@@ -215,6 +215,26 @@ export const ProductSchema = z.object({
   priceFils: FilsSchema.positive(),
 });
 
+// --------------------------------------------------------------- metrics ---
+
+/**
+ * Merchant Overview KPIs — `GET /salons/{id}/metrics?period=`.
+ *
+ * Not in api-contract.md's entity list, but the dashboard's Overview needs a
+ * shape and a hand-written mirror in one client is how two surfaces start
+ * disagreeing about what "repeat rate" means.
+ */
+export const SalonMetricsSchema = z.object({
+  activeMembers: z.number().int().nonnegative(),
+  /** Change over the previous period. Signed; the delta line hides when 0. */
+  activeMembersDelta: z.number().int(),
+  loadedTodayFils: FilsSchema.nonnegative(),
+  /** Share of today's top-ups taken via KNET, 0–100. */
+  knetSharePercent: z.number().min(0).max(100),
+  repeatRatePercent: z.number().min(0).max(100),
+  upcomingAppointments: z.number().int().nonnegative(),
+});
+
 // ----------------------------------------------------------------- staff ---
 
 /**
@@ -407,6 +427,7 @@ export type Booking = z.infer<typeof BookingSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;
 export type Product = z.infer<typeof ProductSchema>;
+export type SalonMetrics = z.infer<typeof SalonMetricsSchema>;
 export type StaffPerms = z.infer<typeof StaffPermsSchema>;
 export type StaffUser = z.infer<typeof StaffUserSchema>;
 export type Boost = z.infer<typeof BoostSchema>;

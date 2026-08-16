@@ -87,7 +87,23 @@ function emitCss(): string {
 
   lines.push('}');
   lines.push('');
-  lines.push('/* interaction-spec.md §2 — :focus-visible, never :focus. */');
+  lines.push('/* interaction-spec.md §2 — :focus-visible, never :focus.');
+  lines.push('');
+  lines.push('   DELIBERATE DEVIATION. The spec writes the ring as a literal');
+  lines.push('   `2px solid #6E7F6C` — the Amara `brand` value. Generalising that to');
+  lines.push('   `--avo-brand` breaks on a shipped preset. A focus indicator is a');
+  lines.push('   non-text graphic, so WCAG 1.4.11 asks 3:1 against the adjacent');
+  lines.push('   surface (#FBFAF8). Measured:');
+  lines.push('');
+  lines.push('     Amara sage   brand 4.10:1 pass    deep 5.47:1 pass');
+  lines.push('     Noor rose    brand 2.86:1 FAIL    deep 4.87:1 pass');
+  lines.push('     Lila lilac   brand 3.60:1 pass    deep 5.64:1 pass');
+  lines.push('');
+  lines.push('   So the ring uses `--avo-brand-deep`. On Amara this is a slightly');
+  lines.push('   stronger ring than the literal; on Noor rose it is the difference');
+  lines.push('   between a visible focus indicator and a failing one. Same class of');
+  lines.push('   bug as non-negotiable #9 — a value that holds for the default preset');
+  lines.push('   and breaks the white-label promise. Asserted in derive.test.ts. */');
   lines.push(':focus-visible {');
   lines.push('  outline: 2px solid var(--avo-brand-deep);');
   lines.push('  outline-offset: 2px;');

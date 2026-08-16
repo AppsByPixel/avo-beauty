@@ -450,6 +450,9 @@ app.get('/charges', async (req, reply) => {
       message: "You don't have permission to see today's charges. A manager can grant it.",
     });
   }
+  // Honour `empty` — a salon that has taken no charges today is the normal
+  // state at opening time, and its empty state has to be reachable.
+  if (has(req, 'empty')) return { items: [], nextCursor: null };
   return { items: transactions.filter((t) => t.kind === 'charge'), nextCursor: null };
 });
 

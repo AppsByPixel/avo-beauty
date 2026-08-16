@@ -15,10 +15,10 @@ them mergeable:
 
 | Lane | Branch | Writes ONLY to |
 |---|---|---|
-| **A · API** | `feat/api-*` | `api/` |
-| **B · Wallet** | `feat/wallet-*` | `apps/wallet/` |
-| **C · Web** | `feat/dashboard-*` | `apps/dashboard/`, `packages/ui/` |
-| **D · QA** | `feat/qa-*` | `**/*.test.ts`, `e2e/` |
+| **A · API** | `feat/api` | `api/` |
+| **B · Wallet** | `feat/wallet` | `apps/wallet/` |
+| **C · Web** | `feat/web` | `apps/dashboard/`, `packages/ui/` |
+| **D · QA** | `feat/qa` | `**/*.test.ts`, `e2e/` |
 
 **If you are in a lane and the change you want to make is outside your column, stop and
 say so.** Do not edit it "just quickly" — a contract edit made inside one lane silently

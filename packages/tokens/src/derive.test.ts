@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contrastWithWhite } from './contrast.js';
+import { contrastRatio, contrastWithWhite } from './contrast.js';
 import { MIN_WHITE_CONTRAST, deriveBrandSet, assertWhiteIsLegible } from './derive.js';
 import tokens from '../../../design/tokens/avo-tokens.json' with { type: 'json' };
 
@@ -62,5 +62,23 @@ describe('assertWhiteIsLegible', () => {
 
   it('passes on the deep variant', () => {
     expect(() => assertWhiteIsLegible(presets.amaraSage!.deep, 'primary button')).not.toThrow();
+  });
+});
+
+describe('focus ring — WCAG 1.4.11 non-text contrast', () => {
+  const SURFACE = '#FBFAF8';
+
+  it.each(Object.entries(presets))(
+    '%s: the shipped deep clears 3:1 on the app surface',
+    (_name, p) => {
+      expect(contrastRatio(p.deep, SURFACE)).toBeGreaterThanOrEqual(3);
+    },
+  );
+
+  it('Noor rose is why the ring is not --avo-brand', () => {
+    // interaction-spec.md §2 writes the ring as a literal #6E7F6C, the Amara
+    // brand value. Generalising that to --avo-brand fails here.
+    expect(contrastRatio(presets.noorRose!.brand, SURFACE)).toBeLessThan(3);
+    expect(contrastRatio(presets.noorRose!.deep, SURFACE)).toBeGreaterThanOrEqual(3);
   });
 });
