@@ -494,3 +494,34 @@ The rule, precisely:
 - Fingerprint the body when the key is first stored, and compare on replay.
 
 Lane D's spec must change to match; Lane A's implementation stands.
+
+---
+
+## Addendum — the customer never sees the commission
+
+`AVO Wallet Home.dc.html` shows `knetFee: '150 fils fee'` and `cardFee: '2.5% + 50 fils'`
+under the payment methods (line 1239, and translated at 1346), plus a `Processing fee` row
+in the transaction detail sheet. Those contradict § Commission above and the product brief.
+
+**Ruling: do not build them. The customer never sees the commission.** Three independent
+reasons, strongest last:
+
+1. **It would be false.** `creditFils = amountFils + bonusFils` — the fee is not deducted.
+   A customer topping up 10.000 KD receives 10.000 plus her tier bonus and pays no fee. The
+   merchant absorbs the commission, exactly as it funds the tier bonus. A "150 fils fee"
+   line states a charge she does not pay.
+2. **It would suppress KNET**, which the product deliberately makes first and default as
+   "Most used in Kuwait". A phantom fee on the default rail works against the business, and
+   the amount landing in her wallet is identical whichever rail she picks.
+3. **It is not what AVO does.** Checked against `AvoMobileApps-Lean`, a live AvoRewards
+   tenant: **zero** fee or commission strings in source or in either localisation file. The
+   top-up modal takes an amount and sends it; the success screen shows amount, payment id,
+   transaction id and date, and no fee. Across roughly ten tenants running for years, no
+   AVO customer app has ever displayed the commission.
+
+The design strings are a leftover from an earlier model. Commission stays merchant-facing:
+Merchant → Settings displays it, Owner → Controls configures it.
+
+**Reverse this only if** the money model changes so the customer pays the processing fee —
+she pays 10.150 to have 10.000 credited. That is a different product, and it would require
+redefining `creditFils`, not just adding a label.
