@@ -27,6 +27,8 @@ import { service } from '../db/schema/service';
 import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
 import { badRequest, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
+import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import { loyaltyConfigOf } from './loyalty';
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
 const EDITABLE = new Set([
@@ -60,6 +62,19 @@ const EDITABLE = new Set([
  * field would surface as a constraint violation, i.e. a 500 on a valid intent.
  */
 const NULLABLE_ARABIC = new Set(['nameAr', 'stampRewardAr']);
+
+/**
+ * The fields that describe what a visit and a top-up are worth. Touching any of
+ * them sends the whole loyalty configuration through the publish validator —
+ * see the block comment in the PATCH handler.
+ */
+const LOYALTY_FIELDS = new Set([
+  'loyaltyMode',
+  'tiers',
+  'stampTarget',
+  'stampReward',
+  'stampRewardAr',
+]);
 
 function normaliseArabic(key: string, value: unknown): unknown {
   if (!NULLABLE_ARABIC.has(key)) return value;
@@ -133,6 +148,38 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
+
+    /**
+     * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.
+     *
+     * `tiers`, `loyaltyMode`, `stampTarget` and the stamp reward copy have been
+     * in `EDITABLE` since this route was written, and until now nothing checked
+     * them. Every rule the publish endpoint enforces — four rungs, Bronze locked
+     * at 0/0, each threshold above the one below — could be walked around by
+     * sending the same fields one route over, which makes the validation
+     * decorative: an invalid ladder published through the unguarded door is not
+     * a smaller money bug than one published through the guarded one.
+     *
+     * So the loyalty fields go through the SAME validator
+     * (services/loyaltyRules.ts), and the result replaces them wholesale rather
+     * than being merged key by key. The validator returns a COMPLETE
+     * configuration — it fills in whatever the request did not mention from the
+     * current row — which is what keeps `salon_loyalty_config_complete`
+     * satisfiable when a caller flips `loyaltyMode` and nothing else.
+     *
+     * `PUT /salons/{id}/loyalty` remains the endpoint the editor should use: it
+     * returns the preview and writes the "Tier rules published" audit line. This
+     * is the guard on the general-purpose door, not a second front entrance.
+     */
+    const touchesLoyalty = keys.some((k) => LOYALTY_FIELDS.has(k));
+    if (touchesLoyalty) {
+      const config = parseLoyaltyConfig(body, loyaltyConfigOf(before));
+      patch.loyaltyMode = config.mode;
+      patch.tiers = config.tiers;
+      patch.stampTarget = config.stampTarget;
+      patch.stampReward = config.stampReward;
+      patch.stampRewardAr = config.stampRewardAr;
+    }
 
     const [after] = await db
       .update(salon)
