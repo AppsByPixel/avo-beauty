@@ -53,8 +53,10 @@ import {
   commissionFor,
   percentOf,
   fils,
+  TopUpIntentPublicSchema,
   type Fils,
   type PaymentMethod,
+  type TopUpIntentPublic,
 } from '@avo/types';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
@@ -155,14 +157,16 @@ export interface TopUpIntentRow {
 }
 
 /**
- * The wire shape, exactly api-contract.md § TopUpIntent.
+ * The FULL wire shape, exactly api-contract.md § TopUpIntent, commission
+ * included. Merchant and platform views, and the `POST /topups` response.
  *
- * `feeFils` IS on this object, because the contract's TopUpIntent lists it and
- * Lane D's commission specs assert it here. Note the tension for the record:
- * the contract also calls the fee "shown to the merchant not the customer", and
- * `GET /topups/{id}` is a customer endpoint. The customer-never rule is enforced
- * where it is unambiguous — the transaction feed, http/serialise.ts — and the
- * intent follows the schema. Flagged in the lane report; not decided here.
+ * The tension this comment used to flag — the contract calls the fee
+ * "shown to the merchant not the customer" while listing `feeFils` on a shape a
+ * customer reads — is now resolved for the read side. See
+ * `serialiseIntentForCustomer` below. What is NOT yet resolved is `POST /topups`,
+ * which is equally customer-facing and still answers with this shape; Lane D's
+ * `money.test.ts` commission sweep asserts `feeFils` on that response, so the two
+ * cannot move separately. Flagged in the lane report.
  */
 export interface TopUpIntentView {
   id: string;
@@ -192,6 +196,50 @@ export function serialiseIntent(row: TopUpIntentRow): TopUpIntentView {
     redirectUrl: row.redirectUrl,
     reference: row.reference,
   };
+}
+
+/**
+ * The keys the customer-facing shape is allowed to carry, taken FROM THE
+ * CONTRACT rather than written out here.
+ *
+ * `TopUpIntentPublicSchema` is `TopUpIntentSchema.omit({ feeFils: true })`, so
+ * this list cannot drift from it: a field trunk adds to the public shape is
+ * emitted the day it lands, and `feeFils` cannot be emitted no matter what
+ * `serialiseIntent` above is later edited to return.
+ */
+const PUBLIC_INTENT_KEYS: readonly string[] = Object.keys(TopUpIntentPublicSchema.shape);
+
+/**
+ * A top-up intent as the CUSTOMER sees it. `GET /topups/{id}` is the wallet's
+ * authoritative status read, and the commission is merchant-visible,
+ * customer-never — api-contract.md § Commission, its addendum, and the product
+ * owner directly: "The customer doesn't see this of course, they just see the
+ * price."
+ *
+ * WHY THIS PROJECTS ONTO A KEY SET INSTEAD OF DELETING A LINE
+ * -----------------------------------------------------------
+ * Deleting `feeFils` from a serialiser is a rule held by whoever edits it next.
+ * Lane D found what that is worth: `GET /members/me/transactions` hand-mapped
+ * its rows instead of going through `http/serialise.ts`, so a rule enforced in
+ * the shared serialiser was already only half enforced — enforced on the path
+ * that called it, silently absent on the path that did not.
+ *
+ * Projecting onto the contract's own key list makes the omission structural. A
+ * field that is not in `TopUpIntentPublicSchema` cannot reach a customer through
+ * this function even if someone adds it to `TopUpIntentView`, and the failure
+ * mode of getting it wrong is a missing field in a test, not a leaked one in
+ * production.
+ *
+ * It projects rather than `.parse()`s deliberately: a stored intent that somehow
+ * violated the schema would make `parse` throw, turning a readable status into a
+ * 500 for a customer who only wanted to know whether her payment went through.
+ * Stripping cannot fail; validating can.
+ */
+export function serialiseIntentForCustomer(row: TopUpIntentRow): TopUpIntentPublic {
+  const full = serialiseIntent(row) as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of PUBLIC_INTENT_KEYS) out[k] = full[k];
+  return out as unknown as TopUpIntentPublic;
 }
 
 function intentId(): string {
@@ -753,13 +801,17 @@ export async function settleFromWebhook(
  *
  * A gateway that cannot be reached does not change anything. The stored status
  * is returned as-is: we report what we know, never what the client hoped.
+ *
+ * Answers the CUSTOMER shape — no `feeFils`, on any of the five return paths
+ * below. This is a wallet endpoint; the commission belongs to the merchant and
+ * platform views.
  */
 export async function readTopUp(
   db: Db,
   principal: MemberPrincipal,
   id: string,
   simulate?: GatewayOutcome | undefined,
-): Promise<TopUpIntentView> {
+): Promise<TopUpIntentPublic> {
   const rows = await db.select().from(topUpIntent).where(eq(topUpIntent.id, id)).limit(1);
   const intent = rows[0] as TopUpIntentRow | undefined;
 
@@ -770,7 +822,7 @@ export async function readTopUp(
   }
 
   if (!OPEN_STATUSES.includes(intent.status) || !intent.pspReference) {
-    return serialiseIntent(intent);
+    return serialiseIntentForCustomer(intent);
   }
 
   let state;
@@ -780,15 +832,15 @@ export async function readTopUp(
     );
   } catch {
     // Unreachable processor: report the intent unchanged. Never invent a status.
-    return serialiseIntent(intent);
+    return serialiseIntentForCustomer(intent);
   }
 
   const result = await settleFromGatewayRead(db, intent, state.outcome, state.amountFils);
   if (result.kind === 'applied' || result.kind === 'unchanged') {
-    return serialiseIntent(result.intent);
+    return serialiseIntentForCustomer(result.intent);
   }
-  if (result.kind === 'amount_mismatch') return serialiseIntent(result.intent);
-  return serialiseIntent(intent);
+  if (result.kind === 'amount_mismatch') return serialiseIntentForCustomer(result.intent);
+  return serialiseIntentForCustomer(intent);
 }
 
 /** `POST /topups` input validation lives in the route; this is the method list. */
