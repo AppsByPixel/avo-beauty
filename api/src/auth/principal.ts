@@ -214,7 +214,11 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     req.url.startsWith('/scans') ||
     req.url.startsWith('/charges') ||
     req.url.startsWith('/voids') ||
-    req.url.startsWith('/staff/me');
+    req.url.startsWith('/staff/me') ||
+    // The artist's own hours. `/artists/{id}/availability` is the merchant's
+    // route and stays on the dashboard — the `me` prefix is the whole
+    // distinction, exactly as it is in routes/artists.ts.
+    req.url.startsWith('/artists/me');
 
   return loadStaffPrincipal(
     db,

@@ -50,6 +50,13 @@
       "when": 1786905048852,
       "tag": "0006_arabic_names",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786920025587,
+      "tag": "0007_artist_availability",
+      "breakpoints": true
     }
   ]
 }

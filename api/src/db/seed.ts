@@ -35,6 +35,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { fils } from '@avo/types';
 import { branch, salon } from './schema/salon';
+import { artist, type ArtistWindows } from './schema/artist';
 import { ledgerEntry } from './schema/ledger';
 import { member } from './schema/member';
 import { service } from './schema/service';
@@ -65,6 +66,36 @@ const STAFF_PASSWORD = 'noura-dev-password';
 const STAFF_PIN = '2468';
 const HESSA_PIN = '1357';
 const SCANNER_DEVICE = 'DEV-SCANNER-01';
+
+/**
+ * A week of availability windows, keyed '0'..'6' JS `getDay()` order.
+ *
+ * The design fixture (`artistSched` in AVO Merchant Dashboard.dc.html) stores
+ * minutes past midnight — 600, 1260 — because its steppers do arithmetic on
+ * them. The contract stores "HH:mm". Converting here rather than storing minutes
+ * keeps the database holding the contract's shape, and keeps the two
+ * representations from both being half-true.
+ *
+ * Days not named are CLOSED, and still carry a from/to. A closed day with no
+ * times cannot be reopened by ticking one box — the dashboard's steppers need
+ * something to start from, which is why the schema keeps the values and only the
+ * `open` flag decides anything. Friday is closed everywhere in the fixture; it
+ * is the Kuwaiti weekend day, not an oversight.
+ */
+function week(open: Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', [number, number]>>): ArtistWindows {
+  const order = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+  const hhmm = (m: number) =>
+    `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+  const out: ArtistWindows = {};
+  order.forEach((name, index) => {
+    const span = open[name];
+    out[String(index)] = span
+      ? { open: true, from: hhmm(span[0]), to: hhmm(span[1]) }
+      : { open: false, from: '10:00', to: '21:00' };
+  });
+  return out;
+}
 
 async function seed(): Promise<void> {
   const [memberHash, staffHash, pinHash, hessaPinHash] = await Promise.all([
@@ -207,6 +238,83 @@ async function seed(): Promise<void> {
       { id: 'SV-05', salonId: SALON_ID, name: 'Treatment', priceFils: fils(12500) },
     ])
     .onConflictDoNothing();
+
+  // ------------------------------------------------------------- artists ----
+  //
+  // The four artists of design/AVO Merchant Dashboard.dc.html § Team, with the
+  // weeks its `artistSched` fixture holds, converted from minutes-past-midnight
+  // to the contract's "HH:mm". Two are Google-sourced and two manual, because
+  // the read-only refusal in PUT /artists/{id}/availability is only provable
+  // against a row that is actually synced.
+  //
+  // AR-003 is Hessa, and she is the only one wired to a `staff_user`. She holds
+  // a scanner PIN (ST-002), so she is the fixture that makes
+  // `PUT /artists/me/availability` reachable — and, because ST-002 is the
+  // deliberately restricted account with `perms.team` OFF, she is simultaneously
+  // the proof that own-hours needs no team authority and that the same body sent
+  // at somebody else's id is refused.
+  await db
+    .insert(artist)
+    .values([
+      {
+        id: 'AR-001',
+        salonId: SALON_ID,
+        name: 'Rana Al-Sabah',
+        nameAr: 'رنا الصباح',
+        // Google-sourced: windows are read-only until switched to manual.
+        availabilitySource: 'google',
+        googleConnected: true,
+        slotMinutes: 30,
+        windows: week({ sun: [600, 1260], mon: [600, 1260], tue: [600, 1260], wed: [600, 1260], thu: [600, 1260], sat: [960, 1260] }),
+      },
+      {
+        id: 'AR-002',
+        salonId: SALON_ID,
+        name: 'Dana Yousef',
+        nameAr: 'دانة يوسف',
+        availabilitySource: 'google',
+        googleConnected: true,
+        slotMinutes: 45,
+        windows: week({ sun: [600, 1260], tue: [660, 1260], wed: [600, 1260], thu: [600, 1200] }),
+      },
+      {
+        id: 'AR-003',
+        salonId: SALON_ID,
+        staffUserId: 'ST-002',
+        name: 'Hessa M.',
+        nameAr: 'حصة م.',
+        availabilitySource: 'manual',
+        // Connected but manual — the normal state after reception takes the
+        // wheel, and the combination the CHECK deliberately permits.
+        googleConnected: true,
+        slotMinutes: 30,
+        windows: week({ sun: [600, 1260], mon: [600, 1260], tue: [600, 1260], wed: [600, 1260], thu: [600, 1260] }),
+      },
+      {
+        id: 'AR-004',
+        salonId: SALON_ID,
+        name: 'Shaikha B.',
+        // No Arabic name and no Google connection: the null-fallback row, and
+        // the one that proves switching TO google is refused without a calendar.
+        nameAr: null,
+        availabilitySource: 'manual',
+        googleConnected: false,
+        slotMinutes: 60,
+        windows: week({ sun: [960, 1260], mon: [960, 1260], thu: [960, 1260], sat: [960, 1260] }),
+      },
+    ])
+    .onConflictDoUpdate({
+      target: artist.id,
+      // Re-running resets the availability state, so a spec that switched AR-001
+      // to manual does not leave the next run without a synced fixture.
+      set: {
+        availabilitySource: sql`excluded.availability_source`,
+        googleConnected: sql`excluded.google_connected`,
+        slotMinutes: sql`excluded.slot_minutes`,
+        windows: sql`excluded.windows`,
+        active: true,
+      },
+    });
 
   // Dana — the fixture member. 24.500 KD, 5 visits, Silver.
   await db

@@ -31,6 +31,7 @@ import { registerStaffRoutes } from './routes/staff';
 import { registerChargeRoutes } from './routes/charges';
 import { registerTopupRoutes } from './routes/topups';
 import { registerSalonRoutes } from './routes/salons';
+import { registerArtistRoutes } from './routes/artists';
 import { registerPlatformRoutes } from './routes/platform';
 import { registerWebhookRoutes } from './routes/webhooks';
 import { registerSandboxGatewayRoutes } from './routes/sandboxGateway';
@@ -85,6 +86,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerChargeRoutes(app);
   await registerTopupRoutes(app);
   await registerSalonRoutes(app);
+  await registerArtistRoutes(app);
   await registerPlatformRoutes(app);
 
   // The gateway callback. Unauthenticated in the ordinary sense and verified by
