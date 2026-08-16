@@ -10,9 +10,17 @@ jobs:
         with: { version: 9.15.0 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
+
       - run: pnpm install --frozen-lockfile
+
+      # Tokens are generated from design/tokens/avo-tokens.json. If the checked-in
+      # output drifts from the source, someone hand-edited a generated file —
+      # which is how a hex gets re-typed. CLAUDE.md: "never re-type a hex".
       - run: pnpm tokens
-      # Fails the build if the generated tokens drift from avo-tokens.json —
-      # the enforcement behind "never re-type a hex".
       - run: git diff --exit-code packages/tokens/src/generated.ts
+
+      # Nothing below may depend on a build artifact left over from a previous
+      # run. CI checks out clean; a local tree does not, which is exactly how a
+      # missing turbo dependency edge stayed invisible while every local run was
+      # green on a stale packages/types/dist.
       - run: pnpm check

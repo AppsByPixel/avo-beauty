@@ -176,6 +176,9 @@ importers:
 
   e2e:
     devDependencies:
+      '@avo/mock':
+        specifier: workspace:*
+        version: link:../packages/mock
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
