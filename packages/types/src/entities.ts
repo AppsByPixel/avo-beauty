@@ -49,6 +49,17 @@ export const BranchSchema = z.object({
   id: IdSchema,
   salonId: IdSchema,
   name: z.string().min(1),
+  /**
+   * Arabic branch name. Without it an Arabic wallet renders "Salmiya" in Latin
+   * inside otherwise-mirrored Arabic copy. The bundle's own reference
+   * implementation carries it (`avo-promotions.js` → `branchLabel`, which picks
+   * `nameAr` when `ar`), so this closes a gap between the contract and the
+   * behaviour the design already demonstrates.
+   *
+   * Nullable, not required: a salon that has not supplied one falls back to
+   * `name`, the same way an untranslated legal document falls back to `en`.
+   */
+  nameAr: z.string().nullable(),
 });
 
 export const SocialLinkSchema = z.object({
@@ -69,6 +80,8 @@ export const BusinessHoursSchema = z.object({
 export const SalonSchema = z.object({
   id: IdSchema,
   name: z.string().min(1),
+  /** Arabic salon name. See BranchSchema.nameAr. Falls back to `name`. */
+  nameAr: z.string().nullable(),
   plan: z.enum(['starter', 'growth', 'pro']),
   /** Drives the white-label token. Validated through deriveBrandSet at onboarding. */
   brandColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
@@ -77,6 +90,8 @@ export const SalonSchema = z.object({
   tiers: z.array(TierSchema).optional(),
   stampTarget: z.number().int().positive().optional(),
   stampReward: z.string().optional(),
+  /** "تصفيف شعر مجاني" — the reward is customer-facing copy, so it needs both. */
+  stampRewardAr: z.string().nullable().optional(),
   depositFils: FilsSchema.min(1000).max(10000),
   noShowReturnMinutes: z.number().int().positive(),
   businessHours: BusinessHoursSchema,

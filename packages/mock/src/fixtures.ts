@@ -26,6 +26,7 @@ export const BRANCH_KUWAIT_CITY = 'BR-KWC';
 export const salon: Salon = {
   id: SALON_ID,
   name: 'Amara',
+  nameAr: 'أمارا',
   plan: 'growth',
   brandColor: '#6E7F6C',
   // Both default OFF — AVO-Beauty-Product-Description-v2.md §2.3. The pilot runs
@@ -40,12 +41,13 @@ export const salon: Salon = {
   ],
   stampTarget: 8,
   stampReward: 'Free blow-dry',
+  stampRewardAr: 'تصفيف شعر مجاني',
   depositFils: 5000,
   noShowReturnMinutes: 60,
   businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
   branches: [
-    { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya' },
-    { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City' },
+    { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya', nameAr: 'السالمية' },
+    { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City', nameAr: 'مدينة الكويت' },
   ],
   social: [
     { id: 'instagram', label: 'Instagram', handle: '@amara.kw', on: true },
