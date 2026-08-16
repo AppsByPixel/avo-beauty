@@ -270,7 +270,31 @@ export function parseLoyaltyConfig(
   }
 
   if (mode === 'tiers') {
-    const tiers = 'tiers' in body ? parseTiers(body.tiers) : current.tiers;
+    const suppliesTiers = 'tiers' in body;
+    /**
+     * WHEN A *STORED* LADDER IS RE-VALIDATED, AND WHEN IT IS LEFT ALONE.
+     *
+     * The first version of this validated `current.tiers` unconditionally, on
+     * the reasoning that a ladder stored before these rules existed should not
+     * become publishable merely by being touched. Lane D's tenancy suite caught
+     * what that actually does: `PATCH /salons/{id} { stampTarget: 8 }` against a
+     * salon holding a two-rung legacy ladder answered
+     *
+     *     400 A ladder has all four tiers — Bronze, Silver, Gold, Black. Got 2.
+     *
+     * for a request that never mentioned tiers. That is not a guard, it is a
+     * salon locked out of editing anything until it republishes a ladder it did
+     * not ask to change — and refusing the edit does not repair the stored row,
+     * so it buys nothing either.
+     *
+     * The narrower rule: a stored ladder is validated when the request PUTS IT
+     * INTO EFFECT, which is exactly two cases — the request supplies a ladder,
+     * or it switches the mechanic to `tiers` and so makes the stored one live.
+     * A request that leaves both alone passes the ladder through untouched.
+     */
+    const activatesStoredTiers = !suppliesTiers && current.mode !== 'tiers';
+
+    const tiers = suppliesTiers ? parseTiers(body.tiers) : current.tiers;
     if (!tiers) {
       /**
        * The CHECK `salon_loyalty_config_complete` refuses this at the database
@@ -283,11 +307,9 @@ export function parseLoyaltyConfig(
         'A tiers salon needs a tier ladder. Send all four rungs with this change.',
       );
     }
-    // Re-validated even when it came from the database. A ladder stored before
-    // these rules existed must not become publishable merely by being touched.
     return {
       mode,
-      tiers: parseTiers(tiers),
+      tiers: activatesStoredTiers ? parseTiers(tiers) : tiers,
       /**
        * The stamp fields are KEPT, not cleared. A salon that trials tiers for a
        * month and switches back should find its stamp card where it left it, and
@@ -299,7 +321,11 @@ export function parseLoyaltyConfig(
     };
   }
 
-  const stampTarget = 'stampTarget' in body ? parseStampTarget(body.stampTarget) : current.stampTarget;
+  const suppliesTarget = 'stampTarget' in body;
+  /** The mirror of `activatesStoredTiers` above, and for the same reason. */
+  const activatesStoredTarget = !suppliesTarget && current.mode !== 'stamps';
+
+  const stampTarget = suppliesTarget ? parseStampTarget(body.stampTarget) : current.stampTarget;
   if (stampTarget === null) {
     throw badRequest(
       'stamp_target_required',
@@ -309,7 +335,7 @@ export function parseLoyaltyConfig(
   return {
     mode,
     tiers: current.tiers,
-    stampTarget: parseStampTarget(stampTarget),
+    stampTarget: activatesStoredTarget ? parseStampTarget(stampTarget) : stampTarget,
     stampReward:
       'stampReward' in body ? parseOptionalText(body.stampReward, 'stampReward') : current.stampReward,
     stampRewardAr:
