@@ -69,6 +69,36 @@ main architectural improvement Beauty makes over the platform it grew out of.
   artboard at a specific scale. Worth imitating. A hex with a reason survives a redesign
   argument; a hex without one gets changed by whoever is most confident.
 
+## Two things the live app confirmed for us
+
+**The customer never sees a payment fee — checked twice, independently.** Zero fee or
+commission strings anywhere in Lean's source or either localisation file. And the payment
+method list renders exactly one field per method:
+
+```js
+{langugaeId === 'ar' ? item?.nameAr : item.name}     // topupModal.js:233
+```
+
+A name. No fee, no per-method charge. That is the opposite of what
+`AVO Wallet Home.dc.html` draws (`knetFee: '150 fils fee'` under each method), and it
+matches what the product owner confirmed: the AVO/salon split is configured inside
+MyFatoorah and "the customer doesn't see this of course, they just see the price."
+
+**`nameAr` on backend entities is the house pattern.** That same line picks an Arabic name
+off the entity by language. We added `nameAr` to `Salon` and `Branch` because the bundle's
+own `avo-promotions.js` carries it; the production system has been doing it on payment
+methods all along. Independent confirmation that the field belongs on the entity rather
+than being derived or hardcoded per client.
+
+**The app is payment-provider agnostic, and deliberately.** Lean names no gateway anywhere.
+The backend returns a hosted payment URL, the app opens it in a webview
+(`screens/webviews/knwtWebView.js`) and watches the return path for `/Success`. That is why
+MyFatoorah appears nowhere in the app — the integration lives server-side.
+
+Which is the same shape Lane A built: `POST /topups` returns `redirectUrl`, the client opens
+it, then re-reads `GET /topups/{id}` for the authoritative status. Arrived at from the
+contract rather than copied, and it agrees with a system already in production.
+
 ## Platform facts, if we ever need to interoperate
 
 - API base: `https://nextwhitelabelling-prod.azurewebsites.net/api`, .NET/ABP conventions
