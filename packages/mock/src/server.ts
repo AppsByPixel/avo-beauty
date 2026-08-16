@@ -144,6 +144,22 @@ function scopedKey(req: FastifyRequest, key: string): string {
   return `${req.method}:${req.routeOptions.url ?? req.url}:${key}`;
 }
 
+/**
+ * The salon as this request sees it.
+ *
+ * `GET /salons/:id` honoured the `stamps` scenario but the money handlers read
+ * the module-level fixture directly, so a stamps salon still paid a Silver tier
+ * bonus on top-up — a mode that has no bonus at all. Every handler that cares
+ * about loyalty mode goes through here now, so a third call site cannot drift.
+ */
+function salonFor(req: FastifyRequest): typeof salon {
+  return has(req, 'stamps') ? { ...salon, loyaltyMode: 'stamps' as const } : salon;
+}
+
+function memberFor(req: FastifyRequest): typeof member {
+  return has(req, 'stamps') ? memberStamps : member;
+}
+
 /** Money arriving from a client is untrusted. A 400 the client can act on, not a 500. */
 function validateAmountFils(value: unknown): { ok: true; amount: Fils } | { ok: false; message: string } {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -227,10 +243,12 @@ app.post('/topups', async (req, reply) => {
   const method = body.method ?? 'knet';
 
   // Tier bonus is computed SERVER-SIDE and does not exist in stamps mode.
+  const s = salonFor(req);
+  const m = memberFor(req);
   const bonusPercent =
-    salon.loyaltyMode === 'stamps'
+    s.loyaltyMode === 'stamps'
       ? 0
-      : (salon.tiers?.find((t) => t.name === member.tier)?.bonusPercent ?? 0);
+      : (s.tiers?.find((t) => t.name === m.tier)?.bonusPercent ?? 0);
   const bonus = percentOf(amount, bonusPercent);
 
   const id = `TI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -430,7 +448,7 @@ app.post('/charges', async (req, reply) => {
     balanceAfterFils: after,
     depositAppliedFils: heldDeposit,
     loyalty:
-      salon.loyaltyMode === 'stamps'
+      salonFor(req).loyaltyMode === 'stamps'
         ? { mode: 'stamps' as const, stamps: 5, target: salon.stampTarget, rewardReady: false }
         : { mode: 'tiers' as const, visits: member.visits + 1, tier: 'silver', nextTier: 'gold', visitsToNext: 4 },
     /** Voidable for 15 minutes, with a reason. Past that, merchant reimbursement. */
@@ -490,7 +508,7 @@ app.post('/voids', async (req, reply) => {
 
 app.get('/salons/:id', async (req, reply) => {
   if (await intercept(req, reply)) return;
-  return has(req, 'stamps') ? { ...salon, loyaltyMode: 'stamps' } : salon;
+  return salonFor(req);
 });
 
 app.patch('/salons/:id', async (req, reply) => {
