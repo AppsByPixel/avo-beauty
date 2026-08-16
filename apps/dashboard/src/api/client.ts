@@ -18,9 +18,28 @@ export class ApiError extends Error {
     this.offline = opts.offline ?? false;
   }
 
-  /** 401/403 — no amount of retrying fixes it. */
-  get isDenied(): boolean {
-    return this.status === 401 || this.status === 403;
+  /**
+   * 401 — WHO is calling is the problem. The credential is missing, expired
+   * past refresh, or revoked. `authedRequest` has already tried to rotate and
+   * has already dropped the session by the time this reaches a component, so
+   * the screen's job is to get out of the way and let the shell redirect to
+   * sign-in. There is nothing to explain and nothing to retry.
+   */
+  get isUnauthenticated(): boolean {
+    return this.status === 401;
+  }
+
+  /**
+   * 403 — WHAT was asked for is the problem. The session is perfectly valid;
+   * this staff member lacks the permission, or the thing belongs to another
+   * salon ("That salon is not yours."). This is the *explain, no retry* case of
+   * interaction-spec.md §4: an identical request produces an identical refusal,
+   * so offering a retry button is a lie about what the user can do. The
+   * `message` is server-authored copy naming who can grant the permission —
+   * render it rather than inventing one.
+   */
+  get isForbidden(): boolean {
+    return this.status === 403;
   }
 
   /** The connection-style failures the wallet and dashboard both treat as offline. */

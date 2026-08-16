@@ -2,19 +2,30 @@ import { fils, type Transaction } from '@avo/types';
 import { Card, EmptyState, ErrorState, Money, Skeleton, StatCard, StaleBanner } from '@avo/ui';
 import { ApiError } from '../api/client.js';
 import { useRecentActivity, useSalonMetrics, type SalonMetrics } from '../api/salon.js';
-import { useSession } from '../auth/AuthProvider.js';
-import { FALLBACK_SALON_ID } from '../config.js';
 
 export function Overview() {
-  const session = useSession('merchant');
-  const salonId = session.salonId ?? FALLBACK_SALON_ID;
-  const metrics = useSalonMetrics(salonId, session.token);
-  const activity = useRecentActivity(salonId, session.token);
+  // No salon id here at all. Both hooks read it from the session.
+  const metrics = useSalonMetrics();
+  const activity = useRecentActivity();
 
-  // Stale-not-blank: cached figures outrank a failed refresh.
-  const showStale = metrics.isError && metrics.data !== undefined;
+  /*
+   * STALE-NOT-BLANK DOES NOT APPLY TO A REFUSAL.
+   *
+   * interaction-spec.md §4 keeps the last-known figures on screen through a
+   * *network* failure, because a merchant who watches her numbers vanish assumes
+   * the money did too. A 403 is not that failure. It means this staff member may
+   * not see these figures — and holding them on screen behind a "Couldn't
+   * refresh · Retry" banner shows her exactly what she is not allowed to see,
+   * captioned with a button that will never work.
+   *
+   * Observed, not theorised: signing Hessa in after Noura on the same browser
+   * did this. The API answered 403 to both Overview calls and the banner served
+   * Noura's figures underneath it.
+   */
+  const forbidden = metrics.error instanceof ApiError && metrics.error.isForbidden;
+  const showStale = metrics.isError && metrics.data !== undefined && !forbidden;
 
-  if (metrics.isError && metrics.data === undefined) {
+  if (metrics.isError && (metrics.data === undefined || forbidden)) {
     return <MetricsError error={metrics.error} onRetry={() => void metrics.refetch()} retrying={metrics.isFetching} />;
   }
 
@@ -123,19 +134,20 @@ function ActivityList({ items, loading, error, onRetry, retrying }: ActivityList
   }
 
   if (error) {
-    const denied = error instanceof ApiError && error.isDenied;
+    // 401 — the session is gone and the shell is already redirecting to
+    // sign-in. Rendering a refusal here would flash for one frame and tell the
+    // merchant she lacks a permission she actually holds.
+    if (error instanceof ApiError && error.isUnauthenticated) return null;
+
     return (
       <div className="overview__feed-state">
-        {denied ? (
-          // "You can't do that" explains; it does not offer a retry.
-          <ErrorState
-            title="You don't have access to this"
-            body={
-              error instanceof ApiError
-                ? error.message
-                : 'A manager can grant you permission to see salon activity.'
-            }
-          />
+        {error instanceof ApiError && error.isForbidden ? (
+          /*
+           * 403 — explain, no retry (interaction-spec.md §4). `perms.charges` is
+           * the senior permission that gates this feed; the API's message names
+           * who can grant it, so it is rendered rather than paraphrased.
+           */
+          <ErrorState title="You don't have access to this" body={error.message} />
         ) : (
           <ErrorState
             title="Couldn't load activity"
@@ -218,14 +230,21 @@ function MetricsError({
   onRetry: () => void;
   retrying: boolean;
 }) {
-  if (error instanceof ApiError && error.isDenied) {
-    return (
-      <ErrorState
-        title="You don't have access to the overview"
-        body={error.message || 'A manager can grant you the dashboard permission.'}
-      />
-    );
+  // 401: signed out. The shell owns that — it redirects. Show nothing here.
+  if (error instanceof ApiError && error.isUnauthenticated) return null;
+
+  /*
+   * 403: "not yours". Two different refusals arrive with this status and both
+   * are explain-only —
+   *   - `perms.dashboard` is off for this staff member, or
+   *   - `requireSameSalon` refused: "That salon is not yours."
+   * Neither is fixed by pressing a button, so there is no button. The body is
+   * the server's own copy, which names who can grant the permission.
+   */
+  if (error instanceof ApiError && error.isForbidden) {
+    return <ErrorState title="You don't have access to the overview" body={error.message} />;
   }
+
   const offline = error instanceof ApiError && error.isConnectivity;
   return (
     <ErrorState
