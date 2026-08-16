@@ -7,7 +7,14 @@
  * A seed that drifted from the fixtures would make every one of those specs fail
  * for a reason that has nothing to do with the API.
  *
- * Two rows exist here that the fixtures do not have:
+ * Three things exist here that the fixtures do not have:
+ *
+ *   SAL-LUMIERE   a second salon whose Arabic name columns are NULL, on purpose.
+ *                 The client fallback is `nameAr ?? name`, and a row that merely
+ *                 LACKS the key proves nothing about it — `undefined ?? name`
+ *                 and `null ?? name` agree. Only a genuine NULL can catch a NULL
+ *                 arriving at a client as the string "null". See the block
+ *                 comment on the insert.
  *
  *   member 8843   a low-balance member (2.500 KD). Lane D pins the insufficient
  *                 balance case with `x-avo-scenario: lowbal`, which the mock
@@ -28,6 +35,8 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { fils } from '@avo/types';
 import { branch, salon } from './schema/salon';
+import { artist, type ArtistWindows } from './schema/artist';
+import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
 import { member } from './schema/member';
 import { service } from './schema/service';
@@ -59,6 +68,36 @@ const STAFF_PIN = '2468';
 const HESSA_PIN = '1357';
 const SCANNER_DEVICE = 'DEV-SCANNER-01';
 
+/**
+ * A week of availability windows, keyed '0'..'6' JS `getDay()` order.
+ *
+ * The design fixture (`artistSched` in AVO Merchant Dashboard.dc.html) stores
+ * minutes past midnight — 600, 1260 — because its steppers do arithmetic on
+ * them. The contract stores "HH:mm". Converting here rather than storing minutes
+ * keeps the database holding the contract's shape, and keeps the two
+ * representations from both being half-true.
+ *
+ * Days not named are CLOSED, and still carry a from/to. A closed day with no
+ * times cannot be reopened by ticking one box — the dashboard's steppers need
+ * something to start from, which is why the schema keeps the values and only the
+ * `open` flag decides anything. Friday is closed everywhere in the fixture; it
+ * is the Kuwaiti weekend day, not an oversight.
+ */
+function week(open: Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', [number, number]>>): ArtistWindows {
+  const order = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+  const hhmm = (m: number) =>
+    `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+  const out: ArtistWindows = {};
+  order.forEach((name, index) => {
+    const span = open[name];
+    out[String(index)] = span
+      ? { open: true, from: hhmm(span[0]), to: hhmm(span[1]) }
+      : { open: false, from: '10:00', to: '21:00' };
+  });
+  return out;
+}
+
 async function seed(): Promise<void> {
   const [memberHash, staffHash, pinHash, hessaPinHash] = await Promise.all([
     hashSecret(MEMBER_PASSWORD),
@@ -72,6 +111,11 @@ async function seed(): Promise<void> {
     .values({
       id: SALON_ID,
       name: 'Amara',
+      // From design/avo-promotions.js, the bundle's own reference implementation
+      // — not a translation invented here. `branchLabel()` in that file picks
+      // `nameAr` when the language is `ar`, so these are the exact strings the
+      // design already demonstrates the wallet rendering.
+      nameAr: 'أمارا',
       plan: 'growth',
       brandColor: '#6E7F6C',
       moduleBooking: false,
@@ -85,6 +129,7 @@ async function seed(): Promise<void> {
       ],
       stampTarget: 8,
       stampReward: 'Free blow-dry',
+      stampRewardAr: 'تصفيف شعر مجاني',
       depositFils: fils(5000),
       noShowReturnMinutes: 60,
       businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
@@ -96,13 +141,91 @@ async function seed(): Promise<void> {
       ],
       whatsappEnabled: true,
     })
+    // NOT `onConflictDoNothing()`, and the difference is the whole point of the
+    // change that introduced these two columns. Every developer and CI database
+    // already holds an Amara row from an earlier run, so DO NOTHING would leave
+    // `name_ar` NULL there for ever and the seed would silently claim to have
+    // written a translation it did not write — the same class of failure the
+    // member rows below document for `passwordHash`.
+    //
+    // Only the Arabic columns are in the SET. The rest of Amara's configuration
+    // is left alone deliberately: it is a salon a developer may have edited
+    // through `PATCH /salons/:id` while working, and this insert is not the
+    // place that resets it.
+    .onConflictDoUpdate({
+      target: salon.id,
+      set: { nameAr: 'أمارا', stampRewardAr: 'تصفيف شعر مجاني' },
+    });
+
+  await db
+    .insert(branch)
+    .values([
+      { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya', nameAr: 'السالمية' },
+      { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City', nameAr: 'مدينة الكويت' },
+    ])
+    // Same reasoning as the salon above: existing branch rows must actually
+    // receive the Arabic names, not silently keep a NULL from an earlier run.
+    .onConflictDoUpdate({
+      target: branch.id,
+      set: { nameAr: sql`excluded.name_ar` },
+    });
+
+  // ------------------------------------------------- the salon that has none --
+  //
+  // LUMIÈRE EXISTS HERE TO HOLD A REAL NULL.
+  //
+  // The Arabic fields fall back on the client with `nameAr ?? name`, and that
+  // fallback is untestable against a row that simply lacks the key: `undefined
+  // ?? name` and `null ?? name` give the same answer, which is precisely how the
+  // missing implementation went unnoticed in the first place. The failure it
+  // cannot see is the stringify bug — a NULL reaching a client as the FOUR
+  // CHARACTER STRING "null", which renders as a salon called null and satisfies
+  // `??` perfectly. Only a row that genuinely holds NULL can catch that.
+  //
+  // So this salon is seeded with `nameAr` and `stampRewardAr` left NULL
+  // DELIBERATELY. It is not an oversight to be tidied up later, and a future
+  // seed must not "complete" it.
+  //
+  // WHY THESE PARTICULAR VALUES
+  // ---------------------------
+  // `e2e/support/tenancy-harness.ts` (lane D) also seeds SAL-LUMIERE, with
+  // `ON CONFLICT (id) DO NOTHING`, as does this insert — so whichever runs first
+  // wins and the other is a no-op. The fields below are therefore kept
+  // BYTE-IDENTICAL to that harness's INSERT, so the winner is irrelevant. The
+  // only additions are the two Arabic columns, which the harness's insert omits
+  // and which therefore arrive as NULL from it too: both paths produce the same
+  // row. If lane D's fixture ever changes, this must change with it.
+  await db
+    .insert(salon)
+    .values({
+      id: 'SAL-LUMIERE',
+      name: 'Lumiere',
+      nameAr: null,
+      plan: 'starter',
+      brandColor: '#7A5C8E',
+      moduleBooking: false,
+      moduleShop: false,
+      loyaltyMode: 'tiers',
+      tiers: [
+        { name: 'bronze', minVisits: 0, bonusPercent: 0 },
+        { name: 'silver', minVisits: 4, bonusPercent: 10 },
+      ],
+      stampTarget: null,
+      stampReward: null,
+      stampRewardAr: null,
+      depositFils: fils(5000),
+      noShowReturnMinutes: 60,
+      businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
+      social: [],
+      whatsappEnabled: false,
+    })
     .onConflictDoNothing();
 
   await db
     .insert(branch)
     .values([
-      { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya' },
-      { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City' },
+      { id: 'BR-LUM-HAW', salonId: 'SAL-LUMIERE', name: 'Hawally', nameAr: null },
+      { id: 'BR-LUM-JAB', salonId: 'SAL-LUMIERE', name: 'Jabriya', nameAr: null },
     ])
     .onConflictDoNothing();
 
@@ -116,6 +239,83 @@ async function seed(): Promise<void> {
       { id: 'SV-05', salonId: SALON_ID, name: 'Treatment', priceFils: fils(12500) },
     ])
     .onConflictDoNothing();
+
+  // ------------------------------------------------------------- artists ----
+  //
+  // The four artists of design/AVO Merchant Dashboard.dc.html § Team, with the
+  // weeks its `artistSched` fixture holds, converted from minutes-past-midnight
+  // to the contract's "HH:mm". Two are Google-sourced and two manual, because
+  // the read-only refusal in PUT /artists/{id}/availability is only provable
+  // against a row that is actually synced.
+  //
+  // AR-003 is Hessa, and she is the only one wired to a `staff_user`. She holds
+  // a scanner PIN (ST-002), so she is the fixture that makes
+  // `PUT /artists/me/availability` reachable — and, because ST-002 is the
+  // deliberately restricted account with `perms.team` OFF, she is simultaneously
+  // the proof that own-hours needs no team authority and that the same body sent
+  // at somebody else's id is refused.
+  await db
+    .insert(artist)
+    .values([
+      {
+        id: 'AR-001',
+        salonId: SALON_ID,
+        name: 'Rana Al-Sabah',
+        nameAr: 'رنا الصباح',
+        // Google-sourced: windows are read-only until switched to manual.
+        availabilitySource: 'google',
+        googleConnected: true,
+        slotMinutes: 30,
+        windows: week({ sun: [600, 1260], mon: [600, 1260], tue: [600, 1260], wed: [600, 1260], thu: [600, 1260], sat: [960, 1260] }),
+      },
+      {
+        id: 'AR-002',
+        salonId: SALON_ID,
+        name: 'Dana Yousef',
+        nameAr: 'دانة يوسف',
+        availabilitySource: 'google',
+        googleConnected: true,
+        slotMinutes: 45,
+        windows: week({ sun: [600, 1260], tue: [660, 1260], wed: [600, 1260], thu: [600, 1200] }),
+      },
+      {
+        id: 'AR-003',
+        salonId: SALON_ID,
+        staffUserId: 'ST-002',
+        name: 'Hessa M.',
+        nameAr: 'حصة م.',
+        availabilitySource: 'manual',
+        // Connected but manual — the normal state after reception takes the
+        // wheel, and the combination the CHECK deliberately permits.
+        googleConnected: true,
+        slotMinutes: 30,
+        windows: week({ sun: [600, 1260], mon: [600, 1260], tue: [600, 1260], wed: [600, 1260], thu: [600, 1260] }),
+      },
+      {
+        id: 'AR-004',
+        salonId: SALON_ID,
+        name: 'Shaikha B.',
+        // No Arabic name and no Google connection: the null-fallback row, and
+        // the one that proves switching TO google is refused without a calendar.
+        nameAr: null,
+        availabilitySource: 'manual',
+        googleConnected: false,
+        slotMinutes: 60,
+        windows: week({ sun: [960, 1260], mon: [960, 1260], thu: [960, 1260], sat: [960, 1260] }),
+      },
+    ])
+    .onConflictDoUpdate({
+      target: artist.id,
+      // Re-running resets the availability state, so a spec that switched AR-001
+      // to manual does not leave the next run without a synced fixture.
+      set: {
+        availabilitySource: sql`excluded.availability_source`,
+        googleConnected: sql`excluded.google_connected`,
+        slotMinutes: sql`excluded.slot_minutes`,
+        windows: sql`excluded.windows`,
+        active: true,
+      },
+    });
 
   // Dana — the fixture member. 24.500 KD, 5 visits, Silver.
   await db
@@ -299,6 +499,9 @@ async function seed(): Promise<void> {
     await db.execute(sql`DELETE FROM gateway_event`);
     await db.execute(sql`DELETE FROM topup_intent`);
     await db.execute(sql`DELETE FROM sandbox_gateway_payment`);
+    // `loyalty_event.transaction_id` is ON DELETE RESTRICT, so the climbs a
+    // charge produced have to go before the charge does.
+    await db.execute(sql`DELETE FROM loyalty_event`);
     await db.execute(sql`DELETE FROM transaction`);
     await db.execute(sql`DELETE FROM session`);
     await db.execute(sql`DELETE FROM pin_attempt`);
@@ -362,6 +565,90 @@ async function seed(): Promise<void> {
     .update(member)
     .set({ balanceFils: fils(24500), visits: 5 })
     .where(eq(member.id, '8842'));
+
+  // ------------------------------------------------ audit log fixtures ----
+  //
+  // Three rows the audit-log endpoint cannot be honestly tested without.
+  //
+  // WRITTEN ONCE, NEVER RESET — AND THE SEED FOUND THAT OUT THE HARD WAY.
+  //
+  // Every other fixture here is reset on each run: the money tables are cleared
+  // above, which for `ledger_entry` and `gateway_event` takes deliberately
+  // disabling an immutability trigger. The obvious thing to write for these rows
+  // was the same — DELETE the previous fixtures, insert them again — and it
+  // fails:
+  //
+  //     PostgresError: audit_log is append-only: DELETE is not permitted
+  //
+  // even as the OWNER, because migration 0001 backs the REVOKE with a trigger
+  // and no `ALTER TABLE ... DISABLE TRIGGER` is written anywhere for this table.
+  // That is the guarantee doing its job against the one caller most likely to
+  // erode it by accident, and it is a better demonstration of "append-only, 7
+  // years" than any assertion: the seed cannot tidy the audit log, so neither
+  // can anything else.
+  //
+  // So the fixtures are inserted only if they are not already there. Re-running
+  // the seed leaves the existing rows exactly as they were written.
+  const [{ present } = { present: 0 }] = (await db.execute(
+    sql`SELECT count(*)::int AS present FROM audit_log WHERE actor_id = 'PLT-001'`,
+  )) as unknown as Array<{ present: number }>;
+
+  if (present === 0) await db.insert(auditLog).values([
+    {
+      // The design's own row: "Yousef · AVO platform · Wallet adjusted ·
+      // +5.000 KD to Noura S. · support request · Owner console".
+      //
+      // It carries THIS salon's id, which is the whole point — an AVO action on
+      // a salon appears in that salon's log, marked. The dashboard's footnote
+      // promises it and nothing else in the fixtures produces one.
+      salonId: SALON_ID,
+      actorKind: 'platform_admin',
+      actorId: 'PLT-001',
+      actorName: 'Yousef',
+      actorRole: 'AVO platform',
+      kind: 'money',
+      action: 'Wallet adjusted',
+      detail: '+5.000 KD to Dana A. · support request',
+      source: 'owner_console',
+      subjectType: 'member',
+      subjectId: '8842',
+      amountFils: fils(5000),
+      metadata: { ticket: 'AVO-2291' },
+    },
+    {
+      // A PLATFORM-level action belonging to no salon. `salon_id` is null, so it
+      // must be invisible to every merchant — the `salon_id = $1` predicate
+      // excludes null without anyone having to remember to.
+      salonId: null,
+      actorKind: 'platform_admin',
+      actorId: 'PLT-001',
+      actorName: 'Yousef',
+      actorRole: 'AVO platform',
+      kind: 'rules',
+      action: 'Commission rates changed',
+      detail: 'KNET flat 150 → 175 fils, platform-wide',
+      source: 'owner_console',
+      subjectType: 'platform',
+      subjectId: null,
+      metadata: {},
+    },
+    {
+      // ANOTHER SALON'S ROW. Without this, "a merchant cannot read another
+      // salon's audit rows" is proved against an empty set and proves nothing.
+      salonId: 'SAL-LUMIERE',
+      actorKind: 'staff',
+      actorId: 'ST-LUM-001',
+      actorName: 'Lumiere Manager',
+      actorRole: 'manager',
+      kind: 'access',
+      action: 'Permissions changed',
+      detail: 'A name from another salon that must never appear in Amara’s log',
+      source: 'merchant',
+      subjectType: 'staff_user',
+      subjectId: 'ST-LUM-001',
+      metadata: {},
+    },
+  ]);
 
   console.log('seeded');
   console.log(`  member  8842 / ${MEMBER_PASSWORD}   (24.500 KD, Silver)`);

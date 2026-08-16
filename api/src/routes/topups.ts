@@ -29,6 +29,20 @@
  * and the fee are computed server-side and a client-supplied one is ignored
  * outright; and `GET /topups/{id}` reads the intent that was actually asked
  * for, scoped to its owner, 404ing on one that does not exist.
+ *
+ * THE COMMISSION IS NOT ON THE GET
+ * -------------------------------
+ * `GET /topups/{id}` is the wallet's read, so it answers the customer shape —
+ * `TopUpIntentPublicSchema`, which is `TopUpIntentSchema` without `feeFils`. The
+ * rule is api-contract.md § Commission and its addendum, confirmed by the
+ * product owner: the split is configured at MyFatoorah and "the customer doesn't
+ * see this of course, they just see the price". The omission is structural, not
+ * a deleted line — services/topup.ts projects onto the contract's key list.
+ *
+ * `POST /topups` still answers the full shape, including `feeFils`. That is a
+ * KNOWN INCONSISTENCY, not an oversight: it is equally customer-facing, and
+ * Lane D's `money.test.ts` commission sweep asserts the fee on this exact
+ * response, so the two endpoints cannot move independently. Flagged for trunk.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';

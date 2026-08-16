@@ -88,6 +88,58 @@ const EnvSchema = z.object({
   PUBLIC_BASE_URL: z.string().url().optional(),
   /** api-contract.md § TopUpIntent: the gateway returns the customer here. */
   TOPUP_RETURN_URL: z.string().default('avo://topup/return'),
+
+  // ------------------------------------------------------------ receipts --
+  //
+  // Neither channel can be wired yet and neither is waiting on us:
+  // design/whatsapp-templates.md says the four templates are unapproved
+  // ("approval is not instant"), and CLAUDE.md § Escalate lists "whether
+  // receipts send from AVO's domain or per-salon subdomains" as an open client
+  // decision — which is what decides the sending domain's SPF/DKIM records. So
+  // the only driver is `logging`, behind the same seam as the gateway.
+  RECEIPT_DRIVER: z.enum(['logging']).default('logging'),
+
+  /**
+   * THE WORKER IS OFF BY DEFAULT, AND THE REASON IS COORDINATION, NOT CAUTION.
+   *
+   * Lane D's e2e suite asserts, in so many words:
+   *
+   *     expect(scalar(`select status from receipt_job ...`),
+   *       'the receipt was marked sent inside the money transaction —
+   *        the worker has not run').toBe('queued')
+   *
+   * That spec is correct and was written to guard the outbox: a receipt marked
+   * `sent` inside the money transaction would mean the send happened where
+   * db/schema/receipt.ts says it must not. Running the worker against the same
+   * database flips `queued` to `sent` moments later and fails it — for the
+   * opposite reason to the one it is testing.
+   *
+   * Turning it on is therefore a change to Lane D's spec, and CLAUDE.md is
+   * explicit that a lane does not fix another lane's code from inside its own.
+   * The worker is built, exercised and switchable; the flag flips once Lane D
+   * has re-pinned that assertion.
+   */
+  RECEIPT_WORKER_ENABLED: z
+    .enum(['0', '1'])
+    .default('0')
+    .transform((v) => v === '1'),
+
+  /** Milliseconds between passes, measured from the END of the previous one. */
+  RECEIPT_POLL_MS: z.coerce.number().int().positive().default(2_000),
+  /** Jobs claimed per pass. This is the concurrency control — see the worker. */
+  RECEIPT_BATCH_SIZE: z.coerce.number().int().positive().max(500).default(20),
+  /** Tries before a job is parked as a dead letter and audited. */
+  RECEIPT_MAX_ATTEMPTS: z.coerce.number().int().positive().default(6),
+  /** First backoff step. Doubles per attempt, then full-jittered. */
+  RECEIPT_BACKOFF_BASE_MS: z.coerce.number().int().positive().default(5_000),
+  RECEIPT_BACKOFF_MAX_MS: z.coerce.number().int().positive().default(15 * 60_000),
+  /**
+   * How long a claimed job stays claimed. A worker that dies mid-send leaves the
+   * row in `sending`; once this elapses the claim query takes it back. Long
+   * enough to exceed any sane provider timeout, short enough that a crash does
+   * not delay a receipt by more than a couple of minutes.
+   */
+  RECEIPT_LEASE_MS: z.coerce.number().int().positive().default(120_000),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -166,4 +218,12 @@ export const env = {
   gatewayTimeoutMs: raw.GATEWAY_TIMEOUT_MS,
   publicBaseUrl: raw.PUBLIC_BASE_URL ?? `http://localhost:${raw.PORT}`,
   topupReturnUrl: raw.TOPUP_RETURN_URL,
+  receiptDriver: raw.RECEIPT_DRIVER,
+  receiptWorkerEnabled: raw.RECEIPT_WORKER_ENABLED,
+  receiptPollMs: raw.RECEIPT_POLL_MS,
+  receiptBatchSize: raw.RECEIPT_BATCH_SIZE,
+  receiptMaxAttempts: raw.RECEIPT_MAX_ATTEMPTS,
+  receiptBackoffBaseMs: raw.RECEIPT_BACKOFF_BASE_MS,
+  receiptBackoffMaxMs: raw.RECEIPT_BACKOFF_MAX_MS,
+  receiptLeaseMs: raw.RECEIPT_LEASE_MS,
 } as const;

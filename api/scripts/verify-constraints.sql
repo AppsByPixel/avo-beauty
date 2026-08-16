@@ -139,7 +139,17 @@ COMMIT;
 \warn '--- 3g. and a committed ledger entry cannot be edited afterwards ---'
 UPDATE ledger_entry SET amount_fils = 1 WHERE transaction_id = 'TX-LEDGER-OK';
 
-\warn '--- 3h. a wallet token is single use: UPDATE 1 then UPDATE 0 (the 410) ---'
+\warn '--- 3h. a blank Arabic name must be REFUSED; a NULL one must be ACCEPTED ---'
+-- The client falls back with `nameAr ?? name`, and `'' ?? name` is `''`. So a
+-- blank Arabic name does not fall back, it paints an empty heading — absent has
+-- to be NULL and nothing else. Both halves are proven: the whitespace UPDATE
+-- fails, and the NULL one is the one legal statement in this block.
+UPDATE salon SET name_ar = '   ' WHERE id = 'SL-VERIFY';
+UPDATE salon SET stamp_reward_ar = '' WHERE id = 'SL-VERIFY';
+UPDATE branch SET name_ar = '' WHERE id = 'BR-VERIFY';
+UPDATE salon SET name_ar = NULL WHERE id = 'SL-VERIFY';
+
+\warn '--- 3i. a wallet token is single use: UPDATE 1 then UPDATE 0 (the 410) ---'
 INSERT INTO wallet_token (member_id, token_hash) VALUES ('MB-VERIFY', 'hash-live-token');
 UPDATE wallet_token SET consumed_at = now()
  WHERE token_hash = 'hash-live-token' AND consumed_at IS NULL AND expires_at > now();

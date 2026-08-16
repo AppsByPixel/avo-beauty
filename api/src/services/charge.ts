@@ -46,6 +46,7 @@ import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
+import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
@@ -290,14 +291,54 @@ export async function performCharge(
 
     let loyalty: LoyaltyOutcome;
     if (s.loyaltyMode === 'stamps') {
+      const wasReady = (m.stamps ?? 0) >= (s.stampTarget ?? 0);
       loyalty = applyStamps(s.stampTarget ?? 0, m.stamps ?? 0, 1);
       await tx.update(member).set({ stamps: loyalty.stamps }).where(eq(member.id, m.id));
+
+      // Only the charge that FILLS the card. Without `wasReady`, every further
+      // visit on an already-full card would announce the same reward again.
+      if (loyalty.rewardReady && !wasReady) {
+        await tx.insert(loyaltyEvent).values({
+          salonId: ctx.principal.salonId,
+          memberId: m.id,
+          transactionId: txId,
+          kind: 'stamp_reward_ready',
+          stampsAfter: loyalty.stamps,
+          stampTarget: loyalty.target,
+        });
+      }
     } else {
       loyalty = applyVisits(s.tiers ?? [], m.visits, m.tier ?? null, 1);
       await tx
         .update(member)
         .set({ visits: loyalty.visits, tier: loyalty.tier })
         .where(eq(member.id, m.id));
+
+      /**
+       * "Reem S. reached Gold tier" — the one line of the Overview feed that is
+       * not a transaction row. `climbed` is computed just above and was
+       * previously discarded, so the moment a member's standing changed was not
+       * recoverable from anything stored: `member.tier` holds the current rung
+       * and nothing held the move. See db/schema/loyaltyEvent.ts.
+       *
+       * Written inside this transaction like everything else in this function. A
+       * climb recorded but rolled back, or applied but unrecorded, is a feed
+       * that disagrees with the wallet.
+       *
+       * `climbed` is any CHANGE of rung, which after a republished ladder could
+       * in principle be a descent. Nothing here assumes a direction — the row
+       * carries `from_tier` and `to_tier` and lets the reader see which it was.
+       */
+      if (loyalty.climbed && loyalty.tier !== null) {
+        await tx.insert(loyaltyEvent).values({
+          salonId: ctx.principal.salonId,
+          memberId: m.id,
+          transactionId: txId,
+          kind: 'tier_climb',
+          fromTier: m.tier ?? null,
+          toTier: loyalty.tier,
+        });
+      }
     }
 
     // ----------------------------------------------- 10. queue the receipts --

@@ -1,0 +1,38 @@
+-- ===========================================================================
+-- 0009 - the receipt claim index has to be able to rescue a crashed worker
+--
+-- The index was created in 0000 for a claim that had not been written yet, over
+-- `status IN ('queued','failed')`. Writing the worker made the gap obvious.
+--
+-- The claim is one statement:
+--
+--   UPDATE receipt_job SET status='sending', attempts=attempts+1,
+--                          available_at = now() + lease
+--    WHERE id IN (SELECT id FROM receipt_job
+--                  WHERE status IN ('queued','failed','sending')
+--                    AND attempts < max AND available_at <= now()
+--                  ORDER BY available_at LIMIT n FOR UPDATE SKIP LOCKED)
+--
+-- `available_at` doubles as a LEASE. Taking a job pushes it forward, so a worker
+-- that dies between claiming a row and finishing the send leaves that row in
+-- `sending` with a lease that will expire. The claim has to be able to pick it
+-- back up, or the row is stranded for ever - which is precisely the failure mode
+-- that makes people stop trusting outbox tables and start sending inside the
+-- money transaction, where db/schema/receipt.ts explains at length why it must
+-- not go.
+--
+-- `attempts` is already incremented by the claim, so a row that crash-loops
+-- still exhausts its attempt budget and is parked as a dead letter rather than
+-- retrying for ever.
+--
+-- Without `sending` in the predicate the rescue would either not happen at all
+-- or would fall back to a sequential scan of the whole table to find those rows.
+--
+-- CONCURRENCY: this DROP/CREATE is not CONCURRENTLY, so it takes a brief lock on
+-- `receipt_job`. With a worker running that is a pause, not an outage - the
+-- claim simply retries on its next tick. Worth saying out loud because several
+-- API processes share one database during this build.
+-- ===========================================================================
+
+DROP INDEX "receipt_job_claim_idx";--> statement-breakpoint
+CREATE INDEX "receipt_job_claim_idx" ON "receipt_job" USING btree ("available_at") WHERE status IN ('queued', 'failed', 'sending');

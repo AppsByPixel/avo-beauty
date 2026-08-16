@@ -1,8 +1,9 @@
 /**
- * The AVO schema. Sixteen tables, in dependency order.
+ * The AVO schema. Seventeen tables, in dependency order.
  *
  *   salon ─┬─ branch
  *          ├─ service
+ *          ├─ artist (→ staff_user, optionally: an artist needs no login)
  *          ├─ member ──── wallet_token
  *          ├─ staff_user
  *          ├─ session ──── pin_attempt
@@ -20,12 +21,14 @@
 export * from './_shared';
 export * from './salon';
 export * from './service';
+export * from './artist';
 export * from './member';
 export * from './staff';
 export * from './session';
 export * from './transaction';
 export * from './ledger';
 export * from './audit';
+export * from './loyaltyEvent';
 export * from './idempotency';
 export * from './walletToken';
 export * from './receipt';

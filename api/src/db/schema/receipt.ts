@@ -94,10 +94,21 @@ export const receiptJob = pgTable(
      * still one WhatsApp receipt.
      */
     uniqueIndex('receipt_job_transaction_channel_uq').on(t.transactionId, t.channel),
-    // The worker's claim query.
+    /**
+     * The worker's claim query.
+     *
+     * `sending` is in the predicate, and that is the crash-recovery half of the
+     * claim. `available_at` doubles as a LEASE: taking a job pushes it forward,
+     * so a worker that dies mid-send leaves a row in `sending` whose lease
+     * eventually expires and which this index then finds again. Without
+     * `sending` here the claim would either strand those rows for ever or fall
+     * back to a sequential scan to rescue them — and a stranded `sending` row is
+     * the failure mode that makes people distrust outbox tables.
+     * See services/receiptWorker.ts.
+     */
     index('receipt_job_claim_idx')
       .on(t.availableAt)
-      .where(sql`status IN ('queued', 'failed')`),
+      .where(sql`status IN ('queued', 'failed', 'sending')`),
     check('receipt_job_attempts_non_negative', sql`${t.attempts} >= 0`),
     check('receipt_job_sent_at_matches_status', sql`(${t.status} = 'sent') = (${t.sentAt} IS NOT NULL)`),
   ],

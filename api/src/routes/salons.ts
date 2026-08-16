@@ -27,21 +27,64 @@ import { service } from '../db/schema/service';
 import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
 import { badRequest, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
+import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import { loyaltyConfigOf } from './loyalty';
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
 const EDITABLE = new Set([
   'name',
+  // `name` and `stampReward` are editable, so their Arabic twins are too. A
+  // field the API serves but nothing can ever set is the same half-implemented
+  // state this change exists to close: it would leave the Arabic name settable
+  // only by a hand-written UPDATE.
+  'nameAr',
   'brandColor',
   'loyaltyMode',
   'tiers',
   'stampTarget',
   'stampReward',
+  'stampRewardAr',
   'depositFils',
   'noShowReturnMinutes',
   'businessHours',
   'social',
   'whatsappEnabled',
 ]);
+
+/**
+ * The nullable Arabic columns, and the only fields on this route where an empty
+ * string is not a value.
+ *
+ * `'' ?? name` is `''` — a blank Arabic name defeats the client's fallback and
+ * paints an empty heading, which is why the CHECK constraint refuses it. Coerced
+ * here rather than 400'd because clearing a translation is a legitimate thing to
+ * want, and "" is how an emptied text input arrives. Without this, clearing the
+ * field would surface as a constraint violation, i.e. a 500 on a valid intent.
+ */
+const NULLABLE_ARABIC = new Set(['nameAr', 'stampRewardAr']);
+
+/**
+ * The fields that describe what a visit and a top-up are worth. Touching any of
+ * them sends the whole loyalty configuration through the publish validator —
+ * see the block comment in the PATCH handler.
+ */
+const LOYALTY_FIELDS = new Set([
+  'loyaltyMode',
+  'tiers',
+  'stampTarget',
+  'stampReward',
+  'stampRewardAr',
+]);
+
+function normaliseArabic(key: string, value: unknown): unknown {
+  if (!NULLABLE_ARABIC.has(key)) return value;
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw badRequest('invalid_request', `${key} must be a string or null.`);
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
 
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
@@ -57,6 +100,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({
       id: s.id,
       name: s.name,
+      // Emitted whether or not it is set, and emitted as JSON `null` when it is
+      // not. An OMITTED key and a null are the same thing to `??`, which is
+      // exactly why the missing implementation went unnoticed — so the absent
+      // case is now a value the client can actually see and a spec can actually
+      // assert on. What must never reach a client is the STRING "null".
+      nameAr: s.nameAr,
       plan: s.plan,
       brandColor: s.brandColor,
       modules: { booking: s.moduleBooking, shop: s.moduleShop },
@@ -64,10 +113,16 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       tiers: s.tiers,
       stampTarget: s.stampTarget,
       stampReward: s.stampReward,
+      stampRewardAr: s.stampRewardAr,
       depositFils: s.depositFils,
       noShowReturnMinutes: s.noShowReturnMinutes,
       businessHours: s.businessHours,
-      branches: branches.map((b) => ({ id: b.id, salonId: b.salonId, name: b.name })),
+      branches: branches.map((b) => ({
+        id: b.id,
+        salonId: b.salonId,
+        name: b.name,
+        nameAr: b.nameAr,
+      })),
       social: s.social,
       whatsappEnabled: s.whatsappEnabled,
     });
@@ -92,7 +147,39 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     if (!before) throw notFound('unknown_salon', 'No such salon.');
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
-    for (const k of keys) patch[k] = body[k];
+    for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
+
+    /**
+     * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.
+     *
+     * `tiers`, `loyaltyMode`, `stampTarget` and the stamp reward copy have been
+     * in `EDITABLE` since this route was written, and until now nothing checked
+     * them. Every rule the publish endpoint enforces — four rungs, Bronze locked
+     * at 0/0, each threshold above the one below — could be walked around by
+     * sending the same fields one route over, which makes the validation
+     * decorative: an invalid ladder published through the unguarded door is not
+     * a smaller money bug than one published through the guarded one.
+     *
+     * So the loyalty fields go through the SAME validator
+     * (services/loyaltyRules.ts), and the result replaces them wholesale rather
+     * than being merged key by key. The validator returns a COMPLETE
+     * configuration — it fills in whatever the request did not mention from the
+     * current row — which is what keeps `salon_loyalty_config_complete`
+     * satisfiable when a caller flips `loyaltyMode` and nothing else.
+     *
+     * `PUT /salons/{id}/loyalty` remains the endpoint the editor should use: it
+     * returns the preview and writes the "Tier rules published" audit line. This
+     * is the guard on the general-purpose door, not a second front entrance.
+     */
+    const touchesLoyalty = keys.some((k) => LOYALTY_FIELDS.has(k));
+    if (touchesLoyalty) {
+      const config = parseLoyaltyConfig(body, loyaltyConfigOf(before));
+      patch.loyaltyMode = config.mode;
+      patch.tiers = config.tiers;
+      patch.stampTarget = config.stampTarget;
+      patch.stampReward = config.stampReward;
+      patch.stampRewardAr = config.stampRewardAr;
+    }
 
     const [after] = await db
       .update(salon)
