@@ -6,6 +6,100 @@ job and it is the one that fails if nobody does it.
 
 ---
 
+## How to actually drive this, step by step
+
+Written after running it for a day. Read this part first.
+
+### Before anything: declare who owns what
+
+A worktree has one dirty working directory. **Two writers in it — two sessions, or a
+session and a subagent — will read each other's half-written files as their own**, and the
+tidy one destroys the other's work with a `git checkout .`
+
+So at the start of a working block, say it out loud to the trunk session:
+
+> I'm driving avo-api and avo-wallet myself today. Stay out of those.
+
+Then it dispatches nothing into them.
+
+### 1 · Start the mock, once, from the trunk
+
+```bash
+cd ~/dev/avo && pnpm mock          # :4000 — leave it running all day
+```
+
+The wallet and dashboard build against it. If a port is taken from yesterday:
+
+```bash
+lsof -ti :4000 | xargs kill -9
+```
+
+### 2 · Open a build session in the worktree you want to watch
+
+```bash
+cd ~/dev/avo-api        # or -wallet, -web, -qa
+claude
+```
+
+`CLAUDE.md` and `LANES.md` load automatically, so the non-negotiables and the lane rules are
+already in context. Your first message is the lane's brief plus today's slice:
+
+> You are Lane A (API). Read CLAUDE.md and LANES.md.
+>
+> Today: <one day-sized slice>.
+>
+> You write ONLY to `api/`. If a shared package needs changing, stop and tell me.
+>
+> Verify by running it and pasting real output — not by describing what it should do.
+> Commit when it runs.
+
+Those four parts — who you are, one slice, your column, prove it — are the whole brief. The
+last one matters most: **four streams generate more claims than you can personally check**,
+so build the proof into the ask.
+
+### 3 · While it runs
+
+Watch the one you opened. Don't open three more and watch none.
+
+When it says "done", spot-check **one** claim. Not all of them — one. That keeps sessions
+honest without making you the bottleneck.
+
+### 4 · Evening: the integration hour
+
+This is the ritual the whole structure rests on. Do it in the trunk session.
+
+```bash
+cd ~/dev/avo && git checkout dev
+
+git merge --no-ff feat/api -m "merge: lane A"
+pnpm install && pnpm check          # STOP if this fails
+```
+
+Repeat for `feat/qa`, `feat/wallet`, `feat/web`. **Check after every merge, not at the end**
+— otherwise you know something broke but not which lane broke it.
+
+Then verify the way CI does, from a wiped tree — a warm tree lies:
+
+```bash
+rm -rf packages/*/dist .turbo && pnpm check
+```
+
+Then push and level every lane:
+
+```bash
+git push origin dev
+for l in api wallet web qa; do git -C ~/dev/avo-$l rebase dev && git -C ~/dev/avo-$l push -f origin feat/$l; done
+```
+
+### 5 · Route the findings
+
+The job no single lane does. When a lane reports a bug in someone else's code — and it
+will, that is the point of the report-don't-fix rule — carry it to the owning lane with the
+reproduction attached. Today that path found a cross-tenant leak, two suites contradicting
+each other, and a browser session that could debit a wallet.
+
+---
+
 ## Two ways to run a lane, and when to use which
 
 **Persistent sessions — the daily model.** You open a Claude Code session in each worktree
