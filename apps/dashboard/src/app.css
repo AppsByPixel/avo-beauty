@@ -1,0 +1,701 @@
+/*
+ * Merchant dashboard layout.
+ *
+ * Colours resolve through `--avo-*` only — see @avo/tokens. The breakpoint
+ * behaviour is driven by `[data-bp]` on the shell root rather than raw media
+ * queries, because `useBreakpoint` also drives the drawer and the roving nav;
+ * two independent definitions of "narrow" would drift the first time one moved.
+ * interaction-spec.md §1 is the single source of the numbers.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--avo-surface);
+  color: var(--avo-ink);
+  font-family: var(--avo-font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+ul {
+  margin: 0;
+}
+
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--avo-brand-deep);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--avo-brand-deeper);
+}
+
+/* =========================================================== sign-in (5a) == */
+
+.signin {
+  min-height: 100%;
+  background: var(--avo-surface-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+
+.signin__card {
+  width: 100%;
+  max-width: 380px;
+  background: #fff;
+  border: 1px solid var(--avo-hairline);
+  border-radius: 22px;
+  padding: 36px 34px;
+  box-shadow: var(--avo-ui-shadow-card);
+}
+
+.signin__card--done {
+  padding: 44px 34px;
+  text-align: center;
+}
+
+.signin__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 26px;
+}
+
+/* Non-negotiable #9: a white-text fill is `--avo-brand-deep`, never `--avo-brand`. */
+.signin__mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--avo-brand-deep);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 21px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.signin__wordmark {
+  display: block;
+  font-family: var(--avo-font-display);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.signin__scope {
+  display: block;
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.signin__title {
+  font-size: 23px;
+  margin-bottom: 4px;
+}
+
+.signin__sub {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin-bottom: 24px;
+}
+
+.signin__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.signin__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.signin__link {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.signin__error {
+  margin-bottom: 16px;
+}
+
+.signin__foot {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--avo-hairline);
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  text-align: center;
+}
+
+.signin__foot b {
+  color: var(--avo-brand-deep);
+}
+
+.signin__check {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+}
+
+.signin__card--done .signin__sub {
+  margin-bottom: 0;
+  margin-top: 6px;
+  font-size: 13.5px;
+}
+
+/* ================================================================== shell == */
+
+.dash {
+  display: flex;
+  height: 100%;
+  background: var(--avo-surface);
+}
+
+.dash__rail {
+  flex-shrink: 0;
+  width: 232px;
+  background: var(--avo-surface-alt);
+  border-right: 1px solid var(--avo-hairline);
+  /* The sidebar never scrolls with content — interaction-spec.md §1. */
+  overflow-y: auto;
+  transition: width var(--avo-motion-fast) ease;
+}
+
+.dash[data-bp='narrow'] .dash__rail {
+  width: 68px;
+  /*
+   * The hover/focus flyout escapes the 68px rail, and `overflow-y: auto` clips
+   * on BOTH axes. The collapsed rail is ten icons tall and never needs to
+   * scroll, so it gives up its scroll container to let the label out.
+   */
+  overflow: visible;
+}
+
+.dash__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dash__content {
+  flex: 1;
+  overflow: auto;
+  padding: 28px 30px;
+}
+
+.dash[data-bp='base'] .dash__content {
+  padding: 28px 32px;
+}
+
+.dash__column {
+  /* wide: content capped at 1180px and centred. Everything else is fluid. */
+  width: 100%;
+}
+
+.dash[data-bp='wide'] .dash__column {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+/* ------------------------------------------------------------ tablet drawer */
+
+.dash__scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--avo-ink) 34%, transparent);
+  z-index: 40;
+  animation: avo-fade 180ms ease-out;
+}
+
+.dash__drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--avo-surface-alt);
+  border-bottom: 1px solid var(--avo-hairline);
+  border-radius: 0 0 var(--avo-radius-sheet) var(--avo-radius-sheet);
+  z-index: 41;
+  animation: avo-drawer 280ms var(--avo-motion-easing);
+}
+
+@keyframes avo-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes avo-drawer {
+  from {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ================================================================ sidebar == */
+
+.dash-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 20px 16px;
+}
+
+.dash[data-bp='narrow'] .dash-sidebar {
+  padding: 20px 10px;
+}
+
+.dash-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 4px 8px 20px;
+}
+
+.dash-sidebar__mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 18px;
+  font-weight: 600;
+  background: var(--avo-brand-deep);
+  color: #fff;
+}
+
+.dash-sidebar__brand-text {
+  min-width: 0;
+}
+
+.dash-sidebar__salon {
+  display: block;
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.dash-sidebar__salon-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.dash-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dash-nav__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--avo-text-muted-strong);
+  background: transparent;
+  transition: background var(--avo-motion-fast) ease, color var(--avo-motion-fast) ease;
+}
+
+.dash-nav__item:hover {
+  background: var(--avo-surface-alt2);
+  color: var(--avo-ink);
+}
+
+/* Active nav is a tint fill with brand-deep text — not white on brand. #9. */
+.dash-nav__item[data-current] {
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deeper);
+}
+
+.dash-nav__icon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* narrow: icons only, label revealed on hover/focus as a flyout. */
+.dash[data-bp='narrow'] .dash-nav__item {
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.dash[data-bp='narrow'] .dash-nav__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.dash-nav__flyout {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px 10px;
+  border-radius: var(--avo-radius-chip);
+  background: var(--avo-ink);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--avo-motion-fast) ease;
+  z-index: 20;
+}
+
+.dash-nav__item:hover .dash-nav__flyout,
+.dash-nav__item:focus-visible .dash-nav__flyout {
+  opacity: 1;
+}
+
+.dash-sidebar__foot {
+  margin-top: auto;
+  padding: 14px 10px 4px;
+}
+
+.dash-sidebar__token {
+  background: var(--avo-brand-tint);
+  border-radius: 12px;
+  padding: 12px 13px;
+  margin-bottom: 14px;
+}
+
+.dash-sidebar__token .avo-label {
+  color: var(--avo-brand-deep);
+  margin-bottom: 6px;
+  display: block;
+}
+
+.dash-sidebar__token-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dash-sidebar__swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  /* `--avo-brand` as a pure surface. No text sits on it. */
+  background: var(--avo-brand);
+}
+
+.dash-sidebar__token-value {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+}
+
+.dash-sidebar__user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dash-sidebar__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--avo-ink);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dash-sidebar__user-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dash-sidebar__user-role {
+  display: block;
+  font-size: 11px;
+  color: var(--avo-text-muted);
+}
+
+.dash[data-bp='narrow'] .dash-sidebar__brand-text,
+.dash[data-bp='narrow'] .dash-sidebar__token,
+.dash[data-bp='narrow'] .dash-sidebar__user-text {
+  display: none;
+}
+
+.dash[data-bp='narrow'] .dash-sidebar__brand,
+.dash[data-bp='narrow'] .dash-sidebar__user {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ================================================================= header == */
+
+.dash-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 30px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+}
+
+.dash-header__left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.dash-header__menu {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--avo-radius-chip);
+  border: 1px solid var(--avo-ui-ink-10);
+  background: #fff;
+  color: var(--avo-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.dash-header__title {
+  font-size: 26px;
+}
+
+.dash-header__sub {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.dash-header__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.dash-header__date {
+  font-size: 13px;
+  color: var(--avo-ui-ink-55);
+  white-space: nowrap;
+}
+
+.dash-header__rule {
+  width: 1px;
+  height: 22px;
+  background: var(--avo-ui-ink-12);
+}
+
+.dash-header__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid var(--avo-ui-ink-10);
+  border-radius: var(--avo-radius-pill);
+  padding: 6px 13px;
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+.dash-header__signout {
+  font-size: 12.5px;
+}
+
+/* The date is the first thing to go when the header runs out of room. */
+.dash[data-bp='narrow'] .dash-header__date,
+.dash[data-bp='tablet'] .dash-header__date,
+.dash[data-bp='tablet'] .dash-header__rule {
+  display: none;
+}
+
+.dash[data-bp='tablet'] .dash-header,
+.dash[data-bp='tablet'] .dash__content {
+  padding-left: 22px;
+  padding-right: 22px;
+}
+
+/* =============================================================== overview == */
+
+.overview__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--avo-space-grid-gap);
+  margin-bottom: 22px;
+}
+
+/* narrow and tablet: KPI row becomes 2x2. */
+.dash[data-bp='narrow'] .overview__kpis,
+.dash[data-bp='tablet'] .overview__kpis {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.overview__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+.overview__activity {
+  padding: 8px 20px 6px;
+}
+
+.overview__card-title {
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 500;
+  padding: 14px 0 4px;
+}
+
+.overview__feed-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.overview__feed-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-toggle-off);
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.overview__feed-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.overview__feed-text {
+  font-size: 13.5px;
+}
+
+.overview__feed-text b {
+  font-weight: 600;
+}
+
+.overview__feed-when {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.overview__feed-state {
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+/* ====================================================== below 768 notice === */
+
+.dash-toosmall {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--avo-surface-alt);
+}
+
+.dash-toosmall__card {
+  max-width: 420px;
+  background: #fff;
+  border: 1px solid var(--avo-hairline);
+  border-radius: 22px;
+  padding: 32px 28px;
+  box-shadow: var(--avo-ui-shadow-card);
+}
+
+.dash-toosmall__mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: var(--avo-brand-deep);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+
+.dash-toosmall__title {
+  font-size: 22px;
+  margin-bottom: 10px;
+}
+
+.dash-toosmall__body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--avo-text-muted);
+}

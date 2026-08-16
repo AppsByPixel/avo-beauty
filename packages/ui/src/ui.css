@@ -1,0 +1,334 @@
+/*
+ * @avo/ui — shared component styles for the merchant dashboard and, later, the
+ * owner console.
+ *
+ * Import `@avo/tokens/css` BEFORE this file. Every colour here resolves through
+ * an `--avo-*` custom property; there is not one hex in this stylesheet, which
+ * is the only way "never re-type a hex" survives contact with a real build.
+ *
+ * The design bundle uses a handful of ink alphas that the token set does not
+ * name (0.14 hairlines on inputs, the 0.6 micro-label from interaction-spec.md
+ * §2). Those are derived here with color-mix over `--avo-ink` rather than
+ * written out as rgba literals, so a white-label ink change still propagates.
+ */
+
+:root {
+  /* Ink alphas used by the design bundle but not named in the token set. */
+  --avo-ui-ink-06: color-mix(in srgb, var(--avo-ink) 6%, transparent);
+  --avo-ui-ink-08: color-mix(in srgb, var(--avo-ink) 8%, transparent);
+  --avo-ui-ink-10: color-mix(in srgb, var(--avo-ink) 10%, transparent);
+  --avo-ui-ink-12: color-mix(in srgb, var(--avo-ink) 12%, transparent);
+  --avo-ui-ink-14: color-mix(in srgb, var(--avo-ink) 14%, transparent);
+  --avo-ui-ink-38: color-mix(in srgb, var(--avo-ink) 38%, transparent);
+  --avo-ui-ink-55: color-mix(in srgb, var(--avo-ink) 55%, transparent);
+  /* interaction-spec.md §2: uppercase micro-labels are 0.6, never 0.45. */
+  --avo-ui-label: color-mix(in srgb, var(--avo-ink) 60%, transparent);
+
+  --avo-ui-shadow-card: 0 12px 40px var(--avo-ui-ink-06);
+  --avo-ui-shadow-pop: 0 24px 48px -20px color-mix(in srgb, var(--avo-ink) 28%, transparent);
+}
+
+/* --------------------------------------------------------------- primitives */
+
+.avo-card {
+  background: #fff;
+  border: 1px solid var(--avo-hairline);
+  border-radius: var(--avo-radius-card);
+  padding: var(--avo-space-card-padding);
+}
+
+.avo-card--flush {
+  padding: 0;
+}
+
+.avo-label {
+  font-size: var(--avo-type-label-size);
+  font-weight: var(--avo-type-label-weight);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+}
+
+.avo-display {
+  font-family: var(--avo-font-display);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.avo-muted {
+  color: var(--avo-text-muted);
+}
+
+/* ------------------------------------------------------------------ button */
+
+.avo-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: none;
+  border-radius: 12px;
+  padding: 13px 20px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--avo-motion-fast) ease, color var(--avo-motion-fast) ease;
+}
+
+.avo-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/*
+ * Non-negotiable #9. White text sits on `--avo-brand-deep`, never on
+ * `--avo-brand` — even the default sage only reaches 4.27:1 on brand.
+ */
+.avo-btn--primary {
+  background: var(--avo-brand-deep);
+  color: #fff;
+}
+
+.avo-btn--primary:hover:not(:disabled) {
+  background: var(--avo-brand-deeper);
+}
+
+.avo-btn--secondary {
+  background: var(--avo-surface-alt2);
+  color: var(--avo-text-muted-strong);
+}
+
+.avo-btn--quiet {
+  background: transparent;
+  color: var(--avo-brand-deep);
+  padding: 0;
+  font-size: 11.5px;
+}
+
+.avo-btn--block {
+  width: 100%;
+}
+
+/* ------------------------------------------------------------------- field */
+
+.avo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.avo-field__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.avo-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--avo-ui-ink-14);
+  background: #fff;
+  border-radius: 11px;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--avo-ink);
+  transition: border-color var(--avo-motion-fast) ease;
+}
+
+/*
+ * interaction-spec.md §2: keep the brand focus border AND add the ring.
+ *
+ * A bare `outline: none` on `.avo-input` used to sit here. It silently beat the
+ * `:focus-visible` rule in @avo/tokens — same specificity (0,1,0), and this
+ * stylesheet is imported second — so every text input in the product focused
+ * with no ring at all. The spec's words are "never `outline: none` without a
+ * replacement"; the replacement is the token ring, so the reset is now scoped
+ * to the one case the ring deliberately skips.
+ */
+.avo-input:focus {
+  border-color: var(--avo-brand);
+}
+
+.avo-input:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.avo-input::placeholder {
+  color: var(--avo-ui-ink-38);
+}
+
+/* ------------------------------------------------------------ inline error */
+
+.avo-inline-error {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--avo-danger-bg);
+  border-radius: 12px;
+  padding: 11px 14px;
+}
+
+.avo-inline-error__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-danger-dot);
+  flex-shrink: 0;
+}
+
+.avo-inline-error__text {
+  font-size: 12.5px;
+  color: var(--avo-danger-text);
+}
+
+/* ------------------------------------------------------------------ toggle */
+
+.avo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 999px;
+}
+
+.avo-toggle__track {
+  width: 40px;
+  height: 24px;
+  border-radius: var(--avo-radius-pill);
+  padding: 3px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-start;
+  background: var(--avo-toggle-off);
+  transition: background var(--avo-motion-fast) ease;
+}
+
+.avo-toggle[aria-checked='true'] .avo-toggle__track {
+  /* A track is a surface, not a white-text fill — `--avo-brand` is correct here. */
+  background: var(--avo-brand);
+  justify-content: flex-end;
+}
+
+.avo-toggle__knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--avo-shadow-toggle-knob);
+  display: block;
+}
+
+.avo-toggle__label {
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+}
+
+/* ---------------------------------------------------------------- stat card */
+
+.avo-stat__value {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin: 10px 0 8px;
+}
+
+.avo-stat__number {
+  font-family: var(--avo-font-display);
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.avo-stat__unit {
+  font-size: 14px;
+  color: var(--avo-text-muted);
+}
+
+.avo-stat__delta {
+  font-size: 12px;
+  color: var(--avo-positive);
+  min-height: 15px;
+}
+
+/* ---------------------------------------------------------------- skeleton */
+
+.avo-skeleton {
+  display: block;
+  border-radius: 7px;
+  background: linear-gradient(
+    90deg,
+    var(--avo-ui-ink-06),
+    var(--avo-ui-ink-12),
+    var(--avo-ui-ink-06)
+  );
+  background-size: 200% 100%;
+  animation: avo-shimmer 1.4s linear infinite;
+}
+
+@keyframes avo-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ------------------------------------------------------- empty / error / stale */
+
+.avo-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 34px 4px;
+}
+
+.avo-state__title {
+  font-family: var(--avo-font-display);
+  font-size: 19px;
+  font-weight: 500;
+}
+
+.avo-state__body {
+  font-size: 13.5px;
+  color: var(--avo-text-muted);
+  max-width: 46ch;
+  line-height: 1.5;
+}
+
+.avo-state__actions {
+  margin-top: 10px;
+}
+
+.avo-stale {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: var(--avo-warn-bg);
+  border-radius: 12px;
+  padding: 11px 16px;
+  margin-bottom: 18px;
+}
+
+.avo-stale__text {
+  font-size: 12.5px;
+  color: var(--avo-warn-text);
+  flex: 1;
+}
+
+.avo-stale__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-warn-text);
+  flex-shrink: 0;
+}
