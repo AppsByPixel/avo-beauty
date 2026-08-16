@@ -140,7 +140,7 @@ describe('#4 — replaying a key returns the identical result, never a second on
    * packages/mock keys one Map on the header alone and never fingerprints the
    * body, so against the mock this is a knownBug rather than a passing spec.
    */
-  knownBug('same key + a DIFFERENT body is a 422, not a replay of the first result', async () => {
+  it('same key + a DIFFERENT body is a 422, not a replay of the first result', async () => {
     const key = idempotencyKey('topup-replay-mutated');
     const first = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: key,
