@@ -1,0 +1,16 @@
+{
+  "name": "@avo/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lane D. Executable guards for the money core, run against packages/mock until lane A's API lands.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
