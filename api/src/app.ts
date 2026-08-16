@@ -4,8 +4,10 @@
  * Two things happen here that everything else depends on.
  *
  * 1. THE PRINCIPAL IS RESOLVED ONCE PER REQUEST, in an `onRequest` hook, and
- *    hung on the request. Handlers then call `requirePerm(req, 'scanner')` as
- *    their first statement. Resolution is deliberately non-fatal — an anonymous
+ *    hung on the request. Handlers then call `requireScannerPerm(req, 'scanner')`
+ *    or `requireDashboardPerm(req, 'team')` as their first statement — the
+ *    surface an endpoint belongs to is always named, never inferred.
+ *    Resolution is deliberately non-fatal — an anonymous
  *    request gets `principal: undefined` rather than a 401 here — because the
  *    sign-in routes are anonymous by definition and a global reject would have
  *    to carve out exceptions, which is how an endpoint ends up accidentally

@@ -39,7 +39,7 @@ import {
   PERMISSION_NAMES,
   permsOf,
   requireDashboardPerm,
-  requirePerm,
+  requireScannerPerm,
   requireStaff,
   type PermissionName,
 } from '../auth/principal';
@@ -88,9 +88,15 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
   /**
    * No permission gate: this is how a scanner learns what it may do, so gating
    * it on a permission would be circular. Authentication is the gate.
+   *
+   * `'either'` and not `'scanner'`, written out rather than defaulted. Both
+   * surfaces need to know who is signed in and what they may do — the scanner
+   * to draw its locked screens, the dashboard to draw its own shell — and the
+   * response carries no money and no other staff member's row. This is the one
+   * staff endpoint in the API that is genuinely surface-agnostic.
    */
   app.get('/staff/me', async (req, reply) => {
-    const p = requireStaff(req);
+    const p = requireStaff(req, 'either');
     const rows = await db.select().from(staffUser).where(eq(staffUser.id, p.id)).limit(1);
     const row = rows[0];
     if (!row) throw notFound('unknown_staff', 'No such staff member.');
@@ -244,7 +250,7 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
    * identical to a member that does not exist.
    */
   app.post('/scans', async (req, reply) => {
-    const p = requirePerm(req, 'scanner');
+    const p = requireScannerPerm(req, 'scanner');
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const token = typeof body.token === 'string' ? body.token.trim() : '';

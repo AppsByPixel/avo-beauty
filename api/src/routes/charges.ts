@@ -30,7 +30,7 @@ import { db } from '../db/client';
 import { member } from '../db/schema/member';
 import { ledgerEntry } from '../db/schema/ledger';
 import { transaction } from '../db/schema/transaction';
-import { requirePerm, hasScenario } from '../auth/principal';
+import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { requireString, requireStringArray } from '../money/validate';
@@ -87,8 +87,9 @@ async function withIdempotency<T>(
 export async function registerChargeRoutes(app: FastifyInstance): Promise<void> {
   // ------------------------------------------------------------- POST /charges --
   app.post('/charges', async (req, reply) => {
-    // FIRST. A wallet is not debited by a principal with no scanner authority.
-    const p = requirePerm(req, 'scanner');
+    // FIRST. A wallet is not debited by a principal with no scanner authority —
+    // and not from a browser tab, whatever authority it holds.
+    const p = requireScannerPerm(req, 'scanner');
 
     // Then the key — a money-moving POST without one is refused before any work.
     const key = readIdempotencyKey(req);
@@ -122,9 +123,19 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
   });
 
   // -------------------------------------------------------------- GET /charges --
-  /** perms.charges — "senior permission", api-contract.md § StaffUser. */
+  /**
+   * perms.charges — "senior permission", api-contract.md § StaffUser, which
+   * spells the surface out too: "can open Today's charges ON THE SCANNER". The
+   * merchant dashboard has no today's-charges screen; its only mention of
+   * `charges` and `void` is the Accounts → Team permission editor, where they
+   * are labels on a checkbox, not actions.
+   *
+   * So this is scanner-scoped like the charge itself. The list names every
+   * customer charged today with amounts — reading it from an unattended browser
+   * tab is a smaller harm than debiting from one, but it is the same door.
+   */
   app.get('/charges', async (req, reply) => {
-    const p = requirePerm(req, 'charges');
+    const p = requireScannerPerm(req, 'charges');
 
     const since = new Date();
     since.setHours(0, 0, 0, 0);
@@ -168,9 +179,16 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
    *
    * Refunds are wallet credit. Non-negotiable #5: no cash, no card reversal, on
    * any surface, ever.
+   *
+   * Scanner-scoped. A void moves money back into a wallet inside a 15-minute
+   * window — it is the undo of something that just happened at the counter, in
+   * front of the customer, and the design puts it there: `Void` appears
+   * throughout AVO Staff Scanner.dc.html and nowhere in the dashboard but the
+   * permission editor. If the window has closed, the merchant reimburses; there
+   * is no dashboard path back into a wallet, by design.
    */
   app.post('/voids', async (req, reply) => {
-    const p = requirePerm(req, 'void');
+    const p = requireScannerPerm(req, 'void');
     const key = readIdempotencyKey(req);
 
     const body = (req.body ?? {}) as Record<string, unknown>;
