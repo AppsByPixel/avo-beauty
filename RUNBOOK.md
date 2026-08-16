@@ -134,6 +134,45 @@ This should not happen — the one-writer rule exists to prevent it. If it did, 
 that broke the rule is wrong regardless of whose code is better. Revert that side, land
 the change on `dev` yourself, and rebase both lanes.
 
+### The break only reproduces in one worktree
+
+Five worktrees means **five independent `pnpm install` results**. They can hoist
+differently, so a dependency conflict can fail in one worktree and pass on the branch.
+
+Before reporting a broken branch, check the branch:
+
+```bash
+cd ~/dev/avo && git checkout dev && pnpm check
+```
+
+A failure you can only reproduce in your own worktree is a **resolution artifact until
+proven otherwise**. The cause may still be real and worth fixing — but the blast radius is
+not what it looks like from inside one checkout.
+
+This bit us for real: a React 18/19 split failed the dashboard typecheck in one worktree
+and passed cleanly on `dev` the whole time.
+
+### Two agents in one worktree
+
+Don't. Ever.
+
+A worktree is a single working directory with one dirty state. Two agents in it will read
+each other's half-written files as their own, and the polite one — the one that runs
+`git checkout .` to get a clean baseline before starting — destroys the other's
+uncommitted work with no way back.
+
+This is the same one-writer rule as `CLAUDE.md`, one level up: **one writer per package,
+and one agent per worktree.**
+
+Before dispatching into a worktree, check nothing is already live there:
+
+```bash
+git -C ~/dev/avo-<lane> status --porcelain     # dirty tree = someone may be mid-flight
+```
+
+If you find foreign uncommitted changes in your lane: **stop and report.** Do not stage,
+commit, revert or clean them. Tidying is the destructive option here.
+
 ### A lane needs a contract change
 
 `packages/types` is trunk-owned. The correct sequence:
