@@ -13,9 +13,17 @@
  */
 
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { fils, formatMoney, moneyAriaLabel, type Fils, type TopUpIntent } from '@avo/types';
+import {
+  fils,
+  formatMoney,
+  moneyAriaLabel,
+  type Fils,
+  type TierName,
+  type TopUpIntent,
+} from '@avo/types';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text, WHITE } from '../theme';
-import { en } from '../copy/en';
+import { useCopy, useLanguage } from '../i18n/language';
+import type { Copy } from '../copy/types';
 import { canRetry, PAYMENT_METHODS, type TopUpOutcome } from '../domain/topup';
 import type { TopUpController, TopUpStage } from '../state/useTopUp';
 import { Sheet } from './Sheet';
@@ -31,11 +39,15 @@ interface Props {
    * forbids adding creditFils to the old balance to produce it.
    */
   newBalanceFils: Fils | null;
-  /** The tier that funded the bonus, for the calculation card's middle row. */
-  tierName: string | null;
+  /**
+   * The tier that funded the bonus, for the calculation card's middle row.
+   * A `TierName` and not a label, because Arabic inflects it — copy/types.ts.
+   */
+  tier: TierName | null;
 }
 
-export function TopUpSheet({ stage, controller, newBalanceFils, tierName }: Props) {
+export function TopUpSheet({ stage, controller, newBalanceFils, tier }: Props) {
+  const copy = useCopy();
   const open = stage.name !== 'closed';
   const dismissible = stage.name !== 'redirect';
 
@@ -44,7 +56,7 @@ export function TopUpSheet({ stage, controller, newBalanceFils, tierName }: Prop
       open={open}
       dismissible={dismissible}
       onDismiss={controller.close}
-      label={en.payTitle}
+      label={copy.payTitle}
       testID="topup-sheet"
     >
       {stage.name === 'redirect' ? (
@@ -59,7 +71,7 @@ export function TopUpSheet({ stage, controller, newBalanceFils, tierName }: Prop
       ) : stage.name === 'quoteFailed' ? (
         <QuoteFailedStage controller={controller} />
       ) : stage.name === 'closed' ? null : (
-        <ChooseStage stage={stage} controller={controller} tierName={tierName} />
+        <ChooseStage stage={stage} controller={controller} tier={tier} />
       )}
     </Sheet>
   );
@@ -70,12 +82,13 @@ export function TopUpSheet({ stage, controller, newBalanceFils, tierName }: Prop
 function ChooseStage({
   stage,
   controller,
-  tierName,
+  tier,
 }: {
   stage: Extract<TopUpStage, { name: 'quoting' | 'ready' }>;
   controller: TopUpController;
-  tierName: string | null;
+  tier: TierName | null;
 }) {
+  const { lang, copy } = useLanguage();
   const intent = stage.name === 'ready' ? stage.intent : null;
   const method = stage.name === 'ready' ? stage.intent.method : stage.method;
   // The amounts arrive off the wire as plain numbers. `fils()` re-brands them and
@@ -91,7 +104,7 @@ function ChooseStage({
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} testID="topup-choose">
-      <Text style={[text('displayS'), styles.sheetTitle]}>{en.payTitle}</Text>
+      <Text style={[text('displayS', lang), styles.sheetTitle]}>{copy.payTitle}</Text>
 
       {/*
         THE CALCULATION CARD. Every figure below comes off the TopUpIntent the
@@ -100,7 +113,7 @@ function ChooseStage({
         rows are bars rather than zeroes.
       */}
       <View style={styles.calcCard} testID="topup-calc">
-        <CalcRow label={en.youPay} amount={quote ? quote.pay : null} testID="calc-pay" />
+        <CalcRow label={copy.youPay} amount={quote ? quote.pay : null} testID="calc-pay" />
         {/*
           The row exists only when the server sent a bonus — in stamps mode
           `bonusFils` is 0 and there is nothing to show.
@@ -114,7 +127,7 @@ function ChooseStage({
         */}
         {quote && quote.bonus > 0 ? (
           <CalcRow
-            label={tierName ? en.bonusRow(tierName) : en.txTierBonus}
+            label={copy.bonusRow(tier)}
             amount={quote.bonus}
             signed
             tone="brand"
@@ -123,7 +136,7 @@ function ChooseStage({
         ) : null}
         <View style={styles.calcDivider} />
         <CalcRow
-          label={en.lands}
+          label={copy.lands}
           amount={quote ? quote.credit : null}
           tone="brand"
           strong
@@ -131,7 +144,7 @@ function ChooseStage({
         />
       </View>
 
-      <Text style={[text('label'), styles.methodLabel]}>{en.methodLabel}</Text>
+      <Text style={[text('label', lang), styles.methodLabel]}>{copy.methodLabel}</Text>
       <View style={styles.methodList}>
         {PAYMENT_METHODS.map((option) => {
           const on = option.id === method;
@@ -141,7 +154,7 @@ function ChooseStage({
               onPress={() => controller.chooseMethod(option.id)}
               accessibilityRole="radio"
               accessibilityState={{ selected: on }}
-              accessibilityLabel={en.payMethod[option.id]}
+              accessibilityLabel={copy.payMethod[option.id]}
               testID={`topup-method-${option.id}`}
               style={[styles.method, on && styles.methodOn]}
             >
@@ -150,12 +163,12 @@ function ChooseStage({
               </View>
               <View style={styles.methodBody}>
                 <View style={styles.methodNameRow}>
-                  <Text style={[text('bodyL'), styles.methodName]}>
-                    {en.payMethod[option.id]}
+                  <Text style={[text('bodyL', lang), styles.methodName]}>
+                    {copy.payMethod[option.id]}
                   </Text>
-                  {option.note ? (
+                  {option.mostUsed ? (
                     <View style={styles.notePill}>
-                      <Text style={[text('bodyS'), styles.noteText]}>{option.note}</Text>
+                      <Text style={[text('bodyS', lang), styles.noteText]}>{copy.mostUsed}</Text>
                     </View>
                   ) : null}
                 </View>
@@ -174,9 +187,9 @@ function ChooseStage({
       </View>
 
       <PrimaryButton
-        label={quote ? `${en.payBtn} ${formatMoney(quote.pay)}` : en.payBtn}
+        label={quote ? `${copy.payBtn} ${formatMoney(quote.pay, lang)}` : copy.payBtn}
         accessibilityLabel={
-          quote ? `${en.payBtn} ${moneyAriaLabel(quote.pay)}` : en.payBtn
+          quote ? `${copy.payBtn} ${moneyAriaLabel(quote.pay, lang)}` : copy.payBtn
         }
         onPress={controller.pay}
         disabled={!quote}
@@ -202,10 +215,16 @@ function CalcRow({
   strong?: boolean;
   testID: string;
 }) {
+  const { lang, copy } = useLanguage();
   const tint = tone === 'brand' ? color.brandDeep : color.ink;
   return (
     <View style={styles.calcRow} testID={testID}>
-      <Text style={[text('body'), { color: tone === 'brand' ? color.brandDeeper : color.textMuted }]}>
+      <Text
+        style={[
+          text('body', lang),
+          { color: tone === 'brand' ? color.brandDeeper : color.textMuted },
+        ]}
+      >
         {label}
       </Text>
       {amount === null ? (
@@ -213,14 +232,15 @@ function CalcRow({
         <View style={styles.moneySkeleton} testID={`${testID}-skeleton`} />
       ) : (
         <Text
-          accessibilityLabel={`${signed ? 'plus ' : ''}${moneyAriaLabel(amount)}`}
-          style={[
-            strong ? styles.calcValueStrong : styles.calcValue,
-            { color: tint },
-          ]}
+          // "plus" is a word, so it is copy rather than an inline literal — the
+          // exact shape of string that ships in English inside an Arabic build.
+          accessibilityLabel={
+            signed ? copy.plus(moneyAriaLabel(amount, lang)) : moneyAriaLabel(amount, lang)
+          }
+          style={[strong ? styles.calcValueStrong : styles.calcValue, { color: tint }]}
         >
           {signed ? '+' : ''}
-          {formatMoney(amount)}
+          {formatMoney(amount, lang)}
         </Text>
       )}
     </View>
@@ -243,6 +263,7 @@ function CalcRow({
  * wallet that has forgotten about it.
  */
 function RedirectStage({ intent }: { intent: TopUpIntent }) {
+  const { lang, copy } = useLanguage();
   return (
     <View style={styles.centred} testID="topup-redirect">
       <View style={styles.methodMark}>
@@ -250,14 +271,14 @@ function RedirectStage({ intent }: { intent: TopUpIntent }) {
           {PAYMENT_METHODS.find((m) => m.id === intent.method)?.tag ?? ''}
         </Text>
       </View>
-      <Text style={[text('displayS'), styles.resultTitle]}>
-        {en.payRedirectTitle(en.payMethod[intent.method])}
+      <Text style={[text('displayS', lang), styles.resultTitle]}>
+        {copy.payRedirectTitle(copy.payMethod[intent.method])}
       </Text>
       <Text
-        style={[text('body'), styles.resultBody]}
+        style={[text('body', lang), styles.resultBody]}
         accessibilityLiveRegion="polite"
       >
-        {en.payRedirectSub}
+        {copy.payRedirectSub}
       </Text>
 
       <View style={styles.dots}>
@@ -268,7 +289,7 @@ function RedirectStage({ intent }: { intent: TopUpIntent }) {
 
       <View style={styles.holdNote}>
         <View style={styles.holdDot} />
-        <Text style={[text('bodyS'), styles.holdText]}>{en.payDontClose}</Text>
+        <Text style={[text('bodyS', lang), styles.holdText]}>{copy.payDontClose}</Text>
       </View>
     </View>
   );
@@ -276,12 +297,21 @@ function RedirectStage({ intent }: { intent: TopUpIntent }) {
 
 // ------------------------------------------------------------------ result --
 
-const OUTCOME_COPY: Record<TopUpOutcome, { title: string; message: string }> = {
-  success: { title: en.doneTitle, message: en.doneMsg },
-  declined: { title: en.failTitle, message: en.failMsg },
-  cancelled: { title: en.cancelTitle, message: en.cancelMsg },
-  pending: { title: en.pendingTitle, message: en.pendingMsg },
-};
+/**
+ * The four outcomes' words.
+ *
+ * A function of the copy set rather than a module constant: a constant is
+ * evaluated once at import and would freeze whichever language happened to load
+ * first, which is the classic way a language switch "mostly" works.
+ */
+function outcomeWords(copy: Copy): Record<TopUpOutcome, { title: string; message: string }> {
+  return {
+    success: { title: copy.doneTitle, message: copy.doneMsg },
+    declined: { title: copy.failTitle, message: copy.failMsg },
+    cancelled: { title: copy.cancelTitle, message: copy.cancelMsg },
+    pending: { title: copy.pendingTitle, message: copy.pendingMsg },
+  };
+}
 
 function ResultStage({
   intent,
@@ -294,7 +324,8 @@ function ResultStage({
   newBalanceFils: Fils | null;
   controller: TopUpController;
 }) {
-  const copy = OUTCOME_COPY[outcome];
+  const { lang, copy } = useLanguage();
+  const words = outcomeWords(copy)[outcome];
   const retryable = canRetry(outcome);
   // Re-branded off the wire; `fils()` throws on a float rather than rendering one.
   const paid = fils(intent.amountFils);
@@ -318,28 +349,28 @@ function ResultStage({
           </Text>
         </View>
 
-        <Text style={[text('displayM'), styles.resultTitle]} accessibilityRole="header">
-          {copy.title}
+        <Text style={[text('displayM', lang), styles.resultTitle]} accessibilityRole="header">
+          {words.title}
         </Text>
-        <Text style={[text('body'), styles.resultBody]}>{copy.message}</Text>
+        <Text style={[text('body', lang), styles.resultBody]}>{words.message}</Text>
 
         <View style={styles.rowsCard}>
           {outcome === 'success' ? (
             <>
               {/* creditFils — what the server says landed, not amount + a local bonus. */}
               <ResultRow
-                label={en.rAmount}
-                value={formatMoney(credited)}
-                valueLabel={moneyAriaLabel(credited)}
+                label={copy.rAmount}
+                value={formatMoney(credited, lang)}
+                valueLabel={moneyAriaLabel(credited, lang)}
                 strong
               />
-              <ResultRow label={en.rMethod} value={en.payMethod[intent.method]} />
+              <ResultRow label={copy.rMethod} value={copy.payMethod[intent.method]} />
               <ResultRow
-                label={en.rBalance}
-                value={newBalanceFils === null ? null : formatMoney(newBalanceFils)}
+                label={copy.rBalance}
+                value={newBalanceFils === null ? null : formatMoney(newBalanceFils, lang)}
                 {...(newBalanceFils === null
                   ? {}
-                  : { valueLabel: moneyAriaLabel(newBalanceFils) })}
+                  : { valueLabel: moneyAriaLabel(newBalanceFils, lang) })}
                 strong
                 last
               />
@@ -347,27 +378,27 @@ function ResultStage({
           ) : outcome === 'pending' ? (
             <>
               <ResultRow
-                label={en.rAmount}
-                value={formatMoney(paid)}
-                valueLabel={moneyAriaLabel(paid)}
+                label={copy.rAmount}
+                value={formatMoney(paid, lang)}
+                valueLabel={moneyAriaLabel(paid, lang)}
                 strong
               />
-              <ResultRow label={en.rStatus} value={en.vPending} tone="warn" />
+              <ResultRow label={copy.rStatus} value={copy.vPending} tone="warn" />
               {/* Shown so support can trace a payment nobody can yet account for. */}
-              <ResultRow label={en.rRef} value={intent.reference} mono last />
+              <ResultRow label={copy.rRef} value={intent.reference} mono last />
             </>
           ) : (
             <>
               <ResultRow
-                label={en.rAmount}
-                value={formatMoney(paid)}
-                valueLabel={moneyAriaLabel(paid)}
+                label={copy.rAmount}
+                value={formatMoney(paid, lang)}
+                valueLabel={moneyAriaLabel(paid, lang)}
                 strong
               />
-              <ResultRow label={en.rMethod} value={en.payMethod[intent.method]} />
-              <ResultRow label={en.rCharged} value={en.vNothing} tone="good" />
+              <ResultRow label={copy.rMethod} value={copy.payMethod[intent.method]} />
+              <ResultRow label={copy.rCharged} value={copy.vNothing} tone="good" />
               {/* api-contract.md § Transaction: the gateway ref, shown on failure. */}
-              <ResultRow label={en.rRef} value={intent.reference} mono last />
+              <ResultRow label={copy.rRef} value={intent.reference} mono last />
             </>
           )}
         </View>
@@ -382,17 +413,17 @@ function ResultStage({
           <PrimaryButton
             label={
               outcome === 'success'
-                ? en.done
+                ? copy.done
                 : outcome === 'pending'
-                  ? en.backToWallet
-                  : en.tryAgain
+                  ? copy.backToWallet
+                  : copy.tryAgain
             }
             onPress={retryable ? () => controller.tryAgain() : controller.close}
             testID={retryable ? 'topup-try-again' : 'topup-result-done'}
           />
           {retryable ? (
             <SecondaryButton
-              label={en.otherMethod}
+              label={copy.otherMethod}
               onPress={() => controller.tryAgain()}
               testID="topup-other-method"
             />
@@ -420,11 +451,12 @@ function ResultRow({
   tone?: 'warn' | 'good';
   last?: boolean;
 }) {
+  const { lang } = useLanguage();
   const tint =
     tone === 'warn' ? color.warnText : tone === 'good' ? color.positive : color.ink;
   return (
     <View style={[styles.resultRow, last && styles.resultRowLast]}>
-      <Text style={[text('body'), styles.resultRowLabel]}>{label}</Text>
+      <Text style={[text('body', lang), styles.resultRowLabel]}>{label}</Text>
       {value === null ? (
         <View style={styles.moneySkeleton} />
       ) : (
@@ -432,6 +464,9 @@ function ResultRow({
           accessibilityLabel={valueLabel}
           style={[
             strong ? styles.calcValueStrong : styles.resultRowValue,
+            // A text value (a method name, a status word) needs the Arabic face;
+            // a money value and a reference stay in the Latin display face.
+            !strong && !mono && lang === 'ar' && styles.resultRowValueAr,
             mono && styles.reference,
             { color: strong ? color.ink : tint },
           ]}
@@ -451,20 +486,21 @@ function ResultRow({
  * the SAME idempotency key in case the request did reach the server.
  */
 function QuoteFailedStage({ controller }: { controller: TopUpController }) {
+  const { lang, copy } = useLanguage();
   return (
     <View style={styles.centred} testID="topup-quote-failed">
       <View style={[styles.resultMark, styles.resultMarkBad]}>
         <Text style={styles.resultGlyph}>✕</Text>
       </View>
-      <Text style={[text('displayM'), styles.resultTitle]}>{en.quoteFailedTitle}</Text>
-      <Text style={[text('body'), styles.resultBody]}>{en.quoteFailedBody}</Text>
+      <Text style={[text('displayM', lang), styles.resultTitle]}>{copy.quoteFailedTitle}</Text>
+      <Text style={[text('body', lang), styles.resultBody]}>{copy.quoteFailedBody}</Text>
       <View style={styles.resultActions}>
         <PrimaryButton
-          label={en.tryAgain}
+          label={copy.tryAgain}
           onPress={controller.retryQuote}
           testID="topup-retry-quote"
         />
-        <SecondaryButton label={en.txClose} onPress={controller.close} testID="topup-cancel" />
+        <SecondaryButton label={copy.txClose} onPress={controller.close} testID="topup-cancel" />
       </View>
     </View>
   );
@@ -504,7 +540,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.surfaceAlt2,
   },
 
-  methodLabel: { color: color.textMutedLabel, marginTop: 20, marginBottom: 10, marginLeft: 2 },
+  methodLabel: { color: color.textMutedLabel, marginTop: 20, marginBottom: 10, marginStart: 2 },
   methodList: { gap: 9 },
   method: {
     flexDirection: 'row',
@@ -621,6 +657,7 @@ const styles = StyleSheet.create({
   resultRowLast: { borderBottomWidth: 0 },
   resultRowLabel: { color: color.textMutedLabel },
   resultRowValue: { fontSize: 13, fontWeight: '600', fontFamily: 'Inter_600SemiBold' },
+  resultRowValueAr: { fontFamily: 'IBMPlexSansArabic_600SemiBold' },
   reference: { fontFamily: 'Fraunces_500Medium', letterSpacing: 0.4 },
 
   resultActions: { alignSelf: 'stretch', marginTop: 20, gap: 9 },

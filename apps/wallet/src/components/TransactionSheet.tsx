@@ -16,7 +16,8 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Transaction } from '@avo/types';
 import { color, radius, text } from '../theme';
-import { en } from '../copy/en';
+import { useLanguage } from '../i18n/language';
+import { alignEnd } from '../i18n/rtl';
 import { buildReceipt } from '../domain/receipt';
 import { startPaymentReport } from '../support/contact';
 import { Sheet } from './Sheet';
@@ -29,7 +30,8 @@ interface Props {
 }
 
 export function TransactionSheet({ transaction, branches, onClose }: Props) {
-  const receipt = transaction ? buildReceipt(transaction, branches) : null;
+  const { lang, copy } = useLanguage();
+  const receipt = transaction ? buildReceipt(transaction, branches, lang, copy) : null;
 
   return (
     <Sheet
@@ -51,8 +53,8 @@ export function TransactionSheet({ transaction, branches, onClose }: Props) {
             >
               {receipt.amount}
             </Text>
-            <Text style={[text('displayS'), styles.title]}>{receipt.title}</Text>
-            <Text style={[text('bodyS'), styles.subtitle]}>{receipt.subtitle}</Text>
+            <Text style={[text('displayS', lang), styles.title]}>{receipt.title}</Text>
+            <Text style={[text('bodyS', lang), styles.subtitle]}>{receipt.subtitle}</Text>
             {/*
               interaction-spec.md §2: a status pill must carry its meaning as
               text, not as colour alone. The word is the status; the tint only
@@ -81,7 +83,7 @@ export function TransactionSheet({ transaction, branches, onClose }: Props) {
               />
               <Text
                 style={[
-                  text('bodyS'),
+                  text('bodyS', lang),
                   styles.pillText,
                   receipt.statusTone === 'warn'
                     ? styles.pillTextWarn
@@ -98,27 +100,38 @@ export function TransactionSheet({ transaction, branches, onClose }: Props) {
           <View style={styles.rowsCard} testID="tx-rows">
             {receipt.rows.map((row) => (
               <View key={row.label} style={styles.row}>
-                <Text style={[text('body'), styles.rowLabel]}>{row.label}</Text>
+                <Text style={[text('body', lang), styles.rowLabel]}>{row.label}</Text>
+                {/*
+                  `textAlign` is physical in React Native — TextStyle has no
+                  'start'/'end' — so the value column's alignment is resolved
+                  from the language instead of being hard-coded to 'right'.
+                  A money row keeps the Latin display face either way (Western
+                  digits, both languages); only a text row switches face.
+                */}
                 <Text
                   accessibilityLabel={row.valueLabel}
-                  style={[row.emphasis ? styles.rowValueMoney : styles.rowValue]}
+                  style={[
+                    row.emphasis ? styles.rowValueMoney : styles.rowValue,
+                    !row.emphasis && lang === 'ar' && styles.rowValueAr,
+                    { textAlign: alignEnd(lang) },
+                  ]}
                 >
                   {row.value}
                 </Text>
               </View>
             ))}
             <View style={[styles.row, styles.rowLast]}>
-              <Text style={[text('body'), styles.rowLabel]}>{en.txRefLabel}</Text>
+              <Text style={[text('body', lang), styles.rowLabel]}>{copy.txRefLabel}</Text>
               <Text style={styles.reference} testID="tx-reference">
                 {receipt.reference}
               </Text>
             </View>
           </View>
 
-          <Text style={[text('bodyS'), styles.help]}>{en.txHelp}</Text>
+          <Text style={[text('bodyS', lang), styles.help]}>{copy.txHelp}</Text>
 
           <SecondaryButton
-            label={en.txReport}
+            label={copy.txReport}
             testID="tx-report"
             style={styles.report}
             onPress={() => {
@@ -128,7 +141,7 @@ export function TransactionSheet({ transaction, branches, onClose }: Props) {
             }}
           />
           <SecondaryButton
-            label={en.txClose}
+            label={copy.txClose}
             testID="tx-close"
             style={styles.close}
             onPress={onClose}
@@ -189,14 +202,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontFamily: 'Inter_600SemiBold',
     color: color.ink,
-    textAlign: 'right',
   },
+  rowValueAr: { fontFamily: 'IBMPlexSansArabic_600SemiBold' },
+  // Money keeps Fraunces in both languages — the digits are Western either way.
   rowValueMoney: {
     fontFamily: 'Fraunces_600SemiBold',
     fontWeight: '600',
     fontSize: 15,
     color: color.ink,
-    textAlign: 'right',
   },
   reference: {
     fontFamily: 'Fraunces_500Medium',

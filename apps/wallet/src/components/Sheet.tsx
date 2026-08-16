@@ -21,6 +21,7 @@
 import { useEffect, useRef } from 'react';
 import { BackHandler, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { color, radius } from '../theme';
+import { useCopy } from '../i18n/language';
 
 interface Props {
   /** Rendered only when true; there is no hidden-but-mounted state. */
@@ -34,6 +35,7 @@ interface Props {
 }
 
 export function Sheet({ open, dismissible, onDismiss, label, testID, children }: Props) {
+  const copy = useCopy();
   // Held in a ref so the listeners below can be registered once per open and
   // still see the current value — re-registering a keydown handler on every
   // stage change would drop the keystroke that arrives during the swap.
@@ -102,7 +104,7 @@ export function Sheet({ open, dismissible, onDismiss, label, testID, children }:
           style={styles.backdrop}
           onPress={onDismiss}
           accessibilityRole="button"
-          accessibilityLabel="Close"
+          accessibilityLabel={copy.txClose}
           testID={testID ? `${testID}-backdrop` : undefined}
         />
       ) : (

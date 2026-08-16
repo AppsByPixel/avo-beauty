@@ -25,8 +25,8 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { formatFils, moneyAriaLabel, type Fils, type Member, type Salon } from '@avo/types';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
-import { en } from '../copy/en';
-import { tierLabel } from '../domain/loyalty';
+import { useLanguage } from '../i18n/language';
+import type { Copy } from '../copy/types';
 import { TOP_UP_AMOUNTS } from '../domain/topup';
 
 interface Props {
@@ -37,38 +37,48 @@ interface Props {
   onContinue: () => void;
 }
 
-/** The badge and the line under the title, both modes. */
-function bonusHeading(member: Member, salon: Salon): { badge: string; explain: string } | null {
+/**
+ * The badge and the line under the title, both modes.
+ *
+ * The tier goes in as a `TierName`, not as a rendered label, because Arabic
+ * needs the noun in one of these strings and the adjective in the other —
+ * `فضية · مكافأة +١٠٪` against `مستواكِ الفضي يضيف ١٠٪ …`. See copy/types.ts.
+ */
+function bonusHeading(
+  member: Member,
+  salon: Salon,
+  copy: Copy,
+): { badge: string; explain: string } | null {
   if (salon.loyaltyMode === 'stamps') {
     const target = salon.stampTarget ?? 0;
     if (target <= 0) return null;
-    return { badge: en.stampsBadge(target), explain: en.stampsExplain };
+    return { badge: copy.stampsBadge(target), explain: copy.stampsExplain };
   }
   const tier = salon.tiers?.find((t) => t.name === member.tier);
   if (!tier || tier.bonusPercent <= 0) return null;
-  const name = tierLabel(tier.name);
   return {
-    badge: en.tierBonusBadge(name, tier.bonusPercent),
-    explain: en.tierBonusExplain(name, tier.bonusPercent),
+    badge: copy.tierBonusBadge(tier.name, tier.bonusPercent),
+    explain: copy.tierBonusExplain(tier.name, tier.bonusPercent),
   };
 }
 
 export function TopUpCard({ member, salon, selected, onSelect, onContinue }: Props) {
-  const heading = bonusHeading(member, salon);
+  const { lang, copy } = useLanguage();
+  const heading = bonusHeading(member, salon, copy);
 
   return (
     <View style={styles.card} testID="topup-card">
       <View style={styles.headRow}>
-        <Text style={[text('displayS'), styles.title]}>{en.topupTitle}</Text>
+        <Text style={[text('displayS', lang), styles.title]}>{copy.topupTitle}</Text>
         {heading ? (
           <View style={styles.badge}>
             <View style={styles.badgeDot} />
-            <Text style={[text('bodyS'), styles.badgeText]}>{heading.badge}</Text>
+            <Text style={[text('bodyS', lang), styles.badgeText]}>{heading.badge}</Text>
           </View>
         ) : null}
       </View>
       {heading ? (
-        <Text style={[text('bodyS'), styles.explain]}>{heading.explain}</Text>
+        <Text style={[text('bodyS', lang), styles.explain]}>{heading.explain}</Text>
       ) : null}
 
       <View style={styles.grid}>
@@ -81,7 +91,7 @@ export function TopUpCard({ member, salon, selected, onSelect, onContinue }: Pro
               accessibilityRole="radio"
               accessibilityState={{ selected: on }}
               // Non-negotiable #1: money reads as dinars, not as a bare number.
-              accessibilityLabel={moneyAriaLabel(amount)}
+              accessibilityLabel={moneyAriaLabel(amount, lang)}
               testID={`topup-amount-${amount}`}
               style={[styles.amount, on && styles.amountOn]}
             >
@@ -99,7 +109,7 @@ export function TopUpCard({ member, salon, selected, onSelect, onContinue }: Pro
         testID="topup-continue"
         style={styles.cta}
       >
-        <Text style={[text('bodyL'), styles.ctaText]}>{en.continuePay}</Text>
+        <Text style={[text('bodyL', lang), styles.ctaText]}>{copy.continuePay}</Text>
       </Pressable>
     </View>
   );

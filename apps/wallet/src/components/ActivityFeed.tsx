@@ -10,7 +10,7 @@
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MICRO_LABEL_COLOR, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
-import { en } from '../copy/en';
+import { useLanguage } from '../i18n/language';
 import { SignedAmount } from './Money';
 import type { ActivityRow } from '../domain/activity';
 
@@ -22,9 +22,10 @@ interface Props {
 }
 
 export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
+  const { lang, copy } = useLanguage();
   return (
     <View style={styles.section}>
-      <Text style={[text('label'), styles.sectionLabel]}>{en.activityLabel}</Text>
+      <Text style={[text('label', lang), styles.sectionLabel]}>{copy.activityLabel}</Text>
       {rows.length === 0 ? (
         <EmptyActivity onTopUp={onTopUp} />
       ) : (
@@ -35,6 +36,7 @@ export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
 }
 
 function Rows({ rows, onOpen }: { rows: ActivityRow[]; onOpen: (id: string) => void }) {
+  const { lang } = useLanguage();
   return (
     <View style={styles.card}>
       {rows.map((row, index) => (
@@ -52,12 +54,13 @@ function Rows({ rows, onOpen }: { rows: ActivityRow[]; onOpen: (id: string) => v
             <View style={[styles.iconDot, row.positive ? styles.iconDotIn : styles.iconDotOut]} />
           </View>
           <View style={styles.rowText}>
-            <Text style={[text('bodyL'), styles.rowTitle]}>{row.title}</Text>
-            <Text style={[text('bodyS'), styles.rowWhen]}>
-              {row.when}
-              {row.pending ? ' · Pending' : ''}
-              {row.failed ? ' · Failed' : ''}
-            </Text>
+            <Text style={[text('bodyL', lang), styles.rowTitle]}>{row.title}</Text>
+            {/*
+              The status suffix is copy, not a literal — it was ' · Pending'
+              inline, which is exactly the sort of string an Arabic build renders
+              in English without anyone noticing. `toActivityRow` composes it now.
+            */}
+            <Text style={[text('bodyS', lang), styles.rowWhen]}>{row.when}</Text>
           </View>
           <SignedAmount
             display={row.amount}
@@ -71,6 +74,7 @@ function Rows({ rows, onOpen }: { rows: ActivityRow[]; onOpen: (id: string) => v
 }
 
 function EmptyActivity({ onTopUp }: { onTopUp: () => void }) {
+  const { lang, copy } = useLanguage();
   return (
     <View style={[styles.card, styles.empty]}>
       <View style={styles.emptyIcon}>
@@ -78,15 +82,17 @@ function EmptyActivity({ onTopUp }: { onTopUp: () => void }) {
         <View style={styles.emptyBar} />
         <View style={[styles.emptyBar, styles.emptyBarShort]} />
       </View>
-      <Text style={[text('displayS'), styles.emptyTitle]}>{en.emptyActivityTitle}</Text>
-      <Text style={[text('body'), styles.emptyBody]}>{en.emptyActivityBody}</Text>
+      <Text style={[text('displayS', lang), styles.emptyTitle]}>{copy.emptyActivityTitle}</Text>
+      <Text style={[text('body', lang), styles.emptyBody]}>{copy.emptyActivityBody}</Text>
       <Pressable
         onPress={onTopUp}
         accessibilityRole="button"
         style={styles.emptyAction}
-        accessibilityLabel={en.emptyActivityAction}
+        accessibilityLabel={copy.emptyActivityAction}
       >
-        <Text style={[text('body'), styles.emptyActionText]}>{en.emptyActivityAction}</Text>
+        <Text style={[text('body', lang), styles.emptyActionText]}>
+          {copy.emptyActivityAction}
+        </Text>
       </Pressable>
     </View>
   );

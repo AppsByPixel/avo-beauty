@@ -41,10 +41,24 @@ const FACES: Record<string, Record<string, string>> = {
     '600': 'Inter_600SemiBold',
     '700': 'Inter_700Bold',
   },
+  /**
+   * design/README.md § Typography: "IBM Plex Sans Arabic (400–700) — Arabic
+   * (AR / RTL) mode in the customer app only." Also the third family in the
+   * design's own font stack, AVO Wallet Home.dc.html:74.
+   */
+  IBMPlexSansArabic: {
+    '400': 'IBMPlexSansArabic_400Regular',
+    '500': 'IBMPlexSansArabic_500Medium',
+    '600': 'IBMPlexSansArabic_600SemiBold',
+    '700': 'IBMPlexSansArabic_700Bold',
+  },
 };
 
 /** The italic display face, used for the "One wallet" note. */
 export const FRAUNCES_ITALIC = 'Fraunces_400Regular_Italic';
+
+/** The one Latin face that survives into Arabic mode. See `moneyFigureFace`. */
+export const ARABIC_FAMILY = 'IBMPlexSansArabic';
 
 function face(family: string, weight: string): string {
   return FACES[family]?.[weight] ?? FACES[family]?.['400'] ?? family;
@@ -55,10 +69,35 @@ export type TypeToken = keyof typeof theme.text;
 /**
  * A token name in, a React Native text style out.
  * `text('money')` is the only correct way to size a money figure.
+ *
+ * ARABIC IS NOT A FONT FALLBACK HERE, AND THAT IS DELIBERATE.
+ *
+ * The design prototype gets away with the CSS stack `Inter, 'IBM Plex Sans
+ * Arabic', system-ui` (AVO Wallet Home.dc.html:74): the browser takes Latin
+ * glyphs from Inter and falls through to Plex Arabic for anything Inter has no
+ * glyph for. React Native has no such mechanism — `fontFamily` is one family,
+ * and an Arabic string set in Fraunces renders as tofu or as whatever the OS
+ * substitutes. A silent system substitution is exactly the failure the lane
+ * brief asked to check for, so the family is chosen explicitly and is therefore
+ * verifiable in the computed style.
+ *
+ * The rule: in Arabic every *text* token becomes IBM Plex Sans Arabic. The one
+ * exception is the money figure, which stays Fraunces — see `moneyFigureFace`.
+ *
+ * Two token properties are also dropped in Arabic, because they are Latin
+ * typesetting instructions that damage Arabic:
+ *
+ *   letterSpacing  — Arabic is cursive. Tracking pulls the joins apart and the
+ *                    word stops reading as a word. The `label` token carries
+ *                    +0.88 and the display tokens carry negative tracking;
+ *                    neither is meaningful for this script.
+ *   textTransform  — `uppercase` has no effect on Arabic (there is no case), so
+ *                    it is dropped rather than left as a no-op that a later
+ *                    reader has to reason about.
  */
-export function text(token: TypeToken): TextStyle {
+export function text(token: TypeToken, lang: 'en' | 'ar' = 'en'): TextStyle {
   const t = theme.text[token];
-  return {
+  const style: TextStyle = {
     ...t,
     // The generator emits the weight as a string ("500"); React Native's
     // TextStyle enumerates the legal values. The token file is the authority on
@@ -66,6 +105,30 @@ export function text(token: TypeToken): TextStyle {
     fontWeight: t.fontWeight as TextStyle['fontWeight'],
     fontFamily: face(t.fontFamily, t.fontWeight),
   };
+  if (lang !== 'ar') return style;
+  // Omitted, not set to undefined: `exactOptionalPropertyTypes` treats an
+  // explicit undefined as a different thing from an absent key.
+  const { letterSpacing: _ls, textTransform: _tt, ...rest } = style;
+  return { ...rest, fontFamily: face(ARABIC_FAMILY, t.fontWeight) };
+}
+
+/**
+ * The face a money FIGURE is set in, in either language.
+ *
+ * Always Fraunces. Non-negotiable #12 keeps money in Western digits in both
+ * languages, and the design system reserves the display face for exactly that:
+ * "Fraunces — display numerals, headings, balances, prices". The design's own
+ * Arabic stack agrees: `'Fraunces','IBM Plex Sans Arabic', serif`
+ * (AVO Wallet Home.dc.html:86) puts Fraunces first, so `24.500` comes from
+ * Fraunces and only the unit د.ك — which Fraunces has no glyphs for — falls
+ * through to Plex Arabic.
+ *
+ * `src/components/Money.tsx` already splits the figure from the unit into two
+ * Text nodes for sizing reasons. That split is the seam this rule needs: figure
+ * in Fraunces, unit in whatever `text()` returns for the language.
+ */
+export function moneyFigureFace(weight: '400' | '500' | '600' = '600'): string {
+  return face('Fraunces', weight);
 }
 
 /**

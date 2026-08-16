@@ -16,9 +16,9 @@ import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { fils, type Fils } from '@avo/types';
 import { cardGradient, radius, shadow, text, WHITE } from '../theme';
-import { en } from '../copy/en';
+import { useLanguage } from '../i18n/language';
 import { Money } from './Money';
-import { tierLabel, type LoyaltyProgress } from '../domain/loyalty';
+import { type LoyaltyProgress } from '../domain/loyalty';
 
 interface Props {
   balanceFils: number;
@@ -31,6 +31,7 @@ interface Props {
 }
 
 export function WalletCard({ balanceFils, pill, progress, lastUpdated, children }: Props) {
+  const { lang, copy } = useLanguage();
   // fils() throws on a float. If a gateway or a migration ever puts 24.5 on the
   // wire, this card fails loudly instead of rendering "24.500" from a number
   // that was never integer fils.
@@ -44,10 +45,17 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
       style={styles.card}
     >
       <View style={styles.head}>
-        <Text style={[text('label'), styles.headLabel]}>{en.balanceLabel}</Text>
+        {/*
+          `letterSpacing: 1.5` below is dropped in Arabic by the same rule that
+          drops it from the `label` token: tracking breaks the cursive joins and
+          the word stops reading as a word. See theme/index.ts § text().
+        */}
+        <Text style={[text('label', lang), lang === 'ar' ? styles.headLabelAr : styles.headLabel]}>
+          {copy.balanceLabel}
+        </Text>
         {pill ? (
           <View style={styles.pill}>
-            <Text style={[text('bodyS'), styles.pillText]}>{pill}</Text>
+            <Text style={[text('bodyS', lang), styles.pillText]}>{pill}</Text>
           </View>
         ) : null}
       </View>
@@ -57,11 +65,13 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
           amount={balance}
           color={WHITE}
           figureStyle={text('displayXL')}
-          unitStyle={styles.unit}
+          unitStyle={[text('bodyL', lang), styles.unit]}
         />
       </View>
 
-      {lastUpdated ? <Text style={[text('bodyS'), styles.stamp]}>{lastUpdated}</Text> : null}
+      {lastUpdated ? (
+        <Text style={[text('bodyS', lang), styles.stamp]}>{lastUpdated}</Text>
+      ) : null}
 
       {progress ? <Progress progress={progress} /> : null}
 
@@ -71,6 +81,8 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
 }
 
 function Progress({ progress }: { progress: LoyaltyProgress }) {
+  const { lang, copy } = useLanguage();
+
   if (progress.mode === 'stamps') {
     return (
       <View>
@@ -80,11 +92,16 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
           ))}
         </View>
         <View style={styles.progressLegend}>
-          <Text style={[text('bodyS'), styles.legendText]}>
-            {en.stampsHint(progress.have, progress.target)}
+          <Text style={[text('bodyS', lang), styles.legendText]}>
+            {copy.stampsHint(progress.have, progress.target)}
           </Text>
+          {/*
+            The reward comes off Salon.stampReward, which the contract carries in
+            one language only. CONTRACT GAP, reported: an Arabic wallet renders
+            the salon's English reward text here. See the lane report.
+          */}
           {progress.reward ? (
-            <Text style={[text('bodyS'), styles.legendText]}>{progress.reward}</Text>
+            <Text style={[text('bodyS', lang), styles.legendText]}>{progress.reward}</Text>
           ) : null}
         </View>
       </View>
@@ -98,17 +115,24 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
         accessibilityRole="progressbar"
         accessibilityValue={{ min: 0, max: 100, now: Math.round(progress.fraction * 100) }}
       >
+        {/*
+          THE FILL GROWS FROM THE READING EDGE, not from the physical left. A bar
+          anchored left in an Arabic layout reads backwards — "almost none left"
+          when it means "almost there". The anchor is in the stylesheet below,
+          and the reason it takes no language conditional is measured, not
+          assumed. See i18n/rtl.ts.
+        */}
         <View style={[styles.trackFill, { width: `${progress.fraction * 100}%` }]} />
       </View>
       <View style={styles.progressLegend}>
-        <Text style={[text('bodyS'), styles.legendText]}>
+        <Text style={[text('bodyS', lang), styles.legendText]}>
           {progress.next
-            ? en.tierHint(progress.visitsToNext, tierLabel(progress.next))
-            : tierLabel(progress.current)}
+            ? copy.tierHint(progress.visitsToNext, progress.next)
+            : copy.tierName[progress.current]}
         </Text>
-        <Text style={[text('bodyS'), styles.legendText]}>
-          {tierLabel(progress.current)}
-          {progress.next ? ` → ${tierLabel(progress.next)}` : ''}
+        {/* The ladder arrow follows the reading direction — → in EN, ← in AR. */}
+        <Text style={[text('bodyS', lang), styles.legendText]}>
+          {copy.tierLadder(progress.current, progress.next)}
         </Text>
       </View>
     </View>
@@ -127,6 +151,7 @@ const styles = StyleSheet.create({
   },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headLabel: { color: WHITE, opacity: 0.85, letterSpacing: 1.5 },
+  headLabelAr: { color: WHITE, opacity: 0.85 },
   pill: {
     paddingVertical: 5,
     paddingHorizontal: 11,
@@ -137,11 +162,21 @@ const styles = StyleSheet.create({
   },
   pillText: { color: WHITE, fontWeight: '600' },
   balanceRow: { marginTop: 12, marginBottom: 16 },
+  // The unit — "KD" / "د.ك" — takes its family from the language's type scale,
+  // supplied by the caller; only the size and weight are set here.
   unit: { fontSize: 17, opacity: 0.82, fontWeight: '500' },
   stamp: { color: 'rgba(255,255,255,0.78)', marginTop: -10, marginBottom: 16 },
 
   track: { height: 6, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' },
-  trackFill: { height: '100%', borderRadius: radius.pill, backgroundColor: WHITE },
+  // alignSelf: 'flex-start' is the CROSS-axis start of this column container,
+  // which is the LEFT in English and the RIGHT in Arabic. Do not "fix" it to
+  // flex-end for RTL — that double-flips it. Measured, see i18n/rtl.ts.
+  trackFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: WHITE,
+    alignSelf: 'flex-start',
+  },
   progressLegend: {
     flexDirection: 'row',
     justifyContent: 'space-between',

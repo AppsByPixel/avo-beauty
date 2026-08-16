@@ -8,24 +8,26 @@
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
-import { en } from '../copy/en';
+import { useLanguage } from '../i18n/language';
 
 export function OfflineBanner() {
+  const { lang, copy } = useLanguage();
   return (
     <View style={[styles.banner, styles.offline]} accessibilityRole="alert">
       <View style={[styles.dot, styles.offlineDot]} />
-      <Text style={[text('body'), styles.offlineText]}>{en.offlineBanner}</Text>
+      <Text style={[text('body', lang), styles.offlineText]}>{copy.offlineBanner}</Text>
     </View>
   );
 }
 
-export function StaleBanner({ at, onRetry }: { at: string; onRetry: () => void }) {
+export function StaleBanner({ at, onRetry }: { at: number; onRetry: () => void }) {
+  const { lang, copy } = useLanguage();
   return (
     <View style={[styles.banner, styles.stale]} accessibilityRole="alert">
       <View style={[styles.dot, styles.staleDot]} />
-      <Text style={[text('body'), styles.staleText]}>{en.staleBanner(at)}</Text>
+      <Text style={[text('body', lang), styles.staleText]}>{copy.staleBanner(at)}</Text>
       <Pressable onPress={onRetry} accessibilityRole="button" style={styles.staleAction}>
-        <Text style={[text('bodyS'), styles.staleActionText]}>{en.tryAgain}</Text>
+        <Text style={[text('bodyS', lang), styles.staleActionText]}>{copy.tryAgain}</Text>
       </Pressable>
     </View>
   );

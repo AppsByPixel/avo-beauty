@@ -22,10 +22,21 @@ export const DEFAULT_TOP_UP_AMOUNT: Fils = fils(10000);
 
 export interface MethodOption {
   id: PaymentMethod;
-  /** The two- to four-letter mark on the tile. */
+  /**
+   * The two- to four-letter mark on the tile. A brand mark, not copy — "KNET",
+   * "VISA" and "PAY" are the same in both languages, and the design keeps them
+   * Latin in its Arabic build too (AVO Wallet Home.dc.html:1406-1408).
+   */
   tag: string;
-  /** A pill next to the name. Only KNET has one. */
-  note: string | null;
+  /**
+   * Whether a pill sits next to the name. Only KNET has one.
+   *
+   * A BOOLEAN AND NOT THE STRING. It was `note: string | null` holding the
+   * literal 'Most used in Kuwait', which rendered in English inside the Arabic
+   * sheet — a lane screenshot caught it. The wording lives in `copy.mostUsed`,
+   * where the Arabic that the design already wrote (design:1405) can reach it.
+   */
+  mostUsed: boolean;
 }
 
 /**
@@ -47,11 +58,11 @@ export interface MethodOption {
  * the fee lines and the fee row are not built.
  */
 export const PAYMENT_METHODS: MethodOption[] = [
-  { id: 'knet', tag: 'KNET', note: 'Most used in Kuwait' },
+  { id: 'knet', tag: 'KNET', mostUsed: true },
   // The design sets the Apple mark as U+F8FF, an Apple private-use glyph that
   // renders as tofu on Android and in the web build. A word is legible everywhere.
-  { id: 'applepay', tag: 'PAY', note: null },
-  { id: 'card', tag: 'VISA', note: null },
+  { id: 'applepay', tag: 'PAY', mostUsed: false },
+  { id: 'card', tag: 'VISA', mostUsed: false },
 ];
 
 export const DEFAULT_PAYMENT_METHOD: PaymentMethod = 'knet';

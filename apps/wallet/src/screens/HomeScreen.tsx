@@ -15,12 +15,13 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native';
 import { fils, type Fils } from '@avo/types';
 import { color, CONTROL_BORDER, MIN_TAP_TARGET, radius, text } from '../theme';
-import { en } from '../copy/en';
+import { useLanguage } from '../i18n/language';
+import { LanguageToggle } from '../components/LanguageToggle';
 import { useWalletHome } from '../state/useWalletHome';
 import { useWalletToken } from '../state/useWalletToken';
 import { useTopUp } from '../state/useTopUp';
-import { loyaltyPill, loyaltyProgress, tierLabel } from '../domain/loyalty';
-import { clockTime, relativeTime, toActivityRow } from '../domain/activity';
+import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
+import { relativeTime, toActivityRow } from '../domain/activity';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { WalletCard } from '../components/WalletCard';
 import { PaymentCode } from '../components/PaymentCode';
@@ -34,6 +35,7 @@ import { TopUpSheet } from '../components/TopUpSheet';
 import { TransactionSheet } from '../components/TransactionSheet';
 
 export function HomeScreen() {
+  const { lang, copy } = useLanguage();
   const home = useWalletHome();
   const { status, snapshot, fetchedAt, failure } = home;
 
@@ -63,9 +65,9 @@ export function HomeScreen() {
   const rows = useMemo(
     () =>
       snapshot
-        ? snapshot.transactions.map((tx) => toActivityRow(tx, snapshot.salon.branches))
+        ? snapshot.transactions.map((tx) => toActivityRow(tx, snapshot.salon.branches, lang, copy))
         : [],
-    [snapshot],
+    [snapshot, lang, copy],
   );
 
   if (status === 'loading' || (!snapshot && home.refreshing)) {
@@ -81,7 +83,7 @@ export function HomeScreen() {
       <Shell centered>
         <FailureScreen
           kind={failure?.kind ?? 'server'}
-          message={failure?.message ?? en.errorBody}
+          message={failure?.message ?? copy.errorBody}
           reference={failure?.reference ?? '—'}
           onRetry={home.retry}
           retrying={home.refreshing}
@@ -111,7 +113,7 @@ export function HomeScreen() {
             stage={topUp.stage}
             controller={topUp}
             newBalanceFils={newBalanceFils}
-            tierName={member.tier ? tierLabel(member.tier) : null}
+            tier={member.tier}
           />
           <TransactionSheet
             transaction={openTx}
@@ -123,21 +125,36 @@ export function HomeScreen() {
     >
       {offline ? <OfflineBanner /> : null}
       {status === 'stale' && fetchedAt ? (
-        <StaleBanner at={clockTime(fetchedAt)} onRetry={home.retry} />
+        <StaleBanner at={fetchedAt} onRetry={home.retry} />
       ) : null}
 
+      {/*
+        `flexDirection: 'row'` is already a LOGICAL direction on both targets —
+        CSS lays a row along the inline axis and Yoga reverses it under
+        `I18nManager.isRTL` — so the greeting sits at the reading edge and the
+        language toggle at the far edge in both languages, with no conditional.
+        Writing 'row-reverse' for Arabic here would double-flip it.
+      */}
       <View style={styles.header}>
-        <View>
-          <Text style={[text('body'), styles.greeting]}>{en.greeting(firstName)}</Text>
-          <Text style={[text('displayM'), styles.salon]}>{salon.name}</Text>
+        <View style={styles.headerText}>
+          <Text style={[text('body', lang), styles.greeting]}>{copy.greeting(firstName)}</Text>
+          {/*
+            CONTRACT GAP (reported, not filled): `Salon.name` is one string. The
+            design's own reference set carries `nameAr: 'أمارا'`
+            (design/avo-promotions.js:33) and renders it in AR, but
+            api-contract.md's Salon has no Arabic field — so an Arabic wallet
+            shows the Latin salon name. Shared-package change, belongs on trunk.
+          */}
+          <Text style={[text('displayM', lang), styles.salon]}>{salon.name}</Text>
         </View>
+        <LanguageToggle />
       </View>
 
       <WalletCard
         balanceFils={member.balanceFils}
-        pill={loyaltyPill(progress)}
+        pill={loyaltyPill(progress, copy)}
         progress={progress}
-        lastUpdated={offline && fetchedAt ? en.lastUpdated(relativeTime(fetchedAt)) : null}
+        lastUpdated={offline && fetchedAt ? copy.lastUpdated(relativeTime(fetchedAt, copy)) : null}
       >
         <PaymentCode
           memberId={member.id}
@@ -166,7 +183,7 @@ export function HomeScreen() {
 
       {offline ? (
         <Pressable onPress={home.retry} accessibilityRole="button" style={styles.offlineRetry}>
-          <Text style={[text('bodyL'), styles.offlineRetryText]}>{en.tryAgain}</Text>
+          <Text style={[text('bodyL', lang), styles.offlineRetryText]}>{copy.tryAgain}</Text>
         </Pressable>
       ) : null}
 
@@ -222,8 +239,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: 12,
     marginBottom: 20,
   },
+  headerText: { flexShrink: 1, minWidth: 0 },
   greeting: { color: color.textMuted },
   salon: { color: color.ink, marginTop: 2 },
   offlineRetry: {

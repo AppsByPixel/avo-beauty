@@ -35,7 +35,8 @@ import {
   type Language,
   type Transaction,
 } from '@avo/types';
-import { en } from '../copy/en';
+import type { Copy } from '../copy/types';
+import { dateLocale } from './activity';
 
 export interface ReceiptRow {
   label: string;
@@ -63,8 +64,8 @@ export interface Receipt {
 
 const KUWAIT_TIME_ZONE = 'Asia/Kuwait';
 
-function fullWhen(iso: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
+function fullWhen(iso: string, lang: Language): string {
+  return new Intl.DateTimeFormat(dateLocale(lang), {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
@@ -89,7 +90,8 @@ function money(amount: number, lang: Language): { value: string; valueLabel: str
 export function buildReceipt(
   tx: Transaction,
   branches: { id: string; name: string }[],
-  lang: Language = 'en',
+  lang: Language,
+  copy: Copy,
 ): Receipt {
   const branch = branches.find((b) => b.id === tx.branchId)?.name ?? null;
   const bonus = fils(tx.bonusFils);
@@ -103,43 +105,50 @@ export function buildReceipt(
   const rows: ReceiptRow[] = [];
 
   if (tx.kind === 'topup') {
-    if (tx.method) rows.push({ label: en.txPaidWith, value: en.txMethod[tx.method] });
-    rows.push({ label: en.youPay, ...money(paid, lang), emphasis: true });
+    if (tx.method) rows.push({ label: copy.txPaidWith, value: copy.txMethod[tx.method] });
+    rows.push({ label: copy.txYouPaid, ...money(paid, lang), emphasis: true });
     // Non-negotiable: the bonus is the server's number. It is read off the
     // transaction, never recomputed from a tier percentage — and in stamps mode
     // it is 0 and the row does not exist at all.
     if (bonus > 0) {
       const m = money(bonus, lang);
       rows.push({
-        label: en.txTierBonus,
+        // null: a Transaction does not record which tier funded the bonus, so
+        // the neutral wording is used rather than the member's current tier.
+        label: copy.txTierBonus(null),
         value: `+${m.value}`,
-        valueLabel: `plus ${m.valueLabel}`,
+        valueLabel: copy.plus(m.valueLabel),
         emphasis: true,
       });
     }
-    rows.push({ label: en.txLanded, ...money(add(paid, bonus), lang), emphasis: true });
-    rows.push({ label: en.txBranch, value: branch ?? en.txBranchOnline });
+    rows.push({ label: copy.txLanded, ...money(add(paid, bonus), lang), emphasis: true });
+    rows.push({ label: copy.txBranch, value: branch ?? copy.txBranchOnline });
   } else {
-    rows.push({ label: en.txAmountRow, ...money(abs, lang), emphasis: true });
+    rows.push({ label: copy.txAmountRow, ...money(abs, lang), emphasis: true });
     if (tx.kind === 'deposit_return') {
-      rows.push({ label: en.txReturnedTo, value: en.txWalletBalance });
+      rows.push({ label: copy.txReturnedTo, value: copy.txWalletBalance });
     } else if (tx.method) {
-      rows.push({ label: en.txPaidFrom, value: en.txMethod[tx.method] });
+      rows.push({ label: copy.txPaidFrom, value: copy.txMethod[tx.method] });
     }
-    if (branch) rows.push({ label: en.txBranch, value: branch });
+    if (branch) rows.push({ label: copy.txBranch, value: branch });
   }
+
+  const spoken = moneyAriaLabel(abs, lang);
 
   return {
     title:
       tx.kind === 'topup' && tx.method
-        ? `${en.txKind.topup} · ${en.txMethod[tx.method]}`
-        : en.txKind[tx.kind],
-    subtitle: fullWhen(tx.createdAt),
+        ? `${copy.txKind.topup} · ${copy.txMethod[tx.method]}`
+        : copy.txKind[tx.kind],
+    subtitle: fullWhen(tx.createdAt, lang),
     // U+2212 MINUS, not a hyphen — the character the design sets.
+    // MONEY: Western digits in both languages, per non-negotiable #12 and the
+    // design's own Arabic receipt (AVO Wallet Home.dc.html:1579 renders
+    // '25.000 د.ك' with Latin numerals inside an otherwise Eastern-digit sheet).
     amount: `${positive ? '+' : '−'}${formatFils(abs)}`,
-    amountLabel: `${positive ? 'plus' : 'minus'} ${moneyAriaLabel(abs, lang)}`,
+    amountLabel: positive ? copy.plus(spoken) : copy.minus(spoken),
     positive,
-    status: en.txStatus[tx.status],
+    status: copy.txStatus[tx.status],
     statusTone: statusTone(tx.status),
     rows,
     reference: tx.reference,

@@ -18,7 +18,8 @@ import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-nati
 import QRCode from 'react-native-qrcode-svg';
 import { walletTokenUri, type WalletToken } from '@avo/types';
 import { color, radius, text, MIN_TAP_TARGET, WHITE } from '../theme';
-import { en } from '../copy/en';
+import { useCopy, useLanguage } from '../i18n/language';
+import { toEasternDigits } from '../i18n/digits';
 
 const QR_SIZE = 92;
 
@@ -30,15 +31,36 @@ interface Props {
   onPress: () => void;
 }
 
+/**
+ * The member id, held left-to-right inside an Arabic column.
+ *
+ * "AVO-1204" is a Latin identifier and bidi will happily reorder the run around
+ * it in an RTL paragraph. U+2066/U+2069 (LRI…PDI) isolate it so it reads the
+ * same in both languages — the design does the same thing with `direction:ltr`
+ * on its id and phone rows (AVO Wallet Home.dc.html:403, :455).
+ */
+function MemberId({ memberId, prefix }: { memberId: string; prefix: string }) {
+  return (
+    <Text style={[text('displayS'), styles.panelId]}>
+      {prefix}
+      {'⁦'}
+      {memberId}
+      {'⁩'}
+    </Text>
+  );
+}
+
 export function PaymentCode({ memberId, token, secondsRemaining, unavailable, onPress }: Props) {
+  const { lang, copy } = useLanguage();
+
   if (unavailable) {
     return (
       <View style={styles.unavailable} accessibilityRole="summary">
-        <Text style={[text('body'), styles.unavailableTitle]}>
-          {unavailable === 'offline' ? en.qrOfflineTitle : en.qrFailedTitle}
+        <Text style={[text('body', lang), styles.unavailableTitle]}>
+          {unavailable === 'offline' ? copy.qrOfflineTitle : copy.qrFailedTitle}
         </Text>
-        <Text style={[text('bodyS'), styles.unavailableBody]}>
-          {unavailable === 'offline' ? en.qrOfflineBody : en.qrFailedBody}
+        <Text style={[text('bodyS', lang), styles.unavailableBody]}>
+          {unavailable === 'offline' ? copy.qrOfflineBody : copy.qrFailedBody}
         </Text>
       </View>
     );
@@ -50,15 +72,16 @@ export function PaymentCode({ memberId, token, secondsRemaining, unavailable, on
       <View style={styles.panel}>
         <View style={styles.qrPlaceholder} />
         <View style={styles.panelText}>
-          <Text style={[text('label'), styles.panelLabel]}>{en.qrTitle}</Text>
-          <Text style={[text('displayS'), styles.panelId]}>
-            {en.memberIdPrefix}
-            {memberId}
-          </Text>
+          <Text style={[text('label', lang), styles.panelLabel]}>{copy.qrTitle}</Text>
+          <MemberId memberId={memberId} prefix={copy.memberIdPrefix} />
         </View>
       </View>
     );
   }
+
+  // The countdown is a COUNT, not money, so Arabic gets Eastern digits — the
+  // rule the whole i18n/digits module exists for.
+  const seconds = lang === 'ar' ? toEasternDigits(secondsRemaining) : String(secondsRemaining);
 
   return (
     <>
@@ -66,8 +89,8 @@ export function PaymentCode({ memberId, token, secondsRemaining, unavailable, on
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
-        accessibilityLabel={`Payment code for member ${memberId}, refreshes in ${secondsRemaining} seconds`}
-        accessibilityHint={en.tapEnlarge}
+        accessibilityLabel={copy.qrAria(memberId, secondsRemaining)}
+        accessibilityHint={copy.tapEnlarge}
         style={styles.panel}
       >
         <View style={styles.qrBox}>
@@ -79,14 +102,11 @@ export function PaymentCode({ memberId, token, secondsRemaining, unavailable, on
           />
         </View>
         <View style={styles.panelText}>
-          <Text style={[text('label'), styles.panelLabel]}>{en.qrTitle}</Text>
-          <Text style={[text('displayS'), styles.panelId]}>
-            {en.memberIdPrefix}
-            {memberId}
-          </Text>
-          <Text style={[text('bodyS'), styles.panelHint]}>
-            {en.qrHint} {secondsRemaining}
-            {en.sec} · {en.tapEnlarge}
+          <Text style={[text('label', lang), styles.panelLabel]}>{copy.qrTitle}</Text>
+          <MemberId memberId={memberId} prefix={copy.memberIdPrefix} />
+          <Text style={[text('bodyS', lang), styles.panelHint]}>
+            {copy.qrHint} {seconds}
+            {copy.sec} · {copy.tapEnlarge}
           </Text>
         </View>
       </Pressable>
@@ -100,14 +120,18 @@ export function PaymentCode({ memberId, token, secondsRemaining, unavailable, on
  * numbers while someone stands at a till is unusable.
  */
 function Countdown({ secondsRemaining, memberId }: { secondsRemaining: number; memberId: string }) {
+  const copy = useCopy();
   const lastAnnounced = useRef<number | null>(null);
+  // Read through a ref so a language switch does not re-run the effect and fire
+  // a duplicate announcement at the same second count.
+  const copyRef = useRef(copy);
+  copyRef.current = copy;
+
   useEffect(() => {
     if (secondsRemaining % 15 !== 0 || secondsRemaining === 0) return;
     if (lastAnnounced.current === secondsRemaining) return;
     lastAnnounced.current = secondsRemaining;
-    AccessibilityInfo.announceForAccessibility(
-      `Payment code for member ${memberId} refreshes in ${secondsRemaining} seconds`,
-    );
+    AccessibilityInfo.announceForAccessibility(copyRef.current.qrAria(memberId, secondsRemaining));
   }, [secondsRemaining, memberId]);
   return null;
 }
