@@ -120,10 +120,47 @@ describe('#4 — replaying a key returns the identical result, never a second on
     expect(second.body.creditFils).toBe(first.body.creditFils);
   });
 
-  it('a replay with a DIFFERENT body still returns the first result — the key wins', async () => {
-    // The retry-after-timeout case: a client that retries with a mutated amount
-    // must not be able to talk the server into a second, larger intent.
+  /**
+   * SPEC CHANGED — design/api-contract.md § Addendum.
+   *
+   * This spec used to assert that a key reused with a DIFFERENT body replayed the
+   * first result. Lane A implemented a 422, the contract was silent, and the
+   * disagreement was settled against this spec:
+   *
+   *   "Replaying the first result is wrong because the client asked for something
+   *    different and would be told it succeeded — a customer who retries a 5 KD
+   *    top-up as 50 KD would be shown a 5 KD success and never learn the 50 never
+   *    happened. That is a silent money bug, which is worse than an error."
+   *
+   * The rule now: same key + same body replays; same key + different body is a
+   * 422 and does not execute. Lane A's API already answers 422 — proved against
+   * the real API in tenancy.test.ts, "the same key with a DIFFERENT body is a
+   * 422, not a replay of the first result". The MOCK still replays, because
+   * packages/mock keys one Map on the header alone and never fingerprints the
+   * body, so against the mock this is a knownBug rather than a passing spec.
+   */
+  knownBug('same key + a DIFFERENT body is a 422, not a replay of the first result', async () => {
     const key = idempotencyKey('topup-replay-mutated');
+    const first = await api<TopUpIntent>('POST', '/topups', {
+      idempotencyKey: key,
+      body: { amountFils: 10_000, method: 'knet' },
+    });
+    precondition(first.status === 200, `the first top-up failed: ${first.status}`);
+
+    const second = await api<{ error: string; id?: string }>('POST', '/topups', {
+      idempotencyKey: key,
+      body: { amountFils: 250_000, method: 'card' },
+    });
+
+    expect(second.status).toBe(422);
+    expect(second.body.error).toBe('idempotency_key_reused');
+  });
+
+  it('the mutated retry never produces a second, larger intent — whichever way it is refused', async () => {
+    // The half of the old spec that survives the ruling untouched, and the part
+    // that actually protects money. Replay or 422, what must never happen is a
+    // 250.000 KD intent created off a key that bought 10.000.
+    const key = idempotencyKey('topup-replay-mutated-no-second');
     const first = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: key,
       body: { amountFils: 10_000, method: 'knet' },
@@ -133,10 +170,12 @@ describe('#4 — replaying a key returns the identical result, never a second on
       body: { amountFils: 250_000, method: 'card' },
     });
 
-    expect(second.body.id).toBe(first.body.id);
-    expect(second.body.amountFils).toBe(10_000);
-    expect(second.body.creditFils).toBe(first.body.creditFils);
-    expect(second.body.method).toBe('knet');
+    expect(first.status).toBe(200);
+    // Either no intent came back at all (422), or it is the first one verbatim.
+    expect(second.body.id === undefined || second.body.id === first.body.id).toBe(true);
+    expect(second.body.amountFils).not.toBe(250_000);
+    expect(second.body.creditFils).not.toBe(250_000);
+    expect(second.body.method).not.toBe('card');
   });
 
   it('POST /charges replay debits once — the balance after is the same, not twice down', async () => {
@@ -160,9 +199,17 @@ describe('#4 — replaying a key returns the identical result, never a second on
   it.todo(
     'after a replayed top-up, GET /members/me shows the balance moved by creditFils exactly once — the mock has no mutable balance, so this needs lane A',
   );
-  it.todo(
-    'an idempotency key is scoped to one principal — replaying salon A staff key from salon B must 404/409, not return salon A result',
-  );
+  /**
+   * CLOSED — this was `it.todo('an idempotency key is scoped to one principal —
+   * replaying a salon A key from salon B must not return salon A's result')`.
+   *
+   * It cannot be answered against packages/mock, which has one salon and one
+   * global key Map. It is answered against lane A's real API in tenancy.test.ts,
+   * § "idempotency keys do not collide across salons": the same key from a salon
+   * A principal and a salon B principal produces two independent results, stored
+   * under `member:8842` and `member:9001`, and the unique index is on
+   * (scope, endpoint, key) rather than on the key alone.
+   */
 
   it(
     'idempotency keys are not scoped to an endpoint — a key used on POST /topups is honoured by POST /charges',
