@@ -55,20 +55,45 @@ function classify(status: number): FailureKind {
   return 'server';
 }
 
+/**
+ * An idempotency key for one money-moving attempt.
+ *
+ * Non-negotiable #4. The value matters less than its lifetime: it is minted once
+ * per *attempt* and reused verbatim while that attempt is being retried, so a
+ * timed-out POST that actually succeeded replays its stored result instead of
+ * charging twice. A fresh attempt — the customer choosing a different amount, or
+ * trying again after a decline — mints a new one, because api-contract.md's
+ * addendum makes the same key with a different body a 422 and not a replay.
+ */
+export function newIdempotencyKey(): string {
+  const rand = () => Math.random().toString(36).slice(2, 10);
+  return `wlt-${Date.now().toString(36)}-${rand()}${rand()}`;
+}
+
 interface ErrorBody {
   error?: string;
   message?: string;
 }
 
-/**
- * GET a resource and validate it. `schema` is the contract; if the body does not
- * satisfy it, that is a server failure and not something to render around.
- */
-export async function getJson<S extends z.ZodTypeAny>(
+interface RequestOptions {
+  method: 'GET' | 'POST';
+  /** JSON body. Absent on a GET. */
+  body?: unknown;
+  /**
+   * Non-negotiable #4. Required on every money-moving POST; the server rejects
+   * the request without it, which is the behaviour we want rather than a client
+   * that can forget.
+   */
+  idempotencyKey?: string | undefined;
+  signal?: AbortSignal | undefined;
+}
+
+async function request<S extends z.ZodTypeAny>(
   path: string,
   schema: S,
-  signal?: AbortSignal,
+  options: RequestOptions,
 ): Promise<z.infer<S>> {
+  const { method, body, idempotencyKey, signal } = options;
   const reference = newReference();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -78,12 +103,15 @@ export async function getJson<S extends z.ZodTypeAny>(
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      method: 'GET',
+      method,
       headers: {
         accept: 'application/json',
         'x-avo-request-id': reference,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(idempotencyKey === undefined ? {} : { 'idempotency-key': idempotencyKey }),
         ...scenarioHeader(),
       },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: controller.signal,
     });
   } catch {
@@ -125,4 +153,30 @@ export async function getJson<S extends z.ZodTypeAny>(
     );
   }
   return parsed.data as z.infer<S>;
+}
+
+/**
+ * GET a resource and validate it. `schema` is the contract; if the body does not
+ * satisfy it, that is a server failure and not something to render around.
+ */
+export function getJson<S extends z.ZodTypeAny>(
+  path: string,
+  schema: S,
+  signal?: AbortSignal,
+): Promise<z.infer<S>> {
+  return request(path, schema, { method: 'GET', signal });
+}
+
+/**
+ * POST a money-moving request. The idempotency key is a required argument rather
+ * than an option, because there is no correct call site that omits it.
+ */
+export function postJson<S extends z.ZodTypeAny>(
+  path: string,
+  body: unknown,
+  schema: S,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<z.infer<S>> {
+  return request(path, schema, { method: 'POST', body, idempotencyKey, signal });
 }

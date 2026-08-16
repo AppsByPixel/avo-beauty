@@ -69,17 +69,14 @@ export function text(token: TypeToken): TextStyle {
 }
 
 /**
- * White. It is not in the token set at all — `color` has no `white` — but the
- * wallet card, the payment-code panel and every fill derived from `onBrandFill`
- * need it, and it is the one colour that is genuinely constant across every
- * white-label brand. Named here so it reads as a decision rather than as
- * twenty scattered `'#fff'` literals.
+ * White — the one colour that is genuinely constant across every white-label
+ * brand, so it is a token rather than twenty scattered `'#fff'` literals.
  *
- * SHARED-PACKAGE GAP (reported, not fixed): avo-tokens.json should carry
- * `color.white` and the translucent white scale the wallet card documents as
- * intentional exceptions (0.14 / 0.18 / 0.22 / 0.4 / 0.78 / 0.85).
+ * GAP CLOSED: `color.white` landed on trunk and this now reads it. The
+ * translucent white scale the wallet card documents as intentional exceptions
+ * (0.14 / 0.18 / 0.22 / 0.4 / 0.78 / 0.85) is still not tokenised.
  */
-export const WHITE = '#fff';
+export const WHITE = color.white;
 
 /**
  * Non-negotiable #9 / interaction-spec.md §2.
@@ -115,16 +112,13 @@ export const motion = tokens.motion;
  * Uppercase micro-labels ("ACTIVITY", "EARNING BY BRANCH").
  *
  * interaction-spec.md §2 says these must be `rgba(28,27,25,0.6)` — 0.45 measures
- * ~3.3:1 at 11px/600 and fails. The token set has 0.45 (`textMutedSoft`), 0.5
- * (`textMuted`) and 0.7 (`textMutedStrong`) but NOT 0.6, so there is no token to
- * import for the value the spec names.
+ * ~3.3:1 at 11px/600 and fails.
  *
- * SHARED-PACKAGE GAP (reported, not fixed): design/tokens/avo-tokens.json needs a
- * `color.textMutedLabel: "rgba(28,27,25,0.6)"`. Until it exists this uses
- * `textMutedStrong` (0.7) — darker than the spec, so it passes contrast, and it
- * comes from a token rather than a hand-typed rgba.
+ * GAP CLOSED: `color.textMutedLabel` (0.6) landed on trunk, so this is now the
+ * value the spec actually names rather than the `textMutedStrong` (0.7) stand-in
+ * it used before.
  */
-export const MICRO_LABEL_COLOR = color.textMutedStrong;
+export const MICRO_LABEL_COLOR = color.textMutedLabel;
 
 /**
  * The border on a secondary control — the outlined "Try again" button, the
@@ -132,14 +126,11 @@ export const MICRO_LABEL_COLOR = color.textMutedStrong;
  * this in over twenty places across AVO Wallet Home.dc.html and AVO
  * States.dc.html, so it is a system value and not a one-off.
  *
- * The token set has ink at 0.06 (`hairlineInner`) and 0.08 (`hairline`) and
- * stops there. Neither substitutes: a hairline is a divider between rows and is
- * meant to disappear, while this is the edge of a tappable control and has to
- * read as one. Using `hairline` here would make the button look unbordered.
+ * `hairline` (0.08) does not substitute: a hairline is a divider between rows and
+ * is meant to disappear, while this is the edge of a tappable control and has to
+ * read as one.
  *
- * SHARED-PACKAGE GAP (reported, not fixed — packages/tokens is trunk-owned):
- * design/tokens/avo-tokens.json needs `color.borderControl:
- * "rgba(28,27,25,0.14)"`. Until it lands, the value is written once, here, so
- * there is a single line to change rather than a grep across the app.
+ * GAP CLOSED: `color.borderControl` landed on trunk. This alias stays so the
+ * existing call sites keep reading, but it is now a token and not a literal.
  */
-export const CONTROL_BORDER = 'rgba(28,27,25,0.14)';
+export const CONTROL_BORDER = color.borderControl;

@@ -14,23 +14,39 @@ import { en } from '../copy/en';
 import { SignedAmount } from './Money';
 import type { ActivityRow } from '../domain/activity';
 
-export function ActivityFeed({ rows, onTopUp }: { rows: ActivityRow[]; onTopUp: () => void }) {
+interface Props {
+  rows: ActivityRow[];
+  onTopUp: () => void;
+  /** Every row opens the detail sheet — design/AVO Wallet Home.dc.html. */
+  onOpen: (id: string) => void;
+}
+
+export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
   return (
     <View style={styles.section}>
       <Text style={[text('label'), styles.sectionLabel]}>{en.activityLabel}</Text>
-      {rows.length === 0 ? <EmptyActivity onTopUp={onTopUp} /> : <Rows rows={rows} />}
+      {rows.length === 0 ? (
+        <EmptyActivity onTopUp={onTopUp} />
+      ) : (
+        <Rows rows={rows} onOpen={onOpen} />
+      )}
     </View>
   );
 }
 
-function Rows({ rows }: { rows: ActivityRow[] }) {
+function Rows({ rows, onOpen }: { rows: ActivityRow[]; onOpen: (id: string) => void }) {
   return (
     <View style={styles.card}>
       {rows.map((row, index) => (
-        <View
+        <Pressable
           key={row.id}
+          onPress={() => onOpen(row.id)}
+          accessibilityRole="button"
+          // One label for the whole row, so a reader announces a receipt rather
+          // than four disconnected fragments.
+          accessibilityLabel={`${row.title}, ${row.when}, ${row.amountLabel}`}
+          testID={`activity-row-${row.id}`}
           style={[styles.row, index === rows.length - 1 && styles.rowLast]}
-          accessible
         >
           <View style={styles.icon}>
             <View style={[styles.iconDot, row.positive ? styles.iconDotIn : styles.iconDotOut]} />
@@ -48,7 +64,7 @@ function Rows({ rows }: { rows: ActivityRow[] }) {
             label={row.amountLabel}
             color={row.positive ? color.positive : color.ink}
           />
-        </View>
+        </Pressable>
       ))}
     </View>
   );

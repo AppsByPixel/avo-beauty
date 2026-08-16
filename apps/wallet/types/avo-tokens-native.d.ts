@@ -36,7 +36,9 @@ declare module '@avo/tokens/native' {
       brandTint2: string;
       hairline: string;
       hairlineInner: string;
+      borderControl: string;
       textMuted: string;
+      textMutedLabel: string;
       textMutedSoft: string;
       textMutedStrong: string;
       success: string;
@@ -49,6 +51,7 @@ declare module '@avo/tokens/native' {
       toggleOff: string;
       disabledBg: string;
       whatsappOnGreen: string;
+      white: string;
     };
     card: { from: string; to: string };
     text: Record<

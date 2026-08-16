@@ -38,6 +38,65 @@ export const en = {
   stampsMultiplier: (n: number) => `${n}× stamps`,
   topupBoost: (percent: number) => `+${percent}% top-ups`,
 
+  // top-up card
+  topupTitle: 'Top up',
+  tierBonusBadge: (tier: string, percent: number) => `${tier} · +${percent}% bonus`,
+  tierBonusExplain: (tier: string, percent: number) =>
+    `Your ${tier} tier adds ${percent}% free credit to every top-up.`,
+  stampsBadge: (target: number) => `Collect ${target} · get 1 free`,
+  stampsExplain: 'Top up any amount — every salon visit adds a stamp.',
+  continuePay: 'Continue to payment',
+
+  // top-up sheet — choose
+  payTitle: 'Choose payment',
+  youPay: 'Pay',
+  // The bonus row's label carries the tier, because "Bonus" alone reads as
+  // AVO's money. It is the salon's: "Bonus credit and tier rewards are funded by
+  // Amara Salon, not AVO."
+  bonusRow: (tier: string) => `${tier} bonus`,
+  lands: 'Lands in wallet',
+  methodLabel: 'Payment method',
+  payBtn: 'Pay',
+  mostUsed: 'Most used in Kuwait',
+  payMethod: {
+    knet: 'KNET',
+    card: 'Visa · Mastercard',
+    applepay: 'Apple Pay',
+  } as const,
+
+  // top-up sheet — the quote itself failed, before any intent existed
+  quoteFailedTitle: "We couldn't start that top-up",
+  quoteFailedBody: 'Nothing was charged. Try again in a moment.',
+
+  // top-up sheet — redirect. Not dismissible; there is no close control here.
+  payRedirectTitle: (method: string) => `Opening ${method}`,
+  payRedirectSub:
+    'Finish the payment on your bank page — you will come back here automatically.',
+  payDontClose: 'Keep this screen open until the bank sends you back.',
+
+  // top-up sheet — the four outcomes. Four sets of words, deliberately.
+  doneTitle: 'Top-up complete',
+  doneMsg: 'Your wallet is ready to use at any branch.',
+  failTitle: 'Payment not completed',
+  failMsg: 'Your bank declined the transaction. Nothing was charged.',
+  cancelTitle: 'Payment cancelled',
+  cancelMsg: 'You cancelled on the KNET page. Nothing was charged.',
+  pendingTitle: 'Confirming with your bank',
+  pendingMsg:
+    'This can take up to a minute. Do not pay again — the credit appears as soon as the bank confirms.',
+
+  rAmount: 'Amount',
+  rMethod: 'Method',
+  rRef: 'Reference',
+  rStatus: 'Status',
+  rBalance: 'New balance',
+  rCharged: 'Charged',
+  vNothing: 'Nothing charged',
+  vPending: 'Awaiting bank',
+  otherMethod: 'Choose another method',
+  backToWallet: 'Back to wallet',
+  done: 'Done',
+
   // activity
   activityLabel: 'Activity',
   emptyActivityTitle: 'Nothing here yet',
@@ -87,6 +146,30 @@ export const en = {
     card: 'Card',
     applepay: 'Apple Pay',
     wallet: 'Wallet balance',
+  } as const,
+
+  // transaction detail sheet
+  txRefLabel: 'Reference',
+  txHelp: 'Something looks wrong? Message the salon on WhatsApp.',
+  txClose: 'Close',
+  txReport: 'Report a problem with this payment',
+  txPaidWith: 'Paid with',
+  txPaidFrom: 'Paid from',
+  txWalletBalance: 'Wallet balance',
+  txLanded: 'Landed in wallet',
+  // The design says "Silver bonus". A Transaction does not record which tier
+  // funded it, and a member who has climbed since would be shown her *current*
+  // tier against an old percentage. Neutral until the contract carries it.
+  txTierBonus: 'Tier bonus',
+  txBranch: 'Branch',
+  txBranchOnline: 'Online',
+  txReturnedTo: 'Returned to',
+  txAmountRow: 'Amount',
+  txStatus: {
+    settled: 'Completed',
+    pending: 'Pending',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
   } as const,
 };
 
