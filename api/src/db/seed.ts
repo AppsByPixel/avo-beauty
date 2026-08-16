@@ -498,6 +498,9 @@ async function seed(): Promise<void> {
     await db.execute(sql`DELETE FROM gateway_event`);
     await db.execute(sql`DELETE FROM topup_intent`);
     await db.execute(sql`DELETE FROM sandbox_gateway_payment`);
+    // `loyalty_event.transaction_id` is ON DELETE RESTRICT, so the climbs a
+    // charge produced have to go before the charge does.
+    await db.execute(sql`DELETE FROM loyalty_event`);
     await db.execute(sql`DELETE FROM transaction`);
     await db.execute(sql`DELETE FROM session`);
     await db.execute(sql`DELETE FROM pin_attempt`);

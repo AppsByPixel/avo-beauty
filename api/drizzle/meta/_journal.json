@@ -57,6 +57,13 @@
       "when": 1786920025587,
       "tag": "0007_artist_availability",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786921116135,
+      "tag": "0008_loyalty_event",
+      "breakpoints": true
     }
   ]
 }

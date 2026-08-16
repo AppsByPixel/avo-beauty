@@ -28,6 +28,7 @@ export * from './session';
 export * from './transaction';
 export * from './ledger';
 export * from './audit';
+export * from './loyaltyEvent';
 export * from './idempotency';
 export * from './walletToken';
 export * from './receipt';
