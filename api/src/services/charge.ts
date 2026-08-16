@@ -50,7 +50,7 @@ import { receiptJob } from '../db/schema/receipt';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
-import { consumeToken, peekToken } from './walletToken';
+import { consumeToken, peekToken, TokenOutsideSalonError } from './walletToken';
 import { claimKey, completeKey } from './idempotency';
 import { writeAudit } from './audit';
 
@@ -126,7 +126,24 @@ export async function performCharge(
     // -------------------------------------------------- 2. validate the token --
     // Validated, NOT consumed. Consumption is step 8, after the debit.
     if (input.token) {
-      const peeked = await peekToken(db, input.token);
+      // A token from another salon does not resolve at all (the tenant boundary
+      // lives in peekToken). Here it is reported as the mismatch it is: this
+      // handler has already established that `m` is a real member of the
+      // caller's own salon, so "no such member" would be false, and the artist
+      // needs to be told the CODE is wrong, not the customer.
+      let peeked;
+      try {
+        peeked = await peekToken(db, input.token, { salonId: ctx.principal.salonId });
+      } catch (err) {
+        if (err instanceof TokenOutsideSalonError) {
+          throw conflict(
+            'token_member_mismatch',
+            'That code belongs to a different customer. Ask for a fresh one.',
+          );
+        }
+        throw err;
+      }
+
       // The token is the authority for whose wallet this is. Without this check
       // the handler trusts `body.memberId`, and one customer's QR could be
       // charged against another customer's balance.
@@ -254,10 +271,12 @@ export async function performCharge(
     // row count decides the outcome: zero rows means another scanner won the
     // race, and the 410 it throws rolls this whole transaction back.
     if (input.token) {
-      await consumeToken(tx, input.token, {
-        staffId: ctx.principal.id,
-        transactionId: txId,
-      });
+      await consumeToken(
+        tx,
+        input.token,
+        { staffId: ctx.principal.id, transactionId: txId },
+        { salonId: ctx.principal.salonId },
+      );
     }
 
     // ------------------------------------------------------ 9. loyalty + tier --
