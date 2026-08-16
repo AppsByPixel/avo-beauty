@@ -33,6 +33,7 @@ import { registerTopupRoutes } from './routes/topups';
 import { registerSalonRoutes } from './routes/salons';
 import { registerArtistRoutes } from './routes/artists';
 import { registerLoyaltyRoutes } from './routes/loyalty';
+import { registerAuditRoutes } from './routes/audit';
 import { registerActivityRoutes } from './routes/activity';
 import { registerPlatformRoutes } from './routes/platform';
 import { registerWebhookRoutes } from './routes/webhooks';
@@ -90,6 +91,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerSalonRoutes(app);
   await registerArtistRoutes(app);
   await registerLoyaltyRoutes(app);
+  await registerAuditRoutes(app);
   await registerActivityRoutes(app);
   await registerPlatformRoutes(app);
 

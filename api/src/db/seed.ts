@@ -36,6 +36,7 @@ import postgres from 'postgres';
 import { fils } from '@avo/types';
 import { branch, salon } from './schema/salon';
 import { artist, type ArtistWindows } from './schema/artist';
+import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
 import { member } from './schema/member';
 import { service } from './schema/service';
@@ -564,6 +565,90 @@ async function seed(): Promise<void> {
     .update(member)
     .set({ balanceFils: fils(24500), visits: 5 })
     .where(eq(member.id, '8842'));
+
+  // ------------------------------------------------ audit log fixtures ----
+  //
+  // Three rows the audit-log endpoint cannot be honestly tested without.
+  //
+  // WRITTEN ONCE, NEVER RESET — AND THE SEED FOUND THAT OUT THE HARD WAY.
+  //
+  // Every other fixture here is reset on each run: the money tables are cleared
+  // above, which for `ledger_entry` and `gateway_event` takes deliberately
+  // disabling an immutability trigger. The obvious thing to write for these rows
+  // was the same — DELETE the previous fixtures, insert them again — and it
+  // fails:
+  //
+  //     PostgresError: audit_log is append-only: DELETE is not permitted
+  //
+  // even as the OWNER, because migration 0001 backs the REVOKE with a trigger
+  // and no `ALTER TABLE ... DISABLE TRIGGER` is written anywhere for this table.
+  // That is the guarantee doing its job against the one caller most likely to
+  // erode it by accident, and it is a better demonstration of "append-only, 7
+  // years" than any assertion: the seed cannot tidy the audit log, so neither
+  // can anything else.
+  //
+  // So the fixtures are inserted only if they are not already there. Re-running
+  // the seed leaves the existing rows exactly as they were written.
+  const [{ present } = { present: 0 }] = (await db.execute(
+    sql`SELECT count(*)::int AS present FROM audit_log WHERE actor_id = 'PLT-001'`,
+  )) as unknown as Array<{ present: number }>;
+
+  if (present === 0) await db.insert(auditLog).values([
+    {
+      // The design's own row: "Yousef · AVO platform · Wallet adjusted ·
+      // +5.000 KD to Noura S. · support request · Owner console".
+      //
+      // It carries THIS salon's id, which is the whole point — an AVO action on
+      // a salon appears in that salon's log, marked. The dashboard's footnote
+      // promises it and nothing else in the fixtures produces one.
+      salonId: SALON_ID,
+      actorKind: 'platform_admin',
+      actorId: 'PLT-001',
+      actorName: 'Yousef',
+      actorRole: 'AVO platform',
+      kind: 'money',
+      action: 'Wallet adjusted',
+      detail: '+5.000 KD to Dana A. · support request',
+      source: 'owner_console',
+      subjectType: 'member',
+      subjectId: '8842',
+      amountFils: fils(5000),
+      metadata: { ticket: 'AVO-2291' },
+    },
+    {
+      // A PLATFORM-level action belonging to no salon. `salon_id` is null, so it
+      // must be invisible to every merchant — the `salon_id = $1` predicate
+      // excludes null without anyone having to remember to.
+      salonId: null,
+      actorKind: 'platform_admin',
+      actorId: 'PLT-001',
+      actorName: 'Yousef',
+      actorRole: 'AVO platform',
+      kind: 'rules',
+      action: 'Commission rates changed',
+      detail: 'KNET flat 150 → 175 fils, platform-wide',
+      source: 'owner_console',
+      subjectType: 'platform',
+      subjectId: null,
+      metadata: {},
+    },
+    {
+      // ANOTHER SALON'S ROW. Without this, "a merchant cannot read another
+      // salon's audit rows" is proved against an empty set and proves nothing.
+      salonId: 'SAL-LUMIERE',
+      actorKind: 'staff',
+      actorId: 'ST-LUM-001',
+      actorName: 'Lumiere Manager',
+      actorRole: 'manager',
+      kind: 'access',
+      action: 'Permissions changed',
+      detail: 'A name from another salon that must never appear in Amara’s log',
+      source: 'merchant',
+      subjectType: 'staff_user',
+      subjectId: 'ST-LUM-001',
+      metadata: {},
+    },
+  ]);
 
   console.log('seeded');
   console.log(`  member  8842 / ${MEMBER_PASSWORD}   (24.500 KD, Silver)`);
