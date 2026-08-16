@@ -1,0 +1,18 @@
+node_modules/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# env & secrets — secrets live in a manager, never here (go-live-checklist § Security)
+.env
+.env.*
+!.env.example
+
+# generated — rebuilt by `pnpm tokens`, never edited by hand
+packages/tokens/dist/
+
+.DS_Store
+*.log
+coverage/
+.expo/

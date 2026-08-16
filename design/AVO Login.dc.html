@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #EBE8E1; }
+  a { color: var(--brand-deep,#5A6B58); text-decoration: none; }
+  a:hover { color: #47543f; }
+  input:focus { border-color: var(--brand,#6E7F6C) !important; }
+  svg [stroke="#5A6B58"], svg[stroke="#5A6B58"] { stroke: var(--brand-deep,#5A6B58); }
+  svg [fill="#5A6B58"], svg[fill="#5A6B58"] { fill: var(--brand-deep,#5A6B58); }
+  svg [stroke="#6E7F6C"], svg[stroke="#6E7F6C"] { stroke: var(--brand,#6E7F6C); }
+  svg [fill="#6E7F6C"], svg[fill="#6E7F6C"] { fill: var(--brand,#6E7F6C); }
+  svg [stroke="#EEF1EC"], svg[stroke="#EEF1EC"] { stroke: var(--brand-tint,#EEF1EC); }
+  svg [fill="#EEF1EC"], svg[fill="#EEF1EC"] { fill: var(--brand-tint,#EEF1EC); }
+  svg [stroke="#4F5E4C"], svg[stroke="#4F5E4C"] { stroke: var(--brand-deeper,#4F5E4C); }
+  svg [fill="#4F5E4C"], svg[fill="#4F5E4C"] { fill: var(--brand-deeper,#4F5E4C); }
+  svg [stroke="#5E7157"], svg[stroke="#5E7157"] { stroke: var(--brand-ink,#5E7157); }
+  svg [fill="#5E7157"], svg[fill="#5E7157"] { fill: var(--brand-ink,#5E7157); }
+</style>
+</helmet>
+<template id="__bundler_thumbnail" data-bg-color="#5A6B58">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#5A6B58"></rect>
+    <rect x="480" y="260" width="240" height="240" rx="64" fill="#FBFAF8"></rect>
+    <text x="600" y="440" font-family="Georgia, serif" font-size="150" font-weight="600" fill="#5A6B58" text-anchor="middle">A</text>
+  </svg>
+</template>
+
+
+<section style="min-height:100vh;padding:44px 48px 90px;font-family:Inter,system-ui,sans-serif;color:#1C1B19">
+  <div style="max-width:680px;margin-bottom:30px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:24px;padding:0 9px;border-radius:7px;background:#1C1B19;color:#fff;font-size:12px;font-weight:600">5</span>
+      <span style="font-size:14px;font-weight:600">Sign-in — merchant &amp; owner console</span>
+    </div>
+    <div style="font-family:'Fraunces',serif;font-size:30px;font-weight:500;letter-spacing:-0.01em">AVO Beauty — Sign in</div>
+    <div style="color:rgba(28,27,25,0.55);font-size:14px;margin-top:8px;line-height:1.5">Username + password entry for both web apps. The merchant workspace (<b>5a</b>) is light and salon-branded; the owner console (<b>5b</b>) is the dark platform admin. Fields are live — show/hide the password, submit to see validation, then land on a signed-in state.</div>
+  </div>
+
+  <div style="display:flex;gap:40px;flex-wrap:wrap;align-items:flex-start">
+
+    <!-- 5a MERCHANT LOGIN -->
+    <div id="5a" style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:9px">
+        <span style="display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:22px;padding:0 8px;border-radius:6px;background:var(--brand-deep,#5A6B58);color:#fff;font-size:11.5px;font-weight:600">5a</span>
+        <span style="font-size:13px;font-weight:600;color:rgba(28,27,25,0.7)">Merchant workspace</span>
+      </div>
+      <x-import component-from-global-scope="ChromeWindow" from="./browser-window.jsx" width="760" height="600" url="dashboard.avo.beauty" tabs="{{ mTabs }}" hint-size="760px,600px">
+        <div style="height:100%;background:#F6F4EE;display:flex;align-items:center;justify-content:center;font-family:Inter,system-ui,sans-serif;color:#1C1B19;padding:32px">
+          <div style="width:100%;max-width:380px">
+
+            <sc-if value="{{ mFormView }}" hint-placeholder-val="{{ true }}">
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:22px;padding:36px 34px;box-shadow:0 12px 40px rgba(28,27,25,0.06)">
+                <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px">
+                  <div style="width:40px;height:40px;border-radius:12px;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;color:#fff;font-family:'Fraunces',serif;font-size:21px;font-weight:600">A</div>
+                  <div><div style="font-family:'Fraunces',serif;font-size:20px;font-weight:500;line-height:1">AVO</div><div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:2px">Merchant workspace</div></div>
+                </div>
+                <div style="font-family:'Fraunces',serif;font-size:23px;font-weight:500;letter-spacing:-0.01em;margin-bottom:4px">Sign in to your salon</div>
+                <div style="font-size:13px;color:rgba(28,27,25,0.5);margin-bottom:24px">Enter the credentials for your salon workspace.</div>
+
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+                  <span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(28,27,25,0.6)">Username</span>
+                  <input value="{{ mUser }}" onInput="{{ setMUser }}" placeholder="amara" autocomplete="off" style="width:100%;box-sizing:border-box;border:1px solid rgba(28,27,25,0.14);background:#fff;border-radius:11px;padding:12px 14px;font-family:inherit;font-size:14px;color:#1C1B19;outline:none;transition:border-color .12s">
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">
+                  <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(28,27,25,0.6)">Password</span><button onClick="{{ toggleMShow }}" style="background:none;border:none;padding:0;font-family:inherit;font-size:11.5px;font-weight:600;color:var(--brand-deep,#5A6B58);cursor:pointer">{{ mShowLabel }}</button></div>
+                  <input value="{{ mPass }}" onInput="{{ setMPass }}" type="{{ mPassType }}" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1px solid rgba(28,27,25,0.14);background:#fff;border-radius:11px;padding:12px 14px;font-family:inherit;font-size:14px;color:#1C1B19;outline:none;transition:border-color .12s">
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+                  <div onClick="{{ toggleMKeep }}" style="display:flex;align-items:center;gap:9px;cursor:pointer"><div style="{{ mKeepTrack }}"><span style="{{ knob }}"></span></div><span style="font-size:12.5px;color:rgba(28,27,25,0.6)">Keep me signed in</span></div>
+                  <a href="#5a" style="font-size:12.5px;font-weight:600">Forgot password?</a>
+                </div>
+
+                <sc-if value="{{ mErr }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-bottom:16px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56">{{ mErr }}</span></div></sc-if>
+
+                <button onClick="{{ signInM }}" style="width:100%;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:12px;padding:13px 0;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">Sign in</button>
+
+                <div style="margin-top:20px;padding-top:18px;border-top:1px solid rgba(28,27,25,0.08);font-size:12.5px;color:rgba(28,27,25,0.5);text-align:center">Team member? Open the <b style="color:var(--brand-deep,#5A6B58)">AVO Scanner</b> app instead.</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ mDone }}">
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:22px;padding:44px 34px;box-shadow:0 12px 40px rgba(28,27,25,0.06);text-align:center">
+                <div style="width:60px;height:60px;border-radius:50%;background:var(--brand-tint,#EEF1EC);display:flex;align-items:center;justify-content:center;margin:0 auto 20px"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="#5A6B58" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                <div style="font-family:'Fraunces',serif;font-size:23px;font-weight:500">Welcome back{{ mHello }}</div>
+                <div style="font-size:13.5px;color:rgba(28,27,25,0.55);margin-top:6px">Opening the Amara dashboard…</div>
+                <button onClick="{{ resetM }}" style="margin-top:24px;background:#F0EEE9;color:rgba(28,27,25,0.7);border:none;border-radius:11px;padding:10px 18px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Back to sign in</button>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+      </x-import>
+    </div>
+
+    <!-- 5b OWNER CONSOLE LOGIN -->
+    <div id="5b" style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:9px">
+        <span style="display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:22px;padding:0 8px;border-radius:6px;background:#1C1B19;color:#fff;font-size:11.5px;font-weight:600">5b</span>
+        <span style="font-size:13px;font-weight:600;color:rgba(28,27,25,0.7)">Owner console</span>
+      </div>
+      <x-import component-from-global-scope="ChromeWindow" from="./browser-window.jsx" width="760" height="600" url="console.avo.beauty" tabs="{{ cTabs }}" hint-size="760px,600px">
+        <div style="height:100%;background:#1C1B19;display:flex;align-items:center;justify-content:center;font-family:Inter,system-ui,sans-serif;color:#fff;padding:32px">
+          <div style="width:100%;max-width:380px">
+
+            <sc-if value="{{ cFormView }}" hint-placeholder-val="{{ true }}">
+              <div style="background:#232220;border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:36px 34px">
+                <div style="display:flex;align-items:center;gap:11px;margin-bottom:26px">
+                  <div style="width:40px;height:40px;border-radius:12px;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;color:#fff;font-family:'Fraunces',serif;font-size:21px;font-weight:600">A</div>
+                  <div><div style="font-family:'Fraunces',serif;font-size:20px;font-weight:500;line-height:1;color:#fff">AVO Platform</div><div style="font-size:12px;color:rgba(255,255,255,0.5);margin-top:2px">Owner console</div></div>
+                </div>
+                <div style="font-family:'Fraunces',serif;font-size:23px;font-weight:500;letter-spacing:-0.01em;margin-bottom:4px;color:#fff">Sign in</div>
+                <div style="font-size:13px;color:rgba(255,255,255,0.5);margin-bottom:24px">The super-admin view above every salon.</div>
+
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px">
+                  <span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(255,255,255,0.45)">Username</span>
+                  <input value="{{ cUser }}" onInput="{{ setCUser }}" placeholder="yousef" autocomplete="off" style="width:100%;box-sizing:border-box;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);border-radius:11px;padding:12px 14px;font-family:inherit;font-size:14px;color:#fff;outline:none;transition:border-color .12s">
+                </div>
+
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">
+                  <div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(255,255,255,0.45)">Password</span><button onClick="{{ toggleCShow }}" style="background:none;border:none;padding:0;font-family:inherit;font-size:11.5px;font-weight:600;color:#B7CBB0;cursor:pointer">{{ cShowLabel }}</button></div>
+                  <input value="{{ cPass }}" onInput="{{ setCPass }}" type="{{ cPassType }}" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);border-radius:11px;padding:12px 14px;font-family:inherit;font-size:14px;color:#fff;outline:none;transition:border-color .12s">
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+                  <div onClick="{{ toggleCKeep }}" style="display:flex;align-items:center;gap:9px;cursor:pointer"><div style="{{ cKeepTrack }}"><span style="{{ knob }}"></span></div><span style="font-size:12.5px;color:rgba(255,255,255,0.6)">Keep me signed in</span></div>
+                  <a href="#5b" style="font-size:12.5px;font-weight:600;color:#B7CBB0">Forgot password?</a>
+                </div>
+
+                <sc-if value="{{ cErr }}"><div style="display:flex;align-items:center;gap:9px;background:rgba(176,115,111,0.18);border-radius:12px;padding:11px 14px;margin-bottom:16px"><span style="width:8px;height:8px;border-radius:9px;background:#E7B7B3;flex-shrink:0"></span><span style="font-size:12.5px;color:#E7B7B3">{{ cErr }}</span></div></sc-if>
+
+                <button onClick="{{ signInC }}" style="width:100%;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:12px;padding:13px 0;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">Sign in</button>
+
+                <div style="margin-top:20px;padding-top:18px;border-top:1px solid rgba(255,255,255,0.08);font-size:12px;color:rgba(255,255,255,0.4);text-align:center">Restricted — authorized platform admins only.</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ cDone }}">
+              <div style="background:#232220;border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:44px 34px;text-align:center">
+                <div style="width:60px;height:60px;border-radius:50%;background:rgba(110,127,108,0.25);display:flex;align-items:center;justify-content:center;margin:0 auto 20px"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.5 4.5L19 7.5" stroke="#B7CBB0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+                <div style="font-family:'Fraunces',serif;font-size:23px;font-weight:500;color:#fff">Welcome back{{ cHello }}</div>
+                <div style="font-size:13.5px;color:rgba(255,255,255,0.55);margin-top:6px">Opening the owner console…</div>
+                <button onClick="{{ resetC }}" style="margin-top:24px;background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.75);border:none;border-radius:11px;padding:10px 18px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">Back to sign in</button>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+      </x-import>
+    </div>
+
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;brandColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#6E7F6C&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;,&quot;options&quot;:[&quot;#6E7F6C&quot;,&quot;#8A5B6E&quot;,&quot;#3F5A78&quot;,&quot;#B0734A&quot;]}}">
+class Component extends DCLogic {
+  brandVars() {
+    const p = this.props || {};
+    const hex = p.brandColor || '#6E7F6C';
+    const rgb = h => { let v = String(h).replace('#',''); if (v.length === 3) v = v.split('').map(c => c + c).join(''); const n = parseInt(v, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+    const to = c => '#' + c.map(x => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, '0')).join('');
+    const base = rgb(hex), W = [255,255,255], B = [0,0,0];
+    const mix = (c, t, a) => c.map((x, i) => x + (t[i] - x) * a);
+    const vars = {
+      '--brand': hex,
+      '--brand-deep': to(mix(base, B, 0.14)),
+      '--brand-deeper': to(mix(base, B, 0.28)),
+      '--brand-ink': to(mix(base, B, 0.08)),
+      '--brand-tint': to(mix(base, W, 0.88)),
+      '--brand-wash': to(mix(base, W, 0.94)),
+      '--brand-card-from': to(mix(base, W, 0.07)),
+      '--brand-card-to': to(mix(base, B, 0.13)),
+    };
+    const r = document.documentElement;
+    for (const k in vars) r.style.setProperty(k, vars[k]);
+  }
+
+  state = {
+    mUser: '', mPass: '', mShow: false, mKeep: true, mErr: '', mDone: false,
+    cUser: '', cPass: '', cShow: false, cKeep: false, cErr: '', cDone: false,
+  };
+
+  knob() { return 'width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.2);display:block;'; }
+  track(on) {
+    return 'width:40px;height:24px;border-radius:999px;padding:3px;flex-shrink:0;display:flex;transition:background .15s;'
+      + (on ? 'background:var(--brand,#6E7F6C);justify-content:flex-end;' : 'background:#D9D6CF;justify-content:flex-start;');
+  }
+
+  firstName(u) {
+    const t = (u || '').trim();
+    if (!t) return '';
+    const n = t.replace(/[@._-]+/g, ' ').split(' ')[0];
+    return ', ' + n.charAt(0).toUpperCase() + n.slice(1);
+  }
+
+  renderVals() {
+    this.brandVars();
+    const s = this.state;
+    return {
+      knob: this.knob(),
+      mTabs: [{ title: 'AVO · Merchant' }],
+      cTabs: [{ title: 'AVO · Owner Console' }],
+
+      // merchant
+      mFormView: !s.mDone, mDone: s.mDone,
+      mUser: s.mUser, mPass: s.mPass,
+      mPassType: s.mShow ? 'text' : 'password', mShowLabel: s.mShow ? 'Hide' : 'Show',
+      mErr: s.mErr, mHello: this.firstName(s.mUser),
+      mKeepTrack: this.track(s.mKeep),
+      setMUser: (e) => this.setState({ mUser: e.target.value, mErr: '' }),
+      setMPass: (e) => this.setState({ mPass: e.target.value, mErr: '' }),
+      toggleMShow: () => this.setState(x => ({ mShow: !x.mShow })),
+      toggleMKeep: () => this.setState(x => ({ mKeep: !x.mKeep })),
+      signInM: () => {
+        if (!s.mUser.trim() || !s.mPass) { this.setState({ mErr: 'Enter both your username and password.' }); return; }
+        if (s.mPass.length < 6) { this.setState({ mErr: 'Password must be at least 6 characters.' }); return; }
+        this.setState({ mDone: true, mErr: '' });
+      },
+      resetM: () => this.setState({ mDone: false, mPass: '' }),
+
+      // console
+      cFormView: !s.cDone, cDone: s.cDone,
+      cUser: s.cUser, cPass: s.cPass,
+      cPassType: s.cShow ? 'text' : 'password', cShowLabel: s.cShow ? 'Hide' : 'Show',
+      cErr: s.cErr, cHello: this.firstName(s.cUser),
+      cKeepTrack: this.track(s.cKeep),
+      setCUser: (e) => this.setState({ cUser: e.target.value, cErr: '' }),
+      setCPass: (e) => this.setState({ cPass: e.target.value, cErr: '' }),
+      toggleCShow: () => this.setState(x => ({ cShow: !x.cShow })),
+      toggleCKeep: () => this.setState(x => ({ cKeep: !x.cKeep })),
+      signInC: () => {
+        if (!s.cUser.trim() || !s.cPass) { this.setState({ cErr: 'Enter both your username and password.' }); return; }
+        if (s.cPass.length < 6) { this.setState({ cErr: 'Password must be at least 6 characters.' }); return; }
+        this.setState({ cDone: true, cErr: '' });
+      },
+      resetC: () => this.setState({ cDone: false, cPass: '' }),
+    };
+  }
+}
+</script>
+</body>
+</html>

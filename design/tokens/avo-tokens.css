@@ -1,0 +1,47 @@
+:root {
+  --avo-ink: #1C1B19;
+  --avo-canvas: #EBE8E1;
+  --avo-surface: #FBFAF8;
+  --avo-surface-alt: #F6F4EE;
+  --avo-surface-alt2: #F0EEE9;
+  --avo-brand: #6E7F6C;
+  --avo-brand-deep: #5A6B58;
+  --avo-brand-deeper: #4F5E4C;
+  --avo-brand-tint: #EEF1EC;
+  --avo-brand-tint2: #F6F7F3;
+  --avo-hairline: rgba(28,27,25,0.08);
+  --avo-hairline-inner: rgba(28,27,25,0.06);
+  --avo-text-muted: rgba(28,27,25,0.5);
+  --avo-text-muted-soft: rgba(28,27,25,0.45);
+  --avo-text-muted-strong: rgba(28,27,25,0.7);
+  --avo-success: #25D366;
+  --avo-positive: #5E7157;
+  --avo-danger-dot: #B0736F;
+  --avo-danger-text: #8f5a56;
+  --avo-danger-bg: #F6EAE8;
+  --avo-warn-text: #8a6d3b;
+  --avo-warn-bg: #F3E9CF;
+  --avo-toggle-off: #D9D6CF;
+  --avo-disabled-bg: #E7E4DD;
+
+  /* white-label: swap these three (+ card gradient) per salon.
+     White text goes on --avo-brand-deep, never --avo-brand. See $rules.brandFill. */
+  --avo-brand: #6E7F6C;
+  --avo-brand-deep: #5A6B58;
+  --avo-brand-tint: #EEF1EC;
+  --avo-card-from: #78886F;
+  --avo-card-to: #5E6E59;
+
+  --avo-radius-chip: 10px;
+  --avo-radius-input: 13px;
+  --avo-radius-button: 14px;
+  --avo-radius-card: 16px;
+  --avo-radius-card-lg: 20px;
+  --avo-radius-wallet-card: 24px;
+  --avo-radius-sheet: 26px;
+  --avo-radius-pill: 999px;
+
+  --avo-font-display: Fraunces, serif;
+  --avo-font-ui: Inter, system-ui, sans-serif;
+  --avo-font-ar: 'IBM Plex Sans Arabic', sans-serif;
+}

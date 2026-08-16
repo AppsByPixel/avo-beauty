@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #EBE8E1; }
+  a { color: #5A6B58; text-decoration: none; }
+  a:hover { color: #47543f; }
+  @keyframes avoshimmer { 0% { opacity: 0.55; } 50% { opacity: 1; } 100% { opacity: 0.55; } }
+  @keyframes avopulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+</style>
+</helmet>
+<template id="__bundler_thumbnail" data-bg-color="#6E7F6C">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#6E7F6C"></rect>
+    <rect x="480" y="260" width="240" height="240" rx="64" fill="#FBFAF8"></rect>
+    <text x="600" y="440" font-family="Georgia, serif" font-size="150" font-weight="600" fill="#6E7F6C" text-anchor="middle">S</text>
+  </svg>
+</template>
+
+
+<section style="min-height:100vh;padding:44px 40px 90px;font-family:Inter,system-ui,sans-serif;color:#1C1B19">
+  <div style="max-width:640px;margin-bottom:36px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:24px;padding:0 9px;border-radius:7px;background:#1C1B19;color:#fff;font-size:12px;font-weight:600">6a</span>
+      <span style="font-size:14px;font-weight:600">States matrix — loading · empty · error · offline</span>
+    </div>
+    <div style="font-family:'Fraunces',serif;font-size:30px;font-weight:500;letter-spacing:-0.01em">AVO Beauty — States</div>
+    <div style="color:rgba(28,27,25,0.55);font-size:14px;margin-top:8px;line-height:1.55">The five screen files show the happy path. These are the states every one of them also needs — the ones a developer otherwise invents. Written to the same tokens. Rules behind each are in <b>interaction-spec.md</b> §4.</div>
+  </div>
+
+  <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin-bottom:16px">Customer wallet · mobile</div>
+  <div style="display:flex;flex-wrap:wrap;gap:26px;margin-bottom:52px">
+
+    <div style="width:330px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Home · loading</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Skeleton matches the real layout. Never render <b>0.000</b> before data lands.</div>
+      <div style="height:560px;border-radius:26px;background:#FBFAF8;border:1px solid rgba(28,27,25,0.08);padding:22px 20px;overflow:hidden">
+        <div style="display:flex;flex-direction:column;gap:7px;animation:avoshimmer 1.6s ease-in-out infinite">
+          <span style="width:96px;height:11px;border-radius:6px;background:#EDEAE3"></span>
+          <span style="width:74px;height:17px;border-radius:6px;background:#E4E0D8"></span>
+        </div>
+        <div style="margin-top:20px;border-radius:24px;padding:22px;background:#F1EEE7;animation:avoshimmer 1.6s ease-in-out 0.1s infinite">
+          <div style="display:flex;justify-content:space-between"><span style="width:88px;height:10px;border-radius:6px;background:#E4E0D8"></span><span style="width:52px;height:20px;border-radius:999px;background:#E4E0D8"></span></div>
+          <span style="display:block;width:172px;height:40px;border-radius:9px;background:#E4E0D8;margin:16px 0 18px"></span>
+          <span style="display:block;width:100%;height:6px;border-radius:999px;background:#E4E0D8"></span>
+          <div style="margin-top:20px;background:#F7F5F0;border-radius:16px;padding:15px;display:flex;gap:15px">
+            <span style="width:82px;height:82px;border-radius:8px;background:#E4E0D8;flex-shrink:0"></span>
+            <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding-top:4px">
+              <span style="width:72%;height:10px;border-radius:6px;background:#E4E0D8"></span>
+              <span style="width:52%;height:16px;border-radius:6px;background:#E4E0D8"></span>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:22px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:16px;animation:avoshimmer 1.6s ease-in-out 0.2s infinite">
+          <span style="display:block;width:110px;height:11px;border-radius:6px;background:#EDEAE3;margin-bottom:14px"></span>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px">
+            <span style="height:52px;border-radius:14px;background:#F1EEE7"></span>
+            <span style="height:52px;border-radius:14px;background:#F1EEE7"></span>
+            <span style="height:52px;border-radius:14px;background:#F1EEE7"></span>
+            <span style="height:52px;border-radius:14px;background:#F1EEE7"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:330px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Home · offline</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Last-known balance stays. <b>The QR is hidden</b> — a stale token fails at the counter and blames the salon.</div>
+      <div style="height:560px;border-radius:26px;background:#FBFAF8;border:1px solid rgba(28,27,25,0.08);padding:22px 20px;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:9px;background:#F0EEE9;border:1px solid rgba(28,27,25,0.09);border-radius:12px;padding:11px 13px;margin-bottom:18px">
+          <span style="width:8px;height:8px;border-radius:9px;background:#8A867E;flex-shrink:0"></span>
+          <span style="font-size:12.5px;color:rgba(28,27,25,0.65);line-height:1.4">No connection · showing your last update</span>
+        </div>
+        <div style="border-radius:24px;padding:22px;background:linear-gradient(158deg,#78886F 0%,#5E6E59 100%);color:#fff;opacity:0.9">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;opacity:0.85">Wallet balance</span>
+            <span style="font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;background:rgba(255,255,255,0.18)">Silver</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin:12px 0 6px">
+            <span style="font-family:'Fraunces',serif;font-size:52px;font-weight:500;line-height:0.9">24.500</span>
+            <span style="font-size:17px;opacity:0.82;font-weight:500">KD</span>
+          </div>
+          <div style="font-size:12px;opacity:0.78">Last updated 14 min ago</div>
+          <div style="margin-top:18px;background:rgba(255,255,255,0.14);border:1px dashed rgba(255,255,255,0.4);border-radius:16px;padding:20px 16px;text-align:center">
+            <div style="font-size:13.5px;font-weight:600">Payment code unavailable offline</div>
+            <div style="font-size:12px;opacity:0.85;margin-top:5px;line-height:1.45">Reconnect to show a valid code at the salon.</div>
+          </div>
+        </div>
+        <div style="margin:13px 4px 0;font-family:'Fraunces',serif;font-style:italic;font-size:13.5px;color:rgba(28,27,25,0.55)">One wallet — valid at all branches.</div>
+        <button style="width:100%;margin-top:20px;background:#fff;color:#5A6B58;border:1px solid rgba(28,27,25,0.14);border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">Try again</button>
+      </div>
+    </div>
+
+    <div style="width:330px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Activity · empty</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Name the thing, offer the one action that fills it. No illustration.</div>
+      <div style="height:560px;border-radius:26px;background:#FBFAF8;border:1px solid rgba(28,27,25,0.08);padding:22px 20px;overflow:hidden">
+        <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 4px 10px">Activity</div>
+        <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:44px 24px;text-align:center">
+          <div style="width:44px;height:44px;border-radius:14px;background:#F0EEE9;margin:0 auto;display:flex;align-items:center;justify-content:center">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h9" stroke="rgba(28,27,25,0.32)" stroke-width="1.7" stroke-linecap="round"></path></svg>
+          </div>
+          <div style="font-family:'Fraunces',serif;font-size:19px;font-weight:500;margin-top:16px">Nothing here yet</div>
+          <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">Top-ups, visits and purchases will appear here.</div>
+          <button style="margin-top:20px;background:#5A6B58;color:#fff;border:none;border-radius:13px;padding:13px 22px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">Top up your wallet</button>
+        </div>
+        <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:26px 4px 10px">Shop · empty catalogue</div>
+        <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:32px 24px;text-align:center">
+          <div style="font-family:'Fraunces',serif;font-size:18px;font-weight:500">No products yet</div>
+          <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">Amara hasn't listed anything for pickup.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:330px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Home · failed to load</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">"We failed" — so it retries. Distinct from "you can't do that", which explains instead.</div>
+      <div style="height:560px;border-radius:26px;background:#FBFAF8;border:1px solid rgba(28,27,25,0.08);padding:22px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;overflow:hidden">
+        <div style="width:62px;height:62px;border-radius:50%;background:#F6EAE8;display:flex;align-items:center;justify-content:center">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 8v5M12 16.5v.5" stroke="#B0736F" stroke-width="2" stroke-linecap="round"></path><circle cx="12" cy="12" r="9" stroke="#B0736F" stroke-width="1.7"></circle></svg>
+        </div>
+        <div style="font-family:'Fraunces',serif;font-size:21px;font-weight:500;margin-top:19px">We couldn't load your wallet</div>
+        <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:7px;line-height:1.5;max-width:250px">Your balance and history are safe. This is on our side.</div>
+        <button style="width:100%;margin-top:24px;background:#5A6B58;color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">Try again</button>
+        <div style="font-size:11.5px;color:rgba(28,27,25,0.4);margin-top:16px">Reference · WLT-5502-9917</div>
+      </div>
+    </div>
+
+    <div style="width:330px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Scanner · code expired</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Staff surface. The token rotates every 45s and is single-use — this will happen daily.</div>
+      <div style="height:560px;border-radius:26px;background:#FBFAF8;border:1px solid rgba(28,27,25,0.08);padding:22px 20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;overflow:hidden">
+        <div style="width:62px;height:62px;border-radius:50%;background:#F3E9CF;display:flex;align-items:center;justify-content:center">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.6" stroke="#8a6d3b" stroke-width="1.8"></circle><path d="M12 7.5V12l3 2" stroke="#8a6d3b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        </div>
+        <div style="font-family:'Fraunces',serif;font-size:21px;font-weight:500;margin-top:19px">That code has expired</div>
+        <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:7px;line-height:1.5;max-width:255px">Codes refresh every 45 seconds. Ask the customer to show hers again.</div>
+        <button style="width:100%;margin-top:24px;background:#5A6B58;color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">Scan again</button>
+        <div style="width:100%;display:flex;align-items:center;gap:9px;background:#F6F7F3;border:1px solid rgba(110,127,108,0.22);border-radius:13px;padding:12px 14px;margin-top:18px;text-align:left">
+          <span style="width:7px;height:7px;border-radius:9px;background:#6E7F6C;flex-shrink:0"></span>
+          <span style="font-size:12.5px;color:#4F5E4C;line-height:1.45">Nothing was charged.</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.45);margin-bottom:16px">Merchant dashboard &amp; owner console · web</div>
+  <div style="display:flex;flex-wrap:wrap;gap:26px;margin-bottom:52px">
+
+    <div style="width:520px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Table · loading</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px">Header row renders immediately; only the cells skeleton. Column widths must not shift when data lands.</div>
+      <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;overflow:hidden">
+        <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 0.9fr;gap:16px;padding:13px 20px;background:#F6F4EE;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(28,27,25,0.5)">
+          <span>Customer</span><span>Service</span><span>When</span><span>Status</span>
+        </div>
+        <sc-for list="{{ skeletonRows }}" as="r" hint-placeholder-count="5">
+          <div style="{{ r.style }}">
+            <span style="width:74%;height:12px;border-radius:6px;background:#EDEAE3"></span>
+            <span style="width:60%;height:12px;border-radius:6px;background:#EDEAE3"></span>
+            <span style="width:82%;height:12px;border-radius:6px;background:#EDEAE3"></span>
+            <span style="width:64px;height:20px;border-radius:999px;background:#F1EEE7"></span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="width:520px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Appointments · empty</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px">Two different empties: nothing booked yet, versus the Booking module switched off. Never show the same copy for both.</div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:40px 28px;text-align:center">
+          <div style="font-family:'Fraunces',serif;font-size:19px;font-weight:500">No appointments this week</div>
+          <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">Bookings from the customer app land here as soon as they're made.</div>
+        </div>
+        <div style="background:#F6F7F3;border:1px solid rgba(110,127,108,0.22);border-radius:16px;padding:32px 28px;text-align:center">
+          <div style="font-family:'Fraunces',serif;font-size:19px;font-weight:500">Booking is switched off</div>
+          <div style="font-size:13px;color:rgba(28,27,25,0.6);margin-top:6px;line-height:1.5;max-width:340px;margin-left:auto;margin-right:auto">Turn it on in Settings and your team's hours become bookable. Nothing changes for existing customers.</div>
+          <button style="margin-top:18px;background:#5A6B58;color:#fff;border:none;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer">Open Settings</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:520px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Search · no results</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px">Echo the query back and offer the escape. Distinct from "no data at all".</div>
+      <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;overflow:hidden">
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid rgba(28,27,25,0.07)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.6" stroke="rgba(28,27,25,0.4)" stroke-width="1.7"></circle><path d="m16 16 4 4" stroke="rgba(28,27,25,0.4)" stroke-width="1.7" stroke-linecap="round"></path></svg>
+          <span style="font-size:14px;color:#1C1B19">noura almu</span>
+        </div>
+        <div style="padding:44px 28px;text-align:center">
+          <div style="font-family:'Fraunces',serif;font-size:19px;font-weight:500">No members match "noura almu"</div>
+          <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">Try a phone number, or check the branch filter.</div>
+          <button style="margin-top:18px;background:transparent;color:#5A6B58;border:1px solid rgba(28,27,25,0.14);border-radius:12px;padding:11px 18px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer">Clear search</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:520px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Section · failed, and stale</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px">On refresh failure, keep the last-known data on screen behind a stale banner. Blanking a dashboard someone is reading is worse than showing old numbers, labelled.</div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:36px 28px;text-align:center">
+          <div style="width:52px;height:52px;border-radius:50%;background:#F6EAE8;margin:0 auto;display:flex;align-items:center;justify-content:center">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 8v5M12 16.5v.5" stroke="#B0736F" stroke-width="2" stroke-linecap="round"></path><circle cx="12" cy="12" r="9" stroke="#B0736F" stroke-width="1.7"></circle></svg>
+          </div>
+          <div style="font-family:'Fraunces',serif;font-size:19px;font-weight:500;margin-top:15px">Couldn't load Appointments</div>
+          <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">Nothing was lost. Try again, or switch section and come back.</div>
+          <button style="margin-top:18px;background:#5A6B58;color:#fff;border:none;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer">Retry</button>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;background:#F3E9CF;border-radius:13px;padding:13px 16px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="width:8px;height:8px;border-radius:9px;background:#8a6d3b;flex-shrink:0;animation:avopulse 1.6s ease-in-out infinite"></span>
+            <span style="font-size:13px;color:#8a6d3b">Showing figures from 14:02 — refresh failed</span>
+          </div>
+          <button style="background:transparent;border:1px solid rgba(138,109,59,0.4);color:#8a6d3b;border-radius:10px;padding:7px 14px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap">Refresh</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.45);margin-bottom:6px">Motion, focus &amp; responsive</div>
+  <div style="font-size:13.5px;color:rgba(28,27,25,0.55);max-width:640px;line-height:1.55;margin-bottom:16px">The three things the happy-path files don't show and the spec alone doesn't settle. Build these, don't infer them.</div>
+  <div style="display:flex;flex-wrap:wrap;gap:22px;margin-bottom:34px">
+
+    <div style="width:400px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Reduced motion</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Under <code style="font-family:inherit">prefers-reduced-motion</code>, remove the animation — never just shorten it.</div>
+      <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:6px 18px">
+        <sc-for list="{{ motionRows }}" as="m" hint-placeholder-count="6">
+          <div style="padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.06)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <span style="font-size:13.5px;font-weight:600">{{ m.name }}</span>
+              <span style="{{ m.pill }}">{{ m.verdict }}</span>
+            </div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:4px;line-height:1.5">{{ m.rule }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="width:400px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Focus &amp; keyboard</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Ring is 2px <b>#5A6B58</b> at 2px offset on every focusable, on both light and dark surfaces.</div>
+      <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:20px">
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+          <button style="background:#5A6B58;color:#fff;border:none;border-radius:13px;padding:13px 20px;font-family:inherit;font-size:14px;font-weight:600;outline:2px solid #5A6B58;outline-offset:2px">Primary · focused</button>
+          <button style="background:#fff;color:#1C1B19;border:1px solid rgba(28,27,25,0.14);border-radius:13px;padding:13px 20px;font-family:inherit;font-size:14px;font-weight:600;outline:2px solid #5A6B58;outline-offset:2px">Secondary · focused</button>
+        </div>
+        <input value="Focused input" readonly style="width:100%;box-sizing:border-box;margin-top:14px;border:1px solid #6E7F6C;border-radius:11px;padding:12px 14px;font-family:inherit;font-size:14px;color:#1C1B19;outline:2px solid #5A6B58;outline-offset:2px">
+        <div style="display:flex;align-items:center;gap:11px;margin-top:14px;background:#131511;border-radius:13px;padding:14px 16px">
+          <button style="background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:11px;padding:11px 16px;font-family:inherit;font-size:13.5px;font-weight:600;outline:2px solid #A7BBA0;outline-offset:2px">On dark · #A7BBA0</button>
+          <span style="font-size:12px;color:rgba(255,255,255,0.5)">Scanner &amp; owner sidebar</span>
+        </div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(28,27,25,0.07)">
+          <sc-for list="{{ keyRows }}" as="k" hint-placeholder-count="5">
+            <div style="display:flex;align-items:baseline;gap:12px;padding:6px 0">
+              <span style="font-family:'Fraunces',serif;font-size:12.5px;font-weight:600;min-width:92px;color:#5A6B58">{{ k.key }}</span>
+              <span style="font-size:12.5px;color:rgba(28,27,25,0.6);line-height:1.5">{{ k.does }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:400px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Responsive</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Mobile is one column at every width. The two web surfaces have three states each.</div>
+      <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:6px 18px">
+        <sc-for list="{{ bpRows }}" as="b" hint-placeholder-count="5">
+          <div style="padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.06)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <span style="font-size:13.5px;font-weight:600">{{ b.name }}</span>
+              <span style="font-family:'Fraunces',serif;font-size:12.5px;color:rgba(28,27,25,0.5)">{{ b.range }}</span>
+            </div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:4px;line-height:1.5">{{ b.rule }}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:flex;gap:11px;background:#F6F7F3;border:1px solid rgba(110,127,108,0.22);border-radius:14px;padding:14px 16px;margin-top:14px">
+        <span style="width:7px;height:7px;border-radius:9px;background:#6E7F6C;flex-shrink:0;margin-top:6px"></span>
+        <div style="font-size:12.5px;color:#4F5E4C;line-height:1.55">Data tables never squeeze below their column minimums — they scroll horizontally inside their card, with the first column pinned.</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.45);margin-bottom:6px">Push notifications · lock screen &amp; in-app</div>
+  <div style="font-size:13.5px;color:rgba(28,27,25,0.55);max-width:640px;line-height:1.55;margin-bottom:16px">Title carries the fact, body carries the amount and the name. Never "You have a new notification". Money always 3 decimals. Deep-link target is listed under each card.</div>
+  <div style="display:flex;flex-wrap:wrap;gap:22px;margin-bottom:34px">
+    <div style="width:400px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Customer · lock screen</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Four messages ship at launch. Offers are opt-in and are not one of them.</div>
+      <div style="border-radius:22px;background:linear-gradient(158deg,#4A5347,#2A2F28);padding:20px 16px;display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ pushCustomer }}" as="n" hint-placeholder-count="5">
+          <div style="background:rgba(255,255,255,0.92);border-radius:16px;padding:13px 15px;backdrop-filter:blur(8px)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span style="width:17px;height:17px;border-radius:5px;background:#5A6B58;color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:10px;font-weight:600">A</span>
+              <span style="font-size:11px;font-weight:600;color:rgba(28,27,25,0.55)">AVO · Amara</span>
+              <span style="margin-left:auto;font-size:11px;color:rgba(28,27,25,0.4)">{{ n.when }}</span>
+            </div>
+            <div style="font-size:13.5px;font-weight:600;color:#1C1B19">{{ n.title }}</div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.6);margin-top:2px;line-height:1.45">{{ n.body }}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="font-size:11.5px;color:rgba(28,27,25,0.45);margin-top:10px;line-height:1.6">Deep links · top-up → Activity detail · reminder → Upcoming · deposit → Activity detail · tier → Membership · low balance → Top up. Low balance fires once per drop below 3.000 KD, never more than weekly.</div>
+    </div>
+
+    <div style="width:400px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Staff · lock screen</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Bookings and no-shows only. A charge never notifies the person who took it.</div>
+      <div style="border-radius:22px;background:linear-gradient(158deg,#26282A,#131511);padding:20px 16px;display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ pushStaff }}" as="n" hint-placeholder-count="3">
+          <div style="background:rgba(255,255,255,0.92);border-radius:16px;padding:13px 15px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span style="width:17px;height:17px;border-radius:5px;background:#1C1B19;color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:10px;font-weight:600">A</span>
+              <span style="font-size:11px;font-weight:600;color:rgba(28,27,25,0.55)">AVO Staff</span>
+              <span style="margin-left:auto;font-size:11px;color:rgba(28,27,25,0.4)">{{ n.when }}</span>
+            </div>
+            <div style="font-size:13.5px;font-weight:600;color:#1C1B19">{{ n.title }}</div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.6);margin-top:2px;line-height:1.45">{{ n.body }}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="font-size:11.5px;color:rgba(28,27,25,0.45);margin-top:10px;line-height:1.6">Deep links · booking → My bookings · no-show → Appointments · calendar → My schedule. Badge count clears on open, not on receipt.</div>
+    </div>
+
+    <div style="width:400px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:3px">Merchant · in-app alert</div>
+      <div style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.45;margin-bottom:11px;min-height:34px">Desktop has no push. The bell holds the same events, unread until opened.</div>
+      <div style="background:#fff;border:1px solid rgba(28,27,25,0.1);border-radius:16px;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid rgba(28,27,25,0.07)">
+          <span style="font-family:'Fraunces',serif;font-size:16px;font-weight:500">Notifications</span>
+          <span style="font-size:12.5px;font-weight:600;color:#5A6B58">Mark all read</span>
+        </div>
+        <sc-for list="{{ pushMerchant }}" as="n" hint-placeholder-count="3">
+          <div style="display:flex;align-items:flex-start;gap:11px;padding:13px 16px;border-bottom:1px solid rgba(28,27,25,0.06);background:{{ n.bg }}">
+            <span style="width:8px;height:8px;border-radius:9px;margin-top:6px;flex-shrink:0;background:{{ n.dot }}"></span>
+            <div style="min-width:0">
+              <div style="font-size:13.5px;font-weight:500;line-height:1.35">{{ n.title }}</div>
+              <div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:2px">{{ n.body }}</div>
+              <div style="font-size:11.5px;color:rgba(28,27,25,0.38);margin-top:4px">{{ n.when }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="font-size:11.5px;color:rgba(28,27,25,0.45);margin-top:10px;line-height:1.6">Same events also go out on WhatsApp when the module is on — never duplicate both to the same person within 5 minutes.</div>
+    </div>
+  </div>
+
+  <div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.45);margin-bottom:6px">White-label · one token restyles everything</div>
+  <div style="font-size:13.5px;color:rgba(28,27,25,0.55);max-width:640px;line-height:1.55;margin-bottom:14px">The same wallet card under each demo preset. Only <b>--avo-brand</b> and its two derived values change — tints, gradients and pills are computed from it. Full list in <b>tokens/avo-tokens.json</b>.</div>
+  <div style="display:flex;gap:11px;background:#F6F7F3;border:1px solid rgba(110,127,108,0.22);border-radius:14px;padding:15px 17px;max-width:640px;margin-bottom:22px">
+    <span style="width:7px;height:7px;border-radius:9px;background:#6E7F6C;flex-shrink:0;margin-top:6px"></span>
+    <div style="font-size:13px;color:#4F5E4C;line-height:1.55"><b>White text never sits on <code style="font-family:inherit">--avo-brand</code> directly.</b> A salon's raw brand hex is a surface color; buttons and any other white-on-color fill use the derived <code style="font-family:inherit">--avo-brand-deep</code>, which must clear <b>4.5:1</b>. Noor rose at <code style="font-family:inherit">#B08D8D</code> is only 2.98:1 with white — unreadable as a button. White-label onboarding has to <b>derive and validate</b> the deep variant, not accept any hex a merchant pastes in.</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:22px">
+    <sc-for list="{{ presets }}" as="p" hint-placeholder-count="3">
+      <div style="width:330px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
+          <span style="{{ p.swatch }}"></span>
+          <span style="font-size:13px;font-weight:600">{{ p.name }}</span>
+          <span style="font-family:'Fraunces',serif;font-size:12.5px;color:rgba(28,27,25,0.5)">{{ p.hex }}</span>
+          <span style="{{ p.ratioNote }}">deep {{ p.deep }} · {{ p.ratio }}</span>
+        </div>
+        <div style="{{ p.card }}">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:12px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;opacity:0.85">Wallet balance</span>
+            <span style="font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;background:rgba(255,255,255,0.18)">Silver</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin:12px 0 16px">
+            <span style="font-family:'Fraunces',serif;font-size:46px;font-weight:500;line-height:0.9">24.500</span>
+            <span style="font-size:16px;opacity:0.82;font-weight:500">KD</span>
+          </div>
+          <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.22);overflow:hidden"><div style="width:40%;height:100%;border-radius:999px;background:#fff"></div></div>
+          <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12.5px;opacity:0.88"><span>6 visits to Gold</span><span>Silver → Gold</span></div>
+          <div style="margin-top:18px;background:#fff;border-radius:16px;padding:14px;display:flex;align-items:center;gap:14px">
+            <canvas id="{{ p.canvasId }}" width="152" height="152" style="width:76px;height:76px;flex-shrink:0"></canvas>
+            <div style="flex:1;color:#1C1B19">
+              <div style="font-size:11.5px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.5)">Show to pay</div>
+              <div style="font-family:'Fraunces',serif;font-size:18px;font-weight:500;margin-top:3px">ID · 8842</div>
+              <div style="font-size:12.5px;font-weight:600;margin-top:7px;color:{{ p.deep }}">Tap to enlarge</div>
+            </div>
+          </div>
+        </div>
+        <button style="{{ p.button }}">Top up</button>
+      </div>
+    </sc-for>
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  componentDidMount() { this.drawQrs(); this._t = setTimeout(() => this.drawQrs(), 600); }
+  componentWillUnmount() { if (this._t) clearTimeout(this._t); }
+
+  drawQrs() {
+    const gen = window.qrcode;
+    if (!gen) return;
+    const qr = gen(0, 'M');
+    qr.addData('avo://pay?m=8842&t=AVO8842X1');
+    qr.make();
+    const n = qr.getModuleCount();
+    ['qrp0', 'qrp1', 'qrp2'].forEach(id => {
+      const c = document.getElementById(id);
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const px = c.width / n;
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.fillStyle = '#1C1B19';
+      for (let r = 0; r < n; r++) {
+        for (let col = 0; col < n; col++) {
+          if (qr.isDark(r, col)) ctx.fillRect(Math.round(col * px), Math.round(r * px), Math.ceil(px), Math.ceil(px));
+        }
+      }
+    });
+  }
+
+  renderVals() {
+    const skeletonRows = Array.from({ length: 5 }, (_, i) => ({
+      style: 'display:grid;grid-template-columns:1.4fr 1fr 1fr 0.9fr;gap:16px;align-items:center;padding:16px 20px;'
+        + (i < 4 ? 'border-bottom:1px solid rgba(28,27,25,0.06);' : '')
+        + 'animation:avoshimmer 1.6s ease-in-out ' + (i * 0.09) + 's infinite;',
+    }));
+    const defs = [
+      ['Amara sage', '#6E7F6C', '#5A6B58', '#78886F', '#5E6E59', '4.9:1'],
+      ['Noor rose', '#B08D8D', '#8A6565', '#BC9898', '#9C7A7A', '5.1:1'],
+      ['Lila lilac', '#8A7CB0', '#6B5C92', '#9587BB', '#786A9B', '6.0:1'],
+    ];
+    const presets = defs.map(([name, hex, deep, from, to, ratio], i) => ({
+      name, hex, deep, ratio, canvasId: 'qrp' + i,
+      swatch: 'width:15px;height:15px;border-radius:5px;flex-shrink:0;background:' + hex + ';',
+      card: 'border-radius:24px;padding:22px;color:#fff;background:linear-gradient(158deg,' + from + ' 0%,' + to + ' 100%);',
+      button: 'width:100%;margin-top:13px;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;color:#fff;background:' + deep + ';',
+      ratioNote: 'font-family:Fraunces,serif;font-size:12px;color:rgba(28,27,25,0.5);margin-left:auto;',
+    }));
+    const pushCustomer = [
+      { when: 'now', title: 'Top-up complete · 27.500 KD', body: 'Including 2.500 KD Silver bonus. Your wallet is ready at any Amara branch.' },
+      { when: '2h', title: 'Balayage & gloss at 4:30 PM', body: 'With Rana at Amara Salmiya. 5.000 KD deposit is held.' },
+      { when: 'Fri', title: 'Deposit returned · 5.000 KD', body: 'Your 9 Jul blow-dry was released. The credit is back in your wallet.' },
+      { when: 'Thu', title: 'Low balance · 2.500 KD left', body: "That won't cover your next blow-dry. Top up 10 and get 11 with your Silver bonus." },
+      { when: 'Wed', title: "You're Gold at Amara", body: 'Top-ups now earn +20% instead of 10%, starting with your next one.' },
+    ];
+    const pushStaff = [
+      { when: 'now', title: 'New booking · 4:30 PM Saturday', body: 'Balayage & gloss for Layla A. · 5.000 KD deposit held.' },
+      { when: '1h', title: 'No-show · Mariam K.', body: 'Blow-dry at 12:00. Mark it in Appointments to settle the deposit.' },
+      { when: 'Yesterday', title: 'Google Calendar disconnected', body: 'Your hours fall back to salon hours until you reconnect.' },
+    ];
+    const pushMerchant = [
+      { when: '6 min ago', title: 'New booking · Balayage & gloss', body: 'Layla A. with Rana · Sat 4:30 PM', bg: '#FBFAF8', dot: '#6E7F6C' },
+      { when: '1 hr ago', title: 'No-show · Blow-dry', body: 'Mariam K. did not arrive · deposit decision needed', bg: '#FBFAF8', dot: '#C2705C' },
+      { when: 'Yesterday', title: 'Shop order ready for pickup', body: 'Repair serum · paid from wallet', bg: 'transparent', dot: 'rgba(28,27,25,0.15)' },
+    ];
+    const remove = 'font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#F6EAE8;color:#8f5a56;';
+    const keep = 'font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:#EEF1EC;color:#5A6B58;';
+    const motionRows = [
+      { name: 'Scanner line (avoscan)', verdict: 'Remove', pill: remove, rule: 'Delete the sweeping line entirely and hold the corner brackets static. Do not slow it down — a slower sweep is worse.' },
+      { name: 'Sheet slide-up (avosheet)', verdict: 'Cross-fade', pill: keep, rule: 'Replace the translate with a 120ms opacity fade. The sheet still needs to read as arriving.' },
+      { name: 'QR enlarge (avozoom)', verdict: 'Cross-fade', pill: keep, rule: 'No scale. Fade the overlay in at 120ms.' },
+      { name: 'Success pop (avopop)', verdict: 'Remove', pill: remove, rule: 'Draw the check mark already complete. The state change carries the message.' },
+      { name: 'WhatsApp pulse (avopulse)', verdict: 'Remove', pill: remove, rule: 'Static dot. It is decoration, not status.' },
+      { name: 'Skeleton shimmer', verdict: 'Remove', pill: remove, rule: 'Flat grey blocks, no sweep. Layout still reserves the same space.' },
+      { name: 'QR 45s countdown', verdict: 'Keep', pill: keep, rule: 'Functional, not decorative — the number must keep ticking under reduced motion.' },
+    ];
+    const keyRows = [
+      { key: 'Tab / Shift+Tab', does: 'Moves through the page in visual order. Sheets and dialogs trap focus until dismissed.' },
+      { key: 'Esc', does: 'Closes any sheet, dialog or drawer — except the KNET redirect, which is deliberately not dismissible.' },
+      { key: 'Enter / Space', does: 'Activates the focused control. Enter submits the sign-in and search fields.' },
+      { key: 'Arrow keys', does: 'Moves within segmented controls, day strips, time-slot grids and steppers.' },
+      { key: 'On open', does: 'Focus lands on the sheet title; on close it returns to the control that opened it.' },
+    ];
+    const bpRows = [
+      { name: 'Customer & staff apps', range: 'any width', rule: 'Single column, 20–26px gutters, tap targets never below 44px. No tablet layout — the app scales, it does not re-flow.' },
+      { name: 'Web · full', range: '≥ 1280px', rule: 'Sidebar 238px pinned, content max 1000px, KPI cards 4 across.' },
+      { name: 'Web · compact', range: '1024–1279px', rule: 'Sidebar collapses to 64px icons with tooltips, KPI cards 2 across, tables keep every column.' },
+      { name: 'Web · narrow', range: '768–1023px', rule: 'Sidebar becomes a top drawer, cards stack, tables scroll horizontally with the first column pinned.' },
+      { name: 'Web · below 768', range: '< 768px', rule: 'Not supported. Show a short "open on a larger screen" card rather than a broken dashboard.' },
+    ];
+    return { skeletonRows, presets, pushCustomer, pushStaff, pushMerchant, motionRows, keyRows, bpRows };
+  }
+}
+</script>
+</body>
+</html>

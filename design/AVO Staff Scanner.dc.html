@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #EBE8E1; }
+  a { color: var(--brand-deep,#5A6B58); text-decoration: none; }
+  a:hover { color: #47543f; }
+  @keyframes avoscan { 0% { transform: translateY(0); } 100% { transform: translateY(214px); } }
+  /* shared promotions + authority endpoint */
+  @keyframes avopulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes avopop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
+  svg [stroke="#5A6B58"], svg[stroke="#5A6B58"] { stroke: var(--brand-deep,#5A6B58); }
+  svg [fill="#5A6B58"], svg[fill="#5A6B58"] { fill: var(--brand-deep,#5A6B58); }
+  svg [stroke="#6E7F6C"], svg[stroke="#6E7F6C"] { stroke: var(--brand,#6E7F6C); }
+  svg [fill="#6E7F6C"], svg[fill="#6E7F6C"] { fill: var(--brand,#6E7F6C); }
+  svg [stroke="#EEF1EC"], svg[stroke="#EEF1EC"] { stroke: var(--brand-tint,#EEF1EC); }
+  svg [fill="#EEF1EC"], svg[fill="#EEF1EC"] { fill: var(--brand-tint,#EEF1EC); }
+  svg [stroke="#4F5E4C"], svg[stroke="#4F5E4C"] { stroke: var(--brand-deeper,#4F5E4C); }
+  svg [fill="#4F5E4C"], svg[fill="#4F5E4C"] { fill: var(--brand-deeper,#4F5E4C); }
+  svg [stroke="#5E7157"], svg[stroke="#5E7157"] { stroke: var(--brand-ink,#5E7157); }
+  svg [fill="#5E7157"], svg[fill="#5E7157"] { fill: var(--brand-ink,#5E7157); }
+</style>
+<script src="./avo-promotions.js"></script>
+</helmet>
+<template id="__bundler_thumbnail" data-bg-color="#1C1B19">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#1C1B19"></rect>
+    <rect x="480" y="260" width="240" height="240" rx="64" fill="#FBFAF8"></rect>
+    <text x="600" y="440" font-family="Georgia, serif" font-size="150" font-weight="600" fill="#1C1B19" text-anchor="middle">A</text>
+  </svg>
+</template>
+
+
+<section style="min-height:100vh;padding:44px 40px 80px;font-family:Inter,system-ui,sans-serif;color:#1C1B19">
+  <div style="max-width:360px;margin-bottom:30px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:24px;padding:0 9px;border-radius:7px;background:#1C1B19;color:#fff;font-size:12px;font-weight:600">3a</span>
+      <span style="font-size:14px;font-weight:600">Staff scanner — scan &amp; charge</span>
+    </div>
+    <div style="font-family:'Fraunces',serif;font-size:30px;font-weight:500;letter-spacing:-0.01em">AVO Beauty — Staff</div>
+    <div style="color:rgba(28,27,25,0.55);font-size:14px;margin-top:8px;line-height:1.5">The phone staff carry. <b>Enter any 4 digits</b> to reach the home screen, then choose <b>Scan</b> (charge a customer's wallet) or <b>My schedule</b> (set your own booking hours — availability windows with any slot length).</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:18px;padding:15px 17px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px">
+      <span style="font-size:10.5px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);white-space:nowrap">Loyalty mechanic</span>
+      <div style="display:inline-flex;background:#F0EEE9;border-radius:11px;padding:4px;gap:4px;align-self:flex-start">
+        <button onClick="{{ setTiers }}" style="{{ segTiers }}">Tiers</button>
+        <button onClick="{{ setStamps }}" style="{{ segStamps }}">Stamps</button>
+      </div>
+      <span style="font-size:10.5px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin-top:6px">Signed in as</span>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        <sc-for list="{{ staffPicker }}" as="p" hint-placeholder-count="3"><button onClick="{{ p.onPick }}" style="{{ p.style }}">{{ p.label }}</button></sc-for>
+      </div>
+      <span style="font-size:12px;color:rgba(28,27,25,0.5);line-height:1.5">{{ authorityNote }}</span>
+    </div>
+  </div>
+
+  <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{ darkFrame }}" hint-size="402px,874px">
+    <div style="height:100%;position:relative;font-family:Inter,system-ui,sans-serif">
+
+      <!-- PIN -->
+      <sc-if value="{{ isPin }}" hint-placeholder-val="{{ true }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column;padding:74px 26px 30px">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+            <sc-if value="{{ hasLogo }}"><div style="width:44px;height:44px;border-radius:13px;background-color:#fff;background-image:url({{ logoUrl }});background-size:cover;background-position:center"></div></sc-if>
+            <sc-if value="{{ noLogo }}" hint-placeholder-val="{{ true }}"><div style="width:44px;height:44px;border-radius:13px;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;color:#fff;font-family:'Fraunces',serif;font-size:22px;font-weight:600">{{ logoInitial }}</div></sc-if>
+            <div style="text-align:center"><div style="font-family:'Fraunces',serif;font-size:21px;font-weight:500">{{ salonName }}</div><div style="font-size:12.5px;color:rgba(28,27,25,0.5);margin-top:2px">Staff scanner</div></div>
+          </div>
+          <div style="text-align:center;margin-top:38px;font-size:14px;color:rgba(28,27,25,0.6)">Enter your PIN</div>
+          <div style="display:flex;justify-content:center;gap:16px;margin-top:18px">
+            <sc-for list="{{ dots }}" as="d" hint-placeholder-count="4"><span style="{{ d.style }}"></span></sc-for>
+          </div>
+          <div style="margin-top:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:280px;width:100%;align-self:center">
+            <sc-for list="{{ keys }}" as="k" hint-placeholder-count="12"><button onClick="{{ k.onPress }}" style="{{ k.style }}">{{ k.label }}</button></sc-for>
+          </div>
+          <div style="text-align:center;margin-top:22px;font-size:11.5px;color:rgba(28,27,25,0.4)">Scan only · no dashboard access</div>
+        </div>
+      </sc-if>
+
+      <!-- HOME -->
+      <sc-if value="{{ isHome }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column;padding:70px 26px 30px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:11px">
+              <sc-if value="{{ hasLogo }}"><div style="width:40px;height:40px;border-radius:12px;background-color:#fff;background-image:url({{ logoUrl }});background-size:cover;background-position:center"></div></sc-if>
+              <sc-if value="{{ noLogo }}" hint-placeholder-val="{{ true }}"><div style="width:40px;height:40px;border-radius:12px;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;color:#fff;font-family:'Fraunces',serif;font-size:19px;font-weight:600">{{ logoInitial }}</div></sc-if>
+              <div><div style="font-family:'Fraunces',serif;font-size:18px;font-weight:500;line-height:1.1">{{ salonName }}</div><div style="font-size:12px;color:rgba(28,27,25,0.5)">{{ meFirst }} · signed in</div></div>
+            </div>
+            <span onClick="{{ signOut }}" style="font-size:13px;color:rgba(28,27,25,0.5);font-weight:600;cursor:pointer">Sign out</span>
+          </div>
+
+          <div style="margin-top:40px"><div style="font-family:'Fraunces',serif;font-size:26px;font-weight:500">Hello, {{ meFirst }}</div><div style="font-size:13.5px;color:rgba(28,27,25,0.55);margin-top:5px">What would you like to do?</div></div>
+
+          <div style="display:flex;flex-direction:column;gap:14px;margin-top:24px">
+            <button onClick="{{ toScan }}" style="text-align:left;border:none;cursor:pointer;background:linear-gradient(158deg,var(--brand-card-from,#78886F),var(--brand-card-to,#5E6E59));color:#fff;border-radius:20px;padding:22px;font-family:inherit;display:flex;align-items:center;gap:16px">
+              <span style="width:48px;height:48px;border-radius:14px;background:rgba(255,255,255,0.16);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M4 12h16" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+              <span style="min-width:0"><span style="font-size:18px;font-weight:600;display:block">Scan</span><span style="font-size:13px;opacity:0.85">Scan a customer's wallet QR and charge</span></span>
+            </button>
+            <button onClick="{{ toBookings }}" style="text-align:left;border:1px solid rgba(28,27,25,0.1);cursor:pointer;background:#fff;color:#1C1B19;border-radius:20px;padding:22px;font-family:inherit;display:flex;align-items:center;gap:16px">
+              <span style="width:48px;height:48px;border-radius:14px;background:var(--brand-tint,#EEF1EC);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3.5" y="5" width="17" height="15" rx="2.5" stroke="#5A6B58" stroke-width="1.7"/><path d="M3.5 9.5h17M8 3.5V6.5M16 3.5V6.5" stroke="#5A6B58" stroke-width="1.7" stroke-linecap="round"/><path d="M8.5 14.5l2.2 2.2 4-4.2" stroke="#5A6B58" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span style="flex:1;min-width:0"><span style="font-size:18px;font-weight:600;display:block">My bookings</span><span style="font-size:13px;color:rgba(28,27,25,0.55)">Upcoming appointments &amp; client contacts</span></span>
+              <sc-if value="{{ hasNew }}"><span style="background:var(--brand-deep,#5A6B58);color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:999px;flex-shrink:0">{{ newBadge }}</span></sc-if>
+            </button>
+            <button onClick="{{ toSchedule }}" style="text-align:left;border:1px solid rgba(28,27,25,0.1);cursor:pointer;background:#fff;color:#1C1B19;border-radius:20px;padding:22px;font-family:inherit;display:flex;align-items:center;gap:16px">
+              <span style="width:48px;height:48px;border-radius:14px;background:var(--brand-tint,#EEF1EC);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.3" stroke="#5A6B58" stroke-width="1.7"/><path d="M12 7.5V12l3 1.8" stroke="#5A6B58" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span style="min-width:0"><span style="font-size:18px;font-weight:600;display:block">My schedule</span><span style="font-size:13px;color:rgba(28,27,25,0.55)">Set the hours you're available to book</span></span>
+            </button>
+            <button onClick="{{ toCharges }}" style="text-align:left;border:1px solid rgba(28,27,25,0.1);cursor:pointer;background:#fff;color:#1C1B19;border-radius:20px;padding:22px;font-family:inherit;display:flex;align-items:center;gap:16px">
+              <span style="width:48px;height:48px;border-radius:14px;background:var(--brand-tint,#EEF1EC);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2v-17Z" stroke="#5A6B58" stroke-width="1.7" stroke-linejoin="round"></path><path d="M9.5 9h5M9.5 13h5" stroke="#5A6B58" stroke-width="1.7" stroke-linecap="round"></path></svg></span>
+              <span style="flex:1;min-width:0"><span style="font-size:18px;font-weight:600;display:block">Today's charges</span><span style="font-size:13px;color:rgba(28,27,25,0.55)">{{ chargesTileSub }}</span></span>
+              <sc-if value="{{ noCharges }}"><span style="flex-shrink:0" title="Not enabled for your account"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="4" y="9" width="12" height="8" rx="2" stroke="rgba(28,27,25,0.35)" stroke-width="1.6"></rect><path d="M7 9V6.8a3 3 0 0 1 6 0V9" stroke="rgba(28,27,25,0.35)" stroke-width="1.6"></path></svg></span></sc-if>
+            </button>
+          </div>
+
+          <div style="margin-top:auto;text-align:center;font-size:11.5px;color:rgba(28,27,25,0.4)">AVO Beauty · Staff</div>
+        </div>
+      </sc-if>
+
+      <!-- MY BOOKINGS -->
+      <sc-if value="{{ isBookings }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column">
+          <div style="flex:1;overflow:auto;padding:66px 22px 26px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <span onClick="{{ toHome }}" style="font-size:13px;color:var(--brand-deep,#5A6B58);font-weight:600">‹ Home</span>
+              <span style="font-size:12px;color:rgba(28,27,25,0.45)">{{ meFirst }} · {{ meHandle }}</span>
+            </div>
+            <div style="font-family:'Fraunces',serif;font-size:24px;font-weight:500">My bookings</div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:5px;line-height:1.5">{{ bookingCountStr }} — pulled from the AVO app and your Google Calendar.</div>
+
+            <div style="display:flex;align-items:flex-start;gap:9px;background:var(--brand-tint,#EEF1EC);border-radius:12px;padding:11px 14px;margin-top:16px">
+              <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;margin-top:1px"><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3-1.5 4.2-1.5 4.2h12s-1.5-1.2-1.5-4.2A4.5 4.5 0 0 0 10 3ZM8.5 15a1.5 1.5 0 0 0 3 0" stroke="#5A6B58" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span style="font-size:12.5px;color:var(--brand-deeper,#4F5E4C)">Every new booking pings you with a push notification and lands here — synced with your Google Calendar automatically.</span>
+            </div>
+
+            <sc-for list="{{ bookingGroups }}" as="g" hint-placeholder-count="2">
+              <div style="margin-top:20px">
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ g.label }}</div>
+                <div style="display:flex;flex-direction:column;gap:10px;margin-top:10px">
+                  <sc-for list="{{ g.items }}" as="b" hint-placeholder-count="3">
+                    <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:16px">
+                      <div style="display:flex;align-items:center;justify-content:space-between">
+                        <div style="display:flex;align-items:center;gap:8px">
+                          <span style="font-family:'Fraunces',serif;font-size:17px;font-weight:600">{{ b.time }}</span>
+                          <span style="font-size:12px;color:rgba(28,27,25,0.45)">· {{ b.dur }}</span>
+                          <sc-if value="{{ b.isNew }}"><span style="font-size:10px;font-weight:700;color:#fff;background:var(--brand-deep,#5A6B58);padding:2px 7px;border-radius:999px">NEW</span></sc-if>
+                        </div>
+                        <span style="font-size:11px;font-weight:600;color:var(--brand-deeper,#4F5E4C);background:var(--brand-tint,#EEF1EC);padding:4px 10px;border-radius:999px">Deposit {{ b.deposit }}</span>
+                      </div>
+                      <div style="font-size:14.5px;font-weight:600;margin-top:9px">{{ b.service }}</div>
+                      <div style="display:flex;align-items:center;gap:11px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(28,27,25,0.07)">
+                        <div style="width:38px;height:38px;border-radius:11px;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:15px;font-weight:600;flex-shrink:0">{{ b.initial }}</div>
+                        <div style="flex:1;min-width:0">
+                          <div style="font-size:13.5px;font-weight:600">{{ b.name }}<span style="{{ b.tierStyle }}">{{ b.tier }}</span></div>
+                          <div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:1px">{{ b.phone }}</div>
+                        </div>
+                        <span style="{{ b.srcStyle }}">{{ b.srcLabel }}</span>
+                      </div>
+                      <div style="display:flex;gap:9px;margin-top:13px">
+                        <a href="{{ b.telHref }}" style="flex:1;text-align:center;border:1px solid rgba(28,27,25,0.14);border-radius:11px;padding:10px;font-size:13px;font-weight:600;color:#1C1B19;text-decoration:none">Call</a>
+                        <a href="{{ b.waHref }}" target="_blank" rel="noopener" style="flex:1;text-align:center;border:none;border-radius:11px;padding:10px;font-size:13px;font-weight:600;color:#0B3D1E;background:#25D366;text-decoration:none">WhatsApp</a>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- SCAN -->
+      <sc-if value="{{ isScan }}">
+        <div onClick="{{ doScan }}" style="height:100%;background:#131511;color:#fff;display:flex;flex-direction:column;align-items:center;padding:76px 26px 34px;cursor:pointer">
+          <div style="display:flex;align-items:center;justify-content:space-between;width:100%">
+            <span onClick="{{ toHome }}" style="font-size:13px;color:#A7BBA0;font-weight:600">‹ Home</span>
+            <span onClick="{{ signOut }}" style="font-size:13px;color:rgba(255,255,255,0.55)">Sign out</span>
+          </div>
+          <div style="text-align:center;margin-top:44px"><div style="font-family:'Fraunces',serif;font-size:22px;font-weight:500">Show me the QR</div><div style="font-size:13px;color:rgba(255,255,255,0.55);margin-top:6px">Point at the customer's wallet code</div></div>
+          <div style="position:relative;width:240px;height:240px;margin-top:34px;border-radius:26px;background:rgba(255,255,255,0.03)">
+            <span style="position:absolute;top:0;left:0;width:34px;height:34px;border-top:3px solid #A7BBA0;border-left:3px solid #A7BBA0;border-radius:16px 0 0 0"></span>
+            <span style="position:absolute;top:0;right:0;width:34px;height:34px;border-top:3px solid #A7BBA0;border-right:3px solid #A7BBA0;border-radius:0 16px 0 0"></span>
+            <span style="position:absolute;bottom:0;left:0;width:34px;height:34px;border-bottom:3px solid #A7BBA0;border-left:3px solid #A7BBA0;border-radius:0 0 0 16px"></span>
+            <span style="position:absolute;bottom:0;right:0;width:34px;height:34px;border-bottom:3px solid #A7BBA0;border-right:3px solid #A7BBA0;border-radius:0 0 16px 0"></span>
+            <div style="position:absolute;left:16px;right:16px;top:12px;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,#A7BBA0,transparent);box-shadow:0 0 12px #6E7F6C;animation:avoscan 2s ease-in-out infinite alternate"></div>
+          </div>
+          <button onClick="{{ toLookup }}" style="width:100%;margin-top:26px;background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:14px;padding:14px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">Can't scan? Find member manually</button>
+          <div style="margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:14px">
+            <div style="display:flex;align-items:center;gap:9px;background:rgba(255,255,255,0.08);border-radius:999px;padding:8px 15px"><span style="width:24px;height:24px;border-radius:50%;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600">R</span><span style="font-size:13px">Rana · signed in</span></div>
+            <div style="font-size:12px;color:rgba(255,255,255,0.4)">Tap the frame to scan · demo</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- MANUAL LOOKUP -->
+      <sc-if value="{{ isLookup }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column">
+          <div style="flex:1;overflow:auto;padding:66px 22px 26px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <span onClick="{{ toScan }}" style="font-size:13px;color:var(--brand-deep,#5A6B58);font-weight:600;cursor:pointer">‹ Back to scan</span>
+              <span style="font-size:12px;color:rgba(28,27,25,0.45)">Manual lookup</span>
+            </div>
+            <div style="font-family:'Fraunces',serif;font-size:24px;font-weight:500">Find a member</div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:5px;line-height:1.5">For a dead phone or a camera that won't focus. Search by name, phone number or member ID.</div>
+            <input value="{{ lookupQ }}" onChange="{{ onLookup }}" placeholder="Name, phone or ID" style="width:100%;box-sizing:border-box;margin-top:18px;border:1px solid rgba(28,27,25,0.14);border-radius:14px;padding:15px 16px;font-family:inherit;font-size:15px;color:#1C1B19;background:#fff;outline:none" style-focus="border-color:var(--brand,#6E7F6C)" />
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+              <sc-for list="{{ lookupRows }}" as="m" hint-placeholder-count="2">
+                <button onClick="{{ m.onPick }}" style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:14px;font-family:inherit;color:#1C1B19;text-align:left;cursor:pointer">
+                  <span style="width:42px;height:42px;border-radius:13px;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:17px;font-weight:600;flex-shrink:0">{{ m.initial }}</span>
+                  <span style="flex:1;min-width:0">
+                    <span style="display:flex;align-items:center;gap:7px"><span style="font-size:14.5px;font-weight:600">{{ m.name }}</span><span style="{{ m.tierStyle }}">{{ m.tier }}</span></span>
+                    <span style="display:block;font-size:12px;color:rgba(28,27,25,0.5);margin-top:2px">{{ m.phone }} · {{ m.idStr }}</span>
+                  </span>
+                  <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;flex-shrink:0">{{ m.bal }}</span>
+                </button>
+              </sc-for>
+            </div>
+            <sc-if value="{{ noMatch }}">
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:30px 20px;text-align:center;margin-top:16px">
+                <div style="font-family:'Fraunces',serif;font-size:17px;font-weight:500">No member found</div>
+                <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">Check the number, or ask her to sign up in the AVO app first.</div>
+              </div>
+            </sc-if>
+            <div style="display:flex;align-items:flex-start;gap:9px;background:var(--brand-wash,#F6F7F3);border:1px solid rgba(110,127,108,0.22);border-radius:12px;padding:11px 14px;margin-top:18px">
+              <span style="width:7px;height:7px;border-radius:9px;background:var(--brand,#6E7F6C);flex-shrink:0;margin-top:5px"></span>
+              <span style="font-size:12px;color:var(--brand-deeper,#4F5E4C);line-height:1.5">Manual lookups are logged with your name. The customer gets a WhatsApp confirmation for every charge taken this way.</span>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- TODAY'S CHARGES / VOID -->
+      <sc-if value="{{ isCharges }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column">
+          <div style="flex:1;overflow:auto;padding:66px 22px 26px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <span onClick="{{ toHome }}" style="font-size:13px;color:var(--brand-deep,#5A6B58);font-weight:600;cursor:pointer">‹ Home</span>
+              <span style="font-size:12px;color:rgba(28,27,25,0.45)">Saturday</span>
+            </div>
+            <div style="font-family:'Fraunces',serif;font-size:24px;font-weight:500">Today's charges</div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:5px;line-height:1.5">{{ chargesSub }}. {{ voidRule }}</div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+              <sc-for list="{{ chargeRows }}" as="c" hint-placeholder-count="4">
+                <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:15px">
+                  <div style="display:flex;align-items:flex-start;gap:12px">
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:14.5px;font-weight:600">{{ c.name }}</div>
+                      <div style="font-size:12.5px;color:rgba(28,27,25,0.5);margin-top:2px">{{ c.svc }}</div>
+                      <div style="font-size:11.5px;color:rgba(28,27,25,0.4);margin-top:4px">{{ c.time }} · by {{ c.by }}</div>
+                    </div>
+                    <span style="{{ c.amtStyle }}">{{ c.amt }}</span>
+                  </div>
+                  <sc-if value="{{ c.canVoid }}">
+                    <button onClick="{{ c.onVoid }}" style="width:100%;margin-top:13px;background:#fff;color:#8f5a56;border:1px solid rgba(176,115,111,0.45);border-radius:12px;padding:11px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer">Void this charge</button>
+                  </sc-if>
+                  <sc-if value="{{ c.voided }}">
+                    <div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:11px;padding:10px 13px;margin-top:13px"><span style="width:7px;height:7px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12px;color:#8f5a56">Voided · refunded to wallet · {{ c.reason }}</span></div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- CHARGES LOCKED — authority comes from the merchant dashboard -->
+      <sc-if value="{{ isLocked }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column">
+          <div style="flex:1;overflow:auto;padding:66px 22px 26px;display:flex;flex-direction:column">
+            <span onClick="{{ toHome }}" style="font-size:13px;color:var(--brand-deep,#5A6B58);font-weight:600;cursor:pointer;margin-bottom:26px">‹ Home</span>
+            <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-top:40px">
+              <div style="width:62px;height:62px;border-radius:20px;background:#F0EEE9;display:flex;align-items:center;justify-content:center">
+                <svg width="26" height="26" viewBox="0 0 20 20" fill="none"><rect x="3.5" y="8.5" width="13" height="8.5" rx="2.2" stroke="rgba(28,27,25,0.45)" stroke-width="1.6"></rect><path d="M6.6 8.5V6.6a3.4 3.4 0 0 1 6.8 0v1.9" stroke="rgba(28,27,25,0.45)" stroke-width="1.6"></path></svg>
+              </div>
+              <div style="font-family:'Fraunces',serif;font-size:22px;font-weight:500;margin-top:18px">Not enabled for you</div>
+              <div style="font-size:13.5px;color:rgba(28,27,25,0.55);margin-top:8px;line-height:1.6;max-width:270px">{{ lockedBody }}</div>
+            </div>
+            <div style="margin-top:26px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:16px">
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(28,27,25,0.45)">Who can see charges here</div>
+              <div style="display:flex;flex-direction:column;gap:9px;margin-top:11px">
+                <sc-for list="{{ authorisedStaff }}" as="a" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="width:28px;height:28px;border-radius:9px;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0">{{ a.initial }}</span>
+                    <span style="font-size:13.5px;flex:1;min-width:0">{{ a.name }}</span>
+                    <span style="font-size:11.5px;font-weight:600;color:rgba(28,27,25,0.45)">{{ a.role }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <button onClick="{{ requestAccess }}" style="margin-top:18px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">{{ requestLabel }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- VOID CONFIRM -->
+      <sc-if value="{{ voidOpen }}">
+        <div onClick="{{ closeVoid }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.55);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:50">
+          <div onClick="{{ stop }}" style="width:100%;background:#FBFAF8;border-radius:26px 26px 0 0;padding:14px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px"></div>
+            <div style="font-family:'Fraunces',serif;font-size:21px;font-weight:500">Void this charge?</div>
+            <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">The full amount goes straight back to her wallet, the visit is removed, and she gets a WhatsApp notice. This is recorded against your name.</div>
+            <div style="display:flex;flex-direction:column;gap:9px;margin-top:18px">
+              <sc-for list="{{ voidReasons }}" as="r" hint-placeholder-count="3">
+                <button onClick="{{ r.onPick }}" style="{{ r.style }}"><span style="{{ r.dot }}"></span><span>{{ r.label }}</span></button>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:20px">
+              <button onClick="{{ closeVoid }}" style="flex:1;background:#F0EEE9;color:#1C1B19;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">Keep it</button>
+              <button onClick="{{ doVoid }}" style="flex:1;background:#8f5a56;color:#fff;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">Void &amp; refund</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- MEMBER / CHARGE -->
+      <sc-if value="{{ isMember }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column">
+          <div style="flex:1;overflow:auto;padding:66px 22px 20px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+              <span onClick="{{ rescan }}" style="font-size:13px;color:var(--brand-deep,#5A6B58);font-weight:600">‹ Rescan</span>
+              <span style="font-size:12px;color:rgba(28,27,25,0.45)">Charging</span>
+            </div>
+
+            <div style="border-radius:20px;padding:18px;background:linear-gradient(158deg,var(--brand-card-from,#78886F) 0%,var(--brand-card-to,#5E6E59) 100%);color:#fff">
+              <div style="display:flex;align-items:center;gap:13px">
+                <div style="width:46px;height:46px;border-radius:14px;background:rgba(255,255,255,0.16);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:20px;font-weight:600">L</div>
+                <div style="flex:1"><div style="font-size:16px;font-weight:600">Latifa A.</div><div style="font-size:12px;opacity:0.85;margin-top:1px">{{ memberSub }}</div></div>
+                <span style="font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;background:rgba(255,255,255,0.18)">{{ loyaltyPill }}</span>
+              </div>
+              <sc-if value="{{ isStamps }}">
+                <div style="display:flex;gap:6px;margin-top:15px">
+                  <sc-for list="{{ stampDots }}" as="sd" hint-placeholder-count="8">
+                    <span style="{{ sd.style }}"><sc-if value="{{ sd.filled }}"><svg width="10" height="10" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#5E6E59" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.2)">
+                <span style="font-size:12px;opacity:0.85;letter-spacing:0.08em;text-transform:uppercase">Wallet balance</span>
+                <span><span style="font-family:'Fraunces',serif;font-size:26px;font-weight:500">{{ balanceStr }}</span><span style="font-size:13px;opacity:0.8;margin-left:5px">KD</span></span>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:9px;background:var(--brand-tint,#EEF1EC);border-radius:12px;padding:11px 14px;margin-top:14px">
+              <span style="width:8px;height:8px;border-radius:9px;background:var(--brand,#6E7F6C)"></span>
+              <span style="font-size:12.5px;color:var(--brand-deeper,#4F5E4C)">Held deposit <b>5.000</b> will apply automatically to this charge.</span>
+            </div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:22px 2px 12px">Select services</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <sc-for list="{{ services }}" as="svc" hint-placeholder-count="6">
+                <button onClick="{{ svc.onToggle }}" style="{{ svc.chipStyle }}"><span style="text-align:left">{{ svc.name }}</span><span style="{{ svc.priceStyle }}">{{ svc.priceStr }}</span></button>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{ insufficient }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:12px 14px;margin-top:18px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F"></span><span style="font-size:12.5px;color:#8f5a56">Balance too low by <b>{{ shortStr }} KD</b> — ask Latifa to top up, then rescan.</span></div></sc-if>
+          </div>
+
+          <div style="flex-shrink:0;background:#fff;border-top:1px solid rgba(28,27,25,0.08);padding:16px 22px 30px">
+            <div style="display:flex;justify-content:space-between;font-size:13px;color:rgba(28,27,25,0.6);margin-bottom:5px"><span>Services</span><span style="font-family:'Fraunces',serif;font-weight:600;color:#1C1B19">{{ totalStr }}</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;color:rgba(28,27,25,0.6);margin-bottom:5px"><span>Deposit applied</span><span style="font-family:'Fraunces',serif;font-weight:600;color:var(--brand-ink,#5E7157)">− {{ creditStr }}</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;padding-top:9px;border-top:1px solid rgba(28,27,25,0.08);margin-bottom:14px"><span style="font-size:14px;font-weight:600">To charge</span><span><span style="font-family:'Fraunces',serif;font-size:22px;font-weight:600">{{ chargedStr }}</span><span style="font-size:13px;color:rgba(28,27,25,0.5);margin-left:4px">KD</span></span></div>
+            <button onClick="{{ onCharge }}" style="{{ chargeStyle }}">{{ chargeLabel }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- DONE -->
+      <sc-if value="{{ isDone }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column;align-items:center;padding:96px 30px 34px">
+          <div style="width:76px;height:76px;border-radius:50%;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;animation:avopop 0.4s ease-out"><svg width="34" height="34" viewBox="0 0 34 34" fill="none"><path d="M8 17.5 14.5 24 26 11" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div style="font-family:'Fraunces',serif;font-size:26px;font-weight:500;margin-top:22px">Charged {{ lastCharged }} KD</div>
+          <div style="font-size:13.5px;color:rgba(28,27,25,0.55);margin-top:6px">Latifa A. · {{ loyaltyPill }}</div>
+
+          <div style="width:100%;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:6px 18px;margin-top:28px">
+            <div style="display:flex;justify-content:space-between;padding:13px 0;font-size:13.5px"><span style="color:rgba(28,27,25,0.6)">New balance</span><span style="font-family:'Fraunces',serif;font-weight:600">{{ lastBalance }} KD</span></div>
+            <div style="display:flex;justify-content:space-between;padding:13px 0;border-top:1px solid rgba(28,27,25,0.07);font-size:13.5px;gap:14px"><span style="color:rgba(28,27,25,0.6);white-space:nowrap">Loyalty</span><span style="font-weight:500;text-align:right">{{ loyaltyResult }}</span></div>
+            <div style="display:flex;align-items:center;gap:8px;padding:13px 0;border-top:1px solid rgba(28,27,25,0.07);font-size:13.5px"><span style="width:8px;height:8px;border-radius:9px;background:#25D366;animation:avopulse 1.4s ease-in-out infinite"></span><span style="color:rgba(28,27,25,0.6)">WhatsApp receipt sent</span></div>
+          </div>
+
+          <div style="margin-top:auto;width:100%;display:flex;flex-direction:column;gap:10px">
+            <button onClick="{{ voidLast }}" style="width:100%;background:#fff;color:#8f5a56;border:1px solid rgba(176,115,111,0.45);border-radius:15px;padding:14px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">Wrong charge? Void it</button>
+            <button onClick="{{ nextCustomer }}" style="width:100%;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:15px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">Next customer</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- MY SCHEDULE -->
+      <sc-if value="{{ isSchedule }}">
+        <div style="height:100%;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column">
+          <div style="flex:1;overflow:auto;padding:66px 22px 20px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <span onClick="{{ toHome }}" style="font-size:13px;color:var(--brand-deep,#5A6B58);font-weight:600">‹ Home</span>
+              <span style="font-size:12px;color:rgba(28,27,25,0.45)">{{ meFirst }} · {{ meHandle }}</span>
+            </div>
+            <div style="font-family:'Fraunces',serif;font-size:24px;font-weight:500">My schedule</div>
+            <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-top:5px;line-height:1.5">Set the hours you're free — customers can book you in any open window. No fixed slots.</div>
+
+            <div style="display:flex;background:#F0EEE9;border-radius:12px;padding:4px;margin-top:18px">
+              <button onClick="{{ useGoogle }}" style="{{ segGoogle }}">Google Calendar</button>
+              <button onClick="{{ useManual }}" style="{{ segManual }}">Set manually</button>
+            </div>
+
+            <div style="{{ srcBannerStyle }}">
+              <span style="width:8px;height:8px;border-radius:9px;background:{{ srcBannerDot }};flex-shrink:0"></span>
+              <span style="font-size:12.5px;color:var(--brand-deeper,#4F5E4C)">{{ srcBannerText }}</span>
+            </div>
+
+            <sc-if value="{{ isManual }}">
+              <div style="margin-top:18px">
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin-bottom:9px">Booking slot length</div>
+                <div style="display:flex;gap:8px">
+                  <sc-for list="{{ slotOpts }}" as="o" hint-placeholder-count="5"><button onClick="{{ o.onPick }}" style="{{ o.style }}">{{ o.label }}</button></sc-for>
+                </div>
+                <div style="font-size:11.5px;color:rgba(28,27,25,0.5);margin-top:8px">Each open day is offered as {{ slotStr }} appointments — set any length you like.</div>
+              </div>
+            </sc-if>
+
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">
+              <sc-for list="{{ week }}" as="d" hint-placeholder-count="7">
+                <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:14px;padding:14px 15px">
+                  <div style="display:flex;align-items:center;justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:12px;min-width:0">
+                      <span style="{{ d.badgeStyle }}">{{ d.short }}</span>
+                      <div style="min-width:0"><div style="font-size:14px;font-weight:600">{{ d.name }}</div><div style="font-size:11.5px;color:rgba(28,27,25,0.5);margin-top:1px">{{ d.summary }}</div></div>
+                    </div>
+                    <sc-if value="{{ d.editable }}"><div onClick="{{ d.onToggleDay }}" style="{{ d.trackStyle }}"><span style="{{ d.knobStyle }}"></span></div></sc-if>
+                    <sc-if value="{{ d.synced }}"><span style="{{ d.pillStyle }}">{{ d.pillLabel }}</span></sc-if>
+                  </div>
+                  <sc-if value="{{ d.showRange }}">
+                    <div style="display:flex;align-items:flex-end;gap:10px;margin-top:13px">
+                      <div style="flex:1">
+                        <div style="font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:rgba(28,27,25,0.4);margin-bottom:5px">From</div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(28,27,25,0.12);border-radius:11px;padding:5px 6px">
+                          <button onClick="{{ d.onFromMinus }}" style="{{ stepBtn }}">−</button>
+                          <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600">{{ d.fromLabel }}</span>
+                          <button onClick="{{ d.onFromPlus }}" style="{{ stepBtn }}">+</button>
+                        </div>
+                      </div>
+                      <div style="flex:1">
+                        <div style="font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:rgba(28,27,25,0.4);margin-bottom:5px">To</div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(28,27,25,0.12);border-radius:11px;padding:5px 6px">
+                          <button onClick="{{ d.onToMinus }}" style="{{ stepBtn }}">−</button>
+                          <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600">{{ d.toLabel }}</span>
+                          <button onClick="{{ d.onToPlus }}" style="{{ stepBtn }}">+</button>
+                        </div>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex-shrink:0;background:#fff;border-top:1px solid rgba(28,27,25,0.08);padding:16px 22px 30px">
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span style="color:rgba(28,27,25,0.6)">Open days</span><span style="font-family:'Fraunces',serif;font-weight:600">{{ daysStr }}</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span style="color:rgba(28,27,25,0.6)">Hours per week</span><span style="font-family:'Fraunces',serif;font-weight:600">{{ hoursStr }}</span></div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;padding-bottom:12px;border-bottom:1px solid rgba(28,27,25,0.08)"><span style="color:rgba(28,27,25,0.6)">Booking slots</span><span style="font-family:'Fraunces',serif;font-weight:600">{{ slotsStr }}</span></div>
+            <button onClick="{{ saveSched }}" style="width:100%;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:15px;padding:15px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;margin-top:14px">{{ saveLabel }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </x-import>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;brandColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#6E7F6C&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;,&quot;options&quot;:[&quot;#6E7F6C&quot;,&quot;#8A5B6E&quot;,&quot;#3F5A78&quot;,&quot;#B0734A&quot;]},&quot;salonName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Amara&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;},&quot;logoUrl&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;}}">
+class Component extends DCLogic {
+  brandVars() {
+    const p = this.props || {};
+    const hex = p.brandColor || '#6E7F6C';
+    const rgb = h => { let v = String(h).replace('#',''); if (v.length === 3) v = v.split('').map(c => c + c).join(''); const n = parseInt(v, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+    const to = c => '#' + c.map(x => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, '0')).join('');
+    const base = rgb(hex), W = [255,255,255], B = [0,0,0];
+    const mix = (c, t, a) => c.map((x, i) => x + (t[i] - x) * a);
+    const vars = {
+      '--brand': hex,
+      '--brand-deep': to(mix(base, B, 0.14)),
+      '--brand-deeper': to(mix(base, B, 0.28)),
+      '--brand-ink': to(mix(base, B, 0.08)),
+      '--brand-tint': to(mix(base, W, 0.88)),
+      '--brand-wash': to(mix(base, W, 0.94)),
+      '--brand-card-from': to(mix(base, W, 0.07)),
+      '--brand-card-to': to(mix(base, B, 0.13)),
+    };
+    const r = document.documentElement;
+    for (const k in vars) r.style.setProperty(k, vars[k]);
+  }
+
+  state = {
+    screen: 'pin', pin: '', selected: {}, lastCharged: '', lastBalance: '', loyalty: 'tiers',
+    lookupQ: '', voidTarget: null, voidReason: 'wrong', lastChargeId: null,
+    charges: [
+      { id: 'c1', name: 'Noura S.', svc: 'Blow-dry', amt: '6.000', time: '2:10 PM', by: 'Rana', voided: false, voidable: true },
+      { id: 'c2', name: 'Mariam K.', svc: 'Cut & style', amt: '12.000', time: '12:45 PM', by: 'Rana', voided: false, voidable: true },
+      { id: 'c3', name: 'Latifa A.', svc: 'Gloss + scalp', amt: '12.000', time: '11:02 AM', by: 'Dana', voided: true, voidable: false },
+      { id: 'c4', name: 'Hind J.', svc: 'Express mani', amt: '5.000', time: '10:20 AM', by: 'Rana', voided: false, voidable: false },
+    ],
+    staffHandle: '@rana', team: [], accessAsked: false,
+    availSrc: 'manual', slotMin: 30,
+    days: {
+      sun: { open: true, from: 600, to: 1260 }, mon: { open: true, from: 600, to: 1260 },
+      tue: { open: true, from: 600, to: 1260 }, wed: { open: true, from: 600, to: 1260 },
+      thu: { open: true, from: 600, to: 1260 }, fri: { open: false, from: 600, to: 1260 },
+      sat: { open: true, from: 960, to: 1260 },
+    },
+  };
+
+  pressPin(d) {
+    this.setState(s => (s.pin.length >= 4 ? {} : { pin: s.pin + d }), () => {
+      if (this.state.pin.length === 4) setTimeout(() => this.setState({ screen: 'home' }), 240);
+    });
+  }
+  delPin() { this.setState(s => ({ pin: s.pin.slice(0, -1) })); }
+
+  hhmm(m) { const h = Math.floor(m / 60), mm = m % 60; return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm; }
+  toggleDay(k) { this.setState(s => ({ days: { ...s.days, [k]: { ...s.days[k], open: !s.days[k].open } } })); }
+  adjustFrom(k, delta) {
+    this.setState(s => { const d = s.days[k]; const v = Math.max(480, Math.min(d.from + delta, d.to - s.slotMin)); return { days: { ...s.days, [k]: { ...d, from: v } } }; });
+  }
+  adjustTo(k, delta) {
+    this.setState(s => { const d = s.days[k]; const v = Math.min(1380, Math.max(d.to + delta, d.from + s.slotMin)); return { days: { ...s.days, [k]: { ...d, to: v } } }; });
+  }
+  setSlot(m) {
+    this.setState(s => {
+      const days = {};
+      for (const k in s.days) { const d = s.days[k]; days[k] = (d.to - d.from) < m ? { ...d, to: Math.min(1380, d.from + m) } : d; }
+      return { slotMin: m, days };
+    });
+  }
+
+  confirmVoid() {
+    const id = this.state.voidTarget;
+    const reasons = { wrong: 'Wrong amount or service', dupe: 'Duplicate charge', cust: 'Customer did not receive service' };
+    this.setState(x => ({
+      voidTarget: null,
+      charges: x.charges.map(c => c.id === id
+        ? Object.assign({}, c, { voided: true, voidable: false, reason: reasons[x.voidReason] })
+        : c),
+    }));
+  }
+
+  componentDidMount() {
+    const API = window.AVOPromotions;
+    if (!API) return;
+    this.unsub = API.subscribe(p => this.setState({ team: p.team }));
+    this.setState({ team: API.get().team });
+  }
+  componentWillUnmount() { if (this.unsub) this.unsub(); }
+
+  renderVals() {
+    this.brandVars();
+    const s = this.state;
+    const P = this.props || {};
+    // ---- authority: set by the merchant, read here. A stylist cannot open
+    // today's charges unless a senior grants it in the dashboard. ----
+    const API = window.AVOPromotions;
+    const team = s.team && s.team.length ? s.team : (API ? API.get().team : []);
+    const me = team.filter(t => t.handle === s.staffHandle)[0] || team[0] || { name: 'Staff', handle: '@staff', role: 'stylist', perms: {} };
+    const canCharges = !!me.perms.charges;
+    const canVoid = canCharges && !!me.perms.void;
+    const roleName = { manager: 'Manager', frontdesk: 'Front desk', stylist: 'Stylist', scanner: 'Scanner only' };
+    const staffPicker = team.map(t => ({
+      label: t.name.split(' ')[0] + ' · ' + (roleName[t.role] || t.role),
+      style: 'border:none;border-radius:999px;padding:7px 12px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;'
+        + (t.handle === me.handle ? 'background:#5A6B58;color:#fff;' : 'background:#F0EEE9;color:rgba(28,27,25,0.6);'),
+      onPick: () => this.setState({ staffHandle: t.handle, screen: 'home', accessAsked: false }),
+    }));
+    const authorityNote = me.name + ' can ' + (canCharges ? (canVoid ? 'see and void today\u2019s charges' : 'see today\u2019s charges but not void them') : 'scan and charge, but not open today\u2019s charges')
+      + '. Change that under Accounts → Team in the merchant dashboard.';
+    const authorisedStaff = team.filter(t => t.perms.charges).map(t => ({ initial: t.name[0], name: t.name, role: roleName[t.role] || t.role }));
+    const salonName = P.salonName || 'Amara';
+    const fmt = f => (f / 1000).toFixed(3);
+    const BAL = 8000, DEP = 5000;
+
+    const dots = [0, 1, 2, 3].map(i => ({
+      style: 'width:13px;height:13px;border-radius:50%;'
+        + (i < s.pin.length ? 'background:var(--brand,#6E7F6C);' : 'background:transparent;border:1.5px solid rgba(28,27,25,0.25);'),
+    }));
+    const kpBase = 'height:58px;border:none;background:rgba(28,27,25,0.04);font-family:Fraunces,serif;font-size:25px;font-weight:500;color:#1C1B19;cursor:pointer;border-radius:16px;';
+    const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'].map(d => ({
+      label: d === 'del' ? '⌫' : d,
+      style: kpBase + (d === '' ? 'visibility:hidden;' : '') + (d === 'del' ? 'font-family:Inter,sans-serif;font-size:22px;background:transparent;' : ''),
+      onPress: d === '' ? () => {} : (d === 'del' ? () => this.delPin() : () => this.pressPin(d)),
+    }));
+
+    const defs = [
+      { id: 'cut', name: 'Cut & style', price: 12000 },
+      { id: 'blow', name: 'Blow-dry', price: 6000 },
+      { id: 'gloss', name: 'Gloss', price: 8000 },
+      { id: 'root', name: 'Root touch-up', price: 15000 },
+      { id: 'scalp', name: 'Scalp massage', price: 4000 },
+      { id: 'mani', name: 'Express mani', price: 5000 },
+    ];
+    const isStamps = s.loyalty === 'stamps';
+    const STAMP_TARGET = 8, stampsHave = 4;
+    const segStyle = on => 'padding:7px 15px;border-radius:8px;border:none;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;'
+      + (on ? 'background:#fff;color:#1C1B19;box-shadow:0 1px 3px rgba(0,0,0,0.08);' : 'background:transparent;color:rgba(28,27,25,0.55);');
+    const loyaltyPill = isStamps ? stampsHave + ' / ' + STAMP_TARGET : 'Silver';
+    const memberSub = isStamps ? 'Member · ' + stampsHave + ' stamps' : 'Member · 4 visits';
+    const loyaltyResult = isStamps
+      ? 'Stamp added · ' + (stampsHave + 1) + ' of ' + STAMP_TARGET
+      : 'Visit added · 5 of 10 to Gold';
+    const stampDots = Array.from({ length: STAMP_TARGET }, (_, i) => ({
+      filled: i < stampsHave,
+      style: 'width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;'
+        + (i < stampsHave ? 'background:#fff;' : 'border:1.5px solid rgba(255,255,255,0.45);'),
+    }));
+
+    let total = 0;
+    const services = defs.map(d => {
+      const on = !!s.selected[d.id];
+      if (on) total += d.price;
+      return {
+        name: d.name, priceStr: fmt(d.price), sel: on,
+        chipStyle: 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-radius:14px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:500;text-align:left;'
+          + (on ? 'background:var(--brand-deep,#5A6B58);color:#fff;border:1px solid #5A6B58;' : 'background:#fff;color:#1C1B19;border:1px solid rgba(28,27,25,0.12);'),
+        priceStyle: 'font-family:Fraunces,serif;font-weight:600;font-size:13.5px;flex-shrink:0;' + (on ? 'color:rgba(255,255,255,0.9);' : 'color:rgba(28,27,25,0.55);'),
+        onToggle: () => this.setState(x => ({ selected: { ...x.selected, [d.id]: !x.selected[d.id] } })),
+      };
+    });
+
+    const credit = Math.min(DEP, total);
+    const charged = total - credit;
+    const has = total > 0;
+    const insufficient = charged > BAL;
+    const short = charged - BAL;
+
+    const chargeLabel = !has ? 'Select a service' : (insufficient ? 'Balance too low' : 'Charge ' + fmt(charged) + ' KD');
+    const enabled = has && !insufficient;
+    const chargeStyle = 'width:100%;border:none;border-radius:15px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;'
+      + (enabled ? 'background:var(--brand-deep,#5A6B58);color:#fff;cursor:pointer;' : 'background:#E7E4DD;color:rgba(28,27,25,0.4);cursor:not-allowed;');
+
+    // ---- My schedule ----
+    const manual = s.availSrc === 'manual';
+    const STEP = 30;
+    const GOOGLE = {
+      sun: { open: true, from: 600, to: 1260 }, mon: { open: true, from: 600, to: 1080 },
+      tue: { open: true, from: 660, to: 1260 }, wed: { open: true, from: 600, to: 1260 },
+      thu: { open: true, from: 600, to: 1200 }, fri: { open: false, from: 600, to: 1260 },
+      sat: { open: false, from: 600, to: 1260 },
+    };
+    const days = manual ? s.days : GOOGLE;
+    const slotMin = s.slotMin;
+    const DAYS = [['sun', 'Sunday', 'S'], ['mon', 'Monday', 'M'], ['tue', 'Tuesday', 'T'], ['wed', 'Wednesday', 'W'], ['thu', 'Thursday', 'T'], ['fri', 'Friday', 'F'], ['sat', 'Saturday', 'S']];
+    const slotChip = on => 'flex:1;border-radius:10px;padding:9px 4px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;'
+      + (on ? 'background:var(--brand-deep,#5A6B58);color:#fff;border:1px solid #5A6B58;' : 'background:#fff;color:rgba(28,27,25,0.55);border:1px solid rgba(28,27,25,0.14);');
+    const slotOpts = [15, 20, 30, 45, 60].map(m => ({ label: m + 'm', onPick: () => this.setSlot(m), style: slotChip(m === slotMin) }));
+    let openDays = 0, totalMin = 0, totalSlots = 0;
+    const week = DAYS.map(([k, name, short]) => {
+      const d = days[k];
+      const open = d.open;
+      const span = d.to - d.from;
+      const slots = open ? Math.floor(span / slotMin) : 0;
+      if (open) { openDays++; totalMin += span; totalSlots += slots; }
+      const summary = open ? this.hhmm(d.from) + ' – ' + this.hhmm(d.to) + ' · ' + slots + ' × ' + slotMin + 'm' : 'Day off';
+      return {
+        name, short, summary, editable: manual, synced: !manual,
+        showRange: open && manual,
+        fromLabel: this.hhmm(d.from), toLabel: this.hhmm(d.to),
+        badgeStyle: 'width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0;'
+          + (open ? 'background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);' : 'background:#F0EEE9;color:rgba(28,27,25,0.3);'),
+        trackStyle: 'width:44px;height:26px;border-radius:999px;position:relative;flex-shrink:0;transition:background .15s;cursor:pointer;'
+          + (open ? 'background:var(--brand,#6E7F6C);' : 'background:#D9D6CF;'),
+        knobStyle: 'position:absolute;top:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.2);transition:left .15s;'
+          + (open ? 'left:21px;' : 'left:3px;'),
+        pillLabel: open ? 'Synced' : 'Off',
+        pillStyle: 'font-size:11px;font-weight:600;padding:5px 11px;border-radius:999px;flex-shrink:0;'
+          + (open ? 'background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);' : 'background:#F0EEE9;color:rgba(28,27,25,0.4);'),
+        onToggleDay: () => this.toggleDay(k),
+        onFromMinus: () => this.adjustFrom(k, -STEP), onFromPlus: () => this.adjustFrom(k, STEP),
+        onToMinus: () => this.adjustTo(k, -STEP), onToPlus: () => this.adjustTo(k, STEP),
+      };
+    });
+    const wkH = totalMin / 60;
+    const segBase = 'flex:1;border:none;border-radius:9px;padding:9px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;';
+    const segOn = segBase + 'background:#fff;color:#1C1B19;box-shadow:0 1px 3px rgba(0,0,0,0.08);';
+    const segOff = segBase + 'background:transparent;color:rgba(28,27,25,0.55);';
+
+    // ---- My bookings ----
+    const TIER = { Bronze: ['#B08D57', '#F0EEE9'], Silver: ['#5f6b73', '#ECEEF0'], Gold: ['#8a6d3b', '#F3E9CF'], Black: ['#3A3A3A', '#E3E1DC'] };
+    const rawB = [
+      ['Today · Sun 13 Jul', [
+        ['2:30 PM', '45 min', 'Root touch-up', 'Latifa A.', 'Silver', '+965 9912 4408', '5.000', 'gcal', true],
+        ['4:00 PM', '30 min', 'Blow-dry', 'Noor S.', 'Gold', '+965 6650 1180', '5.000', 'app', true],
+        ['6:15 PM', '1 hr', 'Cut & style', 'Maryam H.', 'Bronze', '+965 9088 7723', '5.000', 'app', false],
+      ]],
+      ['Tomorrow · Mon 14 Jul', [
+        ['11:00 AM', '1 hr 30', 'Full colour', 'Dana K.', 'Silver', '+965 5541 9002', '5.000', 'gcal', false],
+        ['5:30 PM', '30 min', 'Gloss', 'Sara M.', 'Bronze', '+965 9772 3311', '5.000', 'app', false],
+      ]],
+    ];
+    let newCount = 0, bookingTotal = 0;
+    const bookingGroups = rawB.map(([label, items]) => ({
+      label,
+      items: items.map(([time, dur, service, name, tier, phone, deposit, src, isNew]) => {
+        if (isNew) newCount++;
+        bookingTotal++;
+        const [tc, tb] = TIER[tier];
+        const digits = phone.replace(/[^0-9]/g, '');
+        return {
+          time, dur, service, name, tier, phone, deposit, isNew, initial: name[0],
+          tierStyle: 'font-size:10px;font-weight:600;padding:2px 8px;border-radius:999px;margin-left:7px;color:' + tc + ';background:' + tb + ';',
+          srcLabel: src === 'gcal' ? 'Google Calendar' : 'AVO app',
+          srcStyle: 'font-size:10.5px;font-weight:600;padding:4px 9px;border-radius:999px;flex-shrink:0;white-space:nowrap;'
+            + (src === 'gcal' ? 'color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);' : 'color:rgba(28,27,25,0.55);background:#F0EEE9;'),
+          telHref: 'tel:' + digits, waHref: 'https://wa.me/' + digits,
+        };
+      }),
+    }));
+
+    // ---- manual member lookup ----
+    const directory = [
+      { name: 'Latifa Al-Ali', phone: '+965 9944 2210', tier: 'Silver', bal: '8.000', id: '8842' },
+      { name: 'Noura Salem', phone: '+965 6677 1180', tier: 'Gold', bal: '21.500', id: '8791' },
+      { name: 'Mariam Khaled', phone: '+965 5510 3344', tier: 'Member', bal: '3.250', id: '8760' },
+      { name: 'Hind Jassim', phone: '+965 9902 8877', tier: 'Bronze', bal: '0.000', id: '8703' },
+    ];
+    const q = s.lookupQ.trim().toLowerCase();
+    const digitsQ = q.replace(/\D/g, '');
+    const matches = q === '' ? [] : directory.filter(m =>
+      m.name.toLowerCase().includes(q) || m.id.includes(digitsQ && digitsQ.length ? digitsQ : '\u0000')
+      || m.phone.replace(/\D/g, '').includes(digitsQ && digitsQ.length >= 3 ? digitsQ : '\u0000'));
+    const lookupRows = matches.map(m => ({
+      name: m.name, phone: m.phone, tier: m.tier, bal: m.bal, initial: m.name[0], idStr: 'ID · ' + m.id,
+      onPick: () => this.setState({ screen: 'member', lookupQ: '' }),
+    }));
+
+    const tierPill = t => 'font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:999px;flex-shrink:0;'
+      + (t === 'Gold' ? 'color:#8a6d3b;background:#F3E9CF;'
+        : t === 'Silver' ? 'color:#5f6b73;background:#ECEEF0;'
+        : t === 'Bronze' ? 'color:#8a6d3b;background:#EFE6D8;' : 'color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);');
+    lookupRows.forEach(r => { r.tierStyle = tierPill(r.tier); });
+
+    // ---- today's charges / void ----
+    const chargeRows = s.charges.map(c => ({
+      name: c.name, svc: c.svc, amt: c.amt, time: c.time, by: c.by,
+      voided: c.voided, canVoid: canVoid && c.voidable && !c.voided,
+      reason: c.reason || 'Voided by staff',
+      amtStyle: 'font-family:Fraunces,serif;font-size:16px;font-weight:600;flex-shrink:0;'
+        + (c.voided ? 'color:rgba(28,27,25,0.35);text-decoration:line-through;' : 'color:#1C1B19;'),
+      onVoid: () => this.setState({ voidTarget: c.id, voidReason: 'wrong' }),
+    }));
+    const voidableCount = s.charges.filter(c => c.voidable && !c.voided).length;
+    const reasonOpt = (id, label) => ({
+      label, on: s.voidReason === id,
+      style: 'display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:12px 14px;border-radius:12px;font-family:inherit;font-size:13.5px;cursor:pointer;background:#fff;'
+        + (s.voidReason === id ? 'border:1.5px solid #6E7F6C;font-weight:600;' : 'border:1.5px solid rgba(28,27,25,0.1);'),
+      dot: 'width:16px;height:16px;border-radius:50%;flex-shrink:0;'
+        + (s.voidReason === id ? 'border:5px solid #6E7F6C;' : 'border:1.5px solid rgba(28,27,25,0.25);'),
+      onPick: () => this.setState({ voidReason: id }),
+    });
+
+    return {
+      salonName, logoUrl: P.logoUrl || 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      hasLogo: !!P.logoUrl, noLogo: !P.logoUrl,
+      logoInitial: salonName.trim().charAt(0).toUpperCase(),
+      darkFrame: s.screen === 'scan',
+      isLookup: s.screen === 'lookup', isCharges: s.screen === 'charges',
+      lookupQ: s.lookupQ, lookupRows, hasQuery: q !== '', noMatch: q !== '' && lookupRows.length === 0,
+      onLookup: e => this.setState({ lookupQ: e.target.value }),
+      toLookup: (e) => { if (e) e.stopPropagation(); this.setState({ screen: 'lookup', lookupQ: '' }); },
+      toCharges: (e) => { if (e) e.stopPropagation(); this.setState({ screen: canCharges ? 'charges' : 'locked' }); },
+      isLocked: s.screen === 'locked',
+      noCharges: !canCharges,
+      chargesTileSub: canCharges ? (canVoid ? 'Review or void a charge you just took' : 'Review the charges you took today') : 'Needs a senior to switch this on',
+      lockedBody: 'Today\u2019s charges is a senior permission. ' + (me.name.split(' ')[0]) + '\u2019s account can scan and charge, but a manager has to turn this on in the merchant dashboard.',
+      authorisedStaff, staffPicker, authorityNote,
+      meFirst: me.name.split(' ')[0], meHandle: me.handle,
+      requestLabel: s.accessAsked ? ('Request sent to ' + (authorisedStaff[0] ? authorisedStaff[0].name.split(' ')[0] : 'your manager')) : 'Ask a manager for access',
+      requestAccess: () => this.setState({ accessAsked: true }),
+      voidRule: canVoid ? 'A charge can be voided for 15 minutes — after that ask the manager.' : 'Voiding is off for your account — a manager can reverse a charge for you.',
+      chargeRows, voidableCount, chargesSub: s.charges.length + ' charges today · ' + voidableCount + ' still voidable',
+      stop: e => e.stopPropagation(),
+      voidOpen: !!s.voidTarget, closeVoid: () => this.setState({ voidTarget: null }),
+      voidReasons: [reasonOpt('wrong', 'Wrong amount or service'), reasonOpt('dupe', 'Duplicate charge'), reasonOpt('cust', 'Customer did not receive service')],
+      doVoid: () => this.confirmVoid(),
+      voidLast: () => this.setState(x => ({ screen: 'charges', voidTarget: x.lastChargeId })),
+      isPin: s.screen === 'pin', isHome: s.screen === 'home', isScan: s.screen === 'scan',
+      isMember: s.screen === 'member', isDone: s.screen === 'done',
+      isSchedule: s.screen === 'schedule', isManual: manual,
+      isBookings: s.screen === 'bookings',
+      toBookings: (e) => { if (e) e.stopPropagation(); this.setState({ screen: 'bookings' }); },
+      bookingGroups, hasNew: newCount > 0, newBadge: newCount + ' new',
+      bookingCountStr: bookingTotal + ' upcoming' + (newCount > 0 ? ' · ' + newCount + ' new' : ''),
+      toHome: (e) => { if (e) e.stopPropagation(); this.setState({ screen: 'home' }); },
+      toSchedule: (e) => { if (e) e.stopPropagation(); this.setState({ screen: 'schedule' }); },
+      toScan: () => this.setState({ screen: 'scan' }),
+      saveSched: () => this.setState({ screen: 'home' }),
+      week, slotOpts, slotStr: slotMin + ' min',
+      daysStr: openDays + ' of 7',
+      hoursStr: (Number.isInteger(wkH) ? wkH : wkH.toFixed(1)) + ' hrs',
+      slotsStr: totalSlots + ' / week',
+      stepBtn: 'width:30px;height:30px;border:none;background:#F0EEE9;border-radius:8px;font-size:18px;color:var(--brand-deep,#5A6B58);cursor:pointer;line-height:1;flex-shrink:0;',
+      saveLabel: manual ? 'Save schedule' : 'Back to home',
+      useGoogle: () => this.setState({ availSrc: 'google' }),
+      useManual: () => this.setState({ availSrc: 'manual' }),
+      segGoogle: !manual ? segOn : segOff, segManual: manual ? segOn : segOff,
+      srcBannerStyle: 'display:flex;align-items:center;gap:9px;border-radius:12px;padding:11px 14px;margin-top:14px;background:' + (manual ? '#EEF1EC' : '#F6F7F3'),
+      srcBannerDot: manual ? '#6E7F6C' : '#C9A24B',
+      srcBannerText: manual
+        ? 'You set these hours yourself — no Google Calendar needed. Toggle a day, or drag the window earlier or later.'
+        : 'Synced live from your Google Calendar. Busy events block booking automatically. Switch to Set manually to edit here.',
+      dots, keys,
+      doScan: () => this.setState({ screen: 'member' }),
+      signOut: (e) => { if (e) e.stopPropagation(); this.setState({ screen: 'pin', pin: '' }); },
+      rescan: () => this.setState({ screen: 'scan', selected: {} }),
+      isStamps, loyaltyPill, memberSub, loyaltyResult, stampDots,
+      segTiers: segStyle(!isStamps), segStamps: segStyle(isStamps),
+      setTiers: () => this.setState({ loyalty: 'tiers' }),
+      setStamps: () => this.setState({ loyalty: 'stamps' }),
+      services, balanceStr: fmt(BAL),
+      totalStr: fmt(total), creditStr: fmt(credit), chargedStr: fmt(charged),
+      insufficient, shortStr: fmt(Math.max(0, short)),
+      chargeLabel, chargeStyle,
+      onCharge: () => {
+        if (!enabled) return;
+        const id = 'c' + Date.now();
+        const names = defs.filter(d => s.selected[d.id]).map(d => d.name).join(' + ');
+        this.setState(x => ({
+          screen: 'done', lastCharged: fmt(charged), lastBalance: fmt(BAL - charged), lastChargeId: id,
+          charges: [{ id, name: 'Latifa A.', svc: names, amt: fmt(charged), time: 'Just now', by: me.name.split(' ')[0], voided: false, voidable: true }].concat(x.charges),
+        }));
+      },
+      lastCharged: s.lastCharged, lastBalance: s.lastBalance,
+      nextCustomer: () => this.setState({ screen: 'scan', selected: {} }),
+    };
+  }
+}
+</script>
+</body>
+</html>

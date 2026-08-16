@@ -1,0 +1,1931 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&amp;family=Inter:wght@400;500;600;700&amp;family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="./avo-promotions.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #EBE8E1; }
+  a { color: var(--brand-deep,#5A6B58); text-decoration: none; }
+  a:hover { color: #47543f; }
+  @keyframes avopulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes avofade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes avozoom { from { opacity: 0; transform: scale(0.82); } to { opacity: 1; transform: scale(1); } }
+  @keyframes avosheet { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  canvas { image-rendering: -webkit-optimize-contrast; }
+  svg [stroke="#5A6B58"], svg[stroke="#5A6B58"] { stroke: var(--brand-deep,#5A6B58); }
+  svg [fill="#5A6B58"], svg[fill="#5A6B58"] { fill: var(--brand-deep,#5A6B58); }
+  svg [stroke="#6E7F6C"], svg[stroke="#6E7F6C"] { stroke: var(--brand,#6E7F6C); }
+  svg [fill="#6E7F6C"], svg[fill="#6E7F6C"] { fill: var(--brand,#6E7F6C); }
+  svg [stroke="#EEF1EC"], svg[stroke="#EEF1EC"] { stroke: var(--brand-tint,#EEF1EC); }
+  svg [fill="#EEF1EC"], svg[fill="#EEF1EC"] { fill: var(--brand-tint,#EEF1EC); }
+  svg [stroke="#4F5E4C"], svg[stroke="#4F5E4C"] { stroke: var(--brand-deeper,#4F5E4C); }
+  svg [fill="#4F5E4C"], svg[fill="#4F5E4C"] { fill: var(--brand-deeper,#4F5E4C); }
+  svg [stroke="#5E7157"], svg[stroke="#5E7157"] { stroke: var(--brand-ink,#5E7157); }
+  svg [fill="#5E7157"], svg[fill="#5E7157"] { fill: var(--brand-ink,#5E7157); }
+</style>
+</helmet>
+<template id="__bundler_thumbnail" data-bg-color="#6E7F6C">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#6E7F6C"></rect>
+    <rect x="480" y="260" width="240" height="240" rx="64" fill="#FBFAF8"></rect>
+    <text x="600" y="440" font-family="Georgia, serif" font-size="150" font-weight="600" fill="#6E7F6C" text-anchor="middle">A</text>
+  </svg>
+</template>
+
+
+<section style="min-height:100vh;padding:44px 40px 80px;font-family:Inter,system-ui,sans-serif;color:#1C1B19">
+  <div style="max-width:440px;margin-bottom:30px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:24px;padding:0 9px;border-radius:7px;background:#1C1B19;color:#fff;font-size:12px;font-weight:600">1a</span>
+      <span style="font-size:14px;font-weight:600">AVO customer wallet — consumer app</span>
+    </div>
+    <div style="font-family:'Fraunces',serif;font-size:30px;font-weight:500;letter-spacing:-0.01em">AVO Beauty — Wallet</div>
+    <div style="color:rgba(28,27,25,0.55);font-size:14px;margin-top:8px;line-height:1.5">Both money flows now have a real checkout. <b>Top up</b> → choose KNET / card / Apple Pay → pay. <b>Shop</b> tab → add to cart → the <b>cart</b> checks out from your wallet balance. Tap the QR to enlarge · <b>العربية</b> for RTL.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:20px;margin-top:18px;padding:15px 17px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <span style="font-size:10.5px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);white-space:nowrap">Loyalty mechanic</span>
+        <div style="display:inline-flex;background:#F0EEE9;border-radius:11px;padding:4px;gap:4px">
+          <button onClick="{{ setTiers }}" style="{{ segTiers }}">Tiers</button>
+          <button onClick="{{ setStamps }}" style="{{ segStamps }}">Stamps</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <span style="font-size:10.5px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);white-space:nowrap">Top-up outcome</span>
+        <div style="display:flex;flex-wrap:wrap;background:#F0EEE9;border-radius:11px;padding:4px;gap:4px">
+          <sc-for list="{{ outcomes }}" as="o" hint-placeholder-count="4"><button onClick="{{ o.onPick }}" style="{{ o.style }}">{{ o.name }}</button></sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="402px,874px">
+    <div id="app" style="height:100%;position:relative;background:#FBFAF8;color:#1C1B19;font-family:Inter,'IBM Plex Sans Arabic',system-ui,sans-serif">
+
+      <!-- ================= AUTH ================= -->
+      <sc-if value="{{ notAuthed }}">
+      <div style="height:100%;overflow:auto;background:#FBFAF8;color:#1C1B19;display:flex;flex-direction:column;padding:72px 26px 34px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:13px">
+          <sc-if value="{{ hasLogo }}">
+            <div style="width:54px;height:54px;border-radius:17px;background-color:#fff;background-image:url({{ logoUrl }});background-size:cover;background-position:center;box-shadow:0 6px 18px -8px rgba(28,27,25,0.4)"></div>
+          </sc-if>
+          <sc-if value="{{ noLogo }}" hint-placeholder-val="{{ true }}">
+            <div style="width:54px;height:54px;border-radius:17px;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;color:#fff;font-family:'Fraunces',serif;font-size:27px;font-weight:600">{{ logoInitial }}</div>
+          </sc-if>
+          <div style="text-align:center"><div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:23px;font-weight:500;letter-spacing:-0.01em">{{ t.salon }}</div><div style="font-size:12.5px;color:rgba(28,27,25,0.5);margin-top:3px">{{ t.walletWord }}</div></div>
+        </div>
+
+        <!-- LOGIN -->
+        <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+          <div style="margin-top:36px">
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:25px;font-weight:500;text-align:center">{{ t.welcomeBack }}</div>
+            <div style="font-size:13px;color:rgba(28,27,25,0.55);text-align:center;margin-top:6px">{{ t.loginSub }}</div>
+            <div style="display:flex;flex-direction:column;gap:13px;margin-top:28px">
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.username }}</span>
+                <input value="{{ fUser }}" onInput="{{ setUser }}" placeholder="dana.k" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.password }}</span>
+                <input value="{{ fPass }}" onInput="{{ setPass }}" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+            </div>
+            <div style="text-align:right;margin-top:11px"><a href="#" onClick="{{ goForgot }}" style="font-size:13px;font-weight:600">{{ t.forgot }}</a></div>
+            <sc-if value="{{ authErr }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:14px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56">{{ authErrMsg }}</span></div></sc-if>
+            <button onClick="{{ doLogin }}" style="width:100%;margin-top:20px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.loginBtn }}</button>
+            <div style="text-align:center;margin-top:20px;font-size:13px;color:rgba(28,27,25,0.55)">{{ t.noAccount }} <a href="#" onClick="{{ goSignup }}" style="font-weight:600">{{ t.createOne }}</a></div>
+          </div>
+        </sc-if>
+
+        <!-- SIGNUP -->
+        <sc-if value="{{ isSignup }}">
+          <div style="margin-top:30px">
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:25px;font-weight:500;text-align:center">{{ t.createTitle }}</div>
+            <div style="font-size:13px;color:rgba(28,27,25,0.55);text-align:center;margin-top:6px">{{ t.createSub }}</div>
+            <div style="display:flex;flex-direction:column;gap:12px;margin-top:24px">
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.fullName }} <span style="text-transform:none;letter-spacing:0;color:rgba(28,27,25,0.35)">· {{ t.optional }}</span></span>
+                <input value="{{ fName }}" onInput="{{ setName }}" placeholder="Dana" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.username }}</span>
+                <input value="{{ fUser }}" onInput="{{ setUser }}" placeholder="dana.k" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.password }}</span>
+                <input value="{{ fPass }}" onInput="{{ setPass }}" type="password" placeholder="{{ t.passHint }}" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.confirmPass }}</span>
+                <input value="{{ fPass2 }}" onInput="{{ setPass2 }}" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+            </div>
+            <sc-if value="{{ authErr }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:14px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56">{{ authErrMsg }}</span></div></sc-if>
+            <div style="display:flex;flex-direction:column;gap:11px;margin-top:18px">
+              <button onClick="{{ toggleConsentTerms }}" style="display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;background:transparent;border:none;padding:0;font-family:inherit;cursor:pointer">
+                <span style="{{ consentTermsBox }}"><sc-if value="{{ consentTerms }}"><svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                <span style="font-size:12.5px;line-height:1.55;color:rgba(28,27,25,0.7)">{{ t.consentTerms }}</span>
+              </button>
+              <button onClick="{{ toggleConsentWa }}" style="display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;background:transparent;border:none;padding:0;font-family:inherit;cursor:pointer">
+                <span style="{{ consentWaBox }}"><sc-if value="{{ consentWa }}"><svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                <span style="font-size:12.5px;line-height:1.55;color:rgba(28,27,25,0.7)">{{ t.consentWa }}</span>
+              </button>
+            </div>
+            <div style="display:flex;gap:14px;margin-top:12px">
+              <sc-for list="{{ consentLinks }}" as="c" hint-placeholder-count="3">
+                <button onClick="{{ c.onOpen }}" style="background:none;border:none;padding:0;font-family:inherit;font-size:12.5px;font-weight:600;color:var(--brand-deep,#5A6B58);cursor:pointer;text-decoration:underline">{{ c.label }}</button>
+              </sc-for>
+            </div>
+            <button onClick="{{ doSignup }}" style="width:100%;margin-top:20px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.createBtn }}</button>
+            <div style="text-align:center;margin-top:20px;font-size:13px;color:rgba(28,27,25,0.55)">{{ t.haveAccount }} <a href="#" onClick="{{ goLogin }}" style="font-weight:600">{{ t.logIn }}</a></div>
+          </div>
+        </sc-if>
+
+        <!-- FORGOT -->
+        <sc-if value="{{ isForgot }}">
+          <div style="margin-top:34px">
+            <sc-if value="{{ resetPending }}" hint-placeholder-val="{{ true }}">
+              <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:25px;font-weight:500;text-align:center">{{ t.resetTitle }}</div>
+              <div style="font-size:13px;color:rgba(28,27,25,0.55);text-align:center;margin-top:6px;line-height:1.5">{{ t.resetSub }}</div>
+              <div style="display:flex;flex-direction:column;gap:7px;margin-top:26px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.username }}</span>
+                <input value="{{ fUser }}" onInput="{{ setUser }}" placeholder="dana.k" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:13px;padding:14px 15px;font-family:inherit;font-size:15px;color:#1C1B19;outline:none">
+              </div>
+              <sc-if value="{{ authErr }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:14px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56">{{ authErrMsg }}</span></div></sc-if>
+              <button onClick="{{ sendReset }}" style="width:100%;margin-top:20px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.resetBtn }}</button>
+              <div style="text-align:center;margin-top:20px"><a href="#" onClick="{{ goLogin }}" style="font-size:13px;font-weight:600">{{ t.backToLogin }}</a></div>
+            </sc-if>
+            <sc-if value="{{ resetSent }}">
+              <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:6px 6px 0">
+                <div style="width:66px;height:66px;border-radius:50%;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;animation:avozoom 0.4s cubic-bezier(.2,.9,.3,1.1)"><svg width="30" height="30" viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"></path><path d="m4 7 8 6 8-6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:22px;font-weight:500;margin-top:20px">{{ t.resetSentTitle }}</div>
+                <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:6px;line-height:1.5">{{ t.resetSentSub }}</div>
+                <button onClick="{{ goLogin }}" style="width:100%;margin-top:24px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.backToLogin }}</button>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ authed }}" hint-placeholder-val="{{ true }}">
+      <div style="height:100%;display:flex;flex-direction:column">
+        <div style="flex:1;overflow:auto">
+
+          <!-- ================= HOME ================= -->
+          <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:58px 20px 20px">
+
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
+              <div>
+                <div style="font-size:13px;color:rgba(28,27,25,0.55)">{{ t.greeting }}</div>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:23px;font-weight:500;letter-spacing:-0.01em;margin-top:2px">{{ t.salon }}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <button onClick="{{ toggleLang }}" style="border:1px solid rgba(28,27,25,0.12);background:#fff;color:#1C1B19;height:34px;padding:0 14px;border-radius:999px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">{{ t.langSwitch }}</button>
+                <button onClick="{{ goAccount }}" title="{{ t.accountTitle }}" style="width:34px;height:34px;border-radius:999px;border:1px solid rgba(28,27,25,0.12);background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8.5" r="3.6" stroke="#5A6B58" stroke-width="1.7"></circle><path d="M4.8 20c.9-3.4 3.7-5.2 7.2-5.2s6.3 1.8 7.2 5.2" stroke="#5A6B58" stroke-width="1.7" stroke-linecap="round"></path></svg></button>
+              </div>
+            </div>
+
+            <!-- HAPPY HOUR LIVE -->
+            <sc-if value="{{ happyOn }}">
+              <div style="display:flex;align-items:center;gap:11px;background:var(--brand-tint,#EEF1EC);border:1px solid rgba(110,127,108,0.28);border-radius:16px;padding:12px 14px;margin-bottom:14px">
+                <span style="width:8px;height:8px;border-radius:9px;background:var(--brand,#6E7F6C);flex-shrink:0;animation:avopulse 1.6s ease-in-out infinite"></span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13.5px;font-weight:600;color:var(--brand-deeper,#4F5E4C)">{{ happyTitle }}</div>
+                  <div style="font-size:12px;color:rgba(28,27,25,0.55);margin-top:2px">{{ happySub }}</div>
+                </div>
+                <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0">
+                  <span style="font-size:11.5px;font-weight:600;color:#fff;background:var(--brand-deep,#5A6B58);padding:5px 10px;border-radius:999px;white-space:nowrap">{{ happyLiveLabel }}</span>
+                  <span style="font-size:10px;font-weight:600;letter-spacing:0.04em;color:rgba(28,27,25,0.42);white-space:nowrap">{{ happyClock }}</span>
+                </span>
+              </div>
+            </sc-if>
+
+            <!-- HAPPY HOUR NEXT -->
+            <sc-if value="{{ happyNext }}">
+              <div style="display:flex;align-items:center;gap:11px;background:#fff;border:1px solid rgba(28,27,25,0.09);border-radius:16px;padding:12px 14px;margin-bottom:14px">
+                <span style="width:8px;height:8px;border-radius:9px;background:rgba(28,27,25,0.2);flex-shrink:0"></span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13.5px;font-weight:600;color:#1C1B19">{{ happyNextTitle }}</div>
+                  <div style="font-size:12px;color:rgba(28,27,25,0.55);margin-top:2px">{{ happyNextSub }}</div>
+                </div>
+                <span style="font-size:11.5px;font-weight:600;color:rgba(28,27,25,0.6);background:#F0EEE9;padding:5px 10px;border-radius:999px;white-space:nowrap;flex-shrink:0">{{ happyNextLabel }}</span>
+              </div>
+            </sc-if>
+
+            <!-- WALLET CARD -->
+            <div style="border-radius:24px;padding:22px;background:linear-gradient(158deg,var(--brand-card-from,#78886F) 0%,var(--brand-card-to,#5E6E59) 100%);color:#fff;box-shadow:0 22px 44px -20px rgba(94,110,89,0.85)">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:9px;min-width:0">
+                  <sc-if value="{{ hasLogo }}"><div style="width:26px;height:26px;border-radius:8px;background-color:rgba(255,255,255,0.9);background-image:url({{ logoUrl }});background-size:cover;background-position:center;flex-shrink:0"></div></sc-if>
+                  <span style="font-size:12px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.balanceLabel }}</span>
+                </div>
+                <span style="font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;background:rgba(255,255,255,0.18)">{{ loyaltyPill }}</span>
+              </div>
+              <div style="display:flex;align-items:baseline;gap:8px;margin:12px 0 16px">
+                <span style="font-family:'Fraunces',serif;font-size:52px;font-weight:500;line-height:0.9">{{ balanceStr }}</span>
+                <span style="font-size:17px;opacity:0.82;font-weight:500">{{ t.kd }}</span>
+              </div>
+              <sc-if value="{{ isTiers }}" hint-placeholder-val="{{ true }}">
+                <div style="height:6px;border-radius:999px;background:rgba(255,255,255,0.22);overflow:hidden"><div style="width:40%;height:100%;border-radius:999px;background:#fff"></div></div>
+                <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:12.5px;opacity:0.88"><span>{{ t.tierHint }}</span><span>{{ t.tierName }} → {{ t.nextTier }}</span></div>
+              </sc-if>
+              <sc-if value="{{ isStamps }}">
+                <div style="display:flex;gap:7px">
+                  <sc-for list="{{ stampDots }}" as="sd" hint-placeholder-count="8">
+                    <span style="{{ sd.style }}"><sc-if value="{{ sd.filled }}"><svg width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#5E6E59" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                  </sc-for>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:10px;margin-top:9px;font-size:12.5px;opacity:0.88"><span style="white-space:nowrap">{{ t.stampsHint }}</span><span style="white-space:nowrap">{{ t.stampsReward }}</span></div>
+              </sc-if>
+
+              <button onClick="{{ openQr }}" style="width:100%;margin-top:20px;background:#fff;border:none;border-radius:16px;padding:15px;display:flex;align-items:center;gap:15px;cursor:pointer;text-align:left;font-family:inherit">
+                <canvas id="qrCard" width="130" height="130" style="width:92px;height:92px;flex-shrink:0"></canvas>
+                <div style="flex:1;color:#1C1B19">
+                  <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.5)">{{ t.qrTitle }}</div>
+                  <div style="font-family:'Fraunces',serif;font-size:19px;font-weight:500;margin-top:3px">ID · 8842</div>
+                  <div style="display:flex;align-items:center;gap:6px;margin-top:9px;font-size:12.5px;color:var(--brand-deep,#5A6B58);font-weight:600"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M9 2h5v5M14 2 8.5 7.5M7 14H2V9M2 14l5.5-5.5" stroke="#5A6B58" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg><span>{{ t.tapEnlarge }}</span></div>
+                </div>
+              </button>
+            </div>
+
+            <!-- EARNING BY BRANCH -->
+            <div style="margin-top:16px">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 4px 9px">{{ branchEarnLabel }}</div>
+              <div style="display:flex;gap:9px">
+                <sc-for list="{{ branchChips }}" as="b" hint-placeholder-count="2">
+                  <div style="flex:1;min-width:0;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:12px 13px">
+                    <div style="font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ b.name }}</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+                      <sc-for list="{{ b.badges }}" as="bg" hint-placeholder-count="1">
+                        <span style="font-size:11px;font-weight:600;color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);padding:4px 9px;border-radius:999px;white-space:nowrap">{{ bg.text }}</span>
+                      </sc-for>
+                      <sc-if value="{{ b.plain }}"><span style="font-size:11.5px;color:rgba(28,27,25,0.42);padding:4px 0">{{ b.standard }}</span></sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="margin:11px 4px 0;font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-style:italic;font-size:13.5px;color:rgba(28,27,25,0.55)">{{ t.branchNote }}</div>
+            </div>
+
+            <!-- TOP UP + BONUS -->
+            <div style="margin-top:22px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:22px;padding:19px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+                <span style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:19px;font-weight:500">{{ t.topupTitle }}</span>
+                <span style="{{ bonusBadgeStyle }}"><span style="{{ bonusBadgeDot }}"></span>{{ bonusBadge }}</span>
+              </div>
+              <div style="font-size:12.5px;color:rgba(28,27,25,0.55);margin-bottom:15px">{{ bonusExplain }}</div>
+
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px">
+                <sc-for list="{{ topups }}" as="tu" hint-placeholder-count="4">
+                  <button onClick="{{ tu.onPick }}" style="{{ tu.style }}">
+                    <span style="font-family:'Fraunces',serif;font-size:20px;font-weight:600;line-height:1">{{ tu.amt }}</span>
+                    <span style="{{ tu.bonusStyle }}">+{{ tu.bonus }}</span>
+                  </button>
+                </sc-for>
+              </div>
+
+              <div style="margin-top:15px;background:var(--brand-wash,#F6F7F3);border:1px solid rgba(110,127,108,0.22);border-radius:15px;padding:15px 16px">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <div style="display:flex;align-items:baseline;gap:5px"><span style="font-size:13px;color:rgba(28,27,25,0.6)">{{ t.youPay }}</span><span style="font-family:'Fraunces',serif;font-size:18px;font-weight:600">{{ payStr }}</span><span style="font-size:11.5px;color:rgba(28,27,25,0.5)">{{ t.kd }}</span></div>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="opacity:0.5;transform:{{ arrowFlip }}"><path d="M5 12h14M13 6l6 6-6 6" stroke="#5A6B58" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                  <div style="display:flex;align-items:baseline;gap:5px"><span style="font-size:13px;color:var(--brand-deeper,#4F5E4C);font-weight:600">{{ t.youGet }}</span><span style="font-family:'Fraunces',serif;font-size:22px;font-weight:600;color:var(--brand-ink,#5E7157)">{{ getStr }}</span><span style="font-size:11.5px;color:var(--brand-deep,#5A6B58)">{{ t.kd }}</span></div>
+                </div>
+                <div style="text-align: center; margin-top: 9px; padding-top: 11px; border-top: 1px dashed rgba(110,127,108,0.3); font-size: 12.5px; color: var(--brand-deeper,#4F5E4C); display: none">{{ bonusLine }}</div>
+              </div>
+
+              <button onClick="{{ openPay }}" style="width:100%;margin-top:13px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:15px;display:flex;align-items:center;justify-content:center;gap:8px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="13" rx="2.5" stroke="#fff" stroke-width="1.8"></rect><path d="M3 10h18" stroke="#fff" stroke-width="1.8"></path></svg>{{ t.continuePay }}</button>
+            </div>
+
+            <!-- UPCOMING -->
+            <div style="margin-top:22px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:17px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><span style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6)">{{ t.upcomingLabel }}</span><span style="font-size:11.5px;font-weight:600;color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);padding:4px 10px;border-radius:999px">{{ t.upDeposit }}</span></div>
+              <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:19px;font-weight:500">{{ t.upService }}</div>
+              <div style="font-size:13.5px;color:rgba(28,27,25,0.6);margin-top:2px">{{ t.upWith }} · {{ t.upWhen }}</div>
+              <div style="display:flex;gap:9px;margin-top:13px;padding-top:13px;border-top:1px solid rgba(28,27,25,0.08)">
+                <button onClick="{{ reschedule }}" style="flex:1;background:#fff;border:1px solid rgba(28,27,25,0.14);border-radius:12px;padding:11px;font-family:inherit;font-size:13.5px;font-weight:600;color:#1C1B19;cursor:pointer">{{ t.reschedule }}</button>
+                <button onClick="{{ cancelBooking }}" style="flex:1;background:#fff;border:1px solid rgba(176,115,111,0.4);border-radius:12px;padding:11px;font-family:inherit;font-size:13.5px;font-weight:600;color:#8f5a56;cursor:pointer">{{ t.cancel }}</button>
+              </div>
+              <div style="font-size:11.5px;color:rgba(28,27,25,0.45);margin-top:9px;line-height:1.5">{{ t.reschedNote }}</div>
+            </div>
+
+            <!-- ACTIVITY -->
+            <div style="margin-top:24px">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 4px 10px">{{ t.activityLabel }}</div>
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:4px 16px">
+                <sc-for list="{{ activities }}" as="row" hint-placeholder-count="4">
+                  <button onClick="{{ row.onOpen }}" style="width:100%;display:flex;align-items:center;gap:13px;padding:13px 0;border:none;border-bottom:1px solid rgba(28,27,25,0.06);background:transparent;font-family:inherit;color:#1C1B19;text-align:left;cursor:pointer">
+                    <div style="width:34px;height:34px;border-radius:11px;background:#F0EEE9;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                      <sc-if value="{{ row.pos }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" viewBox="0 0 14 14" fill="none"><path d="M4 10 10 4M5.5 4H10v4.5" stroke="#5E7157" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if>
+                      <sc-if value="{{ row.neg }}"><svg width="15" height="15" viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3.5 7.5 7 11l3.5-3.5" stroke="#8A867E" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if>
+                    </div>
+                    <div style="flex:1;min-width:0"><div style="font-size:14.5px;font-weight:500">{{ row.title }}</div><div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:1px">{{ row.when }}</div></div>
+                    <sc-if value="{{ row.pos }}" hint-placeholder-val="{{ true }}"><span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;color:var(--brand-ink,#5E7157)">{{ row.amt }}</span></sc-if>
+                    <sc-if value="{{ row.neg }}"><span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;color:#1C1B19">{{ row.amt }}</span></sc-if>
+                    <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="flex-shrink:0;opacity:0.3;transform:{{ arrowFlip }}"><path d="M1 1l5 5-5 5" stroke="#1C1B19" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+
+            <!-- MEMBERSHIP -->
+            <div style="margin-top:24px">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 4px 10px">{{ membersLabel }}</div>
+              <sc-if value="{{ isTiers }}" hint-placeholder-val="{{ true }}">
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:4px 16px">
+                <sc-for list="{{ tiers }}" as="tier" hint-placeholder-count="4">
+                  <div style="display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.06)">
+                    <div style="flex:1">
+                      <div style="display:flex;align-items:center;gap:8px"><span style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:16px;font-weight:500">{{ tier.name }}</span><sc-if value="{{ tier.active }}"><span style="font-size:10.5px;font-weight:600;color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);padding:2px 8px;border-radius:999px">{{ t.current }}</span></sc-if></div>
+                      <div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:2px">{{ tier.req }}</div>
+                    </div>
+                    <span style="font-family:'Fraunces',serif;font-size:13.5px;color:rgba(28,27,25,0.7);letter-spacing:0.01em">{{ tier.bonus }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="margin:9px 6px 0;font-size:11.5px;line-height:1.55;color:rgba(28,27,25,0.45)">{{ t.tierFine }}</div>
+              </sc-if>
+              <sc-if value="{{ isStamps }}">
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:18px 18px 6px">
+                <div style="display:flex;align-items:baseline;justify-content:space-between">
+                  <span style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:18px;font-weight:500">{{ t.stampCardTitle }}</span>
+                  <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;color:var(--brand-deep,#5A6B58)">{{ stampCount }}</span>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(8,1fr);gap:8px;margin-top:14px">
+                  <sc-for list="{{ stampDotsBig }}" as="bd" hint-placeholder-count="8">
+                    <span style="{{ bd.style }}"><sc-if value="{{ bd.filled }}"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                  </sc-for>
+                </div>
+                <div style="display:flex;align-items:center;gap:9px;background:var(--brand-tint,#EEF1EC);border-radius:13px;padding:12px 14px;margin-top:16px">
+                  <span style="width:7px;height:7px;border-radius:9px;background:var(--brand,#6E7F6C);flex-shrink:0"></span>
+                  <span style="font-size:12.5px;color:var(--brand-deeper,#4F5E4C);line-height:1.45">{{ t.stampsGoal }}</span>
+                </div>
+                <div style="margin-top:6px">
+                  <sc-for list="{{ stampRules }}" as="sr" hint-placeholder-count="3">
+                    <div style="display:flex;gap:11px;padding:12px 0;border-bottom:1px solid rgba(28,27,25,0.06)">
+                      <span style="width:5px;height:5px;border-radius:9px;background:rgba(28,27,25,0.25);flex-shrink:0;margin-top:7px"></span>
+                      <span style="font-size:13px;color:rgba(28,27,25,0.65);line-height:1.45">{{ sr.text }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              </sc-if>
+            </div>
+
+          </div>
+          </sc-if>
+
+          <!-- ================= ACCOUNT ================= -->
+          <sc-if value="{{ isAccount }}">
+          <div style="padding:58px 20px 20px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+              <button onClick="{{ goHome }}" style="background:none;border:none;font-family:inherit;font-size:13.5px;font-weight:600;color:var(--brand-deep,#5A6B58);cursor:pointer;padding:0">{{ t.back }}</button>
+              <span style="font-size:12px;color:rgba(28,27,25,0.45)">ID · 8842</span>
+            </div>
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:26px;font-weight:500">{{ t.accountTitle }}</div>
+
+            <div style="display:flex;align-items:center;gap:13px;margin-top:18px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:16px">
+              <span style="width:52px;height:52px;border-radius:16px;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:21px;font-weight:600;flex-shrink:0">{{ acctInitial }}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:18px;font-weight:500">{{ acctName }}</div>
+                <div style="font-size:12.5px;color:rgba(28,27,25,0.5);margin-top:2px;direction:ltr">{{ acctPhone }}</div>
+              </div>
+              <button onClick="{{ openProfile }}" style="flex-shrink:0;background:#F0EEE9;border:none;border-radius:999px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:600;color:#1C1B19;cursor:pointer">{{ t.rowEdit }}</button>
+            </div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:24px 4px 10px">{{ t.acctProfile }}</div>
+            <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:2px 16px">
+              <sc-for list="{{ profileRows }}" as="r" hint-placeholder-count="3">
+                <button onClick="{{ r.onOpen }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 0;border:none;border-bottom:1px solid rgba(28,27,25,0.06);background:transparent;font-family:inherit;color:#1C1B19;text-align:left;cursor:pointer">
+                  <span style="font-size:14px">{{ r.label }}</span>
+                  <span style="display:flex;align-items:center;gap:8px"><span style="font-size:13px;color:rgba(28,27,25,0.45)">{{ r.value }}</span><svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="opacity:0.3;transform:{{ arrowFlip }}"><path d="M1 1l5 5-5 5" stroke="#1C1B19" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+                </button>
+              </sc-for>
+            </div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:24px 4px 10px">{{ t.acctNotifs }}</div>
+            <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:2px 16px">
+              <sc-for list="{{ notifRows }}" as="n" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 0;border-bottom:1px solid rgba(28,27,25,0.06)">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:14px">{{ n.label }}</div>
+                    <div style="font-size:12px;color:rgba(28,27,25,0.45);margin-top:2px;line-height:1.45">{{ n.sub }}</div>
+                  </div>
+                  <div onClick="{{ n.onToggle }}" style="{{ n.track }}"><span style="{{ n.knob }}"></span></div>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:24px 4px 10px">{{ t.acctLegal }}</div>
+            <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:2px 16px">
+              <sc-for list="{{ legalRows }}" as="l" hint-placeholder-count="4">
+                <button onClick="{{ l.onOpen }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 0;border:none;border-bottom:1px solid rgba(28,27,25,0.06);background:transparent;font-family:inherit;color:#1C1B19;text-align:left;cursor:pointer">
+                  <span style="font-size:14px">{{ l.label }}</span>
+                  <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="opacity:0.3;transform:{{ arrowFlip }}"><path d="M1 1l5 5-5 5" stroke="#1C1B19" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                </button>
+              </sc-for>
+            </div>
+
+            <div style="margin:12px 4px 0;font-size:11.5px;line-height:1.55;color:rgba(28,27,25,0.45)">{{ t.walletFine }}</div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:24px 4px 10px">{{ t.acctHelp }}</div>
+            <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:20px;padding:2px 16px">
+              <button onClick="{{ openContact }}" style="width:100%;display:flex;align-items:center;gap:13px;padding:14px 0;border:none;border-bottom:1px solid rgba(28,27,25,0.06);background:transparent;font-family:inherit;color:#1C1B19;text-align:left;cursor:pointer">
+                <span style="width:36px;height:36px;border-radius:11px;background:var(--brand-tint,#EEF1EC);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 5.5h14v9H8.5L5 17.5V14.5H3z" stroke="var(--brand-deep,#5A6B58)" stroke-width="1.7" stroke-linejoin="round"></path></svg></span>
+                <span style="flex:1;min-width:0">
+                  <span style="display:block;font-size:14px;font-weight:600">{{ t.contactCta }}</span>
+                  <span style="display:block;font-size:12px;color:rgba(28,27,25,0.5);margin-top:2px;line-height:1.45">{{ t.contactCtaSub }}</span>
+                </span>
+                <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style="opacity:0.3;transform:{{ arrowFlip }};flex-shrink:0"><path d="M1 1l5 5-5 5" stroke="#1C1B19" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              </button>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:15px 0">
+                <span style="font-size:14px">{{ t.cViaWa }}</span>
+                <span style="font-size:13px;color:rgba(28,27,25,0.45);direction:ltr">{{ supWhatsapp }}</span>
+              </div>
+            </div>
+            <div style="margin:10px 4px 0;font-size:11.5px;line-height:1.55;color:rgba(28,27,25,0.45)">{{ supHours }}</div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:24px 4px 10px">{{ followTitle }}</div>
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px">
+              <sc-for list="{{ socials }}" as="so" hint-placeholder-count="4">
+                <a href="{{ so.url }}" target="_blank" rel="noreferrer" style="display:flex;flex-direction:column;align-items:center;gap:7px;min-width:0;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:14px 6px;text-decoration:none;color:#1C1B19" style-hover="border-color:var(--brand-deep,#5A6B58)">
+                  <span style="width:38px;height:38px;border-radius:12px;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center">
+                    <svg width="21" height="21" viewBox="0 0 24 24" fill="none"><path d="{{ so.d }}" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                  </span>
+                  <span style="font-size:10.5px;font-weight:600;color:rgba(28,27,25,0.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">{{ so.label }}</span>
+                  <span style="font-size:10px;color:rgba(28,27,25,0.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;direction:ltr">{{ so.handle }}</span>
+                </a>
+              </sc-for>
+            </div>
+
+            <button onClick="{{ logout }}" style="width:100%;margin-top:22px;background:#fff;border:1px solid rgba(28,27,25,0.12);border-radius:16px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;color:#1C1B19;cursor:pointer">{{ t.logOut }}</button>
+            <button onClick="{{ openDelete }}" style="width:100%;margin-top:10px;background:transparent;border:none;padding:13px;font-family:inherit;font-size:13.5px;font-weight:600;color:#8f5a56;cursor:pointer">{{ t.deleteAcct }}</button>
+            <div style="text-align:center;font-size:11px;color:rgba(28,27,25,0.35);margin-top:6px">AVO Beauty · v1.0</div>
+          </div>
+          </sc-if>
+
+          <!-- ================= SHOP ================= -->
+          <sc-if value="{{ isShop }}">
+          <div style="padding:58px 20px 20px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:23px;font-weight:500">{{ t.shopTitle }}</div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <button onClick="{{ toggleLang }}" style="border:1px solid rgba(28,27,25,0.12);background:#fff;color:#1C1B19;height:34px;padding:0 14px;border-radius:999px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">{{ t.langSwitch }}</button>
+                <button onClick="{{ openCart }}" style="position:relative;width:40px;height:40px;border-radius:12px;border:1px solid rgba(28,27,25,0.12);background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 4h2l2.2 11.2a1.5 1.5 0 0 0 1.5 1.2h8.1a1.5 1.5 0 0 0 1.5-1.2L20.5 8H6" stroke="#1C1B19" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="9.5" cy="20" r="1.4" fill="#1C1B19"></circle><circle cx="17.5" cy="20" r="1.4" fill="#1C1B19"></circle></svg>
+                  <sc-if value="{{ hasCart }}"><span style="position:absolute;top:-6px;right:-6px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:var(--brand-deep,#5A6B58);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center">{{ cartCount }}</span></sc-if>
+                </button>
+              </div>
+            </div>
+            <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-bottom:18px">{{ t.shopSub }}</div>
+
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <sc-for list="{{ products }}" as="p" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:14px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:13px 14px">
+                  <div style="width:52px;height:52px;border-radius:14px;background:{{ p.swatch }};flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:rgba(28,27,25,0.4)">{{ p.initial }}</div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:14.5px;font-weight:600">{{ p.name }}</div>
+                    <div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:1px">{{ p.desc }}</div>
+                    <div style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;margin-top:5px">{{ p.priceStr }} <span style="font-size:11px;color:rgba(28,27,25,0.5)">{{ t.kd }}</span></div>
+                  </div>
+                  <sc-if value="{{ p.inCart }}">
+                    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+                      <button onClick="{{ p.onDec }}" style="width:32px;height:32px;border-radius:10px;border:1px solid rgba(28,27,25,0.14);background:#fff;font-size:18px;color:#1C1B19;cursor:pointer">−</button>
+                      <span style="font-family:'Fraunces',serif;font-size:16px;font-weight:600;min-width:14px;text-align:center">{{ p.qty }}</span>
+                      <button onClick="{{ p.onInc }}" style="width:32px;height:32px;border-radius:10px;border:none;background:var(--brand-deep,#5A6B58);font-size:18px;color:#fff;cursor:pointer">+</button>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ p.notInCart }}" hint-placeholder-val="{{ true }}">
+                    <button onClick="{{ p.onInc }}" style="flex-shrink:0;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);border:none;border-radius:11px;padding:10px 16px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer">{{ t.add }}</button>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="margin-top:16px;display:flex;align-items:center;gap:9px;background:var(--brand-tint,#EEF1EC);border-radius:12px;padding:12px 14px"><span style="width:8px;height:8px;border-radius:9px;background:var(--brand,#6E7F6C);flex-shrink:0"></span><span style="font-size:12.5px;color:var(--brand-deeper,#4F5E4C)">{{ t.shopNote }}</span></div>
+          </div>
+          </sc-if>
+
+          <!-- ================= BOOK ================= -->
+          <sc-if value="{{ isBook }}">
+          <div style="padding:58px 20px 20px">
+
+            <sc-if value="{{ bookActive }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                <button onClick="{{ bookBack }}" style="display:flex;align-items:center;gap:4px;background:none;border:none;font-family:inherit;font-size:14px;font-weight:600;color:var(--brand-deep,#5A6B58);cursor:pointer">{{ t.back }}</button>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:20px;font-weight:500">{{ t.bookTitle }}</div>
+                <span style="font-size:12px;font-weight:600;color:rgba(28,27,25,0.5)">{{ bookStepLabel }}</span>
+              </div>
+              <div style="height:5px;border-radius:999px;background:rgba(28,27,25,0.08);overflow:hidden;margin-bottom:20px"><div style="height:100%;border-radius:999px;background:var(--brand,#6E7F6C);width:{{ bookProgress }};transition:width .25s"></div></div>
+            </sc-if>
+
+            <!-- STEP 1: service -->
+            <sc-if value="{{ bookS1 }}">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 2px 12px">{{ t.chooseService }}</div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ svcOptions }}" as="o" hint-placeholder-count="5">
+                  <button onClick="{{ o.onPick }}" style="{{ o.style }}">
+                    <div style="flex:1;text-align:left"><div style="font-size:14.5px;font-weight:600">{{ o.name }}</div><div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:1px">{{ o.dur }}</div></div>
+                    <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600">{{ o.priceStr }} <span style="font-size:11px;color:rgba(28,27,25,0.5)">{{ t.kd }}</span></span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <!-- STEP 2: artist -->
+            <sc-if value="{{ bookS2 }}">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 2px 12px">{{ t.chooseArtist }}</div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ artistOptions }}" as="o" hint-placeholder-count="4">
+                  <button onClick="{{ o.onPick }}" style="{{ o.style }}">
+                    <span style="width:42px;height:42px;border-radius:13px;background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:17px;font-weight:600;flex-shrink:0">{{ o.initial }}</span>
+                    <div style="flex:1;text-align:left">
+                      <div style="font-size:14.5px;font-weight:600">{{ o.name }}</div>
+                      <div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:1px">{{ o.role }}</div>
+                      <span style="{{ o.availStyle }}"><span style="{{ o.availDot }}"></span>{{ o.availLabel }}</span>
+                    </div>
+                    <span style="{{ o.dot }}"><sc-if value="{{ o.on }}"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <!-- STEP 3: date & time -->
+            <sc-if value="{{ bookS3 }}">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 2px 12px">{{ t.chooseDay }}</div>
+              <div style="display:flex;gap:9px;overflow:auto;padding-bottom:4px">
+                <sc-for list="{{ dayOptions }}" as="d" hint-placeholder-count="5">
+                  <button onClick="{{ d.onPick }}" style="{{ d.style }}"><span style="font-size:11px;opacity:0.7">{{ d.dow }}</span><span style="font-family:'Fraunces',serif;font-size:18px;font-weight:600;line-height:1.1">{{ d.date }}</span></button>
+                </sc-for>
+              </div>
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:20px 2px 10px">{{ t.morning }}</div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px">
+                <sc-for list="{{ slotsMorning }}" as="sl" hint-placeholder-count="4"><button onClick="{{ sl.onPick }}" style="{{ sl.style }}">{{ sl.time }}</button></sc-for>
+              </div>
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:18px 2px 10px">{{ t.evening }}</div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px">
+                <sc-for list="{{ slotsEvening }}" as="sl" hint-placeholder-count="6"><button onClick="{{ sl.onPick }}" style="{{ sl.style }}">{{ sl.time }}</button></sc-for>
+              </div>
+            </sc-if>
+
+            <!-- STEP 4: review -->
+            <sc-if value="{{ bookS4 }}">
+              <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 2px 12px">{{ t.review }}</div>
+              <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:6px 18px">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.06)"><span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ t.svcRow }}</span><span style="font-size:14px;font-weight:600">{{ bookSvcName }}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.06)"><span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ t.artistRow }}</span><span style="font-size:14px;font-weight:600">{{ bookArtistName }}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:13px 0"><span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ t.whenRow }}</span><span style="font-size:14px;font-weight:600">{{ bookWhen }}</span></div>
+              </div>
+              <div style="margin-top:14px;background:var(--brand-wash,#F6F7F3);border:1px solid rgba(110,127,108,0.22);border-radius:16px;padding:16px">
+                <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:13.5px;color:var(--brand-deeper,#4F5E4C);font-weight:600">{{ t.depositHeld }}</span><span><span style="font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:var(--brand-ink,#5E7157)">{{ depositStr }}</span><span style="font-size:12px;color:var(--brand-deep,#5A6B58);margin-left:4px">{{ t.kd }}</span></span></div>
+                <div style="font-size:12px;color:rgba(28,27,25,0.55);margin-top:6px">{{ bookDepositNote }}</div>
+              </div>
+              <sc-if value="{{ bookShort }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:12px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56">{{ t.depShort }}</span></div></sc-if>
+            </sc-if>
+
+            <!-- CTA -->
+            <sc-if value="{{ bookActive }}"><button onClick="{{ bookCta }}" style="{{ bookCtaStyle }}">{{ bookCtaLabel }}</button></sc-if>
+
+            <!-- STEP 5: confirmed -->
+            <sc-if value="{{ bookS5 }}">
+              <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:30px 6px 10px">
+                <div style="width:74px;height:74px;border-radius:50%;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;animation:avozoom 0.4s cubic-bezier(.2,.9,.3,1.1)"><svg width="34" height="34" viewBox="0 0 34 34" fill="none"><path d="M8 17.5 14.5 24 26 11" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></div>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:24px;font-weight:500;margin-top:20px">{{ t.booked }}</div>
+                <div style="font-size:13.5px;color:rgba(28,27,25,0.55);margin-top:6px">{{ bookSvcName }} · {{ bookArtistName }}</div>
+                <div style="width:100%;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:6px 18px;margin-top:24px">
+                  <div style="display:flex;justify-content:space-between;padding:13px 0;font-size:13.5px"><span style="color:rgba(28,27,25,0.6)">{{ t.whenRow }}</span><span style="font-weight:600">{{ bookWhen }}</span></div>
+                  <div style="display:flex;justify-content:space-between;padding:13px 0;border-top:1px solid rgba(28,27,25,0.07);font-size:13.5px"><span style="color:rgba(28,27,25,0.6)">{{ t.depositHeld }}</span><span style="font-family:'Fraunces',serif;font-weight:600;color:var(--brand-ink,#5E7157)">{{ depositStr }} {{ t.kd }}</span></div>
+                  <div style="display:flex;align-items:center;gap:8px;padding:13px 0;border-top:1px solid rgba(28,27,25,0.07);font-size:13px;color:rgba(28,27,25,0.6)"><span style="width:8px;height:8px;border-radius:9px;background:#25D366"></span>{{ t.waConfirm }}</div>
+                </div>
+                <div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:14px;line-height:1.5">{{ t.cancelPolicy }}</div>
+                <button onClick="{{ bookDoneBtn }}" style="width:100%;margin-top:22px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.viewHome }}</button>
+              </div>
+            </sc-if>
+
+          </div>
+          </sc-if>
+
+        </div>
+
+        <!-- BOTTOM NAV -->
+        <div style="flex-shrink:0;border-top:1px solid rgba(28,27,25,0.08);background:rgba(251,250,248,0.94);padding:9px 22px 30px;display:flex;justify-content:space-between">
+          <button onClick="{{ goHome }}" style="{{ navHomeStyle }}"><svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"></path></svg><span style="font-size:10.5px;font-weight:600">{{ t.navHome }}</span></button>
+          <button onClick="{{ book }}" style="{{ navBookStyle }}"><svg width="23" height="23" viewBox="0 0 24 24" fill="none"><rect x="4" y="5.5" width="16" height="15" rx="2.5" stroke="currentColor" stroke-width="1.7"></rect><path d="M4 9.5h16M8.5 3.5v4M15.5 3.5v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path></svg><span style="font-size:10.5px;font-weight:600">{{ t.navBook }}</span></button>
+          <button onClick="{{ goShop }}" style="{{ navShopStyle }}"><span style="position:relative"><svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="M6 8h12l-1 12.5H7z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"></path><path d="M9 8.5V6a3 3 0 0 1 6 0v2.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path></svg><sc-if value="{{ hasCart }}"><span style="position:absolute;top:-5px;right:-8px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:var(--brand-deep,#5A6B58);color:#fff;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center">{{ cartCount }}</span></sc-if></span><span style="font-size:10.5px;font-weight:600">{{ t.navShop }}</span></button>
+          <button onClick="{{ openQr }}" style="{{ navPayStyle }}"><svg width="23" height="23" viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"></rect><rect x="4" y="14" width="7" height="6" rx="1.5" stroke="currentColor" stroke-width="1.7"></rect><rect x="14" y="4" width="6" height="7" rx="1.5" stroke="currentColor" stroke-width="1.7"></rect><path d="M14 15h3v5M20 15v5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path></svg><span style="font-size:10.5px;font-weight:600">{{ t.navPay }}</span></button>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- QR ENLARGE OVERLAY -->
+      <sc-if value="{{ qrOpen }}">
+        <div onClick="{{ closeQr }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.55);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:26px;animation:avofade 0.18s ease-out;cursor:pointer;z-index:20">
+          <div style="width:100%;background:#fff;border-radius:28px;padding:26px 24px 22px;text-align:center;animation:avozoom 0.24s cubic-bezier(.2,.9,.3,1.1);box-shadow:0 30px 60px -20px rgba(0,0,0,0.5)">
+            <div style="display:flex;align-items:center;justify-content:center;gap:9px;margin-bottom:10px">
+              <sc-if value="{{ hasLogo }}"><div style="width:28px;height:28px;border-radius:9px;background-image:url({{ logoUrl }});background-size:cover;background-position:center"></div></sc-if>
+              <sc-if value="{{ noLogo }}" hint-placeholder-val="{{ true }}"><span style="width:28px;height:28px;border-radius:9px;background:var(--brand-deep,#5A6B58);color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:15px;font-weight:600">{{ logoInitial }}</span></sc-if>
+              <span style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:15px;font-weight:500;color:rgba(28,27,25,0.7)">{{ t.salon }}</span>
+            </div>
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:22px;font-weight:500">{{ t.qrBig }}</div>
+            <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:4px">{{ t.qrBigSub }}</div>
+            <div style="margin:22px auto 0;width:246px;height:246px;background:#fff;border-radius:18px;display:flex;align-items:center;justify-content:center"><canvas id="qrBig" width="246" height="246" style="width:246px;height:246px"></canvas></div>
+            <div style="font-family:'Fraunces',serif;font-size:24px;font-weight:500;margin-top:18px;letter-spacing:0.04em">ID · 8842</div>
+            <div style="display:flex;align-items:center;justify-content:center;gap:7px;margin-top:8px;font-size:12.5px;color:rgba(28,27,25,0.55)"><span style="width:7px;height:7px;border-radius:9px;background:var(--brand,#6E7F6C);animation:avopulse 1.4s ease-in-out infinite"></span><span>{{ t.qrHint }} {{ secs }}{{ t.sec }}</span></div>
+            <button onClick="{{ closeQr }}" style="width:100%;margin-top:20px;background:#F0EEE9;color:#1C1B19;border:none;border-radius:14px;padding:14px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">{{ t.done }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- TOP-UP PAYMENT SHEET -->
+      <sc-if value="{{ payOpen }}">
+        <div onClick="{{ closePay }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.5);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:22;cursor:pointer">
+          <div onClick="{{ stop }}" style="width:100%;background:#FBFAF8;border-radius:26px 26px 0 0;padding:12px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px"></div>
+            <sc-if value="{{ payIdle }}" hint-placeholder-val="{{ true }}">
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.payTitle }}</div>
+
+            <div style="margin-top:14px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:15px 17px">
+              <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px"><span style="color:rgba(28,27,25,0.6)">{{ t.youPay }}</span><span style="font-family:'Fraunces',serif;font-size:17px;font-weight:600">{{ payStr }} {{ t.kd }}</span></div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px;padding-top:9px;border-top:1px dashed rgba(110,127,108,0.3);font-size:14px"><span style="color:var(--brand-deeper,#4F5E4C);font-weight:600">{{ t.lands }}</span><span><span style="font-family:'Fraunces',serif;font-size:20px;font-weight:600;color:var(--brand-ink,#5E7157)">{{ getStr }}</span><span style="font-size:12px;color:var(--brand-deep,#5A6B58);margin-left:4px">{{ t.kd }}</span></span></div>
+              <div style="font-size: 11.5px; color: var(--brand-deep,#5A6B58); margin-top: 6px; display: none">{{ bonusLine }}</div>
+            </div>
+
+            <div style="font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:20px 2px 10px">{{ t.method }}</div>
+            <div style="display:flex;flex-direction:column;gap:9px">
+              <sc-for list="{{ methods }}" as="m" hint-placeholder-count="3">
+                <button onClick="{{ m.onPick }}" style="{{ m.style }}">
+                  <span style="width:38px;height:26px;border-radius:6px;background:{{ m.badge }};color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;letter-spacing:0.02em">{{ m.tag }}</span>
+                  <div style="flex:1;text-align:left">
+                    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap"><span style="font-size:14px;font-weight:600">{{ m.name }}</span><sc-if value="{{ m.hasNote }}"><span style="font-size:10.5px;font-weight:600;color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);padding:2px 8px;border-radius:999px;white-space:nowrap">{{ m.note }}</span></sc-if></div>
+                    <div style="font-size:11.5px;color:rgba(28,27,25,0.5);margin-top:2px">{{ m.fee }}</div>
+                  </div>
+                  <span style="{{ m.dot }}"><sc-if value="{{ m.on }}"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 7.5 6 10.5 11 4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if></span>
+                </button>
+              </sc-for>
+            </div>
+
+            <button onClick="{{ payNow }}" style="width:100%;margin-top:18px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.payBtn }} {{ payStr }} {{ t.kd }}</button>
+            </sc-if>
+
+            <sc-if value="{{ payRedirecting }}">
+              <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:22px 6px 6px">
+                <div style="width:64px;height:64px;border-radius:19px;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:700;letter-spacing:0.02em">{{ payMethodTag }}</div>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500;margin-top:20px">{{ t.payRedirectTitle }}</div>
+                <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:7px;line-height:1.5;max-width:280px">{{ t.payRedirectSub }}</div>
+                <div style="display:flex;gap:7px;margin-top:26px">
+                  <span style="width:8px;height:8px;border-radius:9px;background:var(--brand,#6E7F6C);animation:avopulse 1.1s ease-in-out infinite"></span>
+                  <span style="width:8px;height:8px;border-radius:9px;background:var(--brand,#6E7F6C);animation:avopulse 1.1s ease-in-out 0.18s infinite"></span>
+                  <span style="width:8px;height:8px;border-radius:9px;background:var(--brand,#6E7F6C);animation:avopulse 1.1s ease-in-out 0.36s infinite"></span>
+                </div>
+                <div style="width:100%;display:flex;align-items:center;gap:9px;background:var(--brand-wash,#F6F7F3);border:1px solid rgba(110,127,108,0.22);border-radius:13px;padding:12px 14px;margin-top:28px;text-align:left">
+                  <span style="width:7px;height:7px;border-radius:9px;background:var(--brand,#6E7F6C);flex-shrink:0"></span>
+                  <span style="font-size:12.5px;color:var(--brand-deeper,#4F5E4C);line-height:1.45">{{ t.payDontClose }}</span>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ payResult }}">
+              <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:22px 6px 6px">
+                <div style="{{ resIconWrap }}">
+                  <sc-if value="{{ resIsGood }}"><svg width="30" height="30" viewBox="0 0 24 24" fill="none"><path d="m5 12.5 4.5 4.5L19 7.5" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if>
+                  <sc-if value="{{ resIsBad }}"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6 6 18" stroke="#fff" stroke-width="2.1" stroke-linecap="round"></path></svg></sc-if>
+                  <sc-if value="{{ resIsWait }}"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.4" stroke="#fff" stroke-width="1.9"></circle><path d="M12 7.6V12l3 1.9" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path></svg></sc-if>
+                </div>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:22px;font-weight:500;margin-top:19px">{{ resTitle }}</div>
+                <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:7px;line-height:1.5;max-width:290px">{{ resMsg }}</div>
+
+                <div style="width:100%;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:4px 17px;margin-top:22px">
+                  <sc-for list="{{ resRows }}" as="rr" hint-placeholder-count="2">
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.07);font-size:13.5px">
+                      <span style="color:rgba(28,27,25,0.6)">{{ rr.label }}</span>
+                      <span style="{{ rr.valueStyle }}">{{ rr.value }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="width:100%;display:flex;flex-direction:column;gap:9px;margin-top:20px">
+                  <button onClick="{{ resPrimary }}" style="width:100%;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ resPrimaryLabel }}</button>
+                  <sc-if value="{{ resHasSecondary }}"><button onClick="{{ resSecondary }}" style="width:100%;background:transparent;color:var(--brand-deep,#5A6B58);border:1px solid rgba(28,27,25,0.14);border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">{{ resSecondaryLabel }}</button></sc-if>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- LEGAL / POLICY SHEET -->
+      <sc-if value="{{ legalOpen }}">
+        <div onClick="{{ closeLegal }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.5);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:45">
+          <div onClick="{{ stop }}" style="width:100%;max-height:88%;display:flex;flex-direction:column;background:#FBFAF8;border-radius:26px 26px 0 0;padding:12px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px;flex-shrink:0"></div>
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500;flex-shrink:0">{{ legalTitle }}</div>
+            <div style="font-size:12px;color:rgba(28,27,25,0.45);margin-top:4px;flex-shrink:0">{{ t.legalUpdated }}</div>
+            <div style="flex:1;overflow:auto;margin-top:14px">
+              <sc-for list="{{ legalBody }}" as="p" hint-placeholder-count="4">
+                <div style="font-size:13.5px;line-height:1.65;color:rgba(28,27,25,0.72);margin-bottom:13px">{{ p.text }}</div>
+              </sc-for>
+            </div>
+            <button onClick="{{ closeLegal }}" style="width:100%;margin-top:14px;flex-shrink:0;background:#F0EEE9;color:#1C1B19;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">{{ t.txClose }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- CONTACT / SUPPORT SHEET -->
+      <sc-if value="{{ contactOpen }}">
+        <div onClick="{{ closeContact }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.5);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:47">
+          <div onClick="{{ stop }}" style="width:100%;max-height:92%;display:flex;flex-direction:column;background:#FBFAF8;border-radius:26px 26px 0 0;padding:12px 22px 26px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px;flex-shrink:0"></div>
+
+            <sc-if value="{{ cSent }}">
+              <div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:6px 0 2px">
+                <span style="width:56px;height:56px;border-radius:999px;background:var(--brand-tint,#EEF1EC);display:flex;align-items:center;justify-content:center"><svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M5 12.5l4.2 4.2L19 7" stroke="var(--brand-deep,#5A6B58)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500;margin-top:14px">{{ t.cSentTitle }}</div>
+                <div style="font-size:13.5px;line-height:1.6;color:rgba(28,27,25,0.6);margin-top:7px">{{ cSentLine }}</div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:16px;padding:15px 18px;margin-top:18px">
+                <span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ t.cSentRef }}</span>
+                <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;letter-spacing:0.03em;direction:ltr">{{ cSentRefNo }}</span>
+              </div>
+              <div style="margin:12px 4px 0;font-size:11.5px;line-height:1.55;color:rgba(28,27,25,0.45)">{{ supReply }}</div>
+              <button onClick="{{ closeContact }}" style="width:100%;margin-top:18px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">{{ t.cSentDone }}</button>
+            </sc-if>
+
+            <sc-if value="{{ cForm }}" hint-placeholder-val="{{ true }}">
+              <div style="flex-shrink:0">
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.contactTitle }}</div>
+                <div style="font-size:13px;color:rgba(28,27,25,0.55);margin-top:4px;line-height:1.5">{{ t.contactSub }}</div>
+              </div>
+
+              <div style="flex:1;overflow:auto;margin-top:16px">
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:0 2px 8px">{{ t.cTopicLabel }}</div>
+                <div style="background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:2px 16px">
+                  <sc-for list="{{ cTopics }}" as="c" hint-placeholder-count="6">
+                    <button onClick="{{ c.onPick }}" style="width:100%;display:flex;align-items:center;gap:11px;padding:12px 0;border:none;border-bottom:1px solid rgba(28,27,25,0.06);background:transparent;font-family:inherit;color:#1C1B19;text-align:left;cursor:pointer">
+                      <span style="{{ c.dot }}"></span>
+                      <span style="flex:1;min-width:0;font-size:14px">{{ c.label }}</span>
+                      <span style="font-size:10.5px;font-weight:600;color:rgba(28,27,25,0.5);background:#F0EEE9;padding:4px 9px;border-radius:999px;white-space:nowrap">{{ c.routeLabel }}</span>
+                    </button>
+                  </sc-for>
+                </div>
+
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:18px 2px 8px">{{ t.cMsgLabel }}</div>
+                <textarea value="{{ cMsg }}" onInput="{{ setCMsg }}" placeholder="{{ t.cMsgPh }}" rows="4" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 14px;font-family:inherit;font-size:14px;line-height:1.55;color:#1C1B19;resize:none;outline:none"></textarea>
+
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:16px 2px 8px">{{ t.cRefLabel }} <span style="text-transform:none;letter-spacing:0;font-weight:400;color:rgba(28,27,25,0.4)">{{ t.cOptional }}</span></div>
+                <input value="{{ cRef }}" onInput="{{ setCRef }}" placeholder="AVO-77219" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 14px;font-family:inherit;font-size:14px;color:#1C1B19;outline:none">
+
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:16px 2px 8px">{{ t.cViaLabel }}</div>
+                <div style="display:flex;gap:9px">
+                  <button onClick="{{ pickWa }}" style="{{ cWaStyle }}">{{ t.cViaWa }}</button>
+                  <button onClick="{{ pickEmail }}" style="{{ cEmailStyle }}">{{ t.cViaEmail }}</button>
+                </div>
+                <div style="margin:9px 4px 0;font-size:11.5px;line-height:1.55;color:rgba(28,27,25,0.45);direction:ltr">{{ cViaValue }}</div>
+
+                <sc-if value="{{ cErr }}">
+                  <div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:14px">
+                    <span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span>
+                    <span style="font-size:12.5px;color:#8f5a56">{{ t.cErr }}</span>
+                  </div>
+                </sc-if>
+              </div>
+
+              <div style="flex-shrink:0;padding-top:14px">
+                <button onClick="{{ sendContact }}" style="width:100%;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">{{ t.cSend }}</button>
+                <button onClick="{{ closeContact }}" style="width:100%;margin-top:8px;background:transparent;border:none;padding:12px;font-family:inherit;font-size:13.5px;font-weight:600;color:rgba(28,27,25,0.55);cursor:pointer">{{ t.txClose }}</button>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- EDIT PROFILE SHEET -->
+      <sc-if value="{{ profileOpen }}">
+        <div onClick="{{ closeProfile }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.55);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:47">
+          <div onClick="{{ stop }}" style="width:100%;max-height:92%;overflow:auto;background:#FBFAF8;border-radius:26px 26px 0 0;padding:14px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px"></div>
+            <sc-if value="{{ pfForm }}" hint-placeholder-val="{{ true }}">
+              <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.pfTitle }}</div>
+              <div style="font-size:13.5px;color:rgba(28,27,25,0.6);margin-top:6px;line-height:1.6">{{ t.pfSub }}</div>
+
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:20px 2px 8px">{{ t.rowName }}</div>
+              <input value="{{ pfName }}" onInput="{{ setPfName }}" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 15px;font-family:inherit;font-size:14.5px;color:#1C1B19;outline:none">
+
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:16px 2px 8px">{{ t.rowPhone }}</div>
+              <input value="{{ pfPhone }}" onInput="{{ setPfPhone }}" type="tel" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 15px;font-family:inherit;font-size:14.5px;color:#1C1B19;outline:none;direction:ltr">
+              <div style="margin:8px 2px 0;font-size:11.5px;line-height:1.5;color:rgba(28,27,25,0.45)">{{ t.pfPhoneNote }}</div>
+
+              <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:16px 2px 8px">{{ t.rowEmail }} <span style="text-transform:none;letter-spacing:0;font-weight:500;color:rgba(28,27,25,0.4)">{{ t.cOptional }}</span></div>
+              <input value="{{ pfEmail }}" onInput="{{ setPfEmail }}" type="email" placeholder="{{ t.pfEmailPh }}" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 15px;font-family:inherit;font-size:14.5px;color:#1C1B19;outline:none;direction:ltr">
+
+              <sc-if value="{{ pfErr }}">
+                <div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:16px"><span style="width:8px;height:8px;border-radius:9px;background:#B4756E;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56;line-height:1.45">{{ pfErr }}</span></div>
+              </sc-if>
+
+              <button onClick="{{ saveProfile }}" style="width:100%;margin-top:20px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.pfSave }}</button>
+              <button onClick="{{ closeProfile }}" style="width:100%;margin-top:10px;background:transparent;color:rgba(28,27,25,0.55);border:none;padding:12px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer">{{ t.txClose }}</button>
+            </sc-if>
+
+            <sc-if value="{{ pfVerify }}">
+              <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.vfTitle }}</div>
+              <div style="font-size:13.5px;color:rgba(28,27,25,0.6);margin-top:6px;line-height:1.6">{{ pfVerifySub }}</div>
+              <input value="{{ pfCode }}" onInput="{{ setPfCode }}" type="tel" maxlength="4" placeholder="0000" style="width:100%;box-sizing:border-box;margin-top:18px;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:16px;font-family:'Fraunces',serif;font-size:26px;font-weight:600;letter-spacing:0.4em;text-align:center;color:#1C1B19;outline:none;direction:ltr">
+              <sc-if value="{{ pfErr }}">
+                <div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:14px"><span style="width:8px;height:8px;border-radius:9px;background:#B4756E;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56;line-height:1.45">{{ pfErr }}</span></div>
+              </sc-if>
+              <button onClick="{{ confirmPhone }}" style="width:100%;margin-top:18px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.vfConfirm }}</button>
+              <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-top:14px">
+                <a href="#" onClick="{{ resendCode }}" style="font-size:13px;font-weight:600">{{ t.vfResend }}</a>
+                <a href="#" onClick="{{ backToProfile }}" style="font-size:13px;font-weight:600;color:rgba(28,27,25,0.5)">{{ t.vfBack }}</a>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- CHANGE PASSWORD SHEET -->
+      <sc-if value="{{ passOpen }}">
+        <div onClick="{{ closePass }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.55);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:47">
+          <div onClick="{{ stop }}" style="width:100%;max-height:92%;overflow:auto;background:#FBFAF8;border-radius:26px 26px 0 0;padding:14px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px"></div>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+              <div style="flex:1;min-width:0">
+                <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.pwTitle }}</div>
+                <div style="font-size:13.5px;color:rgba(28,27,25,0.6);margin-top:6px;line-height:1.6">{{ t.pwSub }}</div>
+              </div>
+              <button onClick="{{ togglePwShow }}" style="flex-shrink:0;background:#F0EEE9;border:none;border-radius:999px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:600;color:#1C1B19;cursor:pointer">{{ pwShowLabel }}</button>
+            </div>
+
+            <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:20px 2px 8px">{{ t.pwCurLabel }}</div>
+            <input value="{{ pwCur }}" onInput="{{ setPwCur }}" type="{{ pwType }}" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 15px;font-family:inherit;font-size:14.5px;color:#1C1B19;outline:none;direction:ltr">
+
+            <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:16px 2px 8px">{{ t.pwNewLabel }}</div>
+            <input value="{{ pwNew }}" onInput="{{ setPwNew }}" type="{{ pwType }}" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 15px;font-family:inherit;font-size:14.5px;color:#1C1B19;outline:none;direction:ltr">
+            <div style="margin:8px 2px 0;font-size:11.5px;color:rgba(28,27,25,0.45)">{{ t.passHint }}</div>
+
+            <div style="font-size:11px;font-weight:600;letter-spacing:0.09em;text-transform:uppercase;color:rgba(28,27,25,0.6);margin:16px 2px 8px">{{ t.pwConfLabel }}</div>
+            <input value="{{ pwConf }}" onInput="{{ setPwConf }}" type="{{ pwType }}" placeholder="••••••••" style="width:100%;box-sizing:border-box;border:1.5px solid rgba(28,27,25,0.14);background:#fff;border-radius:14px;padding:13px 15px;font-family:inherit;font-size:14.5px;color:#1C1B19;outline:none;direction:ltr">
+
+            <sc-if value="{{ pwErr }}">
+              <div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:16px"><span style="width:8px;height:8px;border-radius:9px;background:#B4756E;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56;line-height:1.45">{{ pwErr }}</span></div>
+            </sc-if>
+
+            <button onClick="{{ savePass }}" style="width:100%;margin-top:20px;background:var(--brand-deep,#5A6B58);color:#fff;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer">{{ t.pwSave }}</button>
+            <div style="text-align:center;margin-top:14px"><a href="#" onClick="{{ pwForgot }}" style="font-size:13px;font-weight:600">{{ t.pwForgot }}</a></div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- DELETE ACCOUNT SHEET -->
+      <sc-if value="{{ deleteOpen }}">
+        <div onClick="{{ closeDelete }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.55);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:46">
+          <div onClick="{{ stop }}" style="width:100%;background:#FBFAF8;border-radius:26px 26px 0 0;padding:14px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 16px"></div>
+            <div style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.deleteTitle }}</div>
+            <div style="font-size:13.5px;color:rgba(28,27,25,0.6);margin-top:8px;line-height:1.6">{{ t.deleteBody }}</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#F6EAE8;border-radius:14px;padding:14px 16px;margin-top:16px">
+              <span style="font-size:13px;color:#8f5a56">{{ t.deleteBalance }}</span>
+              <span style="font-family:'Fraunces',serif;font-size:17px;font-weight:600;color:#8f5a56">{{ balanceStr }} {{ t.kd }}</span>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:20px">
+              <button onClick="{{ closeDelete }}" style="flex:1;background:#F0EEE9;color:#1C1B19;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">{{ t.deleteKeep }}</button>
+              <button onClick="{{ closeDelete }}" style="flex:1;background:#8f5a56;color:#fff;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:600;cursor:pointer">{{ t.deleteGo }}</button>
+            </div>
+            <div style="text-align:center;font-size:11.5px;color:rgba(28,27,25,0.45);margin-top:12px;line-height:1.5">{{ t.deleteFine }}</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- TRANSACTION DETAIL SHEET -->
+      <sc-if value="{{ txOpen }}">
+        <div onClick="{{ closeTx }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.5);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:40">
+          <div onClick="{{ stop }}" style="width:100%;max-height:88%;overflow:auto;background:#FBFAF8;border-radius:26px 26px 0 0;padding:12px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 18px"></div>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center">
+              <span style="{{ txAmtStyle }}">{{ tx.amt }}</span>
+              <span style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:17px;font-weight:500">{{ tx.title }}</span>
+              <span style="font-size:12.5px;color:rgba(28,27,25,0.5)">{{ tx.sub }} · {{ tx.when }}</span>
+              <span style="display:inline-flex;align-items:center;gap:6px;margin-top:6px;font-size:11.5px;font-weight:600;color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);padding:5px 12px;border-radius:999px"><span style="width:6px;height:6px;border-radius:9px;background:var(--brand,#6E7F6C)"></span>{{ tx.status }}</span>
+            </div>
+            <div style="margin-top:20px;background:#fff;border:1px solid rgba(28,27,25,0.08);border-radius:18px;padding:4px 18px">
+              <sc-for list="{{ txRows }}" as="r" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 0;border-bottom:1px solid rgba(28,27,25,0.06)">
+                  <span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ r.label }}</span>
+                  <span style="font-size:13.5px;font-weight:600;text-align:right">{{ r.value }}</span>
+                </div>
+              </sc-for>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 0">
+                <span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ t.txRefLabel }}</span>
+                <span style="font-family:'Fraunces',serif;font-size:13px;letter-spacing:0.03em;color:rgba(28,27,25,0.7)">{{ tx.ref }}</span>
+              </div>
+            </div>
+            <div style="margin:12px 4px 0;font-size:11.5px;line-height:1.55;color:rgba(28,27,25,0.45)">{{ t.txHelp }}</div>
+            <button onClick="{{ reportTx }}" style="width:100%;margin-top:12px;background:#fff;border:1px solid rgba(28,27,25,0.12);border-radius:14px;padding:14px;font-family:inherit;font-size:13.5px;font-weight:600;color:#1C1B19;cursor:pointer">{{ t.cReport }}</button>
+            <button onClick="{{ closeTx }}" style="width:100%;margin-top:18px;background:#F0EEE9;color:#1C1B19;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer">{{ t.txClose }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- CART SHEET -->
+      <sc-if value="{{ cartOpen }}">
+        <div onClick="{{ closeCart }}" style="position:absolute;inset:0;background:rgba(20,21,17,0.5);backdrop-filter:blur(4px);display:flex;align-items:flex-end;animation:avofade 0.18s ease-out;z-index:22;cursor:pointer">
+          <div onClick="{{ stop }}" style="width:100%;max-height:88%;display:flex;flex-direction:column;background:#FBFAF8;border-radius:26px 26px 0 0;padding:12px 22px 30px;animation:avosheet 0.28s cubic-bezier(.2,.9,.3,1.05);cursor:default">
+            <div style="width:40px;height:5px;border-radius:999px;background:rgba(28,27,25,0.15);margin:0 auto 14px;flex-shrink:0"></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0"><span style="font-family:'Fraunces','IBM Plex Sans Arabic',serif;font-size:21px;font-weight:500">{{ t.cartTitle }}</span><span style="font-size:13px;color:rgba(28,27,25,0.5)">{{ cartCount }} {{ t.items }}</span></div>
+
+            <sc-if value="{{ hasCart }}" hint-placeholder-val="{{ true }}">
+              <div style="flex:1;overflow:auto;margin-top:14px">
+                <sc-for list="{{ cartLines }}" as="c" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:center;gap:13px;padding:11px 0;border-bottom:1px solid rgba(28,27,25,0.07)">
+                    <div style="width:42px;height:42px;border-radius:12px;background:{{ c.swatch }};flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:rgba(28,27,25,0.4)">{{ c.initial }}</div>
+                    <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600">{{ c.name }}</div><div style="font-size:12px;color:rgba(28,27,25,0.5);margin-top:1px">{{ c.lineStr }} {{ t.kd }}</div></div>
+                    <div style="display:flex;align-items:center;gap:9px">
+                      <button onClick="{{ c.onDec }}" style="width:30px;height:30px;border-radius:9px;border:1px solid rgba(28,27,25,0.14);background:#fff;font-size:17px;color:#1C1B19;cursor:pointer">−</button>
+                      <span style="font-family:'Fraunces',serif;font-size:15px;font-weight:600;min-width:12px;text-align:center">{{ c.qty }}</span>
+                      <button onClick="{{ c.onInc }}" style="width:30px;height:30px;border-radius:9px;border:none;background:var(--brand-deep,#5A6B58);font-size:17px;color:#fff;cursor:pointer">+</button>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+
+              <div style="flex-shrink:0;margin-top:14px">
+                <div style="display:flex;justify-content:space-between;font-size:13.5px;color:rgba(28,27,25,0.6);margin-bottom:5px"><span>{{ t.total }}</span><span style="font-family:'Fraunces',serif;font-size:16px;font-weight:600;color:#1C1B19">{{ cartTotalStr }} {{ t.kd }}</span></div>
+                <div style="display:flex;justify-content:space-between;font-size:13.5px;color:rgba(28,27,25,0.6)"><span>{{ t.payFrom }}</span><span style="font-family:'Fraunces',serif;font-weight:600;color:{{ balColor }}">{{ balanceStr }} {{ t.kd }}</span></div>
+
+                <sc-if value="{{ cartShort }}"><div style="display:flex;align-items:center;gap:9px;background:#F6EAE8;border-radius:12px;padding:11px 14px;margin-top:12px"><span style="width:8px;height:8px;border-radius:9px;background:#B0736F;flex-shrink:0"></span><span style="font-size:12.5px;color:#8f5a56">{{ t.shortMsg }} {{ shortStr }} {{ t.kd }}</span></div></sc-if>
+
+                <button onClick="{{ checkout }}" style="{{ checkoutStyle }}">{{ checkoutLabel }}</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{ cartEmpty }}">
+              <div style="text-align:center;padding:40px 10px 30px;color:rgba(28,27,25,0.45)"><div style="font-family:'Fraunces',serif;font-size:18px;margin-bottom:6px;color:rgba(28,27,25,0.6)">{{ t.emptyTitle }}</div><div style="font-size:13px">{{ t.emptySub }}</div></div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- TOAST -->
+      <sc-if value="{{ toast }}">
+        <div style="position:absolute;left:16px;right:16px;bottom:96px;background:#1C1B19;color:#fff;border-radius:16px;padding:15px 18px;display:flex;align-items:center;gap:12px;animation:avozoom 0.26s cubic-bezier(.2,.9,.3,1.1);box-shadow:0 18px 36px -14px rgba(0,0,0,0.5);z-index:30">
+          <span style="width:30px;height:30px;border-radius:50%;background:var(--brand-deep,#5A6B58);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 12.5 10.5 17 18 8" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+          <span style="font-size:13.5px;line-height:1.35">{{ toastText }}</span>
+        </div>
+      </sc-if>
+
+    </div>
+  </x-import>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;brandColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#6E7F6C&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;,&quot;options&quot;:[&quot;#6E7F6C&quot;,&quot;#8A5B6E&quot;,&quot;#3F5A78&quot;,&quot;#B0734A&quot;]},&quot;salonName&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Amara&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;},&quot;logoUrl&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand kit&quot;},&quot;demoClock&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;inside&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Promotions&quot;,&quot;options&quot;:[&quot;inside&quot;,&quot;ending&quot;,&quot;before&quot;,&quot;real&quot;]}}">
+class Component extends DCLogic {
+  brandVars() {
+    const p = this.props || {};
+    const hex = p.brandColor || '#6E7F6C';
+    const rgb = h => { let v = String(h).replace('#',''); if (v.length === 3) v = v.split('').map(c => c + c).join(''); const n = parseInt(v, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+    const to = c => '#' + c.map(x => Math.round(Math.max(0, Math.min(255, x))).toString(16).padStart(2, '0')).join('');
+    const base = rgb(hex), W = [255,255,255], B = [0,0,0];
+    const mix = (c, t, a) => c.map((x, i) => x + (t[i] - x) * a);
+    const vars = {
+      '--brand': hex,
+      '--brand-deep': to(mix(base, B, 0.14)),
+      '--brand-deeper': to(mix(base, B, 0.28)),
+      '--brand-ink': to(mix(base, B, 0.08)),
+      '--brand-tint': to(mix(base, W, 0.88)),
+      '--brand-wash': to(mix(base, W, 0.94)),
+      '--brand-card-from': to(mix(base, W, 0.07)),
+      '--brand-card-to': to(mix(base, B, 0.13)),
+    };
+    const r = document.documentElement;
+    for (const k in vars) r.style.setProperty(k, vars[k]);
+  }
+
+  openProfileAt(name) {
+    const s = this.state;
+    this.setState({ profileOpen: true, pfStep: 'form', pfErr: '',
+      pfName: name, pfPhone: s.phone, pfEmail: s.email || '' });
+  }
+
+  state = { lang: 'en', secs: 45, token: 'AVO8842X1', balance: 24500, pick: 10,
+    loyalty: 'tiers', stamps: 4, payStage: 'idle', outcome: 'success',
+    legalOpen: null, deleteOpen: false, consentTerms: false, consentWa: true,
+    contactOpen: false, cTopic: null, cMsg: '', cRef: '', cVia: 'wa', cErr: false, cSent: null,
+    notifs: { push: true, wa: true, remind: true, receipt: true, offers: false },
+    email: 'dana.alroumi@gmail.com', name: null, phone: '+965 6612 4408',
+    profileOpen: false, pfStep: 'form', pfName: '', pfPhone: '', pfEmail: '', pfCode: '', pfErr: '',
+    passOpen: false, pwCur: '', pwNew: '', pwConf: '', pwShow: false, pwErr: '',
+    screen: 'home', qrOpen: false, txOpen: null, payOpen: false, method: 'knet', cartOpen: false, cart: {},
+    bookStep: 1, bookSvc: null, bookArtist: 'any', bookDay: 0, bookSlot: null, booked: null,
+    toast: false, toastText: '',
+    authed: false, authScreen: 'login', fUser: '', fPass: '', fPass2: '', fName: '',
+    authErr: false, authErrMsg: '', resetSent: false,
+    promo: (typeof window !== 'undefined' && window.AVOPromotions) ? window.AVOPromotions.get() : null };
+
+  rand() { return 'AVO8842' + Math.random().toString(36).slice(2, 6).toUpperCase(); }
+
+  componentDidMount() {
+    this.draw();
+    const API = window.AVOPromotions;
+    if (API) {
+      this.unsub = API.subscribe(p => this.setState({ promo: p }));
+      this.applyDemoClock();
+      this.setState({ promo: API.get() });
+    }
+    this.timer = setInterval(() => {
+      this.setState(s => {
+        const secs = s.secs - 1;
+        if (secs <= 0) return { secs: 45, token: this.rand() };
+        return { secs };
+      });
+    }, 1000);
+  }
+  applyDemoClock() {
+    const API = window.AVOPromotions;
+    if (!API) return;
+    const mode = (this.props || {}).demoClock || 'inside';
+    if (this._clockMode === mode) return;
+    this._clockMode = mode;
+    if (mode === 'real') { API.setClockOffsetMin(0); return; }
+    const at = mode === 'ending' ? '13:56' : mode === 'before' ? '09:40' : '12:30';
+    let offset = API.offsetForTimeOfDay(at);
+    // land the demo on a day the window actually runs, then let it tick forward
+    const win = API.get().happy.filter(h => h.on)[0];
+    if (win) {
+      const base = new Date(Date.now() + offset * 60000);
+      let add = 0;
+      while (add < 7 && win.days.indexOf((base.getDay() + add) % 7) === -1) add++;
+      offset += add * 1440;
+    }
+    API.setClockOffsetMin(offset);
+  }
+
+  componentWillUnmount() { clearInterval(this.timer); if (this.unsub) this.unsub(); if (this.toastT) clearTimeout(this.toastT); if (this.payT) clearTimeout(this.payT); }
+
+  componentDidUpdate() {
+    this.applyDemoClock();
+    if (this.state.authed && (this._dt !== this.state.token || this._qr !== this.state.qrOpen || !this._wasAuthed)) this.draw();
+    this._wasAuthed = this.state.authed;
+    const rtl = this.state.lang === 'ar';
+    const el = document.getElementById('app');
+    if (el) { el.style.direction = rtl ? 'rtl' : 'ltr'; el.dir = rtl ? 'rtl' : 'ltr'; }
+  }
+
+  draw() {
+    if (!this.state.authed) return;
+    const gen = window.qrcode;
+    if (!gen) { setTimeout(() => this.draw(), 150); return; }
+    const qr = gen(0, 'M');
+    qr.addData('https://avo.beauty/pay?m=8842&t=' + this.state.token);
+    qr.make();
+    const n = qr.getModuleCount();
+    let drew = 0;
+    [['qrCard', 130], ['qrBig', 246]].forEach(([id, size]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      drew++;
+      el.width = size; el.height = size;
+      const ctx = el.getContext('2d');
+      ctx.clearRect(0, 0, size, size);
+      const cell = size / n;
+      ctx.fillStyle = '#1C1B19';
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) ctx.fillRect(Math.floor(c * cell), Math.floor(r * cell), Math.ceil(cell), Math.ceil(cell));
+      }
+    });
+    if (!drew) { setTimeout(() => this.draw(), 150); return; }
+    this._dt = this.state.token; this._qr = this.state.qrOpen;
+  }
+
+  showToast(txt) {
+    if (this.toastT) clearTimeout(this.toastT);
+    this.setState({ toast: true, toastText: txt });
+    this.toastT = setTimeout(() => this.setState({ toast: false }), 3400);
+  }
+
+  navStyle(active) {
+    return 'display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;font-family:inherit;cursor:pointer;padding:0;'
+      + (active ? 'color:var(--brand-deep,#5A6B58);' : 'color:rgba(28,27,25,0.4);');
+  }
+
+  renderVals() {
+    this.brandVars();
+    const s = this.state;
+    const fmt = f => (f / 1000).toFixed(3);
+    const isAr = s.lang === 'ar';
+    const isStamps = s.loyalty === 'stamps';
+    const P = this.props || {};
+    // ---- promotions: read from the shared endpoint, never duplicated here.
+    // Boosts and happy-hour windows are whatever the merchant published; the
+    // banner is resolved against a real clock, so it expires on its own.
+    const API = window.AVOPromotions;
+    const promo = s.promo || (API ? API.get() : null);
+    const arD = str => isAr ? String(str).replace(/[0-9]/g, d => '٠١٢٣٤٥٦٧٨٩'[+d]) : String(str);
+    const hh = API ? API.resolveHappy(API.now()) : { live: null, next: null };
+    const live = hh.live, nextW = hh.next;
+    const happyOn = !!live;
+    const happyTitle = live ? (isAr ? 'الساعة السعيدة · ' : 'Happy hour · ') + API.rewardLabel(live.reward, isAr) : '';
+    const happySub = live ? API.branchName(live.branchId, isAr) + (isAr ? ' · حتى ' : ' · until ') + arD(live.to) : '';
+    const happyLiveLabel = live ? (isAr ? 'باقي ' : '') + API.countdown(live.msLeft, isAr) + (isAr ? '' : ' left') : '';
+    const nowClock = API ? API.now() : new Date();
+    const happyClock = (isAr ? 'الآن ' : 'now ') + arD((nowClock.getHours() < 10 ? '0' : '') + nowClock.getHours() + ':' + (nowClock.getMinutes() < 10 ? '0' : '') + nowClock.getMinutes());
+    const happyNext = !live && !!nextW;
+    const dayNamesEn = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayNamesAr = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    const nextDayIdx = nextW ? (nowClock.getDay() + nextW.inDays) % 7 : 0;
+    const happyNextTitle = nextW ? (isAr ? 'القادمة · ' : 'Next happy hour · ') + API.rewardLabel(nextW.reward, isAr) : '';
+    const happyNextSub = nextW
+      ? API.branchName(nextW.branchId, isAr) + ' · '
+        + (nextW.inDays === 0 ? (isAr ? 'اليوم ' : 'today ') : (isAr ? dayNamesAr[nextDayIdx] + ' ' : dayNamesEn[nextDayIdx] + ' '))
+        + arD(nextW.from) + '–' + arD(nextW.to)
+      : '';
+    const happyNextLabel = nextW ? (isAr ? 'بعد ' : 'in ') + API.countdown(nextW.startsInMs, isAr) : '';
+    const branchEarnLabel = isAr ? 'الكسب حسب الفرع' : 'Earning by branch';
+    const branchChips = (promo ? promo.branches : []).map(b => {
+      const v = (promo.boosts || {})[b.id] || { visit: 1, topup: 0, stamp: 1 };
+      const mult = isStamps ? v.stamp : v.visit;
+      const badges = [];
+      if (mult > 1) badges.push({ text: isStamps ? (isAr ? 'أختام ×' + arD(mult) : mult + '× stamps') : (isAr ? 'زيارات ×' + arD(mult) : mult + '× visits') });
+      if (v.topup > 0) badges.push({ text: isAr ? '+' + arD(v.topup) + '٪ على الشحن' : '+' + v.topup + '% top-ups' });
+      return { name: isAr ? b.nameAr : b.name, badges, plain: badges.length === 0,
+        standard: isAr ? 'كسب اعتيادي' : 'Standard earning' };
+    });
+    const isTiers = !isStamps;
+    const STAMP_TARGET = 8;
+    const RATE = isStamps ? 0 : 0.10;
+    const bonusFils = amt => Math.round(amt * 1000 * RATE);
+
+    const en = {
+      greeting: 'Good evening, Dana', salon: 'Amara', balanceLabel: 'Wallet balance',
+      kd: 'KD', tierName: 'Silver', nextTier: 'Gold', tierHint: '6 visits to Gold',
+      branchNote: 'One wallet — valid at all branches.',
+      qrTitle: 'Show to pay', qrHint: 'Refreshes in', sec: 's', tapEnlarge: 'Tap to enlarge',
+      qrBig: 'Show this to the cashier', qrBigSub: 'Screen brightened for scanning', done: 'Done',
+      tierFine: 'Bonus credit and tier rewards are funded by Amara Salon, not AVO. The salon can change its tiers at any time; your existing balance is never affected.',
+      topupTitle: 'Top up', bonusBadge: 'Silver · +10% bonus',
+      bonusExplain: 'Your Silver tier adds 10% free credit to every top-up.',
+      youPay: 'Pay', youGet: 'Get', continuePay: 'Continue to payment',
+      payTitle: 'Choose payment', lands: 'Lands in wallet', method: 'Payment method', payBtn: 'Pay',
+      upcomingLabel: 'Upcoming', upService: 'Balayage & gloss', upWith: 'with Rana',
+      upWhen: 'Sat 12 Jul · 4:30 PM', upDeposit: '5.000 KD held', cancel: 'Cancel',
+      reschedule: 'Reschedule', reschedNote: 'Free until an hour before. After that the deposit stays with the salon.',
+      txRefLabel: 'Reference', txHelp: 'Something looks wrong? Message the salon on WhatsApp.', txClose: 'Close',
+      accountTitle: 'Account', acctName: 'Dana Al-Roumi', acctProfile: 'Profile',
+      acctNotifs: 'Notifications', acctLegal: 'Wallet & policies',
+      rowEdit: 'Edit',
+      pfTitle: 'Edit profile', pfSub: 'Your name, and how the salon reaches you.',
+      pfEmailPh: 'name@email.com',
+      pfPhoneNote: 'Your phone number is how you log in. Changing it needs a code sent to the new number.',
+      pfSave: 'Save changes', pfSaved: 'Profile updated',
+      pfErrName: 'Enter your name.', pfErrPhone: 'Enter a valid phone number.',
+      pfErrEmail: 'That email address does not look right.',
+      vfTitle: 'Confirm your new number', vfSubPre: 'Enter the 4-digit code we sent to',
+      vfConfirm: 'Confirm number', vfResend: 'Send again', vfBack: 'Back',
+      vfErr: 'Enter the 4-digit code.', vfSent: 'Code sent',
+      pwTitle: 'Change password', pwSub: 'You stay logged in on this phone. Other devices are signed out.',
+      pwCurLabel: 'Current password', pwNewLabel: 'New password', pwConfLabel: 'Confirm new password',
+      pwSave: 'Update password', pwSaved: 'Password updated',
+      pwForgot: 'I forgot my current password',
+      pwErrCur: 'Enter your current password.', pwErrShort: 'Use at least 6 characters.',
+      pwErrSame: 'Choose a password different from your current one.',
+      pwErrMatch: "The two new passwords don't match.",
+      rowName: 'Name', rowPhone: 'Phone', rowEmail: 'Email', rowPassword: 'Password', rowLang: 'Language', rowChange: 'Change', rowAddEmail: 'Add an email',
+      nPush: 'App notifications', nPushSub: 'Booking reminders, top-ups and tier changes',
+      nWa: 'WhatsApp messages', nWaSub: 'Receipts and appointment confirmations',
+      nRemind: 'Appointment reminder', nRemindSub: 'Two hours before your slot',
+      nReceipt: 'Email receipts', nReceiptSub: 'An itemised receipt by email for every payment, top-up and refund',
+      nOffers: 'Salon offers', nOffersSub: 'Occasional promotions from Amara. Off by default.',
+      legalTerms: 'Wallet terms', legalRefund: 'Refunds & cancellation', legalBonus: 'How bonuses work', legalPrivacy: 'Privacy & your data',
+      legalGTerms: 'Terms & conditions', legalPolicy: 'Privacy policy',
+      legalExpiry: 'Does my credit expire?',
+      consentTerms: 'I agree to the Wallet terms, the refund policy and the privacy notice.',
+      consentWa: 'Send me receipts and appointment confirmations on WhatsApp.',
+      errConsent: 'Please accept the wallet terms to continue.',
+      legalUpdated: 'Last updated 1 July 2026',
+      walletFine: 'Your wallet holds prepaid credit for Amara Salon only. Credit does not expire, cannot be transferred to another salon, and is not a bank deposit.',
+      logOut: 'Log out', deleteAcct: 'Delete my account',
+      acctHelp: 'Help',
+      contactCta: 'Contact us', contactCtaSub: 'A question, a charge that looks wrong, or anything else',
+      contactTitle: 'Contact us', contactSub: 'Tell us what happened and we will come back to you.',
+      cTopicLabel: 'What is it about?', cMsgLabel: 'Your message',
+      cMsgPh: 'A few lines is plenty. Dates and amounts help.',
+      cRefLabel: 'Receipt or reference', cOptional: '(optional)',
+      cViaLabel: 'Reply to me on', cViaWa: 'WhatsApp', cViaEmail: 'Email',
+      cSend: 'Send message', cErr: 'Pick a topic and write a short message.',
+      cRouteSalon: 'Salon', cRouteAvo: 'AVO',
+      cReport: 'Report a problem with this payment',
+      cSentTitle: 'Message sent', cSentRef: 'Your reference', cSentDone: 'Done',
+      cSentSalon: 'Amara has your message and will reply on WhatsApp.',
+      cSentAvo: 'AVO support has your message.',
+      deleteTitle: 'Delete your account?', deleteBody: 'Your profile, visit history and loyalty progress are removed within 30 days. Anything already paid to the salon is not reversed.',
+      deleteBalance: 'Remaining balance', deleteKeep: 'Keep account', deleteGo: 'Request deletion',
+      deleteFine: 'Wallet credit cannot be paid out in cash. Spend the remaining balance at the salon, or ask them to settle it with you, before the account closes.',
+      activityLabel: 'Activity', membersLabel: 'Membership', current: 'Current', langSwitch: 'العربية',
+      navHome: 'Home', navBook: 'Book', navShop: 'Shop', navPay: 'Pay',
+      shopTitle: 'Shop', shopSub: 'Pay from your wallet · pick up at the salon.',
+      add: 'Add', shopNote: 'Shop purchases count as a visit toward your next tier.',
+      cartTitle: 'Your cart', items: 'items', total: 'Total', payFrom: 'Paid from wallet',
+      shortMsg: 'Balance too low by', emptyTitle: 'Your cart is empty', emptySub: 'Add a product to get started.',
+      knet: 'KNET', card: 'Visa · Mastercard', applepay: 'Apple Pay',
+      knetFee: '150 fils fee', cardFee: '2.5% + 50 fils', apayFee: '2.5% + 50 fils',
+      back: '‹ Back', bookTitle: 'Book', chooseService: 'Choose a service', chooseArtist: 'Choose an artist',
+      chooseDay: 'Pick a day', morning: 'Morning', evening: 'Evening', review: 'Review',
+      svcRow: 'Service', artistRow: 'Artist', whenRow: 'When', depositHeld: 'Deposit held',
+      depShort: 'Top up your wallet to hold the deposit.', booked: "You're booked",
+      waConfirm: 'Confirmation sent on WhatsApp', viewHome: 'View on home',
+      cancelPolicy: 'Free to cancel up to 24h before — the deposit returns to your wallet automatically.',
+      walletWord: 'Wallet', welcomeBack: 'Welcome back', loginSub: 'Log in to your Amara wallet',
+      username: 'Username', password: 'Password', confirmPass: 'Confirm password', fullName: 'Name', optional: 'optional',
+      passHint: 'At least 6 characters', forgot: 'Forgot password?', loginBtn: 'Log in',
+      noAccount: 'New here?', createOne: 'Create account',
+      createTitle: 'Create your account', createSub: 'Your Amara wallet — valid at every Amara branch',
+      createBtn: 'Create account', haveAccount: 'Already have an account?', logIn: 'Log in',
+      resetTitle: 'Reset your password', resetSub: "Enter your username — we'll send a reset link to your WhatsApp.",
+      resetBtn: 'Send reset link', resetSentTitle: 'Check WhatsApp',
+      resetSentSub: 'A secure reset link is on its way to your registered number.',
+      backToLogin: 'Back to log in',
+      errEmpty: 'Enter your username and password.', errMismatch: "Passwords don't match.", errShort: 'Use at least 6 characters.',
+      stampsHint: '4 more visits', stampsReward: 'Free blow-dry',
+      stampCardTitle: 'Your stamp card', stampsGoal: '4 more visits and your blow-dry is on us.',
+      stampsLabel: 'Stamp card', stampsBadge: 'Collect 8 · get 1 free',
+      stampsExplain: 'Top up any amount — every salon visit adds a stamp.',
+      rule1: 'One stamp per salon visit, whatever you spend.',
+      rule2: 'A shop purchase counts as a visit too.',
+      rule3: 'Your card resets after you claim the free blow-dry.',
+      payRedirectTitle: 'Opening KNET', payRedirectSub: 'Finish the payment on your bank page — you will come back here automatically.',
+      payDontClose: 'Keep this screen open until the bank sends you back.',
+      failTitle: 'Payment not completed', failMsg: 'Your bank declined the transaction. Nothing was charged.',
+      cancelTitle: 'Payment cancelled', cancelMsg: 'You cancelled on the KNET page. Nothing was charged.',
+      pendingTitle: 'Confirming with your bank', pendingMsg: 'This can take up to a minute. Do not pay again — the credit appears as soon as the bank confirms.',
+      doneTitle: 'Top-up complete', doneMsg: 'Your wallet is ready to use at any branch.',
+      rAmount: 'Amount', rMethod: 'Method', rRef: 'Reference', rStatus: 'Status', rBalance: 'New balance', rCharged: 'Charged',
+      vNothing: 'Nothing charged', vPending: 'Awaiting bank', tryAgain: 'Try again', otherMethod: 'Choose another method',
+      backToWallet: 'Back to wallet', done: 'Done',
+    };
+    const ar = {
+      greeting: 'مساء الخير، دانة', salon: 'أمارا', balanceLabel: 'رصيد المحفظة',
+      kd: 'د.ك', tierName: 'فضية', nextTier: 'الذهبية', tierHint: '٦ زيارات للذهبية',
+      branchNote: 'محفظة واحدة — صالحة في كل الفروع.',
+      qrTitle: 'اعرضي للدفع', qrHint: 'يتجدد خلال', sec: ' ث', tapEnlarge: 'اضغطي للتكبير',
+      qrBig: 'اعرضي هذا على الكاشير', qrBigSub: 'تم رفع الإضاءة لتسهيل المسح', done: 'تم',
+      tierFine: 'المكافآت ومزايا المستويات ممولة من صالون أمارة وليس من AVO. يمكن للصالون تغيير المستويات في أي وقت، ولا يتأثر رصيدك الحالي.',
+      topupTitle: 'اشحني محفظتك', bonusBadge: 'فضية · مكافأة +١٠٪',
+      bonusExplain: 'مستواكِ الفضي يضيف ١٠٪ رصيد مجاني على كل شحن.',
+      youPay: 'تدفعين', youGet: 'تحصلين على', continuePay: 'متابعة الدفع',
+      payTitle: 'اختاري وسيلة الدفع', lands: 'يُضاف للمحفظة', method: 'وسيلة الدفع', payBtn: 'ادفعي',
+      upcomingLabel: 'موعدك القادم', upService: 'بالياج وغلوس', upWith: 'مع رنا',
+      upWhen: 'السبت ١٢ يوليو · ٤:٣٠ م', upDeposit: 'عربون 5.000 د.ك', cancel: 'إلغاء',
+      reschedule: 'تغيير الموعد', reschedNote: 'مجاناً حتى ساعة قبل الموعد. بعدها يبقى العربون للصالون.',
+      txRefLabel: 'الرقم المرجعي', txHelp: 'في حال وجود خطأ، راسلي الصالون على واتساب.', txClose: 'إغلاق',
+      accountTitle: 'حسابي', acctName: 'دانة الرومي', acctProfile: 'الملف الشخصي',
+      acctNotifs: 'الإشعارات', acctLegal: 'المحفظة والسياسات',
+      rowEdit: 'تعديل',
+      pfTitle: 'تعديل الملف الشخصي', pfSub: 'اسمك وطريقة تواصل الصالون معك.',
+      pfEmailPh: 'name@email.com',
+      pfPhoneNote: 'رقم هاتفك هو وسيلة تسجيل الدخول. تغييره يحتاج رمزاً نرسله للرقم الجديد.',
+      pfSave: 'حفظ التغييرات', pfSaved: 'تم تحديث الملف',
+      pfErrName: 'أدخلي اسمك.', pfErrPhone: 'أدخلي رقم هاتف صحيح.',
+      pfErrEmail: 'البريد الإلكتروني غير صحيح.',
+      vfTitle: 'تأكيد رقمك الجديد', vfSubPre: 'أدخلي الرمز المكوّن من ٤ أرقام الذي أرسلناه إلى',
+      vfConfirm: 'تأكيد الرقم', vfResend: 'إرسال مرة أخرى', vfBack: 'رجوع',
+      vfErr: 'أدخلي الرمز المكوّن من ٤ أرقام.', vfSent: 'تم إرسال الرمز',
+      pwTitle: 'تغيير كلمة المرور', pwSub: 'ستبقين مسجّلة الدخول على هذا الهاتف، وتُسجَّل الأجهزة الأخرى خارجاً.',
+      pwCurLabel: 'كلمة المرور الحالية', pwNewLabel: 'كلمة المرور الجديدة', pwConfLabel: 'تأكيد كلمة المرور الجديدة',
+      pwSave: 'تحديث كلمة المرور', pwSaved: 'تم تحديث كلمة المرور',
+      pwForgot: 'نسيت كلمة المرور الحالية',
+      pwErrCur: 'أدخلي كلمة المرور الحالية.', pwErrShort: 'استخدمي ٦ أحرف على الأقل.',
+      pwErrSame: 'اختاري كلمة مرور مختلفة عن الحالية.',
+      pwErrMatch: 'كلمتا المرور غير متطابقتين.',
+      rowName: 'الاسم', rowPhone: 'رقم الهاتف', rowEmail: 'البريد الإلكتروني', rowPassword: 'كلمة المرور', rowLang: 'اللغة', rowChange: 'تغيير', rowAddEmail: 'أضيفي بريداً إلكترونياً',
+      nPush: 'إشعارات التطبيق', nPushSub: 'تذكير المواعيد، الشحن، وتغيّر المستوى',
+      nWa: 'رسائل واتساب', nWaSub: 'الإيصالات وتأكيد المواعيد',
+      nRemind: 'تذكير بالموعد', nRemindSub: 'قبل موعدك بساعتين',
+      nReceipt: 'إيصالات بالبريد', nReceiptSub: 'إيصال مفصّل بالبريد الإلكتروني عن كل عملية دفع أو شحن أو استرجاع',
+      nOffers: 'عروض الصالون', nOffersSub: 'عروض من أمارا بين حين وآخر. مغلقة افتراضياً.',
+      legalTerms: 'شروط المحفظة', legalRefund: 'الاسترجاع والإلغاء', legalBonus: 'كيف تعمل المكافآت', legalPrivacy: 'الخصوصية وبياناتك',
+      legalGTerms: 'الشروط والأحكام', legalPolicy: 'سياسة الخصوصية',
+      legalExpiry: 'هل ينتهي رصيدي؟',
+      consentTerms: 'أوافق على شروط المحفظة وسياسة الاسترجاع وإشعار الخصوصية.',
+      consentWa: 'أرسلوا لي الإيصالات وتأكيد المواعيد على واتساب.',
+      errConsent: 'يرجى الموافقة على شروط المحفظة للمتابعة.',
+      legalUpdated: 'آخر تحديث ١ يوليو ٢٠٢٦',
+      walletFine: 'محفظتك تحتوي رصيداً مدفوعاً مسبقاً لصالون أمارا فقط. الرصيد لا ينتهي، ولا يمكن تحويله لصالون آخر، وليس وديعة بنكية.',
+      logOut: 'تسجيل الخروج', deleteAcct: 'حذف حسابي',
+      acctHelp: 'المساعدة',
+      contactCta: 'اتصلي بنا', contactCtaSub: 'سؤال، أو خصم يبدو غير صحيح، أو أي أمر آخر',
+      contactTitle: 'اتصلي بنا', contactSub: 'اكتبي لنا ما حصل وسنرد عليك.',
+      cTopicLabel: 'ما هو الموضوع؟', cMsgLabel: 'رسالتك',
+      cMsgPh: 'سطران يكفيان. ذكر التاريخ والمبلغ يساعدنا.',
+      cRefLabel: 'رقم الإيصال أو المرجع', cOptional: '(اختياري)',
+      cViaLabel: 'الرد عليّ على', cViaWa: 'واتساب', cViaEmail: 'البريد الإلكتروني',
+      cSend: 'إرسال الرسالة', cErr: 'اختاري الموضوع واكتبي رسالة قصيرة.',
+      cRouteSalon: 'الصالون', cRouteAvo: 'AVO',
+      cReport: 'الإبلاغ عن مشكلة في هذه العملية',
+      cSentTitle: 'تم إرسال رسالتك', cSentRef: 'رقمك المرجعي', cSentDone: 'تم',
+      cSentSalon: 'وصلت رسالتك إلى أمارا وسيتم الرد على واتساب.',
+      cSentAvo: 'وصلت رسالتك إلى فريق AVO.',
+      deleteTitle: 'حذف حسابك؟', deleteBody: 'سيتم حذف ملفك وسجل زياراتك ونقاط الولاء خلال ٣٠ يوماً. المبالغ المدفوعة للصالون لا تُسترجع تلقائياً.',
+      deleteBalance: 'الرصيد المتبقي', deleteKeep: 'الاحتفاظ بالحساب', deleteGo: 'طلب الحذف',
+      deleteFine: 'لا يُصرف رصيد المحفظة نقداً. استخدمي الرصيد المتبقي في الصالون أو اتفقي معهم على تسويته قبل إغلاق الحساب.',
+      activityLabel: 'النشاط', membersLabel: 'مستويات العضوية', current: 'الحالية', langSwitch: 'EN',
+      navHome: 'الرئيسية', navBook: 'احجزي', navShop: 'المتجر', navPay: 'ادفعي',
+      shopTitle: 'المتجر', shopSub: 'ادفعي من محفظتك · الاستلام من الصالون.',
+      add: 'أضيفي', shopNote: 'مشتريات المتجر تُحتسب كزيارة نحو مستواكِ التالي.',
+      cartTitle: 'سلتك', items: 'منتج', total: 'الإجمالي', payFrom: 'الدفع من المحفظة',
+      shortMsg: 'الرصيد أقل بـ', emptyTitle: 'سلتك فارغة', emptySub: 'أضيفي منتجاً للبدء.',
+      knet: 'كي نت', card: 'فيزا · ماستركارد', applepay: 'Apple Pay',
+      knetFee: 'رسوم ١٥٠ فلس', cardFee: '٢٫٥٪ + ٥٠ فلس', apayFee: '٢٫٥٪ + ٥٠ فلس',
+      back: '‹ رجوع', bookTitle: 'احجزي', chooseService: 'اختاري الخدمة', chooseArtist: 'اختاري المصففة',
+      chooseDay: 'اختاري اليوم', morning: 'صباحاً', evening: 'مساءً', review: 'المراجعة',
+      svcRow: 'الخدمة', artistRow: 'المصففة', whenRow: 'الموعد', depositHeld: 'العربون المحجوز',
+      depShort: 'اشحني محفظتك لحجز العربون.', booked: 'تم حجز موعدك',
+      waConfirm: 'تم إرسال التأكيد على واتساب', viewHome: 'العودة للرئيسية',
+      cancelPolicy: 'الإلغاء مجاني حتى ٢٤ ساعة قبل الموعد — يُعاد العربون لمحفظتك تلقائياً.',
+      walletWord: 'المحفظة', welcomeBack: 'أهلاً بعودتك', loginSub: 'سجّلي الدخول إلى محفظة أمارا',
+      username: 'اسم المستخدم', password: 'كلمة المرور', confirmPass: 'تأكيد كلمة المرور', fullName: 'الاسم', optional: 'اختياري',
+      passHint: '٦ أحرف على الأقل', forgot: 'نسيت كلمة المرور؟', loginBtn: 'تسجيل الدخول',
+      noAccount: 'أول مرة معنا؟', createOne: 'أنشئي حساباً',
+      createTitle: 'أنشئي حسابك', createSub: 'محفظتك في أمارا — صالحة في كل فروع أمارا',
+      createBtn: 'إنشاء الحساب', haveAccount: 'لديكِ حساب بالفعل؟', logIn: 'سجّلي الدخول',
+      resetTitle: 'إعادة تعيين كلمة المرور', resetSub: 'أدخلي اسم المستخدم — سنرسل رابط إعادة التعيين على واتساب.',
+      resetBtn: 'إرسال الرابط', resetSentTitle: 'تحقّقي من واتساب',
+      resetSentSub: 'رابط إعادة التعيين في طريقه إلى رقمكِ المسجّل.',
+      backToLogin: 'العودة لتسجيل الدخول',
+      errEmpty: 'أدخلي اسم المستخدم وكلمة المرور.', errMismatch: 'كلمتا المرور غير متطابقتين.', errShort: 'استخدمي ٦ أحرف على الأقل.',
+      stampsHint: '٤ زيارات باقية', stampsReward: 'تصفيف مجاني',
+      stampCardTitle: 'بطاقة الأختام', stampsGoal: '٤ زيارات وتصفيف الشعر على حسابنا.',
+      stampsLabel: 'بطاقة الأختام', stampsBadge: 'اجمعي ٨ · واحدة مجاناً',
+      stampsExplain: 'اشحني أي مبلغ — كل زيارة للصالون تضيف ختماً.',
+      rule1: 'ختم واحد لكل زيارة، مهما كان المبلغ.',
+      rule2: 'مشتريات المتجر تُحتسب كزيارة أيضاً.',
+      rule3: 'تبدأ البطاقة من جديد بعد استلام التصفيف المجاني.',
+      payRedirectTitle: 'جارٍ فتح كي نت', payRedirectSub: 'أكملي الدفع في صفحة البنك — ستعودين إلى هنا تلقائياً.',
+      payDontClose: 'أبقي هذه الشاشة مفتوحة حتى يعيدكِ البنك.',
+      failTitle: 'لم تكتمل العملية', failMsg: 'رفض البنك العملية. لم يُخصم أي مبلغ.',
+      cancelTitle: 'أُلغيت العملية', cancelMsg: 'ألغيتِ الدفع في صفحة كي نت. لم يُخصم أي مبلغ.',
+      pendingTitle: 'بانتظار تأكيد البنك', pendingMsg: 'قد تستغرق دقيقة. لا تعيدي الدفع — سيُضاف الرصيد فور تأكيد البنك.',
+      doneTitle: 'تم الشحن', doneMsg: 'محفظتكِ جاهزة للاستخدام في كل الفروع.',
+      rAmount: 'المبلغ', rMethod: 'الطريقة', rRef: 'الرقم المرجعي', rStatus: 'الحالة', rBalance: 'الرصيد الجديد', rCharged: 'المخصوم',
+      vNothing: 'لم يُخصم شيء', vPending: 'بانتظار البنك', tryAgain: 'حاولي مرة أخرى', otherMethod: 'اختاري طريقة أخرى',
+      backToWallet: 'العودة للمحفظة', done: 'تم',
+    };
+    const t = Object.assign({}, isAr ? ar : en);
+    if (P.salonName) { t.salon = P.salonName; }
+
+    // ---- top-up ----
+    const amounts = [5, 10, 25, 50];
+    const topups = amounts.map(a => {
+      const on = s.pick === a;
+      return {
+        amt: a, bonus: fmt(bonusFils(a)),
+        style: 'display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 0 10px;border-radius:14px;cursor:pointer;font-family:inherit;'
+          + (on ? 'background:var(--brand-deep,#5A6B58);color:#fff;border:1px solid #5A6B58;' : 'background:#fff;color:#1C1B19;border:1px solid rgba(28,27,25,0.12);'),
+        bonusStyle: 'font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;'
+          + (on ? 'background:rgba(255,255,255,0.22);color:#fff;' : 'background:var(--brand-tint,#EEF1EC);color:var(--brand-deep,#5A6B58);'),
+        onPick: () => this.setState({ pick: a }),
+      };
+    });
+    const pick = s.pick;
+    const bonus = bonusFils(pick);
+    const getFils = pick * 1000 + bonus;
+    const bonusLine = isAr
+      ? `شحن ${pick} = ${fmt(getFils)} د.ك · ${fmt(bonus)} مجاناً 🎁`
+      : `Top up ${pick}, get ${fmt(getFils)} KD — that's ${fmt(bonus)} free 🎁`;
+
+    const methodDefs = [
+      { id: 'knet', name: t.knet, fee: t.knetFee, tag: 'KNET', badge: '#5A6B58', note: isAr ? 'الأكثر استخداماً في الكويت' : 'Most used in Kuwait' },
+      { id: 'card', name: t.card, fee: t.cardFee, tag: 'VISA', badge: '#1A1F71' },
+      { id: 'applepay', name: t.applepay, fee: t.apayFee, tag: '\uF8FF Pay', badge: '#1C1B19' },
+    ];
+    const methods = methodDefs.map(m => {
+      const on = s.method === m.id;
+      return {
+        name: m.name, fee: m.fee, tag: m.tag, badge: m.badge, on,
+        note: m.note, hasNote: !!m.note,
+        style: 'display:flex;align-items:center;gap:13px;padding:13px 15px;border-radius:14px;cursor:pointer;font-family:inherit;background:#fff;'
+          + (on ? 'border:1.5px solid #6E7F6C;' : 'border:1.5px solid rgba(28,27,25,0.1);'),
+        dot: 'width:22px;height:22px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;'
+          + (on ? 'background:var(--brand,#6E7F6C);' : 'border:1.5px solid rgba(28,27,25,0.2);'),
+        onPick: () => this.setState({ method: m.id }),
+      };
+    });
+
+    // ---- shop ----
+    const catalog = [
+      { id: 'serum', name: isAr ? 'سيروم إصلاح' : 'Repair serum', desc: isAr ? 'للأطراف المتقصفة' : 'For split ends', price: 9500, initial: 'R', swatch: '#EDE7DF' },
+      { id: 'oil', name: isAr ? 'زيت الأركان' : 'Argan hair oil', desc: isAr ? 'لمعان وترطيب' : 'Shine & hydration', price: 7000, initial: 'A', swatch: '#E8E9E0' },
+      { id: 'shampoo', name: isAr ? 'شامبو هيدرا · ٣٠٠مل' : 'Hydra shampoo · 300ml', desc: isAr ? 'ترطيب يومي' : 'Daily moisture', price: 5500, initial: 'H', swatch: '#E4EAE4' },
+      { id: 'heat', name: isAr ? 'واقي الحرارة' : 'Heat protect spray', desc: isAr ? 'حتى ٢٣٠°' : 'Up to 230°', price: 6000, initial: 'H', swatch: '#ECE6E6' },
+      { id: 'scrunchie', name: isAr ? 'ربطة شعر حرير' : 'Silk scrunchie', desc: isAr ? 'لطيفة على الشعر' : 'Gentle hold', price: 2500, initial: 'S', swatch: '#EAE4EC' },
+    ];
+    const cart = s.cart;
+    const inc = id => this.setState(x => ({ cart: { ...x.cart, [id]: (x.cart[id] || 0) + 1 } }));
+    const dec = id => this.setState(x => {
+      const q = (x.cart[id] || 0) - 1;
+      const c = { ...x.cart };
+      if (q <= 0) delete c[id]; else c[id] = q;
+      return { cart: c };
+    });
+    const products = catalog.map(p => {
+      const qty = cart[p.id] || 0;
+      return { ...p, priceStr: fmt(p.price), qty, inCart: qty > 0, notInCart: qty === 0,
+        onInc: () => inc(p.id), onDec: () => dec(p.id) };
+    });
+    const cartLines = catalog.filter(p => cart[p.id]).map(p => {
+      const qty = cart[p.id];
+      return { ...p, qty, lineStr: fmt(p.price * qty), onInc: () => inc(p.id), onDec: () => dec(p.id) };
+    });
+    const cartCount = Object.values(cart).reduce((a, b) => a + b, 0);
+    const cartTotal = catalog.reduce((sum, p) => sum + (cart[p.id] || 0) * p.price, 0);
+    const cartShort = cartTotal > s.balance;
+    const short = cartTotal - s.balance;
+    const canCheckout = cartCount > 0 && !cartShort;
+
+    const checkout = () => {
+      if (cartShort) { this.setState({ cartOpen: false, screen: 'home' }); this.showToast(isAr ? 'اشحني محفظتك ثم أكملي الشراء' : 'Top up your wallet, then check out'); return; }
+      if (cartCount === 0) return;
+      this.setState(x => ({ balance: x.balance - cartTotal, cart: {}, cartOpen: false }));
+      this.showToast(isAr ? `تم الدفع ${fmt(cartTotal)} د.ك من المحفظة · أُضيفت زيارة` : `Paid ${fmt(cartTotal)} KD from wallet · visit added`);
+    };
+    const checkoutLabel = cartShort
+      ? (isAr ? 'اشحني محفظتك' : 'Top up to continue')
+      : `${isAr ? 'ادفعي' : 'Pay'} ${fmt(cartTotal)} ${t.kd} ${isAr ? 'من المحفظة' : 'from wallet'}`;
+    const checkoutStyle = 'width:100%;margin-top:14px;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;'
+      + (cartShort ? 'background:#B0736F;color:#fff;' : 'background:var(--brand-deep,#5A6B58);color:#fff;');
+
+    // ---- book ----
+    const DEPOSIT = 5000;
+    const toAr = str => isAr ? String(str).replace(/[0-9]/g, d => '٠١٢٣٤٥٦٧٨٩'[+d]) : String(str);
+    const setBook = patch => this.setState(patch);
+    const svcDefs = [
+      { id: 'cut', name: isAr ? 'قص وتصفيف' : 'Cut & style', dur: isAr ? '٤٥ دقيقة' : '45 min', price: 12000 },
+      { id: 'blow', name: isAr ? 'سشوار' : 'Blow-dry', dur: isAr ? '٣٠ دقيقة' : '30 min', price: 6000 },
+      { id: 'balayage', name: isAr ? 'بالياج وغلوس' : 'Balayage & gloss', dur: isAr ? 'ساعتان' : '2 hr', price: 45000 },
+      { id: 'root', name: isAr ? 'صبغة جذور' : 'Root touch-up', dur: isAr ? 'ساعة' : '60 min', price: 15000 },
+      { id: 'keratin', name: isAr ? 'كيراتين' : 'Keratin treatment', dur: isAr ? 'ساعتان ونصف' : '2.5 hr', price: 60000 },
+      { id: 'mani', name: isAr ? 'مانيكير وبديكير' : 'Mani + pedi', dur: isAr ? 'ساعة' : '60 min', price: 14000 },
+    ];
+    const svcOptions = svcDefs.map(o => {
+      const on = s.bookSvc === o.id;
+      return { name: o.name, dur: o.dur, priceStr: fmt(o.price),
+        style: 'display:flex;align-items:center;gap:12px;padding:14px 15px;border-radius:15px;cursor:pointer;font-family:inherit;background:#fff;'
+          + (on ? 'border:1.5px solid #6E7F6C;box-shadow:0 0 0 3px rgba(110,127,108,0.12);' : 'border:1.5px solid rgba(28,27,25,0.1);'),
+        onPick: () => setBook({ bookSvc: o.id }) };
+    });
+    const artistDefs = [
+      { id: 'any', name: isAr ? 'أي متاح' : 'Any available', role: isAr ? 'أقرب موعد' : 'Soonest slot', initial: '★', live: true },
+      { id: 'rana', name: 'Rana', role: isAr ? 'كبيرة اختصاصيي اللون' : 'Senior colorist', initial: 'R', live: true },
+      { id: 'dana', name: 'Dana', role: isAr ? 'مصففة' : 'Stylist', initial: 'D', live: true },
+      { id: 'hessa', name: 'Hessa', role: isAr ? 'اختصاصية أظافر' : 'Nail artist', initial: 'H', live: false },
+      { id: 'fatima', name: 'Fatima', role: isAr ? 'مصففة' : 'Stylist', initial: 'F', live: false },
+    ];
+    const liveLbl = isAr ? 'توفر مباشر' : 'Live availability';
+    const hoursLbl = isAr ? 'حسب دوام الصالون' : 'Availability by salon hours';
+    const artistOptions = artistDefs.map(o => {
+      const on = s.bookArtist === o.id;
+      return { name: o.name, role: o.role, initial: o.initial, on,
+        availLabel: o.live ? liveLbl : hoursLbl,
+        availStyle: 'display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px;margin-top:4px;'
+          + (o.live ? 'color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);' : 'color:#8A7A55;background:#F4EFE2;'),
+        availDot: 'width:5px;height:5px;border-radius:9px;background:' + (o.live ? '#6E7F6C' : '#B6A26A'),
+        style: 'display:flex;align-items:center;gap:13px;padding:12px 15px;border-radius:15px;cursor:pointer;font-family:inherit;background:#fff;'
+          + (on ? 'border:1.5px solid #6E7F6C;' : 'border:1.5px solid rgba(28,27,25,0.1);'),
+        dot: 'width:22px;height:22px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;'
+          + (on ? 'background:var(--brand,#6E7F6C);' : 'border:1.5px solid rgba(28,27,25,0.2);'),
+        onPick: () => setBook({ bookArtist: o.id }) };
+    });
+    const dowEn = ['Today', 'Sun', 'Mon', 'Tue', 'Wed'];
+    const dowAr = ['اليوم', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء'];
+    const dateNums = [12, 13, 14, 15, 16];
+    const dayOptions = dateNums.map((dn, i) => {
+      const on = s.bookDay === i;
+      return { dow: (isAr ? dowAr : dowEn)[i], date: toAr(dn),
+        style: 'display:flex;flex-direction:column;align-items:center;gap:3px;min-width:58px;padding:11px 0;border-radius:14px;cursor:pointer;font-family:inherit;'
+          + (on ? 'background:var(--brand-deep,#5A6B58);color:#fff;border:1px solid #5A6B58;' : 'background:#fff;color:#1C1B19;border:1px solid rgba(28,27,25,0.12);'),
+        onPick: () => setBook({ bookDay: i }) };
+    });
+    const bookedSlots = ['11:30', '17:30'];
+    const slotStyle = (on, disabled) => 'padding:12px 0;border-radius:12px;font-family:inherit;font-size:14px;font-weight:600;text-align:center;'
+      + (disabled ? 'background:#F3F1EC;color:rgba(28,27,25,0.3);border:1px solid transparent;cursor:not-allowed;text-decoration:line-through;'
+        : on ? 'background:var(--brand-deep,#5A6B58);color:#fff;border:1px solid #5A6B58;cursor:pointer;'
+        : 'background:#fff;color:#1C1B19;border:1px solid rgba(28,27,25,0.12);cursor:pointer;');
+    const mkSlot = time => {
+      const disabled = bookedSlots.includes(time);
+      const on = s.bookSlot === time;
+      return { time: toAr(time), style: slotStyle(on, disabled), onPick: disabled ? () => {} : () => setBook({ bookSlot: time }) };
+    };
+    const slotsMorning = ['10:00', '10:45', '11:30', '12:15'].map(mkSlot);
+    const slotsEvening = ['16:00', '16:45', '17:30', '18:15', '19:00', '19:45'].map(mkSlot);
+
+    const svcSel = svcDefs.find(x => x.id === s.bookSvc);
+    const artistSel = artistDefs.find(x => x.id === s.bookArtist);
+    const bookSvcName = svcSel ? svcSel.name : '—';
+    const bookArtistName = artistSel ? artistSel.name : '—';
+    const bookWhen = s.bookSlot
+      ? `${(isAr ? dowAr : dowEn)[s.bookDay]} ${toAr(dateNums[s.bookDay])} ${isAr ? 'يوليو' : 'Jul'} · ${toAr(s.bookSlot)}`
+      : '—';
+    const remainder = svcSel ? Math.max(0, svcSel.price - DEPOSIT) : 0;
+    const bookDepositNote = isAr
+      ? `يُحجز من محفظتك · الباقي ${fmt(remainder)} د.ك يُدفع في الصالون.`
+      : `Held from your wallet · remainder ${fmt(remainder)} KD paid at the salon.`;
+    const bookShort = s.balance < DEPOSIT;
+    const step = s.bookStep;
+    const stepEnabled = step === 1 ? !!s.bookSvc : step === 3 ? !!s.bookSlot : true;
+    const bookNext = () => { if (stepEnabled) this.setState(x => ({ bookStep: x.bookStep + 1 })); };
+    const confirmBook = () => {
+      this.setState(x => ({ balance: x.balance - DEPOSIT, bookStep: 5,
+        booked: { svc: bookSvcName, artist: bookArtistName, when: bookWhen } }));
+      this.showToast(isAr ? `تم الحجز · حُجز عربون ${fmt(DEPOSIT)} د.ك` : `Booked · ${fmt(DEPOSIT)} KD deposit held`);
+    };
+    let bookCtaLabel, bookCtaAction, ctaEnabled = true;
+    if (step === 3) { bookCtaLabel = isAr ? 'مراجعة الحجز' : 'Review booking'; bookCtaAction = bookNext; ctaEnabled = stepEnabled; }
+    else if (step === 4) {
+      if (bookShort) { bookCtaLabel = isAr ? 'اشحني للحجز' : 'Top up to book'; bookCtaAction = () => this.setState({ screen: 'home' }); }
+      else { bookCtaLabel = `${isAr ? 'تأكيد · حجز' : 'Confirm · hold'} ${fmt(DEPOSIT)} ${t.kd}`; bookCtaAction = confirmBook; }
+    } else { bookCtaLabel = isAr ? 'متابعة' : 'Continue'; bookCtaAction = bookNext; ctaEnabled = stepEnabled; }
+    const bookCtaStyle = 'width:100%;margin-top:22px;border:none;border-radius:14px;padding:16px;font-family:inherit;font-size:15px;font-weight:600;'
+      + (!ctaEnabled ? 'background:#E7E4DD;color:rgba(28,27,25,0.4);cursor:not-allowed;'
+        : (bookShort && step === 4) ? 'background:#B0736F;color:#fff;cursor:pointer;'
+        : 'background:var(--brand-deep,#5A6B58);color:#fff;cursor:pointer;');
+
+    if (s.booked) { t.upService = s.booked.svc; t.upWith = (isAr ? 'مع ' : 'with ') + s.booked.artist; t.upWhen = s.booked.when; }
+
+    const actEn = [
+      { title: 'Top-up · KNET', when: 'Today · 6:12 PM', amt: '+27.500', pos: true, neg: false,
+        sub: 'Wallet top-up', status: 'Completed', good: true, ref: 'AVO-TU-88421',
+        rows: [['Paid with', 'KNET · ····4417'], ['You paid', '25.000 KD'], ['Silver bonus', '+2.500 KD'], ['Processing fee', '0.150 KD'], ['Landed in wallet', '27.500 KD'], ['Branch', 'Online']] },
+      { title: 'Cut & style', when: 'Yesterday · Amara Salmiya', amt: '−12.000', pos: false, neg: true,
+        sub: 'Service · Rana', status: 'Paid from wallet', good: true, ref: 'AVO-SV-77310',
+        rows: [['Service', 'Cut & style'], ['Artist', 'Rana'], ['Branch', 'Amara Salmiya'], ['Paid from', 'Wallet balance'], ['Visit credit', '+1 visit'], ['Balance after', '36.500 KD']] },
+      { title: 'Deposit returned', when: '9 Jul · No-show', amt: '+5.000', pos: true, neg: false,
+        sub: 'Deposit release', status: 'Refunded to wallet', good: true, ref: 'AVO-DP-77104',
+        rows: [['Original booking', 'Blow-dry · 9 Jul, 5:00 PM'], ['Deposit held', '5.000 KD'], ['Outcome', 'Salon released the hold'], ['Returned to', 'Wallet balance'], ['Visit credit', 'Not counted']] },
+      { title: 'Repair serum', when: '6 Jul · pickup', amt: '−9.500', pos: false, neg: true,
+        sub: 'Shop order', status: 'Picked up', good: true, ref: 'AVO-SH-76888',
+        rows: [['Item', 'Repair serum × 1'], ['Paid from', 'Wallet balance'], ['Pickup', 'Amara Salmiya · 6 Jul'], ['Visit credit', '+1 visit'], ['Balance after', '48.500 KD']] },
+    ];
+    const actAr = [
+      { title: 'شحن · كي نت', when: 'اليوم · ٦:١٢ م', amt: '+27.500', pos: true, neg: false,
+        sub: 'شحن المحفظة', status: 'مكتملة', good: true, ref: 'AVO-TU-88421',
+        rows: [['وسيلة الدفع', 'كي نت · ····٤٤١٧'], ['المبلغ المدفوع', '25.000 د.ك'], ['مكافأة فضية', '+2.500 د.ك'], ['رسوم المعالجة', '0.150 د.ك'], ['المضاف للمحفظة', '27.500 د.ك'], ['الفرع', 'عبر التطبيق']] },
+      { title: 'قص وتصفيف', when: 'أمس · أمارا السالمية', amt: '−12.000', pos: false, neg: true,
+        sub: 'خدمة · رنا', status: 'مدفوعة من المحفظة', good: true, ref: 'AVO-SV-77310',
+        rows: [['الخدمة', 'قص وتصفيف'], ['المصففة', 'رنا'], ['الفرع', 'أمارا السالمية'], ['الدفع من', 'رصيد المحفظة'], ['احتساب الزيارة', '+زيارة واحدة'], ['الرصيد بعدها', '36.500 د.ك']] },
+      { title: 'استرجاع العربون', when: '٩ يوليو · عدم حضور', amt: '+5.000', pos: true, neg: false,
+        sub: 'تحرير العربون', status: 'أُعيد للمحفظة', good: true, ref: 'AVO-DP-77104',
+        rows: [['الحجز الأصلي', 'سشوار · ٩ يوليو ٥:٠٠ م'], ['العربون المحجوز', '5.000 د.ك'], ['النتيجة', 'الصالون حرّر المبلغ'], ['أُعيد إلى', 'رصيد المحفظة'], ['احتساب الزيارة', 'غير محتسبة']] },
+      { title: 'سيروم إصلاح', when: '٦ يوليو · استلام', amt: '−9.500', pos: false, neg: true,
+        sub: 'طلب من المتجر', status: 'تم الاستلام', good: true, ref: 'AVO-SH-76888',
+        rows: [['المنتج', 'سيروم إصلاح × ١'], ['الدفع من', 'رصيد المحفظة'], ['الاستلام', 'أمارا السالمية · ٦ يوليو'], ['احتساب الزيارة', '+زيارة واحدة'], ['الرصيد بعدها', '48.500 د.ك']] },
+    ];
+    // ---- account: notifications + legal ----
+    const notifDefs = [
+      ['push', t.nPush, t.nPushSub], ['wa', t.nWa, t.nWaSub],
+      ['remind', t.nRemind, t.nRemindSub], ['receipt', t.nReceipt, t.nReceiptSub],
+      ['offers', t.nOffers, t.nOffersSub],
+    ];
+    const notifRows = notifDefs.map(([k, label, sub]) => {
+      const on = !!s.notifs[k];
+      return { label, sub,
+        track: 'width:44px;height:26px;border-radius:999px;flex-shrink:0;padding:3px;cursor:pointer;display:flex;'
+          + (isAr ? 'justify-content:' + (on ? 'flex-start' : 'flex-end') + ';' : 'justify-content:' + (on ? 'flex-end' : 'flex-start') + ';')
+          + 'background:' + (on ? '#6E7F6C' : '#D9D6CF') + ';',
+        knob: 'width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.2)',
+        onToggle: () => this.setState(x => ({ notifs: Object.assign({}, x.notifs, { [k]: !x.notifs[k] }) })) };
+    });
+    // ---- legal documents come from the platform policy store (Owner Console
+    // -> Policies). The wallet renders the published version; it holds no copy. ----
+    const legalDocs = API ? API.policyDocs(s.lang, 'published') : [];
+    const pMeta = API ? API.policyMeta() : null;
+    if (pMeta && pMeta.effectiveFrom) {
+      const d = new Date(pMeta.effectiveFrom + 'T00:00');
+      const mEn = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+      const mAr = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+      t.legalUpdated = isAr
+        ? 'آخر تحديث ' + arD(d.getDate()) + ' ' + mAr[d.getMonth()] + ' ' + arD(d.getFullYear()) + ' · إصدار ' + arD(pMeta.version)
+        : 'Last updated ' + d.getDate() + ' ' + mEn[d.getMonth()] + ' ' + d.getFullYear() + ' · v' + pMeta.version;
+    }
+    const legalDoc = legalDocs.find(d => d.id === s.legalOpen) || null;
+    // ---- support: channels and topics come from the platform support config
+    // (Owner Console -> Policies -> Support). The wallet holds no copy. ----
+    const sup = API ? API.supportConfig(s.lang) : { whatsapp: '', email: '', hours: '', reply: '', topics: [] };
+    // the salon's own public channels — Merchant -> Settings -> Social links
+    const socials = API && API.socialLinks ? API.socialLinks() : [];
+    // profile: name falls back to the seeded member so it follows the language
+    const acctName = s.name || t.acctName;
+    const acctPhone = s.phone;
+    const segBtn = on => 'flex:1;padding:13px;border-radius:13px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;'
+      + (on ? 'background:var(--brand-deep,#5A6B58);color:#fff;border:1.5px solid var(--brand-deep,#5A6B58);'
+            : 'background:#fff;color:rgba(28,27,25,0.6);border:1.5px solid rgba(28,27,25,0.14);');
+    const radio = on => 'width:18px;height:18px;border-radius:999px;flex-shrink:0;'
+      + (on ? 'background:var(--brand-deep,#5A6B58);border:1.5px solid var(--brand-deep,#5A6B58);box-shadow:inset 0 0 0 3px #fff;'
+            : 'background:#fff;border:1.5px solid rgba(28,27,25,0.25);');
+    const cbox = on => 'width:20px;height:20px;border-radius:6px;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;'
+      + (on ? 'background:var(--brand-deep,#5A6B58);border:1.5px solid #5A6B58;' : 'background:#fff;border:1.5px solid rgba(28,27,25,0.25);');
+
+    const actList = (isAr ? actAr : actEn).map((a, i) => Object.assign({}, a, {
+      onOpen: () => this.setState({ txOpen: i }),
+    }));
+    const txSel = s.txOpen === null || s.txOpen === undefined ? null : actList[s.txOpen];
+    const txRows = txSel ? txSel.rows.map(r => ({ label: r[0], value: r[1] })) : [];
+    const txAmtStyle = 'font-family:\'Fraunces\',serif;font-size:34px;font-weight:500;letter-spacing:-0.01em;'
+      + (txSel && txSel.pos ? 'color:var(--brand-ink,#5E7157)' : 'color:#1C1B19');
+    // ---- loyalty mode ----
+    const have = s.stamps;
+    const left = STAMP_TARGET - have;
+    const arNum = n => isAr ? String(n).replace(/[0-9]/g, d => '٠١٢٣٤٥٦٧٨٩'[+d]) : String(n);
+    const loyaltyPill = isStamps ? `${arNum(have)} / ${arNum(STAMP_TARGET)}` : t.tierName;
+    const stampDots = Array.from({ length: STAMP_TARGET }, (_, i) => ({
+      filled: i < have,
+      style: 'width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;'
+        + (i < have ? 'background:#fff;' : 'border:1.5px solid rgba(255,255,255,0.45);'),
+    }));
+    const stampDotsBig = Array.from({ length: STAMP_TARGET }, (_, i) => ({
+      filled: i < have,
+      style: 'aspect-ratio:1;border-radius:50%;display:flex;align-items:center;justify-content:center;'
+        + (i < have ? 'background:var(--brand,#6E7F6C);' : 'border:1.5px dashed rgba(28,27,25,0.2);'),
+    }));
+    const stampCount = isAr ? `${arNum(have)} من ${arNum(STAMP_TARGET)}` : `${have} of ${STAMP_TARGET}`;
+    const stampRules = [{ text: t.rule1 }, { text: t.rule2 }, { text: t.rule3 }];
+    const stampsHintFull = isAr ? `${arNum(left)} زيارات باقية` : `${left} more visits`;
+    t.stampsHint = stampsHintFull;
+    t.stampsGoal = isAr
+      ? `${arNum(left)} زيارات وتصفيف الشعر على حسابنا.`
+      : `${left} more visits and your blow-dry is on us.`;
+    const membersLabel = isStamps ? t.stampsLabel : t.membersLabel;
+    const bonusBadge = isStamps ? t.stampsBadge : t.bonusBadge;
+    const bonusExplain = isStamps ? t.stampsExplain : t.bonusExplain;
+    const bonusBadgeStyle = 'display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--brand-deep,#5A6B58);background:var(--brand-tint,#EEF1EC);padding:5px 11px;border-radius:999px';
+    const bonusBadgeDot = 'width:6px;height:6px;border-radius:9px;background:var(--brand,#6E7F6C)';
+
+    const segStyle = on => 'padding:7px 15px;border-radius:8px;border:none;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;'
+      + (on ? 'background:#fff;color:#1C1B19;box-shadow:0 1px 3px rgba(0,0,0,0.08);' : 'background:transparent;color:rgba(28,27,25,0.55);');
+
+    // ---- top-up outcome (simulated) ----
+    const outcomeDefs = [['success', 'Success'], ['declined', 'Declined'], ['cancelled', 'Cancelled'], ['pending', 'Pending']];
+    const outcomes = outcomeDefs.map(([id, name]) => ({
+      name,
+      onPick: () => this.setState({ outcome: id }),
+      style: 'padding:7px 13px;border-radius:8px;border:none;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer;'
+        + (s.outcome === id ? 'background:#fff;color:#1C1B19;box-shadow:0 1px 3px rgba(0,0,0,0.08);' : 'background:transparent;color:rgba(28,27,25,0.55);'),
+    }));
+    const stage = s.payStage;
+    const payIdle = stage === 'idle';
+    const payRedirecting = stage === 'redirect';
+    const payResult = stage === 'result';
+    const methodNames = { knet: t.knet, card: t.card, applepay: t.applepay };
+    const payMethodTag = s.method === 'knet' ? 'KNET' : s.method === 'card' ? 'VISA' : '\uF8FF';
+    const outcome = s.outcome;
+    const resIsGood = outcome === 'success';
+    const resIsWait = outcome === 'pending';
+    const resIsBad = outcome === 'declined' || outcome === 'cancelled';
+    const resColor = resIsGood ? '#5A6B58' : resIsWait ? '#8a6d3b' : '#B0736F';
+    const resIconWrap = 'width:66px;height:66px;border-radius:50%;display:flex;align-items:center;justify-content:center;animation:avozoom 0.35s cubic-bezier(.2,.9,.3,1.1);background:' + resColor + ';';
+    const resTitle = resIsGood ? t.doneTitle : resIsWait ? t.pendingTitle : outcome === 'cancelled' ? t.cancelTitle : t.failTitle;
+    const resMsg = resIsGood ? t.doneMsg : resIsWait ? t.pendingMsg : outcome === 'cancelled' ? t.cancelMsg : t.failMsg;
+    const strong = 'font-family:Fraunces,serif;font-size:15px;font-weight:600;color:#1C1B19';
+    const quiet = 'font-size:13px;font-weight:600;color:rgba(28,27,25,0.55)';
+    const resRows = resIsGood
+      ? [{ label: t.rAmount, value: fmt(getFils) + ' ' + t.kd, valueStyle: strong },
+         { label: t.rMethod, value: methodNames[s.method], valueStyle: quiet },
+         { label: t.rBalance, value: fmt(s.balance) + ' ' + t.kd, valueStyle: strong }]
+      : resIsWait
+      ? [{ label: t.rAmount, value: fmt(pick * 1000) + ' ' + t.kd, valueStyle: strong },
+         { label: t.rRef, value: 'KNT-4471-2208', valueStyle: quiet },
+         { label: t.rStatus, value: t.vPending, valueStyle: 'font-size:13px;font-weight:600;color:#8a6d3b' }]
+      : [{ label: t.rAmount, value: fmt(pick * 1000) + ' ' + t.kd, valueStyle: strong },
+         { label: t.rMethod, value: methodNames[s.method], valueStyle: quiet },
+         { label: t.rCharged, value: t.vNothing, valueStyle: 'font-size:13px;font-weight:600;color:var(--brand-ink,#5E7157)' }];
+    const closeSheet = () => this.setState({ payStage: 'idle', payOpen: false });
+    const resPrimary = resIsBad ? () => this.setState({ payStage: 'idle' }) : closeSheet;
+    const resPrimaryLabel = resIsBad ? t.tryAgain : resIsWait ? t.backToWallet : t.done;
+    const resHasSecondary = resIsBad;
+    const resSecondary = () => this.setState({ payStage: 'idle' });
+    const resSecondaryLabel = t.otherMethod;
+
+    const tiersEn = [
+      { name: 'Bronze', req: '0 visits · no bonus', bonus: '10 → 10', active: false },
+      { name: 'Silver', req: '4+ visits · +10%', bonus: '10 → 11', active: true },
+      { name: 'Gold', req: '10+ visits · +20%', bonus: '10 → 12', active: false },
+      { name: 'Black', req: '20+ · +30% · priority', bonus: '10 → 13', active: false },
+    ];
+    const tiersAr = [
+      { name: 'برونزية', req: '٠ زيارة · بدون مكافأة', bonus: '10 ← 10', active: false },
+      { name: 'فضية', req: '+٤ زيارات · +١٠٪', bonus: '10 ← 11', active: true },
+      { name: 'ذهبية', req: '+١٠ زيارات · +٢٠٪', bonus: '10 ← 12', active: false },
+      { name: 'سوداء', req: '+٢٠ · +٣٠٪ · أولوية', bonus: '10 ← 13', active: false },
+    ];
+
+    const setF = k => e => this.setState({ [k]: e.target.value, authErr: false });
+    const doLogin = () => {
+      if (!s.fUser.trim() || !s.fPass) { this.setState({ authErr: true, authErrMsg: t.errEmpty }); return; }
+      this.setState({ authed: true, authErr: false, fPass: '' });
+    };
+    const doSignup = () => {
+      if (!s.consentTerms) { this.setState({ authErr: true, authErrMsg: t.errConsent }); return; }
+      if (!s.fUser.trim() || !s.fPass) { this.setState({ authErr: true, authErrMsg: t.errEmpty }); return; }
+      if (s.fPass.length < 6) { this.setState({ authErr: true, authErrMsg: t.errShort }); return; }
+      if (s.fPass !== s.fPass2) { this.setState({ authErr: true, authErrMsg: t.errMismatch }); return; }
+      this.setState({ authed: true, authErr: false, fPass: '', fPass2: '' });
+    };
+    const sendReset = () => {
+      if (!s.fUser.trim()) { this.setState({ authErr: true, authErrMsg: t.errEmpty }); return; }
+      this.setState({ resetSent: true, authErr: false });
+    };
+    return {
+      notAuthed: !s.authed, authed: s.authed,
+      isLogin: s.authScreen === 'login', isSignup: s.authScreen === 'signup', isForgot: s.authScreen === 'forgot',
+      resetPending: s.authScreen === 'forgot' && !s.resetSent, resetSent: s.resetSent,
+      fUser: s.fUser, fPass: s.fPass, fPass2: s.fPass2, fName: s.fName,
+      setUser: setF('fUser'), setPass: setF('fPass'), setPass2: setF('fPass2'), setName: setF('fName'),
+      authErr: s.authErr, authErrMsg: s.authErrMsg,
+      doLogin, doSignup, sendReset,
+      consentTerms: s.consentTerms, consentWa: s.consentWa,
+      consentTermsBox: cbox(s.consentTerms), consentWaBox: cbox(s.consentWa),
+      toggleConsentTerms: () => this.setState(x => ({ consentTerms: !x.consentTerms, authErr: false })),
+      toggleConsentWa: () => this.setState(x => ({ consentWa: !x.consentWa })),
+      // whichever documents AVO flagged as consent documents, in published order
+      consentLinks: legalDocs.filter(d => d.consent).map(d => ({
+        label: d.title, onOpen: () => this.setState({ legalOpen: d.id }),
+      })),
+      goLogin: () => this.setState({ authScreen: 'login', authErr: false, resetSent: false }),
+      goSignup: () => this.setState({ authScreen: 'signup', authErr: false }),
+      goForgot: () => this.setState({ authScreen: 'forgot', authErr: false, resetSent: false }),
+      logout: () => this.setState({ authed: false, authScreen: 'login', fPass: '', fPass2: '' }),
+      t, secs: s.secs, balanceStr: fmt(s.balance),
+      isTiers, isStamps, loyaltyPill, stampDots, stampDotsBig, stampCount, stampRules,
+      membersLabel, bonusBadge, bonusBadgeStyle, bonusBadgeDot, bonusExplain,
+      setTiers: () => this.setState({ loyalty: 'tiers' }),
+      setStamps: () => this.setState({ loyalty: 'stamps' }),
+      segTiers: segStyle(isTiers), segStamps: segStyle(isStamps),
+      outcomes, payIdle, payRedirecting, payResult, payMethodTag,
+      resIconWrap, resIsGood, resIsBad, resIsWait, resTitle, resMsg, resRows,
+      resPrimary, resPrimaryLabel, resHasSecondary, resSecondary, resSecondaryLabel,
+      reschedule: () => { this.setState({ screen: 'book', bookStep: 3, bookSlot: null }); this.showToast(isAr ? 'اختاري موعداً جديداً — العربون محفوظ' : 'Pick a new time — your deposit carries over'); },
+      cancelBooking: () => { this.setState(x => ({ booked: null, balance: x.balance + 5000 })); this.showToast(isAr ? 'أُلغي الموعد · أُعيد العربون 5.000 د.ك' : 'Appointment cancelled · 5.000 KD deposit returned'); },
+      isAccount: s.screen === 'account',
+      goAccount: () => this.setState({ screen: 'account' }),
+      acctName, acctPhone, acctInitial: acctName.trim().charAt(0),
+      profileOpen: s.profileOpen, pfForm: s.profileOpen && s.pfStep === 'form',
+      pfVerify: s.profileOpen && s.pfStep === 'verify', pfErr: s.pfErr,
+      pfName: s.pfName, pfPhone: s.pfPhone, pfEmail: s.pfEmail, pfCode: s.pfCode,
+      setPfName: e => this.setState({ pfName: e.target.value, pfErr: '' }),
+      setPfPhone: e => this.setState({ pfPhone: e.target.value, pfErr: '' }),
+      setPfEmail: e => this.setState({ pfEmail: e.target.value, pfErr: '' }),
+      setPfCode: e => this.setState({ pfCode: e.target.value.replace(/\D/g, '').slice(0, 4), pfErr: '' }),
+      pfVerifySub: t.vfSubPre + ' ' + s.pfPhone,
+      openProfile: () => this.setState({ profileOpen: true, pfStep: 'form', pfErr: '',
+        pfName: acctName, pfPhone: acctPhone, pfEmail: s.email || '' }),
+      closeProfile: () => this.setState({ profileOpen: false, pfErr: '', pfStep: 'form', pfCode: '' }),
+      backToProfile: () => this.setState({ pfStep: 'form', pfErr: '', pfCode: '' }),
+      resendCode: () => { this.setState({ pfCode: '', pfErr: '' }); this.showToast(t.vfSent); },
+      saveProfile: () => {
+        const name = s.pfName.trim(), phone = s.pfPhone.trim(), email = s.pfEmail.trim();
+        if (!name) { this.setState({ pfErr: t.pfErrName }); return; }
+        if (phone.replace(/\D/g, '').length < 8) { this.setState({ pfErr: t.pfErrPhone }); return; }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { this.setState({ pfErr: t.pfErrEmail }); return; }
+        // the phone number is the login identity — a change has to be verified
+        if (phone !== acctPhone) { this.setState({ pfStep: 'verify', pfCode: '', pfErr: '' }); return; }
+        this.setState({ name, email, profileOpen: false, pfErr: '' });
+        this.showToast(t.pfSaved);
+      },
+      confirmPhone: () => {
+        if (s.pfCode.length !== 4) { this.setState({ pfErr: t.vfErr }); return; }
+        this.setState({ name: s.pfName.trim(), phone: s.pfPhone.trim(), email: s.pfEmail.trim(),
+          profileOpen: false, pfStep: 'form', pfCode: '', pfErr: '' });
+        this.showToast(t.pfSaved);
+      },
+      passOpen: s.passOpen, pwErr: s.pwErr,
+      pwCur: s.pwCur, pwNew: s.pwNew, pwConf: s.pwConf,
+      pwType: s.pwShow ? 'text' : 'password',
+      pwShowLabel: s.pwShow ? (isAr ? 'إخفاء' : 'Hide') : (isAr ? 'إظهار' : 'Show'),
+      togglePwShow: () => this.setState(x => ({ pwShow: !x.pwShow })),
+      setPwCur: e => this.setState({ pwCur: e.target.value, pwErr: '' }),
+      setPwNew: e => this.setState({ pwNew: e.target.value, pwErr: '' }),
+      setPwConf: e => this.setState({ pwConf: e.target.value, pwErr: '' }),
+      openPass: () => this.setState({ passOpen: true, pwCur: '', pwNew: '', pwConf: '', pwErr: '', pwShow: false }),
+      closePass: () => this.setState({ passOpen: false, pwErr: '' }),
+      savePass: () => {
+        if (!s.pwCur) { this.setState({ pwErr: t.pwErrCur }); return; }
+        if (s.pwNew.length < 6) { this.setState({ pwErr: t.pwErrShort }); return; }
+        if (s.pwNew === s.pwCur) { this.setState({ pwErr: t.pwErrSame }); return; }
+        if (s.pwNew !== s.pwConf) { this.setState({ pwErr: t.pwErrMatch }); return; }
+        this.setState({ passOpen: false, pwCur: '', pwNew: '', pwConf: '', pwErr: '' });
+        this.showToast(t.pwSaved);
+      },
+      pwForgot: e => { if (e) e.preventDefault();
+        this.setState({ passOpen: false, authed: false, authScreen: 'forgot', resetSent: false, screen: 'home' }); },
+      profileRows: [
+        { label: t.rowName, value: acctName, onOpen: () => this.openProfileAt(acctName) },
+        { label: t.rowPhone, value: acctPhone, onOpen: () => this.openProfileAt(acctName) },
+        { label: t.rowEmail, value: s.email || t.rowAddEmail, onOpen: () => this.openProfileAt(acctName) },
+        { label: t.rowPassword, value: t.rowChange, onOpen: () => this.setState({ passOpen: true, pwCur: '', pwNew: '', pwConf: '', pwErr: '', pwShow: false }) },
+        { label: t.rowLang, value: isAr ? 'العربية' : 'English', onOpen: () => this.setState(x => ({ lang: x.lang === 'en' ? 'ar' : 'en' })) },
+      ],
+      notifRows: notifRows,
+      legalRows: legalDocs.map(d => ({ label: d.title, onOpen: () => this.setState({ legalOpen: d.id }) })),
+      legalOpen: !!legalDoc, legalTitle: legalDoc ? legalDoc.title : '',
+      legalBody: legalDoc ? legalDoc.body.map(text => ({ text })) : [],
+      closeLegal: () => this.setState({ legalOpen: null }),
+      supWhatsapp: sup.whatsapp, supHours: sup.hours, supReply: sup.reply,
+      socials, followTitle: (isAr ? 'تابعي ' : 'Follow ') + t.salon,
+      contactOpen: s.contactOpen, cForm: s.contactOpen && !s.cSent, cSent: !!s.cSent,
+      openContact: () => this.setState({ contactOpen: true, cSent: null, cErr: false }),
+      closeContact: () => this.setState({ contactOpen: false, cSent: null, cErr: false, cMsg: '', cRef: '', cTopic: null }),
+      reportTx: () => this.setState({ txOpen: null, contactOpen: true, cSent: null, cErr: false,
+        cTopic: 'charge', cRef: txSel ? txSel.ref : '' }),
+      cTopics: sup.topics.map(tp => ({
+        label: tp.label,
+        routeLabel: tp.route === 'salon' ? t.cRouteSalon : t.cRouteAvo,
+        dot: radio(s.cTopic === tp.id),
+        onPick: () => this.setState({ cTopic: tp.id, cErr: false }),
+      })),
+      cMsg: s.cMsg, setCMsg: e => this.setState({ cMsg: e.target.value }),
+      cRef: s.cRef, setCRef: e => this.setState({ cRef: e.target.value }),
+      cWaStyle: segBtn(s.cVia === 'wa'), cEmailStyle: segBtn(s.cVia === 'email'),
+      pickWa: () => this.setState({ cVia: 'wa' }), pickEmail: () => this.setState({ cVia: 'email' }),
+      cViaValue: s.cVia === 'wa' ? acctPhone : (s.email || sup.email),
+      cErr: s.cErr,
+      sendContact: () => {
+        if (!s.cTopic || String(s.cMsg).trim().length < 4) { this.setState({ cErr: true }); return; }
+        const row = API
+          ? API.submitTicket({ topicId: s.cTopic, member: t.acctName, message: s.cMsg, ref: s.cRef, via: s.cVia })
+          : { id: 'SUP-40000', route: 'avo' };
+        this.setState({ cSent: row, cErr: false, cMsg: '', cRef: '' });
+      },
+      cSentRefNo: s.cSent ? s.cSent.id : '',
+      cSentLine: s.cSent && s.cSent.route === 'salon' ? t.cSentSalon : t.cSentAvo,
+      deleteOpen: s.deleteOpen,
+      openDelete: () => this.setState({ deleteOpen: true }),
+      closeDelete: () => this.setState({ deleteOpen: false }),
+      activities: actList, tiers: isAr ? tiersAr : tiersEn,
+      txOpen: !!txSel, tx: txSel || {}, txRows, txAmtStyle,
+      closeTx: () => this.setState({ txOpen: null }),
+      isHome: s.screen === 'home', isShop: s.screen === 'shop', isBook: s.screen === 'book',
+      bookActive: step >= 1 && step <= 4,
+      bookS1: step === 1, bookS2: step === 2, bookS3: step === 3, bookS4: step === 4, bookS5: step === 5,
+      bookStepLabel: isAr ? `الخطوة ${toAr(step)} من ٤` : `Step ${step} of 4`,
+      bookProgress: (Math.min(step, 4) / 4 * 100) + '%',
+      svcOptions, artistOptions, dayOptions, slotsMorning, slotsEvening,
+      bookSvcName, bookArtistName, bookWhen, depositStr: fmt(DEPOSIT), bookDepositNote, bookShort,
+      bookCtaLabel, bookCtaStyle, bookCta: () => bookCtaAction(),
+      bookBack: () => this.setState(x => x.bookStep > 1 ? { bookStep: x.bookStep - 1 } : { screen: 'home' }),
+      bookDoneBtn: () => this.setState({ screen: 'home' }),
+      topups, payStr: fmt(pick * 1000), getStr: fmt(getFils), bonusLine,
+      happyOn, happyTitle, happySub, happyLiveLabel, happyClock, branchEarnLabel, branchChips,
+      happyNext, happyNextTitle, happyNextSub, happyNextLabel,
+      logoUrl: P.logoUrl || 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      hasLogo: !!P.logoUrl, noLogo: !P.logoUrl,
+      logoInitial: (P.salonName || 'Amara').trim().charAt(0).toUpperCase(),
+      arrowFlip: isAr ? 'scaleX(-1)' : 'none',
+      methods, products, cartLines, cartCount, hasCart: cartCount > 0,
+      cartEmpty: cartCount === 0, cartTotalStr: fmt(cartTotal),
+      cartShort, shortStr: fmt(Math.max(0, short)),
+      balColor: cartShort ? '#B0736F' : '#5E7157',
+      checkout, checkoutLabel, checkoutStyle,
+      navHomeStyle: this.navStyle(s.screen === 'home'),
+      navShopStyle: this.navStyle(s.screen === 'shop'),
+      navBookStyle: this.navStyle(s.screen === 'book'), navPayStyle: this.navStyle(false),
+      qrOpen: s.qrOpen, payOpen: s.payOpen, cartOpen: s.cartOpen,
+      toast: s.toast, toastText: s.toastText,
+      stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
+      toggleLang: () => this.setState(x => ({ lang: x.lang === 'en' ? 'ar' : 'en' })),
+      goHome: () => this.setState({ screen: 'home' }),
+      goShop: () => this.setState({ screen: 'shop' }),
+      book: () => this.setState({ screen: 'book', bookStep: 1 }),
+      openQr: () => this.setState({ qrOpen: true }),
+      closeQr: () => this.setState({ qrOpen: false }),
+      openPay: () => this.setState({ payOpen: true, payStage: 'idle' }),
+      closePay: () => { if (this.state.payStage !== 'redirect') this.setState({ payOpen: false, payStage: 'idle' }); },
+      openCart: () => this.setState({ cartOpen: true }),
+      closeCart: () => this.setState({ cartOpen: false }),
+      payNow: () => {
+        this.setState({ payStage: 'redirect' });
+        if (this.payT) clearTimeout(this.payT);
+        this.payT = setTimeout(() => {
+          if (this.state.outcome === 'success') {
+            this.setState(x => ({ balance: x.balance + getFils, payStage: 'result' }));
+            this.showToast(isStamps
+              ? (isAr ? `تمت إضافة ${fmt(getFils)} د.ك للمحفظة` : `Added ${fmt(getFils)} KD to your wallet`)
+              : (isAr ? `تمت إضافة ${fmt(getFils)} د.ك — منها ${fmt(bonus)} مكافأة فضية`
+                      : `Added ${fmt(getFils)} KD — including ${fmt(bonus)} Silver bonus`));
+          } else {
+            this.setState({ payStage: 'result' });
+          }
+        }, 1600);
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>
