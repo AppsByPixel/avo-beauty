@@ -132,6 +132,10 @@ async function seed(): Promise<void> {
       stampRewardAr: 'تصفيف شعر مجاني',
       depositFils: fils(5000),
       noShowReturnMinutes: 60,
+      // Spelled out rather than left to the column default, because the two
+      // lines below it are meaningless without it: "10:00" is a string until
+      // something says which clock. Migration 0010.
+      timezone: 'Asia/Kuwait',
       businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
       social: [
         { id: 'instagram', label: 'Instagram', handle: '@amara.kw', on: true },

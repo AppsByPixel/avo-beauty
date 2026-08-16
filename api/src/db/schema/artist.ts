@@ -55,10 +55,12 @@ export const availabilitySource = pgEnum('availability_source', ['google', 'manu
  * One day of the week, as the contract writes it:
  * `{ [dayOfWeek: 0-6]: { open: bool, from: "HH:mm", to: "HH:mm" } }`.
  *
- * `from` and `to` are NAIVE WALL-CLOCK STRINGS with no zone attached. See the
- * header of routes/artists.ts for exactly what that costs the day AVO signs a
- * salon outside Kuwait — it is a decision that belongs to the client, and this
- * comment exists so it is made knowingly rather than discovered.
+ * `from` and `to` are NAIVE WALL-CLOCK STRINGS with no zone attached, and that
+ * is now a complete description rather than a gap: they are resolved against
+ * `salon.timezone` (migration 0010) by api/src/time/zone.ts, at every point
+ * where a wall time has to become an instant. They are deliberately NOT stored
+ * as instants — "Tuesday 10:00" is a rule about the week, not a moment, and
+ * freezing it into a timestamptz would make a zone correction rewrite history.
  */
 export interface ArtistWindow {
   open: boolean;

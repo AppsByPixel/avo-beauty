@@ -28,6 +28,7 @@ import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../aut
 import { badRequest, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
@@ -46,6 +47,15 @@ const EDITABLE = new Set([
   'stampRewardAr',
   'depositFils',
   'noShowReturnMinutes',
+  /**
+   * Editable, and validated as an IANA id rather than stored verbatim.
+   *
+   * It decides what "10:00" means for business hours, artist windows and every
+   * happy-hour window, so an unvalidated string here would not fail loudly — it
+   * would make `Intl.DateTimeFormat` throw inside a charge, three screens away
+   * from the field that was typed wrong. See `parseTimeZone`.
+   */
+  'timezone',
   'businessHours',
   'social',
   'whatsappEnabled',
@@ -116,6 +126,15 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       stampRewardAr: s.stampRewardAr,
       depositFils: s.depositFils,
       noShowReturnMinutes: s.noShowReturnMinutes,
+      /**
+       * Emitted to every surface, not just the dashboard. `businessHours` right
+       * below it is naive wall clock and means nothing without this — a wallet
+       * that renders "Open until 21:00" is rendering a string in a zone it was
+       * never told. The clients also need it to resolve `isHappyHourLive`
+       * themselves, every second, which is the whole point of there being no
+       * `live` flag.
+       */
+      timezone: s.timezone,
       businessHours: s.businessHours,
       branches: branches.map((b) => ({
         id: b.id,
@@ -148,6 +167,11 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
+
+    // Refused here, before the UPDATE, so a typo is a 400 naming the tz database
+    // rather than a 500 thrown out of `Intl.DateTimeFormat` inside the next
+    // charge that tries to resolve a happy hour.
+    if ('timezone' in body) patch.timezone = parseTimeZone(body.timezone);
 
     /**
      * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.

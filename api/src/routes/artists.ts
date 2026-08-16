@@ -41,56 +41,38 @@
  * they land in one UPDATE.
  *
  * ===========================================================================
- * FINDING — THERE IS NO TIMEZONE ANYWHERE IN api/src, AND THIS IS THE SECOND
- * PLACE IT WILL COST SOMETHING. NOT FIXED HERE ON PURPOSE.
+ * THE TIMEZONE FINDING THIS FILE RAISED THREE TIMES IS NOW RESOLVED.
  * ===========================================================================
- * `windows[d].from` / `.to` are naive wall-clock strings: "10:00", no offset, no
- * zone. So are `salon.business_hours.morning` / `.evening`, and so are the happy
- * hour `from` / `to` in design/avo-promotions.js. Nothing in this codebase
- * stores a zone for a salon, and nothing converts one.
+ * It said: `windows[d].from` / `.to` are naive wall-clock strings — "10:00", no
+ * offset, no zone — and so are `salon.business_hours` and the happy-hour
+ * `from`/`to`, and nothing in the codebase stored a zone or converted one. It
+ * declined to guess, on the grounds that a column added on one lane's judgement
+ * reads as settled to the next three.
  *
- * Today that is harmless, and only for one reason: every AVO salon is in Kuwait,
- * Kuwait is UTC+3, and Kuwait has no daylight saving. One fixed offset is
- * therefore correct for every row, all year, and the fact that nobody wrote it
- * down cannot yet produce a wrong answer.
+ * The decision came back, and it is the one the finding argued for: an IANA zone
+ * id on the salon, defaulting to `Asia/Kuwait`. Migration 0010. The business
+ * question — will AVO sign a salon outside Kuwait — is still the client's; the
+ * technical choice never depended on it, because an id is correct either way and
+ * only gets expensive after there is production data.
  *
- * WHAT BREAKS THE DAY AVO SIGNS A SALON OUTSIDE KUWAIT
+ * So `GET /artists/{id}/availability?date=` below can now exist. It is the
+ * endpoint the finding named as the first thing that would break: it has to
+ * choose an instant for "10:00 on 2026-08-17", and until 0010 there was no salon
+ * field to choose it from, so it would have fallen back to the process zone —
+ * UTC under docker-compose — and offered every slot for a Kuwait salon three
+ * hours late. Silently: the list still renders, it is just wrong.
  *
- *   1. `GET /artists/{id}/availability?date=` is defined as "business hours
- *      minus Google busy blocks minus existing bookings". Busy blocks and
- *      `booking.startsAt` are real instants (timestamptz). Windows are wall
- *      clock. Subtracting one from the other REQUIRES choosing an instant for
- *      "10:00 on 2026-08-17", and there is no salon field to choose it from. The
- *      server would fall back to its own zone — UTC in docker-compose.yml, which
- *      sets TZ=UTC deliberately — so a Kuwait salon's 10:00 window would resolve
- *      to 13:00 Kuwait and every slot would be offered three hours late. This is
- *      silent: the slot list still renders, it is just wrong.
+ * Every conversion here goes through `api/src/time/zone.ts`, which never reads
+ * the process zone. `TZ=America/New_York node …` resolves identically to
+ * `TZ=UTC`; src/time/zone.test.ts asserts exactly that, because a test that only
+ * runs in one zone cannot tell a correct conversion from an absent one.
  *
- *   2. A UTC+3 assumption hardcoded now is not merely wrong elsewhere, it is
- *      wrong TWICE A YEAR in any DST zone (Riyadh is fine, Cairo, Amman, Beirut,
- *      Istanbul and every EU location are not). No stored integer offset can fix
- *      that; "10:00 local" is two different instants across the year and only an
- *      IANA zone id (`Asia/Kuwait`) resolves it. So the eventual fix is a zone
- *      column plus a conversion at every wall-clock boundary, NOT an offset —
- *      and retrofitting an offset first is strictly wasted work.
- *
- *   3. The same shape already governs money-adjacent state. A happy hour is
- *      "from/to, salon-local, 24h" and non-negotiable #2 says the server decides
- *      whether one is live for the purpose of a charge. A charge's reward
- *      multiplier therefore depends on this unstated zone. Availability only
- *      costs a mis-booked appointment; the promotions predicate costs money.
- *
- * WHAT IS DELIBERATELY NOT DONE HERE
- *
- * No `timezone` column, no default, no `Asia/Kuwait` constant. Guessing a zone
- * is exactly the kind of decision CLAUDE.md § Escalate says belongs to the
- * client, and a column added on one lane's judgement would be read as settled by
- * the next three. It was flagged before promotions are stored; availability has
- * the identical shape and is flagged again, so that when the decision is taken
- * it is taken knowing it covers three surfaces and not one.
- *
- * Until then this route stores and returns the strings verbatim. It converts
- * nothing, so it cannot convert wrongly.
+ * WHAT IS STILL NOT SUBTRACTED, AND SAID OUT LOUD
+ * The contract defines availability as "business hours minus Google busy blocks
+ * minus existing bookings". Bookings do not exist yet and the Google sync is not
+ * wired, so this endpoint returns the open grid. It reports `subtracted: []` so
+ * a client can see that nothing was removed rather than infer it from a
+ * suspiciously full day.
  * ===========================================================================
  */
 
@@ -98,14 +80,23 @@ import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist, SLOT_MINUTES, type ArtistWindows } from '../db/schema/artist';
+import { salon } from '../db/schema/salon';
 import {
   requireDashboardPerm,
+  requirePrincipal,
   requireScannerScope,
   requireSameSalon,
   type StaffPrincipal,
 } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
+import {
+  hhmmToMinutes,
+  minutesToHhmm,
+  parseDate,
+  wallClockInstant,
+  weekdayOf,
+} from '../time/zone';
 
 /** "10:00", "23:45". 24-hour, zero-padded, no seconds — the contract's "HH:mm". */
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -406,7 +397,124 @@ async function applyAvailability(
   });
 }
 
+/** A closed interval of salon-local minutes, half-open at the end. */
+interface Span {
+  from: number;
+  to: number;
+}
+
+/** a ∩ b, or null when they do not overlap. */
+function intersect(a: Span, b: Span): Span | null {
+  const from = Math.max(a.from, b.from);
+  const to = Math.min(a.to, b.to);
+  return to > from ? { from, to } : null;
+}
+
+/**
+ * The salon's trading spans for one weekday.
+ *
+ * TWO of them, not one, and that is the Kuwaiti shape rather than an edge case —
+ * `BusinessHoursSchema` is `{ morning: ["10:00","13:00"], evening: [...] }` and
+ * the afternoon closure between them is real. An implementation that took
+ * `morning[0]` to `evening[1]` would happily offer a 14:00 appointment at a
+ * salon whose door is locked.
+ */
+function tradingSpans(hours: { morning: [string, string]; evening: [string, string] }): Span[] {
+  const spans: Span[] = [];
+  for (const [from, to] of [hours.morning, hours.evening]) {
+    const span = { from: hhmmToMinutes(from), to: hhmmToMinutes(to) };
+    if (span.to > span.from) spans.push(span);
+  }
+  return spans;
+}
+
 export async function registerArtistRoutes(app: FastifyInstance): Promise<void> {
+  // ------------------------------------ GET /artists/{id}/availability?date= --
+  /**
+   * api-contract.md § Operations: "Customer | Availability |
+   * GET /artists/{id}/availability?date=".
+   *
+   * THE ENDPOINT THE ZONE EXISTS FOR. Every slot it emits is a real instant, and
+   * producing one requires answering "what moment is 10:00 on this date at this
+   * salon" — which is `wallClockInstant(date, minutes, salon.timezone)` and is
+   * not answerable without the column migration 0010 added.
+   *
+   * Any authenticated principal of the salon. A customer chooses a slot from
+   * this list, so gating it on a merchant permission would gate booking itself;
+   * `requireSameSalon` is the boundary that matters, and it is checked against
+   * the ARTIST's salon because the path carries no salon id.
+   *
+   * Both representations are emitted for every slot:
+   *
+   *   startsAt  the instant, in UTC. What a booking will actually be stored as,
+   *             and the only thing two clients in two zones can agree on.
+   *   local     "10:00", the label. Rendered as-is — a client that reformatted
+   *             `startsAt` in the DEVICE's zone would show a customer in London
+   *             her Kuwait appointment at 07:00 and let her believe it.
+   */
+  app.get<{ Params: { id: string }; Querystring: { date?: string } }>(
+    '/artists/:id/availability',
+    async (req, reply) => {
+      const p = requirePrincipal(req);
+
+      const rows = await db.select().from(artist).where(eq(artist.id, req.params.id)).limit(1);
+      const a = rows[0];
+      // Checked against the artist's own salon, and answered as a 404 rather
+      // than a 403 for the reason routes/staff.ts gives: another salon's roster
+      // is not something this caller gets to probe.
+      if (!a || a.salonId !== p.salonId) throw notFound('unknown_artist', 'No such artist.');
+
+      const salonRows = await db.select().from(salon).where(eq(salon.id, a.salonId)).limit(1);
+      const s = salonRows[0];
+      if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+      // Required, not defaulted to "today". "Today" is a question about a zone,
+      // and a server that answered it from its own clock would be making exactly
+      // the mistake this endpoint exists to stop.
+      const date = parseDate(req.query?.date, 'date');
+      const weekday = weekdayOf(date);
+
+      const window = a.windows[String(weekday)];
+      const open = a.active && window?.open === true;
+
+      const slots: Array<{ startsAt: string; endsAt: string; local: string }> = [];
+      if (open && window) {
+        const artistSpan = { from: hhmmToMinutes(window.from), to: hhmmToMinutes(window.to) };
+        for (const trading of tradingSpans(s.businessHours)) {
+          const span = intersect(artistSpan, trading);
+          if (!span) continue;
+          // `+ slotMinutes <= span.to` — a slot that would run past closing is
+          // not offered. Half a haircut is not availability.
+          for (let m = span.from; m + a.slotMinutes <= span.to; m += a.slotMinutes) {
+            slots.push({
+              startsAt: wallClockInstant(date, m, s.timezone).toISOString(),
+              endsAt: wallClockInstant(date, m + a.slotMinutes, s.timezone).toISOString(),
+              local: minutesToHhmm(m),
+            });
+          }
+        }
+      }
+
+      return reply.send({
+        artistId: a.id,
+        date: req.query?.date ?? '',
+        /** Echoed so a client never has to assume which zone `local` is in. */
+        timezone: s.timezone,
+        slotMinutes: a.slotMinutes,
+        open,
+        slots,
+        /**
+         * Nothing has been removed from the grid yet — bookings do not exist and
+         * the Google busy sync is not wired. Reported as an empty list rather
+         * than omitted so "nothing was subtracted" is a fact the client can see
+         * instead of an inference from a suspiciously full day.
+         */
+        subtracted: [] as string[],
+      });
+    },
+  );
+
+
   // ------------------------------------------------- GET /salons/{id}/artists --
   /**
    * perms.team. The roster of bookable people and their hours is the Merchant →
