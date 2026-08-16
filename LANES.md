@@ -61,7 +61,16 @@ the failure mode this structure exists to prevent.
 > `design/AVO States.dc.html`. Import every colour from `@avo/tokens` and every money
 > helper from `@avo/types`.
 >
-> You write only to `apps/wallet/`.
+> You write only to `apps/wallet/` and `apps/scanner/`.
+
+### Lane B also owns the scanner
+
+`design/ADR-0001-stack.md` puts the wallet and the scanner in **one Expo codebase**, so they
+share a lane rather than competing for one. Lane B's column is `apps/wallet/` **and**
+`apps/scanner/`.
+
+If a component genuinely belongs to both — a money display, a sheet, a button — it moves to
+a shared package, and that is a trunk conversation, not something either app does quietly.
 
 ## Lane C — Web
 
@@ -99,3 +108,28 @@ the failure mode this structure exists to prevent.
 > assume the reasoning behind it.
 >
 > You write only to `**/*.test.ts` and `e2e/`.
+
+
+---
+
+## Order of work, and why
+
+Not a preference — dependency, checked against what the API actually serves.
+
+**1 · Scanner (lane B).** Fully unblocked: `POST /staff/session`, `GET /staff/me`,
+`POST /scans`, `POST /charges`, `POST /voids` all exist and are tested under concurrency.
+It is also the highest-value gap — without it there is no way to demonstrate a salon taking
+a payment, which is the whole pilot. Build it first, and watch it, because it is a new
+surface with a real camera on a real device.
+
+**2 · API (lane A).** The dashboard needs four endpoints that do not exist:
+`PUT /artists/{id}/availability`, the audit log, loyalty publish, and the artists list.
+Until those land, lane C can only build against a mock and re-do the wiring later.
+
+**3 · Dashboard (lane C).** Consumes what lane A just built. Running it *ahead* of the API
+is what produced the throwaway sign-in stand-in that had to be rewritten.
+
+**4 · QA (lane D) — always last, and always against integrated code.** Its best runs came
+from testing what had already merged; its worst came from testing one lane's branch in
+isolation, where a half-landed migration made a schema-pinned spec flap. Merge first, then
+sweep.
