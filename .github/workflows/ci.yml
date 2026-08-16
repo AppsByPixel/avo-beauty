@@ -34,6 +34,13 @@ jobs:
       # BEFORE UPDATE trigger. They shell out to `docker exec avo-postgres`, so
       # CI brings up the same compose stack a developer runs rather than a
       # services: block, whose container name would not match.
+      # Build BEFORE anything that imports a workspace package at runtime.
+      # db:seed imports @avo/types for the money helpers, and turbo's build graph
+      # is not consulted by a bare `pnpm --filter ... run db:seed`. This is the
+      # third failure of the same shape this session: a step that needs a build
+      # artifact running before the build that makes it.
+      - run: pnpm build
+
       - name: Start Postgres
         working-directory: api
         run: docker compose up -d --wait
