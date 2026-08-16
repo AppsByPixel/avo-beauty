@@ -128,7 +128,7 @@ await app.register(cors, { origin: true });
  * TopUpIntent and never debits. Lane A must scope on (principal, endpoint, key),
  * with the row inserted inside the same transaction as the effect.
  */
-const idempotency = new Map<string, unknown>();
+const idempotency = new Map<string, { fingerprint: string; value: unknown }>();
 /** Top-up intents by their real id, so GET /topups/{id} can look one up. */
 const topups = new Map<string, TopUpIntent>();
 /** Wallet tokens issued and not yet consumed. Single use — non-negotiable #2. */
@@ -142,6 +142,62 @@ function idempotencyKey(req: FastifyRequest): string | null {
 /** Namespaced so a key cannot leak between endpoints. */
 function scopedKey(req: FastifyRequest, key: string): string {
   return `${req.method}:${req.routeOptions.url ?? req.url}:${key}`;
+}
+
+/**
+ * Stable fingerprint of a request body, for the idempotency mismatch check.
+ * Key order must not matter — two clients serialising the same intent
+ * differently are making the same request.
+ */
+function bodyFingerprint(body: unknown): string {
+  const norm = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(norm);
+    if (v && typeof v === 'object') {
+      return Object.fromEntries(
+        Object.entries(v as Record<string, unknown>)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, val]) => [k, norm(val)]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(norm(body ?? {}));
+}
+
+/**
+ * Replay a stored result, or refuse a key reused with a different body.
+ *
+ * api-contract.md § "idempotency key reused with a different body": same key +
+ * same body replays; same key + DIFFERENT body is 422. Replaying the first
+ * result would tell a customer who retried a 5 KD top-up as 50 KD that the 50
+ * succeeded — a silent money bug, worse than an error.
+ *
+ * Lane A found the mock had no body fingerprint at all and replayed regardless,
+ * at three call sites. The real API was already correct; this brings the mock
+ * into line so a client cannot be built against the wrong behaviour.
+ */
+function replayOrConflict(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  key: string,
+): { hit: true; value: unknown } | { hit: false; store: (v: unknown) => void } {
+  const scoped = scopedKey(req, key);
+  const fp = bodyFingerprint(req.body);
+  const prior = idempotency.get(scoped);
+
+  if (prior) {
+    if (prior.fingerprint !== fp) {
+      void reply.code(422).send({
+        error: 'idempotency_key_reused',
+        message:
+          'That idempotency key was already used with different request data. ' +
+          'Use a new key for a new request.',
+      });
+      return { hit: true, value: undefined };
+    }
+    return { hit: true, value: prior.value };
+  }
+  return { hit: false, store: (v: unknown) => idempotency.set(scoped, { fingerprint: fp, value: v }) };
 }
 
 /**
@@ -231,8 +287,8 @@ app.post('/topups', async (req, reply) => {
       message: 'Every money-moving POST needs an Idempotency-Key header.',
     });
   }
-  const scoped = scopedKey(req, key);
-  if (idempotency.has(scoped)) return idempotency.get(scoped);
+  const idem = replayOrConflict(req, reply, key);
+  if (idem.hit) return idem.value;
 
   const body = req.body as { amountFils: unknown; method: 'knet' | 'card' | 'applepay' };
   const parsed = validateAmountFils(body.amountFils);
@@ -268,7 +324,7 @@ app.post('/topups', async (req, reply) => {
     reference: `KNET-${Math.floor(Math.random() * 9e7 + 1e7)}`,
   };
 
-  idempotency.set(scoped, intent);
+  idem.store(intent);
   topups.set(id, intent);
   return intent;
 });
@@ -369,8 +425,8 @@ app.post('/charges', async (req, reply) => {
       message: 'Every money-moving POST needs an Idempotency-Key header.',
     });
   }
-  const scoped = scopedKey(req, key);
-  if (idempotency.has(scoped)) return idempotency.get(scoped);
+  const idem = replayOrConflict(req, reply, key);
+  if (idem.hit) return idem.value;
 
   const body = req.body as { memberId: string; serviceIds: string[]; token?: string };
 
@@ -455,7 +511,7 @@ app.post('/charges', async (req, reply) => {
     voidableUntil: new Date(Date.now() + 15 * 60_000).toISOString(),
   };
 
-  idempotency.set(scoped, result);
+  idem.store(result);
   return result;
 });
 
@@ -491,8 +547,8 @@ app.post('/voids', async (req, reply) => {
       message: 'Every money-moving POST needs an Idempotency-Key header.',
     });
   }
-  const scoped = scopedKey(req, key);
-  if (idempotency.has(scoped)) return idempotency.get(scoped);
+  const idem = replayOrConflict(req, reply, key);
+  if (idem.hit) return idem.value;
 
   const { reason } = req.body as { transactionId: string; reason: string };
   if (!reason) {
@@ -500,7 +556,7 @@ app.post('/voids', async (req, reply) => {
   }
 
   const result = { ok: true, refundedFils: fils(8000), visitRemoved: true };
-  idempotency.set(scoped, result);
+  idem.store(result);
   return result;
 });
 
