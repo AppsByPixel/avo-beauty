@@ -64,6 +64,13 @@
       "when": 1786921116135,
       "tag": "0008_loyalty_event",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786922096902,
+      "tag": "0009_receipt_claim_reclaims_sending",
+      "breakpoints": true
     }
   ]
 }
