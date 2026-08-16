@@ -1,0 +1,41 @@
+# Local Postgres for the API. `pnpm --filter @avo/api run db:up`
+#
+# Port 5433, not 5432, so it cannot collide with a Postgres already running on
+# the machine — and so a mistyped host in a .env file fails loudly instead of
+# quietly writing to something else.
+#
+# Provider-neutral by decision (ADR-0001): no managed-service extensions, no
+# vendor auth, nothing that ties the schema to a region before the data
+# residency question is answered.
+
+name: avo
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: avo-postgres
+    restart: unless-stopped
+    ports:
+      - '${POSTGRES_PORT:-5433}:5432'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-avo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-avo_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-avo}
+      # The application role's local password. In every other environment this
+      # role is created by ops with a real secret; the migration only ever
+      # creates it NOLOGIN if it is missing.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-avo_app_dev_password}
+      # Deterministic instant maths for the happy-hour and quiet-hour predicates.
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - avo-pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-avo} -d ${POSTGRES_DB:-avo}']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  avo-pgdata:
