@@ -19,8 +19,25 @@ jobs:
       - run: pnpm tokens
       - run: git diff --exit-code packages/tokens/src/generated.ts
 
+      # The tenancy and gateway suites drive real Postgres, because a mock with
+      # one salon cannot prove a salon boundary and a mock cannot exercise a
+      # BEFORE UPDATE trigger. They shell out to `docker exec avo-postgres`, so
+      # CI brings up the same compose stack a developer runs rather than a
+      # services: block, whose container name would not match.
+      - name: Start Postgres
+        working-directory: api
+        run: docker compose up -d --wait
+
+      - run: pnpm --filter @avo/api run db:migrate
+      - run: pnpm --filter @avo/api run db:seed
+
       # Nothing below may depend on a build artifact left over from a previous
       # run. CI checks out clean; a local tree does not, which is exactly how a
       # missing turbo dependency edge stayed invisible while every local run was
       # green on a stale packages/types/dist.
       - run: pnpm check
+
+      - name: Postgres logs on failure
+        if: failure()
+        working-directory: api
+        run: docker compose logs postgres | tail -50
