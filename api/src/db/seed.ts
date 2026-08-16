@@ -140,7 +140,21 @@ async function seed(): Promise<void> {
     .onConflictDoUpdate({
       target: member.id,
       // Reset to the pre-charge values so a suite run starts from a known state.
-      set: { balanceFils: fils(32500), visits: 6, tier: 'silver', stamps: null },
+      //
+      // `passwordHash` is reset too, and it is not decoration. Without it, the
+      // upsert branch left whatever hash the FIRST seed of this database wrote,
+      // so re-seeding restored the balance and the tier but not the credential
+      // — and the script then printed "member 8842 / dana-dev-password" and
+      // meant it, while `POST /auth/member/session` answered 401. A fixture
+      // that prints credentials it does not actually restore is worse than one
+      // that prints nothing: it sends you looking for the bug in the auth code.
+      set: {
+        balanceFils: fils(32500),
+        visits: 6,
+        tier: 'silver',
+        stamps: null,
+        passwordHash: memberHash,
+      },
     });
 
   // The low-balance member behind `x-avo-scenario: lowbal`. 2.500 KD.
@@ -162,7 +176,13 @@ async function seed(): Promise<void> {
     })
     .onConflictDoUpdate({
       target: member.id,
-      set: { balanceFils: fils(2500), visits: 1, tier: 'bronze', stamps: null },
+      set: {
+        balanceFils: fils(2500),
+        visits: 1,
+        tier: 'bronze',
+        stamps: null,
+        passwordHash: memberHash,
+      },
     });
 
   // ST-001 Noura — manager, every permission.
@@ -203,6 +223,11 @@ async function seed(): Promise<void> {
         permMarketing: true,
         pinFailedAttempts: 0,
         pinLockedUntil: null,
+        // Same reasoning as the member above: the credentials this script
+        // prints have to be the credentials the row actually holds.
+        passwordHash: staffHash,
+        pinHash,
+        pinDeviceId: SCANNER_DEVICE,
       },
     });
 
@@ -246,6 +271,9 @@ async function seed(): Promise<void> {
         permMarketing: false,
         pinFailedAttempts: 0,
         pinLockedUntil: null,
+        passwordHash: staffHash,
+        pinHash: hessaPinHash,
+        pinDeviceId: SCANNER_DEVICE,
       },
     });
 
@@ -258,16 +286,24 @@ async function seed(): Promise<void> {
   // typo". This is that deliberate act, and it is the only place in the
   // repository that performs it. It is guarded by the production check at the
   // bottom of this file.
+  // `gateway_event` is append-only for the same reason and by the same means
+  // (migration 0004), so clearing it takes the same deliberate act.
   await db.execute(sql`ALTER TABLE ledger_entry DISABLE TRIGGER ledger_entry_is_immutable`);
+  await db.execute(sql`ALTER TABLE gateway_event DISABLE TRIGGER gateway_event_no_delete`);
   try {
     await db.execute(sql`DELETE FROM receipt_job`);
     await db.execute(sql`DELETE FROM ledger_entry`);
     await db.execute(sql`DELETE FROM idempotency_key`);
     await db.execute(sql`DELETE FROM wallet_token`);
+    // Order follows the restricting references: event → intent → transaction.
+    await db.execute(sql`DELETE FROM gateway_event`);
+    await db.execute(sql`DELETE FROM topup_intent`);
+    await db.execute(sql`DELETE FROM sandbox_gateway_payment`);
     await db.execute(sql`DELETE FROM transaction`);
     await db.execute(sql`DELETE FROM session`);
     await db.execute(sql`DELETE FROM pin_attempt`);
   } finally {
+    await db.execute(sql`ALTER TABLE gateway_event ENABLE TRIGGER gateway_event_no_delete`);
     await db.execute(sql`ALTER TABLE ledger_entry ENABLE TRIGGER ledger_entry_is_immutable`);
   }
 

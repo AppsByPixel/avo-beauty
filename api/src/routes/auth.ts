@@ -21,6 +21,16 @@
  * counter), and the account locks after N failures. The scope on the session is
  * the fourth: a PIN mints `scanner`, and `requireDashboardScope` refuses it.
  *
+ * AND THE SAME WALL IN THE OTHER DIRECTION
+ * ----------------------------------------
+ * Those four controls only protect anything if the scanner is the ONLY way to
+ * charge. A web session is everything a PIN session is not — long-lived,
+ * browser-based, not bound to a device, refreshable for thirty days — so if it
+ * could reach `POST /charges`, an attacker would simply use that door and the
+ * PIN's controls would be decoration. `requireScannerPerm` is the other half of
+ * the wall, and the product design says the same thing plainly: "Desktop
+ * dashboard = full control; staff phone = PIN + scan only."
+ *
  * ENUMERATION
  * -----------
  * Every failure path answers with the same body and burns the same argon2 time,

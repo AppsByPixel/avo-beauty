@@ -4,8 +4,10 @@
  * Two things happen here that everything else depends on.
  *
  * 1. THE PRINCIPAL IS RESOLVED ONCE PER REQUEST, in an `onRequest` hook, and
- *    hung on the request. Handlers then call `requirePerm(req, 'scanner')` as
- *    their first statement. Resolution is deliberately non-fatal — an anonymous
+ *    hung on the request. Handlers then call `requireScannerPerm(req, 'scanner')`
+ *    or `requireDashboardPerm(req, 'team')` as their first statement — the
+ *    surface an endpoint belongs to is always named, never inferred.
+ *    Resolution is deliberately non-fatal — an anonymous
  *    request gets `principal: undefined` rather than a 401 here — because the
  *    sign-in routes are anonymous by definition and a global reject would have
  *    to carve out exceptions, which is how an endpoint ends up accidentally
@@ -30,6 +32,8 @@ import { registerChargeRoutes } from './routes/charges';
 import { registerTopupRoutes } from './routes/topups';
 import { registerSalonRoutes } from './routes/salons';
 import { registerPlatformRoutes } from './routes/platform';
+import { registerWebhookRoutes } from './routes/webhooks';
+import { registerSandboxGatewayRoutes } from './routes/sandboxGateway';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,6 +86,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerTopupRoutes(app);
   await registerSalonRoutes(app);
   await registerPlatformRoutes(app);
+
+  // The gateway callback. Unauthenticated in the ordinary sense and verified by
+  // signature instead — see routes/webhooks.ts.
+  await registerWebhookRoutes(app);
+  // The sandbox PSP's hosted page. A no-op unless GATEWAY_DRIVER=sandbox, which
+  // env.ts refuses in production.
+  await registerSandboxGatewayRoutes(app);
 
   app.get('/_health', async () => ({ ok: true }));
 
