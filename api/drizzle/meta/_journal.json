@@ -43,6 +43,13 @@
       "when": 1786905048851,
       "tag": "0005_receipt_job_per_channel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786905048852,
+      "tag": "0006_arabic_names",
+      "breakpoints": true
     }
   ]
 }

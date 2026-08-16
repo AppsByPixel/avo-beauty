@@ -7,7 +7,14 @@
  * A seed that drifted from the fixtures would make every one of those specs fail
  * for a reason that has nothing to do with the API.
  *
- * Two rows exist here that the fixtures do not have:
+ * Three things exist here that the fixtures do not have:
+ *
+ *   SAL-LUMIERE   a second salon whose Arabic name columns are NULL, on purpose.
+ *                 The client fallback is `nameAr ?? name`, and a row that merely
+ *                 LACKS the key proves nothing about it — `undefined ?? name`
+ *                 and `null ?? name` agree. Only a genuine NULL can catch a NULL
+ *                 arriving at a client as the string "null". See the block
+ *                 comment on the insert.
  *
  *   member 8843   a low-balance member (2.500 KD). Lane D pins the insufficient
  *                 balance case with `x-avo-scenario: lowbal`, which the mock
@@ -72,6 +79,11 @@ async function seed(): Promise<void> {
     .values({
       id: SALON_ID,
       name: 'Amara',
+      // From design/avo-promotions.js, the bundle's own reference implementation
+      // — not a translation invented here. `branchLabel()` in that file picks
+      // `nameAr` when the language is `ar`, so these are the exact strings the
+      // design already demonstrates the wallet rendering.
+      nameAr: 'أمارا',
       plan: 'growth',
       brandColor: '#6E7F6C',
       moduleBooking: false,
@@ -85,6 +97,7 @@ async function seed(): Promise<void> {
       ],
       stampTarget: 8,
       stampReward: 'Free blow-dry',
+      stampRewardAr: 'تصفيف شعر مجاني',
       depositFils: fils(5000),
       noShowReturnMinutes: 60,
       businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
@@ -96,13 +109,91 @@ async function seed(): Promise<void> {
       ],
       whatsappEnabled: true,
     })
+    // NOT `onConflictDoNothing()`, and the difference is the whole point of the
+    // change that introduced these two columns. Every developer and CI database
+    // already holds an Amara row from an earlier run, so DO NOTHING would leave
+    // `name_ar` NULL there for ever and the seed would silently claim to have
+    // written a translation it did not write — the same class of failure the
+    // member rows below document for `passwordHash`.
+    //
+    // Only the Arabic columns are in the SET. The rest of Amara's configuration
+    // is left alone deliberately: it is a salon a developer may have edited
+    // through `PATCH /salons/:id` while working, and this insert is not the
+    // place that resets it.
+    .onConflictDoUpdate({
+      target: salon.id,
+      set: { nameAr: 'أمارا', stampRewardAr: 'تصفيف شعر مجاني' },
+    });
+
+  await db
+    .insert(branch)
+    .values([
+      { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya', nameAr: 'السالمية' },
+      { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City', nameAr: 'مدينة الكويت' },
+    ])
+    // Same reasoning as the salon above: existing branch rows must actually
+    // receive the Arabic names, not silently keep a NULL from an earlier run.
+    .onConflictDoUpdate({
+      target: branch.id,
+      set: { nameAr: sql`excluded.name_ar` },
+    });
+
+  // ------------------------------------------------- the salon that has none --
+  //
+  // LUMIÈRE EXISTS HERE TO HOLD A REAL NULL.
+  //
+  // The Arabic fields fall back on the client with `nameAr ?? name`, and that
+  // fallback is untestable against a row that simply lacks the key: `undefined
+  // ?? name` and `null ?? name` give the same answer, which is precisely how the
+  // missing implementation went unnoticed in the first place. The failure it
+  // cannot see is the stringify bug — a NULL reaching a client as the FOUR
+  // CHARACTER STRING "null", which renders as a salon called null and satisfies
+  // `??` perfectly. Only a row that genuinely holds NULL can catch that.
+  //
+  // So this salon is seeded with `nameAr` and `stampRewardAr` left NULL
+  // DELIBERATELY. It is not an oversight to be tidied up later, and a future
+  // seed must not "complete" it.
+  //
+  // WHY THESE PARTICULAR VALUES
+  // ---------------------------
+  // `e2e/support/tenancy-harness.ts` (lane D) also seeds SAL-LUMIERE, with
+  // `ON CONFLICT (id) DO NOTHING`, as does this insert — so whichever runs first
+  // wins and the other is a no-op. The fields below are therefore kept
+  // BYTE-IDENTICAL to that harness's INSERT, so the winner is irrelevant. The
+  // only additions are the two Arabic columns, which the harness's insert omits
+  // and which therefore arrive as NULL from it too: both paths produce the same
+  // row. If lane D's fixture ever changes, this must change with it.
+  await db
+    .insert(salon)
+    .values({
+      id: 'SAL-LUMIERE',
+      name: 'Lumiere',
+      nameAr: null,
+      plan: 'starter',
+      brandColor: '#7A5C8E',
+      moduleBooking: false,
+      moduleShop: false,
+      loyaltyMode: 'tiers',
+      tiers: [
+        { name: 'bronze', minVisits: 0, bonusPercent: 0 },
+        { name: 'silver', minVisits: 4, bonusPercent: 10 },
+      ],
+      stampTarget: null,
+      stampReward: null,
+      stampRewardAr: null,
+      depositFils: fils(5000),
+      noShowReturnMinutes: 60,
+      businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
+      social: [],
+      whatsappEnabled: false,
+    })
     .onConflictDoNothing();
 
   await db
     .insert(branch)
     .values([
-      { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya' },
-      { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City' },
+      { id: 'BR-LUM-HAW', salonId: 'SAL-LUMIERE', name: 'Hawally', nameAr: null },
+      { id: 'BR-LUM-JAB', salonId: 'SAL-LUMIERE', name: 'Jabriya', nameAr: null },
     ])
     .onConflictDoNothing();
 

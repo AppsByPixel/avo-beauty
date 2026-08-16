@@ -31,17 +31,45 @@ import { writeAudit } from '../services/audit';
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
 const EDITABLE = new Set([
   'name',
+  // `name` and `stampReward` are editable, so their Arabic twins are too. A
+  // field the API serves but nothing can ever set is the same half-implemented
+  // state this change exists to close: it would leave the Arabic name settable
+  // only by a hand-written UPDATE.
+  'nameAr',
   'brandColor',
   'loyaltyMode',
   'tiers',
   'stampTarget',
   'stampReward',
+  'stampRewardAr',
   'depositFils',
   'noShowReturnMinutes',
   'businessHours',
   'social',
   'whatsappEnabled',
 ]);
+
+/**
+ * The nullable Arabic columns, and the only fields on this route where an empty
+ * string is not a value.
+ *
+ * `'' ?? name` is `''` — a blank Arabic name defeats the client's fallback and
+ * paints an empty heading, which is why the CHECK constraint refuses it. Coerced
+ * here rather than 400'd because clearing a translation is a legitimate thing to
+ * want, and "" is how an emptied text input arrives. Without this, clearing the
+ * field would surface as a constraint violation, i.e. a 500 on a valid intent.
+ */
+const NULLABLE_ARABIC = new Set(['nameAr', 'stampRewardAr']);
+
+function normaliseArabic(key: string, value: unknown): unknown {
+  if (!NULLABLE_ARABIC.has(key)) return value;
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw badRequest('invalid_request', `${key} must be a string or null.`);
+  }
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
 
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
@@ -57,6 +85,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({
       id: s.id,
       name: s.name,
+      // Emitted whether or not it is set, and emitted as JSON `null` when it is
+      // not. An OMITTED key and a null are the same thing to `??`, which is
+      // exactly why the missing implementation went unnoticed — so the absent
+      // case is now a value the client can actually see and a spec can actually
+      // assert on. What must never reach a client is the STRING "null".
+      nameAr: s.nameAr,
       plan: s.plan,
       brandColor: s.brandColor,
       modules: { booking: s.moduleBooking, shop: s.moduleShop },
@@ -64,10 +98,16 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       tiers: s.tiers,
       stampTarget: s.stampTarget,
       stampReward: s.stampReward,
+      stampRewardAr: s.stampRewardAr,
       depositFils: s.depositFils,
       noShowReturnMinutes: s.noShowReturnMinutes,
       businessHours: s.businessHours,
-      branches: branches.map((b) => ({ id: b.id, salonId: b.salonId, name: b.name })),
+      branches: branches.map((b) => ({
+        id: b.id,
+        salonId: b.salonId,
+        name: b.name,
+        nameAr: b.nameAr,
+      })),
       social: s.social,
       whatsappEnabled: s.whatsappEnabled,
     });
@@ -92,7 +132,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     if (!before) throw notFound('unknown_salon', 'No such salon.');
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
-    for (const k of keys) patch[k] = body[k];
+    for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
 
     const [after] = await db
       .update(salon)
