@@ -46,12 +46,12 @@ import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
-import { receiptJob } from '../db/schema/receipt';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { consumeToken, peekToken, TokenOutsideSalonError } from './walletToken';
 import { claimKey, completeKey } from './idempotency';
+import { queueReceipts } from './receipts';
 import { writeAudit } from './audit';
 
 /** Voidable for 15 minutes — api-contract.md § StaffUser, "reverse within 15 min". */
@@ -300,18 +300,15 @@ export async function performCharge(
         .where(eq(member.id, m.id));
     }
 
-    // ------------------------------------------------ 10. queue the receipt --
-    // A row, not a network call. The worker sends it after this commits.
-    await tx.insert(receiptJob).values({
+    // ----------------------------------------------- 10. queue the receipts --
+    // Rows, not network calls. The worker sends them after this commits, one
+    // channel at a time and independently — see services/receipts.ts.
+    await queueReceipts(tx, m, txId, {
+      kind: 'charge',
       transactionId: txId,
-      memberId: m.id,
-      channel: 'whatsapp',
-      payload: {
-        transactionId: txId,
-        amountFils: due,
-        services: rows.map((r) => ({ id: r.id, name: r.name, priceFils: r.priceFils })),
-        balanceAfterFils: balanceAfter,
-      },
+      amountFils: due,
+      services: rows.map((r) => ({ id: r.id, name: r.name, priceFils: r.priceFils })),
+      balanceAfterFils: balanceAfter,
     });
 
     // ------------------------------------------------------------ 11. audit --

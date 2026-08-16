@@ -61,8 +61,8 @@ import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
-import { receiptJob } from '../db/schema/receipt';
 import { gatewayEvent, topUpIntent } from '../db/schema/topup';
+import { queueReceipts } from './receipts';
 import type { MemberPrincipal } from '../auth/principal';
 import { ApiError, badRequest, conflict, notFound } from '../http/errors';
 import { gateway, withGatewayTimeout, type GatewayOutcome } from '../gateway';
@@ -618,25 +618,22 @@ async function creditWallet(
 
   await tx.insert(ledgerEntry).values(entries);
 
-  // ------------------------------------------------------------ receipt ---
-  // A row, not a network call — the transactional outbox, same as the charge
-  // path. `UNIQUE (transaction_id)` means one receipt per credit even if this
-  // code is reached twice.
-  await tx.insert(receiptJob).values({
+  // ----------------------------------------------------------- receipts ---
+  // Rows, not network calls — the transactional outbox, same as the charge
+  // path. `UNIQUE (transaction_id, channel)` means one receipt per credit PER
+  // CHANNEL even if this code is reached twice: a replay collides on both
+  // columns and is refused, while the two channels stay independent of each
+  // other.
+  await queueReceipts(tx, m, txId, {
+    kind: 'topup',
     transactionId: txId,
-    memberId: m.id,
-    channel: 'whatsapp',
-    payload: {
-      kind: 'topup',
-      transactionId: txId,
-      intentId: intent.id,
-      amountFils: intent.amountFils,
-      bonusFils: intent.bonusFils,
-      creditFils: intent.creditFils,
-      method: intent.method,
-      reference,
-      balanceAfterFils: balanceAfter,
-    },
+    intentId: intent.id,
+    amountFils: intent.amountFils,
+    bonusFils: intent.bonusFils,
+    creditFils: intent.creditFils,
+    method: intent.method,
+    reference,
+    balanceAfterFils: balanceAfter,
   });
 
   // -------------------------------------------------------------- audit ---

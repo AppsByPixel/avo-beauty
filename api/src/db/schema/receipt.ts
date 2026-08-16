@@ -22,7 +22,17 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { check, index, integer, jsonb, pgEnum, pgTable, text, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 import { member } from './member';
 import { transaction } from './transaction';
@@ -36,14 +46,8 @@ export const receiptJob = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
 
-    /**
-     * One receipt per transaction. The unique index is what makes an idempotent
-     * replay of a charge queue ONE receipt rather than a second one — Lane D's
-     * "a double submit queues ONE WhatsApp receipt" case.
-     */
     transactionId: text('transaction_id')
       .notNull()
-      .unique()
       .references(() => transaction.id, { onDelete: 'restrict' }),
     memberId: text('member_id')
       .notNull()
@@ -66,6 +70,30 @@ export const receiptJob = pgTable(
     sentAt: timestamptz('sent_at'),
   },
   (t) => [
+    /**
+     * ONE ROW PER TRANSACTION *PER CHANNEL*, and the second half of that is the
+     * whole point.
+     *
+     * It was `UNIQUE (transaction_id)`, which reads as "one receipt per
+     * transaction" and is the natural thing to write. It is also a rule that
+     * makes build-plan.md phase 2 unsatisfiable: "a receipt email AND a
+     * WhatsApp receipt arrive for every settled payment" needs two rows, and
+     * the constraint permitted one. The charge path queued WhatsApp and email
+     * silently had nowhere to go.
+     *
+     * With the channel in the key the two are separate jobs. They queue
+     * independently, the worker retries them independently, and a WhatsApp
+     * provider outage cannot stop the email — the same isolation
+     * whatsapp-templates.md already demands between a failed send and the
+     * transaction that triggered it, applied one level out, between channels.
+     *
+     * It still does the job it was doing before. An idempotent replay of a
+     * charge re-runs this insert with the same `transaction_id` and the same
+     * `channel`, and the constraint refuses it, so Lane D's "a double submit
+     * queues ONE WhatsApp receipt" holds exactly as it did — one per channel is
+     * still one WhatsApp receipt.
+     */
+    uniqueIndex('receipt_job_transaction_channel_uq').on(t.transactionId, t.channel),
     // The worker's claim query.
     index('receipt_job_claim_idx')
       .on(t.availableAt)
