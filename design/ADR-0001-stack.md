@@ -122,9 +122,19 @@ before this is committed. Until then the schema and deployment stay provider-neu
 the decision costs nothing today and gets expensive only once production data exists.
 Start the procurement conversation in week one.
 
-**PSP.** Out of the pilot's path by decision — the gateway sits behind an adapter with a
-sandbox implementation. Swapping in the contracted processor is a config change and one
-adapter, not a rebuild.
+**PSP — ANSWERED 17 Aug 2026: MyFatoorah.** The product owner confirmed AVO already uses
+MyFatoorah as its payment provider, and that the AVO/salon split is configured inside
+MyFatoorah rather than computed by this API.
+
+This is exactly what the adapter was built for. `GATEWAY_DRIVER` currently accepts only
+`sandbox`; adding `myfatoorah` is one driver in `api/src/gateway/` plus credentials — no
+change to the charge path, the webhook state machine, or the signature verification, all of
+which were built against the interface rather than a provider.
+
+Still open, and NOT answered by this: the **CBK position**. MyFatoorah being a licensed
+processor answers "who moves the money"; it does not answer whether AVO holding stored value
+requires its own licence. Those are different questions and `go-live-checklist.md` lists
+them separately.
 
 ---
 

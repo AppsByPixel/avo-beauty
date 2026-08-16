@@ -525,3 +525,15 @@ Merchant → Settings displays it, Owner → Controls configures it.
 **Reverse this only if** the money model changes so the customer pays the processing fee —
 she pays 10.150 to have 10.000 credited. That is a different product, and it would require
 redefining `creditFils`, not just adding a label.
+
+**Confirmed by the product owner, 17 Aug 2026.** Asked directly whether the salon or the
+customer absorbs the KNET fee:
+
+> "usually that happens through our payment provider MyFatoorah … where in their system we
+> put the amount we are going to take and what goes to salon. The customer doesn't see this
+> of course, they just see the price."
+
+So the split is configured **at the PSP**, not computed by this API. That has a consequence
+for `feeFils`: it is a **record of the split MyFatoorah will apply**, not an amount this
+system moves. Reconciliation must therefore match our `Transaction` rows against
+MyFatoorah's split reporting, not against a single gross settlement figure.
