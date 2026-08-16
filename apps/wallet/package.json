@@ -1,0 +1,39 @@
+{
+  "name": "@avo/wallet",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "web": "expo start --web",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "build": "expo export --platform web --output-dir dist",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "echo \"@avo/wallet: test files are lane D's column\" && exit 0"
+  },
+  "dependencies": {
+    "@avo/tokens": "workspace:*",
+    "@avo/types": "workspace:*",
+    "@expo-google-fonts/fraunces": "^0.4.1",
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo/metro-runtime": "~57.0.10",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~57.0.13",
+    "expo-font": "~57.0.1",
+    "expo-linear-gradient": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-qrcode-svg": "^6.3.21",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}
