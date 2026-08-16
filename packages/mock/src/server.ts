@@ -120,14 +120,42 @@ async function intercept(req: FastifyRequest, reply: FastifyReply): Promise<bool
 const app = Fastify({ logger: { transport: { target: 'pino-pretty' } } });
 await app.register(cors, { origin: true });
 
-/** Idempotency keys seen this process, so a replay returns the first result. */
+/**
+ * Idempotency keys seen this process, so a replay returns the first result.
+ *
+ * SCOPED PER ENDPOINT. A single global map keyed on the header alone means a key
+ * used on POST /topups is honoured by POST /charges — the charge returns a
+ * TopUpIntent and never debits. Lane A must scope on (principal, endpoint, key),
+ * with the row inserted inside the same transaction as the effect.
+ */
 const idempotency = new Map<string, unknown>();
+/** Top-up intents by their real id, so GET /topups/{id} can look one up. */
+const topups = new Map<string, TopUpIntent>();
 /** Wallet tokens issued and not yet consumed. Single use — non-negotiable #2. */
 const liveTokens = new Map<string, { memberId: string; expiresAt: number }>();
 
 function idempotencyKey(req: FastifyRequest): string | null {
   const k = req.headers['idempotency-key'];
   return (Array.isArray(k) ? k[0] : k) ?? null;
+}
+
+/** Namespaced so a key cannot leak between endpoints. */
+function scopedKey(req: FastifyRequest, key: string): string {
+  return `${req.method}:${req.routeOptions.url ?? req.url}:${key}`;
+}
+
+/** Money arriving from a client is untrusted. A 400 the client can act on, not a 500. */
+function validateAmountFils(value: unknown): { ok: true; amount: Fils } | { ok: false; message: string } {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return { ok: false, message: 'amountFils must be a number of fils, e.g. 10000 for 10.000 KD.' };
+  }
+  if (!Number.isInteger(value)) {
+    return { ok: false, message: 'amountFils must be a whole number of fils. 10.000 KD is 10000.' };
+  }
+  if (value <= 0) {
+    return { ok: false, message: 'amountFils must be greater than zero.' };
+  }
+  return { ok: true, amount: fils(value) };
 }
 
 // ------------------------------------------------------------------ member --
@@ -187,10 +215,15 @@ app.post('/topups', async (req, reply) => {
       message: 'Every money-moving POST needs an Idempotency-Key header.',
     });
   }
-  if (idempotency.has(key)) return idempotency.get(key);
+  const scoped = scopedKey(req, key);
+  if (idempotency.has(scoped)) return idempotency.get(scoped);
 
-  const body = req.body as { amountFils: number; method: 'knet' | 'card' | 'applepay' };
-  const amount = fils(body.amountFils);
+  const body = req.body as { amountFils: unknown; method: 'knet' | 'card' | 'applepay' };
+  const parsed = validateAmountFils(body.amountFils);
+  if (!parsed.ok) {
+    return reply.code(400).send({ error: 'invalid_amount', message: parsed.message });
+  }
+  const amount = parsed.amount;
   const method = body.method ?? 'knet';
 
   // Tier bonus is computed SERVER-SIDE and does not exist in stamps mode.
@@ -217,7 +250,8 @@ app.post('/topups', async (req, reply) => {
     reference: `KNET-${Math.floor(Math.random() * 9e7 + 1e7)}`,
   };
 
-  idempotency.set(key, intent);
+  idempotency.set(scoped, intent);
+  topups.set(id, intent);
   return intent;
 });
 
@@ -225,22 +259,13 @@ app.post('/topups', async (req, reply) => {
 app.get<{ Params: { id: string } }>('/topups/:id', async (req, reply) => {
   if (await intercept(req, reply)) return;
 
-  const base = [...idempotency.values()].find(
-    (v): v is TopUpIntent => typeof v === 'object' && v !== null && 'redirectUrl' in v,
-  );
-  const intent: TopUpIntent = base ?? {
-    id: req.params.id,
-    memberId: member.id,
-    amountFils: fils(10000),
-    bonusFils: fils(1000),
-    creditFils: fils(11000),
-    method: 'knet',
-    feeFils: fils(150),
-    status: 'succeeded',
-    failureReason: null,
-    redirectUrl: '',
-    reference: 'KNET-77120043',
-  };
+  // Look up the intent that was actually asked for. Returning "whichever intent
+  // exists" tells a client polling a fabricated id that their money landed, and
+  // makes two concurrent top-ups read each other's amounts.
+  const intent = topups.get(req.params.id);
+  if (!intent) {
+    return reply.code(404).send({ error: 'unknown_topup', message: 'No such top-up.' });
+  }
 
   if (has(req, 'declined')) return { ...intent, status: 'failed', failureReason: 'declined' };
   if (has(req, 'cancelled'))
@@ -326,21 +351,40 @@ app.post('/charges', async (req, reply) => {
       message: 'Every money-moving POST needs an Idempotency-Key header.',
     });
   }
-  if (idempotency.has(key)) return idempotency.get(key);
+  const scoped = scopedKey(req, key);
+  if (idempotency.has(scoped)) return idempotency.get(scoped);
 
   const body = req.body as { memberId: string; serviceIds: string[]; token?: string };
-  const chosen = services.filter((sv) => body.serviceIds?.includes(sv.id));
+
+  const requested = body.serviceIds ?? [];
+  const chosen = services.filter((sv) => requested.includes(sv.id));
+  // An unknown service id must not silently charge 0.000 and settle a real
+  // transaction with a voidable window for work that doesn't exist.
+  const unknown = requested.filter((id) => !services.some((sv) => sv.id === id));
+  if (requested.length === 0 || unknown.length > 0) {
+    return reply.code(400).send({
+      error: 'invalid_services',
+      message:
+        unknown.length > 0
+          ? `Unknown service: ${unknown.join(', ')}.`
+          : 'A charge needs at least one service.',
+      unknown,
+    });
+  }
   const gross = chosen.reduce<Fils>((sum, sv) => add(sum, fils(sv.priceFils)), fils(0));
 
-  // Single-use consumption. A second scan of the same token must fail.
+  // VALIDATE the token here, but do NOT consume it yet.
   if (body.token) {
-    if (!liveTokens.has(body.token)) {
+    const entry = liveTokens.get(body.token);
+    if (!entry) {
       return reply.code(410).send({
         error: 'token_consumed_or_unknown',
         message: 'That code has already been used.',
       });
     }
-    liveTokens.delete(body.token);
+    if (entry.expiresAt < Date.now()) {
+      return reply.code(410).send({ error: 'token_expired', message: 'That code expired.' });
+    }
   }
 
   const heldDeposit = fils(0);
@@ -348,7 +392,10 @@ app.post('/charges', async (req, reply) => {
   const balance = has(req, 'lowbal') ? fils(2500) : fils(member.balanceFils);
 
   if (due > balance) {
-    // Nothing else happened. Non-negotiable #3.
+    // Nothing else happened — non-negotiable #3. In particular the QR token is
+    // still live: she tops up at the counter and the SAME code is rescanned.
+    // Burning it here forces her to generate a fresh code after a failure that
+    // was never her fault, and it is the exact ordering Lane A must not copy.
     return reply.code(402).send({
       error: 'insufficient_balance',
       shortfallFils: subtract(due, balance),
@@ -357,6 +404,12 @@ app.post('/charges', async (req, reply) => {
       message: 'Balance too low.',
     });
   }
+
+  // The debit succeeds from here, so the token is consumed as part of it.
+  // Real implementation: a conditional UPDATE ... WHERE consumed_at IS NULL
+  // returning a row count, inside the charge transaction. A check-and-delete
+  // like this one is only safe because Node is single-threaded here.
+  if (body.token) liveTokens.delete(body.token);
 
   const after = subtract(balance, due);
   const tx: Transaction = {
@@ -384,7 +437,7 @@ app.post('/charges', async (req, reply) => {
     voidableUntil: new Date(Date.now() + 15 * 60_000).toISOString(),
   };
 
-  idempotency.set(key, result);
+  idempotency.set(scoped, result);
   return result;
 });
 
@@ -408,11 +461,26 @@ app.post('/voids', async (req, reply) => {
       message: "You don't have permission to void a charge. A manager can grant it.",
     });
   }
+  // A void moves money, so non-negotiable #4 applies to it too. A retried void
+  // without a key is a double refund.
+  const key = idempotencyKey(req);
+  if (!key) {
+    return reply.code(400).send({
+      error: 'idempotency_key_required',
+      message: 'Every money-moving POST needs an Idempotency-Key header.',
+    });
+  }
+  const scoped = scopedKey(req, key);
+  if (idempotency.has(scoped)) return idempotency.get(scoped);
+
   const { reason } = req.body as { transactionId: string; reason: string };
   if (!reason) {
     return reply.code(400).send({ error: 'reason_required', message: 'A void needs a reason.' });
   }
-  return { ok: true, refundedFils: fils(8000), visitRemoved: true };
+
+  const result = { ok: true, refundedFils: fils(8000), visitRemoved: true };
+  idempotency.set(scoped, result);
+  return result;
 });
 
 // ------------------------------------------------------------------ salon ---

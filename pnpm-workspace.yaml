@@ -2,3 +2,4 @@ packages:
   - "api"
   - "apps/*"
   - "packages/*"
+  - "e2e"
