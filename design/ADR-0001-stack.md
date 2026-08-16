@@ -125,3 +125,45 @@ Start the procurement conversation in week one.
 **PSP.** Out of the pilot's path by decision — the gateway sits behind an adapter with a
 sandbox implementation. Swapping in the contracted processor is a config change and one
 adapter, not a rebuild.
+
+---
+
+## Addendum, same day — AvoRewards reviewed and deliberately not extended
+
+The original decision above was taken without knowledge of **AvoRewards**, AVO's existing
+white-label wallet and loyalty platform, live with roughly ten food-and-drink tenants
+(Lean, Harvest, ACR, Aseer Time, Matcha Matcha, Nejoud, Roast Coffee, Say Suco, MHB, Back
+Burner). Source reviewed: `AvoMobileApps-Lean`.
+
+That platform is:
+
+| | |
+|---|---|
+| Mobile | Bare React Native 0.69.5, yarn, patch-package |
+| Backend | .NET / ABP on Azure — `nextwhitelabelling-prod.azurewebsites.net/api` |
+| Tenanting | `COMPANY_ID` + `brandId` routing keys, accounts scoped per tenant |
+| White-label | One git branch per brand, one Xcode scheme per brand, one `theme/brand.js` per branch |
+| Already built | Wallet, deposits, loyalty levels, QR, stores, orders, Apple Pay |
+
+**Decision: AVO Beauty is a new platform, not a new tenant. Expo is kept.** Confirmed by
+the product owner after review. Three reasons, in order of weight:
+
+1. **Money.** AvoRewards handles money as floats —
+   `convertToDecimals = (n, d) => parseFloat(n).toFixed(d)` in `src/helper/cart.js`.
+   Non-negotiable #1 requires integer fils end to end. In KWD at three decimals this is
+   foundational, not a refactor, and changing it inside a system already serving ten
+   tenants is a larger and riskier job than building correctly here.
+2. **Web-first.** The brief requires a customer wallet reachable without an app download.
+   AvoRewards is app-only. Expo with the web target serves the requirement and keeps store
+   review off the 30-day critical path.
+3. **White-label model.** `go-live-checklist.md` requires a pipeline producing a per-salon
+   app from one brand token, name, logo and typography pairing **with no code change**.
+   Branch-per-brand is the opposite, and every fix must be cherry-picked ten times. The
+   handoff is an explicit correction of the current approach; adopting that approach would
+   defeat it.
+
+**Accepted cost:** AVO will run two mobile stacks and two backends. Real, and the reason
+this is written down. It is the price of the three points above, and it was paid knowingly.
+
+**What we take from AvoRewards anyway** — see `PRIOR-ART.md`. The hard-won operational
+knowledge in that codebase is worth more than its architecture.
