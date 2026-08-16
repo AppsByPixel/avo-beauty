@@ -98,6 +98,22 @@ Two documents against one. Unresolved at the time of writing.
 number in front of a customer that someone decided they should not see, or removes one
 someone decided they should.
 
+**Then check what AVO actually ships.** `~/Desktop/AvoMobileApps-Lean` is a live AvoRewards
+tenant — the same company, the same market, years in production. It has broken a tie three
+times now:
+
+- The design showed a payment fee to the customer. Lean has **zero** fee strings anywhere,
+  and renders a payment method as `{langugaeId === 'ar' ? item?.nameAr : item.name}` — a
+  name and nothing else. The contract was right.
+- We added `nameAr` to `Salon` and `Branch` from the bundle's own reference implementation;
+  that same line shows it is the house pattern on backend entities.
+- The app names no payment gateway at all, because the backend returns a hosted URL — which
+  is why MyFatoorah appears nowhere in it, and why our `redirectUrl` shape matches a system
+  already in production.
+
+The bundle describes intent at one moment. The live app is what the company does. When they
+disagree, that is worth knowing before you ask — see `PRIOR-ART.md`.
+
 Check specifically for: money the customer may not be entitled to see, fields that do not
 exist on the entity, and states the contract says are impossible.
 

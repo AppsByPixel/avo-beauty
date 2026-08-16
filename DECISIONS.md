@@ -37,3 +37,33 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### `feeFils` on `POST /topups` — decided, deliberately not yet implemented
+
+**What.** `POST /topups` still returns `feeFils`. It is as customer-facing as
+`GET /topups/{id}` — the wallet calls it to create the intent — so the customer-never rule
+applies there too and it should serialise through `TopUpIntentPublicSchema`.
+
+**Why it is not done yet.** Lane D's two suites contradict each other on this exact
+response: `integration.test.ts` wants the fee gone, while five specs in `money.test.ts`
+assert `expect(intent.feeFils).toBe(150)`. Removing it from the mock right now turns `dev`
+red, and rule 1 of this run is that `dev` never stays red.
+
+**Sequencing.** Lane D moves the commission assertions off the customer response and onto
+the persisted `fee_fils` — the pattern it already used for `receipt_job`, proving behaviour
+against the table rather than through a response a customer sees. Lane A applies the public
+shape to `POST /topups` in the same cycle. Both land together or neither does.
+
+**To reverse:** keep `feeFils` on both responses and delete `TopUpIntentPublicSchema`. You
+would be choosing to show AVO's commission to customers, against the contract, the product
+owner's own words, and every AVO app in production.
+
+### Scanner given to Lane B rather than a new lane
+
+**What.** `apps/scanner/` is Lane B's column alongside `apps/wallet/`.
+
+**Why.** ADR-0001 puts both in one Expo codebase sharing tokens and types. A separate lane
+would have two agents in one dependency graph competing over shared components.
+
+**To reverse:** split them once a shared mobile component package exists — that is the point
+at which two lanes stop colliding.
+
