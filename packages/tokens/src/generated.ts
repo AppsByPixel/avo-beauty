@@ -28,6 +28,7 @@ export const tokens = {
     "borderControl": "rgba(28,27,25,0.14)",
     "textMuted": "rgba(28,27,25,0.5)",
     "textMutedLabel": "rgba(28,27,25,0.6)",
+    "neutralDot": "#8A867E",
     "textMutedSoft": "rgba(28,27,25,0.45)",
     "textMutedStrong": "rgba(28,27,25,0.7)",
     "success": "#25D366",
@@ -39,6 +40,7 @@ export const tokens = {
     "warnBg": "#F3E9CF",
     "toggleOff": "#D9D6CF",
     "disabledBg": "#E7E4DD",
+    "skeleton": "#EDEAE3",
     "whatsappOnGreen": "#0B3D1E",
     "white": "#FFFFFF"
   },
@@ -217,7 +219,13 @@ export const tokens = {
     "brandFillStatus": "Applied across all six design files. Audited by driving every screen through its states in the live DOM and scanning for white text on opaque backgrounds below 4.5:1 plus brand fills whose only white content is an SVG stroke: zero failures. Three documented exceptions in interaction-spec.md §2 (translucent pills on the wallet card, white checkmarks in stamp dots as non-text graphics, WhatsApp green).",
     "mutedLabel": "Uppercase micro-labels (11px/600) use color.textMutedLabel = rgba(28,27,25,0.6), not 0.45 - 0.45 measures ~3.3:1 and fails at that size. 0.5/0.55 remain the muted body scale. (Token added: the rule mandated 0.6 and the design uses it 154 times, but no 0.6 token existed, so every micro-label would have been hardcoded.)",
     "whatsapp": "WhatsApp green #25D366 is a fixed third-party brand colour: white text on it is 1.98:1. Label WhatsApp buttons with #0B3D1E.",
-    "borderControl": "Secondary control borders (bordered buttons, steppers, chips) use color.borderControl = rgba(28,27,25,0.14), used 111 times across the design. color.hairline (0.08) is a row divider and makes a bordered control look unbordered."
+    "borderControl": "Secondary control borders (bordered buttons, steppers, chips) use color.borderControl = rgba(28,27,25,0.14), used 111 times across the design. color.hairline (0.08) is a row divider and makes a bordered control look unbordered.",
+    "darkSurfaces": "The staff scanner frame and the owner-console sidebar are dark by design, not by a theme. `dark.focusRing` #A9BBA6 is mandatory there: interaction-spec.md section 2 says #5A6B58 does not carry against #1C1B19. These are NOT a dark-mode palette - dark mode is out of scope."
+  },
+  "dark": {
+    "surface": "#131511",
+    "accent": "#A7BBA0",
+    "focusRing": "#A9BBA6"
   }
 } as const;
 

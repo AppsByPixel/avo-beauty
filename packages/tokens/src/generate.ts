@@ -159,7 +159,13 @@ export const CURRENCY = tokens.$meta.currency;
 
 // ---------------------------------------------------------- React Native ---
 
-function emitNative(): string {
+/**
+ * The native theme as an object. Built once and serialised twice — as JS and as
+ * a declaration — so the two cannot drift. Re-parsing the emitted JS to derive
+ * the types would make the declaration a function of a string, which is how a
+ * generator ends up lying about itself.
+ */
+function nativeTheme(): Record<string, unknown> {
   const color = raw.color as Record<string, string>;
   const sage = (raw.brandPresets as Record<string, Record<string, string>>).amaraSage!;
   const type = raw.type as Record<string, Record<string, unknown>>;
@@ -180,16 +186,22 @@ function emitNative(): string {
     };
   }
 
-  const theme = {
+  return {
     color: { ...color, brand: sage.brand, brandDeep: sage.deep, brandTint: sage.tint },
     card: { from: sage.cardFrom, to: sage.cardTo },
+    // The scanner frame and owner-console sidebar are dark by design, not by
+    // theme. dark.focusRing is mandatory there — interaction-spec.md §2.
+    dark: raw.dark,
     text: textStyles,
     radius: raw.radius,
     space: raw.space,
     control: raw.control,
     tier: raw.tier,
   };
+}
 
+function emitNative(): string {
+  const theme = nativeTheme();
   return `${BANNER}
 
 export const theme = ${JSON.stringify(theme, null, 2)};
@@ -205,9 +217,43 @@ function trackingToPx(tracking: string, size: number): number {
 
 // ------------------------------------------------------------------ run ----
 
+/**
+ * A declaration file for the native theme.
+ *
+ * Without it, `@avo/tokens/native` is untyped and every consumer hand-copies a
+ * declaration — which both mobile apps did, and which is the exact drift this
+ * generator exists to prevent. A generated artifact that forces a hand-written
+ * companion is not generated.
+ *
+ * Emitted as a structural type of the real object rather than a hand-maintained
+ * interface, so it cannot fall behind the values it describes.
+ */
+function emitNativeTypes(): string {
+  const shape = (v: unknown, indent = 2): string => {
+    if (Array.isArray(v)) return `readonly ${shape(v[0], indent)}[]`;
+    if (v && typeof v === 'object') {
+      const pad = ' '.repeat(indent);
+      const rows = Object.entries(v as Record<string, unknown>)
+        .map(([k, val]) => `${pad}readonly ${JSON.stringify(k)}: ${shape(val, indent + 2)};`)
+        .join('\n');
+      return `{\n${rows}\n${' '.repeat(indent - 2)}}`;
+    }
+    return typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : 'string';
+  };
+
+  return `${BANNER}
+
+declare const theme: ${shape(nativeTheme())};
+
+export { theme };
+export default theme;
+`;
+}
+
 mkdirSync(resolve(here, '../dist'), { recursive: true });
 writeFileSync(resolve(here, '../dist/avo-tokens.css'), emitCss());
 writeFileSync(resolve(here, 'generated.ts'), emitTs());
 writeFileSync(resolve(here, '../dist/native.js'), emitNative());
+writeFileSync(resolve(here, '../dist/native.d.ts'), emitNativeTypes());
 
-console.log('tokens → dist/avo-tokens.css, src/generated.ts, dist/native.js');
+console.log('tokens → dist/avo-tokens.css, src/generated.ts, dist/native.js, dist/native.d.ts');

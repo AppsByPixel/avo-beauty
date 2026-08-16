@@ -6,9 +6,15 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./css": "./dist/avo-tokens.css",
-    "./native": "./dist/native.js"
+    "./native": {
+      "types": "./dist/native.d.ts",
+      "default": "./dist/native.js"
+    }
   },
   "scripts": {
     "build": "tsx src/generate.ts && tsc -p tsconfig.json",

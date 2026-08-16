@@ -37,6 +37,38 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Five tokens added, and the native theme now ships its own types
+
+**What.** `color.neutralDot` (#8A867E), `color.skeleton` (#EDEAE3), and a `dark` group —
+`surface` #131511, `accent` #A7BBA0, `focusRing` #A9BBA6. And `packages/tokens` now emits
+`dist/native.d.ts` with a `types` export condition.
+
+**Why.** Both mobile lanes reported the same thing independently: `@avo/tokens/native` was
+untyped, so each app hand-copied a declaration file. **A generated artifact that forces a
+hand-written companion is not generated** — it is the exact drift the generator exists to
+prevent, arriving through the back door.
+
+The five hexes are all in the design with nothing to name them. `neutralDot` had to be flat
+rather than a composite: the wallet derived it from `textMuted` over `surfaceAlt2`, which is
+correct there, but the scanner's ground is dark and a composite cannot serve both. That was
+foreseen — the wallet's own comment said a flat token would be needed "if this dot ever has
+to sit on a different ground."
+
+`dark` is a group, not a theme. The scanner frame and owner-console sidebar are dark **by
+design**; dark mode is explicitly out of scope (`README.md` § Known gaps 3). `dark.focusRing`
+is mandatory there because `interaction-spec.md` §2 says #5A6B58 does not carry against
+#1C1B19.
+
+**One thing I got wrong first.** I generated the declaration by re-parsing the emitted
+JavaScript with string splits. It broke, and it deserved to — that makes the types a
+function of a string rather than of the data. The theme object is now built once and
+serialised twice, as JS and as a declaration, so the two cannot drift. I had just told Lane
+A not to do in-place shell rewrites for exactly this class of reason.
+
+**To reverse:** delete the tokens and the `emitNativeTypes` call. Both apps go back to
+hand-copied declarations that fall behind silently.
+
+
 ### Salon timezone — decided, IANA zone id, default `Asia/Kuwait`
 
 **What.** `Salon.timezone` added to the contract, defaulting to `Asia/Kuwait`. Lane A owes
