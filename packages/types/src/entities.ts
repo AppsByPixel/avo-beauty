@@ -182,6 +182,26 @@ export const TopUpIntentSchema = z.object({
   reference: z.string(),
 });
 
+/**
+ * The customer-facing shape of a top-up intent.
+ *
+ * `GET /topups/{id}` is called by the wallet, and the commission is
+ * merchant-visible / customer-never — settled in api-contract.md, confirmed by
+ * the product owner ("the customer doesn't see this of course, they just see the
+ * price") and by the live AvoRewards app, whose payment methods render a name
+ * and no fee.
+ *
+ * So the field is omitted from the type the customer endpoint returns, rather
+ * than left on it with a comment asking everyone to remember. A field that is
+ * not in the response cannot be leaked by a serialiser someone edits later —
+ * which is the failure mode Lane D found: `GET /members/me/transactions` maps
+ * its rows inline instead of going through the shared serialiser, so a rule
+ * enforced in one place was already only half enforced.
+ *
+ * `TopUpIntentSchema` keeps `feeFils` for the merchant and platform views.
+ */
+export const TopUpIntentPublicSchema = TopUpIntentSchema.omit({ feeFils: true });
+
 // -------------------------------------------------------------- booking ----
 
 export const BookingSchema = z.object({
@@ -438,6 +458,7 @@ export type WalletToken = z.infer<typeof WalletTokenSchema>;
 export type Transaction = z.infer<typeof TransactionSchema>;
 export type TransactionKind = z.infer<typeof TransactionKindSchema>;
 export type TopUpIntent = z.infer<typeof TopUpIntentSchema>;
+export type TopUpIntentPublic = z.infer<typeof TopUpIntentPublicSchema>;
 export type Booking = z.infer<typeof BookingSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;
