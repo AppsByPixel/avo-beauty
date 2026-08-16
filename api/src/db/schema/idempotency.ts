@@ -76,7 +76,15 @@ export const idempotencyKey = pgTable(
   },
   (t) => [
     // The race resolver. Everything above depends on this one index.
-    uniqueIndex('idempotency_key_scope_key_uq').on(t.scope, t.key),
+    //
+    // It covers ENDPOINT as well as (scope, key). Lane D found the failure the
+    // narrower index allows: with a single key space per principal, a key first
+    // used on POST /topups is matched by POST /charges, and the charge replays a
+    // TopUpIntent with a 200 while never debiting anything. Scoping per endpoint
+    // means the two flows cannot see each other's keys at all — a key is only
+    // ever valid for the endpoint that minted it, which is what the `endpoint`
+    // column was always documented to mean.
+    uniqueIndex('idempotency_key_scope_endpoint_key_uq').on(t.scope, t.endpoint, t.key),
     index('idempotency_key_expires_idx').on(t.expiresAt),
     index('idempotency_key_transaction_idx').on(t.transactionId),
 

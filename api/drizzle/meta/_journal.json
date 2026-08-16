@@ -15,6 +15,13 @@
       "when": 1786892848374,
       "tag": "0001_append_only_and_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786898168505,
+      "tag": "0002_spotty_proteus",
+      "breakpoints": true
     }
   ]
 }
