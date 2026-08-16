@@ -1,0 +1,731 @@
+/**
+ * THE SEAMS BETWEEN THE LANES.
+ *
+ * Every other file in this directory tests one lane's work. This one tests the
+ * places where two lanes' work meets, because that is where four branches that
+ * were each green in isolation stop being green together — and none of these
+ * combinations existed on one branch until the integration merge.
+ *
+ * Four seams, in the order they were found:
+ *
+ *   1. LANE C'S SIGN-IN × LANE A'S SCOPE CHECK. Lane A made the surface a
+ *      required parameter at every staff gate. Lane C replaced the shim with a
+ *      real `POST /auth/web/session`. Nobody had put a REAL session in front of
+ *      the scope check. Every spec in that block signs in with a password or a
+ *      PIN; none of them touch `AVO_TEST_PRINCIPALS`, which is the whole point —
+ *      the shim decides the scope by URL prefix, so a scope proven under the shim
+ *      is a property of the shim.
+ *
+ *   2. LANE A'S RECEIPT OUTBOX, END TO END. `receipt_job` is keyed
+ *      (transaction_id, channel) so the two channels are independent jobs. That
+ *      was proved against the table. This proves it through the product: a real
+ *      top-up, settled by the real signed callback, queues both channels — and
+ *      failing one leaves the other claimable by the worker's own claim
+ *      predicate.
+ *
+ *   3. THE COMMISSION RULE, AS A SWEEP. design/api-contract.md now says the
+ *      customer never sees `feeFils`. A single spec on the transaction feed would
+ *      pass forever while someone adds the field to a different serialiser, so
+ *      this walks every customer-facing response and searches the whole document.
+ *
+ *   4. TRUNK'S ARABIC NAMES. `nameAr` and `stampRewardAr` are nullable and fall
+ *      back to the Latin name. Most of Arabic is lane B's and out of reach from
+ *      here; the fallback is not, because it is only safe if the API serves a
+ *      string or a real null and never the four characters `null`.
+ *
+ * It uses `support/tenancy-harness.ts` rather than `support/api.ts` for the same
+ * reason gateway.test.ts and tenancy.test.ts do: it needs real bearer sessions,
+ * its own API on its own port, and psql. It never runs against `packages/mock`.
+ */
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { knownBug, precondition } from './support/known-bug.js';
+import {
+  A_MEMBER,
+  A_STAFF_FULL,
+  B_BRANCH,
+  B_MEMBER,
+  B_SCANNER_DEVICE,
+  B_STAFF,
+  B_STAFF_HANDLE,
+  QA_MEMBER,
+  QA_MEMBER_PHONE,
+  SALON_A,
+  SALON_B,
+  psql,
+  scalar,
+  signInDashboard,
+  signInMember,
+  signInScanner,
+  startTenancyApi,
+  stopTenancyApi,
+  treq,
+} from './support/tenancy-harness.js';
+
+/** Salon A's seeded scanner device. `api/src/db/seed.ts`. */
+const A_SCANNER_DEVICE = 'DEV-SCANNER-01';
+const A_STAFF_HANDLE = 'noura';
+
+let n = 0;
+const key = (label: string) => `int-${label}-${Date.now()}-${n++}`;
+
+/** Real sessions, minted once. Nothing below runs under the test shim. */
+let dashboardA = '';
+let scannerA = '';
+let dashboardB = '';
+let scannerB = '';
+let walletQa = '';
+
+beforeAll(async () => {
+  await startTenancyApi();
+  dashboardA = await signInDashboard(SALON_A, A_STAFF_HANDLE);
+  scannerA = await signInScanner(SALON_A, A_STAFF_HANDLE, A_SCANNER_DEVICE);
+  dashboardB = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+  scannerB = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+  walletQa = await signInMember(SALON_A, QA_MEMBER_PHONE);
+}, 180_000);
+
+afterAll(async () => {
+  await stopTenancyApi();
+});
+
+// ===========================================================================
+// SEAM 1 — lane C's real sign-in meets lane A's scope check
+// ===========================================================================
+
+/**
+ * THE TRIPWIRE THAT MAKES THE REST OF THIS BLOCK MEAN ANYTHING.
+ *
+ * `AVO_TEST_PRINCIPALS` is ON in this harness — the gateway suite needs it to
+ * mint a wallet token for a member whose password it cannot know. Under that
+ * flag an UNAUTHENTICATED request is not anonymous, it resolves to salon A's
+ * ST-001, and the shim picks the scope FROM THE URL: `/charges` is treated as a
+ * scanner surface, everything else as dashboard.
+ *
+ * So the shim can never produce a scope 403 on `/charges` — it hands out exactly
+ * the scope the route wants. A scope spec run without credentials is therefore
+ * guaranteed to pass and guaranteed to prove nothing, which is precisely how a
+ * dashboard session reaching `POST /charges` stayed invisible in the first place.
+ * These two specs establish that the tokens below are real and that the shim is
+ * distinguishable from them.
+ */
+describe('tripwires — these are real sessions, not the test shim', () => {
+  it('the dashboard token resolves to the staff row that signed in, with dashboard scope', async () => {
+    const me = await treq<{ id: string; salonId: string }>('GET', '/staff/me', {
+      token: dashboardB,
+    });
+    expect(me.status).toBe(200);
+    expect(me.body.id).toBe(B_STAFF);
+    expect(me.body.salonId).toBe(SALON_B);
+  });
+
+  it('and an unauthenticated request resolves to someone else entirely — the shim', async () => {
+    // If this ever returns 401, the shim is off and the specs below are still
+    // valid. If it returns ST-B01, the tokens above are not doing any work.
+    const me = await treq<{ id: string }>('GET', '/staff/me', { token: null });
+    expect(me.status).toBe(200);
+    expect(me.body.id).toBe(A_STAFF_FULL);
+    expect(me.body.id).not.toBe(B_STAFF);
+  });
+});
+
+describe('a real web session cannot charge a wallet', () => {
+  /**
+   * The direction that shipped broken once. A web session is long-lived,
+   * browser-based, not device-bound and refreshable for thirty days; if it can
+   * debit a wallet then every control around the four-digit PIN is decoration,
+   * because the easier door is open.
+   *
+   * Layla is a MANAGER holding all nine permissions, so this 403 cannot be a
+   * permission 403 — it has to be the surface.
+   */
+  it('POST /charges with a dashboard bearer token → 403', async () => {
+    const res = await treq<{ error?: string; message?: string }>('POST', '/charges', {
+      token: dashboardB,
+      idempotencyKey: key('web-charge'),
+      // A token that was never minted. If the scope gate is missing, this gets
+      // as far as the wallet-token lookup and answers 410 — so a 410 here is a
+      // FAILURE, and a very specific one: authority was checked after the token.
+      body: { memberId: B_MEMBER, serviceIds: ['SV-B01'], token: 'tok_never_minted' },
+    });
+
+    expect(res.status, `expected the surface refusal, got ${res.raw}`).toBe(403);
+  });
+
+  it('and the refusal names the surface rather than blaming her permissions', async () => {
+    const res = await treq<{ message?: string }>('POST', '/charges', {
+      token: dashboardB,
+      idempotencyKey: key('web-charge-copy'),
+      body: { memberId: B_MEMBER, serviceIds: ['SV-B01'], token: 'tok_never_minted' },
+    });
+    precondition(res.status === 403, `expected 403, got ${res.status} ${res.raw}`);
+    // api/src/auth/principal.ts SURFACE_COPY.scanner. A manager who hits this is
+    // confused, not attacking.
+    expect(res.body.message ?? '').toMatch(/scanner/i);
+    expect(res.body.message ?? '').not.toMatch(/permission/i);
+  });
+
+  it('moved no money and consumed no idempotency key — the refusal is the whole response', async () => {
+    const before = Number(scalar(`select balance_fils from member where id='${B_MEMBER}'`));
+    const k = key('web-charge-nomove');
+
+    const refused = await treq('POST', '/charges', {
+      token: dashboardB,
+      idempotencyKey: k,
+      body: { memberId: B_MEMBER, serviceIds: ['SV-B01'], token: 'tok_never_minted' },
+    });
+    precondition(refused.status === 403, `expected 403, got ${refused.status} ${refused.raw}`);
+
+    expect(Number(scalar(`select balance_fils from member where id='${B_MEMBER}'`))).toBe(before);
+    // A key burned by a request that was refused before any work would strand the
+    // retry: the scanner would re-send under the same key and get the 403 back.
+    expect(
+      Number(scalar(`select count(*) from idempotency_key where key='${k}'`)),
+      'a request refused at the scope gate still claimed its idempotency key',
+    ).toBe(0);
+  });
+
+  it('the SAME staff member charging from a real PIN session gets past the scope gate', async () => {
+    // The control. Without it every 403 above could be an endpoint that is simply
+    // broken shut. Same person, same permissions, same salon — only the kind of
+    // credential differs, and the answer changes from "wrong surface" to "that
+    // token does not exist", which is the token check doing its job.
+    const res = await treq<{ error?: string }>('POST', '/charges', {
+      token: scannerB,
+      idempotencyKey: key('pin-charge'),
+      body: { memberId: B_MEMBER, serviceIds: ['SV-B01'], token: 'tok_never_minted' },
+    });
+
+    expect(res.status, `expected the token refusal, got ${res.raw}`).toBe(410);
+    expect(res.body.error).toBe('token_consumed_or_unknown');
+  });
+});
+
+describe('a real PIN session cannot reach the dashboard', () => {
+  /**
+   * The other direction, and the older half of the wall. api-contract.md
+   * § StaffUser: a PIN must "never let it reach dashboard scopes". `GET /staff`
+   * is the roster — who works here and what they may do — and `PATCH /staff/{id}`
+   * next to it is how permissions themselves are set, so this is the surface that
+   * guards privilege escalation from a tablet on the salon floor.
+   */
+  it('GET /staff with a scanner bearer token → 403', async () => {
+    const res = await treq<{ items?: unknown[]; message?: string }>('GET', '/staff', {
+      token: scannerB,
+    });
+
+    expect(res.status, `expected the surface refusal, got ${res.raw}`).toBe(403);
+    expect(res.body.items, 'the roster leaked in the refusal body').toBeUndefined();
+  });
+
+  it('and the refusal tells her where the dashboard lives', async () => {
+    const res = await treq<{ message?: string }>('GET', '/staff', { token: scannerB });
+    precondition(res.status === 403, `expected 403, got ${res.status} ${res.raw}`);
+    // SURFACE_COPY.dashboard.
+    expect(res.body.message ?? '').toMatch(/dashboard/i);
+  });
+
+  it('PATCH /staff/{id} — the privilege-escalation route — is refused from the scanner too', async () => {
+    const before = scalar(`select perm_team::text from staff_user where id='ST-B02'`);
+    const res = await treq('PATCH', '/staff/ST-B02', {
+      token: scannerB,
+      body: { perms: { team: true } },
+    });
+
+    expect(res.status, `expected the surface refusal, got ${res.raw}`).toBe(403);
+    expect(
+      scalar(`select perm_team::text from staff_user where id='ST-B02'`),
+      'a 403 that still wrote the permission',
+    ).toBe(before);
+  });
+
+  it('the SAME staff member reading the roster from her web session succeeds', async () => {
+    // The control again: the 403s above are about the credential, not the route.
+    const res = await treq<{ items: Array<{ id: string }> }>('GET', '/staff', {
+      token: dashboardB,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.items.map((s) => s.id).sort()).toEqual([B_STAFF, 'ST-B02']);
+  });
+
+  it('both directions hold at salon A too — this is the gate, not salon B', async () => {
+    const webCharge = await treq('POST', '/charges', {
+      token: dashboardA,
+      idempotencyKey: key('a-web-charge'),
+      body: { memberId: A_MEMBER, serviceIds: ['SV-01'], token: 'tok_never_minted' },
+    });
+    const pinRoster = await treq('GET', '/staff', { token: scannerA });
+
+    expect([webCharge.status, pinRoster.status]).toEqual([403, 403]);
+  });
+});
+
+// ===========================================================================
+// SEAM 2 — the receipt outbox, driven through the product
+// ===========================================================================
+
+/**
+ * A settled top-up, made the way a customer makes one.
+ *
+ * `POST /topups` with a real wallet session, then the sandbox PSP's hosted page,
+ * which fires a real HMAC-signed callback at `POST /webhooks/sandbox` over real
+ * HTTP. Nothing here calls the settle service directly, so what is proved is the
+ * path the real processor will take.
+ */
+async function settleATopUp(label: string, amountFils = 10_000): Promise<string> {
+  const created = await treq<{ id: string; redirectUrl: string }>('POST', '/topups', {
+    token: walletQa,
+    idempotencyKey: key(label),
+    body: { amountFils, method: 'knet' },
+  });
+  precondition(created.status === 200, `POST /topups answered ${created.status} ${created.raw}`);
+
+  const ref = /\/_gateway\/([^/?#]+)/.exec(created.body.redirectUrl)?.[1];
+  precondition(!!ref, `no sandbox reference in redirectUrl: ${created.body.redirectUrl}`);
+
+  const paid = await treq('POST', `/_gateway/${ref}`, {
+    token: null,
+    body: { outcome: 'succeeded', notify: true },
+  });
+  precondition(paid.status === 200, `the hosted page answered ${paid.status} ${paid.raw}`);
+
+  const txId = scalar(`select coalesce(transaction_id,'') from topup_intent where id='${created.body.id}'`);
+  precondition(txId !== '', `${created.body.id} settled without a transaction id`);
+  return txId;
+}
+
+const channelsFor = (txId: string): string[] => {
+  const s = scalar(
+    `select coalesce(string_agg(channel::text, ',' order by channel::text), '') from receipt_job where transaction_id='${txId}'`,
+  );
+  return s === '' ? [] : s.split(',');
+};
+
+/**
+ * The worker's OWN claim predicate, copied from the partial index in
+ * `api/src/db/schema/receipt.ts`:
+ *
+ *   index('receipt_job_claim_idx').on(availableAt).where(status IN ('queued','failed'))
+ *
+ * Written out rather than derived, so that if lane A narrows what a worker may
+ * claim, this disagrees instead of silently following.
+ */
+const claimableChannels = (txId: string): string[] => {
+  const s = scalar(
+    `select coalesce(string_agg(channel::text, ',' order by channel::text), '')
+       from receipt_job
+      where transaction_id='${txId}'
+        and status in ('queued','failed')
+        and available_at <= now()`,
+  );
+  return s === '' ? [] : s.split(',');
+};
+
+describe('one settled payment queues two independent receipts', () => {
+  it('both channels are queued, through the real gateway round trip', async () => {
+    const txId = await settleATopUp('receipts-both');
+    expect(
+      channelsFor(txId),
+      'build-plan.md phase 2: "a receipt email AND a WhatsApp receipt arrive for every settled payment"',
+    ).toEqual(['email', 'whatsapp']);
+  });
+
+  it('as two rows with their own status, attempts and backoff — not one row with two destinations', async () => {
+    const txId = await settleATopUp('receipts-rows');
+    const rows = scalar(
+      `select coalesce(string_agg(channel::text || ':' || status::text || ':' || attempts::text, ' ' order by channel::text), '')
+         from receipt_job where transaction_id='${txId}'`,
+    );
+    expect(rows).toBe('email:queued:0 whatsapp:queued:0');
+  });
+
+  /**
+   * THE POINT OF PUTTING THE CHANNEL IN THE KEY.
+   *
+   * whatsapp-templates.md draws this line one level in — "a failed WhatsApp send
+   * must never roll back the transaction that triggered it" — and the composite
+   * key applies it between channels. Under the old `UNIQUE (transaction_id)` the
+   * email row could not exist at all, so this case could not even be posed.
+   *
+   * The WhatsApp job is failed the way a worker fails one: status, an error and a
+   * backoff into the future. The email must remain claimable RIGHT NOW.
+   */
+  it('failing the WhatsApp job leaves the email claimable', async () => {
+    const txId = await settleATopUp('receipts-isolation');
+    precondition(
+      channelsFor(txId).length === 2,
+      'this case needs both channels queued to say anything',
+    );
+
+    psql(`
+      UPDATE receipt_job
+         SET status = 'failed',
+             attempts = attempts + 1,
+             last_error = 'provider 503 — simulated by e2e/integration.test.ts',
+             available_at = now() + interval '1 hour'
+       WHERE transaction_id = '${txId}' AND channel = 'whatsapp';
+    `);
+
+    expect(
+      claimableChannels(txId),
+      'the WhatsApp failure took the email job with it — the two are not independent',
+    ).toEqual(['email']);
+
+    // And the email row itself was not touched by the failure.
+    expect(
+      scalar(
+        `select status::text || ':' || attempts::text || ':' || coalesce(last_error,'-') from receipt_job where transaction_id='${txId}' and channel='email'`,
+      ),
+    ).toBe('queued:0:-');
+  });
+
+  it('and the failed WhatsApp job is still the worker\'s to retry once its backoff expires', async () => {
+    const txId = await settleATopUp('receipts-retry');
+    psql(`
+      UPDATE receipt_job
+         SET status = 'failed', attempts = 1, available_at = now() - interval '1 minute'
+       WHERE transaction_id = '${txId}' AND channel = 'whatsapp';
+    `);
+    // `failed` is in the claim predicate on purpose: a failed send is a retry, not
+    // a dead letter. Both come back.
+    expect(claimableChannels(txId)).toEqual(['email', 'whatsapp']);
+  });
+
+  /**
+   * THE MUTATION PROOF FOR THE KEY ITSELF.
+   *
+   * Two inserts that a single-column `UNIQUE (transaction_id)` would treat
+   * identically and the composite key does not: a second WhatsApp row must be
+   * refused, and the email row that already exists is proof the composite key is
+   * the one in force. Together they pin the index shape behaviourally rather than
+   * by reading `pg_indexes` — a spec that reads the catalogue tells you what is
+   * declared, this tells you what the database will do.
+   */
+  it('a second row for a channel that already has one is refused by the database', async () => {
+    const txId = await settleATopUp('receipts-unique');
+    let error = '';
+    try {
+      psql(`
+        INSERT INTO receipt_job (transaction_id, member_id, channel, payload)
+        VALUES ('${txId}', '${QA_MEMBER}', 'whatsapp', '{}'::jsonb);
+      `);
+    } catch (err) {
+      error = String((err as Error).message);
+    }
+
+    expect(error, 'a duplicate WhatsApp receipt was accepted — that is a second message to a customer')
+      .toMatch(/duplicate key value violates unique constraint "receipt_job_transaction_channel_uq"/);
+    expect(
+      Number(
+        scalar(`select count(*) from receipt_job where transaction_id='${txId}' and channel='whatsapp'`),
+      ),
+    ).toBe(1);
+  });
+});
+
+// ===========================================================================
+// SEAM 3 — the commission never reaches the customer
+// ===========================================================================
+
+/**
+ * design/api-contract.md, settled during the integration: the customer never
+ * sees `feeFils`. `transaction.fee_fils` and `topup_intent.fee_fils` are real
+ * columns on tables the wallet reads, so the only thing between AVO's margin and
+ * the customer's activity feed is a serialiser.
+ *
+ * WHY THIS IS A SWEEP AND NOT A SPEC.
+ * `api/src/http/serialise.ts` gets this right and comments on it. But
+ * `GET /members/me/transactions` does NOT use that function — it maps the row
+ * inline in `api/src/routes/members.ts`, field by field. One spec pointed at one
+ * of those two would pass forever while the other one leaked, and the way this
+ * rule gets re-broken is exactly that: somebody adds a field to a serialiser
+ * nobody wrote a spec about. So this walks every customer-facing response and
+ * searches the WHOLE document, at any depth, for anything that looks like a fee.
+ */
+interface Leak {
+  path: string;
+  value: unknown;
+}
+
+/** Every path in a JSON document whose key looks like a commission. */
+function feeLeaks(value: unknown, path = '$'): Leak[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((v, i) => feeLeaks(v, `${path}[${i}]`));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) =>
+      // `fee`, `feeFils`, `commissionFils`, `platformFee` — the rule is about the
+      // number, not about one spelling of it.
+      /^(fee|commission)|([Ff]ee|[Cc]ommission)(Fils)?$/.test(k)
+        ? [{ path: `${path}.${k}`, value: v }]
+        : feeLeaks(v, `${path}.${k}`),
+    );
+  }
+  return [];
+}
+
+interface CustomerEndpoint {
+  what: string;
+  fetch: () => Promise<{ status: number; body: unknown; raw: string }>;
+}
+
+describe('the commission is merchant-visible and customer-never', () => {
+  /**
+   * The sweep's own tripwire. If `feeLeaks` were broken — a bad regex, a missed
+   * recursion — every spec below would pass by finding nothing, forever. So it is
+   * shown finding something first.
+   */
+  it('the detector finds a fee at any depth, under any of its spellings', () => {
+    const found = feeLeaks({
+      id: 'TX-1',
+      feeFils: 150,
+      nested: { items: [{ commissionFils: 7 }, { amountFils: 1 }] },
+      merchant: { fee: 9 },
+    }).map((l) => l.path);
+
+    expect(found.sort()).toEqual([
+      '$.feeFils',
+      '$.merchant.fee',
+      '$.nested.items[0].commissionFils',
+    ]);
+    // And it does not fire on the fields that legitimately carry money.
+    expect(feeLeaks({ amountFils: 1, bonusFils: 2, creditFils: 3, balanceFils: 4 })).toEqual([]);
+  });
+
+  it('sweeps every customer-facing read', async () => {
+    // Settle one first, so the feed and the intent below have something in them.
+    // A sweep over empty responses is a sweep that cannot fail.
+    const txId = await settleATopUp('fee-sweep');
+    const intentId = scalar(`select id from topup_intent where transaction_id='${txId}'`);
+    precondition(intentId !== '', 'no intent behind the settled transaction');
+
+    const endpoints: CustomerEndpoint[] = [
+      { what: 'GET /members/me', fetch: () => treq('GET', '/members/me', { token: walletQa }) },
+      {
+        what: 'GET /members/me/transactions — the activity feed',
+        fetch: () => treq('GET', '/members/me/transactions', { token: walletQa }),
+      },
+      {
+        what: 'GET /members/me/wallet-token',
+        fetch: () => treq('GET', '/members/me/wallet-token', { token: walletQa }),
+      },
+      {
+        what: `GET /salons/${SALON_A} — the wallet's salon header`,
+        fetch: () => treq('GET', `/salons/${SALON_A}`, { token: walletQa }),
+      },
+    ];
+
+    const results = await Promise.all(
+      endpoints.map(async (e) => ({ ...e, res: await e.fetch() })),
+    );
+
+    const leaks = results.flatMap((r) => {
+      expect(r.res.status, `${r.what} answered ${r.res.status} ${r.res.raw}`).toBe(200);
+      return feeLeaks(r.res.body).map((l) => `  ${r.what} → ${l.path} = ${JSON.stringify(l.value)}`);
+    });
+
+    expect(
+      leaks,
+      'AVO\'s commission reached a customer surface:\n' + leaks.join('\n'),
+    ).toEqual([]);
+  });
+
+  it('the feed really did contain the settled transaction — the sweep swept something', async () => {
+    // Guards the sweep above against the empty-collection failure mode: an
+    // activity feed with no rows in it has no fee to leak.
+    const feed = await treq<{ items: Array<{ id: string; kind: string }> }>(
+      'GET',
+      '/members/me/transactions',
+      { token: walletQa },
+    );
+    expect(feed.status).toBe(200);
+    expect(feed.body.items.length).toBeGreaterThan(0);
+    expect(feed.body.items.some((t) => t.kind === 'topup')).toBe(true);
+  });
+
+  it('but the merchant CAN see it — the rule is "customer-never", not "nobody"', () => {
+    // Read from the database rather than an endpoint, because the merchant
+    // surface that displays it is phase 4. What matters here is that the number
+    // is recorded and non-zero, so the customer-facing absence above is a
+    // deliberate omission and not simply a fee nobody ever computed.
+    const fee = Number(
+      scalar(
+        `select coalesce(max(fee_fils),-1) from transaction where member_id='${QA_MEMBER}' and kind='topup' and fee_fils > 0`,
+      ),
+    );
+    expect(fee, 'no top-up ever recorded a commission, so the sweep proves nothing').toBeGreaterThan(0);
+  });
+
+  /**
+   * THE OPEN CONTRACT QUESTION — NOT DECIDED HERE.
+   *
+   * `feeFils` is a field on `TopUpIntent` in design/api-contract.md, and
+   * `GET /topups/{id}` and `POST /topups` are customer endpoints that serialise
+   * that shape (`api/src/services/topup.ts` → `serialiseIntent`, whose own
+   * comment flags the tension). So the contract says two things:
+   *
+   *   the commission is "shown to the merchant not the customer"
+   *   TopUpIntent carries feeFils, and TopUpIntent is what a customer reads
+   *
+   * Both cannot be true. Recorded as a knownBug so it flips the day it is
+   * resolved in either direction — remove the field and this goes green and asks
+   * to be promoted; keep it and amend the contract, and this spec should be
+   * deleted with the amendment cited. Lane D does not get to pick.
+   */
+  knownBug('a customer reading her own top-up is told AVO\'s commission', async () => {
+    const created = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: key('fee-intent'),
+      body: { amountFils: 10_000, method: 'knet' },
+    });
+    precondition(created.status === 200, `POST /topups answered ${created.status} ${created.raw}`);
+
+    const read = await treq('GET', `/topups/${created.body.id}`, { token: walletQa });
+    precondition(read.status === 200, `GET /topups answered ${read.status} ${read.raw}`);
+
+    const leaks = [
+      ...feeLeaks(created.body).map((l) => `  POST /topups → ${l.path} = ${JSON.stringify(l.value)}`),
+      ...feeLeaks(read.body).map((l) => `  GET /topups/{id} → ${l.path} = ${JSON.stringify(l.value)}`),
+    ];
+
+    expect(
+      leaks,
+      'CONTRACT CONTRADICTION — api-contract.md § Commission says customer-never, ' +
+        '§ TopUpIntent lists feeFils, and GET /topups/{id} is a customer endpoint:\n' +
+        leaks.join('\n'),
+    ).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// SEAM 4 — trunk's Arabic names, and the fallback
+// ===========================================================================
+
+/**
+ * `packages/types` now carries `SalonSchema.nameAr`, `BranchSchema.nameAr` and
+ * `SalonSchema.stampRewardAr`. All three are NULLABLE and documented to fall back
+ * to the Latin name — "the same way an untranslated legal document falls back to
+ * `en`".
+ *
+ * Arabic is otherwise lane B's, and RTL, Plex Arabic and the digit rule are not
+ * reachable from an HTTP suite. The fallback is, because it has a server-side
+ * half that is easy to get wrong in a way no screenshot catches: `nameAr` must
+ * arrive as a string or as a real JSON `null`. A serialiser that stringifies —
+ * `String(row.nameAr)`, a template literal, a `COALESCE(name_ar, 'null')` — sends
+ * the four characters `null`, and every client-side `nameAr ?? name` then renders
+ * the word "null" in the salon header, because a non-empty string is truthy and
+ * `??` never fires.
+ *
+ * The specs are written against the contract, so they fail today. See the
+ * knownBug below for what is actually missing.
+ */
+interface SalonView {
+  id: string;
+  name: string;
+  nameAr?: string | null;
+  stampReward?: string | null;
+  stampRewardAr?: string | null;
+  branches: Array<{ id: string; name: string; nameAr?: string | null }>;
+}
+
+/** What a renderer does. `?? ` and not `||`, so an empty string is a bug not a fallback. */
+const label = (ar: string | null | undefined, latin: string): string => ar ?? latin;
+
+const UNUSABLE = ['null', 'undefined', 'NaN', '[object Object]', ''];
+
+async function salonAsCustomer(salonId: string, token: string): Promise<SalonView> {
+  const res = await treq<SalonView>('GET', `/salons/${salonId}`, { token });
+  precondition(res.status === 200, `GET /salons/${salonId} answered ${res.status} ${res.raw}`);
+  return res.body;
+}
+
+describe('Arabic names fall back to the Latin name, and never to the word "null"', () => {
+  it('whatever the API serves for a salon renders as usable text in Arabic', async () => {
+    const s = await salonAsCustomer(SALON_A, walletQa);
+    const shown = label(s.nameAr, s.name);
+
+    expect(UNUSABLE, `the Arabic salon header would render "${shown}"`).not.toContain(shown);
+    expect(shown.trim()).not.toBe('');
+  });
+
+  it('and for every branch — the case the reference implementation already handles', async () => {
+    // avo-promotions.js → `branchLabel` picks `nameAr` when the language is `ar`.
+    // A branch list is where this bites first, because it is rendered as a row of
+    // chips with no other text to make a stray "null" look wrong.
+    const s = await salonAsCustomer(SALON_A, walletQa);
+    expect(s.branches.length).toBeGreaterThan(0);
+
+    for (const b of s.branches) {
+      const shown = label(b.nameAr, b.name);
+      expect(UNUSABLE, `branch ${b.id} would render "${shown}" in Arabic`).not.toContain(shown);
+    }
+  });
+
+  it('and for the stamp reward, which is customer-facing copy', async () => {
+    const s = await salonAsCustomer(SALON_A, walletQa);
+    if (s.stampReward === null || s.stampReward === undefined) return; // tiers salon, nothing to translate
+    const shown = label(s.stampRewardAr, s.stampReward);
+    expect(UNUSABLE, `the stamp card would render "${shown}"`).not.toContain(shown);
+  });
+
+  it('a salon that supplied no Arabic name still serves a usable Latin one', async () => {
+    // Salon B is seeded by this suite's harness and has never been given an
+    // Arabic name, so it is the honest "no Arabic name" case. The Latin name is
+    // read from Postgres rather than written here as a literal — the harness seed
+    // is `ON CONFLICT DO NOTHING`, so a row created by an older revision survives
+    // and a hardcoded expectation becomes an assertion about seed history. (It
+    // did: the row says "Lumière", the current seed string says "Lumiere".)
+    const latin = scalar(`select name from salon where id='${SALON_B}'`);
+    precondition(latin !== '', `${SALON_B} is not seeded`);
+
+    const s = await salonAsCustomer(SALON_B, dashboardB);
+    expect(s.name).toBe(latin);
+    expect(label(s.nameAr, s.name)).toBe(latin);
+    for (const b of s.branches) {
+      expect(label(b.nameAr, b.name).trim()).not.toBe('');
+      expect(UNUSABLE).not.toContain(label(b.nameAr, b.name));
+    }
+    expect(s.branches.map((b) => b.id)).toContain(B_BRANCH);
+  });
+
+  /**
+   * WHAT IS ACTUALLY MISSING.
+   *
+   * The specs above pass today, and they pass for a reason worth naming: the API
+   * does not serve `nameAr` AT ALL, so `undefined ?? name` falls back correctly by
+   * accident. There is no `name_ar` column on `salon` or `branch` and no
+   * `stamp_reward_ar` on `salon`; `GET /salons/{id}` in api/src/routes/salons.ts
+   * lists its fields explicitly and none of the three is among them.
+   *
+   * So `SalonSchema` and `BranchSchema` declare `nameAr: z.string().nullable()` —
+   * a REQUIRED key holding a nullable value — and the live response has no such
+   * key. Any client that parses the contract's schema against this API fails, and
+   * lane B has nothing to render even when a salon has supplied a name.
+   *
+   * LANE A OWES: the two columns, the stamp reward column, and the three fields
+   * on the serialiser. This flips green the day they land.
+   */
+  knownBug('the API serves none of the Arabic name fields the contract declares', async () => {
+    const s = await salonAsCustomer(SALON_A, walletQa);
+    const missing: string[] = [];
+    if (!('nameAr' in s)) missing.push('Salon.nameAr');
+    if (!('stampRewardAr' in s) && s.stampReward != null) missing.push('Salon.stampRewardAr');
+    for (const b of s.branches) if (!('nameAr' in b)) missing.push(`Branch(${b.id}).nameAr`);
+
+    expect(
+      missing,
+      'packages/types declares these as required keys with nullable values; ' +
+        'GET /salons/{id} omits them entirely:\n  ' + missing.join('\n  '),
+    ).toEqual([]);
+  });
+
+  /**
+   * The half that CANNOT be tested until the columns exist, and the one that
+   * actually catches the stringify bug. A salon with a genuine SQL NULL in
+   * `name_ar` must serialise to JSON `null`, not to `"null"`.
+   */
+  it.todo(
+    'LANE A OWES THE FIXTURE: set salon B\'s name_ar to SQL NULL and salon A\'s to a real Arabic string, then assert JSON null vs a string — the stringify bug (COALESCE(name_ar, \'null\'), String(row.nameAr), a template literal) is invisible until a row actually holds NULL',
+  );
+});

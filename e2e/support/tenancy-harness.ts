@@ -351,13 +351,25 @@ ON CONFLICT (id) DO UPDATE SET
   balance_fils = ${B_MEMBER_BALANCE_FILS}, visits = 2, tier = 'bronze', stamps = NULL;
 
 -- A second staff row at salon B with team:false. Used to prove the roster read
--- is salon-scoped and to keep the escalation specs honest.
+-- is salon-scoped and as the TARGET of the escalation specs.
+--
+-- The conflict branch is not decoration. Those specs assert that a refused
+-- PATCH /staff/{id} wrote nothing, which is only a real assertion if the row
+-- starts from a known value — and the row survives between runs. It was
+-- ON CONFLICT DO NOTHING, and a run against a deliberately broken build (a
+-- mutation test removing the surface gate) escalated Mariam for real and left her that
+-- way, so the next run's "wrote nothing" spec would have compared a granted
+-- permission against a granted permission and passed. Reset the authority
+-- columns every time.
 INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
                         password_hash, perm_scanner)
 SELECT 'ST-B02', '${SALON_B}', 'Mariam', 'mariam', 'frontdesk', false, ARRAY['${B_BRANCH}'],
        s.password_hash, true
 FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  perm_dashboard = false, perm_appointments = false, perm_shop = false, perm_loyalty = false,
+  perm_team = false, perm_scanner = true, perm_charges = false, perm_void = false,
+  perm_marketing = false;
 
 -- PIN attempts are rate limited per device+salon. A previous run that failed a
 -- sign-in would otherwise lock this suite out of the scanner session.

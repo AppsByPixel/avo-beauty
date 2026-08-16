@@ -16,8 +16,9 @@
  * todo rather than a rediscovery six weeks from now.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  ensureBalanceAtLeast,
   memberNow,
   MEMBER_ID,
   SALON_ID,
@@ -25,7 +26,12 @@ import {
   api,
   idempotencyKey,
   mintWalletToken,
+  targetKind,
 } from './support/api.js';
+import { knownBug, precondition } from './support/known-bug.js';
+
+/** Which server. The promotions gap below is real on one and absent on the other. */
+const TARGET = await targetKind();
 
 interface ChargeResult {
   transaction: { id: string; amountFils: number };
@@ -43,6 +49,26 @@ const charge = (options: { key: string; token?: string; serviceIds?: string[] })
     },
   });
 
+/**
+ * This file settles eight charges of 8.000 KD — the floor below carries two
+ * spare. Lane A seeds the shared member at 24.500 KD, which pays for three.
+ *
+ * That arithmetic did not matter while nothing ever reset her — she had drifted
+ * past 300 KD and everything cleared. Re-running `db:seed` put her back and the
+ * fourth charge onwards answered a perfectly correct 402, which read as three
+ * broken idempotency specs. So the floor is stated once, here, and funded
+ * through the real top-up path before any spec runs. See `ensureBalanceAtLeast`.
+ *
+ * Deliberately generous: a spec that fails because a PREVIOUS spec in this file
+ * spent the money is the same class of bug one level down.
+ */
+const CHARGES_IN_THIS_FILE = 10;
+const FLOOR_FILS = SERVICE.blowDry.priceFils * CHARGES_IN_THIS_FILE;
+
+beforeAll(async () => {
+  await ensureBalanceAtLeast(FLOOR_FILS, 'concurrency');
+}, 60_000);
+
 // ---------------------------------------------------------- 1. double scan ---
 
 describe('double scan of one wallet token', () => {
@@ -50,7 +76,11 @@ describe('double scan of one wallet token', () => {
     const token = await mintWalletToken();
 
     const first = await charge({ key: idempotencyKey('scan-1'), token });
-    expect(first.status).toBe(200);
+    // The body is in the message on purpose. A bare `expected 500 to be 200` is
+    // not diagnosable after the fact, and this suite has seen a burst of 500s on
+    // one re-run that never reproduced — see the lane report. Next time the
+    // failure carries the server's own answer.
+    expect(first.status, `the first charge answered: ${JSON.stringify(first.body)}`).toBe(200);
     expect(first.body.transaction.amountFils).toBe(-SERVICE.blowDry.priceFils);
 
     // A different idempotency key, so this is a genuinely new charge attempt —
@@ -76,7 +106,10 @@ describe('double scan of one wallet token', () => {
     ]);
 
     const statuses = [a.status, b.status].sort();
-    expect(statuses).toEqual([200, 410]);
+    expect(
+      statuses,
+      `the racing charges answered: ${JSON.stringify([a.body, b.body])}`,
+    ).toEqual([200, 410]);
 
     const settled = [a, b].filter((r) => r.status === 200);
     expect(settled).toHaveLength(1);
@@ -111,7 +144,7 @@ describe('double scan of one wallet token', () => {
 
     // …and the token is still chargeable after both reads.
     const settled = await charge({ key: idempotencyKey('scan-after-peek'), token });
-    expect(settled.status).toBe(200);
+    expect(settled.status, `the charge answered: ${JSON.stringify(settled.body)}`).toBe(200);
   });
 
   it.todo(
@@ -251,11 +284,25 @@ describe('callback arriving before the client returns from the gateway', () => {
 // ------------------------------------------- 5. happy-hour boundary ----------
 
 describe('a charge crossing a happy-hour boundary', () => {
+  /**
+   * `happy.length > 0` used to be asserted here. That held against
+   * `packages/mock`, whose fixture publishes two happy hours, and it cannot hold
+   * against lane A's API: `GET /v1/salons/{id}/promotions` returns a hardcoded
+   * `happy: []` because promotions are not persisted yet (build-plan.md phase 3
+   * — there is no promotion table in the schema at all). The spec was pinned to
+   * the mock's fixture rather than to the rule.
+   *
+   * The RULE is the absence of a precomputed liveness flag, and it is checkable
+   * on an empty set for the envelope and on every element that is there. The
+   * emptiness itself is a gap, and it is reported as one below rather than
+   * smuggled into this assertion.
+   */
   it('the promotion set ships the inputs a server-side predicate needs, and no `live` flag', async () => {
     // Non-negotiable #2: the client never decides whether a happy hour is live
     // for the purpose of a charge. So the wire format must carry days/from/to
     // and NOT a precomputed boolean anyone could trust or spoof.
     const res = await api<{
+      boosts: Record<string, unknown>;
       happy: Array<{
         id: string;
         branchId: string;
@@ -268,7 +315,12 @@ describe('a charge crossing a happy-hour boundary', () => {
     }>('GET', `/v1/salons/${SALON_ID}/promotions`);
 
     expect(res.status).toBe(200);
-    expect(res.body.happy.length).toBeGreaterThan(0);
+    expect(Array.isArray(res.body.happy)).toBe(true);
+    expect(res.body).toHaveProperty('boosts');
+
+    // The envelope-level version of the same rule: no liveness anywhere in the
+    // document, whatever shape the set inside it happens to have today.
+    expect(JSON.stringify(res.body)).not.toMatch(/"(live|isLive|minutesRemaining)"/);
 
     for (const hh of res.body.happy) {
       expect(hh).not.toHaveProperty('live');
@@ -280,6 +332,34 @@ describe('a charge crossing a happy-hour boundary', () => {
       expect(typeof hh.on).toBe('boolean');
     }
   });
+
+  /**
+   * The gap the assertion above used to hide, and it exists only on the real API:
+   * `packages/mock` publishes two happy hours from its fixture, lane A's API
+   * returns a hardcoded `happy: []` because there is no promotion table in the
+   * schema at all. So the spec is registered as the true statement about the
+   * server it is driving — a passing assertion against the mock, a standing
+   * defect report against the API. It flips by itself the day lane A persists
+   * promotions, and the loop above then starts actually looping.
+   */
+  const fixtureSalonPublishesAHappyHour = async () => {
+    const res = await api<{ happy: unknown[] }>('GET', `/v1/salons/${SALON_ID}/promotions`);
+    precondition(res.status === 200, `GET promotions answered ${res.status}`);
+    expect(
+      res.body.happy.length,
+      'LANE A OWES: a promotion table and a real read. Until then every happy-hour ' +
+        'boundary spec in this file is untestable, because there is no happy hour to cross.',
+    ).toBeGreaterThan(0);
+  };
+
+  if (TARGET === 'api') {
+    knownBug(
+      'the promotion set is served but never stored — `happy` is a hardcoded empty array',
+      fixtureSalonPublishesAHappyHour,
+    );
+  } else {
+    it('the fixture salon publishes at least one happy hour to evaluate', fixtureSalonPublishesAHappyHour);
+  }
 
   it('a charge response carries no happy-hour outcome yet — nothing tells the receipt what was granted', async () => {
     // Running evidence for the gap. When lane A adds the applied-reward field

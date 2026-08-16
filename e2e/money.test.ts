@@ -12,8 +12,9 @@
  * have returned is decoration.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  ensureBalanceAtLeast,
   LOWBAL_BALANCE_FILS,
   MEMBER_ID,
   SERVICE,
@@ -22,8 +23,34 @@ import {
   idempotencyKey,
   memberNow,
   mintWalletToken,
+  targetKind,
 } from './support/api.js';
 import { knownBug, precondition } from './support/known-bug.js';
+
+/**
+ * Resolved once, before any spec is registered, so a spec can be registered as
+ * the right KIND. See the mutated-retry spec below for why this file needs to
+ * know. Top-level await: vitest collects ESM test files as modules.
+ */
+const TARGET = await targetKind();
+
+/**
+ * The same floor `concurrency.test.ts` documents, for the same reason and with
+ * the same mechanism. This file settles charges of 8.000, 15.000 and 25.000 KD
+ * across a dozen specs; lane A seeds the shared member at 24.500, and each of
+ * these suites spends what the one before it left. On a freshly seeded database
+ * the first run cleared and the SECOND run went red on
+ * "a failed charge does not burn its idempotency key" — a spec about idempotency
+ * failing because the retry it makes could not be afforded.
+ *
+ * Deliberately several times what the file spends. Running out halfway is the
+ * failure mode being fixed, and a tight floor reproduces it.
+ */
+const FLOOR_FILS = 250_000;
+
+beforeAll(async () => {
+  await ensureBalanceAtLeast(FLOOR_FILS, 'money');
+}, 60_000);
 
 interface TopUpIntent {
   id: string;
@@ -140,7 +167,25 @@ describe('#4 — replaying a key returns the identical result, never a second on
    * packages/mock keys one Map on the header alone and never fingerprints the
    * body, so against the mock this is a knownBug rather than a passing spec.
    */
-  it('same key + a DIFFERENT body is a 422, not a replay of the first result', async () => {
+  /**
+   * PROMOTED, CONDITIONALLY — and the condition is the point.
+   *
+   * Lane A's API answers 422. Run against it, the `knownBug()` above reported
+   * "this appears to be FIXED" on every single run: correct, and useless as a
+   * standing signal. Run against `packages/mock` the contract-correct assertion
+   * is still red, because the mock keys one Map on the header alone and never
+   * fingerprints the body.
+   *
+   * So the spec asks which server it is driving and makes the honest statement
+   * about that server. Same body either way — the assertion is not weakened for
+   * the mock, it is only reported differently, and the mock's replay stays on the
+   * books as a defect somebody owns rather than disappearing.
+   *
+   * TRUNK OWES: `packages/mock` should fingerprint the request body the way
+   * `api/src/services/idempotency.ts` does, so the two servers stop disagreeing
+   * about a money rule. Lane D does not edit packages/mock.
+   */
+  const mutatedRetryIsRefused = async () => {
     const key = idempotencyKey('topup-replay-mutated');
     const first = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: key,
@@ -155,7 +200,16 @@ describe('#4 — replaying a key returns the identical result, never a second on
 
     expect(second.status).toBe(422);
     expect(second.body.error).toBe('idempotency_key_reused');
-  });
+  };
+
+  if (TARGET === 'api') {
+    it('same key + a DIFFERENT body is a 422, not a replay of the first result', mutatedRetryIsRefused);
+  } else {
+    knownBug(
+      'packages/mock replays a mutated retry instead of refusing it — lane A\'s API answers 422',
+      mutatedRetryIsRefused,
+    );
+  }
 
   it('the mutated retry never produces a second, larger intent — whichever way it is refused', async () => {
     // The half of the old spec that survives the ruling untouched, and the part
