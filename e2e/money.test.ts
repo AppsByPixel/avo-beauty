@@ -14,12 +14,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  BALANCE_FILS,
   LOWBAL_BALANCE_FILS,
   MEMBER_ID,
   SERVICE,
+  TIER_BONUS_PERCENT,
   api,
   idempotencyKey,
+  memberNow,
   mintWalletToken,
 } from './support/api.js';
 import { knownBug, precondition } from './support/known-bug.js';
@@ -181,6 +182,10 @@ describe('#4 — replaying a key returns the identical result, never a second on
   it('POST /charges replay debits once — the balance after is the same, not twice down', async () => {
     const key = idempotencyKey('charge-replay');
     const body = { memberId: MEMBER_ID, serviceIds: [SERVICE.blowDry.id] };
+    // Read first, assert the delta. The absolute 24.500 this used to expect was
+    // the mock's fixture, and against a real database it became an assertion
+    // about how many earlier runs had charged her. See `memberNow()`.
+    const before = (await memberNow()).balanceFils;
 
     const first = await api<ChargeResult>('POST', '/charges', { idempotencyKey: key, body });
     const second = await api<ChargeResult>('POST', '/charges', { idempotencyKey: key, body });
@@ -190,10 +195,16 @@ describe('#4 — replaying a key returns the identical result, never a second on
     expect(second.body.transaction.id).toBe(first.body.transaction.id);
     expect(second.body).toEqual(first.body);
 
-    // Explicitly: 24.500 − 8.000 = 16.500, and NOT 8.500.
-    expect(first.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
-    expect(second.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
-    expect(second.body.balanceAfterFils).not.toBe(BALANCE_FILS - SERVICE.blowDry.priceFils * 2);
+    // Down by the price ONCE — explicitly not twice, which is the whole spec.
+    expect(first.body.balanceAfterFils).toBe(before - SERVICE.blowDry.priceFils);
+    expect(second.body.balanceAfterFils).toBe(before - SERVICE.blowDry.priceFils);
+    expect(second.body.balanceAfterFils).not.toBe(before - SERVICE.blowDry.priceFils * 2);
+    // NOT asserted here: that GET /members/me now agrees with balanceAfterFils.
+    // `packages/mock` has no mutable balance and answers 24.500 forever, so that
+    // check would be red against the mock and green against the real API for
+    // reasons that have nothing to do with idempotency. It is the `it.todo`
+    // immediately below, and it is answered against lane A's API in
+    // gateway.test.ts, where the balance is read out of Postgres.
   });
 
   it.todo(
@@ -296,34 +307,80 @@ describe('commission — api-contract.md § Commission', () => {
 
 // -------------------------------------------------------------- tier bonus ---
 
+/**
+ * THE TIER BONUS, WITHOUT PINNING WHICH TIER SHE IS IN.
+ *
+ * These four specs used to write Silver's 10% into every expectation —
+ * `bonusFils` is 1.000 on 10.000, full stop. That is correct against
+ * `packages/mock`, whose member is rebuilt Silver on every boot, and it decays
+ * against a real database: `applyVisits` walks the seeded member up the ladder
+ * as the other suites charge her, and by the time this ran against lane A's API
+ * she was Black on 30%. Four red specs, no defect.
+ *
+ * THE RATE IS STILL A LITERAL. `TIER_BONUS_PERCENT` is the ladder copied out of
+ * design/api-contract.md § Commission — bronze 0, silver 10, gold 20, black 30 —
+ * and the arithmetic below is written out here rather than borrowed from
+ * `percentOf()`. What is read at runtime is only WHICH RUNG she is on, which is
+ * the part that legitimately moves. The server and this file can still disagree
+ * about the bonus, which is the whole point of the specs.
+ */
 describe('#2 — the tier bonus is computed by the server', () => {
-  it('Silver 10%: a 10.000 top-up credits 11.000', async () => {
+  /** The contract's rate for the tier she is actually in, right now. */
+  async function rate(): Promise<{ tier: string; percent: number }> {
+    const { tier } = await memberNow();
+    const percent = TIER_BONUS_PERCENT[tier];
+    expect(percent, `the tier ladder in api-contract.md has no rung called "${tier}"`).toBeDefined();
+    return { tier, percent: percent as number };
+  }
+
+  /** Half-up to whole fils. Non-negotiable #1 — no half fil survives anywhere. */
+  const bonusFor = (amountFils: number, percent: number) =>
+    Math.round((amountFils * percent) / 100);
+
+  it('a top-up credits the amount plus her tier\'s percentage of it', async () => {
+    const { tier, percent } = await rate();
     const res = await api<TopUpIntent>('POST', '/topups', {
-      idempotencyKey: idempotencyKey('bonus-silver'),
+      idempotencyKey: idempotencyKey('bonus-tier'),
       body: { amountFils: 10_000, method: 'knet' },
     });
 
     expect(res.status).toBe(200);
     expect(res.body.amountFils).toBe(10_000);
-    expect(res.body.bonusFils).toBe(1_000);
-    expect(res.body.creditFils).toBe(11_000);
+    expect(res.body.bonusFils, `${tier} is ${percent}% on 10.000`).toBe(bonusFor(10_000, percent));
+    expect(res.body.creditFils).toBe(10_000 + bonusFor(10_000, percent));
     expectIntegerFils(res.body.amountFils, 'amountFils');
     expectIntegerFils(res.body.bonusFils, 'bonusFils');
     expectIntegerFils(res.body.creditFils, 'creditFils');
   });
 
   it('the bonus tracks the amount, so it is a rate and not a constant', async () => {
-    const res = await api<TopUpIntent>('POST', '/topups', {
-      idempotencyKey: idempotencyKey('bonus-silver-25'),
+    // The assertion that survives the tier moving under it, and the one that
+    // actually catches a bonus implemented as a flat number: 2.5x the amount
+    // must be 2.5x the bonus.
+    const { percent } = await rate();
+    const small = await api<TopUpIntent>('POST', '/topups', {
+      idempotencyKey: idempotencyKey('bonus-rate-10'),
+      body: { amountFils: 10_000, method: 'knet' },
+    });
+    const large = await api<TopUpIntent>('POST', '/topups', {
+      idempotencyKey: idempotencyKey('bonus-rate-25'),
       body: { amountFils: 25_000, method: 'knet' },
     });
-    expect(res.body.bonusFils).toBe(2_500);
-    expect(res.body.creditFils).toBe(27_500);
+
+    expect(small.body.bonusFils).toBe(bonusFor(10_000, percent));
+    expect(large.body.bonusFils).toBe(bonusFor(25_000, percent));
+    expect(large.body.creditFils).toBe(25_000 + bonusFor(25_000, percent));
+    if (percent > 0) {
+      expect(large.body.bonusFils, 'the bonus is a constant, not a rate').toBe(
+        small.body.bonusFils * 2.5,
+      );
+    }
   });
 
   it('a client-supplied bonus is ignored — the wallet cannot mint its own credit', async () => {
     // Non-negotiable #2. If this ever passes through, a patched client tops up
     // 1.000 KD and credits itself 1000.000.
+    const { percent } = await rate();
     const res = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: idempotencyKey('bonus-forged'),
       body: {
@@ -336,20 +393,27 @@ describe('#2 — the tier bonus is computed by the server', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.bonusFils).toBe(1_000);
-    expect(res.body.creditFils).toBe(11_000);
+    expect(res.body.bonusFils).toBe(bonusFor(10_000, percent));
+    expect(res.body.creditFils).toBe(10_000 + bonusFor(10_000, percent));
+    // The forged values are nowhere near the answer, whatever her tier is.
+    expect(res.body.bonusFils).not.toBe(999_999);
+    expect(res.body.creditFils).not.toBe(999_999);
     expect(res.body.feeFils).toBe(150);
   });
 
   it('bonus rounds to whole fils on an awkward amount', async () => {
-    // 10% of 1005 = 100.5 → 101 (half-up), credit 1106. No half fil survives.
+    // The case where a float implementation shows itself. At Silver, 10% of 1005
+    // is 100.5 → 101 half-up, credit 1106; at Gold, 201 → 1206. Whichever rung
+    // she is on, what must never come back is 100.5.
+    const { percent } = await rate();
     const res = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: idempotencyKey('bonus-rounding'),
       body: { amountFils: 1_005, method: 'knet' },
     });
     expectIntegerFils(res.body.bonusFils, 'bonusFils on 1005');
-    expect(res.body.bonusFils).toBe(101);
-    expect(res.body.creditFils).toBe(1_106);
+    expectIntegerFils(res.body.creditFils, 'creditFils on 1005');
+    expect(res.body.bonusFils).toBe(bonusFor(1_005, percent));
+    expect(res.body.creditFils).toBe(1_005 + bonusFor(1_005, percent));
   });
 
   it.todo(
@@ -393,6 +457,8 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
   });
 
   it('nothing else happened: no transaction, no balance move, no loyalty tick', async () => {
+    const before = await memberNow();
+
     const res = await api<Record<string, unknown>>('POST', '/charges', {
       scenario: 'lowbal',
       idempotencyKey: idempotencyKey('lowbal-atomic'),
@@ -405,9 +471,11 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
     expect(res.body).not.toHaveProperty('loyalty'); // no visit, no stamp
     expect(res.body).not.toHaveProperty('voidableUntil');
 
-    const member = await api<{ balanceFils: number; visits: number }>('GET', '/members/me');
-    expect(member.body.balanceFils).toBe(BALANCE_FILS);
-    expect(member.body.visits).toBe(5);
+    // Unchanged from what it was a moment ago, not equal to a fixture literal:
+    // "nothing happened" is a statement about a delta.
+    const after = await memberNow();
+    expect(after.balanceFils, 'a refused charge moved the balance').toBe(before.balanceFils);
+    expect(after.visits, 'a refused charge ticked a visit').toBe(before.visits);
   });
 
   it('a partial charge is never attempted — the whole basket fails or none of it', async () => {
@@ -431,6 +499,8 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
     // the failed attempt had cached a 402 against the key, that retry would be
     // answered with a stale refusal forever.
     const key = idempotencyKey('lowbal-then-retry');
+    const before = (await memberNow()).balanceFils;
+
     const failed = await api<ShortfallError>('POST', '/charges', {
       scenario: 'lowbal',
       idempotencyKey: key,
@@ -442,8 +512,10 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
       idempotencyKey: key,
       body: { memberId: MEMBER_ID, serviceIds: [SERVICE.blowDry.id] },
     });
-    expect(retried.status).toBe(200);
-    expect(retried.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
+    expect(retried.status, `the retry under a key a 402 had used answered: ${retried.status}`).toBe(
+      200,
+    );
+    expect(retried.body.balanceAfterFils).toBe(before - SERVICE.blowDry.priceFils);
   });
 
   it(
@@ -452,8 +524,18 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
       // packages/mock/src/server.ts POST /charges deletes the token BEFORE the
       // balance check, so a customer whose balance is short loses her QR: the
       // scanner cannot retry after she tops up, she has to re-open the app.
-      const token = await mintWalletToken();
-      const resolvedFirst = await api('POST', '/scans', { body: { token } });
+      // SCENARIO ON THE MINT TOO, and this is not tidiness. Against the mock the
+      // header changes nothing. Against the real API `lowbal` selects a
+      // DIFFERENT SEEDED MEMBER — a real API cannot fabricate a balance, so the
+      // scenario changes whose wallet is in play. Minting without it produced a
+      // token for Dana and then charged Reem, and lane A's token/member check
+      // correctly answered 409 `token_member_mismatch`. The spec was stale, not
+      // the API: it was written when `lowbal` only substituted a number.
+      const token = await mintWalletToken('lowbal');
+      const resolvedFirst = await api('POST', '/scans', {
+        scenario: 'lowbal',
+        body: { token },
+      });
       precondition(resolvedFirst.status === 200, `the token did not resolve: ${resolvedFirst.status}`);
 
       const charge = await api<ShortfallError>('POST', '/charges', {
@@ -461,10 +543,16 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
         idempotencyKey: idempotencyKey('lowbal-token'),
         body: { memberId: MEMBER_ID, serviceIds: [SERVICE.colourRoots.id], token },
       });
-      precondition(charge.status === 402, `expected a 402, got ${charge.status}`);
+      precondition(
+        charge.status === 402,
+        `expected a 402, got ${charge.status} ${JSON.stringify(charge.body)}`,
+      );
 
       // The debit failed, so the token must still be live.
-      const resolvedAfter = await api<{ error?: string }>('POST', '/scans', { body: { token } });
+      const resolvedAfter = await api<{ error?: string }>('POST', '/scans', {
+        scenario: 'lowbal',
+        body: { token },
+      });
       expect(resolvedAfter.status).toBe(200);
     },
   );
@@ -528,25 +616,73 @@ describe('#1 — no float and no negative amount reaches money', () => {
 // --------------------------------------------------- authoritative status read --
 
 describe('the top-up status read is authoritative — api-contract.md § TopUpIntent', () => {
-  it('reports the four terminal outcomes distinctly', async () => {
-    const created = await api<TopUpIntent>('POST', '/topups', {
-      idempotencyKey: idempotencyKey('outcomes'),
-      body: { amountFils: 10_000, method: 'knet' },
-    });
-    const id = created.body.id;
+  /**
+   * SPEC REPAIRED — this was lane D's own bug, not the API's.
+   *
+   * It used to create ONE intent and read it four times, once per scenario,
+   * expecting succeeded, failed, cancelled and pending back. Against the mock
+   * that passed, because the mock computes a status per request out of the
+   * `x-avo-scenario` header and stores nothing.
+   *
+   * It was still wrong, and wrong in the direction that matters. An intent is a
+   * state machine with one ending: `created → redirected → pending →` exactly one
+   * of `succeeded | failed | cancelled`, and no arrow out of a terminal state.
+   * The old spec asserted that one intent can be all four things, which is the
+   * precise property lane A's machine exists to make impossible — so as written
+   * it would have to be deleted or weakened the day the real API answered it.
+   * A spec that a correct implementation must break is not a guard.
+   *
+   * Four outcomes therefore need four intents. That reads the same way against
+   * the mock (a per-id lookup and a per-request scenario) and against lane A's
+   * API (a per-intent sandbox payment driven to its own outcome), which is what
+   * makes it worth writing this way rather than pointing it at one of them.
+   *
+   * What survives verbatim is the assertion that actually protects money:
+   * `pending` is its own state and is never collapsed into success or failure.
+   */
+  it('reports succeeded, failed, cancelled and pending — one intent each, because an intent has one ending', async () => {
+    const cases: Array<{ scenario?: string; expected: string; why: string }> = [
+      { expected: 'succeeded', why: 'the money landed' },
+      { scenario: 'declined', expected: 'failed', why: 'the card was refused' },
+      { scenario: 'cancelled', expected: 'cancelled', why: 'she closed the page' },
+      { scenario: 'pending', expected: 'pending', why: 'the processor has not decided' },
+    ];
 
-    const succeeded = await api<TopUpIntent>('GET', `/topups/${id}`);
-    const declined = await api<TopUpIntent>('GET', `/topups/${id}`, { scenario: 'declined' });
-    const cancelled = await api<TopUpIntent>('GET', `/topups/${id}`, { scenario: 'cancelled' });
-    const pending = await api<TopUpIntent>('GET', `/topups/${id}`, { scenario: 'pending' });
+    const seen: Array<{ id: string; status: string }> = [];
 
-    expect(succeeded.body.status).toBe('succeeded');
-    expect(declined.body.status).toBe('failed');
-    expect(cancelled.body.status).toBe('cancelled');
+    for (const c of cases) {
+      const created = await api<TopUpIntent>('POST', '/topups', {
+        idempotencyKey: idempotencyKey(`outcome-${c.expected}`),
+        body: { amountFils: 10_000, method: 'knet' },
+      });
+      expect(created.status, `could not create the ${c.expected} intent: ${created.status}`).toBe(
+        200,
+      );
+
+      const read = await api<TopUpIntent>('GET', `/topups/${created.body.id}`, {
+        ...(c.scenario === undefined ? {} : { scenario: c.scenario }),
+      });
+
+      expect(read.status).toBe(200);
+      // The read is of THIS intent. Without this the four assertions below could
+      // all be satisfied by one shared row.
+      expect(read.body.id, `GET /topups/${created.body.id} answered about a different intent`).toBe(
+        created.body.id,
+      );
+      expect(read.body.status, `${c.why} → ${c.expected}`).toBe(c.expected);
+
+      seen.push({ id: read.body.id, status: read.body.status });
+    }
+
+    // Four intents, not one read four times.
+    expect(new Set(seen.map((s) => s.id)).size, 'the four outcomes shared an intent').toBe(4);
+    expect(seen.map((s) => s.status)).toEqual(['succeeded', 'failed', 'cancelled', 'pending']);
+
     // `pending` is its own screen and must never be collapsed into success or
-    // failure — that is how double charges happen.
-    expect(pending.body.status).toBe('pending');
-    expect(['succeeded', 'failed', 'cancelled']).not.toContain(pending.body.status);
+    // failure — that is how double charges happen. (api-contract.md
+    // § TopUpIntent, client rule 2: no retry is offered from pending.)
+    const pending = seen[3];
+    expect(['succeeded', 'failed', 'cancelled']).not.toContain(pending?.status);
   });
 
   it('GET /topups/{id} ignores the id and returns whichever intent is first in memory', async () => {

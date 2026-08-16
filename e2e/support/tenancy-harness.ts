@@ -55,6 +55,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -94,6 +95,109 @@ const STAFF_PIN = '2468';
 /** A salon id that has never existed. The control for the existence-oracle specs. */
 export const SALON_NOWHERE = 'SAL-DOES-NOT-EXIST';
 export const STAFF_NOWHERE = 'ST-DOES-NOT-EXIST';
+
+// ------------------------------------------------------- the isolated member --
+
+/**
+ * A MEMBER THAT BELONGS TO THE SUITE, RESET ON EVERY RUN.
+ *
+ * WHY SHE EXISTS
+ * --------------
+ * The gateway suite first ran against lane A's seeded member 8842 and went red
+ * on its second run. She is shared: `money.test.ts`, `concurrency.test.ts` and
+ * `permissions.test.ts` all charge her, `applyVisits` moves her up the tier
+ * ladder as they do, and nothing resets her. Over accumulated runs she went
+ * Silver → Gold → Black, her bonus went 10% → 20% → 30%, and her balance drifted
+ * from 24.500 KD to over 300 KD. Any spec holding a figure about her decays into
+ * a test of how many earlier runs happened.
+ *
+ * That is not a bug in one spec; it is the absence of isolation, and it ends
+ * with a suite that is entirely red and that everyone has stopped reading. So
+ * the suites that CAN own their fixture do:
+ *
+ *   Dana 8842            lane A's seed. Shared, drifting. Read, never pinned.
+ *   Fatima 9001          salon B. Reset by `seedSalonB()` on every run.
+ *   Rania QA-GW-0001     this one. Reset by `seedQaMember()` on every run.
+ *
+ * WHY SHE IS IN SALON A AND NOT SALON B
+ * -------------------------------------
+ * Two properties the gateway suite needs that salon B does not have:
+ * `whatsapp_enabled` is true at Amara, and she carries a VERIFIED email address,
+ * so a settled payment owes her both receipt channels.
+ *
+ * She is an ADDITION to salon A, never an edit of it. Nothing here touches Dana,
+ * Reem, the staff rows or the salon itself. If a spec ever moves one of those,
+ * that is the bug the spec was looking for.
+ *
+ * WHY `tier` IS WRITTEN AND NOT DERIVED
+ * -------------------------------------
+ * `createTopUp` reads `member.tier`, so pinning the tier is exactly what turns
+ * the expected bonus back into a literal. `visits` is set consistent with it so
+ * the row is not self-contradictory for anything that later recomputes it.
+ *
+ * FOR THE SUITES THAT CANNOT USE HER: `money.test.ts`, `concurrency.test.ts` and
+ * `permissions.test.ts` run against `packages/mock` by default and must keep
+ * working with no Postgres and no docker, so they cannot seed anything. They
+ * assert RELATIVELY instead — read the balance and the tier first, then assert
+ * the delta and the rate. Same goal, different mechanism.
+ */
+export const QA_MEMBER = 'QA-GW-0001';
+export const QA_MEMBER_NAME = 'Rania Al-Otaibi';
+export const QA_MEMBER_PHONE = '+96599777001';
+export const QA_MEMBER_EMAIL = 'qa-gateway@example.invalid';
+/** Reset to this on every run, so a balance delta is the only thing a spec reads. */
+export const QA_MEMBER_BALANCE_FILS = 50_000;
+/** Pinned. Salon A's ladder: bronze 0%, silver 10% ≥4 visits, gold 20% ≥10, black 30% ≥20. */
+export const QA_MEMBER_TIER = 'silver';
+export const QA_MEMBER_BONUS_PERCENT = 10;
+export const QA_MEMBER_VISITS = 6;
+
+// ------------------------------------------------------------ the gateway --
+
+/**
+ * The HMAC key the API is booted with, so this suite can sign a callback the
+ * way the processor does.
+ *
+ * `api/src/env.ts` GENERATES a random secret per boot when the variable is
+ * unset. That is a good default for a developer and useless for a test: a suite
+ * that cannot compute a valid signature can only ever prove that bad ones are
+ * refused, which is the half that passes when the endpoint is broken shut.
+ * Pinning it here buys the control — a correctly signed callback that settles —
+ * which is what makes every 401 below mean "the signature was wrong" rather than
+ * "the webhook never works".
+ */
+export const GATEWAY_WEBHOOK_SECRET = 'tenancy-suite-gateway-hmac-key-not-a-secret-0123456789';
+
+/** `env.gatewayWebhookToleranceSeconds`'s default. The replay window. */
+export const GATEWAY_WEBHOOK_TOLERANCE_SECONDS = 300;
+
+/**
+ * `x-avo-signature: t=<unix seconds>,v1=<hex hmac>`.
+ *
+ * Computed here from the documented construction — HMAC-SHA256 over
+ * `${t}.${rawBody}` — and NOT by importing `signGatewayPayload` from
+ * `api/src/gateway/sandbox.ts`. Signing with the implementation's own function
+ * would verify that the code agrees with itself; a test that does that cannot
+ * catch the day someone changes what goes into the MAC.
+ *
+ * The timestamp is INSIDE the MAC on purpose, and this helper is what proves it:
+ * `signCallback(body, staleT)` produces a signature that is valid for `staleT`
+ * and for no other `t`, so a captured callback cannot be replayed with a fresh
+ * header.
+ */
+export function signCallback(
+  rawBody: string,
+  timestampSeconds: number,
+  secret: string = GATEWAY_WEBHOOK_SECRET,
+): string {
+  const mac = createHmac('sha256', secret).update(`${timestampSeconds}.${rawBody}`).digest('hex');
+  return `t=${timestampSeconds},v1=${mac}`;
+}
+
+export const SIGNATURE_HEADER = 'x-avo-signature';
+
+/** Unix seconds, the unit the signature header carries. */
+export const nowSeconds = (): number => Math.floor(Date.now() / 1000);
 
 // ----------------------------------------------------------------- postgres --
 
@@ -274,6 +378,47 @@ export function tenancyBaseUrl(): string {
   return base;
 }
 
+/**
+ * The suite's own member at salon A, restored to a known state on every run.
+ *
+ * Idempotent, and the UPDATE branch is the load-bearing half: the row survives
+ * between runs, so what matters is that balance, tier, visits and stamps are put
+ * back exactly where the last run found them. Everything the gateway suite
+ * asserts is a delta from these numbers.
+ *
+ * Her password hash is copied from salon A's ST-001 for the reason the salon B
+ * seed documents: `hashSecret()` is one function for staff and members, so the
+ * hash is portable, and copying it cannot drift out of step with the seed the
+ * way a pasted constant would.
+ *
+ * Old rows are NOT deleted between runs — `transaction`, `ledger_entry`,
+ * `receipt_job` and `topup_intent` reference her and are append-only by design.
+ * Deleting them would be lying about history to make a test tidy. Every spec
+ * scopes its reads to the intent or transaction it just created.
+ */
+function seedQaMember(): void {
+  psql(`
+BEGIN;
+
+INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                    balance_fils, visits, tier, stamps, policy_version)
+SELECT '${QA_MEMBER}', '${SALON_A}', '${QA_MEMBER_NAME}', '${QA_MEMBER_PHONE}',
+       '${QA_MEMBER_EMAIL}', true, s.password_hash,
+       ${QA_MEMBER_BALANCE_FILS}, ${QA_MEMBER_VISITS}, '${QA_MEMBER_TIER}', NULL, 3
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  password_hash  = EXCLUDED.password_hash,
+  email          = EXCLUDED.email,
+  email_verified = true,
+  balance_fils   = ${QA_MEMBER_BALANCE_FILS},
+  visits         = ${QA_MEMBER_VISITS},
+  tier           = '${QA_MEMBER_TIER}',
+  stamps         = NULL;
+
+COMMIT;
+`);
+}
+
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const probe = createServer();
@@ -288,6 +433,7 @@ async function freePort(): Promise<number> {
 export async function startTenancyApi(): Promise<void> {
   preflight();
   seedSalonB();
+  seedQaMember();
 
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
@@ -309,6 +455,14 @@ export async function startTenancyApi(): Promise<void> {
       // Only so salon A's member can mint a wallet token without her password.
       // See the file header — every salon B request is a real session.
       AVO_TEST_PRINCIPALS: '1',
+      // Pinned so the suite can produce a VALID signature as well as bad ones.
+      // env.ts would otherwise generate one per boot. See GATEWAY_WEBHOOK_SECRET.
+      GATEWAY_WEBHOOK_SECRET,
+      GATEWAY_WEBHOOK_TOLERANCE_SECONDS: String(GATEWAY_WEBHOOK_TOLERANCE_SECONDS),
+      // The sandbox's hosted page fires its callback at this base URL from
+      // inside the API process. Pinned to the ephemeral port this boot chose,
+      // rather than left to env.ts's `http://localhost:${PORT}` default.
+      PUBLIC_BASE_URL: base,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -356,6 +510,21 @@ export interface TenancyRequest {
   token?: string | null;
   body?: unknown;
   idempotencyKey?: string;
+  /** `x-avo-scenario`. Drives the sandbox gateway's outcome and the test shim. */
+  scenario?: string;
+  /** Anything else. Used for `x-avo-signature`. */
+  headers?: Record<string, string>;
+  /**
+   * Send this EXACT string as the request body.
+   *
+   * Not a convenience. `api/src/routes/webhooks.ts` verifies the MAC against the
+   * raw bytes it received, which is the only construction that means anything —
+   * re-encoding JSON before hashing is how a verification passes while verifying
+   * a different document than the one that was signed. A `body` that this client
+   * stringifies could differ from the string the test signed by a space, and the
+   * tampering spec below could then pass for the wrong reason.
+   */
+  rawBody?: string;
 }
 
 export async function treq<T = any>(
@@ -373,15 +542,30 @@ export async function treq<T = any>(
     );
   }
 
+  if (options.body !== undefined && options.rawBody !== undefined) {
+    throw new Error(`treq(${method} ${path}) was given both body and rawBody. Pick one.`);
+  }
+
   const headers: Record<string, string> = { accept: 'application/json' };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
   if (options.idempotencyKey) headers['idempotency-key'] = options.idempotencyKey;
-  if (options.body !== undefined) headers['content-type'] = 'application/json';
+  if (options.scenario) headers['x-avo-scenario'] = options.scenario;
+  if (options.body !== undefined || options.rawBody !== undefined) {
+    headers['content-type'] = 'application/json';
+  }
+  Object.assign(headers, options.headers ?? {});
+
+  const payload =
+    options.rawBody !== undefined
+      ? options.rawBody
+      : options.body === undefined
+        ? undefined
+        : JSON.stringify(options.body);
 
   const res = await fetch(`${tenancyBaseUrl()}${path}`, {
     method,
     headers,
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    ...(payload === undefined ? {} : { body: payload }),
   });
 
   const raw = await res.text();

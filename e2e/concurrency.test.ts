@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  BALANCE_FILS,
+  memberNow,
   MEMBER_ID,
   SALON_ID,
   SERVICE,
@@ -63,6 +63,11 @@ describe('double scan of one wallet token', () => {
   });
 
   it('two charges racing on the same token: exactly one settles, the other 410s', async () => {
+    // Read the balance first and assert the delta. The absolute this used to
+    // expect was `packages/mock`'s fixture; against a real database it decayed
+    // into an assertion about how many earlier runs had charged her. See
+    // `memberNow()` in support/api.ts.
+    const before = (await memberNow()).balanceFils;
     const token = await mintWalletToken();
 
     const [a, b] = await Promise.all([
@@ -75,7 +80,8 @@ describe('double scan of one wallet token', () => {
 
     const settled = [a, b].filter((r) => r.status === 200);
     expect(settled).toHaveLength(1);
-    expect(settled[0]?.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
+    // ONE debit, not two: the loser must not have moved anything.
+    expect(settled[0]?.body.balanceAfterFils).toBe(before - SERVICE.blowDry.priceFils);
 
     // NOTE FOR LANE A: the mock wins this by accident. Its check-and-delete on
     // the token map is synchronous inside one handler in one Node process, so
@@ -121,6 +127,7 @@ describe('double scan of one wallet token', () => {
 describe('double submit of one charge', () => {
   it('a sequential resubmit under the same key returns the first result', async () => {
     const key = idempotencyKey('double-submit-seq');
+    const before = (await memberNow()).balanceFils;
     const first = await charge({ key });
     const second = await charge({ key });
 
@@ -128,11 +135,12 @@ describe('double submit of one charge', () => {
     expect(second.status).toBe(200);
     expect(second.body.transaction.id).toBe(first.body.transaction.id);
     expect(second.body).toEqual(first.body);
-    expect(second.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
+    expect(second.body.balanceAfterFils).toBe(before - SERVICE.blowDry.priceFils);
   });
 
   it('a double-tap — two in flight at once under one key — settles exactly one transaction', async () => {
     const key = idempotencyKey('double-submit-parallel');
+    const before = (await memberNow()).balanceFils;
 
     const [a, b] = await Promise.all([charge({ key }), charge({ key })]);
 
@@ -140,7 +148,7 @@ describe('double submit of one charge', () => {
     expect(b.status).toBe(200);
     expect(a.body.transaction.id).toBe(b.body.transaction.id);
     expect(a.body.balanceAfterFils).toBe(b.body.balanceAfterFils);
-    expect(a.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
+    expect(a.body.balanceAfterFils).toBe(before - SERVICE.blowDry.priceFils);
 
     // NOTE FOR LANE A: same caveat as the token race. The mock's has()/set() on
     // its idempotency Map cannot interleave in one process, so this spec is

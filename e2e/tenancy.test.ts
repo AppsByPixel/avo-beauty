@@ -38,7 +38,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   A_MEMBER,
   A_MEMBER_NAME,
@@ -360,41 +360,142 @@ describe('existence is not disclosed — a salon that is not yours reads like on
  * it is consumed, one salon's scanner can act on another salon's customer.
  */
 describe('the wallet token — a bearer credential minted for salon A', () => {
-  knownBug(
-    "POST /scans accepts salon A's wallet token from salon B's scanner and returns her card",
-    async () => {
-      const token = await mintSalonAWalletToken();
+  /**
+   * PROMOTED — this was a `knownBug()`. It found the leak, lane A closed it, the
+   * helper flipped to "appears to be FIXED", and it is a plain `it()` now so the
+   * behaviour stays locked in.
+   *
+   * The leak: `peekToken` resolved a token by its hash alone and `POST /scans`
+   * fetched the member by id with no tenant predicate, so a scanner at ANY salon
+   * on a legitimate device-bound PIN session could submit a QR minted for
+   * another salon's customer and be handed her name, phone, email, balance, tier
+   * and visit count. The service list two lines below WAS salon-scoped, which is
+   * what made the response look correct.
+   *
+   * The fix is structural rather than a check added to this handler:
+   * `peekToken` and `consumeToken` now take a REQUIRED `TokenScope`, so a future
+   * call site cannot resolve a token without saying whose salon it is resolving
+   * it in — there is no overload that omits it. That is why this spec asserts
+   * the refusal rather than merely a non-200: the shape is the contract, and a
+   * regression that answered 500 would otherwise read as green.
+   */
+  it("POST /scans refuses salon A's wallet token from salon B's scanner", async () => {
+    const token = await mintSalonAWalletToken();
 
-      const res = await treq<{ member?: { id: string; salonId: string } }>('POST', '/scans', {
-        token: bScanner,
-        body: { token },
-      });
+    const res = await treq<{ error: string; message: string; member?: unknown }>('POST', '/scans', {
+      token: bScanner,
+      body: { token },
+    });
 
-      if (res.status === 200 && res.body.member) {
-        // Printed rather than asserted, because knownBug() swallows the
-        // assertion below. This is the defect report.
-        const disclosed = Object.keys(res.body.member).join(', ');
-        // eslint-disable-next-line no-console
-        console.warn(
-          `\n  TENANCY LEAK — POST /scans\n` +
-            `  salon B's scanner (${B_STAFF} @ ${SALON_B}) resolved a wallet token minted for\n` +
-            `  member ${A_MEMBER} @ ${SALON_A} and was handed: ${disclosed}\n` +
-            `  balance ${res.body.member ? (res.body.member as Record<string, unknown>).balanceFils : '?'} fils, ` +
-            `phone ${(res.body.member as Record<string, unknown>).phone}\n` +
-            `  services/walletToken.ts peekToken() resolves by token hash only; staff.ts\n` +
-            `  POST /scans never compares member.salonId with the caller's salon.\n`,
-        );
-      }
+    // 404, and 404 SPECIFICALLY — see the paired spec below for why this route
+    // says something different from POST /charges.
+    expect(res.status, `POST /scans answered ${res.status}: ${res.raw}`).toBe(404);
+    expect(res.body.error).toBe('unknown_member');
+    expect(res.body.message).toBe('No such member.');
+    // Nothing about the card came back with the refusal.
+    expect(res.body).not.toHaveProperty('member');
+    expect(res.body).not.toHaveProperty('services');
+    expect(res.body).not.toHaveProperty('heldDepositFils');
+    expectNoSalonALeak(res.raw, 'POST /scans with a foreign wallet token');
+  });
 
-      // The contract-correct answer. `peekToken` resolves a token by its hash
-      // alone and `POST /scans` never checks the member's salon, so a scanner in
-      // any salon can resolve any live code on the platform.
-      expect(
-        res.status,
-        'a scanner must not resolve a wallet token belonging to another salon',
-      ).not.toBe(200);
-    },
-  );
+  /**
+   * SPEC CORRECTED — the first version of this asserted the wrong equivalence,
+   * and the API was right.
+   *
+   * It expected a foreign token and a token that was never minted anywhere to be
+   * byte-identical, by analogy with the salon-existence specs above. They are
+   * not: a foreign token is `404 unknown_member`, a token nobody ever minted is
+   * `410 token_consumed_or_unknown`. That is deliberate, and the reasoning is
+   * recorded in `api/src/services/walletToken.ts`:
+   *
+   *   The property that has to hold is that a FOREIGN MEMBER and an ABSENT
+   *   MEMBER are indistinguishable — otherwise the 404 becomes a directory of
+   *   other salons' customers, which is enumerable and worth having. Folding the
+   *   foreign case into the 410 would hide one further bit (whether a token
+   *   string is live somewhere on the platform) at the cost of that property.
+   *   A wallet token is a 45-second, 128-bit random: nobody guesses one, so the
+   *   only person who can learn that bit is someone already holding the code,
+   *   who learns nothing they did not have.
+   *
+   * The distinction is asserted rather than the equivalence, so the trade stays a
+   * decision. Collapsing these two into one answer should fail here and be
+   * argued, not merged.
+   */
+  it('a foreign token and a token nobody ever minted answer differently — the recorded trade', async () => {
+    const foreign = await mintSalonAWalletToken();
+    const fromAnotherSalon = await treq<{ error: string; message: string }>('POST', '/scans', {
+      token: bScanner,
+      body: { token: foreign },
+    });
+    const neverMinted = await treq<{ error: string }>('POST', '/scans', {
+      token: bScanner,
+      body: { token: 'wt_this_value_was_never_minted_by_anyone' },
+    });
+
+    expect([fromAnotherSalon.status, fromAnotherSalon.body.error]).toEqual([404, 'unknown_member']);
+    expect([neverMinted.status, neverMinted.body.error]).toEqual([
+      410,
+      'token_consumed_or_unknown',
+    ]);
+
+    // THE equivalence that does have to hold: the foreign token's refusal is the
+    // same answer a member id that never existed gets, verbatim.
+    const absentMember = await treq<{ error: string; message: string }>('POST', '/charges', {
+      token: bScanner,
+      idempotencyKey: key('absent-member-body'),
+      body: { memberId: 'MEMBER-DOES-NOT-EXIST', serviceIds: [B_SERVICE] },
+    });
+    expect(absentMember.status).toBe(404);
+    expect(
+      fromAnotherSalon.body,
+      "another salon's customer is distinguishable from a member who does not exist",
+    ).toEqual(absentMember.body);
+  });
+
+  /**
+   * TWO REFUSALS, DELIBERATELY DIFFERENT — lane A's judgement call, asserted so
+   * it is a decision rather than an accident.
+   *
+   *   POST /scans    404 unknown_member         the token is the caller's ONLY
+   *                                             identifier, so "no such member"
+   *                                             is simply true, and it is the
+   *                                             same answer a member that never
+   *                                             existed gives.
+   *
+   *   POST /charges  409 token_member_mismatch  the caller already NAMED a
+   *                                             member of its own salon. 404
+   *                                             there would be a lie about the
+   *                                             customer standing at the
+   *                                             counter, and it would send the
+   *                                             scanner to the wrong copy.
+   *
+   * Different information available, different refusal. The pair is asserted in
+   * one spec so that a future change which collapses them into one code fails
+   * here with the reason attached, instead of quietly making one of the two
+   * endpoints less honest.
+   */
+  it('the two refusals differ because the two callers know different things', async () => {
+    const scanToken = await mintSalonAWalletToken();
+    const scan = await treq<{ error: string }>('POST', '/scans', {
+      token: bScanner,
+      body: { token: scanToken },
+    });
+
+    const chargeToken = await mintSalonAWalletToken();
+    const charge = await treq<{ error: string }>('POST', '/charges', {
+      token: bScanner,
+      idempotencyKey: key('refusal-shapes'),
+      // A member of salon B's OWN salon, paired with salon A's code.
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token: chargeToken },
+    });
+
+    expect([scan.status, scan.body.error]).toEqual([404, 'unknown_member']);
+    expect([charge.status, charge.body.error]).toEqual([409, 'token_member_mismatch']);
+    // Stated as an inequality too, so "both became 404" cannot pass by having
+    // updated only one of the two lines above.
+    expect(scan.status).not.toBe(charge.status);
+  });
 
   it("salon B's scanner cannot spend salon A's token — the charge refuses", async () => {
     const token = await mintSalonAWalletToken();
@@ -442,6 +543,133 @@ describe('the wallet token — a bearer credential minted for salon A', () => {
     });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('token_member_mismatch');
+  });
+});
+
+// ------------------------------------------------------------------- scope --
+
+/**
+ * SCOPE IS NOT PERMISSION, AND BOTH DIRECTIONS HAVE TO BE CHECKED.
+ *
+ * The tripwires at the top of this file prove one direction: a scanner PIN
+ * cannot reach `GET /staff`. This section is the inverse, and until lane A
+ * landed `requireScannerPerm` it was open — `POST /charges` and `POST /scans`
+ * checked the PERMISSION and never looked at `principal.scope`. Layla holds
+ * every permission, so her WEB session debited a wallet.
+ *
+ * That matters because the two credentials are hardened differently on purpose.
+ * The PIN is a four-digit shift credential: hashed, bound to a device, rate
+ * limited per device and salon, locked after five failures — precisely BECAUSE
+ * it can move money. A dashboard session has none of that. It is long-lived,
+ * browser-based, bound to no device, refreshable for thirty days, and it is the
+ * one a manager leaves signed in on a laptop in the back office. If it can
+ * charge, every PIN control is optional, because the easier door is open.
+ *
+ * PROMOTED — both specs below were `knownBug()` and both flipped in one run when
+ * the fix landed. While they were red they printed the damage: Layla's web
+ * session debited member 9001 by 7.000 fils and was handed her card and phone.
+ *
+ * THIS SECTION IS THE ONE THAT HAD TO BYPASS THE TEST SHIM, and that is the
+ * general lesson rather than a detail. `AVO_TEST_PRINCIPALS` assigns scanner
+ * scope BY URL — `/scans`, `/charges` and `/voids` get a scanner principal
+ * automatically. Every shim-driven spec in the other three suites was therefore
+ * blind to this hole by construction: it could not present a dashboard
+ * credential to a scanner route even if it tried. The bug was live, the suite
+ * was green, and when it was fixed not one existing spec moved.
+ *
+ * These use a real `POST /auth/web/session` and a real Bearer token. Anything
+ * that turns on WHICH KIND of credential is presented has to be tested with
+ * credentials; whatever the shim decides for you, your suite cannot see.
+ */
+describe('scope — a dashboard credential must not reach the scanner surface', () => {
+  it('POST /charges refuses a dashboard-scope session with 403, and debits nothing', async () => {
+    const before = scalar(`select balance_fils from member where id='${B_MEMBER}'`);
+
+    const res = await treq<{ error: string; message: string }>('POST', '/charges', {
+      token: bDashboard,
+      idempotencyKey: key('dashboard-charge'),
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE] },
+    });
+
+    expect(
+      res.status,
+      `a web session must not debit a wallet, whatever permissions it holds: ${res.raw}`,
+    ).toBe(403);
+    expect(res.body.error).toBe('forbidden');
+    // The copy names the surface the action lives on: a manager who hits this is
+    // confused, not attacking.
+    expect(res.body.message).toMatch(/Charging happens on the staff scanner/i);
+    expect(res.body).not.toHaveProperty('transaction');
+    expect(res.body).not.toHaveProperty('balanceAfterFils');
+
+    const after = scalar(`select balance_fils from member where id='${B_MEMBER}'`);
+    expect(after, 'a dashboard-scope charge moved money').toBe(before);
+  });
+
+  it('POST /scans refuses a dashboard-scope session with 403, and discloses no card', async () => {
+    // Salon B's own customer, salon B's own manager, all nine permissions held.
+    // The only thing wrong is the KIND of credential.
+    const minted = await treq<{ token: string }>('GET', '/members/me/wallet-token', {
+      token: bMember,
+    });
+    precondition(minted.status === 200, `could not mint salon B's wallet token: ${minted.raw}`);
+
+    const res = await treq<{ error: string; message: string }>('POST', '/scans', {
+      token: bDashboard,
+      body: { token: minted.body.token },
+    });
+
+    expect(res.status, `a web session must not resolve a wallet QR: ${res.raw}`).toBe(403);
+    expect(res.body.message).toMatch(/Charging happens on the staff scanner/i);
+    expect(res.body).not.toHaveProperty('member');
+    expect(res.body).not.toHaveProperty('services');
+    // And the refusal came BEFORE the token was resolved. A 410 here would mean
+    // an unauthorised caller had already been told whether that code is live.
+    expect(res.status).not.toBe(410);
+  });
+
+  it('the token a refused scan carried is still live — a wrong-surface call burns nothing', async () => {
+    const minted = await treq<{ token: string }>('GET', '/members/me/wallet-token', {
+      token: bMember,
+    });
+    precondition(minted.status === 200, `could not mint salon B's wallet token: ${minted.raw}`);
+
+    const refused = await treq('POST', '/scans', {
+      token: bDashboard,
+      body: { token: minted.body.token },
+    });
+    expect(refused.status).toBe(403);
+
+    const rightSurface = await treq<{ member: { id: string } }>('POST', '/scans', {
+      token: bScanner,
+      body: { token: minted.body.token },
+    });
+    expect(rightSurface.status, rightSurface.raw).toBe(200);
+    expect(rightSurface.body.member.id).toBe(B_MEMBER);
+  });
+
+  it("the same two calls from salon B's SCANNER session succeed — the 403 is about scope, not the route", async () => {
+    // The control. Without it, a 403 from a broken body or a missing permission
+    // would have promoted the two specs above for the wrong reason.
+    const minted = await treq<{ token: string }>('GET', '/members/me/wallet-token', {
+      token: bMember,
+    });
+    precondition(minted.status === 200, `could not mint salon B's wallet token: ${minted.raw}`);
+
+    const scan = await treq<{ member: { id: string } }>('POST', '/scans', {
+      token: bScanner,
+      body: { token: minted.body.token },
+    });
+    expect(scan.status, scan.raw).toBe(200);
+    expect(scan.body.member.id).toBe(B_MEMBER);
+
+    const charge = await treq<{ transaction: { id: string } }>('POST', '/charges', {
+      token: bScanner,
+      idempotencyKey: key('scanner-charge-control'),
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE] },
+    });
+    expect(charge.status, charge.raw).toBe(200);
+    expect(charge.body.transaction.id).toMatch(/^TX-/);
   });
 });
 
