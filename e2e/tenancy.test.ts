@@ -167,7 +167,7 @@ describe('tripwires — the principals are who this suite thinks they are', () =
 // ------------------------------------------------- every salon-scoped route --
 
 interface SalonRoute {
-  method: 'GET' | 'POST' | 'PATCH';
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT';
   /** `{id}` is substituted with the salon under test. */
   template: string;
   body?: unknown;
@@ -176,7 +176,7 @@ interface SalonRoute {
 }
 
 /**
- * The eight routes that carry a salon id in the path, as registered in
+ * Every route that carries a salon id in the path, as registered in
  * `api/src/routes/salons.ts` and `api/src/routes/platform.ts`.
  *
  * Bodies are the minimum the handler would accept if it got that far. They are
@@ -200,6 +200,27 @@ const SALON_ROUTES: SalonRoute[] = [
     method: 'POST',
     template: '/v1/salons/{id}/campaigns',
     body: { title: 'tenancy probe', body: 'tenancy probe', channel: 'push' },
+  },
+  // Added by trunk when lane A's five new routes merged. The ledger fired
+  // correctly on the merge — that is what it is for. Its sibling assertion,
+  // which drives every AUTO-DISCOVERED route, already passed against all five,
+  // so tenancy was proven before this list was updated; only the hand-written
+  // half was stale.
+  { method: 'GET', template: '/salons/{id}/artists' },
+  { method: 'GET', template: '/salons/{id}/audit' },
+  { method: 'GET', template: '/salons/{id}/activity' },
+  { method: 'GET', template: '/salons/{id}/loyalty' },
+  {
+    method: 'PUT',
+    template: '/salons/{id}/loyalty',
+    body: {
+      tiers: [
+        { name: 'bronze', minVisits: 0, bonusPercent: 0 },
+        { name: 'silver', minVisits: 4, bonusPercent: 10 },
+        { name: 'gold', minVisits: 10, bonusPercent: 20 },
+        { name: 'black', minVisits: 20, bonusPercent: 30 },
+      ],
+    },
   },
 ];
 

@@ -44,6 +44,7 @@ export const salon: Salon = {
   stampRewardAr: 'تصفيف شعر مجاني',
   depositFils: 5000,
   noShowReturnMinutes: 60,
+  timezone: 'Asia/Kuwait',
   businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
   branches: [
     { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya', nameAr: 'السالمية' },

@@ -94,6 +94,21 @@ export const SalonSchema = z.object({
   stampRewardAr: z.string().nullable().optional(),
   depositFils: FilsSchema.min(1000).max(10000),
   noShowReturnMinutes: z.number().int().positive(),
+  /**
+   * IANA zone id — "Asia/Kuwait", not an offset.
+   *
+   * `businessHours`, artist `windows` and happy-hour `from`/`to` are all naive
+   * wall clock. Without a zone they resolve against whatever the API process
+   * booted with (UTC in docker-compose), which silently offers every slot three
+   * hours out and, for happy hours, applies the wrong earning multiplier — a
+   * money bug, not a display one.
+   *
+   * An IANA id rather than a stored offset because "10:00 local" is two
+   * different instants across the year in any zone with DST. Kuwait has none,
+   * so this is free today and expensive the first time AVO signs a salon
+   * outside it.
+   */
+  timezone: z.string().min(1).default('Asia/Kuwait'),
   businessHours: BusinessHoursSchema,
   branches: z.array(BranchSchema),
   social: z.array(SocialLinkSchema),

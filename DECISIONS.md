@@ -37,6 +37,47 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Salon timezone — decided, IANA zone id, default `Asia/Kuwait`
+
+**What.** `Salon.timezone` added to the contract, defaulting to `Asia/Kuwait`. Lane A owes
+the column and the resolution logic.
+
+**Why I decided this rather than queuing it.** Lane A escalated it three times and it now
+touches three surfaces. The *business* question — will AVO sign a salon outside Kuwait —
+is the client's. The *technical* choice does not depend on the answer: storing an IANA zone
+id is correct either way, costs nothing today, and gets expensive once there is production
+data. Deciding it does not pre-empt Aftab; leaving it undecided would have.
+
+Without it, `businessHours`, artist `windows` and happy-hour `from`/`to` resolve against
+whatever zone the API process booted with — UTC in docker-compose. That silently offers
+every booking slot three hours out, and for happy hours applies the wrong earning
+multiplier, which is a money bug rather than a display one.
+
+An IANA id and not a stored offset, because "10:00 local" is two different instants across
+the year in any DST zone. Kuwait has none, which is exactly why this is free to get right
+now.
+
+**To reverse:** drop the field and pin the API process to `TZ=Asia/Kuwait`. That works until
+the first salon outside Kuwait, and fails silently rather than loudly when it stops working.
+
+### Lane D's tenancy ledger updated at trunk, inside lane D's column
+
+**What.** Added lane A's five new `/salons/:id/*` routes to `SALON_ROUTES` in
+`e2e/tenancy.test.ts`, and widened `SalonRoute.method` to include `PUT` — lane A registered
+the first salon-scoped PUT.
+
+**Why, given it is lane D's file.** The merge turned `dev` red and rule 1 is that `dev`
+never stays red. This is a list of known routes, and the moment the trunk merges new ones is
+the moment it should update.
+
+**Why it was safe.** The ledger's sibling assertion — which auto-discovers routes rather
+than reading the list — **already passed against all five**. Tenancy was independently
+proven before I touched anything; only the hand-maintained half was stale. Had that
+assertion also failed, I would have reverted the merge instead.
+
+Flagged to lane D on its next dispatch.
+
+
 ### `feeFils` on `POST /topups` — decided, deliberately not yet implemented
 
 **What.** `POST /topups` still returns `feeFils`. It is as customer-facing as
