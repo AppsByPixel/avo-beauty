@@ -16,6 +16,7 @@ import { member } from '../db/schema/member';
 import { transaction } from '../db/schema/transaction';
 import { requireMember } from '../auth/principal';
 import { notFound } from '../http/errors';
+import { serialiseTransactionForCustomer, type TransactionRow } from '../http/serialise';
 import { mintToken } from '../services/walletToken';
 import { serialiseMember } from './auth';
 
@@ -28,6 +29,20 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
     return reply.send(serialiseMember(m));
   });
 
+  /**
+   * The activity feed, through the SHARED serialiser.
+   *
+   * This handler used to map its rows inline. The mapping was correct — it
+   * listed its fields and `feeFils` was not among them — and that is exactly
+   * why it was worth changing. `http/serialise.ts` exists so that
+   * "merchant-visible, customer-never" is a place in the code rather than a
+   * habit; a second, parallel mapping of the same row makes it a habit again.
+   *
+   * Lane D found it: the rule was enforced in the shared serialiser and this,
+   * the single most fee-adjacent customer read in the API, did not call it. The
+   * next person to add a column to `transaction` and widen the wrong `select`
+   * would have had nothing to stop them here.
+   */
   app.get('/members/me/transactions', async (req, reply) => {
     const p = requireMember(req);
     const rows = await db
@@ -38,18 +53,7 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
       .limit(50);
 
     return reply.send({
-      items: rows.map((t) => ({
-        id: t.id,
-        memberId: t.memberId,
-        branchId: t.branchId,
-        kind: t.kind,
-        amountFils: t.amountFils,
-        bonusFils: t.bonusFils,
-        method: t.method,
-        status: t.status,
-        reference: t.reference,
-        createdAt: t.createdAt.toISOString(),
-      })),
+      items: rows.map((t) => serialiseTransactionForCustomer(t as TransactionRow)),
       nextCursor: null,
     });
   });
