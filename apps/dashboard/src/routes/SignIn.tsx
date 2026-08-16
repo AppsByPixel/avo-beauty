@@ -5,6 +5,7 @@ import { ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { displayNameFor } from '../auth/api.js';
 import { SCOPES } from '../auth/scopes.js';
+import { rememberWorkspace, suggestedWorkspace, workspaceHintFromHost } from '../config.js';
 
 /** AVO Login.dc.html 5a. Copy is verbatim; do not paraphrase it. */
 const COPY = {
@@ -12,6 +13,18 @@ const COPY = {
   shortPassword: 'Password must be at least 6 characters.',
   unreachable: "We couldn't reach your workspace. Check your connection and try again.",
   rejected: 'That username and password do not match. Try again.',
+  /*
+   * NOT FROM THE DESIGN — flagged in the lane report.
+   *
+   * AVO Login.dc.html 5a draws two fields, username and password. The API needs
+   * three: `staff_user_salon_handle_uq` is on (salon_id, handle), so "noura" is
+   * not a unique person and a two-field form cannot address a second salon. On
+   * a per-salon subdomain this field is derived from the host and hidden, which
+   * is the deployed shape and matches the design exactly; on a bare host it has
+   * to be asked for. The alternative was a build-time constant, which is the
+   * thing this change removes.
+   */
+  missingWorkspace: 'Enter the workspace for your salon.',
 } as const;
 
 const MIN_PASSWORD_LENGTH = 6;
@@ -21,6 +34,14 @@ export function SignIn() {
   const { signIn, sessionFor } = useAuth();
   const errorId = useId();
 
+  /*
+   * A subdomain is authoritative enough to hide the field: on `amara.avo.app`
+   * the merchant did not choose the workspace, the URL did. On `localhost` and
+   * on the apex there is no host to read, so the field is shown and pre-filled
+   * with whatever last signed in here.
+   */
+  const fromHost = workspaceHintFromHost(window.location.hostname);
+  const [salonId, setSalonId] = useState(() => suggestedWorkspace());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -53,18 +74,38 @@ export function SignIn() {
       setError(COPY.shortPassword);
       return;
     }
+    if (!salonId.trim()) {
+      setError(COPY.missingWorkspace);
+      return;
+    }
 
     setSubmitting(true);
     setError('');
     try {
-      const session = await signIn('merchant', { username, password }, keepSignedIn);
+      const session = await signIn(
+        'merchant',
+        { salonId: salonId.trim(), username: username.trim(), password },
+        keepSignedIn,
+      );
       // Non-negotiable #6: the password leaves the client's memory the moment
       // the request resolves, whichever way it resolved.
       setPassword('');
+      // The salon that gets remembered is the one the SERVER put on the session,
+      // not the one that was typed. They match today; if they ever stop, the
+      // server's answer is the right one to keep.
+      rememberWorkspace(session.salonId);
       setWelcome(session.displayName || displayNameFor(username));
     } catch (cause) {
       setPassword('');
-      if (cause instanceof ApiError && cause.isDenied) setError(COPY.rejected);
+      /*
+       * The API answers every credential failure identically and on purpose —
+       * "wrong password", "no such user" and "no such salon" are one 401 with
+       * one body, because distinguishing them turns this form into a staff-list
+       * oracle. So this branch does not try to be more specific than the server
+       * was: one message for a refusal, one for not reaching it at all.
+       */
+      if (cause instanceof ApiError && cause.isUnauthenticated) setError(COPY.rejected);
+      else if (cause instanceof ApiError && cause.status === 400) setError(COPY.missingWorkspace);
       else setError(COPY.unreachable);
     } finally {
       setSubmitting(false);
@@ -114,6 +155,22 @@ export function SignIn() {
         <p className="signin__sub">Enter the credentials for your salon workspace.</p>
 
         <div className="signin__fields">
+          {fromHost ? null : (
+            <TextField
+              label="Workspace"
+              placeholder="SAL-AMARA"
+              autoComplete="organization"
+              autoCapitalize="characters"
+              spellCheck={false}
+              value={salonId}
+              describedBy={error ? errorId : undefined}
+              onChange={(event) => {
+                setSalonId(event.target.value);
+                setError('');
+              }}
+            />
+          )}
+
           <TextField
             label="Username"
             placeholder="amara"

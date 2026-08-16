@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useSalon } from '../api/salon.js';
-import { useAuth } from '../auth/AuthProvider.js';
+import { useAuth, useSession } from '../auth/AuthProvider.js';
 import { SCOPES } from '../auth/scopes.js';
-import { FALLBACK_SALON_ID } from '../config.js';
 import { Header } from './Header.js';
 import { Sidebar } from './Sidebar.js';
 import { UnsupportedWidth } from './UnsupportedWidth.js';
@@ -11,31 +10,46 @@ import { navItemFor } from './navItems.js';
 import { useBrandTheme } from './useBrandTheme.js';
 import { useBreakpoint } from './useBreakpoint.js';
 
+/**
+ * The guard half of the shell.
+ *
+ * `requireScope` guards ENTRY to this route, but it does not re-run when the
+ * session disappears underneath a mounted shell — and that is exactly what
+ * sign-out does, and what a sign-out in a second tab does. So the redirect is
+ * driven from here, and the signed-in body is a separate component.
+ *
+ * The split is what lets the body use `useSession` and `useSalonId` strictly.
+ * Those accessors throw without a session, on purpose — that is how the salon id
+ * stays non-optional and how the old `?? FALLBACK_SALON_ID` cannot come back.
+ * Keeping every one of them below this early return means a signed-out shell is
+ * a normal transient state rather than a throw into the router's CatchBoundary.
+ */
 export function MerchantShell() {
-  /*
-   * Read the session leniently, not through `useSession`.
-   *
-   * `requireScope` guards ENTRY to this route, but it does not re-run when the
-   * session disappears underneath a mounted shell — and that is exactly what
-   * sign-out does. `signOut()` sets state, React re-renders this component
-   * while the URL is still `/overview`, and the strict accessor threw "No
-   * merchant session" before `navigate` had a chance to move. The throw landed
-   * in the router's CatchBoundary, so every sign-out tore the tree down through
-   * an error boundary instead of simply leaving.
-   *
-   * The same holds for a session cleared in another tab on a shared front-desk
-   * machine. A signed-out shell is a normal transient state, not a crash.
-   */
-  const { signOut, sessionFor } = useAuth();
-  const session = sessionFor('merchant');
+  const session = useAuth().sessionFor('merchant');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!session) void navigate({ to: SCOPES.merchant.signIn });
+  }, [session, navigate]);
+
+  // Render nothing for the tick before the redirect lands, rather than a shell
+  // with no user in it. Returning null also unmounts <Outlet>, so the section
+  // below never renders against a missing session either.
+  if (!session) return null;
+
+  return <SignedInShell />;
+}
+
+function SignedInShell() {
+  const session = useSession('merchant');
+  const { signOut } = useAuth();
   const breakpoint = useBreakpoint();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLDivElement>(null);
 
-  const salonId = session?.salonId ?? FALLBACK_SALON_ID;
-  const salonQuery = useSalon(salonId, session?.token ?? null, session !== null);
+  // No salon id is passed or defaulted: the hook reads it from the session.
+  const salonQuery = useSalon();
   const salon = salonQuery.data;
   const salonName = salon?.name ?? '—';
   const branchLabel = salon?.branches[0]?.name ?? '—';
@@ -65,25 +79,18 @@ export function MerchantShell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [drawerOpen]);
 
-  /*
-   * The session went away under a mounted shell. `requireScope` only guards
-   * entry, so the redirect has to be driven from here.
-   */
-  useEffect(() => {
-    if (!session) void navigate({ to: SCOPES.merchant.signIn });
-  }, [session, navigate]);
-
-  // Render nothing for the tick before the redirect lands, rather than a shell
-  // with no user in it. Returning null also unmounts <Outlet>, so the section
-  // below never renders against a missing session either.
-  if (!session) return null;
-
   if (breakpoint === 'unsupported') return <UnsupportedWidth />;
 
   const collapsed = breakpoint === 'narrow';
 
+  /*
+   * Sign-out revokes the session row server-side before clearing this machine.
+   * The promise is deliberately not awaited here: `signOut` drops the session
+   * from the tree first, so the redirect happens on the click and the revoke
+   * lands behind it. A merchant does not wait on a network round-trip to leave.
+   */
   function onSignOut() {
-    signOut('merchant');
+    void signOut('merchant');
   }
 
   return (

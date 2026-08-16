@@ -1,70 +1,118 @@
-import type { Salon } from '@avo/types';
+import { StaffUserSchema, type StaffUser } from '@avo/types';
 import { ApiError, request } from '../api/client.js';
-import { FALLBACK_SALON_ID } from '../config.js';
-import type { Session } from './session.js';
+import { deviceId } from '../config.js';
+import { authedRequest } from './authedRequest.js';
 import type { AuthScope } from './scopes.js';
+import { clearSession, readSession, type Session } from './session.js';
 
 export interface Credentials {
+  /**
+   * The salon the credential belongs to. `staff_user_salon_handle_uq` is on
+   * (salon_id, handle), so "noura" does not identify a person — the API needs
+   * the triple. See config.ts for why this is a credential component and not an
+   * authorisation, and SignIn.tsx for where the value comes from.
+   */
+  salonId: string;
   username: string;
   password: string;
 }
 
-interface AuthResponse {
-  token: string;
-  user: { username: string; name: string; salonId: string | null; perms: Session['perms'] };
+/** `POST /auth/web/session`, verbatim. `expiresAt` is the REFRESH expiry. */
+interface WebSessionResponse {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  staff: StaffUser;
 }
 
 /**
  * Web sign-in.
  *
- * `POST /auth/session` is what LANES.md gives lane A ("web username+password,
- * refresh with revocation"). It does not exist in `packages/mock` yet, so a 404
- * falls back to a development stand-in that at least proves the workspace is
- * reachable before letting anyone through. The moment the route lands, this
- * function starts using it with no change here — which is the point of writing
- * the real call first and the stand-in second.
+ * This calls the real endpoint. The development stand-in that used to live here
+ * — a 404 fallback that read a hardcoded salon and minted a `dev_` token —
+ * authenticated nobody and is gone.
  *
  * The password reaches this function and goes no further: it is never stored,
  * never logged, and never put on the Session. Non-negotiable #6.
+ *
+ * THE SALON ON THE RETURNED SESSION IS `staff.salonId`, NOT `credentials.salonId`.
+ * They will usually be equal, because the API looks the staff row up by the
+ * salon that was typed. Reading it back off the response anyway is the habit
+ * that matters: the server owns which salon a session is for, and the client
+ * records what it was told rather than what it asked for.
  */
 export async function signIn(scope: AuthScope, credentials: Credentials): Promise<Session> {
-  try {
-    const result = await request<AuthResponse>('/auth/session', {
-      method: 'POST',
-      body: { scope, username: credentials.username, password: credentials.password },
+  const device = deviceId();
+  const result = await request<WebSessionResponse>('/auth/web/session', {
+    method: 'POST',
+    body: {
+      salonId: credentials.salonId,
+      username: credentials.username,
+      password: credentials.password,
+      ...(device ? { deviceId: device } : {}),
+    },
+  });
+
+  // `StaffUserSchema` is the trunk contract in packages/types and matches the
+  // API's `serialiseStaff` field for field. Parsing rather than trusting means a
+  // response that drops `salonId` or `perms` fails HERE, at sign-in, instead of
+  // rendering a shell with no salon in it and 404ing one route later.
+  const parsed = StaffUserSchema.safeParse(result.staff);
+  if (!parsed.success || !parsed.data.salonId) {
+    throw new ApiError('That sign-in did not come back with a workspace. Try again.', {
+      status: 401,
+      code: 'session_without_salon',
     });
-    return {
-      scope,
-      token: result.token,
-      username: result.user.username,
-      displayName: result.user.name,
-      salonId: result.user.salonId,
-      perms: result.user.perms,
-    };
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) {
-      return developmentSignIn(scope, credentials.username);
-    }
-    throw error;
   }
+  const staff = parsed.data;
+
+  return {
+    scope,
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+    refreshExpiresAt: result.expiresAt,
+    staffId: staff.id,
+    username: staff.handle,
+    displayName: staff.name,
+    salonId: staff.salonId,
+    perms: staff.perms,
+  };
 }
 
 /**
- * Development stand-in for the missing endpoint. Reads the salon so a wrong API
- * base URL, a stopped mock or an `error`/`offline` scenario surfaces on the
- * sign-in screen instead of one route later — but it authenticates nobody, and
- * it must be deleted with the 404 branch above.
+ * Sign out.
+ *
+ * `POST /auth/sign-out` revokes the session row server-side, which is the half
+ * that matters: clearing `localStorage` only removes the copy on this machine
+ * and leaves a refresh token valid for thirty more days for anyone who captured
+ * it. `revokeSession` sets `revoked_at`, and `resolvePrincipal` re-checks the
+ * row on every request, so the access token stops working immediately too
+ * rather than living out its fifteen minutes.
+ *
+ * Through `authedRequest`, so an access token that expired while the merchant
+ * was reading rotates and the revoke still lands instead of 401ing into a
+ * local-only sign-out.
+ *
+ * The local session is cleared whatever happens. A merchant who clicks Sign out
+ * on a shared front-desk machine and walks away must not be left signed in
+ * because the network was down — the server-side revoke is best effort, the
+ * local clear is not.
  */
-async function developmentSignIn(scope: AuthScope, username: string): Promise<Session> {
-  const salon = await request<Salon>(`/salons/${FALLBACK_SALON_ID}`);
-  return {
-    scope,
-    token: `dev_${scope}_${salon.id}`,
-    username,
-    displayName: displayNameFor(username),
-    salonId: salon.id,
-    perms: null,
-  };
+export async function signOut(scope: AuthScope): Promise<{ revoked: boolean }> {
+  if (!readSession(scope)) return { revoked: false };
+  try {
+    await authedRequest<void>(scope, '/auth/sign-out', { method: 'POST' });
+    return { revoked: true };
+  } catch (error) {
+    // A 401 means the session was already dead server-side, which is the same
+    // end state. Anything else — offline, a 500 — leaves a live row behind, so
+    // say so rather than reporting a clean sign-out.
+    const alreadyGone = error instanceof ApiError && error.isUnauthenticated;
+    if (!alreadyGone) console.warn('[avo] Sign-out did not reach the server; clearing locally.');
+    return { revoked: alreadyGone };
+  } finally {
+    clearSession(scope);
+  }
 }
 
 /** "amara.k" → "Amara". Matches the greeting in AVO Login.dc.html. */
