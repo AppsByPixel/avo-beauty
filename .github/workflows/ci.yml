@@ -4,6 +4,16 @@ on: [push, pull_request]
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # Mirrors api/.env.example. These are the compose stack's dev defaults, not
+    # secrets — the database exists only for the length of this job. Anything
+    # genuinely secret belongs in repository secrets, never here.
+    env:
+      DATABASE_URL: postgres://avo:avo_dev_password@localhost:5433/avo
+      APP_DATABASE_URL: postgres://avo_app:avo_app_dev_password@localhost:5433/avo
+      NODE_ENV: test
+      GATEWAY_DRIVER: sandbox
+
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
