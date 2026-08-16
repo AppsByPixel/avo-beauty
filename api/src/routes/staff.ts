@@ -39,7 +39,7 @@ import {
   PERMISSION_NAMES,
   permsOf,
   requireDashboardPerm,
-  requirePerm,
+  requireScannerPerm,
   requireStaff,
   type PermissionName,
 } from '../auth/principal';
@@ -88,9 +88,15 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
   /**
    * No permission gate: this is how a scanner learns what it may do, so gating
    * it on a permission would be circular. Authentication is the gate.
+   *
+   * `'either'` and not `'scanner'`, written out rather than defaulted. Both
+   * surfaces need to know who is signed in and what they may do — the scanner
+   * to draw its locked screens, the dashboard to draw its own shell — and the
+   * response carries no money and no other staff member's row. This is the one
+   * staff endpoint in the API that is genuinely surface-agnostic.
    */
   app.get('/staff/me', async (req, reply) => {
-    const p = requireStaff(req);
+    const p = requireStaff(req, 'either');
     const rows = await db.select().from(staffUser).where(eq(staffUser.id, p.id)).limit(1);
     const row = rows[0];
     if (!row) throw notFound('unknown_staff', 'No such staff member.');
@@ -231,17 +237,36 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
    *
    * It does NOT consume the token. Consumption happens at the charge, so a
    * scanner re-reading the code before the artist confirms does not burn it.
+   *
+   * THE TOKEN IS RESOLVED INSIDE THE CALLER'S SALON, and the member row is read
+   * inside it too. This handler used to resolve the token by hash alone and then
+   * fetch the member by id with no tenant predicate, which made it a
+   * cross-tenant read: a scanner at salon B, on a legitimate device-bound PIN
+   * session, could submit a QR minted for salon A's customer and receive her
+   * name, phone, email, balance, tier and visit count. The service list two
+   * lines below WAS salon-scoped, which is what made the response look correct.
+   *
+   * Both reads are scoped now, and both refusals are `404 unknown_member` —
+   * identical to a member that does not exist.
    */
   app.post('/scans', async (req, reply) => {
-    const p = requirePerm(req, 'scanner');
+    const p = requireScannerPerm(req, 'scanner');
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const token = typeof body.token === 'string' ? body.token.trim() : '';
     if (!token) throw badRequest('invalid_request', 'token is required.');
 
-    const peeked = await peekToken(db, token);
+    const peeked = await peekToken(db, token, { salonId: p.salonId });
 
-    const rows = await db.select().from(member).where(eq(member.id, peeked.memberId)).limit(1);
+    // Scoped again here rather than trusting the resolver. Two independent
+    // predicates on the same boundary is the point: this one survives a future
+    // change to peekToken, and peekToken's survives a future handler that
+    // forgets this line.
+    const rows = await db
+      .select()
+      .from(member)
+      .where(and(eq(member.id, peeked.memberId), eq(member.salonId, p.salonId)))
+      .limit(1);
     const m = rows[0];
     if (!m) throw notFound('unknown_member', 'No such member.');
 

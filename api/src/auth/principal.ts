@@ -268,26 +268,67 @@ export function requireMember(req: FastifyRequest): MemberPrincipal {
   return p;
 }
 
-export function requireStaff(req: FastifyRequest): StaffPrincipal {
+/**
+ * WHICH SURFACE AN ENDPOINT BELONGS TO.
+ *
+ * Required, never defaulted, at every staff gate. A default here would be a
+ * default answer to a security question, and the whole reason this parameter
+ * exists is that the wrong default shipped: the scope check ran in one direction
+ * only, so a dashboard web session could call `POST /charges` and debit a
+ * wallet. Making the surface a parameter you cannot omit means the next endpoint
+ * added to this API cannot be scope-agnostic by accident — only on purpose, by
+ * writing `'either'` and being seen to write it.
+ */
+export type StaffSurface = 'scanner' | 'dashboard' | 'either';
+
+const SURFACE_COPY: Record<Exclude<StaffSurface, 'either'>, string> = {
+  /**
+   * api-contract.md § StaffUser: a PIN must "never reach dashboard scopes".
+   * The credential is the wrong kind, not merely under-privileged — a manager
+   * holding every permission still cannot reach Accounts → Team from the
+   * scanner tablet on the salon floor.
+   */
+  dashboard:
+    'A scanner PIN cannot reach the dashboard. Sign in on the web with a username and password.',
+  /**
+   * The other direction, and the reason this map exists. A four-digit PIN is
+   * only safe because of what surrounds it: hashed, device-scoped, rate-limited
+   * per device and salon, locked after five failures, scanner scope only. A web
+   * session has none of that — it is long-lived, browser-based, not bound to a
+   * device, and refreshable for thirty days. If it can charge, every one of
+   * those PIN controls is optional, because the easier door is open.
+   *
+   * A manager who hits this is confused, not attacking, so the copy names the
+   * surface the action lives on rather than refusing flatly.
+   */
+  scanner:
+    'Charging happens on the staff scanner, not the dashboard. Open AVO on the salon phone and sign in with your PIN.',
+};
+
+/**
+ * Authenticated staff on the right surface.
+ *
+ * The scope is stamped on the session at sign-in and is NOT re-read per request
+ * the way permissions are: a session is issued as a scanner session or a web
+ * session and never changes kind. That makes it a property of the credential,
+ * which is why it is checked before authority — a caller can be entirely
+ * authorised and still be holding the wrong sort of key.
+ */
+export function requireStaff(req: FastifyRequest, surface: StaffSurface): StaffPrincipal {
   const p = requirePrincipal(req);
   if (p.kind !== 'staff') throw forbidden('This endpoint is for salon staff.');
+  if (surface !== 'either' && p.scope !== surface) throw forbidden(SURFACE_COPY[surface]);
   return p;
 }
 
-/**
- * Dashboard-only. api-contract.md § StaffUser: a PIN must "never reach dashboard
- * scopes". The scope is stamped on the session at sign-in, so a scanner token
- * cannot reach a dashboard endpoint even if the staff member holds every
- * permission — the credential is the wrong kind, not merely under-privileged.
- */
+/** Dashboard-only, no permission attached. */
 export function requireDashboardScope(req: FastifyRequest): StaffPrincipal {
-  const p = requireStaff(req);
-  if (p.scope !== 'dashboard') {
-    throw forbidden(
-      'A scanner PIN cannot reach the dashboard. Sign in on the web with a username and password.',
-    );
-  }
-  return p;
+  return requireStaff(req, 'dashboard');
+}
+
+/** Scanner-only, no permission attached. */
+export function requireScannerScope(req: FastifyRequest): StaffPrincipal {
+  return requireStaff(req, 'scanner');
 }
 
 /** Copy from design/AVO Staff Scanner.dc.html, locked state. Lane D asserts on it. */
@@ -307,34 +348,51 @@ const PERMISSION_COPY: Record<PermissionName, string> = {
  * THE permission gate. Call it as the first statement of a handler, before any
  * lookup, any token resolution and any write.
  *
- * Ordering is load-bearing, not tidiness. Lane D's probe for `perms.scanner`
- * reads: "POST /scans — 410 means the token was resolved before authority was
+ * TWO gates, and the order between them is load-bearing:
+ *
+ *   1. SURFACE — is this the right kind of credential at all? Checked first
+ *      because it is the more fundamental refusal, and because it is the one a
+ *      permission check cannot stand in for: a manager holds `charges`
+ *      legitimately, so gating on the permission alone lets her web session
+ *      debit a wallet from a back-office laptop.
+ *   2. PERMISSION — read from `staff_user` on this request, never from a claim.
+ *
+ * Both run before any lookup. Lane D's probe for `perms.scanner` reads:
+ * "POST /scans — 410 means the token was resolved before authority was
  * checked". An endpoint that looks the token up first and only then checks
  * authority has already told an unauthorised caller whether that token exists.
+ *
+ * `surface` has no default on purpose. See `StaffSurface`.
  */
-export function requirePerm(req: FastifyRequest, permission: PermissionName): StaffPrincipal {
-  const p = requireStaff(req);
+export function requirePerm(
+  req: FastifyRequest,
+  surface: StaffSurface,
+  permission: PermissionName,
+): StaffPrincipal {
+  const p = requireStaff(req, surface);
   if (!p.perms[permission]) throw forbidden(PERMISSION_COPY[permission]);
   return p;
 }
 
-/**
- * A dashboard endpoint: the credential must be a web session AND carry the
- * permission. Both gates, in that order.
- *
- * Scope is checked first because it is the more fundamental refusal. A manager
- * holding every permission still must not reach Accounts → Team from a scanner
- * tablet on the salon floor — the PIN is a four-digit shift credential, and
- * api-contract.md says it must "never let it reach dashboard scopes". Checking
- * only the permission would let it, since she genuinely holds the permission.
- */
+/** A dashboard endpoint: a web session AND the permission. */
 export function requireDashboardPerm(
   req: FastifyRequest,
   permission: PermissionName,
 ): StaffPrincipal {
-  const p = requireDashboardScope(req);
-  if (!p.perms[permission]) throw forbidden(PERMISSION_COPY[permission]);
-  return p;
+  return requirePerm(req, 'dashboard', permission);
+}
+
+/**
+ * A scanner endpoint: a device-bound PIN session AND the permission.
+ *
+ * The mirror of `requireDashboardPerm`, and the half that was missing. Every
+ * money-moving endpoint on the counter goes through here.
+ */
+export function requireScannerPerm(
+  req: FastifyRequest,
+  permission: PermissionName,
+): StaffPrincipal {
+  return requirePerm(req, 'scanner', permission);
 }
 
 /** A staff member may only ever act inside their own salon. */

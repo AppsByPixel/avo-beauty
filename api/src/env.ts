@@ -59,6 +59,35 @@ const EnvSchema = z.object({
     .enum(['0', '1'])
     .default('0')
     .transform((v) => v === '1'),
+
+  // ------------------------------------------------------------- gateway --
+  //
+  // PSP selection is a client decision that has not been made (CLAUDE.md
+  // § Escalate, don't guess). The gateway sits behind an interface with a
+  // sandbox driver; choosing the real one later is this variable plus one
+  // adapter in src/gateway/. `sandbox` is refused in production below.
+  GATEWAY_DRIVER: z.enum(['sandbox']).default('sandbox'),
+
+  /**
+   * HMAC-SHA256 key the PSP signs its callbacks with.
+   *
+   * A webhook that trusts its payload is an unauthenticated credit endpoint, so
+   * this is not optional in production. Outside production a missing key is
+   * generated per boot — the sandbox driver signs and verifies with the same
+   * process, so the round trip still works, and a developer who forgets to set
+   * one gets callbacks that stop verifying at restart rather than a well-known
+   * default that reaches an environment where it matters.
+   */
+  GATEWAY_WEBHOOK_SECRET: z.string().min(16).optional(),
+  /** Seconds a signed callback stays acceptable. Replay window, keep it small. */
+  GATEWAY_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
+  /** Milliseconds. A gateway that has not answered by now has not answered. */
+  GATEWAY_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
+  /** Where the PSP's hosted page lives, for the sandbox. Absolute. */
+  PUBLIC_BASE_URL: z.string().url().optional(),
+  /** api-contract.md § TopUpIntent: the gateway returns the customer here. */
+  TOPUP_RETURN_URL: z.string().default('avo://topup/return'),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -88,6 +117,21 @@ if (raw.NODE_ENV === 'production' && !raw.JWT_SECRET) {
   throw new Error('JWT_SECRET is required in production.');
 }
 
+if (raw.NODE_ENV === 'production' && raw.GATEWAY_DRIVER === 'sandbox') {
+  throw new Error(
+    'GATEWAY_DRIVER=sandbox settles payments nobody paid for. Select a real ' +
+      'processor before production — see CLAUDE.md § Escalate, don\'t guess.',
+  );
+}
+
+if (raw.NODE_ENV === 'production' && !raw.GATEWAY_WEBHOOK_SECRET) {
+  throw new Error(
+    'GATEWAY_WEBHOOK_SECRET is required in production. Without it the webhook ' +
+      'cannot verify a signature, and an unverified webhook is an ' +
+      'unauthenticated credit endpoint.',
+  );
+}
+
 /**
  * Outside production a missing secret is generated per boot. That is deliberate:
  * a developer who forgets to set one gets tokens that stop working at restart,
@@ -96,6 +140,11 @@ if (raw.NODE_ENV === 'production' && !raw.JWT_SECRET) {
  */
 const jwtSecret =
   raw.JWT_SECRET ??
+  (raw.NODE_ENV === 'production' ? '' : randomUUID() + randomUUID());
+
+/** Same reasoning as `jwtSecret`: generated per boot outside production. */
+const gatewayWebhookSecret =
+  raw.GATEWAY_WEBHOOK_SECRET ??
   (raw.NODE_ENV === 'production' ? '' : randomUUID() + randomUUID());
 
 export const env = {
@@ -111,4 +160,10 @@ export const env = {
   pinDeviceAttemptsPerWindow: raw.PIN_DEVICE_ATTEMPTS_PER_WINDOW,
   pinDeviceWindowMinutes: raw.PIN_DEVICE_WINDOW_MINUTES,
   testPrincipals: raw.AVO_TEST_PRINCIPALS,
+  gatewayDriver: raw.GATEWAY_DRIVER,
+  gatewayWebhookSecret,
+  gatewayWebhookToleranceSeconds: raw.GATEWAY_WEBHOOK_TOLERANCE_SECONDS,
+  gatewayTimeoutMs: raw.GATEWAY_TIMEOUT_MS,
+  publicBaseUrl: raw.PUBLIC_BASE_URL ?? `http://localhost:${raw.PORT}`,
+  topupReturnUrl: raw.TOPUP_RETURN_URL,
 } as const;
