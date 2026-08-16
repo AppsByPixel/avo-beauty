@@ -470,3 +470,27 @@ scanner shows "Balance too low by X" with the customer's shortfall.
 - KNET: **150 fils flat** per top-up.
 - Card / Apple Pay: **2.5% + 50 fils**.
 - Configurable per platform in Owner → Controls; display in Merchant → Settings.
+
+---
+
+## Addendum — idempotency key reused with a different body
+
+`api-contract.md` was silent on this and two lanes implemented opposite behaviours:
+Lane A returned **422**, Lane D's spec expected the first result replayed.
+
+**Ruling: 422 Unprocessable Entity.** Replaying the first result is wrong because the
+client asked for something *different* and would be told it succeeded — a customer who
+retries a 5 KD top-up as 50 KD would be shown a 5 KD success and never learn the 50 never
+happened. That is a silent money bug, which is worse than an error.
+
+This matches the IETF `Idempotency-Key` header draft and how Stripe behaves.
+
+The rule, precisely:
+
+- Same key, **same** body → replay the stored result. This is the retry case idempotency
+  exists for.
+- Same key, **different** body → `422`, with a message naming the mismatch. Do not
+  execute, do not replay.
+- Fingerprint the body when the key is first stored, and compare on replay.
+
+Lane D's spec must change to match; Lane A's implementation stands.

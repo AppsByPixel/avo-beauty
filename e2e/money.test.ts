@@ -85,7 +85,7 @@ describe('#4 — every money-moving POST requires an Idempotency-Key', () => {
     expect(res.body).not.toHaveProperty('balanceAfterFils');
   });
 
-  knownBug(
+  it(
     'POST /voids accepts a money-moving request with no Idempotency-Key — a retried void refunds twice',
     async () => {
       // Non-negotiable #4 lists voids explicitly: "Top-ups, charges, orders, voids."
@@ -164,7 +164,7 @@ describe('#4 — replaying a key returns the identical result, never a second on
     'an idempotency key is scoped to one principal — replaying salon A staff key from salon B must 404/409, not return salon A result',
   );
 
-  knownBug(
+  it(
     'idempotency keys are not scoped to an endpoint — a key used on POST /topups is honoured by POST /charges',
     async () => {
       // packages/mock/src/server.ts holds one global Map keyed by the header alone.
@@ -399,8 +399,8 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
     expect(retried.body.balanceAfterFils).toBe(BALANCE_FILS - SERVICE.blowDry.priceFils);
   });
 
-  knownBug(
-    'a 402 insufficient_balance consumes the wallet token — non-negotiable #3 says nothing else happened',
+  it(
+    'a 402 insufficient_balance leaves the wallet token unconsumed',
     async () => {
       // packages/mock/src/server.ts POST /charges deletes the token BEFORE the
       // balance check, so a customer whose balance is short loses her QR: the
@@ -447,7 +447,7 @@ describe('#1 — no float and no negative amount reaches money', () => {
     expect(res.body).not.toHaveProperty('creditFils');
   });
 
-  knownBug('a fractional amount answers 500, not a 400 the client can act on', async () => {
+  it('a fractional amount answers 500, not a 400 the client can act on', async () => {
     const res = await api<{ error?: string; message?: string }>('POST', '/topups', {
       idempotencyKey: idempotencyKey('float-amount-400'),
       body: { amountFils: 10.5, method: 'knet' },
@@ -457,7 +457,7 @@ describe('#1 — no float and no negative amount reaches money', () => {
     expect(JSON.stringify(res.body)).not.toMatch(/Money must be an integer number of fils/);
   });
 
-  knownBug('a negative amountFils creates a top-up intent for negative credit', async () => {
+  it('a negative amountFils creates a top-up intent for negative credit', async () => {
     // Currently returns 200 with amountFils −10000, bonusFils −1000,
     // creditFils −11000 and a 150 fil fee. A drain path dressed as a top-up.
     const res = await api<TopUpIntent>('POST', '/topups', {
@@ -467,7 +467,7 @@ describe('#1 — no float and no negative amount reaches money', () => {
     expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
-  knownBug('an unknown serviceId is charged as 0 fils instead of being rejected', async () => {
+  it('an unknown serviceId is charged as 0 fils instead of being rejected', async () => {
     // A settled 0.000 transaction with a real reference and a voidable window,
     // for services that do not exist. Any typo in a scanner payload lands here.
     const res = await api<ChargeResult>('POST', '/charges', {
@@ -502,7 +502,7 @@ describe('the top-up status read is authoritative — api-contract.md § TopUpIn
     expect(['succeeded', 'failed', 'cancelled']).not.toContain(pending.body.status);
   });
 
-  knownBug('GET /topups/{id} ignores the id and returns whichever intent is first in memory', async () => {
+  it('GET /topups/{id} ignores the id and returns whichever intent is first in memory', async () => {
     // packages/mock/src/server.ts:228 searches the idempotency map for anything
     // with a redirectUrl and returns that. Two customers topping up at once get
     // each other's amounts back, and the wallet renders the wrong figure.
@@ -522,7 +522,7 @@ describe('the top-up status read is authoritative — api-contract.md § TopUpIn
     expect(read.body.amountFils).toBe(25_000);
   });
 
-  knownBug('GET /topups/{unknown-id} answers 200 succeeded instead of 404', async () => {
+  it('GET /topups/{unknown-id} answers 200 succeeded instead of 404', async () => {
     // A client polling a fabricated or stale intent id is told the money landed.
     const read = await api<TopUpIntent>('GET', '/topups/TI-NOT-A-REAL-INTENT');
     expect(read.status).toBe(404);
