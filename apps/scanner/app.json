@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "AVO Staff",
+    "slug": "avo-scanner",
+    "version": "0.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "avo",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "beauty.avo.scanner",
+      "infoPlist": {
+        "NSCameraUsageDescription": "The scanner reads a customer's wallet code to take payment."
+      }
+    },
+    "android": {
+      "package": "beauty.avo.scanner",
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["android.permission.CAMERA"]
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The scanner reads a customer's wallet code to take payment."
+        }
+      ]
+    ]
+  }
+}
