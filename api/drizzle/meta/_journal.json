@@ -22,6 +22,20 @@
       "when": 1786898168505,
       "tag": "0002_spotty_proteus",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786905048849,
+      "tag": "0003_shocking_rumiko_fujikawa",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786905048850,
+      "tag": "0004_topup_state_machine",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,8 @@ import { registerChargeRoutes } from './routes/charges';
 import { registerTopupRoutes } from './routes/topups';
 import { registerSalonRoutes } from './routes/salons';
 import { registerPlatformRoutes } from './routes/platform';
+import { registerWebhookRoutes } from './routes/webhooks';
+import { registerSandboxGatewayRoutes } from './routes/sandboxGateway';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,6 +84,13 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerTopupRoutes(app);
   await registerSalonRoutes(app);
   await registerPlatformRoutes(app);
+
+  // The gateway callback. Unauthenticated in the ordinary sense and verified by
+  // signature instead — see routes/webhooks.ts.
+  await registerWebhookRoutes(app);
+  // The sandbox PSP's hosted page. A no-op unless GATEWAY_DRIVER=sandbox, which
+  // env.ts refuses in production.
+  await registerSandboxGatewayRoutes(app);
 
   app.get('/_health', async () => ({ ok: true }));
 

@@ -1,5 +1,5 @@
 /**
- * The AVO schema. Thirteen tables, in dependency order.
+ * The AVO schema. Sixteen tables, in dependency order.
  *
  *   salon ─┬─ branch
  *          ├─ service
@@ -8,8 +8,10 @@
  *          ├─ session ──── pin_attempt
  *          └─ transaction ─┬─ ledger_entry
  *                          ├─ idempotency_key
- *                          └─ receipt_job
+ *                          ├─ receipt_job
+ *                          └─ topup_intent ──── gateway_event
  *          audit_log (soft references only — see audit.ts)
+ *          sandbox_gateway_payment (the sandbox PSP's own store — not product)
  *
  * Drizzle needs every table reachable from one module for `drizzle-kit generate`
  * and for the migrator; this is that module.
@@ -27,3 +29,5 @@ export * from './audit';
 export * from './idempotency';
 export * from './walletToken';
 export * from './receipt';
+export * from './topup';
+export * from './sandboxGateway';

@@ -258,16 +258,24 @@ async function seed(): Promise<void> {
   // typo". This is that deliberate act, and it is the only place in the
   // repository that performs it. It is guarded by the production check at the
   // bottom of this file.
+  // `gateway_event` is append-only for the same reason and by the same means
+  // (migration 0004), so clearing it takes the same deliberate act.
   await db.execute(sql`ALTER TABLE ledger_entry DISABLE TRIGGER ledger_entry_is_immutable`);
+  await db.execute(sql`ALTER TABLE gateway_event DISABLE TRIGGER gateway_event_no_delete`);
   try {
     await db.execute(sql`DELETE FROM receipt_job`);
     await db.execute(sql`DELETE FROM ledger_entry`);
     await db.execute(sql`DELETE FROM idempotency_key`);
     await db.execute(sql`DELETE FROM wallet_token`);
+    // Order follows the restricting references: event → intent → transaction.
+    await db.execute(sql`DELETE FROM gateway_event`);
+    await db.execute(sql`DELETE FROM topup_intent`);
+    await db.execute(sql`DELETE FROM sandbox_gateway_payment`);
     await db.execute(sql`DELETE FROM transaction`);
     await db.execute(sql`DELETE FROM session`);
     await db.execute(sql`DELETE FROM pin_attempt`);
   } finally {
+    await db.execute(sql`ALTER TABLE gateway_event ENABLE TRIGGER gateway_event_no_delete`);
     await db.execute(sql`ALTER TABLE ledger_entry ENABLE TRIGGER ledger_entry_is_immutable`);
   }
 
