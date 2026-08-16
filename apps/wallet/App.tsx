@@ -6,9 +6,17 @@
  * a wallet card that flashes system-serif before swapping is worse than a beat
  * of blank canvas.
  *
- * IBM Plex Sans Arabic — the Arabic face named in non-negotiable #12 — is not
- * loaded here because the language switch is not yet built. It lands with the
- * RTL layout, not before it.
+ * IBM PLEX SANS ARABIC IS LOADED UNCONDITIONALLY, not on the language switch.
+ *
+ * Loading it lazily would mean the first Arabic frame renders in whatever the OS
+ * substitutes and swaps a moment later — and a silent system substitution is
+ * exactly the failure this is meant to prevent. It is four weights against a
+ * one-off cost at startup, and the switch has to be instant on web because on
+ * web it is instant (see src/i18n/language.tsx).
+ *
+ * `useFonts` returns true only once every named face has actually registered, so
+ * a missing Arabic face fails visibly at startup rather than quietly falling back
+ * at the moment somebody switches language.
  */
 
 import { useFonts } from 'expo-font';
@@ -24,10 +32,18 @@ import {
   Inter_600SemiBold,
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
+import {
+  IBMPlexSansArabic_400Regular,
+  IBMPlexSansArabic_500Medium,
+  IBMPlexSansArabic_600SemiBold,
+  IBMPlexSansArabic_700Bold,
+} from '@expo-google-fonts/ibm-plex-sans-arabic';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet } from 'react-native';
 import { color } from './src/theme';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { LanguageProvider } from './src/i18n/language';
+import { initialLanguage } from './src/i18n/initialLanguage';
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -39,15 +55,20 @@ export default function App() {
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
+    // design/README.md § Typography — "IBM Plex Sans Arabic (400–700)".
+    IBMPlexSansArabic_400Regular,
+    IBMPlexSansArabic_500Medium,
+    IBMPlexSansArabic_600SemiBold,
+    IBMPlexSansArabic_700Bold,
   });
 
   if (!fontsLoaded) return <View style={styles.blank} />;
 
   return (
-    <>
+    <LanguageProvider initial={initialLanguage()}>
       <StatusBar style="dark" />
       <HomeScreen />
-    </>
+    </LanguageProvider>
   );
 }
 

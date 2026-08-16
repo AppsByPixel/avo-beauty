@@ -124,6 +124,9 @@ importers:
       '@expo-google-fonts/fraunces':
         specifier: ^0.4.1
         version: 0.4.1
+      '@expo-google-fonts/ibm-plex-sans-arabic':
+        specifier: ^0.4.2
+        version: 0.4.2
       '@expo-google-fonts/inter':
         specifier: ^0.4.2
         version: 0.4.2
@@ -173,6 +176,9 @@ importers:
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.33.0)(terser@5.50.0)
 
   e2e:
     devDependencies:
@@ -1354,6 +1360,9 @@ packages:
 
   '@expo-google-fonts/fraunces@0.4.1':
     resolution: {integrity: sha512-gYc9P92ObyWvz1rWPOeWSvVKyBFIuA8hgOdhvo4DSiPBaWLbFA6v8uLIEIBwW+0oWTlXbBzjeBReHQI2H7UNjQ==}
+
+  '@expo-google-fonts/ibm-plex-sans-arabic@0.4.2':
+    resolution: {integrity: sha512-Cx24iSo/4pWBKHVf69tbVLDUiHWCSTHrhKPw/+SYWLDnyiX10WXh+amNWRSo9N3ruwd+qk9AQgDaIY1KO0u1Ig==}
 
   '@expo-google-fonts/inter@0.4.2':
     resolution: {integrity: sha512-syfiImMaDmq7cFi0of+waE2M4uSCyd16zgyWxdPOY7fN2VBmSLKEzkfbZgeOjJq61kSqPBNNtXjggiQiSD6gMQ==}
@@ -5013,6 +5022,8 @@ snapshots:
     optional: true
 
   '@expo-google-fonts/fraunces@0.4.1': {}
+
+  '@expo-google-fonts/ibm-plex-sans-arabic@0.4.2': {}
 
   '@expo-google-fonts/inter@0.4.2': {}
 

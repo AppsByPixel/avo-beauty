@@ -7,6 +7,7 @@
  */
 
 import type { Member, Salon, TierName } from '@avo/types';
+import type { Copy } from '../copy/types';
 
 export interface TierProgress {
   mode: 'tiers';
@@ -27,15 +28,17 @@ export interface StampProgress {
 
 export type LoyaltyProgress = TierProgress | StampProgress;
 
-const TIER_LABELS: Record<TierName, string> = {
-  bronze: 'Bronze',
-  silver: 'Silver',
-  gold: 'Gold',
-  black: 'Black',
-};
-
-export function tierLabel(tier: TierName): string {
-  return TIER_LABELS[tier];
+/**
+ * The tier's display name.
+ *
+ * It lives in the copy module, not here, because Arabic needs more than a
+ * lookup: the same tier appears as a noun (فضية), inside a merged preposition
+ * (للذهبية) and as an adjective (الفضي) depending on the sentence. A single
+ * `tierLabel` string cannot serve all three, so the grammar stays in the
+ * language file and this is only the plain-noun accessor.
+ */
+export function tierLabel(tier: TierName, copy: Copy): string {
+  return copy.tierName[tier];
 }
 
 export function loyaltyProgress(member: Member, salon: Salon): LoyaltyProgress | null {
@@ -75,10 +78,17 @@ export function loyaltyProgress(member: Member, salon: Salon): LoyaltyProgress |
   };
 }
 
-/** The pill on the wallet card. Tiers show the tier; stamps show the count. */
-export function loyaltyPill(progress: LoyaltyProgress | null): string | null {
+/**
+ * The pill on the wallet card. Tiers show the tier; stamps show the count.
+ *
+ * The stamps form is built by the copy module rather than here, because "3/8" is
+ * a COUNT and counts are Eastern in Arabic — design/AVO Wallet Home.dc.html:1646
+ * renders it `٣ / ٨`. Assembling it locally is exactly how a Western digit ends
+ * up on an Arabic card.
+ */
+export function loyaltyPill(progress: LoyaltyProgress | null, copy: Copy): string | null {
   if (!progress) return null;
   return progress.mode === 'tiers'
-    ? tierLabel(progress.current)
-    : `${progress.have}/${progress.target}`;
+    ? tierLabel(progress.current, copy)
+    : copy.stampsPill(progress.have, progress.target);
 }

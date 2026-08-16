@@ -17,6 +17,7 @@
 import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import { color, radius, space } from '../theme';
+import { useCopy } from '../i18n/language';
 
 function useShimmer(delayMs: number) {
   const value = useRef(new Animated.Value(0.55)).current;
@@ -83,6 +84,7 @@ function Bar({
 }
 
 export function HomeSkeleton() {
+  const copy = useCopy();
   const head = useShimmer(0);
   const card = useShimmer(100);
   const list = useShimmer(200);
@@ -90,7 +92,7 @@ export function HomeSkeleton() {
   return (
     <View
       accessibilityRole="progressbar"
-      accessibilityLabel="Loading your wallet"
+      accessibilityLabel={copy.loadingAria}
       // Announce once. A live region on a skeleton chatters.
       aria-busy
     >

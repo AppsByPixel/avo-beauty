@@ -10,7 +10,7 @@
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
-import { en } from '../copy/en';
+import { useLanguage } from '../i18n/language';
 import type { FailureKind } from '../api/client';
 
 interface Props {
@@ -22,6 +22,7 @@ interface Props {
 }
 
 export function FailureScreen({ kind, message, reference, onRetry, retrying }: Props) {
+  const { lang, copy } = useLanguage();
   const canRetry = kind !== 'forbidden';
   return (
     <View style={styles.wrap} accessibilityRole="alert">
@@ -31,10 +32,10 @@ export function FailureScreen({ kind, message, reference, onRetry, retrying }: P
         <View style={styles.iconDot} />
       </View>
 
-      <Text style={[text('displayM'), styles.title]}>
-        {canRetry ? en.errorTitle : en.blockedTitle}
+      <Text style={[text('displayM', lang), styles.title]}>
+        {canRetry ? copy.errorTitle : copy.blockedTitle}
       </Text>
-      <Text style={[text('body'), styles.body]}>{canRetry ? en.errorBody : message}</Text>
+      <Text style={[text('body', lang), styles.body]}>{canRetry ? copy.errorBody : message}</Text>
 
       {canRetry ? (
         <Pressable
@@ -44,12 +45,12 @@ export function FailureScreen({ kind, message, reference, onRetry, retrying }: P
           accessibilityState={{ disabled: retrying }}
           style={[styles.button, retrying && styles.buttonBusy]}
         >
-          <Text style={[text('bodyL'), styles.buttonText]}>{en.tryAgain}</Text>
+          <Text style={[text('bodyL', lang), styles.buttonText]}>{copy.tryAgain}</Text>
         </Pressable>
       ) : null}
 
-      <Text style={[text('bodyS'), styles.reference]}>
-        {en.referencePrefix}
+      <Text style={[text('bodyS', lang), styles.reference]}>
+        {copy.referencePrefix}
         {reference}
       </Text>
     </View>

@@ -41,10 +41,24 @@ const FACES: Record<string, Record<string, string>> = {
     '600': 'Inter_600SemiBold',
     '700': 'Inter_700Bold',
   },
+  /**
+   * design/README.md § Typography: "IBM Plex Sans Arabic (400–700) — Arabic
+   * (AR / RTL) mode in the customer app only." Also the third family in the
+   * design's own font stack, AVO Wallet Home.dc.html:74.
+   */
+  IBMPlexSansArabic: {
+    '400': 'IBMPlexSansArabic_400Regular',
+    '500': 'IBMPlexSansArabic_500Medium',
+    '600': 'IBMPlexSansArabic_600SemiBold',
+    '700': 'IBMPlexSansArabic_700Bold',
+  },
 };
 
 /** The italic display face, used for the "One wallet" note. */
 export const FRAUNCES_ITALIC = 'Fraunces_400Regular_Italic';
+
+/** The one Latin face that survives into Arabic mode. See `moneyFigureFace`. */
+export const ARABIC_FAMILY = 'IBMPlexSansArabic';
 
 function face(family: string, weight: string): string {
   return FACES[family]?.[weight] ?? FACES[family]?.['400'] ?? family;
@@ -55,10 +69,35 @@ export type TypeToken = keyof typeof theme.text;
 /**
  * A token name in, a React Native text style out.
  * `text('money')` is the only correct way to size a money figure.
+ *
+ * ARABIC IS NOT A FONT FALLBACK HERE, AND THAT IS DELIBERATE.
+ *
+ * The design prototype gets away with the CSS stack `Inter, 'IBM Plex Sans
+ * Arabic', system-ui` (AVO Wallet Home.dc.html:74): the browser takes Latin
+ * glyphs from Inter and falls through to Plex Arabic for anything Inter has no
+ * glyph for. React Native has no such mechanism — `fontFamily` is one family,
+ * and an Arabic string set in Fraunces renders as tofu or as whatever the OS
+ * substitutes. A silent system substitution is exactly the failure the lane
+ * brief asked to check for, so the family is chosen explicitly and is therefore
+ * verifiable in the computed style.
+ *
+ * The rule: in Arabic every *text* token becomes IBM Plex Sans Arabic. The one
+ * exception is the money figure, which stays Fraunces — see `moneyFigureFace`.
+ *
+ * Two token properties are also dropped in Arabic, because they are Latin
+ * typesetting instructions that damage Arabic:
+ *
+ *   letterSpacing  — Arabic is cursive. Tracking pulls the joins apart and the
+ *                    word stops reading as a word. The `label` token carries
+ *                    +0.88 and the display tokens carry negative tracking;
+ *                    neither is meaningful for this script.
+ *   textTransform  — `uppercase` has no effect on Arabic (there is no case), so
+ *                    it is dropped rather than left as a no-op that a later
+ *                    reader has to reason about.
  */
-export function text(token: TypeToken): TextStyle {
+export function text(token: TypeToken, lang: 'en' | 'ar' = 'en'): TextStyle {
   const t = theme.text[token];
-  return {
+  const style: TextStyle = {
     ...t,
     // The generator emits the weight as a string ("500"); React Native's
     // TextStyle enumerates the legal values. The token file is the authority on
@@ -66,20 +105,41 @@ export function text(token: TypeToken): TextStyle {
     fontWeight: t.fontWeight as TextStyle['fontWeight'],
     fontFamily: face(t.fontFamily, t.fontWeight),
   };
+  if (lang !== 'ar') return style;
+  // Omitted, not set to undefined: `exactOptionalPropertyTypes` treats an
+  // explicit undefined as a different thing from an absent key.
+  const { letterSpacing: _ls, textTransform: _tt, ...rest } = style;
+  return { ...rest, fontFamily: face(ARABIC_FAMILY, t.fontWeight) };
 }
 
 /**
- * White. It is not in the token set at all — `color` has no `white` — but the
- * wallet card, the payment-code panel and every fill derived from `onBrandFill`
- * need it, and it is the one colour that is genuinely constant across every
- * white-label brand. Named here so it reads as a decision rather than as
- * twenty scattered `'#fff'` literals.
+ * The face a money FIGURE is set in, in either language.
  *
- * SHARED-PACKAGE GAP (reported, not fixed): avo-tokens.json should carry
- * `color.white` and the translucent white scale the wallet card documents as
- * intentional exceptions (0.14 / 0.18 / 0.22 / 0.4 / 0.78 / 0.85).
+ * Always Fraunces. Non-negotiable #12 keeps money in Western digits in both
+ * languages, and the design system reserves the display face for exactly that:
+ * "Fraunces — display numerals, headings, balances, prices". The design's own
+ * Arabic stack agrees: `'Fraunces','IBM Plex Sans Arabic', serif`
+ * (AVO Wallet Home.dc.html:86) puts Fraunces first, so `24.500` comes from
+ * Fraunces and only the unit د.ك — which Fraunces has no glyphs for — falls
+ * through to Plex Arabic.
+ *
+ * `src/components/Money.tsx` already splits the figure from the unit into two
+ * Text nodes for sizing reasons. That split is the seam this rule needs: figure
+ * in Fraunces, unit in whatever `text()` returns for the language.
  */
-export const WHITE = '#fff';
+export function moneyFigureFace(weight: '400' | '500' | '600' = '600'): string {
+  return face('Fraunces', weight);
+}
+
+/**
+ * White — the one colour that is genuinely constant across every white-label
+ * brand, so it is a token rather than twenty scattered `'#fff'` literals.
+ *
+ * GAP CLOSED: `color.white` landed on trunk and this now reads it. The
+ * translucent white scale the wallet card documents as intentional exceptions
+ * (0.14 / 0.18 / 0.22 / 0.4 / 0.78 / 0.85) is still not tokenised.
+ */
+export const WHITE = color.white;
 
 /**
  * Non-negotiable #9 / interaction-spec.md §2.
@@ -115,16 +175,13 @@ export const motion = tokens.motion;
  * Uppercase micro-labels ("ACTIVITY", "EARNING BY BRANCH").
  *
  * interaction-spec.md §2 says these must be `rgba(28,27,25,0.6)` — 0.45 measures
- * ~3.3:1 at 11px/600 and fails. The token set has 0.45 (`textMutedSoft`), 0.5
- * (`textMuted`) and 0.7 (`textMutedStrong`) but NOT 0.6, so there is no token to
- * import for the value the spec names.
+ * ~3.3:1 at 11px/600 and fails.
  *
- * SHARED-PACKAGE GAP (reported, not fixed): design/tokens/avo-tokens.json needs a
- * `color.textMutedLabel: "rgba(28,27,25,0.6)"`. Until it exists this uses
- * `textMutedStrong` (0.7) — darker than the spec, so it passes contrast, and it
- * comes from a token rather than a hand-typed rgba.
+ * GAP CLOSED: `color.textMutedLabel` (0.6) landed on trunk, so this is now the
+ * value the spec actually names rather than the `textMutedStrong` (0.7) stand-in
+ * it used before.
  */
-export const MICRO_LABEL_COLOR = color.textMutedStrong;
+export const MICRO_LABEL_COLOR = color.textMutedLabel;
 
 /**
  * The border on a secondary control — the outlined "Try again" button, the
@@ -132,14 +189,11 @@ export const MICRO_LABEL_COLOR = color.textMutedStrong;
  * this in over twenty places across AVO Wallet Home.dc.html and AVO
  * States.dc.html, so it is a system value and not a one-off.
  *
- * The token set has ink at 0.06 (`hairlineInner`) and 0.08 (`hairline`) and
- * stops there. Neither substitutes: a hairline is a divider between rows and is
- * meant to disappear, while this is the edge of a tappable control and has to
- * read as one. Using `hairline` here would make the button look unbordered.
+ * `hairline` (0.08) does not substitute: a hairline is a divider between rows and
+ * is meant to disappear, while this is the edge of a tappable control and has to
+ * read as one.
  *
- * SHARED-PACKAGE GAP (reported, not fixed — packages/tokens is trunk-owned):
- * design/tokens/avo-tokens.json needs `color.borderControl:
- * "rgba(28,27,25,0.14)"`. Until it lands, the value is written once, here, so
- * there is a single line to change rather than a grep across the app.
+ * GAP CLOSED: `color.borderControl` landed on trunk. This alias stays so the
+ * existing call sites keep reading, but it is now a token and not a literal.
  */
-export const CONTROL_BORDER = 'rgba(28,27,25,0.14)';
+export const CONTROL_BORDER = color.borderControl;
