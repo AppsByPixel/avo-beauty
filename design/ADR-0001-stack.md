@@ -167,3 +167,40 @@ this is written down. It is the price of the three points above, and it was paid
 
 **What we take from AvoRewards anyway** — see `PRIOR-ART.md`. The hard-won operational
 knowledge in that codebase is worth more than its architecture.
+
+---
+
+## Addendum 2 — .NET / Angular proposed, current stack kept
+
+The engineering manager proposed **.NET backend, Angular dashboard, React Native mobile**.
+Evaluated; the existing stack is kept. Decision by the product owner.
+
+**The proposal was sound, and this is not a rejection of it on merit.** Recording the
+reasoning so nobody re-litigates it later from a weaker position:
+
+- **Mobile was never in dispute.** Expo *is* React Native. The only live question there is
+  whether the web target survives, and it must — the brief requires a web-first wallet with
+  no forced app download, which bare RN cannot serve. Expo ships that as a URL for the
+  pilot and to the stores later from one codebase.
+- **.NET is genuinely strong here, and better than TypeScript on one axis.** C# gives a real
+  runtime money type (`readonly record struct Fils(long)`) where our branded `Fils` is a
+  compile-time construct that erases at runtime. AVO also already runs .NET on Azure. This
+  was the strongest part of the proposal.
+- **Angular is a reasonable fit** for a keyboard-driven data tool. Its cost here is that the
+  AVO design system is custom, so Angular Material would need heavy overriding to reach the
+  intended spa-clean look.
+
+**Why we stay anyway:** a 30-day money-critical build carries more risk from an unfamiliar
+language than it gains from long-term house-stack alignment. The pilot date is the
+constraint being optimised for, and it is the product owner's call.
+
+**Cost of reversing later.** Roughly two days today, and it grows. Stack-independent and
+safe either way: the design tokens, the mock API, **Lane D's entire e2e suite** (it speaks
+raw HTTP and imports nothing from `@avo/types`, deliberately), the API contract, and the
+schema *design* — `bigint` fils, the non-negative CHECK, the append-only audit log. Redone
+on a switch: Lane A's Drizzle implementation, `packages/types` becoming OpenAPI-generated,
+and the dashboard shell.
+
+**Revisit if** the answer to "who maintains this after the pilot" turns out to be AVO's
+existing .NET/Angular team. That single fact would outweigh everything above, and it is
+still unanswered.
