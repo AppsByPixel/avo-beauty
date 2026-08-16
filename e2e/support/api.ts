@@ -68,13 +68,63 @@ export function idempotencyKey(label: string): string {
   return `${label}-${randomUUID()}`;
 }
 
-/** Mint a live wallet token. Server-minted, 45s, single use at charge time. */
-export async function mintWalletToken(): Promise<string> {
-  const res = await api<{ token: string; expiresAt: string }>('GET', '/members/me/wallet-token');
+/**
+ * Mint a live wallet token. Server-minted, 45s, single use at charge time.
+ *
+ * `scenario` MATTERS AND IS NOT OPTIONAL IN PRACTICE. Against `packages/mock`
+ * there is one member and the header changes nothing. Against the real API,
+ * `x-avo-scenario: lowbal` selects a DIFFERENT SEEDED MEMBER — the mock could
+ * substitute a fake balance, a real API cannot lie about the money, so the
+ * scenario changes whose wallet is in play. A token minted without the header
+ * and then presented on a `lowbal` charge belongs to the wrong customer, and
+ * lane A's token/member check correctly answers 409 `token_member_mismatch`
+ * rather than the 402 the spec was after. Pass the same scenario to both calls.
+ */
+export async function mintWalletToken(scenario?: string): Promise<string> {
+  const res = await api<{ token: string; memberId: string }>('GET', '/members/me/wallet-token', {
+    ...(scenario === undefined ? {} : { scenario }),
+  });
   if (res.status !== 200 || !res.body?.token) {
     throw new Error(`Could not mint a wallet token: ${res.status} ${JSON.stringify(res.body)}`);
   }
   return res.body.token;
+}
+
+export interface MemberSnapshot {
+  balanceFils: number;
+  visits: number;
+  tier: string;
+}
+
+/**
+ * The member as she is RIGHT NOW.
+ *
+ * THE REASON THIS EXISTS. These suites were written against `packages/mock`,
+ * whose fixture is rebuilt in memory on every boot and therefore never moves. So
+ * they asserted absolutes: balance 24.500, visits 5, Silver's 10%. Pointed at
+ * the real API those became assertions about how many previous runs had happened
+ * — Dana is charged and topped up by three suites, `applyVisits` walks her up the
+ * tier ladder, and nothing resets her. She reached Black on 30% and 300+ KD, and
+ * ten specs went red without a single defect behind them.
+ *
+ * A shared fixture that accumulates is a suite with a shelf life. Where a suite
+ * can own its fixture it should — `e2e/support/tenancy-harness.ts` seeds and
+ * resets its own member for exactly this reason. These three suites cannot: they
+ * must keep running against the mock with no Postgres and no docker, so they
+ * have nothing to seed with and no way to reset.
+ *
+ * What they can do is stop asserting absolutes. Read the state first, assert the
+ * DELTA and the RATE. `balanceAfter === before − price` is the invariant that was
+ * always meant; `24_500 − 8_000` was only ever a way of writing it down.
+ */
+export async function memberNow(scenario?: string): Promise<MemberSnapshot> {
+  const res = await api<MemberSnapshot>('GET', '/members/me', {
+    ...(scenario === undefined ? {} : { scenario }),
+  });
+  if (res.status !== 200) {
+    throw new Error(`Could not read the member: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return res.body;
 }
 
 // --------------------------------------------------------- fixture constants --
@@ -83,10 +133,31 @@ export async function mintWalletToken(): Promise<string> {
 
 export const MEMBER_ID = '8842';
 export const SALON_ID = 'SAL-AMARA';
-/** Dana's balance in the default scenario. */
+/**
+ * Dana's balance in the mock's default scenario.
+ *
+ * Correct against `packages/mock` and NOT a safe expectation against a real
+ * database — see `memberNow()`. Kept because the mock-shaped specs that pin the
+ * mock's own behaviour are still entitled to it; anything asserting an
+ * invariant about money reads the balance instead.
+ */
 export const BALANCE_FILS = 24_500;
 /** `lowbal` pins the balance here so the shortfall arithmetic is checkable. */
 export const LOWBAL_BALANCE_FILS = 2_500;
+
+/**
+ * The tier ladder, from design/api-contract.md § Commission.
+ *
+ * THE literal in the bonus specs. The member's tier is read at runtime (it
+ * drifts), the RATE for that tier is fixed by the contract (it does not), and
+ * the product of the two is what the server must have computed.
+ */
+export const TIER_BONUS_PERCENT: Record<string, number> = {
+  bronze: 0,
+  silver: 10,
+  gold: 20,
+  black: 30,
+};
 
 export const SERVICE = {
   blowDry: { id: 'SV-01', priceFils: 8_000 },
