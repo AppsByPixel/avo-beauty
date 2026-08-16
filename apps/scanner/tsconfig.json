@@ -8,6 +8,6 @@
     "exactOptionalPropertyTypes": true,
     "jsx": "react-jsx"
   },
-  "include": ["**/*.ts", "**/*.tsx", "types/**/*.d.ts"],
+  "include": ["**/*.ts", "**/*.tsx"],
   "exclude": ["node_modules", "dist", ".expo"]
 }

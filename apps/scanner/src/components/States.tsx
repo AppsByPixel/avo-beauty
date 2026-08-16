@@ -27,12 +27,13 @@ import { PrimaryButton, SecondaryButton } from './Buttons';
 // ------------------------------------------------------------------ loading --
 
 /**
- * A skeleton bar. States:173 — `#EDEAE3`, 12px tall, 6px radius.
+ * A skeleton bar. States:173 — 12px tall, 6px radius.
  *
- * TOKEN GAP (reported): `#EDEAE3` is the skeleton fill used throughout
- * AVO States.dc.html and has no name in design/tokens/avo-tokens.json.
+ * The fill was a local constant with a citation when this app was built,
+ * because AVO States.dc.html used it throughout with nothing to name it.
+ * Trunk has since added `skeleton` to the token file.
  */
-const SKELETON_FILL = '#EDEAE3';
+const SKELETON_FILL = color.skeleton;
 
 export function SkeletonBar({
   width,
@@ -238,10 +239,11 @@ export function CodeRefusedState({
  * explicit that a network failure "keeps the last-known data visible with a
  * stale banner rather than blanking".
  *
- * TOKEN GAP (reported): the banner's dot is `#8A867E` in the design and has no
- * name in the token file. It is the only neutral status dot in the bundle.
+ * The dot is `neutralDot` — the only neutral status dot in the bundle, and the
+ * one colour here that is not brand, danger or warn. It was a local constant
+ * with a citation until trunk named it.
  */
-const OFFLINE_DOT = '#8A867E';
+const OFFLINE_DOT = color.neutralDot;
 
 export function OfflineBanner({ label }: { label?: string }) {
   return (

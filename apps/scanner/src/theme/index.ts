@@ -4,30 +4,22 @@
  * Everything re-exports `@avo/tokens/native`, generated from
  * design/tokens/avo-tokens.json. CLAUDE.md: "never re-type a hex".
  *
- * TOKEN GAP — REPORTED, NOT INVENTED
- * ----------------------------------
- * The scanner is the only surface in the bundle with a **dark** screen
- * (design/AVO Staff Scanner.dc.html § SCAN, `darkFrame` at line 767), and the
- * token file has no names for any of its colours. Three values in `dark` below
- * are read straight off the design and the interaction spec, and every one is
- * cited. They are gathered here, in one object, rather than spread inline, so
- * that when `packages/tokens` grows the names this file is the only edit.
+ * THE DARK GROUP IS A TOKEN NOW, NOT A LOCAL CONSTANT.
+ * ----------------------------------------------------
+ * The scanner is the only surface in this app with a dark screen
+ * (design/AVO Staff Scanner.dc.html § SCAN, `darkFrame` at :767). Its three
+ * colours had no names in the token file when this app was first built, so they
+ * were held here with citations and reported to trunk. Trunk added them —
+ * `theme.dark.surface`, `.accent`, `.focusRing` — and this file reads them
+ * rather than restating them. Nothing under `apps/scanner/src` types a hex.
  *
- * Reported to trunk — `packages/tokens` is trunk-owned (CLAUDE.md § Lanes), so
- * this lane cannot add them:
+ * `focusRing` is deliberately a different value from `accent`
+ * (interaction-spec.md §2: "On the dark owner-console sidebar and the dark
+ * scanner frame, use #A9BBA6 instead — #6E7F6C does not carry enough contrast
+ * against #1C1B19"), which is exactly why they are two tokens and not one.
  *
- *   dark.surface  #131511  scanner screen background
- *                 AVO Staff Scanner.dc.html:183
- *   dark.accent   #A7BBA0  viewfinder corner brackets, "‹ Home" on dark
- *                 AVO Staff Scanner.dc.html:185, 190-193
- *   dark.focus    #A9BBA6  focus ring on a dark surface. NOT the same value as
- *                 the accent, and deliberately so — interaction-spec.md §2:
- *                 "On the dark owner-console sidebar and the dark scanner
- *                 frame, use #A9BBA6 instead — #6E7F6C does not carry enough
- *                 contrast against #1C1B19."
- *
- * The white-on-dark overlays (`rgba(255,255,255,…)`) are compositing alphas
- * rather than brand colours, so they are local by nature and stay here.
+ * The white-on-dark overlays below stay local: they are compositing alphas that
+ * only mean anything over `dark.surface`, not palette entries.
  */
 
 import type { TextStyle } from 'react-native';
@@ -55,20 +47,19 @@ export const MIN_TAP_TARGET = theme.control.minTapTarget;
  */
 export const onBrandFill = color.brandDeep;
 
-/** See the TOKEN GAP note above. Every value is cited; none is invented. */
+/** The dark scan surface. Three tokens, plus the alphas that sit on them. */
 export const dark = {
-  /** AVO Staff Scanner.dc.html:183 — the scan screen background. */
-  surface: '#131511',
-  /** AVO Staff Scanner.dc.html:185,190-193 — brackets and the back link. */
-  accent: '#A7BBA0',
-  /** interaction-spec.md §2 — the focus ring on a dark surface. */
-  focus: '#A9BBA6',
+  /** theme.dark.surface — AVO Staff Scanner.dc.html:183. */
+  surface: theme.dark.surface,
+  /** theme.dark.accent — brackets and the back link, :185, :190-193. */
+  accent: theme.dark.accent,
+  /** theme.dark.focusRing — interaction-spec.md §2. Not the accent. */
+  focus: theme.dark.focusRing,
   /** Compositing alphas over `surface`, not brand colours. */
   fill: 'rgba(255,255,255,0.08)',
   fillStrong: 'rgba(255,255,255,0.10)',
   frame: 'rgba(255,255,255,0.03)',
   border: 'rgba(255,255,255,0.18)',
-  /** The token, not a re-typed hex — white is named in the token file. */
   text: color.white,
   textMuted: 'rgba(255,255,255,0.55)',
   textFaint: 'rgba(255,255,255,0.4)',
@@ -109,16 +100,56 @@ function face(family: string, weight: string): string {
 
 export type TypeToken = keyof typeof theme.text;
 
+/**
+ * The shape every text token shares, with the three that only some carry
+ * declared optional.
+ *
+ * WHY THIS WIDENING EXISTS — REPORTED TO TRUNK.
+ * `packages/tokens`' generated `native.d.ts` types each text token as its own
+ * literal object, so `theme.text[token]` is a UNION of nine distinct shapes and
+ * `lineHeight`, `letterSpacing` and `textTransform` do not exist on all of
+ * them. A helper that takes a token name — which both mobile apps have — then
+ * cannot read them at all.
+ *
+ * This is an assignment, not a cast: every token really does have the three
+ * required fields, and the optional three are simply absent on some. If the
+ * generator ever emits a token missing `fontSize`, this line fails to compile,
+ * which is the behaviour we want.
+ *
+ * apps/wallet has not hit this yet only because it still carries its own
+ * hand-copied `types/avo-tokens-native.d.ts`, whose ambient `declare module`
+ * shadows the package's new types. It will hit it the moment that file is
+ * deleted, so the fix belongs in the generator rather than in both apps.
+ */
+interface NativeTextStyle {
+  fontSize: number;
+  fontWeight: string;
+  fontFamily: string;
+  lineHeight?: number;
+  letterSpacing?: number;
+  /**
+   * `string`, not `'uppercase'` — the generator widens the JSON's literal, so
+   * matching it here is what keeps this an assignment rather than a cast. It is
+   * narrowed at the point of use below, where React Native needs a literal.
+   */
+  textTransform?: string;
+}
+
+const TEXT: Record<TypeToken, NativeTextStyle> = theme.text;
+
 /** A token name in, a React Native text style out. */
 export function text(token: TypeToken): TextStyle {
-  const t = theme.text[token];
+  const t = TEXT[token];
   const style: TextStyle = {
     fontSize: t.fontSize,
     fontFamily: face(t.fontFamily, t.fontWeight),
   };
   if (t.lineHeight !== undefined) style.lineHeight = t.lineHeight;
   if (t.letterSpacing !== undefined) style.letterSpacing = t.letterSpacing;
-  if (t.textTransform !== undefined) style.textTransform = t.textTransform;
+  // The only transform the token file uses. Checked rather than asserted, so a
+  // new value added to the JSON is ignored here instead of reaching React
+  // Native as an invalid style.
+  if (t.textTransform === 'uppercase') style.textTransform = 'uppercase';
   return style;
 }
 
