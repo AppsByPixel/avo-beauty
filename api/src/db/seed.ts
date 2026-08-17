@@ -70,6 +70,52 @@ const HESSA_PIN = '1357';
 const SCANNER_DEVICE = 'DEV-SCANNER-01';
 
 /**
+ * ============================================================================
+ * TWO MODES, BECAUSE "SEED" AND "RESET" ARE TWO THINGS AND THIS FILE DID BOTH
+ * UNCONDITIONALLY ON A DATABASE FOUR LANES SHARE.
+ * ============================================================================
+ *
+ * What that cost, concretely, before this flag existed:
+ *
+ *   - Lane B lost a scanner session mid-test and spent an afternoon chasing a
+ *     401 against a JWT that was still valid for another thirteen minutes. The
+ *     token was fine. Its `session` row had been deleted by somebody else's
+ *     `pnpm db:seed` in another terminal.
+ *   - A trunk integration check lost 65 e2e specs to the same DELETE and read
+ *     as a regression until `sessions: 0` explained it.
+ *
+ * Neither is a bug in the thing that broke, and that is what makes it worth a
+ * flag rather than a warning in a README: the failure surfaces far away from
+ * the command that caused it, in someone else's terminal, as a symptom that
+ * looks like an auth defect.
+ *
+ * `SEED_RESET=1` — THE DEFAULT. Restores the fixture world: clears the transient
+ * money-path state and puts Dana back on 24.500 / 5 visits / Silver. This is
+ * what CI wants, what a local suite run wants, and what makes Lane D's specs
+ * repeatable. It is destructive by design and now says so.
+ *
+ * `SEED_RESET=0` — ensures the fixture ROWS exist and touches no live state.
+ * The mode a shared development database has needed all along. Balances,
+ * transactions, ledger entries, wallet tokens and open top-up intents are left
+ * exactly as they are; only rows that are missing are created.
+ *
+ * `SEED_RESET_SESSIONS=1` — SEPARATE, AND OFF EVEN WHEN SEED_RESET IS ON.
+ *
+ * Sessions are not money-path state, and nothing in these fixtures depends on
+ * there being no sessions. The lockout state a test actually needs cleared —
+ * `pinFailedAttempts`, `pinLockedUntil` — is already reset by the staff upserts
+ * above, without touching a single credential anyone is holding. The only thing
+ * clearing `session` and `pin_attempt` buys is ending the per-device PIN
+ * rate-limit window early, which is a real need perhaps twice a week and is
+ * worth typing out loud on those two occasions.
+ *
+ * So the default is now: a developer who runs `pnpm db:seed` out of habit
+ * cannot sign anybody out.
+ */
+const RESET = (process.env.SEED_RESET ?? '1') !== '0';
+const RESET_SESSIONS = process.env.SEED_RESET_SESSIONS === '1';
+
+/**
  * A week of availability windows, keyed '0'..'6' JS `getDay()` order.
  *
  * The design fixture (`artistSched` in AVO Merchant Dashboard.dc.html) stores
@@ -564,13 +610,22 @@ async function seed(): Promise<void> {
       // meant it, while `POST /auth/member/session` answered 401. A fixture
       // that prints credentials it does not actually restore is worse than one
       // that prints nothing: it sends you looking for the bug in the auth code.
-      set: {
-        balanceFils: fils(32500),
-        visits: 6,
-        tier: 'silver',
-        stamps: null,
-        passwordHash: memberHash,
-      },
+      //
+      // THE MONEY FIELDS FOLLOW `SEED_RESET`; THE CREDENTIAL DOES NOT.
+      // Rewriting a balance while `SEED_RESET=0` leaves the ledger untouched
+      // would make `member.balance_fils` disagree with `sum(ledger_entry)` —
+      // the one reconciliation this schema exists to keep true. The password is
+      // not money and is always restored, because the line this script prints
+      // has to be a line that works.
+      set: RESET
+        ? {
+            balanceFils: fils(32500),
+            visits: 6,
+            tier: 'silver',
+            stamps: null,
+            passwordHash: memberHash,
+          }
+        : { passwordHash: memberHash },
     });
 
   // The low-balance member behind `x-avo-scenario: lowbal`. 2.500 KD.
@@ -592,16 +647,25 @@ async function seed(): Promise<void> {
     })
     .onConflictDoUpdate({
       target: member.id,
-      set: {
-        balanceFils: fils(2500),
-        visits: 1,
-        tier: 'bronze',
-        stamps: null,
-        passwordHash: memberHash,
-      },
+      // Same split as Dana above: money follows `SEED_RESET`, the credential
+      // always gets restored.
+      set: RESET
+        ? {
+            balanceFils: fils(2500),
+            visits: 1,
+            tier: 'bronze',
+            stamps: null,
+            passwordHash: memberHash,
+          }
+        : { passwordHash: memberHash },
     });
 
-  // Clear the transient money-path state so a run is repeatable.
+  // ------------------------------------------------ the destructive part ----
+  //
+  // Everything above this line CREATES fixture rows and is safe to run against
+  // any database at any time. Everything below it DELETES other people's work,
+  // which is why it is behind `SEED_RESET` — see the flag's comment at the top
+  // of this file for the two afternoons that bought it.
   //
   // `ledger_entry` is immutable: the application role has UPDATE and DELETE
   // revoked, AND a trigger raises on both so that even the owner cannot remove a
@@ -612,34 +676,52 @@ async function seed(): Promise<void> {
   // bottom of this file.
   // `gateway_event` is append-only for the same reason and by the same means
   // (migration 0004), so clearing it takes the same deliberate act.
-  await db.execute(sql`ALTER TABLE ledger_entry DISABLE TRIGGER ledger_entry_is_immutable`);
-  await db.execute(sql`ALTER TABLE gateway_event DISABLE TRIGGER gateway_event_no_delete`);
-  try {
-    await db.execute(sql`DELETE FROM receipt_job`);
-    await db.execute(sql`DELETE FROM ledger_entry`);
-    await db.execute(sql`DELETE FROM idempotency_key`);
-    await db.execute(sql`DELETE FROM wallet_token`);
-    // Order follows the restricting references: event → intent → transaction.
-    await db.execute(sql`DELETE FROM gateway_event`);
-    await db.execute(sql`DELETE FROM topup_intent`);
-    await db.execute(sql`DELETE FROM sandbox_gateway_payment`);
-    // `loyalty_event.transaction_id` is ON DELETE RESTRICT, so the climbs a
-    // charge produced have to go before the charge does.
-    await db.execute(sql`DELETE FROM loyalty_event`);
-    await db.execute(sql`DELETE FROM transaction`);
-    await db.execute(sql`DELETE FROM session`);
-    await db.execute(sql`DELETE FROM pin_attempt`);
-    // Windows a developer or a proof run added through the dashboard. Removed
-    // AFTER `transaction`, because `transaction.promotion_id` is ON DELETE
-    // restrict and a window that paid something out is not deletable until the
-    // rows that reference it are gone — which is the guarantee working, not an
-    // obstacle. HH-01 and HH-02 are the fixture and are reasserted above.
-    await db.execute(
-      sql`DELETE FROM happy_hour WHERE salon_id = ${SALON_ID} AND id NOT IN ('HH-01', 'HH-02')`,
-    );
-  } finally {
-    await db.execute(sql`ALTER TABLE gateway_event ENABLE TRIGGER gateway_event_no_delete`);
-    await db.execute(sql`ALTER TABLE ledger_entry ENABLE TRIGGER ledger_entry_is_immutable`);
+  if (RESET) {
+    await db.execute(sql`ALTER TABLE ledger_entry DISABLE TRIGGER ledger_entry_is_immutable`);
+    await db.execute(sql`ALTER TABLE gateway_event DISABLE TRIGGER gateway_event_no_delete`);
+    try {
+      await db.execute(sql`DELETE FROM receipt_job`);
+      await db.execute(sql`DELETE FROM ledger_entry`);
+      await db.execute(sql`DELETE FROM idempotency_key`);
+      await db.execute(sql`DELETE FROM wallet_token`);
+      // Order follows the restricting references: event → intent → transaction.
+      await db.execute(sql`DELETE FROM gateway_event`);
+      await db.execute(sql`DELETE FROM topup_intent`);
+      await db.execute(sql`DELETE FROM sandbox_gateway_payment`);
+      // `loyalty_event.transaction_id` is ON DELETE RESTRICT, so the climbs a
+      // charge produced have to go before the charge does.
+      await db.execute(sql`DELETE FROM loyalty_event`);
+      await db.execute(sql`DELETE FROM transaction`);
+
+      /**
+       * SESSIONS ARE BEHIND THEIR OWN FLAG, AND IT IS OFF EVEN HERE.
+       *
+       * This is the DELETE that signed Lane B out mid-test and cost a trunk
+       * integration check 65 specs. It is not money-path state, nothing in
+       * these fixtures depends on its absence, and the lockout state a test
+       * needs cleared (`pinFailedAttempts`, `pinLockedUntil`) is already reset
+       * by the staff upserts above without invalidating anybody's credential.
+       *
+       * What it does buy is ending the per-device PIN rate-limit window early —
+       * a real need, occasionally, and one worth asking for by name.
+       */
+      if (RESET_SESSIONS) {
+        await db.execute(sql`DELETE FROM session`);
+        await db.execute(sql`DELETE FROM pin_attempt`);
+      }
+
+      // Windows a developer or a proof run added through the dashboard. Removed
+      // AFTER `transaction`, because `transaction.promotion_id` is ON DELETE
+      // restrict and a window that paid something out is not deletable until the
+      // rows that reference it are gone — which is the guarantee working, not an
+      // obstacle. HH-01 and HH-02 are the fixture and are reasserted above.
+      await db.execute(
+        sql`DELETE FROM happy_hour WHERE salon_id = ${SALON_ID} AND id NOT IN ('HH-01', 'HH-02')`,
+      );
+    } finally {
+      await db.execute(sql`ALTER TABLE gateway_event ENABLE TRIGGER gateway_event_no_delete`);
+      await db.execute(sql`ALTER TABLE ledger_entry ENABLE TRIGGER ledger_entry_is_immutable`);
+    }
   }
 
   // ------------------------------------------------------------ TX-9021 ----
@@ -658,45 +740,64 @@ async function seed(): Promise<void> {
   //
   // It is dated now rather than backdated so it sits inside the 15-minute void
   // window; a two-day-old charge is not voidable, it is a reimbursement.
-  const chargedAt = new Date();
-  await db.insert(transaction).values({
-    id: 'TX-9021',
-    memberId: '8842',
-    salonId: SALON_ID,
-    branchId: BRANCH_SALMIYA,
-    kind: 'charge',
-    amountFils: fils(-8000),
-    method: 'wallet',
-    status: 'settled',
-    reference: 'AVO-CHG-9021',
-    createdByStaffId: 'ST-001',
-    createdAt: chargedAt,
-    settledAt: chargedAt,
-  });
-  await db.insert(ledgerEntry).values([
-    {
-      transactionId: 'TX-9021',
-      salonId: SALON_ID,
+  //
+  // WRITTEN ONLY IF IT IS NOT ALREADY THERE. Under `SEED_RESET=1` the block
+  // above has just deleted it, so this always runs and always writes a fresh
+  // one inside a fresh void window. Under `SEED_RESET=0` nothing was deleted,
+  // the row survives from the last reset, and re-inserting it would raise a
+  // primary key violation — the seed would fail on the safe mode and only on
+  // the safe mode, which is the worst possible place to put a crash.
+  //
+  // The trade-off is stated rather than hidden: on a database last reset more
+  // than fifteen minutes ago, TX-9021 is outside its void window and Lane D's
+  // void specs will not pass against it. That is what `SEED_RESET=1` is for.
+  const [{ present: hasCharge } = { present: 0 }] = (await db.execute(
+    sql`SELECT count(*)::int AS present FROM "transaction" WHERE id = 'TX-9021'`,
+  )) as unknown as Array<{ present: number }>;
+
+  if (hasCharge === 0) {
+    const chargedAt = new Date();
+    await db.insert(transaction).values({
+      id: 'TX-9021',
       memberId: '8842',
-      account: 'member_wallet',
-      direction: 'debit',
-      amountFils: fils(8000),
-      balanceAfterFils: fils(24500),
-    },
-    {
-      transactionId: 'TX-9021',
       salonId: SALON_ID,
-      memberId: null,
-      account: 'salon_revenue',
-      direction: 'credit',
-      amountFils: fils(8000),
-    },
-  ]);
-  // The charge lands her on the fixture balance and visit count.
-  await db
-    .update(member)
-    .set({ balanceFils: fils(24500), visits: 5 })
-    .where(eq(member.id, '8842'));
+      branchId: BRANCH_SALMIYA,
+      kind: 'charge',
+      amountFils: fils(-8000),
+      method: 'wallet',
+      status: 'settled',
+      reference: 'AVO-CHG-9021',
+      createdByStaffId: 'ST-001',
+      createdAt: chargedAt,
+      settledAt: chargedAt,
+    });
+    await db.insert(ledgerEntry).values([
+      {
+        transactionId: 'TX-9021',
+        salonId: SALON_ID,
+        memberId: '8842',
+        account: 'member_wallet',
+        direction: 'debit',
+        amountFils: fils(8000),
+        balanceAfterFils: fils(24500),
+      },
+      {
+        transactionId: 'TX-9021',
+        salonId: SALON_ID,
+        memberId: null,
+        account: 'salon_revenue',
+        direction: 'credit',
+        amountFils: fils(8000),
+      },
+    ]);
+    // The charge lands her on the fixture balance and visit count. Guarded by
+    // the same condition: without it, a `SEED_RESET=0` run would reach past the
+    // untouched ledger and rewrite the balance anyway.
+    await db
+      .update(member)
+      .set({ balanceFils: fils(24500), visits: 5 })
+      .where(eq(member.id, '8842'));
+  }
 
   // ------------------------------------------------ audit log fixtures ----
   //
@@ -782,9 +883,32 @@ async function seed(): Promise<void> {
     },
   ]);
 
-  console.log('seeded');
-  console.log(`  member  8842 / ${MEMBER_PASSWORD}   (24.500 KD, Silver)`);
-  console.log(`  member  8843 / ${MEMBER_PASSWORD}   (2.500 KD — the lowbal scenario)`);
+  // WHICH MODE RAN, ALWAYS, AND FIRST.
+  //
+  // The destructive mode is the default, which is right for CI and for a local
+  // suite run and wrong to leave unsaid: the whole failure this flag exists to
+  // prevent was somebody not knowing that `pnpm db:seed` had reached into a
+  // database somebody else was using. A line of output is what turns "the API
+  // is broken" into "oh, I re-seeded".
+  if (RESET) {
+    console.log(
+      `seeded + RESET — money tables cleared${RESET_SESSIONS ? ', sessions and PIN attempts cleared' : ''}.`,
+    );
+    if (!RESET_SESSIONS) {
+      console.log('  sessions left alone. SEED_RESET_SESSIONS=1 to clear them too.');
+    }
+    console.log('  on a database someone else is using, run with SEED_RESET=0.');
+  } else {
+    console.log('seeded (SEED_RESET=0) — fixture rows ensured, no live state touched.');
+  }
+  // The balances are printed ONLY when they were actually restored. This file
+  // already learned the general form of that lesson from `passwordHash`: a
+  // fixture that prints a value it did not write sends the next person looking
+  // for a bug in the wrong place. Under SEED_RESET=0 the balance is whatever the
+  // last charge left, so it is not claimed.
+  const balances = RESET ? ['   (24.500 KD, Silver)', '   (2.500 KD — the lowbal scenario)'] : ['', ''];
+  console.log(`  member  8842 / ${MEMBER_PASSWORD}${balances[0]}`);
+  console.log(`  member  8843 / ${MEMBER_PASSWORD}${balances[1]}`);
   console.log(`  web     noura / ${STAFF_PASSWORD}`);
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
 }
