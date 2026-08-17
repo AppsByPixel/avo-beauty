@@ -37,6 +37,35 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### I routed work to Lane D that it had already done
+
+**What.** I told Lane D to add four promotion routes to `SALON_ROUTES`. It had already added
+them — in `2cba7f8`, along with `'DELETE'` on `SalonRoute.method` and per-salon `{hid}`
+substitution. Its answer: "Nothing to do."
+
+**Why it happened.** I read the ledger from `dev` *before* merging Lane D's commit, saw the
+routes missing, and routed a task off a stale tree. The same class of mistake as reporting
+`dev` green off a warm database: I checked the wrong copy.
+
+**The cheap fix I am adopting:** before routing anything to a lane, check that lane's
+worktree, not `dev`. `git -C ~/dev/avo-<lane> log --oneline -3` costs nothing and would have
+caught it.
+
+### Two corrections from Lane D worth keeping
+
+**`audit_log` is stronger than its own comment claims.** `services/memberSearch.ts` rests
+the untrimmable-counter argument on "the application role cannot UPDATE or DELETE it".
+There is also a trigger, so the **database owner** cannot delete either — Lane D found this
+by trying to delete its own rows as `avo`. Both halves are now asserted because they fail
+differently: `permission denied` as `avo_app`, `audit_log is append-only` as the owner. The
+comment in that file understates the guarantee; Lane A's line to correct.
+
+**`ensureDatabase()`'s `pg_dump` clone is obsolete.** It exists because `db:seed` could not
+bootstrap an empty database. Lane A fixed that and `seed.test.ts` proves it, so Lane D's
+database is now built by a path nothing else uses. Not urgent, but a workaround outliving
+its bug is how a harness quietly stops resembling production.
+
+
 ### `db:generate` will produce a destructive migration for whoever runs it next
 
 **What.** Drizzle's meta snapshots were never written for migrations 0004-0006, 0010 and
