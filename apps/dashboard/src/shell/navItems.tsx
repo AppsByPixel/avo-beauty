@@ -37,7 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'appointments',
     label: 'Appointments',
     to: '/appointments',
-    built: false,
+    built: true,
     title: 'Appointments',
     subtitle: 'Every booking and its deposit status',
     icon: (

@@ -1683,3 +1683,132 @@ a:hover {
   color: var(--avo-text-muted-soft);
   line-height: 1.5;
 }
+
+/* =========================================================== appointments == */
+
+.appts {
+  max-width: 1000px;
+}
+
+/*
+ * The switched-off empty gets the design's tinted card (#F6F7F3 on a green
+ * hairline), not the plain white of the nothing-booked-yet one. Two empties
+ * that must never share copy should not share a silhouette either.
+ */
+.appts__off {
+  margin-top: 18px;
+  background: var(--avo-brand-tint2);
+  border-color: color-mix(in srgb, var(--avo-brand) 22%, transparent);
+}
+
+.appts__card {
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+/* interaction-spec.md §1: a data table scrolls, it never drops a column. */
+.appts__scroll {
+  overflow-x: auto;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.appts__table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.appts__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.appts__table tbody td {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: top;
+}
+
+.appts__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.appts__customer {
+  font-weight: 500;
+}
+
+.appts__muted {
+  color: var(--avo-text-muted-strong);
+}
+
+.appts__when {
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+/* The design sets the deposit in Fraunces — money reads as money everywhere. */
+.appts__deposit {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.appts__status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.appts__due,
+.appts__moved,
+.appts__assumed {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.4;
+}
+
+.appts__due {
+  white-space: nowrap;
+}
+
+/* A booking the artist's calendar never received. Quiet, but not invisible. */
+.appts__syncfail {
+  font-size: 11.5px;
+  color: var(--avo-danger-text);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.appts__empty {
+  padding: 26px 20px;
+  text-align: center;
+}
+
+/*
+ * Both Appointments empties are centred in `AVO States.dc.html`, where the
+ * shared `.avo-state` is left-aligned — a deliberate earlier choice that five
+ * reviewed sections now depend on. Centred HERE rather than in @avo/ui, so this
+ * screen matches its design without restyling the other five.
+ */
+.appts .avo-state {
+  align-items: center;
+  text-align: center;
+}
+
+.appts .avo-state__body {
+  max-width: 42ch;
+}
