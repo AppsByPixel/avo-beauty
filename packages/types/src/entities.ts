@@ -236,6 +236,17 @@ export const ArtistSchema = z.object({
   id: IdSchema,
   salonId: IdSchema,
   name: z.string().min(1),
+  /** Arabic artist name. See BranchSchema.nameAr. Falls back to `name`. */
+  nameAr: z.string().nullable(),
+  /**
+   * An artist is not necessarily a login. `staff_user` is the account; `artist`
+   * is the person whose hours are bookable, and the contract says artists need
+   * no login. When this is true the two are linked and the artist can edit
+   * their own availability from the scanner.
+   */
+  hasOwnLogin: z.boolean(),
+  /** Soft-deleted artists keep their bookings and stop taking new ones. */
+  active: z.boolean(),
   availabilitySource: z.enum(['google', 'manual']),
   googleConnected: z.boolean(),
   slotMinutes: z.union([

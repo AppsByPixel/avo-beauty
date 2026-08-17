@@ -37,6 +37,37 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### `pnpm check` is flaky, so every "green" I reported from it was partly luck
+
+**What.** Four consecutive runs of the same tree gave 7, 4, 1 and 3 failures. Standalone,
+the e2e suite passes. The failures are always the same shape:
+
+```
+expected 50000 to be 149000      a balance
+expected 11 to be 10             visits, off by one
+expected 20 to be 18             visits, off by two
+```
+
+**Cause.** Vitest runs test *files* in parallel, one worker each, and several suites drive
+the **same seeded member**. `gateway`, `promotions`, `money` and `concurrency` all charge
+and top up Dana at once, so each reads a balance another file just moved. It is the
+shared-database problem that has bitten three times across lanes, now inside a single
+command.
+
+**Why it matters more than the fix.** I have been reporting `dev` green off this command
+for two days. Those greens were real runs, but a run that gives four different answers is
+not evidence. Combined with the two earlier misses — reporting green off a stale `dist`,
+and off a warm database — this is the third time the same lesson has arrived: **a check I
+have not proven deterministic is not a check.**
+
+**Routed to Lane D, not fixed here.** It owns the harness and already built
+`seedQaMember()` for exactly this — per-run fixtures rather than shared ones. The other
+plausible fix, `fileParallelism: false`, trades the race for a much slower suite and hides
+rather than removes the coupling.
+
+**To reverse:** nothing to reverse. The finding is the point.
+
+
 ### I routed work to Lane D that it had already done
 
 **What.** I told Lane D to add four promotion routes to `SALON_ROUTES`. It had already added

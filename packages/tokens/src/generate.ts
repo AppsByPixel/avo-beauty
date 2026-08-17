@@ -46,6 +46,34 @@ function emitCss(): string {
     lines.push(`  ${cssVarName('color', k)}: ${v};`);
   }
 
+  /**
+   * The nested colour groups — tier, plan, dark.
+   *
+   * These reached `generated.ts` and the native theme but never the stylesheet,
+   * so a web surface needing a tier pill or a status dot had no custom property
+   * to reach for and substituted an approximation. Lane C hit it on the audit
+   * log's Rules and Access pills and reported four values rather than inventing
+   * them, which is how it was found.
+   *
+   * Flattened as `--avo-<group>-<key>-<field>` because CSS has no nesting here:
+   * `tier.gold.pillBg` becomes `--avo-tier-gold-pill-bg`.
+   */
+  for (const group of ['tier', 'plan', 'dark'] as const) {
+    const entries = raw[group] as Record<string, unknown> | undefined;
+    if (!entries) continue;
+    lines.push('');
+    lines.push(`  /* ${group} */`);
+    for (const [key, val] of Object.entries(entries)) {
+      if (val && typeof val === 'object') {
+        for (const [field, hex] of Object.entries(val as Record<string, string>)) {
+          lines.push(`  ${cssVarName(group, `${key}-${field}`)}: ${hex};`);
+        }
+      } else {
+        lines.push(`  ${cssVarName(group, key)}: ${val as string};`);
+      }
+    }
+  }
+
   // The white-label triple. A salon build overrides exactly these three plus the
   // two gradient stops; nothing else in the stylesheet changes.
   const sage = (raw.brandPresets as Record<string, Record<string, string>>).amaraSage!;
