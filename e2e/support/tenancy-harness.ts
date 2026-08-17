@@ -75,6 +75,15 @@ export const A_MEMBER_PHONE = '+96599124408';
 export const A_STAFF_FULL = 'ST-001';
 export const A_STAFF_RESTRICTED = 'ST-002';
 export const A_SERVICE = 'SV-01';
+/**
+ * A branch at salon A. `api/src/db/seed.ts` — `BR-SAL`, Salmiya.
+ *
+ * Only ever used as the `{bid}` in a cross-salon probe, where the point is that
+ * `requireSameSalon` refuses BEFORE the branch is looked up. A made-up id would
+ * make a 404-instead-of-403 indistinguishable from the tenancy check running too
+ * late, which is the thing those specs are for.
+ */
+export const A_BRANCH = 'BR-SAL';
 /** Salon A's seeded happy hour — `api/src/db/seed.ts`. All branches, x2visit, ON. */
 export const A_HAPPY_HOUR = 'HH-01';
 
@@ -85,6 +94,27 @@ export const B_MEMBER_PHONE = '+96599555001';
 export const B_STAFF = 'ST-B01';
 export const B_STAFF_HANDLE = 'layla';
 export const B_BRANCH = 'BR-LUM-HAW';
+/** Salon B's second branch. What makes `resolveBranch` ambiguous. */
+export const B_BRANCH_SECOND = 'BR-LUM-JAB';
+/**
+ * A branch that exists to be renamed and closed by the specs that prove those
+ * routes, and re-opened by this seed on the next run.
+ *
+ * THE SAME ROLE `B_HAPPY_HOUR_DISPOSABLE` PLAYS, AND FOR A SHARPER REASON. Lane
+ * A's branch writes are real now: `PATCH` renames, and `DELETE` sets `closed_at`.
+ * Pointed at `B_BRANCH` or `B_BRANCH_SECOND` — which is what the tenancy ledger's
+ * control call would do by default — the rename breaks `branch_salon_name_uq` on
+ * the next run and the close drops salon B to one open branch, which flips
+ * `resolveBranch` from "assumed" to "established" and silently rewrites what the
+ * promotions suite is measuring.
+ *
+ * THE ID SORTS AFTER BOTH FIXTURES ON PURPOSE. `resolveBranch` picks the
+ * alphabetically first OPEN branch when there is more than one, so an id
+ * beginning `BR-LUM-D…` would quietly become the branch every salon B charge is
+ * attributed to. `ZZ` keeps it last, and keeps this fixture invisible to every
+ * suite that does not name it.
+ */
+export const B_BRANCH_DISPOSABLE = 'BR-LUM-ZZDISP';
 export const B_SERVICE = 'SV-B01';
 export const B_SERVICE_PRICE_FILS = 7_000;
 /**
@@ -512,6 +542,54 @@ export function scalar(sql: string): string {
 }
 
 /**
+ * Give back branches a suite created, without lying about the money that landed
+ * on them.
+ *
+ * WHY THIS IS NOT `DELETE FROM branch`. It was, and it failed on the first run
+ * with a foreign key: `transaction_branch_id_branch_id_fk`, because a branch
+ * created MID-FILE immediately becomes what `resolveBranch` attributes to. Lane A
+ * mints ids as `BR-` plus random base36, so a probe branch beats `BR-LUM-HAW`
+ * alphabetically about three times in five, and every later charge in that file
+ * is recorded against a row the teardown was planning to remove. Deleting it
+ * would have meant deleting or re-pointing real transactions, which is a suite
+ * rewriting money history to tidy up after itself.
+ *
+ * So: CLOSE everything named, which is the product's own retirement and is
+ * exactly what `resolveBranch` filters on — a closed branch cannot win another
+ * tie-break or change another salon's open-branch count. Then delete only the
+ * rows nothing points at, so the common case still leaves no trace.
+ *
+ * `boost` is cleared first and unconditionally: `PUT …/promotions/boosts` writes
+ * a row per open branch, those rows are configuration rather than history, and
+ * they are re-derived from the salon's branches on the next publish.
+ */
+export function retireBranches(salonId: string, ids: string[]): void {
+  if (ids.length === 0) return;
+  const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(', ');
+  psql(`
+    UPDATE branch SET closed_at = now()
+     WHERE salon_id = '${salonId}' AND id IN (${list}) AND closed_at IS NULL;
+
+    DELETE FROM boost WHERE salon_id = '${salonId}' AND branch_id IN (${list});
+
+    DELETE FROM branch b
+     WHERE b.salon_id = '${salonId}' AND b.id IN (${list})
+       AND NOT EXISTS (SELECT 1 FROM transaction  t WHERE t.branch_id  = b.id)
+       AND NOT EXISTS (SELECT 1 FROM topup_intent i WHERE i.branch_id  = b.id)
+       AND NOT EXISTS (SELECT 1 FROM happy_hour   h WHERE h.branch_id  = b.id)
+       AND NOT EXISTS (SELECT 1 FROM booking      k WHERE k.branch_id  = b.id);
+  `);
+}
+
+/** The ids of a salon's branches whose name starts with `prefix`. */
+export function branchIdsNamed(salonId: string, prefix: string): string[] {
+  const rows = scalar(
+    `select id from branch where salon_id='${salonId}' and name like '${prefix.replace(/'/g, "''")}%'`,
+  );
+  return rows === '' ? [] : rows.split('\n').map((s) => s.trim());
+}
+
+/**
  * Put a staff row's PIN counters back to zero and clear its device's history.
  *
  * WHY A SPEC THAT COUNTS FAILURES HAS TO CALL THIS.
@@ -936,10 +1014,22 @@ VALUES ('${SALON_B}', 'Lumiere', 'starter', '#7A5C8E', false, false, 'tiers',
         '{"morning":["10:00","13:00"],"evening":["16:00","21:00"]}'::jsonb, '[]'::jsonb, false)
 ON CONFLICT (id) DO NOTHING;
 
+-- The two fixture branches. Their NAMES are left alone on conflict: a suite that
+-- renamed one has changed a merchant's configuration, and a seed that silently
+-- put it back would hide that. closed_at is the exception, and it is reset every
+-- run — a branch this seed left open must not start the next run closed, because
+-- an open-branch count of one is a different product (see services/branch.ts)
+-- and nothing in the fixture would say which suite closed it.
 INSERT INTO branch (id, salon_id, name)
 VALUES ('${B_BRANCH}', '${SALON_B}', 'Hawally'),
-       ('BR-LUM-JAB', '${SALON_B}', 'Jabriya')
-ON CONFLICT (id) DO NOTHING;
+       ('${B_BRANCH_SECOND}', '${SALON_B}', 'Jabriya')
+ON CONFLICT (id) DO UPDATE SET closed_at = NULL;
+
+-- The disposable one. Name AND closed_at both reset, because the specs that use
+-- it rename it and close it on purpose. See the constant's own comment.
+INSERT INTO branch (id, salon_id, name)
+VALUES ('${B_BRANCH_DISPOSABLE}', '${SALON_B}', 'Salmiya (disposable)')
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, closed_at = NULL;
 
 INSERT INTO service (id, salon_id, name, price_fils)
 VALUES ('${B_SERVICE}', '${SALON_B}', 'Blow-dry', ${B_SERVICE_PRICE_FILS}),

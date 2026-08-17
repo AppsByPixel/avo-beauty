@@ -146,10 +146,44 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  /**
+   * EVERY BRANCH AND EVERY ACCOUNT THIS FILE CREATED, REMOVED.
+   *
+   * The lesson that produced this block: the moment `POST /salons/{id}/branches`
+   * started working, the spec that had merely PROVED IT MISSING started creating
+   * real branches and leaving them. Salon B went from two to four, which is not a
+   * cosmetic difference — `services/branch.ts` decides on the OPEN BRANCH COUNT,
+   * so `promotions.test.ts`'s whole fixture premise changed, and because lane A
+   * mints branch ids as `BR-` plus random base36 the leaked row won
+   * `resolveBranch`'s alphabetical tie-break about three runs in five.
+   *
+   * A knownBug that flips is not a spec that has started passing. It is a spec
+   * whose side effects have just become real, and the cleanup has to land in the
+   * same commit as the promotion.
+   *
+   * Hard DELETE, not the product's own close and deactivate. `closed_at` and
+   * `deactivated_at` leave rows holding their names against
+   * `branch_salon_name_uq` and the per-salon handle index, so the next run
+   * collides — and a merchant's branch list and staff roster are no place for a
+   * test's scaffolding either way. Scoped by id and by the `qa` handle prefix, so
+   * neither statement can reach a fixture row.
+   */
+  if (createdBranches.length > 0) {
+    const ids = createdBranches.map((id) => `'${id}'`).join(', ');
+    psql(`
+      DELETE FROM boost  WHERE branch_id IN (${ids});
+      DELETE FROM branch WHERE salon_id = '${SALON_B}' AND id IN (${ids});
+    `);
+  }
+  psql(`
+    DELETE FROM staff_user
+     WHERE salon_id = '${SALON_B}' AND handle LIKE 'qa%' AND id NOT IN ('${B_STAFF}', '${STAFF_TARGET}');
+  `);
+
   if (salonSnapshot) {
-    // Restored through SQL rather than through the API, deliberately: the API is
-    // missing write paths for half of these, and a teardown that can only undo
-    // what the product can currently do is a teardown that leaks.
+    // Restored through SQL rather than through the API, deliberately: a teardown
+    // that can only undo what the product currently exposes is a teardown that
+    // leaks the first time a spec runs ahead of the endpoint it is waiting for.
     const assignments = SNAPSHOT_COLUMNS.map((c) => `${c} = ${salonSnapshot![c]}`).join(', ');
     psql(`UPDATE salon SET ${assignments} WHERE id = '${SALON_B}';`);
   }
@@ -263,29 +297,28 @@ describe('Settings — what a merchant can actually change, proved by reading it
   });
 
   /**
-   * FOUND HERE, AND IT IS A 500 RATHER THAN A REFUSAL.
+   * PROMOTED — this was a `knownBug()` and it flipped on lane A's phase-4 merge.
    *
-   * `depositFils: 5500.5` is not validated by the route; it goes into the patch
-   * object as it arrived and Postgres refuses it on the integer column, which
-   * arrives at the client as `server_error` — "Something went wrong on our side."
+   * The defect it reported: `depositFils: 5500.5` was not validated by the route,
+   * went into the patch object as it arrived, and Postgres refused it on the
+   * integer column — reaching the merchant as `server_error`, "Something went
+   * wrong on our side". The money was never at risk, which is why the spec above
+   * stayed a plain `it()` throughout. What was wrong is that a typed-in "5.5" and
+   * a real outage were the same event to whoever was looking at the screen.
    *
-   * The money is safe, which is why the spec above is a plain `it()`: nothing is
-   * written, and the constraint is doing exactly the job a constraint is for. The
-   * defect is that the merchant cannot tell a typed-in "5.5" from an outage, and
-   * that the API's own logs record an unhandled error every time somebody
-   * mis-types a number. The route already validates `timezone` before the UPDATE
-   * for precisely this reason, and its comment says so: "a typo is a 400 naming
-   * the tz database rather than a 500 thrown out of Intl". The money fields
-   * deserve the same treatment.
+   * The route already pre-validated `timezone` for exactly this reason. The money
+   * fields have the same treatment now, and this locks it in.
    */
-  knownBug('and a fractional deposit is a 400 naming the field, not a 500', async () => {
-    const res = await treq('PATCH', `/salons/${SALON_B}`, {
+  it('and a fractional deposit is a 400 naming the field, not a 500', async () => {
+    const res = await treq<{ error?: string }>('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
       body: { depositFils: 5_500.5 },
     });
     expect(res.status, 'an unvalidated float reached Postgres and came back as server_error').toBe(
       400,
     );
+    expect(res.body.error, 'the refusal does not name what was wrong').toBeTruthy();
+    expect(res.body.error).not.toBe('server_error');
   });
 
   it('a field outside the editable set is refused by name rather than dropped', async () => {
@@ -317,11 +350,47 @@ describe('Settings — what a merchant can actually change, proved by reading it
 });
 
 // ---------------------------------------------------------------------------
-// The gap. Lane C found the first one by watching the dashboard fall into its
-// error boundary; the rest are what "configure a salon end to end" still needs.
+// PROMOTED, ALL OF IT. This block was `GAP: Settings cannot finish the job` and
+// every spec in it was a knownBug() reporting an endpoint that did not exist.
+// Lane A's phase-4 merge landed them and they flipped together.
+//
+// THEY ARE NOT PROMOTED AS THEY WERE WRITTEN, and the difference is the whole
+// lesson of this round. A knownBug only has to prove a thing is missing; the
+// call can be a throwaway. A passing spec's write REALLY HAPPENS, and these
+// writes change the shape of the salon that three other files are measuring.
+// `POST /branches` created a branch and nothing removed it, and salon B went
+// from two branches to four — which broke the promotions suite's fixture and,
+// because lane A mints ids as `BR-` + random base36, won `resolveBranch`'s
+// alphabetical tie-break on about three runs in five. Fifteen deterministic
+// failures with a flapping edge, none of them a product defect.
+//
+// So every branch this block creates is tracked and removed, and nothing here
+// touches a fixture branch.
 // ---------------------------------------------------------------------------
 
-describe('GAP: Settings cannot finish the job — lane A owns every one of these', () => {
+/**
+ * Branches this file created, hard-deleted in `afterAll`.
+ *
+ * DELETE and not the product's own close, for two reasons that both matter.
+ * `closed_at` leaves the row holding its name against `branch_salon_name_uq`, so
+ * a second run against the same database collides; and a closed branch is still
+ * a row in the merchant's list, which is scaffolding left in a product.
+ */
+const createdBranches: string[] = [];
+
+/** Unique per run — the name index spans closed branches, so a literal collides. */
+const probeBranchName = (what: string) => `QA ${what} ${Date.now()}`;
+
+async function openBranch(name: string): Promise<{ id: string; status: number; raw: string }> {
+  const res = await treq<{ id: string }>('POST', `/salons/${SALON_B}/branches`, {
+    token: dashboard,
+    body: { name },
+  });
+  if (res.status === 201 && res.body?.id) createdBranches.push(res.body.id);
+  return { id: res.body?.id ?? '', status: res.status, raw: res.raw };
+}
+
+describe('Settings — the structure of a salon, and it is configurable now', () => {
   /**
    * REPORTED BY LANE C, AND THE SYMPTOM IS WORTH KEEPING.
    *
@@ -329,14 +398,11 @@ describe('GAP: Settings cannot finish the job — lane A owns every one of these
    * reasonably would, and every consumer of `salon.branches` and `salon.modules`
    * got `undefined` on the next render. It took the whole section to its error
    * boundary. Lane C's workaround was to stop caching the response and re-GET,
-   * which works and means the write endpoint is telling the truth to nobody.
+   * which worked and meant the write endpoint was telling the truth to nobody.
    *
-   * `GET /salons/{id}` right above builds the `Salon` shape by hand — modules as
-   * an object, branches joined in. The PATCH returns `reply.send(after)`, the raw
-   * Drizzle row: `moduleBooking`/`moduleShop` instead of `modules`, and no
-   * `branches` key at all.
+   * PROMOTED. The PATCH now builds the same `Salon` the GET does.
    */
-  knownBug('PATCH /salons/{id} answers a Salon, the shape GET answers', async () => {
+  it('PATCH /salons/{id} answers a Salon, the shape GET answers', async () => {
     const res = await treq<SalonView>('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
       body: { noShowReturnMinutes: 62 },
@@ -346,18 +412,27 @@ describe('GAP: Settings cannot finish the job — lane A owns every one of these
     expect(res.body.modules, 'PATCH returned the raw row: moduleBooking/moduleShop, no modules')
       .toEqual({ booking: expect.any(Boolean), shop: expect.any(Boolean) });
     expect(Array.isArray(res.body.branches), 'PATCH returned no branches').toBe(true);
+
+    // Byte for byte the same document the GET serves. Anything less and a client
+    // caching one and re-fetching the other sees the salon change under it.
+    const fetched = await readSalon();
+    expect(res.body.branches.map((b) => b.id).sort()).toEqual(
+      fetched.branches.map((b) => b.id).sort(),
+    );
+    expect(res.body.modules).toEqual(fetched.modules);
   });
 
   /**
-   * The two switches at the top of the Settings screen. `GET /salons/{id}` serves
-   * `modules`, the dashboard renders them, and there is no way to set them: they
-   * are not in the route's EDITABLE set under any spelling.
+   * The two switches at the top of the Settings screen.
    *
-   * A read-only toggle is worse than an absent one. The merchant flips it, the
-   * request 400s, and what she has learned is that the dashboard is broken rather
-   * than that the feature is unbuilt.
+   * PROMOTED — and the sibling knownBug is DELETED rather than promoted. It
+   * asserted the same toggle by its column names (`moduleBooking`/`moduleShop`),
+   * written that way so whichever spelling lane A chose, one spec flipped and the
+   * other was removed. Lane A chose `modules` and said why: "the column spelling
+   * is not a second door." Keeping a spec that demands the second door would be
+   * lane D legislating an API shape, which is not its job.
    */
-  knownBug('the module toggles can be switched — Booking and Shop', async () => {
+  it('the module toggles switch — Booking and Shop', async () => {
     const before = (await readSalon()).modules;
 
     const res = await treq('PATCH', `/salons/${SALON_B}`, {
@@ -368,59 +443,154 @@ describe('GAP: Settings cannot finish the job — lane A owns every one of these
 
     const after = (await readSalon()).modules;
     expect(after.booking, 'the Booking module did not switch').toBe(!before.booking);
-  });
+    expect(after.shop, 'the Shop module moved when only Booking was sent').toBe(before.shop);
 
-  knownBug('and by their column names too, if `modules` is not the agreed spelling', async () => {
-    // Written separately so a fix that lands one spelling does not leave the
-    // other reported as broken. Whichever lane A chooses, one of these two
-    // knownBugs flips and the other is deleted.
-    const before = (await readSalon()).modules;
-    const res = await treq('PATCH', `/salons/${SALON_B}`, {
-      token: dashboard,
-      body: { moduleShop: !before.shop },
-    });
-    expect(res.status, `PATCH { moduleShop } answered ${res.status} ${res.raw}`).toBe(200);
+    await treq('PATCH', `/salons/${SALON_B}`, { token: dashboard, body: { modules: before } });
   });
 
   /**
-   * BRANCHES HAVE NO WRITE PATH AT ALL — no POST, no DELETE, and `branches` is
-   * refused by the PATCH.
+   * THE SPEC THAT DECIDES THE PHASE-4 CRITERION.
    *
-   * This is the one that decides the phase-4 criterion. A salon that opens a
-   * second location cannot be told about it by anybody without database access,
-   * and `branchAccessIds` on every staff row, the happy-hour `branchId`, the
-   * per-branch metrics and the charge's own branch resolution all hang off rows
-   * only an engineer can create.
+   * "An owner can configure a salon end to end without an engineer" was false for
+   * exactly as long as branches had no write path: `branchAccessIds` on every
+   * staff row, the happy-hour `branchId`, the per-branch metrics and the charge's
+   * own branch resolution all hang off rows nobody but an engineer could make.
+   *
+   * 201, not 200 — consistent with `POST …/promotions/happy-hours`, which is the
+   * decision lane A asked for and this is the answer: the ledger and this spec
+   * both assert 201.
    */
-  knownBug('a branch can be created — POST /salons/{id}/branches', async () => {
-    const res = await treq('POST', `/salons/${SALON_B}/branches`, {
+  it('a branch can be opened — POST /salons/{id}/branches answers 201 with the branch', async () => {
+    const name = probeBranchName('opened');
+    const openedIds = (await readSalon()).branches.map((b) => b.id);
+
+    const created = await openBranch(name);
+    expect(created.status, `POST /salons/{id}/branches answered ${created.status}: ${created.raw}`)
+      .toBe(201);
+    expect(created.id, 'the created branch has no id to address it by').toBeTruthy();
+
+    // On the salon read, which is the only place the dashboard will look for it.
+    const after = await readSalon();
+    expect(after.branches.map((b) => b.id)).toContain(created.id);
+    expect(after.branches.length, 'the branch list did not grow by one').toBe(openedIds.length + 1);
+    expect(after.branches.find((b) => b.id === created.id)?.name).toBe(name);
+  });
+
+  it('and a second branch of the same name is refused, with the reason named', async () => {
+    const name = probeBranchName('duplicate');
+    const first = await openBranch(name);
+    precondition(first.status === 201, `the first create answered ${first.status}: ${first.raw}`);
+
+    const second = await treq<{ error?: string }>('POST', `/salons/${SALON_B}/branches`, {
       token: dashboard,
-      body: { name: 'Salmiya' },
+      body: { name },
     });
+    expect(second.status, 'two branches of one salon share a name').toBe(409);
+    expect(second.body.error).toBe('branch_name_taken');
+  });
+
+  it('a branch can be renamed, in either language', async () => {
+    // Its own branch, never a fixture: a renamed fixture collides on
+    // `branch_salon_name_uq` the next run, and other suites read those names.
+    const created = await openBranch(probeBranchName('rename'));
+    precondition(created.status === 201, `the create answered ${created.status}: ${created.raw}`);
+
+    const renamed = probeBranchName('renamed');
+    const res = await treq('PATCH', `/salons/${SALON_B}/branches/${created.id}`, {
+      token: dashboard,
+      body: { name: renamed, nameAr: 'حولي الشرقية' },
+    });
+    expect(res.status, `PATCH on a branch answered ${res.status}: ${res.raw}`).toBe(200);
+
+    const after = (await readSalon()).branches.find((b) => b.id === created.id);
+    expect(after?.name, 'the rename did not persist').toBe(renamed);
+    expect(after?.nameAr, 'the Arabic name did not persist').toBe('حولي الشرقية');
+  });
+
+  it('a branch can be closed, and a closed branch leaves the salon\'s open list', async () => {
+    const created = await openBranch(probeBranchName('close'));
+    precondition(created.status === 201, `the create answered ${created.status}: ${created.raw}`);
+
+    const res = await treq('DELETE', `/salons/${SALON_B}/branches/${created.id}`, {
+      token: dashboard,
+    });
+    expect(res.status, `DELETE on a branch answered ${res.status}: ${res.raw}`).toBe(200);
+
+    // A close, not a delete — the row survives so its receipts stay attached to
+    // something, and `closed_at` is what `services/branch.ts` filters on.
     expect(
-      res.status,
-      `POST /salons/{id}/branches answered ${res.status} — a salon cannot open a second location`,
-    ).toBe(200);
+      scalar(`select (closed_at is not null)::text from branch where id='${created.id}'`),
+      'DELETE removed the row instead of closing it — its transactions now point at nothing',
+    ).toBe('true');
+    expect((await readSalon()).branches.map((b) => b.id)).not.toContain(created.id);
   });
 
-  knownBug('a branch can be renamed', async () => {
-    const res = await treq('PATCH', `/salons/${SALON_B}/branches/${B_BRANCH}`, {
-      token: dashboard,
-      body: { name: 'Hawally East' },
-    });
-    expect(res.status, `PATCH on a branch answered ${res.status}`).toBe(200);
-  });
+  it('the LAST open branch cannot be closed — that would be a money outage from a settings screen', async () => {
+    // `resolveBranch` throws `no_branch` for a salon with none, so the next
+    // charge, top-up and booking would all fail. Refused with a sentence instead
+    // of discovered at the counter.
+    const open = (await readSalon()).branches;
+    precondition(open.length >= 2, 'salon B needs two open branches for this spec to mean anything');
 
-  knownBug('a branch can be closed — DELETE /salons/{id}/branches/{bid}', async () => {
-    const res = await treq('DELETE', `/salons/${SALON_B}/branches/BR-LUM-JAB`, {
-      token: dashboard,
-    });
-    // Whether it is a soft close or a hard delete is lane A's call; the point is
-    // that there is a door. Transactions reference `branch`, so it will most
-    // likely be the same "switch it off, the receipts refer to it" rule the
-    // happy-hour delete already states.
-    expect(res.status, `DELETE on a branch answered ${res.status}`).toBe(200);
+    // Close everything but one, through the product's own door.
+    const [survivor, ...rest] = open;
+    const closedHere: string[] = [];
+    try {
+      for (const b of rest) {
+        const res = await treq('DELETE', `/salons/${SALON_B}/branches/${b.id}`, {
+          token: dashboard,
+        });
+        precondition(res.status === 200, `closing ${b.id} answered ${res.status}: ${res.raw}`);
+        closedHere.push(b.id);
+      }
+
+      const last = await treq<{ error?: string }>(
+        'DELETE',
+        `/salons/${SALON_B}/branches/${survivor!.id}`,
+        { token: dashboard },
+      );
+      expect(last.status, "a salon's only open branch was closed").toBe(409);
+      expect(last.body.error).toBe('last_open_branch');
+    } finally {
+      /**
+       * ONLY THE ONES THIS SPEC CLOSED, and in a `finally` so a failed assertion
+       * cannot leave salon B single-branched for the rest of the file.
+       *
+       * The first version reopened every branch of the salon and then checked the
+       * count matched what it saw at the start. It did not: earlier specs in this
+       * block close branches on purpose, so a blanket reopen restores THOSE too
+       * and the total comes back higher. A teardown that undoes more than its own
+       * spec did is the same class of mistake as one that undoes less.
+       *
+       * Through SQL because there is no re-open endpoint — which is itself worth
+       * knowing, and is in the GAP block below.
+       */
+      if (closedHere.length > 0) {
+        const list = closedHere.map((id) => `'${id}'`).join(', ');
+        psql(`UPDATE branch SET closed_at = NULL WHERE salon_id='${SALON_B}' AND id IN (${list});`);
+      }
+    }
+
+    expect(
+      (await readSalon()).branches.map((b) => b.id).sort(),
+      'this spec did not put salon B\'s open branches back',
+    ).toEqual(open.map((b) => b.id).sort());
   });
+});
+
+describe('GAP: what configuring a salon still cannot do', () => {
+  it.todo(
+    'a CLOSED branch cannot be re-opened. `DELETE` sets closed_at and nothing clears it, so a ' +
+      'merchant who closes the wrong location needs an engineer to undo a self-service action — ' +
+      'and `branch_salon_name_uq` spans closed rows, so she cannot even re-create it under the ' +
+      'same name (lane A)',
+  );
+  it.todo(
+    'branch writes are gated on perms.loyalty because there is no perms.settings among the nine ' +
+      'in api-contract.md. A staff member who may edit the tier ladder may therefore restructure ' +
+      'the salon. Lane A reported it as a contract observation rather than inventing a tenth ' +
+      'permission, correctly — this is the spec that appears when the contract answers (trunk)',
+  );
 });
 
 // ===========================================================================
@@ -697,56 +867,165 @@ describe('Accounts — authority is readable, settable, and never carries a cred
   });
 });
 
-describe('GAP: staff onboarding has no server behind it — lane A owns these too', () => {
-  /**
-   * There is no way to hire anybody. `GET /staff` lists, `PATCH /staff/{id}`
-   * adjusts authority, and that is the whole surface — a new receptionist has to
-   * be INSERTed by hand, with a password hash produced by hand, which is both a
-   * blocker for phase 4 and the exact circumstance in which somebody stores a
-   * plaintext password to get through the afternoon.
-   */
-  knownBug('a staff account can be created — POST /staff', async () => {
-    const res = await treq('POST', '/staff', {
+/**
+ * PROMOTED. Hire, leave, and a reset that is only ever a link.
+ *
+ * These three were `knownBug()` and reported the same absence: `GET /staff` and
+ * `PATCH /staff/{id}` were the whole surface, so a new receptionist had to be
+ * INSERTed by hand with a password hash produced by hand — a phase-4 blocker and
+ * the exact circumstance in which somebody stores a plaintext password to get
+ * through an afternoon.
+ *
+ * EVERY ACCOUNT THIS BLOCK CREATES IS ITS OWN, with a handle unique per run.
+ * `staff_user` handles are unique per salon and span deactivated rows, so a fixed
+ * handle would 409 the second time this file ran against one database — and a
+ * spec that hired into salon B's real roster would be changing what
+ * `tenancy.test.ts` and `scanner.test.ts` count.
+ */
+describe('Accounts — hiring, leaving, and a password that is only ever a link', () => {
+  const probeHandle = (what: string) => `qa${what}${Date.now().toString(36)}`;
+
+  it('a staff account can be hired — POST /staff answers 201 with the account', async () => {
+    const handle = probeHandle('hire');
+    const res = await treq<StaffView>('POST', '/staff', {
       token: dashboard,
-      idempotencyKey: `staff-create-${Date.now()}`,
       body: {
         name: 'Shaikha',
-        handle: 'shaikha',
+        handle,
         role: 'frontdesk',
         perms: { scanner: true, charges: true },
       },
     });
-    expect(
-      res.status,
-      `POST /staff answered ${res.status} — a salon cannot hire without an engineer`,
-    ).toBe(200);
+    // 201, matching POST /salons/{id}/branches and POST …/happy-hours. Lane A
+    // asked which of 200 or 201 this suite wanted; the answer is 201 everywhere.
+    expect(res.status, `POST /staff answered ${res.status}: ${res.raw}`).toBe(201);
+    expect(res.body.id, 'the new account has no id').toBeTruthy();
+    expect(res.body.handle).toBe(handle);
+
+    // The authority asked for, and nothing more. A hire that quietly granted the
+    // nine would be the worst possible default.
+    expect(res.body.perms.scanner).toBe(true);
+    expect(res.body.perms.charges).toBe(true);
+    expect(res.body.perms.team, 'a new frontdesk account can edit the roster').toBe(false);
+    expect(res.body.perms.void, 'void arrived unasked, and it is the reversal permission').toBe(
+      false,
+    );
+
+    // On the roster the Accounts screen reads.
+    const roster = await treq<{ items: StaffView[] }>('GET', '/staff', { token: dashboard });
+    expect(roster.body.items.map((s) => s.id)).toContain(res.body.id);
   });
 
-  knownBug('a staff account can be removed — DELETE /staff/{id}', async () => {
-    const res = await treq('DELETE', `/staff/${STAFF_TARGET}`, { token: dashboard });
-    // Almost certainly a deactivation rather than a delete, since `transaction`
-    // and `audit_log` name the actor. Either is a door; there is none.
-    expect(
-      res.status,
-      `DELETE /staff/{id} answered ${res.status} — a leaver keeps her sign-in for ever`,
-    ).toBe(200);
+  it('and the hire carries no credential, in the response or the audit row (non-negotiable #6)', async () => {
+    const res = await treq<StaffView>('POST', '/staff', {
+      token: dashboard,
+      body: { name: 'Noor QA', handle: probeHandle('cred'), role: 'frontdesk', perms: {} },
+    });
+    precondition(res.status === 201, `POST /staff answered ${res.status}: ${res.raw}`);
+
+    for (const smell of ['passwordHash', 'password_hash', 'pinHash', 'pin_hash', '$argon2']) {
+      expect(res.raw, `POST /staff leaked ${smell}`).not.toContain(smell);
+    }
+
+    /**
+     * `pinSet` and `passwordSet` are the RIGHT shape and this asserts they stayed
+     * booleans rather than banning the substring "pin".
+     *
+     * The first draft did ban it, and `pinSet: false` tripped it — a spec calling
+     * a correct design a leak. The Accounts screen has to distinguish "no web
+     * login by design", an artist who only ever uses the tablet, from "her
+     * password needs resetting"; both are false and only one is a problem. A
+     * boolean answers that. A length or a masked hash would not, and is what this
+     * assertion is really for.
+     */
+    expect(typeof (res.body as unknown as { pinSet: unknown }).pinSet).toBe('boolean');
+    expect(typeof (res.body as unknown as { passwordSet: unknown }).passwordSet).toBe('boolean');
+
+    const audit = scalar(
+      `select coalesce(detail,'') || ' ' || coalesce(metadata::text,'') from audit_log
+        where subject_id='${res.body.id}' order by seq desc limit 1`,
+    );
+    expect(audit, 'the hire audit row carries a credential').not.toMatch(/argon2|password|pin_hash/i);
   });
 
-  /**
-   * Non-negotiable #6: "Owner console only ever sends a reset link." There is no
-   * endpoint that sends one, from either console, which means the only way to
-   * restore access today is to write a hash into the row — the thing the
-   * non-negotiable exists to prevent.
-   */
-  knownBug('a forgotten password is recovered by a reset LINK, never by a set', async () => {
-    const res = await treq('POST', `/staff/${STAFF_TARGET}/password-reset`, {
+  it('a leaver loses her sign-in, and her history keeps her name on it', async () => {
+    const created = await treq<StaffView>('POST', '/staff', {
+      token: dashboard,
+      body: { name: 'Departing QA', handle: probeHandle('leave'), role: 'frontdesk', perms: {} },
+    });
+    precondition(created.status === 201, `POST /staff answered ${created.status}: ${created.raw}`);
+
+    const res = await treq('DELETE', `/staff/${created.body.id}`, { token: dashboard });
+    expect(res.status, `DELETE /staff/{id} answered ${res.status}: ${res.raw}`).toBe(200);
+
+    // A deactivation, not a delete: `transaction` and `audit_log` name the actor,
+    // and a removed row would leave every one of those pointing at nobody.
+    expect(
+      scalar(`select (deactivated_at is not null)::text from staff_user where id='${created.body.id}'`),
+      'DELETE removed the row — her charges and audit lines now name nobody',
+    ).toBe('true');
+  });
+
+  it('a forgotten password is recovered by a LINK, and the link is never in the response', async () => {
+    /**
+     * NON-NEGOTIABLE #6, and the assertion that matters is the second one.
+     *
+     * "Owner console only ever sends a reset link." An endpoint that answered 202
+     * and handed the caller the token would satisfy the letter of that and none of
+     * its intent: the merchant's browser, her logs and anything reading the
+     * response would hold a credential that resets a staff account.
+     */
+    const res = await treq<{ expiresAt?: string }>(
+      'POST',
+      `/staff/${STAFF_TARGET}/password-reset`,
+      { token: dashboard, body: {} },
+    );
+    expect(res.status, `POST /staff/{id}/password-reset answered ${res.status}: ${res.raw}`).toBe(
+      202,
+    );
+    expect(res.body.expiresAt, 'the dashboard cannot say how long the link is good for').toBeTruthy();
+
+    for (const smell of ['token', 'link', 'url', 'password', 'hash']) {
+      expect(
+        res.raw.toLowerCase(),
+        `the reset response carries "${smell}" — the token must never leave the server`,
+      ).not.toContain(smell);
+    }
+
+    // Nor in the audit row, which is read by more people than the response is.
+    const audit = scalar(
+      `select coalesce(detail,'') || ' ' || coalesce(metadata::text,'') from audit_log
+        where subject_id='${STAFF_TARGET}' and action like '%link sent%' order by seq desc limit 1`,
+    );
+    expect(audit, 'no audit row for a reset link').not.toBe('');
+    expect(audit.toLowerCase(), 'the audit row recorded the reset token').not.toMatch(
+      /token|[a-f0-9]{32}/,
+    );
+  });
+
+  it('and the same endpoint re-activates a leaver, rather than a second account appearing', async () => {
+    const handle = probeHandle('rehire');
+    const created = await treq<StaffView>('POST', '/staff', {
+      token: dashboard,
+      body: { name: 'Returning QA', handle, role: 'frontdesk', perms: {} },
+    });
+    precondition(created.status === 201, `POST /staff answered ${created.status}: ${created.raw}`);
+    const left = await treq('DELETE', `/staff/${created.body.id}`, { token: dashboard });
+    precondition(left.status === 200, `DELETE answered ${left.status}: ${left.raw}`);
+
+    // Hiring the same handle again must not mint a second identity — her charges
+    // and audit lines belong to one person.
+    const again = await treq<{ error?: string }>('POST', '/staff', {
+      token: dashboard,
+      body: { name: 'Returning QA', handle, role: 'frontdesk', perms: {} },
+    });
+    expect(again.status, 'a leaver\'s handle was reissued as a new account').toBe(409);
+
+    const reset = await treq('POST', `/staff/${created.body.id}/password-reset`, {
       token: dashboard,
       body: {},
     });
-    expect(
-      res.status,
-      `POST /staff/{id}/password-reset answered ${res.status} — there is no reset link to send`,
-    ).toBe(202);
+    expect(reset.status, `re-activating answered ${reset.status}: ${reset.raw}`).toBe(202);
   });
 });
 

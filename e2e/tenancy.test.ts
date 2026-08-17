@@ -47,7 +47,9 @@ import {
   A_HAPPY_HOUR,
   A_STAFF_FULL,
   A_STAFF_RESTRICTED,
+  A_BRANCH,
   B_BRANCH,
+  B_BRANCH_DISPOSABLE,
   B_HAPPY_HOUR,
   B_HAPPY_HOUR_DISPOSABLE,
   B_MEMBER,
@@ -61,7 +63,9 @@ import {
   SALON_NOWHERE,
   STAFF_NOWHERE,
   discoverSalonScopedRoutes,
+  branchIdsNamed,
   mintSalonAWalletToken,
+  retireBranches,
   scalar,
   signInDashboard,
   signInMember,
@@ -90,6 +94,26 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  /**
+   * THE BRANCH THE POST CONTROL CREATED, RETIRED.
+   *
+   * The gap ledger's control half performs its write for real, so the moment
+   * `POST /salons/{id}/branches` started working this file began adding a branch
+   * to salon B on every run and leaving it there. An extra open branch changes
+   * what `services/branch.ts` decides and, because lane A mints ids as `BR-` plus
+   * random base36, it wins `resolveBranch`'s alphabetical tie-break about three
+   * times in five — a suite that fails differently on Tuesday.
+   *
+   * `retireBranches` and not a DELETE, and the reason is the same tie-break one
+   * level deeper: this file charges after the ledger runs, so those charges are
+   * attributed to the probe branch and the row cannot be removed without
+   * rewriting money history. Closing it is enough — a closed branch wins no
+   * tie-breaks and counts toward nobody's open-branch total. See the helper.
+   *
+   * Scoped by name prefix and salon, so it can only ever match rows this file
+   * made.
+   */
+  retireBranches(SALON_B, branchIdsNamed(SALON_B, PROBE_BRANCH_PREFIX));
   await stopTenancyApi();
 });
 
@@ -180,6 +204,10 @@ interface SalonRoute {
    * single hard-coded id cannot serve both: salon A's `HH-01` does not exist at
    * salon B, so the control would 404 and the ledger would report a tenancy hole
    * that is really a missing fixture.
+   *
+   * `{bid}` is the same arrangement for a branch, with one extra constraint: the
+   * salon B substitution must be the DISPOSABLE branch, because the control call
+   * really renames and really closes it. See `branchFor`.
    */
   template: string;
   body?: unknown;
@@ -194,6 +222,17 @@ interface SalonRoute {
    */
   controlStatus?: number;
 }
+
+/**
+ * The branch the POST control creates, named so `afterAll` can find it and so no
+ * two runs against one database can collide on `branch_salon_name_uq`.
+ *
+ * Declared above the table because the table uses it. A `const` below would be
+ * in its temporal dead zone at module evaluation, which is a crash and not a
+ * lint.
+ */
+const PROBE_BRANCH_PREFIX = 'Tenancy probe branch';
+const PROBE_BRANCH_NAME = `${PROBE_BRANCH_PREFIX} ${Date.now()}`;
 
 /**
  * Every route that carries a salon id in the path, as registered in
@@ -293,7 +332,63 @@ const SALON_ROUTES: SalonRoute[] = [
     template: '/v1/salons/{id}/promotions/happy-hours/{hid}',
     controlStatus: 204,
   },
+
+  /**
+   * LANE A'S THREE BRANCH WRITES.
+   *
+   * The ledger fired on the merge, correctly — its auto-discovering sibling had
+   * already proved all three refuse a principal from another salon, so tenancy
+   * was never in doubt; only this hand-written half was stale.
+   *
+   * These are the most destructive control calls in the table, and a branch is
+   * not a promotion. The open-branch COUNT of a salon is what `services/branch.ts`
+   * decides on, so a control call that closes the wrong row rewrites what
+   * `promotions.test.ts` measures three files later. Hence:
+   *
+   *   - `POST` creates a REAL branch at salon B. Its name is unique per run —
+   *     `branch_salon_name_uq` spans CLOSED branches, so a fixed name would 409
+   *     against any database this suite ran on twice — and `afterAll` removes it.
+   *     That leak, uncleaned, is what took `dev` to fifteen failures.
+   *   - `PATCH` and `DELETE` point at `B_BRANCH_DISPOSABLE`, never at a fixture.
+   *     A rename would collide on the unique index next run, and a close would
+   *     drop salon B to one open branch, flipping every charge in the suite from
+   *     "assumed" to "established".
+   *   - `DELETE` answers 200 carrying the closed branch, not 204. A close is a
+   *     state the merchant has to be shown, not a disappearance — so the default
+   *     `controlStatus` is right and saying so here is the point.
+   */
+  {
+    method: 'POST',
+    template: '/salons/{id}/branches',
+    body: { name: PROBE_BRANCH_NAME },
+    controlStatus: 201,
+  },
+  {
+    method: 'PATCH',
+    template: '/salons/{id}/branches/{bid}',
+    // `nameAr` rather than `name`: the Arabic twin is nullable and unconstrained,
+    // so the control call cannot collide with `branch_salon_name_uq` however many
+    // times this suite has run.
+    body: { nameAr: 'فرع الاختبار' },
+  },
+  {
+    method: 'DELETE',
+    template: '/salons/{id}/branches/{bid}',
+  },
 ];
+
+/**
+ * A branch that belongs to the salon being addressed.
+ *
+ * Salon B always gets the disposable one — the PATCH renames it and the DELETE
+ * closes it, and `seedSalonB()` restores both on the next run. Salon A gets a
+ * real seeded branch for the same reason the happy hour does: the cross-salon
+ * probe must be refused by `requireSameSalon` BEFORE the branch is read, and an
+ * id that does not exist anywhere would make a 404-instead-of-403 impossible to
+ * tell from the tenancy check running too late.
+ */
+const branchFor = (salonId: string): string =>
+  salonId === SALON_B ? B_BRANCH_DISPOSABLE : A_BRANCH;
 
 /**
  * A happy hour that belongs to the salon being addressed.
@@ -313,7 +408,10 @@ function happyHourFor(route: SalonRoute, salonId: string): string {
 }
 
 const url = (r: SalonRoute, salonId: string) =>
-  r.template.replace('{id}', salonId).replace('{hid}', happyHourFor(r, salonId));
+  r.template
+    .replace('{id}', salonId)
+    .replace('{hid}', happyHourFor(r, salonId))
+    .replace('{bid}', branchFor(salonId));
 
 describe("salon-scoped routes — salon B's manager calling salon A's URL", () => {
   for (const route of SALON_ROUTES) {
@@ -1048,19 +1146,32 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'PATCH /v1/salons/:id/promotions/happy-hours/:hid',
       'DELETE /v1/salons/:id/promotions/happy-hours/:hid',
       'POST /v1/salons/:id/campaigns',
+      // Lane A's phase-4 branch writes. These are what closed the phase-4
+      // criterion — a salon can open, rename and close a location without an
+      // engineer — so a scan that stops seeing them is a scan that would let the
+      // most destructive salon-scoped routes in the API go unprobed.
+      'POST /salons/:id/branches',
+      'PATCH /salons/:id/branches/:bid',
+      'DELETE /salons/:id/branches/:bid',
     ]) {
       expect(paths, `the route scan lost ${known}`).toContain(known);
     }
   });
 
   it('the hand-written table above covers every route the scanner finds', () => {
-    // `{id}` → `:id` and `{hid}` → `:hid`: the table writes path parameters in
-    // braces so `url()` can substitute them, the route scanner reads them as
-    // fastify registers them. Both placeholders have to be translated or a route
-    // that IS in the table reads as missing.
+    // `{id}` → `:id`, `{hid}` → `:hid`, `{bid}` → `:bid`: the table writes path
+    // parameters in braces so `url()` can substitute them, the route scanner
+    // reads them as fastify registers them. EVERY placeholder has to be
+    // translated or a route that IS in the table reads as missing — and the
+    // failure lands as "add it to SALON_ROUTES" against an entry already there,
+    // which is a confusing hour for whoever adds the next parameterised route.
     const probed = new Set(
       SALON_ROUTES.map(
-        (r) => `${r.method} ${r.template.replace('{id}', ':id').replace('{hid}', ':hid')}`,
+        (r) =>
+          `${r.method} ${r.template
+            .replace('{id}', ':id')
+            .replace('{hid}', ':hid')
+            .replace('{bid}', ':bid')}`,
       ),
     );
     const missing = discovered

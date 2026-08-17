@@ -564,9 +564,6 @@ describe('branch scoping', () => {
 
 // --------------------------------------------- the branch decision, pinned --
 
-/** Salon B's SECOND branch. `seedSalonB()` — the one that makes it ambiguous. */
-const B_BRANCH_SECOND = 'BR-LUM-JAB';
-
 /**
  * WHAT LANE A DECIDED, AND WHY IT NEEDS PINNING RATHER THAN A COMMENT.
  *
@@ -601,6 +598,37 @@ const B_BRANCH_SECOND = 'BR-LUM-JAB';
  * that waits on device enrolment. So the third spec asserts that a `branchId` in
  * the charge body is INERT, which is the assertion a well-meaning future fix
  * trips over.
+ *
+ * THIS BLOCK OWNS ITS OPEN-BRANCH SET, AND DID NOT USED TO
+ * ---------------------------------------------------------
+ * It asserted `count(*) from branch where salon_id = B` is exactly 2, and named
+ * `B_BRANCH` as the branch a multi-branch charge would be attributed to. Both
+ * were true of the fixture and neither was in this file's gift.
+ *
+ * The day `POST /salons/{id}/branches` started working, `configuration.test.ts`
+ * created real branches and did not clean them up. The count became 4, so the
+ * two-branch precondition failed and the one-branch spec could not get down to
+ * one by removing a single row. Worse, lane A mints branch ids as `BR-` plus six
+ * random base36 characters, about 61% of which sort before `BR-LUM-HAW` — so the
+ * leaked branch won `resolveBranch`'s alphabetical tie-break and the attribution
+ * assertion failed on roughly three runs in five. Eight specs, one of them
+ * flapping, none of them about a product defect. (The money was never at risk:
+ * every such row came back `branch_assumed = true`, so no boost paid — which is
+ * the invariant these specs exist for, doing its job while they failed.)
+ *
+ * So the fixture is now DRIVEN rather than asserted. `soleOpenBranch()` and
+ * `reopenEveryBranch()` set the open-branch count this block needs, and the
+ * attribution expectation is READ from the database — the first open branch by
+ * id, which is what `services/branch.ts` says the answer is — instead of being a
+ * literal that happens to be right. Any number of branches another suite leaves
+ * behind is now invisible here.
+ *
+ * CLOSED, NOT DELETED. `closed_at` is how the product retires a branch and it is
+ * exactly what `resolveBranch` filters on, so it is both the honest lever and the
+ * one that needs no permission from the four tables that reference `branch`. The
+ * old version deleted the row, which forced a precondition refusing to run if the
+ * branch had ever carried a transaction, a top-up intent or a happy hour — a spec
+ * one real charge away from being unrunnable.
  */
 describe('the branch decision — one branch is knowledge, two branches is a guess', () => {
   /** Publish a boost through lane A's own endpoint, as the tenancy ledger does. */
@@ -618,22 +646,63 @@ describe('the branch decision — one branch is knowledge, two branches is a gue
   const branchOf = (txId: string): string =>
     scalar(`select branch_id || '|' || branch_assumed::text from transaction where id='${txId}'`);
 
-  afterEach(async () => {
-    // Both fixtures back, in the order that cannot leave salon B one-branched.
+  /**
+   * Salon B's open branches, in the order `resolveBranch` sees them.
+   *
+   * The same `closed_at IS NULL` and the same `ORDER BY id`. A spec that ordered
+   * these differently would be asserting against a list the server never had.
+   */
+  function openBranches(): string[] {
+    const rows = scalar(
+      `select id from branch where salon_id='${SALON_B}' and closed_at is null order by id`,
+    );
+    return rows === '' ? [] : rows.split('\n').map((s) => s.trim());
+  }
+
+  /** What a charge at salon B must be attributed to right now, per services/branch.ts. */
+  const attributedBranch = (): string => {
+    const open = openBranches();
+    precondition(open.length > 0, 'salon B has no open branch, so no charge can be attributed');
+    return open[0]!;
+  };
+
+  /** Close every open branch except one, making the salon unambiguously single-branch. */
+  function soleOpenBranch(keep: string): void {
     psql(`
-      INSERT INTO branch (id, salon_id, name)
-      VALUES ('${B_BRANCH_SECOND}', '${SALON_B}', 'Jabriya')
-      ON CONFLICT (id) DO NOTHING;
+      UPDATE branch SET closed_at = now()
+       WHERE salon_id='${SALON_B}' AND id <> '${keep}' AND closed_at IS NULL;
     `);
+    const open = openBranches();
+    precondition(
+      open.length === 1 && open[0] === keep,
+      `expected ${keep} to be salon B's only open branch, found [${open.join(', ')}]`,
+    );
+  }
+
+  /** Undo it. Runs in `afterEach`, so a spec that throws cannot leave B single-branched. */
+  function reopenEveryBranch(): void {
+    psql(`UPDATE branch SET closed_at = NULL WHERE salon_id='${SALON_B}';`);
+  }
+
+  afterEach(async () => {
+    // Reopen FIRST. `PUT .../boosts` writes a row for every OPEN branch, so
+    // resetting the boost before reopening would leave the closed ones holding
+    // whatever they held when this block started.
+    reopenEveryBranch();
     await resetBoost();
   });
 
   it('TWO BRANCHES — the boost does not pay, and the row admits its branch was assumed', async () => {
-    await publishBoost(B_BRANCH, 2);
+    reopenEveryBranch();
     precondition(
-      scalar(`select count(*) from branch where salon_id='${SALON_B}'`) === '2',
+      openBranches().length >= 2,
       'salon B is not multi-branch, so this spec is about the other case',
     );
+    // Published against the branch the charge will actually be attributed to, so
+    // a boost that DID pay would be unmistakable. Naming a different branch would
+    // let this pass for the boring reason.
+    const expected = attributedBranch();
+    await publishBoost(expected, 2);
 
     const before = visitsOf();
     const res = await charge('multi-branch');
@@ -648,58 +717,30 @@ describe('the branch decision — one branch is knowledge, two branches is a gue
     expect(
       branchOf(res.transaction.id),
       'the row presents an alphabetically-chosen branch as a fact',
-    ).toBe(`${B_BRANCH}|true`);
+    ).toBe(`${expected}|true`);
   });
 
   it('ONE BRANCH — the boost pays, and the row does NOT claim its branch was assumed', async () => {
     /**
-     * The fixture is made single-branch by removing the second one for the
-     * duration of the spec, and put back in `afterEach`. `seedSalonB()` re-creates
-     * it on every run as well, so a crash between the two cannot leave salon B
-     * permanently one-branched for the next suite.
+     * Single-branch for the duration of this spec, and reopened in `afterEach` —
+     * so a crash between the two cannot leave salon B one-branched for the next
+     * file, and `seedSalonB()` clears `closed_at` on the next run regardless.
      *
-     * THE MONEY REFERENCES ARE A HARD STOP, THE BOOST ROW IS NOT, and the
-     * difference is the whole reason this is two statements rather than one
-     * blanket check. `branch` is referenced by four tables. Three of them —
-     * `transaction`, `topup_intent`, `happy_hour` — hold history or a merchant's
-     * configuration, and a spec that cleared them to make its own delete succeed
-     * would be destroying evidence to prove a point.
+     * CLOSING RATHER THAN DELETING is what makes this spec runnable at all. The
+     * previous version deleted the branch row, which meant it first had to prove
+     * the branch carried no `transaction`, `topup_intent` or `happy_hour` — three
+     * tables that hold history and a merchant's configuration, and that a spec has
+     * no business clearing to make its own DELETE succeed. It was one real charge
+     * away from refusing to run. `closed_at` is the product's own retirement lever
+     * and the exact column `resolveBranch` filters on, so it needs nobody's
+     * permission and asserts against the mechanism that actually decides.
      *
-     * `boost` is the exception, and it is one because of a rule worth knowing
-     * about: `PUT .../promotions/boosts` writes a row for EVERY branch of the
-     * salon, resetting the ones the body omitted rather than leaving them holding
-     * a boost the merchant thinks she removed. So `publishBoost` above always
-     * leaves an identity row against the second branch, and no run of this spec
-     * could ever find zero. That row is 1x/0/1 — nothing — and `afterEach`
-     * re-publishes it byte for byte, so removing it costs nothing.
+     * The boost is published AFTER the close, because `PUT .../boosts` writes a
+     * row for every OPEN branch — publishing first would leave the branches this
+     * spec is about to close holding a stale row.
      */
-    const money = scalar(`
-      select (select count(*) from transaction where branch_id='${B_BRANCH_SECOND}')
-           + (select count(*) from topup_intent where branch_id='${B_BRANCH_SECOND}')
-           + (select count(*) from happy_hour where branch_id='${B_BRANCH_SECOND}')`);
-    precondition(
-      money === '0',
-      `${B_BRANCH_SECOND} carries ${money} money or promotion rows. This spec removes a branch ` +
-        'and will not delete those to do it — re-seed salon B instead.',
-    );
-
+    soleOpenBranch(B_BRANCH);
     await publishBoost(B_BRANCH, 2);
-    const identity = scalar(
-      `select visit || '/' || topup || '/' || stamp from boost
-        where salon_id='${SALON_B}' and branch_id='${B_BRANCH_SECOND}'`,
-    );
-    precondition(
-      identity === '' || identity === '1/0/1',
-      `the second branch holds a real boost (${identity}), not the identity row this spec expects`,
-    );
-    psql(`
-      DELETE FROM boost WHERE salon_id='${SALON_B}' AND branch_id='${B_BRANCH_SECOND}';
-      DELETE FROM branch WHERE id='${B_BRANCH_SECOND}' AND salon_id='${SALON_B}';
-    `);
-    precondition(
-      scalar(`select count(*) from branch where salon_id='${SALON_B}'`) === '1',
-      'salon B still has more than one branch',
-    );
 
     const before = visitsOf();
     const res = await charge('single-branch');
@@ -737,7 +778,17 @@ describe('the branch decision — one branch is knowledge, two branches is a gue
      * device session the SERVER established, and no route may start feeding it
      * from a body. Asserted here so that "no route reads a branch from a request"
      * is checkable rather than a convention.
+     *
+     * The body names `B_BRANCH` specifically — a REAL, OPEN branch of this very
+     * salon, and the one carrying the 2x. A made-up id would prove nothing: the
+     * handler could be reading the field and merely failing to find it.
      */
+    reopenEveryBranch();
+    precondition(
+      openBranches().length >= 2,
+      'salon B must be ambiguous for this spec — a single-branch salon pays its boost anyway',
+    );
+    const expected = attributedBranch();
     await publishBoost(B_BRANCH, 2);
 
     const token = await mintWalletTokenFor(wallet, B_MEMBER);
@@ -757,7 +808,7 @@ describe('the branch decision — one branch is knowledge, two branches is a gue
     expect(
       branchOf(res.body.transaction.id),
       'a branch supplied by the client was laundered into an established one',
-    ).toBe(`${B_BRANCH}|true`);
+    ).toBe(`${expected}|true`);
   });
 });
 

@@ -9,29 +9,32 @@
  *
  * WHY THIS FILE EXISTS
  * --------------------
- * Lane B has built the Account screen — profile edit, phone confirmation, change
+ * Lane B built the Account screen — profile edit, phone confirmation, change
  * password, the policy renderer, contact us, notification switches, deletion —
- * and `apps/wallet/src/api/account.ts` is the list of endpoints it calls. Six of
- * them. One exists.
+ * and `apps/wallet/src/api/account.ts` is the list of endpoints it calls. When
+ * this file was written there were six of them and one existed. Every other spec
+ * here was a `knownBug()` holding the contract's assertion against an absent
+ * route, which is the only form of "this is missing" that cannot quietly stop
+ * being true.
  *
- * That is not a criticism of lane B's work; the client is written against
- * api-contract.md and says so at every call site, including the ones where it
- * refuses to fake a success it cannot back. It is the reason this file is mostly
- * `knownBug()`. A screen built against an absent server is a phase that reports
- * done twice — once when the screen renders and once, months later, when someone
- * discovers the customer cannot actually change her name.
+ * Lane A's phase-4 merge landed five of the six and they all flipped in one run.
+ * They are plain `it()` now, and mostly with MORE assertions than the knownBug
+ * carried: a knownBug only has to prove a route is missing, so its call can be a
+ * gesture, while a passing spec is what will be defended.
  *
- * The two non-negotiables in play are the ones that cannot be retro-fitted:
+ * The two non-negotiables in play are the ones that could not be retro-fitted:
  *
  *   #10  the customer app holds no legal copy. It renders the published set from
- *        the API and stamps the version against the member. With no endpoint,
- *        the wallet's policy section renders nothing at all — which lane B has
- *        made testable rather than accidental, and which is still an empty
- *        Terms screen in front of a customer.
- *   #11  support routing is resolved SERVER-SIDE from `topicId`. There is no
- *        server. A client-supplied route is exactly what the rule forbids and
- *        exactly what an eventual "we'll pass the route through for now" would
- *        be.
+ *        the API and stamps the version against the member. Lane B built the
+ *        wallet with no bundled fallback set at all — a property of the code,
+ *        not a promise — so the endpoint's absence WAS an empty Terms screen in
+ *        front of a customer, and its arrival is what makes the stamped version
+ *        refer to something.
+ *   #11  support routing is resolved SERVER-SIDE from `topicId`. The spec below
+ *        supplies a `route` on purpose, and the opposite of the right one: a
+ *        client-supplied route is exactly what the rule forbids, and "we'll pass
+ *        the route through for now" is exactly the shape the eventual mistake
+ *        would take.
  *
  * ITS OWN MEMBER, SEEDED HERE. The password specs below change a password for
  * real and revoke sessions for real. Doing that to `B_MEMBER` would leave every
@@ -40,7 +43,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
   SALON_B,
@@ -268,38 +271,65 @@ describe('change password — the sentence on the screen is true only if the ser
 });
 
 // ===========================================================================
-// Everything else the screen calls. Written as the contract says it should
-// behave, so each one flips the day lane A ships it.
+// PROMOTED. Five of these six were knownBug() reporting an absent endpoint, and
+// lane A's phase-4 merge landed all of them. The sixth was red for a reason that
+// was mine: it sent `topicId: 'wallet-balance'`, an id that exists in no seed.
+//
+// The topic id had three spellings across three surfaces — the design says
+// `wallet`, `packages/mock` says `tp-wallet`, and this file had invented a
+// third. Lane A seeded the design's, which settles it. Lane B's wallet echoes
+// `topic.id` straight from the config it fetched, so it was never wrong; only
+// this literal and the mock's fixture were, and the mock is trunk's.
 // ===========================================================================
 
-describe('GAP: the Account screen calls five endpoints that do not exist — lane A', () => {
+describe('the profile, the policy set and support — the rest of the Account screen', () => {
   /**
    * `apps/wallet/src/api/account.ts` § profile. api-contract.md rule 1 defines
-   * both halves: the profile edit takes `name` and `email`, and it must REJECT a
-   * `phone` field because the phone is the login identity and moves through the
-   * challenge pair below.
+   * both halves: the profile edit takes `name` and `email`, and it must REFUSE a
+   * `phone` field, because the phone is the login identity and moves only through
+   * the challenge pair below.
    */
-  knownBug('PATCH /members/me edits the profile and answers the updated Member', async () => {
+  it('PATCH /members/me edits the profile and answers the updated Member', async () => {
+    const renamed = 'Sara Al-Mutairi-Ahmed';
     const res = await treq<MemberView>('PATCH', '/members/me', {
       token: member,
-      body: { name: 'Sara Al-Mutairi-Ahmed' },
+      body: { name: renamed },
     });
     expect(
       res.status,
       `PATCH /members/me answered ${res.status} — a customer cannot change her own name`,
     ).toBe(200);
-    expect(res.body.name).toBe('Sara Al-Mutairi-Ahmed');
+    expect(res.body.name).toBe(renamed);
+    // The second request. The response could be an echo; the row cannot.
+    expect(scalar(`select name from member where id='${MEMBER}'`)).toBe(renamed);
+
+    await treq('PATCH', '/members/me', { token: member, body: { name: MEMBER_NAME } });
   });
 
-  knownBug('PATCH /members/me REFUSES a phone field (api-contract rule 1)', async () => {
+  it('changing the email clears emailVerified, because the new one has proved nothing', async () => {
+    psql(`UPDATE member SET email_verified = true WHERE id='${MEMBER}';`);
+    const res = await treq<MemberView>('PATCH', '/members/me', {
+      token: member,
+      body: { email: 'qa-account-changed@example.invalid' },
+    });
+    precondition(res.status === 200, `PATCH answered ${res.status}: ${res.raw}`);
+
+    expect(
+      res.body.emailVerified,
+      'a new, unconfirmed address inherited the old one\'s verified flag',
+    ).toBe(false);
+    expect(scalar(`select email_verified::text from member where id='${MEMBER}'`)).toBe('false');
+  });
+
+  it('PATCH /members/me REFUSES a phone field (api-contract rule 1)', async () => {
     const res = await treq<{ error?: string }>('PATCH', '/members/me', {
       token: member,
       body: { phone: '+96599000000' },
     });
-    // 404 today because the route is absent. When it lands, a 404 here would mean
-    // the route exists and quietly accepted the identity change — which is why
-    // this asserts the code and not merely "not 200".
-    expect(res.status, `PATCH /members/me { phone } answered ${res.status}`).toBe(400);
+    // Refused by name, not silently dropped: a 200 that ignored the field would
+    // tell the client the identity moved when it did not.
+    expect(res.status, `PATCH /members/me { phone } answered ${res.status}: ${res.raw}`).toBe(400);
+    expect(res.body.error).toBeTruthy();
     expect(scalar(`select phone from member where id='${MEMBER}'`)).toBe(MEMBER_PHONE);
   });
 
@@ -308,78 +338,148 @@ describe('GAP: the Account screen calls five endpoints that do not exist — lan
    * PATCH — the new number has to prove it can receive a code, and the OLD number
    * is notified by the server that it happened.
    */
-  knownBug('POST /members/me/phone-change starts a challenge on the NEW number', async () => {
-    const res = await treq<{ challengeId?: string; expiresAt?: string }>(
-      'POST',
-      '/members/me/phone-change',
-      { token: member, body: { phone: '+96599777399' } },
-    );
-    expect(res.status, `POST /members/me/phone-change answered ${res.status}`).toBe(200);
+  it('POST /members/me/phone-change starts a challenge and does NOT move the identity', async () => {
+    const res = await treq<{
+      challengeId?: string;
+      expiresAt?: string;
+      newPhone?: string;
+      codeSent?: boolean;
+      code?: unknown;
+    }>('POST', '/members/me/phone-change', { token: member, body: { phone: '+96599777399' } });
+
+    expect(res.status, `POST /members/me/phone-change answered ${res.status}: ${res.raw}`).toBe(200);
     expect(res.body.challengeId, 'no challenge to verify against').toBeTruthy();
-    // Unverified, the identity has not moved.
+    expect(res.body.expiresAt, 'a challenge with no expiry is a challenge that never closes').toBeTruthy();
+
+    // Unverified, the identity has not moved. This is the assertion that matters:
+    // a challenge that changed the phone before the code was entered would let
+    // anyone holding a session lock the customer out of her own account.
     expect(scalar(`select phone from member where id='${MEMBER}'`)).toBe(MEMBER_PHONE);
+
+    /**
+     * THE CODE IS NOT IN THE BODY. Asserted on the KEY, not on the substring.
+     *
+     * The first draft banned the substring "code" and failed on `codeSent: false`
+     * — a field that exists precisely because delivery is not wired and this API
+     * refuses to let a client render "we've texted you" on top of nothing. That is
+     * the honest design, and a spec should not read it as a leak.
+     *
+     * What must never appear is the challenge secret itself: anyone holding the
+     * session could read it and verify immediately, which is the exact property a
+     * second factor exists to deny.
+     */
+    expect(res.body.code, 'the challenge code was returned to the caller').toBeUndefined();
+    expect(res.body.codeSent, 'the API claimed a delivery it has no sender for').toBe(false);
+    expect(
+      res.raw,
+      'a bare numeric code appears in the response body',
+    ).not.toMatch(/"\s*\d{4,8}\s*"/);
   });
 
   /**
    * NON-NEGOTIABLE #10, in one request.
    *
    * The wallet has no bundled legal set and no fallback branch — lane B made that
-   * a property of the code rather than a promise. So with no endpoint the Terms
-   * screen is blank, and the version stamped against the member refers to a
-   * document nobody can produce.
+   * a property of the code rather than a promise, so until this endpoint existed
+   * the Terms screen was blank and the version stamped against the member named a
+   * document nobody could produce.
    */
-  knownBug('GET /v1/platform/policies serves the published legal set', async () => {
-    const res = await treq<{ published?: { version?: number; docs?: unknown[] } }>(
-      'GET',
-      '/v1/platform/policies',
-      { token: member },
-    );
+  it('GET /v1/platform/policies serves the published legal set, with a version to stamp', async () => {
+    const res = await treq<{
+      published?: { version?: number; docs?: Array<{ id: string; title: { en: string; ar: string } }> };
+    }>('GET', '/v1/platform/policies', { token: member });
+
     expect(
       res.status,
       `GET /v1/platform/policies answered ${res.status} — the wallet's Terms screen is empty`,
     ).toBe(200);
-    expect(Array.isArray(res.body.published?.docs), 'no documents in the published set').toBe(true);
+    const docs = res.body.published?.docs ?? [];
+    expect(docs.length, 'no documents in the published set').toBeGreaterThan(0);
     expect(res.body.published?.version, 'the set carries no version to stamp').toBeTruthy();
+
+    // Every document carries both languages as keys, even when `ar` is empty —
+    // the contract's per-document fallback needs the key to exist to fall back
+    // FROM, and lane B's `localiseDoc` reads `doc.title.ar` unconditionally.
+    for (const doc of docs) {
+      expect(doc.id, 'a policy document with no id cannot be linked to').toBeTruthy();
+      expect(typeof doc.title?.en, `${doc.id} has no English title`).toBe('string');
+      expect(typeof doc.title?.ar, `${doc.id} has no Arabic title key to fall back from`).toBe(
+        'string',
+      );
+    }
   });
 
-  knownBug('GET /v1/platform/support serves the channels, the hours and the topics', async () => {
+  it('GET /v1/platform/support serves the channels, the hours and the topics', async () => {
     const res = await treq<{ topics?: Array<{ id: string; route: string }> }>(
       'GET',
       '/v1/platform/support',
       { token: member },
     );
-    expect(res.status, `GET /v1/platform/support answered ${res.status}`).toBe(200);
-    expect(Array.isArray(res.body.topics), 'no topic list for the Contact us form').toBe(true);
+    expect(res.status, `GET /v1/platform/support answered ${res.status}: ${res.raw}`).toBe(200);
+    const topics = res.body.topics ?? [];
+    expect(topics.length, 'no topic list for the Contact us form').toBeGreaterThan(0);
+
+    // The route is SERVED so the wallet can draw the "Salon" / "AVO" chip beside
+    // each topic — the design shows the customer who answers before she picks.
+    // Displaying it and sending it are different things; the next spec is the
+    // other half.
+    for (const t of topics) {
+      expect(['salon', 'avo'], `topic ${t.id} has route "${t.route}"`).toContain(t.route);
+    }
+    expect(topics.map((t) => t.id), 'the wallet topic is not in the list').toContain('wallet');
   });
 
   /**
    * NON-NEGOTIABLE #11 — and the assertion is deliberately about what the SERVER
-   * decides, not about the ticket being created.
+   * decides, not about a ticket being created.
    *
    * The client sends `topicId` and never `route`; lane B's `TicketDraft` makes
-   * sending one a compile error. The rule this spec will hold when the endpoint
-   * lands is the other half: a route supplied anyway must not be honoured, or a
-   * wallet dispute lands in a salon's inbox and the customer's money question is
-   * answered by the merchant she is disputing.
+   * sending one a compile error. This holds the other half: a route supplied
+   * anyway must not be honoured, or a wallet dispute lands in a salon's inbox and
+   * the customer's money question is answered by the merchant she is disputing.
    */
-  knownBug('POST /v1/support/tickets resolves the route from topicId, server-side', async () => {
-    const res = await treq<{ id?: string; route?: string }>('POST', '/v1/support/tickets', {
-      token: member,
-      idempotencyKey: `support-${Date.now()}`,
-      body: {
-        topicId: 'wallet-balance',
-        message: 'My top-up has not arrived.',
-        ref: '',
-        via: 'email',
-        // Supplied on purpose. The server must ignore it.
-        route: 'salon',
+  it('POST /v1/support/tickets resolves the route from topicId, server-side', async () => {
+    const res = await treq<{ id?: string; route?: string; topicId?: string }>(
+      'POST',
+      '/v1/support/tickets',
+      {
+        token: member,
+        idempotencyKey: `support-${Date.now()}`,
+        body: {
+          topicId: 'wallet',
+          message: `My top-up has not arrived. ${Date.now()}`,
+          ref: '',
+          via: 'email',
+          // Supplied on purpose, and the opposite of the right answer. `wallet`
+          // routes to AVO; this asks for the salon.
+          route: 'salon',
+        },
       },
-    });
-    expect(res.status, `POST /v1/support/tickets answered ${res.status}`).toBe(200);
+    );
+    expect(res.status, `POST /v1/support/tickets answered ${res.status}: ${res.raw}`).toBe(200);
     expect(
       res.body.route,
       'a client-supplied route was honoured — a wallet dispute can be routed to the salon',
     ).toBe('avo');
+
+    // And it is the ROW that carries the server's answer, not just the response.
+    expect(
+      scalar(`select route from support_ticket where id='${res.body.id}'`),
+      'the stored ticket carries the route the client asked for',
+    ).toBe('avo');
+  });
+
+  it('an unknown topic is refused with the list, never routed somewhere sensible', async () => {
+    const res = await treq<{ error?: string; message?: string }>('POST', '/v1/support/tickets', {
+      token: member,
+      body: { topicId: 'wallet-balance', message: 'anything', ref: '', via: 'email' },
+    });
+    // `wallet-balance` is the id this file used to send. Guessing a route for an
+    // unknown topic is exactly the decision this endpoint exists to take away
+    // from guesswork.
+    expect(res.status, 'an unknown topic was accepted').toBe(400);
+    expect(res.body.error).toBe('unknown_topic');
+    expect(res.body.message, 'the refusal does not say which topics are valid').toContain('wallet');
   });
 });
 
