@@ -119,7 +119,7 @@ interface ErrorBody {
 }
 
 export interface RequestOptions {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT';
   body?: unknown;
   /** Non-negotiable #4. Required on every money-moving POST. */
   idempotencyKey?: string | undefined;
@@ -195,6 +195,28 @@ async function request<S extends z.ZodTypeAny>(
     });
   }
   return decoded.data as z.infer<S>;
+}
+
+/**
+ * PUT a resource and validate the entity that comes back.
+ *
+ * Added for `PUT /artists/me/availability`, the artist's own week. It moves no
+ * money, so no idempotency key: the request is a full replacement of one row
+ * and sending it twice lands the same week twice, which is the same week.
+ *
+ * The failure CODE matters more here than on most calls — `availability_is_synced`
+ * and `google_not_connected` are both 409s and they are different sentences to
+ * an artist standing in a salon — and it survives because every call on this
+ * surface goes through `request` above.
+ */
+export function putJson<S extends z.ZodTypeAny>(
+  path: string,
+  body: unknown,
+  schema: S,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<z.infer<S>> {
+  return request(path, schema, { method: 'PUT', body, accessToken, signal });
 }
 
 /** GET a resource and validate it against the contract. */

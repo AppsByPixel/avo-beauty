@@ -31,7 +31,8 @@ import { ChargesScreen } from './ChargesScreen';
 import { HomeScreen, type HomeDestination } from './HomeScreen';
 import { LookupScreen } from './LookupScreen';
 import { MemberScreen, type ChargeAttempt } from './MemberScreen';
-import { NotBuiltScreen } from './NotBuiltScreen';
+import { BookingsScreen } from './BookingsScreen';
+import { ScheduleScreen } from './ScheduleScreen';
 import { ResultScreen } from './ResultScreen';
 import { ScanScreen } from './ScanScreen';
 
@@ -139,6 +140,8 @@ export function ScannerFlow() {
   }, []);
 
   const firstName = staff?.name.split(' ')[0] ?? 'there';
+  // design:135, :402 — "Hessa · hessa" in both screens' headers.
+  const staffHandle = staff?.handle ?? '—';
 
   return (
     <View style={styles.root}>
@@ -213,18 +216,20 @@ export function ScannerFlow() {
       )}
 
       {screen.name === 'bookings' && (
-        <NotBuiltScreen
-          title={copy.bookings}
-          body="Bookings are not part of this build. The screen is designed and waiting on the bookings API."
+        <BookingsScreen
+          accessToken={accessToken}
           onHome={goHome}
+          staffFirstName={firstName}
+          staffHandle={staffHandle}
         />
       )}
 
       {screen.name === 'schedule' && (
-        <NotBuiltScreen
-          title={copy.schedule}
-          body="Availability is not part of this build. The screen is designed and waiting on the availability API."
+        <ScheduleScreen
+          accessToken={accessToken}
           onHome={goHome}
+          staffFirstName={firstName}
+          staffHandle={staffHandle}
         />
       )}
 
