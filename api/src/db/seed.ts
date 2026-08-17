@@ -343,6 +343,119 @@ async function seed(): Promise<void> {
       },
     });
 
+  // ---------------------------------------------------------- staff users ----
+  //
+  // BEFORE THE ARTISTS, AND THAT ORDER IS LOAD-BEARING.
+  //
+  // `artist.staff_user_id` references `staff_user`, and AR-003 (Hessa) carries
+  // 'ST-002'. These two inserts used to sit 132 lines BELOW the artist insert,
+  // which works on every database that has been seeded before and fails on a
+  // genuinely empty one:
+  //
+  //     insert or update on table "artist" violates foreign key constraint
+  //     "artist_staff_user_id_staff_user_id_fk"
+  //
+  // It went unseen for exactly that reason. Every developer database and every
+  // local run already held ST-002 from a previous seed, so the only place the
+  // ordering was ever exercised was CI, on a fresh database — where it had been
+  // failing. A seed is only correct against an empty schema; a warm one cannot
+  // tell you anything about insert order, because the rows are already there.
+  //
+  // This file is now in dependency order throughout: salon → branch → service →
+  // promotions → staff_user → artist → member → the money fixtures.
+
+  // ST-001 Noura — manager, every permission.
+  await db
+    .insert(staffUser)
+    .values({
+      id: 'ST-001',
+      salonId: SALON_ID,
+      name: 'Noura',
+      handle: 'noura',
+      role: 'manager',
+      branchAccessAll: true,
+      branchAccessIds: [],
+      passwordHash: staffHash,
+      pinHash,
+      pinDeviceId: SCANNER_DEVICE,
+      permDashboard: true,
+      permAppointments: true,
+      permShop: true,
+      permLoyalty: true,
+      permTeam: true,
+      permScanner: true,
+      permCharges: true,
+      permVoid: true,
+      permMarketing: true,
+    })
+    .onConflictDoUpdate({
+      target: staffUser.id,
+      set: {
+        permDashboard: true,
+        permAppointments: true,
+        permShop: true,
+        permLoyalty: true,
+        permTeam: true,
+        permScanner: true,
+        permCharges: true,
+        permVoid: true,
+        permMarketing: true,
+        pinFailedAttempts: 0,
+        pinLockedUntil: null,
+        // Same reasoning as the member below: the credentials this script
+        // prints have to be the credentials the row actually holds.
+        passwordHash: staffHash,
+        pinHash,
+        pinDeviceId: SCANNER_DEVICE,
+      },
+    });
+
+  // ST-002 Hessa — frontdesk, deliberately restricted. This is the account Lane
+  // B and Lane D use to prove the locked screen and the 403. Scanner stays ON:
+  // she can take payment, she just cannot review or reverse one.
+  await db
+    .insert(staffUser)
+    .values({
+      id: 'ST-002',
+      salonId: SALON_ID,
+      name: 'Hessa',
+      handle: 'hessa',
+      role: 'frontdesk',
+      branchAccessAll: false,
+      branchAccessIds: [BRANCH_SALMIYA],
+      passwordHash: staffHash,
+      pinHash: hessaPinHash,
+      pinDeviceId: SCANNER_DEVICE,
+      permDashboard: false,
+      permAppointments: true,
+      permShop: false,
+      permLoyalty: false,
+      permTeam: false,
+      permScanner: true,
+      permCharges: false,
+      permVoid: false,
+      permMarketing: false,
+    })
+    .onConflictDoUpdate({
+      target: staffUser.id,
+      set: {
+        permDashboard: false,
+        permAppointments: true,
+        permShop: false,
+        permLoyalty: false,
+        permTeam: false,
+        permScanner: true,
+        permCharges: false,
+        permVoid: false,
+        permMarketing: false,
+        pinFailedAttempts: 0,
+        pinLockedUntil: null,
+        passwordHash: staffHash,
+        pinHash: hessaPinHash,
+        pinDeviceId: SCANNER_DEVICE,
+      },
+    });
+
   // ------------------------------------------------------------- artists ----
   //
   // The four artists of design/AVO Merchant Dashboard.dc.html § Team, with the
@@ -485,98 +598,6 @@ async function seed(): Promise<void> {
         tier: 'bronze',
         stamps: null,
         passwordHash: memberHash,
-      },
-    });
-
-  // ST-001 Noura — manager, every permission.
-  await db
-    .insert(staffUser)
-    .values({
-      id: 'ST-001',
-      salonId: SALON_ID,
-      name: 'Noura',
-      handle: 'noura',
-      role: 'manager',
-      branchAccessAll: true,
-      branchAccessIds: [],
-      passwordHash: staffHash,
-      pinHash,
-      pinDeviceId: SCANNER_DEVICE,
-      permDashboard: true,
-      permAppointments: true,
-      permShop: true,
-      permLoyalty: true,
-      permTeam: true,
-      permScanner: true,
-      permCharges: true,
-      permVoid: true,
-      permMarketing: true,
-    })
-    .onConflictDoUpdate({
-      target: staffUser.id,
-      set: {
-        permDashboard: true,
-        permAppointments: true,
-        permShop: true,
-        permLoyalty: true,
-        permTeam: true,
-        permScanner: true,
-        permCharges: true,
-        permVoid: true,
-        permMarketing: true,
-        pinFailedAttempts: 0,
-        pinLockedUntil: null,
-        // Same reasoning as the member above: the credentials this script
-        // prints have to be the credentials the row actually holds.
-        passwordHash: staffHash,
-        pinHash,
-        pinDeviceId: SCANNER_DEVICE,
-      },
-    });
-
-  // ST-002 Hessa — frontdesk, deliberately restricted. This is the account Lane
-  // B and Lane D use to prove the locked screen and the 403. Scanner stays ON:
-  // she can take payment, she just cannot review or reverse one.
-  await db
-    .insert(staffUser)
-    .values({
-      id: 'ST-002',
-      salonId: SALON_ID,
-      name: 'Hessa',
-      handle: 'hessa',
-      role: 'frontdesk',
-      branchAccessAll: false,
-      branchAccessIds: [BRANCH_SALMIYA],
-      passwordHash: staffHash,
-      pinHash: hessaPinHash,
-      pinDeviceId: SCANNER_DEVICE,
-      permDashboard: false,
-      permAppointments: true,
-      permShop: false,
-      permLoyalty: false,
-      permTeam: false,
-      permScanner: true,
-      permCharges: false,
-      permVoid: false,
-      permMarketing: false,
-    })
-    .onConflictDoUpdate({
-      target: staffUser.id,
-      set: {
-        permDashboard: false,
-        permAppointments: true,
-        permShop: false,
-        permLoyalty: false,
-        permTeam: false,
-        permScanner: true,
-        permCharges: false,
-        permVoid: false,
-        permMarketing: false,
-        pinFailedAttempts: 0,
-        pinLockedUntil: null,
-        passwordHash: staffHash,
-        pinHash: hessaPinHash,
-        pinDeviceId: SCANNER_DEVICE,
       },
     });
 
