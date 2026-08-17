@@ -71,6 +71,7 @@ import { gateway, withGatewayTimeout, type GatewayOutcome } from '../gateway';
 import { GatewayUnavailableError } from '../gateway/types';
 import { env } from '../env';
 import { claimKey, completeKey, isUniqueViolation } from './idempotency';
+import { decideEarning, loadPromotionInputs } from './promotions';
 import { writeAudit, type Executor } from './audit';
 
 // ------------------------------------------------------------ the machine --
@@ -144,6 +145,8 @@ export interface TopUpIntentRow {
   branchId: string;
   amountFils: Fils;
   bonusFils: Fils;
+  promoBonusFils: Fils;
+  promotionId: string | null;
   creditFils: Fils;
   feeFils: Fils;
   method: 'knet' | 'card' | 'applepay' | 'wallet';
@@ -187,7 +190,23 @@ export function serialiseIntent(row: TopUpIntentRow): TopUpIntentView {
     id: row.id,
     memberId: row.memberId,
     amountFils: row.amountFils,
-    bonusFils: row.bonusFils,
+    /**
+     * THE TOTAL MERCHANT-FUNDED BONUS — tier plus promotion.
+     *
+     * `TopUpIntentSchema` has exactly one bonus field, and the contract's
+     * invariant `creditFils = amountFils + bonusFils` is one Lane D pins
+     * directly. Emitting only the tier portion would break that invariant on the
+     * wire and hand the customer a credit she cannot account for; emitting a
+     * second field is a `packages/types` change, which is trunk's to make and
+     * not lane A's.
+     *
+     * So the wire keeps one number, which is what the contract describes, and
+     * the SPLIT lives in the database where reconciliation actually happens —
+     * `bonus_fils` and `promo_bonus_fils`. Reported: if the dashboard ever needs
+     * to show a merchant which half of a bonus a campaign cost her, that is the
+     * `packages/types` field, and the columns behind it already exist.
+     */
+    bonusFils: (row.bonusFils + row.promoBonusFils) as Fils,
     creditFils: row.creditFils,
     method: row.method as PaymentMethod,
     feeFils: row.feeFils,
@@ -328,13 +347,50 @@ export async function createTopUp(
         : (s.tiers?.find((t) => t.name === m.tier)?.bonusPercent ?? 0);
 
     const bonus = percentOf(input.amountFils, bonusPercent);
-    const credit = add(input.amountFils, bonus);
-    // AVO's cut. Recorded on the intent and later on the transaction; never
-    // deducted from what lands in the wallet.
-    const fee = commissionFor(input.amountFils, input.method);
 
     const id = ctx.failCreate ? `${intentId()}-GWFAIL` : intentId();
     const branchId = await defaultBranchId(tx, s.id);
+
+    /**
+     * ------------------------------- the promotion bonus, decided server-side --
+     *
+     * A live `topup10` / `topup20` window adds percentage points ON TOP OF the
+     * tier bonus — packages/types/src/rules.ts says so in as many words, and
+     * that is why they are two columns rather than one: both are merchant-funded
+     * but one is owed to the customer's standing and the other to a campaign,
+     * and a single `bonus_fils` could never be split back apart at
+     * reconciliation. That was the second schema obstacle flagged before this
+     * was built, and this is it resolved.
+     *
+     * LOCKED AT CREATION, not at settlement. The customer tapped Pay against the
+     * number she was shown; a top-up settles minutes later and possibly after
+     * the window has closed, and re-deciding at settlement would take back an
+     * offer she acted on. The tier bonus was already locked here for the same
+     * reason, and settlement credits `creditFils` verbatim.
+     *
+     * BRANCH: `null`, not `branchId`. A wallet top-up happens on a phone, not at
+     * a branch — `defaultBranchId` above picks the salon's first branch by
+     * `ORDER BY id LIMIT 1` purely so the NOT NULL column has an attribution,
+     * and paying a per-branch percentage on that basis would make a customer's
+     * bonus depend on branch-id sort order. So the branch boost's `topup` points
+     * and any branch-scoped window are skipped; an `all`-scoped happy hour has
+     * no ambiguity to resolve and applies. services/promotions.ts §
+     * PromotionInputs carries the reasoning and the flag.
+     */
+    const promoInputs = await loadPromotionInputs(tx, s.id, null);
+    const promoPercent =
+      promoInputs && s.loyaltyMode !== 'stamps'
+        ? decideEarning(promoInputs, new Date())
+        : null;
+
+    const promoBonus = promoPercent
+      ? percentOf(input.amountFils, promoPercent.topupBonusPercent)
+      : fils(0);
+    const credit = add(add(input.amountFils, bonus), promoBonus);
+
+    // AVO's cut. Recorded on the intent and later on the transaction; never
+    // deducted from what lands in the wallet.
+    const fee = commissionFor(input.amountFils, input.method);
 
     await tx.insert(topUpIntent).values({
       id,
@@ -343,6 +399,8 @@ export async function createTopUp(
       branchId,
       amountFils: input.amountFils,
       bonusFils: bonus,
+      promoBonusFils: promoBonus,
+      promotionId: promoBonus > 0 ? promoPercent?.happyHourId ?? null : null,
       creditFils: credit,
       feeFils: fee,
       method: input.method,
@@ -593,9 +651,13 @@ async function creditWallet(
     salonId: intent.salonId,
     branchId: intent.branchId,
     kind: 'topup',
-    // Signed, credit positive: what actually landed, bonus included.
+    // Signed, credit positive: what actually landed, both bonuses included.
     amountFils: intent.creditFils,
+    // Carried across as the SPLIT the intent locked, not as the wire's single
+    // number. This row is what a reconciliation report reads.
     bonusFils: intent.bonusFils,
+    promoBonusFils: intent.promoBonusFils,
+    promotionId: intent.promotionId,
     // Commission, recorded PER TRANSACTION — build-plan.md phase 2. The
     // customer serializer in http/serialise.ts does not emit it.
     feeFils: intent.feeFils,
@@ -632,14 +694,19 @@ async function creditWallet(
     },
   ];
 
-  if (intent.bonusFils > 0) {
+  // One debit for both merchant-funded bonuses: they come out of the same
+  // pocket, and `promotion_id` on the transaction is what separates a campaign's
+  // cost from a tier's in a report. Splitting the LEDGER too would add an
+  // account nobody reconciles against.
+  const merchantFunded = add(intent.bonusFils, intent.promoBonusFils);
+  if (merchantFunded > 0) {
     entries.push({
       transactionId: txId,
       salonId: intent.salonId,
       memberId: null,
       account: 'merchant_bonus_funding',
       direction: 'debit',
-      amountFils: intent.bonusFils,
+      amountFils: merchantFunded,
     });
   }
 
@@ -703,6 +770,8 @@ async function creditWallet(
       method: intent.method,
       feeFils: intent.feeFils,
       bonusFils: intent.bonusFils,
+      promoBonusFils: intent.promoBonusFils,
+      promotionId: intent.promotionId,
       observedVia: source,
       provider: intent.provider,
       pspReference: intent.pspReference,

@@ -23,6 +23,7 @@ import {
 import { fils } from '@avo/types';
 import { filsColumn, timestamptz } from './_shared';
 import { member } from './member';
+import { happyHour } from './promotion';
 import { branch, salon } from './salon';
 import { staffUser } from './staff';
 
@@ -70,8 +71,47 @@ export const transaction = pgTable(
     kind: transactionKind('kind').notNull(),
     /** Signed: credit positive, debit negative. */
     amountFils: filsColumn('amount_fils').notNull(),
-    /** Tier bonus portion of a top-up. Always 0 in stamps mode. */
+    /**
+     * The TIER bonus portion of a top-up, and nothing else. Always 0 in stamps
+     * mode. Its meaning is unchanged by promotions landing — see
+     * `promo_bonus_fils` immediately below for why that is the whole point.
+     */
     bonusFils: filsColumn('bonus_fils').notNull().default(fils(0)),
+    /**
+     * THE SECOND BONUS SOURCE, IN ITS OWN COLUMN.
+     *
+     * A `topup10` / `topup20` happy hour, or a branch boost's `topup` points,
+     * add credit on top of the tier bonus — packages/types/src/rules.ts is
+     * explicit: "Extra top-up bonus percentage points ON TOP OF the tier bonus".
+     * Adding them into `bonus_fils` would have made a settled top-up
+     * irreconcilable: nothing stored would say how much of one number the
+     * merchant funded because of a customer's standing and how much because of a
+     * promotion she was running. Two different budget lines, one column, no way
+     * back. Hence two columns.
+     *
+     * Still top-up-only, and the CHECK below says so. A promotion that pays out
+     * on a CHARGE (`credit3`) is not a top-up bonus and does not live here — it
+     * is written as its own `adjustment` transaction, which is what lets the
+     * activity feed show the customer the credit as a line of its own instead of
+     * hiding it inside the charge that triggered it. See services/promotions.ts.
+     */
+    promoBonusFils: filsColumn('promo_bonus_fils').notNull().default(fils(0)),
+    /**
+     * The happy hour that produced `promo_bonus_fils`, or that multiplied this
+     * charge's loyalty increment, or that this `adjustment` is the payout of.
+     *
+     * Nullable and unconstrained by `kind` on purpose: a promotion can attach to
+     * a top-up (bonus points), a charge (a visit/stamp multiplier, which moves no
+     * money at all) or an adjustment (`credit3`). What it must never be is
+     * absent — an x2 visit granted with nothing recording WHY is a loyalty
+     * standing nobody can explain to a customer who asks.
+     *
+     * `ON DELETE restrict`, and `DELETE .../happy-hours/{hid}` therefore
+     * soft-deletes rather than removing the row once it has been applied. A
+     * promotion deleted out from under the transactions it paid for is a
+     * reconciliation report with a dangling id in it.
+     */
+    promotionId: text('promotion_id').references(() => happyHour.id, { onDelete: 'restrict' }),
     /**
      * AVO's commission on this transaction. build-plan.md phase 2: "commission
      * recorded per transaction, merchant-visible, customer-never". Not part of
@@ -121,9 +161,39 @@ export const transaction = pgTable(
     ),
     // A bonus is a top-up concept. Nothing else has one, and it is never negative.
     check('transaction_bonus_non_negative', sql`${t.bonusFils} >= 0`),
+    /**
+     * NOT RELAXED, and that is the finding.
+     *
+     * This constraint was flagged as an obstacle to promotions: a happy-hour
+     * reward on a CHARGE (`credit3`, `x2visit`) had nowhere to record itself.
+     * Looking at it while building the feature, the constraint is right and the
+     * modelling was wrong. Neither case is a top-up bonus:
+     *
+     *   x2visit / x2stamp / x3stamp   moves no money whatsoever. It multiplies a
+     *                                 loyalty increment. `promotion_id` on the
+     *                                 charge row plus a `loyalty_event` records
+     *                                 it; a fils column would have to hold 0.
+     *   credit3                       is a 3.000 KD wallet CREDIT. Recording it
+     *                                 inside the charge row that triggered it
+     *                                 would net a debit against a credit and
+     *                                 leave the activity feed unable to show the
+     *                                 customer either number. It is written as
+     *                                 its own `adjustment` transaction, which
+     *                                 the sign CHECK above already permits and
+     *                                 which the ledger already balances.
+     *
+     * So the constraint stays, and both promotion payouts are modelled as what
+     * they actually are. Relaxing it would have bought the ability to write a
+     * meaningless row.
+     */
     check(
       'transaction_bonus_is_topup_only',
       sql`${t.bonusFils} = 0 OR ${t.kind} = 'topup'`,
+    ),
+    check('transaction_promo_bonus_non_negative', sql`${t.promoBonusFils} >= 0`),
+    check(
+      'transaction_promo_bonus_is_topup_only',
+      sql`${t.promoBonusFils} = 0 OR ${t.kind} = 'topup'`,
     ),
     check('transaction_fee_non_negative', sql`${t.feeFils} >= 0`),
     check(

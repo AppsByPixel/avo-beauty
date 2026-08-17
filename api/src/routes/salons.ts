@@ -28,6 +28,8 @@ import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../aut
 import { badRequest, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import { computeMetrics, parsePeriod } from '../services/metrics';
+import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
@@ -46,6 +48,15 @@ const EDITABLE = new Set([
   'stampRewardAr',
   'depositFils',
   'noShowReturnMinutes',
+  /**
+   * Editable, and validated as an IANA id rather than stored verbatim.
+   *
+   * It decides what "10:00" means for business hours, artist windows and every
+   * happy-hour window, so an unvalidated string here would not fail loudly — it
+   * would make `Intl.DateTimeFormat` throw inside a charge, three screens away
+   * from the field that was typed wrong. See `parseTimeZone`.
+   */
+  'timezone',
   'businessHours',
   'social',
   'whatsappEnabled',
@@ -116,6 +127,15 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       stampRewardAr: s.stampRewardAr,
       depositFils: s.depositFils,
       noShowReturnMinutes: s.noShowReturnMinutes,
+      /**
+       * Emitted to every surface, not just the dashboard. `businessHours` right
+       * below it is naive wall clock and means nothing without this — a wallet
+       * that renders "Open until 21:00" is rendering a string in a zone it was
+       * never told. The clients also need it to resolve `isHappyHourLive`
+       * themselves, every second, which is the whole point of there being no
+       * `live` flag.
+       */
+      timezone: s.timezone,
       businessHours: s.businessHours,
       branches: branches.map((b) => ({
         id: b.id,
@@ -148,6 +168,11 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
+
+    // Refused here, before the UPDATE, so a typo is a 400 naming the tz database
+    // rather than a 500 thrown out of `Intl.DateTimeFormat` inside the next
+    // charge that tries to resolve a happy hour.
+    if ('timezone' in body) patch.timezone = parseTimeZone(body.timezone);
 
     /**
      * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.
@@ -203,22 +228,37 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(after);
   });
 
-  /** perms.dashboard */
-  app.get<{ Params: { id: string } }>('/salons/:id/metrics', async (req, reply) => {
-    const p = requireDashboardPerm(req, 'dashboard');
-    requireSameSalon(p, req.params.id);
+  /**
+   * perms.dashboard. Overview's four stat tiles, computed rather than stubbed.
+   *
+   * Every definition — what "active" counts, what "today" means, why a repeat
+   * visit is a charge and not a transaction — lives in services/metrics.ts next
+   * to the query that implements it. A metric's failure mode is not a crash, it
+   * is a merchant deciding on a number that means something other than what she
+   * thinks, so the definitions sit where they cannot drift from the SQL.
+   */
+  app.get<{ Params: { id: string }; Querystring: { period?: string } }>(
+    '/salons/:id/metrics',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'dashboard');
+      requireSameSalon(p, req.params.id);
 
-    // Real aggregation is phase 2 of build-plan.md; the gate is what this task
-    // owes, and the shape matches packages/mock so lane C is not blocked.
-    return reply.send({
-      activeMembers: 0,
-      activeMembersDelta: 0,
-      loadedTodayFils: 0,
-      knetSharePercent: 0,
-      repeatRatePercent: 0,
-      upcomingAppointments: 0,
-    });
-  });
+      const period = parsePeriod(req.query?.period);
+
+      const rows = await db
+        .select({ id: salon.id, timezone: salon.timezone })
+        .from(salon)
+        .where(eq(salon.id, req.params.id))
+        .limit(1);
+      const s = rows[0];
+      if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+      // The salon's zone, not the process zone: "loaded today" has to roll over
+      // at the salon's midnight, or the last three hours of every evening's
+      // takings land on yesterday's tile. See services/metrics.ts.
+      return reply.send(await computeMetrics(db, s, period));
+    },
+  );
 
   /** perms.shop */
   app.get<{ Params: { id: string } }>('/salons/:id/products', async (req, reply) => {

@@ -71,6 +71,20 @@
       "when": 1786922096902,
       "tag": "0009_receipt_claim_reclaims_sending",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786940000000,
+      "tag": "0010_salon_timezone",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786940100000,
+      "tag": "0011_promotions",
+      "breakpoints": true
     }
   ]
 }

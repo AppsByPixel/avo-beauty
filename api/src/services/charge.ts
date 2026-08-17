@@ -50,6 +50,7 @@ import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
+import { decideEarning, loadPromotionInputs, NO_PROMOTION } from './promotions';
 import { consumeToken, peekToken, TokenOutsideSalonError } from './walletToken';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
@@ -89,6 +90,23 @@ export interface ChargeResult {
   depositAppliedFils: number;
   loyalty: LoyaltyOutcome;
   voidableUntil: string;
+  /**
+   * What the promotion set decided for THIS charge, at ONE instant, on the
+   * server. Null when nothing was live — never omitted, so a scanner can tell
+   * "no promotion applied" from "this API is too old to say".
+   *
+   * The scanner renders it and the receipt quotes it. It is an OUTCOME, not an
+   * input: `POST /charges` reads no promotion field from its body at all, so a
+   * client claiming a boost that is not live is not refused, it is simply not
+   * consulted. Non-negotiable #2.
+   */
+  happyHour: {
+    id: string | null;
+    visitMultiplier: number;
+    stampMultiplier: number;
+    creditFils: number;
+    minutesRemaining: number;
+  } | null;
 }
 
 function transactionId(): string {
@@ -289,10 +307,65 @@ export async function performCharge(
     const s = salonRows[0];
     if (!s) throw notFound('unknown_salon', 'No such salon.');
 
+    /**
+     * ------------------------------------------- 9a. the earning multiplier --
+     *
+     * THE SERVER DECIDES, HERE, ONCE.
+     *
+     * Read inside the money transaction, not before it: a merchant who switches
+     * a window off while this charge is in flight must not still fund it. And
+     * evaluated at ONE instant — `now`, taken at step 5 — so a charge submitted
+     * at 17:59:59 and committed at 18:00:01 resolves against a single moment
+     * rather than once per read. That single moment is what `completeKey` stores
+     * below, which is what makes an idempotent replay return the SAME reward
+     * instead of re-evaluating against the replay clock. Re-evaluating is the
+     * boundary bug that pays twice.
+     *
+     * Nothing about the client reaches this. `ChargeInput` has no promotion
+     * field to read; a scanner that believes a boost is live and is wrong earns
+     * the ordinary rate, silently and correctly. Non-negotiable #2.
+     */
+    /**
+     * `input.branchId`, NOT the `branchId` the row was attributed with.
+     *
+     * They differ whenever the branch was not established, in which case
+     * `branchId` above is `defaultBranchId()` — the salon's first branch by id,
+     * chosen so the NOT NULL column has a value. Deciding a customer's earning
+     * rate from that would pay her Kuwait City's boost because 'BR-KWC' sorts
+     * before 'BR-SAL'. See services/promotions.ts § PromotionInputs.
+     *
+     * TODAY IT IS ALWAYS NULL, AND THAT IS THE CORRECT STATE RATHER THAN A GAP.
+     * `POST /charges` takes `{ memberId, serviceIds[], token }` — the contract's
+     * body, which has no branch in it — and routes/charges.ts does not read one.
+     * It must not start: a client naming its own branch is a client choosing its
+     * own multiplier, which is non-negotiable #2 with extra steps. The branch has
+     * to arrive from something the server established, and `StaffPrincipal`
+     * carries branch ACCESS rather than a current location, so that is a
+     * branch-bound scanner session — flagged, not guessed at. Until then branch
+     * boosts are stored, served to both clients, and applied by neither.
+     */
+    const promoInputs = await loadPromotionInputs(
+      tx,
+      ctx.principal.salonId,
+      input.branchId ?? null,
+    );
+    const earning = promoInputs
+      ? decideEarning(promoInputs, now)
+      : { ...NO_PROMOTION, decidedAt: now };
+
+    // Attribution on the charge row itself, so "why did this visit count twice"
+    // is answerable from the transaction a customer is looking at.
+    if (earning.happyHourId) {
+      await tx
+        .update(transaction)
+        .set({ promotionId: earning.happyHourId })
+        .where(eq(transaction.id, txId));
+    }
+
     let loyalty: LoyaltyOutcome;
     if (s.loyaltyMode === 'stamps') {
       const wasReady = (m.stamps ?? 0) >= (s.stampTarget ?? 0);
-      loyalty = applyStamps(s.stampTarget ?? 0, m.stamps ?? 0, 1);
+      loyalty = applyStamps(s.stampTarget ?? 0, m.stamps ?? 0, earning.stampMultiplier);
       await tx.update(member).set({ stamps: loyalty.stamps }).where(eq(member.id, m.id));
 
       // Only the charge that FILLS the card. Without `wasReady`, every further
@@ -308,7 +381,7 @@ export async function performCharge(
         });
       }
     } else {
-      loyalty = applyVisits(s.tiers ?? [], m.visits, m.tier ?? null, 1);
+      loyalty = applyVisits(s.tiers ?? [], m.visits, m.tier ?? null, earning.visitMultiplier);
       await tx
         .update(member)
         .set({ visits: loyalty.visits, tier: loyalty.tier })
@@ -341,6 +414,72 @@ export async function performCharge(
       }
     }
 
+    /**
+     * ------------------------------------------ 9b. a flat promotion credit --
+     *
+     * `credit3` — 3.000 KD into the wallet, granted by a live window.
+     *
+     * ITS OWN TRANSACTION ROW, and that is the answer to the schema obstacle
+     * that was flagged before this was built. `transaction.bonus_fils` is
+     * constrained to top-ups, so the question was whether to relax the
+     * constraint. It should not be relaxed: this is not a top-up bonus, it is a
+     * credit, and burying it inside the charge row would net a 3.000 credit
+     * against a 15.000 debit and leave the activity feed unable to show the
+     * customer either number. As an `adjustment` it is a line she can see, the
+     * sign CHECK already permits it, and the ledger already balances it.
+     *
+     * Written AFTER the debit deliberately, against the balance the debit left,
+     * so `member.balance_fils >= 0` is never satisfied only because a credit
+     * happened to be applied first.
+     */
+    let balanceFinal = balanceAfter;
+    if (earning.creditFils > 0 && earning.happyHourId) {
+      const creditId = transactionId();
+      balanceFinal = add(balanceAfter, fils(earning.creditFils));
+
+      await tx.update(member).set({ balanceFils: balanceFinal, updatedAt: now }).where(eq(member.id, m.id));
+
+      await tx.insert(transaction).values({
+        id: creditId,
+        memberId: m.id,
+        salonId: ctx.principal.salonId,
+        branchId,
+        kind: 'adjustment',
+        amountFils: fils(earning.creditFils),
+        method: 'wallet',
+        status: 'settled',
+        reference: `AVO-PRO-${creditId.slice(3)}`,
+        note: 'Happy hour credit',
+        promotionId: earning.happyHourId,
+        createdByStaffId: ctx.principal.id,
+        createdAt: now,
+        settledAt: now,
+      });
+
+      await tx.insert(ledgerEntry).values([
+        {
+          transactionId: creditId,
+          salonId: ctx.principal.salonId,
+          memberId: null,
+          // The merchant funds her own promotion, exactly as she funds a tier
+          // bonus on a top-up. Same account, so the two are one budget line in
+          // a report and `promotion_id` is what separates them.
+          account: 'merchant_bonus_funding',
+          direction: 'debit',
+          amountFils: fils(earning.creditFils),
+        },
+        {
+          transactionId: creditId,
+          salonId: ctx.principal.salonId,
+          memberId: m.id,
+          account: 'member_wallet',
+          direction: 'credit',
+          amountFils: fils(earning.creditFils),
+          balanceAfterFils: balanceFinal,
+        },
+      ]);
+    }
+
     // ----------------------------------------------- 10. queue the receipts --
     // Rows, not network calls. The worker sends them after this commits, one
     // channel at a time and independently — see services/receipts.ts.
@@ -349,7 +488,7 @@ export async function performCharge(
       transactionId: txId,
       amountFils: due,
       services: rows.map((r) => ({ id: r.id, name: r.name, priceFils: r.priceFils })),
-      balanceAfterFils: balanceAfter,
+      balanceAfterFils: balanceFinal,
     });
 
     // ------------------------------------------------------------ 11. audit --
@@ -362,7 +501,22 @@ export async function performCharge(
       subjectType: 'transaction',
       subjectId: txId,
       amountFils: -due,
-      metadata: { serviceIds: input.serviceIds, tokenUsed: Boolean(input.token) },
+      metadata: {
+        serviceIds: input.serviceIds,
+        tokenUsed: Boolean(input.token),
+        // The promotion decision, stamped into the audit line. A merchant asking
+        // "why did this charge count double" gets the window id and the instant
+        // it was evaluated at, not a re-derivation from today's clock.
+        promotion: earning.happyHourId
+          ? {
+              happyHourId: earning.happyHourId,
+              visitMultiplier: earning.visitMultiplier,
+              stampMultiplier: earning.stampMultiplier,
+              creditFils: earning.creditFils,
+              decidedAt: earning.decidedAt.toISOString(),
+            }
+          : null,
+      },
       ipAddress: ctx.ipAddress ?? null,
       userAgent: ctx.userAgent ?? null,
     });
@@ -380,10 +534,19 @@ export async function performCharge(
         reference: `AVO-CHG-${txId.slice(3)}`,
         createdAt: now.toISOString(),
       },
-      balanceAfterFils: balanceAfter,
+      balanceAfterFils: balanceFinal,
       depositAppliedFils: heldDeposit,
       loyalty,
       voidableUntil: new Date(now.getTime() + VOID_WINDOW_MINUTES * 60_000).toISOString(),
+      happyHour: earning.happyHourId
+        ? {
+            id: earning.happyHourId,
+            visitMultiplier: earning.visitMultiplier,
+            stampMultiplier: earning.stampMultiplier,
+            creditFils: earning.creditFils,
+            minutesRemaining: earning.minutesRemaining,
+          }
+        : null,
     };
 
     // ------------------------------------------------- 12. store the response --

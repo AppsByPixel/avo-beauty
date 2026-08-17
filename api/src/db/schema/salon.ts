@@ -64,6 +64,25 @@ export const salon = pgTable(
 
     depositFils: filsColumn('deposit_fils').notNull(),
     noShowReturnMinutes: integer('no_show_return_minutes').notNull().default(60),
+
+    /**
+     * IANA zone id. THE zone every naive wall-clock value in this schema is
+     * resolved against — `business_hours` below, `artist.windows`, and
+     * `happy_hour.from`/`.to`. Never the process zone: docker-compose.yml sets
+     * TZ=UTC, so an unzoned conversion offers a Kuwait salon's 10:00 at 13:00
+     * and, for a happy hour, applies the wrong earning multiplier. One of those
+     * is a mis-booked appointment; the other is money.
+     *
+     * An id rather than a stored offset because "10:00 local" is two different
+     * instants across the year in any DST zone, and no integer fixes that. See
+     * migration 0010 and api/src/time/zone.ts.
+     *
+     * Validity is enforced at the write (`parseTimeZone`), not by a CHECK: the
+     * tz database is mutable, so "is this a real zone" is not an IMMUTABLE
+     * predicate and Postgres will not accept it in a constraint.
+     */
+    timezone: text('timezone').notNull().default('Asia/Kuwait'),
+
     businessHours: jsonb('business_hours').$type<BusinessHours>().notNull(),
     /** Handles, never URLs — api-contract.md § SocialLink. Derive the URL on read. */
     social: jsonb('social')
@@ -82,6 +101,7 @@ export const salon = pgTable(
     // api-contract.md: merchant-set booking deposit, 1000–10000 fils.
     check('salon_deposit_in_range', sql`${t.depositFils} BETWEEN 1000 AND 10000`),
     check('salon_no_show_return_positive', sql`${t.noShowReturnMinutes} > 0`),
+    check('salon_timezone_not_blank', sql`length(btrim(${t.timezone})) > 0`),
     check('salon_stamp_target_positive', sql`${t.stampTarget} IS NULL OR ${t.stampTarget} > 0`),
     // An empty string is not a translation, it is a rendering bug waiting to
     // happen: `'' ?? name` is `''`, so a blank Arabic name defeats the client's
