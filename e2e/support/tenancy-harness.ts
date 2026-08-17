@@ -55,7 +55,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -340,44 +340,175 @@ const PG_USER = process.env.POSTGRES_USER ?? 'avo';
  * likes without taking anyone down. Override with POSTGRES_DB to point the suite
  * back at a shared database deliberately.
  *
+ * AND IT IS ONE DATABASE PER RUN, NOT ONE DATABASE CALLED `avo_qa`.
+ * ------------------------------------------------------------------
+ * The paragraphs above were right about the hazard and wrong about the scope of
+ * the fix, and the difference cost two days of "dev is green" that was not.
+ *
+ * `avo_qa` was a CONSTANT. Every git worktree on this machine carries a copy of
+ * this file, every copy resolved that constant to the same eleven characters, and
+ * they all shell out to the same `avo-postgres` container. So "lane D's own
+ * database" was lane D's own database only in the sense that no other lane's
+ * *seed script* wrote to it — any other CHECKOUT running this same suite landed
+ * in it, on the same fixtures, at the same time. Two suites a few seconds out of
+ * phase produce exactly the reported signature: a balance short by 11 000 fils
+ * (one 10.000 KD top-up plus the silver 10%), visits ahead by one or two, and a
+ * balance that has snapped back to `QA_MEMBER_BALANCE_FILS` because the other
+ * run's `seedQaMember()` reset the row mid-file. Reproduced deliberately: two
+ * copies of this suite started twenty seconds apart failed 7 and 4 specs, which
+ * are two of the four counts that started this investigation.
+ *
+ * A leaked API process is the same problem in time rather than in space. A run
+ * that is SIGKILLed leaves `api/src/server.ts` detached and alive — one was found
+ * two and a half hours old, still polling `receipt_job` in `avo_qa` — so the next
+ * run shared its fixtures with a ghost of the last one.
+ *
+ * Both disappear if the database name cannot be guessed by anybody else. The name
+ * is minted once per run in `support/global-setup.ts`, handed to the workers in
+ * `AVO_QA_DB`, and dropped in that file's teardown. Nothing else on the machine
+ * can name it, so nothing else can write to it — including this suite's own
+ * previous run.
+ *
  * SETTING IT UP — see `ensureDatabase()` below, which does it automatically and
  * says what it did.
  */
-const PG_DB = process.env.POSTGRES_DB ?? 'avo_qa';
+
+/**
+ * Run databases are named so a sweep can recognise and age them out. Anything
+ * outside this prefix is somebody's deliberate database and is never touched.
+ */
+export const RUN_DB_PREFIX = 'avo_qa_run_';
+
+/** A name nothing else on this machine will mint: clock, pid and entropy. */
+export function newRunDatabaseName(): string {
+  const stamp = Math.floor(Date.now() / 1000);
+  return `${RUN_DB_PREFIX}${stamp}_${process.pid}_${randomBytes(3).toString('hex')}`;
+}
+
+/**
+ * POSTGRES_DB is the deliberate opt-out: a named, long-lived database that this
+ * suite does not own. It is never created from empty and never dropped.
+ */
+const EXPLICIT_DB = process.env.POSTGRES_DB;
+
+/** True when this run minted its database and is therefore allowed to drop it. */
+export const ownsItsDatabase = (): boolean => EXPLICIT_DB === undefined;
+
+let resolvedDb: string | undefined;
+
+/**
+ * The database every helper in this file talks to.
+ *
+ * Resolved lazily and cached, NOT captured at import time. `global-setup.ts` sets
+ * `AVO_QA_DB` and this module has to see that value however the import order
+ * happens to fall — a `const` read at module load is precisely the kind of
+ * ordering trap this whole change exists to remove.
+ */
+export function pgDb(): string {
+  if (resolvedDb) return resolvedDb;
+  const fromSetup = process.env.AVO_QA_DB;
+  if (!EXPLICIT_DB && !fromSetup) {
+    // Only reachable if this module is imported outside a vitest run, since the
+    // global setup that mints the name is wired into vitest.config.ts. Mint one
+    // rather than throw, and say so — an unexpected database is easier to explain
+    // than an unexplained crash.
+    const minted = newRunDatabaseName();
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[lane D] AVO_QA_DB is not set, so support/global-setup.ts did not run. ` +
+        `Minting "${minted}" for this process; it will not be dropped automatically.`,
+    );
+    resolvedDb = minted;
+    return resolvedDb;
+  }
+  resolvedDb = EXPLICIT_DB ?? fromSetup!;
+  return resolvedDb;
+}
 
 /** The maintenance database, for CREATE DATABASE and the existence probe. */
 const PG_MAINTENANCE_DB = 'postgres';
+
+/**
+ * HOW LONG A `docker exec psql` IS ALLOWED TO TAKE, AND WHY THERE IS A LIMIT.
+ *
+ * Every database read in this directory is a fresh `docker exec` — hundreds per
+ * run — and `execFileSync` blocks the worker thread with no deadline. When one of
+ * them stalls, vitest cannot interrupt it: the spec simply stops for as long as
+ * Docker takes, and if that outlasts `testTimeout` the report says "Test timed
+ * out in 20000ms" about a spec whose own work takes 900 milliseconds.
+ *
+ * That happened once in eight full `pnpm check` runs, on
+ * `integration.test.ts > KNET is 150 fils flat` — 21 593ms against a median of
+ * 900ms, with every neighbouring spec normal. A stall, not a slow query.
+ *
+ * The deadline does not stop the stall. What it does is make the next one say
+ * what it was: "docker exec did not answer in 10s" names Docker, and lets a
+ * read-only query be attempted a second time. Both beat a mute 20-second gap.
+ *
+ * THE REAL FIX is not this. It is to stop shelling out at all: Postgres is
+ * published on 127.0.0.1:5433, `connectionEnv()` already builds the URL, and a
+ * client library would remove several hundred process spawns per run along with
+ * this entire class. That is a large change to a 1 300-line harness and it is in
+ * the lane report rather than in this commit.
+ */
+const DOCKER_EXEC_TIMEOUT_MS = 10_000;
+
+function isTimeoutKill(err: unknown): boolean {
+  // execFileSync reports a `timeout` kill as SIGTERM on the error object.
+  const e = err as { signal?: string | null; killed?: boolean };
+  return e?.killed === true || e?.signal === 'SIGTERM';
+}
 
 /**
  * Run SQL as the database owner and return stdout.
  *
  * `-v ON_ERROR_STOP=1` matters: without it psql exits 0 after a failed statement
  * and a broken seed reads as a passing suite.
+ *
+ * NOT RETRIED, unlike `scalar()` below. This one carries writes — a seed, a
+ * fixture reset, a PIN counter — and a statement that may or may not have
+ * committed before the client gave up is not something to run twice on a hunch.
  */
 export function psql(sql: string): string {
   try {
     return execFileSync(
       'docker',
-      ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_DB, '-v', 'ON_ERROR_STOP=1'],
-      { input: sql, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+      ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', pgDb(), '-v', 'ON_ERROR_STOP=1'],
+      {
+        input: sql,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: DOCKER_EXEC_TIMEOUT_MS,
+      },
     );
   } catch (err) {
     const e = err as { stderr?: Buffer | string; message?: string };
+    const why = isTimeoutKill(err)
+      ? `docker exec did not answer in ${DOCKER_EXEC_TIMEOUT_MS / 1000}s — the container is ` +
+        'wedged or the daemon is stalling, and this is NOT a SQL failure.\n'
+      : '';
     throw new Error(
       `psql failed against container "${PG_CONTAINER}".\n` +
+        why +
         'Is lane A\'s Postgres up?  pnpm --filter @avo/api run db:up\n' +
         `--- sql ---\n${sql.trim()}\n--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
     );
   }
 }
 
-/** One scalar. Empty string when the query returns no row. */
+/**
+ * One scalar. Empty string when the query returns no row.
+ *
+ * ATTEMPTED TWICE, AND ONLY EVER ON A STALL. A SQL error, a bad column, a
+ * connection refused — every failure that carries a message from psql — is
+ * re-thrown on the first attempt, because retrying those would be hiding a
+ * defect. The second attempt exists for one condition: the process was killed by
+ * the deadline above without saying anything, which is a property of Docker's
+ * scheduling and not of the query. It says so out loud when it happens, so a
+ * suite that starts needing the retry regularly cannot do it quietly.
+ */
 export function scalar(sql: string): string {
-  return execFileSync(
-    'docker',
-    ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_DB, '-tAc', sql],
-    { encoding: 'utf8' },
-  ).trim();
+  return scalarOn(pgDb(), sql);
 }
 
 /**
@@ -405,93 +536,125 @@ export function resetPinState(staffId: string, deviceId?: string): void {
   `);
 }
 
-/** One scalar against a NAMED database. Used before `PG_DB` is known to exist. */
+/** One scalar against a NAMED database. Used before `pgDb()` is known to exist. */
 function scalarOn(database: string, sql: string): string {
-  return execFileSync(
-    'docker',
-    ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', database, '-tAc', sql],
-    { encoding: 'utf8' },
-  ).trim();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return execFileSync(
+        'docker',
+        ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', database, '-tAc', sql],
+        { encoding: 'utf8', timeout: DOCKER_EXEC_TIMEOUT_MS },
+      ).trim();
+    } catch (err) {
+      if (attempt === 1 && isTimeoutKill(err)) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[lane D] a read against "${database}" was killed after ` +
+            `${DOCKER_EXEC_TIMEOUT_MS / 1000}s with no output from psql — docker exec stalled. ` +
+            'Reading once more. If this line is showing up often, the harness needs a Postgres ' +
+            'client rather than several hundred process spawns a run.\n' +
+            `--- sql ---\n${sql.trim()}`,
+        );
+        continue;
+      }
+      const e = err as { stderr?: Buffer | string; message?: string };
+      throw new Error(
+        `A read against "${database}" on container "${PG_CONTAINER}" failed` +
+          (isTimeoutKill(err)
+            ? ` twice, each time killed after ${DOCKER_EXEC_TIMEOUT_MS / 1000}s with nothing on ` +
+              'stderr. That is Docker, not SQL.'
+            : '.') +
+          `\n--- sql ---\n${sql.trim()}\n--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
+      );
+    }
+  }
 }
 
 // ------------------------------------------------------------ the bootstrap --
 
 /**
- * Create lane D's database if it is not there, and leave it migrated and seeded.
+ * Create this run's database if it is not there, and leave it migrated and seeded.
  *
- * Idempotent and cheap: after the first run this is one `SELECT` against
- * `pg_database` and two more against the schema.
+ * Idempotent and cheap after the first call: one `SELECT` against `pg_database`.
  *
- * WHY IT CLONES `avo` INSTEAD OF MIGRATING AND SEEDING FROM EMPTY
- * ---------------------------------------------------------------
- * Because the obvious route does not work, and the reason is a defect worth
- * reporting rather than hiding. `api/src/db/seed.ts` inserts in this order:
- *
- *     salon → branch → service → artist → member → staff_user
- *
- * and `artist.staff_user_id` REFERENCES `staff_user`. AR-003 is wired to ST-002,
- * so against a freshly migrated database the seed dies at the artist insert:
+ * IT MIGRATES AND SEEDS FROM EMPTY — THE `pg_dump` CLONE IS GONE
+ * --------------------------------------------------------------
+ * It used to clone the shared `avo` database with `pg_dump`, because
+ * `api/src/db/seed.ts` inserted `artist` rows referencing `staff_user_id = 'ST-002'`
+ * before it inserted `staff_user`, and so died on the foreign key against any
+ * database that had never been seeded:
  *
  *     ERROR 23503  Key (staff_user_id)=(ST-002) is not present in table "staff_user"
  *
- * It only appears to work on the shared `avo` database because ST-002 was already
- * there from before migration 0007 added the column. So `db:seed` cannot bootstrap
- * a new environment today — a staging database, a CI job, or this one. Lane D does
- * not edit `api/src/db/seed.ts`; the fix is one move of the `staff_user` insert
- * above the `artist` insert, and it is in the lane report.
+ * Lane A has since moved the `staff_user` inserts above the `artist` insert, and
+ * `seed.test.ts` in this directory is the standing proof: it creates an empty
+ * database, migrates it, seeds it and checks the fixtures, on every run.
  *
- * The workaround is a `pg_dump` of the shared database into the new one, which
- * carries the schema, the grants for `avo_app`, and the rows the seed's ordering
- * assumes already exist. Lane A's own seed then runs on top and resets every
- * fixture to its canonical value, so what this ends up with is lane A's seed
- * state and not a snapshot of whatever the shared database had drifted to.
+ * Keeping the clone after that would have been worse than redundant. It meant
+ * lane D's database was built by a path NOTHING ELSE USES — not CI, not a laptop
+ * running `db:up && db:migrate && db:seed`, not staging. A harness that
+ * provisions itself differently from production stops being able to tell you
+ * anything about production, and it does it quietly: the clone would have carried
+ * a hand-made column or a missing grant straight into the suite and the suite
+ * would have gone green on it. The very defect the clone was invented to route
+ * around is the defect it would have hidden next time.
+ *
+ * So: `CREATE DATABASE`, then lane A's own migrator, then lane A's own seed. The
+ * same three steps a new environment gets, run about five seconds slower than a
+ * clone and worth every one of them.
  */
 function ensureDatabase(): void {
+  const db = pgDb();
   const exists =
-    scalarOn(PG_MAINTENANCE_DB, `select 1 from pg_database where datname='${PG_DB}'`) === '1';
+    scalarOn(PG_MAINTENANCE_DB, `select 1 from pg_database where datname='${db}'`) === '1';
   if (exists) return;
 
   // eslint-disable-next-line no-console
-  console.log(`[lane D] creating an isolated database "${PG_DB}" — this happens once.`);
-
-  execFileSync(
-    'docker',
-    [
-      'exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_MAINTENANCE_DB,
-      '-v', 'ON_ERROR_STOP=1',
-      '-c', `CREATE DATABASE ${PG_DB} OWNER ${PG_USER}`,
-      // `avo_app` is a CLUSTER-level role, so it already exists; only the
-      // per-database CONNECT privilege has to be granted for the new database.
-      '-c', `GRANT CONNECT ON DATABASE ${PG_DB} TO avo_app`,
-    ],
-    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
-  );
+  console.log(`[lane D] provisioning "${db}" — migrate and seed from empty, lane A's own scripts.`);
 
   try {
-    // Schema, privileges and rows. `ON_ERROR_STOP=1` on the restore side so a
-    // half-copied database is a loud failure and not a suite that fails strangely
-    // twenty specs later.
     execFileSync(
       'docker',
       [
-        'exec', '-i', PG_CONTAINER, 'sh', '-c',
-        `pg_dump -U ${PG_USER} -d avo | psql -U ${PG_USER} -d ${PG_DB} -q -v ON_ERROR_STOP=1`,
+        'exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_MAINTENANCE_DB,
+        '-v', 'ON_ERROR_STOP=1',
+        '-c', `CREATE DATABASE ${db} OWNER ${PG_USER}`,
+        // `avo_app` is a CLUSTER-level role, so it already exists; only the
+        // per-database CONNECT privilege has to be granted for the new database.
+        '-c', `GRANT CONNECT ON DATABASE ${db} TO avo_app`,
       ],
       { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
     );
   } catch (err) {
     const e = err as { stderr?: Buffer | string; message?: string };
     throw new Error(
-      `Could not clone the shared "avo" database into "${PG_DB}".\n` +
-        'The shared database has to exist and be migrated first:\n' +
-        '  pnpm --filter @avo/api run db:up && pnpm --filter @avo/api run db:migrate\n' +
+      `Could not create "${db}" on container "${PG_CONTAINER}".\n` +
+        'Is lane A\'s Postgres up?  pnpm --filter @avo/api run db:up\n' +
         `--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
     );
   }
 
-  reseed();
+  const migrated = migrateDatabase(db);
+  if (!migrated.ok) {
+    throw new Error(
+      `api/src/db/migrate.ts failed against the empty database "${db}", so no environment can ` +
+        `be provisioned at all — see seed.test.ts, which asserts this same path.\n` +
+        `--- stderr ---\n${migrated.stderr}`,
+    );
+  }
+
+  const seeded = seedDatabase(db);
+  if (!seeded.ok) {
+    throw new Error(
+      `api/src/db/seed.ts failed against the freshly migrated database "${db}". This is the ` +
+        'foreign-key ordering class of defect: the seed passes on any database that has been ' +
+        'seeded before, because the rows its foreign keys need are already there.\n' +
+        `--- stderr ---\n${seeded.stderr}`,
+    );
+  }
+
   // eslint-disable-next-line no-console
-  console.log(`[lane D] "${PG_DB}" is ready — lane A's schema, lane A's seed, nobody else's writes.`);
+  console.log(`[lane D] "${db}" is ready — lane A's schema, lane A's seed, nobody else's writes.`);
 }
 
 /**
@@ -502,7 +665,7 @@ function ensureDatabase(): void {
  * database is that this cannot take another lane's session down.
  */
 export function reseed(): void {
-  runApiDbScript('src/db/seed.ts', PG_DB);
+  runApiDbScript('src/db/seed.ts', pgDb());
 }
 
 /** The two connection strings `api/src/env.ts` wants, pointed at one database. */
@@ -615,6 +778,67 @@ export function scalarOnDatabase(database: string, sql: string): string {
   return scalarOn(database, sql);
 }
 
+// ----------------------------------------------- the run database's lifetime --
+
+/**
+ * Drop the run databases that earlier runs did not get to drop themselves.
+ *
+ * A run that is Ctrl-C'd or SIGKILLed never reaches `global-setup.ts`'s teardown,
+ * so its database survives. One is invisible; a fortnight of them is a Postgres
+ * data directory nobody understands. This sweeps them on the way in.
+ *
+ * TWO GUARDS, AND BOTH ARE LOAD-BEARING. Only names carrying `RUN_DB_PREFIX` are
+ * considered — `avo`, `avo_qa`, and anything a person named deliberately are
+ * untouchable. And only names whose embedded timestamp is older than
+ * `maxAgeSeconds` are dropped, so a suite running RIGHT NOW in another checkout
+ * cannot have its database pulled out from under it. Dropping a live one would be
+ * this whole class of bug all over again, with a worse failure mode.
+ *
+ * Best-effort by design: it runs before anything needs Postgres, and a machine
+ * with no container should still be able to run the mock-backed suites.
+ */
+export function sweepStaleRunDatabases(maxAgeSeconds = 2 * 60 * 60): string[] {
+  let names: string[];
+  try {
+    names = scalarOn(
+      PG_MAINTENANCE_DB,
+      `select datname from pg_database where datname like '${RUN_DB_PREFIX}%'`,
+    )
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return []; // no container, no sweep, no complaint
+  }
+
+  const cutoff = Math.floor(Date.now() / 1000) - maxAgeSeconds;
+  const dropped: string[] = [];
+  for (const name of names) {
+    const stamp = Number(name.slice(RUN_DB_PREFIX.length).split('_')[0]);
+    if (!Number.isFinite(stamp) || stamp >= cutoff) continue;
+    // `dropDatabase` uses WITH (FORCE), which is what makes this work at all: a
+    // leaked API process from a killed run holds its connection pool open
+    // indefinitely, and a plain DROP would fail on it forever.
+    dropDatabase(name);
+    dropped.push(name);
+  }
+  return dropped;
+}
+
+/**
+ * Drop this run's database, if this run is the one that minted it.
+ *
+ * Refuses when `POSTGRES_DB` named the database: that is somebody's long-lived
+ * environment and dropping it would be a considerably worse bug than the one this
+ * file exists to fix.
+ */
+export function dropRunDatabase(): string | undefined {
+  if (!ownsItsDatabase()) return undefined;
+  const db = pgDb();
+  dropDatabase(db);
+  return db;
+}
+
 // ----------------------------------------------------------------- preflight --
 
 function preflight(): void {
@@ -636,25 +860,26 @@ function preflight(): void {
     );
   }
 
-  // Creates and seeds `PG_DB` the first time, then returns immediately.
+  // Creates and seeds `pgDb()` the first time, then returns immediately.
   ensureDatabase();
 
   /**
-   * MIGRATE ON EVERY RUN, NOT ONLY AT CREATION.
+   * MIGRATE ON EVERY FILE, NOT ONLY AT CREATION.
    *
-   * Lane D's database is its own, which is the point — and the cost of that is
-   * that lane A's migrations no longer arrive here by somebody else running
-   * `db:migrate` on the shared one. This suite went red on
+   * Redundant for the normal path now that the database is minted per run and
+   * `ensureDatabase()` migrates it from empty — and kept anyway, because the
+   * `POSTGRES_DB` opt-out points this suite at a long-lived database that nobody
+   * migrates on its behalf. This suite went red on
    * `relation "happy_hour" does not exist` the day lane A landed promotions, which
    * is a stale-schema problem wearing a missing-feature costume.
    *
    * `migrate()` is idempotent and skips applied migrations, so this costs a
-   * `SELECT` against the journal on every run and removes the whole class.
+   * `SELECT` against the journal and removes the whole class.
    */
-  const migrated = migrateDatabase(PG_DB);
+  const migrated = migrateDatabase(pgDb());
   if (!migrated.ok) {
     throw new Error(
-      `Could not bring "${PG_DB}" up to date with lane A's migrations.\n` +
+      `Could not bring "${pgDb()}" up to date with lane A's migrations.\n` +
         `--- stderr ---\n${migrated.stderr}`,
     );
   }
@@ -664,8 +889,8 @@ function preflight(): void {
   );
   if (tables !== '5') {
     throw new Error(
-      `The schema in "${PG_DB}" is not migrated — this suite reads and writes real rows.\n` +
-        `  DATABASE_URL=postgres://avo:avo_dev_password@127.0.0.1:5433/${PG_DB} ` +
+      `The schema in "${pgDb()}" is not migrated — this suite reads and writes real rows.\n` +
+        `  DATABASE_URL=postgres://avo:avo_dev_password@127.0.0.1:5433/${pgDb()} ` +
         'pnpm --filter @avo/api run db:migrate',
     );
   }
@@ -675,7 +900,7 @@ function preflight(): void {
   );
   if (seeded !== '1') {
     throw new Error(
-      `Salon A is not seeded in "${PG_DB}" — ${A_STAFF_FULL} is missing, and salon B copies ` +
+      `Salon A is not seeded in "${pgDb()}" — ${A_STAFF_FULL} is missing, and salon B copies ` +
         'its password hash. `reseed()` in this file runs lane A\'s seed against lane D\'s database.',
     );
   }
@@ -971,11 +1196,21 @@ export async function startTenancyApi(): Promise<void> {
       ...process.env,
       NODE_ENV: 'test',
       PORT: String(port),
-      DATABASE_URL:
-        process.env.DATABASE_URL ?? `postgres://avo:avo_dev_password@127.0.0.1:5433/${PG_DB}`,
-      APP_DATABASE_URL:
-        process.env.APP_DATABASE_URL ??
-        `postgres://avo_app:avo_app_dev_password@127.0.0.1:5433/${PG_DB}`,
+      /**
+       * THE API UNDER TEST TALKS TO THE DATABASE THIS HARNESS TALKS TO. ALWAYS.
+       *
+       * These two used to be `process.env.DATABASE_URL ?? …`, which meant an
+       * ambient `DATABASE_URL` silently won — and CI sets one at job level,
+       * pointing at the shared `avo`. The harness would then read fixtures out of
+       * one database with `psql` while the server it booted wrote them to another,
+       * so every delta assertion in this directory would be comparing two
+       * unrelated wallets. An inherited connection string is not a configuration
+       * knob here, it is a way for the suite to test something it is not looking
+       * at. `POSTGRES_DB` remains the one supported way to redirect this suite,
+       * and it goes through `pgDb()` like everything else.
+       */
+      DATABASE_URL: `postgres://avo:avo_dev_password@127.0.0.1:5433/${pgDb()}`,
+      APP_DATABASE_URL: `postgres://avo_app:avo_app_dev_password@127.0.0.1:5433/${pgDb()}`,
       // Fixed so a restart inside one run does not invalidate a token mid-suite.
       JWT_SECRET: process.env.JWT_SECRET ?? 'tenancy-suite-signing-key-not-a-secret-0123456789',
       // Only so salon A's member can mint a wallet token without her password.
@@ -1042,13 +1277,7 @@ export async function startTenancyApi(): Promise<void> {
    * way out, however it goes out.
    */
   const reap = () => {
-    if (child && child.exitCode === null) {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* already gone */
-      }
-    }
+    if (child && child.exitCode === null) signalApiGroup('SIGKILL');
   };
   process.once('exit', reap);
   process.once('SIGINT', reap);
@@ -1073,12 +1302,37 @@ export async function startTenancyApi(): Promise<void> {
   }
 }
 
+/**
+ * Signal the API's whole process group, not just the process we hold a handle to.
+ *
+ * `apiTsx()` is the tsx CLI, which spawns the real server as a GRANDCHILD.
+ * `child.kill()` reaches the CLI and nothing else, so a CLI that exits without
+ * forwarding the signal leaves the server running — detached, re-parented to
+ * init, and still connected to the database. One was found on this machine two
+ * and a half hours after the run that made it, still polling `receipt_job`.
+ *
+ * `detached: true` above made the child a group leader, which is what makes the
+ * negative pid legal here and what makes it reach the grandchild.
+ */
+function signalApiGroup(signal: NodeJS.Signals): void {
+  if (!child?.pid) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal); // the group is already gone; try the process itself
+    } catch {
+      /* already reaped */
+    }
+  }
+}
+
 export async function stopTenancyApi(): Promise<void> {
   if (!child) return;
-  child.kill('SIGTERM');
+  signalApiGroup('SIGTERM');
   const exited = new Promise<void>((r) => child?.once('exit', () => r()));
   await Promise.race([exited, new Promise((r) => setTimeout(r, 3_000))]);
-  if (child.exitCode === null) child.kill('SIGKILL');
+  if (child.exitCode === null) signalApiGroup('SIGKILL');
   child = undefined;
 }
 
@@ -1149,16 +1403,32 @@ export async function treq<T = any>(
 
   let res: Response;
   try {
+    /**
+     * A DEADLINE, FOR THE SAME REASON THE `docker exec` CALLS HAVE ONE.
+     *
+     * `fetch` waits for ever by default. An API that accepts the connection and
+     * then stops answering — a lock it will never get, a promise nobody settles —
+     * spends the spec's entire 20-second budget in silence and reports as "Test
+     * timed out", which names the test and not the server. Twelve seconds is well
+     * clear of the slowest legitimate request in this directory (the migration
+     * chain, at about four) and comfortably inside `testTimeout`, so the message
+     * below is what the reader sees instead.
+     */
     res = await fetch(`${tenancyBaseUrl()}${path}`, {
       method,
       headers,
+      signal: AbortSignal.timeout(12_000),
       ...(payload === undefined ? {} : { body: payload }),
     });
   } catch (err) {
+    const stalled = (err as Error)?.name === 'TimeoutError';
     // An ECONNREFUSED here is almost always the API having died earlier, not a
     // networking problem. Say which, and say what it printed on the way out.
     throw new Error(
-      `${method} ${path} could not reach the API at ${tenancyBaseUrl()}.\n` +
+      (stalled
+        ? `${method} ${path} was ACCEPTED by the API and then never answered — 12s with the ` +
+          'connection open. That is the server hanging, not the test being slow.\n'
+        : `${method} ${path} could not reach the API at ${tenancyBaseUrl()}.\n`) +
         `${apiPostMortem()}\n` +
         `--- the fetch error ---\n${String((err as Error)?.message ?? err)}`,
     );

@@ -1,16 +1,37 @@
 /**
- * Boots the API the suites run against, then tears it down.
+ * Everything one run of this suite owns, created here and destroyed here.
  *
- * Two modes:
+ * TWO THINGS, AND THEY ARE THE SAME THING TWICE.
  *
- *   default          starts `packages/mock` on a free ephemeral port, so a suite
- *                    run never collides with a `pnpm mock` already on :4000.
- *   E2E_BASE_URL=…   points every suite at an API that is already running. This
- *                    is how lane A's real API gets driven by the same specs:
- *                        E2E_BASE_URL=http://localhost:3000 pnpm --filter @avo/e2e test
+ * 1. THE MOCK API, for the suites that drive `packages/mock`:
  *
- * Either way the suites never assume a server is up; if one cannot be reached
- * the failure names what to run rather than surfacing 40 ECONNREFUSED lines.
+ *      default          starts `packages/mock` on a free ephemeral port, so a run
+ *                       never collides with a `pnpm mock` already on :4000.
+ *      E2E_BASE_URL=…   points those suites at an API that is already running:
+ *                           E2E_BASE_URL=http://localhost:3000 pnpm --filter @avo/e2e test
+ *
+ * 2. THE POSTGRES DATABASE, for the suites that drive lane A's real API through
+ *    `support/tenancy-harness.ts`. Its name is minted HERE, once, and handed to
+ *    the test workers in `AVO_QA_DB`.
+ *
+ * WHY THE NAME IS MINTED AND NOT WRITTEN DOWN
+ * -------------------------------------------
+ * It used to be the constant `avo_qa`, and a constant is a name every other
+ * checkout of this repository resolves to as well. Four `pnpm check` runs on one
+ * unchanged tree reported 7, 4, 1 and 3 failures, and the reason was not this
+ * suite racing itself — `fileParallelism: false` has always ruled that out — it
+ * was this suite racing a COPY of itself in another worktree, both charging the
+ * same seeded member in the same database on the same container. Running two
+ * copies deliberately reproduces it exactly: 7 failures and 4.
+ *
+ * An ephemeral port is how the mock avoids the identical problem, and has been
+ * since the first commit of this file. The database now works the same way. A run
+ * cannot collide with a run whose name it cannot guess — including its own
+ * previous run, whose leaked API process is the version of this bug that travels
+ * through time rather than across worktrees.
+ *
+ * The port is released by the OS; a database is not, so `teardown` drops it and
+ * `setup` sweeps whatever an interrupted run left behind.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -91,7 +112,37 @@ function assertTypesBuilt(): void {
 
 let child: ChildProcess | undefined;
 
+/**
+ * Name this run's database and tell the workers about it.
+ *
+ * Deliberately does NOT create it. Provisioning needs Docker and Postgres, and
+ * the mock-backed suites — money, concurrency, permissions — need neither. A
+ * laptop with no container running must still be able to run those, so creation
+ * stays in `preflight()`, where it happens the first time a suite actually asks
+ * for a real database and where the error message can name `db:up`.
+ *
+ * `POSTGRES_DB` wins if it is set: that is the deliberate opt-out for pointing
+ * this suite at a long-lived database, and such a database is not ours to mint or
+ * to drop.
+ */
+async function nameRunDatabase(): Promise<void> {
+  if (process.env.POSTGRES_DB || process.env.AVO_QA_DB) return;
+  const { newRunDatabaseName, sweepStaleRunDatabases } = await import('./tenancy-harness.js');
+  // globalSetup runs before the test workers are forked, so they inherit this.
+  process.env.AVO_QA_DB = newRunDatabaseName();
+
+  const dropped = sweepStaleRunDatabases();
+  if (dropped.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[lane D] swept ${dropped.length} run database(s) left by interrupted runs: ${dropped.join(', ')}`,
+    );
+  }
+}
+
 export async function setup(): Promise<void> {
+  await nameRunDatabase();
+
   const external = process.env.E2E_BASE_URL;
   if (external) {
     if (!(await healthy(external))) {
@@ -132,9 +183,29 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
+  await dropRunDatabaseIfOurs();
+
   if (!child) return;
   child.kill('SIGTERM');
   const exited = new Promise<void>((r) => child?.once('exit', () => r()));
   await Promise.race([exited, new Promise((r) => setTimeout(r, 3000))]);
   if (child.exitCode === null) child.kill('SIGKILL');
+}
+
+/**
+ * Give the run's database back.
+ *
+ * Runs FIRST in teardown and never throws. A failure to drop is a few megabytes
+ * on a dev container — the sweep in `setup` will get it — and turning that into a
+ * red run would be reporting a housekeeping problem as a test result, which is
+ * the habit this whole change is about breaking.
+ */
+async function dropRunDatabaseIfOurs(): Promise<void> {
+  if (!process.env.AVO_QA_DB) return;
+  try {
+    const { dropRunDatabase } = await import('./tenancy-harness.js');
+    dropRunDatabase();
+  } catch {
+    /* nothing here is worth failing a run over */
+  }
 }
