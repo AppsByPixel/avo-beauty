@@ -398,6 +398,36 @@ async function applyAvailability(
   });
 }
 
+/**
+ * The artist row belonging to this staff account, or a 404 that says why.
+ *
+ * Shared by `GET /artists/me` and `PUT /artists/me/availability` so the two
+ * cannot disagree about who "me" is. Scoped to the principal's salon as well as
+ * to the staff id: `artist.staff_user_id` is unique on its own, but reading a
+ * salon id off the token and then not using it is how a cross-salon lookup gets
+ * introduced later by someone tidying the query.
+ *
+ * A staff account with no artist row — a receptionist, a shared scanner
+ * terminal — is not bookable and has no week. 404 rather than 403: nothing was
+ * refused on authority, there is simply no calendar here. Both routes give the
+ * same sentence, because from the tablet they are the same situation.
+ */
+async function requireOwnArtist(p: StaffPrincipal): Promise<typeof artist.$inferSelect> {
+  const rows = await db
+    .select()
+    .from(artist)
+    .where(and(eq(artist.staffUserId, p.id), eq(artist.salonId, p.salonId)))
+    .limit(1);
+  const target = rows[0];
+  if (!target) {
+    throw notFound(
+      'not_an_artist',
+      'This account is not set up as a bookable artist, so it has no hours to set.',
+    );
+  }
+  return target;
+}
+
 export async function registerArtistRoutes(app: FastifyInstance): Promise<void> {
   // ------------------------------------ GET /artists/{id}/availability?date= --
   /**
@@ -466,6 +496,41 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
     return reply.send({ items: rows.map(serialiseArtist), nextCursor: null });
   });
 
+  // ------------------------------------------------------- GET /artists/me --
+  /**
+   * THE READ THAT MAKES `PUT /artists/me/availability` USABLE.
+   *
+   * Until this existed the scanner could WRITE an artist's week and could not
+   * read it back. All three candidate routes failed her, each for a different
+   * and correct reason: this path did not exist, `/artists/me/availability`
+   * fell through to the `:id` handler and 404'd on an artist called "me", and
+   * `GET /salons/{id}/artists` is `perms.team` — which is exactly the
+   * permission an artist account is supposed to lack.
+   *
+   * So the scanner's My schedule opened on the manual/Google toggle and got its
+   * row from the response of the PUT that answered it. Lane B declined to probe
+   * with a speculative `{availabilitySource:'manual'}` on mount, and was right
+   * to: that is a write dressed as a read, and it silently switches a
+   * Google-synced artist off her calendar. A screen with no read is a screen
+   * that eventually invents one.
+   *
+   * Scanner scope, NO PERMISSION, same authority model as `GET /staff/me` and
+   * as the PUT directly below: the `me` in the path is self-scoping by
+   * construction, so there is nothing left for a permission to decide. Gating
+   * "may I see my own working hours" on `perms.team` would mean every artist
+   * who can read her own week can also read — and edit — everyone else's.
+   *
+   * Returns the full `serialiseArtist` shape, deliberately, and not a narrowed
+   * one. It is HER row: `windows` is the week the screen renders,
+   * `availabilitySource` and `googleConnected` are what the source toggle is a
+   * picture of, and `slotMinutes` is the grid. A narrower response would send
+   * the screen straight back to inferring them from a write.
+   */
+  app.get('/artists/me', async (req, reply) => {
+    const p = requireScannerScope(req);
+    return reply.send(serialiseArtist(await requireOwnArtist(p)));
+  });
+
   // ------------------------------------------ PUT /artists/me/availability --
   /**
    * The artist's own hours, from the scanner.
@@ -482,25 +547,7 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
    */
   app.put('/artists/me/availability', async (req, reply) => {
     const p = requireScannerScope(req);
-
-    const rows = await db
-      .select()
-      .from(artist)
-      .where(and(eq(artist.staffUserId, p.id), eq(artist.salonId, p.salonId)))
-      .limit(1);
-    const target = rows[0];
-    /**
-     * A staff account with no artist row — a receptionist, a scanner terminal —
-     * is not bookable and has no week to set. 404 rather than 403: nothing was
-     * refused on authority, there is simply no calendar here.
-     */
-    if (!target) {
-      throw notFound(
-        'not_an_artist',
-        'This account is not set up as a bookable artist, so it has no hours to set.',
-      );
-    }
-
+    const target = await requireOwnArtist(p);
     return reply.send(await applyAvailability(target, p, req, 'scanner'));
   });
 
