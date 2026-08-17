@@ -92,7 +92,9 @@ export async function resolveBranch(
 ): Promise<ResolvedBranch> {
   if (supplied) {
     const owned = await exec.execute(
-      sql`SELECT id FROM branch WHERE id = ${supplied} AND salon_id = ${salonId} LIMIT 1`,
+      sql`SELECT id FROM branch
+           WHERE id = ${supplied} AND salon_id = ${salonId} AND closed_at IS NULL
+           LIMIT 1`,
     );
     const row = (owned as unknown as Array<{ id: string }>)[0];
     if (!row) {
@@ -106,12 +108,19 @@ export async function resolveBranch(
   // LIMIT 2, not 1: the second row is the entire question. One round trip
   // answers both "which branch do we attribute to" and "is there more than one
   // candidate", and those cannot disagree the way two separate reads could.
+  //
+  // `closed_at IS NULL` is what stops a closed branch collecting new money. It
+  // also changes the ESTABLISHED answer for the better: a two-branch salon that
+  // closes one is now a one-branch salon, so its boost applies again instead of
+  // every charge being marked assumed for ever. See db/schema/salon.ts.
   const rows = (await exec.execute(
-    sql`SELECT id FROM branch WHERE salon_id = ${salonId} ORDER BY id LIMIT 2`,
+    sql`SELECT id FROM branch
+         WHERE salon_id = ${salonId} AND closed_at IS NULL
+         ORDER BY id LIMIT 2`,
   )) as unknown as Array<{ id: string }>;
 
   const first = rows[0];
-  if (!first) throw notFound('no_branch', 'That salon has no branch.');
+  if (!first) throw notFound('no_branch', 'That salon has no open branch.');
 
   // Exactly one branch: unambiguous, so it is established and its boost applies.
   // More than one: `first` is alphabetical order talking, and it is marked as

@@ -18,7 +18,7 @@
  * charge time, so a stale banner cannot cause a wrong charge.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
@@ -41,9 +41,22 @@ function happyHourId(): string {
   return `HH-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }
 
-/** Every branch of this salon, plus the sentinel the wire uses for "all". */
+/**
+ * Every OPEN branch of this salon. `branchId: 'all'` is the wire's sentinel and
+ * is handled by the caller.
+ *
+ * Closed branches are excluded so a new happy hour or a boost cannot be scoped
+ * to a location that takes no money — `resolveBranch` will never attribute a
+ * charge there, so such a window would be silently dead. The `PUT …/boosts`
+ * caller relies on this in a second way: it resets every branch the body omits,
+ * and a closed branch has no business being reset to a neutral boost it can
+ * never spend.
+ */
 async function branchIdsOf(salonId: string): Promise<Set<string>> {
-  const rows = await db.select({ id: branch.id }).from(branch).where(eq(branch.salonId, salonId));
+  const rows = await db
+    .select({ id: branch.id })
+    .from(branch)
+    .where(and(eq(branch.salonId, salonId), isNull(branch.closedAt)));
   return new Set(rows.map((r) => r.id));
 }
 

@@ -113,6 +113,13 @@
       "when": 1786940500000,
       "tag": "0015_idempotent_replay_is_byte_for_byte",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786940600000,
+      "tag": "0016_branch_close",
+      "breakpoints": true
     }
   ]
 }
