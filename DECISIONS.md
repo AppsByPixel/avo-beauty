@@ -37,6 +37,38 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Booking landed, and Lane A found a live money bug in a path we had already shipped
+
+**`POST /voids` was under-refunding a deposit-funded charge.** It refunded
+`abs(amountFils)` off the charge row — which is *net of the deposit already applied*. So the
+design's own worked example (8.000 service, 5.000 deposit held, 3.000 charged) handed the
+customer back **3.000 of the 8.000 she had paid**.
+
+The fix reads the `deposit_held` debit off the ledger rather than recomputing it, so an
+already-returned remainder cannot be refunded twice, and moves the booking to `cancelled`.
+
+Worth noting how it was found: not by a test, but by building the path that makes deposits
+reachable. `heldDepositFils` had been hardcoded to `0` since the scanner shipped, so the
+void code had never once run against a real hold. **A branch that cannot execute cannot be
+wrong, and cannot be tested either.**
+
+Two more, same slice:
+- `promo_bonus_fils` shipped as `integer` on two tables while both Drizzle schemas declared
+  `filsColumn()`. Not an overflow risk at these amounts — the point is that one exception
+  stops non-negotiable #1 being *checkable*. Verified: 0 non-bigint money columns.
+- Idempotent replay was byte-identical **by luck**. `response_body` was `jsonb`, which
+  re-serialises in its own key order; adding two fields to the void response broke Lane D's
+  `replay.raw === first.raw`. Now `json`. Reordering fields would have broken it again,
+  silently.
+
+### Double-booking is an exclusion constraint, not a unique index
+
+Lane A's call and it is right. A unique index on (artist, start) accepts a 45-minute
+booking at 16:00 *and* a 30-minute one at 16:15 — different keys, overlapping chairs.
+`EXCLUDE USING gist` over the real `tstzrange` refuses it in the database, where two
+concurrent requests cannot both win.
+
+
 ### `pnpm check` is flaky, so every "green" I reported from it was partly luck
 
 **What.** Four consecutive runs of the same tree gave 7, 4, 1 and 3 failures. Standalone,
