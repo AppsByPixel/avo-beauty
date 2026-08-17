@@ -429,35 +429,86 @@ export function pgDb(): string {
 const PG_MAINTENANCE_DB = 'postgres';
 
 /**
+ * HOW LONG A `docker exec psql` IS ALLOWED TO TAKE, AND WHY THERE IS A LIMIT.
+ *
+ * Every database read in this directory is a fresh `docker exec` — hundreds per
+ * run — and `execFileSync` blocks the worker thread with no deadline. When one of
+ * them stalls, vitest cannot interrupt it: the spec simply stops for as long as
+ * Docker takes, and if that outlasts `testTimeout` the report says "Test timed
+ * out in 20000ms" about a spec whose own work takes 900 milliseconds.
+ *
+ * That happened once in eight full `pnpm check` runs, on
+ * `integration.test.ts > KNET is 150 fils flat` — 21 593ms against a median of
+ * 900ms, with every neighbouring spec normal. A stall, not a slow query.
+ *
+ * The deadline does not stop the stall. What it does is make the next one say
+ * what it was: "docker exec did not answer in 10s" names Docker, and lets a
+ * read-only query be attempted a second time. Both beat a mute 20-second gap.
+ *
+ * THE REAL FIX is not this. It is to stop shelling out at all: Postgres is
+ * published on 127.0.0.1:5433, `connectionEnv()` already builds the URL, and a
+ * client library would remove several hundred process spawns per run along with
+ * this entire class. That is a large change to a 1 300-line harness and it is in
+ * the lane report rather than in this commit.
+ */
+const DOCKER_EXEC_TIMEOUT_MS = 10_000;
+
+function isTimeoutKill(err: unknown): boolean {
+  // execFileSync reports a `timeout` kill as SIGTERM on the error object.
+  const e = err as { signal?: string | null; killed?: boolean };
+  return e?.killed === true || e?.signal === 'SIGTERM';
+}
+
+/**
  * Run SQL as the database owner and return stdout.
  *
  * `-v ON_ERROR_STOP=1` matters: without it psql exits 0 after a failed statement
  * and a broken seed reads as a passing suite.
+ *
+ * NOT RETRIED, unlike `scalar()` below. This one carries writes — a seed, a
+ * fixture reset, a PIN counter — and a statement that may or may not have
+ * committed before the client gave up is not something to run twice on a hunch.
  */
 export function psql(sql: string): string {
   try {
     return execFileSync(
       'docker',
       ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', pgDb(), '-v', 'ON_ERROR_STOP=1'],
-      { input: sql, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+      {
+        input: sql,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: DOCKER_EXEC_TIMEOUT_MS,
+      },
     );
   } catch (err) {
     const e = err as { stderr?: Buffer | string; message?: string };
+    const why = isTimeoutKill(err)
+      ? `docker exec did not answer in ${DOCKER_EXEC_TIMEOUT_MS / 1000}s — the container is ` +
+        'wedged or the daemon is stalling, and this is NOT a SQL failure.\n'
+      : '';
     throw new Error(
       `psql failed against container "${PG_CONTAINER}".\n` +
+        why +
         'Is lane A\'s Postgres up?  pnpm --filter @avo/api run db:up\n' +
         `--- sql ---\n${sql.trim()}\n--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
     );
   }
 }
 
-/** One scalar. Empty string when the query returns no row. */
+/**
+ * One scalar. Empty string when the query returns no row.
+ *
+ * ATTEMPTED TWICE, AND ONLY EVER ON A STALL. A SQL error, a bad column, a
+ * connection refused — every failure that carries a message from psql — is
+ * re-thrown on the first attempt, because retrying those would be hiding a
+ * defect. The second attempt exists for one condition: the process was killed by
+ * the deadline above without saying anything, which is a property of Docker's
+ * scheduling and not of the query. It says so out loud when it happens, so a
+ * suite that starts needing the retry regularly cannot do it quietly.
+ */
 export function scalar(sql: string): string {
-  return execFileSync(
-    'docker',
-    ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', pgDb(), '-tAc', sql],
-    { encoding: 'utf8' },
-  ).trim();
+  return scalarOn(pgDb(), sql);
 }
 
 /**
@@ -487,11 +538,36 @@ export function resetPinState(staffId: string, deviceId?: string): void {
 
 /** One scalar against a NAMED database. Used before `pgDb()` is known to exist. */
 function scalarOn(database: string, sql: string): string {
-  return execFileSync(
-    'docker',
-    ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', database, '-tAc', sql],
-    { encoding: 'utf8' },
-  ).trim();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return execFileSync(
+        'docker',
+        ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', database, '-tAc', sql],
+        { encoding: 'utf8', timeout: DOCKER_EXEC_TIMEOUT_MS },
+      ).trim();
+    } catch (err) {
+      if (attempt === 1 && isTimeoutKill(err)) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[lane D] a read against "${database}" was killed after ` +
+            `${DOCKER_EXEC_TIMEOUT_MS / 1000}s with no output from psql — docker exec stalled. ` +
+            'Reading once more. If this line is showing up often, the harness needs a Postgres ' +
+            'client rather than several hundred process spawns a run.\n' +
+            `--- sql ---\n${sql.trim()}`,
+        );
+        continue;
+      }
+      const e = err as { stderr?: Buffer | string; message?: string };
+      throw new Error(
+        `A read against "${database}" on container "${PG_CONTAINER}" failed` +
+          (isTimeoutKill(err)
+            ? ` twice, each time killed after ${DOCKER_EXEC_TIMEOUT_MS / 1000}s with nothing on ` +
+              'stderr. That is Docker, not SQL.'
+            : '.') +
+          `\n--- sql ---\n${sql.trim()}\n--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
+      );
+    }
+  }
 }
 
 // ------------------------------------------------------------ the bootstrap --
@@ -1327,16 +1403,32 @@ export async function treq<T = any>(
 
   let res: Response;
   try {
+    /**
+     * A DEADLINE, FOR THE SAME REASON THE `docker exec` CALLS HAVE ONE.
+     *
+     * `fetch` waits for ever by default. An API that accepts the connection and
+     * then stops answering — a lock it will never get, a promise nobody settles —
+     * spends the spec's entire 20-second budget in silence and reports as "Test
+     * timed out", which names the test and not the server. Twelve seconds is well
+     * clear of the slowest legitimate request in this directory (the migration
+     * chain, at about four) and comfortably inside `testTimeout`, so the message
+     * below is what the reader sees instead.
+     */
     res = await fetch(`${tenancyBaseUrl()}${path}`, {
       method,
       headers,
+      signal: AbortSignal.timeout(12_000),
       ...(payload === undefined ? {} : { body: payload }),
     });
   } catch (err) {
+    const stalled = (err as Error)?.name === 'TimeoutError';
     // An ECONNREFUSED here is almost always the API having died earlier, not a
     // networking problem. Say which, and say what it printed on the way out.
     throw new Error(
-      `${method} ${path} could not reach the API at ${tenancyBaseUrl()}.\n` +
+      (stalled
+        ? `${method} ${path} was ACCEPTED by the API and then never answered — 12s with the ` +
+          'connection open. That is the server hanging, not the test being slow.\n'
+        : `${method} ${path} could not reach the API at ${tenancyBaseUrl()}.\n`) +
         `${apiPostMortem()}\n` +
         `--- the fetch error ---\n${String((err as Error)?.message ?? err)}`,
     );
