@@ -36,9 +36,16 @@ export function getPromotions(salonId: string, signal?: AbortSignal): Promise<Pr
 /**
  * The QR token. Non-negotiable #2: server-minted, single-use, 45s life. The
  * client asks for one and counts down to `expiresAt` — it never mints, extends
- * or reuses a token, and the countdown is cosmetic. The mock also returns a
- * convenience `uri`; we ignore it and build the string with walletTokenUri() so
- * the client is not depending on a field the real API need not send.
+ * or reuses a token, and the countdown is cosmetic.
+ *
+ * `uri` — the `avo://pay?m=…&t=…` string the QR encodes — is the server's too,
+ * and PaymentCode renders it verbatim. This comment used to say the field was
+ * ignored "so the client is not depending on a field the real API need not
+ * send". That reasoning was wrong twice over: both the mock and
+ * api/src/routes/members.ts have always sent it, and the contract was silently
+ * stripping it, so the claim could not be checked. Re-deriving the format is
+ * not independence from the server — it is a second opinion about how a bearer
+ * credential is written, held by the half of the system that does not mint it.
  */
 export function getWalletToken(signal?: AbortSignal): Promise<WalletToken> {
   return getJson('/members/me/wallet-token', WalletTokenSchema, signal);
