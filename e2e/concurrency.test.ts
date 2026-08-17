@@ -26,12 +26,8 @@ import {
   api,
   idempotencyKey,
   mintWalletToken,
-  targetKind,
 } from './support/api.js';
-import { knownBug, precondition } from './support/known-bug.js';
-
-/** Which server. The promotions gap below is real on one and absent on the other. */
-const TARGET = await targetKind();
+import { precondition } from './support/known-bug.js';
 
 interface ChargeResult {
   transaction: { id: string; amountFils: number };
@@ -334,32 +330,36 @@ describe('a charge crossing a happy-hour boundary', () => {
   });
 
   /**
-   * The gap the assertion above used to hide, and it exists only on the real API:
-   * `packages/mock` publishes two happy hours from its fixture, lane A's API
-   * returns a hardcoded `happy: []` because there is no promotion table in the
-   * schema at all. So the spec is registered as the true statement about the
-   * server it is driving — a passing assertion against the mock, a standing
-   * defect report against the API. It flips by itself the day lane A persists
-   * promotions, and the loop above then starts actually looping.
+   * PROMOTED, AND THE TWO-WAY REGISTRATION COLLAPSED WITH IT.
+   *
+   * This was a spec registered BY TARGET, which is a shape worth explaining
+   * before it is deleted. `packages/mock` had always published two happy hours
+   * from its fixture; lane A's API returned a hardcoded `happy: []`, because
+   * there was no promotion table in the schema at all. Neither `knownBug()` nor
+   * `it()` was a true statement about both servers — a `knownBug` would have
+   * reported "this appears to be FIXED" on every single run against the mock —
+   * so the file asked `targetKind()` which server it was driving and registered
+   * the true one.
+   *
+   * Lane A has since landed the promotion tables and a real read, and the two
+   * answers converged. It is one plain `it()` again, asserted against both, and
+   * the loop above finally loops on the real API as well.
+   *
+   * The `targetKind()` probe goes with it. It was introduced for this one spec
+   * and nothing else in this file consulted it, so leaving it behind would leave
+   * a mechanism with no remaining reason — and the next person to need it would
+   * find it already imported and assume it was load-bearing. `support/api.ts`
+   * still exports it, with the reasoning intact, for the next divergence.
    */
-  const fixtureSalonPublishesAHappyHour = async () => {
+  it('the fixture salon publishes at least one happy hour to evaluate', async () => {
     const res = await api<{ happy: unknown[] }>('GET', `/v1/salons/${SALON_ID}/promotions`);
     precondition(res.status === 200, `GET promotions answered ${res.status}`);
     expect(
       res.body.happy.length,
-      'LANE A OWES: a promotion table and a real read. Until then every happy-hour ' +
-        'boundary spec in this file is untestable, because there is no happy hour to cross.',
+      'the fixture salon publishes no happy hour, so every happy-hour boundary spec in this ' +
+        'file is untestable — there is no window to cross.',
     ).toBeGreaterThan(0);
-  };
-
-  if (TARGET === 'api') {
-    knownBug(
-      'the promotion set is served but never stored — `happy` is a hardcoded empty array',
-      fixtureSalonPublishesAHappyHour,
-    );
-  } else {
-    it('the fixture salon publishes at least one happy hour to evaluate', fixtureSalonPublishesAHappyHour);
-  }
+  });
 
   /**
    * THE SEVEN "LANE A OWES" TODOS THAT LIVED HERE HAVE MOVED TO

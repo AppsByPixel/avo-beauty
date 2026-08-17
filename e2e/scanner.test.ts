@@ -80,6 +80,7 @@ import {
   psql,
   resetPinState,
   scalar,
+  signInDashboard,
   signInMember,
   signInScanner,
   startTenancyApi,
@@ -936,7 +937,596 @@ describe('POST /voids', () => {
 });
 
 // ===========================================================================
-// THE GAP LEDGER — the seven things the API owes the scanner
+// PROMOTED OUT OF THE GAP LEDGER — three of the seven, now built
+// ===========================================================================
+
+/**
+ * These were `knownBug()`s in the ledger below. Lane A landed all three, the
+ * helper flipped each to "this appears to be FIXED", and they are plain `it()`s
+ * here so the behaviour stays locked in.
+ *
+ * They are moved OUT of the gap ledger rather than left in it with the wrapper
+ * swapped, because a ledger of gaps that is mostly not gaps stops being read as
+ * one. What is still owed is still down there, and it is now four things.
+ */
+
+// ------------------------------------------------------------------ 1 --
+/**
+ * MANUAL LOOKUP — the path for the customer whose phone is flat.
+ *
+ * The gap entry asserted only that the endpoint exists and is salon-scoped, and
+ * left the other three controls as `it.todo`s reading "cannot be written until
+ * the endpoint exists". It exists. They are written.
+ *
+ * THE CONTROLS ARE THE FEATURE, not hardening added around it. A staff-facing
+ * search box with none of them is a customer-list export with a text field on
+ * the front, and the audit row is not telemetry — design/AVO Staff Scanner.dc.html
+ * promises the CUSTOMER that lookups are logged.
+ *
+ * The four figures below are written out as literals from
+ * `api/src/services/memberSearch.ts` rather than imported from it. A spec that
+ * imported `MEMBER_SEARCH_MAX_PER_WINDOW` would pass at any value the
+ * implementation happened to hold, including 30000.
+ */
+const SEARCH_MIN_QUERY = 2;
+const SEARCH_MAX_PER_WINDOW = 30;
+const SEARCH_WINDOW_MINUTES = 5;
+const LOOKUP_ACTION = 'Customer looked up';
+
+interface MemberSearchItem {
+  id: string;
+  salonId: string;
+  name: string;
+  phoneLast4: string;
+  tier: string | null;
+}
+
+const search = (token: string, q: string) =>
+  treq<{ items: MemberSearchItem[]; error?: string; message?: string }>(
+    'GET',
+    `/members?q=${encodeURIComponent(q)}`,
+    { token },
+  );
+
+/**
+ * How many lookups this session has been charged for, read from the LOG.
+ *
+ * Deliberately the same rows the limiter counts. If lane A ever adds a separate
+ * counter table, the specs below start disagreeing with it, which is the whole
+ * point — see "the counter is the log" at the end of this block.
+ */
+const lookupsLogged = (sessionId: string): number =>
+  Number(
+    scalar(
+      `select count(*) from audit_log
+        where action='${LOOKUP_ACTION}'
+          and metadata ->> 'sessionId' = '${sessionId}'`,
+    ),
+  );
+
+/**
+ * The `sid` claim out of an access token.
+ *
+ * Reading the token rather than guessing at the newest audit row: the rate limit
+ * is scoped per SESSION, so a spec about it has to be able to name the session it
+ * is talking about. The claim is in the token the client already holds — this
+ * decodes, it does not verify, and it asserts nothing about the signature.
+ */
+function sessionIdOf(accessToken: string): string {
+  const payload = accessToken.split('.')[1];
+  if (!payload) throw new Error('that access token has no payload segment');
+  const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+    sid?: string;
+  };
+  if (!claims.sid) throw new Error('that access token carries no `sid` claim');
+  return claims.sid;
+}
+
+describe('GET /members?q= — the manual lookup, and the four controls that keep it one', () => {
+  it('finds a customer by name', async () => {
+    const res = await search(scanner, 'Fatima');
+
+    expect(res.status, `GET /members?q= answered ${res.status} ${res.raw}`).toBe(200);
+    expect(Array.isArray(res.body.items)).toBe(true);
+    expect(res.body.items.map((m) => m.id)).toContain(B_MEMBER);
+  });
+
+  it('and by the digits of her number, however the number was stored', async () => {
+    // The staff member reads four digits off a loyalty card; she does not know
+    // whether the row holds `+96599555001` or `0099655...`.
+    const last4 = B_MEMBER_PHONE.slice(-4);
+    const res = await search(scanner, last4);
+
+    expect(res.status, res.raw).toBe(200);
+    expect(res.body.items.map((m) => m.id)).toContain(B_MEMBER);
+  });
+
+  it('SALON SCOPED — salon A\'s customers are not in salon B\'s search results', async () => {
+    // Dana, salon A. Without the scope one salon's front desk searches every
+    // customer AVO has, which is the tenancy boundary this suite has already
+    // watched leak once.
+    const res = await search(scanner, 'Dana');
+
+    expect(res.status, res.raw).toBe(200);
+    expect(res.body.items.map((m) => m.id)).not.toContain(A_MEMBER);
+    expect(
+      res.body.items.every((m) => m.salonId === SALON_B),
+      `a foreign salon's customer came back: ${res.raw}`,
+    ).toBe(true);
+  });
+
+  it('returns what disambiguates a person and nothing more — no balance, no whole number', async () => {
+    const res = await search(scanner, 'Fatima');
+    precondition(res.status === 200, res.raw);
+    const hit = res.body.items.find((m) => m.id === B_MEMBER);
+    precondition(hit !== undefined, 'salon B\'s own customer is not in her own salon\'s results');
+
+    // Last four digits only. The list is a picker, and a full contact number is
+    // not what picking needs.
+    expect(hit!.phoneLast4).toBe(B_MEMBER_PHONE.slice(-4));
+    expect(hit!.phoneLast4.length).toBe(4);
+    // A balance in a list is a balance readable over a shoulder for every
+    // customer whose name shares a prefix.
+    expect(hit!).not.toHaveProperty('balanceFils');
+    expect(hit!).not.toHaveProperty('email');
+    expect(res.raw).not.toContain(B_MEMBER_PHONE);
+  });
+
+  it(`MINIMUM LENGTH — a ${SEARCH_MIN_QUERY - 1}-character query is refused, because it returns the salon`, async () => {
+    const res = await search(scanner, 'F');
+
+    expect(res.status, `a one-character query answered ${res.status} ${res.raw}`).toBe(400);
+    expect(res.body.error).toBe('query_too_short');
+    expect(res.body).not.toHaveProperty('items');
+  });
+
+  it('and an empty or whitespace query is the same refusal, not an unfiltered list', async () => {
+    for (const q of ['', '   ']) {
+      const res = await search(scanner, q);
+      expect(res.status, `q=${JSON.stringify(q)} answered ${res.status} ${res.raw}`).toBe(400);
+      expect(res.body.error).toBe('query_too_short');
+    }
+  });
+
+  it('a LIKE metacharacter is a literal, not a wildcard — `%%` matches nobody', async () => {
+    /**
+     * THE HOLE THE LENGTH LIMIT DOES NOT COVER, which is why it is asserted
+     * separately from it.
+     *
+     * `%%` is two characters, so it clears the minimum. Interpolated into a LIKE
+     * pattern unescaped it becomes `%%%%` and matches every member in the salon —
+     * the exact customer-list export the minimum was meant to prevent, reached by
+     * a query that satisfies it. `_` is the same hole one character wide.
+     */
+    for (const q of ['%%', '%_', '__']) {
+      const res = await search(scanner, q);
+      expect(res.status, `q=${q} answered ${res.status} ${res.raw}`).toBe(200);
+      expect(
+        res.body.items,
+        `q=${q} was treated as a wildcard and returned the salon's customer book: ${res.raw}`,
+      ).toEqual([]);
+    }
+  });
+
+  it('AUDIT ROW — one per lookup, naming the staff member and what she searched for', async () => {
+    // A session of its own, so the count is this spec's and not whatever ran
+    // before it in this file.
+    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    const sid = sessionIdOf(token);
+    precondition(lookupsLogged(sid) === 0, 'a brand-new session already has lookups against it');
+
+    const res = await search(token, 'Fatima');
+    precondition(res.status === 200, res.raw);
+
+    expect(lookupsLogged(sid), 'the lookup was served and never logged').toBe(1);
+
+    const row = scalar(
+      `select kind || '|' || actor_id || '|' || source || '|' || subject_type
+              || '|' || (metadata ->> 'query')
+         from audit_log
+        where action='${LOOKUP_ACTION}' and metadata ->> 'sessionId' = '${sid}'`,
+    );
+    expect(row).toBe(`access|${B_STAFF}|scanner|member_search|Fatima`);
+  });
+
+  it('logs a lookup that found nobody too — "who did she search for" is the question', async () => {
+    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    const sid = sessionIdOf(token);
+
+    const res = await search(token, 'Zzzznobody');
+    precondition(res.status === 200, res.raw);
+    expect(res.body.items).toEqual([]);
+
+    expect(lookupsLogged(sid), 'a search that matched nothing was not logged').toBe(1);
+  });
+
+  it('records the QUERY and the result COUNT, never the customers who matched', async () => {
+    // The alternative builds a second customer list inside an append-only,
+    // seven-year log — every name a staff member ever searched, alongside every
+    // member id it resolved to.
+    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    const sid = sessionIdOf(token);
+
+    const res = await search(token, 'Fatima');
+    precondition(res.status === 200 && res.body.items.length > 0, res.raw);
+
+    const metadata = scalar(
+      `select metadata::text from audit_log
+        where action='${LOOKUP_ACTION}' and metadata ->> 'sessionId' = '${sid}'`,
+    );
+    expect(JSON.parse(metadata).results).toBe(res.body.items.length);
+    expect(
+      metadata,
+      `the matched customers were copied into the audit log: ${metadata}`,
+    ).not.toContain(B_MEMBER);
+  });
+
+  it(`RATE LIMITED — ${SEARCH_MAX_PER_WINDOW} lookups per ${SEARCH_WINDOW_MINUTES} minutes per session, and the ${SEARCH_MAX_PER_WINDOW + 1}st is refused`, async () => {
+    /**
+     * ITS OWN SESSION, AND THAT IS WHAT MAKES THIS RE-RUNNABLE.
+     *
+     * The budget is per session and `audit_log` is append-only, so a run cannot
+     * clear the rows it wrote. Burning the shared `scanner` session's budget would
+     * therefore 429 every later lookup in this file for five minutes, and a second
+     * run inside the window would start already throttled. A session minted here
+     * begins at zero every time, whatever the previous run left behind — the same
+     * property that stops a stolen token inheriting a staff member's leftovers.
+     */
+    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    const sid = sessionIdOf(token);
+    precondition(lookupsLogged(sid) === 0, 'a brand-new session already has lookups against it');
+
+    for (let i = 0; i < SEARCH_MAX_PER_WINDOW; i += 1) {
+      const res = await search(token, `probe${i}`);
+      expect(res.status, `lookup ${i + 1} of ${SEARCH_MAX_PER_WINDOW} answered ${res.raw}`).toBe(200);
+    }
+
+    const refused = await search(token, 'Fatima');
+    expect(
+      refused.status,
+      `lookup ${SEARCH_MAX_PER_WINDOW + 1} answered ${refused.status} ${refused.raw}`,
+    ).toBe(429);
+    expect(refused.body.error).toBe('lookup_rate_limited');
+    // Nothing came back with the refusal — a throttled caller reads no customers.
+    expect(refused.body).not.toHaveProperty('items');
+
+    // And the refusal did not inflate the count it is judged on, or a client
+    // retrying in a loop would extend its own lockout indefinitely.
+    expect(
+      lookupsLogged(sid),
+      'the throttled lookup wrote an audit row, so a retry loop lengthens its own punishment',
+    ).toBe(SEARCH_MAX_PER_WINDOW);
+
+    // Per SESSION, asserted rather than assumed: the shared session is untouched
+    // and can still search. Without this the spec above is equally consistent with
+    // a global limit that has just taken the whole salon offline.
+    const other = await search(scanner, 'Fatima');
+    expect(
+      other.status,
+      `one session's exhausted budget refused another session: ${other.raw}`,
+    ).toBe(200);
+  }, 60_000);
+
+  it('THE COUNTER IS THE LOG — a row appended by hand consumes budget', async () => {
+    /**
+     * WHY THIS IS WORTH A SPEC OF ITS OWN.
+     *
+     * Lane A made the audit log itself the rate-limit counter, on the grounds
+     * that the limit must count the thing the promise is about. That is a real
+     * design decision with a real consequence — the two can never drift, so "how
+     * many times did she search today" has exactly one answer — and it is the
+     * kind of decision a later refactor undoes by adding a tidy `lookup_counter`
+     * table without noticing what it cost.
+     *
+     * This is the assertion that notices, and it is written the way it is because
+     * the obvious version is impossible. Deleting the rows and watching the budget
+     * return would be the cleaner demonstration; `audit_log` refuses a DELETE from
+     * EVERYONE, the database owner included — see the note on the paired spec
+     * below. So the experiment runs the other way: a session is taken to one
+     * lookup short of its limit, ONE row is appended by hand, and the next real
+     * lookup is refused.
+     *
+     * That is only explicable if the injected row was counted. The spec above
+     * establishes the control — thirty real lookups succeed and the thirty-first
+     * does not — so twenty-nine real plus one appended cannot be an off-by-one.
+     * Against a separate counter table the injected row changes nothing and the
+     * thirtieth lookup is served.
+     */
+    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    const sid = sessionIdOf(token);
+    precondition(lookupsLogged(sid) === 0, 'a brand-new session already has lookups against it');
+
+    for (let i = 0; i < SEARCH_MAX_PER_WINDOW - 1; i += 1) {
+      const res = await search(token, `count${i}`);
+      precondition(res.status === 200, `lookup ${i + 1} answered ${res.raw}`);
+    }
+    precondition(
+      lookupsLogged(sid) === SEARCH_MAX_PER_WINDOW - 1,
+      `the log holds ${lookupsLogged(sid)} rows after ${SEARCH_MAX_PER_WINDOW - 1} lookups`,
+    );
+
+    // One row, appended. Same action, same session, nothing else touched.
+    psql(`
+      INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind,
+                             action, detail, source, subject_type, subject_id, metadata)
+      VALUES ('${SALON_B}', 'staff', '${B_STAFF}', 'Layla', 'manager', 'access',
+              '${LOOKUP_ACTION}', 'appended by lane D to prove the counter is this table',
+              'scanner', 'member_search', NULL,
+              '{"query":"injected","results":0,"sessionId":"${sid}"}'::jsonb);
+    `);
+    precondition(lookupsLogged(sid) === SEARCH_MAX_PER_WINDOW, 'the appended row is not in the log');
+
+    const next = await search(token, 'Fatima');
+    expect(
+      next.status,
+      'appending a row to audit_log did not consume any budget, so the limiter is counting ' +
+        `something other than the log it is supposed to be counting: ${next.raw}`,
+    ).toBe(429);
+    expect(next.body.error).toBe('lookup_rate_limited');
+  }, 60_000);
+
+  it('and nobody can trim it — audit_log refuses a DELETE from the app role AND from its owner', async () => {
+    /**
+     * THE PROPERTY THAT MAKES THE COUPLING ABOVE SAFE, and it is stronger than
+     * the comment in `api/src/services/memberSearch.ts` claims. That file rests
+     * the argument on "the application role cannot UPDATE or DELETE it", which is
+     * true and is only half of it: there is also a trigger, so the refusal does
+     * not depend on which role happens to be connected.
+     *
+     * Both halves are asserted, because they fail differently and a reader should
+     * be able to tell which one is holding. As `avo_app` the grant check fires
+     * first — "permission denied". As the OWNER the grants allow it and the
+     * trigger refuses instead. Lane D found the second half by trying to delete
+     * its own rows as `avo`, which is the only way anyone finds out.
+     *
+     * `SET ROLE` rather than a second connection: the privilege check then runs
+     * as `avo_app` on a connection `psql()` already has, and what comes back is
+     * Postgres refusing rather than a test asserting that a grant table looks
+     * right.
+     */
+    const attempt = (statement: string): string => {
+      try {
+        psql(`SET ROLE avo_app; ${statement}`);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
+
+    const deleted = attempt(`DELETE FROM audit_log WHERE action='${LOOKUP_ACTION}';`);
+    expect(deleted, 'the application role can DELETE from audit_log').toMatch(/permission denied/i);
+
+    const updated = attempt(`UPDATE audit_log SET action='edited' WHERE action='${LOOKUP_ACTION}';`);
+    expect(updated, 'the application role can UPDATE audit_log').toMatch(/permission denied/i);
+
+    // The owner, with every grant, refused by the trigger instead.
+    const asOwner = (statement: string): string => {
+      try {
+        psql(statement);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
+    expect(
+      asOwner(`DELETE FROM audit_log WHERE action='${LOOKUP_ACTION}';`),
+      'the database OWNER can delete audit rows, so append-only is a grant and not a rule',
+    ).toMatch(/append-only/i);
+    expect(
+      asOwner(`UPDATE audit_log SET action='edited' WHERE action='${LOOKUP_ACTION}';`),
+      'the database OWNER can edit audit rows',
+    ).toMatch(/append-only/i);
+  });
+
+  it('the lookup needs perms.scanner — a principal who may not scan may not search instead', async () => {
+    // Noor holds `scanner`, so she is the wrong probe here; the restricted
+    // principal for THIS control is a dashboard session, which has no scanner
+    // scope at all. A search box is the fallback for a scan, not a wider door.
+    const web = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+    const res = await search(web, 'Fatima');
+
+    expect(res.status, `a dashboard session searched customers: ${res.raw}`).toBe(403);
+    expect(res.raw).not.toContain('Fatima Al-Rashed');
+  });
+});
+
+// ------------------------------------------------------------------ 2 --
+describe('GET /charges marks a voided charge, so the scanner stops offering to void it again', () => {
+  /**
+   * The money was always safe — the unique index on `reverses_transaction_id`
+   * makes a second void impossible and the spec above proves it. What was wrong
+   * was the SCREEN: an already-voided charge rendered identically to a live one
+   * and still offered "Void this charge", so the staff member pressed it in front
+   * of the customer and got an error for doing what she was invited to do.
+   *
+   * Lane A resolved it with a self-join onto the reversal rather than a second
+   * query, so the marker cannot disagree with the row it is attached to.
+   */
+  it('carries voidedAt and reversedByTransactionId once the charge is reversed', async () => {
+    const charged = await chargeOnce('voided-flag');
+    const voided = await treq<{ ok: boolean }>('POST', '/voids', {
+      token: scanner,
+      idempotencyKey: key('voided-flag'),
+      body: { transactionId: charged.transaction.id, reason: 'to mark it voided' },
+    });
+    precondition(voided.status === 200, `the void failed: ${voided.raw}`);
+
+    /**
+     * The reversal's id comes from the ROW, because `POST /voids` does not return
+     * it — the response is `{ ok, refundedFils, visitRemoved }`. Worth stating,
+     * because the natural way to write this spec is to read it off that response,
+     * and doing so would compare the list against nothing.
+     */
+    const reversalId = scalar(
+      `select id from transaction where reverses_transaction_id='${charged.transaction.id}'`,
+    );
+    precondition(reversalId !== '', 'the void wrote no reversal row');
+
+    const res = await treq<{ items: Array<Record<string, unknown>> }>('GET', '/charges', {
+      token: scanner,
+    });
+    precondition(res.status === 200, `GET /charges answered ${res.status}`);
+    const row = res.body.items.find((t) => t.id === charged.transaction.id);
+    precondition(row !== undefined, 'the voided charge left the list entirely');
+
+    expect(
+      typeof row!.voidedAt,
+      `the voided charge is indistinguishable from a live one: ${JSON.stringify(row)}`,
+    ).toBe('string');
+    expect(Number.isFinite(Date.parse(row!.voidedAt as string))).toBe(true);
+    // Not merely a boolean: the marker names the reversal, so the screen can link
+    // to the row that returned the money rather than only greying a button out.
+    expect(row!.reversedByTransactionId).toBe(reversalId);
+  });
+
+  it('and a charge that has NOT been voided carries neither — the marker is a fact, not a column that is always set', async () => {
+    // The control. Without it the spec above passes against a serialiser that
+    // stamps every row with the same timestamp.
+    const charged = await chargeOnce('not-voided-flag');
+    const res = await treq<{ items: Array<Record<string, unknown>> }>('GET', '/charges', {
+      token: scanner,
+    });
+    const row = res.body.items.find((t) => t.id === charged.transaction.id);
+    precondition(row !== undefined, 'the charge just made is not in the list');
+
+    expect(row!.voidedAt ?? null).toBeNull();
+    expect(row!.reversedByTransactionId ?? null).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------------ 3 --
+describe('a double void says already_voided, not request_in_progress', () => {
+  /**
+   * WHAT IT USED TO ANSWER, AND WHY THAT WAS WORSE THAN A WRONG STATUS CODE.
+   *
+   * The second void hit the unique index on `reverses_transaction_id`;
+   * `withIdempotency` caught the unique violation, assumed it must have been the
+   * IDEMPOTENCY key that collided, looked for the winner's stored response under
+   * a key that had never existed, found nothing, and answered
+   * `409 request_in_progress`. The scanner then told the staff member "that
+   * request is still being processed, try again in a moment" — advice that is
+   * wrong, that invites a third attempt, and that hides the true state, which is
+   * that the customer already has her money back.
+   *
+   * Lane A fixed it in BOTH places it arises, and the two are genuinely
+   * different, which is why there are two specs here rather than one:
+   *
+   *   - the SEQUENTIAL case, where the first void has already committed. A read
+   *     inside the money transaction finds the existing reversal and refuses
+   *     before anything is written.
+   *   - the RACE, where two voids are in flight and neither has committed, so
+   *     there is nothing to read. That one can only be resolved by the database,
+   *     and `violatedConstraint()` is what tells the two unique indexes apart
+   *     after the fact.
+   *
+   * A fix that only handled the first would pass a sequential spec and still
+   * answer `request_in_progress` on the tap that actually happens twice.
+   */
+  it('sequentially — a second void under a NEW key is 409 already_voided', async () => {
+    const charged = await chargeOnce('double-void');
+    const first = await treq('POST', '/voids', {
+      token: scanner,
+      idempotencyKey: key('double-void-1'),
+      body: { transactionId: charged.transaction.id, reason: 'first' },
+    });
+    precondition(first.status === 200, `the first void failed: ${first.raw}`);
+
+    const second = await treq<{ error: string; message: string }>('POST', '/voids', {
+      token: scanner,
+      idempotencyKey: key('double-void-2'),
+      body: { transactionId: charged.transaction.id, reason: 'second' },
+    });
+
+    expect(second.status, second.raw).toBe(409);
+    expect(
+      second.body.error,
+      'the second void of an already-voided charge reports a transient, retryable condition. ' +
+        'It is neither: the charge was refunded and trying again will never succeed.',
+    ).toBe('already_voided');
+    expect(second.body.error).not.toBe('request_in_progress');
+  });
+
+  it('and the SAME key still replays the first void verbatim — a retry is not a double void', async () => {
+    /**
+     * The distinction the fix must not have collapsed. A gateway or a flaky
+     * tablet retrying the identical request with the identical key is
+     * non-negotiable #4 working: it gets the original 200 back. Only a NEW key
+     * against an already-voided charge is a second attempt, and only that is 409.
+     *
+     * Answering 409 to both would break every client that retries on a timeout.
+     */
+    const charged = await chargeOnce('void-replay');
+    const idem = key('void-replay');
+    const body = { transactionId: charged.transaction.id, reason: 'first' };
+
+    const first = await treq<{ transaction: { id: string } }>('POST', '/voids', {
+      token: scanner,
+      idempotencyKey: idem,
+      body,
+    });
+    precondition(first.status === 200, `the first void failed: ${first.raw}`);
+
+    const replay = await treq<{ transaction: { id: string } }>('POST', '/voids', {
+      token: scanner,
+      idempotencyKey: idem,
+      body,
+    });
+
+    expect(replay.status, `a same-key retry answered ${replay.status} ${replay.raw}`).toBe(200);
+    expect(replay.raw, 'the replay was recomputed rather than replayed').toBe(first.raw);
+    expect(
+      scalar(
+        `select count(*) from transaction where reverses_transaction_id='${charged.transaction.id}'`,
+      ),
+      'the replay wrote a second reversal row',
+    ).toBe('1');
+  });
+
+  it('racing — two voids at once, one 200 and one 409 already_voided, one reversal row', async () => {
+    /**
+     * The case the sequential spec cannot reach: two DIFFERENT keys in flight at
+     * the same instant, so neither transaction can see the other's uncommitted
+     * reversal and the read-first path finds nothing. The unique index resolves
+     * it, and `violatedConstraint()` is what turns the loser's error into the
+     * right sentence instead of `request_in_progress`.
+     */
+    const charged = await chargeOnce('void-race');
+    const [a, b] = await Promise.all([
+      treq<{ error?: string }>('POST', '/voids', {
+        token: scanner,
+        idempotencyKey: key('void-race-a'),
+        body: { transactionId: charged.transaction.id, reason: 'a' },
+      }),
+      treq<{ error?: string }>('POST', '/voids', {
+        token: scanner,
+        idempotencyKey: key('void-race-b'),
+        body: { transactionId: charged.transaction.id, reason: 'b' },
+      }),
+    ]);
+
+    expect(
+      [a.status, b.status].sort(),
+      `the racing voids answered: ${a.raw} / ${b.raw}`,
+    ).toEqual([200, 409]);
+
+    const loser = [a, b].find((r) => r.status === 409)!;
+    expect(
+      loser.body.error,
+      'the losing side of a void race is told the request is still processing, which invites ' +
+        'a third tap at a charge that has already been refunded',
+    ).toBe('already_voided');
+
+    expect(
+      scalar(
+        `select count(*) from transaction where reverses_transaction_id='${charged.transaction.id}'`,
+      ),
+      'two reversal rows exist for one charge',
+    ).toBe('1');
+  });
+});
+
+// ===========================================================================
+// THE GAP LEDGER — what the API still owes the scanner
 // ===========================================================================
 
 /**
@@ -950,48 +1540,16 @@ describe('POST /voids', () => {
  * the endpoint lands, and ask to be promoted. `it.todo` only where there is
  * genuinely nothing to call yet, because a `knownBug` against a shape nobody has
  * designed would be asserting lane D's guess.
+ *
+ * THREE OF THE SEVEN ARE GONE FROM HERE and are plain `it()`s above — the manual
+ * lookup with its four controls, the voided marker, and `already_voided`. Four
+ * remain, and two of those carry a decision that is not lane D's to take.
+ *
+ * The numbers below are lane B's original seven and are left as they were, so the
+ * holes in the sequence — 1, 3, 4 — are the three that closed. Renumbering would
+ * make the ledger disagree with the report it came from.
  */
-describe('GAP: what the API owes the scanner', () => {
-  // ------------------------------------------------------------------ 1 --
-  /**
-   * MANUAL LOOKUP. The scanner has a "find her by name or number" path for the
-   * customer whose phone is flat, and it renders "No such endpoint" today.
-   *
-   * The design promises the CUSTOMER that this is logged — which makes the audit
-   * row part of the feature and not a nice-to-have. The other three requirements
-   * are what stop a staff-facing search box from being a customer-list export:
-   * salon scoping, a minimum query length so a single letter cannot enumerate the
-   * salon, and a rate limit.
-   */
-  knownBug('GET /members?q= does not exist — the scanner cannot look a customer up by name', async () => {
-    const res = await treq<{ items: Array<{ id: string; salonId: string }> }>(
-      'GET',
-      '/members?q=Fatima',
-      { token: scanner },
-    );
-
-    expect(res.status, `GET /members?q= answered ${res.status} ${res.raw}`).toBe(200);
-    expect(Array.isArray(res.body.items)).toBe(true);
-    expect(res.body.items.map((m) => m.id)).toContain(B_MEMBER);
-    // Salon-scoped, or a staff member at one salon can search every customer AVO
-    // has.
-    expect(res.body.items.every((m) => m.salonId === SALON_B)).toBe(true);
-  });
-
-  it.todo(
-    'GET /members?q= must enforce a MINIMUM QUERY LENGTH — a one-character query returns the salon, ' +
-      'which makes the lookup a customer-list export. Cannot be written until the endpoint exists',
-  );
-  it.todo(
-    'GET /members?q= must be RATE LIMITED per session — otherwise the search box walks the ' +
-      'name space at whatever speed the tablet can manage. Cannot be written until the endpoint exists',
-  );
-  it.todo(
-    'GET /members?q= must write an AUDIT ROW per lookup naming the staff member and the query — ' +
-      'design/AVO Staff Scanner.dc.html promises the customer that lookups are logged, so the ' +
-      'audit row is part of the feature. Assert kind=access against audit_log once it exists',
-  );
-
+describe('GAP: what the API still owes the scanner', () => {
   // ------------------------------------------------------------------ 2 --
   /**
    * `GET /charges` returns bare `Transaction` rows. The screen it feeds is a list
@@ -1015,79 +1573,6 @@ describe('GAP: what the API owes the scanner', () => {
       'today\'s charges is a list a human reads at the counter; these fields are what makes ' +
         `a row identifiable:\n  ${missing.join('\n  ')}`,
     ).toEqual([]);
-  });
-
-  // ------------------------------------------------------------------ 3 --
-  /**
-   * NO VOIDED INDICATOR. The money is safe — the unique index makes a second void
-   * impossible, and the spec above proves it. The UI is wrong: an already-voided
-   * charge still offers "Void this charge", so the staff member presses it in
-   * front of the customer and gets an error for doing what the screen invited.
-   */
-  knownBug('GET /charges does not mark a voided charge, so the scanner offers to void it again', async () => {
-    const charged = await chargeOnce('gap-voided-flag');
-    const voided = await treq('POST', '/voids', {
-      token: scanner,
-      idempotencyKey: key('gap-voided-flag'),
-      body: { transactionId: charged.transaction.id, reason: 'to mark it voided' },
-    });
-    precondition(voided.status === 200, `the void failed: ${voided.raw}`);
-
-    const res = await treq<{ items: Array<Record<string, unknown>> }>('GET', '/charges', {
-      token: scanner,
-    });
-    const row = res.body.items.find((t) => t.id === charged.transaction.id);
-    precondition(row !== undefined, 'the voided charge left the list entirely');
-
-    // Any honest signal will do — the field name is lane A's to choose. What must
-    // not happen is a voided charge that looks exactly like a live one.
-    const marked =
-      row!.voided === true ||
-      row!.status === 'voided' ||
-      typeof row!.voidedAt === 'string' ||
-      typeof row!.reversedByTransactionId === 'string';
-
-    expect(
-      marked,
-      `the voided charge ${charged.transaction.id} is indistinguishable from a live one in ` +
-        `today's charges: ${JSON.stringify(row)}`,
-    ).toBe(true);
-  });
-
-  // ------------------------------------------------------------------ 4 --
-  /**
-   * DOUBLE VOID ANSWERS THE WRONG THING. The second void hits the unique index on
-   * `reverses_transaction_id`; `withIdempotency` catches the unique violation,
-   * assumes it was the IDEMPOTENCY key that collided, looks for the winner's
-   * stored response under a key that never existed, finds nothing, and answers
-   * `409 request_in_progress`.
-   *
-   * So the scanner tells the staff member "that request is still being processed,
-   * try again in a moment" — advice that is wrong, that invites a third attempt,
-   * and that hides the true state, which is that the charge was already refunded.
-   * `already_voided` is a different sentence and a different screen.
-   */
-  knownBug('a double void answers request_in_progress rather than already_voided', async () => {
-    const charged = await chargeOnce('gap-double-void');
-    const first = await treq('POST', '/voids', {
-      token: scanner,
-      idempotencyKey: key('gap-double-void-1'),
-      body: { transactionId: charged.transaction.id, reason: 'first' },
-    });
-    precondition(first.status === 200, `the first void failed: ${first.raw}`);
-
-    const second = await treq<{ error: string; message: string }>('POST', '/voids', {
-      token: scanner,
-      idempotencyKey: key('gap-double-void-2'),
-      body: { transactionId: charged.transaction.id, reason: 'second' },
-    });
-
-    expect(second.status).toBe(409);
-    expect(
-      second.body.error,
-      'the second void of an already-voided charge reports a transient, retryable condition. ' +
-        'It is neither: the charge was refunded and trying again will never succeed.',
-    ).toBe('already_voided');
   });
 
   // ------------------------------------------------------------------ 5 --

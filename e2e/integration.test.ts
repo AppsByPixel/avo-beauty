@@ -39,7 +39,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   A_MEMBER,
   A_STAFF_FULL,
@@ -763,10 +763,30 @@ describe('the commission is merchant-visible and customer-never', () => {
    * been restated against `topup_intent.fee_fils` — see "the commission is
    * computed and persisted" below — and the blocker is gone.
    *
-   * So this stays a `knownBug()` naming exactly one endpoint, and it flips to
-   * green the day `POST /topups` returns `serialiseIntentForCustomer(intent)`.
+   * PROMOTED — lane A applied the public shape to the write side and this flipped
+   * to "appears to be FIXED" on the next run.
+   *
+   * WHERE it applied it is the part worth keeping in front of a reader, because
+   * the obvious placement is wrong in a way no assertion on this response would
+   * ever catch. `services/topup.ts` projects ABOVE `completeKey`, not at the
+   * `return`:
+   *
+   *     const view = serialiseIntentForCustomer(row as TopUpIntentRow);
+   *     await completeKey(tx, keyId, { status: 200, body: view });
+   *     return view;
+   *
+   * Serialising only the returned object would have stored the FULL row as the
+   * idempotency replay body, and `routes/topups.ts` answers a lost unique-index
+   * race by replaying `stored.body` verbatim. The commission would then be absent
+   * on the first call and present on every retry — the worst version of the leak,
+   * because a retry is the path nobody re-reads.
+   *
+   * So the spec below covers the first call, and the two after it cover the
+   * replay. They are separate specs rather than three assertions in one, because
+   * a regression on the store side must not be reported as "the top-up endpoint
+   * leaks the fee" when the first call is clean.
    */
-  knownBug('POST /topups tells a customer AVO\'s commission — GET /topups/{id} no longer does', async () => {
+  it('POST /topups and GET /topups/{id} both answer the customer shape', async () => {
     const created = await treq<{ id: string }>('POST', '/topups', {
       token: walletQa,
       idempotencyKey: key('fee-intent'),
@@ -788,6 +808,87 @@ describe('the commission is merchant-visible and customer-never', () => {
         'api-contract.md § Commission is customer-never and TopUpIntentPublicSchema ' +
         'omits feeFils; apply serialiseIntentForCustomer to the write side too:\n' +
         leaks.join('\n'),
+    ).toEqual([]);
+  });
+
+  /**
+   * THE STORED REPLAY BODY — the assertion the response-shaped spec above cannot
+   * make.
+   *
+   * `idempotency_key.response_body` is written inside the money transaction and
+   * is what a retry receives verbatim. Reading it from the column rather than
+   * from a replayed response is deliberate: it fails at the exact line that
+   * would regress — a `serialiseIntentForCustomer` moved down to the `return` —
+   * rather than one HTTP round trip away from it.
+   *
+   * The fee precondition is what stops this being vacuous. "No fee in the body"
+   * proves nothing about a top-up that never had one, so the row is checked to
+   * carry a real commission first.
+   */
+  it('the stored idempotency body carries no commission either — the replay cannot leak what the response did not', async () => {
+    const idem = key('fee-replay-stored');
+    const created = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: idem,
+      body: { amountFils: 10_000, method: 'knet' },
+    });
+    precondition(created.status === 200, `POST /topups answered ${created.status} ${created.raw}`);
+
+    // 150 fils flat on KNET — api-contract.md § Commission. If this is 0 the
+    // spec below would pass on an intent that has no commission to leak.
+    const fee = Number(
+      scalar(`select coalesce(fee_fils, 0) from topup_intent where id='${created.body.id}'`),
+    );
+    precondition(fee > 0, `this intent recorded no commission (fee_fils = ${fee})`);
+
+    const stored = scalar(
+      `select coalesce(response_body::text, '') from idempotency_key
+        where key='${idem}' and endpoint='POST /topups'`,
+    );
+    precondition(stored !== '', `no idempotency row was stored for key ${idem}`);
+
+    const leaks = feeLeaks(JSON.parse(stored)).map(
+      (l) => `  idempotency_key.response_body → ${l.path} = ${JSON.stringify(l.value)}`,
+    );
+    expect(
+      leaks,
+      'the response is clean but the STORED replay body carries the commission, so the leak ' +
+        'is absent on the first call and present on every retry. `serialiseIntentForCustomer` ' +
+        'must be applied ABOVE `completeKey` in services/topup.ts, not at the `return`:\n' +
+        leaks.join('\n'),
+    ).toEqual([]);
+  });
+
+  it('and a real retry on the same key replays that body — same intent, still no commission', async () => {
+    const idem = key('fee-replay-http');
+    const body = { amountFils: 10_000, method: 'knet' };
+
+    const first = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: idem,
+      body,
+    });
+    precondition(first.status === 200, `the first POST /topups answered ${first.status} ${first.raw}`);
+
+    // Same key, same body — non-negotiable #4. This is the gateway-retry path,
+    // and it is served from `stored.body` rather than recomputed.
+    const retry = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: idem,
+      body,
+    });
+
+    expect(retry.status, `the retry answered ${retry.status} ${retry.raw}`).toBe(200);
+    // Replayed, not re-created: a second intent id would mean a second charge at
+    // the processor, which is the defect the key exists to prevent.
+    expect(retry.body.id, 'the retry created a SECOND top-up intent').toBe(first.body.id);
+
+    const leaks = feeLeaks(retry.body).map(
+      (l) => `  POST /topups (retry) → ${l.path} = ${JSON.stringify(l.value)}`,
+    );
+    expect(
+      leaks,
+      'the retried top-up carried AVO\'s commission the first call did not:\n' + leaks.join('\n'),
     ).toEqual([]);
   });
 });
@@ -948,8 +1049,10 @@ describe('the commission is computed and persisted', () => {
  * the word "null" in the salon header, because a non-empty string is truthy and
  * `??` never fires.
  *
- * The specs are written against the contract, so they fail today. See the
- * knownBug below for what is actually missing.
+ * The specs are written against the contract. They failed when this was written;
+ * migration 0006 landed the columns and the last spec in this block — the one
+ * that pins the fields as PRESENT rather than merely usable — was promoted out of
+ * `knownBug()` at that point.
  */
 interface SalonView {
   id: string;
