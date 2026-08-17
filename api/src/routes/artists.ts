@@ -1,7 +1,9 @@
 /**
  * Artists and their availability windows — api-contract.md § Artist.
  *
- *   GET /salons/{id}/artists          perms.team   (dashboard)
+ *   GET /salons/{id}/artists          perms.team   (dashboard) — the full roster
+ *   GET /salons/{id}/artists/bookable any principal of the salon — the customer's
+ *   GET /artists/me                   authenticated staff (scanner) — her own row
  *   PUT /artists/{id}/availability    perms.team   (dashboard) — on their behalf
  *   PUT /artists/me/availability      authenticated staff (scanner) — her own
  *
@@ -79,7 +81,7 @@
  * ===========================================================================
  */
 
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist, SLOT_MINUTES, type ArtistWindows } from '../db/schema/artist';
@@ -495,6 +497,131 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
 
     return reply.send({ items: rows.map(serialiseArtist), nextCursor: null });
   });
+
+  // -------------------------------------- GET /salons/{id}/artists/bookable --
+  /**
+   * THE ROUTE THAT MAKES BOOKING WORK FOR A CUSTOMER AT ALL.
+   *
+   * Step 2 of the wallet's Book flow — choose your artist — and the artist name
+   * on the upcoming-appointment card both need the roster, and the only roster
+   * endpoint was `GET /salons/{id}/artists` above, which is `perms.team`. A real
+   * member session therefore got a 403 and the flow resolved only under
+   * `AVO_TEST_PRINCIPALS`, where an unauthenticated request quietly becomes
+   * ST-001. The Book flow was working in the test shim and nowhere else.
+   *
+   * A SEPARATE PATH, NOT A BRANCH INSIDE THE `perms.team` ROUTE. One URL that
+   * answers two different shapes depending on who is asking cannot be declared
+   * once in `packages/types`, and the contract is the thing that has already
+   * bitten this build three times. The URL names the audience, exactly as
+   * `/artists/me/…` does two routes down.
+   *
+   * ACTIVE ONLY. "Bookable" is the filter, not a hint — a customer choosing who
+   * will cut her hair should not be offered somebody who has left. The merchant
+   * roster above deliberately does the opposite and lists everyone, because
+   * reception has to be able to see and reactivate a retired artist.
+   *
+   * WHAT A CUSTOMER GETS, AND WHAT SHE DOES NOT
+   * -------------------------------------------
+   * Emitted: `id` (she posts it to `/bookings` and reads
+   * `/artists/{id}/availability` with it), `salonId`, `name`, `nameAr`, and
+   * `availabilityLive`.
+   *
+   * Excluded, and each for its own reason rather than as a blanket narrowing:
+   *
+   *   handle, role, perms, branchAccess
+   *                     `staff_user` fields. They are not on this table at all
+   *                     and must not be joined in to get here — the roster a
+   *                     customer sees is people, not accounts.
+   *   hasOwnLogin       which artists hold an AVO account. A staffing fact, and
+   *                     the one field on THIS table that leaks toward
+   *                     `staff_user`. It is on the merchant shape because
+   *                     reception needs to know who can edit her own week.
+   *   windows           the salon's internal scheduling week. She gets the
+   *                     computed grid from `/artists/{id}/availability`, which
+   *                     has already subtracted other customers' bookings; the
+   *                     raw week would let her infer who is booked when.
+   *   slotMinutes       an operational detail. The grid arrives pre-sliced.
+   *   availabilitySource, googleConnected
+   *                     the name and connection state of a third-party
+   *                     integration. See `availabilityLive` below.
+   *   active            the list is filtered on it, so emitting it would say
+   *                     `true` on every row. The filter is the statement.
+   *
+   * `availabilityLive` IS THE ANSWER WITHOUT THE MECHANISM
+   * -----------------------------------------------------
+   * False means services/availability.ts will fall back to the SALON's hours for
+   * this artist rather than offering her own — which over-offers deliberately, so
+   * a slot the customer picks may be one the artist cannot actually work. That is
+   * a real thing to tell her. *Why* it happens is "AVO cannot reach her Google
+   * Calendar", which is the salon's operational problem and belongs in the
+   * merchant's bell (it is already there, deduplicated), not in a customer's
+   * booking screen. One boolean says the part she can act on.
+   *
+   * Computed the same way `resolveWorkingWindow` computes it, and it has to be:
+   * a manual artist is always live, a google-sourced one needs BOTH a
+   * `connected` row and a driver that can actually reach a calendar — a stub
+   * driver with a connection row would report an artist free having read
+   * nothing. One `IN` query for the whole salon rather than one per artist.
+   *
+   * IT DOES NOT RAISE THE MERCHANT NOTIFICATION. `resolveWorkingWindow` does
+   * that on the real availability read, where the fallback is actually applied.
+   * Raising it here would put a write inside a customer's list read for a
+   * fallback that has not happened yet.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/salons/:id/artists/bookable',
+    async (req, reply) => {
+      // Any authenticated principal of this salon — the same gate
+      // `GET /salons/{id}/services` uses, and for the same reason: gating the
+      // list a customer books from on a merchant permission gates booking.
+      const p = requirePrincipal(req);
+      requireSameSalon(p, req.params.id);
+
+      const rows = await db
+        .select({
+          id: artist.id,
+          salonId: artist.salonId,
+          name: artist.name,
+          nameAr: artist.nameAr,
+          availabilitySource: artist.availabilitySource,
+        })
+        .from(artist)
+        .where(and(eq(artist.salonId, req.params.id), eq(artist.active, true)))
+        .orderBy(asc(artist.name));
+
+      const syncedIds = rows
+        .filter((r) => r.availabilitySource === 'google')
+        .map((r) => r.id);
+
+      const live = new Set<string>();
+      if (syncedIds.length > 0 && calendar.configured) {
+        const connections = await db
+          .select({ artistId: artistCalendarConnection.artistId })
+          .from(artistCalendarConnection)
+          .where(
+            and(
+              inArray(artistCalendarConnection.artistId, syncedIds),
+              eq(artistCalendarConnection.status, 'connected'),
+            ),
+          );
+        for (const c of connections) live.add(c.artistId);
+      }
+
+      return reply.send({
+        items: rows.map((r) => ({
+          id: r.id,
+          salonId: r.salonId,
+          name: r.name,
+          nameAr: r.nameAr,
+          // `availabilitySource` is selected only to compute this, and is
+          // destructured away here by construction rather than deleted from a
+          // spread — the same discipline http/serialise.ts applies to `feeFils`.
+          availabilityLive: r.availabilitySource !== 'google' || live.has(r.id),
+        })),
+        nextCursor: null,
+      });
+    },
+  );
 
   // ------------------------------------------------------- GET /artists/me --
   /**

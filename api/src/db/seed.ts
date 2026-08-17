@@ -374,16 +374,30 @@ async function seed(): Promise<void> {
     ])
     .onConflictDoNothing();
 
+  // The Book flow's service list, in both languages. SV-05 has NO Arabic name
+  // deliberately, for the reason migration 0006 gives about the branch fixture:
+  // a `nameAr ?? name` fallback exercised only by rows that all have a
+  // translation never proves the null path, and the "stringify bug" — a NULL
+  // reaching a client as the four-character string "null" — is invisible until
+  // a row genuinely holds one.
+  //
+  // `onConflictDoUpdate` rather than `DoNothing`: these rows predate migration
+  // 0022, so a database seeded before it would keep five NULL Arabic names and
+  // the Book flow would look exactly as broken as it did before the column
+  // existed.
   await db
     .insert(service)
     .values([
-      { id: 'SV-01', salonId: SALON_ID, name: 'Blow-dry', priceFils: fils(8000) },
-      { id: 'SV-02', salonId: SALON_ID, name: 'Cut & style', priceFils: fils(15000) },
-      { id: 'SV-03', salonId: SALON_ID, name: 'Colour — roots', priceFils: fils(25000) },
-      { id: 'SV-04', salonId: SALON_ID, name: 'Manicure', priceFils: fils(6000) },
-      { id: 'SV-05', salonId: SALON_ID, name: 'Treatment', priceFils: fils(12500) },
+      { id: 'SV-01', salonId: SALON_ID, name: 'Blow-dry', nameAr: 'تجفيف بالسشوار', priceFils: fils(8000) },
+      { id: 'SV-02', salonId: SALON_ID, name: 'Cut & style', nameAr: 'قص وتصفيف', priceFils: fils(15000) },
+      { id: 'SV-03', salonId: SALON_ID, name: 'Colour — roots', nameAr: 'صبغة الجذور', priceFils: fils(25000) },
+      { id: 'SV-04', salonId: SALON_ID, name: 'Manicure', nameAr: 'مانيكير', priceFils: fils(6000) },
+      { id: 'SV-05', salonId: SALON_ID, name: 'Treatment', nameAr: null, priceFils: fils(12500) },
     ])
-    .onConflictDoNothing();
+    .onConflictDoUpdate({
+      target: service.id,
+      set: { nameAr: sql`excluded.name_ar` },
+    });
 
   // ---------------------------------------------------------- promotions ----
   //
