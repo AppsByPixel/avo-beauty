@@ -119,7 +119,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'audit',
     label: 'Audit log',
     to: '/audit',
-    built: false,
+    built: true,
     title: 'Audit log',
     subtitle: 'Every money and permission change, and who made it',
     icon: (

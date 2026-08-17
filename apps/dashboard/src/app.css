@@ -1552,3 +1552,134 @@ a:hover {
   color: var(--avo-text-muted-soft);
   line-height: 1.5;
 }
+
+/* ============================================================== audit log == */
+
+.audit {
+  max-width: 960px;
+}
+
+.audit__controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+  flex-wrap: wrap;
+}
+
+.audit__search {
+  flex: 1;
+  max-width: 320px;
+  border-radius: 11px;
+  padding: 11px 14px;
+}
+
+.audit__filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.audit__count {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.audit__card {
+  overflow: hidden;
+}
+
+/*
+ * interaction-spec.md §1: "Data tables never drop columns responsively — a
+ * merchant reconciling money needs all of them. Scroll the table, keep the
+ * header row sticky."
+ */
+.audit__scroll {
+  overflow-x: auto;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.audit__table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.audit__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 22px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.audit__table tbody td {
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: top;
+}
+
+.audit__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* An AVO platform action on this salon. The pill in the Source cell carries the
+   meaning; this is a quiet second cue, never the only one. */
+.audit__table tbody tr[data-platform] {
+  background: var(--avo-brand-tint2);
+}
+
+.audit__when {
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+.audit__who {
+  font-weight: 600;
+}
+
+.audit__role {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  margin-top: 1px;
+}
+
+.audit__detail {
+  color: var(--avo-text-muted-strong);
+  line-height: 1.5;
+}
+
+.audit__source {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  white-space: nowrap;
+}
+
+.audit__empty {
+  padding: 34px 22px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.audit__more {
+  margin-top: 14px;
+}
+
+.audit__foot {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.5;
+}
