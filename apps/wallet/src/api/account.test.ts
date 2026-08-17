@@ -41,6 +41,10 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
             route: 'salon',
             message: 'x',
             ref: '',
+            // The charge this dispute is ABOUT, resolved server-side from `ref`.
+            // Null here because these specs submit without a receipt reference —
+            // the routing they assert is unaffected by it.
+            transactionId: null,
             via: 'wa',
             at: '2026-08-17T10:00:00+03:00',
             status: 'open',
