@@ -218,7 +218,18 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     // The artist's own hours. `/artists/{id}/availability` is the merchant's
     // route and stays on the dashboard — the `me` prefix is the whole
     // distinction, exactly as it is in routes/artists.ts.
-    req.url.startsWith('/artists/me');
+    req.url.startsWith('/artists/me') ||
+    /**
+     * Manual customer lookup — `GET /members?q=`, the fallback for a flat phone.
+     *
+     * Matched exactly, never by prefix. `/members/` was already claimed by the
+     * MEMBER branch above, and a `startsWith('/members')` here would be tested
+     * after it and so could never fire — but it would be a live trap for whoever
+     * next reorders these two blocks and silently hands the wallet's own routes
+     * a staff principal.
+     */
+    req.url === '/members' ||
+    req.url.startsWith('/members?');
 
   return loadStaffPrincipal(
     db,

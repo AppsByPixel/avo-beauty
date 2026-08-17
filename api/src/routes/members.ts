@@ -14,13 +14,41 @@ import { walletTokenUri } from '@avo/types';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
 import { transaction } from '../db/schema/transaction';
-import { requireMember } from '../auth/principal';
+import { requireMember, requireScannerPerm } from '../auth/principal';
 import { notFound } from '../http/errors';
 import { serialiseTransactionForCustomer, type TransactionRow } from '../http/serialise';
+import { searchMembers } from '../services/memberSearch';
 import { mintToken } from '../services/walletToken';
 import { serialiseMember } from './auth';
 
 export async function registerMemberRoutes(app: FastifyInstance): Promise<void> {
+  // ------------------------------------------------------------ GET /members --
+  /**
+   * MANUAL LOOKUP, for the customer whose phone is flat. The one route in this
+   * file that a STAFF principal calls rather than a member — it is grouped here
+   * because it reads the member table, and guarded like the scanner route it
+   * backs up.
+   *
+   * `perms.scanner` — the same permission as `POST /scans`, because this is the
+   * fallback for a scan that cannot happen, not a wider capability. A staff
+   * member who may not scan may not look a customer up by name instead.
+   *
+   * Everything that makes a staff search box safe — salon scoping, minimum
+   * query length, the rate limit and the audit row the design promises the
+   * customer — is in services/memberSearch.ts, which explains each one.
+   */
+  app.get('/members', async (req, reply) => {
+    const p = requireScannerPerm(req, 'scanner');
+    const { q } = (req.query ?? {}) as { q?: unknown };
+
+    const items = await searchMembers(db, p, q, {
+      ipAddress: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    });
+
+    return reply.send({ items, nextCursor: null });
+  });
+
   app.get('/members/me', async (req, reply) => {
     const p = requireMember(req);
     const rows = await db.select().from(member).where(eq(member.id, p.id)).limit(1);
