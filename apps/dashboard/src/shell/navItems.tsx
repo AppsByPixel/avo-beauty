@@ -105,7 +105,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'marketing',
     label: 'Marketing',
     to: '/marketing',
-    built: false,
+    built: true,
     title: 'Marketing',
     subtitle: 'Campaigns, branch boosts and happy hours',
     icon: (
