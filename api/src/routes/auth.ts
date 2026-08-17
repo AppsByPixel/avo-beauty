@@ -38,12 +38,12 @@
  * being distinguishable turns a login form into a customer-list oracle.
  */
 
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
 import { pinAttempt, session } from '../db/schema/session';
-import { staffUser } from '../db/schema/staff';
+import { staffPasswordReset, staffUser } from '../db/schema/staff';
 import { env } from '../env';
 import {
   burnVerifyTime,
@@ -53,7 +53,14 @@ import {
   verifySecret,
 } from '../auth/password';
 import { permsOf, requirePrincipal } from '../auth/principal';
-import { issueSession, revokeOtherSessions, revokeSession, rotateSession } from '../auth/sessions';
+import {
+  issueSession,
+  revokeAllSessions,
+  revokeOtherSessions,
+  revokeSession,
+  rotateSession,
+} from '../auth/sessions';
+import { hashPasswordResetToken } from '../auth/tokens';
 import { badRequest, forbidden, tooManyRequests, unauthorized } from '../http/errors';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -200,6 +207,98 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post('/auth/sign-out', async (req, reply) => {
     const p = requirePrincipal(req);
     await revokeSession(db, p.sessionId, 'sign_out');
+    return reply.code(204).send();
+  });
+
+  // ------------------------------------------------- staff reset, redeemed --
+  /**
+   * The far end of the reset LINK — non-negotiable #6's other half.
+   *
+   * `POST /staff/{id}/password-reset` mints the token and answers 202 without
+   * it; the staff member arrives here holding it. UNAUTHENTICATED by necessity:
+   * the whole point is that she cannot sign in. The token is the credential,
+   * which is why it is 32 bytes of CSPRNG, single-use, and dead in an hour.
+   *
+   * EVERY FAILURE IS THE SAME REFUSAL. Unknown, expired, already spent, or
+   * belonging to an account that has since been deactivated all answer
+   * `invalid_reset_token`. Distinguishing them would let someone with a stale
+   * link learn whether an account still exists, and there is nothing the
+   * legitimate holder can do differently in any of the four cases anyway —
+   * she asks for another link.
+   *
+   * On success every session for that staff member is revoked. She is setting
+   * this password because she lost the old one, and "lost" and "somebody else
+   * has it" are the same event until proven otherwise.
+   */
+  app.post('/auth/staff/password-reset', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const token = requireString(body.token, 'token', 500);
+    const password = body.password;
+
+    if (!isAcceptablePassword(password)) {
+      throw badRequest('password_too_short', 'Your new password needs at least 6 characters.');
+    }
+
+    const REFUSED = () =>
+      badRequest(
+        'invalid_reset_token',
+        'That reset link has expired or has already been used. Ask a manager to send a new one.',
+      );
+
+    const rows = await db
+      .select()
+      .from(staffPasswordReset)
+      .where(eq(staffPasswordReset.tokenHash, hashPasswordResetToken(token)))
+      .limit(1);
+    const reset = rows[0];
+    if (!reset || reset.usedAt || reset.expiresAt.getTime() <= Date.now()) throw REFUSED();
+
+    const staffRows = await db
+      .select()
+      .from(staffUser)
+      .where(eq(staffUser.id, reset.staffId))
+      .limit(1);
+    const staff = staffRows[0];
+    if (!staff || staff.deactivatedAt) throw REFUSED();
+
+    const passwordHash = await hashSecret(password);
+
+    /**
+     * The UPDATE carries the `used_at IS NULL` predicate rather than trusting
+     * the SELECT above. Two redemptions of one link racing each other is the
+     * double-tapped scanner in another costume, and the database resolves it:
+     * exactly one of them updates a row, and the loser is refused.
+     */
+    const spent = await db
+      .update(staffPasswordReset)
+      .set({ usedAt: new Date() })
+      .where(and(eq(staffPasswordReset.id, reset.id), isNull(staffPasswordReset.usedAt)))
+      .returning({ id: staffPasswordReset.id });
+    if (spent.length === 0) throw REFUSED();
+
+    await db
+      .update(staffUser)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(staffUser.id, staff.id));
+
+    // She lost the old password. Treat that as a compromise until told
+    // otherwise — the same instinct as `revokeOtherSessions` on a change,
+    // except there is no calling device here worth keeping.
+    await revokeAllSessions(db, { kind: 'staff', id: staff.id }, 'password_reset');
+
+    await writeAudit(db, null, {
+      salonId: staff.salonId,
+      kind: 'access',
+      action: 'Password set from reset link',
+      detail: `${staff.name} (@${staff.handle}) set a new password`,
+      source: 'merchant',
+      subjectType: 'staff_user',
+      subjectId: staff.id,
+      metadata: { requestedBy: reset.requestedBy },
+      ...clientMeta(req),
+    });
+
+    // 204: no body, so no body to leak a credential in. She signs in normally.
     return reply.code(204).send();
   });
 

@@ -116,6 +116,25 @@ export function mintWalletTokenValue(): string {
   return `tok_${randomBytes(16).toString('base64url')}`;
 }
 
+/**
+ * A staff password-reset token. 32 bytes, like the refresh token, because it is
+ * the same kind of secret: an opaque bearer value that grants a credential
+ * change to whoever holds it.
+ *
+ * Non-negotiable #6 — "Owner console only ever sends a reset link" — is why this
+ * is minted rather than a password being chosen for somebody. It is returned by
+ * NO endpoint; it exists in the row as a sha256 and in the message the staff
+ * member receives.
+ */
+export function mintPasswordResetToken(): string {
+  return `rst_${randomBytes(32).toString('base64url')}`;
+}
+
+/** sha256 of a reset token. Same reasoning as the refresh token. */
+export function hashPasswordResetToken(raw: string): string {
+  return createHash('sha256').update(raw).digest('hex');
+}
+
 /** sha256 of a canonical request body — the "same key, different body" check. */
 export function hashRequestBody(body: unknown): string {
   return createHash('sha256').update(JSON.stringify(body ?? null)).digest('hex');
