@@ -10,6 +10,7 @@ import { SCOPES, type AuthScope } from './auth/scopes.js';
 import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
 import { SignIn } from './routes/SignIn.js';
+import { Team } from './routes/Team.js';
 import { MerchantShell } from './shell/MerchantShell.js';
 import { NAV_ITEMS } from './shell/navItems.js';
 
@@ -60,11 +61,22 @@ const indexRoute = createRoute({
   },
 });
 
-const overviewRoute = createRoute({
-  getParentRoute: () => merchantRoute,
-  path: '/overview',
-  component: Overview,
-});
+/**
+ * The built sections, keyed by the nav path they answer.
+ *
+ * Paired with `NAV_ITEMS[].built` rather than listed twice: the placeholder
+ * routes below are derived from the same flag, so a section that is built and a
+ * section the sidebar *says* is built cannot drift apart. Adding a section is
+ * one component here and one `built: true` there.
+ */
+const SECTIONS = [
+  { path: '/overview', component: Overview },
+  { path: '/team', component: Team },
+] as const;
+
+const sectionRoutes = SECTIONS.map(({ path, component }) =>
+  createRoute({ getParentRoute: () => merchantRoute, path, component }),
+);
 
 /** Every other nav item resolves to a route, so the sidebar never dead-ends. */
 const placeholderRoutes = NAV_ITEMS.filter((item) => !item.built).map((item) =>
@@ -77,7 +89,7 @@ const placeholderRoutes = NAV_ITEMS.filter((item) => !item.built).map((item) =>
 
 const routeTree = rootRoute.addChildren([
   signInRoute,
-  merchantRoute.addChildren([indexRoute, overviewRoute, ...placeholderRoutes]),
+  merchantRoute.addChildren([indexRoute, ...sectionRoutes, ...placeholderRoutes]),
 ]);
 
 export const router = createRouter({

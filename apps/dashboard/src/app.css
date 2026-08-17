@@ -62,7 +62,7 @@ a:hover {
 .signin__card {
   width: 100%;
   max-width: 380px;
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-hairline);
   border-radius: 22px;
   padding: 36px 34px;
@@ -87,7 +87,7 @@ a:hover {
   height: 40px;
   border-radius: 12px;
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -309,7 +309,7 @@ a:hover {
   font-size: 18px;
   font-weight: 600;
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
 }
 
 .dash-sidebar__brand-text {
@@ -390,7 +390,7 @@ a:hover {
   padding: 6px 10px;
   border-radius: var(--avo-radius-chip);
   background: var(--avo-ink);
-  color: #fff;
+  color: var(--avo-white);
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
@@ -454,7 +454,7 @@ a:hover {
   height: 30px;
   border-radius: 9px;
   background: var(--avo-ink);
-  color: #fff;
+  color: var(--avo-white);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -512,7 +512,7 @@ a:hover {
   height: 40px;
   border-radius: var(--avo-radius-chip);
   border: 1px solid var(--avo-ui-ink-10);
-  background: #fff;
+  background: var(--avo-white);
   color: var(--avo-ink);
   display: flex;
   align-items: center;
@@ -554,7 +554,7 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-ui-ink-10);
   border-radius: var(--avo-radius-pill);
   padding: 6px 13px;
@@ -667,7 +667,7 @@ a:hover {
 
 .dash-toosmall__card {
   max-width: 420px;
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-hairline);
   border-radius: 22px;
   padding: 32px 28px;
@@ -679,7 +679,7 @@ a:hover {
   height: 44px;
   border-radius: 13px;
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -698,4 +698,361 @@ a:hover {
   font-size: 13.5px;
   line-height: 1.55;
   color: var(--avo-text-muted);
+}
+
+/* ================================================= section write failures == */
+
+/*
+ * What a failed WRITE leaves on screen, as distinct from a failed read.
+ *
+ * Not `.avo-inline-error`: that is the sign-in form's field-level banner. This
+ * one always names what did NOT happen ("Nothing was published"), because the
+ * screen is still showing the merchant's edits and the salon is still showing
+ * what it had before, and only one of those is the truth.
+ */
+.section-write-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  background: var(--avo-danger-bg);
+  border-radius: 12px;
+  padding: 12px 15px;
+  margin: 16px 0;
+}
+
+.section-write-error__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-danger-dot);
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.section-write-error__text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-danger-text);
+}
+
+/* ============================================================ team (grid) == */
+
+.team__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--avo-space-grid-gap);
+  margin-top: 20px;
+}
+
+/* interaction-spec.md §1: two-column card grids go 1-up at `narrow` and below. */
+.dash[data-bp='narrow'] .team__grid,
+.dash[data-bp='tablet'] .team__grid {
+  grid-template-columns: 1fr;
+}
+
+.team-card {
+  padding: 18px;
+}
+
+.team-card__head {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.team-card__avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 19px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.team-card__ident {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.team-card__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.team-card__sub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.team-card__status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 13px;
+}
+
+.team-card__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  background: var(--avo-brand);
+}
+
+/*
+ * TOKEN NOTE. The design paints the manual-hours status dot #C9A24B, which is
+ * `tier.gold.dot` — a loyalty-tier token, and this is not a loyalty tier. There
+ * is no "attention" dot token; `--avo-warn-text` is the nearest named colour
+ * that means what this dot means, and it is what the Manual hours pill beside it
+ * already carries, so the two agree. Reported to trunk.
+ */
+.team-card__dot[data-source='manual'] {
+  background: var(--avo-warn-text);
+}
+
+.team-card__status-text {
+  font-size: 12px;
+  color: var(--avo-text-muted-strong);
+}
+
+.team-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.team-card__summary {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}
+
+.team-card__foot .avo-btn {
+  padding: 8px 14px;
+  font-size: 12.5px;
+  border-radius: 10px;
+}
+
+/* --------------------------------------------------------------- week strip */
+
+.team-week {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.team-week__cell {
+  flex: 1;
+  text-align: center;
+}
+
+.team-week__badge {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--avo-surface-alt2);
+  color: var(--avo-ui-ink-38);
+}
+
+.team-week__badge[data-open] {
+  background: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+/* ========================================================== hours editor == */
+
+/* interaction-spec.md §1: "Modals/editors (Team hours…) cap at 720px." */
+.hours-editor {
+  max-width: 780px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: 18px;
+  padding: 22px 24px;
+  margin-top: 20px;
+}
+
+.hours-editor__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hours-editor__back {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.hours-editor__name {
+  font-size: 22px;
+  margin-top: 8px;
+}
+
+.hours-editor__role {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.hours-editor__banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 12px;
+  padding: 11px 14px;
+  margin-top: 14px;
+  background: var(--avo-brand-tint2);
+}
+
+.hours-editor__banner[data-manual] {
+  background: var(--avo-brand-tint);
+}
+
+.hours-editor__banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  /* Same token note as .team-card__dot — the synced state has no dot token. */
+  background: var(--avo-warn-text);
+}
+
+.hours-editor__banner[data-manual] .hours-editor__banner-dot {
+  background: var(--avo-brand);
+}
+
+.hours-editor__banner-text {
+  font-size: 12.5px;
+  color: var(--avo-brand-deeper);
+  line-height: 1.5;
+}
+
+.hours-editor__slots {
+  margin-top: 18px;
+}
+
+.hours-editor__slot-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+
+.hours-editor__week {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.hours-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--avo-surface);
+  border: 1px solid var(--avo-hairline-inner);
+  border-radius: 13px;
+  padding: 12px 15px;
+}
+
+.hours-row__day {
+  width: 130px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-shrink: 0;
+}
+
+.hours-row__badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: var(--avo-surface-alt2);
+  color: var(--avo-ui-ink-38);
+}
+
+.hours-row__badge[data-open] {
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+.hours-row__name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.hours-row__body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hours-row__arrow {
+  color: var(--avo-ui-ink-38);
+}
+
+.hours-row__slots {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.hours-row__window {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.hours-row__off {
+  font-size: 13px;
+  color: var(--avo-ui-ink-38);
+}
+
+.hours-row__toggle {
+  flex-shrink: 0;
+}
+
+.hours-editor__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.hours-editor__summary {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
 }

@@ -51,7 +51,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'team',
     label: 'Team',
     to: '/team',
-    built: false,
+    built: true,
     title: 'Team',
     subtitle: 'Artists and calendar availability',
     icon: (
