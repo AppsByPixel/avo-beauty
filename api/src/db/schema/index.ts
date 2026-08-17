@@ -27,6 +27,7 @@ export * from './promotion';
 export * from './service';
 export * from './artist';
 export * from './member';
+export * from './phoneChange';
 export * from './staff';
 export * from './session';
 export * from './transaction';
