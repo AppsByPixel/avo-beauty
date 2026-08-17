@@ -27,9 +27,14 @@ interface Props {
   transaction: Transaction | null;
   branches: { id: string; name: string }[];
   onClose: () => void;
+  /**
+   * Navigate to Account → Contact us. The reference has already been recorded by
+   * `startPaymentReport` when this fires, so the target has nothing to be passed.
+   */
+  onReport: () => void;
 }
 
-export function TransactionSheet({ transaction, branches, onClose }: Props) {
+export function TransactionSheet({ transaction, branches, onClose, onReport }: Props) {
   const { lang, copy } = useLanguage();
   const receipt = transaction ? buildReceipt(transaction, branches, lang, copy) : null;
 
@@ -135,9 +140,12 @@ export function TransactionSheet({ transaction, branches, onClose }: Props) {
             testID="tx-report"
             style={styles.report}
             onPress={() => {
-              // Hands the reference over; the form is the next slice.
+              // Hand the reference over, close the receipt, then open the form.
+              // In that order: the form reads the prefill on mount, so it has to
+              // be recorded before the navigation happens.
               startPaymentReport(receipt.reference);
               onClose();
+              onReport();
             }}
           />
           <SecondaryButton

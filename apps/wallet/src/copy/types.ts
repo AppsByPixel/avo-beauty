@@ -209,6 +209,143 @@ export interface Copy {
   plus(label: string): string;
   minus(label: string): string;
 
+  // ══════════════════════════════════════════════════════════════ account ══
+
+  // account — shell and section headings
+  accountTitle: string;
+  back: string;
+  acctProfile: string;
+  acctNotifs: string;
+  acctLegal: string;
+  acctHelp: string;
+  /** "Follow Amara" / "تابعي أمارا" — the salon name comes from the API. */
+  followTitle(salonName: string): string;
+  /** Product wordmark and build. Identical in both languages by design. */
+  appVersion: string;
+
+  // account — profile rows
+  rowEdit: string;
+  rowName: string;
+  rowPhone: string;
+  rowEmail: string;
+  rowPassword: string;
+  rowLang: string;
+  /** The password row's value column. Never the password — non-negotiable #6. */
+  rowChange: string;
+  /** The email row's value when there is no email yet. */
+  rowAddEmail: string;
+  /** The language row's value: the language currently in force, in its own name. */
+  rowLangValue: string;
+
+  // account — the five notification switches
+  nPush: string;
+  nPushSub: string;
+  nWa: string;
+  nWaSub: string;
+  nRemind: string;
+  nRemindSub: string;
+  nReceipt: string;
+  nReceiptSub: string;
+  nOffers: string;
+  nOffersSub: string;
+
+  // account — wallet & policies
+  /**
+   * The document header stamp: "Last updated 1 July 2026 · v3".
+   *
+   * Takes the RAW `effectiveFrom` ("YYYY-MM-DD") and the version, not a
+   * pre-formatted date — the same rule as `staleBanner`. Arabic needs its own
+   * month names and Eastern digits, and a caller that formatted the date would
+   * have to know which. Non-negotiable #10 makes this the only string the wallet
+   * itself contributes to a policy document; every other character is the API's.
+   */
+  legalUpdated(effectiveFrom: string, version: number): string;
+  /** The fine print under the policy list. Not a legal document — a summary. */
+  walletFine: string;
+  logOut: string;
+  deleteAcct: string;
+
+  // account — help
+  contactCta: string;
+  contactCtaSub: string;
+
+  // edit profile sheet
+  pfTitle: string;
+  pfSub: string;
+  pfEmailPh: string;
+  pfPhoneNote: string;
+  pfSave: string;
+  pfSaved: string;
+  pfErrName: string;
+  pfErrPhone: string;
+  pfErrEmail: string;
+  /** "(optional)" — used by both the email field and the receipt reference. */
+  cOptional: string;
+
+  // phone confirmation — the number is the login identity
+  vfTitle: string;
+  vfSub(phone: string): string;
+  vfConfirm: string;
+  vfResend: string;
+  vfBack: string;
+  vfErr: string;
+  vfSent: string;
+
+  // change password sheet
+  pwTitle: string;
+  /**
+   * "You stay logged in on this phone. Other devices are signed out."
+   *
+   * A security claim in front of a customer, and it is true: the API revokes
+   * every other session on success. See src/api/account.ts § changePassword.
+   */
+  pwSub: string;
+  pwCurLabel: string;
+  pwNewLabel: string;
+  pwConfLabel: string;
+  pwSave: string;
+  pwSaved: string;
+  pwForgot: string;
+  pwErrCur: string;
+  pwErrShort: string;
+  pwErrSame: string;
+  pwErrMatch: string;
+  /** The show/hide control on the password sheet. */
+  pwShow: string;
+  pwHide: string;
+  /** "At least 6 characters" — Eastern digit in Arabic; a count, not money. */
+  passHint: string;
+
+  // contact us sheet
+  contactTitle: string;
+  contactSub: string;
+  cTopicLabel: string;
+  cMsgLabel: string;
+  cMsgPh: string;
+  cRefLabel: string;
+  cViaLabel: string;
+  cViaWa: string;
+  cViaEmail: string;
+  cSend: string;
+  cErr: string;
+  /** The chip next to a topic. Read from the topic, never sent back — #11. */
+  cRouteSalon: string;
+  cRouteAvo: string;
+  cSentTitle: string;
+  cSentRef: string;
+  cSentDone: string;
+  /** Chosen by the route the SERVER returned, not the one the client displayed. */
+  cSentSalon: string;
+  cSentAvo: string;
+
+  // delete account sheet
+  deleteTitle: string;
+  deleteBody: string;
+  deleteBalance: string;
+  deleteKeep: string;
+  deleteGo: string;
+  deleteFine: string;
+
   // the language switch itself
   langSwitch: string;
   /**

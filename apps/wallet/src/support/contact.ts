@@ -1,11 +1,10 @@
 /**
  * The seam between a receipt and the contact form.
  *
- * The contact form itself is a later slice — design/AVO Wallet Home.dc.html's
- * `contactOpen` sheet, with its topic list, message field and "Receipt or
- * reference" input. What is built here is the *entry point*: "Report a problem
- * with this payment" hands over the receipt's reference, and the form picks it up
- * pre-filled.
+ * "Report a problem with this payment" on a receipt hands over that receipt's
+ * reference; Account reads it once on mount and opens Contact us with the
+ * reference already in the field. Two modules, one value, and no prop threaded
+ * through four components that do not care about it.
  *
  * Two things are deliberately NOT decided here, because they are not the
  * client's to decide:
@@ -13,11 +12,19 @@
  *   · **The route.** Non-negotiable #11: support ticket routing is resolved
  *     server-side from `topicId`. A client that picks "salon" or "AVO" can land
  *     a wallet dispute in a salon's inbox. Nothing in this module sets a route,
- *     and the form must not either — it posts a topic and the server decides.
- *   · **The topic.** A payment problem is not automatically a wallet dispute; the
- *     customer chooses from the published topic list in GET /v1/platform/support.
+ *     and the form does not either — it posts a topic and the server decides.
+ *     See src/api/account.ts § TicketDraft.
+ *   · **The topic.** A payment problem is not automatically a wallet dispute;
+ *     the customer chooses from the published topic list in
+ *     GET /v1/platform/support. So the handoff carries the reference and nothing
+ *     else, and the topic picker opens unselected.
  *
- * So the handoff carries one field, and that field is the reference.
+ * WHY A MODULE-LEVEL VALUE RATHER THAN A CONTEXT OR A ROUTE PARAM: it is
+ * write-once, read-once, and it must survive a screen change. A context would
+ * have to be provided above both screens for a value neither of them owns, and
+ * there is no router in this app yet to carry a param. When one lands, this
+ * becomes a navigation param and `takeContactPrefill` disappears — the two
+ * call sites are the only things that change.
  */
 
 export interface ContactPrefill {
@@ -27,24 +34,19 @@ export interface ContactPrefill {
 
 let pending: ContactPrefill | null = null;
 
-/**
- * Called by the receipt sheet. Records what the form should open with.
- *
- * STUB: when the contact form lands, this is where it is opened from — replace
- * the store with a navigation call and keep the prefill. Nothing else in the app
- * needs to change.
- */
+/** Called by the receipt sheet, immediately before navigating to Account. */
 export function startPaymentReport(reference: string): ContactPrefill {
   pending = { reference };
-  if (__DEV__) {
-    // Evidence that the entry point carries the right receipt while the target
-    // does not exist yet. Stripped from a release bundle.
-    console.log('[avo] contact form handoff (not built yet) · reference:', reference);
-  }
   return pending;
 }
 
-/** Read and clear. The form will call this on mount. */
+/**
+ * Read and clear. Account calls this once, on mount.
+ *
+ * Clearing on read is what stops a stale receipt number appearing in the form
+ * three visits later: opening Account from the avatar finds nothing pending, so
+ * the reference field is empty, which is what it should be.
+ */
 export function takeContactPrefill(): ContactPrefill | null {
   const value = pending;
   pending = null;

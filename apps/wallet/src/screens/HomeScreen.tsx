@@ -33,8 +33,9 @@ import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { TopUpCard } from '../components/TopUpCard';
 import { TopUpSheet } from '../components/TopUpSheet';
 import { TransactionSheet } from '../components/TransactionSheet';
+import { AccountButton } from '../components/AccountButton';
 
-export function HomeScreen() {
+export function HomeScreen({ onOpenAccount }: { onOpenAccount: () => void }) {
   const { lang, copy } = useLanguage();
   const home = useWalletHome();
   const { status, snapshot, fetchedAt, failure } = home;
@@ -119,6 +120,9 @@ export function HomeScreen() {
             transaction={openTx}
             branches={salon.branches}
             onClose={() => setOpenTxId(null)}
+            // "Report a problem with this payment" → Account → Contact us, with
+            // the receipt reference already handed over. src/support/contact.ts.
+            onReport={onOpenAccount}
           />
         </>
       }
@@ -147,7 +151,11 @@ export function HomeScreen() {
           */}
           <Text style={[text('displayM', lang), styles.salon]}>{salon.name}</Text>
         </View>
-        <LanguageToggle />
+        {/* design:195-198 — the switch and the avatar, in that order. */}
+        <View style={styles.headerControls}>
+          <LanguageToggle />
+          <AccountButton onPress={onOpenAccount} />
+        </View>
       </View>
 
       <WalletCard
@@ -243,6 +251,9 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   headerText: { flexShrink: 1, minWidth: 0 },
+  // `row` is already a logical direction on both targets, so the pair mirrors in
+  // Arabic without a conditional. See i18n/rtl.ts.
+  headerControls: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   greeting: { color: color.textMuted },
   salon: { color: color.ink, marginTop: 2 },
   offlineRetry: {

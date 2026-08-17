@@ -20,7 +20,9 @@ import {
 } from '@avo/types';
 import type { Member, PromotionSet, Salon, Transaction } from '@avo/types';
 
-const KEY = 'avo.wallet.home.v1';
+/** Exported so log-out can drop it without restating the string. */
+export const SNAPSHOT_KEY = 'avo.wallet.home.v1';
+const KEY = SNAPSHOT_KEY;
 
 export interface WalletSnapshot {
   member: Member;
