@@ -28,6 +28,7 @@ import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../aut
 import { badRequest, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import { computeMetrics, parsePeriod } from '../services/metrics';
 import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
 
@@ -227,22 +228,37 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(after);
   });
 
-  /** perms.dashboard */
-  app.get<{ Params: { id: string } }>('/salons/:id/metrics', async (req, reply) => {
-    const p = requireDashboardPerm(req, 'dashboard');
-    requireSameSalon(p, req.params.id);
+  /**
+   * perms.dashboard. Overview's four stat tiles, computed rather than stubbed.
+   *
+   * Every definition — what "active" counts, what "today" means, why a repeat
+   * visit is a charge and not a transaction — lives in services/metrics.ts next
+   * to the query that implements it. A metric's failure mode is not a crash, it
+   * is a merchant deciding on a number that means something other than what she
+   * thinks, so the definitions sit where they cannot drift from the SQL.
+   */
+  app.get<{ Params: { id: string }; Querystring: { period?: string } }>(
+    '/salons/:id/metrics',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'dashboard');
+      requireSameSalon(p, req.params.id);
 
-    // Real aggregation is phase 2 of build-plan.md; the gate is what this task
-    // owes, and the shape matches packages/mock so lane C is not blocked.
-    return reply.send({
-      activeMembers: 0,
-      activeMembersDelta: 0,
-      loadedTodayFils: 0,
-      knetSharePercent: 0,
-      repeatRatePercent: 0,
-      upcomingAppointments: 0,
-    });
-  });
+      const period = parsePeriod(req.query?.period);
+
+      const rows = await db
+        .select({ id: salon.id, timezone: salon.timezone })
+        .from(salon)
+        .where(eq(salon.id, req.params.id))
+        .limit(1);
+      const s = rows[0];
+      if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+      // The salon's zone, not the process zone: "loaded today" has to roll over
+      // at the salon's midnight, or the last three hours of every evening's
+      // takings land on yesterday's tile. See services/metrics.ts.
+      return reply.send(await computeMetrics(db, s, period));
+    },
+  );
 
   /** perms.shop */
   app.get<{ Params: { id: string } }>('/salons/:id/products', async (req, reply) => {
