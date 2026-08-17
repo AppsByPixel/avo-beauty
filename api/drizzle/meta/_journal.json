@@ -85,6 +85,13 @@
       "when": 1786940100000,
       "tag": "0011_promotions",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786940200000,
+      "tag": "0012_transaction_branch_assumed",
+      "breakpoints": true
     }
   ]
 }

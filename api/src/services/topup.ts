@@ -47,7 +47,7 @@
  * of them do.
  */
 
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import {
   add,
   commissionFor,
@@ -73,6 +73,7 @@ import { env } from '../env';
 import { claimKey, completeKey, isUniqueViolation } from './idempotency';
 import { decideEarning, loadPromotionInputs } from './promotions';
 import { writeAudit, type Executor } from './audit';
+import { resolveBranch } from './branch';
 
 // ------------------------------------------------------------ the machine --
 
@@ -272,14 +273,11 @@ function transactionId(): string {
   return `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
 }
 
-async function defaultBranchId(exec: Executor, salonId: string): Promise<string> {
-  const rows = await exec.execute(
-    sql`SELECT id FROM branch WHERE salon_id = ${salonId} ORDER BY id LIMIT 1`,
-  );
-  const first = (rows as unknown as Array<{ id: string }>)[0];
-  if (!first) throw notFound('no_branch', 'That salon has no branch.');
-  return first.id;
-}
+/**
+ * `defaultBranchId` USED TO LIVE HERE, identical to the copy in
+ * services/charge.ts. Both are now services/branch.ts § resolveBranch, which
+ * returns the attribution and whether it is a fact as two separate answers.
+ */
 
 // ------------------------------------------------------------ POST /topups --
 
@@ -352,7 +350,20 @@ export async function createTopUp(
     const bonus = percentOf(input.amountFils, bonusPercent);
 
     const id = ctx.failCreate ? `${intentId()}-GWFAIL` : intentId();
-    const branchId = await defaultBranchId(tx, s.id);
+    /**
+     * A TOP-UP HAS NO BRANCH TO ESTABLISH — it happens on a phone. So this is an
+     * attribution and never anything more, and `branch.established` is ignored
+     * here rather than consulted: even a one-branch salon did not host this
+     * top-up, it merely has only one candidate to name.
+     *
+     * The promotion read below passes `null` for the same reason, and the
+     * settled transaction is written `branch_assumed = true` in every case. That
+     * is the honest reading and it costs the customer nothing: the branch
+     * boost's `topup` points were already skipped on this path before this
+     * change, deliberately, so nothing she earns moves.
+     */
+    const branch = await resolveBranch(tx, s.id);
+    const branchId = branch.branchId;
 
     /**
      * ------------------------------- the promotion bonus, decided server-side --
@@ -371,14 +382,15 @@ export async function createTopUp(
      * offer she acted on. The tier bonus was already locked here for the same
      * reason, and settlement credits `creditFils` verbatim.
      *
-     * BRANCH: `null`, not `branchId`. A wallet top-up happens on a phone, not at
-     * a branch — `defaultBranchId` above picks the salon's first branch by
-     * `ORDER BY id LIMIT 1` purely so the NOT NULL column has an attribution,
-     * and paying a per-branch percentage on that basis would make a customer's
-     * bonus depend on branch-id sort order. So the branch boost's `topup` points
-     * and any branch-scoped window are skipped; an `all`-scoped happy hour has
-     * no ambiguity to resolve and applies. services/promotions.ts §
-     * PromotionInputs carries the reasoning and the flag.
+     * BRANCH: `null`, not `branchId`, and unconditionally — this is the one
+     * place that does NOT consult `branch.established`. A wallet top-up happens
+     * on a phone, not at a branch, so there is nothing to establish; the
+     * resolver above names a branch purely so the NOT NULL column has an
+     * attribution. Paying a per-branch percentage on that basis would make a
+     * customer's bonus depend on branch-id sort order. So the branch boost's
+     * `topup` points and any branch-scoped window are skipped; an `all`-scoped
+     * happy hour has no ambiguity to resolve and applies. services/promotions.ts
+     * § PromotionInputs carries the reasoning and the flag.
      */
     const promoInputs = await loadPromotionInputs(tx, s.id, null);
     const promoPercent =
@@ -666,6 +678,14 @@ async function creditWallet(
     memberId: m.id,
     salonId: intent.salonId,
     branchId: intent.branchId,
+    /**
+     * ALWAYS TRUE for a top-up. The branch on the intent is an attribution for a
+     * NOT NULL column, not a place the money moved — she paid on her phone. See
+     * migration 0012; a per-branch total that counts wallet top-ups as footfall
+     * at whichever branch sorts first is exactly what the column exists to make
+     * visible.
+     */
+    branchAssumed: true,
     kind: 'topup',
     // Signed, credit positive: what actually landed, both bonuses included.
     amountFils: intent.creditFils,
