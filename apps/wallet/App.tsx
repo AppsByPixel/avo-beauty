@@ -39,30 +39,36 @@ import {
   IBMPlexSansArabic_700Bold,
 } from '@expo-google-fonts/ibm-plex-sans-arabic';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Pressable, Text, View, StyleSheet } from 'react-native';
+import Svg, { Path, Rect } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { color } from './src/theme';
+import { MIN_TAP_TARGET, color, text } from './src/theme';
 import { installFocusRing } from './src/theme/focus';
 import { SNAPSHOT_KEY } from './src/state/cache';
 import { PREFERENCES_KEY } from './src/state/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { AccountScreen } from './src/screens/AccountScreen';
-import { LanguageProvider } from './src/i18n/language';
+import { BookScreen } from './src/screens/BookScreen';
+import { LanguageProvider, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
+import { useWalletHome } from './src/state/useWalletHome';
+import { Toast, useToast } from './src/components/Toast';
+import { focusable } from './src/theme/focus';
+import type { BookingView } from './src/api/booking';
+import type { RescheduleTarget } from './src/state/useBooking';
 
 /**
- * The two built screens.
+ * The three built screens.
  *
- * NO ROUTER, DELIBERATELY, AND ONLY UNTIL THERE ARE MORE THAN TWO. The design's
- * wallet has five destinations (home, book, shop, pay, account) plus the auth
- * set, and that is a router's job — but installing one to switch between two
- * screens would add a dependency, a navigation container and a set of typed
- * route params to the tree before anything needs them. The seam is this union:
- * when Book and Shop land, this becomes a navigator and the two screens keep
- * their props unchanged.
+ * STILL NO ROUTER. The design's wallet has five destinations (home, book, shop,
+ * pay, account) plus the auth set, and that is a router's job — but a navigation
+ * container and a set of typed route params for three screens with no deep
+ * links and no back stack is machinery ahead of a need. The seam has not moved:
+ * when Shop and the auth screens land, this union becomes a navigator and none
+ * of the screens' props change.
  */
-type Screen = 'home' | 'account';
+type Screen = 'home' | 'book' | 'account';
 
 // interaction-spec.md §2's focus ring, as real CSS. At module scope so the rule
 // exists before the first control paints. Idempotent and a no-op off web.
@@ -85,17 +91,91 @@ export default function App() {
     IBMPlexSansArabic_700Bold,
   });
 
-  const [screen, setScreen] = useState<Screen>('home');
-
   if (!fontsLoaded) return <View style={styles.blank} />;
 
   return (
     <LanguageProvider initial={initialLanguage()}>
       <StatusBar style="dark" />
-      {screen === 'home' ? (
-        <HomeScreen onOpenAccount={() => setScreen('account')} />
-      ) : (
-        <AccountScreen
+      <Wallet />
+    </LanguageProvider>
+  );
+}
+
+/**
+ * The shell, inside the language provider so the nav labels can read copy.
+ *
+ * THE WALLET SNAPSHOT IS READ ONCE, HERE, AND HANDED DOWN.
+ *
+ * Home and Book both need the member and the salon, and both can move money —
+ * Book holds a deposit, Home cancels one and gets it back. Two `useWalletHome()`
+ * instances would be two balances, and the one on screen would be whichever
+ * screen happened to mount last. One state, one balance, and a `retry()` after
+ * every money move — non-negotiable #2: the new balance is the server's answer
+ * to `GET /members/me`, never a figure this app computed.
+ */
+function Wallet() {
+  const [screen, setScreen] = useState<Screen>('home');
+  const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null);
+  const home = useWalletHome();
+  const toast = useToast();
+
+  const goHome = useCallback(() => {
+    setScreen('home');
+    setReschedule(null);
+  }, []);
+
+  const startReschedule = useCallback((booking: BookingView) => {
+    setReschedule({ booking, artistId: booking.artistId, serviceId: booking.serviceId });
+    setScreen('book');
+  }, []);
+
+  const snapshot = home.snapshot;
+
+  return (
+    <View style={styles.root}>
+      <View style={styles.body}>
+        {screen === 'home' && (
+          <HomeScreen
+            home={home}
+            onOpenAccount={() => setScreen('account')}
+            onBook={() => {
+              setReschedule(null);
+              setScreen('book');
+            }}
+            onReschedule={startReschedule}
+            onToast={toast.show}
+          />
+        )}
+
+        {/*
+          Book needs the salon (its timezone, its deposit, its booking module)
+          and the member (her tier, for the top-up sheet's bonus row). Until the
+          snapshot lands there is nothing to draw it from, so Home stays up with
+          its skeletons rather than Book rendering a frame around a salon it
+          does not have.
+        */}
+        {screen === 'book' &&
+          (snapshot ? (
+            <BookScreen
+              salon={snapshot.salon}
+              member={snapshot.member}
+              onHome={goHome}
+              onBooked={home.retry}
+              reschedule={reschedule ?? undefined}
+              onToast={toast.show}
+            />
+          ) : (
+            <HomeScreen
+              home={home}
+              onOpenAccount={() => setScreen('account')}
+              onBook={() => setScreen('book')}
+              onReschedule={startReschedule}
+              onToast={toast.show}
+            />
+          ))}
+
+        {screen === 'account' && (
+          <AccountScreen
           onBack={() => setScreen('home')}
           /**
            * THERE IS NO SESSION TO END YET, AND THE BUTTON SAYS SO BY DOING THE
@@ -123,10 +203,126 @@ export default function App() {
            * unlock the password sheet. Until the reset screen exists it returns
            * to Home rather than pretending to send a link. Reported.
            */
-          onForgotPassword={() => setScreen('home')}
+            onForgotPassword={() => setScreen('home')}
+          />
+        )}
+      </View>
+
+      {/*
+        design:622-628 — the bottom navigation.
+
+        TWO TABS, NOT FOUR, AND THAT IS DELIBERATE. The design's nav carries
+        Home, Book, Shop and Pay. Shop is not built (design/README.md § Known
+        gaps) and Pay opens the QR overlay, which lives on the wallet card and
+        already has a tap target there. A tab that leads to a screen that does
+        not exist is worse than a tab that is not there yet — so the nav is a
+        list rather than a fixed four-up, and the other two drop in without a
+        layout change.
+
+        Hidden on Account, which the design pushes as a full screen with its own
+        back control rather than as a tab.
+      */}
+      {screen !== 'account' ? (
+        <BottomNav
+          screen={screen}
+          onHome={goHome}
+          onBook={() => {
+            setReschedule(null);
+            setScreen('book');
+          }}
         />
-      )}
-    </LanguageProvider>
+      ) : null}
+
+      <Toast message={toast.message} />
+    </View>
+  );
+}
+
+/** design:623-625 — the two built destinations, with the design's own glyphs. */
+function BottomNav({
+  screen,
+  onHome,
+  onBook,
+}: {
+  screen: Screen;
+  onHome: () => void;
+  onBook: () => void;
+}) {
+  const { lang, copy } = useLanguage();
+  return (
+    <View style={styles.nav}>
+      <NavItem
+        label={copy.navHome}
+        active={screen === 'home'}
+        onPress={onHome}
+        testID="nav-home"
+        lang={lang}
+        icon={
+          <Path
+            d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"
+            stroke="currentColor"
+            strokeWidth={1.7}
+            strokeLinejoin="round"
+          />
+        }
+      />
+      <NavItem
+        label={copy.navBook}
+        active={screen === 'book'}
+        onPress={onBook}
+        testID="nav-book"
+        lang={lang}
+        icon={
+          <>
+            <Rect x={4} y={5.5} width={16} height={15} rx={2.5} stroke="currentColor" strokeWidth={1.7} />
+            <Path
+              d="M4 9.5h16M8.5 3.5v4M15.5 3.5v4"
+              stroke="currentColor"
+              strokeWidth={1.7}
+              strokeLinecap="round"
+            />
+          </>
+        }
+      />
+    </View>
+  );
+}
+
+function NavItem({
+  label,
+  active,
+  onPress,
+  icon,
+  testID,
+  lang,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  icon: React.ReactNode;
+  testID: string;
+  lang: 'en' | 'ar';
+}) {
+  // Brand text and brand glyphs on a light surface are `brandDeep`, never
+  // `brand` — non-negotiable #9.
+  const tint = active ? color.brandDeep : color.textMuted;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label}
+      dataSet={focusable}
+      testID={testID}
+      style={styles.navItem}
+    >
+      <Svg width={23} height={23} viewBox="0 0 24 24" fill="none" color={tint}>
+        {icon}
+      </Svg>
+      <Text style={[text('bodyS', lang), { color: tint, fontWeight: '600', fontSize: 10.5 }]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -147,4 +343,29 @@ async function clearLocalState(): Promise<void> {
 
 const styles = StyleSheet.create({
   blank: { flex: 1, backgroundColor: color.canvas },
+  root: { flex: 1, backgroundColor: color.canvas },
+  body: { flex: 1 },
+  nav: {
+    // design:623 — the nav is part of the phone frame, so it is centred at the
+    // same 402pt as the screens above it rather than spanning a desktop window.
+    width: '100%',
+    maxWidth: 402,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingTop: 9,
+    paddingBottom: 20,
+    paddingHorizontal: 22,
+    borderTopWidth: 1,
+    borderTopColor: color.hairline,
+    backgroundColor: color.surface,
+  },
+  navItem: {
+    minWidth: MIN_TAP_TARGET,
+    minHeight: MIN_TAP_TARGET,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    paddingHorizontal: 12,
+  },
 });
