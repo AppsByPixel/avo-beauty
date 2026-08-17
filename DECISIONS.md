@@ -37,6 +37,61 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### I edited a lane's file twice. The first worked by luck; the second I reverted.
+
+**What happened.** Twice, a merge turned `dev` red on Lane D's tenancy gap ledger, and twice
+I edited `e2e/tenancy.test.ts` at trunk rather than waiting. The first time (Lane A's five
+read routes) it worked. The second time (four promotion write routes) **one failure became
+four** — the new *control* assertions need a happy hour seeded on salon B, and I do not know
+that harness's fixtures. I reverted.
+
+**The lesson, which I got backwards.** I justified the first edit on the grounds that the
+ledger's auto-discovery sibling had already proven tenancy, so only a list was stale. That
+reasoning was sound and the outcome was still luck: those five routes happened to need no
+fixture. Nothing in my reasoning distinguished the case that worked from the case that did
+not, which means it was not really reasoning.
+
+A rule that only holds when the data is simple is not a rule. **Trunk does not edit a lane's
+column to keep `dev` green — it routes to the lane and accepts a short red.** A red `dev`
+that someone is actively fixing is honest; a green one built on a guess about another
+suite's fixtures is not.
+
+**Current state:** `dev` carries one failing spec — the ledger listing four routes it does
+not yet cover. Tenancy is independently proven (the auto-discovery sibling passes on all
+four); only the hand-written half is stale. Lane D has the routes and is landing them.
+
+**To reverse:** nothing to reverse. The revert is the decision.
+
+
+### Branch boosts are stored and served but applied by nobody — HELD, not fixed
+
+**What Lane A found by running it.** The first live charge under the new promotion set
+**doubled a customer's visits**, because `defaultBranchId()` sorts `BR-KWC` before `BR-SAL`
+and Kuwait City carries a 2x visit boost. A sort order decided a loyalty multiplier.
+
+**Why it is not fixed yet, and must not be fixed the easy way.** The obvious patch is to let
+the client send its branch on `POST /charges`. That is wrong: **a client naming its branch is
+a client choosing its own multiplier**, which is non-negotiable #2 with extra steps — the
+same shape as a wallet minting its own token.
+
+The correct fix is a branch-bound scanner session. `StaffPrincipal` currently carries branch
+*access* — which branches this person may work at — not branch *location*, which is where
+this device is standing. Those are different facts and only the second one can price a
+charge.
+
+**Held because** it needs a decision about device enrolment that overlaps Lane B's finding
+that there is no device provisioning endpoint at all (it resolved PIN sign-in as one-time
+enrolment, adequate for a pilot on salon-owned hardware, explicitly not for release). Both
+want answering together, and the answer shapes the scanner's sign-in.
+
+**Meanwhile the exposure is real but bounded:** boosts are seeded for Kuwait City only, and
+the pilot salon is a single branch. It is wrong in the data, not yet wrong in front of a
+customer.
+
+**To reverse the hold:** add `branchId` to the charge body. Do not. Read the paragraph above
+first.
+
+
 ### `turbo.json` — `dev` now depends on `^build`. Third instance of one bug.
 
 **What.** `dev` was the last task with no `dependsOn`. Lane B found `dev` needed a manual
