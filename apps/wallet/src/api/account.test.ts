@@ -41,6 +41,12 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
             route: 'salon',
             message: 'x',
             ref: '',
+            // Resolved server-side from `ref`. This topic is an appointment
+            // question opened with no receipt behind it, so there is no charge
+            // to resolve and `null` is what the server serves. Kept null on
+            // purpose: these three specs are about routing, and a real id here
+            // would read as though one of them asserted the receipt link.
+            transactionId: null,
             via: 'wa',
             at: '2026-08-17T10:00:00+03:00',
             status: 'open',
