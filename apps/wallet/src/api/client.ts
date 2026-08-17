@@ -76,7 +76,7 @@ interface ErrorBody {
 }
 
 interface RequestOptions {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH';
   /** JSON body. Absent on a GET. */
   body?: unknown;
   /**
@@ -88,11 +88,17 @@ interface RequestOptions {
   signal?: AbortSignal | undefined;
 }
 
-async function request<S extends z.ZodTypeAny>(
+/**
+ * The transport half: everything up to and including "the server answered
+ * without an error status". Split out from `request` so that a 204 endpoint —
+ * `POST /members/me/password`, which returns no body precisely so that it cannot
+ * leak a password field (non-negotiable #6) — can share the failure
+ * classification without being handed a schema it has nothing to validate.
+ */
+async function send(
   path: string,
-  schema: S,
   options: RequestOptions,
-): Promise<z.infer<S>> {
+): Promise<{ response: Response; reference: string }> {
   const { method, body, idempotencyKey, signal } = options;
   const reference = newReference();
   const controller = new AbortController();
@@ -143,6 +149,16 @@ async function request<S extends z.ZodTypeAny>(
     );
   }
 
+  return { response, reference };
+}
+
+async function request<S extends z.ZodTypeAny>(
+  path: string,
+  schema: S,
+  options: RequestOptions,
+): Promise<z.infer<S>> {
+  const { response, reference } = await send(path, options);
+
   const parsed = schema.safeParse(await response.json());
   if (!parsed.success) {
     throw new ApiError(
@@ -179,4 +195,55 @@ export function postJson<S extends z.ZodTypeAny>(
   signal?: AbortSignal,
 ): Promise<z.infer<S>> {
   return request(path, schema, { method: 'POST', body, idempotencyKey, signal });
+}
+
+/**
+ * POST a request that moves no money and returns a body.
+ *
+ * Separate from `postJson` because the idempotency key there is a *required*
+ * positional argument, and that is deliberate — non-negotiable #4 is about money
+ * and a helper that let a top-up omit the key would be the bug. These calls
+ * (profile edits, a phone-change challenge, a support ticket) still take a key,
+ * but as an option: it protects against a double-submit creating two tickets
+ * rather than two charges, so the caller decides.
+ */
+export function postAction<S extends z.ZodTypeAny>(
+  path: string,
+  body: unknown,
+  schema: S,
+  options: { idempotencyKey?: string; signal?: AbortSignal } = {},
+): Promise<z.infer<S>> {
+  return request(path, schema, {
+    method: 'POST',
+    body,
+    idempotencyKey: options.idempotencyKey,
+    signal: options.signal,
+  });
+}
+
+/** PATCH a resource and validate the updated entity that comes back. */
+export function patchJson<S extends z.ZodTypeAny>(
+  path: string,
+  body: unknown,
+  schema: S,
+  signal?: AbortSignal,
+): Promise<z.infer<S>> {
+  return request(path, schema, { method: 'PATCH', body, signal });
+}
+
+/**
+ * POST something whose success is a 204 with no body.
+ *
+ * There is nothing to parse and nothing to return — which is the point for
+ * `POST /members/me/password`: api-contract.md rule 5 says the endpoint never
+ * returns a password field, and the surest way to keep that true is a response
+ * with no body to put one in. A caller that wanted a value back from this would
+ * be asking for something it must not have.
+ */
+export async function postNoContent(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<void> {
+  await send(path, { method: 'POST', body, signal });
 }
