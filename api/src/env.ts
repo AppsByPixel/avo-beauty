@@ -100,28 +100,50 @@ const EnvSchema = z.object({
   RECEIPT_DRIVER: z.enum(['logging']).default('logging'),
 
   /**
-   * THE WORKER IS OFF BY DEFAULT, AND THE REASON IS COORDINATION, NOT CAUTION.
+   * THE WORKER IS ON BY DEFAULT. It was off, and the reason was coordination
+   * rather than caution; the coordination has happened.
    *
-   * Lane D's e2e suite asserts, in so many words:
+   * WHAT THE OLD ASSERTION SAID, AND WHY IT BLOCKED THIS
+   * ----------------------------------------------------
+   * Lane D's gateway suite used to end a spec with:
    *
    *     expect(scalar(`select status from receipt_job ...`),
    *       'the receipt was marked sent inside the money transaction —
    *        the worker has not run').toBe('queued')
    *
-   * That spec is correct and was written to guard the outbox: a receipt marked
-   * `sent` inside the money transaction would mean the send happened where
-   * db/schema/receipt.ts says it must not. Running the worker against the same
-   * database flips `queued` to `sent` moments later and fails it — for the
-   * opposite reason to the one it is testing.
+   * Running the worker against the same database flips `queued` to `sent` a poll
+   * interval later and fails that — for the OPPOSITE reason to the one it was
+   * testing. Turning the flag on was therefore a change to another lane's spec,
+   * which CLAUDE.md does not allow from inside this one. So the worker was
+   * built, exercised and switchable, and left off.
    *
-   * Turning it on is therefore a change to Lane D's spec, and CLAUDE.md is
-   * explicit that a lane does not fix another lane's code from inside its own.
-   * The worker is built, exercised and switchable; the flag flips once Lane D
-   * has re-pinned that assertion.
+   * WHY IT NO LONGER DOES
+   * ---------------------
+   * Lane D restated it, and the correction is worth keeping: "the worker has not
+   * run" was never the invariant. It was an assumption about the environment
+   * that happened to hold. The invariant db/schema/receipt.ts exists for is that
+   * THE MONEY TRANSACTION QUEUES THE RECEIPT AND DOES NOT SEND IT — because an
+   * HTTP call inside the charge transaction holds row locks for the length of a
+   * third party's timeout, and turns a WhatsApp outage into a
+   * card-declined-at-the-counter outage.
+   *
+   * That is now asserted as the one state a queued send can never reach: `sent`
+   * with `attempts = 0`. `attempts` is incremented in exactly one place in this
+   * system — `claimJobs()` in services/receiptWorker.ts — so a `sent` row that
+   * was never claimed is the signature of a send that bypassed the queue. True
+   * whether the worker runs or not, which is what the old literal could not say.
+   * (`processJob` hands an attempt back for a channel its driver does not
+   * handle, and sets the row to `queued` when it does, never `sent` — so that
+   * path cannot forge the signature either.)
+   *
+   * A process that serves requests should drain its own outbox; leaving this off
+   * meant a production deploy queued receipts nobody sent. `server.ts` starts
+   * the worker, `buildApp()` does not, so a test that constructs handlers still
+   * gets a still outbox. Set `RECEIPT_WORKER_ENABLED=0` to hold one deliberately.
    */
   RECEIPT_WORKER_ENABLED: z
     .enum(['0', '1'])
-    .default('0')
+    .default('1')
     .transform((v) => v === '1'),
 
   /** Milliseconds between passes, measured from the END of the previous one. */

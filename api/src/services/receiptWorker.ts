@@ -55,8 +55,9 @@
  * ---------------------
  * `buildApp()` is what the tests construct, and a background loop attached to it
  * would send receipts inside every test run. The worker is started from
- * server.ts, behind `RECEIPT_WORKER_ENABLED`, which currently defaults OFF — see
- * env.ts for why that default is a coordination fact and not timidity.
+ * server.ts, behind `RECEIPT_WORKER_ENABLED`, which defaults ON — so a process
+ * that serves requests drains its own outbox, and one that merely exercises
+ * handlers leaves it still. See env.ts for the history of that default.
  */
 
 import { eq, sql } from 'drizzle-orm';

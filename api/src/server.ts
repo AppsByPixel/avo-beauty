@@ -24,7 +24,8 @@ const worker = env.receiptWorkerEnabled
 app.log.info(
   worker
     ? `receipt worker on, driver=${env.receiptDriver}`
-    : 'receipt worker off (RECEIPT_WORKER_ENABLED=0) — see env.ts for why',
+    : 'receipt worker OFF — RECEIPT_WORKER_ENABLED=0 was set deliberately, since ' +
+      'the default is on. Receipts will queue and nothing will send them.',
 );
 
 /**
