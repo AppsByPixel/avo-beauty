@@ -31,7 +31,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { check, index, integer, jsonb, pgEnum, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { check, index, integer, json, pgEnum, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 import { transaction } from './transaction';
 
@@ -61,7 +61,22 @@ export const idempotencyKey = pgTable(
     status: idempotencyStatus('status').notNull().default('in_progress'),
     /** The stored response, replayed verbatim on retry. */
     responseStatus: integer('response_status'),
-    responseBody: jsonb('response_body'),
+    /**
+     * `json`, NOT `jsonb`, and the difference IS the guarantee — migration 0015.
+     *
+     * jsonb does not store JSON; it stores a parsed value and re-serialises on
+     * read in its own canonical key order (shortest key first, then bytewise).
+     * So a jsonb replay is equal as a VALUE and different as a STRING, and "the
+     * retry gets the original answer" held only while every handler happened to
+     * build its response object in jsonb's collation. Adding two fields to the
+     * void response broke it — nothing about the money was wrong, the guarantee
+     * was.
+     *
+     * `json` keeps the bytes that were written. Its costs — no operator class,
+     * so no GIN index and no `=` comparison — are free here: this column is
+     * written once and read once, by primary key.
+     */
+    responseBody: json('response_body'),
     /** The effect this key guarded, when there was one. */
     transactionId: text('transaction_id').references(() => transaction.id, {
       onDelete: 'restrict',
