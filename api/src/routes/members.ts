@@ -19,7 +19,7 @@ import { transaction } from '../db/schema/transaction';
 import { hashSecret, verifySecret } from '../auth/password';
 import { requireMember, requireScannerPerm } from '../auth/principal';
 import { revokeOtherSessions } from '../auth/sessions';
-import { badRequest, conflict, notFound, tooManyRequests } from '../http/errors';
+import { badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../http/errors';
 import { serialiseTransactionForCustomer, type TransactionRow } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -83,6 +83,34 @@ function parseEmail(value: unknown): string | null {
 
 /** The five switches the Account screen draws. */
 const NOTIFICATION_KEYS = new Set(['push', 'remind', 'wa', 'receipt', 'offers']);
+
+/**
+ * "Removed within 30 days" — the wallet's own copy, and the privacy policy's:
+ * "the rest of your account data is deleted within 30 days of a deletion
+ * request". The number is the promise, so it is named once, here.
+ */
+const DELETION_GRACE_DAYS = 30;
+
+/**
+ * The deletion state, on the wire.
+ *
+ * `erasureScheduled: false` is the honest part. The clock is real and the state
+ * is real, but the job that does the erasing is not built — which columns are
+ * nulled at the due date and which survive the 7-year financial record is a
+ * retention decision that belongs to the client (CLAUDE.md § Open decisions).
+ * A client must be able to tell "we have your request and the clock is running"
+ * from "it has been carried out", and a response that implied the second would
+ * make the confirmation screen say something untrue.
+ */
+function serialiseDeletion(m: typeof member.$inferSelect) {
+  return {
+    requestedAt: m.deletionRequestedAt?.toISOString() ?? null,
+    erasureDueAt: m.deletionDueAt?.toISOString() ?? null,
+    status: m.deletionRequestedAt ? ('pending' as const) : ('none' as const),
+    graceDays: DELETION_GRACE_DAYS,
+    erasureScheduled: false,
+  };
+}
 
 /**
  * The screen-shaped response: four preferences and one consent, together.
@@ -342,6 +370,120 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
     });
 
     return reply.send(await serialiseNotifications(after ?? me));
+  });
+
+  // ---------------------------------------------------- account deletion --
+  /**
+   * "Removed within 30 days" — the promise the wallet's copy already makes, and
+   * which had nothing behind it.
+   *
+   * A STATE WITH A CLOCK, not a support ticket. The reasoning is in migration
+   * 0021 in full; the three steps are:
+   *
+   *   - it cannot be a hard delete. The privacy policy this API now serves says
+   *     both "transaction records are kept for 7 years" and "the rest of your
+   *     account data is deleted within 30 days". Two retention periods over one
+   *     customer means deletion is an ERASURE OF PERSONAL DATA that leaves the
+   *     money record standing — and `transaction`, `ledger_entry` and
+   *     `audit_log` reference her with restrict/append-only anyway, so the
+   *     database would refuse a DELETE regardless.
+   *   - it cannot be a ticket. Who staffs the AVO queue and in what hours is
+   *     still an open client decision, and a 30-day guarantee published in a
+   *     legal document must not depend on a rota nobody has agreed.
+   *   - so the clock is a database fact, on the row the eventual job reads.
+   *
+   * THE PASSWORD IS REQUIRED. This is the most destructive thing the wallet
+   * offers and the session alone should not be enough — an unlocked handset on
+   * a salon counter is the threat, and it is the same reasoning that makes
+   * `POST /members/me/password` demand `current`.
+   *
+   * SESSIONS ARE NOT REVOKED, deliberately. The 30 days are a grace window, and
+   * an account she is locked out of the moment she asks is one she cannot
+   * change her mind about. `DELETE` below is that door.
+   *
+   * A NON-ZERO BALANCE IS REFUSED. Her wallet is prepaid credit the salon owes
+   * her — non-negotiable #5 makes every refund wallet credit, and the terms say
+   * a closing salon "must settle any remaining balance with you". Erasing the
+   * account that names the money, while the money is still owed, is the one
+   * outcome nobody can undo. Refused with the amount and the way out named.
+   */
+  app.post('/members/me/deletion', async (req, reply) => {
+    const p = requireMember(req);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const password = typeof body.password === 'string' ? body.password : '';
+
+    const me = await loadMember(p.id);
+
+    if (!(await verifySecret(me.passwordHash, password))) {
+      throw unauthorized('That password does not match.', 'invalid_credentials');
+    }
+
+    if (me.deletionRequestedAt && me.deletionDueAt) {
+      // Idempotent. Asking twice is one request, and must not restart the clock
+      // — that would let a mis-tapped button quietly extend the 30 days.
+      return reply.send(serialiseDeletion(me));
+    }
+
+    if (me.balanceFils > 0) {
+      throw conflict('balance_outstanding', 'You still have credit in your wallet.', {
+        balanceFils: me.balanceFils,
+      });
+    }
+
+    const requestedAt = new Date();
+    const dueAt = new Date(requestedAt.getTime() + DELETION_GRACE_DAYS * 86_400_000);
+
+    const [after] = await db
+      .update(member)
+      .set({ deletionRequestedAt: requestedAt, deletionDueAt: dueAt, updatedAt: requestedAt })
+      .where(eq(member.id, me.id))
+      .returning();
+    if (!after) throw notFound('unknown_member', 'No such member.');
+
+    await writeAudit(db, p, {
+      salonId: me.salonId,
+      kind: 'access',
+      action: 'Account deletion requested',
+      detail: `Erasure due ${dueAt.toISOString().slice(0, 10)}`,
+      source: 'wallet',
+      subjectType: 'member',
+      subjectId: me.id,
+      metadata: { requestedAt: requestedAt.toISOString(), dueAt: dueAt.toISOString() },
+      ...clientMeta(req),
+    });
+
+    return reply.send(serialiseDeletion(after));
+  });
+
+  /** The grace window is only real if she can use it. */
+  app.delete('/members/me/deletion', async (req, reply) => {
+    const p = requireMember(req);
+    const me = await loadMember(p.id);
+
+    if (!me.deletionRequestedAt) {
+      throw notFound('no_deletion_request', 'There is no deletion request to cancel.');
+    }
+
+    const [after] = await db
+      .update(member)
+      .set({ deletionRequestedAt: null, deletionDueAt: null, updatedAt: new Date() })
+      .where(eq(member.id, me.id))
+      .returning();
+    if (!after) throw notFound('unknown_member', 'No such member.');
+
+    await writeAudit(db, p, {
+      salonId: me.salonId,
+      kind: 'access',
+      action: 'Account deletion cancelled',
+      detail: 'The account stays open',
+      source: 'wallet',
+      subjectType: 'member',
+      subjectId: me.id,
+      ...clientMeta(req),
+    });
+
+    return reply.send(serialiseDeletion(after));
   });
 
   // ------------------------------------------------- the phone change, part 1 --

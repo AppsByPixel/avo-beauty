@@ -148,6 +148,13 @@
       "when": 1786941000000,
       "tag": "0020_notification_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786941100000,
+      "tag": "0021_account_deletion",
+      "breakpoints": true
     }
   ]
 }

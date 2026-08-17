@@ -82,6 +82,25 @@ export const member = pgTable(
     notifyWa: boolean('notify_wa').notNull().default(true),
     notifyReceipt: boolean('notify_receipt').notNull().default(true),
 
+    /**
+     * ACCOUNT DELETION — a state with a clock, not a ticket. Migration 0021
+     * carries the full reasoning; the short form is that the published privacy
+     * policy names two retention periods over one customer ("transaction
+     * records are kept for 7 years" / "the rest of your account data is deleted
+     * within 30 days"), so deletion is an erasure of personal data that leaves
+     * the money record standing, and the 30-day promise cannot depend on a
+     * support rota nobody has agreed to staff.
+     *
+     * The window is also a GRACE period: sessions are not revoked and sign-in
+     * keeps working, because she has to be able to change her mind.
+     *
+     * The erasure job itself is NOT built. Which columns are nulled at the due
+     * date and which survive the 7 years is a retention decision that belongs
+     * to the client (CLAUDE.md § Open decisions), and it is escalated.
+     */
+    deletionRequestedAt: timestamptz('deletion_requested_at'),
+    deletionDueAt: timestamptz('deletion_due_at'),
+
     joinedAt: timestamptz('joined_at').notNull().defaultNow(),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -101,6 +120,16 @@ export const member = pgTable(
     check('member_visits_non_negative', sql`${t.visits} >= 0`),
     check('member_stamps_non_negative', sql`${t.stamps} IS NULL OR ${t.stamps} >= 0`),
     check('member_policy_version_positive', sql`${t.policyVersion} > 0`),
+    // Both or neither: a due date with no request, or a request with no due
+    // date, is a row the erasure job can neither act on nor report.
+    check(
+      'member_deletion_is_whole',
+      sql`(${t.deletionRequestedAt} IS NULL) = (${t.deletionDueAt} IS NULL)`,
+    ),
+    check(
+      'member_deletion_due_after_request',
+      sql`${t.deletionDueAt} IS NULL OR ${t.deletionDueAt} > ${t.deletionRequestedAt}`,
+    ),
   ],
 );
 
