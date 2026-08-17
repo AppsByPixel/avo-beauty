@@ -24,12 +24,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
 
-    # Mirrors api/.env.example. These are the compose stack's dev defaults, not
-    # secrets — the database exists only for the length of this job. Anything
-    # genuinely secret belongs in repository secrets, never here.
+    # DELIBERATELY NO job-level DATABASE_URL.
+    #
+    # There used to be one, pointing at a shared `avo`. The e2e harness read it
+    # and would have taken fixtures from one database while the API it booted
+    # wrote to another. Lane D pinned the harness to its own database; removing
+    # the variable removes the trap rather than working around it.
+    #
+    # Each step below that needs a database now names the one it means.
     env:
-      DATABASE_URL: postgres://avo:avo_dev_password@localhost:5433/avo
-      APP_DATABASE_URL: postgres://avo_app:avo_app_dev_password@localhost:5433/avo
       NODE_ENV: test
       GATEWAY_DRIVER: sandbox
 
@@ -48,29 +51,42 @@ jobs:
       - run: pnpm tokens
       - run: git diff --exit-code packages/tokens/src/generated.ts
 
-      # The tenancy and gateway suites drive real Postgres, because a mock with
-      # one salon cannot prove a salon boundary and a mock cannot exercise a
-      # BEFORE UPDATE trigger. They shell out to `docker exec avo-postgres`, so
-      # CI brings up the same compose stack a developer runs rather than a
-      # services: block, whose container name would not match.
-      # Build BEFORE anything that imports a workspace package at runtime.
-      # db:seed imports @avo/types for the money helpers, and turbo's build graph
-      # is not consulted by a bare `pnpm --filter ... run db:seed`. This is the
-      # third failure of the same shape this session: a step that needs a build
-      # artifact running before the build that makes it.
+      # Build BEFORE anything that imports a workspace package at runtime, and
+      # before the suites, which need the built types.
       - run: pnpm build
 
+      # The compose stack, not a `services:` block — the e2e harness shells out
+      # to `docker exec avo-postgres` by name, and a service container would not
+      # match it.
       - name: Start Postgres
         working-directory: api
         run: docker compose up -d --wait
 
-      - run: pnpm --filter @avo/api run db:migrate
-      - run: pnpm --filter @avo/api run db:seed
+      # A MIGRATION SMOKE TEST, not setup for the suites.
+      #
+      # This is worth its own step because it caught a real bug: `seed.ts`
+      # inserted artists before the staff users they referenced, which worked on
+      # every warm database and failed only on an empty one. CI was the only
+      # place an empty one existed.
+      #
+      # It runs against a throwaway database of its own so nothing downstream can
+      # accidentally depend on the rows it leaves behind.
+      - name: Migrations and seed apply to an empty database
+        working-directory: api
+        env:
+          DATABASE_URL: postgres://avo:avo_dev_password@localhost:5433/avo_migrate_check
+          APP_DATABASE_URL: postgres://avo_app:avo_app_dev_password@localhost:5433/avo_migrate_check
+        run: |
+          docker exec -i avo-postgres psql -U avo -d postgres \
+            -c "CREATE DATABASE avo_migrate_check OWNER avo;"
+          pnpm run db:migrate
+          pnpm run db:seed
 
-      # Nothing below may depend on a build artifact left over from a previous
-      # run. CI checks out clean; a local tree does not, which is exactly how a
-      # missing turbo dependency edge stayed invisible while every local run was
-      # green on a stale packages/types/dist.
+      # The suites mint their own per-run database in global-setup and drop it in
+      # teardown. Do NOT set POSTGRES_DB here: global-setup.ts skips the minting
+      # when it sees one, which silently puts every concurrent checkout back on
+      # the same fixtures — the bug that produced four different failure counts
+      # on one unchanged tree.
       - run: pnpm check
 
       - name: Postgres logs on failure
