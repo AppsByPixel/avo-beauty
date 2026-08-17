@@ -37,6 +37,54 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Turbo was caching test runs, so "green twice in a row" was one run and a 14ms replay
+
+**What.** `turbo.json`'s `test` task had no `"cache": false`. Turbo hashes source files; this
+workspace's e2e suite also depends on a running Postgres, a booted API process and the wall
+clock, none of which are in the hash. Measured on an unchanged tree:
+
+```
+run 1:  Cached: 0 cached, 22 total   Time: 2m26s
+run 2:  Cached: 22 cached, 22 total  Time: 14ms  >>> FULL TURBO
+```
+
+**Why it is worse than it looks, and Lane D's insight rather than mine:** turbo does **not**
+cache failures. So a flaky suite *looks* like it re-runs — every red run genuinely
+executes — and **the first green one seals it**. Every "green" after that is a replay of one
+lucky run's log, indefinitely.
+
+I reported "274 passed, twice consecutively" a few messages before this as evidence of
+stability. It was one real run and a fourteen-millisecond replay of its output.
+
+**Fixed:** `"cache": false` on `test` only. Build and typecheck stay cached — those are
+genuinely a function of the source they hash. Verified: three consecutive genuine runs, 323
+passed each, 13 of 22 tasks cached (the typecheck and lint ones).
+
+**To reverse:** delete the flag and get a test suite that reports success without running.
+
+### My diagnosis of the flakiness was wrong in mechanism, right in class
+
+I said vitest was running test files in parallel over a shared member. Lane D corrected all
+three parts:
+
+1. **`fileParallelism: false` had been set since the suite was written.** Files were never
+   parallel.
+2. **`money`, `concurrency` and `permissions` drive the in-memory mock**, not Postgres. They
+   cannot touch that member at all.
+3. The shared state was **one constant**: `PG_DB = process.env.POSTGRES_DB ?? 'avo_qa'`.
+   Every worktree carries a copy of the harness, every copy resolves it to the same eleven
+   characters, and they all `docker exec` into the same container. It was never lane D's own
+   database against another *checkout* running the same suite.
+
+It reproduced my exact numbers — two copies started twenty seconds apart failed **7 and 4**,
+two of the four counts I had seen — and got 0 and 0 after the fix. It also found a leaked
+API process, ppid 1, two and a half hours old, still polling `receipt_job`: the same bug
+through time rather than across worktrees.
+
+**The lesson I keep re-learning in new costume:** I had a plausible mechanism and stopped.
+Lane D reproduced before fixing, which is why the fix works and mine would not have.
+
+
 ### Booking landed, and Lane A found a live money bug in a path we had already shipped
 
 **`POST /voids` was under-refunding a deposit-funded charge.** It refunded

@@ -9,7 +9,23 @@
       "dependsOn": ["^build"]
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+
+      // NEVER cache a test run.
+      //
+      // Turbo hashes source files. This workspace's e2e suite also depends on a
+      // running Postgres, a booted API process and the wall clock — none of which
+      // are in the hash. So a second `pnpm check` on an unchanged tree replayed
+      // run one's log in 14ms and reported it as a pass.
+      //
+      // That is not a cosmetic problem. Turbo does not cache FAILURES, so a
+      // flaky suite looks like it re-runs — every red run really does execute —
+      // and the first green one seals it. "Green twice in a row" was one real
+      // run and a replay, and it was reported here as evidence of stability.
+      //
+      // Build and typecheck stay cached: those are genuinely a function of the
+      // source they hash.
+      "cache": false
     },
     "lint": {
       "dependsOn": ["^build"]
