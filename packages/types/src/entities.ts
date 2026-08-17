@@ -290,26 +290,76 @@ export const AvailabilitySlotSchema = z.object({
   /** Salon-local wall clock, "16:45" — what the customer is shown. */
   local: z.string(),
   available: z.boolean(),
-  /** The UI strikes unavailable slots through rather than hiding them. */
-  reason: z.enum(['busy', 'booked', 'closed', 'past']).nullable(),
+  /**
+   * OPTIONAL, not merely nullable. The server OMITS this key on an available
+   * slot rather than sending null.
+   *
+   * The distinction cost a round: a `.nullable()` that is not `.optional()`
+   * makes `reason` required, so **every bookable slot fails `.parse()`** — the
+   * entire Book grid. It hid on today's date, where every slot is already past
+   * and therefore carries a reason, which is exactly why the first fix looked
+   * like it worked.
+   */
+  reason: z.enum(['busy', 'booked', 'closed']).optional(),
+});
+
+/** What was removed from the open grid, reported rather than left to be inferred. */
+export const SubtractedBlockSchema = z.object({
+  from: DateTimeSchema,
+  to: DateTimeSchema,
+  reason: z.enum(['busy', 'booked']),
+  bookingId: IdSchema.optional(),
 });
 
 /**
- * `GET /artists/{id}/availability?date=` returns slots inside an envelope,
- * because *why* a grid looks the way it does is part of the answer.
+ * `GET /artists/{id}/availability?date=` — slots inside an envelope, because
+ * *why* a grid looks the way it does is part of the answer.
  *
- * When a Google-sourced artist has no live connection the API falls back to
- * salon hours and says so. That fallback deliberately over-offers rather than
- * under-offers — an over-offer is a booking the salon can move, an under-offer
- * is revenue that silently never happened — so the client has to be able to
- * tell the customer which grid she is looking at.
+ * Every field here is served. An earlier version of this schema declared four of
+ * them and zod stripped the rest, including `open` — which is how a client tells
+ * "she does not work that day" from an error, and `subtracted`, which is how a
+ * merchant reads a suspiciously wide day without correlating it against a
+ * notification.
  */
 export const AvailabilityDaySchema = z.object({
+  artistId: IdSchema,
   date: z.string(),
+  /** IANA zone the wall-clock strings are in. */
+  timezone: z.string(),
+  slotMinutes: z.number().int().positive(),
+  /** false with an empty `slots` means she does not work that day. */
+  open: z.boolean(),
   slots: z.array(AvailabilitySlotSchema),
+  subtracted: z.array(SubtractedBlockSchema),
+  /**
+   * `salon_hours` means this artist's own window was not trusted. The fallback
+   * deliberately over-offers, so the customer has to be able to tell which grid
+   * she is looking at.
+   */
   hoursSource: z.enum(['artist_windows', 'salon_hours']),
   /** Null unless `hoursSource` is `salon_hours`. Names why. */
   fallbackReason: z.enum(['calendar_not_connected', 'calendar_unavailable']).nullable(),
+});
+
+/**
+ * `GET /salons/{id}/artists/bookable` — what a CUSTOMER may see of an artist.
+ *
+ * Deliberately not `Artist`. Excluded and why, per Lane A: `handle`/`role`/
+ * `perms`/`branchAccess` are staff facts; `hasOwnLogin` is a staffing fact;
+ * `windows` is the internal week, and the raw week lets a customer infer who is
+ * booked when — she gets the computed grid, which has already subtracted other
+ * customers' bookings.
+ *
+ * `availabilityLive: false` is the answer without the mechanism: availability
+ * falls back to salon hours, which over-offers, so a slot she picks may be one
+ * the artist cannot work. WHY is the salon's problem and is in the merchant bell.
+ */
+export const BookableArtistSchema = z.object({
+  id: IdSchema,
+  salonId: IdSchema,
+  name: z.string().min(1),
+  nameAr: z.string().nullable(),
+  availabilityLive: z.boolean(),
 });
 
 export const ServiceSchema = z.object({
@@ -319,10 +369,12 @@ export const ServiceSchema = z.object({
   /**
    * The Book flow is the most Arabic-heavy screen in the wallet and it was
    * rendering Latin service names. Salon, Branch and Artist all carry this;
-   * Service was the omission.
+   * Service was the omission. Nullable — SV-05 is seeded NULL deliberately so
+   * the `nameAr ?? name` fallback has a real null path to prove.
    */
   nameAr: z.string().nullable(),
   priceFils: FilsSchema.positive(),
+  /** A retired service would build a basket the charge handler refuses. */
   active: z.boolean(),
 });
 
@@ -544,6 +596,8 @@ export type TopUpIntent = z.infer<typeof TopUpIntentSchema>;
 export type TopUpIntentPublic = z.infer<typeof TopUpIntentPublicSchema>;
 export type Booking = z.infer<typeof BookingSchema>;
 export type AvailabilityDay = z.infer<typeof AvailabilityDaySchema>;
+export type SubtractedBlock = z.infer<typeof SubtractedBlockSchema>;
+export type BookableArtist = z.infer<typeof BookableArtistSchema>;
 export type Service = z.infer<typeof ServiceSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;

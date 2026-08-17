@@ -37,6 +37,43 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### My fix for the third drift created the fourth, and hid it the same way
+
+**What.** I set `AvailabilitySlotSchema.reason` to `.nullable()`. The server **omits** the
+key on an available slot rather than sending null, so `reason` was required and **every
+bookable slot failed `.parse()`** — the entire Book grid, unvalidatable by any client using
+the contract.
+
+**Why it looked fixed.** It hides on today's date, where every slot is already past and
+therefore carries a reason. Lane A found it by asking for a future date. My verification
+asked for today.
+
+**And the same fix was narrow in the other direction:** with `reason` forced present, the
+envelope parsed and stripped `artistId`, `timezone`, `slotMinutes`, `open` and `subtracted`.
+`open: false` with an empty `slots` is how a client tells *"she does not work that day"*
+from an error — deleted in transit.
+
+**Four drifts now, all mine, all the same shape, none caught by a check.** The pattern is
+worth naming: I keep fixing the instance and not the class. `.nullable()` versus `.optional()`
+is a distinction I got wrong while writing a comment about how the last one had gone wrong.
+
+Fixed properly: slot `reason` optional, envelope carrying all nine served fields, plus
+`SubtractedBlockSchema` and `BookableArtistSchema`.
+
+**The durable fix is routed to Lane D:** a guard that parses real API responses and asserts
+no key was dropped and no required key was absent — both directions, because drifts 2 and 3
+lost fields and drift 4 wrongly required one. And on a **future** date, since that single
+choice is the difference between catching this one and shipping it.
+
+### `ServiceSchema` — a slip worth recording because of how I made it
+
+Splicing by string index between two anchors, I replaced everything between
+`AvailabilitySlotSchema` and `ProductSchema` — and `ServiceSchema` was sitting between them.
+The typecheck caught it immediately, so it cost a minute. Recorded because it is the third
+time today a shell/index rewrite has damaged a file I was editing, after twice telling a
+lane not to do exactly that. Use the editing tools.
+
+
 ### The contract was silently deleting the cancellation window
 
 **What.** `BookingSchema` was missing five fields the API sends, one of them
