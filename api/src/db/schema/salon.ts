@@ -141,6 +141,22 @@ export const branch = pgTable(
      * second branch before its first.
      */
     nameAr: text('name_ar'),
+    /**
+     * A CLOSED branch, not a deleted one. NULL means open.
+     *
+     * `transaction.branch_id` and `booking.branch_id` are both NOT NULL and
+     * `ON DELETE restrict`, so a branch that has ever taken money cannot be
+     * removed — and should not be. Per-branch revenue, a customer's receipt and
+     * an appointment history all name it, and that record has to outlive the
+     * merchant's interest in operating there. Same rule as `happy_hour`: the
+     * receipts refer to it, switch it off instead.
+     *
+     * A closed branch is excluded from `resolveBranch` (so it attracts no new
+     * money), from the happy-hour and boost branch pickers, and from the
+     * `branches` list every client renders. Its historic rows keep resolving to
+     * a row that still has a name.
+     */
+    closedAt: timestamptz('closed_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },

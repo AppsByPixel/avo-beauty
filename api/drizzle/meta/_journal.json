@@ -113,6 +113,48 @@
       "when": 1786940500000,
       "tag": "0015_idempotent_replay_is_byte_for_byte",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786940600000,
+      "tag": "0016_branch_close",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786940700000,
+      "tag": "0017_staff_onboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786940800000,
+      "tag": "0018_phone_change_challenge",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786940900000,
+      "tag": "0019_policies_and_support",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786941000000,
+      "tag": "0020_notification_preferences",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786941100000,
+      "tag": "0021_account_deletion",
+      "breakpoints": true
     }
   ]
 }

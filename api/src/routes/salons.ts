@@ -19,16 +19,18 @@
  * merchant-only in it.
  */
 
-import { and, desc, eq, inArray } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { branch, salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
+import { staffUser } from '../db/schema/staff';
 import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
-import { badRequest, notFound } from '../http/errors';
+import { badRequest, conflict, notFound } from '../http/errors';
+import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
 import { serialiseBooking, type BookingRow } from '../services/booking';
@@ -42,6 +44,19 @@ const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'canc
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
 const EDITABLE = new Set([
   'name',
+  /**
+   * `{ booking, shop }` — the shape `GET /salons/{id}` serves and the shape
+   * api-contract.md § Salon defines. Stored as two boolean columns, so this is
+   * the one editable field whose wire name is not its column name; the split
+   * happens in `applyModules` below.
+   *
+   * The COLUMN spellings (`moduleBooking` / `moduleShop`) are deliberately NOT
+   * accepted. Two doors into one field is how the tier ladder acquired an
+   * unvalidated second entrance, and a client that can spell a field two ways
+   * will eventually spell it both ways in one request. Lane C reads `modules`
+   * from the GET; it writes the same word back.
+   */
+  'modules',
   // `name` and `stampReward` are editable, so their Arabic twins are too. A
   // field the API serves but nothing can ever set is the same half-implemented
   // state this change exists to close: it would leave the Arabic name settable
@@ -104,55 +119,193 @@ function normaliseArabic(key: string, value: unknown): unknown {
   return trimmed === '' ? null : trimmed;
 }
 
+/**
+ * THE NUMERIC FIELDS, REFUSED AT THE DOOR RATHER THAN AT THE COLUMN.
+ *
+ * `depositFils: 5500.5` used to go into the patch object exactly as it arrived.
+ * Postgres refused it on the bigint column — the money was never at risk, and
+ * non-negotiable #1 held — but the refusal reached the merchant as
+ * `server_error`, "Something went wrong on our side". She cannot tell a typed
+ * "5.5" from an outage, and the API logged an unhandled error every time
+ * somebody mistyped a number.
+ *
+ * This is the same treatment `timezone` already had, and for the reason its
+ * comment gives: a validated field fails with a sentence naming the field, an
+ * unvalidated one fails somewhere else as somebody else's problem.
+ *
+ * The RANGE is checked here as well as by `salon_deposit_in_range`, so 500 fils
+ * is a sentence about the range instead of a constraint-violation 500. Both
+ * still exist: the CHECK is the guarantee, this is the explanation.
+ */
+const DEPOSIT_MIN_FILS = 1_000;
+const DEPOSIT_MAX_FILS = 10_000;
+
+function parseDepositFils(value: unknown): number {
+  const n = parseAmountFils(value, 'depositFils');
+  if (n < DEPOSIT_MIN_FILS || n > DEPOSIT_MAX_FILS) {
+    throw badRequest(
+      'deposit_out_of_range',
+      `The booking deposit has to be between ${DEPOSIT_MIN_FILS / 1000}.000 and ${DEPOSIT_MAX_FILS / 1000}.000 KD.`,
+    );
+  }
+  return n;
+}
+
+function parseNoShowReturnMinutes(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw badRequest(
+      'invalid_no_show_window',
+      'noShowReturnMinutes must be a whole number of minutes greater than zero.',
+    );
+  }
+  return value;
+}
+
+/**
+ * `modules: { booking, shop }` → the two boolean columns.
+ *
+ * A partial object is a partial update: `{ booking: true }` leaves Shop alone,
+ * because the Settings screen has two independent switches and sending the pair
+ * on every flip would let a stale render turn the other one off.
+ */
+function applyModules(value: unknown, patch: Record<string, unknown>): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw badRequest('invalid_request', 'modules must be an object like { booking, shop }.');
+  }
+  const incoming = value as Record<string, unknown>;
+  for (const key of Object.keys(incoming)) {
+    if (key !== 'booking' && key !== 'shop') {
+      throw badRequest('unknown_module', `Unknown module: ${key}. The modules are booking and shop.`);
+    }
+  }
+  for (const [key, column] of [
+    ['booking', 'moduleBooking'],
+    ['shop', 'moduleShop'],
+  ] as const) {
+    if (key in incoming) {
+      if (typeof incoming[key] !== 'boolean') {
+        throw badRequest('invalid_request', `modules.${key} must be true or false.`);
+      }
+      patch[column] = incoming[key];
+    }
+  }
+}
+
+/**
+ * THE Salon WIRE SHAPE — one function, so a read and a write cannot disagree.
+ *
+ * This existed only inside the GET handler, and `PATCH` answered
+ * `reply.send(after)` — the raw Drizzle row, carrying `moduleBooking` and
+ * `moduleShop` instead of `modules`, and no `branches` at all. Lane C cached
+ * that response as the new salon, which is what any reasonable client does with
+ * a 200 from a write, and every consumer of `salon.branches` got `undefined` on
+ * the next render. It took the whole Settings section to its error boundary.
+ * The workaround — stop caching the write, re-GET — works and means the write
+ * endpoint is telling the truth to nobody.
+ *
+ * `branches` carries only OPEN branches: a closed one is history, and every
+ * client renders this list as the places a customer can be sent to.
+ */
+function serialiseSalon(
+  s: typeof salon.$inferSelect,
+  branches: Array<typeof branch.$inferSelect>,
+) {
+  return {
+    id: s.id,
+    name: s.name,
+    // Emitted whether or not it is set, and emitted as JSON `null` when it is
+    // not. An OMITTED key and a null are the same thing to `??`, which is
+    // exactly why the missing implementation went unnoticed — so the absent
+    // case is now a value the client can actually see and a spec can actually
+    // assert on. What must never reach a client is the STRING "null".
+    nameAr: s.nameAr,
+    plan: s.plan,
+    brandColor: s.brandColor,
+    modules: { booking: s.moduleBooking, shop: s.moduleShop },
+    loyaltyMode: s.loyaltyMode,
+    tiers: s.tiers,
+    stampTarget: s.stampTarget,
+    stampReward: s.stampReward,
+    stampRewardAr: s.stampRewardAr,
+    depositFils: s.depositFils,
+    noShowReturnMinutes: s.noShowReturnMinutes,
+    /**
+     * Emitted to every surface, not just the dashboard. `businessHours` right
+     * below it is naive wall clock and means nothing without this — a wallet
+     * that renders "Open until 21:00" is rendering a string in a zone it was
+     * never told. The clients also need it to resolve `isHappyHourLive`
+     * themselves, every second, which is the whole point of there being no
+     * `live` flag.
+     */
+    timezone: s.timezone,
+    businessHours: s.businessHours,
+    branches: branches.map(serialiseBranch),
+    social: s.social,
+    whatsappEnabled: s.whatsappEnabled,
+  };
+}
+
+/** api-contract.md § Branch. `nameAr` for the reason db/schema/salon.ts gives. */
+function serialiseBranch(b: typeof branch.$inferSelect) {
+  return { id: b.id, salonId: b.salonId, name: b.name, nameAr: b.nameAr };
+}
+
+/** The open branches of a salon, in a stable order. */
+function openBranchesOf(salonId: string) {
+  return db
+    .select()
+    .from(branch)
+    .where(and(eq(branch.salonId, salonId), isNull(branch.closedAt)))
+    .orderBy(branch.id);
+}
+
+/** Read the salon or 404. Used by every handler in this file that writes one. */
+async function loadSalon(id: string): Promise<typeof salon.$inferSelect> {
+  const rows = await db.select().from(salon).where(eq(salon.id, id)).limit(1);
+  const s = rows[0];
+  if (!s) throw notFound('unknown_salon', 'No such salon.');
+  return s;
+}
+
+/**
+ * A branch of THIS salon, open or closed, or a 404.
+ *
+ * Scoped to the salon in the same predicate rather than fetched by id and
+ * checked afterwards — the same rule `POST /scans` learned the hard way. A
+ * branch of another tenant is `unknown_branch`, identical to one that does not
+ * exist, because a distinguishable 403 would confirm the id names something
+ * real somewhere else.
+ */
+async function loadBranch(salonId: string, id: string): Promise<typeof branch.$inferSelect> {
+  const rows = await db
+    .select()
+    .from(branch)
+    .where(and(eq(branch.id, id), eq(branch.salonId, salonId)))
+    .limit(1);
+  const b = rows[0];
+  if (!b) throw notFound('unknown_branch', 'No such branch.');
+  return b;
+}
+
+function branchId(): string {
+  return `BR-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
+
+/** The two audit columns every handler in this file fills the same way. */
+function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent: string | null } {
+  return {
+    ipAddress: req.ip ?? null,
+    userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+  };
+}
+
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
     const p = requirePrincipal(req);
     requireSameSalon(p, req.params.id);
 
-    const rows = await db.select().from(salon).where(eq(salon.id, req.params.id)).limit(1);
-    const s = rows[0];
-    if (!s) throw notFound('unknown_salon', 'No such salon.');
-
-    const branches = await db.select().from(branch).where(eq(branch.salonId, s.id));
-
-    return reply.send({
-      id: s.id,
-      name: s.name,
-      // Emitted whether or not it is set, and emitted as JSON `null` when it is
-      // not. An OMITTED key and a null are the same thing to `??`, which is
-      // exactly why the missing implementation went unnoticed — so the absent
-      // case is now a value the client can actually see and a spec can actually
-      // assert on. What must never reach a client is the STRING "null".
-      nameAr: s.nameAr,
-      plan: s.plan,
-      brandColor: s.brandColor,
-      modules: { booking: s.moduleBooking, shop: s.moduleShop },
-      loyaltyMode: s.loyaltyMode,
-      tiers: s.tiers,
-      stampTarget: s.stampTarget,
-      stampReward: s.stampReward,
-      stampRewardAr: s.stampRewardAr,
-      depositFils: s.depositFils,
-      noShowReturnMinutes: s.noShowReturnMinutes,
-      /**
-       * Emitted to every surface, not just the dashboard. `businessHours` right
-       * below it is naive wall clock and means nothing without this — a wallet
-       * that renders "Open until 21:00" is rendering a string in a zone it was
-       * never told. The clients also need it to resolve `isHappyHourLive`
-       * themselves, every second, which is the whole point of there being no
-       * `live` flag.
-       */
-      timezone: s.timezone,
-      businessHours: s.businessHours,
-      branches: branches.map((b) => ({
-        id: b.id,
-        salonId: b.salonId,
-        name: b.name,
-        nameAr: b.nameAr,
-      })),
-      social: s.social,
-      whatsappEnabled: s.whatsappEnabled,
-    });
+    const s = await loadSalon(req.params.id);
+    return reply.send(serialiseSalon(s, await openBranchesOf(s.id)));
   });
 
   /** perms.loyalty — the loyalty editor writes through here. */
@@ -169,9 +322,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       throw badRequest('not_editable', `These fields cannot be edited here: ${rejected.join(', ')}.`);
     }
 
-    const rows = await db.select().from(salon).where(eq(salon.id, req.params.id)).limit(1);
-    const before = rows[0];
-    if (!before) throw notFound('unknown_salon', 'No such salon.');
+    const before = await loadSalon(req.params.id);
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
@@ -180,6 +331,19 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     // rather than a 500 thrown out of `Intl.DateTimeFormat` inside the next
     // charge that tries to resolve a happy hour.
     if ('timezone' in body) patch.timezone = parseTimeZone(body.timezone);
+
+    // Every remaining field whose wire type is not its column type, or whose
+    // range the database states as a CHECK. See the helpers at the top.
+    if ('depositFils' in body) patch.depositFils = parseDepositFils(body.depositFils);
+    if ('noShowReturnMinutes' in body) {
+      patch.noShowReturnMinutes = parseNoShowReturnMinutes(body.noShowReturnMinutes);
+    }
+    if ('modules' in body) {
+      // `modules` is a wire shape, not a column. Remove it before the UPDATE or
+      // Drizzle would try to set a column that does not exist.
+      delete patch.modules;
+      applyModules(body.modules, patch);
+    }
 
     /**
      * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.
@@ -218,6 +382,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       .set(patch)
       .where(eq(salon.id, req.params.id))
       .returning();
+    if (!after) throw notFound('unknown_salon', 'No such salon.');
 
     await writeAudit(db, p, {
       salonId: p.salonId,
@@ -232,8 +397,316 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
     });
 
-    return reply.send(after);
+    // The SAME shape `GET` answers. See `serialiseSalon`.
+    return reply.send(serialiseSalon(after, await openBranchesOf(after.id)));
   });
+
+  // ========================================================================
+  // BRANCHES — the write path phase 4 was missing.
+  //
+  // THE PERMISSION IS `loyalty`, and it is worth saying why rather than
+  // leaving it to look arbitrary. Branches are a Settings concern, and
+  // `PATCH /salons/{id}` — the Settings write these three sit beside — is
+  // already gated on `perms.loyalty`. The nine permissions in
+  // api-contract.md § StaffUser have no "settings" among them, so a new gate
+  // would have to be invented, and inventing a tenth permission is a contract
+  // change this lane may not make. Gating the branch routes on anything
+  // WEAKER than the screen they live on would be the real defect: it would let
+  // a staff member who cannot change the deposit restructure the salon.
+  // Reported to trunk as a contract observation.
+  // ========================================================================
+
+  /** perms.loyalty. A salon opens a second location. */
+  app.post<{ Params: { id: string } }>('/salons/:id/branches', async (req, reply) => {
+    const p = requireDashboardPerm(req, 'loyalty');
+    requireSameSalon(p, req.params.id);
+    await loadSalon(req.params.id);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rejected = Object.keys(body).filter((k) => k !== 'name' && k !== 'nameAr');
+    if (rejected.length > 0) {
+      throw badRequest(
+        'not_editable',
+        `These fields cannot be set on a branch: ${rejected.join(', ')}.`,
+      );
+    }
+
+    const name = requireString(body.name, 'name', 120);
+    const nameAr = normaliseArabic('nameAr', body.nameAr) as string | null;
+
+    // `branch_salon_name_uq` spans CLOSED branches too, so this catches the
+    // re-opening case as well as the duplicate one. Asked here so the merchant
+    // gets a sentence naming the alternative, rather than a 23505 as a 500.
+    const clash = await db
+      .select({ id: branch.id, closedAt: branch.closedAt })
+      .from(branch)
+      .where(and(eq(branch.salonId, req.params.id), eq(branch.name, name)))
+      .limit(1);
+    if (clash[0]) {
+      throw conflict(
+        'branch_name_taken',
+        clash[0].closedAt
+          ? `This salon already has a branch called "${name}" that is closed. Re-open that one instead, so its history stays attached to it.`
+          : `This salon already has a branch called "${name}".`,
+      );
+    }
+
+    const id = branchId();
+    const [row] = await db.transaction(async (tx) => {
+      const inserted = await tx
+        .insert(branch)
+        .values({ id, salonId: req.params.id, name, nameAr })
+        .returning();
+
+      await writeAudit(tx, p, {
+        salonId: p.salonId,
+        kind: 'rules',
+        action: 'Branch opened',
+        detail: name,
+        source: 'merchant',
+        subjectType: 'branch',
+        subjectId: id,
+        metadata: { name, nameAr },
+        ...clientMeta(req),
+      });
+      return inserted;
+    });
+
+    if (!row) throw conflict('branch_not_created', 'That branch could not be created.');
+    return reply.code(201).send(serialiseBranch(row));
+  });
+
+  /** perms.loyalty. Rename a branch, in either language. */
+  app.patch<{ Params: { id: string; bid: string } }>(
+    '/salons/:id/branches/:bid',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'loyalty');
+      requireSameSalon(p, req.params.id);
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const keys = Object.keys(body);
+      if (keys.length === 0) throw badRequest('invalid_request', 'Nothing to change.');
+      const rejected = keys.filter((k) => k !== 'name' && k !== 'nameAr');
+      if (rejected.length > 0) {
+        throw badRequest(
+          'not_editable',
+          `These fields cannot be edited on a branch: ${rejected.join(', ')}.`,
+        );
+      }
+
+      const current = await loadBranch(req.params.id, req.params.bid);
+
+      const patch: Record<string, unknown> = { updatedAt: new Date() };
+      if ('name' in body) patch.name = requireString(body.name, 'name', 120);
+      if ('nameAr' in body) patch.nameAr = normaliseArabic('nameAr', body.nameAr);
+
+      if (typeof patch.name === 'string' && patch.name !== current.name) {
+        const clash = await db
+          .select({ id: branch.id })
+          .from(branch)
+          .where(and(eq(branch.salonId, req.params.id), eq(branch.name, patch.name)))
+          .limit(1);
+        if (clash[0]) {
+          throw conflict(
+            'branch_name_taken',
+            `This salon already has a branch called "${patch.name as string}".`,
+          );
+        }
+      }
+
+      const [row] = await db.transaction(async (tx) => {
+        const updated = await tx
+          .update(branch)
+          .set(patch)
+          .where(eq(branch.id, current.id))
+          .returning();
+
+        await writeAudit(tx, p, {
+          salonId: p.salonId,
+          kind: 'rules',
+          action: 'Branch renamed',
+          detail: `${current.name} → ${(patch.name as string | undefined) ?? current.name}`,
+          source: 'merchant',
+          subjectType: 'branch',
+          subjectId: current.id,
+          metadata: { before: serialiseBranch(current), changed: keys },
+          ...clientMeta(req),
+        });
+        return updated;
+      });
+
+      if (!row) throw notFound('unknown_branch', 'No such branch.');
+      return reply.send(serialiseBranch(row));
+    },
+  );
+
+  /**
+   * perms.loyalty. CLOSE a branch. It is not deleted, and this is the cascade
+   * the API owns rather than leaving to a foreign key.
+   *
+   * WHY A CLOSE. `transaction.branch_id` and `booking.branch_id` are both NOT
+   * NULL and `ON DELETE restrict`. A real DELETE of a branch that has ever
+   * taken money is refused by the database and arrives at the merchant as a
+   * 500 — and the refusal is correct, because per-branch revenue, a customer's
+   * receipt and an appointment history all name the branch. Same rule the
+   * happy-hour delete already states: the receipts refer to it, switch it off.
+   *
+   * THE THREE THINGS THAT REFERENCE A BRANCH, AND WHAT HAPPENS TO EACH:
+   *
+   * 1. STAFF (`staff_user.branch_access_ids`). The id is REMOVED from every
+   *    staff row in the salon, in this transaction, and each affected member is
+   *    named in the audit row. A staff member scoped only to this branch is
+   *    left with an EMPTY access list — she is not promoted to `all`.
+   *    Widening authority as a side effect of closing a location is exactly
+   *    the privilege escalation the permission model exists to prevent, and
+   *    "revoking charges takes void with it" is the same instinct: when a
+   *    change makes authority ambiguous, the safe direction is less.
+   *    The owner re-scopes her from Accounts → Team, and the audit row tells
+   *    her who needs it.
+   *
+   * 2. BOOKINGS. Left exactly as they are, and this is deliberate rather than
+   *    lazy. A booking's `branch_id` comes from `resolveBranch`, which for a
+   *    multi-branch salon is an ATTRIBUTION and is flagged `branch_assumed` as
+   *    such — services/branch.ts is explicit that such a value must not drive
+   *    a decision. Refusing to close a location because of appointments whose
+   *    branch was GUESSED would be a refusal built on a number the codebase
+   *    says is not knowledge. The count is reported and audited so the
+   *    merchant knows what she still has to deal with, and each booking runs
+   *    to its own end state; the deposit-return path is untouched by this and
+   *    a no-show at a closed branch still returns the customer's money.
+   *
+   * 3. TRANSACTIONS. Untouched, still pointing at a branch that still exists
+   *    and still has a name to render. That is the entire point of a close.
+   *
+   * The LAST OPEN BRANCH cannot be closed. `resolveBranch` refuses a salon with
+   * none, so the next charge, top-up and booking would all fail with
+   * `no_branch` — a total money outage produced by a settings change. Refused
+   * here with a sentence instead of discovered at the counter.
+   */
+  app.delete<{ Params: { id: string; bid: string } }>(
+    '/salons/:id/branches/:bid',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'loyalty');
+      requireSameSalon(p, req.params.id);
+
+      const current = await loadBranch(req.params.id, req.params.bid);
+
+      // Idempotent: closing a closed branch is not an error, and must not write
+      // a second audit row claiming it happened twice.
+      if (current.closedAt) return reply.send(serialiseBranch(current));
+
+      const open = await openBranchesOf(req.params.id);
+      if (open.length <= 1) {
+        throw conflict(
+          'last_open_branch',
+          'This is the salon\'s only open branch. A salon with no open branch cannot take a payment, a top-up or a booking — open the new location first, then close this one.',
+        );
+      }
+
+      const [liveBookings] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(booking)
+        .where(and(eq(booking.branchId, current.id), eq(booking.status, 'deposit_held')));
+      const heldCount = liveBookings?.n ?? 0;
+
+      const closedAt = new Date();
+      const { row, rescoped, stranded } = await db.transaction(async (tx) => {
+        const updated = await tx
+          .update(branch)
+          .set({ closedAt, updatedAt: closedAt })
+          .where(eq(branch.id, current.id))
+          .returning();
+
+        // Every staff row in the salon that names this branch. `array_remove`
+        // does it in one statement so there is no read-modify-write to race,
+        // and `RETURNING` names who was affected for the audit row.
+        // `array_remove` in ONE statement, so there is no read-modify-write for
+        // a concurrent permission change to race, and `RETURNING` names who was
+        // affected without a second query that could see a different world.
+        //
+        // Through the query builder rather than a raw `sql` template: the
+        // template binds `closedAt` as a Date straight to postgres.js, which
+        // refuses it, while the builder maps it through the column's own
+        // `timestamptz` codec.
+        const affected = await tx
+          .update(staffUser)
+          .set({
+            branchAccessIds: sql`array_remove(${staffUser.branchAccessIds}, ${current.id})`,
+            updatedAt: closedAt,
+          })
+          .where(
+            and(
+              eq(staffUser.salonId, req.params.id),
+              sql`${current.id} = ANY(${staffUser.branchAccessIds})`,
+            ),
+          )
+          .returning({
+            id: staffUser.id,
+            name: staffUser.name,
+            branchAccessIds: staffUser.branchAccessIds,
+          });
+
+        // `branch_access_all` staff are untouched by the UPDATE above — their id
+        // list is empty by the `staff_user_branch_access_exclusive` CHECK, so
+        // `= ANY(…)` never matches them. An empty list here can therefore only
+        // mean a member who was scoped to branches and now has none.
+        const strandedRows = affected.filter((s) => s.branchAccessIds.length === 0);
+
+        await writeAudit(tx, p, {
+          salonId: p.salonId,
+          kind: 'rules',
+          action: 'Branch closed',
+          detail:
+            `${current.name} closed` +
+            (affected.length ? ` · ${affected.length} staff re-scoped` : '') +
+            (strandedRows.length
+              ? ` · ${strandedRows.map((s) => s.name).join(', ')} ${strandedRows.length === 1 ? 'now has' : 'now have'} no branch access`
+              : '') +
+            (heldCount ? ` · ${heldCount} appointment(s) still hold a deposit here` : ''),
+          source: 'merchant',
+          subjectType: 'branch',
+          subjectId: current.id,
+          metadata: {
+            branch: serialiseBranch(current),
+            staffRescoped: affected.map((s) => ({
+              id: s.id,
+              name: s.name,
+              remaining: s.branchAccessIds.length,
+            })),
+            staffLeftWithNoBranch: strandedRows.map((s) => s.id),
+            depositHeldBookings: heldCount,
+          },
+          ...clientMeta(req),
+        });
+
+        return { row: updated[0], rescoped: affected, stranded: strandedRows };
+      });
+
+      if (!row) throw notFound('unknown_branch', 'No such branch.');
+
+      /**
+       * 200 with a body, not 204. A close is an UPDATE — the merchant's screen
+       * wants the row back to re-render it as closed, and `closedAt` is the
+       * fact she just created. A 204 would make the client re-read to find out
+       * what its own request did, which is the defect `PATCH /salons/{id}` had.
+       */
+      return reply.send({
+        ...serialiseBranch(row),
+        closedAt: row.closedAt?.toISOString() ?? null,
+        /**
+         * What the close actually touched — read from the UPDATE's own
+         * RETURNING, not re-queried afterwards, so it describes this close and
+         * not the salon's general state. The Settings screen says it out loud
+         * rather than leaving the merchant to find it in the audit log: both
+         * are consequences she cannot see from the branch list she was looking
+         * at, and `staffLeftWithNoBranch` is the one that needs her attention.
+         */
+        staffRescoped: rescoped.map((s) => s.name),
+        staffLeftWithNoBranch: stranded.map((s) => s.name),
+        depositHeldBookings: heldCount,
+      });
+    },
+  );
 
   /**
    * perms.dashboard. Overview's four stat tiles, computed rather than stubbed.

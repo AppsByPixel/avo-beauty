@@ -13,7 +13,17 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, pgEnum, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 import { salon } from './salon';
 
@@ -71,6 +81,18 @@ export const staffUser = pgTable(
     /** Can submit a campaign for AVO approval. Cannot send it — non-negotiable #8. */
     permMarketing: boolean('perm_marketing').notNull().default(false),
 
+    /**
+     * A LEAVER, not a deleted row. NULL means active.
+     *
+     * `transaction.created_by_staff_id`, `wallet_token.consumed_by_staff_id`
+     * and `artist.staff_user_id` all reference this table, and `audit_log`
+     * names the actor by id. The row is what makes a two-year-old charge still
+     * say who took it, so leaving removes the CREDENTIALS — `password_hash`
+     * and `pin_hash` are nulled and every session revoked — and keeps the
+     * identity. Re-hiring is a reset link against the same row.
+     */
+    deactivatedAt: timestamptz('deactivated_at'),
+
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -92,5 +114,50 @@ export const staffUser = pgTable(
       sql`(${t.pinHash} IS NULL) = (${t.pinDeviceId} IS NULL)`,
     ),
     check('staff_user_pin_attempts_non_negative', sql`${t.pinFailedAttempts} >= 0`),
+    // A leaver keeps nothing she can sign in with. The handler nulls both; this
+    // is the invariant the handler is an implementation of.
+    check(
+      'staff_user_deactivated_holds_no_credential',
+      sql`${t.deactivatedAt} IS NULL OR (${t.passwordHash} IS NULL AND ${t.pinHash} IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A password reset, as a LINK. Non-negotiable #6: "Owner console only ever
+ * sends a reset link."
+ *
+ * The sha256 of the token, never the token — the same treatment
+ * `session.refresh_token_hash` and `wallet_token.token_hash` get. The issuing
+ * endpoint answers 202 with no token in the body, because a reset that comes
+ * back through the manager's browser is a credential travelling through the
+ * wrong pair of hands, which is the thing the non-negotiable is about.
+ *
+ * This is an OUTBOX. `sentAt` is where a sender stamps itself; none is wired,
+ * for the reason receipts/types.ts sets out — unapproved WhatsApp templates and
+ * an undecided sending domain, both client decisions, neither waiting on code.
+ */
+export const staffPasswordReset = pgTable(
+  'staff_password_reset',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    staffId: text('staff_id')
+      .notNull()
+      .references(() => staffUser.id, { onDelete: 'cascade' }),
+    salonId: text('salon_id')
+      .notNull()
+      .references(() => salon.id, { onDelete: 'restrict' }),
+    tokenHash: text('token_hash').notNull(),
+    /** Who asked. A reset is an access event; the row carries the fact too. */
+    requestedBy: text('requested_by').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    sentAt: timestamptz('sent_at'),
+    usedAt: timestamptz('used_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('staff_password_reset_token_uq').on(t.tokenHash),
+    index('staff_password_reset_live_idx').on(t.staffId).where(sql`used_at IS NULL`),
+    check('staff_password_reset_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),
   ],
 );
