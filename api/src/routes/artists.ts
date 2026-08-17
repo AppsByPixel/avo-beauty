@@ -67,12 +67,15 @@
  * `TZ=UTC`; src/time/zone.test.ts asserts exactly that, because a test that only
  * runs in one zone cannot tell a correct conversion from an absent one.
  *
- * WHAT IS STILL NOT SUBTRACTED, AND SAID OUT LOUD
+ * WHAT IS SUBTRACTED NOW
  * The contract defines availability as "business hours minus Google busy blocks
- * minus existing bookings". Bookings do not exist yet and the Google sync is not
- * wired, so this endpoint returns the open grid. It reports `subtracted: []` so
- * a client can see that nothing was removed rather than infer it from a
- * suspiciously full day.
+ * minus existing bookings". Both halves exist: bookings are subtracted for real,
+ * and the Google busy overlay is read through the driver seam in src/calendar/,
+ * which today is a stub that honestly returns nothing rather than a fake that
+ * reports an artist free. The computation moved to services/availability.ts,
+ * because `POST /bookings` has to validate a start time against exactly the same
+ * grid this endpoint renders — two implementations of "is 16:45 bookable" is
+ * two answers, and the one the customer saw is not the one that took her money.
  * ===========================================================================
  */
 
@@ -90,13 +93,8 @@ import {
 } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
-import {
-  hhmmToMinutes,
-  minutesToHhmm,
-  parseDate,
-  wallClockInstant,
-  weekdayOf,
-} from '../time/zone';
+import { computeAvailability } from '../services/availability';
+import { parseDate } from '../time/zone';
 
 /** "10:00", "23:45". 24-hour, zero-padded, no seconds — the contract's "HH:mm". */
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -397,37 +395,6 @@ async function applyAvailability(
   });
 }
 
-/** A closed interval of salon-local minutes, half-open at the end. */
-interface Span {
-  from: number;
-  to: number;
-}
-
-/** a ∩ b, or null when they do not overlap. */
-function intersect(a: Span, b: Span): Span | null {
-  const from = Math.max(a.from, b.from);
-  const to = Math.min(a.to, b.to);
-  return to > from ? { from, to } : null;
-}
-
-/**
- * The salon's trading spans for one weekday.
- *
- * TWO of them, not one, and that is the Kuwaiti shape rather than an edge case —
- * `BusinessHoursSchema` is `{ morning: ["10:00","13:00"], evening: [...] }` and
- * the afternoon closure between them is real. An implementation that took
- * `morning[0]` to `evening[1]` would happily offer a 14:00 appointment at a
- * salon whose door is locked.
- */
-function tradingSpans(hours: { morning: [string, string]; evening: [string, string] }): Span[] {
-  const spans: Span[] = [];
-  for (const [from, to] of [hours.morning, hours.evening]) {
-    const span = { from: hhmmToMinutes(from), to: hhmmToMinutes(to) };
-    if (span.to > span.from) spans.push(span);
-  }
-  return spans;
-}
-
 export async function registerArtistRoutes(app: FastifyInstance): Promise<void> {
   // ------------------------------------ GET /artists/{id}/availability?date= --
   /**
@@ -451,66 +418,25 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
    *   local     "10:00", the label. Rendered as-is — a client that reformatted
    *             `startsAt` in the DEVICE's zone would show a customer in London
    *             her Kuwait appointment at 07:00 and let her believe it.
+   *
+   * EVERY slot is emitted, including the ones nobody can book. See
+   * services/availability.ts: a struck-through 16:45 says "somebody took it",
+   * a missing 16:45 says "this salon does not work at 16:45", and only one of
+   * those is true.
    */
   app.get<{ Params: { id: string }; Querystring: { date?: string } }>(
     '/artists/:id/availability',
     async (req, reply) => {
       const p = requirePrincipal(req);
 
-      const rows = await db.select().from(artist).where(eq(artist.id, req.params.id)).limit(1);
-      const a = rows[0];
-      // Checked against the artist's own salon, and answered as a 404 rather
-      // than a 403 for the reason routes/staff.ts gives: another salon's roster
-      // is not something this caller gets to probe.
-      if (!a || a.salonId !== p.salonId) throw notFound('unknown_artist', 'No such artist.');
-
-      const salonRows = await db.select().from(salon).where(eq(salon.id, a.salonId)).limit(1);
-      const s = salonRows[0];
-      if (!s) throw notFound('unknown_salon', 'No such salon.');
-
       // Required, not defaulted to "today". "Today" is a question about a zone,
       // and a server that answered it from its own clock would be making exactly
       // the mistake this endpoint exists to stop.
       const date = parseDate(req.query?.date, 'date');
-      const weekday = weekdayOf(date);
 
-      const window = a.windows[String(weekday)];
-      const open = a.active && window?.open === true;
-
-      const slots: Array<{ startsAt: string; endsAt: string; local: string }> = [];
-      if (open && window) {
-        const artistSpan = { from: hhmmToMinutes(window.from), to: hhmmToMinutes(window.to) };
-        for (const trading of tradingSpans(s.businessHours)) {
-          const span = intersect(artistSpan, trading);
-          if (!span) continue;
-          // `+ slotMinutes <= span.to` — a slot that would run past closing is
-          // not offered. Half a haircut is not availability.
-          for (let m = span.from; m + a.slotMinutes <= span.to; m += a.slotMinutes) {
-            slots.push({
-              startsAt: wallClockInstant(date, m, s.timezone).toISOString(),
-              endsAt: wallClockInstant(date, m + a.slotMinutes, s.timezone).toISOString(),
-              local: minutesToHhmm(m),
-            });
-          }
-        }
-      }
-
-      return reply.send({
-        artistId: a.id,
-        date: req.query?.date ?? '',
-        /** Echoed so a client never has to assume which zone `local` is in. */
-        timezone: s.timezone,
-        slotMinutes: a.slotMinutes,
-        open,
-        slots,
-        /**
-         * Nothing has been removed from the grid yet — bookings do not exist and
-         * the Google busy sync is not wired. Reported as an empty list rather
-         * than omitted so "nothing was subtracted" is a fact the client can see
-         * instead of an inference from a suspiciously full day.
-         */
-        subtracted: [] as string[],
-      });
+      return reply.send(
+        await computeAvailability(db, req.params.id, p.salonId, date, req.query?.date ?? ''),
+      );
     },
   );
 
