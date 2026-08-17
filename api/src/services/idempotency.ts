@@ -50,6 +50,28 @@ export function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === UNIQUE_VIOLATION;
 }
 
+/**
+ * WHICH unique index was violated.
+ *
+ * `isUniqueViolation` alone is not enough on any path where more than one unique
+ * index can fire, and treating them alike produced a real defect: a second void
+ * of the same charge violates `transaction_reverses_uq`, but the caller assumed
+ * every 23505 was an idempotency-key collision, went looking for the winner's
+ * stored response under a key that had never existed, found nothing, and
+ * answered `409 request_in_progress` — "still being processed, try again",
+ * which is wrong, invites a third attempt, and hides that the charge was already
+ * refunded.
+ *
+ * Postgres puts the index name in `constraint`, so the two cases are
+ * distinguishable and the caller has to say which one it means.
+ */
+export function violatedConstraint(err: unknown): string | null {
+  if (!isUniqueViolation(err)) return null;
+  return (err as { constraint_name?: string; constraint?: string }).constraint_name
+    ?? (err as { constraint?: string }).constraint
+    ?? null;
+}
+
 /** 'member:8842' / 'staff:ST-002'. One client's key cannot collide with another's. */
 export function principalScope(principal: Principal): string {
   return `${principal.kind}:${principal.id}`;

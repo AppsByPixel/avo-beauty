@@ -30,19 +30,26 @@
  * outright; and `GET /topups/{id}` reads the intent that was actually asked
  * for, scoped to its owner, 404ing on one that does not exist.
  *
- * THE COMMISSION IS NOT ON THE GET
- * -------------------------------
- * `GET /topups/{id}` is the wallet's read, so it answers the customer shape —
- * `TopUpIntentPublicSchema`, which is `TopUpIntentSchema` without `feeFils`. The
- * rule is api-contract.md § Commission and its addendum, confirmed by the
- * product owner: the split is configured at MyFatoorah and "the customer doesn't
- * see this of course, they just see the price". The omission is structural, not
- * a deleted line — services/topup.ts projects onto the contract's key list.
+ * THE COMMISSION IS ON NEITHER ENDPOINT
+ * -------------------------------------
+ * Both handlers answer the customer shape — `TopUpIntentPublicSchema`, which is
+ * `TopUpIntentSchema` without `feeFils`. The rule is api-contract.md
+ * § Commission and its addendum, confirmed by the product owner: the split is
+ * configured at MyFatoorah and "the customer doesn't see this of course, they
+ * just see the price". The omission is structural, not a deleted line —
+ * services/topup.ts projects onto the contract's own key list.
  *
- * `POST /topups` still answers the full shape, including `feeFils`. That is a
- * KNOWN INCONSISTENCY, not an oversight: it is equally customer-facing, and
- * Lane D's `money.test.ts` commission sweep asserts the fee on this exact
- * response, so the two endpoints cannot move independently. Flagged for trunk.
+ * `POST /topups` IS AS CUSTOMER-FACING AS THE GET, which is why it moved: the
+ * wallet is what calls it. It previously answered the full shape because Lane
+ * D's `money.test.ts` asserted `feeFils` on this exact response, so the two
+ * endpoints could not move independently. Those specs now read the commission
+ * off `topup_intent.fee_fils` instead — both where the number lives, and the
+ * stronger assertion, because it proves the fee was RECORDED rather than merely
+ * reported. With the blocker gone, the write side matches the read side.
+ *
+ * THE REPLAY IS COVERED BY THE SAME PROJECTION, not a second one. `createTopUp`
+ * stores the public body in the idempotency record, so the `stored.body` replay
+ * below cannot carry a fee the original response did not.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';

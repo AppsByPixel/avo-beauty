@@ -12,6 +12,7 @@
 
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   index,
   pgEnum,
@@ -67,6 +68,32 @@ export const transaction = pgTable(
     branchId: text('branch_id')
       .notNull()
       .references(() => branch.id, { onDelete: 'restrict' }),
+    /**
+     * TRUE when `branch_id` above is an attribution rather than a fact.
+     *
+     * That column is NOT NULL because the contract has no nullable branch and
+     * both clients render it unconditionally, so every money path must produce a
+     * value. When the branch was not established — a multi-branch salon, and a
+     * charge that cannot yet say where it happened — the value comes from
+     * `ORDER BY id LIMIT 1`, which is alphabetical order, not knowledge.
+     *
+     * The fallback used to be silent, and the silence is what made it dangerous:
+     * a salon with `BR-KWC` and `BR-SAL` paid every unattributed customer Kuwait
+     * City's 2x visit boost because 'BR-KWC' sorts first. The EARNING side is
+     * fixed at the source — an unknown branch matches no boost and no
+     * branch-scoped window, see services/branch.ts and services/promotions.ts
+     * § PromotionInputs. This column fixes the REPORTING side, which that does
+     * not touch.
+     *
+     * WHY A COLUMN AND NOT A LOG LINE. Per-branch revenue is a figure a merchant
+     * acts on. Without this, a defaulted row is indistinguishable from a real
+     * one forever, and the only honest answer to "is this branch total right" is
+     * "we cannot tell". With it, the answer is a WHERE clause.
+     *
+     * It goes all-false naturally once a branch-bound scanner session lands and
+     * charges know where they happened.
+     */
+    branchAssumed: boolean('branch_assumed').notNull().default(false),
 
     kind: transactionKind('kind').notNull(),
     /** Signed: credit positive, debit negative. */

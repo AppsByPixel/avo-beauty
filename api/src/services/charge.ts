@@ -38,7 +38,7 @@
  * answered with a cached 402 forever.
  */
 
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { add, fils, subtract, type Fils } from '@avo/types';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
@@ -49,6 +49,7 @@ import { ledgerEntry } from '../db/schema/ledger';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
+import { resolveBranch } from './branch';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { decideEarning, loadPromotionInputs, NO_PROMOTION } from './promotions';
 import { consumeToken, peekToken, TokenOutsideSalonError } from './walletToken';
@@ -215,7 +216,17 @@ export async function performCharge(
     const balanceAfter = subtract(balance, due);
 
     const txId = transactionId();
-    const branchId = input.branchId ?? (await defaultBranchId(tx, ctx.principal.salonId));
+    /**
+     * Two answers, not one, and keeping them apart is the whole point.
+     *
+     * `branchId` attributes the row — the column is NOT NULL and something has
+     * to go in it. `established` says whether that value is a fact or a
+     * fallback, and it is what every earning decision below is gated on. See
+     * services/branch.ts for the charge that doubled a customer's visits because
+     * these two used to be the same answer.
+     */
+    const branch = await resolveBranch(tx, ctx.principal.salonId, input.branchId);
+    const branchId = branch.branchId;
     const now = new Date();
 
     await tx
@@ -229,6 +240,8 @@ export async function performCharge(
       memberId: m.id,
       salonId: ctx.principal.salonId,
       branchId,
+      // The row says of itself whether its branch was known. See migration 0012.
+      branchAssumed: !branch.established,
       kind: 'charge',
       amountFils: fils(-due),
       method: 'wallet',
@@ -326,28 +339,38 @@ export async function performCharge(
      * the ordinary rate, silently and correctly. Non-negotiable #2.
      */
     /**
-     * `input.branchId`, NOT the `branchId` the row was attributed with.
+     * THE ESTABLISHED BRANCH, NOT THE ATTRIBUTED ONE. These differ exactly when
+     * the branch was a guess, and paying out on a guess is the defect this
+     * whole seam exists for.
      *
-     * They differ whenever the branch was not established, in which case
-     * `branchId` above is `defaultBranchId()` — the salon's first branch by id,
-     * chosen so the NOT NULL column has a value. Deciding a customer's earning
-     * rate from that would pay her Kuwait City's boost because 'BR-KWC' sorts
-     * before 'BR-SAL'. See services/promotions.ts § PromotionInputs.
+     * `branchId` on the row above may be `ORDER BY id LIMIT 1` talking.
+     * Deciding a customer's earning rate from that pays her Kuwait City's 2x
+     * because 'BR-KWC' sorts before 'BR-SAL' — which is not a hypothetical, it
+     * is what the first live charge did. `null` here means "not known", and
+     * services/promotions.ts § PromotionInputs matches it against no boost and
+     * no branch-scoped window.
      *
-     * TODAY IT IS ALWAYS NULL, AND THAT IS THE CORRECT STATE RATHER THAN A GAP.
+     * A SINGLE-BRANCH SALON IS NOW ESTABLISHED, which is a real behaviour
+     * change and a correction rather than a relaxation. There is no sort order
+     * to be at the mercy of and nowhere else the charge could have happened, so
+     * its boost applies — where before, every salon's branch was treated as
+     * unknown and a one-branch salon's boost never paid either.
+     *
+     * A MULTI-BRANCH SALON IS STILL UNKNOWN, and that is not fixable from here.
      * `POST /charges` takes `{ memberId, serviceIds[], token }` — the contract's
      * body, which has no branch in it — and routes/charges.ts does not read one.
      * It must not start: a client naming its own branch is a client choosing its
-     * own multiplier, which is non-negotiable #2 with extra steps. The branch has
-     * to arrive from something the server established, and `StaffPrincipal`
-     * carries branch ACCESS rather than a current location, so that is a
-     * branch-bound scanner session — flagged, not guessed at. Until then branch
-     * boosts are stored, served to both clients, and applied by neither.
+     * own multiplier, non-negotiable #2 with extra steps. The branch has to
+     * arrive from something the SERVER established, and `StaffPrincipal` carries
+     * branch ACCESS rather than a current location, so that is a branch-bound
+     * scanner session — flagged, not guessed at. Until then a multi-branch
+     * salon's boosts are stored, served to both clients, applied by neither, and
+     * every row they could have touched carries `branch_assumed = true`.
      */
     const promoInputs = await loadPromotionInputs(
       tx,
       ctx.principal.salonId,
-      input.branchId ?? null,
+      branch.established ? branchId : null,
     );
     const earning = promoInputs
       ? decideEarning(promoInputs, now)
@@ -557,15 +580,10 @@ export async function performCharge(
   });
 }
 
-/** A wallet-originated charge is attributed to the salon's first branch. */
-async function defaultBranchId(
-  tx: Parameters<Parameters<Db['transaction']>[0]>[0],
-  salonId: string,
-): Promise<string> {
-  const rows = await tx.execute(
-    sql`SELECT id FROM branch WHERE salon_id = ${salonId} ORDER BY id LIMIT 1`,
-  );
-  const first = (rows as unknown as Array<{ id: string }>)[0];
-  if (!first) throw notFound('no_branch', 'That salon has no branch.');
-  return first.id;
-}
+/**
+ * `defaultBranchId` USED TO LIVE HERE, and its twin lived in services/topup.ts.
+ * Both were `SELECT id FROM branch WHERE salon_id = $1 ORDER BY id LIMIT 1`,
+ * both returned a bare string, and neither said that the string was a guess.
+ * They are now one function that returns the guess and the fact separately —
+ * services/branch.ts, which carries the reasoning and the incident.
+ */
