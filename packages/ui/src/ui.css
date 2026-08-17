@@ -19,6 +19,8 @@
   --avo-ui-ink-10: color-mix(in srgb, var(--avo-ink) 10%, transparent);
   --avo-ui-ink-12: color-mix(in srgb, var(--avo-ink) 12%, transparent);
   --avo-ui-ink-14: color-mix(in srgb, var(--avo-ink) 14%, transparent);
+  /* The empty stamp-dot ring. */
+  --avo-ui-ink-18: color-mix(in srgb, var(--avo-ink) 18%, transparent);
   /* The unfilled permission-chip dot ring. */
   --avo-ui-ink-28: color-mix(in srgb, var(--avo-ink) 28%, transparent);
   --avo-ui-ink-38: color-mix(in srgb, var(--avo-ink) 38%, transparent);

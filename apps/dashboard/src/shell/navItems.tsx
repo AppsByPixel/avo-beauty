@@ -84,7 +84,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'loyalty',
     label: 'Loyalty',
     to: '/loyalty',
-    built: false,
+    built: true,
     title: 'Loyalty',
     subtitle: 'The reward mechanic for this salon',
     icon: (
