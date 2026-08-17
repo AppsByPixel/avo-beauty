@@ -15,7 +15,17 @@
 import type { z } from 'zod';
 import { scenarioHeader } from './scenario';
 
-export const API_BASE_URL = 'http://localhost:4000';
+/**
+ * Where the API lives.
+ *
+ * `packages/mock` serves :4000 and answers everything the Home, top-up and
+ * Account screens need. It does NOT implement booking — no `/bookings`, no
+ * `/artists/{id}/availability` — so the Book flow is built and driven against
+ * the real API (`api/`, lane A), which does. `EXPO_PUBLIC_AVO_API` selects it,
+ * exactly as apps/scanner already does, rather than this constant being edited
+ * back and forth by whoever ran the app last.
+ */
+export const API_BASE_URL: string = process.env['EXPO_PUBLIC_AVO_API'] ?? 'http://localhost:4000';
 
 /** Timeout past which we treat the request as a connection failure, not a 500. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -33,13 +43,48 @@ export class ApiError extends Error {
   /** Shown on the error screen so support can find the request. */
   readonly reference: string;
   readonly status: number | null;
+  /**
+   * The API's `error` field — `insufficient_balance`, `change_window_closed`,
+   * `slot_taken`, `booking_not_enabled`.
+   *
+   * THE THREE KINDS ARE NOT ENOUGH FOR BOOKING, AND THAT IS WHY THIS EXISTS.
+   * Home and Top up only ever had to tell "we failed" from "you can't" from
+   * "no connection", so the code was thrown away at this boundary. The Book
+   * flow cannot: a 402 has to become an inline shortfall with a top-up button,
+   * a 409 `change_window_closed` has to become the one-hour sentence on the
+   * Upcoming card, and a 409 `slot_taken` has to send her back to the grid. All
+   * three would otherwise collapse into one "Try again" that never works.
+   */
+  readonly code: string | null;
+  /**
+   * Whatever else the error body carried. On a 402 that is
+   * `{ shortfallFils, balanceFils, dueFils }` — non-negotiable #2 says the
+   * server owns the balance, which includes owning the difference, so the
+   * screen reads the shortfall off here rather than subtracting two numbers.
+   */
+  readonly details: Record<string, unknown>;
 
-  constructor(kind: FailureKind, message: string, reference: string, status: number | null) {
+  constructor(
+    kind: FailureKind,
+    message: string,
+    reference: string,
+    status: number | null,
+    code: string | null = null,
+    details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.kind = kind;
     this.reference = reference;
     this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+
+  /** The shortfall on a 402, in fils. Null on anything else. */
+  get shortfallFils(): number | null {
+    const v = this.details['shortfallFils'];
+    return typeof v === 'number' ? v : null;
   }
 }
 
@@ -73,10 +118,11 @@ export function newIdempotencyKey(): string {
 interface ErrorBody {
   error?: string;
   message?: string;
+  [key: string]: unknown;
 }
 
 interface RequestOptions {
-  method: 'GET' | 'POST' | 'PATCH';
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   /** JSON body. Absent on a GET. */
   body?: unknown;
   /**
@@ -141,11 +187,14 @@ async function send(
     } catch {
       /* a non-JSON error body is still an error; the status carries the meaning */
     }
+    const { error, message, ...details } = body;
     throw new ApiError(
       classify(response.status),
-      body.message ?? 'Something went wrong.',
+      message ?? 'Something went wrong.',
       reference,
       response.status,
+      error ?? null,
+      details,
     );
   }
 
@@ -219,6 +268,26 @@ export function postAction<S extends z.ZodTypeAny>(
     idempotencyKey: options.idempotencyKey,
     signal: options.signal,
   });
+}
+
+/**
+ * DELETE a resource and validate what comes back.
+ *
+ * NO IDEMPOTENCY KEY, AND THAT IS THE API'S REASONING RATHER THAN AN OMISSION.
+ * `DELETE /bookings/{id}` returns a deposit to the wallet, so by
+ * non-negotiable #4's letter it moves money — but api/src/routes/bookings.ts
+ * spells out why a key would be weaker here: a DELETE names ONE resource with
+ * one live state, and the `deposit_held → cancelled` transition happens under
+ * `FOR UPDATE`. A second cancel blocks, re-reads and is told `already_cancelled`
+ * — which also holds when the client sends two DIFFERENT keys, and a key would
+ * not.
+ */
+export function deleteJson<S extends z.ZodTypeAny>(
+  path: string,
+  schema: S,
+  signal?: AbortSignal,
+): Promise<z.infer<S>> {
+  return request(path, schema, { method: 'DELETE', signal });
 }
 
 /** PATCH a resource and validate the updated entity that comes back. */

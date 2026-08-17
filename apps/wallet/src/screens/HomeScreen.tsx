@@ -13,11 +13,15 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native';
-import { fils, type Fils } from '@avo/types';
+import { fils, formatMoney, type Fils } from '@avo/types';
 import { color, CONTROL_BORDER, MIN_TAP_TARGET, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { LanguageToggle } from '../components/LanguageToggle';
-import { useWalletHome } from '../state/useWalletHome';
+import type { HomeState } from '../state/useWalletHome';
+import { useUpcoming } from '../state/useBooking';
+import { useBookingLabels } from '../state/useBookingLabels';
+import { nextAppointment } from '../domain/booking';
+import type { BookingView } from '../api/booking';
 import { useWalletToken } from '../state/useWalletToken';
 import { useTopUp } from '../state/useTopUp';
 import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
@@ -31,13 +35,37 @@ import { HomeSkeleton } from '../components/HomeSkeleton';
 import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { TopUpCard } from '../components/TopUpCard';
+import {
+  NoUpcomingCard,
+  UpcomingCard,
+  UpcomingFailedCard,
+  UpcomingSkeleton,
+} from '../components/UpcomingCard';
 import { TopUpSheet } from '../components/TopUpSheet';
 import { TransactionSheet } from '../components/TransactionSheet';
 import { AccountButton } from '../components/AccountButton';
 
-export function HomeScreen({ onOpenAccount }: { onOpenAccount: () => void }) {
+interface HomeProps {
+  /**
+   * Lifted to App.tsx so that Home and Book read ONE wallet snapshot.
+   *
+   * Two `useWalletHome()` instances would be two `GET /members/me` calls and,
+   * worse, two balances: the Book flow could hold a deposit and Home would keep
+   * rendering the figure it read before the tap, until something happened to
+   * remount it. One state, one balance, re-read after every money move.
+   */
+  home: HomeState & { retry: () => void };
+  onOpenAccount: () => void;
+  /** Open the Book flow — the empty card's action and the Upcoming card's. */
+  onBook: () => void;
+  /** Move an existing appointment. The deposit carries; no money moves. */
+  onReschedule: (booking: BookingView) => void;
+  /** Fired with the cancellation toast, so it survives this screen re-rendering. */
+  onToast: (message: string) => void;
+}
+
+export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast }: HomeProps) {
   const { lang, copy } = useLanguage();
-  const home = useWalletHome();
   const { status, snapshot, fetchedAt, failure } = home;
 
   const [amount, setAmount] = useState<Fils>(DEFAULT_TOP_UP_AMOUNT);
@@ -69,6 +97,38 @@ export function HomeScreen({ onOpenAccount }: { onOpenAccount: () => void }) {
         ? snapshot.transactions.map((tx) => toActivityRow(tx, snapshot.salon.branches, lang, copy))
         : [],
     [snapshot, lang, copy],
+  );
+
+  /**
+   * The upcoming appointment.
+   *
+   * Only read when the salon actually takes bookings — `modules.booking`
+   * defaults OFF (AVO-Beauty-Product-Description-v2.md § Settings) and a card
+   * for a feature the salon does not have is worse than no card. The server
+   * enforces the module too, so this is the courtesy half of non-negotiable #7.
+   */
+  const bookingOn = snapshot?.salon.modules.booking === true;
+  const upcoming = useUpcoming({
+    enabled: bookingOn,
+    onChanged: home.retry,
+  });
+  const labels = useBookingLabels(snapshot?.salon.id ?? null, bookingOn);
+  const nextBooking = useMemo(
+    () => nextAppointment(upcoming.bookings, new Date()),
+    [upcoming.bookings],
+  );
+
+  const onCancel = useCallback(
+    async (booking: BookingView) => {
+      const refunded = await upcoming.cancel(booking.id);
+      // Only on success. A refused cancel renders its refusal on the card —
+      // a toast saying "deposit returned" for a 409 would be a lie the customer
+      // acts on.
+      if (refunded !== null) {
+        onToast(copy.cancelledToast(formatMoney(fils(refunded), lang)));
+      }
+    },
+    [upcoming, onToast, copy, lang],
   );
 
   if (status === 'loading' || (!snapshot && home.refreshing)) {
@@ -174,6 +234,35 @@ export function HomeScreen({ onOpenAccount }: { onOpenAccount: () => void }) {
       </WalletCard>
 
       <BranchEarning salon={salon} promotions={promotions} />
+
+      {/*
+        design:312-322 — the Upcoming card, between the branch note and the
+        top-up card. Four renderings, and the empty one is a card rather than
+        nothing: a section that vanishes reads as a screen that half-loaded.
+      */}
+      {bookingOn ? (
+        upcoming.status === 'loading' ? (
+          <UpcomingSkeleton />
+        ) : upcoming.status === 'failed' ? (
+          // NOT the empty card. See UpcomingFailedCard — a failed read here once
+          // told a customer she had no appointment moments after her deposit
+          // left her balance.
+          <UpcomingFailedCard onRetry={upcoming.reload} />
+        ) : nextBooking ? (
+          <UpcomingCard
+            booking={nextBooking}
+            salon={salon}
+            artistLabel={labels.artistLabel(nextBooking.artistId, lang)}
+            serviceLabel={labels.serviceLabel(nextBooking.serviceId)}
+            onReschedule={() => onReschedule(nextBooking)}
+            onCancel={() => void onCancel(nextBooking)}
+            busy={upcoming.busy}
+            failure={upcoming.actionFailure}
+          />
+        ) : (
+          <NoUpcomingCard onBook={onBook} />
+        )
+      ) : null}
 
       <TopUpCard
         member={member}

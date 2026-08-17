@@ -78,14 +78,16 @@ export function EmptyState({
   body,
   actionLabel,
   onAction,
+  testID,
 }: {
   title: string;
   body: string;
   actionLabel?: string;
   onAction?: () => void;
+  testID?: string;
 }) {
   return (
-    <View style={styles.card}>
+    <View style={styles.card} testID={testID}>
       <View style={styles.emptyInner}>
         <View style={styles.emptyIcon}>
           <Svg width={19} height={19} viewBox="0 0 24 24" fill="none">

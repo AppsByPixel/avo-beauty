@@ -231,6 +231,79 @@ export const en: Copy = {
   plus: (label) => `plus ${label}`,
   minus: (label) => `minus ${label}`,
 
+  // ══════════════════════════════════════════════════════════════════ book ══
+
+  navHome: 'Home', // design:1233
+  navBook: 'Book', // design:1233
+
+  bookTitle: 'Book', // design:1240
+  bookStep: (step, total) => `Step ${step} of ${total}`, // design:1876
+
+  chooseService: 'Choose a service', // design:1240
+  chooseArtist: 'Choose an artist', // design:1240
+  chooseDay: 'Pick a day', // design:1241
+  morning: 'Morning', // design:1241
+  evening: 'Evening', // design:1241
+  review: 'Review', // design:1241
+
+  availLive: 'Live availability', // design:1491
+  availSalon: 'Availability by salon hours', // design:1492
+  /**
+   * NOT DESIGN-SOURCED, and it could not be: the design's artist fixture has a
+   * static `live` boolean and never models a calendar that is *supposed* to be
+   * live and is not. The API does — `fallbackReason` — and it is the one
+   * difference the customer can act on, because the times she is being offered
+   * are the salon's rather than the artist's.
+   */
+  availFallback: "Showing the salon's own hours — this artist's calendar could not be reached.",
+
+  svcRow: 'Service', // design:1242
+  artistRow: 'Artist', // design:1242
+  whenRow: 'When', // design:1242
+  depositHeld: 'Deposit held', // design:1242
+  depositNote: (remainder) => `Held from your wallet · remainder ${remainder} paid at the salon.`, // design:1539
+  depShort: 'Top up your wallet to hold the deposit.', // design:1243
+
+  bookContinue: 'Continue', // design:1554
+  bookReviewCta: 'Review booking', // design:1550
+  bookConfirmCta: (deposit) => `Confirm · hold ${deposit}`, // design:1553
+  bookTopUpCta: 'Top up to book', // design:1552
+
+  booked: "You're booked", // design:1243
+  waConfirm: 'Confirmation sent on WhatsApp', // design:1244
+  viewHome: 'View on home', // design:1244
+  cancelPolicy:
+    'Free to cancel up to 24h before — the deposit returns to your wallet automatically.', // design:1245
+
+  bookedToast: (deposit) => `Booked · ${deposit} deposit held`, // design:1547
+  rescheduleToast: 'Pick a new time — your deposit carries over', // design:1773
+  cancelledToast: (deposit) => `Appointment cancelled · ${deposit} deposit returned`, // design:1774
+
+  bookEmptyDayTitle: 'Nothing on this day',
+  bookEmptyDayBody: 'This artist is not working then. Try another day.',
+  bookFullDayTitle: 'Fully booked',
+  bookFullDayBody: 'Every time on this day is taken. Try another day or another artist.',
+  slotTakenTitle: 'That time has gone',
+  slotTakenBody: 'Somebody booked it a moment before you. Pick another one.',
+  bookingOffTitle: 'This salon does not take appointments',
+  bookingOffBody: 'Nothing was held from your wallet.',
+  bookShortBy: (shortfall) => `Balance too low by ${shortfall}`, // design:1237 `shortMsg`
+
+  // ═════════════════════════════════════════════════ upcoming appointment ══
+
+  upcomingLabel: 'Upcoming', // design:1178
+  upDeposit: (deposit) => `${deposit} held`, // design:1179
+  upWith: (artist) => `with ${artist}`, // design:1178
+  reschedule: 'Reschedule', // design:1180
+  cancel: 'Cancel', // design:1179
+  reschedNote: 'Free until an hour before. After that the deposit stays with the salon.', // design:1180
+  changeClosedTitle: 'Too close to the appointment',
+  changeClosedBody:
+    'An appointment can be changed free until an hour before it starts. After that the deposit stays with the salon.',
+  noUpcomingTitle: 'No appointment booked',
+  noUpcomingBody: 'Book a service and your wallet holds the deposit.',
+  noUpcomingAction: 'Book',
+
   // ══════════════════════════════════════════════════════════════ account ══
   // design:1182-1231, verbatim.
   accountTitle: 'Account',

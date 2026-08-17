@@ -104,6 +104,18 @@ describe('dates and times are Eastern in Arabic', () => {
 // ---------------------------------------------------------------- policy ----
 
 /**
+ * The sample money string, as `formatMoney` would hand it over.
+ *
+ * Western digits, three decimals, and the unit attached — which is the whole
+ * point: the copy modules never format an amount, they interpolate one that has
+ * already been formatted, so the unit changes with the language without a single
+ * `kd: 'KD'` constant existing anywhere. The Arabic sample would be
+ * "5.000 د.ك"; the digits are identical either way, which is what
+ * MONEY_ARG_KEYS below asserts is allowed.
+ */
+const MONEY_SAMPLE = '5.000 KD';
+
+/**
  * Sample arguments for every copy entry that is a function. Numbers are chosen
  * multi-digit where possible so a partial conversion is visible.
  */
@@ -141,6 +153,20 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   // reason: a date and a version are counts, so Arabic renders them Eastern.
   legalUpdated: ['2026-07-01', 3],
   vfSub: ['+96599887766'],
+  // --- book ---
+  // A step counter and a total: counts, so Eastern in Arabic.
+  bookStep: [2, 4],
+  // An artist's name, already resolved to the reading language by
+  // domain/booking.ts § artistName.
+  upWith: ['رنا'],
+  // Everything below is handed an ALREADY-FORMATTED money string. See
+  // MONEY_ARG_KEYS.
+  depositNote: [MONEY_SAMPLE],
+  bookConfirmCta: [MONEY_SAMPLE],
+  bookedToast: [MONEY_SAMPLE],
+  cancelledToast: [MONEY_SAMPLE],
+  bookShortBy: [MONEY_SAMPLE],
+  upDeposit: [MONEY_SAMPLE],
 };
 
 /**
@@ -162,6 +188,32 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
  * customer, the server or the release owns — never a number this app computed.
  */
 const IDENTIFIER_KEYS = new Set(['vfSub', 'qrAria', 'appVersion']);
+
+/**
+ * Arabic strings that carry Western digits because what is interpolated is
+ * MONEY — the fourth category, and the one the Book flow introduced.
+ *
+ * Until booking, no copy string took an amount: the wallet card, the top-up
+ * calculation and every receipt row rendered money through `<Money>`, as its own
+ * node, so no sentence had a figure inside it. The design's booking copy does
+ * have them — `تأكيد · حجز 5.000 د.ك` (design:1553), `عربون 5.000 د.ك`
+ * (design:1286), `أُعيد العربون 5.000 د.ك` (design:1774) — and every one is
+ * written with WESTERN digits in the designer's own Arabic. That is
+ * non-negotiable #12 working exactly as specified, not an exception to it.
+ *
+ * What keeps this narrow rather than a hole: each of these keys takes ONE
+ * argument, that argument is always `formatMoney`'s output, and the surrounding
+ * sentence has no other number in it. A key that mixed a count and an amount
+ * would fail the mixed-script test below, which is not exempted here.
+ */
+const MONEY_ARG_KEYS = new Set([
+  'depositNote',
+  'bookConfirmCta',
+  'bookedToast',
+  'cancelledToast',
+  'bookShortBy',
+  'upDeposit',
+]);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */
 function render(copy: Copy): [string, string][] {
@@ -187,10 +239,10 @@ const GAPS = new Set<string>(AR_GAPS);
 describe('Arabic copy obeys the digit rule', () => {
   it('has no Western digit in any translated string', () => {
     const offenders = render(ar)
-      .filter(([key]) => !GAPS.has(key) && !IDENTIFIER_KEYS.has(key))
+      .filter(([key]) => !GAPS.has(key) && !IDENTIFIER_KEYS.has(key) && !MONEY_ARG_KEYS.has(key))
       .filter(([, value]) => hasWesternDigits(value));
     // The gaps are English and are allowed Western digits; nothing else is,
-    // except the identifier keys above.
+    // except the identifier keys and the money keys above.
     expect(offenders).toEqual([]);
   });
 

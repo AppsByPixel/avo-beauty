@@ -265,6 +265,115 @@ export const copy = {
   enrolDevice: 'Device ID',
   enrolSave: 'Save and continue',
   enrolChange: 'Set up this device',
+
+  // ------------------------------------------------------- my bookings ----
+  /** :138 — "3 upcoming · 2 new". */
+  bookingsCount: (total: number, isNew: number) =>
+    `${total} upcoming${isNew > 0 ? ` · ${isNew} new` : ''}`,
+  /** :138, verbatim after the em dash. */
+  bookingsSource: 'pulled from the AVO app and your Google Calendar.',
+  /** :142, verbatim. */
+  bookingsNote:
+    'Every new booking pings you with a push notification and lands here — synced with your Google Calendar automatically.',
+  /** :157 — "Deposit 5.000". The amount comes off formatFils, never a literal. */
+  bookingsDeposit: (amount: string) => `Deposit ${amount}`,
+  /** :155 */
+  bookingsNew: 'NEW',
+  /** :169-170 */
+  bookingsCall: 'Call',
+  bookingsWhatsApp: 'WhatsApp',
+  /** :693 — the group headings. Dates, so they are formatted rather than fixed. */
+  bookingsToday: 'Today',
+  bookingsTomorrow: 'Tomorrow',
+  /** :713-714 — where the booking came from. */
+  bookingsSrcApp: 'AVO app',
+  bookingsSrcGcal: 'Google Calendar',
+  /** The duration, off the booking's own `durationMin`. design:693-699. */
+  bookingsDuration: (minutes: number) =>
+    minutes < 60
+      ? `${minutes} min`
+      : minutes % 60 === 0
+        ? `${minutes / 60} hr`
+        : `${Math.floor(minutes / 60)} hr ${minutes % 60}`,
+  bookingsEmptyTitle: 'Nothing booked yet',
+  bookingsEmptyBody: 'When a customer books you in the AVO app, it lands here.',
+  /**
+   * `GET /artists/me/bookings` answers `404 not_an_artist` for a staff account
+   * with no artist row — a receptionist, a shared terminal. Not a refusal on
+   * authority: there is simply no calendar here, and the API says so in those
+   * words.
+   */
+  notArtistTitle: 'This account has no calendar',
+  notArtistBody:
+    'This login is not set up as a bookable artist, so it has no appointments of its own. A manager can add you to the team in the merchant dashboard.',
+
+  // ------------------------------------------------------- my schedule ----
+  /**
+   * :405, verbatim — the SCREEN's subtitle. Not `scheduleSub` above, which is
+   * :116, the home tile's one-liner. The design writes two different sentences
+   * and collapsing them loses the one that explains "no fixed slots".
+   */
+  scheduleIntro:
+    "Set the hours you're free — customers can book you in any open window. No fixed slots.",
+  /** :408-409 */
+  srcGoogle: 'Google Calendar',
+  srcManual: 'Set manually',
+  /** :811-812, both verbatim. */
+  srcManualNote:
+    'You set these hours yourself — no Google Calendar needed. Toggle a day, or drag the window earlier or later.',
+  srcGoogleNote:
+    'Synced live from your Google Calendar. Busy events block booking automatically. Switch to Set manually to edit here.',
+  /** :419 */
+  slotLengthLabel: 'Booking slot length',
+  /** :423 */
+  slotNote: (minutes: number) =>
+    `Each open day is offered as ${minutes} min appointments — set any length you like.`,
+  /** :657 — the chips read "15m", "30m". */
+  slotChip: (minutes: number) => `${minutes}m`,
+  /** :665 — "10:00 – 19:00 · 18 × 30m", and the closed-day line. */
+  daySummary: (from: string, to: string, slots: number, minutes: number) =>
+    `${from} – ${to} · ${slots} × ${minutes}m`,
+  dayOff: 'Day off',
+  /** :676 — the pill on a synced day. */
+  synced: 'Synced',
+  off: 'Off',
+  /** :441,:449 */
+  windowFrom: 'From',
+  windowTo: 'To',
+  /** :464-466 — the running summary in the footer. */
+  openDays: 'Open days',
+  openDaysValue: (open: number, total: number) => `${open} of ${total}`,
+  hoursPerWeek: 'Hours per week',
+  hoursValue: (hours: number) => `${Number.isInteger(hours) ? hours : hours.toFixed(1)} hrs`,
+  bookingSlots: 'Booking slots',
+  slotsValue: (slots: number) => `${slots} / week`,
+  /** :804 */
+  saveSchedule: 'Save schedule',
+  backToHome: 'Back to home',
+  scheduleSaved: 'Schedule saved',
+  /**
+   * `409 availability_is_synced`.
+   *
+   * SURFACED, NOT ONLY PREVENTED. The design draws a Google-sourced week as
+   * read-only rows with a Synced pill, which is a UI convention — and
+   * non-negotiable #7's whole point is that a convention is not a control. So
+   * the rows stay tappable, the server refuses, and the refusal names the fix.
+   * The body shown on screen is the API's own sentence.
+   */
+  syncedRefusedTitle: 'These hours come from Google',
+  /** `409 google_not_connected` — no calendar to switch back to. */
+  noCalendarTitle: 'No calendar connected',
+  /**
+   * The first-open state, and the endpoint that would remove it.
+   *
+   * There is no `GET /artists/me`, so the week cannot be drawn before a source
+   * is chosen — see src/api/artist.ts for the three routes that were checked.
+   * Choosing one is the design's own first control and the PUT returns the row,
+   * so nothing is invented and nothing is probed. Reported.
+   */
+  pickSourceTitle: 'Choose where your hours come from',
+  pickSourceBody:
+    'Your week loads once you pick a source. Google Calendar keeps it in sync; Set manually lets you edit it here.',
 } as const;
 
 export type Copy = typeof copy;
