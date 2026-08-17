@@ -83,7 +83,9 @@ import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist, SLOT_MINUTES, type ArtistWindows } from '../db/schema/artist';
-import { salon } from '../db/schema/salon';
+import { artistCalendarConnection } from '../db/schema/booking';
+import { calendar, CalendarNotConfiguredError } from '../calendar';
+import { env } from '../env';
 import {
   requireDashboardPerm,
   requirePrincipal,
@@ -91,9 +93,10 @@ import {
   requireSameSalon,
   type StaffPrincipal,
 } from '../auth/principal';
-import { badRequest, conflict, notFound } from '../http/errors';
+import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
 import { writeAudit } from '../services/audit';
 import { computeAvailability } from '../services/availability';
+import { resolveMerchantNotification } from '../services/notifications';
 import { parseDate } from '../time/zone';
 
 /** "10:00", "23:45". 24-hour, zero-padded, no seconds — the contract's "HH:mm". */
@@ -499,6 +502,138 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
     }
 
     return reply.send(await applyAvailability(target, p, req, 'scanner'));
+  });
+
+  // ----------------------------------- POST /artists/{id}/calendar/connect --
+  /**
+   * Start the Google connect. build-plan.md phase 6: "Google Calendar read-only
+   * connect".
+   *
+   * `perms.team` — it is the Team screen's action, and it changes where an
+   * artist's bookable hours come from, which is the same authority that edits
+   * them.
+   *
+   * TODAY THIS ANSWERS 503, AND THAT IS THE HONEST ANSWER. The driver is a stub
+   * because OAuth against Google needs a Cloud project owned by AVO — a client id
+   * and secret, a verified consent screen carrying AVO's name and privacy policy,
+   * and redirect URIs on AVO's domains. Those are issued to a legal entity and
+   * are the client's to create; a developer's personal project would put a
+   * salon's artists' calendars behind an account nobody at AVO controls.
+   *
+   * The refusal names all of it, so a merchant who taps Connect learns she is
+   * waiting on AVO rather than on herself. The alternative — a redirect to
+   * nowhere, or a fake "connected" state — is the failure src/calendar/stub.ts
+   * exists to refuse.
+   */
+  app.post<{ Params: { id: string } }>('/artists/:id/calendar/connect', async (req, reply) => {
+    const p = requireDashboardPerm(req, 'team');
+
+    const [target] = await db
+      .select()
+      .from(artist)
+      .where(and(eq(artist.id, req.params.id), eq(artist.salonId, p.salonId)))
+      .limit(1);
+    if (!target) throw notFound('unknown_artist', 'No such artist.');
+
+    try {
+      const started = await calendar.beginConnect({
+        salonId: p.salonId,
+        artistId: target.id,
+        redirectUri: env.calendarRedirectUrl,
+      });
+      return reply.send({ authorizeUrl: started.authorizeUrl, state: started.state });
+    } catch (err) {
+      if (err instanceof CalendarNotConfiguredError) {
+        throw serviceUnavailable('calendar_not_configured', err.message, {
+          driver: calendar.id,
+          artistId: target.id,
+        });
+      }
+      throw err;
+    }
+  });
+
+  // ------------------------------------------ DELETE /artists/{id}/calendar --
+  /**
+   * Disconnect. `perms.team`, same reasoning.
+   *
+   * IT ALSO SWITCHES HER TO MANUAL HOURS, and it has to: the CHECK
+   * `artist_google_source_requires_connection` refuses a row that claims its
+   * hours come from a calendar it is not connected to, so an artist left on
+   * `google` with `google_connected = false` is not a state the database will
+   * store. Doing it in one UPDATE is what stops a disconnect from being half
+   * applied.
+   *
+   * Her `windows` are KEPT, deliberately. They are the last thing the sync wrote
+   * and are the only hours anyone has for her; blanking them would leave the
+   * merchant re-typing a week she never chose to lose. They are now editable,
+   * which is exactly what "switch to Manual to set them here" means.
+   */
+  app.delete<{ Params: { id: string } }>('/artists/:id/calendar', async (req, reply) => {
+    const p = requireDashboardPerm(req, 'team');
+
+    const [target] = await db
+      .select()
+      .from(artist)
+      .where(and(eq(artist.id, req.params.id), eq(artist.salonId, p.salonId)))
+      .limit(1);
+    if (!target) throw notFound('unknown_artist', 'No such artist.');
+
+    if (!target.googleConnected) {
+      throw conflict('calendar_not_connected', 'That artist has no connected calendar.');
+    }
+
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(artist)
+        .set({
+          googleConnected: false,
+          // Forced by the CHECK, and correct: her hours are now hers to set.
+          availabilitySource: 'manual',
+          updatedAt: new Date(),
+        })
+        .where(eq(artist.id, target.id))
+        .returning();
+      if (!updated) throw notFound('unknown_artist', 'No such artist.');
+
+      await tx
+        .update(artistCalendarConnection)
+        .set({ status: 'revoked', updatedAt: new Date() })
+        .where(eq(artistCalendarConnection.artistId, target.id));
+
+      /**
+       * `access`, not `rules`. Revoking a third party's read access to a
+       * calendar is an authority change; the hours change that comes with it is
+       * a consequence, and the detail says so.
+       */
+      await writeAudit(tx, p, {
+        salonId: target.salonId,
+        kind: 'access',
+        action: 'Calendar disconnected',
+        detail: `${target.name}: Google calendar disconnected · hours switched to manual`,
+        source: 'merchant',
+        subjectType: 'artist',
+        subjectId: target.id,
+        metadata: { artistId: target.id, previousSource: target.availabilitySource },
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+
+      /**
+       * The disconnect notification is RESOLVED rather than raised. She is on
+       * manual hours now, deliberately, so there is nothing to warn about — and
+       * leaving a stale warning open would suppress the real one if her calendar
+       * is ever reconnected and then breaks.
+       */
+      await resolveMerchantNotification(tx, {
+        salonId: target.salonId,
+        kind: 'calendar_disconnected',
+        subjectType: 'artist',
+        subjectId: target.id,
+      });
+
+      return reply.send(serialiseArtist(updated));
+    });
   });
 
   // ------------------------------------------ PUT /artists/{id}/availability --
