@@ -24,6 +24,7 @@
  */
 
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
@@ -42,6 +43,7 @@ import {
   isUniqueViolation,
   principalScope,
   readIdempotencyKey,
+  violatedConstraint,
 } from '../services/idempotency';
 import { performCharge, VOID_WINDOW_MINUTES } from '../services/charge';
 import { writeAudit } from '../services/audit';
@@ -71,6 +73,24 @@ async function withIdempotency<T>(
     return { status: 200, body: result };
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
+
+    /**
+     * NOT EVERY UNIQUE VIOLATION IS AN IDEMPOTENCY-KEY COLLISION, and assuming
+     * so is what made a double void answer "still being processed".
+     *
+     * Two voids of one charge under two DIFFERENT keys race; one wins; the loser
+     * violates `transaction_reverses_uq`, not the key index. Falling through to
+     * the replay below would search for a committed response under a key that
+     * never collided, find nothing, and report a transient condition for a state
+     * that is permanent. `performVoid` catches the ordinary sequential case with
+     * a read; this is the same truth told for the race.
+     */
+    if (violatedConstraint(err) === 'transaction_reverses_uq') {
+      throw conflict(
+        'already_voided',
+        'That charge has already been voided. The customer was refunded to her wallet.',
+      );
+    }
 
     // Another request holds this key. Wait for its committed response and
     // replay it byte for byte rather than computing a second one.
@@ -140,9 +160,27 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
     const since = new Date();
     since.setHours(0, 0, 0, 0);
 
+    /**
+     * THE VOID IS A SEPARATE ROW, so the list has to go and look for it.
+     *
+     * A void is a compensating `adjustment` pointing back at the charge through
+     * `reverses_transaction_id` — the charge itself is never edited. That is
+     * right for the ledger and wrong for this screen, which was rendering a
+     * refunded charge identically to a live one and offering "Void this charge"
+     * a second time. The staff member then tapped it in front of the customer
+     * and got an error for doing what the screen invited.
+     *
+     * A self-join rather than a second query, so the flag cannot disagree with
+     * the row it is attached to. `reverses_transaction_id` is uniquely indexed,
+     * so this matches at most one reversal per charge and the join cannot
+     * duplicate a row.
+     */
+    const reversal = alias(transaction, 'reversal');
+
     const rows = await db
-      .select()
+      .select({ charge: transaction, reversal })
       .from(transaction)
+      .leftJoin(reversal, eq(reversal.reversesTransactionId, transaction.id))
       .where(
         and(
           eq(transaction.salonId, p.salonId),
@@ -154,7 +192,7 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
       .limit(200);
 
     return reply.send({
-      items: rows.map((t) => ({
+      items: rows.map(({ charge: t, reversal: v }) => ({
         id: t.id,
         memberId: t.memberId,
         branchId: t.branchId,
@@ -165,6 +203,19 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
         status: t.status,
         reference: t.reference,
         createdAt: t.createdAt.toISOString(),
+        /**
+         * Both, and deliberately not one.
+         *
+         * `voidedAt` is what the list renders — "Voided 14:32" is the sentence a
+         * human reads. `reversedByTransactionId` is what makes it auditable: it
+         * names the refund row, so "where did the money go" is answerable from
+         * the screen the question is asked on rather than from a ledger export.
+         * Null on a live charge, and null is a positive statement here — not
+         * voided — which is why the fields are always present rather than
+         * omitted when absent.
+         */
+        voidedAt: v ? v.createdAt.toISOString() : null,
+        reversedByTransactionId: v ? v.id : null,
       })),
       nextCursor: null,
     });
@@ -236,6 +287,38 @@ async function performVoid(
       throw badRequest('not_voidable', 'Only a charge can be voided.');
     }
 
+    /**
+     * ALREADY VOIDED IS ITS OWN ANSWER, not a retryable one.
+     *
+     * Without this the second void reached the insert, violated
+     * `transaction_reverses_uq`, and `withIdempotency` — which assumed every
+     * unique violation was an idempotency-key collision — answered `409
+     * request_in_progress`. The scanner then told the staff member "that request
+     * is still being processed, try again in a moment", in front of the
+     * customer: wrong, an invitation to try a third time, and concealing the
+     * actual state, which is that the charge was already refunded.
+     *
+     * The money was never at risk — the unique index held, and still does. This
+     * is about telling the truth. `already_voided` is a different sentence and a
+     * different screen.
+     *
+     * The read is inside the money transaction, so it cannot go stale between
+     * check and insert; the index below is still what makes "void once" true
+     * under a genuine race, and the catch in the caller translates that case to
+     * the same error rather than letting it read as transient.
+     */
+    const existingReversal = await tx
+      .select({ id: transaction.id })
+      .from(transaction)
+      .where(eq(transaction.reversesTransactionId, target.id))
+      .limit(1);
+    if (existingReversal[0]) {
+      throw conflict(
+        'already_voided',
+        'That charge has already been voided. The customer was refunded to her wallet.',
+      );
+    }
+
     // The 15-minute window. Past it, the merchant reimburses instead.
     const age = Date.now() - target.createdAt.getTime();
     if (age > VOID_WINDOW_MINUTES * 60_000) {
@@ -272,6 +355,10 @@ async function performVoid(
       memberId: m.id,
       salonId: principal.salonId,
       branchId: target.branchId,
+      // Inherited with the branch, not re-derived. A reversal is attributed
+      // exactly as confidently as the charge it undoes — claiming `false` here
+      // would launder a guessed branch into an established one on the way back.
+      branchAssumed: target.branchAssumed,
       kind: 'adjustment',
       amountFils: refund,
       method: 'wallet',
