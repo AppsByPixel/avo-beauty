@@ -350,6 +350,14 @@ export interface Copy {
   nReceiptSub: string;
   nOffers: string;
   nOffersSub: string;
+  /**
+   * The five switches could not be read. NOT a generic error: five switches
+   * drawn from defaults look like her settings and are not, so the section says
+   * it could not read them rather than showing a wrong `offers: false`.
+   */
+  notifErr: string;
+  /** One switch's write failed and it has been put back where it was. */
+  notifSaveErr: string;
 
   // account — wallet & policies
   /**
@@ -447,6 +455,20 @@ export interface Copy {
   deleteKeep: string;
   deleteGo: string;
   deleteFine: string;
+  /**
+   * The confirmed state, and the cancel door.
+   *
+   * NO DESIGN SOURCE. The design's sheet has both buttons call `closeDelete`
+   * (design:902-903) and never reaches a server, so it has copy for no outcome
+   * at all — neither the two refusals nor the request actually landing. The two
+   * refusals use the SERVER's own message, following ChangePasswordSheet; these
+   * three are the ones the client has to supply, and all three are in AR_GAPS.
+   */
+  deletePendingTitle: string;
+  /** The grace window is the SERVER's number — `graceDays`, not a local 30. */
+  deletePendingBody(days: number): string;
+  deleteCancel: string;
+  deleteCancelled: string;
 
   // the language switch itself
   langSwitch: string;

@@ -9,30 +9,39 @@
  * restating a field.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * WHAT EXISTS AND WHAT DOES NOT, AT THE TIME OF WRITING
+ * EVERY ROUTE IN THIS FILE IS NOW SERVED BY THE REAL API.
  *
- *   served by the mock AND the real API
- *     POST   /members/me/password
+ * That was not true when it was written, and the shape of the file is the
+ * record of it: three groups of calls, written against the contract's own paths
+ * and bodies so that when the endpoints landed nothing here would change.
+ * Nothing here did change — the calls were already right. What changed is that
+ * they now return instead of 404ing, and the screens above them can stop
+ * rendering honest failures.
  *
- *   served by the mock ONLY — the real API owes them
- *     GET    /v1/platform/policies
- *     GET    /v1/platform/support
- *     POST   /v1/support/tickets
+ *     POST   /members/me/password                          always existed
+ *     GET    /v1/platform/policies                         landed — all SEVEN
+ *                                                          documents, both
+ *                                                          languages. The mock
+ *                                                          served three.
+ *     GET    /v1/platform/support                          landed
+ *     POST   /v1/support/tickets                           landed
+ *     PATCH  /members/me                                   landed
+ *     POST   /members/me/phone-change                      landed
+ *     POST   /members/me/phone-change/{id}/verify          landed
+ *     GET    /members/me/notifications                     landed
+ *     PATCH  /members/me/notifications                     landed
+ *     POST   /members/me/deletion                          landed
+ *     DELETE /members/me/deletion                          landed
  *
- *   in api-contract.md, served by NEITHER — the API owes them
- *     PATCH  /members/me
- *     POST   /members/me/phone-change
- *     POST   /members/me/phone-change/{challengeId}/verify
+ * The last four were in NO contract at all and were escalated rather than
+ * invented — the deletion shape in particular, because whether deletion is a
+ * ticket, a queued job or a state on the member changes what the confirmation
+ * is ALLOWED to say, and the copy already promised "removed within 30 days".
+ * Lane A made it a member state with a clock, so the promise is now backed.
  *
- *   in NO contract and NO server — see `notifications.ts` and
- *   `requestAccountDeletion` below, both escalated rather than invented
- *     notification preferences
- *     account deletion request
- *
- * The three middle calls are written against the contract's own paths and
- * bodies, so when the endpoint lands nothing in this app changes. Until then
- * they fail the way any unbuilt route fails — a 404 classified as `server`, so
- * the sheet shows "we failed, try again" rather than pretending it saved.
+ * Their shapes are still not in api-contract.md. They are declared here as
+ * envelopes, built out of shared schemas where shared schemas exist, and
+ * reported to trunk rather than added to `packages/types` from this lane.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -45,7 +54,14 @@ import {
   SupportTicketSchema,
 } from '@avo/types';
 import type { LegalDoc, Member, SupportConfig, SupportTicket } from '@avo/types';
-import { getJson, newIdempotencyKey, patchJson, postAction, postNoContent } from './client';
+import {
+  deleteJson,
+  getJson,
+  newIdempotencyKey,
+  patchJson,
+  postAction,
+  postNoContent,
+} from './client';
 
 // ------------------------------------------------------------------ policies --
 
@@ -242,32 +258,131 @@ export function changePassword(
   return postNoContent('/members/me/password', { current, next }, signal);
 }
 
+// ------------------------------------------------------------- notifications --
+
+/**
+ * The five switches — server-held, and four of them were never the client's.
+ *
+ * This was device-local `AsyncStorage` while no endpoint existed, and the
+ * escalation said exactly why that was untenable: `wa` and `receipt` are sent
+ * BY THE SERVER, so a local "off" does not stop a receipt and the customer has
+ * been told it did. `offers` is marketing consent, which non-negotiable #8
+ * needs readable on the platform send path. Storage that cannot be read by the
+ * thing it is supposed to govern is not a preference, it is a false statement.
+ *
+ * `offersConsent` is the evidence beside the boolean: when she answered, from
+ * where, and under which version of the terms. The screen binds to `offers`;
+ * this type carries the rest because the response does, and because dropping it
+ * here is precisely the silent stripping the contract guard exists to catch.
+ *
+ * NOT IN api-contract.md. The API serves it and the shape is lane A's; it is
+ * declared here as an envelope rather than added to `packages/types` from this
+ * lane. Reported to trunk.
+ */
+export const ConsentStateSchema = z.object({
+  granted: z.boolean(),
+  /** Null when she has never been asked. No event at all means no consent. */
+  at: DateTimeSchema.nullable(),
+  source: z.enum(['signup', 'wallet_account', 'support', 'import']).nullable(),
+  policyVersion: z.number().int().positive().nullable(),
+});
+
+export const NotificationPreferencesSchema = z.object({
+  push: z.boolean(),
+  remind: z.boolean(),
+  wa: z.boolean(),
+  receipt: z.boolean(),
+  offers: z.boolean(),
+  offersConsent: ConsentStateSchema,
+});
+
+export type NotificationPreferencesResponse = z.infer<typeof NotificationPreferencesSchema>;
+
+export function getNotifications(signal?: AbortSignal): Promise<NotificationPreferencesResponse> {
+  return getJson('/members/me/notifications', NotificationPreferencesSchema, signal);
+}
+
+/**
+ * PATCH one switch, not all five.
+ *
+ * The API refuses an unknown key by name and refuses an empty body, and it
+ * records a consent EVENT only when the answer actually changes — re-sending
+ * the same value is a screen re-rendering, not the customer consenting again.
+ * Sending only the switch she touched is what keeps that true: a full-object
+ * PATCH would be indistinguishable from four deliberate answers.
+ */
+export function patchNotifications(
+  patch: Partial<Record<'push' | 'remind' | 'wa' | 'receipt' | 'offers', boolean>>,
+  signal?: AbortSignal,
+): Promise<NotificationPreferencesResponse> {
+  return patchJson('/members/me/notifications', patch, NotificationPreferencesSchema, signal);
+}
+
 // ------------------------------------------------------------------ deletion --
 
 /**
- * Request account deletion — the App Store requirement.
+ * Account deletion — a member state with a clock, which is what the copy needed.
  *
- * THERE IS NO ENDPOINT. Not in api-contract.md, not in packages/mock, not in
- * api/src/routes. Reported to lane A rather than invented here, because the
- * shape of this one is not a client decision: whether deletion is a ticket, a
- * queued job with a 30-day timer, or a state on the member changes what the
- * confirmation is allowed to say, and the copy already promises "removed within
- * 30 days".
+ * The wallet's copy has always promised "removed within 30 days" and there was
+ * nothing behind it; this function used to `console.warn` and return
+ * `{ recorded: false }`, because faking a confirmation is a data-protection
+ * problem rather than a TODO. The endpoint exists now and the promise is backed
+ * by `deletionDueAt` on the member row — `graceDays` comes back so the sentence
+ * states the server's number rather than a 30 hard-coded twice.
  *
- * So this does what the design does — design/AVO Wallet Home.dc.html:902-903,
- * where BOTH buttons in the delete sheet call `closeDelete` and nothing else —
- * and does not show a success message it cannot back. Faking one is the worst
- * available option: a customer told her data will be gone in 30 days, when
- * nothing was recorded, is a data-protection problem and not a TODO.
+ * TWO REFUSALS THE SCREEN HAS TO TELL APART, and neither is a generic error:
  *
- * When the endpoint lands, this is the only function that changes.
+ *   401 invalid_credentials   the password did not match, AND NOTHING HAPPENED.
+ *                             No clock started. She can simply try again.
+ *   409 balance_outstanding   she still holds credit. The error carries
+ *                             `balanceFils`, so the screen names the amount
+ *                             instead of telling her to go and look.
+ *
+ * The second is the one a real customer hits, because a wallet with money in it
+ * is the normal state of a wallet. Erasing the account that names money the
+ * salon owes her is the one outcome nobody can undo.
  */
-export function requestAccountDeletion(): { recorded: false; owes: string } {
-  if (__DEV__) {
-    console.warn(
-      '[avo] account deletion requested — no endpoint exists yet. ' +
-        'API owes: POST /members/me/deletion-request (shape undecided, escalated).',
-    );
-  }
-  return { recorded: false, owes: 'POST /members/me/deletion-request' };
+export const DeletionStateSchema = z.object({
+  requestedAt: DateTimeSchema.nullable(),
+  erasureDueAt: DateTimeSchema.nullable(),
+  status: z.enum(['none', 'pending']),
+  /** The grace window in days. The server's number, not a client constant. */
+  graceDays: z.number().int().positive(),
+  erasureScheduled: z.boolean(),
+});
+
+export type DeletionState = z.infer<typeof DeletionStateSchema>;
+
+/**
+ * The password is required and is sent for one request only.
+ *
+ * Non-negotiable #6: it is never stored, never cached, never logged, and the
+ * response cannot contain it. An unlocked handset on a salon counter is the
+ * threat this guards, which is the same reasoning behind
+ * `POST /members/me/password` demanding `current`.
+ *
+ * Idempotent server-side: asking twice is one request and does not restart the
+ * clock, so a double-tapped button cannot quietly extend the 30 days.
+ */
+export function requestAccountDeletion(
+  password: string,
+  signal?: AbortSignal,
+): Promise<DeletionState> {
+  return postAction(
+    '/members/me/deletion',
+    { password },
+    DeletionStateSchema,
+    signal ? { signal } : {},
+  );
+}
+
+/**
+ * Change her mind. The grace window is only real if she can use it.
+ *
+ * Sessions are deliberately NOT revoked on request, so she is still signed in
+ * and this door is reachable. 404 `no_deletion_request` when there was nothing
+ * pending — which the screen treats as already-cancelled rather than an error.
+ */
+export function cancelAccountDeletion(signal?: AbortSignal): Promise<DeletionState> {
+  return deleteJson('/members/me/deletion', DeletionStateSchema, signal);
 }
