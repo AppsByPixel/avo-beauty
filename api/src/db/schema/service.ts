@@ -26,6 +26,15 @@ export const service = pgTable(
       .notNull()
       .references(() => salon.id, { onDelete: 'restrict' }),
     name: text('name').notNull(),
+    /**
+     * Arabic service name. NULL when the salon has not supplied one, and the
+     * client falls back to `name` — the reasoning is migration 0006's, in full.
+     *
+     * This is the field the Book flow was missing. It is also the line on every
+     * receipt and in every transaction detail, so it is the string a customer
+     * reading Arabic sees more often than any other in the product.
+     */
+    nameAr: text('name_ar'),
     priceFils: filsColumn('price_fils').notNull(),
     /** Retired services stay for old transactions to reference; they just can't be charged. */
     active: boolean('active').notNull().default(true),
@@ -37,5 +46,9 @@ export const service = pgTable(
     index('service_salon_idx').on(t.salonId),
     // A free service is a rounding bug waiting to be argued about at a counter.
     check('service_price_positive', sql`${t.priceFils} > 0`),
+    // Absent is NULL; present means present. See migration 0006 and 0022 — a
+    // blank Arabic name defeats the `nameAr ?? name` fallback and paints an
+    // empty line where a service should be.
+    check('service_name_ar_not_blank', sql`${t.nameAr} IS NULL OR length(btrim(${t.nameAr})) > 0`),
   ],
 );

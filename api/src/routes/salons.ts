@@ -827,12 +827,37 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** The scanner's service list. Readable by anyone who may scan. */
+  /**
+   * The service list. Readable by anyone who may scan — and, since the Book
+   * flow, by the customer choosing what she is booking.
+   *
+   * `ServiceSchema` IS THE SHAPE, ALL FIVE FIELDS. This route served
+   * `{id, name, priceFils}` against a contract that also declares `salonId`,
+   * `nameAr` and `active`, so the wallet's most Arabic-heavy screen rendered
+   * Latin service names — `name_ar` did not exist until migration 0022, and the
+   * two fields that did exist were simply never selected.
+   *
+   * `active` IS EMITTED AND THE LIST IS STILL FILTERED ON IT, which reads like a
+   * contradiction and is not. The filter is a rule about money: a retired
+   * service cannot be charged — services/charge.ts prices a basket from these
+   * rows — so offering one would build a basket the charge handler then refuses
+   * at the counter. The field is contract conformance: `ServiceSchema` declares
+   * it non-optional, and a response omitting it fails `.parse()` in every client
+   * that validates. It is `true` on every row here, and that is a true
+   * statement rather than a placeholder.
+   */
   app.get<{ Params: { id: string } }>('/salons/:id/services', async (req, reply) => {
     const p = requirePrincipal(req);
     requireSameSalon(p, req.params.id);
     const rows = await db
-      .select({ id: service.id, name: service.name, priceFils: service.priceFils })
+      .select({
+        id: service.id,
+        salonId: service.salonId,
+        name: service.name,
+        nameAr: service.nameAr,
+        priceFils: service.priceFils,
+        active: service.active,
+      })
       .from(service)
       .where(and(eq(service.salonId, req.params.id), eq(service.active, true)));
     return reply.send({ items: rows, nextCursor: null });
