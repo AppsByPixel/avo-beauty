@@ -1683,3 +1683,599 @@ a:hover {
   color: var(--avo-text-muted-soft);
   line-height: 1.5;
 }
+
+/* =========================================================== appointments == */
+
+.appts {
+  max-width: 1000px;
+}
+
+/*
+ * The switched-off empty gets the design's tinted card (#F6F7F3 on a green
+ * hairline), not the plain white of the nothing-booked-yet one. Two empties
+ * that must never share copy should not share a silhouette either.
+ */
+.appts__off {
+  margin-top: 18px;
+  background: var(--avo-brand-tint2);
+  border-color: color-mix(in srgb, var(--avo-brand) 22%, transparent);
+}
+
+.appts__card {
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+/* interaction-spec.md §1: a data table scrolls, it never drops a column. */
+.appts__scroll {
+  overflow-x: auto;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.appts__table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.appts__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.appts__table tbody td {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: top;
+}
+
+.appts__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.appts__customer {
+  font-weight: 500;
+}
+
+.appts__muted {
+  color: var(--avo-text-muted-strong);
+}
+
+.appts__when {
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+/* The design sets the deposit in Fraunces — money reads as money everywhere. */
+.appts__deposit {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.appts__status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.appts__due,
+.appts__moved,
+.appts__assumed {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.4;
+}
+
+.appts__due {
+  white-space: nowrap;
+}
+
+/* A booking the artist's calendar never received. Quiet, but not invisible. */
+.appts__syncfail {
+  font-size: 11.5px;
+  color: var(--avo-danger-text);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+.appts__empty {
+  padding: 26px 20px;
+  text-align: center;
+}
+
+/*
+ * Both Appointments empties are centred in `AVO States.dc.html`, where the
+ * shared `.avo-state` is left-aligned — a deliberate earlier choice that five
+ * reviewed sections now depend on. Centred HERE rather than in @avo/ui, so this
+ * screen matches its design without restyling the other five.
+ */
+.appts .avo-state {
+  align-items: center;
+  text-align: center;
+}
+
+.appts .avo-state__body {
+  max-width: 42ch;
+}
+
+/* ================================================================ marketing == */
+
+.mk {
+  max-width: 1000px;
+}
+
+.mk__tabs {
+  display: inline-flex;
+}
+
+.mk__hint {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin: 8px 0 20px;
+}
+
+.mk__cardtitle {
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 500;
+  margin: 0 0 16px;
+}
+
+.mk__cardhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mk__cardhead .mk__cardtitle {
+  margin-bottom: 4px;
+}
+
+/* The clock the rows resolve against — quiet, but always visible. */
+.mk__clock {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-text-muted-soft);
+  white-space: nowrap;
+}
+
+.mk__cardsub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
+.mk__none {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+  padding: 14px 0;
+  margin: 0;
+}
+
+.mk__skeletons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.mk__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.mk__two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.mk__optional {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--avo-text-muted-soft);
+}
+
+/* ----------------------------------------------------------- campaigns -- */
+
+.mk__campaigns {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.mk__side {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mk__textarea {
+  line-height: 1.5;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.mk__count {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  align-self: flex-end;
+}
+
+.mk__submitrow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--avo-hairline);
+  flex-wrap: wrap;
+}
+
+.mk__submit {
+  margin-left: auto;
+}
+
+.mk__when {
+  max-width: 210px;
+}
+
+.mk__submitted {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--avo-brand-tint);
+  border-radius: 12px;
+  padding: 12px 15px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--avo-brand-deeper);
+  line-height: 1.5;
+}
+
+.mk__submitteddot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+}
+
+/* The push preview, on the design's warm grey slab. */
+.mk__phone {
+  background: var(--avo-toggle-off);
+  border-radius: var(--avo-radius-card);
+  padding: 18px 14px;
+}
+
+.mk__push {
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 15px;
+  padding: 13px 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.mk__pushhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.mk__pushmark {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 11px;
+  font-weight: 600;
+  /* Non-negotiable #9: never white on --avo-brand. */
+  background: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+.mk__pushapp {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-text-muted-label);
+}
+
+.mk__pushwhen {
+  font-size: 11px;
+  color: var(--avo-text-muted-soft);
+  margin-left: auto;
+}
+
+.mk__pushtitle {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.mk__pushbody {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--avo-text-muted-strong);
+}
+
+.mk__quiet {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  margin: 12px 0 0;
+  line-height: 1.5;
+}
+
+.mk__queuerow {
+  padding: 13px 0;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.mk__queuetop {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 5px;
+}
+
+.mk__queuetitle {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.mk__queuemeta {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}
+
+/* AVO's rejection note, verbatim and visually set apart from the salon's copy. */
+.mk__queuenote {
+  font-size: 12px;
+  color: var(--avo-text-muted-label);
+  background: var(--avo-surface);
+  border-radius: 9px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* -------------------------------------------------------------- boosts -- */
+
+.mk__boosts {
+  max-width: 860px;
+}
+
+.mk__boost {
+  border-top: 1px solid var(--avo-hairline);
+  padding: 18px 0;
+}
+
+.mk__boosthead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.mk__boostname {
+  font-family: var(--avo-font-display);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.mk__boostid {
+  font-family: var(--avo-font-display);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+.mk__boostgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.mk__boostcell {
+  background: var(--avo-surface);
+  border-radius: 13px;
+  padding: 14px;
+}
+
+.mk__boostlabel {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin-bottom: 10px;
+}
+
+.mk__boostsummary {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin: 11px 0 0;
+  line-height: 1.5;
+}
+
+.mk__boostfoot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 18px;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.mk__boostnote {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.mk__boostfoot .avo-btn {
+  margin-left: auto;
+}
+
+/* --------------------------------------------------------- happy hours -- */
+
+.mk__happy {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.mk__window {
+  border-top: 1px solid var(--avo-hairline);
+  padding: 16px 0;
+}
+
+/* A paused window is dimmed, but its text stays readable — the pill says why. */
+.mk__window[data-off] {
+  opacity: 0.62;
+}
+
+.mk__windowtop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.mk__windowtime {
+  font-family: var(--avo-font-display);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.mk__windowactions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.mk__remove {
+  width: 32px;
+  padding: 0;
+  color: var(--avo-text-muted-soft);
+}
+
+.mk__windowchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.mk__chip {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: var(--avo-radius-pill);
+  background: var(--avo-surface-alt2);
+  color: var(--avo-text-muted-strong);
+}
+
+.mk__chip--reward {
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+.mk__form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mk__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mk__times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.mk__notify {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--avo-surface);
+  border-radius: 12px;
+  padding: 13px 14px;
+  margin-bottom: 14px;
+}
+
+.mk__notifytitle {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.mk__notifysub {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.mk__formerror {
+  font-size: 12.5px;
+  color: var(--avo-danger-text);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+/* interaction-spec.md §1 — the two-column marketing layouts collapse first. */
+@media (max-width: 1100px) {
+  .mk__campaigns,
+  .mk__happy {
+    grid-template-columns: 1fr;
+  }
+}
+
+/*
+ * The design draws these two switches bare — the meaning is carried by the row
+ * they sit in ("16:00 – 18:00 · Live") and by the block beside them ("Notify
+ * when it opens"), so `Toggle`'s own label would print the same words twice.
+ * Hidden visually, NOT removed: the switch still has to announce what it does,
+ * and `Toggle` renders that label as its accessible name.
+ */
+.mk__windowactions .avo-toggle__label,
+.mk__notify .avo-toggle__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

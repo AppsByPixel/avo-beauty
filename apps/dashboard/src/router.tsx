@@ -8,8 +8,10 @@ import {
 import type { AuthState } from './auth/AuthProvider.js';
 import { SCOPES, type AuthScope } from './auth/scopes.js';
 import { Accounts } from './routes/Accounts.js';
+import { Appointments } from './routes/Appointments.js';
 import { AuditLog } from './routes/AuditLog.js';
 import { Loyalty } from './routes/Loyalty.js';
+import { Marketing } from './routes/Marketing.js';
 import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
 import { Settings } from './routes/Settings.js';
@@ -75,8 +77,10 @@ const indexRoute = createRoute({
  */
 const SECTIONS = [
   { path: '/overview', component: Overview },
+  { path: '/appointments', component: Appointments },
   { path: '/team', component: Team },
   { path: '/loyalty', component: Loyalty },
+  { path: '/marketing', component: Marketing },
   { path: '/settings', component: Settings },
   { path: '/accounts', component: Accounts },
   { path: '/audit', component: AuditLog },

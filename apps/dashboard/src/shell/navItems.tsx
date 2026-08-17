@@ -37,7 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'appointments',
     label: 'Appointments',
     to: '/appointments',
-    built: false,
+    built: true,
     title: 'Appointments',
     subtitle: 'Every booking and its deposit status',
     icon: (
@@ -105,7 +105,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'marketing',
     label: 'Marketing',
     to: '/marketing',
-    built: false,
+    built: true,
     title: 'Marketing',
     subtitle: 'Campaigns, branch boosts and happy hours',
     icon: (
