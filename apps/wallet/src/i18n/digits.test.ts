@@ -134,7 +134,34 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   txTierBonus: ['silver'],
   plus: ['x'],
   minus: ['x'],
+  // --- account ---
+  followTitle: ['أمارا'],
+  // The policy stamp. The raw "YYYY-MM-DD" and the version go in and each
+  // language formats its own — the same rule as `staleBanner`, and for the same
+  // reason: a date and a version are counts, so Arabic renders them Eastern.
+  legalUpdated: ['2026-07-01', 3],
+  vfSub: ['+96599887766'],
 };
+
+/**
+ * Keys whose rendered string legitimately carries Western digits in Arabic,
+ * because what is interpolated is an IDENTIFIER and not a count.
+ *
+ * `vfSub` is "أدخلي الرمز المكوّن من ٤ أرقام الذي أرسلناه إلى +96599887766" —
+ * the code length is Eastern, as the rule requires, and the phone number is
+ * left exactly as stored. Converting it would produce a number the customer
+ * cannot compare against the one on her SIM, and the design does the same
+ * (design:1842 interpolates `s.pfPhone` untouched). `qrAria` is the same shape:
+ * a member id inside a spoken sentence.
+ *
+ * `appVersion` is the same category without an interpolation: "AVO Beauty ·
+ * v1.0" is a build number. "v١٫٠" is not a version anyone can quote to support.
+ *
+ * This is a third category alongside "money is Western" and "counts are
+ * Eastern", and it is narrow on purpose: only strings carrying a value the
+ * customer, the server or the release owns — never a number this app computed.
+ */
+const IDENTIFIER_KEYS = new Set(['vfSub', 'qrAria', 'appVersion']);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */
 function render(copy: Copy): [string, string][] {
@@ -160,9 +187,10 @@ const GAPS = new Set<string>(AR_GAPS);
 describe('Arabic copy obeys the digit rule', () => {
   it('has no Western digit in any translated string', () => {
     const offenders = render(ar)
-      .filter(([key]) => !GAPS.has(key))
+      .filter(([key]) => !GAPS.has(key) && !IDENTIFIER_KEYS.has(key))
       .filter(([, value]) => hasWesternDigits(value));
-    // The gaps are English and are allowed Western digits; nothing else is.
+    // The gaps are English and are allowed Western digits; nothing else is,
+    // except the identifier keys above.
     expect(offenders).toEqual([]);
   });
 
@@ -196,9 +224,9 @@ describe('Arabic copy obeys the digit rule', () => {
 describe('no rendered string mixes the two digit scripts', () => {
   for (const [name, copy] of [['en', en], ['ar', ar]] as const) {
     it(`${name} copy is internally consistent`, () => {
-      const mixed = render(copy).filter(
-        ([, value]) => hasWesternDigits(value) && hasEasternDigits(value),
-      );
+      const mixed = render(copy)
+        .filter(([key]) => !IDENTIFIER_KEYS.has(key))
+        .filter(([, value]) => hasWesternDigits(value) && hasEasternDigits(value));
       expect(mixed).toEqual([]);
     });
   }
@@ -235,8 +263,22 @@ describe('the two languages stay the same shape', () => {
     const stillEnglish = render(ar)
       .filter(([key, value]) => enByKey.get(key) === value)
       .map(([key]) => key)
-      // Not a gap: the design's own Arabic leaves these untranslated.
-      .filter((key) => !['payMethod.applepay', 'txMethod.applepay', 'memberIdPrefix'].includes(key))
+      // Not gaps: the design's own Arabic leaves these untranslated, because
+      // each is a brand, a Latin identifier or a placeholder rather than a
+      // sentence. `cRouteAvo` is the AVO wordmark (design:1331), `appVersion`
+      // is a wordmark and a build number (design:475), and `pfEmailPh` is a
+      // Latin email placeholder (design:1293).
+      .filter(
+        (key) =>
+          ![
+            'payMethod.applepay',
+            'txMethod.applepay',
+            'memberIdPrefix',
+            'cRouteAvo',
+            'appVersion',
+            'pfEmailPh',
+          ].includes(key),
+      )
       .sort();
     expect(stillEnglish).toEqual([...AR_GAPS].sort());
   });

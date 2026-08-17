@@ -73,6 +73,42 @@ const TIER_ADJECTIVE: Record<TierName, string> = {
   black: 'الأسود', // UNVERIFIED
 };
 
+/**
+ * design:1612 — the Arabic month names the policy stamp is built from, lifted
+ * from the design's own `mAr` array. Not transliterations invented here.
+ */
+const MONTHS_AR = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'أبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر',
+];
+
+/**
+ * "2026-07-01" → "١ يوليو ٢٠٢٦".
+ *
+ * Same string parse as the English side (see en.ts § formatEffectiveFrom) —
+ * `effectiveFrom` is a calendar date, and putting it through `new Date` would
+ * make the effective date of a legal document depend on the phone's timezone.
+ * The digits are Eastern because a date is not money.
+ */
+function formatEffectiveFromAr(effectiveFrom: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(effectiveFrom.trim());
+  if (!match) return effectiveFrom;
+  const [, year, month, day] = match;
+  const name = MONTHS_AR[Number(month) - 1];
+  if (!name) return effectiveFrom;
+  return `${ea(Number(day))} ${name} ${ea(year!)}`;
+}
+
 export const ar: Copy = {
   // ---------------------------------------------------------------- header --
   greeting: (firstName) => `مساء الخير، ${firstName}`, // design:1275
@@ -241,6 +277,124 @@ export const ar: Copy = {
 
   plus: en.plus, // AR GAP
   minus: en.minus, // AR GAP
+
+  // ══════════════════════════════════════════════════════════════ account ══
+  // design:1289-1338. The design's Arabic block covers the whole Account screen,
+  // so this section adds not a single new AR GAP — every string below was
+  // written by the designer, in feminine address forms throughout
+  // (اكتبي، اختاري، أدخلي، استخدمي، تابعي).
+  accountTitle: 'حسابي', // design:1289
+  back: '‹ رجوع', // design:1347
+  acctProfile: 'الملف الشخصي', // design:1289
+  acctNotifs: 'الإشعارات', // design:1290
+  acctLegal: 'المحفظة والسياسات', // design:1290
+  acctHelp: 'المساعدة', // design:1323
+  // design:1840 — `(isAr ? 'تابعي ' : 'Follow ') + t.salon`. تابعي is the
+  // feminine imperative; the salon name itself comes off the API.
+  followTitle: (salonName) => `تابعي ${salonName}`,
+  // design:475 — sits outside the `t` object in the design, i.e. the same string
+  // in both languages. A wordmark and a build number, not a sentence.
+  appVersion: 'AVO Beauty · v1.0',
+
+  rowEdit: 'تعديل', // design:1291
+  rowName: 'الاسم', // design:1308
+  rowPhone: 'رقم الهاتف', // design:1308
+  rowEmail: 'البريد الإلكتروني', // design:1308
+  rowPassword: 'كلمة المرور', // design:1308
+  rowLang: 'اللغة', // design:1308
+  rowChange: 'تغيير', // design:1308
+  rowAddEmail: 'أضيفي بريداً إلكترونياً', // design:1308 — feminine imperative
+  rowLangValue: 'العربية', // design:1832
+
+  nPush: 'إشعارات التطبيق', // design:1309
+  nPushSub: 'تذكير المواعيد، الشحن، وتغيّر المستوى', // design:1309
+  nWa: 'رسائل واتساب', // design:1310
+  nWaSub: 'الإيصالات وتأكيد المواعيد', // design:1310
+  nRemind: 'تذكير بالموعد', // design:1311
+  nRemindSub: 'قبل موعدك بساعتين', // design:1311
+  nReceipt: 'إيصالات بالبريد', // design:1312
+  nReceiptSub: 'إيصال مفصّل بالبريد الإلكتروني عن كل عملية دفع أو شحن أو استرجاع', // design:1312
+  nOffers: 'عروض الصالون', // design:1313
+  nOffersSub: 'عروض من أمارا بين حين وآخر. مغلقة افتراضياً.', // design:1313
+
+  // design:1320 'آخر تحديث ١ يوليو ٢٠٢٦', and design:1614 which composes the
+  // version onto it. Eastern digits throughout — a date and a version are not
+  // money — and the Arabic month name, not a transliteration of the English one.
+  legalUpdated: (effectiveFrom, version) =>
+    `آخر تحديث ${formatEffectiveFromAr(effectiveFrom)} · إصدار ${ea(version)}`,
+  walletFine:
+    'محفظتك تحتوي رصيداً مدفوعاً مسبقاً لصالون أمارا فقط. الرصيد لا ينتهي، ولا يمكن تحويله لصالون آخر، وليس وديعة بنكية.', // design:1321
+  logOut: 'تسجيل الخروج', // design:1322
+  deleteAcct: 'حذف حسابي', // design:1322
+
+  contactCta: 'اتصلي بنا', // design:1324 — feminine imperative
+  contactCtaSub: 'سؤال، أو خصم يبدو غير صحيح، أو أي أمر آخر', // design:1324
+
+  pfTitle: 'تعديل الملف الشخصي', // design:1292
+  pfSub: 'اسمك وطريقة تواصل الصالون معك.', // design:1292
+  pfEmailPh: 'name@email.com', // design:1293 — a Latin placeholder in both
+  pfPhoneNote: 'رقم هاتفك هو وسيلة تسجيل الدخول. تغييره يحتاج رمزاً نرسله للرقم الجديد.', // design:1294
+  pfSave: 'حفظ التغييرات', // design:1295
+  pfSaved: 'تم تحديث الملف', // design:1295
+  pfErrName: 'أدخلي اسمك.', // design:1296 — feminine imperative
+  pfErrPhone: 'أدخلي رقم هاتف صحيح.', // design:1296
+  pfErrEmail: 'البريد الإلكتروني غير صحيح.', // design:1297
+  cOptional: '(اختياري)', // design:1328
+
+  vfTitle: 'تأكيد رقمك الجديد', // design:1298
+  // design:1298 + design:1842. '٤ أرقام' is Eastern; the phone number that
+  // follows is a Latin/E.164 run that bidi keeps together and LTR.
+  vfSub: (phone) => `أدخلي الرمز المكوّن من ٤ أرقام الذي أرسلناه إلى ${phone}`,
+  vfConfirm: 'تأكيد الرقم', // design:1299
+  vfResend: 'إرسال مرة أخرى', // design:1299
+  vfBack: 'رجوع', // design:1299
+  vfErr: 'أدخلي الرمز المكوّن من ٤ أرقام.', // design:1300
+  vfSent: 'تم إرسال الرمز', // design:1300
+
+  pwTitle: 'تغيير كلمة المرور', // design:1301
+  pwSub: 'ستبقين مسجّلة الدخول على هذا الهاتف، وتُسجَّل الأجهزة الأخرى خارجاً.', // design:1301
+  pwCurLabel: 'كلمة المرور الحالية', // design:1302
+  pwNewLabel: 'كلمة المرور الجديدة', // design:1302
+  pwConfLabel: 'تأكيد كلمة المرور الجديدة', // design:1302
+  pwSave: 'تحديث كلمة المرور', // design:1303
+  pwSaved: 'تم تحديث كلمة المرور', // design:1303
+  pwForgot: 'نسيت كلمة المرور الحالية', // design:1304
+  pwErrCur: 'أدخلي كلمة المرور الحالية.', // design:1305
+  pwErrShort: 'استخدمي ٦ أحرف على الأقل.', // design:1305 — Eastern, a count
+  pwErrSame: 'اختاري كلمة مرور مختلفة عن الحالية.', // design:1306
+  pwErrMatch: 'كلمتا المرور غير متطابقتين.', // design:1307
+  pwShow: 'إظهار', // design:1806
+  pwHide: 'إخفاء', // design:1806
+  passHint: '٦ أحرف على الأقل', // design:1355 — Eastern, a count
+
+  contactTitle: 'اتصلي بنا', // design:1325
+  contactSub: 'اكتبي لنا ما حصل وسنرد عليك.', // design:1325 — feminine imperative
+  cTopicLabel: 'ما هو الموضوع؟', // design:1326
+  cMsgLabel: 'رسالتك', // design:1326
+  cMsgPh: 'سطران يكفيان. ذكر التاريخ والمبلغ يساعدنا.', // design:1327
+  cRefLabel: 'رقم الإيصال أو المرجع', // design:1328
+  cViaLabel: 'الرد عليّ على', // design:1329
+  cViaWa: 'واتساب', // design:1329
+  cViaEmail: 'البريد الإلكتروني', // design:1329
+  cSend: 'إرسال الرسالة', // design:1330
+  cErr: 'اختاري الموضوع واكتبي رسالة قصيرة.', // design:1330
+  cRouteSalon: 'الصالون', // design:1331
+  cRouteAvo: 'AVO', // design:1331 — the brand stays Latin in the Arabic build
+  cSentTitle: 'تم إرسال رسالتك', // design:1333
+  cSentRef: 'رقمك المرجعي', // design:1333
+  cSentDone: 'تم', // design:1333
+  cSentSalon: 'وصلت رسالتك إلى أمارا وسيتم الرد على واتساب.', // design:1334
+  cSentAvo: 'وصلت رسالتك إلى فريق AVO.', // design:1335
+
+  deleteTitle: 'حذف حسابك؟', // design:1336
+  // design:1336 — ٣٠ يوماً is Eastern; a number of days is a count, not money.
+  deleteBody:
+    'سيتم حذف ملفك وسجل زياراتك ونقاط الولاء خلال ٣٠ يوماً. المبالغ المدفوعة للصالون لا تُسترجع تلقائياً.',
+  deleteBalance: 'الرصيد المتبقي', // design:1337
+  deleteKeep: 'الاحتفاظ بالحساب', // design:1337
+  deleteGo: 'طلب الحذف', // design:1337
+  deleteFine:
+    'لا يُصرف رصيد المحفظة نقداً. استخدمي الرصيد المتبقي في الصالون أو اتفقي معهم على تسويته قبل إغلاق الحساب.', // design:1338
 
   langSwitch: 'EN', // design:1339
   restartNeeded: en.restartNeeded, // AR GAP

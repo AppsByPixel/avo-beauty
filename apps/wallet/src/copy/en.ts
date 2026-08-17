@@ -18,6 +18,44 @@ const TIER_NAME: Record<TierName, string> = {
   black: 'Black',
 };
 
+/** design:1611 — the English month names the policy stamp is built from. */
+const MONTHS_EN = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * "2026-07-01" → "1 July 2026".
+ *
+ * PARSED AS A STRING, NOT AS A DATE. The design does
+ * `new Date(effectiveFrom + 'T00:00')`, which resolves in the device's zone —
+ * so a phone set to UTC−03:00 renders `effectiveFrom: '2026-07-01'` as
+ * "30 June 2026" and shows a customer an effective date one day before the one
+ * she agreed to. `effectiveFrom` is a calendar date in the contract
+ * ("YYYY-MM-DD"), not an instant, and calendar dates have no zone.
+ *
+ * A value that is not a calendar date is returned untouched rather than turned
+ * into "NaN undefined NaN": the API is the authority on this string.
+ */
+export function formatEffectiveFrom(effectiveFrom: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(effectiveFrom.trim());
+  if (!match) return effectiveFrom;
+  const [, year, month, day] = match;
+  const name = MONTHS_EN[Number(month) - 1];
+  if (!name) return effectiveFrom;
+  return `${Number(day)} ${name} ${year}`;
+}
+
 export const en: Copy = {
   // header
   greeting: (firstName) => `Good evening, ${firstName}`,
@@ -192,6 +230,114 @@ export const en: Copy = {
 
   plus: (label) => `plus ${label}`,
   minus: (label) => `minus ${label}`,
+
+  // ══════════════════════════════════════════════════════════════ account ══
+  // design:1182-1231, verbatim.
+  accountTitle: 'Account',
+  back: '‹ Back',
+  acctProfile: 'Profile',
+  acctNotifs: 'Notifications',
+  acctLegal: 'Wallet & policies',
+  acctHelp: 'Help',
+  followTitle: (salonName) => `Follow ${salonName}`, // design:1840
+  appVersion: 'AVO Beauty · v1.0', // design:475
+
+  rowEdit: 'Edit',
+  rowName: 'Name',
+  rowPhone: 'Phone',
+  rowEmail: 'Email',
+  rowPassword: 'Password',
+  rowLang: 'Language',
+  rowChange: 'Change',
+  rowAddEmail: 'Add an email',
+  rowLangValue: 'English', // design:1832
+
+  nPush: 'App notifications',
+  nPushSub: 'Booking reminders, top-ups and tier changes',
+  nWa: 'WhatsApp messages',
+  nWaSub: 'Receipts and appointment confirmations',
+  nRemind: 'Appointment reminder',
+  nRemindSub: 'Two hours before your slot',
+  nReceipt: 'Email receipts',
+  nReceiptSub: 'An itemised receipt by email for every payment, top-up and refund',
+  nOffers: 'Salon offers',
+  nOffersSub: 'Occasional promotions from Amara. Off by default.',
+
+  // design:1213 is the static half ("Last updated 1 July 2026"); design:1615
+  // composes the whole stamp including the version.
+  legalUpdated: (effectiveFrom, version) =>
+    `Last updated ${formatEffectiveFrom(effectiveFrom)} · v${version}`,
+  walletFine:
+    'Your wallet holds prepaid credit for Amara Salon only. Credit does not expire, cannot be transferred to another salon, and is not a bank deposit.',
+  logOut: 'Log out',
+  deleteAcct: 'Delete my account',
+
+  contactCta: 'Contact us',
+  contactCtaSub: 'A question, a charge that looks wrong, or anything else',
+
+  pfTitle: 'Edit profile',
+  pfSub: 'Your name, and how the salon reaches you.',
+  pfEmailPh: 'name@email.com',
+  pfPhoneNote:
+    'Your phone number is how you log in. Changing it needs a code sent to the new number.',
+  pfSave: 'Save changes',
+  pfSaved: 'Profile updated',
+  pfErrName: 'Enter your name.',
+  pfErrPhone: 'Enter a valid phone number.',
+  pfErrEmail: 'That email address does not look right.',
+  cOptional: '(optional)',
+
+  vfTitle: 'Confirm your new number',
+  vfSub: (phone) => `Enter the 4-digit code we sent to ${phone}`, // design:1191, :1842
+  vfConfirm: 'Confirm number',
+  vfResend: 'Send again',
+  vfBack: 'Back',
+  vfErr: 'Enter the 4-digit code.',
+  vfSent: 'Code sent',
+
+  pwTitle: 'Change password',
+  pwSub: 'You stay logged in on this phone. Other devices are signed out.',
+  pwCurLabel: 'Current password',
+  pwNewLabel: 'New password',
+  pwConfLabel: 'Confirm new password',
+  pwSave: 'Update password',
+  pwSaved: 'Password updated',
+  pwForgot: 'I forgot my current password',
+  pwErrCur: 'Enter your current password.',
+  pwErrShort: 'Use at least 6 characters.',
+  pwErrSame: 'Choose a password different from your current one.',
+  pwErrMatch: "The two new passwords don't match.",
+  pwShow: 'Show', // design:1806
+  pwHide: 'Hide', // design:1806
+  passHint: 'At least 6 characters',
+
+  contactTitle: 'Contact us',
+  contactSub: 'Tell us what happened and we will come back to you.',
+  cTopicLabel: 'What is it about?',
+  cMsgLabel: 'Your message',
+  cMsgPh: 'A few lines is plenty. Dates and amounts help.',
+  cRefLabel: 'Receipt or reference',
+  cViaLabel: 'Reply to me on',
+  cViaWa: 'WhatsApp',
+  cViaEmail: 'Email',
+  cSend: 'Send message',
+  cErr: 'Pick a topic and write a short message.',
+  cRouteSalon: 'Salon',
+  cRouteAvo: 'AVO',
+  cSentTitle: 'Message sent',
+  cSentRef: 'Your reference',
+  cSentDone: 'Done',
+  cSentSalon: 'Amara has your message and will reply on WhatsApp.',
+  cSentAvo: 'AVO support has your message.',
+
+  deleteTitle: 'Delete your account?',
+  deleteBody:
+    'Your profile, visit history and loyalty progress are removed within 30 days. Anything already paid to the salon is not reversed.',
+  deleteBalance: 'Remaining balance',
+  deleteKeep: 'Keep account',
+  deleteGo: 'Request deletion',
+  deleteFine:
+    'Wallet credit cannot be paid out in cash. Spend the remaining balance at the salon, or ask them to settle it with you, before the account closes.',
 
   // design/AVO Wallet Home.dc.html:1232 — the English build offers Arabic.
   langSwitch: 'العربية',
