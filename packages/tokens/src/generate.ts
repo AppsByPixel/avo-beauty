@@ -241,9 +241,43 @@ function emitNativeTypes(): string {
     return typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : 'string';
   };
 
+  const theme = nativeTheme();
+  const { text, ...rest } = theme as { text: Record<string, unknown> };
+
+  /**
+   * ONE interface for every text token, not nine literal shapes.
+   *
+   * Both mobile apps have a `text(token)` helper. If each token gets its own
+   * literal type, `theme.text[token]` is a union of nine, and the fields that
+   * only some tokens carry — lineHeight, letterSpacing, textTransform — become
+   * unreadable from it. The first version of this generator did exactly that
+   * and pushed the workaround into every native consumer, which is the same
+   * class of problem the missing .d.ts was.
+   *
+   * Optional where a token may omit it, and `textTransform` is the literal
+   * rather than `string`, so React Native's own prop type accepts it without
+   * the consumer narrowing first.
+   */
+  const tokenNames = Object.keys(text)
+    .map((k) => JSON.stringify(k))
+    .join(' | ');
+
   return `${BANNER}
 
-declare const theme: ${shape(nativeTheme())};
+export interface NativeTextStyle {
+  readonly fontSize: number;
+  readonly fontWeight: string;
+  readonly fontFamily: string;
+  readonly lineHeight?: number;
+  readonly letterSpacing?: number;
+  readonly textTransform?: 'uppercase';
+}
+
+export type TextToken = ${tokenNames};
+
+declare const theme: ${shape(rest).replace(/\n}$/, '')}
+  readonly text: Readonly<Record<TextToken, NativeTextStyle>>;
+};
 
 export { theme };
 export default theme;

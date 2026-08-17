@@ -78,11 +78,34 @@ pnpm install && pnpm check          # STOP if this fails
 Repeat for `feat/qa`, `feat/wallet`, `feat/web`. **Check after every merge, not at the end**
 — otherwise you know something broke but not which lane broke it.
 
-Then verify the way CI does, from a wiped tree — a warm tree lies:
+Then verify the way CI does. **Two kinds of state lie to you, and wiping one is not enough.**
 
 ```bash
-rm -rf packages/*/dist .turbo && pnpm check
+# 1. Build artifacts — a warm tree has a dist a clean checkout does not
+rm -rf packages/*/dist .turbo
+
+# 2. Database state — a warm database has rows a fresh one does not
+docker exec -i avo-postgres psql -U avo -d postgres \
+  -c "DROP DATABASE IF EXISTS avo_ci;" -c "CREATE DATABASE avo_ci OWNER avo;"
+export DATABASE_URL="postgres://avo:avo_dev_password@localhost:5433/avo_ci"
+export APP_DATABASE_URL="postgres://avo_app:avo_app_dev_password@localhost:5433/avo_ci"
+pnpm --filter @avo/api run db:migrate && pnpm --filter @avo/api run db:seed
+
+pnpm check
 ```
+
+Both halves were learned the hard way, a day apart, and they are the same lesson:
+
+- A missing turbo dependency edge stayed invisible for a whole session because
+  `packages/types/dist` was lying around from an earlier build.
+- `seed.ts` could not seed an empty database for two commits — it inserted artists 132 lines
+  before the staff users they reference — and every local run passed because the database
+  already had those rows. CI was red the entire time while the trunk reported green.
+
+**"It passes locally" is not evidence. The only run that counts is one with nothing left
+over.** Use a dedicated database (`avo_ci`) so an integration check cannot race a lane's
+migrations, and so a lane's seed cannot truncate the session table underneath it — which
+produced 65 phantom `401` failures once and read exactly like a regression.
 
 Then push and level every lane:
 

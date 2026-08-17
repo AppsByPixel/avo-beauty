@@ -37,6 +37,49 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### `turbo.json` — `dev` now depends on `^build`. Third instance of one bug.
+
+**What.** `dev` was the last task with no `dependsOn`. Lane B found `dev` needed a manual
+`pnpm --filter @avo/types build` before the API would boot, because `topup.ts` imports
+`TopUpIntentPublicSchema` and the built `dist` did not have it yet.
+
+**Why it matters more than the one-line fix.** This is the *third* time the same shape has
+bitten: `@avo/e2e` needed `@avo/types` built but declared no dependency; `lint` had no
+`dependsOn` while every lint script is `tsc --noEmit`; now `dev`. Each time it was invisible
+locally, because a warm tree already has the artifact.
+
+I audited every task rather than patching the one that hurt. All five now carry `^build`.
+Verified by wiping every `dist` and booting the API cold with no manual build.
+
+**To reverse:** remove the `dependsOn`. You get back a dev server that boots from a stale
+artifact and fails only for whoever checks out clean — which is CI, and eventually a new
+machine.
+
+### The native declaration was mine, and it was wrong twice
+
+**What.** `packages/tokens` now emits one `NativeTextStyle` interface plus a `TextToken`
+union, rather than nine literal object types.
+
+**Why.** Lane B found it by deleting its hand-copied declaration and typechecking against
+the real one. Each token having its own shape makes `theme.text[token]` a union of nine, so
+`lineHeight`, `letterSpacing` and `textTransform` are unreadable from a `text(token)`
+helper — **which both mobile apps have.** The wallet still typechecks only because its
+ambient `declare module` shadows the package; it will hit this the moment it deletes its
+copy.
+
+Also widened `textTransform` from `string` to the literal `'uppercase'`, so React Native's
+own prop type accepts it without the consumer narrowing.
+
+**Twice wrong, worth recording.** The first version derived the declaration by re-parsing
+the emitted JavaScript with string splits — types as a function of a string. The second
+emitted per-token literals and pushed a workaround into every consumer, which is the same
+class of problem as the missing declaration it was meant to fix. A generator that makes
+every consumer write the same adapter has not finished its job.
+
+**To reverse:** revert `emitNativeTypes`. Both apps go back to hand-copied declarations,
+and the drift returns silently.
+
+
 ### Five tokens added, and the native theme now ships its own types
 
 **What.** `color.neutralDot` (#8A867E), `color.skeleton` (#EDEAE3), and a `dark` group —
