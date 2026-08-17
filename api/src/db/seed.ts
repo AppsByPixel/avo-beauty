@@ -165,7 +165,23 @@ async function seed(): Promise<void> {
       nameAr: 'أمارا',
       plan: 'growth',
       brandColor: '#6E7F6C',
-      moduleBooking: false,
+      /**
+       * ON, and it is the one field of Amara's configuration this seed changed
+       * when booking landed.
+       *
+       * The modules default OFF for a real salon — AVO-Beauty-Product-Description-v2.md
+       * § Settings, "module toggles (Booking, Shop — both default OFF)" — and
+       * `salon.module_booking` keeps that default. Amara is the fixture every
+       * lane drives, and `POST /bookings` refuses a salon whose booking module is
+       * off, so leaving it false would make the entire phase-6 surface
+       * unreachable in development and every proof run start with a PATCH.
+       *
+       * SAL-LUMIERE below stays OFF deliberately, which is what keeps the refusal
+       * itself testable: two salons, one with the module and one without, is the
+       * only fixture shape that can prove the gate exists rather than that it is
+       * merely absent.
+       */
+      moduleBooking: true,
       moduleShop: false,
       loyaltyMode: 'tiers',
       tiers: [
@@ -199,13 +215,21 @@ async function seed(): Promise<void> {
     // written a translation it did not write — the same class of failure the
     // member rows below document for `passwordHash`.
     //
-    // Only the Arabic columns are in the SET. The rest of Amara's configuration
-    // is left alone deliberately: it is a salon a developer may have edited
-    // through `PATCH /salons/:id` while working, and this insert is not the
-    // place that resets it.
+    // The Arabic columns and `module_booking` are in the SET; the rest of
+    // Amara's configuration is left alone deliberately, because it is a salon a
+    // developer may have edited through `PATCH /salons/:id` while working and
+    // this insert is not the place that resets it.
+    //
+    // `module_booking` is in the SET for exactly the reason `name_ar` is. Every
+    // developer and CI database already holds an Amara row from before booking
+    // existed, with the module off; DO NOTHING there would leave the whole of
+    // phase 6 unreachable on every warm database while the seed printed success.
+    // That is the same silent-claim failure the paragraph above describes, and it
+    // is worse here because the symptom is a 409 on a route the fixture is
+    // supposed to make reachable.
     .onConflictDoUpdate({
       target: salon.id,
-      set: { nameAr: 'أمارا', stampRewardAr: 'تصفيف شعر مجاني' },
+      set: { nameAr: 'أمارا', stampRewardAr: 'تصفيف شعر مجاني', moduleBooking: true },
     });
 
   await db
@@ -682,6 +706,19 @@ async function seed(): Promise<void> {
     try {
       await db.execute(sql`DELETE FROM receipt_job`);
       await db.execute(sql`DELETE FROM ledger_entry`);
+      /**
+       * BEFORE `transaction`, and that ordering is the same load-bearing kind as
+       * the artist/staff_user one 300 lines above.
+       *
+       * `booking.hold_transaction_id` is NOT NULL and ON DELETE restrict, and
+       * `settled_transaction_id` is restrict too. A booking is a money row that
+       * OWNS a transaction; clearing transactions first fails with a foreign key
+       * violation on a database where anyone has ever booked. `merchant_notification`
+       * has no such reference, but a notification about a booking that no longer
+       * exists is a bell nobody can act on, so it goes with it.
+       */
+      await db.execute(sql`DELETE FROM booking`);
+      await db.execute(sql`DELETE FROM merchant_notification`);
       await db.execute(sql`DELETE FROM idempotency_key`);
       await db.execute(sql`DELETE FROM wallet_token`);
       // Order follows the restricting references: event → intent → transaction.

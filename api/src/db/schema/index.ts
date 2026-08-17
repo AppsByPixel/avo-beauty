@@ -8,6 +8,8 @@
  *          ├─ member ──── wallet_token
  *          ├─ staff_user
  *          ├─ session ──── pin_attempt
+ *          ├─ booking ──── artist_calendar_connection (per artist)
+ *          ├─ merchant_notification
  *          └─ transaction ─┬─ ledger_entry
  *                          ├─ idempotency_key
  *                          ├─ receipt_job
@@ -35,4 +37,6 @@ export * from './idempotency';
 export * from './walletToken';
 export * from './receipt';
 export * from './topup';
+export * from './booking';
+export * from './notification';
 export * from './sandboxGateway';
