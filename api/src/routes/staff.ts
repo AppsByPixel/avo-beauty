@@ -712,12 +712,22 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
     const target = rows[0];
     if (!target) throw notFound('unknown_staff', 'No such staff member.');
 
-    if (target.deactivatedAt) {
-      throw conflict(
-        'staff_deactivated',
-        'That account has been deactivated. Re-activate it before sending a reset link.',
-      );
-    }
+    /**
+     * A DEACTIVATED ACCOUNT IS ALLOWED HERE, and that is the re-hire path.
+     *
+     * This refused a leaver at first, which made `handle_taken` on `POST /staff`
+     * a lie: it tells a manager re-hiring somebody to "re-activate that account
+     * with a reset link instead", and there was no such door. A leaver's row
+     * exists precisely so her history stays on one identity, so the way back in
+     * has to go through it.
+     *
+     * The link is an INVITATION and issuing it changes nothing on its own — the
+     * account stays deactivated, holding no credential, until she redeems it.
+     * Re-activation happens at redemption, in the same UPDATE that sets the
+     * password, because `staff_user_deactivated_holds_no_credential` will not
+     * let those two facts exist apart.
+     */
+    const reactivating = target.deactivatedAt !== null;
 
     const token = mintResetToken();
     const expiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60_000);
@@ -739,14 +749,20 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
       await writeAudit(tx, p, {
         salonId: p.salonId,
         kind: 'access',
-        action: 'Password reset link sent',
+        action: reactivating ? 'Re-activation link sent' : 'Password reset link sent',
         // Names who and when. NEVER the token — an audit row is read by more
         // people than the endpoint's response is.
-        detail: `${target.name} (@${target.handle}) — link valid for ${RESET_TTL_MINUTES} minutes`,
+        detail:
+          `${target.name} (@${target.handle}) — link valid for ${RESET_TTL_MINUTES} minutes` +
+          (reactivating ? ' · will re-activate a deactivated account' : ''),
         source: 'merchant',
         subjectType: 'staff_user',
         subjectId: target.id,
-        metadata: { expiresAt: expiresAt.toISOString(), ttlMinutes: RESET_TTL_MINUTES },
+        metadata: {
+          expiresAt: expiresAt.toISOString(),
+          ttlMinutes: RESET_TTL_MINUTES,
+          reactivating,
+        },
         ...clientMeta(req),
       });
     });
@@ -760,6 +776,8 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
       staffId: target.id,
       expiresAt: expiresAt.toISOString(),
       delivered: false,
+      /** So the dashboard can say "invite Mariam back" rather than "reset". */
+      reactivating,
     });
   });
 

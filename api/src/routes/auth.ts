@@ -259,7 +259,28 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(staffUser.id, reset.staffId))
       .limit(1);
     const staff = staffRows[0];
-    if (!staff || staff.deactivatedAt) throw REFUSED();
+    if (!staff) throw REFUSED();
+
+    /**
+     * A DEACTIVATED ACCOUNT IS RE-ACTIVATED HERE, not refused.
+     *
+     * `POST /staff/{id}/password-reset` issues a link against a leaver on
+     * purpose — that is the re-hire path, and it is what keeps her history on
+     * one identity instead of forking it across a second row. The link is only
+     * an invitation until this point; accepting it is what makes her staff
+     * again.
+     *
+     * It has to happen in the SAME UPDATE that sets the password, because
+     * `staff_user_deactivated_holds_no_credential` refuses a row that is
+     * deactivated and holds a credential. The constraint is not in the way here
+     * — it is the reason the two facts cannot drift apart.
+     *
+     * Her permissions are whatever they were at departure; they are on the row,
+     * and the roster shows them. Re-hiring somebody is not the moment to
+     * silently reset her authority to nothing, and it is not the moment to
+     * silently widen it either.
+     */
+    const reactivating = staff.deactivatedAt !== null;
 
     const passwordHash = await hashSecret(password);
 
@@ -278,7 +299,12 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
     await db
       .update(staffUser)
-      .set({ passwordHash, updatedAt: new Date() })
+      .set({
+        passwordHash,
+        // Both facts in one statement. See the note above.
+        ...(reactivating ? { deactivatedAt: null } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(staffUser.id, staff.id));
 
     // She lost the old password. Treat that as a compromise until told
@@ -289,12 +315,14 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     await writeAudit(db, null, {
       salonId: staff.salonId,
       kind: 'access',
-      action: 'Password set from reset link',
-      detail: `${staff.name} (@${staff.handle}) set a new password`,
+      action: reactivating ? 'Account re-activated from reset link' : 'Password set from reset link',
+      detail:
+        `${staff.name} (@${staff.handle}) set a new password` +
+        (reactivating ? ' and is active again' : ''),
       source: 'merchant',
       subjectType: 'staff_user',
       subjectId: staff.id,
-      metadata: { requestedBy: reset.requestedBy },
+      metadata: { requestedBy: reset.requestedBy, reactivated: reactivating },
       ...clientMeta(req),
     });
 
