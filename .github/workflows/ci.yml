@@ -1,5 +1,24 @@
 name: CI
-on: [push, pull_request]
+
+# Only the trunk branches, plus any PR.
+#
+# Lane branches are rebased onto `dev` at every integration and force-pushed, so
+# running on every push meant FIVE identical runs per cycle — dev plus four lane
+# branches all sitting on the same commit — and five failure emails for one
+# failure. A notification you receive five times is one you learn to delete.
+#
+# A lane still gets CI the moment it opens a pull request, which is the point at
+# which its code differs from `dev` and the answer is worth having.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+# A force-push supersedes the run it interrupts. Without this, rebasing four
+# lanes queues runs for commits nobody will ever look at again.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
