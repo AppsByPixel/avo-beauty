@@ -13,18 +13,16 @@
 
 import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
+import { focusable } from '../theme/focus';
 
-/**
- * interaction-spec.md §2 focus ring: 2px solid #6E7F6C, offset 2px, and
- * `:focus-visible` rather than `:focus` so a mouse press does not ring.
- * react-native-web maps these through to CSS.
+/*
+ * THE FOCUS RING IS NOT A STYLE OBJECT. It used to be, and that was a bug: a
+ * `{ outlineStyle: 'solid' }` in a React Native style paints an outline
+ * unconditionally, because there is no pseudo-class in a style object to hang
+ * `:focus-visible` off. Every control on every screen was permanently ringed.
+ * It is now real CSS, injected once — see src/theme/focus.ts for the measurement
+ * and the fix. Controls opt in with `dataSet={focusable}`.
  */
-const focusRing = {
-  outlineColor: color.brand,
-  outlineWidth: 2,
-  outlineStyle: 'solid',
-  outlineOffset: 2,
-} as unknown as ViewStyle;
 
 interface ButtonProps {
   label: string;
@@ -51,6 +49,7 @@ export function PrimaryButton({
       accessibilityState={{ disabled: Boolean(disabled) }}
       accessibilityLabel={accessibilityLabel ?? label}
       testID={testID}
+      dataSet={focusable}
       style={[styles.base, styles.primary, disabled && styles.disabled, style]}
     >
       <Text style={[text('bodyL'), styles.primaryText, disabled && styles.disabledText]}>
@@ -76,6 +75,7 @@ export function SecondaryButton({
       accessibilityState={{ disabled: Boolean(disabled) }}
       accessibilityLabel={accessibilityLabel ?? label}
       testID={testID}
+      dataSet={focusable}
       style={[styles.base, styles.secondary, style]}
     >
       {/* Brand text on a light surface is brandDeep, never brand. */}
@@ -90,7 +90,8 @@ export function TappableRow({
   ...props
 }: React.ComponentProps<typeof Pressable> & { children: React.ReactNode }) {
   return (
-    <Pressable {...props} style={[focusRing, props.style as StyleProp<ViewStyle>]}>
+    // `dataSet` first so a caller that genuinely needs its own can override it.
+    <Pressable dataSet={focusable} {...props} style={props.style as StyleProp<ViewStyle>}>
       {children}
     </Pressable>
   );
@@ -104,7 +105,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.button,
     alignItems: 'center',
     justifyContent: 'center',
-    ...focusRing,
   },
   primary: { backgroundColor: onBrandFill.backgroundColor },
   primaryText: { color: onBrandFill.color, fontWeight: '600' },
