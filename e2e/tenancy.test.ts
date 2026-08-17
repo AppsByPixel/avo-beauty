@@ -44,8 +44,12 @@ import {
   A_MEMBER_NAME,
   A_MEMBER_PHONE,
   A_SERVICE,
+  A_HAPPY_HOUR,
   A_STAFF_FULL,
   A_STAFF_RESTRICTED,
+  B_BRANCH,
+  B_HAPPY_HOUR,
+  B_HAPPY_HOUR_DISPOSABLE,
   B_MEMBER,
   B_MEMBER_PHONE,
   B_SERVICE,
@@ -167,12 +171,28 @@ describe('tripwires — the principals are who this suite thinks they are', () =
 // ------------------------------------------------- every salon-scoped route --
 
 interface SalonRoute {
-  method: 'GET' | 'POST' | 'PATCH' | 'PUT';
-  /** `{id}` is substituted with the salon under test. */
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  /**
+   * `{id}` is substituted with the salon under test.
+   *
+   * `{hid}` is substituted with a happy hour BELONGING TO THAT SALON — salon A's
+   * seeded window when probing salon A, salon B's own when running the control. A
+   * single hard-coded id cannot serve both: salon A's `HH-01` does not exist at
+   * salon B, so the control would 404 and the ledger would report a tenancy hole
+   * that is really a missing fixture.
+   */
   template: string;
   body?: unknown;
   /** The same call against salon B's own id must succeed. */
   controlBody?: unknown;
+  /**
+   * What the control call answers on success. Defaults to 200.
+   *
+   * Not every write returns one — `POST …/happy-hours` is a 201 and
+   * `DELETE …/happy-hours/{hid}` is a 204. Asserting 200 across the board turns a
+   * correctly implemented route into a red ledger entry.
+   */
+  controlStatus?: number;
 }
 
 /**
@@ -222,9 +242,78 @@ const SALON_ROUTES: SalonRoute[] = [
       ],
     },
   },
+
+  /**
+   * LANE A'S FOUR PROMOTION WRITES.
+   *
+   * These are the first entries in this table that need real fixtures rather than
+   * only a valid body, and the difference is worth stating because adding them
+   * from outside the suite is what broke: the control half — "against salon B's
+   * own id succeeds" — genuinely performs the write, so
+   *
+   *   - `PATCH` and `DELETE` need a happy hour that EXISTS AT SALON B. `{hid}` is
+   *     substituted per salon for that reason; salon A's `HH-01` is not salon B's.
+   *   - `DELETE`'s control really deletes it, so its fixture is re-created by
+   *     `seedSalonB()` on every run. A stable id would pass once and 404 for ever.
+   *   - `POST` answers 201 and `DELETE` answers 204, hence `controlStatus`.
+   *
+   * The bodies below are deliberately valid AND harmless. Every boost is 1x/0/1x
+   * and every window is created `on: false`, because the control call writes them
+   * to salon B for real and a live 2x-visit promotion would change what
+   * `scanner.test.ts` observes a charge doing.
+   */
+  {
+    method: 'PUT',
+    template: '/v1/salons/{id}/promotions/boosts',
+    // The identity boost — no multiplier anywhere. Proves the route runs without
+    // making any other suite's money literals depend on this one having run.
+    body: { boosts: { [B_BRANCH]: { visit: 1, topup: 0, stamp: 1 } } },
+  },
+  {
+    method: 'POST',
+    template: '/v1/salons/{id}/promotions/happy-hours',
+    body: {
+      branchId: 'all',
+      days: [3],
+      from: '09:00',
+      to: '10:00',
+      reward: 'x2visit',
+      on: false,
+      notify: false,
+    },
+    controlStatus: 201,
+  },
+  {
+    method: 'PATCH',
+    template: '/v1/salons/{id}/promotions/happy-hours/{hid}',
+    body: { on: false },
+  },
+  {
+    method: 'DELETE',
+    template: '/v1/salons/{id}/promotions/happy-hours/{hid}',
+    controlStatus: 204,
+  },
 ];
 
-const url = (r: SalonRoute, salonId: string) => r.template.replace('{id}', salonId);
+/**
+ * A happy hour that belongs to the salon being addressed.
+ *
+ * The DELETE route gets the disposable one at salon B — the control deletes it,
+ * and `seedSalonB()` puts it back on the next run. Everything else gets the
+ * stable window.
+ *
+ * At salon A this only ever has to be an id the handler would recognise: the
+ * cross-salon probes must be refused by `requireSameSalon` BEFORE the happy hour
+ * is looked up, and a 404 in place of a 403 would mean the tenancy check ran too
+ * late — which the ledger's own assertions would then catch, correctly.
+ */
+function happyHourFor(route: SalonRoute, salonId: string): string {
+  if (salonId !== SALON_B) return A_HAPPY_HOUR;
+  return route.method === 'DELETE' ? B_HAPPY_HOUR_DISPOSABLE : B_HAPPY_HOUR;
+}
+
+const url = (r: SalonRoute, salonId: string) =>
+  r.template.replace('{id}', salonId).replace('{hid}', happyHourFor(r, salonId));
 
 describe("salon-scoped routes — salon B's manager calling salon A's URL", () => {
   for (const route of SALON_ROUTES) {
@@ -252,7 +341,9 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
         token: bDashboard,
         ...(body === undefined ? {} : { body }),
       });
-      expect(res.status, `the control call answered ${res.status}: ${res.raw}`).toBe(200);
+      expect(res.status, `the control call answered ${res.status}: ${res.raw}`).toBe(
+        route.controlStatus ?? 200,
+      );
     });
   }
 });
@@ -926,7 +1017,19 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
 
   it('the scanner actually finds routes (a broken regex must not pass silently)', () => {
     const paths = discovered.map((r) => `${r.method} ${r.path}`);
-    // The eight known today. More is fine — fewer means the scan broke.
+    /**
+     * Every route known today. More is fine — fewer means the scan broke.
+     *
+     * KEPT IN STEP WITH THE TABLE ON PURPOSE. This list was left at the original
+     * eight while nine more routes landed, which quietly weakened the tripwire to
+     * the point where the regex could have lost every write route and still
+     * passed. The whole job of this spec is to fail when the scanner stops seeing
+     * things, and a scanner that only has to see the 2024 routes cannot do it.
+     *
+     * The four DELETE/PATCH/PUT/POST promotion writes matter most here: they carry
+     * the awkward shapes — a second path parameter, and a generic between the
+     * method and the paren — that a naive regex misses first.
+     */
     for (const known of [
       'GET /salons/:id',
       'PATCH /salons/:id',
@@ -934,7 +1037,16 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'GET /salons/:id/products',
       'GET /salons/:id/bookings',
       'GET /salons/:id/services',
+      'GET /salons/:id/artists',
+      'GET /salons/:id/audit',
+      'GET /salons/:id/activity',
+      'GET /salons/:id/loyalty',
+      'PUT /salons/:id/loyalty',
       'GET /v1/salons/:id/promotions',
+      'PUT /v1/salons/:id/promotions/boosts',
+      'POST /v1/salons/:id/promotions/happy-hours',
+      'PATCH /v1/salons/:id/promotions/happy-hours/:hid',
+      'DELETE /v1/salons/:id/promotions/happy-hours/:hid',
       'POST /v1/salons/:id/campaigns',
     ]) {
       expect(paths, `the route scan lost ${known}`).toContain(known);
@@ -942,7 +1054,15 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
   });
 
   it('the hand-written table above covers every route the scanner finds', () => {
-    const probed = new Set(SALON_ROUTES.map((r) => `${r.method} ${r.template.replace('{id}', ':id')}`));
+    // `{id}` → `:id` and `{hid}` → `:hid`: the table writes path parameters in
+    // braces so `url()` can substitute them, the route scanner reads them as
+    // fastify registers them. Both placeholders have to be translated or a route
+    // that IS in the table reads as missing.
+    const probed = new Set(
+      SALON_ROUTES.map(
+        (r) => `${r.method} ${r.template.replace('{id}', ':id').replace('{hid}', ':hid')}`,
+      ),
+    );
     const missing = discovered
       .map((r) => `${r.method} ${r.path}`)
       .filter((s) => !probed.has(s));

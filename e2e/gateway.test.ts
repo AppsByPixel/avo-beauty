@@ -1017,16 +1017,64 @@ describe('receipts — one settled payment, both channels', () => {
         `where tablename='${table}' and indexdef ilike '%UNIQUE%' and indexdef ilike '%transaction_id%'`,
     );
 
-  it('queues at least one receipt, in the same transaction as the credit', async () => {
-    // The part that is true today, and the guard that keeps the outbox from
-    // regressing while the channel question is open.
+  /**
+   * RE-PINNED, SO THE RECEIPT WORKER CAN BE SWITCHED ON.
+   *
+   * This spec used to end:
+   *
+   *     expect(scalar(`select status from receipt_job …`),
+   *       'the receipt was marked sent inside the money transaction —
+   *        the worker has not run').toBe('queued')
+   *
+   * `api/src/env.ts` defaults `RECEIPT_WORKER_ENABLED` to `0` and cites those two
+   * lines as the reason: lane A built the worker, saw that running it would flip
+   * `queued` to `sent` moments later and fail this spec, and left the flag off
+   * rather than edit another lane's file. That was the right call, and this is the
+   * other half of it.
+   *
+   * The parenthetical — "the worker has not run" — was never the invariant. It was
+   * an assumption about the environment that happened to hold. The invariant is
+   * the one `db/schema/receipt.ts` exists for: THE MONEY TRANSACTION QUEUES THE
+   * RECEIPT, IT DOES NOT SEND IT. An HTTP call inside the charge transaction holds
+   * row locks for the length of a third party's timeout, and turns a WhatsApp
+   * outage into a card-declined-at-the-counter outage.
+   *
+   * Restated so a running worker cannot falsify it: a row the money transaction
+   * had sent would be `sent` with `attempts = 0`, because `attempts` is
+   * incremented in exactly one place in the system — `claimJobs()` in
+   * `api/src/services/receiptWorker.ts`, which is the worker claiming the row
+   * afterwards. `sent` with a zero attempt count is therefore the signature of a
+   * send that never went through the queue, and it is the one combination that
+   * must never appear. True whether the worker runs or not, which is what the old
+   * literal could not say.
+   *
+   * The suite now boots the API with the worker ON (`support/tenancy-harness.ts`),
+   * and `integration.test.ts` proves it drains the outbox end to end. Lane A can
+   * flip the default in env.ts.
+   */
+  it('queues the receipt inside the money transaction, and does not SEND it there', async () => {
     const txId = await settledTransactionId('receipt-outbox');
+
     const jobs = Number(scalar(`select count(*) from receipt_job where transaction_id='${txId}'`));
     expect(jobs, 'a settled top-up queued no receipt at all').toBeGreaterThan(0);
+
     expect(
-      scalar(`select status from receipt_job where transaction_id='${txId}' limit 1`),
-      'the receipt was marked sent inside the money transaction — the worker has not run',
-    ).toBe('queued');
+      scalar(
+        `select count(*) from receipt_job where transaction_id='${txId}' and status='sent' and attempts=0`,
+      ),
+      'a receipt is `sent` with attempts=0, so it was sent without ever being claimed by the ' +
+        'worker — meaning the send happened inside the money transaction. ' +
+        'See api/src/db/schema/receipt.ts.',
+    ).toBe('0');
+
+    // And a job that has not been sent carries no send timestamp. The CHECK
+    // `receipt_job_sent_at_matches_status` ties the two together; asserting it
+    // here states what the column MEANS rather than that a constraint exists.
+    expect(
+      scalar(
+        `select count(*) from receipt_job where transaction_id='${txId}' and status <> 'sent' and sent_at is not null`,
+      ),
+    ).toBe('0');
   });
 
   it('a receipt cannot be queued twice for one transaction and channel', async () => {

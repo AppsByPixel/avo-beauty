@@ -17,9 +17,24 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { SALON_ID, api, idempotencyKey } from './support/api.js';
+import {
+  MEMBER_ID,
+  SALON_ID,
+  SERVICE,
+  api,
+  ensureBalanceAtLeast,
+  idempotencyKey,
+  targetKind,
+} from './support/api.js';
+import { knownBug } from './support/known-bug.js';
 
 const NOPERMS = 'noperms';
+
+/**
+ * Which server these specs are driving. The 403 specs below hold against both;
+ * the gap ledger at the bottom does not, and says so rather than pretending.
+ */
+const TARGET = await targetKind();
 
 /**
  * The nine permissions on `StaffPermsSchema` (packages/types/src/entities.ts:224).
@@ -140,10 +155,29 @@ describe('perms.void — POST /voids', () => {
     );
     expect(before.status).toBe(200);
 
+    /**
+     * The target is taken FROM the feed rather than named as `TX-9021`.
+     *
+     * The seeded charge is real and the id was correct, but the feed is the fifty
+     * most recent rows and every run of these suites pushes new ones onto it. On
+     * a database that had been run against a few times TX-9021 had simply fallen
+     * off the page, and `expect(target).toBeDefined()` failed — a spec about a 403
+     * writing nothing, reporting a pagination boundary.
+     *
+     * Any charge on the first page does the job: the assertion is that the refused
+     * void changed it, and a row this spec can see is a row it can check.
+     */
+    const target = before.body.items.find((t) => t.kind === 'charge');
+    expect(
+      target,
+      'the activity feed contains no charge to attempt a void against',
+    ).toBeDefined();
+    const targetId = String(target!.id);
+
     const res = await api<Record<string, unknown>>('POST', '/voids', {
       scenario: NOPERMS,
       idempotencyKey: idempotencyKey('void-noperms-sideeffect'),
-      body: { transactionId: 'TX-9021', reason: 'customer changed her mind' },
+      body: { transactionId: targetId, reason: 'customer changed her mind' },
     });
     expect(res.status).toBe(403);
 
@@ -160,17 +194,41 @@ describe('perms.void — POST /voids', () => {
     // mock this list is static, so today this mostly guards the shape; against
     // lane A's API it is the assertion that a 403 wrote nothing.
     expect(after.body.items).toEqual(before.body.items);
-    const target = after.body.items.find((t) => t.id === 'TX-9021');
-    expect(target).toBeDefined();
-    expect(target?.amountFils).toBe(-8000);
-    expect(target?.status).toBe('settled');
+    const stillThere = after.body.items.find((t) => t.id === targetId);
+    expect(stillThere, `${targetId} left the feed after a refused void`).toBeDefined();
+    expect(stillThere?.status).toBe('settled');
+    expect(stillThere?.amountFils).toBe(target!.amountFils);
     expect(after.body.items.some((t) => String(t.kind).includes('void'))).toBe(false);
   });
 
+  /**
+   * THE CONTROL — without it the 403 above could be an endpoint that is simply
+   * broken shut.
+   *
+   * It used to void the seeded `TX-9021`, and that is a ONE-SHOT fixture: the
+   * first run voids it, and every run afterwards gets `409 already_voided`. That
+   * went unnoticed for as long as nobody ran the suite twice against one seeded
+   * database, and it surfaced the moment the database was actually re-seeded and
+   * re-run. A suite that only passes on its first execution is a suite with a
+   * shelf life, the same way an accumulating fixture is.
+   *
+   * So it makes its own target: a charge settled seconds ago, by this spec, which
+   * is inside the fifteen-minute void window by construction and has never been
+   * voided. `packages/mock` ignores the transaction id on `POST /voids` entirely,
+   * so the same code drives both servers.
+   */
   it('the same endpoint succeeds for a principal that holds the permission', async () => {
+    await ensureBalanceAtLeast(SERVICE.blowDry.priceFils * 2, 'void-control');
+
+    const charged = await api<{ transaction: { id: string } }>('POST', '/charges', {
+      idempotencyKey: idempotencyKey('void-target'),
+      body: { memberId: MEMBER_ID, serviceIds: [SERVICE.blowDry.id] },
+    });
+    expect(charged.status, `could not create a charge to void: ${JSON.stringify(charged.body)}`).toBe(200);
+
     const res = await api<{ ok: boolean }>('POST', '/voids', {
       idempotencyKey: idempotencyKey('void-permitted'),
-      body: { transactionId: 'TX-9021', reason: 'customer changed her mind' },
+      body: { transactionId: charged.body.transaction.id, reason: 'customer changed her mind' },
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -270,61 +328,131 @@ const PROBES: Probe[] = [
   },
 ];
 
+/**
+ * WHAT THIS LEDGER MEASURES, AND THE BUG IT HAD
+ * ---------------------------------------------
+ * A probe can only detect a missing gate for a permission the probing principal
+ * DOES NOT HOLD. Point it at a principal who holds `appointments` and the
+ * bookings probe answers 200 whether the route is gated or not — and the ledger
+ * calls that a hole.
+ *
+ * It used to assert a hardcoded `['charges', 'void']`, which was true of the one
+ * principal it had: `packages/mock`'s restricted staff member, who holds almost
+ * nothing. Against lane A's real seed the same header selects ST-002 (Hessa), a
+ * frontdesk row that legitimately holds `appointments` and `scanner`. So the
+ * ledger reported two holes that are not holes — and, much worse, it would have
+ * gone on reporting exactly those two if lane A had genuinely DELETED the
+ * bookings or scans gate. A ledger that cannot tell "ungated" from "the probe
+ * was authorised" is not evidence of anything.
+ *
+ * So the expectation is derived, not written down: read who the probe principal
+ * actually is, and require a 403 for every permission she lacks. Permissions she
+ * holds are reported as unprobed rather than counted either way. That statement
+ * means the same thing against the mock and against lane A's API, and it tightens
+ * by itself as the fixture gets more restricted.
+ */
+interface RestrictedPrincipal {
+  id: string;
+  perms: Record<string, boolean>;
+}
+
+async function restrictedPrincipal(): Promise<RestrictedPrincipal> {
+  const res = await api<RestrictedPrincipal>('GET', '/staff/me', { scenario: NOPERMS });
+  if (res.status !== 200 || !res.body?.perms) {
+    throw new Error(
+      `The ledger cannot read its own probe principal: GET /staff/me (scenario=${NOPERMS}) ` +
+        `answered ${res.status} ${JSON.stringify(res.body)}.\n` +
+        'Without it the ledger cannot tell an ungated endpoint from an authorised one.',
+    );
+  }
+  return res.body;
+}
+
 describe('permission gap ledger', () => {
   it('covers all nine permissions', () => {
     expect(PROBES.map((p) => p.perm).sort()).toEqual([...NINE_PERMISSIONS].sort());
   });
 
+  it('the probe principal is restricted enough to be worth probing', async () => {
+    const who = await restrictedPrincipal();
+    const lacks = NINE_PERMISSIONS.filter((p) => !who.perms[p]);
+    // Not nine — the fixture is a real frontdesk row, not a null principal. But a
+    // fixture that held everything would turn this whole block into a no-op, and
+    // that has to be loud rather than green.
+    expect(
+      lacks.length,
+      `${who.id} holds every permission, so no probe below can detect a missing gate. ` +
+        'The ledger needs a restricted fixture.',
+    ).toBeGreaterThan(0);
+  });
+
   /**
-   * When lane A gates another permission, this spec FAILS. That is the intended
-   * signal: delete the corresponding `it.todo` below, write the real 403 spec
-   * next to the `charges` and `void` ones, and add the permission here.
+   * When lane A removes a gate this FAILS and names the permission and the
+   * endpoint. When lane A ADDS a gate for a permission the fixture lacks it keeps
+   * passing, which is correct — a new gate is not a regression.
+   *
+   * REGISTERED BY TARGET. Non-negotiable #7 is a property of the API that owns
+   * the data; `packages/mock` has no authority layer at all beyond the two gates
+   * it happens to implement, so asserting the rule against it is asserting that a
+   * stub is a product. Against the mock the same probe runs and the same holes are
+   * listed, as a `knownBug()` that names the mock as the owner — so the gap stays
+   * visible and stops being a permanent red on `pnpm check`.
    */
-  it('exactly `charges` and `void` are enforced server-side right now', async () => {
+  const everyLackedPermissionIsRefused = async () => {
+    const who = await restrictedPrincipal();
     const results = await Promise.all(
-      PROBES.map(async (p) => ({ ...p, status: await p.run() })),
+      PROBES.map(async (p) => ({ ...p, status: await p.run(), held: who.perms[p.perm] === true })),
     );
-    const gated = results.filter((r) => r.status === 403).map((r) => r.perm);
-    const ungated = results
-      .filter((r) => r.status !== 403)
+
+    const holes = results
+      .filter((r) => !r.held && r.status !== 403)
+      .map((r) => `  perms.${r.perm}: ${r.what} → HTTP ${r.status} (expected 403)`);
+    const unprobed = results
+      .filter((r) => r.held)
       .map((r) => `  perms.${r.perm}: ${r.what} → HTTP ${r.status}`);
 
     expect(
-      gated.sort(),
-      `Permissions with NO server-side gate (each is a hole under non-negotiable #7):\n${ungated.join('\n')}`,
-    ).toEqual(['charges', 'void']);
-  });
+      holes,
+      'Permissions with NO server-side gate (each is a hole under non-negotiable #7):\n' +
+        `${holes.join('\n')}\n` +
+        `NOT PROBED — ${who.id} legitimately holds these, so their gate is untested here:\n` +
+        `${unprobed.join('\n') || '  (none)'}`,
+    ).toEqual([]);
+  };
+
+  if (TARGET === 'api') {
+    it('every permission the probe principal LACKS is refused server-side', everyLackedPermissionIsRefused);
+  } else {
+    knownBug(
+      'packages/mock enforces only charges and void — the other gates exist in api/src/routes, not here',
+      everyLackedPermissionIsRefused,
+    );
+  }
+
+  /**
+   * The half the derived ledger cannot reach. `appointments` and `scanner` are
+   * held by lane A's restricted fixture, so nothing above proves their gates
+   * exist — and both ARE real gates in `api/src/routes`. Stated as a todo so the
+   * coverage hole is a fact in the report rather than an invisible exemption.
+   */
+  it.todo(
+    "perms.appointments and perms.scanner are UNPROBED against lane A's seed — ST-002 holds both. Needs a seeded staff row with all nine permissions off, or a PATCH /staff/{id} this suite may use to strip them",
+  );
 });
 
 /**
- * GAP — no endpoint enforces these seven. Each todo names the endpoint that must
- * carry the check, so the work is a promotion of a todo, not a rediscovery.
+ * GAP — what is still not covered.
+ *
+ * The seven "no endpoint enforces this" todos that used to live here are GONE,
+ * and that is the delta worth recording: every one of the nine permissions now
+ * has a gate in `api/src/routes` (`requireDashboardPerm` / `requireScannerPerm`),
+ * and the ledger above proves the seven that lane A's restricted fixture lacks.
+ * What is left is coverage this suite cannot reach, not endpoints that do not
+ * exist.
  */
-describe('GAP: permissions with no endpoint gating them yet', () => {
+describe('GAP: permission coverage this suite cannot reach', () => {
   it.todo(
-    'perms.dashboard — GET /salons/{id}/metrics must 403 for a principal with dashboard:false (currently 200)',
-  );
-  it.todo(
-    'perms.appointments — GET /salons/{id}/bookings and PATCH /bookings/{id} do not exist yet; both must be gated when lane A adds them',
-  );
-  it.todo(
-    'perms.shop — GET /salons/{id}/products and the order endpoints must 403 for shop:false (products currently 200, orders unimplemented)',
-  );
-  it.todo(
-    'perms.loyalty — PATCH /salons/{id} must 403 for loyalty:false; the atomic tier-ladder publish is a money path (currently 200)',
-  );
-  it.todo(
-    'perms.team — GET /staff and PATCH /staff/{id} must 403 for team:false; PATCH /staff/{id} is how perms themselves are set, so it is the privilege-escalation route (GET currently 200, PATCH unimplemented)',
-  );
-  it.todo(
-    'perms.scanner — POST /scans and POST /charges must 403 for scanner:false BEFORE the token is resolved; today POST /scans reaches token lookup (410) and POST /charges debits a wallet with no authority check at all',
-  );
-  it.todo(
-    'perms.marketing — POST /v1/salons/{id}/campaigns must 403 for marketing:false (currently 200 and creates a pending campaign)',
-  );
-
-  it.todo(
-    'void:true with charges:false must be rejected at PATCH /staff/{id} — api-contract.md: "void is meaningless without charges". Needs the endpoint first.',
+    'PATCH /staff/{id} with void:true and charges:false must be refused — api-contract.md: "void is meaningless without charges". The endpoint exists and is gated on perms.team; the combination check is untested here because this suite has no principal holding team',
   );
   it.todo(
     'owner console section permissions (analytics, activity, reports, salons, accounts, admins, approvals, billing, audit, controls — api-contract.md:400) have no endpoints and no gates yet',

@@ -32,22 +32,38 @@ export function precondition(ok: boolean, message: string): asserts ok {
   if (!ok) throw new Error(`precondition failed: ${message}`);
 }
 
-export function knownBug(title: string, fn: () => Promise<void> | void): void {
-  it(`KNOWN BUG — ${title}`, async () => {
-    let thrown: unknown;
-    try {
-      await fn();
-    } catch (err) {
-      thrown = err;
-    }
+/**
+ * `timeoutMs` mirrors vitest's own third argument to `it`.
+ *
+ * Without it a knownBug could not be written for anything slow — `seed.test.ts`
+ * runs a whole migration chain and a whole seed inside one — and the workaround
+ * would be to abandon the helper and hand-roll the try/catch, which is the exact
+ * pattern this file exists to stop people writing.
+ */
+export function knownBug(
+  title: string,
+  fn: () => Promise<void> | void,
+  timeoutMs?: number,
+): void {
+  it(
+    `KNOWN BUG — ${title}`,
+    async () => {
+      let thrown: unknown;
+      try {
+        await fn();
+      } catch (err) {
+        thrown = err;
+      }
 
-    if (thrown === undefined) {
-      throw new Error(
-        `This bug appears to be FIXED: "${title}".\n` +
-          'The contract-correct assertion now passes. Promote this knownBug() to a plain it() ' +
-          'so the behaviour stays locked in.',
-      );
-    }
-    if (!isAssertionFailure(thrown)) throw thrown;
-  });
+      if (thrown === undefined) {
+        throw new Error(
+          `This bug appears to be FIXED: "${title}".\n` +
+            'The contract-correct assertion now passes. Promote this knownBug() to a plain it() ' +
+            'so the behaviour stays locked in.',
+        );
+      }
+      if (!isAssertionFailure(thrown)) throw thrown;
+    },
+    timeoutMs,
+  );
 }

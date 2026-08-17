@@ -12,8 +12,9 @@
  * have returned is decoration.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  ensureBalanceAtLeast,
   LOWBAL_BALANCE_FILS,
   MEMBER_ID,
   SERVICE,
@@ -23,7 +24,38 @@ import {
   memberNow,
   mintWalletToken,
 } from './support/api.js';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
+
+/**
+ * NO `targetKind()` HERE ANY MORE, AND THAT IS THE GOOD OUTCOME.
+ *
+ * This file briefly resolved which server it was driving so that the mutated-retry
+ * spec could be registered as a passing `it()` against lane A's API and a
+ * `knownBug()` against `packages/mock`, which replayed instead of refusing. Trunk
+ * has since taught the mock to fingerprint request bodies, the two servers agree,
+ * and every spec in this file is one plain statement true of both again.
+ *
+ * If a future divergence needs it back, `targetKind()` is still in support/api.ts
+ * and `permissions.test.ts` still uses it.
+ */
+
+/**
+ * The same floor `concurrency.test.ts` documents, for the same reason and with
+ * the same mechanism. This file settles charges of 8.000, 15.000 and 25.000 KD
+ * across a dozen specs; lane A seeds the shared member at 24.500, and each of
+ * these suites spends what the one before it left. On a freshly seeded database
+ * the first run cleared and the SECOND run went red on
+ * "a failed charge does not burn its idempotency key" — a spec about idempotency
+ * failing because the retry it makes could not be afforded.
+ *
+ * Deliberately several times what the file spends. Running out halfway is the
+ * failure mode being fixed, and a tight floor reproduces it.
+ */
+const FLOOR_FILS = 250_000;
+
+beforeAll(async () => {
+  await ensureBalanceAtLeast(FLOOR_FILS, 'money');
+}, 60_000);
 
 interface TopUpIntent {
   id: string;
@@ -32,7 +64,15 @@ interface TopUpIntent {
   bonusFils: number;
   creditFils: number;
   method: string;
-  feeFils: number;
+  /**
+   * OPTIONAL, AND THE `?` IS THE POINT.
+   *
+   * `POST /topups` still answers with the full shape today and lane A is applying
+   * `TopUpIntentPublicSchema` to it — see the commission block below. Typed as
+   * required, this file would stop compiling the day that lands, which would make
+   * a correct fix look like a lane D breakage. Nothing here reads it.
+   */
+  feeFils?: number;
   status: string;
   reference: string;
 }
@@ -134,11 +174,21 @@ describe('#4 — replaying a key returns the identical result, never a second on
    *    happened. That is a silent money bug, which is worse than an error."
    *
    * The rule now: same key + same body replays; same key + different body is a
-   * 422 and does not execute. Lane A's API already answers 422 — proved against
-   * the real API in tenancy.test.ts, "the same key with a DIFFERENT body is a
-   * 422, not a replay of the first result". The MOCK still replays, because
-   * packages/mock keys one Map on the header alone and never fingerprints the
-   * body, so against the mock this is a knownBug rather than a passing spec.
+   * 422 and does not execute.
+   *
+   * PROMOTED, UNCONDITIONALLY — and the history is worth keeping because it is
+   * the shape of a spec doing its job.
+   *
+   * This was a `knownBug()`, then briefly a spec registered BY TARGET: lane A's
+   * API answered 422 and `packages/mock` replayed, because the mock keyed one Map
+   * on the header alone and never fingerprinted the body. Two servers disagreeing
+   * about a money rule is not a thing a suite should paper over, so the
+   * conditional named the mock as the owner and kept the gap on the books.
+   *
+   * Trunk has since fixed it — `packages/mock/src/server.ts` now fingerprints the
+   * request body the way `api/src/services/idempotency.ts` does. Both servers
+   * answer 422, so the conditional is dead weight and the spec is one plain
+   * statement about both again.
    */
   it('same key + a DIFFERENT body is a 422, not a replay of the first result', async () => {
     const key = idempotencyKey('topup-replay-mutated');
@@ -249,59 +299,74 @@ describe('#4 — replaying a key returns the identical result, never a second on
 
 // --------------------------------------------------------------- commission ---
 
+/**
+ * THE COMMISSION ARITHMETIC HAS MOVED — `e2e/integration.test.ts`, "the
+ * commission is computed and persisted".
+ *
+ * WHY, BECAUSE A SUITE THAT LOSES FIVE SPECS OWES AN EXPLANATION
+ * --------------------------------------------------------------
+ * Five specs here read `feeFils` off the `POST /topups` RESPONSE and asserted the
+ * rate table against it. They were correct about the arithmetic and wrong about
+ * where to look, and the two suites in this directory had ended up contradicting
+ * each other on it:
+ *
+ *   money.test.ts        POST /topups MUST carry feeFils   (five specs)
+ *   integration.test.ts  no customer response may carry a fee (the sweep)
+ *
+ * `POST /topups` is a customer endpoint — the wallet calls it to start a top-up —
+ * so the customer-never rule of api-contract.md § Commission applies to it exactly
+ * as it applies to `GET /topups/{id}`. Lane A had already resolved the read side
+ * with `TopUpIntentPublicSchema` and `serialiseIntentForCustomer`, and left
+ * `POST /topups` on the full shape with a comment naming these five specs as the
+ * reason it could not move. This block was the blocker.
+ *
+ * So the assertions moved rather than died, and they moved onto
+ * `topup_intent.fee_fils` — the pattern this suite already uses for `receipt_job`:
+ * prove the behaviour against the TABLE, not through a response a customer reads.
+ * The commission is still asserted to the fil, at every rate, including the
+ * rounding cases. It is asserted where the number actually lives.
+ *
+ * IT COULD NOT STAY IN THIS FILE. These specs run against `packages/mock` by
+ * default, with no Postgres and no docker (see `memberNow()`), so this file has
+ * no way to read a column. `integration.test.ts` boots lane A's real API against
+ * lane A's real database and already reads `fee_fils` there.
+ *
+ * WHAT STAYS HERE is the half that needs no fee field at all, and it is the half
+ * that protects the customer's money.
+ */
 describe('commission — api-contract.md § Commission', () => {
-  async function feeFor(amountFils: number, method: string): Promise<TopUpIntent> {
+  it('the commission never inflates OR reduces what lands in the wallet', async () => {
+    // "Merchant-visible, customer-never." Whatever AVO takes, the credit is
+    // amount + bonus and nothing else — this holds without the response ever
+    // naming a fee, which is exactly why it is the spec that survives here.
     const res = await api<TopUpIntent>('POST', '/topups', {
-      idempotencyKey: idempotencyKey(`fee-${method}-${amountFils}`),
-      body: { amountFils, method },
+      idempotencyKey: idempotencyKey('fee-does-not-touch-credit'),
+      body: { amountFils: 10_000, method: 'knet' },
     });
     expect(res.status).toBe(200);
-    return res.body;
-  }
+    const intent = res.body;
 
-  it('KNET is 150 fils flat, at every amount', async () => {
-    for (const amount of [1_000, 10_000, 25_000, 250_000]) {
-      const intent = await feeFor(amount, 'knet');
-      expectIntegerFils(intent.feeFils, `knet fee on ${amount}`);
-      expect(intent.feeFils, `KNET fee on ${amount} fils must be flat 150`).toBe(150);
-    }
-  });
-
-  it('card is 2.5% + 50 fils', async () => {
-    const cases: Array<[amount: number, fee: number]> = [
-      [10_000, 300], // 250 + 50
-      [5_000, 175], //  125 + 50
-      [25_000, 675], //  625 + 50
-      [100_000, 2_550], // 2500 + 50
-    ];
-    for (const [amount, expected] of cases) {
-      const intent = await feeFor(amount, 'card');
-      expectIntegerFils(intent.feeFils, `card fee on ${amount}`);
-      expect(intent.feeFils, `card fee on ${amount} fils`).toBe(expected);
-    }
-  });
-
-  it('a card percentage that lands on a half fil rounds to an integer, never a float', async () => {
-    // 2.5% of 3333 = 83.325 → 83, + 50 = 133. This is the case where a float
-    // implementation shows itself.
-    const intent = await feeFor(3_333, 'card');
-    expect(intent.feeFils).toBe(133);
-    expectIntegerFils(intent.feeFils, 'card fee on 3333');
-    // 2.5% of 1010 = 25.25 → 25, + 50 = 75.
-    expect((await feeFor(1_010, 'card')).feeFils).toBe(75);
-  });
-
-  it('Apple Pay is priced as a card', async () => {
-    const intent = await feeFor(10_000, 'applepay');
-    expect(intent.feeFils).toBe(300);
-  });
-
-  it('the commission is merchant-visible on the intent and never inflates the credit', async () => {
-    // "Merchant-visible, customer-never." The fee is reported so the dashboard
-    // can show it, but it must not touch what lands in the wallet.
-    const intent = await feeFor(10_000, 'knet');
+    expectIntegerFils(intent.amountFils, 'amountFils');
+    expectIntegerFils(intent.bonusFils, 'bonusFils');
+    expectIntegerFils(intent.creditFils, 'creditFils');
     expect(intent.creditFils).toBe(intent.amountFils + intent.bonusFils);
-    expect(intent.creditFils).not.toBe(intent.amountFils + intent.bonusFils - intent.feeFils);
+
+    // KNET is 150 flat, so a credit netted of the commission would be 150 short.
+    // Stated as a literal rather than read from the response: the point is that
+    // the customer's credit is unaffected by a number she is not shown.
+    expect(intent.creditFils).not.toBe(intent.amountFils + intent.bonusFils - 150);
+  });
+
+  it('the same holds on a card, where the commission is a percentage', async () => {
+    // 2.5% + 50 on 10.000 is 300 — big enough that netting it out would be
+    // obvious, which is the point of checking a second method.
+    const res = await api<TopUpIntent>('POST', '/topups', {
+      idempotencyKey: idempotencyKey('fee-does-not-touch-credit-card'),
+      body: { amountFils: 10_000, method: 'card' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.creditFils).toBe(res.body.amountFils + res.body.bonusFils);
+    expect(res.body.creditFils).not.toBe(res.body.amountFils + res.body.bonusFils - 300);
   });
 });
 
@@ -398,7 +463,10 @@ describe('#2 — the tier bonus is computed by the server', () => {
     // The forged values are nowhere near the answer, whatever her tier is.
     expect(res.body.bonusFils).not.toBe(999_999);
     expect(res.body.creditFils).not.toBe(999_999);
-    expect(res.body.feeFils).toBe(150);
+    // The forged `feeFils: 0` is checked in integration.test.ts against
+    // `topup_intent.fee_fils`, for the reason the commission block above gives:
+    // a customer response is the wrong place to read a commission from, so it is
+    // also the wrong place to prove one was not forged.
   });
 
   it('bonus rounds to whole fils on an awkward amount', async () => {

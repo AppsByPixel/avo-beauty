@@ -90,6 +90,40 @@ export async function mintWalletToken(scenario?: string): Promise<string> {
   return res.body.token;
 }
 
+/**
+ * WHICH SERVER IS ON THE OTHER END.
+ *
+ * These suites drive two things: `packages/mock` by default, and lane A's real
+ * API under `E2E_BASE_URL`. For almost everything that is invisible and should
+ * stay invisible — the whole point of writing to the contract is that both must
+ * satisfy it.
+ *
+ * There is one class of spec where it cannot stay invisible: behaviour lane A has
+ * implemented and the mock has NOT. Left as a `knownBug()`, such a spec reports
+ * "this appears to be FIXED" every single run against the real API — which is the
+ * helper working exactly as designed, and useless as a standing signal. Left as a
+ * plain `it()`, it is permanently red against the mock. Neither is a true
+ * statement about both servers, so the suite has to know which one it is talking
+ * to and say so out loud.
+ *
+ * The probe is a real observable difference rather than an environment variable:
+ * the mock's `/_health` advertises its scenario switch, lane A's does not. An
+ * env var would be a claim; this is evidence.
+ */
+export type TargetKind = 'mock' | 'api';
+
+let cachedTarget: TargetKind | undefined;
+
+export async function targetKind(): Promise<TargetKind> {
+  if (cachedTarget) return cachedTarget;
+  const res = await api<{ ok?: boolean; scenarios?: string }>('GET', '/_health');
+  if (res.status !== 200 || res.body?.ok !== true) {
+    throw new Error(`Nothing healthy answered ${baseUrl()}/_health: ${res.status}`);
+  }
+  cachedTarget = typeof res.body.scenarios === 'string' ? 'mock' : 'api';
+  return cachedTarget;
+}
+
 export interface MemberSnapshot {
   balanceFils: number;
   visits: number;
@@ -125,6 +159,96 @@ export async function memberNow(scenario?: string): Promise<MemberSnapshot> {
     throw new Error(`Could not read the member: ${res.status} ${JSON.stringify(res.body)}`);
   }
   return res.body;
+}
+
+/**
+ * Make sure the shared member can afford what the spec is about to do.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS NOT "TOPPING UP TO MAKE A TEST PASS"
+ * ------------------------------------------------------------------
+ * `memberNow()` above solved half of the shared-fixture problem: stop asserting
+ * absolutes, assert the delta. The other half only appeared once lane A's seed
+ * was actually re-run. Dana is seeded at 24.500 KD; `concurrency.test.ts` needs
+ * six settled charges of 8.000 KD, so from a clean seed the fourth charge is a
+ * genuine 402 and three specs about idempotency and token races go red for a
+ * reason that has nothing to do with idempotency or token races.
+ *
+ * Those specs had been green for weeks — because Dana had drifted up past
+ * 300 KD across accumulated runs and nothing had reset her. So the suite was
+ * passing on drift, and the day the database was seeded properly it broke. A
+ * suite that only works on an un-reset database is not a suite.
+ *
+ * The money moved here is REAL, through the real path: `POST /topups` creates an
+ * intent, the sandbox PSP's hosted page settles it, and the signed callback
+ * credits the wallet. Nothing writes a balance directly, so this cannot paper
+ * over a broken credit path — if the top-up path is broken this throws and every
+ * spec downstream fails loudly.
+ *
+ * AGAINST `packages/mock` THIS IS INERT, BY TARGET AND NOT BY LUCK. The mock's
+ * fixture is rebuilt in memory at boot and its balance never moves however many
+ * charges settle against it, so no floor can ever be crossed there and there is
+ * nothing to fund. Checking the balance instead would be wrong for the same
+ * reason it is wrong everywhere else in this file: 24.500 is smaller than a
+ * ten-charge floor, so the helper would try to top up a server that has no
+ * gateway and take the whole file down in `beforeAll`.
+ *
+ * NEVER call this with the `lowbal` scenario. That member's shortfall IS the
+ * fixture — funding her would delete the 402 specs.
+ */
+export async function ensureBalanceAtLeast(minFils: number, label = 'fixture'): Promise<number> {
+  const current = (await memberNow()).balanceFils;
+  if (current >= minFils) return current;
+  // The mock's balance is static; a floor is meaningless against it.
+  if ((await targetKind()) === 'mock') return current;
+
+  // Round up to a whole KD above the floor, so one top-up covers several specs
+  // rather than one per charge.
+  const shortfall = minFils - current;
+  const amountFils = Math.ceil(shortfall / 1_000) * 1_000;
+
+  const created = await api<{ id: string; redirectUrl?: string }>('POST', '/topups', {
+    idempotencyKey: idempotencyKey(`ensure-balance-${label}`),
+    body: { amountFils, method: 'knet' },
+  });
+  if (created.status !== 200) {
+    throw new Error(
+      `The shared member is short ${shortfall} fils and POST /topups answered ` +
+        `${created.status} ${JSON.stringify(created.body)}.\n` +
+        'Re-seed lane A\'s fixture:  pnpm --filter @avo/api run db:seed',
+    );
+  }
+
+  // The sandbox driver's hosted page. `POST /_gateway/{ref}` is what a customer
+  // pressing "pay" does, so it needs no credential and no webhook secret — which
+  // is the only reason a suite pointed at an arbitrary E2E_BASE_URL can drive it.
+  const ref = /\/_gateway\/([^/?#]+)/.exec(created.body.redirectUrl ?? '')?.[1];
+  if (!ref) {
+    throw new Error(
+      `The shared member is short ${shortfall} fils and this API's top-up does not go ` +
+        `through the sandbox gateway (redirectUrl: ${created.body.redirectUrl ?? '(none)'}).\n` +
+        'This suite cannot fund her against a real processor. Re-seed instead:\n' +
+        '  pnpm --filter @avo/api run db:seed',
+    );
+  }
+
+  const settled = await api('POST', `/_gateway/${ref}`, {
+    body: { outcome: 'succeeded', notify: true },
+  });
+  if (settled.status !== 200) {
+    throw new Error(
+      `The sandbox gateway refused to settle ${ref}: ${settled.status} ${JSON.stringify(settled.body)}`,
+    );
+  }
+
+  const after = (await memberNow()).balanceFils;
+  if (after < minFils) {
+    throw new Error(
+      `Funded the shared member with ${amountFils} fils and she is still below ${minFils} ` +
+        `(now ${after}). The top-up settled but the wallet did not move — that is a real defect, ` +
+        'not a fixture problem.',
+    );
+  }
+  return after;
 }
 
 // --------------------------------------------------------- fixture constants --

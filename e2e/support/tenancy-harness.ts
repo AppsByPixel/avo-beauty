@@ -75,6 +75,8 @@ export const A_MEMBER_PHONE = '+96599124408';
 export const A_STAFF_FULL = 'ST-001';
 export const A_STAFF_RESTRICTED = 'ST-002';
 export const A_SERVICE = 'SV-01';
+/** Salon A's seeded happy hour — `api/src/db/seed.ts`. All branches, x2visit, ON. */
+export const A_HAPPY_HOUR = 'HH-01';
 
 /** The second salon, seeded by this file and by nothing else. */
 export const SALON_B = 'SAL-LUMIERE';
@@ -85,8 +87,91 @@ export const B_STAFF_HANDLE = 'layla';
 export const B_BRANCH = 'BR-LUM-HAW';
 export const B_SERVICE = 'SV-B01';
 export const B_SERVICE_PRICE_FILS = 7_000;
-export const B_MEMBER_BALANCE_FILS = 30_000;
+/**
+ * Salon B's customer, reset to this on every run.
+ *
+ * DELIBERATELY SEVERAL TIMES WHAT A RUN SPENDS. It was 30.000 — four blow-dries —
+ * which was ample while salon B only appeared in tenancy specs that refuse before
+ * they ever reach the money. `scanner.test.ts` settles a dozen charges against
+ * her, the fifth answered `402 insufficient_balance`, and nine specs then failed
+ * on a precondition — none of them about balances.
+ *
+ * Same shelf-life problem `money.test.ts` documents on `FLOOR_FILS`, same fix.
+ * The suites assert DELTAS, so the absolute figure is free; what it must not be
+ * is tight enough to run out half way, because that failure is loud, misleading,
+ * and lands on whichever spec happens to be next.
+ */
+export const B_MEMBER_BALANCE_FILS = 500_000;
 export const B_SCANNER_DEVICE = 'DEV-SCANNER-B';
+
+// --------------------------------------------------- the scanner's own fixtures --
+
+/**
+ * Three more staff rows at salon B, added for `scanner.test.ts`. Each exists
+ * because a scanner spec would otherwise have to damage a row another spec needs.
+ *
+ * B_STAFF_RESTRICTED — Noor. A REAL PIN on a REAL device, `scanner` on,
+ *   `charges` and `void` OFF. This is the shape of the locked screen in
+ *   design/AVO Staff Scanner.dc.html: someone who can take payment and cannot
+ *   review or reverse one. Salon B's existing restricted row (Mariam, ST-B02)
+ *   could not do the job — she has no `pin_hash`, so she can never hold a scanner
+ *   session, and a 403 you cannot reach is not a 403 you can test.
+ *
+ * B_STAFF_LOCKOUT — Huda. Exists to be locked out, on her own device. The lockout
+ *   spec burns five failures and leaves `pin_locked_until` fifteen minutes in the
+ *   future; doing that to Layla would sign the rest of the suite out of the
+ *   scanner, and doing it to Noor would break the permission specs.
+ *
+ * B_STAFF_RATELIMIT — Dalal. Exists so the DEVICE rate limit can be proved
+ *   without locking any account. Her device takes ten failures against handles
+ *   that do not exist, which walks the per-device counter without touching a
+ *   single account's counter — the rotating-handle attack the device limit is
+ *   there to stop.
+ *
+ * All three are reset to a known state on every run, for the reason the ST-B02
+ * conflict branch below documents: a spec that asserts "nothing changed" is only
+ * a real assertion if the row started somewhere known.
+ */
+export const B_STAFF_RESTRICTED = 'ST-B03';
+export const B_STAFF_RESTRICTED_HANDLE = 'noor';
+export const B_RESTRICTED_DEVICE = 'DEV-SCANNER-B-RESTRICTED';
+
+export const B_STAFF_LOCKOUT = 'ST-B04';
+export const B_STAFF_LOCKOUT_HANDLE = 'huda';
+export const B_LOCKOUT_DEVICE = 'DEV-SCANNER-B-LOCKOUT';
+
+export const B_STAFF_RATELIMIT = 'ST-B05';
+export const B_STAFF_RATELIMIT_HANDLE = 'dalal';
+export const B_RATELIMIT_DEVICE = 'DEV-SCANNER-B-RATELIMIT';
+
+// -------------------------------------------------- salon B's happy hours --
+
+/**
+ * TWO happy hours at salon B, and the second one exists purely to be destroyed.
+ *
+ * The tenancy ledger drives every salon-scoped route twice: once at salon A's id,
+ * where it must 403, and once at salon B's own id, where it must SUCCEED. That
+ * control is the half that proves the 403 came from tenancy rather than from a
+ * route that is broken shut — and it means the ledger really performs each write.
+ *
+ * For `PATCH …/happy-hours/{hid}` that needs a window at salon B to edit.
+ * For `DELETE …/happy-hours/{hid}` it needs one it may actually delete, and the
+ * control genuinely deletes it — so a fixed fixture would work on the first run
+ * of the day and 404 on every run after. `B_HAPPY_HOUR_DISPOSABLE` is re-created
+ * by this seed on every run for exactly that reason.
+ *
+ * They are kept OFF (`on: false`). A live happy hour at salon B would silently
+ * change what `POST /charges` does in `scanner.test.ts`, which asserts a plain
+ * 7.000 debit — a promotion is precisely the sort of thing that turns a money
+ * literal into a lie about which fixtures happened to be enabled.
+ */
+export const B_HAPPY_HOUR = 'HH-B01';
+export const B_HAPPY_HOUR_DISPOSABLE = 'HH-B02';
+
+/** The PIN every salon B row shares, copied from salon A's hash. */
+export const B_STAFF_PIN = '2468';
+/** A four-digit PIN that is not `B_STAFF_PIN`. Used for the failure paths. */
+export const B_WRONG_PIN = '1111';
 
 /** From `api/src/db/seed.ts`. Copied hashes mean salon B shares them. */
 const STAFF_PASSWORD = 'noura-dev-password';
@@ -171,6 +256,29 @@ export const GATEWAY_WEBHOOK_SECRET = 'tenancy-suite-gateway-hmac-key-not-a-secr
 /** `env.gatewayWebhookToleranceSeconds`'s default. The replay window. */
 export const GATEWAY_WEBHOOK_TOLERANCE_SECONDS = 300;
 
+// ------------------------------------------------------------------- the PIN --
+
+/**
+ * The PIN controls, pinned rather than inherited. See the API boot below for why.
+ * api-contract.md § StaffUser: "rate-limit it, lock after N failures".
+ */
+export const PIN_MAX_ATTEMPTS = 5;
+export const PIN_DEVICE_ATTEMPTS_PER_WINDOW = 10;
+export const PIN_LOCKOUT_MINUTES = 15;
+export const PIN_DEVICE_WINDOW_MINUTES = 5;
+
+// -------------------------------------------------------------- the receipts --
+
+/**
+ * The worker's poll interval under test. Short so a spec that waits for a queued
+ * job to be sent waits a second rather than the 2s production default times a
+ * retry.
+ */
+export const RECEIPT_POLL_MS = 250;
+
+/** Whether the API under test runs the receipt worker. See the boot env below. */
+export const RECEIPT_WORKER_ENABLED = (process.env.RECEIPT_WORKER_ENABLED ?? '1') === '1';
+
 /**
  * `x-avo-signature: t=<unix seconds>,v1=<hex hmac>`.
  *
@@ -203,7 +311,42 @@ export const nowSeconds = (): number => Math.floor(Date.now() / 1000);
 
 const PG_CONTAINER = process.env.AVO_PG_CONTAINER ?? 'avo-postgres';
 const PG_USER = process.env.POSTGRES_USER ?? 'avo';
-const PG_DB = process.env.POSTGRES_DB ?? 'avo';
+
+/**
+ * LANE D'S OWN DATABASE, AND IT IS NOT TIDINESS.
+ *
+ * This used to be `avo` — the database every lane shares. `api/src/db/seed.ts`
+ * clears the transient money-path state to make a run repeatable, and among the
+ * tables it clears is `session`:
+ *
+ *     DELETE FROM receipt_job / ledger_entry / idempotency_key / wallet_token
+ *     DELETE FROM gateway_event / topup_intent / transaction
+ *     DELETE FROM session          ← this one
+ *     DELETE FROM pin_attempt
+ *
+ * That is correct for a seed and hostile to a suite running beside it. Every file
+ * driven by this harness signs in for real in `beforeAll` and holds a bearer token
+ * for the length of the run. Another lane running `pnpm --filter @avo/api run
+ * db:seed` mid-suite deletes the session row behind that token, and because
+ * `resolvePrincipal` checks `sessionIsLive` on every request, the very next call
+ * answers 401 while the JWT itself is still minutes from expiry. It cost lane B
+ * real time reading that as a client bug, which is exactly what it looks like.
+ *
+ * The transaction and wallet_token deletes are the same hazard one level quieter:
+ * a spec holding a charge id or a live QR token has it removed underneath it.
+ *
+ * So this suite gets its own database on the same container. Nothing else writes
+ * here, no other lane's seed can reach it, and lane D can re-seed whenever it
+ * likes without taking anyone down. Override with POSTGRES_DB to point the suite
+ * back at a shared database deliberately.
+ *
+ * SETTING IT UP — see `ensureDatabase()` below, which does it automatically and
+ * says what it did.
+ */
+const PG_DB = process.env.POSTGRES_DB ?? 'avo_qa';
+
+/** The maintenance database, for CREATE DATABASE and the existence probe. */
+const PG_MAINTENANCE_DB = 'postgres';
 
 /**
  * Run SQL as the database owner and return stdout.
@@ -237,6 +380,241 @@ export function scalar(sql: string): string {
   ).trim();
 }
 
+/**
+ * Put a staff row's PIN counters back to zero and clear its device's history.
+ *
+ * WHY A SPEC THAT COUNTS FAILURES HAS TO CALL THIS.
+ *
+ * `pin_failed_attempts` is cumulative across a run, and the specs that merely
+ * PROVE a wrong PIN is refused leave it incremented — correctly, that is the
+ * feature. So a later spec asserting "the fifth failure locks the account" is
+ * really asserting "the fifth failure SINCE WHATEVER RAN BEFORE IT", and the
+ * scanner suite went red exactly there: two earlier refusal specs had already put
+ * Layla on two, so four more locked her on the fifth and the precondition read
+ * `5:true after 4 failures`.
+ *
+ * Resetting makes each counting spec independent of the order the file happens to
+ * run in, which it should be regardless. It resets the DEVICE history too: the
+ * per-device rate limit counts rows in `pin_attempt`, so a spec that burns
+ * failures against a device poisons the next spec that uses it.
+ */
+export function resetPinState(staffId: string, deviceId?: string): void {
+  psql(`
+    UPDATE staff_user SET pin_failed_attempts = 0, pin_locked_until = NULL WHERE id = '${staffId}';
+    ${deviceId ? `DELETE FROM pin_attempt WHERE device_id = '${deviceId}';` : ''}
+  `);
+}
+
+/** One scalar against a NAMED database. Used before `PG_DB` is known to exist. */
+function scalarOn(database: string, sql: string): string {
+  return execFileSync(
+    'docker',
+    ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', database, '-tAc', sql],
+    { encoding: 'utf8' },
+  ).trim();
+}
+
+// ------------------------------------------------------------ the bootstrap --
+
+/**
+ * Create lane D's database if it is not there, and leave it migrated and seeded.
+ *
+ * Idempotent and cheap: after the first run this is one `SELECT` against
+ * `pg_database` and two more against the schema.
+ *
+ * WHY IT CLONES `avo` INSTEAD OF MIGRATING AND SEEDING FROM EMPTY
+ * ---------------------------------------------------------------
+ * Because the obvious route does not work, and the reason is a defect worth
+ * reporting rather than hiding. `api/src/db/seed.ts` inserts in this order:
+ *
+ *     salon → branch → service → artist → member → staff_user
+ *
+ * and `artist.staff_user_id` REFERENCES `staff_user`. AR-003 is wired to ST-002,
+ * so against a freshly migrated database the seed dies at the artist insert:
+ *
+ *     ERROR 23503  Key (staff_user_id)=(ST-002) is not present in table "staff_user"
+ *
+ * It only appears to work on the shared `avo` database because ST-002 was already
+ * there from before migration 0007 added the column. So `db:seed` cannot bootstrap
+ * a new environment today — a staging database, a CI job, or this one. Lane D does
+ * not edit `api/src/db/seed.ts`; the fix is one move of the `staff_user` insert
+ * above the `artist` insert, and it is in the lane report.
+ *
+ * The workaround is a `pg_dump` of the shared database into the new one, which
+ * carries the schema, the grants for `avo_app`, and the rows the seed's ordering
+ * assumes already exist. Lane A's own seed then runs on top and resets every
+ * fixture to its canonical value, so what this ends up with is lane A's seed
+ * state and not a snapshot of whatever the shared database had drifted to.
+ */
+function ensureDatabase(): void {
+  const exists =
+    scalarOn(PG_MAINTENANCE_DB, `select 1 from pg_database where datname='${PG_DB}'`) === '1';
+  if (exists) return;
+
+  // eslint-disable-next-line no-console
+  console.log(`[lane D] creating an isolated database "${PG_DB}" — this happens once.`);
+
+  execFileSync(
+    'docker',
+    [
+      'exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_MAINTENANCE_DB,
+      '-v', 'ON_ERROR_STOP=1',
+      '-c', `CREATE DATABASE ${PG_DB} OWNER ${PG_USER}`,
+      // `avo_app` is a CLUSTER-level role, so it already exists; only the
+      // per-database CONNECT privilege has to be granted for the new database.
+      '-c', `GRANT CONNECT ON DATABASE ${PG_DB} TO avo_app`,
+    ],
+    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+
+  try {
+    // Schema, privileges and rows. `ON_ERROR_STOP=1` on the restore side so a
+    // half-copied database is a loud failure and not a suite that fails strangely
+    // twenty specs later.
+    execFileSync(
+      'docker',
+      [
+        'exec', '-i', PG_CONTAINER, 'sh', '-c',
+        `pg_dump -U ${PG_USER} -d avo | psql -U ${PG_USER} -d ${PG_DB} -q -v ON_ERROR_STOP=1`,
+      ],
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+  } catch (err) {
+    const e = err as { stderr?: Buffer | string; message?: string };
+    throw new Error(
+      `Could not clone the shared "avo" database into "${PG_DB}".\n` +
+        'The shared database has to exist and be migrated first:\n' +
+        '  pnpm --filter @avo/api run db:up && pnpm --filter @avo/api run db:migrate\n' +
+        `--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
+    );
+  }
+
+  reseed();
+  // eslint-disable-next-line no-console
+  console.log(`[lane D] "${PG_DB}" is ready — lane A's schema, lane A's seed, nobody else's writes.`);
+}
+
+/**
+ * Run lane A's seed against lane D's database.
+ *
+ * Exported because it is the recovery move when a fixture has been mangled, and
+ * because it is now SAFE to run at any time — the whole point of the isolated
+ * database is that this cannot take another lane's session down.
+ */
+export function reseed(): void {
+  runApiDbScript('src/db/seed.ts', PG_DB);
+}
+
+/** The two connection strings `api/src/env.ts` wants, pointed at one database. */
+function connectionEnv(database: string): Record<string, string> {
+  const url = (role: string, password: string) =>
+    `postgres://${role}:${password}@127.0.0.1:5433/${database}`;
+  return {
+    NODE_ENV: 'test',
+    DATABASE_URL: url('avo', 'avo_dev_password'),
+    APP_DATABASE_URL: url('avo_app', 'avo_app_dev_password'),
+  };
+}
+
+export interface ApiScriptResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run one of lane A's database scripts (`db/migrate.ts`, `db/seed.ts`) against a
+ * named database, and REPORT rather than throw.
+ *
+ * The reporting matters. `seed.test.ts` is a suite ABOUT whether the seed
+ * succeeds, so it needs the failure as a value it can assert on — a helper that
+ * throws would turn "the seed is broken" into a suite that errored, and the two
+ * read very differently in a report.
+ */
+export function runApiDbScriptResult(script: string, database: string): ApiScriptResult {
+  try {
+    const stdout = execFileSync(apiTsx(), [script], {
+      cwd: join(repoRoot, 'api'),
+      env: { ...process.env, ...connectionEnv(database) },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { ok: true, stdout, stderr: '' };
+  } catch (err) {
+    const e = err as { stdout?: Buffer | string; stderr?: Buffer | string; message?: string };
+    return {
+      ok: false,
+      stdout: String(e.stdout ?? ''),
+      stderr: String(e.stderr ?? e.message ?? ''),
+    };
+  }
+}
+
+/** The throwing form, for callers that treat a failure as fatal. */
+function runApiDbScript(script: string, database: string): void {
+  const res = runApiDbScriptResult(script, database);
+  if (res.ok) return;
+  throw new Error(
+    `\`${script}\` failed against "${database}".\n` +
+      `--- stdout ---\n${res.stdout}\n--- stderr ---\n${res.stderr}`,
+  );
+}
+
+// ------------------------------------------------ throwaway databases --------
+
+/**
+ * Create an EMPTY database, owned by `avo`, with `avo_app` able to connect.
+ *
+ * Deliberately empty — no clone, no schema. `seed.test.ts` needs a database in
+ * the state a brand-new environment is in, which is the state `ensureDatabase()`
+ * above goes out of its way to avoid because lane A's seed could not cope with
+ * it. That avoidance is a workaround; this is the spec that says so.
+ */
+export function createEmptyDatabase(database: string): void {
+  execFileSync(
+    'docker',
+    [
+      'exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_MAINTENANCE_DB,
+      '-v', 'ON_ERROR_STOP=1',
+      '-c', `DROP DATABASE IF EXISTS ${database}`,
+      '-c', `CREATE DATABASE ${database} OWNER ${PG_USER}`,
+      '-c', `GRANT CONNECT ON DATABASE ${database} TO avo_app`,
+    ],
+    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+}
+
+/** Drop a throwaway database. Never throws — this runs in cleanup. */
+export function dropDatabase(database: string): void {
+  try {
+    execFileSync(
+      'docker',
+      [
+        'exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', PG_MAINTENANCE_DB,
+        '-c', `DROP DATABASE IF EXISTS ${database} WITH (FORCE)`,
+      ],
+      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+  } catch {
+    /* a leaked scratch database is untidy, not a failure worth reporting */
+  }
+}
+
+/** Migrate a named database with lane A's own migrator. */
+export function migrateDatabase(database: string): ApiScriptResult {
+  return runApiDbScriptResult('src/db/migrate.ts', database);
+}
+
+/** Seed a named database with lane A's own seed. */
+export function seedDatabase(database: string): ApiScriptResult {
+  return runApiDbScriptResult('src/db/seed.ts', database);
+}
+
+/** One scalar against a named database, for the scratch-database specs. */
+export function scalarOnDatabase(database: string, sql: string): string {
+  return scalarOn(database, sql);
+}
+
 // ----------------------------------------------------------------- preflight --
 
 function preflight(): void {
@@ -252,13 +630,43 @@ function preflight(): void {
     );
   }
 
+  if (!existsSync(apiTsx())) {
+    throw new Error(
+      'The API\'s dependencies are not installed, so it cannot be started.\n  pnpm install',
+    );
+  }
+
+  // Creates and seeds `PG_DB` the first time, then returns immediately.
+  ensureDatabase();
+
+  /**
+   * MIGRATE ON EVERY RUN, NOT ONLY AT CREATION.
+   *
+   * Lane D's database is its own, which is the point — and the cost of that is
+   * that lane A's migrations no longer arrive here by somebody else running
+   * `db:migrate` on the shared one. This suite went red on
+   * `relation "happy_hour" does not exist` the day lane A landed promotions, which
+   * is a stale-schema problem wearing a missing-feature costume.
+   *
+   * `migrate()` is idempotent and skips applied migrations, so this costs a
+   * `SELECT` against the journal on every run and removes the whole class.
+   */
+  const migrated = migrateDatabase(PG_DB);
+  if (!migrated.ok) {
+    throw new Error(
+      `Could not bring "${PG_DB}" up to date with lane A's migrations.\n` +
+        `--- stderr ---\n${migrated.stderr}`,
+    );
+  }
+
   const tables = scalar(
     "select count(*) from information_schema.tables where table_schema='public' and table_name in ('salon','staff_user','member','wallet_token','idempotency_key')",
   );
   if (tables !== '5') {
     throw new Error(
-      'The schema is not migrated — the tenancy suite reads and writes real rows.\n' +
-        '  pnpm --filter @avo/api run db:migrate',
+      `The schema in "${PG_DB}" is not migrated — this suite reads and writes real rows.\n` +
+        `  DATABASE_URL=postgres://avo:avo_dev_password@127.0.0.1:5433/${PG_DB} ` +
+        'pnpm --filter @avo/api run db:migrate',
     );
   }
 
@@ -267,14 +675,8 @@ function preflight(): void {
   );
   if (seeded !== '1') {
     throw new Error(
-      `Salon A is not seeded — ${A_STAFF_FULL} is missing, and salon B copies its password hash.\n` +
-        '  pnpm --filter @avo/api run db:seed',
-    );
-  }
-
-  if (!existsSync(apiTsx())) {
-    throw new Error(
-      'The API\'s dependencies are not installed, so it cannot be started.\n  pnpm install',
+      `Salon A is not seeded in "${PG_DB}" — ${A_STAFF_FULL} is missing, and salon B copies ` +
+        'its password hash. `reseed()` in this file runs lane A\'s seed against lane D\'s database.',
     );
   }
 }
@@ -351,16 +753,85 @@ ON CONFLICT (id) DO UPDATE SET
   balance_fils = ${B_MEMBER_BALANCE_FILS}, visits = 2, tier = 'bronze', stamps = NULL;
 
 -- A second staff row at salon B with team:false. Used to prove the roster read
--- is salon-scoped and to keep the escalation specs honest.
+-- is salon-scoped and as the TARGET of the escalation specs.
+--
+-- The conflict branch is not decoration. Those specs assert that a refused
+-- PATCH /staff/{id} wrote nothing, which is only a real assertion if the row
+-- starts from a known value — and the row survives between runs. It was
+-- ON CONFLICT DO NOTHING, and a run against a deliberately broken build (a
+-- mutation test removing the surface gate) escalated Mariam for real and left her that
+-- way, so the next run's "wrote nothing" spec would have compared a granted
+-- permission against a granted permission and passed. Reset the authority
+-- columns every time.
 INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
                         password_hash, perm_scanner)
 SELECT 'ST-B02', '${SALON_B}', 'Mariam', 'mariam', 'frontdesk', false, ARRAY['${B_BRANCH}'],
        s.password_hash, true
 FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  perm_dashboard = false, perm_appointments = false, perm_shop = false, perm_loyalty = false,
+  perm_team = false, perm_scanner = true, perm_charges = false, perm_void = false,
+  perm_marketing = false;
+
+-- The scanner suite's three rows. See the constants at the top of this file for
+-- why each exists. All three carry a real pin_hash on a device of their own, so
+-- each holds a genuine device-bound PIN session and none can disturb another's
+-- device counter.
+--
+-- Noor: scanner ON, charges and void OFF — the locked screen's principal.
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id, perm_scanner)
+SELECT '${B_STAFF_RESTRICTED}', '${SALON_B}', 'Noor', '${B_STAFF_RESTRICTED_HANDLE}', 'frontdesk',
+       true, '{}', s.password_hash, s.pin_hash, '${B_RESTRICTED_DEVICE}', true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_RESTRICTED_DEVICE}',
+  perm_dashboard = false, perm_appointments = false, perm_shop = false, perm_loyalty = false,
+  perm_team = false, perm_scanner = true, perm_charges = false, perm_void = false,
+  perm_marketing = false;
+
+-- Huda: exists to be locked out. Full scanner authority, so that when a spec does
+-- sign her in, nothing but the lockout can refuse her.
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id,
+                        perm_scanner, perm_charges, perm_void)
+SELECT '${B_STAFF_LOCKOUT}', '${SALON_B}', 'Huda', '${B_STAFF_LOCKOUT_HANDLE}', 'frontdesk',
+       true, '{}', s.password_hash, s.pin_hash, '${B_LOCKOUT_DEVICE}', true, true, true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_LOCKOUT_DEVICE}',
+  perm_scanner = true, perm_charges = true, perm_void = true;
+
+-- Dalal: exists so the per-device rate limit can be walked to its threshold
+-- without locking any account.
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id, perm_scanner)
+SELECT '${B_STAFF_RATELIMIT}', '${SALON_B}', 'Dalal', '${B_STAFF_RATELIMIT_HANDLE}', 'frontdesk',
+       true, '{}', s.password_hash, s.pin_hash, '${B_RATELIMIT_DEVICE}', true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_RATELIMIT_DEVICE}', perm_scanner = true;
+
+-- Salon B's happy hours. Both OFF, so no promotion is live during the money
+-- specs; see the constants at the top of this file.
+--
+-- The disposable one is DELETEd and re-inserted rather than upserted, because the
+-- tenancy ledger's control call really does delete it and a row that survived
+-- would make the second run of the day 404.
+INSERT INTO happy_hour (id, salon_id, branch_id, days, "from", "to", reward, "on", notify)
+VALUES ('${B_HAPPY_HOUR}', '${SALON_B}', NULL, '{0,1,2}', '16:00', '18:00', 'x2visit', false, false)
+ON CONFLICT (id) DO UPDATE SET
+  branch_id = NULL, days = '{0,1,2}', "from" = '16:00', "to" = '18:00',
+  reward = 'x2visit', "on" = false, notify = false;
+
+DELETE FROM happy_hour WHERE id = '${B_HAPPY_HOUR_DISPOSABLE}';
+INSERT INTO happy_hour (id, salon_id, branch_id, days, "from", "to", reward, "on", notify)
+VALUES ('${B_HAPPY_HOUR_DISPOSABLE}', '${SALON_B}', NULL, '{4}', '10:00', '13:00', 'topup10', false, false);
 
 -- PIN attempts are rate limited per device+salon. A previous run that failed a
--- sign-in would otherwise lock this suite out of the scanner session.
+-- sign-in would otherwise lock this suite out of the scanner session. It is also
+-- what makes the lockout and rate-limit specs repeatable: they COUNT failures, so
+-- the counter has to start at zero.
 DELETE FROM pin_attempt WHERE salon_id = '${SALON_B}';
 UPDATE staff_user SET pin_failed_attempts = 0, pin_locked_until = NULL WHERE salon_id = '${SALON_B}';
 
@@ -373,9 +844,44 @@ COMMIT;
 let child: ChildProcess | undefined;
 let base = '';
 
+/**
+ * Everything the API has written to stdout and stderr this run, and whether it is
+ * still alive.
+ *
+ * WHY THE SUITE KEEPS THIS AFTER STARTUP.
+ * It used to be a local in `startTenancyApi`, used once for the "never became
+ * healthy" message and then dropped. When the API died MID-RUN instead — which it
+ * did, and which is how this was written — every remaining spec failed with
+ * `ECONNREFUSED 127.0.0.1:<ephemeral port>` and nothing else. Twelve red specs, no
+ * stack, no reason, and the reason had been printed to a stream nobody was
+ * holding on to.
+ *
+ * A suite that boots its own server owns that server's output. `treq` checks this
+ * on a connection failure and reports the crash instead of the symptom.
+ */
+let apiOutput = '';
+let apiExit: { code: number | null; signal: string | null } | undefined;
+
 export function tenancyBaseUrl(): string {
   if (!base) throw new Error('startTenancyApi() has not run.');
   return base;
+}
+
+/** The API's own account of why it is not answering. */
+function apiPostMortem(): string {
+  if (!apiExit) {
+    return 'The API process is still running, so this is a connection problem rather than a crash.';
+  }
+  const how =
+    apiExit.signal !== null
+      ? `killed by ${apiExit.signal}`
+      : `exited with code ${apiExit.code}`;
+  return (
+    `THE API UNDER TEST IS GONE — it ${how} part-way through the run, so every spec ` +
+    'after that point fails on the connection rather than on its own assertion.\n' +
+    `--- the API's last output ---\n${apiOutput.slice(-4000) || '(nothing on stdout/stderr)'}\n` +
+    '-----------------------------'
+  );
 }
 
 /**
@@ -437,10 +943,30 @@ export async function startTenancyApi(): Promise<void> {
 
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
-  let output = '';
+  apiOutput = '';
+  apiExit = undefined;
 
   child = spawn(apiTsx(), ['src/server.ts'], {
     cwd: join(repoRoot, 'api'),
+    /**
+     * ITS OWN PROCESS GROUP — this is a fix, not a flourish.
+     *
+     * Vitest runs each test file in its own forked worker and tears the worker
+     * down afterwards. Spawned without `detached`, the API joins that worker's
+     * process group, so the teardown's signal reaches it too — and
+     * `api/src/server.ts` handles SIGTERM by closing the server and calling
+     * `process.exit(0)`.
+     *
+     * The result was the worst kind of failure: an API that vanished part-way
+     * through a multi-file run, cleanly, with exit code 0 and nothing on stderr,
+     * taking thirteen specs with it. Running one file at a time it never happened,
+     * so it looked like flakiness in whichever suite drew the short straw.
+     *
+     * `detached: true` makes the child a group leader of its own, out of reach of
+     * a signal aimed at the worker. It now lives and dies only by
+     * `stopTenancyApi()` below.
+     */
+    detached: true,
     env: {
       ...process.env,
       NODE_ENV: 'test',
@@ -463,11 +989,70 @@ export async function startTenancyApi(): Promise<void> {
       // inside the API process. Pinned to the ephemeral port this boot chose,
       // rather than left to env.ts's `http://localhost:${PORT}` default.
       PUBLIC_BASE_URL: base,
+
+      // --------------------------------------------------------- the PIN --
+      // Pinned for the same reason as GATEWAY_WEBHOOK_SECRET above: the scanner
+      // suite asserts "the FIFTH failure locks the account" and "the ELEVENTH
+      // attempt from a device is refused", and those are only literals if the
+      // thresholds are. Inherited from env.ts's defaults they are assertions
+      // about whatever lane A last chose.
+      //
+      // The two numbers are deliberately different. Account lockout at 5 fires
+      // before the device limit at 10 when an attacker hammers ONE handle; the
+      // device limit is what catches the attacker who rotates handles to keep
+      // every individual account counter below its threshold. A suite that set
+      // them equal could not tell the two controls apart.
+      PIN_MAX_ATTEMPTS: String(PIN_MAX_ATTEMPTS),
+      PIN_DEVICE_ATTEMPTS_PER_WINDOW: String(PIN_DEVICE_ATTEMPTS_PER_WINDOW),
+      PIN_LOCKOUT_MINUTES: String(PIN_LOCKOUT_MINUTES),
+      PIN_DEVICE_WINDOW_MINUTES: String(PIN_DEVICE_WINDOW_MINUTES),
+
+      // ---------------------------------------------------- the receipts --
+      // ON, and this is the re-pin lane A asked for.
+      //
+      // env.ts defaults RECEIPT_WORKER_ENABLED to '0' and says why: lane D's
+      // gateway suite asserted `receipt_job.status = 'queued'` with the note
+      // "the worker has not run", so starting the worker flipped that spec red
+      // for the opposite reason to the one it was testing. Lane A built the
+      // worker and left it off rather than edit another lane's spec.
+      //
+      // The assertion has been restated — see gateway.test.ts, "the receipts
+      // block" — against what the money transaction actually guarantees rather
+      // than against the worker being absent. So the worker runs here, the
+      // outbox is drained end to end, and lane A can flip the default in env.ts.
+      RECEIPT_WORKER_ENABLED: process.env.RECEIPT_WORKER_ENABLED ?? '1',
+      // Fast enough that a spec can wait for a send without a long timeout.
+      RECEIPT_POLL_MS: String(RECEIPT_POLL_MS),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  child.stdout?.on('data', (c: Buffer) => (output += c.toString()));
-  child.stderr?.on('data', (c: Buffer) => (output += c.toString()));
+  child.stdout?.on('data', (c: Buffer) => (apiOutput += c.toString()));
+  child.stderr?.on('data', (c: Buffer) => (apiOutput += c.toString()));
+  child.on('exit', (code, signal) => {
+    apiExit = { code, signal };
+  });
+
+  /**
+   * THE OTHER HALF OF `detached`.
+   *
+   * A detached child outlives its parent, which is the point — and also the risk.
+   * If a suite dies before `afterAll` (a crash, a Ctrl-C, a vitest timeout) the
+   * API would be left running, holding a database connection and a port, and the
+   * next run would find a stranger's server on it. So the worker kills it on the
+   * way out, however it goes out.
+   */
+  const reap = () => {
+    if (child && child.exitCode === null) {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  process.once('exit', reap);
+  process.once('SIGINT', reap);
+  process.once('SIGTERM', reap);
 
   const deadline = Date.now() + 60_000;
   for (;;) {
@@ -481,7 +1066,7 @@ export async function startTenancyApi(): Promise<void> {
       child.kill('SIGKILL');
       throw new Error(
         `Lane A's API never became healthy at ${base}/_health.\n` +
-          `--- server output ---\n${output || '(nothing on stdout/stderr)'}\n---------------------`,
+          `--- server output ---\n${apiOutput || '(nothing on stdout/stderr)'}\n---------------------`,
       );
     }
     await new Promise((r) => setTimeout(r, 250));
@@ -562,11 +1147,22 @@ export async function treq<T = any>(
         ? undefined
         : JSON.stringify(options.body);
 
-  const res = await fetch(`${tenancyBaseUrl()}${path}`, {
-    method,
-    headers,
-    ...(payload === undefined ? {} : { body: payload }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${tenancyBaseUrl()}${path}`, {
+      method,
+      headers,
+      ...(payload === undefined ? {} : { body: payload }),
+    });
+  } catch (err) {
+    // An ECONNREFUSED here is almost always the API having died earlier, not a
+    // networking problem. Say which, and say what it printed on the way out.
+    throw new Error(
+      `${method} ${path} could not reach the API at ${tenancyBaseUrl()}.\n` +
+        `${apiPostMortem()}\n` +
+        `--- the fetch error ---\n${String((err as Error)?.message ?? err)}`,
+    );
+  }
 
   const raw = await res.text();
   let body: unknown;
@@ -580,7 +1176,7 @@ export async function treq<T = any>(
 
 // ------------------------------------------------------------------ sign-ins --
 
-interface SessionResponse {
+export interface SessionResponse {
   accessToken?: string;
   error?: string;
   message?: string;
@@ -622,6 +1218,32 @@ export async function signInScanner(
   return res.body.accessToken;
 }
 
+/**
+ * `POST /staff/session` WITHOUT the success expectation — the raw response.
+ *
+ * `signInScanner` above throws on anything but a 200, which is right for a
+ * `beforeAll` and useless for the specs that are ABOUT the refusals. This is the
+ * same call with the outcome left to the caller, so a spec can assert the status,
+ * the error code and the copy on a wrong PIN, a wrong device, a locked account or
+ * a rate-limited device.
+ */
+export async function attemptScannerSignIn(params: {
+  salonId: string;
+  handle: string;
+  deviceId: string;
+  pin: unknown;
+}): Promise<TenancyResponse<SessionResponse & { staff?: { id: string } }>> {
+  return treq('POST', '/staff/session', {
+    token: null,
+    body: {
+      salonId: params.salonId,
+      handle: params.handle,
+      deviceId: params.deviceId,
+      pin: params.pin,
+    },
+  });
+}
+
 /** `POST /auth/member/session` — salon + phone + password, `wallet` scope. */
 export async function signInMember(salonId: string, phone: string): Promise<string> {
   const res = await treq<SessionResponse>('POST', '/auth/member/session', {
@@ -652,6 +1274,36 @@ export async function mintSalonAWalletToken(): Promise<string> {
   if (res.body.memberId !== A_MEMBER) {
     throw new Error(
       `The wallet token was minted for ${res.body.memberId}, not salon A's member ${A_MEMBER}.`,
+    );
+  }
+  return res.body.token;
+}
+
+/**
+ * A live wallet token for a member who signed in for real.
+ *
+ * The authentic version of the helper above: no shim anywhere in the path, the
+ * customer holds a `wallet`-scope bearer token and asks for her own QR. This is
+ * what the scanner suite uses, because a scan is the moment two real principals
+ * meet — the customer's token and the staff member's PIN session — and shimming
+ * either of them would take the meeting out of the test.
+ */
+export async function mintWalletTokenFor(
+  walletToken: string,
+  expectMemberId: string,
+): Promise<string> {
+  const res = await treq<{ token?: string; memberId?: string }>(
+    'GET',
+    '/members/me/wallet-token',
+    { token: walletToken },
+  );
+  if (res.status !== 200 || !res.body.token) {
+    throw new Error(`Could not mint a wallet token for ${expectMemberId}: ${res.status} ${res.raw}`);
+  }
+  if (res.body.memberId !== expectMemberId) {
+    throw new Error(
+      `The wallet token was minted for ${res.body.memberId}, not ${expectMemberId}. ` +
+        'That means the session used here belongs to somebody else.',
     );
   }
   return res.body.token;
