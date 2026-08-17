@@ -51,6 +51,20 @@ export function useSalon(enabled = true): UseQueryResult<Salon> {
     queryKey: salonKeys.detail(salonId),
     queryFn: ({ signal }) => authedRequest<Salon>('merchant', `/salons/${salonId}`, { signal }),
     enabled,
+    /*
+     * `retry: 1`, for the reason `useSalonMetrics` gives below: the budget has to
+     * stay small enough that a failure surfaces promptly rather than after four
+     * silent attempts.
+     *
+     * This was the only query in the dashboard without an explicit budget, so it
+     * fell back to TanStack's default of three retries with exponential backoff.
+     * Measured while driving the error state: Settings — which reads the salon
+     * rather than a section endpoint — took about five seconds to show its error
+     * while every other section showed one in about two. Five seconds of an
+     * apparently working settings screen is how a merchant concludes a toggle
+     * saved.
+     */
+    retry: 1,
   });
 }
 
