@@ -179,11 +179,29 @@ export const transaction = pgTable(
       .on(t.reversesTransactionId)
       .where(sql`reverses_transaction_id IS NOT NULL`),
 
-    // Sign follows kind. A credit kind cannot debit and a debit kind cannot credit.
+    /**
+     * Sign follows kind. A credit kind cannot debit and a debit kind cannot
+     * credit.
+     *
+     * `charge` IS `<= 0` WHERE THE OTHER DEBIT KINDS ARE `< 0`, which is
+     * migration 0014 and is not an inconsistency. A charge records what was
+     * debited AFTER a held deposit was applied — the design's "8.000 service −
+     * 5.000 deposit = 3.000 charged" — so a 6.000 manicure against a 10.000
+     * deposit, which is the contract's maximum, debits nothing further and the
+     * row is legitimately zero. That is still a real visit: loyalty increments,
+     * the booking completes, a receipt goes out. What stays forbidden is a
+     * POSITIVE charge, a charge that pays the customer.
+     *
+     * `deposit_hold` cannot be zero because `salon_deposit_in_range` puts the
+     * deposit between 1000 and 10000, and `shop` cannot because
+     * `service_price_positive` refuses a free line. Widening either would buy
+     * only the ability to write a meaningless row.
+     */
     check(
       'transaction_amount_sign_matches_kind',
       sql`(${t.kind} IN ('topup', 'deposit_return') AND ${t.amountFils} > 0)
-          OR (${t.kind} IN ('charge', 'deposit_hold', 'shop') AND ${t.amountFils} < 0)
+          OR (${t.kind} = 'charge' AND ${t.amountFils} <= 0)
+          OR (${t.kind} IN ('deposit_hold', 'shop') AND ${t.amountFils} < 0)
           OR (${t.kind} = 'adjustment' AND ${t.amountFils} <> 0)`,
     ),
     // A bonus is a top-up concept. Nothing else has one, and it is never negative.

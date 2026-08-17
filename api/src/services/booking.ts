@@ -547,10 +547,17 @@ export async function createBooking(
  * Give the deposit back. Shared by cancel and by the no-show job.
  *
  * Called with the booking row ALREADY LOCKED and its status already checked by
- * the caller — this writes, it does not decide. Both callers have to lock the
- * member row too, and in the same order (booking, then member), because two
- * different orders is how a cancel and a no-show return deadlock over the same
- * pair of rows.
+ * the caller — this writes, it does not decide.
+ *
+ * THE LOCK ORDER IS MEMBER, THEN BOOKING, EVERYWHERE. It is written down here
+ * because it is not local: `performCharge` takes the member row `FOR UPDATE` as
+ * its first statement and only then reaches for the held booking, and a cancel
+ * or a no-show return that took them the other way round would deadlock against
+ * a charge on the same customer — two transactions each holding what the other
+ * wants, resolved by Postgres killing one of them at random. Both callers here
+ * therefore read the booking UNLOCKED to learn whose it is, lock the member, and
+ * only then lock the booking and re-check its status. The re-check is what makes
+ * the unlocked first read safe.
  */
 export async function returnDeposit(
   tx: Executor,
@@ -695,14 +702,37 @@ export async function cancelBooking(
   transactionId: string;
 }> {
   return db.transaction(async (tx) => {
-    const [row] = await tx
-      .select()
+    /**
+     * UNLOCKED, to learn whose booking this is. See `returnDeposit`'s header for
+     * why the member row has to be locked first: the global order is member, then
+     * booking, and a cancel that locked the booking first would deadlock against
+     * a charge on the same customer.
+     */
+    const [probe] = await tx
+      .select({ memberId: booking.memberId })
       .from(booking)
       .where(and(eq(booking.id, bookingIdParam), eq(booking.memberId, ctx.principal.id)))
-      .for('update')
       .limit(1);
     // Scoped to the caller's own bookings. Someone else's appointment is not
     // something a customer gets to probe, so this is a 404 rather than a 403.
+    if (!probe) throw notFound('unknown_booking', 'No such appointment.');
+
+    const [m] = await tx
+      .select()
+      .from(member)
+      .where(eq(member.id, probe.memberId))
+      .for('update')
+      .limit(1);
+    if (!m) throw notFound('unknown_member', 'No such member.');
+
+    // NOW the booking, locked, and its status re-read under that lock. This is
+    // what makes the unlocked probe above harmless.
+    const [row] = await tx
+      .select()
+      .from(booking)
+      .where(eq(booking.id, bookingIdParam))
+      .for('update')
+      .limit(1);
     if (!row) throw notFound('unknown_booking', 'No such appointment.');
 
     if (row.status !== 'deposit_held') {
@@ -719,14 +749,6 @@ export async function cancelBooking(
 
     const now = new Date();
     assertChangeWindowOpen(row, now, 'cancelled');
-
-    const [m] = await tx
-      .select()
-      .from(member)
-      .where(eq(member.id, row.memberId))
-      .for('update')
-      .limit(1);
-    if (!m) throw notFound('unknown_member', 'No such member.');
 
     const returned = await returnDeposit(tx, {
       row: row as BookingRow,
