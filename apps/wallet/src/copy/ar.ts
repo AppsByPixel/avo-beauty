@@ -278,6 +278,99 @@ export const ar: Copy = {
   plus: en.plus, // AR GAP
   minus: en.minus, // AR GAP
 
+  // ══════════════════════════════════════════════════════════════════ book ══
+  //
+  // design:1340-1352 and :1537-1554. The design's Arabic block covers the whole
+  // happy path of the Book flow — every heading, every row label, the deposit
+  // note, all four call-to-action labels and all three toasts — in feminine
+  // address forms throughout (احجزي، اختاري، اشحني). Nine keys are new AR GAPS
+  // and every one of them is a STATE: an empty day, a full day, a slot taken
+  // between the tap and the POST, the module being off, the calendar fallback,
+  // and the refusal when the change window has closed. That is the same shape
+  // the file's header describes — AVO States.dc.html contains zero Arabic — and
+  // it holds here for a reason worth saying out loud: the design's booking
+  // prototype has no failures in it at all.
+  //
+  // THE DIGIT RULE EARNS ITS KEEP ON THIS SCREEN. It is full of numbers and
+  // almost none of them are money: the step counter, the day of the month, the
+  // slot times, the duration, the weekday. Those are Eastern. The deposit, the
+  // remainder and the shortfall are money and stay Western — and none of them
+  // is formatted here, because every one arrives already formatted by
+  // `formatMoney`, which is what makes "5.000 د.ك" impossible to get wrong.
+
+  navHome: 'الرئيسية', // design:1340
+  navBook: 'احجزي', // design:1340
+
+  bookTitle: 'احجزي', // design:1347
+  bookStep: (step, total) => `الخطوة ${ea(step)} من ${ea(total)}`, // design:1876
+
+  chooseService: 'اختاري الخدمة', // design:1347
+  chooseArtist: 'اختاري المصففة', // design:1347
+  chooseDay: 'اختاري اليوم', // design:1348
+  morning: 'صباحاً', // design:1348
+  evening: 'مساءً', // design:1348
+  review: 'المراجعة', // design:1348
+
+  availLive: 'توفر مباشر', // design:1491
+  availSalon: 'حسب دوام الصالون', // design:1492
+  availFallback: en.availFallback, // AR GAP
+
+  svcRow: 'الخدمة', // design:1349
+  artistRow: 'المصففة', // design:1349
+  whenRow: 'الموعد', // design:1349
+  depositHeld: 'العربون المحجوز', // design:1349
+  depositNote: (remainder) => `يُحجز من محفظتك · الباقي ${remainder} يُدفع في الصالون.`, // design:1538
+  depShort: 'اشحني محفظتك لحجز العربون.', // design:1350
+
+  bookContinue: 'متابعة', // design:1554
+  bookReviewCta: 'مراجعة الحجز', // design:1550
+  bookConfirmCta: (deposit) => `تأكيد · حجز ${deposit}`, // design:1553
+  bookTopUpCta: 'اشحني للحجز', // design:1552
+
+  booked: 'تم حجز موعدك', // design:1350
+  waConfirm: 'تم إرسال التأكيد على واتساب', // design:1351
+  viewHome: 'العودة للرئيسية', // design:1351
+  /**
+   * design:1352, verbatim — ٢٤ ساعة.
+   *
+   * ⚠️ IT CONTRADICTS `reschedNote` BELOW, WHICH SAYS ساعة (one hour), AND THE
+   * SERVER IMPLEMENTS ONE HOUR. Both strings are the designer's and both are
+   * kept exactly as written, in both languages, rather than one being quietly
+   * corrected to match the other — a lane editing product copy to resolve a
+   * product contradiction is how the contradiction stops being visible.
+   * Reported. See BookScreen § the confirmed step, which states the one-hour
+   * rule alongside this line so the customer is not told only the wrong number.
+   */
+  cancelPolicy: 'الإلغاء مجاني حتى ٢٤ ساعة قبل الموعد — يُعاد العربون لمحفظتك تلقائياً.', // design:1352
+
+  bookedToast: (deposit) => `تم الحجز · حُجز عربون ${deposit}`, // design:1547
+  rescheduleToast: 'اختاري موعداً جديداً — العربون محفوظ', // design:1773
+  cancelledToast: (deposit) => `أُلغي الموعد · أُعيد العربون ${deposit}`, // design:1774
+
+  bookEmptyDayTitle: en.bookEmptyDayTitle, // AR GAP
+  bookEmptyDayBody: en.bookEmptyDayBody, // AR GAP
+  bookFullDayTitle: en.bookFullDayTitle, // AR GAP
+  bookFullDayBody: en.bookFullDayBody, // AR GAP
+  slotTakenTitle: en.slotTakenTitle, // AR GAP
+  slotTakenBody: en.slotTakenBody, // AR GAP
+  bookingOffTitle: en.bookingOffTitle, // AR GAP
+  bookingOffBody: en.bookingOffBody, // AR GAP
+  bookShortBy: (shortfall) => `الرصيد أقل بـ ${shortfall}`, // design:1344 `shortMsg`
+
+  // ═════════════════════════════════════════════════ upcoming appointment ══
+
+  upcomingLabel: 'موعدك القادم', // design:1285
+  upDeposit: (deposit) => `عربون ${deposit}`, // design:1286
+  upWith: (artist) => `مع ${artist}`, // design:1285
+  reschedule: 'تغيير الموعد', // design:1287
+  cancel: 'إلغاء', // design:1286
+  reschedNote: 'مجاناً حتى ساعة قبل الموعد. بعدها يبقى العربون للصالون.', // design:1287
+  changeClosedTitle: en.changeClosedTitle, // AR GAP
+  changeClosedBody: en.changeClosedBody, // AR GAP
+  noUpcomingTitle: en.noUpcomingTitle, // AR GAP
+  noUpcomingBody: en.noUpcomingBody, // AR GAP
+  noUpcomingAction: 'احجزي', // design:1340 — the nav label, the same word.
+
   // ══════════════════════════════════════════════════════════════ account ══
   // design:1289-1338. The design's Arabic block covers the whole Account screen,
   // so this section adds not a single new AR GAP — every string below was
@@ -442,6 +535,22 @@ export const AR_GAPS = [
   'txStatus.pending',
   'txStatus.failed',
   'txStatus.cancelled',
+  // ---- book. Every one of these is a STATE or a refusal; see the section
+  // header above. The design's booking prototype has no failure in it, so the
+  // Arabic block that covers its whole happy path covers none of these.
+  'availFallback',
+  'bookEmptyDayTitle',
+  'bookEmptyDayBody',
+  'bookFullDayTitle',
+  'bookFullDayBody',
+  'slotTakenTitle',
+  'slotTakenBody',
+  'bookingOffTitle',
+  'bookingOffBody',
+  'changeClosedTitle',
+  'changeClosedBody',
+  'noUpcomingTitle',
+  'noUpcomingBody',
 ] as const;
 
 /**

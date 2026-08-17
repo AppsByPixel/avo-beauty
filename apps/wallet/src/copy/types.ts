@@ -209,6 +209,108 @@ export interface Copy {
   plus(label: string): string;
   minus(label: string): string;
 
+  // ══════════════════════════════════════════════════════════════════ book ══
+
+  // bottom navigation
+  navHome: string;
+  navBook: string;
+
+  // book — shell
+  bookTitle: string;
+  /** "Step 2 of 4" — a count, so Eastern in Arabic. */
+  bookStep(step: number, total: number): string;
+
+  // book — step headings, design:1240-1241
+  chooseService: string;
+  chooseArtist: string;
+  chooseDay: string;
+  morning: string;
+  evening: string;
+  review: string;
+
+  // book — the artist rows' availability badge, design:1491-1492
+  availLive: string;
+  availSalon: string;
+  /**
+   * Shown on the GRID, not the artist row, when a google-sourced artist's
+   * calendar could not actually be read and the salon's own hours were offered
+   * instead. The API returns `fallbackReason`; this is what it means to a
+   * customer, which is that the times shown are wider than the artist's own.
+   */
+  availFallback: string;
+
+  // book — the review rows, design:1242
+  svcRow: string;
+  artistRow: string;
+  whenRow: string;
+  depositHeld: string;
+  /**
+   * "Held from your wallet · remainder 3.000 KD paid at the salon."
+   * design:1537-1539. Takes the FORMATTED remainder, because the unit changes
+   * with the language and only `formatMoney` knows that.
+   */
+  depositNote(remainder: string): string;
+  depShort: string;
+
+  // book — the call to action, design:1550-1554
+  bookContinue: string;
+  bookReviewCta: string;
+  /** "Confirm · hold 5.000 KD" — money, so formatted by the caller. */
+  bookConfirmCta(deposit: string): string;
+  bookTopUpCta: string;
+
+  // book — confirmed, design:1243-1245
+  booked: string;
+  waConfirm: string;
+  viewHome: string;
+  /**
+   * "Free to cancel up to 24h before…", design:1245.
+   *
+   * ⚠️ THIS STRING CONTRADICTS `reschedNote` AND THE SERVER. See ar.ts and the
+   * BookScreen's confirmed step: the design says 24 hours here and one hour at
+   * design:1180, the build plan and the API implement ONE hour, and the copy is
+   * left verbatim in both places rather than quietly edited. Reported.
+   */
+  cancelPolicy: string;
+
+  // book — toasts, design:1547, 1773-1774
+  bookedToast(deposit: string): string;
+  rescheduleToast: string;
+  cancelledToast(deposit: string): string;
+
+  // book — the states the design bundle has no Arabic for
+  bookEmptyDayTitle: string;
+  bookEmptyDayBody: string;
+  bookFullDayTitle: string;
+  bookFullDayBody: string;
+  /** 409 slot_taken — somebody else took it between the tap and the POST. */
+  slotTakenTitle: string;
+  slotTakenBody: string;
+  /** 409 booking_not_enabled — the module is off for this salon. */
+  bookingOffTitle: string;
+  bookingOffBody: string;
+  /** The shortfall banner. Takes the formatted shortfall — the SERVER's number. */
+  bookShortBy(shortfall: string): string;
+
+  // ═════════════════════════════════════════════════ upcoming appointment ══
+
+  upcomingLabel: string;
+  /** "5.000 KD held" / "عربون 5.000 د.ك" — money, formatted by the caller. */
+  upDeposit(deposit: string): string;
+  /** "with Rana" / "مع رنا" — design:1178, 1285. */
+  upWith(artist: string): string;
+  reschedule: string;
+  cancel: string;
+  /** The one-hour rule, stated inline. design:1180, 1287. */
+  reschedNote: string;
+  /** 409 change_window_closed — the server refused, and says when it closed. */
+  changeClosedTitle: string;
+  changeClosedBody: string;
+  /** The empty state where the Upcoming card would be. */
+  noUpcomingTitle: string;
+  noUpcomingBody: string;
+  noUpcomingAction: string;
+
   // ══════════════════════════════════════════════════════════════ account ══
 
   // account — shell and section headings
