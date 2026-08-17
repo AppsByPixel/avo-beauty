@@ -146,7 +146,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'accounts',
     label: 'Accounts',
     to: '/accounts',
-    built: false,
+    built: true,
     title: 'Accounts',
     subtitle: 'Staff access and customer profiles',
     icon: (

@@ -1459,3 +1459,96 @@ a:hover {
   padding: 4px 10px;
   border-radius: 8px;
 }
+
+/* =============================================================== accounts == */
+
+.accounts__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.accounts__hint {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+.accounts__count {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin-bottom: 16px;
+}
+
+.accounts__list {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  max-width: 980px;
+}
+
+.account {
+  padding: 18px 20px;
+}
+
+.account__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.account__avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.account__ident {
+  flex: 1;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.account__handle {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  font-family: var(--avo-font-display);
+}
+
+.account__perms {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.account__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.account__rule {
+  margin-top: 11px;
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.5;
+}

@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router';
 import type { AuthState } from './auth/AuthProvider.js';
 import { SCOPES, type AuthScope } from './auth/scopes.js';
+import { Accounts } from './routes/Accounts.js';
 import { Loyalty } from './routes/Loyalty.js';
 import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
@@ -76,6 +77,7 @@ const SECTIONS = [
   { path: '/team', component: Team },
   { path: '/loyalty', component: Loyalty },
   { path: '/settings', component: Settings },
+  { path: '/accounts', component: Accounts },
 ] as const;
 
 const sectionRoutes = SECTIONS.map(({ path, component }) =>
