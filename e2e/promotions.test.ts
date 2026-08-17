@@ -562,6 +562,205 @@ describe('branch scoping', () => {
   });
 });
 
+// --------------------------------------------- the branch decision, pinned --
+
+/** Salon B's SECOND branch. `seedSalonB()` — the one that makes it ambiguous. */
+const B_BRANCH_SECOND = 'BR-LUM-JAB';
+
+/**
+ * WHAT LANE A DECIDED, AND WHY IT NEEDS PINNING RATHER THAN A COMMENT.
+ *
+ * `transaction.branch_id` is NOT NULL, so every money row needs a branch, and
+ * both money paths used to get one the same way: the salon's first branch BY ID.
+ * That is a defensible way to ATTRIBUTE a row and an indefensible way to decide
+ * what a customer EARNS. It doubled a real customer's visits, because 'BR-KWC'
+ * sorts before 'BR-SAL' and Kuwait City carried a 2x boost. Alphabetical order
+ * chose a multiplier, and nothing said so.
+ *
+ * `services/branch.ts` splits the two questions apart:
+ *
+ *   branchId     always answerable, used for attribution only
+ *   established  whether that value is a FACT — gate every earning on this
+ *
+ * and the invariant that falls out of it is subtle enough to be worth three
+ * specs:
+ *
+ *   ONE BRANCH   there is no sort order to be at the mercy of and nowhere else
+ *                the charge could have happened. It is established, its boost
+ *                pays, and `branch_assumed` is false.
+ *   TWO BRANCHES nobody knows where the charge happened. No boost applies, and
+ *                `branch_assumed` is true — the row says of itself that its
+ *                branch is a guess, so "which figures can I trust per branch" is
+ *                a query rather than an assumption.
+ *
+ * THE FIX THAT MUST NOT BE TAKEN, and the reason the third spec exists: letting
+ * the client name its branch. It is the obvious way to make the multi-branch case
+ * pay, it would turn every spec above green, and it is non-negotiable #2 with
+ * extra steps — a client naming its branch is a client choosing its own
+ * multiplier. The branch has to arrive from something the SERVER established, and
+ * that waits on device enrolment. So the third spec asserts that a `branchId` in
+ * the charge body is INERT, which is the assertion a well-meaning future fix
+ * trips over.
+ */
+describe('the branch decision — one branch is knowledge, two branches is a guess', () => {
+  /** Publish a boost through lane A's own endpoint, as the tenancy ledger does. */
+  async function publishBoost(branchId: string, visit: number): Promise<void> {
+    const res = await treq('PUT', `/v1/salons/${SALON_B}/promotions/boosts`, {
+      token: dashboard,
+      body: { boosts: { [branchId]: { visit, topup: 0, stamp: 1 } } },
+    });
+    precondition(res.status === 200, `could not publish the boost: ${res.status} ${res.raw}`);
+  }
+
+  /** Back to the identity boost. A live 2x left behind changes what every other suite sees. */
+  const resetBoost = () => publishBoost(B_BRANCH, 1);
+
+  const branchOf = (txId: string): string =>
+    scalar(`select branch_id || '|' || branch_assumed::text from transaction where id='${txId}'`);
+
+  afterEach(async () => {
+    // Both fixtures back, in the order that cannot leave salon B one-branched.
+    psql(`
+      INSERT INTO branch (id, salon_id, name)
+      VALUES ('${B_BRANCH_SECOND}', '${SALON_B}', 'Jabriya')
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    await resetBoost();
+  });
+
+  it('TWO BRANCHES — the boost does not pay, and the row admits its branch was assumed', async () => {
+    await publishBoost(B_BRANCH, 2);
+    precondition(
+      scalar(`select count(*) from branch where salon_id='${SALON_B}'`) === '2',
+      'salon B is not multi-branch, so this spec is about the other case',
+    );
+
+    const before = visitsOf();
+    const res = await charge('multi-branch');
+
+    expect(
+      visitsOf(),
+      'a 2x boost paid at a salon where nobody knows which branch the charge happened at',
+    ).toBe(before + 1);
+    expect(res.happyHour, 'a boost is not a happy hour and must not be reported as one').toBeNull();
+
+    // The attribution is still made — the column is NOT NULL — and it is marked.
+    expect(
+      branchOf(res.transaction.id),
+      'the row presents an alphabetically-chosen branch as a fact',
+    ).toBe(`${B_BRANCH}|true`);
+  });
+
+  it('ONE BRANCH — the boost pays, and the row does NOT claim its branch was assumed', async () => {
+    /**
+     * The fixture is made single-branch by removing the second one for the
+     * duration of the spec, and put back in `afterEach`. `seedSalonB()` re-creates
+     * it on every run as well, so a crash between the two cannot leave salon B
+     * permanently one-branched for the next suite.
+     *
+     * THE MONEY REFERENCES ARE A HARD STOP, THE BOOST ROW IS NOT, and the
+     * difference is the whole reason this is two statements rather than one
+     * blanket check. `branch` is referenced by four tables. Three of them —
+     * `transaction`, `topup_intent`, `happy_hour` — hold history or a merchant's
+     * configuration, and a spec that cleared them to make its own delete succeed
+     * would be destroying evidence to prove a point.
+     *
+     * `boost` is the exception, and it is one because of a rule worth knowing
+     * about: `PUT .../promotions/boosts` writes a row for EVERY branch of the
+     * salon, resetting the ones the body omitted rather than leaving them holding
+     * a boost the merchant thinks she removed. So `publishBoost` above always
+     * leaves an identity row against the second branch, and no run of this spec
+     * could ever find zero. That row is 1x/0/1 — nothing — and `afterEach`
+     * re-publishes it byte for byte, so removing it costs nothing.
+     */
+    const money = scalar(`
+      select (select count(*) from transaction where branch_id='${B_BRANCH_SECOND}')
+           + (select count(*) from topup_intent where branch_id='${B_BRANCH_SECOND}')
+           + (select count(*) from happy_hour where branch_id='${B_BRANCH_SECOND}')`);
+    precondition(
+      money === '0',
+      `${B_BRANCH_SECOND} carries ${money} money or promotion rows. This spec removes a branch ` +
+        'and will not delete those to do it — re-seed salon B instead.',
+    );
+
+    await publishBoost(B_BRANCH, 2);
+    const identity = scalar(
+      `select visit || '/' || topup || '/' || stamp from boost
+        where salon_id='${SALON_B}' and branch_id='${B_BRANCH_SECOND}'`,
+    );
+    precondition(
+      identity === '' || identity === '1/0/1',
+      `the second branch holds a real boost (${identity}), not the identity row this spec expects`,
+    );
+    psql(`
+      DELETE FROM boost WHERE salon_id='${SALON_B}' AND branch_id='${B_BRANCH_SECOND}';
+      DELETE FROM branch WHERE id='${B_BRANCH_SECOND}' AND salon_id='${SALON_B}';
+    `);
+    precondition(
+      scalar(`select count(*) from branch where salon_id='${SALON_B}'`) === '1',
+      'salon B still has more than one branch',
+    );
+
+    const before = visitsOf();
+    const res = await charge('single-branch');
+
+    expect(
+      visitsOf(),
+      'a single-branch salon published a 2x visit boost and the charge earned one visit. ' +
+        'There is no sort order to be wrong about here — the branch is knowledge, and ' +
+        'services/branch.ts says the boost applies.',
+    ).toBe(before + 2);
+    // Still not a happy hour: `transaction.promotion_id` stays null, because no
+    // window produced this. A boost that reported itself as a window would put a
+    // countdown on the scanner for something that never ends.
+    expect(res.happyHour).toBeNull();
+
+    expect(
+      branchOf(res.transaction.id),
+      'the only branch the charge could have happened at is recorded as assumed',
+    ).toBe(`${B_BRANCH}|false`);
+  });
+
+  it('A CLIENT CANNOT NAME ITS BRANCH — a branchId in the charge body is inert', async () => {
+    /**
+     * THE REGRESSION THIS EXISTS TO CATCH, stated as a behaviour rather than as a
+     * rule in a comment.
+     *
+     * Salon B is multi-branch, a 2x boost is live on `B_BRANCH`, and the request
+     * body says the charge happened at `B_BRANCH`. If the handler believed it,
+     * the customer would earn two visits and `branch_assumed` would be false —
+     * and the scanner would have chosen its own multiplier, which is exactly the
+     * failure mode `POST /charges` is non-negotiable #2 about.
+     *
+     * `routes/charges.ts` reads `memberId`, `serviceIds` and `token` and nothing
+     * else; `resolveBranch`'s `supplied` argument exists for a branch-bound
+     * device session the SERVER established, and no route may start feeding it
+     * from a body. Asserted here so that "no route reads a branch from a request"
+     * is checkable rather than a convention.
+     */
+    await publishBoost(B_BRANCH, 2);
+
+    const token = await mintWalletTokenFor(wallet, B_MEMBER);
+    const before = visitsOf();
+    const res = await treq<ChargeResult>('POST', '/charges', {
+      token: scanner,
+      idempotencyKey: key('client-branch'),
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, branchId: B_BRANCH },
+    });
+    precondition(res.status === 200, `POST /charges answered ${res.status} ${res.raw}`);
+
+    expect(
+      visitsOf(),
+      'the client named its branch and was paid that branch\'s boost — a client choosing ' +
+        'its own multiplier',
+    ).toBe(before + 1);
+    expect(
+      branchOf(res.body.transaction.id),
+      'a branch supplied by the client was laundered into an established one',
+    ).toBe(`${B_BRANCH}|true`);
+  });
+});
+
 // ------------------------------------------------------------- what is left --
 
 describe('GAP: promotion questions still out of reach', () => {
