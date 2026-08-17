@@ -37,6 +37,44 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### `db:generate` will produce a destructive migration for whoever runs it next
+
+**What.** Drizzle's meta snapshots were never written for migrations 0004-0006, 0010 and
+0011 — they were hand-authored. So `drizzle-kit generate` diffs the schema against the 0009
+snapshot and re-emits DDL that already exists. Lane A ran it, got a migration re-creating
+`boost` and `happy_hour`, discarded it, and hand-wrote 0012 instead.
+
+**Why this is on the list rather than fixed.** It is a live trap with no owner: the next
+person to run a normal, documented command gets a migration that drops and re-creates tables
+holding money. Lane A correctly treated it as outside its slice and reported it.
+
+**The options, none of which I am taking unilaterally:** regenerate the missing snapshots so
+the tool tells the truth; or delete `db:generate` from `package.json` and make hand-authored
+migrations the documented path. The second is honest about what this repo actually does —
+every migration since 0004 was hand-written — but it gives up drift detection.
+
+**Queued rather than decided** because it changes how every future migration is authored,
+and that is a workflow choice rather than a technical one. Whoever picks it up should note
+that three of the last four migrations were hand-written *by preference*, not by accident.
+
+### The branch guess: no boost when the branch is not established
+
+**Lane A's call, and I am keeping it.** Rather than refusing a charge when the branch is
+ambiguous, apply no boost and record `transaction.branch_assumed`.
+
+Its reasoning is better than the alternative: refusing would take every multi-branch salon
+offline until device enrolment ships, to fix an attribution defect whose money impact is
+already nil. The money was safe; what was wrong is that **a guess looked like knowledge**.
+
+It also found a correction inside the bug: a *single*-branch salon is now `established`, so
+its boost pays. Previously it never did — there was no sort order to be at the mercy of, and
+no boost either.
+
+**To reverse:** the real fix is still a branch-bound scanner session, blocked on device
+enrolment. `services/branch.ts` documents the fix that must NOT be taken — a client-supplied
+branch — beside the parameter that will one day carry the server-established one.
+
+
 ### Lane D answered on the ledger edits, and its reasoning beats mine
 
 I asked twice whether editing its tenancy ledger at trunk was the right call. Its answer:
