@@ -37,6 +37,34 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Lane D answered on the ledger edits, and its reasoning beats mine
+
+I asked twice whether editing its tenancy ledger at trunk was the right call. Its answer:
+
+> "The edit itself was correct; the general policy should change, and you've already found
+> the reason. The auto-discovery assertion is the tenancy proof; the hand-written table adds
+> a stricter body shape, an existence-oracle comparison, and *a control call that really
+> performs the write*. Read routes need no fixture, so those five were safe. That's not a
+> property of the ledger — it's a property of those five routes, and there was no way to see
+> it from outside."
+
+That is the distinction I could not draw. I had justified the first edit by saying tenancy
+was already proven, which was true and beside the point: what made it safe was that all five
+were *reads*. Writes need a fixture and a control that performs the write, which is exactly
+where my second attempt turned one failure into four.
+
+**Policy from here: trunk routes to the lane and accepts a short red.** Lane D endorsed
+keeping the escalation rule — if the auto-discovery assertion also fails, revert the merge
+rather than edit — because that one is about a real property, not about who owns a file.
+
+It also found its own tripwire was under-counting: the discovery list held the original
+eight while nine routes had landed, so **it could have lost every write route and still
+passed.** Now seventeen.
+
+**To reverse:** nothing. This replaces the earlier entry's conclusion, which was right by
+luck.
+
+
 ### I edited a lane's file twice. The first worked by luck; the second I reverted.
 
 **What happened.** Twice, a merge turned `dev` red on Lane D's tenancy gap ledger, and twice
