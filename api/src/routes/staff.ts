@@ -33,6 +33,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
+import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { staffUser } from '../db/schema/staff';
 import {
@@ -47,6 +48,7 @@ import { revokeAllSessions } from '../auth/sessions';
 import { badRequest, notFound } from '../http/errors';
 import { peekToken } from '../services/walletToken';
 import { writeAudit } from '../services/audit';
+import { findApplicableHold } from '../services/booking';
 import { serialiseMember, staffPinSession } from './auth';
 
 /**
@@ -275,10 +277,56 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
       .from(service)
       .where(and(eq(service.salonId, p.salonId), eq(service.active, true)));
 
+    /**
+     * THE HELD DEPOSIT, READ FOR REAL.
+     *
+     * This was hardcoded to 0 with a comment saying bookings were not built.
+     * Lane D carried the consequence as a standing todo: the scanner's "deposit
+     * applied" credit line renders money and had never been exercised with a
+     * non-zero value.
+     *
+     * The SAME function `performCharge` uses — services/booking.ts
+     * § findApplicableHold — so what the scanner shows before the charge and what
+     * the charge actually applies cannot disagree. Two implementations of "does
+     * she have a deposit with us right now" is two answers, and the one on the
+     * screen is the one the customer is told.
+     *
+     * Unlocked here, because this is a read and the charge is the authority. A
+     * booking the no-show job returns in the second between this scan and that
+     * charge shows a credit line the charge then declines to apply — which is
+     * correct, and is why the number is recomputed there rather than passed in.
+     */
+    const [s] = await db
+      .select({ noShowReturnMinutes: salon.noShowReturnMinutes })
+      .from(salon)
+      .where(eq(salon.id, p.salonId))
+      .limit(1);
+
+    const held = await findApplicableHold(db, {
+      memberId: m.id,
+      salonId: p.salonId,
+      now: new Date(),
+      noShowReturnMinutes: s?.noShowReturnMinutes ?? 60,
+    });
+
     return reply.send({
       member: serialiseMember(m),
-      // Bookings are not built, so nothing is ever held today.
-      heldDepositFils: 0,
+      heldDepositFils: held?.depositFils ?? 0,
+      /**
+       * Not in the contract's `POST /scans` response, and not decorative: the
+       * credit line reads "Deposit held · 5.000" and the staff member has to be
+       * able to say WHICH appointment when the customer asks. Null when nothing
+       * is held, rather than omitted, so "no deposit" is a fact the client can
+       * read instead of an absence it has to interpret.
+       */
+      heldDepositBooking: held
+        ? {
+            id: held.id,
+            startsAt: held.startsAt.toISOString(),
+            serviceId: held.serviceId,
+            artistId: held.artistId,
+          }
+        : null,
       services,
     });
   });

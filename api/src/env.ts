@@ -89,6 +89,56 @@ const EnvSchema = z.object({
   /** api-contract.md § TopUpIntent: the gateway returns the customer here. */
   TOPUP_RETURN_URL: z.string().default('avo://topup/return'),
 
+  // ------------------------------------------------------------ calendar --
+  //
+  // Google Calendar sits behind the same kind of seam as the gateway, for the
+  // same reason: OAuth against Google needs a Cloud project, a client id and
+  // secret, and a verified consent screen, all of which are issued to a legal
+  // entity and are therefore AVO's to create, not a developer's. See
+  // src/calendar/types.ts for the full list the client has to provide.
+  //
+  // NO PRODUCTION REFUSAL, unlike GATEWAY_DRIVER=sandbox. A sandbox gateway in
+  // production settles payments nobody made; a stub calendar makes every artist
+  // bookable on the salon's own hours and raises a merchant notification saying
+  // so. Degraded, honest, and tradeable.
+  CALENDAR_DRIVER: z.enum(['stub']).default('stub'),
+
+  /** Where Google returns the browser after consent. Absolute, AVO-owned. */
+  CALENDAR_REDIRECT_URL: z.string().optional(),
+
+  // ------------------------------------------------------------- booking --
+
+  /**
+   * THE NO-SHOW RETURN JOB. On by default, for the reason the receipt worker is:
+   * a process that serves requests should do its own background work, and a
+   * deploy that quietly holds every deposit for ever is the failure mode of
+   * leaving it off.
+   *
+   * `buildApp()` does not start it — `server.ts` does — so a test that
+   * constructs handlers gets a still queue and can drive `runNoShowReturnsOnce`
+   * by hand.
+   */
+  NO_SHOW_WORKER_ENABLED: z
+    .enum(['0', '1'])
+    .default('1')
+    .transform((v) => v === '1'),
+  /** Milliseconds between passes, measured from the END of the previous one. */
+  NO_SHOW_POLL_MS: z.coerce.number().int().positive().default(30_000),
+  /** Bookings returned per pass. The concurrency control. */
+  NO_SHOW_BATCH_SIZE: z.coerce.number().int().positive().max(500).default(50),
+
+  /**
+   * How long before a slot a customer may still cancel or reschedule for free.
+   *
+   * SIXTY, from the design: "Free until an hour before. After that the deposit
+   * stays with the salon" — AVO Wallet Home.dc.html, `reschedNote`, EN and AR.
+   * Configurable so it is a number with a name rather than a literal buried in a
+   * comparison, and NOT per-salon: the deposit rule is the product's, and a
+   * merchant able to set her own cancellation window is a policy surface nobody
+   * has designed. Reported rather than invented.
+   */
+  BOOKING_CHANGE_WINDOW_MINUTES: z.coerce.number().int().positive().default(60),
+
   // ------------------------------------------------------------ receipts --
   //
   // Neither channel can be wired yet and neither is waiting on us:
@@ -240,6 +290,14 @@ export const env = {
   gatewayTimeoutMs: raw.GATEWAY_TIMEOUT_MS,
   publicBaseUrl: raw.PUBLIC_BASE_URL ?? `http://localhost:${raw.PORT}`,
   topupReturnUrl: raw.TOPUP_RETURN_URL,
+  calendarDriver: raw.CALENDAR_DRIVER,
+  calendarRedirectUrl:
+    raw.CALENDAR_REDIRECT_URL ??
+    `${raw.PUBLIC_BASE_URL ?? `http://localhost:${raw.PORT}`}/artists/calendar/callback`,
+  noShowWorkerEnabled: raw.NO_SHOW_WORKER_ENABLED,
+  noShowPollMs: raw.NO_SHOW_POLL_MS,
+  noShowBatchSize: raw.NO_SHOW_BATCH_SIZE,
+  bookingChangeWindowMinutes: raw.BOOKING_CHANGE_WINDOW_MINUTES,
   receiptDriver: raw.RECEIPT_DRIVER,
   receiptWorkerEnabled: raw.RECEIPT_WORKER_ENABLED,
   receiptPollMs: raw.RECEIPT_POLL_MS,

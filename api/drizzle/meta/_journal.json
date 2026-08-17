@@ -92,6 +92,27 @@
       "when": 1786940200000,
       "tag": "0012_transaction_branch_assumed",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786940300000,
+      "tag": "0013_booking",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786940400000,
+      "tag": "0014_charge_may_be_fully_deposit_funded",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786940500000,
+      "tag": "0015_idempotent_replay_is_byte_for_byte",
+      "breakpoints": true
     }
   ]
 }

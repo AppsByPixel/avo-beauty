@@ -28,6 +28,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
+import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { ledgerEntry } from '../db/schema/ledger';
 import { transaction } from '../db/schema/transaction';
@@ -337,10 +338,61 @@ async function performVoid(
     const m = memberRows[0];
     if (!m) throw notFound('unknown_member', 'No such member.');
 
-    const refund = fils(Math.abs(target.amountFils));
+    /**
+     * THE REFUND INCLUDES THE HELD DEPOSIT THIS CHARGE CONSUMED.
+     *
+     * `abs(target.amountFils)` alone was right while deposits did not exist and
+     * became a silent under-refund the moment they did. The charge row records
+     * what was debited AFTER the deposit was applied — 3.000, on the design's
+     * 8.000 service with a 5.000 deposit — so refunding only that hands back
+     * three of the eight the customer actually paid, and the other five stays
+     * with the salon for a visit that has just been declared not to have
+     * happened.
+     *
+     * Read from the LEDGER rather than from the booking, and that is deliberate:
+     * the `deposit_held` debit on this transaction is exactly what was applied,
+     * already net of any remainder that was handed straight back at charge time
+     * (services/charge.ts § 7a). Reading `booking.deposit_fils` instead would
+     * refund a remainder she has already received.
+     */
+    const [applied] = await tx
+      .select({ amountFils: ledgerEntry.amountFils })
+      .from(ledgerEntry)
+      .where(
+        and(
+          eq(ledgerEntry.transactionId, target.id),
+          eq(ledgerEntry.account, 'deposit_held'),
+          eq(ledgerEntry.direction, 'debit'),
+        ),
+      )
+      .limit(1);
+    const depositApplied = fils(applied?.amountFils ?? 0);
+
+    const refund = fils(Math.abs(target.amountFils) + depositApplied);
     const balanceAfter = fils(m.balanceFils + refund);
     const now = new Date();
     const voidId = `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
+
+    /**
+     * The booking the deposit came from, if there was one. Its money is going
+     * back to the customer, so it cannot stay `completed` — that status asserts
+     * the salon earned the deposit. It becomes `cancelled`, settled by the void,
+     * which is the closest true statement: the appointment's money returned to
+     * her wallet.
+     *
+     * It does NOT become `deposit_held` again. The deposit is not held any more;
+     * it is spendable balance, and a booking claiming a hold that no ledger entry
+     * backs is the kind of disagreement the whole state machine exists to prevent.
+     * A customer who still wants the appointment rebooks, and holds again.
+     */
+    const [heldBooking] = depositApplied
+      ? await tx
+          .select({ id: booking.id })
+          .from(booking)
+          .where(eq(booking.settledTransactionId, target.id))
+          .for('update')
+          .limit(1)
+      : [undefined];
 
     await tx
       .update(member)
@@ -391,21 +443,62 @@ async function performVoid(
       },
     ]);
 
+    /**
+     * The whole refund comes out of `salon_revenue`, INCLUDING the deposit
+     * portion, and that is correct rather than a shortcut: the deposit stopped
+     * being a `deposit_held` liability the moment the charge discharged it into
+     * revenue (services/charge.ts § 7). Crediting `deposit_held` back here would
+     * reopen a liability nobody holds and leave that account permanently out.
+     */
+    if (heldBooking) {
+      await tx
+        .update(booking)
+        .set({
+          status: 'cancelled',
+          settledTransactionId: voidId,
+          completedAt: null,
+          cancelledAt: now,
+          updatedAt: now,
+        })
+        .where(eq(booking.id, heldBooking.id));
+    }
+
     await writeAudit(tx, principal, {
       salonId: principal.salonId,
       kind: 'money',
       action: 'Charge voided',
-      detail: `${(refund / 1000).toFixed(3)} KD returned to ${m.name} · ${reason}`,
+      detail:
+        `${(refund / 1000).toFixed(3)} KD returned to ${m.name} · ${reason}` +
+        (depositApplied > 0
+          ? ` · includes ${(depositApplied / 1000).toFixed(3)} KD of held deposit`
+          : ''),
       source: 'scanner',
       subjectType: 'transaction',
       subjectId: target.id,
       amountFils: refund,
-      metadata: { reason, voidTransactionId: voidId },
+      metadata: {
+        reason,
+        voidTransactionId: voidId,
+        chargedFils: Math.abs(target.amountFils),
+        depositReturnedFils: depositApplied,
+        bookingId: heldBooking?.id ?? null,
+      },
       ipAddress: req.ip ?? null,
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
     });
 
-    const result = { ok: true, refundedFils: refund, visitRemoved: true };
+    const result = {
+      ok: true,
+      refundedFils: refund,
+      /**
+       * Broken out, because "8.000 was returned" on a charge whose row says
+       * −3.000 is a number the staff member cannot reconcile in front of the
+       * customer without being told where the other five came from.
+       */
+      depositReturnedFils: depositApplied,
+      bookingId: heldBooking?.id ?? null,
+      visitRemoved: true,
+    };
     await completeKey(tx, keyId, { status: 200, body: result }, voidId);
     return result;
   });

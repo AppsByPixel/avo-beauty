@@ -41,6 +41,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { add, fils, subtract, type Fils } from '@avo/types';
 import type { Db } from '../db/client';
+import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
@@ -49,6 +50,7 @@ import { ledgerEntry } from '../db/schema/ledger';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
+import { findApplicableHold } from './booking';
 import { resolveBranch } from './branch';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { decideEarning, loadPromotionInputs, NO_PROMOTION } from './promotions';
@@ -88,7 +90,16 @@ export interface ChargeResult {
     createdAt: string;
   };
   balanceAfterFils: number;
+  /** What the held deposit took off this charge. The scanner's credit line. */
   depositAppliedFils: number;
+  /**
+   * What was handed BACK because the deposit was bigger than the visit, and the
+   * booking it came from. Both always present, both null/0 when there was no
+   * booking — a scanner has to be able to tell "no deposit was held" from "this
+   * API is too old to say", the same reasoning `happyHour` carries below.
+   */
+  depositReturnedFils: number;
+  bookingId: string | null;
   loyalty: LoyaltyOutcome;
   voidableUntil: string;
   /**
@@ -200,10 +211,63 @@ export async function performCharge(
     const gross = rows.reduce<Fils>((sum, r) => add(sum, fils(r.priceFils)), fils(0));
 
     // ------------------------------------------------- 4. apply held deposit --
-    // Bookings are not built yet, so this is always 0 today. It is computed
-    // rather than hardcoded so the deposit line exists in the ledger the moment
-    // deposits do.
-    const heldDeposit = fils(0);
+    /**
+     * THE CREDIT LINE, FINALLY REACHABLE.
+     *
+     * This was `fils(0)` with a comment saying bookings did not exist. Lane D
+     * carried the consequence as a standing todo: the scanner's "deposit applied"
+     * line renders money and had never been exercised with a non-zero value, and
+     * `POST /scans` had the same hardcoded zero.
+     *
+     * The design's worked example is the case this has to produce:
+     * `8.000 service − 5.000 deposit = 3.000 charged`
+     * — AVO-Beauty-Product-Description-v2.md § 4, README § Scan.
+     *
+     * WHICH booking, and why not simply her earliest held one, is
+     * services/booking.ts § findApplicableHold: a customer with an appointment
+     * next Tuesday who walks in today for a blow-dry must not have Tuesday's
+     * deposit spent on it.
+     *
+     * `forUpdate`, because the row is about to be marked `completed` and the
+     * no-show job may be looking at exactly this row at exactly this moment. The
+     * lock order is member (step 1) then booking, and every other caller follows
+     * it — see the header of `returnDeposit`.
+     */
+    const [salonForDeposit] = await tx
+      .select({ noShowReturnMinutes: salon.noShowReturnMinutes })
+      .from(salon)
+      .where(eq(salon.id, ctx.principal.salonId))
+      .limit(1);
+    const held = await findApplicableHold(
+      tx,
+      {
+        memberId: m.id,
+        salonId: ctx.principal.salonId,
+        now: new Date(),
+        noShowReturnMinutes: salonForDeposit?.noShowReturnMinutes ?? 60,
+      },
+      { forUpdate: true },
+    );
+
+    /**
+     * CAPPED AT THE BASKET, and the remainder goes back to her wallet.
+     *
+     * A 3.000 service against a 5.000 held deposit is a real case: the salon's
+     * deposit is flat, 1 to 10 KD, and nothing ties it to what she actually
+     * books. Applying the whole hold would make `due` negative, and a negative
+     * `due` reaches the ledger as a negative `amount_fils`, which the
+     * `ledger_entry_amount_positive` CHECK refuses — a 500 at the counter for a
+     * cheap blow-dry.
+     *
+     * So `applied = min(gross, held)`, and whatever is left over is written as
+     * its own `deposit_return` at step 7a. That is the only answer consistent
+     * with non-negotiable #5: the money is hers, it never became salon revenue,
+     * and it lands in her wallet as a line she can see rather than being netted
+     * invisibly into a charge.
+     */
+    const heldTotal = held ? fils(held.depositFils) : fils(0);
+    const heldDeposit = heldTotal > gross ? gross : heldTotal;
+    const depositRemainder = subtract(heldTotal, heldDeposit);
     const due = subtract(gross, heldDeposit);
 
     // -------------------------------------------------------------- 5. debit --
@@ -296,6 +360,93 @@ export async function performCharge(
           amountFils: heldDeposit,
         },
       ]);
+    }
+
+    /**
+     * ------------------------------------------- 7a. the booking is settled --
+     *
+     * `deposit_held → completed`, naming THIS charge as what resolved the money.
+     * The `booking_settlement_matches_status` CHECK refuses a completed booking
+     * with no settling transaction, so forgetting this line does not commit — it
+     * is not a convention this handler keeps, it is a constraint it satisfies.
+     *
+     * Inside the money transaction, like everything else here. A booking marked
+     * completed by a charge that rolled back is an appointment nobody can find the
+     * payment for, and a charge that applied a deposit without closing the booking
+     * leaves the no-show job free to return money the salon has already earned.
+     */
+    let depositReturnedFils = fils(0);
+    if (held) {
+      await tx
+        .update(booking)
+        .set({
+          status: 'completed',
+          settledTransactionId: txId,
+          completedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(booking.id, held.id));
+
+      /**
+       * THE REMAINDER, when the deposit was larger than the basket.
+       *
+       * Its own `deposit_return` transaction and its own ledger pair, for the
+       * reason step 9b gives for a happy-hour credit: netting a credit inside the
+       * charge row that triggered it leaves the activity feed unable to show the
+       * customer either number. She held 5.000, spent 3.000, and 2.000 came back —
+       * three figures, and she is entitled to see all three.
+       *
+       * Written AFTER the debit, against the balance the debit left, so
+       * `member.balance_fils >= 0` is never satisfied only because a credit
+       * happened to be applied first.
+       */
+      if (depositRemainder > 0) {
+        const returnId = transactionId();
+        const balanceWithRemainder = add(balanceAfter, depositRemainder);
+        depositReturnedFils = depositRemainder;
+
+        await tx
+          .update(member)
+          .set({ balanceFils: balanceWithRemainder, updatedAt: now })
+          .where(eq(member.id, m.id));
+
+        await tx.insert(transaction).values({
+          id: returnId,
+          memberId: m.id,
+          salonId: ctx.principal.salonId,
+          branchId,
+          branchAssumed: !branch.established,
+          kind: 'deposit_return',
+          amountFils: depositRemainder,
+          method: 'wallet',
+          status: 'settled',
+          reference: `AVO-DPR-${returnId.slice(3)}`,
+          note: 'Deposit larger than the visit',
+          createdByStaffId: ctx.principal.id,
+          createdAt: now,
+          settledAt: now,
+        });
+
+        await tx.insert(ledgerEntry).values([
+          {
+            transactionId: returnId,
+            salonId: ctx.principal.salonId,
+            memberId: null,
+            account: 'deposit_held',
+            direction: 'debit',
+            amountFils: depositRemainder,
+          },
+          {
+            transactionId: returnId,
+            salonId: ctx.principal.salonId,
+            memberId: m.id,
+            account: 'member_wallet',
+            direction: 'credit',
+            amountFils: depositRemainder,
+            balanceAfterFils: balanceWithRemainder,
+          },
+        ]);
+      }
     }
 
     // ------------------------------------------------- 8. consume the token --
@@ -455,10 +606,17 @@ export async function performCharge(
      * so `member.balance_fils >= 0` is never satisfied only because a credit
      * happened to be applied first.
      */
-    let balanceFinal = balanceAfter;
+    // Starts from the balance AFTER the deposit remainder was returned at 7a, not
+    // from the post-debit balance: two credits on one charge would otherwise
+    // overwrite each other and the second would report a wallet the first had
+    // already changed.
+    let balanceFinal = add(balanceAfter, depositReturnedFils);
     if (earning.creditFils > 0 && earning.happyHourId) {
       const creditId = transactionId();
-      balanceFinal = add(balanceAfter, fils(earning.creditFils));
+      // `balanceFinal`, not `balanceAfter`: it already carries any deposit
+      // remainder returned at 7a. Recomputing from `balanceAfter` here would
+      // silently undo that credit — the two paths can both fire on one charge.
+      balanceFinal = add(balanceFinal, fils(earning.creditFils));
 
       await tx.update(member).set({ balanceFils: balanceFinal, updatedAt: now }).where(eq(member.id, m.id));
 
@@ -559,6 +717,8 @@ export async function performCharge(
       },
       balanceAfterFils: balanceFinal,
       depositAppliedFils: heldDeposit,
+      depositReturnedFils,
+      bookingId: held?.id ?? null,
       loyalty,
       voidableUntil: new Date(now.getTime() + VOID_WINDOW_MINUTES * 60_000).toISOString(),
       happyHour: earning.happyHourId

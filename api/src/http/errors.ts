@@ -75,6 +75,19 @@ export const unprocessable = (code: string, message: string, details?: Record<st
 export const tooManyRequests = (code: string, message: string, details?: Record<string, unknown>) =>
   new ApiError(429, code, message, details);
 
+/**
+ * 503 — the server is fine, a capability it depends on is not deployed.
+ *
+ * Distinct from a 500 (a bug) and from a 409 (a rule refused you): nothing is
+ * broken and the caller did nothing wrong, the deployment simply has no
+ * credentials for the thing being asked for. The Google Calendar connect is the
+ * first user, and the message names what the client has to provide rather than
+ * saying "unavailable" — a merchant tapping Connect deserves to know it is
+ * waiting on AVO, not on her.
+ */
+export const serviceUnavailable = (code: string, message: string, details?: Record<string, unknown>) =>
+  new ApiError(503, code, message, details);
+
 // ------------------------------------------------------------ named errors --
 
 /** Non-negotiable #4. The same body on every money-moving POST. */

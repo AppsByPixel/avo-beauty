@@ -19,18 +19,25 @@
  * merchant-only in it.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
+import { artist } from '../db/schema/artist';
+import { booking } from '../db/schema/booking';
+import { member } from '../db/schema/member';
 import { branch, salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
 import { badRequest, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import { serialiseBooking, type BookingRow } from '../services/booking';
 import { computeMetrics, parsePeriod } from '../services/metrics';
 import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
+
+/** api-contract.md § Booking — the four statuses, and the merchant's status pills. */
+const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
 const EDITABLE = new Set([
@@ -268,15 +275,84 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
-   * perms.appointments. Bookings are not implemented — the route exists so the
-   * ninth permission has a server-side gate rather than an unguarded 404 that
-   * looks like a gate and is not.
+   * perms.appointments — the Merchant → Appointments screen.
+   *
+   * This route existed as an empty list so the ninth permission had a real
+   * server-side gate rather than an unguarded 404 that looks like a gate and is
+   * not. It now returns actual bookings.
+   *
+   * `?status=` takes the contract's four, comma-separated — the status pills the
+   * design draws, "Deposit held / Completed / No-show · returned". Unknown values
+   * are refused BY NAME rather than silently ignored: a dashboard filtering on a
+   * typo would render an empty Appointments screen, and the merchant would read
+   * that as "no bookings today", which is the worst possible answer to give a
+   * salon about its own day.
+   *
+   * The customer's name, tier and phone are joined in, which the design asks for
+   * and which `perms.appointments` is the gate for. `branchAssumed` comes out
+   * too, for the reason it does on a transaction: a per-branch appointment count
+   * that rests on a guess should be filterable rather than indistinguishable from
+   * one that does not.
    */
-  app.get<{ Params: { id: string } }>('/salons/:id/bookings', async (req, reply) => {
-    const p = requireDashboardPerm(req, 'appointments');
-    requireSameSalon(p, req.params.id);
-    return reply.send({ items: [], nextCursor: null });
-  });
+  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+    '/salons/:id/bookings',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'appointments');
+      requireSameSalon(p, req.params.id);
+
+      const raw = req.query?.status;
+      const wanted =
+        typeof raw === 'string' && raw.trim() !== ''
+          ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+          : null;
+      if (wanted) {
+        const unknown = wanted.filter((s) => !(BOOKING_STATUSES as readonly string[]).includes(s));
+        if (unknown.length > 0) {
+          throw badRequest(
+            'invalid_status',
+            `Unknown booking status: ${unknown.join(', ')}. One of ${BOOKING_STATUSES.join(', ')}.`,
+          );
+        }
+      }
+
+      const rows = await db
+        .select({
+          b: booking,
+          memberName: member.name,
+          memberPhone: member.phone,
+          memberTier: member.tier,
+          artistName: artist.name,
+          serviceName: service.name,
+        })
+        .from(booking)
+        .innerJoin(member, eq(member.id, booking.memberId))
+        .innerJoin(artist, eq(artist.id, booking.artistId))
+        .innerJoin(service, eq(service.id, booking.serviceId))
+        .where(
+          wanted
+            ? and(
+                eq(booking.salonId, req.params.id),
+                inArray(booking.status, wanted as Array<BookingRow['status']>),
+              )
+            : eq(booking.salonId, req.params.id),
+        )
+        .orderBy(desc(booking.startsAt))
+        .limit(200);
+
+      return reply.send({
+        items: rows.map((r) => ({
+          ...serialiseBooking(r.b as BookingRow),
+          branchAssumed: r.b.branchAssumed,
+          memberName: r.memberName,
+          memberPhone: r.memberPhone,
+          memberTier: r.memberTier,
+          artistName: r.artistName,
+          serviceName: r.serviceName,
+        })),
+        nextCursor: null,
+      });
+    },
+  );
 
   /** The scanner's service list. Readable by anyone who may scan. */
   app.get<{ Params: { id: string } }>('/salons/:id/services', async (req, reply) => {

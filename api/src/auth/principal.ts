@@ -201,7 +201,20 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
 
   // Member-scoped routes get the member; everything else gets the staff row.
   // The suite only ever needs one of each.
-  if (req.url.startsWith('/members/') || req.url.startsWith('/topups')) {
+  //
+  // `/bookings` is the customer's collection — api-contract.md § Operations puts
+  // it at the root and scopes it by the credential, so it belongs here. NOT
+  // `/artists/me/bookings`, which is the artist's own day on the scanner and is
+  // matched by the scanner block below; the two are different surfaces reading
+  // the same table, exactly as `/artists/me/availability` and
+  // `/artists/{id}/availability` are.
+  if (
+    req.url.startsWith('/members/') ||
+    req.url.startsWith('/topups') ||
+    req.url === '/bookings' ||
+    req.url.startsWith('/bookings?') ||
+    req.url.startsWith('/bookings/')
+  ) {
     const memberId = hasScenario(req, 'lowbal') ? TEST_MEMBER_LOWBAL : TEST_MEMBER;
     return loadMemberPrincipal(db, memberId, 'test-session-member');
   }

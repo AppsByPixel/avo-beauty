@@ -1,0 +1,49 @@
+-- ===========================================================================
+-- 0015 - a replayed response is the SAME BYTES, not the same object
+--
+-- FOUND BY LANE D, and it had been true only by accident.
+--
+-- `scanner.test.ts` asserts, of a retried void under one key:
+--
+--     expect(replay.raw, 'the replay was recomputed rather than replayed')
+--       .toBe(first.raw);
+--
+-- `idempotency_key.response_body` was `jsonb`. jsonb does not store JSON; it
+-- stores a parsed value, and it re-serialises on read in ITS OWN canonical key
+-- order - shortest key first, then bytewise. Whitespace and duplicate keys go
+-- too. So the replayed body was equal as a value and different as a string, and
+-- the spec passed only while every stored response happened to have been written
+-- in jsonb's order already.
+--
+-- Adding two fields to the void response broke it. `{ok, refundedFils,
+-- depositReturnedFils, bookingId, visitRemoved}` came back as `{ok, bookingId,
+-- refundedFils, visitRemoved, depositReturnedFils}`. Nothing about the money was
+-- wrong; the guarantee was.
+--
+-- WHY THAT IS WORTH A MIGRATION RATHER THAN A FIELD REORDER
+-- Reordering the object to match jsonb's collation would make this spec pass and
+-- would leave the property resting on a coincidence that the next added field
+-- breaks again, silently, in whichever handler happens to be edited. Idempotency
+-- means "the retry gets the ORIGINAL answer", and a client is entitled to compare
+-- it, hash it, or match a signature over it. The column has to preserve what was
+-- written.
+--
+-- `json` does exactly that: it stores the source text and hands it back
+-- unchanged. The costs are real and acceptable here - no operator class, so no
+-- GIN index and no `=` comparison - because nothing indexes or compares this
+-- column. It is written once and read once, by primary key.
+--
+-- EXISTING ROWS CANNOT BE RECOVERED. Their key order was normalised at write and
+-- the original text is gone; the cast below preserves whatever jsonb currently
+-- holds. That is correct rather than regrettable: a stored response is only ever
+-- replayed to the client that minted the key, within its retry window, and this
+-- is a pilot. From here forward the bytes are the bytes.
+--
+-- LOCKING: ALTER TYPE jsonb -> json rewrites the table under ACCESS EXCLUSIVE.
+-- `idempotency_key` is small and short-lived by nature (keys are per attempt),
+-- so this is milliseconds. Worth naming anyway, since it is the third rewrite in
+-- this branch.
+-- ===========================================================================
+
+ALTER TABLE "idempotency_key"
+  ALTER COLUMN "response_body" TYPE json USING "response_body"::json;

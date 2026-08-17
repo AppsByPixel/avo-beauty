@@ -10,6 +10,7 @@
 import { buildApp } from './app';
 import { db } from './db/client';
 import { env } from './env';
+import { startNoShowWorker } from './services/noShowWorker';
 import { startReceiptWorker } from './services/receiptWorker';
 
 const app = await buildApp();
@@ -29,13 +30,27 @@ app.log.info(
 );
 
 /**
+ * The no-show return job. Same split as the receipt worker and for the same
+ * reason: `buildApp()` is what the tests construct, and a loop attached to it
+ * would return deposits inside every test run at a moment no test chose.
+ */
+const noShow = env.noShowWorkerEnabled ? startNoShowWorker(db, (o) => app.log.info(o)) : null;
+
+app.log.info(
+  noShow
+    ? `no-show worker on, every ${env.noShowPollMs}ms`
+    : 'no-show worker OFF — NO_SHOW_WORKER_ENABLED=0 was set deliberately, since ' +
+      'the default is on. Missed appointments will hold their deposits for ever.',
+);
+
+/**
  * Stop the worker before the server, so a pass in flight finishes rather than
  * stranding a claimed row in `sending` to wait out its whole lease.
  */
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.once(signal, () => {
     void (async () => {
-      await worker?.stop();
+      await Promise.all([worker?.stop(), noShow?.stop()]);
       await app.close();
       process.exit(0);
     })();
