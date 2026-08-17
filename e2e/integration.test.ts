@@ -50,6 +50,8 @@ import {
   B_STAFF_HANDLE,
   QA_MEMBER,
   QA_MEMBER_PHONE,
+  RECEIPT_POLL_MS,
+  RECEIPT_WORKER_ENABLED,
   SALON_A,
   SALON_B,
   psql,
@@ -241,12 +243,32 @@ describe('a real PIN session cannot reach the dashboard', () => {
 
   it('the SAME staff member reading the roster from her web session succeeds', async () => {
     // The control again: the 403s above are about the credential, not the route.
-    const res = await treq<{ items: Array<{ id: string }> }>('GET', '/staff', {
+    const res = await treq<{ items: Array<{ id: string; salonId: string }> }>('GET', '/staff', {
       token: dashboardB,
     });
 
     expect(res.status).toBe(200);
-    expect(res.body.items.map((s) => s.id).sort()).toEqual([B_STAFF, 'ST-B02']);
+
+    /**
+     * CONTAINMENT AND SCOPE, NOT AN EXACT ROSTER.
+     *
+     * This asserted `[B_STAFF, 'ST-B02']` exactly, and adding salon B's three
+     * scanner fixtures broke it — a spec about a web session reading a roster,
+     * failing because the roster legitimately grew. An exact list makes every
+     * future fixture a false positive here, and this is not the file that owns
+     * salon B's headcount.
+     *
+     * What it does own: the roster is salon-scoped, and it really contains the
+     * rows this suite reasons about elsewhere. Both survive a new fixture; a
+     * salon A row appearing does not.
+     */
+    const ids = res.body.items.map((s) => s.id);
+    expect(ids).toContain(B_STAFF);
+    expect(ids).toContain('ST-B02');
+    expect(
+      res.body.items.filter((s) => s.salonId !== SALON_B),
+      "salon B's roster contains a row from another salon",
+    ).toEqual([]);
   });
 
   it('both directions hold at salon A too — this is the gate, not salon B', async () => {
@@ -310,17 +332,81 @@ const channelsFor = (txId: string): string[] => {
  *
  * Written out rather than derived, so that if lane A narrows what a worker may
  * claim, this disagrees instead of silently following.
+ *
+ * `asOf` IS THE PART THAT MAKES THIS USABLE BESIDE A RUNNING WORKER.
+ *
+ * The predicate's time half is `available_at <= now()`. Evaluated at the real
+ * `now()`, any row this function reports as claimable is a row the live worker is
+ * about to claim — and did, within a poll interval, turning `queued` into
+ * `sending` between the UPDATE and the SELECT. These specs went red reporting an
+ * empty list, which was the worker being prompt rather than a broken predicate.
+ *
+ * So the horizon is a parameter. The specs park their rows in the future, out of
+ * the worker's reach entirely, and ask the predicate about an instant AFTER the
+ * backoff they set. What is being tested is the predicate — which statuses come
+ * back, and whether a backoff excludes a row — and none of that needs the row to
+ * be due right now. The worker never touches these rows, so the answer is stable.
  */
-const claimableChannels = (txId: string): string[] => {
+const claimableChannels = (txId: string, asOf = 'now()'): string[] => {
   const s = scalar(
     `select coalesce(string_agg(channel::text, ',' order by channel::text), '')
        from receipt_job
       where transaction_id='${txId}'
         and status in ('queued','failed')
-        and available_at <= now()`,
+        and available_at <= ${asOf}`,
   );
   return s === '' ? [] : s.split(',');
 };
+
+/**
+ * Put a transaction's receipt rows back to the state the MONEY TRANSACTION wrote,
+ * and out of the running worker's reach.
+ *
+ * WHY THIS EXISTS NOW AND DID NOT BEFORE
+ * --------------------------------------
+ * These specs were written against an API with `RECEIPT_WORKER_ENABLED=0`. The
+ * outbox therefore sat still: a settled top-up left two rows in `queued` with
+ * `attempts = 0` and they stayed that way, so a spec could assert those literals
+ * and then mutate one row to pose its question.
+ *
+ * The worker is on now (see `support/tenancy-harness.ts`), and it drains the
+ * outbox within a poll interval. Every one of those literals became a race — the
+ * suite went red on `email:sent:1 whatsapp:sent:1`, which is the worker doing its
+ * job, not a defect.
+ *
+ * The questions these specs ask are not about the worker. They are about the
+ * composite key and the claim predicate: given two rows, does failing one leave
+ * the other claimable; does a failed row come back when its backoff expires. Both
+ * need a known starting state, and "whatever the worker happened to have done by
+ * the time psql connected" is not one.
+ *
+ * So the spec builds its own. `available_at` an hour out puts both rows outside
+ * the claim predicate's `available_at <= now()`, which is the worker's own gate —
+ * not a flag, not a pause, the same condition production uses for backoff. The
+ * rows are then stable for as long as the spec needs them, and what is asserted
+ * afterwards is asserted about a state the spec put there deliberately.
+ *
+ * `sent_at = NULL` is not tidiness either: `receipt_job_sent_at_matches_status`
+ * CHECKs `(status = 'sent') = (sent_at IS NOT NULL)`, so a row the worker has
+ * already sent cannot be moved back to `queued` or `failed` without clearing it.
+ * Leaving it out is what made these two specs fail with a constraint violation
+ * rather than an assertion.
+ */
+function parkOutbox(txId: string): void {
+  psql(`
+    UPDATE receipt_job
+       SET status = 'queued', attempts = 0, last_error = NULL, sent_at = NULL,
+           available_at = now() + interval '1 hour'
+     WHERE transaction_id = '${txId}';
+  `);
+}
+
+/** `channel:status:attempts` for every row, ordered — the whole outbox at a glance. */
+const outboxOf = (txId: string): string =>
+  scalar(
+    `select coalesce(string_agg(channel::text || ':' || status::text || ':' || attempts::text, ' ' order by channel::text), '')
+       from receipt_job where transaction_id='${txId}'`,
+  );
 
 describe('one settled payment queues two independent receipts', () => {
   it('both channels are queued, through the real gateway round trip', async () => {
@@ -333,11 +419,45 @@ describe('one settled payment queues two independent receipts', () => {
 
   it('as two rows with their own status, attempts and backoff — not one row with two destinations', async () => {
     const txId = await settleATopUp('receipts-rows');
-    const rows = scalar(
-      `select coalesce(string_agg(channel::text || ':' || status::text || ':' || attempts::text, ' ' order by channel::text), '')
+
+    // Two rows with distinct primary keys is the whole claim. One row carrying
+    // two destinations would be a single id, a single status and a single
+    // attempts counter, and a WhatsApp outage would then hold up the email.
+    const ids = scalar(
+      `select coalesce(string_agg(distinct id::text, ',' order by id::text), '')
          from receipt_job where transaction_id='${txId}'`,
+    ).split(',').filter(Boolean);
+    expect(ids.length, 'a settled top-up did not produce two independent receipt rows').toBe(2);
+
+    // Each with its own channel, and both of them.
+    expect(channelsFor(txId)).toEqual(['email', 'whatsapp']);
+
+    /**
+     * THE OUTBOX INVARIANT, RESTATED SO A RUNNING WORKER CANNOT FALSIFY IT.
+     *
+     * This used to read `email:queued:0 whatsapp:queued:0`, which was true only
+     * because the worker was switched off. What it was really guarding is that
+     * the money transaction QUEUES the receipt and does not SEND it — an HTTP
+     * call inside the charge transaction is the thing `receipt.ts` exists to
+     * prevent.
+     *
+     * A row the money transaction had sent would be `sent` with `attempts = 0`,
+     * because `attempts` is incremented by exactly one statement in the system —
+     * `claimJobs()` in `api/src/services/receiptWorker.ts`, which is the worker
+     * claiming the row afterwards. So `sent` with a zero attempt count is the
+     * signature of a send that never went through the queue, and it is the one
+     * combination that must never appear. That statement is true whether the
+     * worker is running or not, which is the property the old literal lacked.
+     */
+    const sentWithoutBeingClaimed = scalar(
+      `select count(*) from receipt_job
+        where transaction_id='${txId}' and status='sent' and attempts=0`,
     );
-    expect(rows).toBe('email:queued:0 whatsapp:queued:0');
+    expect(
+      sentWithoutBeingClaimed,
+      'a receipt is `sent` with attempts=0, so it was sent without ever being claimed — ' +
+        'that means the send happened inside the money transaction. See db/schema/receipt.ts.',
+    ).toBe('0');
   });
 
   /**
@@ -357,22 +477,28 @@ describe('one settled payment queues two independent receipts', () => {
       channelsFor(txId).length === 2,
       'this case needs both channels queued to say anything',
     );
+    // A known starting state, out of the running worker's reach. `parkOutbox` puts
+    // both rows an hour out; the WhatsApp failure below pushes its row to two, so
+    // a horizon of 90 minutes separates the two by their BACKOFF and nothing else.
+    parkOutbox(txId);
+    precondition(outboxOf(txId) === 'email:queued:0 whatsapp:queued:0', 'the park did not take');
 
     psql(`
       UPDATE receipt_job
          SET status = 'failed',
              attempts = attempts + 1,
              last_error = 'provider 503 — simulated by e2e/integration.test.ts',
-             available_at = now() + interval '1 hour'
+             available_at = now() + interval '2 hours'
        WHERE transaction_id = '${txId}' AND channel = 'whatsapp';
     `);
 
     expect(
-      claimableChannels(txId),
+      claimableChannels(txId, "now() + interval '90 minutes'"),
       'the WhatsApp failure took the email job with it — the two are not independent',
     ).toEqual(['email']);
 
-    // And the email row itself was not touched by the failure.
+    // And the email row itself was not touched by the failure. This is the
+    // independence claim stated directly, with no predicate in the way.
     expect(
       scalar(
         `select status::text || ':' || attempts::text || ':' || coalesce(last_error,'-') from receipt_job where transaction_id='${txId}' and channel='email'`,
@@ -382,14 +508,75 @@ describe('one settled payment queues two independent receipts', () => {
 
   it('and the failed WhatsApp job is still the worker\'s to retry once its backoff expires', async () => {
     const txId = await settleATopUp('receipts-retry');
+    parkOutbox(txId);
     psql(`
       UPDATE receipt_job
-         SET status = 'failed', attempts = 1, available_at = now() - interval '1 minute'
+         SET status = 'failed', attempts = 1, sent_at = NULL,
+             available_at = now() + interval '30 minutes'
        WHERE transaction_id = '${txId}' AND channel = 'whatsapp';
     `);
+
     // `failed` is in the claim predicate on purpose: a failed send is a retry, not
-    // a dead letter. Both come back.
-    expect(claimableChannels(txId)).toEqual(['email', 'whatsapp']);
+    // a dead letter. Past both backoffs, both come back — and the WhatsApp row
+    // coming back is the whole assertion, because a predicate narrowed to
+    // `status = 'queued'` would drop it and strand every retry in the system.
+    expect(claimableChannels(txId, "now() + interval '90 minutes'")).toEqual([
+      'email',
+      'whatsapp',
+    ]);
+
+    // Before its backoff expires it is NOT claimable — the retry is delayed, not
+    // immediate. Without this the spec above would pass on a predicate that
+    // ignored `available_at` altogether.
+    expect(claimableChannels(txId, "now() + interval '5 minutes'")).toEqual([]);
+  });
+
+  /**
+   * THE HALF THAT ONLY BECAME TESTABLE WHEN THE WORKER WAS SWITCHED ON.
+   *
+   * `gateway.test.ts` had this as a standing todo — "the receipt worker does not
+   * exist; when it does, a queued job must move queued → sending → sent exactly
+   * once". It exists, it runs here, and this is that spec.
+   *
+   * It is the other half of the outbox contract. The specs above prove the money
+   * transaction does not send; this proves something eventually does, which is
+   * what stops "queued" from being a euphemism for "dropped".
+   */
+  it('the worker drains the outbox — a queued receipt reaches `sent`, having been claimed', async () => {
+    precondition(
+      RECEIPT_WORKER_ENABLED,
+      'the API under test runs with RECEIPT_WORKER_ENABLED=0, so nothing drains the outbox',
+    );
+    const txId = await settleATopUp('receipts-worker');
+
+    const deadline = Date.now() + 15_000;
+    let state = '';
+    for (;;) {
+      state = outboxOf(txId);
+      if (state === 'email:sent:1 whatsapp:sent:1') break;
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    // Both channels sent, and each with exactly ONE attempt: claimed once, sent
+    // once. Two attempts would mean a retry, which against the `logging` driver
+    // means a send that failed — and "never send twice after a crash between the
+    // send and the row update" is the guarantee the attempt count carries.
+    expect(
+      state,
+      'the worker did not drain the outbox within 15s. RECEIPT_POLL_MS is ' +
+        `${RECEIPT_POLL_MS}ms, so this is not a timing margin problem.`,
+    ).toBe('email:sent:1 whatsapp:sent:1');
+
+    // The CHECK ties these together, but asserting it here says what the column
+    // MEANS: a sent receipt has a moment it was sent at.
+    expect(
+      Number(
+        scalar(
+          `select count(*) from receipt_job where transaction_id='${txId}' and status='sent' and sent_at is null`,
+        ),
+      ),
+    ).toBe(0);
   });
 
   /**
@@ -558,22 +745,28 @@ describe('the commission is merchant-visible and customer-never', () => {
   });
 
   /**
-   * THE OPEN CONTRACT QUESTION — NOT DECIDED HERE.
+   * THE LAST CUSTOMER SURFACE STILL CARRYING THE COMMISSION.
    *
-   * `feeFils` is a field on `TopUpIntent` in design/api-contract.md, and
-   * `GET /topups/{id}` and `POST /topups` are customer endpoints that serialise
-   * that shape (`api/src/services/topup.ts` → `serialiseIntent`, whose own
-   * comment flags the tension). So the contract says two things:
+   * This was "the open contract question" and half of it is now settled.
+   * api-contract.md § Commission was amended: the customer never sees `feeFils`,
+   * and `packages/types` grew `TopUpIntentPublicSchema = TopUpIntentSchema.omit({
+   * feeFils: true })` to say so in a shape rather than in prose.
    *
-   *   the commission is "shown to the merchant not the customer"
-   *   TopUpIntent carries feeFils, and TopUpIntent is what a customer reads
+   * Lane A applied it to the READ side — `GET /topups/{id}` goes through
+   * `serialiseIntentForCustomer`, which projects onto the public key set, so a
+   * field that is not in the schema cannot reach a customer even if somebody adds
+   * it to the view type. That half of this spec passes.
    *
-   * Both cannot be true. Recorded as a knownBug so it flips the day it is
-   * resolved in either direction — remove the field and this goes green and asks
-   * to be promoted; keep it and amend the contract, and this spec should be
-   * deleted with the amendment cited. Lane D does not get to pick.
+   * `POST /topups` still answers with the full shape, and the reason was in this
+   * directory: five specs in `money.test.ts` asserted `feeFils` on that response,
+   * so `serialiseIntent` could not move without turning them red. Those specs have
+   * been restated against `topup_intent.fee_fils` — see "the commission is
+   * computed and persisted" below — and the blocker is gone.
+   *
+   * So this stays a `knownBug()` naming exactly one endpoint, and it flips to
+   * green the day `POST /topups` returns `serialiseIntentForCustomer(intent)`.
    */
-  knownBug('a customer reading her own top-up is told AVO\'s commission', async () => {
+  knownBug('POST /topups tells a customer AVO\'s commission — GET /topups/{id} no longer does', async () => {
     const created = await treq<{ id: string }>('POST', '/topups', {
       token: walletQa,
       idempotencyKey: key('fee-intent'),
@@ -591,10 +784,148 @@ describe('the commission is merchant-visible and customer-never', () => {
 
     expect(
       leaks,
-      'CONTRACT CONTRADICTION — api-contract.md § Commission says customer-never, ' +
-        '§ TopUpIntent lists feeFils, and GET /topups/{id} is a customer endpoint:\n' +
+      'AVO\'s commission reached a customer through the top-up shape. ' +
+        'api-contract.md § Commission is customer-never and TopUpIntentPublicSchema ' +
+        'omits feeFils; apply serialiseIntentForCustomer to the write side too:\n' +
         leaks.join('\n'),
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------- the commission, to the fil --
+
+/**
+ * THE RATE TABLE — api-contract.md § Commission, asserted against
+ * `topup_intent.fee_fils`.
+ *
+ * MOVED HERE FROM `money.test.ts`, and the move is the whole point.
+ *
+ * Five specs there read `feeFils` off the `POST /topups` RESPONSE. That put the
+ * two suites in this directory in direct contradiction: the sweep above says no
+ * customer response may carry a commission, and `POST /topups` is as
+ * customer-facing as the `GET` — the wallet is what calls it. Lane A had already
+ * resolved the read side (`TopUpIntentPublicSchema`, `serialiseIntentForCustomer`)
+ * and left `POST /topups` on the full shape with a comment naming those five
+ * specs as the reason it could not move. They were the blocker.
+ *
+ * So they are restated against the column instead. This is the pattern the
+ * receipt specs above already use, and it is stronger than what it replaces in
+ * two ways rather than weaker:
+ *
+ *   - it survives the fix. When lane A applies the public shape to `POST /topups`
+ *     these keep passing, because `fee_fils` is where the commission actually
+ *     lives and a serialiser cannot move it.
+ *   - it proves the number was RECORDED, not merely reported. A response field is
+ *     a claim about a computation; the row is the computation's result, and the
+ *     row is what a merchant statement will one day be built from.
+ *
+ * The expected figures are literals from § Commission, never recomputed with the
+ * server's own helper. KNET 150 flat; card 2.5% + 50; Apple Pay priced as a card.
+ */
+describe('the commission is computed and persisted', () => {
+  /** Create an intent and return the commission the database recorded for it. */
+  async function persistedFee(amountFils: number, method: string): Promise<number> {
+    const created = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: key(`fee-${method}-${amountFils}`),
+      body: { amountFils, method },
+    });
+    precondition(
+      created.status === 200,
+      `POST /topups (${method}, ${amountFils}) answered ${created.status} ${created.raw}`,
+    );
+
+    const raw = scalar(`select fee_fils::text from topup_intent where id='${created.body.id}'`);
+    precondition(raw !== '', `no topup_intent row for ${created.body.id}`);
+    // Read as text and converted here, so a column that ever became numeric and
+    // returned "150.000" fails this rather than being silently coerced to 150.
+    expect(raw, `fee_fils for ${method} ${amountFils} is not an integer: "${raw}"`).toMatch(
+      /^-?\d+$/,
+    );
+    return Number(raw);
+  }
+
+  it('KNET is 150 fils flat, at every amount', async () => {
+    for (const amount of [1_000, 10_000, 25_000, 250_000]) {
+      expect(
+        await persistedFee(amount, 'knet'),
+        `KNET fee on ${amount} fils must be flat 150`,
+      ).toBe(150);
+    }
+  });
+
+  it('card is 2.5% + 50 fils', async () => {
+    const cases: Array<[amount: number, fee: number]> = [
+      [10_000, 300], //   250 + 50
+      [5_000, 175], //    125 + 50
+      [25_000, 675], //   625 + 50
+      [100_000, 2_550], // 2500 + 50
+    ];
+    for (const [amount, expected] of cases) {
+      expect(await persistedFee(amount, 'card'), `card fee on ${amount} fils`).toBe(expected);
+    }
+  });
+
+  it('a card percentage that lands on a half fil rounds to an integer, never a float', async () => {
+    // 2.5% of 3333 = 83.325 → 83, + 50 = 133. This is the case where a float
+    // implementation shows itself — and storing it in an integer column is a
+    // second, independent guard, because a float would have to be truncated to
+    // land there at all.
+    expect(await persistedFee(3_333, 'card')).toBe(133);
+    // 2.5% of 1010 = 25.25 → 25, + 50 = 75.
+    expect(await persistedFee(1_010, 'card')).toBe(75);
+  });
+
+  it('Apple Pay is priced as a card', async () => {
+    expect(await persistedFee(10_000, 'applepay')).toBe(300);
+  });
+
+  it('a client-supplied feeFils is ignored — the commission is the server\'s to compute', async () => {
+    // The half of `money.test.ts`'s forged-bonus spec that needed the fee field.
+    // A wallet that could name its own commission could set it to zero, and the
+    // only place that shows is the column.
+    const created = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: key('fee-forged'),
+      body: { amountFils: 10_000, method: 'knet', feeFils: 0, creditFils: 999_999 },
+    });
+    precondition(created.status === 200, `POST /topups answered ${created.status} ${created.raw}`);
+
+    const fee = Number(scalar(`select fee_fils from topup_intent where id='${created.body.id}'`));
+    expect(fee, 'the forged feeFils: 0 was stored').toBe(150);
+
+    // And the forged credit did not land either — asserted here rather than in
+    // money.test.ts because this is the row, not the reply.
+    const credit = Number(
+      scalar(`select credit_fils from topup_intent where id='${created.body.id}'`),
+    );
+    expect(credit).not.toBe(999_999);
+  });
+
+  it('the commission is never taken out of what lands in the wallet', async () => {
+    // The rule the customer feels. `credit_fils` is amount + bonus; the fee is
+    // AVO's margin on the merchant side and touches neither.
+    const created = await treq<{ id: string }>('POST', '/topups', {
+      token: walletQa,
+      idempotencyKey: key('fee-not-netted'),
+      body: { amountFils: 10_000, method: 'card' },
+    });
+    precondition(created.status === 200, `POST /topups answered ${created.status} ${created.raw}`);
+
+    const row = scalar(
+      `select amount_fils || ',' || bonus_fils || ',' || credit_fils || ',' || fee_fils ` +
+        `from topup_intent where id='${created.body.id}'`,
+    );
+    const [amount, bonus, credit, fee] = row.split(',').map(Number) as [
+      number,
+      number,
+      number,
+      number,
+    ];
+
+    expect(credit).toBe(amount + bonus);
+    expect(fee, 'a card top-up recorded no commission at all').toBe(300);
+    expect(credit, 'the commission was netted out of the credit').not.toBe(amount + bonus - fee);
   });
 });
 
@@ -690,23 +1021,21 @@ describe('Arabic names fall back to the Latin name, and never to the word "null"
   });
 
   /**
-   * WHAT IS ACTUALLY MISSING.
+   * PROMOTED — this was a `knownBug()` and lane A has landed it.
    *
-   * The specs above pass today, and they pass for a reason worth naming: the API
-   * does not serve `nameAr` AT ALL, so `undefined ?? name` falls back correctly by
-   * accident. There is no `name_ar` column on `salon` or `branch` and no
-   * `stamp_reward_ar` on `salon`; `GET /salons/{id}` in api/src/routes/salons.ts
-   * lists its fields explicitly and none of the three is among them.
+   * What it used to report: the API served `nameAr` on nothing. There was no
+   * `name_ar` column on `salon` or `branch` and no `stamp_reward_ar` on `salon`,
+   * so `GET /salons/{id}` omitted all three. The fallback specs above passed by
+   * accident — `undefined ?? name` and `null ?? name` agree — and lane B had
+   * nothing to render even for a salon that had supplied an Arabic name.
    *
-   * So `SalonSchema` and `BranchSchema` declare `nameAr: z.string().nullable()` —
-   * a REQUIRED key holding a nullable value — and the live response has no such
-   * key. Any client that parses the contract's schema against this API fails, and
-   * lane B has nothing to render even when a salon has supplied a name.
-   *
-   * LANE A OWES: the two columns, the stamp reward column, and the three fields
-   * on the serialiser. This flips green the day they land.
+   * Migration 0006 added the columns and the serialiser now lists the fields, so
+   * the contract and the live response agree. Locked in as a plain `it()`: these
+   * are REQUIRED keys with nullable values in `SalonSchema` and `BranchSchema`,
+   * and a client parsing the contract against this API breaks the day one of
+   * them goes missing again.
    */
-  knownBug('the API serves none of the Arabic name fields the contract declares', async () => {
+  it('serves every Arabic name field the contract declares', async () => {
     const s = await salonAsCustomer(SALON_A, walletQa);
     const missing: string[] = [];
     if (!('nameAr' in s)) missing.push('Salon.nameAr');

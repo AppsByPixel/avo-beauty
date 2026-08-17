@@ -361,35 +361,31 @@ describe('a charge crossing a happy-hour boundary', () => {
     it('the fixture salon publishes at least one happy hour to evaluate', fixtureSalonPublishesAHappyHour);
   }
 
-  it('a charge response carries no happy-hour outcome yet — nothing tells the receipt what was granted', async () => {
-    // Running evidence for the gap. When lane A adds the applied-reward field
-    // this fails, and the todos below become the real boundary specs.
-    const res = await charge({ key: idempotencyKey('hh-shape') });
-    expect(res.status).toBe(200);
-    expect(res.body).not.toHaveProperty('happyHour');
-    expect(res.body.loyalty).not.toHaveProperty('boostApplied');
-    expect(res.body.loyalty).not.toHaveProperty('happyHourId');
-  });
-
-  it.todo(
-    'LANE A OWES: liveness is evaluated at commit time on the server clock in salon-local time (UTC+3, packages/types/src/rules.ts SALON_UTC_OFFSET_MINUTES) — a device clock set to 17:00 must not earn an x2 visit at 19:00',
-  );
-  it.todo(
-    'LANE A OWES: a charge submitted at 17:59:59 and committed at 18:00:01 resolves the reward ONCE against a single evaluation instant, not once per read — needs a clock injection hook or a fixture happy hour ending in the next few seconds',
-  );
-  it.todo(
-    'LANE A OWES: the boundary is inclusive-start / exclusive-end and the two ends agree — a charge exactly at `from` earns, a charge exactly at `to` does not',
-  );
-  it.todo(
-    'LANE A OWES: a happy hour with on:false never applies, even inside its window (HH-02 in the fixture is the case)',
-  );
-  it.todo(
-    "LANE A OWES: a branch-scoped happy hour applies only at that branch; branchId 'all' applies everywhere",
-  );
-  it.todo(
-    'LANE A OWES: an overlapping happy hour and a branch boost stack in one defined order and are applied once — two evaluations of the same charge must not double the visit',
-  );
-  it.todo(
-    'LANE A OWES: an idempotent replay of a charge that earned an x2 visit returns the SAME reward, evaluated once — not re-evaluated against the replay clock, which is the boundary bug that pays twice',
-  );
+  /**
+   * THE SEVEN "LANE A OWES" TODOS THAT LIVED HERE HAVE MOVED TO
+   * `e2e/promotions.test.ts`, AND THE SPEC ABOVE THEM IS DELETED. Both facts are
+   * worth recording, because this is the tidiest ending a gap ledger can have.
+   *
+   * There was a spec here asserting a charge response carried NO happy-hour
+   * outcome — `not.toHaveProperty('happyHour')` — with the comment "when lane A
+   * adds the applied-reward field this fails, and the todos below become the real
+   * boundary specs". Lane A added it. The spec failed, exactly as designed, and
+   * that was its whole job. It is deleted rather than inverted, because the
+   * positive statements belong where they can actually be made.
+   *
+   * WHY NOT HERE. Every one of those questions needs a happy hour positioned to
+   * the minute against the salon's own clock, and therefore a database. This file
+   * drives `packages/mock` by default and owns no fixture it can move. So they are
+   * answered in `promotions.test.ts` against lane A's API and lane D's Postgres:
+   * liveness on the server clock, the inclusive-start / exclusive-end boundary,
+   * `on: false`, a window on the wrong day, overlapping windows resolving to one
+   * outcome, and an idempotent replay returning the STORED decision rather than
+   * re-evaluating it against the replay clock.
+   *
+   * Two remain open and are recorded there rather than here: pinning the
+   * evaluation INSTANT needs a clock-injection hook the API does not have, and
+   * branch scoping cannot apply at all until a charge knows which branch it
+   * happened at — a `knownBug()` in that file, with the sort-order near-miss that
+   * nearly became the fix written out beside it.
+   */
 });
