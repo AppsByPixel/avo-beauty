@@ -1,7 +1,8 @@
 /**
- * The AVO schema. Seventeen tables, in dependency order.
+ * The AVO schema. Nineteen tables, in dependency order.
  *
- *   salon ─┬─ branch
+ *   salon ─┬─ branch ─┬─ boost
+ *          │          └─ happy_hour (branch_id NULL = every branch)
  *          ├─ service
  *          ├─ artist (→ staff_user, optionally: an artist needs no login)
  *          ├─ member ──── wallet_token
@@ -20,6 +21,7 @@
 
 export * from './_shared';
 export * from './salon';
+export * from './promotion';
 export * from './service';
 export * from './artist';
 export * from './member';

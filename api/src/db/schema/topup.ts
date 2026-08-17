@@ -36,6 +36,7 @@ import {
 import { fils } from '@avo/types';
 import { filsColumn, timestamptz } from './_shared';
 import { member } from './member';
+import { happyHour } from './promotion';
 import { branch, salon } from './salon';
 import { paymentMethod, transaction } from './transaction';
 
@@ -79,9 +80,24 @@ export const topUpIntent = pgTable(
 
     /** What the customer pays. */
     amountFils: filsColumn('amount_fils').notNull(),
-    /** Merchant-funded tier bonus. Server-computed; 0 in stamps mode. */
+    /** Merchant-funded TIER bonus. Server-computed; 0 in stamps mode. */
     bonusFils: filsColumn('bonus_fils').notNull().default(fils(0)),
-    /** amountFils + bonusFils — what lands in the wallet. */
+    /**
+     * Merchant-funded PROMOTION bonus — a live `topup10`/`topup20` happy hour.
+     * Separate from the tier bonus so a settled top-up can be reconciled: both
+     * are merchant-funded, but one is owed to a customer's standing and the
+     * other to a campaign the merchant chose to run, and one column could never
+     * be split back apart. See db/schema/transaction.ts § promo_bonus_fils.
+     *
+     * LOCKED AT CREATION, like `bonusFils` and for the same reason. A top-up
+     * settles minutes after it starts, possibly after the window has closed, and
+     * the customer acted on the number she was shown when she tapped Pay. The
+     * intent is the promise; settlement credits `creditFils` verbatim.
+     */
+    promoBonusFils: filsColumn('promo_bonus_fils').notNull().default(fils(0)),
+    /** Which window funded `promoBonusFils`. Null when none was live. */
+    promotionId: text('promotion_id').references(() => happyHour.id, { onDelete: 'restrict' }),
+    /** amountFils + bonusFils + promoBonusFils — what lands in the wallet. */
     creditFils: filsColumn('credit_fils').notNull(),
     /**
      * AVO's commission. Merchant-visible, customer-never: it is recorded here
@@ -134,12 +150,13 @@ export const topUpIntent = pgTable(
 
     check('topup_intent_amount_positive', sql`${t.amountFils} > 0`),
     check('topup_intent_bonus_non_negative', sql`${t.bonusFils} >= 0`),
+    check('topup_intent_promo_bonus_non_negative', sql`${t.promoBonusFils} >= 0`),
     check('topup_intent_fee_non_negative', sql`${t.feeFils} >= 0`),
-    // The credit is the amount plus the bonus. The commission is NOT deducted
-    // from it — Lane D asserts exactly this on the intent.
+    // The credit is the amount plus BOTH merchant-funded bonuses. The commission
+    // is NOT deducted from it — Lane D asserts exactly this on the intent.
     check(
       'topup_intent_credit_is_amount_plus_bonus',
-      sql`${t.creditFils} = ${t.amountFils} + ${t.bonusFils}`,
+      sql`${t.creditFils} = ${t.amountFils} + ${t.bonusFils} + ${t.promoBonusFils}`,
     ),
     // 'wallet' is a charge method. A top-up is funded from outside the wallet.
     check('topup_intent_method_is_external', sql`${t.method} <> 'wallet'`),

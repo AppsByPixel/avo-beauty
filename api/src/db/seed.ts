@@ -34,6 +34,7 @@ import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { fils } from '@avo/types';
+import { boost, happyHour } from './schema/promotion';
 import { branch, salon } from './schema/salon';
 import { artist, type ArtistWindows } from './schema/artist';
 import { auditLog } from './schema/audit';
@@ -243,6 +244,104 @@ async function seed(): Promise<void> {
       { id: 'SV-05', salonId: SALON_ID, name: 'Treatment', priceFils: fils(12500) },
     ])
     .onConflictDoNothing();
+
+  // ---------------------------------------------------------- promotions ----
+  //
+  // packages/mock/src/fixtures.ts § promotions, exactly. Lane D's specs read
+  // this set and assert on the SHAPE — days/from/to present, no `live` flag —
+  // so a seed that invented its own windows would be testing something nobody
+  // designed.
+  //
+  // WHAT THESE TWO FIXTURES ARE FOR, which is not obvious from the values:
+  //
+  //   HH-01  all branches, Sun/Mon/Tue 16:00-18:00, x2visit, ON.
+  //          The live-window case, and the one that expires ON ITS OWN at 18:00
+  //          with no push, no poll and no server tick — because nothing stores
+  //          that it is live. It just stops satisfying the predicate.
+  //
+  //   HH-02  Salmiya only, Thursday 10:00-13:00, topup10, OFF.
+  //          The `on: false` case. It is INSIDE its own window for three hours
+  //          every Thursday and must never apply — proof that `on` is an input
+  //          to the shared predicate rather than a second liveness concept.
+  //
+  // Neither of them adds a top-up bonus in practice: HH-01 multiplies visits and
+  // HH-02 is off. That is the fixture's design, not a convenience — it is what
+  // lets Lane D's `bonusFils === tier% of amount` sweep stay a statement about
+  // the tier ladder.
+  await db
+    .insert(happyHour)
+    .values([
+      {
+        id: 'HH-01',
+        salonId: SALON_ID,
+        branchId: null, // the wire's "all"
+        days: [0, 1, 2],
+        from: '16:00',
+        to: '18:00',
+        reward: 'x2visit',
+        on: true,
+        notify: true,
+      },
+      {
+        id: 'HH-02',
+        salonId: SALON_ID,
+        branchId: BRANCH_SALMIYA,
+        days: [4],
+        from: '10:00',
+        to: '13:00',
+        reward: 'topup10',
+        on: false,
+        notify: false,
+      },
+    ])
+    // Reset to the fixture on every run, like the member balances above: a
+    // developer who switched HH-01 off through the dashboard must not leave the
+    // next test run asserting against her state.
+    .onConflictDoUpdate({
+      target: happyHour.id,
+      set: {
+        branchId: sql`excluded.branch_id`,
+        days: sql`excluded.days`,
+        from: sql`excluded."from"`,
+        to: sql`excluded."to"`,
+        reward: sql`excluded.reward`,
+        on: sql`excluded."on"`,
+        notify: sql`excluded.notify`,
+      },
+    });
+
+  await db
+    .insert(boost)
+    .values([
+      {
+        salonId: SALON_ID,
+        branchId: BRANCH_SALMIYA,
+        visit: 1,
+        topup: 0,
+        stamp: 1,
+        publishedAt: new Date('2026-08-10T09:00:00+03:00'),
+        publishedBy: 'Noura',
+      },
+      {
+        salonId: SALON_ID,
+        branchId: BRANCH_KUWAIT_CITY,
+        visit: 2,
+        topup: 10,
+        stamp: 1,
+        publishedAt: new Date('2026-08-10T09:00:00+03:00'),
+        publishedBy: 'Noura',
+      },
+    ])
+    .onConflictDoUpdate({
+      target: [boost.salonId, boost.branchId],
+      set: {
+        visit: sql`excluded.visit`,
+        topup: sql`excluded.topup`,
+        stamp: sql`excluded.stamp`,
+        publishedAt: sql`excluded.published_at`,
+        publishedBy: sql`excluded.published_by`,
+      },
+    });
 
   // ------------------------------------------------------------- artists ----
   //
@@ -509,6 +608,14 @@ async function seed(): Promise<void> {
     await db.execute(sql`DELETE FROM transaction`);
     await db.execute(sql`DELETE FROM session`);
     await db.execute(sql`DELETE FROM pin_attempt`);
+    // Windows a developer or a proof run added through the dashboard. Removed
+    // AFTER `transaction`, because `transaction.promotion_id` is ON DELETE
+    // restrict and a window that paid something out is not deletable until the
+    // rows that reference it are gone — which is the guarantee working, not an
+    // obstacle. HH-01 and HH-02 are the fixture and are reasserted above.
+    await db.execute(
+      sql`DELETE FROM happy_hour WHERE salon_id = ${SALON_ID} AND id NOT IN ('HH-01', 'HH-02')`,
+    );
   } finally {
     await db.execute(sql`ALTER TABLE gateway_event ENABLE TRIGGER gateway_event_no_delete`);
     await db.execute(sql`ALTER TABLE ledger_entry ENABLE TRIGGER ledger_entry_is_immutable`);
