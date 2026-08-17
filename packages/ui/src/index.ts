@@ -9,8 +9,13 @@
 
 export { Button, type ButtonProps, type ButtonVariant } from './Button.js';
 export { Card, type CardProps } from './Card.js';
+export { Chip, type ChipProps } from './Chip.js';
+export { InfoBanner, type InfoBannerProps } from './InfoBanner.js';
 export { InlineError, type InlineErrorProps } from './InlineError.js';
 export { Money, type MoneyProps } from './Money.js';
+export { Pill, type PillProps, type PillTone } from './Pill.js';
+export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented.js';
+export { Stepper, type StepperProps } from './Stepper.js';
 export { Skeleton, type SkeletonProps } from './Skeleton.js';
 export { StatCard, type StatCardProps } from './StatCard.js';
 export { TextField, type TextFieldProps } from './TextField.js';

@@ -62,7 +62,7 @@ a:hover {
 .signin__card {
   width: 100%;
   max-width: 380px;
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-hairline);
   border-radius: 22px;
   padding: 36px 34px;
@@ -87,7 +87,7 @@ a:hover {
   height: 40px;
   border-radius: 12px;
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -309,7 +309,7 @@ a:hover {
   font-size: 18px;
   font-weight: 600;
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
 }
 
 .dash-sidebar__brand-text {
@@ -390,7 +390,7 @@ a:hover {
   padding: 6px 10px;
   border-radius: var(--avo-radius-chip);
   background: var(--avo-ink);
-  color: #fff;
+  color: var(--avo-white);
   font-size: 12.5px;
   font-weight: 500;
   white-space: nowrap;
@@ -454,7 +454,7 @@ a:hover {
   height: 30px;
   border-radius: 9px;
   background: var(--avo-ink);
-  color: #fff;
+  color: var(--avo-white);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -512,7 +512,7 @@ a:hover {
   height: 40px;
   border-radius: var(--avo-radius-chip);
   border: 1px solid var(--avo-ui-ink-10);
-  background: #fff;
+  background: var(--avo-white);
   color: var(--avo-ink);
   display: flex;
   align-items: center;
@@ -554,7 +554,7 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-ui-ink-10);
   border-radius: var(--avo-radius-pill);
   padding: 6px 13px;
@@ -667,7 +667,7 @@ a:hover {
 
 .dash-toosmall__card {
   max-width: 420px;
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-hairline);
   border-radius: 22px;
   padding: 32px 28px;
@@ -679,7 +679,7 @@ a:hover {
   height: 44px;
   border-radius: 13px;
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -698,4 +698,988 @@ a:hover {
   font-size: 13.5px;
   line-height: 1.55;
   color: var(--avo-text-muted);
+}
+
+/* ================================================= section write failures == */
+
+/*
+ * What a failed WRITE leaves on screen, as distinct from a failed read.
+ *
+ * Not `.avo-inline-error`: that is the sign-in form's field-level banner. This
+ * one always names what did NOT happen ("Nothing was published"), because the
+ * screen is still showing the merchant's edits and the salon is still showing
+ * what it had before, and only one of those is the truth.
+ */
+.section-write-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  background: var(--avo-danger-bg);
+  border-radius: 12px;
+  padding: 12px 15px;
+  margin: 16px 0;
+}
+
+.section-write-error__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-danger-dot);
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.section-write-error__text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-danger-text);
+}
+
+/* ============================================================ team (grid) == */
+
+.team__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--avo-space-grid-gap);
+  margin-top: 20px;
+}
+
+/* interaction-spec.md §1: two-column card grids go 1-up at `narrow` and below. */
+.dash[data-bp='narrow'] .team__grid,
+.dash[data-bp='tablet'] .team__grid {
+  grid-template-columns: 1fr;
+}
+
+.team-card {
+  padding: 18px;
+}
+
+.team-card__head {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.team-card__avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 19px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.team-card__ident {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.team-card__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.team-card__sub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.team-card__status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 13px;
+}
+
+.team-card__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  background: var(--avo-brand);
+}
+
+/*
+ * TOKEN NOTE. The design paints the manual-hours status dot #C9A24B, which is
+ * `tier.gold.dot` — a loyalty-tier token, and this is not a loyalty tier. There
+ * is no "attention" dot token; `--avo-warn-text` is the nearest named colour
+ * that means what this dot means, and it is what the Manual hours pill beside it
+ * already carries, so the two agree. Reported to trunk.
+ */
+.team-card__dot[data-source='manual'] {
+  background: var(--avo-warn-text);
+}
+
+.team-card__status-text {
+  font-size: 12px;
+  color: var(--avo-text-muted-strong);
+}
+
+.team-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.team-card__summary {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}
+
+.team-card__foot .avo-btn {
+  padding: 8px 14px;
+  font-size: 12.5px;
+  border-radius: 10px;
+}
+
+/* --------------------------------------------------------------- week strip */
+
+.team-week {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.team-week__cell {
+  flex: 1;
+  text-align: center;
+}
+
+.team-week__badge {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--avo-surface-alt2);
+  color: var(--avo-ui-ink-38);
+}
+
+.team-week__badge[data-open] {
+  background: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+/* ========================================================== hours editor == */
+
+/* interaction-spec.md §1: "Modals/editors (Team hours…) cap at 720px." */
+.hours-editor {
+  max-width: 780px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: 18px;
+  padding: 22px 24px;
+  margin-top: 20px;
+}
+
+.hours-editor__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.hours-editor__back {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.hours-editor__name {
+  font-size: 22px;
+  margin-top: 8px;
+}
+
+.hours-editor__role {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.hours-editor__banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-radius: 12px;
+  padding: 11px 14px;
+  margin-top: 14px;
+  background: var(--avo-brand-tint2);
+}
+
+.hours-editor__banner[data-manual] {
+  background: var(--avo-brand-tint);
+}
+
+.hours-editor__banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  /* Same token note as .team-card__dot — the synced state has no dot token. */
+  background: var(--avo-warn-text);
+}
+
+.hours-editor__banner[data-manual] .hours-editor__banner-dot {
+  background: var(--avo-brand);
+}
+
+.hours-editor__banner-text {
+  font-size: 12.5px;
+  color: var(--avo-brand-deeper);
+  line-height: 1.5;
+}
+
+.hours-editor__slots {
+  margin-top: 18px;
+}
+
+.hours-editor__slot-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+
+.hours-editor__week {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.hours-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--avo-surface);
+  border: 1px solid var(--avo-hairline-inner);
+  border-radius: 13px;
+  padding: 12px 15px;
+}
+
+.hours-row__day {
+  width: 130px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-shrink: 0;
+}
+
+.hours-row__badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+  background: var(--avo-surface-alt2);
+  color: var(--avo-ui-ink-38);
+}
+
+.hours-row__badge[data-open] {
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+.hours-row__name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.hours-row__body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hours-row__arrow {
+  color: var(--avo-ui-ink-38);
+}
+
+.hours-row__slots {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.hours-row__window {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.hours-row__off {
+  font-size: 13px;
+  color: var(--avo-ui-ink-38);
+}
+
+.hours-row__toggle {
+  flex-shrink: 0;
+}
+
+.hours-editor__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.hours-editor__summary {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+}
+
+/* ================================================================ loyalty == */
+
+.loyalty__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+}
+
+.loyalty__hint {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+.loyalty__status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.loyalty__status {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+/* Unsaved or invalid — the sentence itself carries the meaning, not the colour. */
+.loyalty__status[data-dirty] {
+  color: var(--avo-warn-text);
+  font-weight: 600;
+}
+
+.loyalty__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--avo-space-grid-gap);
+}
+
+/*
+ * interaction-spec.md §1: KPI-style rows go 2x2 at `narrow`, everything 1-up at
+ * `tablet`. The ladder is read as a comparison, so it pairs rather than stacks
+ * for as long as it can.
+ */
+.dash[data-bp='narrow'] .loyalty__grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.dash[data-bp='tablet'] .loyalty__grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.tier-card {
+  padding: 18px;
+}
+
+/*
+ * The invalid rung's border.
+ *
+ * TOKEN NOTE. The design paints it #C2705C, which is in no token — the nearest
+ * named colours are `--avo-danger-dot` (#B0736F) and `--avo-danger-text`
+ * (#8f5a56). `--avo-danger-dot` is used: it is the token whose job is "the
+ * visible mark on a failure", and the warning sentence below it already carries
+ * `--avo-danger-text`. Reported to trunk; not invented here.
+ */
+.tier-card[data-bad] {
+  border-color: var(--avo-danger-dot);
+}
+
+.tier-card__name {
+  font-size: 19px;
+}
+
+.tier-card__rule {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin-top: 3px;
+  min-height: 32px;
+}
+
+.tier-card__fields {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.tier-card__field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.tier-card__input {
+  font-family: var(--avo-font-display);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 9px 11px;
+  border-radius: 10px;
+}
+
+.tier-card__locked {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--avo-ui-ink-38);
+  /* Holds the same height as the two inputs so the four cards stay aligned. */
+  min-height: 62px;
+}
+
+.tier-card__foot {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.tier-card__example {
+  font-family: var(--avo-font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--avo-positive);
+}
+
+.tier-card__perk {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin-top: 3px;
+}
+
+.tier-card__warn {
+  font-size: 12px;
+  color: var(--avo-danger-text);
+  margin-top: 7px;
+}
+
+.loyalty__footnote {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--avo-text-muted-soft);
+  max-width: 640px;
+  line-height: 1.5;
+}
+
+.loyalty__toast {
+  margin-top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deeper);
+  border-radius: 12px;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.loyalty__toast-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------------ stamps */
+
+.stamps {
+  max-width: 460px;
+  padding: 24px;
+}
+
+.stamps__title {
+  font-size: 19px;
+  margin-bottom: 4px;
+}
+
+.stamps__sub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+
+.stamps__dots {
+  display: flex;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+.stamps__dot {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--avo-ui-ink-18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--avo-ui-ink-38);
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.stamps__switching {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-warn-text);
+}
+
+/* =============================================================== settings == */
+
+.settings {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.dash[data-bp='narrow'] .settings__pair,
+.dash[data-bp='tablet'] .settings__pair {
+  grid-template-columns: 1fr;
+}
+
+.settings__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings__card {
+  padding: 20px;
+}
+
+.settings__card--rows {
+  padding: 8px 22px;
+}
+
+.settings__card--inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings__title {
+  font-size: 17px;
+}
+
+.settings__card--rows .settings__title {
+  padding: 16px 0 4px;
+}
+
+.settings__sub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin: 6px 0 16px;
+  line-height: 1.5;
+}
+
+/*
+ * The "this is real, and it is not editable yet" strip.
+ *
+ * Warn, not danger: nothing has failed and nothing is wrong with the salon. It
+ * is a limit of the workspace, and the merchant's next step is to ask AVO.
+ */
+.settings__notice {
+  background: var(--avo-warn-bg);
+  color: var(--avo-warn-text);
+  border-radius: 11px;
+  padding: 10px 13px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 10px 0 4px;
+}
+
+.settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.settings__row-name {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.settings__row-body {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.settings__deposit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings__deposit-unit {
+  font-size: 14px;
+  color: var(--avo-text-muted);
+}
+
+.settings__deposit-range {
+  font-size: 12px;
+  color: var(--avo-ui-ink-38);
+  margin-left: auto;
+}
+
+.settings__foot {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+}
+
+.settings__hours-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 13.5px;
+}
+
+.settings__hours-row--divided {
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__hours-label {
+  color: var(--avo-text-muted-strong);
+}
+
+.settings__hours-value {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+}
+
+.settings__note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--avo-ui-ink-38);
+}
+
+.settings__branches {
+  margin-top: 6px;
+}
+
+.settings__branch {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__branch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+}
+
+.settings__branch-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings__branch-id {
+  font-family: var(--avo-font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+/* =============================================================== accounts == */
+
+.accounts__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.accounts__hint {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+.accounts__count {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin-bottom: 16px;
+}
+
+.accounts__list {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  max-width: 980px;
+}
+
+.account {
+  padding: 18px 20px;
+}
+
+.account__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.account__avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.account__ident {
+  flex: 1;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.account__handle {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  font-family: var(--avo-font-display);
+}
+
+.account__perms {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.account__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.account__rule {
+  margin-top: 11px;
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.5;
+}
+
+/* ============================================================== audit log == */
+
+.audit {
+  max-width: 960px;
+}
+
+.audit__controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+  flex-wrap: wrap;
+}
+
+.audit__search {
+  flex: 1;
+  max-width: 320px;
+  border-radius: 11px;
+  padding: 11px 14px;
+}
+
+.audit__filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.audit__count {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.audit__card {
+  overflow: hidden;
+}
+
+/*
+ * interaction-spec.md §1: "Data tables never drop columns responsively — a
+ * merchant reconciling money needs all of them. Scroll the table, keep the
+ * header row sticky."
+ */
+.audit__scroll {
+  overflow-x: auto;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.audit__table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.audit__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 22px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.audit__table tbody td {
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: top;
+}
+
+.audit__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* An AVO platform action on this salon. The pill in the Source cell carries the
+   meaning; this is a quiet second cue, never the only one. */
+.audit__table tbody tr[data-platform] {
+  background: var(--avo-brand-tint2);
+}
+
+.audit__when {
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+.audit__who {
+  font-weight: 600;
+}
+
+.audit__role {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  margin-top: 1px;
+}
+
+.audit__detail {
+  color: var(--avo-text-muted-strong);
+  line-height: 1.5;
+}
+
+.audit__source {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  white-space: nowrap;
+}
+
+.audit__empty {
+  padding: 34px 22px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.audit__more {
+  margin-top: 14px;
+}
+
+.audit__foot {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.5;
 }

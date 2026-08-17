@@ -51,7 +51,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'team',
     label: 'Team',
     to: '/team',
-    built: false,
+    built: true,
     title: 'Team',
     subtitle: 'Artists and calendar availability',
     icon: (
@@ -84,7 +84,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'loyalty',
     label: 'Loyalty',
     to: '/loyalty',
-    built: false,
+    built: true,
     title: 'Loyalty',
     subtitle: 'The reward mechanic for this salon',
     icon: (
@@ -119,7 +119,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'audit',
     label: 'Audit log',
     to: '/audit',
-    built: false,
+    built: true,
     title: 'Audit log',
     subtitle: 'Every money and permission change, and who made it',
     icon: (
@@ -146,7 +146,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'accounts',
     label: 'Accounts',
     to: '/accounts',
-    built: false,
+    built: true,
     title: 'Accounts',
     subtitle: 'Staff access and customer profiles',
     icon: (
@@ -160,7 +160,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'settings',
     label: 'Settings',
     to: '/settings',
-    built: false,
+    built: true,
     title: 'Settings',
     subtitle: 'Brand kit, modules, deposits, hours and billing',
     icon: (

@@ -19,6 +19,10 @@
   --avo-ui-ink-10: color-mix(in srgb, var(--avo-ink) 10%, transparent);
   --avo-ui-ink-12: color-mix(in srgb, var(--avo-ink) 12%, transparent);
   --avo-ui-ink-14: color-mix(in srgb, var(--avo-ink) 14%, transparent);
+  /* The empty stamp-dot ring. */
+  --avo-ui-ink-18: color-mix(in srgb, var(--avo-ink) 18%, transparent);
+  /* The unfilled permission-chip dot ring. */
+  --avo-ui-ink-28: color-mix(in srgb, var(--avo-ink) 28%, transparent);
   --avo-ui-ink-38: color-mix(in srgb, var(--avo-ink) 38%, transparent);
   --avo-ui-ink-55: color-mix(in srgb, var(--avo-ink) 55%, transparent);
   /* interaction-spec.md §2: uppercase micro-labels are 0.6, never 0.45. */
@@ -30,8 +34,31 @@
 
 /* --------------------------------------------------------------- primitives */
 
+/*
+ * Visible to a screen reader, not to the eye.
+ *
+ * interaction-spec.md §2: "Status pills must carry their meaning as text, not
+ * color alone." Several places in the dashboard have a glyph that is genuinely
+ * ambiguous on its own — the week strip's two S's and two T's, where open and
+ * closed differ only by fill — and this is where the real label goes.
+ *
+ * Not `display: none` and not `visibility: hidden`: both remove the element from
+ * the accessibility tree, which is the opposite of the intent.
+ */
+.avo-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .avo-card {
-  background: #fff;
+  background: var(--avo-white);
   border: 1px solid var(--avo-hairline);
   border-radius: var(--avo-radius-card);
   padding: var(--avo-space-card-padding);
@@ -89,7 +116,7 @@
  */
 .avo-btn--primary {
   background: var(--avo-brand-deep);
-  color: #fff;
+  color: var(--avo-white);
 }
 
 .avo-btn--primary:hover:not(:disabled) {
@@ -130,7 +157,7 @@
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--avo-ui-ink-14);
-  background: #fff;
+  background: var(--avo-white);
   border-radius: 11px;
   padding: 12px 14px;
   font-family: inherit;
@@ -221,7 +248,7 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--avo-white);
   box-shadow: var(--avo-shadow-toggle-knob);
   display: block;
 }
@@ -331,4 +358,226 @@
   border-radius: 9px;
   background: var(--avo-warn-text);
   flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------- segmented */
+
+.avo-segmented {
+  display: inline-flex;
+  background: var(--avo-surface-alt2);
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.avo-segmented__option {
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  padding: 8px 15px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--avo-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--avo-motion-fast) ease, color var(--avo-motion-fast) ease;
+}
+
+/*
+ * The selected segment is a white raised chip on the tinted track — the design's
+ * own treatment. It carries `--avo-ink`, not white, so non-negotiable #9 never
+ * comes up here.
+ */
+.avo-segmented__option[aria-checked='true'] {
+  background: var(--avo-white);
+  color: var(--avo-ink);
+  box-shadow: var(--avo-shadow-segmented-active);
+}
+
+.avo-segmented__option:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* -------------------------------------------------------------------- chip */
+
+.avo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: var(--avo-radius-pill);
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--avo-surface-alt2);
+  color: var(--avo-text-muted-strong);
+  transition: background var(--avo-motion-fast) ease, color var(--avo-motion-fast) ease;
+}
+
+/* Non-negotiable #9: the filled chip carries white, so it fills with deep. */
+.avo-chip[data-on] {
+  background: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+.avo-chip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.avo-chip__dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1.5px solid var(--avo-ui-ink-28);
+}
+
+.avo-chip[data-on] .avo-chip__dot {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--avo-white) 92%, transparent);
+}
+
+/* Outlined variant — the audit filter row sits on the canvas, not on a card. */
+.avo-chip--outline {
+  background: var(--avo-white);
+  border: 1px solid var(--avo-border-control);
+  color: var(--avo-text-muted-strong);
+}
+
+.avo-chip--outline[data-on] {
+  background: var(--avo-brand-deep);
+  border-color: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+/* ----------------------------------------------------------------- stepper */
+
+.avo-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 11px;
+}
+
+.avo-stepper--sm {
+  gap: 8px;
+  border: 1px solid var(--avo-border-control);
+  padding: 5px 7px;
+}
+
+.avo-stepper[aria-disabled='true'] {
+  opacity: 0.5;
+}
+
+.avo-stepper__btn {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 11px;
+  border: 1px solid var(--avo-border-control);
+  background: var(--avo-white);
+  font-family: inherit;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--avo-ink);
+  cursor: pointer;
+}
+
+.avo-stepper--sm .avo-stepper__btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: var(--avo-surface-alt2);
+  border-radius: 8px;
+  font-size: 18px;
+  color: var(--avo-brand-deep);
+}
+
+.avo-stepper__btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.avo-stepper__value {
+  font-family: var(--avo-font-display);
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+  min-width: 62px;
+  text-align: center;
+}
+
+.avo-stepper--sm .avo-stepper__value {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 44px;
+}
+
+/* -------------------------------------------------------------------- pill */
+
+.avo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--avo-radius-pill);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.avo-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.avo-pill[data-tone='brand'] {
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+.avo-pill[data-tone='warn'] {
+  background: var(--avo-warn-bg);
+  color: var(--avo-warn-text);
+}
+
+.avo-pill[data-tone='danger'] {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+}
+
+.avo-pill[data-tone='neutral'],
+.avo-pill[data-tone='quiet'] {
+  background: var(--avo-surface-alt2);
+  color: var(--avo-text-muted-strong);
+}
+
+/* -------------------------------------------------------------- info strip */
+
+.avo-info {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: var(--avo-brand-tint);
+  border-radius: 12px;
+  padding: 13px 16px;
+}
+
+.avo-info__icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--avo-brand-deep);
+}
+
+.avo-info__text {
+  font-size: 13px;
+  color: var(--avo-brand-deeper);
+  line-height: 1.5;
 }
