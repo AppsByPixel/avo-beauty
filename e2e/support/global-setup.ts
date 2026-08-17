@@ -106,7 +106,53 @@ function assertTypesBuilt(): void {
   if (existsSync(join(repoRoot, 'packages', 'types', 'dist', 'index.js'))) return;
   throw new Error(
     'packages/types has not been built, so the mock API cannot start.\n' +
-      'Run:  pnpm --filter @avo/types build     (or `pnpm build` for the whole workspace)',
+      'Run:  pnpm --filter @avo/types build     (or `pnpm build` for the whole workspace)' +
+      uninstalledPackagesNote(),
+  );
+}
+
+/**
+ * A WORKSPACE PACKAGE WITH NO `node_modules` IS NOT A TEST FAILURE, AND IT READS
+ * EXACTLY LIKE ONE.
+ *
+ * Lane A lost time to this today: after a worktree rebase `apps/dashboard` had no
+ * `node_modules`, `pnpm check` died in that package's typecheck before a single
+ * spec ran, and the output looked like the suite had broken. It had not — the
+ * tree was simply not installed.
+ *
+ * `pnpm install` is the answer every time, and it costs one `existsSync` per
+ * package to be able to say so. Deliberately ADVISORY: it appends a line to
+ * failures this file already raises and prints a warning at startup, and it never
+ * fails a run on its own. An uninstalled package that this suite does not need is
+ * somebody else's problem, and turning it into a red e2e run would be reporting a
+ * housekeeping problem as a test result — the habit the run-database work was
+ * about breaking.
+ */
+function uninstalledWorkspacePackages(): string[] {
+  const candidates = [
+    ['packages', 'types'],
+    ['packages', 'tokens'],
+    ['packages', 'mock'],
+    ['apps', 'wallet'],
+    ['apps', 'scanner'],
+    ['apps', 'dashboard'],
+    ['api'],
+    ['e2e'],
+  ];
+  return candidates
+    .map((parts) => join(repoRoot, ...parts))
+    .filter((dir) => existsSync(join(dir, 'package.json')) && !existsSync(join(dir, 'node_modules')))
+    .map((dir) => dir.slice(repoRoot.length + 1));
+}
+
+function uninstalledPackagesNote(): string {
+  const missing = uninstalledWorkspacePackages();
+  if (missing.length === 0) return '';
+  return (
+    `\n\nAND FIRST: ${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} no ` +
+    '`node_modules`. That is an uninstalled tree, not a broken suite — a fresh worktree or a ' +
+    'rebase that added a package does this, and every task in it fails before any test runs.\n' +
+    'Run:  pnpm install'
   );
 }
 
@@ -142,6 +188,15 @@ async function nameRunDatabase(): Promise<void> {
 
 export async function setup(): Promise<void> {
   await nameRunDatabase();
+
+  const uninstalled = uninstalledWorkspacePackages();
+  if (uninstalled.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[lane D] ${uninstalled.join(', ')} ${uninstalled.length === 1 ? 'has' : 'have'} no ` +
+        'node_modules. If anything below fails, run `pnpm install` before reading it as a defect.',
+    );
+  }
 
   const external = process.env.E2E_BASE_URL;
   if (external) {

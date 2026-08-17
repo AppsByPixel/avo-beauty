@@ -266,6 +266,10 @@ const SALON_ROUTES: SalonRoute[] = [
   // so tenancy was proven before this list was updated; only the hand-written
   // half was stale.
   { method: 'GET', template: '/salons/{id}/artists' },
+  // Lane A's customer-facing roster. Same story a third time: the auto-discovering
+  // sibling passed on it the moment it landed, and lane A independently confirmed a
+  // member on another salon's `/artists/bookable` gets 403. Only this half was stale.
+  { method: 'GET', template: '/salons/{id}/artists/bookable' },
   { method: 'GET', template: '/salons/{id}/audit' },
   { method: 'GET', template: '/salons/{id}/activity' },
   { method: 'GET', template: '/salons/{id}/loyalty' },
@@ -1136,6 +1140,7 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'GET /salons/:id/bookings',
       'GET /salons/:id/services',
       'GET /salons/:id/artists',
+      'GET /salons/:id/artists/bookable',
       'GET /salons/:id/audit',
       'GET /salons/:id/activity',
       'GET /salons/:id/loyalty',
