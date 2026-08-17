@@ -134,6 +134,13 @@
       "when": 1786940800000,
       "tag": "0018_phone_change_challenge",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786940900000,
+      "tag": "0019_policies_and_support",
+      "breakpoints": true
     }
   ]
 }

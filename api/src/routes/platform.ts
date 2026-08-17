@@ -18,14 +18,22 @@
  * charge time, so a stale banner cannot cause a wrong charge.
  */
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
-import { badRequest, conflict, notFound } from '../http/errors';
+import {
+  requireDashboardPerm,
+  requireMember,
+  requirePrincipal,
+  requireSameSalon,
+} from '../auth/principal';
+import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { db } from '../db/client';
+import { legalDocumentSet, supportConfig, supportTicket, supportTopic } from '../db/schema/legal';
+import { member } from '../db/schema/member';
 import { branch } from '../db/schema/salon';
+import { transaction } from '../db/schema/transaction';
 import { boost, happyHour, REWARD_KEYS } from '../db/schema/promotion';
 import {
   hasBeenApplied,
@@ -39,6 +47,60 @@ const HHMM_OR_END_OF_DAY = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
 
 function happyHourId(): string {
   return `HH-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
+
+/** "SUP-48263" — api-contract.md § SupportTicket. Shown to the customer verbatim. */
+function ticketId(): string {
+  return `SUP-${Math.floor(Math.random() * 90_000 + 10_000)}`;
+}
+
+/** api-contract.md rule 5: "Deduplicate an identical message inside 5 minutes". */
+const TICKET_DEDUPE_MINUTES = 5;
+
+/**
+ * The published set, on the wire.
+ *
+ * `effectiveFrom` is a `date` column and comes back as "YYYY-MM-DD" already —
+ * emitted as-is rather than pushed through a Date, which would re-interpret a
+ * calendar day in the process zone and can move it. The clients render it as
+ * "Last updated 1 July 2026 · v3".
+ */
+function serialiseLegalSet(row: typeof legalDocumentSet.$inferSelect) {
+  return {
+    version: row.version,
+    effectiveFrom: row.effectiveFrom,
+    publishedAt: row.publishedAt.toISOString(),
+    publishedBy: row.publishedBy,
+    docs: row.docs,
+  };
+}
+
+/**
+ * api-contract.md § SupportTicket. `member` is the customer's NAME, which the
+ * contract carries beside `memberId` so a staffed queue can render a person
+ * rather than an id.
+ */
+async function serialiseTicket(row: typeof supportTicket.$inferSelect) {
+  const [m] = await db
+    .select({ name: member.name })
+    .from(member)
+    .where(eq(member.id, row.memberId))
+    .limit(1);
+
+  return {
+    id: row.id,
+    memberId: row.memberId,
+    member: m?.name ?? '',
+    topicId: row.topicId,
+    /** Resolved server-side from the topic. Never echoed from the request. */
+    route: row.route,
+    message: row.message,
+    ref: row.ref,
+    transactionId: row.transactionId,
+    via: row.via,
+    at: row.createdAt.toISOString(),
+    status: row.status,
+  };
 }
 
 /**
@@ -460,6 +522,224 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
       return reply.code(204).send();
     },
   );
+
+  // ======================================================================
+  // THE LEGAL SET — non-negotiable #10.
+  // ======================================================================
+
+  /**
+   * `GET /v1/platform/policies` — what the wallet's Terms screen renders.
+   *
+   * "The customer app holds no legal copy. It renders the published policy set
+   * from the API and stamps the version." Lane B built the screen with no
+   * fallback branch and no bundled copy, which made the absence of this
+   * endpoint an empty screen rather than a hidden one. This is what fills it.
+   *
+   * PUBLISHED ONLY, AND THE OMISSION OF `draft` IS THE FEATURE.
+   * api-contract.md § LegalDocumentSet: "Editing writes to `draft`; nothing
+   * reaches a phone until publish." The owner console's `GET` answers
+   * `{ published, draft }`; this is the customer's read and answers
+   * `{ published }`. A draft served to a wallet is unreviewed legal text in
+   * front of a customer, and `consent: true` documents among it would be
+   * consent collected against wording counsel has not seen.
+   *
+   * `?version=` RESOLVES AN OLD SET, because `member.policyVersion` refers to
+   * one and support has to be able to read what she actually agreed to. Without
+   * it the stamp is a number nobody can turn back into a document.
+   *
+   * Readable by any authenticated principal: staff need the same text to answer
+   * a question about it, and none of it is tenant-specific — the set is
+   * platform-wide, which is why it hangs off `/v1/platform` and not off a salon.
+   */
+  app.get('/v1/platform/policies', async (req, reply) => {
+    requirePrincipal(req);
+
+    const raw = (req.query as Record<string, unknown> | undefined)?.version;
+    let wanted: number | null = null;
+    if (raw !== undefined && raw !== '') {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n <= 0) {
+        throw badRequest('invalid_version', 'version must be a whole number greater than zero.');
+      }
+      wanted = n;
+    }
+
+    const rows = await db
+      .select()
+      .from(legalDocumentSet)
+      .where(wanted === null ? undefined : eq(legalDocumentSet.version, wanted))
+      .orderBy(desc(legalDocumentSet.version))
+      .limit(1);
+
+    const set = rows[0];
+    if (!set) {
+      // A specific version that was never published is a 404. NO published set
+      // at all is a 503: the deployment is incomplete, the caller did nothing
+      // wrong, and a client must not read it as "there are no terms".
+      if (wanted !== null) throw notFound('unknown_policy_version', 'No such policy version.');
+      throw serviceUnavailable(
+        'policies_not_published',
+        'The policy set has not been published yet.',
+      );
+    }
+
+    return reply.send({ published: serialiseLegalSet(set) });
+  });
+
+  // ======================================================================
+  // SUPPORT — non-negotiable #11.
+  // ======================================================================
+
+  /**
+   * The Contact us form's channels, hours and topics.
+   *
+   * Every topic carries its `route`, and serving it is deliberate rather than
+   * careless: the client does not USE it — `POST /v1/support/tickets` below
+   * ignores any route it is sent — but the wallet does tell the customer who
+   * she is writing to ("this goes to the salon" / "this goes to AVO"), and it
+   * cannot say that truthfully from a field it was never given. Reading it is
+   * fine; sending it back is what #11 forbids.
+   */
+  app.get('/v1/platform/support', async (req, reply) => {
+    requirePrincipal(req);
+
+    const [channels] = await db.select().from(supportConfig).limit(1);
+    if (!channels) {
+      throw serviceUnavailable(
+        'support_not_configured',
+        'Support channels have not been configured yet.',
+      );
+    }
+
+    const topics = await db
+      .select()
+      .from(supportTopic)
+      .where(eq(supportTopic.active, true))
+      .orderBy(supportTopic.position);
+
+    return reply.send({
+      channels: {
+        whatsapp: channels.whatsapp,
+        email: channels.email,
+        hoursEn: channels.hoursEn,
+        hoursAr: channels.hoursAr,
+        replyEn: channels.replyEn,
+        replyAr: channels.replyAr,
+      },
+      topics: topics.map((t) => ({ id: t.id, route: t.route, en: t.en, ar: t.ar })),
+    });
+  });
+
+  /**
+   * `POST /v1/support/tickets` — NON-NEGOTIABLE #11, in one line of code.
+   *
+   *     route: topic.route
+   *
+   * Never `body.route`. A client-supplied route lands a wallet dispute in the
+   * salon's inbox, and the customer's money question is then answered by the
+   * merchant she is disputing. A `route` in the body is IGNORED rather than
+   * refused — the same treatment `POST /campaigns` gives a client-supplied
+   * `status`, and for the same reason: the field is not the client's to have an
+   * opinion about, so there is nothing to negotiate over.
+   *
+   * The topic must EXIST. An unknown `topicId` is a 400 naming the list rather
+   * than a ticket routed to a default, because "route it somewhere sensible"
+   * is the decision this endpoint exists to take away from guesswork.
+   *
+   * RULE 5 — "Deduplicate an identical message inside 5 minutes rather than
+   * opening a second ticket." A double-tapped Send is the scanner's double scan
+   * in another costume: the customer gets the SAME ticket id back, because two
+   * reference numbers for one question is a customer told two different things
+   * by two different agents.
+   *
+   * RULE 3 — a `ref` matching one of HER OWN transactions is linked. Scoped to
+   * her: an unscoped lookup would let anyone confirm whether a receipt number
+   * exists by watching whether it linked.
+   */
+  app.post('/v1/support/tickets', async (req, reply) => {
+    const p = requireMember(req);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const topicId = requireString(body.topicId, 'topicId', 100);
+    const message = requireString(body.message, 'message', 4000);
+    const ref = typeof body.ref === 'string' ? body.ref.trim().slice(0, 100) : '';
+    const via = body.via ?? 'wa';
+    if (via !== 'wa' && via !== 'email') {
+      throw badRequest('invalid_via', 'via must be wa or email.');
+    }
+
+    const [topic] = await db
+      .select()
+      .from(supportTopic)
+      .where(and(eq(supportTopic.id, topicId), eq(supportTopic.active, true)))
+      .limit(1);
+    if (!topic) {
+      const known = await db
+        .select({ id: supportTopic.id })
+        .from(supportTopic)
+        .where(eq(supportTopic.active, true))
+        .orderBy(supportTopic.position);
+      throw badRequest(
+        'unknown_topic',
+        `Pick a topic from the list: ${known.map((t) => t.id).join(', ')}.`,
+      );
+    }
+
+    // Rule 5, before anything is written.
+    const since = new Date(Date.now() - TICKET_DEDUPE_MINUTES * 60_000);
+    const [duplicate] = await db
+      .select()
+      .from(supportTicket)
+      .where(
+        and(
+          eq(supportTicket.memberId, p.id),
+          eq(supportTicket.topicId, topic.id),
+          eq(supportTicket.message, message),
+          gte(supportTicket.createdAt, since),
+        ),
+      )
+      .limit(1);
+    if (duplicate) return reply.send(await serialiseTicket(duplicate));
+
+    // Rule 3. Scoped to her own transactions.
+    let transactionId: string | null = null;
+    if (ref) {
+      const [t] = await db
+        .select({ id: transaction.id })
+        .from(transaction)
+        .where(and(eq(transaction.id, ref), eq(transaction.memberId, p.id)))
+        .limit(1);
+      transactionId = t?.id ?? null;
+    }
+
+    const [row] = await db
+      .insert(supportTicket)
+      .values({
+        id: ticketId(),
+        memberId: p.id,
+        salonId: p.salonId,
+        topicId: topic.id,
+        // ---- NON-NEGOTIABLE #11 ----
+        // From the TOPIC. `body.route` is never read, anywhere in this handler.
+        route: topic.route,
+        message,
+        ref,
+        transactionId,
+        via,
+      })
+      .returning();
+    if (!row) throw conflict('ticket_not_created', 'That message could not be sent. Try again.');
+
+    /**
+     * NOT an audit_log row. `audit_log` is the salon's record of authority and
+     * money being spent, filtered by Money / Rules / Access / Risk, and it is
+     * readable by any merchant holding the right permission. A customer's
+     * support message — very often a complaint ABOUT that merchant, and
+     * routed to AVO precisely so the merchant does not see it — has no
+     * business in it. The ticket row is its own record.
+     */
+    return reply.send(await serialiseTicket(row));
+  });
 
   /** perms.marketing. Creates `pending` and nothing else, ever. */
   app.post<{ Params: { id: string } }>('/v1/salons/:id/campaigns', async (req, reply) => {

@@ -34,6 +34,8 @@ import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { fils } from '@avo/types';
+import { PUBLISHED_LEGAL_SET, SUPPORT_CONFIG } from './legalSeed';
+import { legalDocumentSet, supportConfig, supportTopic } from './schema/legal';
 import { boost, happyHour } from './schema/promotion';
 import { branch, salon } from './schema/salon';
 import { artist, type ArtistWindows } from './schema/artist';
@@ -152,6 +154,74 @@ async function seed(): Promise<void> {
     hashSecret(STAFF_PIN),
     hashSecret(HESSA_PIN),
   ]);
+
+  /**
+   * THE LEGAL SET FIRST, BEFORE ANY MEMBER.
+   *
+   * Not because a foreign key demands it — `member.policy_version` is a plain
+   * integer — but because the ordering states the dependency that actually
+   * exists. Non-negotiable #10 makes the stamped version a claim about which
+   * words a customer agreed to, and both seeded members carry
+   * `policyVersion: 3`. Seeding them before the set they point at is how every
+   * member row came to reference a document the API could not produce.
+   *
+   * `onConflictDoNothing` on the version, never an update. A published set is
+   * immutable — that is the whole reason every version is kept — so a re-run of
+   * this seed must not quietly rewrite the text a stored consent refers to.
+   * Republishing is an INSERT at a new version, from the owner console.
+   */
+  await db
+    .insert(legalDocumentSet)
+    .values({
+      version: PUBLISHED_LEGAL_SET.version,
+      effectiveFrom: PUBLISHED_LEGAL_SET.effectiveFrom,
+      /**
+       * `"2026-06-01T09:00"` in the design file is a NAIVE wall clock, and
+       * `new Date()` on a naive string resolves it in the PROCESS zone. That
+       * makes the published timestamp a different instant on every machine
+       * that runs this seed — it came out as 04:00Z here and would be 09:00Z in
+       * CI, for a value clients render as "published at". Same class of bug as
+       * the one `salon.timezone` exists to prevent, and the same fix: name the
+       * zone instead of inheriting one. AVO publishes from Kuwait, UTC+3, no
+       * DST.
+       */
+      publishedAt: new Date(`${PUBLISHED_LEGAL_SET.publishedAt}:00+03:00`),
+      publishedBy: PUBLISHED_LEGAL_SET.publishedBy,
+      docs: PUBLISHED_LEGAL_SET.docs,
+    })
+    .onConflictDoNothing({ target: legalDocumentSet.version });
+
+  // AVO's support channels and the Contact us topic list. Unlike the legal set
+  // these are live on save — api-contract.md: "unlike legal documents there is
+  // no draft/publish step, because nothing here is a legal representation" — so
+  // the seed keeps them current rather than leaving the first write standing.
+  await db
+    .insert(supportConfig)
+    .values({ id: 'avo', ...SUPPORT_CONFIG.channels })
+    .onConflictDoUpdate({
+      target: supportConfig.id,
+      set: { ...SUPPORT_CONFIG.channels, updatedAt: new Date() },
+    });
+
+  for (const [position, topic] of SUPPORT_CONFIG.topics.entries()) {
+    await db
+      .insert(supportTopic)
+      .values({ id: topic.id, route: topic.route, en: topic.en, ar: topic.ar, position })
+      .onConflictDoUpdate({
+        target: supportTopic.id,
+        // `route` is included on purpose: it is AVO's answer to "who handles
+        // this", and a fixture drifting from design/avo-promotions.js would
+        // make non-negotiable #11 untestable against the real routing table.
+        set: {
+          route: topic.route,
+          en: topic.en,
+          ar: topic.ar,
+          position,
+          active: true,
+          updatedAt: new Date(),
+        },
+      });
+  }
 
   await db
     .insert(salon)

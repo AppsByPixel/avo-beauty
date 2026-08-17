@@ -213,7 +213,19 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     req.url.startsWith('/topups') ||
     req.url === '/bookings' ||
     req.url.startsWith('/bookings?') ||
-    req.url.startsWith('/bookings/')
+    req.url.startsWith('/bookings/') ||
+    /**
+     * `POST /v1/support/tickets` is the customer writing to support, so it is
+     * `requireMember` like the rest of this block. Without the line it falls
+     * through to the staff branch below and answers 403 "This endpoint is for
+     * customers" to a suite that cannot see why — the endpoint's own gate
+     * refusing the shim's choice of principal.
+     *
+     * NOT `/v1/platform/support` or `/v1/platform/policies`: those are readable
+     * by any authenticated principal, so either kind resolves them, and staff
+     * is the useful default there because the dashboard reads them too.
+     */
+    req.url.startsWith('/v1/support/tickets')
   ) {
     const memberId = hasScenario(req, 'lowbal') ? TEST_MEMBER_LOWBAL : TEST_MEMBER;
     return loadMemberPrincipal(db, memberId, 'test-session-member');
