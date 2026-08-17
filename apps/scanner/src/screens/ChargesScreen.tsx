@@ -25,6 +25,23 @@
  * come from, so the row shows what exists (reference, time, amount) and leaves
  * the rest out. Filling them with a lookup per row would be N+1 requests
  * against an endpoint that does not exist either; inventing them is worse.
+ *
+ * THE VOID STATE IS NOW THE SERVER'S, WHICH IT WAS NOT
+ * ====================================================
+ * A void is a compensating `adjustment` row, never an edit of the charge, so
+ * "is this charge voided" is a fact about a DIFFERENT row. The API has always
+ * answered it — a self-join on `reverses_transaction_id` filling `voidedAt` and
+ * `reversedByTransactionId` — and `TransactionSchema` was stripping both.
+ *
+ * With the evidence deleted, this screen could only remember the voids it had
+ * performed itself, in a `voided` map that lives as long as the component. A
+ * reload, a second device, or a colleague's void all produced the same wrong
+ * screen: a refunded charge rendered identically to a live one, with "Void this
+ * charge" underneath it. Tapping that is a 409 in front of a customer.
+ *
+ * So `voidedAt` decides, and the local map only supplies the reason text for a
+ * void taken in this session — the list does not carry a reason, and this
+ * screen does not invent one.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -220,7 +237,14 @@ export function ChargesScreen({
       {load.state === 'ready' && load.rows.length > 0 && (
         <View style={styles.list}>
           {load.rows.map((row) => {
+            // The reason we sent, if the void happened in THIS session. The
+            // server is the authority on whether the charge is voided at all —
+            // `voidedAt` covers the reload, the second device, and the
+            // colleague who voided it a minute ago. The local reason only ever
+            // makes the sentence more specific, never makes it true.
             const reason = voided[row.id];
+            const voidedAt = row.voidedAt;
+            const isVoided = voidedAt !== null || reason !== undefined;
             return (
               <View key={row.id} style={styles.card} testID={`charge-${row.id}`}>
                 <View style={styles.cardTop}>
@@ -235,15 +259,21 @@ export function ChargesScreen({
                   </View>
                   <Money
                     amount={fils(Math.abs(row.amountFils))}
-                    figureStyle={[display(16, '600'), reason ? styles.struck : null]}
+                    figureStyle={[display(16, '600'), isVoided ? styles.struck : null]}
                     hideUnit
                   />
                 </View>
 
-                {reason ? (
+                {isVoided ? (
                   <View style={styles.voidedNote}>
                     <View style={styles.voidedDot} />
-                    <Text style={[ui(12), styles.voidedText]}>{copy.voidedNote(reason)}</Text>
+                    <Text style={[ui(12), styles.voidedText]}>
+                      {reason
+                        ? copy.voidedNote(reason)
+                        : voidedAt
+                          ? copy.voidedAtNote(timeOf(voidedAt))
+                          : null}
+                    </Text>
                   </View>
                 ) : (
                   canVoid &&
@@ -280,8 +310,19 @@ export function ChargesScreen({
   );
 }
 
-/** The 15-minute window, computed from the row's own timestamp. */
+/**
+ * Voidable means inside the 15-minute window AND not already voided.
+ *
+ * The second half is new, and it is the half that was a defect. `voidedAt` was
+ * being stripped by the contract, so this function could only ask about the
+ * clock; a charge voided ten minutes ago came back from the server looking
+ * exactly like a live one and the screen offered "Void this charge" on it. The
+ * staff member tapped it in front of the customer and got an error for doing
+ * what the screen invited. Local `voided` state hid it within a session and did
+ * nothing across a reload, a second device, or a void taken by a colleague.
+ */
 function isVoidable(row: ChargeRow): boolean {
+  if (row.voidedAt !== null) return false;
   return Date.now() - new Date(row.createdAt).getTime() < VOID_WINDOW_MS;
 }
 

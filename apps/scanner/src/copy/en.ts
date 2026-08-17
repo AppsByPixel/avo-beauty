@@ -127,8 +127,17 @@ export const copy = {
   chargeBy: (time: string, by: string) => `${time} · by ${by}`,
   /** :263 */
   voidThis: 'Void this charge',
-  /** :266 */
+  /** :266 — the void this session, where we still hold the reason we sent. */
   voidedNote: (reason: string) => `Voided · refunded to wallet · ${reason}`,
+  /**
+   * The same charge, read back from the server on a later load.
+   *
+   * `GET /charges` serves `voidedAt` but not the reason — the reason lives on
+   * the reversal's audit row, not on this list. So the sentence states the time
+   * instead of inventing a reason, and it is the time of the REVERSAL, which is
+   * what "when was this refunded" means to whoever is asking.
+   */
+  voidedAtNote: (time: string) => `Voided ${time} · refunded to wallet`,
 
   // --------------------------------------------------------------- locked --
   /** :284 */
