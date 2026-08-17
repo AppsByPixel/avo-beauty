@@ -161,15 +161,18 @@ export interface TopUpIntentRow {
 
 /**
  * The FULL wire shape, exactly api-contract.md § TopUpIntent, commission
- * included. Merchant and platform views, and the `POST /topups` response.
+ * included. MERCHANT AND PLATFORM VIEWS ONLY.
  *
- * The tension this comment used to flag — the contract calls the fee
- * "shown to the merchant not the customer" while listing `feeFils` on a shape a
- * customer reads — is now resolved for the read side. See
- * `serialiseIntentForCustomer` below. What is NOT yet resolved is `POST /topups`,
- * which is equally customer-facing and still answers with this shape; Lane D's
- * `money.test.ts` commission sweep asserts `feeFils` on that response, so the two
- * cannot move separately. Flagged in the lane report.
+ * No customer-facing endpoint returns this. `GET /topups/{id}` and `POST
+ * /topups` both project through `serialiseIntentForCustomer` below, so the
+ * commission reaches a merchant surface and nothing else.
+ *
+ * The tension this comment used to flag is resolved on both sides now. The
+ * read side went first; the write side was blocked because Lane D's
+ * `money.test.ts` asserted `feeFils` on the `POST /topups` response. Those five
+ * specs have been restated against `topup_intent.fee_fils` — the column, where
+ * the number actually lives and where a serialiser cannot move it — so the two
+ * endpoints no longer have to move separately, and both have moved.
  */
 export interface TopUpIntentView {
   id: string;
@@ -317,7 +320,7 @@ export async function createTopUp(
   db: Db,
   input: CreateTopUpInput,
   ctx: CreateTopUpContext,
-): Promise<TopUpIntentView> {
+): Promise<TopUpIntentPublic> {
   return db.transaction(async (tx) => {
     const keyId = await claimKey(tx, ctx.idempotency);
 
@@ -451,7 +454,20 @@ export async function createTopUp(
 
     if (!row) throw conflict('topup_not_open', 'That top-up is no longer open.');
 
-    const view = serialiseIntent(row as TopUpIntentRow);
+    /**
+     * THE CUSTOMER SHAPE — AND THE STORED REPLAY BODY IS THE SAME OBJECT.
+     *
+     * Projecting only at the `return` would have left the commission in the
+     * idempotency record, and `routes/topups.ts` answers a lost unique-index
+     * race by replaying `stored.body` verbatim. The leak would then be absent on
+     * the first call and present on every retry — the worst version of it,
+     * because a retry is the path nobody re-reads.
+     *
+     * So the projection happens once, above the store, and the response and its
+     * replay are `TopUpIntentPublicSchema` by construction rather than by two
+     * call sites agreeing.
+     */
+    const view = serialiseIntentForCustomer(row as TopUpIntentRow);
     await completeKey(tx, keyId, { status: 200, body: view });
     return view;
   });
