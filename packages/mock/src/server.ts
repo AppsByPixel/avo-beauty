@@ -497,6 +497,10 @@ app.post('/charges', async (req, reply) => {
     status: 'settled',
     reference: `AVO-CHG-${Math.floor(Math.random() * 9000 + 1000)}`,
     createdAt: new Date().toISOString(),
+    // A charge is not voided at the moment it settles. The real API left-joins
+    // the reversal; the mock has no void history to join to.
+    voidedAt: null,
+    reversedByTransactionId: null,
   };
 
   const result = {

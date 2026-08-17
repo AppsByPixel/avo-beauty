@@ -141,6 +141,14 @@ export const WalletTokenSchema = z.object({
   /** Server-minted, single-use, rotates every 45s. The client NEVER mints this. */
   token: z.string().min(1),
   expiresAt: DateTimeSchema,
+  /**
+   * The string the QR encodes — `avo://pay?m=…&t=…` — minted by the server.
+   *
+   * It was being stripped, so every client re-derived it with `walletTokenUri()`
+   * and none of them was using the authoritative one. Two implementations of a
+   * bearer credential's format is one too many.
+   */
+  uri: z.string().min(1),
 });
 
 /** The string the QR encodes. */
@@ -173,6 +181,16 @@ export const TransactionSchema = z.object({
   /** Gateway ref, shown to the customer on failure. */
   reference: z.string(),
   createdAt: DateTimeSchema,
+  /**
+   * The void state. `voidedAt` is what a list renders — "Voided 14:32" is the
+   * sentence a human reads; `reversedByTransactionId` is what makes it auditable.
+   *
+   * Both were being stripped, on the one surface where a 15-minute reversal
+   * window is the whole feature: the scanner offered "Void this charge" on a
+   * charge already voided, because the contract deleted the evidence.
+   */
+  voidedAt: DateTimeSchema.nullable(),
+  reversedByTransactionId: IdSchema.nullable(),
 });
 
 // --------------------------------------------------------------- top-up ----
@@ -303,10 +321,24 @@ export const AvailabilitySlotSchema = z.object({
   reason: z.enum(['busy', 'booked', 'closed']).optional(),
 });
 
-/** What was removed from the open grid, reported rather than left to be inferred. */
+/**
+ * What was removed from the open grid, reported rather than left to be inferred.
+ *
+ * `from`/`to` are salon-local WALL CLOCK — "10:00" — the same shape as a slot's
+ * `local` and as `HappyHourSchema.from`/`to`. Not instants.
+ *
+ * This schema WAS drift #5, and the fix for #3 created it: I typed these as
+ * `DateTimeSchema` and verified against a day with no bookings, where
+ * `subtracted` is an empty array and nothing is validated. The moment a customer
+ * books, the entire availability response throws.
+ *
+ * A brand-new schema proved against an empty sample is not proved at all. That
+ * is why Lane D's guard now FAILS any probe whose declared arrays come back
+ * empty, rather than passing vacuously.
+ */
 export const SubtractedBlockSchema = z.object({
-  from: DateTimeSchema,
-  to: DateTimeSchema,
+  from: z.string(),
+  to: z.string(),
   reason: z.enum(['busy', 'booked']),
   bookingId: IdSchema.optional(),
 });
@@ -436,6 +468,15 @@ export const StaffUserSchema = z.object({
   branchAccess: z.union([z.literal('all'), z.array(IdSchema)]),
   /** Whether a PIN exists. The PIN itself is hashed and never leaves the server. */
   pinSet: z.boolean(),
+  /** Whether a web password exists. A new invite is `false` until they set one. */
+  passwordSet: z.boolean(),
+  /**
+   * Deactivation, not deletion — a staff row that ever took money cannot be
+   * removed. Both fields were stripped, so the dashboard could not tell a live
+   * account from a retired one through the contract.
+   */
+  active: z.boolean(),
+  deactivatedAt: DateTimeSchema.nullable(),
   perms: StaffPermsSchema,
 });
 
@@ -540,7 +581,15 @@ export const LegalDocumentSetSchema = z.object({
     publishedBy: z.string(),
     docs: z.array(LegalDocSchema),
   }),
-  draft: z.object({ docs: z.array(LegalDocSchema) }),
+  /**
+   * OPTIONAL. `GET /v1/platform/policies` serves `{published}` alone, because a
+   * customer must never receive an unpublished draft — non-negotiable #10.
+   *
+   * Requiring it made `.parse()` THROW on the customer's legal set, so #10 could
+   * not be satisfied through the contract at all. The owner console's editor is
+   * the only reader that gets a draft.
+   */
+  draft: z.object({ docs: z.array(LegalDocSchema) }).optional(),
 });
 
 // --------------------------------------------------------------- support ---
@@ -575,6 +624,12 @@ export const SupportTicketSchema = z.object({
   route: z.enum(['salon', 'avo']),
   message: z.string(),
   ref: z.string(),
+  /**
+   * The charge this dispute is ABOUT, resolved server-side from `ref`. Stripped
+   * until now, which made "Report a problem with this payment" a form that knew
+   * the receipt number and not the payment.
+   */
+  transactionId: IdSchema.nullable(),
   via: z.enum(['wa', 'email']),
   at: DateTimeSchema,
   status: z.enum(['open', 'closed']),

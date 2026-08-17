@@ -84,15 +84,27 @@ Then verify the way CI does. **Two kinds of state lie to you, and wiping one is 
 # 1. Build artifacts — a warm tree has a dist a clean checkout does not
 rm -rf packages/*/dist .turbo
 
-# 2. Database state — a warm database has rows a fresh one does not
+# 2. Rebuild BEFORE touching the database. `seed.ts` imports @avo/types from
+#    dist for the money helpers, so on a genuinely clean tree the seed dies with
+#    ERR_MODULE_NOT_FOUND. This line was missing from the recipe for a day —
+#    Lane D found it by running the recipe as written, which nobody had done.
+pnpm build
+
+# 3. Database state — a warm database has rows a fresh one does not
 docker exec -i avo-postgres psql -U avo -d postgres \
   -c "DROP DATABASE IF EXISTS avo_ci;" -c "CREATE DATABASE avo_ci OWNER avo;"
 export DATABASE_URL="postgres://avo:avo_dev_password@localhost:5433/avo_ci"
 export APP_DATABASE_URL="postgres://avo_app:avo_app_dev_password@localhost:5433/avo_ci"
 pnpm --filter @avo/api run db:migrate && pnpm --filter @avo/api run db:seed
 
-pnpm check
+# 4. Twice. A single green run has been wrong three times: once on a stale dist,
+#    once on a warm database, once on a turbo cache replay that took 14ms.
+pnpm check && pnpm check
 ```
+
+**Do not set `POSTGRES_DB`.** `e2e/support/global-setup.ts` skips minting its per-run
+database when it sees one, which silently puts every concurrent checkout back on shared
+fixtures — the bug that produced four different failure counts on one unchanged tree.
 
 Both halves were learned the hard way, a day apart, and they are the same lesson:
 

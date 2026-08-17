@@ -93,6 +93,8 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'AVO-CHG-9021',
     createdAt: '2026-08-14T19:05:00+03:00',
+    voidedAt: null,
+    reversedByTransactionId: null,
   },
   {
     id: 'TX-8977',
@@ -105,6 +107,8 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'KNET-77120043',
     createdAt: '2026-08-14T11:42:00+03:00',
+    voidedAt: null,
+    reversedByTransactionId: null,
   },
   {
     id: 'TX-8810',
@@ -117,6 +121,8 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'AVO-CHG-8810',
     createdAt: '2026-08-02T17:30:00+03:00',
+    voidedAt: null,
+    reversedByTransactionId: null,
   },
   {
     id: 'TX-8642',
@@ -129,6 +135,8 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'AVO-DEP-8642',
     createdAt: '2026-07-28T15:00:00+03:00',
+    voidedAt: null,
+    reversedByTransactionId: null,
   },
   {
     id: 'TX-8511',
@@ -141,6 +149,8 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'KNET-76988201',
     createdAt: '2026-07-19T13:10:00+03:00',
+    voidedAt: null,
+    reversedByTransactionId: null,
   },
 ];
 
@@ -153,6 +163,9 @@ export const staff: StaffUser[] = [
     role: 'manager',
     branchAccess: 'all',
     pinSet: true,
+    passwordSet: true,
+    active: true,
+    deactivatedAt: null,
     perms: {
       dashboard: true,
       appointments: true,
@@ -173,6 +186,9 @@ export const staff: StaffUser[] = [
     role: 'frontdesk',
     branchAccess: [BRANCH_SALMIYA],
     pinSet: true,
+    passwordSet: true,
+    active: true,
+    deactivatedAt: null,
     // Deliberately restricted — this is the account lane B and D use to prove
     // the locked screen and the 403. Non-negotiable #7.
     perms: {
