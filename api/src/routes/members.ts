@@ -23,6 +23,7 @@ import { badRequest, conflict, notFound, tooManyRequests } from '../http/errors'
 import { serialiseTransactionForCustomer, type TransactionRow } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import { marketingConsentOf, recordConsent } from '../services/consent';
 import { searchMembers } from '../services/memberSearch';
 import { mintToken } from '../services/walletToken';
 import { serialiseMember } from './auth';
@@ -78,6 +79,30 @@ function parseEmail(value: unknown): string | null {
     throw badRequest('invalid_email', 'That does not look like an email address.');
   }
   return trimmed.toLowerCase();
+}
+
+/** The five switches the Account screen draws. */
+const NOTIFICATION_KEYS = new Set(['push', 'remind', 'wa', 'receipt', 'offers']);
+
+/**
+ * The screen-shaped response: four preferences and one consent, together.
+ *
+ * `offers` is flattened to a boolean so the switch has something to bind to,
+ * and `offersConsent` carries the evidence beside it — when, from where, and
+ * under which version of the terms. The client renders the boolean; support and
+ * the send path read the rest. A response that carried only the boolean would
+ * make the event storage pointless to everyone but the database.
+ */
+async function serialiseNotifications(m: typeof member.$inferSelect) {
+  const offers = await marketingConsentOf(db, m.id);
+  return {
+    push: m.notifyPush,
+    remind: m.notifyRemind,
+    wa: m.notifyWa,
+    receipt: m.notifyReceipt,
+    offers: offers.granted,
+    offersConsent: offers,
+  };
 }
 
 async function loadMember(id: string): Promise<typeof member.$inferSelect> {
@@ -210,6 +235,113 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
     });
 
     return reply.send(serialiseMember(after));
+  });
+
+  // ------------------------------------------------------- notifications --
+  /**
+   * The five switches on Account → Notifications, and they are NOT five
+   * booleans. Lane B escalated this rather than inventing a contract, and its
+   * reasoning is the design:
+   *
+   *   `push` and `remind` are plausibly client-owned — but held only on the
+   *   client they are lost on reinstall, which silently re-enables everything
+   *   the customer turned off.
+   *
+   *   `wa` and `receipt` ARE NOT CLIENT-OWNED AT ALL. The server sends both;
+   *   the receipt outbox does not consult a phone before it queues a message.
+   *   A local "off" does not stop a receipt, and the customer has been told it
+   *   did. That is not a lost setting, it is a false statement made to her.
+   *
+   *   `offers` is MARKETING CONSENT, which non-negotiable #8 needs readable on
+   *   the platform send path. It is stored as an append-only EVENT — see
+   *   services/consent.ts — because a boolean cannot answer when she agreed,
+   *   under which terms, or whether she had withdrawn it before, and those are
+   *   the questions asked when somebody wants to know why a campaign arrived.
+   *
+   * So four columns and one event stream, behind one screen-shaped response.
+   *
+   * NO CONTRACT EXISTS FOR THIS. api-contract.md has no notification
+   * preferences and packages/mock serves none; the shape below is new and is
+   * reported to trunk rather than added to the contract from inside this lane.
+   */
+  app.get('/members/me/notifications', async (req, reply) => {
+    const p = requireMember(req);
+    const me = await loadMember(p.id);
+    return reply.send(await serialiseNotifications(me));
+  });
+
+  app.patch('/members/me/notifications', async (req, reply) => {
+    const p = requireMember(req);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rejected = Object.keys(body).filter((k) => !NOTIFICATION_KEYS.has(k));
+    if (rejected.length > 0) {
+      throw badRequest(
+        'not_editable',
+        `Unknown notification switch: ${rejected.join(', ')}. They are ${[...NOTIFICATION_KEYS].join(', ')}.`,
+      );
+    }
+    if (Object.keys(body).length === 0) {
+      throw badRequest('invalid_request', 'Nothing to change.');
+    }
+
+    for (const [key, value] of Object.entries(body)) {
+      if (typeof value !== 'boolean') {
+        throw badRequest('invalid_request', `${key} must be true or false.`);
+      }
+    }
+
+    const me = await loadMember(p.id);
+
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if ('push' in body) patch.notifyPush = body.push;
+    if ('remind' in body) patch.notifyRemind = body.remind;
+    if ('wa' in body) patch.notifyWa = body.wa;
+    if ('receipt' in body) patch.notifyReceipt = body.receipt;
+
+    const offersChanged =
+      'offers' in body && body.offers !== (await marketingConsentOf(db, me.id)).granted;
+
+    const [after] = await db.transaction(async (tx) => {
+      const updated =
+        Object.keys(patch).length > 1
+          ? await tx.update(member).set(patch).where(eq(member.id, me.id)).returning()
+          : [me];
+
+      /**
+       * An event only when the ANSWER changes. Re-sending the same value is a
+       * client re-rendering a screen, not the customer consenting again, and a
+       * trail full of duplicate grants makes the real moment she agreed harder
+       * to find rather than easier.
+       */
+      if (offersChanged) {
+        await recordConsent(tx, {
+          memberId: me.id,
+          salonId: me.salonId,
+          granted: body.offers as boolean,
+          source: 'wallet_account',
+          // The terms in force for her. See services/consent.ts.
+          policyVersion: me.policyVersion,
+          ...clientMeta(req),
+        });
+
+        await writeAudit(tx, p, {
+          salonId: me.salonId,
+          kind: 'access',
+          action: body.offers ? 'Marketing consent given' : 'Marketing consent withdrawn',
+          detail: `Offers ${body.offers ? 'on' : 'off'} · policy v${me.policyVersion}`,
+          source: 'wallet',
+          subjectType: 'member',
+          subjectId: me.id,
+          metadata: { granted: body.offers, policyVersion: me.policyVersion },
+          ...clientMeta(req),
+        });
+      }
+
+      return updated;
+    });
+
+    return reply.send(await serialiseNotifications(after ?? me));
   });
 
   // ------------------------------------------------- the phone change, part 1 --

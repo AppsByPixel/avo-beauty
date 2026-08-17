@@ -141,6 +141,13 @@
       "when": 1786940900000,
       "tag": "0019_policies_and_support",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786941000000,
+      "tag": "0020_notification_preferences",
+      "breakpoints": true
     }
   ]
 }
