@@ -58,7 +58,7 @@ function emitCss(): string {
    * Flattened as `--avo-<group>-<key>-<field>` because CSS has no nesting here:
    * `tier.gold.pillBg` becomes `--avo-tier-gold-pill-bg`.
    */
-  for (const group of ['tier', 'plan', 'dark'] as const) {
+  for (const group of ['tier', 'plan', 'dark', 'audit'] as const) {
     const entries = raw[group] as Record<string, unknown> | undefined;
     if (!entries) continue;
     lines.push('');

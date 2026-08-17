@@ -37,6 +37,45 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### The contract was silently deleting the cancellation window
+
+**What.** `BookingSchema` was missing five fields the API sends, one of them
+`changeableUntil` — the entire one-hour rule, as an instant.
+
+**Why it is worse than a missing type.** Zod does not merely *fail to type* an undeclared
+field; `.parse()` **strips it**. So the API sent the deadline, the contract removed it, and
+a client reading `booking.changeableUntil` got `undefined` with no way to know it had ever
+existed. Lane B found it building the Book flow against the real API.
+
+**A schema narrower than the wire is not a smaller contract, it is a lossy one.** That is
+the opposite of what this package is for, and it is the second time the shape has appeared:
+`ArtistSchema` was narrower than the wire too. `AvailabilitySlotSchema` was worse — it
+declared `{time, available, reason?}` against an API sending
+`{startsAt, endsAt, local, available, reason}` inside an envelope carrying `hoursSource`
+and `fallbackReason`, so the fallback that tells a customer *which grid she is looking at*
+never reached her.
+
+Fixed: the five booking fields, a rewritten slot schema, a new `AvailabilityDaySchema` for
+the envelope, and a `ServiceSchema` with the `nameAr` the Book flow needed.
+
+**The check this wants, and does not have:** nothing verifies the contract is not narrower
+than what the API serves. Every drift so far was found by a lane hitting it. A test that
+parses a real response and asserts no key was dropped would have caught all three.
+
+### Two "money moved, screen lied" defects, both found only by driving
+
+Lane B, in the same slice:
+
+- A reschedule refused inside the hour rendered the **cold-load** error — "We couldn't load
+  your wallet" — instead of the one-hour sentence the server had just sent.
+- **A failed `GET /bookings` rendered the empty card.** Caught with the API down mid-drive:
+  the deposit had already left the balance, the activity feed said `Deposit held −5.000`,
+  and the card underneath told the customer she had no appointment.
+
+Neither is visible in code review and neither is a crash. Both are a screen confidently
+stating the opposite of what the money says.
+
+
 ### Turbo was caching test runs, so "green twice in a row" was one run and a 14ms replay
 
 **What.** `turbo.json`'s `test` task had no `"cache": false`. Turbo hashes source files; this

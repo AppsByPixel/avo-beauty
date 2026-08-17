@@ -226,10 +226,32 @@ export const BookingSchema = z.object({
   branchId: IdSchema,
   serviceId: IdSchema,
   startsAt: DateTimeSchema,
+  /** Server-computed. The no-show clock runs from here, not from `startsAt`. */
+  endsAt: DateTimeSchema,
   durationMin: z.number().int().positive(),
   depositFils: FilsSchema.nonnegative(),
   status: z.enum(['deposit_held', 'completed', 'no_show_returned', 'cancelled']),
   source: z.enum(['app', 'google_calendar']),
+
+  /**
+   * The one-hour rule, as an instant rather than a rule the client re-derives.
+   *
+   * THIS FIELD WAS MISSING AND ZOD WAS SILENTLY STRIPPING IT. A schema that
+   * omits a field does not merely fail to type it — `.parse()` removes it from
+   * the object, so a client reading `booking.changeableUntil` got `undefined`
+   * and had no way to know the server had sent it. The entire cancellation
+   * window disappeared between the wire and the screen.
+   *
+   * Found by Lane B building the Book flow against the real API. The lesson is
+   * the one this contract exists for: a schema narrower than the wire is not a
+   * smaller contract, it is a lossy one.
+   */
+  changeableUntil: DateTimeSchema,
+  /** When the no-show job will return the deposit if she does not arrive. */
+  noShowReturnDueAt: DateTimeSchema,
+  /** A reschedule carries the deposit; this counts how often. */
+  rescheduledCount: z.number().int().nonnegative(),
+  calendarSyncState: z.enum(['not_applicable', 'pending', 'synced', 'failed']),
 });
 
 export const ArtistSchema = z.object({
@@ -263,10 +285,45 @@ export const ArtistSchema = z.object({
 });
 
 export const AvailabilitySlotSchema = z.object({
-  time: z.string(),
+  startsAt: DateTimeSchema,
+  endsAt: DateTimeSchema,
+  /** Salon-local wall clock, "16:45" — what the customer is shown. */
+  local: z.string(),
   available: z.boolean(),
   /** The UI strikes unavailable slots through rather than hiding them. */
-  reason: z.enum(['busy', 'booked', 'closed']).optional(),
+  reason: z.enum(['busy', 'booked', 'closed', 'past']).nullable(),
+});
+
+/**
+ * `GET /artists/{id}/availability?date=` returns slots inside an envelope,
+ * because *why* a grid looks the way it does is part of the answer.
+ *
+ * When a Google-sourced artist has no live connection the API falls back to
+ * salon hours and says so. That fallback deliberately over-offers rather than
+ * under-offers — an over-offer is a booking the salon can move, an under-offer
+ * is revenue that silently never happened — so the client has to be able to
+ * tell the customer which grid she is looking at.
+ */
+export const AvailabilityDaySchema = z.object({
+  date: z.string(),
+  slots: z.array(AvailabilitySlotSchema),
+  hoursSource: z.enum(['artist_windows', 'salon_hours']),
+  /** Null unless `hoursSource` is `salon_hours`. Names why. */
+  fallbackReason: z.enum(['calendar_not_connected', 'calendar_unavailable']).nullable(),
+});
+
+export const ServiceSchema = z.object({
+  id: IdSchema,
+  salonId: IdSchema,
+  name: z.string().min(1),
+  /**
+   * The Book flow is the most Arabic-heavy screen in the wallet and it was
+   * rendering Latin service names. Salon, Branch and Artist all carry this;
+   * Service was the omission.
+   */
+  nameAr: z.string().nullable(),
+  priceFils: FilsSchema.positive(),
+  active: z.boolean(),
 });
 
 export const ProductSchema = z.object({
@@ -486,6 +543,8 @@ export type TransactionKind = z.infer<typeof TransactionKindSchema>;
 export type TopUpIntent = z.infer<typeof TopUpIntentSchema>;
 export type TopUpIntentPublic = z.infer<typeof TopUpIntentPublicSchema>;
 export type Booking = z.infer<typeof BookingSchema>;
+export type AvailabilityDay = z.infer<typeof AvailabilityDaySchema>;
+export type Service = z.infer<typeof ServiceSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;
 export type Product = z.infer<typeof ProductSchema>;

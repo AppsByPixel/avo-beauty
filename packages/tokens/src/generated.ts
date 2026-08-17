@@ -220,12 +220,19 @@ export const tokens = {
     "mutedLabel": "Uppercase micro-labels (11px/600) use color.textMutedLabel = rgba(28,27,25,0.6), not 0.45 - 0.45 measures ~3.3:1 and fails at that size. 0.5/0.55 remain the muted body scale. (Token added: the rule mandated 0.6 and the design uses it 154 times, but no 0.6 token existed, so every micro-label would have been hardcoded.)",
     "whatsapp": "WhatsApp green #25D366 is a fixed third-party brand colour: white text on it is 1.98:1. Label WhatsApp buttons with #0B3D1E.",
     "borderControl": "Secondary control borders (bordered buttons, steppers, chips) use color.borderControl = rgba(28,27,25,0.14), used 111 times across the design. color.hairline (0.08) is a row divider and makes a bordered control look unbordered.",
-    "darkSurfaces": "The staff scanner frame and the owner-console sidebar are dark by design, not by a theme. `dark.focusRing` #A9BBA6 is mandatory there: interaction-spec.md section 2 says #5A6B58 does not carry against #1C1B19. These are NOT a dark-mode palette - dark mode is out of scope."
+    "darkSurfaces": "The staff scanner frame and the owner-console sidebar are dark by design, not by a theme. `dark.focusRing` #A9BBA6 is mandatory there: interaction-spec.md section 2 says #5A6B58 does not carry against #1C1B19. These are NOT a dark-mode palette - dark mode is out of scope.",
+    "auditCategories": "The audit log's Money / Rules / Access / Risk pills. Rules and Access get their own tokens because the design's values collide with plan.pro and tier.silver, which are a subscription badge and a loyalty tier - recolouring the Pro badge must not silently recolour audit rows. Money reuses color.warnText and Risk the danger tokens by intent, not by borrowing: those are semantically the same thing in both places."
   },
   "dark": {
     "surface": "#131511",
     "accent": "#A7BBA0",
     "focusRing": "#A9BBA6"
+  },
+  "audit": {
+    "rulesBg": "#ECEEF0",
+    "rulesText": "#5f6b73",
+    "accessBg": "#EAE2D6",
+    "accessText": "#8a6d3b"
   }
 } as const;
 
