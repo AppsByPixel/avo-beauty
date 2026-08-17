@@ -160,7 +160,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'settings',
     label: 'Settings',
     to: '/settings',
-    built: false,
+    built: true,
     title: 'Settings',
     subtitle: 'Brand kit, modules, deposits, hours and billing',
     icon: (

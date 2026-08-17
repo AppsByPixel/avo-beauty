@@ -52,7 +52,17 @@ function SignedInShell() {
   const salonQuery = useSalon();
   const salon = salonQuery.data;
   const salonName = salon?.name ?? '—';
-  const branchLabel = salon?.branches[0]?.name ?? '—';
+  /*
+   * `?.` on `branches` too, not only on `salon`.
+   *
+   * `Salon.branches` is required by the type, so this read looked safe. It is
+   * not: `PATCH /salons/{id}` returns the raw row with no `branches` key, and a
+   * response that is typed as a Salon but is not one put `undefined` here and
+   * took the whole shell to its error boundary — from a settings toggle three
+   * components away. The client no longer caches that response (api/settings.ts),
+   * and the shell no longer trusts a required field to be present either.
+   */
+  const branchLabel = salon?.branches?.[0]?.name ?? '—';
   useBrandTheme(salon?.brandColor);
 
   const item = navItemFor(pathname);

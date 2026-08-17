@@ -1270,3 +1270,192 @@ a:hover {
   line-height: 1.5;
   color: var(--avo-warn-text);
 }
+
+/* =============================================================== settings == */
+
+.settings {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.dash[data-bp='narrow'] .settings__pair,
+.dash[data-bp='tablet'] .settings__pair {
+  grid-template-columns: 1fr;
+}
+
+.settings__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.settings__card {
+  padding: 20px;
+}
+
+.settings__card--rows {
+  padding: 8px 22px;
+}
+
+.settings__card--inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings__title {
+  font-size: 17px;
+}
+
+.settings__card--rows .settings__title {
+  padding: 16px 0 4px;
+}
+
+.settings__sub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin: 6px 0 16px;
+  line-height: 1.5;
+}
+
+/*
+ * The "this is real, and it is not editable yet" strip.
+ *
+ * Warn, not danger: nothing has failed and nothing is wrong with the salon. It
+ * is a limit of the workspace, and the merchant's next step is to ask AVO.
+ */
+.settings__notice {
+  background: var(--avo-warn-bg);
+  color: var(--avo-warn-text);
+  border-radius: 11px;
+  padding: 10px 13px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 10px 0 4px;
+}
+
+.settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.settings__row-name {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.settings__row-body {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.settings__deposit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings__deposit-unit {
+  font-size: 14px;
+  color: var(--avo-text-muted);
+}
+
+.settings__deposit-range {
+  font-size: 12px;
+  color: var(--avo-ui-ink-38);
+  margin-left: auto;
+}
+
+.settings__foot {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+}
+
+.settings__hours-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 13.5px;
+}
+
+.settings__hours-row--divided {
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__hours-label {
+  color: var(--avo-text-muted-strong);
+}
+
+.settings__hours-value {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+}
+
+.settings__note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--avo-ui-ink-38);
+}
+
+.settings__branches {
+  margin-top: 6px;
+}
+
+.settings__branch {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__branch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+}
+
+.settings__branch-name {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings__branch-id {
+  font-family: var(--avo-font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 4px 10px;
+  border-radius: 8px;
+}

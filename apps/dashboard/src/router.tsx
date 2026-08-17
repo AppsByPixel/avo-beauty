@@ -10,6 +10,7 @@ import { SCOPES, type AuthScope } from './auth/scopes.js';
 import { Loyalty } from './routes/Loyalty.js';
 import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
+import { Settings } from './routes/Settings.js';
 import { SignIn } from './routes/SignIn.js';
 import { Team } from './routes/Team.js';
 import { MerchantShell } from './shell/MerchantShell.js';
@@ -74,6 +75,7 @@ const SECTIONS = [
   { path: '/overview', component: Overview },
   { path: '/team', component: Team },
   { path: '/loyalty', component: Loyalty },
+  { path: '/settings', component: Settings },
 ] as const;
 
 const sectionRoutes = SECTIONS.map(({ path, component }) =>
