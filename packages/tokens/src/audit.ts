@@ -43,17 +43,14 @@
  *   - The runtime white-label derivation. `deriveBrandSet` validates its own two
  *     pairings — see derive.ts and derive.test.ts — which is the equivalent
  *     check for salons whose colours do not exist until they onboard.
- *   - `color.textMuted*`, which the JSON declares with NO background, because
- *     these sit on whatever surface a component puts them on. That is a real
- *     limit and it hides a real finding: §2 states `rgba(28,27,25,0.6)` measures
- *     "~5.2:1" and mandates it for 51 uppercase micro-labels, but composited on
- *     the app surface `#FBFAF8` it measures **4.48:1** — marginally UNDER the
- *     4.5 floor it was chosen to clear, and lower still on any darker surface.
- *     Escalated rather than changed: the token is used 154 times across four
- *     surfaces per the JSON's own note, so moving it is a trunk decision. The
- *     one place the JSON *did* declare that pairing — `plan.starter` on
- *     `#F0EEE9`, where 0.6 measured 4.32:1 — was caught by this audit on its
- *     first run and now uses the 0.7 step of the same scale.
+ *   - Any OTHER muted value on an arbitrary surface. `color.textMuted*` are
+ *     declared with no background, so which surfaces they land on is a fact
+ *     about components, not about the token file. `textMutedLabel` is now
+ *     enumerated in `CROSS_GROUP_PAIRS` against the surfaces it actually lands
+ *     on — including the darkest, which is the binding case for dark text — but
+ *     `textMuted`, `textMutedSoft` and `textMutedStrong` are not, because they
+ *     are body-scale values whose sizes make the threshold a judgement rather
+ *     than a lookup. Enumerating a pairing is still a human decision.
  *
  * So this is the floor, not the ceiling. It makes the six known failures
  * impossible to reintroduce and makes a seventh of the same shape fail a test
@@ -95,6 +92,44 @@ export const CROSS_GROUP_PAIRS: ReadonlyArray<{
     textPath: 'brandPresets.lilaLilac.deep',
     bgPath: 'brandPresets.lilaLilac.tint',
     renderedBy: '.avo-label, .avo-pill, .settings__branch-id',
+  },
+  /*
+   * The 11px/600 uppercase micro-label, on every surface it lands on.
+   *
+   * `canvas` is FIRST because it is the binding case and the ordering is the
+   * point: for dark text on a light ground, contrast RISES with the background's
+   * lightness, so the lightest surface is the easiest test and the darkest is the
+   * only one worth clearing. Checking white and stopping is how
+   * `rgba(28,27,25,0.6)` shipped — it cleared 4.5 on pure white at 4.53:1 and
+   * failed on all five real surfaces beneath it.
+   *
+   * `interaction-spec.md` §2 mandates this value for 51 micro-labels and the
+   * JSON's own note counts 154 uses, so it is the single highest-leverage pairing
+   * in the file and the one most worth having a machine watch.
+   */
+  {
+    label: 'muted micro-label on canvas (the darkest surface, the binding case)',
+    textPath: 'color.textMutedLabel',
+    bgPath: 'color.canvas',
+    renderedBy: '11px/600 uppercase labels on the page ground',
+  },
+  {
+    label: 'muted micro-label on surfaceAlt2',
+    textPath: 'color.textMutedLabel',
+    bgPath: 'color.surfaceAlt2',
+    renderedBy: 'segmented-control and pill grounds',
+  },
+  {
+    label: 'muted micro-label on brand tint',
+    textPath: 'color.textMutedLabel',
+    bgPath: 'color.brandTint',
+    renderedBy: 'info banners and tinted cards',
+  },
+  {
+    label: 'muted micro-label on surface',
+    textPath: 'color.textMutedLabel',
+    bgPath: 'color.surface',
+    renderedBy: 'the app surface — what §2 quoted its figure against',
   },
 ];
 

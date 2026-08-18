@@ -8,6 +8,9 @@ import {
 import type { AuthState } from './auth/AuthProvider.js';
 import { SCOPES, type AuthScope } from './auth/scopes.js';
 import { Accounts } from './routes/Accounts.js';
+import { Approvals } from './routes/console/Approvals.js';
+import { ConsoleSignIn } from './routes/ConsoleSignIn.js';
+import { Policies } from './routes/console/Policies.js';
 import { Appointments } from './routes/Appointments.js';
 import { AuditLog } from './routes/AuditLog.js';
 import { Loyalty } from './routes/Loyalty.js';
@@ -17,7 +20,9 @@ import { Overview } from './routes/Overview.js';
 import { Settings } from './routes/Settings.js';
 import { SignIn } from './routes/SignIn.js';
 import { Team } from './routes/Team.js';
+import { ConsoleShell } from './shell/ConsoleShell.js';
 import { MerchantShell } from './shell/MerchantShell.js';
+import { CONSOLE_NAV_ITEMS } from './shell/consoleNavItems.js';
 import { NAV_ITEMS } from './shell/navItems.js';
 
 export interface RouterContext {
@@ -99,9 +104,68 @@ const placeholderRoutes = NAV_ITEMS.filter((item) => !item.built).map((item) =>
   }),
 );
 
+/**
+ * THE OWNER CONSOLE, as a SIBLING of the merchant shell rather than a fork.
+ *
+ * This is what `auth/scopes.ts` has been structured for since the first slice:
+ * "Adding the console means adding the `owner` rows below, a shell component, and
+ * its routes under `/console` — not a second sign-in flow, a second session store,
+ * or a second router." That held. `requireScope` is the same guard with a
+ * different argument, `SCOPES.owner` already carried the paths and the dark theme
+ * flag, and the two sessions coexist because `writeSession` keys storage per
+ * scope.
+ */
+const consoleSignInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: SCOPES.owner.signIn,
+  component: ConsoleSignIn,
+});
+
+const consoleRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'console',
+  beforeLoad: requireScope('owner'),
+  component: ConsoleShell,
+});
+
+const consoleIndexRoute = createRoute({
+  getParentRoute: () => consoleRoute,
+  path: SCOPES.owner.prefix,
+  beforeLoad: () => {
+    throw redirect({ to: SCOPES.owner.home });
+  },
+});
+
+/** Built console sections, paired with `CONSOLE_NAV_ITEMS[].built` for the same
+ *  reason the merchant ones are: a section that is built and a sidebar that says
+ *  so cannot drift apart. */
+const CONSOLE_SECTIONS = [
+  { path: '/console/approvals', component: Approvals },
+  { path: '/console/policies', component: Policies },
+] as const;
+
+const consoleSectionRoutes = CONSOLE_SECTIONS.map(({ path, component }) =>
+  createRoute({ getParentRoute: () => consoleRoute, path, component }),
+);
+
+/** Every other console nav item resolves, so the sidebar never dead-ends. */
+const consolePlaceholderRoutes = CONSOLE_NAV_ITEMS.filter((item) => !item.built).map((item) =>
+  createRoute({
+    getParentRoute: () => consoleRoute,
+    path: item.to,
+    component: () => <NotBuiltYet section={item.title} />,
+  }),
+);
+
 const routeTree = rootRoute.addChildren([
   signInRoute,
+  consoleSignInRoute,
   merchantRoute.addChildren([indexRoute, ...sectionRoutes, ...placeholderRoutes]),
+  consoleRoute.addChildren([
+    consoleIndexRoute,
+    ...consoleSectionRoutes,
+    ...consolePlaceholderRoutes,
+  ]),
 ]);
 
 export const router = createRouter({

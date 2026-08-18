@@ -112,9 +112,19 @@ Three documented exceptions, all intentional:
   on it is 1.98:1, so the label is `#0B3D1E` (≈9:1). Never put white on WhatsApp green.
 
 **Contrast — muted text.** `rgba(28,27,25,0.45)` measured ~3.3:1 on `#FBFAF8` — a fail at the
-11px uppercase micro-label size it was used for. **Now `rgba(28,27,25,0.6)`** on all 51
-uppercase micro-labels across the bundle (~5.2:1). `0.45` survives only on genuinely
-secondary non-label text; `0.5` and `0.55` are unchanged and remain the muted body scale.
+11px uppercase micro-label size it was used for. **Now `rgba(28,27,25,0.65)`** on all 51
+uppercase micro-labels across the bundle (5.26:1 on `#FBFAF8`, 4.91:1 on the darkest surface
+they land on). `0.45` survives only on genuinely secondary non-label text; `0.5` and `0.55`
+are unchanged and remain the muted body scale.
+
+> **This paragraph said `0.6` and `~5.2:1`, and those two cannot both be true.** Composited,
+> `0.6` measures 4.22:1 on `canvas`, 4.32 on `surfaceAlt2`, 4.48 on `surface` and 4.53 on pure
+> white — so the mandated value cleared 4.5:1 on white alone and failed on every real surface,
+> at the one size this paragraph exists to protect. `0.65` is what measures 5.26:1 on
+> `#FBFAF8`, so the figure recorded here was always a measurement of `0.65`; the alpha written
+> beside it was wrong, not the number. Corrected in `design/tokens/avo-tokens.json` and
+> enforced by `packages/tokens/src/audit.test.ts`, which now carries these pairings so the
+> claim cannot drift from the value again.
 
 ---
 

@@ -24,7 +24,7 @@ describe('token contrast audit — every declared text-on-background pair', () =
      * checks nothing. That is the shape of a green run bought with a cast, so the
      * count is pinned first.
      */
-    expect(findings.length).toBeGreaterThanOrEqual(12);
+    expect(findings.length).toBeGreaterThanOrEqual(16);
   });
 
   it('discovers the sibling pairs by structure, not from a hand-written list', () => {
@@ -84,6 +84,11 @@ describe('the six failures this audit was built from stay fixed', () => {
     ['audit.accessText', 3.77],
     ['tier.bronze.pillText', 2.67],
     ['brandPresets.noorRose.deep', 4.41],
+    // The eighth, and the highest-leverage: §2 mandated rgba(28,27,25,0.6) for 51
+    // uppercase micro-labels and claimed ~5.2:1. Composited it cleared 4.5 on
+    // pure white alone (4.53) and failed every real surface. 0.65 is what
+    // actually measures the figure §2 recorded.
+    ['color.textMutedLabel', 4.22],
   ] as const)('%s clears AA, where it used to measure %s:1', (path, wasFailing) => {
     const now = ratioOf(path);
     expect(wasFailing).toBeLessThan(AA_NORMAL_TEXT); // the bug was real

@@ -8,15 +8,47 @@ import {
   type ReactNode,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { signIn as signInRequest, signOut as signOutRequest, type Credentials } from './api.js';
+import {
+  signIn as signInRequest,
+  signInToConsole as signInToConsoleRequest,
+  signOut as signOutRequest,
+  type ConsoleCredentials,
+  type Credentials,
+} from './api.js';
 import { AUTH_SCOPES, type AuthScope } from './scopes.js';
-import { readSession, subscribeToSessions, writeSession, type Session } from './session.js';
+import {
+  readSession,
+  subscribeToSessions,
+  writeSession,
+  type MerchantSession,
+  type OwnerSession,
+  type Session,
+} from './session.js';
+import type { PlatformSections } from './platformAdmin.js';
 
 export interface AuthState {
   /** Sessions by scope. A merchant session and an owner session can coexist. */
   sessions: Partial<Record<AuthScope, Session>>;
   sessionFor: (scope: AuthScope) => Session | null;
-  signIn: (scope: AuthScope, credentials: Credentials, keepSignedIn: boolean) => Promise<Session>;
+  /*
+   * Returns the MEMBER of the union, not the union. A caller that has just signed
+   * a merchant in knows it holds a merchant session, and `SignIn.tsx` reads
+   * `session.salonId` off the result — which does not exist on an owner session
+   * and should not have to be narrowed for.
+   */
+  signIn: (
+    scope: 'merchant',
+    credentials: Credentials,
+    keepSignedIn: boolean,
+  ) => Promise<MerchantSession>;
+  /**
+   * The console's sign-in. Separate because the credential is a PAIR — no salon
+   * — and the endpoint returns a different body. See auth/api.ts.
+   */
+  signInToConsole: (
+    credentials: ConsoleCredentials,
+    keepSignedIn: boolean,
+  ) => Promise<OwnerSession>;
   /** Revokes server-side, then clears locally. Awaitable so a UI can show it. */
   signOut: (scope: AuthScope) => Promise<void>;
 }
@@ -77,15 +109,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * and keeps serving it while a refetch runs, which is exactly the frame where
    * the wrong person is looking at it.
    */
-  const signIn = useCallback(
-    async (scope: AuthScope, credentials: Credentials, keepSignedIn: boolean) => {
-      const session = await signInRequest(scope, credentials);
+  const adopt = useCallback(
+    <T extends Session>(session: T, keepSignedIn: boolean): T => {
       queryClient.clear();
       writeSession(session, keepSignedIn);
-      setSessions((current) => ({ ...current, [scope]: session }));
+      setSessions((current) => ({ ...current, [session.scope]: session }));
       return session;
     },
     [queryClient],
+  );
+
+  const signIn = useCallback(
+    async (scope: 'merchant', credentials: Credentials, keepSignedIn: boolean) => {
+      const session = await signInRequest(scope, credentials);
+      return adopt(session, keepSignedIn);
+    },
+    [adopt],
+  );
+
+  /*
+   * The two scopes coexist: signing in to the console does NOT clear a merchant
+   * session, because `writeSession` is keyed per scope and `SCOPES[].storageKey`
+   * differs. That is deliberate — an AVO founder debugging a salon's workspace
+   * keeps both tabs alive. `queryClient.clear()` still runs on each sign-in,
+   * which is the important half: cached data from whoever was here before must
+   * not be served for a frame to whoever just arrived.
+   */
+  const signInToConsole = useCallback(
+    async (credentials: ConsoleCredentials, keepSignedIn: boolean) => {
+      const session = await signInToConsoleRequest(credentials);
+      return adopt(session, keepSignedIn);
+    },
+    [adopt],
   );
 
   const signOut = useCallback(
@@ -110,9 +165,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessions,
       sessionFor: (scope) => sessions[scope] ?? null,
       signIn,
+      signInToConsole,
       signOut,
     }),
-    [sessions, signIn, signOut],
+    [sessions, signIn, signInToConsole, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -124,11 +180,34 @@ export function useAuth(): AuthState {
   return context;
 }
 
-/** The session for a scope, or a throw. Use inside a scope-guarded route. */
+/**
+ * The session for a scope, or a throw. Use inside a scope-guarded route.
+ *
+ * OVERLOADED ON THE SCOPE, so the return type is the right member of the union
+ * rather than the union itself. Without this every caller would have to narrow a
+ * `Session` it already knows the shape of, and — worse — `useSalonId` below
+ * would compile against an `OwnerSession` that has no salon. The overloads make
+ * the scope argument and the returned shape one decision.
+ */
+export function useSession(scope: 'merchant'): MerchantSession;
+export function useSession(scope: 'owner'): OwnerSession;
+export function useSession(scope: AuthScope): Session;
 export function useSession(scope: AuthScope): Session {
   const session = useAuth().sessionFor(scope);
   if (!session) throw new Error(`No ${scope} session. This route must sit behind requireScope().`);
   return session;
+}
+
+/**
+ * The console admin's section grants.
+ *
+ * The mirror of `useSalonId` for the other scope, and a courtesy in exactly the
+ * same way `session.perms` is: every one of these nine is enforced again by
+ * `requirePlatform` server-side, so hiding a sidebar item is a convenience and
+ * never the control. #7.
+ */
+export function useConsoleSections(): PlatformSections {
+  return useSession('owner').sections;
 }
 
 /**
@@ -140,9 +219,17 @@ export function useSession(scope: AuthScope): Session {
  * survives in four call sites after being deleted from the fifth. There is one
  * place this can be wrong, and it is six lines long.
  *
- * It cannot return an empty value: `Session.salonId` is a required string,
- * rejected at the sign-in boundary and again when read back out of storage. A
- * session with no salon is an authentication failure, not a case to default.
+ * It cannot return an empty value: `MerchantSession.salonId` is a required
+ * string, rejected at the sign-in boundary and again when read back out of
+ * storage. A session with no salon is an authentication failure, not a case to
+ * default.
+ *
+ * AND IT CANNOT BE CALLED FOR THE CONSOLE AT ALL. `OwnerSession` has no
+ * `salonId` — the platform principal has none either, deliberately — so the
+ * overload above makes `useSession('owner').salonId` a type error rather than an
+ * `undefined` that reaches a URL as the string "undefined". Which salon the
+ * console is looking at is a route parameter an admin chose, never a property of
+ * the credential.
  */
 export function useSalonId(): string {
   return useSession('merchant').salonId;
