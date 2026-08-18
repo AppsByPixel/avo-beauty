@@ -45,6 +45,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { knownBug, precondition } from './support/known-bug.js';
 import {
   B_BRANCH,
+  B_STAFF_BRANCH_STRANDED,
+  B_STAFF_BRANCH_SURVIVOR,
   B_STAFF,
   B_STAFF_HANDLE,
   SALON_B,
@@ -73,6 +75,14 @@ const ARTIST_NAME = 'Hessa';
 
 /** ST-B02, Mariam. The Accounts section's target row. */
 const STAFF_TARGET = 'ST-B02';
+
+/**
+ * The two branch-scoped rows the closure-preview identity spec re-scopes, so that
+ * the closure it compares actually has an impact to report. Dedicated because that
+ * spec rewrites their branch access — `STAFF_TARGET` above belongs to Accounts.
+ */
+const BRANCH_SURVIVOR = B_STAFF_BRANCH_SURVIVOR;
+const BRANCH_STRANDED = B_STAFF_BRANCH_STRANDED;
 
 /** A full seven-day week, which is the only shape `PUT …/availability` accepts. */
 function week(overrides: Record<string, { open: boolean; from: string; to: string }> = {}) {
@@ -523,6 +533,146 @@ describe('Settings — the structure of a salon, and it is configurable now', ()
       'DELETE removed the row instead of closing it — its transactions now point at nothing',
     ).toBe('true');
     expect((await readSalon()).branches.map((b) => b.id)).not.toContain(created.id);
+  });
+
+  /**
+   * THE PREVIEW AND THE CLOSE ARE ONE BUILDER, SO PIN THE IDENTITY AND NOT THE FIELDS.
+   *
+   * `GET .../closure-preview` answers what the DELETE would do: who gets re-scoped,
+   * who is left with no branch at all, and how many of this salon's customers have
+   * a deposit held against a booking there. Lane A built both halves on one
+   * `branchClosureImpact`, and lane A verified they agree field-for-field.
+   *
+   * This is the same property as the two doors onto the counter screen, where
+   * `heldDepositFils` was hardcoded `0` on the scan path while the charge read it
+   * for real — the credit line the customer was shown and the credit applied were
+   * different answers, and `services/counter.ts` exists because of it. One identity
+   * assertion protects a shared builder better than two field-by-field specs,
+   * because a field-by-field spec only checks the fields whoever wrote it thought
+   * of, which is exactly how that bug survived.
+   *
+   * THE PREVIEW IS COMPARED AGAINST THE CLOSE OF THE SAME BRANCH, in that order, so
+   * the "would" and the "did" describe one event. Both are taken on a branch this
+   * spec created, so no fixture is closed as a side effect.
+   */
+  it('the closure preview reports exactly what the close then reports — one builder, not two', async () => {
+    const created = await openBranch(probeBranchName('preview'));
+    precondition(created.status === 201, `the create answered ${created.status}: ${created.raw}`);
+
+    /**
+     * GIVE THE CLOSURE SOMETHING TO REPORT, because without this the spec was
+     * VACUOUS AND I PROVED IT. A freshly created branch has no staff and no
+     * bookings, so all four impact fields are empty on both sides — and a deliberate
+     * break that made the preview report `depositHeldBookingsBranchAssumed: 0`
+     * while the close reported the real number DID NOT FAIL. Two empty objects
+     * compare equal no matter how differently they were built.
+     *
+     * Same defect as a refusal probe whose WHERE clause matches nothing, and the
+     * fourth time this suite has produced it. The lesson that generalises: an
+     * identity assertion is only as strong as the difference it could have seen.
+     *
+     * So two staff are scoped onto the branch about to close — one who keeps
+     * another branch and one who does not, which populates `staffRescoped` and
+     * `staffLeftWithNoBranch` respectively. Restored in a `finally`.
+     */
+    psql(`
+      UPDATE staff_user SET branch_access_all = false,
+                            branch_access_ids = ARRAY['${B_BRANCH}', '${created.id}']
+       WHERE id = '${BRANCH_SURVIVOR}';
+      UPDATE staff_user SET branch_access_all = false,
+                            branch_access_ids = ARRAY['${created.id}']
+       WHERE id = '${BRANCH_STRANDED}';
+    `);
+
+    try {
+    const preview = await treq<any>(
+      'GET',
+      `/salons/${SALON_B}/branches/${created.id}/closure-preview`,
+      { token: dashboard },
+    );
+    expect(preview.status, `the preview answered ${preview.status}: ${preview.raw}`).toBe(200);
+
+    // It says the close would go through, which is what makes the comparison below
+    // a comparison of two descriptions of the same event rather than of a refusal.
+    expect(preview.body.closable, `the preview says this branch cannot be closed: ${preview.raw}`).toBe(
+      true,
+    );
+    expect(preview.body.blockedReason).toBeNull();
+
+    const closed = await treq<any>('DELETE', `/salons/${SALON_B}/branches/${created.id}`, {
+      token: dashboard,
+    });
+    expect(closed.status, `the close answered ${closed.status}: ${closed.raw}`).toBe(200);
+
+    /**
+     * THE FOUR IMPACT FIELDS, COMPARED AS A UNIT. Not `closable`, `blockedReason` or
+     * `closedAt` — those describe the preview's own verdict and the close's own
+     * outcome, and are expected to differ.
+     */
+    const impactOf = (body: any) => ({
+      staffRescoped: body.staffRescoped,
+      staffLeftWithNoBranch: body.staffLeftWithNoBranch,
+      depositHeldBookings: body.depositHeldBookings,
+      depositHeldBookingsBranchAssumed: body.depositHeldBookingsBranchAssumed,
+    });
+
+    expect(
+      impactOf(closed.body),
+      'the preview and the close describe the same closure differently. A merchant confirms on ' +
+        'the preview and is told the outcome by the close, so a disagreement means one of the two ' +
+        'sentences she read was false — and the field most likely to drift is the one that counts ' +
+        'money already taken from her customers.',
+    ).toEqual(impactOf(preview.body));
+
+    // And the shapes are the same set of keys, so a field added to one and not the
+    // other is caught even when both happen to be empty on this fixture.
+    for (const field of Object.keys(impactOf(preview.body))) {
+      expect(closed.body, `the close does not carry \`${field}\``).toHaveProperty(field);
+      expect(preview.body, `the preview does not carry \`${field}\``).toHaveProperty(field);
+    }
+
+    /**
+     * `depositHeldBookingsBranchAssumed <= depositHeldBookings`, and it is worth
+     * asserting the relation rather than either number.
+     *
+     * An ASSUMED branch is the NORMAL case for a booking, not the edge one: artists
+     * have no branch column, so `POST /bookings` infers it and comes back
+     * `branch_assumed = true`. A spec expecting the assumed count to be zero, or
+     * treating it as anomalous, would be treating the common path as exceptional.
+     * What must never happen is the assumed count exceeding the total, which would
+     * mean the warning is counting bookings that are not in the set it is warning
+     * about.
+     */
+    expect(
+      preview.body.depositHeldBookingsBranchAssumed,
+      'more deposit-held bookings have an assumed branch than there are deposit-held bookings',
+    ).toBeLessThanOrEqual(preview.body.depositHeldBookings);
+
+    /**
+     * AND THE SAMPLE WAS WORTH COMPARING, asserted rather than assumed — the whole
+     * point of the two staff rows above. Without this the spec could quietly go back
+     * to comparing two empty lists the day the fixture changes.
+     *
+     * The deposit counts are NOT asserted non-zero: salon B seeds no artists, so no
+     * booking can exist there and both numbers are structurally 0. Their non-zero
+     * coverage is `deposit.test.ts`, which works at salon A where the artists are.
+     */
+    expect(
+      preview.body.staffRescoped.length,
+      'no staff were scoped to the closing branch, so this identity assertion compared two empty ' +
+        'lists and would pass however differently the two sides were built',
+    ).toBeGreaterThan(0);
+    expect(
+      preview.body.staffLeftWithNoBranch,
+      'the stranded staff member is missing from the field the merchant most needs to see',
+    ).toContain('Branch Stranded');
+    } finally {
+      psql(`
+        UPDATE staff_user SET branch_access_all = false,
+                              branch_access_ids = ARRAY['${B_BRANCH}']
+         WHERE id IN ('${BRANCH_SURVIVOR}', '${BRANCH_STRANDED}');
+      `);
+    }
   });
 
   it('the LAST open branch cannot be closed — that would be a money outage from a settings screen', async () => {
