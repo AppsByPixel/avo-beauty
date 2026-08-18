@@ -25,7 +25,8 @@ import { serialiseTransactionForCustomer } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { marketingConsentOf, recordConsent } from '../services/consent';
-import { searchMembers } from '../services/memberSearch';
+import { counterEnvelope } from '../services/counter';
+import { resolveMember, searchMembers } from '../services/memberSearch';
 import { mintToken } from '../services/walletToken';
 import { serialiseMember } from './auth';
 
@@ -180,6 +181,39 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
   app.get('/members/me', async (req, reply) => {
     const p = requireMember(req);
     return reply.send(serialiseMember(await loadMember(p.id)));
+  });
+
+  // ------------------------------------------------------- GET /members/:id --
+  /**
+   * RESOLVE ONE MEMBER, for a staff caller — the last step of the manual path.
+   *
+   * `GET /members?q=` returns a deliberately narrow row and nothing turned that
+   * row into something the counter could act on, so "Can't scan? Find member
+   * manually" ended at a name the scanner could display and could not charge —
+   * in precisely the situation the fallback exists for.
+   *
+   * IT RETURNS THE `POST /scans` ENVELOPE, not a bare Member, and that is the
+   * point: the two are doors onto one screen. `services/counter.ts` builds it for
+   * both, so the held deposit cannot be right on one path and stale on the other
+   * — which is a failure that path has already had once.
+   *
+   * REGISTERED AFTER `/members/me`, and it reads more honestly that way even
+   * though it would work either way: find-my-way matches a static segment before a
+   * parametric one, so `/members/me` can never be captured as `:id`. A member
+   * principal reaching this route is refused by `requireScannerPerm` regardless.
+   *
+   * The tenant predicate, the shared directory-read ceiling and the audit row are
+   * in services/memberSearch.ts § resolveMember, which explains each.
+   */
+  app.get<{ Params: { id: string } }>('/members/:id', async (req, reply) => {
+    const p = requireScannerPerm(req, 'scanner');
+
+    const m = await resolveMember(db, p, req.params.id, {
+      ipAddress: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    });
+
+    return reply.send(await counterEnvelope(db, serialiseMember(m), p.salonId));
   });
 
   // ------------------------------------------------------------ the profile --
