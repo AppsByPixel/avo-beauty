@@ -104,19 +104,39 @@ export function ScannerFlow() {
   /**
    * A member reached by manual lookup instead of a scan.
    *
-   * The scan shape is assembled from what the lookup returned plus the salon's
-   * service list — which is the same list `POST /scans` sends. There is no
-   * token, and that is correct: the charge endpoint takes it as optional
-   * precisely so a dead phone can still pay.
+   * ═══════════════════════════════════════════════════════════════════════════
+   * THIS USED TO ASSEMBLE A MEMBER CARD, AND EVERY PART IT ASSEMBLED WAS MADE UP.
    *
-   * NOTE: this path is unreachable until `GET /members?q=` exists (see
-   * src/api/members.ts). It is written so that it works the day it does.
+   * `GET /members?q=` is live now, so the lookup itself works — but it answers
+   * with a directory row: id, salonId, name, phoneLast4, tier. No balance, no
+   * stamps, by design. The card this used to open renders `member.balanceFils`
+   * and `member.stamps` on the screen where money moves.
+   *
+   * It also passed `heldDepositFils: 0` and `services: []` as literals. The
+   * zero was the worse of the two: `POST /scans` reads the REAL held deposit
+   * through the same `findApplicableHold` the charge uses, precisely so what the
+   * artist is shown and what the charge applies cannot disagree. A customer with
+   * 5.000 held would have seen no deposit credit line while the charge quietly
+   * applied one — non-negotiable #2 in the direction that embarrasses the salon
+   * at the counter.
+   *
+   * There is no way to do this correctly yet. Nothing on the API resolves ONE
+   * member for a staff caller: `POST /scans` requires a QR token, which is
+   * exactly what a manual lookup does not have, and there is no
+   * `GET /members/{id}`. So the honest outcome is to say so rather than open a
+   * card full of invented money. ESCALATED to trunk — see copy.
+   *
+   * What is owed, and it is one endpoint: a scanner-scoped, salon-scoped read of
+   * one member returning the SAME envelope `POST /scans` returns —
+   * `{ member, heldDepositFils, heldDepositBooking, services }` — so this path
+   * and the scan path show identical numbers because they came from one place.
+   * ═══════════════════════════════════════════════════════════════════════════
    */
-  const handlePick = useCallback((member: LookupMember) => {
+  const handlePick = useCallback((_member: LookupMember) => {
     setScreen({
-      name: 'member',
-      scan: { member, heldDepositFils: 0, services: [] },
-      token: undefined,
+      name: 'codeRefused',
+      title: copy.lookupPickBlockedTitle,
+      body: copy.lookupPickBlockedBody,
     });
   }, []);
 

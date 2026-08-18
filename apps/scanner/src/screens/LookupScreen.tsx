@@ -5,27 +5,32 @@
  * keeps a customer able to pay when the primary path fails, which makes it part
  * of the money path rather than a convenience.
  *
- * READ src/api/members.ts FIRST. The endpoint this screen needs does not exist
- * in either server. The screen is built to the design and wired to the endpoint
- * the design requires; until lane A ships it, the search renders its error
- * state. That is reported, not worked around — see the report and the module
- * doc for the shape that is owed.
+ * READ src/api/members.ts FIRST. `GET /members?q=` EXISTS and this screen now
+ * parses what it actually sends — a directory row. The previous header here said
+ * the endpoint did not exist, which was wrong and was read as authoritative.
+ *
+ * Two consequences visible in the JSX below:
+ *
+ *   - the row shows `···· 4408` and no balance, because the server sends
+ *     `phoneLast4` and no `balanceFils`. The design's row shows both. The
+ *     contract wins; escalated.
+ *   - picking a row cannot open the member card yet, because that card renders
+ *     her balance and stamps and nothing resolves one member for a staff caller.
+ *     See ScannerFlow's `handlePick`.
  *
  * The promise at the bottom of the screen — "Manual lookups are logged with
- * your name" — is a SERVER guarantee. This client cannot keep it, and the
- * endpoint that will must write the audit row itself.
+ * your name" — is a SERVER guarantee, and the endpoint keeps it: an append-only
+ * audit row per search, written whether or not anything matched.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { fils } from '@avo/types';
 import { ApiError } from '../api/client';
 import { lookupMembers, MIN_QUERY_LENGTH, type LookupMember } from '../api/members';
 import { copy } from '../copy/en';
 import { tierLabel } from '../domain/loyalty';
 import { color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme';
 import { LinkButton } from '../components/Buttons';
-import { figureOf } from '../components/Money';
 import { EmptyState, ErrorState, OfflineBanner, SkeletonRows } from '../components/States';
 
 type Search =
@@ -145,7 +150,7 @@ export function LookupScreen({
                 key={m.id}
                 onPress={() => onPick(m)}
                 accessibilityRole="button"
-                accessibilityLabel={`${m.name}, ${m.phone}`}
+                accessibilityLabel={`${m.name}, number ending ${m.phoneLast4}`}
                 testID={`lookup-${m.id}`}
                 style={styles.row}
               >
@@ -163,11 +168,24 @@ export function LookupScreen({
                       </Text>
                     </View>
                   </View>
+                  {/*
+                    THE DESIGN'S ROW SHOWS THE FULL NUMBER AND THE BALANCE
+                    (design:222-223, `{{ m.phone }} · {{ m.idStr }}` and
+                    `{{ m.bal }}`). The server sends neither, on purpose — see
+                    api/members.ts. This is a design-vs-contract conflict and the
+                    contract wins the same way it does for the top-up fee lines:
+                    not because the design is wrong about what is useful, but
+                    because the only way to render it is to invent it, and the
+                    invented number here is money.
+
+                    `phoneLast4` is what identifies her at the counter anyway —
+                    the artist reads the last four back to her. ESCALATED to
+                    trunk rather than settled here.
+                  */}
                   <Text style={[ui(12), styles.rowMeta]}>
-                    {m.phone} · {copy.memberId(m.id)}
+                    ···· {m.phoneLast4} · {copy.memberId(m.id)}
                   </Text>
                 </View>
-                <Text style={display(15, '600')}>{figureOf(fils(m.balanceFils))}</Text>
               </Pressable>
             );
           })}
