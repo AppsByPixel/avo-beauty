@@ -23,6 +23,34 @@
  *     did reach the server and the second is a retry of it, the server replays
  *     the stored result instead of charging again. That is the guard that
  *     survives a dropped response, which `busy` cannot.
+ *
+ * THE DOUBLE-CHARGE PATH IDEMPOTENCY CANNOT SEE
+ * ---------------------------------------------
+ * Those two guards protect the attempt. They do not protect the RECOVERY, and the
+ * recovery crosses the attempt boundary. Traced end to end on this screen:
+ *
+ *   1. `POST /charges` succeeds server-side — wallet debited, visit counted,
+ *      receipt queued.
+ *   2. The response cannot be read. (It has happened for real: the API omitted two
+ *      fields `TransactionSchema` requires, so a landed charge parsed as a
+ *      failure. Fixed in the API, but a dropped connection does the same thing and
+ *      cannot be fixed.)
+ *   3. Staff reach for Rescan. That unmounts this component.
+ *   4. Remounting re-runs `useRef(newIdempotencyKey())` below — a NEW key.
+ *   5. Her app mints a fresh token; the spent one is gone.
+ *   6. Fresh key, fresh body, fresh token: the server takes a SECOND real charge,
+ *      correctly, because nothing about it is a duplicate.
+ *
+ * Every step is the system working as designed, which is why no idempotency test
+ * finds it — the server behaved properly both times. The consequence for this
+ * screen is a rule about what the error state may offer: NOT a retry. A client
+ * that could not read the response does not know whether the money moved, so the
+ * only honest instruction is to check her balance, which is what it now says.
+ *
+ * Re-tapping Charge, by contrast, is safe and stays enabled: the key has not
+ * changed and neither has the basket, so the server replays its stored answer
+ * rather than charging again. The dangerous affordance is the one that unmounts
+ * this screen, not the one that repeats the request.
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -286,6 +314,21 @@ export function MemberScreen({
           </View>
         )}
 
+        {/*
+          A FAILED CHARGE, AND DELIBERATELY NO "TRY AGAIN" BUTTON.
+
+          See § THE DOUBLE-CHARGE PATH at the top of this file. The short version:
+          this branch also covers the case where the debit SUCCEEDED and only the
+          reply was unreadable, so the one thing the screen must not do is make a
+          second charge one confident tap away. The design's retry affordance
+          (States:103,137) is right for a failed load and wrong for a failed
+          charge, because a client that could not read the response does not know
+          whether the money moved.
+
+          What it says instead is the check the client can no longer make: look at
+          her balance. An offline failure is the exception — nothing left the
+          device, so the outcome is not in doubt and the banner alone is honest.
+        */}
         {failure && (
           <View style={styles.failure} accessibilityRole="alert" testID="charge-failure">
             {failure.kind === 'offline' ? (
@@ -293,6 +336,12 @@ export function MemberScreen({
             ) : (
               <>
                 <Text style={[ui(12.5), styles.shortfallText]}>{failure.message}</Text>
+                <Text
+                  style={[ui(12.5, '600'), styles.shortfallText, styles.unknownOutcome]}
+                  testID="charge-unknown-outcome"
+                >
+                  {copy.chargeUnknownOutcome}
+                </Text>
                 <Text style={[ui(11.5), styles.failureRef]}>{copy.reference(failure.reference)}</Text>
               </>
             )}
@@ -435,7 +484,15 @@ const styles = StyleSheet.create({
   },
   shortfallDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.dangerDot },
   shortfallText: { color: color.dangerText, flex: 1, lineHeight: 18 },
-  failure: { marginTop: 18 },
+  failure: {
+    marginTop: 18,
+    backgroundColor: color.dangerBg,
+    borderRadius: radius.chip,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  /** The instruction, weighted above the server's message — it is the action. */
+  unknownOutcome: { marginTop: 8 },
   failureRef: { color: color.textMutedSoft, marginTop: 6 },
   footer: {
     backgroundColor: color.white,

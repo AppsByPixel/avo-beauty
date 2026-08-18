@@ -267,6 +267,26 @@ export const copy = {
   chargesEmptyBody: 'The first charge you take will show here, with 15 minutes to void it.',
 
   /**
+   * INVENTED, and the reasoning matters more than the wording — see MemberScreen
+   * § THE DOUBLE-CHARGE PATH.
+   *
+   * The design offers "Try again" on a failed load (States:103,137) and that is
+   * right for a load. It is WRONG for a charge, because a client that could not
+   * read the response cannot know whether the money moved. The failure this
+   * sentence appears under includes the case where the debit SUCCEEDED and only
+   * the reply was unreadable, and the recovery staff reach for by instinct —
+   * rescan her code — mints a fresh idempotency key and a fresh token, which the
+   * server correctly treats as a second, genuine charge. No idempotency test
+   * catches that; the server behaved properly both times.
+   *
+   * So the error state deliberately offers no retry button, and says this instead.
+   * Her balance is the only reliable evidence of whether the debit landed, and
+   * checking it is the manual version of the check the client can no longer do.
+   */
+  chargeUnknownOutcome:
+    'Check her balance before charging again — this charge may already have gone through.',
+
+  /**
    * States:142-157 — "Scanner · code expired", the one scanner state the
    * states file draws in full. Verbatim, including the reassurance banner:
    * a code that has rotated is the single most common refusal at a counter
