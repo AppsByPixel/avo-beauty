@@ -54,6 +54,7 @@ import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
 import type { MemberPrincipal, Principal } from '../auth/principal';
+import { serialiseTransactionForCustomer } from '../http/serialise';
 import { env } from '../env';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { parseDate, salonWallClock } from '../time/zone';
@@ -522,18 +523,34 @@ export async function createBooking(
     const result = {
       booking: serialiseBooking(row as BookingRow),
       balanceAfterFils: balanceAfter,
-      transaction: {
-        id: txId,
-        memberId: m.id,
-        branchId: branch.branchId,
-        kind: 'deposit_hold' as const,
-        amountFils: -deposit,
-        bonusFils: 0,
-        method: 'wallet' as const,
-        status: 'settled' as const,
-        reference: `AVO-DEP-${txId.slice(3)}`,
-        createdAt: now.toISOString(),
-      },
+      /**
+       * THROUGH THE SHARED SERIALISER, for the reason the eleven inline fields here
+       * were wrong: `voidedAt` and `reversedByTransactionId` are declared
+       * `.nullable()` on `TransactionSchema` — required on the wire, permitted to be
+       * null — and an explicit field list silently omits whatever is added to the
+       * schema after it is written. The Book flow's own reply failed the client's
+       * contract parse.
+       */
+      transaction: serialiseTransactionForCustomer(
+        {
+          id: txId,
+          memberId: m.id,
+          branchId: branch.branchId,
+          kind: 'deposit_hold',
+          amountFils: -deposit,
+          bonusFils: 0,
+          // Merchant-visible, customer-never, and 0 on the row: a deposit hold moves
+          // her own money into a hold, so there is no commission on it.
+          feeFils: 0,
+          method: 'wallet',
+          status: 'settled',
+          reference: `AVO-DEP-${txId.slice(3)}`,
+          createdAt: now,
+        },
+        // Created inside this transaction, so nothing can have reversed it yet. Said
+        // rather than defaulted — the same argument as services/charge.ts.
+        null,
+      ),
     };
 
     await completeKey(tx, keyId, { status: 201, body: result }, txId);

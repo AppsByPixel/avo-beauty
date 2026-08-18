@@ -39,7 +39,7 @@
  */
 
 import { and, eq, inArray } from 'drizzle-orm';
-import { add, fils, subtract, type Fils } from '@avo/types';
+import { add, fils, subtract, type Fils, type Transaction } from '@avo/types';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
@@ -50,6 +50,7 @@ import { ledgerEntry } from '../db/schema/ledger';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
+import { serialiseTransactionForCustomer } from '../http/serialise';
 import { findApplicableHold } from './booking';
 import { resolveBranch } from './branch';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
@@ -77,18 +78,22 @@ export interface ChargeContext {
 }
 
 export interface ChargeResult {
-  transaction: {
-    id: string;
-    memberId: string;
-    branchId: string;
-    kind: 'charge';
-    amountFils: number;
-    bonusFils: number;
-    method: 'wallet';
-    status: 'settled';
-    reference: string;
-    createdAt: string;
-  };
+  /**
+   * `Transaction` FROM @avo/types, NOT A HAND-WRITTEN FIELD LIST.
+   *
+   * This used to be the eleven fields spelled out inline, which is how it came to
+   * be missing `voidedAt` and `reversedByTransactionId` — both declared
+   * `.nullable()` on `TransactionSchema`, so both required on the wire. The client
+   * could not parse the reply to the most important POST in the product: a charge
+   * that had already succeeded server-side came back unparseable.
+   *
+   * It is the same defect that was fixed in `serialiseTransactionForCustomer` one
+   * endpoint over, and the same lesson as `heldDepositFils`: an explicit field list
+   * is a promise to remember, and two hand-assembled copies of one shape drift. The
+   * type now comes from the schema, so tsc names the next added field instead of a
+   * contract test finding it later.
+   */
+  transaction: Transaction;
   balanceAfterFils: number;
   /** What the held deposit took off this charge. The scanner's credit line. */
   depositAppliedFils: number;
@@ -703,18 +708,31 @@ export async function performCharge(
     });
 
     const result: ChargeResult = {
-      transaction: {
-        id: txId,
-        memberId: m.id,
-        branchId,
-        kind: 'charge',
-        amountFils: -due,
-        bonusFils: 0,
-        method: 'wallet',
-        status: 'settled',
-        reference: `AVO-CHG-${txId.slice(3)}`,
-        createdAt: now.toISOString(),
-      },
+      transaction: serialiseTransactionForCustomer(
+        {
+          id: txId,
+          memberId: m.id,
+          branchId,
+          kind: 'charge',
+          amountFils: -due,
+          bonusFils: 0,
+          // Not emitted by the serialiser — merchant-visible, customer-never — and
+          // 0 is what was written to the row: a charge carries no commission.
+          feeFils: 0,
+          method: 'wallet',
+          status: 'settled',
+          reference: `AVO-CHG-${txId.slice(3)}`,
+          createdAt: now,
+        },
+        /**
+         * NO REVERSAL, and stated rather than defaulted. This charge was created
+         * moments ago inside this very transaction, so nothing can have reversed it
+         * yet — `voidedAt: null` here is a fact, not an absence of information. The
+         * parameter is required precisely so that a caller which COULD have a
+         * reversal cannot forget to look for one.
+         */
+        null,
+      ),
       balanceAfterFils: balanceFinal,
       depositAppliedFils: heldDeposit,
       depositReturnedFils,
