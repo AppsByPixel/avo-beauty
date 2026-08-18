@@ -14,6 +14,27 @@
  * the body throws for ANY reason, so a typo, a parse error or a dead server all
  * read as green. This helper only accepts an *assertion* failure. Anything else
  * is re-thrown and fails the spec.
+ *
+ * USE THIS FOR A MOCK/API DIVERGENCE TOO, AND NOT ONLY FOR A DEFECT.
+ *
+ * `packages/mock` is what three lanes build against, so where it diverges from the
+ * API that is worth writing down — but it must be written down in a form that
+ * EXPIRES. Six divergences were once recorded as plain `it()`s whose TITLES named
+ * the divergence and whose ASSERTIONS demanded the fix:
+ *
+ *     it('a fractional amount answers 500, not a 400 the client can act on', …)
+ *     it('GET /topups/{unknown-id} answers 200 succeeded instead of 404', …)
+ *
+ * Every one was later fixed in the mock. Every one kept passing, because the
+ * assertion was already the contract. So the file carried five confident sentences
+ * that were false, in the place a reader looks first, and nothing could tell them
+ * apart from the true ones.
+ *
+ * Written as `knownBug()` the same information cannot rot: the assertion is the
+ * contract, it fails today, the title is reported beside it, and the hour the
+ * divergence closes the assertion passes and the spec goes RED asking to be
+ * rewritten. A claim about something being broken should be the thing that breaks
+ * when it stops being true.
  */
 
 import { it } from 'vitest';

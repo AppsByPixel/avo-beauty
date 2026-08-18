@@ -56,7 +56,7 @@ import {
   idempotencyKey,
   mintWalletToken,
 } from './support/api.js';
-import { precondition } from './support/known-bug.js';
+import { knownBug, precondition } from './support/known-bug.js';
 
 interface ChargeResult {
   transaction: { id: string; amountFils: number };
@@ -283,35 +283,61 @@ describe('double submit of one charge', () => {
  *
  * The one thing this file could still say for itself is below.
  */
-describe('the mock has no gateway callback, and that is the fact worth asserting here', () => {
-  it('POST /webhooks/{psp} does not exist on the mock', async () => {
-    /**
-     * KEPT, AND NARROWED TO WHAT IT PROVES. The UI lanes build against this mock,
-     * so "the mock cannot settle a top-up for you" is a real thing for them to
-     * know — a wallet that waits for a webhook here waits for ever. It is not,
-     * and never was, evidence about the API.
-     */
-    const res = await api('POST', '/webhooks/knet', {
-      body: { intentId: 'TI-ANY', status: 'succeeded', reference: 'KNET-1' },
-    });
-    expect(res.status).toBe(404);
-  });
+describe('the mock has no gateway callback — the one live divergence, written to expire', () => {
+  /**
+   * WRITTEN AS A knownBug, NOT AS AN it(), AND THAT IS THE WHOLE POINT.
+   *
+   * This is the last divergence between `packages/mock` and the API that this suite
+   * still records. Six others used to be recorded here and in money.test.ts as
+   * plain `it()`s whose TITLES named the defect and whose ASSERTIONS demanded the
+   * fix — and every one of them was silently fixed in the mock while the spec kept
+   * passing and the title kept lying. Five stale sentences in the place a reader
+   * looks first.
+   *
+   * `knownBug()` is the mechanism that cannot rot: the assertion below is the one
+   * the CONTRACT calls for — the webhook exists and settles a top-up — and it fails
+   * today, so this reports green while naming the gap. The hour somebody gives the
+   * mock a webhook, the assertion starts passing and THIS SPEC GOES RED demanding
+   * to be rewritten. A divergence recorded this way expires by itself.
+   *
+   * WHY THE MOCK NOT HAVING ONE MATTERS, since it is not a product defect: three
+   * lanes build against this thing. A wallet that waits for a webhook to settle a
+   * top-up waits for ever here, and will conclude its own polling is broken. That
+   * is the shape of the week the wallet lost to a missing auth endpoint.
+   *
+   * The real webhook is proved end to end in gateway.test.ts — signatures,
+   * duplicates, out-of-order delivery, terminal transitions, and both paths firing
+   * at once.
+   */
+  knownBug(
+    'packages/mock exposes no POST /webhooks/{psp}, so no top-up on the mock can be settled by a ' +
+      'callback and every gateway-ordering case is untestable against it. A client built here ' +
+      'cannot exercise its own settle path at all',
+    async () => {
+      const opened = await api<{ id: string; status: string }>('POST', '/topups', {
+        idempotencyKey: idempotencyKey('mock-webhook-settle'),
+        body: { amountFils: 10_000, method: 'knet' },
+      });
+      precondition(opened.status === 200, `POST /topups answered ${opened.status}`);
+      precondition(
+        opened.body.status !== 'succeeded',
+        `the intent was born ${opened.body.status}, so this spec cannot tell a webhook from a ` +
+          'mock that settles on creation',
+      );
 
-  it('so a top-up on the mock never leaves `redirected` on its own', async () => {
-    // The consequence for a client, stated once. `gateway.test.ts` is where the
-    // real state machine is proved.
-    const opened = await api<{ id: string; status: string }>('POST', '/topups', {
-      idempotencyKey: idempotencyKey('mock-no-webhook'),
-      body: { amountFils: 10_000, method: 'knet' },
-    });
-    precondition(opened.status === 200, `POST /topups answered ${opened.status}`);
-    // `created` on the mock, `redirected` on the API — the point is only that it is
-    // NOT terminal, and that nothing on this target can make it terminal.
-    expect(
-      ['created', 'redirected', 'pending'],
-      `a fresh top-up on the mock is already in ${opened.body.status}`,
-    ).toContain(opened.body.status);
-  });
+      // The assertion the contract calls for: a signed callback settles the intent.
+      const hook = await api<Record<string, unknown>>('POST', '/webhooks/knet', {
+        body: { intentId: opened.body.id, status: 'succeeded', reference: 'KNET-1' },
+      });
+      expect(
+        hook.status,
+        'the mock still has no webhook endpoint, so a client cannot drive a settlement here',
+      ).toBe(200);
+
+      const read = await api<{ status: string }>('GET', `/topups/${opened.body.id}`);
+      expect(read.body.status, 'the callback did not settle the intent').toBe('succeeded');
+    },
+  );
 });
 
 describe('a charge crossing a happy-hour boundary', () => {

@@ -655,56 +655,108 @@ describe('#3 — insufficient balance returns the exact shortfall and applies no
 
 // ------------------------------------------------------- float / bad amounts --
 
+/**
+ * #1 — NO FLOAT AND NO NEGATIVE AMOUNT REACHES MONEY.
+ *
+ * SIX SPECS IN THIS FILE USED TO BE TITLED AS DEFECTS AND ASSERTED THE FIX.
+ *
+ * "a fractional amount answers 500, not a 400 the client can act on".
+ * "a negative amountFils creates a top-up intent for negative credit".
+ * "an unknown serviceId is charged as 0 fils instead of being rejected".
+ * "GET /topups/{id} ignores the id and returns whichever intent is first in memory".
+ * "GET /topups/{unknown-id} answers 200 succeeded instead of 404".
+ *
+ * Every one of those titles described a real defect when it was written. Every one
+ * has since been fixed in `packages/mock`, and every one of those specs kept
+ * passing — because the ASSERTIONS were written against the contract while the
+ * TITLES described the bug. Probed directly to be sure rather than inferred from a
+ * green run:
+ *
+ *   POST /topups  amountFils: 10.5    → 400 invalid_amount
+ *                                       "must be a whole number of fils"
+ *   POST /topups  amountFils: -10000  → 400 invalid_amount
+ *                                       "must be greater than zero"
+ *   POST /charges unknown serviceId   → 400 invalid_services, naming the id
+ *   GET  /topups/TI-NOPE              → 404 unknown_topup
+ *   two intents read by their own ids  → each returns its own amount
+ *
+ * So the file was carrying five confident sentences that were false, in the place a
+ * reader looks first. That is the failure mode this build keeps producing, and the
+ * mechanism that prevents it is the one already in this repository: a spec that
+ * documents a defect must be a `knownBug()`, which asserts the CONTRACT and goes
+ * RED the day the defect is fixed. Written as a plain `it()` it does the opposite —
+ * it preserves the claim for ever and reports green while doing it.
+ *
+ * THE RULE FOR THIS FILE, THEREFORE: a divergence between `packages/mock` and the
+ * API is written as `knownBug()`, never as an `it()` whose title says what is
+ * broken. There is one such divergence left and it is at the bottom of
+ * concurrency.test.ts.
+ *
+ * The assertions below are also strengthened. `expect(status).toBeGreaterThanOrEqual(400)`
+ * passes on a 500 — which is how "answers 500, not a 400" could sit beside an
+ * assertion demanding 400 without either being noticed. Each now names the status
+ * AND the error code, so a regression to a 500 fails instead of qualifying.
+ */
 describe('#1 — no float and no negative amount reaches money', () => {
-  it('a fractional amountFils is rejected and creates nothing', async () => {
+  it('a fractional amountFils is refused with an actionable 400, and creates nothing', async () => {
     const res = await api<Record<string, unknown>>('POST', '/topups', {
       idempotencyKey: idempotencyKey('float-amount'),
       body: { amountFils: 10.5, method: 'knet' },
     });
 
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    // 400 and not merely ">= 400": a 500 here is the money helper's TypeError
+    // escaping, which tells the client nothing it can act on and leaks the shape
+    // of the money layer. That distinction was the whole point of the old title.
+    expect(res.status, `a fractional amount answered ${res.status}: ${JSON.stringify(res.body)}`).toBe(400);
+    expect(res.body.error).toBe('invalid_amount');
     expect(res.body).not.toHaveProperty('creditFils');
     expect(res.body).not.toHaveProperty('redirectUrl');
+    // And the internal helper's own words never reach a caller.
+    expect(JSON.stringify(res.body)).not.toMatch(/Money must be an integer number of fils/);
   });
 
-  it('a KWD amount sent where fils are expected is rejected', async () => {
+  it('a KWD amount sent where fils are expected is refused the same way', async () => {
     // The classic: the client sends 18.5 meaning 18.500 KD.
     const res = await api<Record<string, unknown>>('POST', '/topups', {
       idempotencyKey: idempotencyKey('kwd-amount'),
       body: { amountFils: 18.5, method: 'knet' },
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status, `18.5 answered ${res.status}`).toBe(400);
+    expect(res.body.error).toBe('invalid_amount');
     expect(res.body).not.toHaveProperty('creditFils');
+    // The refusal has to teach the unit, because this is the mistake a client makes
+    // once and then makes again.
+    expect(String(res.body.message)).toMatch(/whole number of fils/i);
   });
 
-  it('a fractional amount answers 500, not a 400 the client can act on', async () => {
-    const res = await api<{ error?: string; message?: string }>('POST', '/topups', {
-      idempotencyKey: idempotencyKey('float-amount-400'),
-      body: { amountFils: 10.5, method: 'knet' },
-    });
-    expect(res.status).toBe(400);
-    // And the internal money helper's message must not be handed to a caller.
-    expect(JSON.stringify(res.body)).not.toMatch(/Money must be an integer number of fils/);
-  });
-
-  it('a negative amountFils creates a top-up intent for negative credit', async () => {
-    // Currently returns 200 with amountFils −10000, bonusFils −1000,
-    // creditFils −11000 and a 150 fil fee. A drain path dressed as a top-up.
-    const res = await api<TopUpIntent>('POST', '/topups', {
+  it('a negative amountFils is refused — a top-up cannot be a drain', async () => {
+    const res = await api<Record<string, unknown>>('POST', '/topups', {
       idempotencyKey: idempotencyKey('negative-amount'),
       body: { amountFils: -10_000, method: 'knet' },
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status, `-10000 answered ${res.status}: ${JSON.stringify(res.body)}`).toBe(400);
+    expect(res.body.error).toBe('invalid_amount');
+    // Nothing that looks like an intent came back. The defect this replaces
+    // returned 200 with creditFils −11000 and a 150 fil fee.
+    expect(res.body).not.toHaveProperty('creditFils');
+    expect(res.body).not.toHaveProperty('redirectUrl');
   });
 
-  it('an unknown serviceId is charged as 0 fils instead of being rejected', async () => {
-    // A settled 0.000 transaction with a real reference and a voidable window,
-    // for services that do not exist. Any typo in a scanner payload lands here.
-    const res = await api<ChargeResult>('POST', '/charges', {
+  it('an unknown serviceId is refused, and the refusal names it', async () => {
+    const res = await api<Record<string, unknown>>('POST', '/charges', {
       idempotencyKey: idempotencyKey('unknown-service'),
       body: { memberId: MEMBER_ID, serviceIds: ['SV-DOES-NOT-EXIST'] },
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status, `an unknown service answered ${res.status}`).toBe(400);
+    expect(res.body.error).toBe('invalid_services');
+    /**
+     * NAMING THE UNKNOWN ID IS THE POINT. The defect this replaces settled a
+     * 0.000 charge with a real reference and a voidable window, so a typo in a
+     * scanner payload produced a receipt for nothing. A refusal that does not say
+     * WHICH id was wrong sends the staff member back to guess.
+     */
+    expect(String(JSON.stringify(res.body))).toContain('SV-DOES-NOT-EXIST');
+    expect(res.body).not.toHaveProperty('transaction');
   });
 });
 
@@ -780,29 +832,51 @@ describe('the top-up status read is authoritative — api-contract.md § TopUpIn
     expect(['succeeded', 'failed', 'cancelled']).not.toContain(pending?.status);
   });
 
-  it('GET /topups/{id} ignores the id and returns whichever intent is first in memory', async () => {
-    // packages/mock/src/server.ts:228 searches the idempotency map for anything
-    // with a redirectUrl and returns that. Two customers topping up at once get
-    // each other's amounts back, and the wallet renders the wrong figure.
+  it('GET /topups/{id} answers about THAT intent — two customers do not see each other\'s', async () => {
+    /**
+     * The defect this replaces: `packages/mock` searched its idempotency map for
+     * anything carrying a redirectUrl and returned that, so two customers topping
+     * up at once each got the other's amount and the wallet rendered the wrong
+     * figure. Fixed; the assertion below is the contract and always was.
+     *
+     * TWO INTENTS WITH DIFFERENT AMOUNTS is what makes this readable: if the read
+     * were still id-blind, the amounts are what would give it away, and a spec
+     * using one amount twice could not tell.
+     */
     const first = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: idempotencyKey('status-a'),
       body: { amountFils: 10_000, method: 'knet' },
     });
     const second = await api<TopUpIntent>('POST', '/topups', {
       idempotencyKey: idempotencyKey('status-b'),
-      body: { amountFils: 25_000, method: 'card' },
+      body: { amountFils: 25_000, method: 'knet' },
     });
     precondition(first.status === 200 && second.status === 200, 'could not create two intents');
-    precondition(first.body.id !== second.body.id, 'the two intents share an id');
+    precondition(first.body.id !== second.body.id, 'the two top-ups share an id');
 
-    const read = await api<TopUpIntent>('GET', `/topups/${second.body.id}`);
-    expect(read.body.id).toBe(second.body.id);
-    expect(read.body.amountFils).toBe(25_000);
+    const readFirst = await api<TopUpIntent>('GET', `/topups/${first.body.id}`);
+    expect(readFirst.status, JSON.stringify(readFirst.body)).toBe(200);
+    expect(
+      readFirst.body.id,
+      'the read answered about a different intent, so a client polling its own top-up is shown ' +
+        "somebody else's",
+    ).toBe(first.body.id);
+    expect(readFirst.body.amountFils).toBe(10_000);
+
+    // And the other one still reads as itself, which is what rules out a read that
+    // simply returns the OLDEST rather than the requested one.
+    const readSecond = await api<TopUpIntent>('GET', `/topups/${second.body.id}`);
+    expect(readSecond.body.id).toBe(second.body.id);
+    expect(readSecond.body.amountFils).toBe(25_000);
   });
 
-  it('GET /topups/{unknown-id} answers 200 succeeded instead of 404', async () => {
-    // A client polling a fabricated or stale intent id is told the money landed.
-    const read = await api<TopUpIntent>('GET', '/topups/TI-NOT-A-REAL-INTENT');
-    expect(read.status).toBe(404);
+  it('GET /topups/{unknown-id} is a 404, not a cheerful success', async () => {
+    // The defect this replaces answered 200 `succeeded`, so a client polling a
+    // fabricated or stale intent id was told the money had landed.
+    const read = await api<Record<string, unknown>>('GET', '/topups/TI-DOES-NOT-EXIST');
+    expect(read.status, `an unknown intent id answered ${read.status}`).toBe(404);
+    expect(read.body.error).toBe('unknown_topup');
+    expect(read.body).not.toHaveProperty('creditFils');
+    expect(read.body.status).not.toBe('succeeded');
   });
 });
