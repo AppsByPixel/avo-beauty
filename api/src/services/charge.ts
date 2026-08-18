@@ -38,7 +38,7 @@
  * answered with a cached 402 forever.
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { add, fils, subtract, type Fils, type Transaction } from '@avo/types';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
@@ -56,18 +56,53 @@ import { resolveBranch } from './branch';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { decideEarning, loadPromotionInputs, NO_PROMOTION } from './promotions';
 import { consumeToken, peekToken, TokenOutsideSalonError } from './walletToken';
-import { claimKey, completeKey } from './idempotency';
+import { claimKey, completeKey, hashRequestBody } from './idempotency';
 import { queueReceipts } from './receipts';
 import { writeAudit } from './audit';
 
 /** Voidable for 15 minutes — api-contract.md § StaffUser, "reverse within 15 min". */
 export const VOID_WINDOW_MINUTES = 15;
 
+/**
+ * The near-duplicate window. DECISIONS.md § "Five calls made without asking", item 3.
+ *
+ * "120s because a genuine repeat is a separate visit." Two identical services back to
+ * back is legitimate — so this costs one extra tap in a rare case to prevent a double
+ * debit in a case already traced end to end, which is the double-tapped scanner.
+ *
+ * WHY A REFUSAL AND NOT A WARNING, in the decision's own words: "A flag-after-the-fact
+ * cannot work, because the triggering condition is a response the client could not
+ * read." A warning arrives after the money moved.
+ */
+export const NEAR_DUPLICATE_WINDOW_SECONDS = 120;
+
+/**
+ * The canonical basket, hashed. SORTED, so `[SV-01, SV-02]` and `[SV-02, SV-01]` are
+ * one basket — they are one basket to the person holding the scanner.
+ *
+ * Sorting is the whole of the canonicalisation because duplicates cannot reach here:
+ * `routes/charges.ts` refuses a repeated service id by name. That refusal is not
+ * merely tidiness — see its comment for the money it protects.
+ */
+export function basketHashFor(serviceIds: readonly string[]): string {
+  return hashRequestBody({ basket: [...serviceIds].sort() });
+}
+
 export interface ChargeInput {
   memberId: string;
   serviceIds: string[];
   token?: string | undefined;
   branchId?: string | undefined;
+  /**
+   * "Yes, charge her again for the same thing" — the explicit confirm the
+   * near-duplicate guard requires. See `NEAR_DUPLICATE_WINDOW_SECONDS`.
+   *
+   * NOT PART OF THE IDEMPOTENCY REQUEST HASH, deliberately: it is a decision about
+   * how to handle a refusal, not part of what is being charged. Including it would
+   * make the confirmed retry a DIFFERENT request under the same key and earn a 422
+   * `idempotency_key_reused`, when it is the same attempt being allowed to proceed.
+   */
+  confirmDuplicate?: boolean | undefined;
 }
 
 export interface ChargeContext {
@@ -215,6 +250,113 @@ export async function performCharge(
     // can charge 0.000 for a colour — non-negotiable #2.
     const gross = rows.reduce<Fils>((sum, r) => add(sum, fils(r.priceFils)), fils(0));
 
+    /**
+     * ------------------------------------------ 3a. THE NEAR-DUPLICATE GUARD --
+     *
+     * DECISIONS.md item 3, and it is a REFUSAL rather than a warning for the reason
+     * recorded there: "A flag-after-the-fact cannot work, because the triggering
+     * condition is a response the client could not read." A warning arrives after
+     * the money moved.
+     *
+     * HERE, AFTER THE BASKET IS VALIDATED AND BEFORE THE DEBIT. After, because a
+     * basket containing an unknown service should be told that rather than told it
+     * looks like a duplicate — the more specific refusal wins. Before, because the
+     * whole point is that nothing moves.
+     *
+     * IT THROWS, SO THE IDEMPOTENCY KEY VANISHES WITH THE TRANSACTION, and that is
+     * what makes the confirm workable rather than a dead end: the scanner retries
+     * the SAME attempt with `confirmDuplicate: true`, and because the first attempt
+     * rolled back there is no committed key row to collide with. The request hash
+     * deliberately excludes the flag (see `ChargeInput.confirmDuplicate`), so the
+     * retry is the same request finally allowed to proceed.
+     *
+     * A VOIDED EARLIER CHARGE IS NOT A DUPLICATE, and this is the case that would
+     * have made the guard actively wrong. A void refunds the customer, so charging
+     * the same basket again is the correct next action — it is what a staff member
+     * does after voiding a mistake. Without the `NOT EXISTS` below, the guard would
+     * refuse exactly the charge the void was performed in order to redo, and the
+     * scanner would be stuck for two minutes with no way forward but a flag it had
+     * no reason to think it needed.
+     *
+     * MATCHED ON A NON-NULL HASH. Every charge written before migration 0031 has
+     * none, and treating null as a wildcard would refuse legitimate charges against
+     * history nobody recorded.
+     */
+    const basketHash = basketHashFor(input.serviceIds);
+    if (!input.confirmDuplicate) {
+      const since = new Date(Date.now() - NEAR_DUPLICATE_WINDOW_SECONDS * 1000);
+      const [earlier] = await tx
+        .select({ t: transaction })
+        .from(transaction)
+        .where(
+          and(
+            eq(transaction.memberId, m.id),
+            eq(transaction.kind, 'charge'),
+            eq(transaction.basketHash, basketHash),
+            gte(transaction.createdAt, since),
+            /**
+             * Not voided. See above — a refunded charge is a reason to charge again,
+             * not a reason to refuse.
+             *
+             * A correlated NOT EXISTS with an explicit alias rather than
+             * `alias(transaction, …)`: this is a self-reference inside a `sql`
+             * fragment, and naming the alias in the SQL is clearer than threading a
+             * table object through a template. `reverses_transaction_id` is uniquely
+             * indexed, so this matches at most one row.
+             */
+            sql`NOT EXISTS (
+                  SELECT 1 FROM ${transaction} AS void_row
+                   WHERE void_row.reverses_transaction_id = ${transaction.id}
+                )`,
+          ),
+        )
+        .orderBy(desc(transaction.createdAt))
+        .limit(1);
+
+      if (earlier) {
+        const secondsAgo = Math.max(
+          0,
+          Math.round((Date.now() - earlier.t.createdAt.getTime()) / 1000),
+        );
+        /**
+         * The earlier transaction travels WITH the refusal, so the scanner can show
+         * the staff member what it thinks she already did — "8.000 KD, 34 seconds
+         * ago" — rather than a bare "are you sure?". A confirmation dialogue that
+         * cannot name what it is warning about trains people to tap through it.
+         */
+        throw conflict(
+          'possible_duplicate',
+          `This customer was charged ${(Math.abs(earlier.t.amountFils) / 1000).toFixed(3)} KD ` +
+            `for the same services ${secondsAgo} second(s) ago. Charge her again only if ` +
+            `that is genuinely a second visit.`,
+          {
+            secondsAgo,
+            windowSeconds: NEAR_DUPLICATE_WINDOW_SECONDS,
+            /** What the client must send to proceed. Named, so it is not guesswork. */
+            confirmWith: 'confirmDuplicate',
+            transaction: serialiseTransactionForCustomer(
+              {
+                id: earlier.t.id,
+                memberId: earlier.t.memberId,
+                branchId: earlier.t.branchId,
+                kind: 'charge',
+                amountFils: earlier.t.amountFils,
+                bonusFils: earlier.t.bonusFils,
+                feeFils: earlier.t.feeFils,
+                method: earlier.t.method,
+                status: earlier.t.status,
+                reference: earlier.t.reference,
+                createdAt: earlier.t.createdAt,
+              },
+              // The query already established it has no reversal, which is why it
+              // matched at all. `null` here is that fact, not a default.
+              null,
+            ),
+          },
+        );
+      }
+    }
+
     // ------------------------------------------------- 4. apply held deposit --
     /**
      * THE CREDIT LINE, FINALLY REACHABLE.
@@ -316,6 +458,9 @@ export async function performCharge(
       method: 'wallet',
       status: 'settled',
       reference: `AVO-CHG-${txId.slice(3)}`,
+      // What this charge was for, canonically. The next charge two minutes from now
+      // compares against it — see step 3a.
+      basketHash,
       createdByStaffId: ctx.principal.id,
       createdAt: now,
       settledAt: now,

@@ -885,6 +885,44 @@ SELECT pg_temp.assert('12', 'every held campaign has an open notification',
      FROM campaign WHERE held_reason IS NOT NULL));
 
 -- =========================================================================
+-- 13. a basket belongs to a charge and to nothing else
+-- =========================================================================
+-- Migration 0031. `transaction.basket_hash` is what makes a near-duplicate
+-- answerable — DECISIONS.md item 3 — and it is meaningful only on a charge: a
+-- top-up or an adjustment has no basket, and a `shop` row's contents live in
+-- `shop_order_line`. Two answers to "what was this for" is the redundancy 0027
+-- refused to create, so the CHECK is what stops a second one appearing.
+--
+-- NOT AN INVARIANT, and worth saying because it looks like one: "no two unvoided
+-- charges for the same member and basket within 120 seconds". That is exactly what
+-- a CONFIRMED duplicate legitimately is — two identical services back to back is a
+-- real case the decision names — so asserting it would make the confirm path fail
+-- the suite. The guard is a control at the boundary; this section checks only the
+-- shape the guard reads.
+SELECT pg_temp.probe('13', 'a top-up cannot carry a basket', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash)
+    VALUES ('TX-BASKET-T','MB-VERIFY','SL-VERIFY','BR-VERIFY','topup',10000,'settled',now(),'deadbeef')$probe$,
+  'transaction_basket_hash_is_charge_only');
+
+SELECT pg_temp.probe('13', 'a shop order cannot carry a basket hash', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash)
+    VALUES ('TX-BASKET-S','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-5000,'settled',now(),'deadbeef')$probe$,
+  'transaction_basket_hash_is_charge_only');
+
+-- MUST SUCCEED: a charge may carry one, or the column would be useless.
+SELECT pg_temp.probe('13', 'a charge may carry a basket hash', 'allowed',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash)
+    VALUES ('TX-BASKET-C','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-8000,'settled',now(),'deadbeef')$probe$);
+
+-- And a charge from before 0031 may not. Null is "not recorded", which is why the
+-- guard matches on a NON-NULL hash rather than treating null as a wildcard — an old
+-- charge cannot be compared to a new basket, and pretending it can would refuse
+-- legitimate charges against history nobody kept.
+SELECT pg_temp.probe('13', 'a charge without a basket hash is still valid', 'allowed',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-BASKET-N','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-8000,'settled',now())$probe$);
+
+-- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST
 -- =========================================================================
 \pset format aligned

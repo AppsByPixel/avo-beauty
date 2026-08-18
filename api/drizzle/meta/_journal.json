@@ -218,6 +218,13 @@
       "when": 1787632400000,
       "tag": "0030_legal_draft_and_publish",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1787718800000,
+      "tag": "0031_charge_basket_hash",
+      "breakpoints": true
     }
   ]
 }

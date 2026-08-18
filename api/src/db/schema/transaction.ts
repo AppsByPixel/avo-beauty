@@ -164,6 +164,25 @@ export const transaction = pgTable(
       { onDelete: 'restrict' },
     ),
 
+    /**
+     * WHAT THIS CHARGE WAS FOR, canonically, so a near-duplicate is answerable.
+     *
+     * sha256 of the SORTED service ids. Order-independent, because `[SV-01, SV-02]`
+     * and `[SV-02, SV-01]` are the same basket to a human at a counter and must be
+     * the same to the guard. Sorting is the whole canonicalisation: duplicates
+     * cannot occur, since `POST /charges` refuses a repeated service id by name.
+     *
+     * CHARGES ONLY, by CHECK. A top-up or an adjustment has no basket, and a `shop`
+     * row's contents live in `shop_order_line` — two answers to "what was this for"
+     * is the redundancy migration 0027 refused to create.
+     *
+     * NULL ON EVERY CHARGE WRITTEN BEFORE MIGRATION 0031, which is why the guard
+     * matches on a NON-NULL hash rather than treating null as a wildcard. An old
+     * charge cannot be compared to a new basket, and pretending it can would refuse
+     * legitimate charges against history nobody recorded.
+     */
+    basketHash: text('basket_hash'),
+
     createdByStaffId: text('created_by_staff_id').references(() => staffUser.id, {
       onDelete: 'restrict',
     }),
@@ -249,5 +268,16 @@ export const transaction = pgTable(
       'transaction_settled_at_matches_status',
       sql`(${t.status} = 'settled') = (${t.settledAt} IS NOT NULL)`,
     ),
+    check(
+      'transaction_basket_hash_is_charge_only',
+      sql`${t.basketHash} IS NULL OR ${t.kind} = 'charge'`,
+    ),
+    /**
+     * The near-duplicate guard's only query: "has this member been charged for this
+     * basket recently". Partial, because only charges carry a hash.
+     */
+    index('transaction_member_basket_recent_idx')
+      .on(t.memberId, t.basketHash, t.createdAt.desc())
+      .where(sql`kind = 'charge' AND basket_hash IS NOT NULL`),
   ],
 );
