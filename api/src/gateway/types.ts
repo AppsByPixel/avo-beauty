@@ -128,3 +128,26 @@ export class GatewayEventMalformedError extends Error {
     this.name = 'GatewayEventMalformedError';
   }
 }
+
+/**
+ * A callback we CAN read, whose signature IS valid, and which this integration
+ * deliberately does not act on.
+ *
+ * Distinct from malformed because the right answer differs. A malformed callback
+ * is an integration bug and must be visible, so it earns a 400. An unsupported
+ * one is the processor telling us about something we do not handle —
+ * `REFUND_STATUS_CHANGED` is the live example, since non-negotiable #5 means AVO
+ * never issues a gateway refund and one arriving means somebody acted in the
+ * portal. Answering 4xx to that would make the PSP retry a correctly delivered
+ * event for days, so it earns a logged 200.
+ *
+ * The two must not collapse into one another in either direction: malformed
+ * hidden as unsupported is a broken integration answering 200, and unsupported
+ * hidden as malformed is noise that teaches operators to ignore 400s.
+ */
+export class GatewayEventUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GatewayEventUnsupportedError';
+  }
+}

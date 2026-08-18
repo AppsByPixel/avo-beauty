@@ -27,9 +27,53 @@
 --   failed     → (nothing)
 --   cancelled  → (nothing)
 --
--- Note that a state cannot reach itself. That is deliberate and load-bearing:
--- it is what makes a re-delivered `succeeded` callback a no-op rather than a
--- second credit.
+-- WHAT THIS TRIGGER DOES NOT DO — AND THE CLAIM THAT USED TO BE HERE
+-- ------------------------------------------------------------------
+-- This header said: "a state cannot reach itself. That is deliberate and
+-- load-bearing: it is what makes a re-delivered `succeeded` callback a no-op
+-- rather than a second credit."
+--
+-- Both sentences were false, and the second was the dangerous one. Verified in
+-- psql against a real settled intent, savepoint-per-probe, all rolled back:
+--
+--   UPDATE topup_intent SET status='succeeded' WHERE id='TI-…';   -> UPDATE 1
+--   UPDATE topup_intent SET status='succeeded',
+--          transaction_id='TX-9021' WHERE id='TI-…';              -> UPDATE 1
+--   UPDATE topup_intent SET status='pending'   WHERE id='TI-…';
+--     -> ERROR: top-up TI-… is terminal (succeeded): it cannot become pending
+--
+-- A state reaches itself freely: the `IF NEW.status = OLD.status THEN RETURN NEW`
+-- branch below returns BEFORE the arrow table is consulted. So a settled intent
+-- can be re-asserted as settled, and — the second line above — re-pointed at a
+-- DIFFERENT transaction_id while it does so, which is precisely the shape a
+-- second credit has.
+--
+-- AND IT CANNOT BE OTHERWISE. Re-asserting a status is indistinguishable from
+-- touching `updated_at`, which ordinary work does and an existing spec requires
+-- to keep working (`UPDATE … SET updated_at=now()` is `UPDATE 1` above, and it
+-- passes through the same branch). Refusing self-transitions would refuse that.
+-- More to the point, A SECOND CREDIT NEVER MOVES THE STATUS — it is
+-- `succeeded → succeeded` by construction — so a status guard is STRUCTURALLY
+-- BLIND to the thing this comment claimed it prevented. No version of this
+-- trigger could have made the claim true.
+--
+-- WHAT IS ACTUALLY LOAD-BEARING, then. The arrows below are real and they are
+-- worth having: `succeeded → pending` is refused, which stops a settled top-up
+-- being walked back into flight by a support tool or a psql session, and that is
+-- the paragraph above ("WHY A TRIGGER AND NOT JUST CAREFUL CODE") stated
+-- correctly. What stops a re-delivered callback crediting twice is in
+-- services/topup.ts: the intent row taken `FOR UPDATE`, `canTransition` refusing
+-- `succeeded → succeeded` in application code, and the conditional credit write.
+-- Lane D removed them one at a time and money moved twice only when all three
+-- were gone.
+--
+-- THIS IS THE THIRD PROSE INVARIANT IN A MIGRATION COMMENT THAT NOBODY COULD
+-- CHECK, after the ledger reconciliation claim and 0020's half-parity. The
+-- pattern is the same each time: a true-sounding sentence about a guarantee,
+-- written next to a mechanism that does something adjacent to it, and no test
+-- that would fail if it were wrong. There is one now — lane D's spec asserts both
+-- halves, so it fails if this trigger is dropped AND it documents that the
+-- self-transition is permitted.
 -- ===========================================================================
 
 

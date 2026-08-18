@@ -183,6 +183,13 @@
       "when": 1787200400000,
       "tag": "0025_policy_acceptance_is_an_event",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787286800000,
+      "tag": "0026_signup_attempt",
+      "breakpoints": true
     }
   ]
 }

@@ -50,6 +50,17 @@ export async function buildApp(): Promise<FastifyInstance> {
         : { transport: { target: 'pino-pretty' }, redact: ['req.headers.authorization'] },
     // Money bodies are small. A generous limit is just a DoS surface.
     bodyLimit: 256 * 1024,
+    /**
+     * Whether `req.ip` is the customer or the load balancer.
+     *
+     * This matters now in a way it did not before: the signup limiter
+     * (services/signupLimit.ts) counts attempts per address, so `req.ip` stopped
+     * being a field written into an audit row and became a CONTROL. Off by
+     * default — see env.ts for why both settings are wrong in production until
+     * TRUST_PROXY names the real proxy, and why off is the safer of the two
+     * wrongs.
+     */
+    trustProxy: env.trustProxy,
   });
 
   await app.register(cors, { origin: true });

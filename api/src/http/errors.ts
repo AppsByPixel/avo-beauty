@@ -36,8 +36,25 @@ export class ApiError extends Error {
     code: string,
     message: string,
     details: Record<string, unknown> = {},
+    /**
+     * The error this one was raised INSTEAD OF, for 5xx.
+     *
+     * Never reaches the caller — `toBody()` does not read it, and rule 2 above
+     * still holds. It exists because of the opposite failure: `POST /topups`
+     * converts a `GatewayUnavailableError` carrying MyFatoorah's own validation
+     * messages into a 502 whose display copy is "We could not reach the payment
+     * provider", and the original was DROPPED ON THE FLOOR. An operator saw
+     * `code: gateway_unavailable` and nothing else, so a wrong API key and a
+     * malformed `CallBackUrl` were the same log line — and gateway/myfatoorah.ts
+     * carried a comment claiming the field names would be nameable from one log
+     * line, which was simply untrue as built. Found by reading the log after
+     * driving the failure, not by reading the code.
+     */
+    options: { cause?: unknown } = {},
   ) {
-    super(message);
+    // `cause` goes through Error's own option bag rather than a field, so the
+    // chain prints under pino's `err` serialiser without extra help.
+    super(message, options);
     this.name = 'ApiError';
     this.statusCode = statusCode;
     this.code = code;
@@ -120,7 +137,21 @@ export const tokenExpired = () =>
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((err: unknown, req: FastifyRequest, reply: FastifyReply) => {
     if (err instanceof ApiError) {
-      req.log.info({ code: err.code, status: err.statusCode }, 'request refused');
+      /**
+       * A 5xx ApiError IS AN INCIDENT AND IS LOGGED LIKE ONE.
+       *
+       * The single `info` line below is right for a 4xx: the message is display
+       * copy and the code is the whole diagnosis. It was wrong for a 5xx, where
+       * the message and the `cause` ARE the diagnosis and the client is being
+       * told nothing on purpose. A 502 from the payment gateway logged as
+       * `info { code, status }` is an outage recorded at the same level as a
+       * mistyped PIN, with the reason discarded.
+       */
+      if (err.statusCode >= 500) {
+        req.log.error({ err, code: err.code, status: err.statusCode }, 'request failed');
+      } else {
+        req.log.info({ code: err.code, status: err.statusCode }, 'request refused');
+      }
       return reply.code(err.statusCode).send(err.toBody());
     }
 

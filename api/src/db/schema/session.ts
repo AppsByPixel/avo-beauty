@@ -124,3 +124,58 @@ export const pinAttempt = pgTable(
   },
   (t) => [index('pin_attempt_device_idx').on(t.salonId, t.deviceId, t.createdAt.desc())],
 );
+
+/**
+ * Signup attempts, for bounding an unauthenticated argon2 endpoint.
+ *
+ * `POST /auth/member/signup` hashes a password with argon2id, which is expensive
+ * on purpose, and had no rate limit — its own header said so and escalated it.
+ * Half of what it escalated was a product decision and half was not: the
+ * enumeration oracle in `already_registered` needs a verification step at signup
+ * and stays escalated; an unbounded expensive endpoint does not, and this is what
+ * bounds it.
+ *
+ * SIBLING OF `pin_attempt`, ON PURPOSE — same shape, same reason. That table
+ * exists so "N attempts from this device in the last minute" is answerable
+ * independently of any account's own counter. This one exists so "N attempts from
+ * this caller in the last five minutes" is answerable when there is no account
+ * yet to count against.
+ *
+ * NO PHONE NUMBER COLUMN. The limit is keyed on the caller, so the phone is not
+ * needed to enforce it, and a retained list of numbers that TRIED to register is a
+ * list of people who do not have accounts here — a worse privacy artefact than the
+ * oracle this deliberately does not close.
+ *
+ * AND NO `succeeded` COLUMN, unlike its sibling. `pin_attempt` knows its outcome
+ * when it inserts; this row must be written BEFORE the argon2 hash or a burst of
+ * simultaneous requests all read a count of zero and all pay for one. Recording
+ * the outcome would need an UPDATE, which migration 0026 revokes so the counter
+ * cannot be reset. So this table is a COUNTER, not a record — which of them
+ * succeeded is already in `audit_log`, one "Member signed up" row per success.
+ *
+ * Migration 0026 carries the rest, including why `salon_id` has no foreign key.
+ */
+export const signupAttempt = pgTable(
+  'signup_attempt',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /**
+     * NOT a reference. An attempt naming a salon that does not exist is exactly
+     * the traffic worth counting, and a foreign key would make that insert fail
+     * before the count happened — turning the cheapest probe into the one request
+     * that skips the limiter.
+     */
+    salonId: text('salon_id').notNull(),
+    /**
+     * Null when Fastify cannot attribute the request. Still counted, and every
+     * such caller shares this one bucket — being unattributable is not a way past
+     * the limit.
+     */
+    ipAddress: text('ip_address'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('signup_attempt_ip_idx').on(t.ipAddress, t.createdAt.desc()),
+    index('signup_attempt_salon_idx').on(t.salonId, t.createdAt.desc()),
+  ],
+);

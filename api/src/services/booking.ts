@@ -683,7 +683,36 @@ export async function returnDeposit(
     },
   ]);
 
-  await tx
+  /**
+   * THE TRANSITION IS THE WHERE CLAUSE, and the row count decides.
+   *
+   * This was `.where(eq(booking.id, row.id))` with the count unread, which made
+   * the caller's status check THE ONLY layer standing between one deposit and two
+   * refunds. Lane D replaced that check with `if (false)` and the entire suite
+   * stayed green — 14 files, 516 passed, exit 0 — because nothing had ever called
+   * `DELETE /bookings/{id}`.
+   *
+   * And the schema could not catch what the handler missed, in the worst possible
+   * pattern: `booking_completed_at_matches_status` and its siblings do refuse
+   * `completed → cancelled` and `no_show_returned → cancelled`, but
+   * `cancelled → cancelled` is SELF-CONSISTENT — every CHECK passes and a second
+   * refund commits. Lane D drove it: 205000 then 210000 for one 5.000 deposit. The
+   * two transitions the schema does cover are exactly the two that made this path
+   * look adequate.
+   *
+   * `deposit_held` is the only status a deposit can come back from, and it is now
+   * asserted by the statement rather than by the caller having remembered. Nothing
+   * downstream of this — including the money written a few lines above — survives
+   * a zero row count, because the throw rolls the whole transaction back. That is
+   * the same mechanism services/topup.ts uses for a settlement, and the reason a
+   * top-up needed all three of its guards removed before money moved twice while
+   * this needed none.
+   *
+   * NOT A REPLACEMENT for the caller's check. `cancelBooking` still answers
+   * `already_cancelled` / `not_cancellable` with copy a client can render; this is
+   * the layer that holds when someone deletes that.
+   */
+  const [settled] = await tx
     .update(booking)
     .set(
       params.reason === 'cancelled'
@@ -700,7 +729,16 @@ export async function returnDeposit(
             updatedAt: now,
           },
     )
-    .where(eq(booking.id, row.id));
+    .where(and(eq(booking.id, row.id), eq(booking.status, 'deposit_held')))
+    .returning({ id: booking.id });
+
+  if (!settled) {
+    throw conflict(
+      'deposit_already_returned',
+      'That deposit has already been returned.',
+      { bookingId: row.id, reason: params.reason },
+    );
+  }
 
   await queueReceipts(tx, memberRow, txId, {
     kind: 'deposit_return',
@@ -919,9 +957,25 @@ export async function rescheduleBooking(
         rescheduledAt: now,
         updatedAt: now,
       })
-      .where(eq(booking.id, row.id))
+      /**
+       * `status = 'deposit_held'` IN THE WHERE, for the reason `returnDeposit`
+       * above now carries it. Lane D removed the handler's status check and the
+       * suite stayed green, so a completed or cancelled appointment could be moved
+       * into a live slot and occupy an artist's diary. No money moves on this path
+       * — which is why lane D reported it rather than building the fix — but the
+       * guard belongs in the write either way, and a booking whose deposit has
+       * already been settled has no slot left to move.
+       */
+      .where(and(eq(booking.id, row.id), eq(booking.status, 'deposit_held')))
       .returning();
-    if (!updated) throw notFound('unknown_booking', 'No such appointment.');
+    if (!updated) {
+      // Not `unknown_booking`: the row was found and locked twenty lines up. A
+      // zero row count here can only mean the status moved, which is the same
+      // fact the handler's check reports and deserves the same code.
+      throw conflict('not_reschedulable', 'That appointment can no longer be changed.', {
+        bookingId: row.id,
+      });
+    }
 
     /**
      * `rules`, not `money`. Nothing moved — the same hold still holds the same
