@@ -1,7 +1,7 @@
 /**
  * Run the no-show return job exactly once, and print what it did.
  *
- *   pnpm --filter @avo/api run job:no-show
+ *   pnpm --dir=/abs/path/to/api run job:no-show
  *
  * TWO REASONS THIS EXISTS, and neither is "for a test".
  *

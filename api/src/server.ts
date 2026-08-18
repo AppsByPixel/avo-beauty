@@ -1,5 +1,5 @@
 /**
- * Entry point. `pnpm --filter @avo/api run dev`
+ * Entry point. `pnpm --dir=/abs/path/to/api run dev`
  *
  * The receipt worker starts HERE and not in `buildApp()`, because `buildApp()`
  * is what the tests construct and a background loop attached to it would send
