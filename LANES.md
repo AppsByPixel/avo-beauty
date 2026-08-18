@@ -92,6 +92,19 @@ docker exec -i avo-postgres psql -U avo -d postgres \
 Anchor load-bearing claims in SQL against your own database rather than in the API's own
 reply. A server that answers plausibly is not evidence that it is *your* server.
 
+### The scratchpad is shared between lanes — a seventh vector
+
+The session scratchpad directory looks per-agent and is not. Lane C wrote `pids.txt` there for
+its own cleanup; **another agent overwrote it**, and the PIDs it then contained belonged to
+**lane B's live `avo-wallet/api` server**. A cleanup step written as `kill $(cat pids.txt)`
+would have killed another lane's API — the exact cross-lane process write this section
+catalogues, arriving through a file rather than a pattern. Lane C escaped it only because it
+passed a hardcoded list instead of reading its own file back.
+
+So: **treat generic filenames in the scratchpad as unsafe.** If you must write state there,
+prefix it with your lane (`lane-c-pids.txt`), and prefer keeping PIDs in shell variables that
+cannot be overwritten by anyone. A file you wrote is not necessarily a file you will read.
+
 ### Browser — one context per lane
 
 The lanes share one browser pane. Lane B once injected a `fetch` shim into **Lane C's
