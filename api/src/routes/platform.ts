@@ -25,7 +25,13 @@ import { badRequest, conflict, notFound, serviceUnavailable } from '../http/erro
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { db } from '../db/client';
-import { legalDocumentSet, supportConfig, supportTicket, supportTopic } from '../db/schema/legal';
+import {
+  legalDocumentDraft,
+  legalDocumentSet,
+  supportConfig,
+  supportTicket,
+  supportTopic,
+} from '../db/schema/legal';
 import { member } from '../db/schema/member';
 import { branch } from '../db/schema/salon';
 import { transaction } from '../db/schema/transaction';
@@ -608,6 +614,42 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
         'policies_not_published',
         'The policy set has not been published yet.',
       );
+    }
+
+    /**
+     * `draft` FOR A PLATFORM PRINCIPAL WITH `policies`, AND FOR NOBODY ELSE.
+     *
+     * `LegalDocumentSetSchema` declares `draft` OPTIONAL, and the reason is in its
+     * own comment: requiring it made `.parse()` throw on the customer's legal set,
+     * "so #10 could not be satisfied through the contract at all. The owner
+     * console's editor is the only reader that gets a draft."
+     *
+     * So this one route serves two shapes, and the fork is the principal rather
+     * than a query parameter — `?includeDraft=1` would be a client asking for
+     * unreviewed legal text and being trusted about whether it may have it. A
+     * wallet, a merchant, an anonymous signup screen and a console admin without
+     * `policies` all get `{ published }`; only the editor sees the draft.
+     *
+     * RESOLVED WITHOUT THROWING, which is the part worth stating. This route is
+     * anonymous by necessity, so it cannot call `requirePlatform` — that would 401
+     * the signup screen. It ASKS whether the caller happens to be a console editor
+     * and adds a key if so. An empty draft is omitted rather than sent as `{docs:
+     * []}`, because "no unpublished changes" and "there is no draft concept here"
+     * should not look identical to a console deciding whether to show a dirty dot.
+     */
+    const p = req.principal;
+    if (p?.kind === 'platform_admin' && p.sections.policies) {
+      const [draft] = await db.select().from(legalDocumentDraft).limit(1);
+      if (draft && draft.docs.length > 0) {
+        return reply.send({
+          published: serialiseLegalSet(set),
+          draft: {
+            docs: draft.docs,
+            updatedBy: draft.updatedBy,
+            updatedAt: draft.updatedAt.toISOString(),
+          },
+        });
+      }
     }
 
     return reply.send({ published: serialiseLegalSet(set) });
