@@ -1235,8 +1235,10 @@ describe('account deletion — a state with a clock, and the clock must not be n
 });
 
 // ===========================================================================
-// SCOPE. Four routes that are member-only, called with every other kind of
-// credential this API issues.
+// SCOPE. Five routes that are member-only, called with every other kind of
+// credential this API issues. Four when this block was written; lane A's
+// `GET /members/me/deletion` made it five, and it cost one entry in `calls`
+// because the matrix is generated rather than written out per route.
 //
 // This project has already shipped a browser session that could debit a wallet —
 // `requireStaff`'s `surface` parameter exists because that check ran in one
@@ -1246,7 +1248,7 @@ describe('account deletion — a state with a clock, and the clock must not be n
 // both are called directly.
 // ===========================================================================
 
-describe('the four member routes are member-scoped, and every other credential is refused', () => {
+describe('the five member routes are member-scoped, and every other credential is refused', () => {
   let web = '';
   let pin = '';
 
@@ -1266,6 +1268,12 @@ describe('the four member routes are member-scoped, and every other credential i
     {
       name: 'PATCH /members/me/notifications',
       run: (token) => treq('PATCH', '/members/me/notifications', { token, body: { offers: true } }),
+    },
+    {
+      // Arrived in lane A's 540b3f1, after the other four. The contract guard's
+      // AWAITING_MERGE note said to add it here on merge, and this is that.
+      name: 'GET /members/me/deletion',
+      run: (token) => treq('GET', '/members/me/deletion', { token }),
     },
     {
       name: 'POST /members/me/deletion',

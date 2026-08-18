@@ -170,6 +170,20 @@ export const B_STAFF_LOCKOUT = 'ST-B04';
 export const B_STAFF_LOCKOUT_HANDLE = 'huda';
 export const B_LOCKOUT_DEVICE = 'DEV-SCANNER-B-LOCKOUT';
 
+/**
+ * THE LOOKUP-BUDGET ROWS. See the seed below for why they exist: the per-staff
+ * hourly ceiling on `GET /members?q=` means a spec that spends 30 lookups has to
+ * spend them under an id nothing else uses, and `audit_log` cannot be trimmed to
+ * give the budget back.
+ */
+export const B_STAFF_BURST = 'ST-B06';
+export const B_STAFF_BURST_HANDLE = 'budgetburst';
+export const B_BURST_DEVICE = 'DEV-SCANNER-B-BURST';
+
+export const B_STAFF_COUNTER = 'ST-B07';
+export const B_STAFF_COUNTER_HANDLE = 'budgetcounter';
+export const B_COUNTER_DEVICE = 'DEV-SCANNER-B-COUNTER';
+
 export const B_STAFF_RATELIMIT = 'ST-B05';
 export const B_STAFF_RATELIMIT_HANDLE = 'dalal';
 export const B_RATELIMIT_DEVICE = 'DEV-SCANNER-B-RATELIMIT';
@@ -1144,6 +1158,44 @@ SELECT '${B_STAFF_RATELIMIT}', '${SALON_B}', 'Dalal', '${B_STAFF_RATELIMIT_HANDL
 FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
 ON CONFLICT (id) DO UPDATE SET
   pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_RATELIMIT_DEVICE}', perm_scanner = true;
+
+-- TWO STAFF ROWS THAT EXIST ONLY TO HAVE THEIR OWN LOOKUP BUDGET.
+--
+-- GET /members?q= now has a SECOND rate-limit tier: 60 per rolling hour keyed on
+-- the staff member alone, with no session and no device in the predicate. That tier
+-- is right — a session was never scarce, so a per-session limit was resettable by
+-- signing out and back in — and it makes one thing about this suite wrong.
+--
+-- scanner.test.ts spends most of an hour's budget under ONE staff id: the shared
+-- scanner session's row is also the row the 30-lookup burst spec and the
+-- 29-lookup "counter is the log" spec sign in as. Measured against lane A's branch
+-- before the merge, that reached the ceiling and "THE COUNTER IS THE LOG" failed on
+-- its 19th lookup with lookup_hourly_limit, passing in isolation.
+--
+-- The fix is staff spread, NOT a weakened limit. A suite that needs a production
+-- control turned down is the suite that is wrong, and a ceiling of 60 an hour that
+-- the test suite cannot live inside is worth knowing about precisely because a busy
+-- front desk has the same problem.
+--
+-- So: one row per heavy spec, named for the budget rather than for a person,
+-- because that is what they are for. audit_log cannot be trimmed by anybody, so a
+-- spec that spends a budget spends it for the whole run — which is exactly why each
+-- of these belongs to one spec and no other.
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id, perm_scanner)
+SELECT '${B_STAFF_BURST}', '${SALON_B}', 'Budget Burst', '${B_STAFF_BURST_HANDLE}', 'frontdesk',
+       true, '{}', s.password_hash, s.pin_hash, '${B_BURST_DEVICE}', true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_BURST_DEVICE}', perm_scanner = true;
+
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id, perm_scanner)
+SELECT '${B_STAFF_COUNTER}', '${SALON_B}', 'Budget Counter', '${B_STAFF_COUNTER_HANDLE}',
+       'frontdesk', true, '{}', s.password_hash, s.pin_hash, '${B_COUNTER_DEVICE}', true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_COUNTER_DEVICE}', perm_scanner = true;
 
 -- Salon B's happy hours. Both OFF, so no promotion is live during the money
 -- specs; see the constants at the top of this file.
