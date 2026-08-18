@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_COMMISSION, fils, formatFils, type Salon } from '@avo/types';
-import { Card, Pill, Skeleton, Stepper, Toggle } from '@avo/ui';
+import { Card, ErrorState, Pill, Skeleton, Stepper, Toggle } from '@avo/ui';
 import { useSalon } from '../api/salon.js';
 import { useUpdateSalon } from '../api/settings.js';
+import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
 
 /**
@@ -32,9 +33,47 @@ const DEPOSIT_MAX = 10_000; // 10 KD
 const DEPOSIT_STEP = 1_000;
 
 export function Settings() {
+  const session = useSession('merchant');
   const salonQuery = useSalon();
   const update = useUpdateSalon();
   const salon = salonQuery.data;
+
+  /*
+   * THE COURTESY GATE MARKETING ALREADY HAD AND THIS SCREEN DID NOT.
+   *
+   * `GET /salons/{id}` is guarded by `requirePrincipal` and `requireSameSalon`
+   * and NO permission — deliberately, because the customer wallet reads the same
+   * object for `timezone`, `businessHours` and the loyalty shape. So the read
+   * succeeds for any staff member in the salon, and this screen rendered a
+   * complete, editable Settings editor to a front-desk account with
+   * `perms.dashboard` and `perms.loyalty` both off. Every write from it then
+   * refuses.
+   *
+   * That is the inverse of the failure `sectionState.tsx` guards against. Not a
+   * 403 wearing a Retry button, but NO refusal at all until she has set a deposit,
+   * toggled WhatsApp and pressed save — at which point the screen tells her the
+   * change never happened. Verified with the seeded front-desk account: six
+   * sections explained themselves, Settings handed her the editor.
+   *
+   * `perms.loyalty` and not `perms.dashboard`, because that is what the server
+   * actually enforces: every salon write — `PATCH /salons/{id}` and all three
+   * branch routes — is `requireDashboardPerm(req, 'loyalty')`. Gating the courtesy
+   * on `dashboard` would hide the screen from somebody the API would let save,
+   * which is a worse error than the one being fixed.
+   *
+   * Non-negotiable #7 is unchanged: the server refuses these writes whether or
+   * not this check exists. This is the courtesy, not the control. The copy is the
+   * API's own sentence for `loyalty`, so a merchant who reaches the refusal by
+   * another route reads the same words.
+   */
+  if (!session.perms.loyalty) {
+    return (
+      <ErrorState
+        title="You don't have access to settings"
+        body="You don't have permission to change loyalty settings. A manager can grant it."
+      />
+    );
+  }
 
   if (salonQuery.isError) {
     return (

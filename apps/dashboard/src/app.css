@@ -254,7 +254,10 @@ a:hover {
   border-bottom: 1px solid var(--avo-hairline);
   border-radius: 0 0 var(--avo-radius-sheet) var(--avo-radius-sheet);
   z-index: 41;
-  animation: avo-drawer 280ms var(--avo-motion-easing);
+  /* `--avo-motion-sheet`, not a re-typed 280ms. §3's table and the token agree,
+     and a duration typed by hand drifts from the token the same way a hex does.
+     There is no token for the 180ms overlay fade — reported, not invented. */
+  animation: avo-drawer var(--avo-motion-sheet) var(--avo-motion-easing);
 }
 
 @keyframes avo-fade {
@@ -274,6 +277,40 @@ a:hover {
   to {
     transform: translateY(0);
     opacity: 1;
+  }
+}
+
+/*
+ * REDUCED MOTION — THE RE-ADD, WHICH IS THE HALF THAT WAS MISSING.
+ *
+ * interaction-spec.md §3 is two steps, not one. Step one is the blanket that
+ * flattens every animation, and @avo/tokens generates it verbatim. Step two is
+ * "Then re-add, deliberately: — Sheets: cross-fade in place instead of sliding."
+ *
+ * Only step one existed. The blanket kills `avo-drawer` wholesale, so the drawer
+ * did not cross-fade — it appeared instantly, which is neither the slide the
+ * spec removes nor the cross-fade it asks for. The same shape as the hours editor
+ * quoting 720 and setting 780: the spec was cited, and something else shipped.
+ *
+ * So the fade is re-added without the transform. `translateY` is the part that
+ * triggers people; an opacity change is not, which is exactly why §3 keeps it.
+ * The scrim is re-added with it because the two are one overlay — a backdrop that
+ * snaps while the sheet fades reads as a rendering fault.
+ *
+ * `!important` and a class selector: the blanket is `* { animation-duration:
+ * 0.01ms !important }`, and among important declarations specificity decides, so
+ * (0,1,0) beats (0,0,0). Not a hack — the blanket is deliberately the widest
+ * possible rule, and the spec's re-adds can only be written on top of it.
+ *
+ * The skeleton shimmer (`avo-shimmer`, a 1.4s infinite loop in @avo/ui) is
+ * deliberately NOT re-added. It is decorative and looping, which is the category
+ * §3 is most concerned with; the skeleton's shape carries the loading state, so
+ * stopping the shimmer removes the animation without removing the state change.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .dash__drawer,
+  .dash__scrim {
+    animation: avo-fade 180ms ease-out !important;
   }
 }
 

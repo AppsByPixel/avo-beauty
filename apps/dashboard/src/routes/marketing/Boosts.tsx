@@ -80,7 +80,15 @@ export function Boosts({ branches, promotions, loading }: BoostsProps) {
           ))}
         </div>
       ) : branches.length === 0 ? (
-        <p className="mk__none">This salon has no branches yet, so there is nothing to boost.</p>
+        /*
+         * Named the thing but not the action, which is the half of the rule that
+         * is easy to miss — the merchant is told why the screen is empty and left
+         * to work out where branches come from. They come from one place.
+         */
+        <p className="mk__none">
+          This salon has no branches yet, so there is nothing to boost. Add one in{' '}
+          <b>Settings → Branches</b> and it appears here.
+        </p>
       ) : (
         branches.map((branch) => {
           const values = draft[branch.id] ?? NEUTRAL_BOOST;
