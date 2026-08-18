@@ -7,6 +7,51 @@ Written as a handoff. If you are a fresh session picking this up, read this firs
 
 ---
 
+## HOW THIS PROJECT IS RUN — read before doing anything else
+
+**Aftab has authorised parallel subagent dispatch, and expects it.** This is a standing
+instruction, not a one-off. He asked for it explicitly, repeatedly, and asked for it to
+continue unattended:
+
+> "I need them to work simultaneously at the same time."
+> "run all of them in this session and keep running… Do not depend on any action or
+> decision from my side."
+
+So: **you are the trunk.** You do not build in this checkout. You dispatch one subagent per
+lane into its own worktree, integrate what comes back, and dispatch the next slice. Four
+lanes, four worktrees, listed in `LANES.md`.
+
+```
+~/dev/avo         you — trunk: merge, decide, route
+~/dev/avo-api     Lane A   feat/api      api/
+~/dev/avo-wallet  Lane B   feat/wallet   apps/wallet/, apps/scanner/
+~/dev/avo-web     Lane C   feat/web      apps/dashboard/, packages/ui/
+~/dev/avo-qa      Lane D   feat/qa       **/*.test.ts, e2e/
+```
+
+**Dispatch two to four at once** when their columns do not overlap. Scanner and API never
+collide; API and dashboard do, because the dashboard consumes what the API has not built
+yet. `LANES.md` carries the order and the reasoning.
+
+**Every brief has four parts**, and the fourth is the one that has caught every real bug:
+
+1. Who it is and which worktree.
+2. One slice, sized for a run — not an hour, not a week.
+3. Its column, restated. *"If the change you want is outside it, stop and report."*
+4. **Verify by running it and pasting real output.** Not "it should work" — the SQL error
+   text, the screenshot, the balance before and after.
+
+**Then integrate**: merge one lane at a time, `pnpm check` after each — never at the end, or
+you know something broke and not which lane broke it. Then the fresh-database recipe in
+`RUNBOOK.md`, twice.
+
+**Do not build a lane's work yourself in the trunk checkout.** Route it. Trunk editing a
+lane's column turned one failing spec into four, once; the policy since is route and accept
+a short red.
+
+
+---
+
 ## Read these, in this order
 
 | File | What it is |

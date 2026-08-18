@@ -151,3 +151,19 @@ These belong to the client:
 - Who monitors the AVO support queue, in what hours, and what the salon-routed queue is
 - Data residency (leaning Kuwait, undecided) and the retention schedule
 - Whether receipts send from AVO's domain or per-salon subdomains
+
+---
+
+## How this project is run
+
+**Parallel subagent dispatch is authorised and expected.** Aftab asked for it explicitly and
+asked for it to continue without waiting on him. A session picking this up should dispatch
+lanes rather than build in the trunk checkout.
+
+Read `STATUS.md` § "HOW THIS PROJECT IS RUN" first — it carries the worktree map, the
+four-part brief shape, and the integration ritual. `LANES.md` has each lane's column and the
+work order.
+
+The short version: **you are the trunk.** Dispatch one subagent per lane into its own
+worktree, two to four at once where columns do not overlap, integrate what comes back, then
+dispatch the next slice. Do not build a lane's work yourself here.
