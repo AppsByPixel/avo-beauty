@@ -261,6 +261,50 @@ async function seed(): Promise<void> {
     });
 
   /**
+   * A THIRD ADMIN, AND SHE EXISTS TO MAKE A GUARD REACHABLE.
+   *
+   * `DELETE /v1/platform/admins/{id}` refuses an admin removing her OWN account —
+   * the console's `admins` section is the only route back in, so a self-removal
+   * locks a section of the product behind a row nobody can edit. Real property.
+   *
+   * And it could not be executed. The owner is refused one line earlier by a
+   * different rule, and the only other signable admin was the analyst, who has no
+   * `admins` permission and so never reaches the handler. So the branch was
+   * unreachable — the shape this repository has already paid for twice, in
+   * `heldDepositFils` sitting at 0 until bookings landed and in the no-show runner
+   * that STATUS.md records as never once executed by a spec. "A branch that cannot
+   * execute cannot be wrong, and cannot be tested either."
+   *
+   * `admin` is the design's own role — "Full admin — everything" in the Admins
+   * editor's select — so this is a fixture of something the product ships rather
+   * than a test-only account. It is also the second full-authority credential the
+   * console needs for any two-reviewer case.
+   */
+  await db
+    .insert(platformAdmin)
+    .values({
+      id: 'PLT-003',
+      name: 'Salem A.',
+      handle: 'salem.a',
+      passwordHash: platformHash,
+      role: 'admin',
+      owner: false,
+      permAnalytics: true,
+      permActivity: true,
+      permSalons: true,
+      permAccounts: true,
+      permAdmins: true,
+      permControls: true,
+      permApprovals: true,
+      permPolicies: true,
+      permAudit: true,
+    })
+    .onConflictDoUpdate({
+      target: platformAdmin.id,
+      set: { passwordHash: platformHash, active: true, permAdmins: true },
+    });
+
+  /**
    * THE LEGAL SET FIRST, BEFORE ANY MEMBER.
    *
    * Not because a foreign key demands it — `member.policy_version` is a plain
@@ -1414,6 +1458,7 @@ async function seed(): Promise<void> {
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
   console.log(`  console yousef / ${PLATFORM_PASSWORD}       (owner, every section)`);
   console.log(`  console mariam.k / ${PLATFORM_PASSWORD}     (analyst — no approvals, no policies)`);
+  console.log(`  console salem.a / ${PLATFORM_PASSWORD}      (full admin, not the owner)`);
 }
 
 // This script truncates the money tables and disables an immutability trigger to

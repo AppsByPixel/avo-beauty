@@ -174,6 +174,21 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO service (id, salon_id, name, price_fils) VALUES ('SV-VERIFY', 'SL-VERIFY', 'Blow-dry', 8000)
 ON CONFLICT (id) DO NOTHING;
 
+-- The owner console's principal and one campaign, for section 12. Rolled back with
+-- everything else.
+INSERT INTO platform_admin (id, name, handle, password_hash, role, owner,
+                            perm_analytics, perm_activity, perm_salons, perm_accounts,
+                            perm_admins, perm_controls, perm_approvals, perm_policies, perm_audit)
+VALUES ('PLT-VERIFY', 'Yousef', 'yousef.verify', '$argon2id$fake', 'owner', true,
+        true, true, true, true, true, true, true, true, true)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO campaign (id, salon_id, title, body, channel, audience, reward, reach,
+                      send_when, status, submitted_by)
+VALUES ('CMP-VERIFY', 'SL-VERIFY', 'Thursday late night', 'Every visit counts double.',
+        'push', 'all', 'x2visit', 12, 'now', 'pending', 'Rana Al-Sabah')
+ON CONFLICT (id) DO NOTHING;
+
 -- An audit row for section 1 to try to tamper with. Written by the app role, which
 -- is the only thing it is allowed to do to this table.
 SET LOCAL ROLE avo_app;
@@ -673,6 +688,174 @@ SELECT pg_temp.assert('11', 'no order line hangs off a non-shop transaction',
      WHERE t.kind <> 'shop'
   ),
   (SELECT count(*) || ' line(s) checked' FROM shop_order_line));
+
+-- =========================================================================
+-- 12. the owner console's principal, and #8's storage
+-- =========================================================================
+-- Migrations 0028 and 0029. Four rules that a handler cannot be trusted with,
+-- because each of them is exactly what a handler forgets:
+--
+--   THE PLATFORM PRINCIPAL HAS NO SALON. `requireSameSalon` is the tenancy
+--   boundary for every other principal, and the console reads across salons by
+--   design. `PlatformPrincipal` has no `salonId` FIELD so the check does not
+--   compile — and the row-level version is an EQUIVALENCE, because a MERCHANT
+--   session with a NULL salon would slip past `requireSameSalon` by having nothing
+--   to compare. Both directions are probed.
+--
+--   "OWNER · FULL ACCESS" is a constraint. The console draws the owner's chips
+--   non-toggleable; this is what backs that, so a row written before the rule
+--   cannot express the forbidden combination either — `void implies charges`'s
+--   treatment, applied to the console.
+--
+--   A REJECTION CARRIES A REASON. api-contract.md: "Rejections must carry a note —
+--   the merchant sees it under the campaign." Left to the handler that is a
+--   promise; here a future second decision path cannot forget it.
+--
+--   A HOLD IS NOT A STATUS. `CampaignSchema` declares four and a fifth on the wire
+--   is a value every client's `.parse()` rejects, so a hold is `approved` +
+--   `held_reason` — and only `approved`, since a hold on a pending, rejected or
+--   sent campaign is a state nobody can act on.
+SELECT pg_temp.probe('12', 'a platform session cannot carry a salon', 'refused',
+  $probe$INSERT INTO session (principal_kind, platform_admin_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('platform_admin', 'PLT-VERIFY', 'SL-VERIFY', 'platform',
+            'verify-hash-salonful', now() + interval '1 day')$probe$,
+  'session_salon_matches_principal');
+
+-- THE OTHER DIRECTION, and it is the one a nullable column would have let through.
+SELECT pg_temp.probe('12', 'a merchant session cannot omit its salon', 'refused',
+  $probe$INSERT INTO session (principal_kind, staff_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('staff', 'ST-VERIFY', NULL, 'dashboard',
+            'verify-hash-salonless', now() + interval '1 day')$probe$,
+  'session_salon_matches_principal');
+
+SELECT pg_temp.probe('12', 'a platform admin cannot hold a dashboard session', 'refused',
+  $probe$INSERT INTO session (principal_kind, platform_admin_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('platform_admin', 'PLT-VERIFY', NULL, 'dashboard',
+            'verify-hash-wrongscope', now() + interval '1 day')$probe$,
+  'session_scope_matches_principal');
+
+SELECT pg_temp.probe('12', 'a session cannot name two principals', 'refused',
+  $probe$INSERT INTO session (principal_kind, platform_admin_id, staff_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('platform_admin', 'PLT-VERIFY', 'ST-VERIFY', NULL, 'platform',
+            'verify-hash-twoprincipals', now() + interval '1 day')$probe$,
+  'session_exactly_one_principal');
+
+SELECT pg_temp.probe('12', 'the owner cannot have a section switched off', 'refused',
+  $probe$UPDATE platform_admin SET perm_approvals = false WHERE id = 'PLT-VERIFY'$probe$,
+  'platform_admin_owner_holds_everything');
+
+SELECT pg_temp.probe('12', 'the owner flag and the owner role are one fact', 'refused',
+  $probe$UPDATE platform_admin SET role = 'admin' WHERE id = 'PLT-VERIFY'$probe$,
+  'platform_admin_owner_flag_matches_role');
+
+SELECT pg_temp.probe('12', 'a rejection with no note is refused', 'refused',
+  $probe$UPDATE campaign SET status = 'rejected', decided_by = 'Yousef', decided_at = now()
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_rejection_has_note');
+
+SELECT pg_temp.probe('12', 'a pending campaign cannot name a decider', 'refused',
+  $probe$UPDATE campaign SET decided_by = 'Yousef', decided_at = now()
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_decision_is_attributed');
+
+SELECT pg_temp.probe('12', 'a decided campaign cannot omit its decider', 'refused',
+  $probe$UPDATE campaign SET status = 'approved' WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_decision_is_attributed');
+
+SELECT pg_temp.probe('12', 'only an approved campaign can be held', 'refused',
+  $probe$UPDATE campaign SET held_reason = 'Quiet hours', held_at = now()
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_hold_requires_approved');
+
+SELECT pg_temp.probe('12', 'a hold needs a reason AND a moment', 'refused',
+  $probe$UPDATE campaign SET status = 'approved', decided_by = 'Yousef', decided_at = now(),
+                         held_reason = 'Quiet hours'
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_hold_is_complete');
+
+SELECT pg_temp.probe('12', 'only a sent campaign carries a result', 'refused',
+  $probe$UPDATE campaign SET status = 'approved', decided_by = 'Yousef', decided_at = now(),
+                         result = '612 reached'
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_result_requires_sent');
+
+SELECT pg_temp.probe('12', 'a now campaign cannot carry a scheduled time', 'refused',
+  $probe$UPDATE campaign SET scheduled_at = now() + interval '1 day' WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_scheduled_at_matches_when');
+
+-- The cap's own rows. A limit whose rows the application can delete is not a limit
+-- — 0026's reasoning about `signup_attempt`, and these rows are also the evidence
+-- that a customer was contacted.
+SELECT pg_temp.probe('12', 'the app role cannot delete a campaign send', 'refused',
+  $probe$DELETE FROM campaign_send$probe$, 'permission denied', 'avo_app');
+
+SELECT pg_temp.probe('12', 'the app role cannot backdate a campaign send', 'refused',
+  $probe$UPDATE campaign_send SET sent_at = now() - interval '30 days'$probe$,
+  'permission denied', 'avo_app');
+
+SELECT pg_temp.probe('12', 'the messaging policy is a singleton', 'refused',
+  $probe$INSERT INTO platform_messaging_policy (id) VALUES ('other')$probe$,
+  'platform_messaging_policy_is_singleton');
+
+SELECT pg_temp.probe('12', 'a weekly cap outside 1..7 is refused', 'refused',
+  $probe$UPDATE platform_messaging_policy SET weekly_cap_per_customer = 8$probe$,
+  'weekly_cap_in_range');
+
+SELECT pg_temp.probe('12', 'quiet hours must be HH:mm', 'refused',
+  $probe$UPDATE platform_messaging_policy SET quiet_from = '25:00'$probe$,
+  'quiet_hours_are_hhmm');
+
+/**
+ * CONSENT ORDER IS UNAMBIGUOUS — migration 0029, and this is the invariant behind
+ * a measured defect rather than a shape.
+ *
+ * `services/consent.ts` derives marketing consent as the newest event, and
+ * `created_at` defaults to `now()` — the TRANSACTION timestamp — so two events
+ * written in one transaction tie. With a grant and a withdrawal tied,
+ * `ORDER BY created_at DESC LIMIT 1` returned the GRANT on eight consecutive runs:
+ * a customer who withdrew read as consenting, in the permissive direction, from the
+ * function the campaign send path is documented as having to call.
+ *
+ * `seq` is the tiebreak. The invariant is that it can BE one: NOT NULL and unique
+ * per member, so "newest" is total rather than partial.
+ */
+SELECT pg_temp.assert('12', 'every consent event has a unique monotonic seq',
+  NOT EXISTS (
+    SELECT 1 FROM member_consent_event
+     WHERE seq IS NULL
+  ) AND NOT EXISTS (
+    SELECT member_id, seq FROM member_consent_event
+     GROUP BY member_id, seq HAVING count(*) > 1
+  ),
+  (SELECT count(*) || ' consent event(s) checked' FROM member_consent_event));
+
+/**
+ * A HELD CAMPAIGN HAS AN OPEN NOTIFICATION. #8's "held and reported, never
+ * silently dropped", as a reconciliation rather than as a promise in a service
+ * function: the merchant learns of a hold from the bell and from nowhere else,
+ * because `CampaignSchema` declares no field for one. A held campaign with no open
+ * `campaign_held` row IS the silent drop the rule forbids, and no constraint can
+ * express it — the two tables are joined only by `subject_id`, which is free text.
+ */
+SELECT pg_temp.assert('12', 'every held campaign has an open notification',
+  NOT EXISTS (
+    SELECT 1 FROM campaign c
+     WHERE c.held_reason IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM merchant_notification n
+          WHERE n.salon_id = c.salon_id
+            AND n.kind = 'campaign_held'
+            AND n.subject_type = 'campaign'
+            AND n.subject_id = c.id
+            AND n.resolved_at IS NULL
+       )
+  ),
+  (SELECT count(*) || ' held campaign(s) checked'
+     FROM campaign WHERE held_reason IS NOT NULL));
 
 -- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST
