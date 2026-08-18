@@ -45,6 +45,46 @@ const EnvSchema = z.object({
   PIN_DEVICE_WINDOW_MINUTES: z.coerce.number().int().positive().default(5),
 
   /**
+   * SIGNUP — bounding an unauthenticated argon2id endpoint.
+   *
+   * Two tiers on the caller's address, the same shape as the directory-read
+   * limiter in services/memberSearch.ts: a burst window and an hourly ceiling,
+   * both answered by one query.
+   *
+   * THE NUMBERS ARE CALIBRATED FOR COST, NOT FOR ENUMERATION, and are generous on
+   * purpose. Kuwaiti mobile networks are heavily NAT'd, so one address can be a
+   * great many customers, and a salon signing walk-ins up on its own wifi is one
+   * address too — a tight limit here refuses real people at a counter, which is a
+   * worse outcome than the one it prevents. 100 hashes an hour is on the order of
+   * ten seconds of CPU: bounded, which is the whole requirement, while being a
+   * number no legitimate address reaches.
+   *
+   * NEITHER TIER ADDRESSES A DISTRIBUTED FLOOD, and nothing keyed on the caller
+   * can. That needs the verification step at signup, which is the escalated
+   * product decision — see the route.
+   */
+  SIGNUP_ATTEMPTS_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  SIGNUP_WINDOW_MINUTES: z.coerce.number().int().positive().default(5),
+  SIGNUP_ATTEMPTS_PER_HOUR: z.coerce.number().int().positive().default(100),
+
+  /**
+   * Whether `X-Forwarded-For` may be believed, and therefore whether `req.ip` is
+   * the customer or the load balancer.
+   *
+   * OFF BY DEFAULT, and the default is the safe one in the direction that matters:
+   * trusting the header unconditionally lets any client SET its own address and
+   * walk straight past the signup limiter, one forged hop at a time. Off, the worst
+   * case is the opposite — every caller behind a proxy shares one bucket.
+   *
+   * Which means BOTH settings are wrong in production until this names the actual
+   * proxy. Fastify accepts an address, a CIDR, a comma-separated list, or a hop
+   * count; the value belongs to whoever owns the deployment, so it is configuration
+   * here rather than a guess in code. `go-live-checklist.md` is where it needs to
+   * land, and it is in the lane report as an escalation.
+   */
+  TRUST_PROXY: z.string().optional(),
+
+  /**
    * TEST AFFORDANCE — off unless explicitly set, and refused outright in
    * production (see the assertion below).
    *
@@ -361,6 +401,22 @@ export const env = {
   pinLockoutMinutes: raw.PIN_LOCKOUT_MINUTES,
   pinDeviceAttemptsPerWindow: raw.PIN_DEVICE_ATTEMPTS_PER_WINDOW,
   pinDeviceWindowMinutes: raw.PIN_DEVICE_WINDOW_MINUTES,
+  signupAttemptsPerWindow: raw.SIGNUP_ATTEMPTS_PER_WINDOW,
+  signupWindowMinutes: raw.SIGNUP_WINDOW_MINUTES,
+  signupAttemptsPerHour: raw.SIGNUP_ATTEMPTS_PER_HOUR,
+  /**
+   * Fastify's own shapes: `true` for "one hop", a number for N hops, or an
+   * address / CIDR / comma-separated list. A bare `true` is passed as a boolean
+   * because Fastify treats the STRING 'true' as an address to match.
+   */
+  trustProxy:
+    raw.TRUST_PROXY === undefined || raw.TRUST_PROXY === ''
+      ? false
+      : raw.TRUST_PROXY === 'true'
+        ? true
+        : /^\d+$/.test(raw.TRUST_PROXY)
+          ? Number(raw.TRUST_PROXY)
+          : raw.TRUST_PROXY,
   testPrincipals: raw.AVO_TEST_PRINCIPALS,
   gatewayDriver: raw.GATEWAY_DRIVER,
   myfatoorahBaseUrl: raw.MYFATOORAH_BASE_URL,

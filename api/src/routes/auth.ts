@@ -71,6 +71,7 @@ import { writeAudit } from '../services/audit';
 import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
 import { tierForVisits } from '../services/loyalty';
 import { recordPolicyAcceptance, requireCurrentPolicyVersion } from '../services/policy';
+import { enforceSignupLimits, recordSignupAttempt } from '../services/signupLimit';
 import { serialiseStaff } from './staff';
 
 /** One body for every credential failure. Never says which half was wrong. */
@@ -153,17 +154,42 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
    * own edit endpoint could not round-trip.
    *
    * UNAUTHENTICATED, AND THEREFORE AN ENUMERATION ORACLE — stated rather than
-   * buried. The duplicate refusal below confirms that a number is registered at
-   * this salon. Any signup form that hands back a session confirms that, because
-   * it must refuse the second registration and cannot pretend to have succeeded.
-   * Bounding it needs a verification step at signup (the shape the phone-change
-   * challenge already uses) and that is a product decision, not one to invent
-   * here. There is also NO RATE LIMIT on this route: argon2 is deliberately
-   * expensive, so an unauthenticated hashing endpoint is a cheap denial of
-   * service. Both are escalated, not fixed quietly.
+   * buried, and STILL ESCALATED. The duplicate refusal below confirms that a
+   * number is registered at this salon. Any signup form that hands back a session
+   * confirms that, because it must refuse the second registration and cannot
+   * pretend to have succeeded. Bounding it needs a verification step at signup
+   * (the shape the phone-change challenge already uses) and that is a product
+   * decision, not one to invent here.
+   *
+   * THE OTHER HALF OF THAT PARAGRAPH IS NOW FIXED, AND THEY WERE NOT THE SAME
+   * QUESTION. It used to read "There is also NO RATE LIMIT on this route: argon2
+   * is deliberately expensive, so an unauthenticated hashing endpoint is a cheap
+   * denial of service. Both are escalated, not fixed quietly." Escalating them
+   * together was the mistake: what a customer is asked to prove about her phone
+   * number is a product decision, and an unbounded expensive endpoint is not one.
+   * `services/signupLimit.ts` bounds the cost, in the shape of the directory-read
+   * limiter — one query, two windows, ceiling first, counted before anything
+   * expensive runs.
+   *
+   * AND THE LIMITER DOES NOT CLOSE THE ORACLE. Worth saying at the call site,
+   * because it looks as though it should: at 20 attempts per five minutes a probe
+   * still walks about 100 numbers an hour from one address, and the answer for
+   * each is definitive. Nothing keyed on the caller bounds a distributed probe
+   * either. What is bounded is the CPU.
    */
   app.post('/auth/member/signup', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
+
+    /**
+     * FIRST, AND BEFORE THE BODY IS EVEN VALIDATED PAST THIS POINT.
+     *
+     * The order is the control. Every line below this one either reads the
+     * database or hashes a password, and both are what a flood is trying to buy;
+     * a refused caller pays for one indexed count and learns nothing about which
+     * numbers are registered, because it never reaches the duplicate check.
+     */
+    const ipAddress = req.ip ?? null;
+    await enforceSignupLimits(db, ipAddress);
 
     const salonId = requireString(body.salonId, 'salonId', 100);
     const name = requireString(body.name, 'name', 120);
@@ -218,6 +244,19 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(member.salonId, salonId), eq(member.phone, phone)))
       .limit(1);
     if (existing[0]) throw ALREADY_REGISTERED();
+
+    /**
+     * RECORDED IMMEDIATELY BEFORE THE HASH, and outside any transaction.
+     *
+     * Here rather than at the top so the row marks an attempt that really is
+     * about to cost an argon2 hash — the thing being rationed — rather than one
+     * refused by validation a few lines up. BEFORE the hash rather than after it,
+     * so a burst of simultaneous requests cannot all pass the count and all pay
+     * for a hash before any of them is visible to the next. And outside the
+     * transaction below, because a row written inside it would be rolled back by
+     * every FAILED signup, which is exactly the traffic being bounded.
+     */
+    await recordSignupAttempt(db, { salonId, ipAddress });
 
     const passwordHash = await hashSecret(password);
 
