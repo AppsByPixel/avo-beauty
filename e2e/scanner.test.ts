@@ -48,6 +48,8 @@
  * run. Salon A's Dana is never touched.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { knownBug, precondition } from './support/known-bug.js';
 import {
@@ -66,6 +68,15 @@ import {
   B_STAFF_LOCKOUT,
   B_STAFF_LOCKOUT_HANDLE,
   B_STAFF_PIN,
+  B_STAFF_BURST,
+  B_STAFF_BURST_HANDLE,
+  B_BURST_DEVICE,
+  B_STAFF_CROSSDOOR,
+  B_STAFF_CROSSDOOR_HANDLE,
+  B_CROSSDOOR_DEVICE,
+  B_STAFF_COUNTER,
+  B_STAFF_COUNTER_HANDLE,
+  B_COUNTER_DEVICE,
   B_STAFF_RATELIMIT,
   B_STAFF_RATELIMIT_HANDLE,
   B_STAFF_RESTRICTED,
@@ -78,6 +89,7 @@ import {
   attemptScannerSignIn,
   mintWalletTokenFor,
   psql,
+  repoRoot,
   resetPinState,
   scalar,
   signInDashboard,
@@ -969,9 +981,64 @@ describe('POST /voids', () => {
  * implementation happened to hold, including 30000.
  */
 const SEARCH_MIN_QUERY = 2;
-const SEARCH_MAX_PER_WINDOW = 30;
+const SEARCH_MAX_PER_WINDOW = 60;
 const SEARCH_WINDOW_MINUTES = 5;
 const LOOKUP_ACTION = 'Customer looked up';
+/**
+ * The second tier, and it counts BOTH directory reads. `memberSearch.ts`
+ * § enforceDirectoryReadLimits: keyed on `audit_log.actor_id` alone, no session and
+ * no device in the predicate, across searches AND resolves.
+ *
+ * STILL A LITERAL, AND NOW WITH A GUARD BESIDE IT. The reason not to import it is
+ * unchanged: a spec that read the value from the implementation would pass at any
+ * value the implementation held, including one that had been raised to make a test
+ * go green. The reason that used to be uncomfortable is that a literal rots — and
+ * both of these did, when the measured cost per customer moved the numbers from
+ * 30/60 to 60/240.
+ *
+ * So the literals stay and ONE spec compares them against the API's own source,
+ * read off disk the way the route census reads routes. A change to either constant
+ * then fails a single spec that names the old value, the new value and where to
+ * look, instead of five specs failing for reasons none of them mentions.
+ */
+const SEARCH_MAX_PER_HOUR = 240;
+
+/**
+ * Backdated directory-read rows for one staff member, under a session that is not
+ * the caller's.
+ *
+ * WHY THE HISTORY IS INSERTED RATHER THAN SPENT. Making 60 real reads trips the
+ * 30-per-5-minute BURST tier first, and both tiers answer 429 — so a spec built
+ * that way cannot tell which one refused it, which is the only thing it is trying
+ * to find out. These rows carry a foreign session id, so the burst tier's
+ * `sessionId` filter sees none of them and only a ceiling keyed on the staff member
+ * can. Takes the ACTION as a parameter because the allowance is shared: filling it
+ * with `Customer opened` and then being refused a search is the cross-door case.
+ *
+ * `audit_log` forbids UPDATE, so rows are inserted already backdated rather than
+ * inserted and moved; `created_at` carries a DEFAULT and not a trigger, so an
+ * explicit value is honoured. They also cannot be deleted afterwards by anybody,
+ * which is why each caller uses a staff row nothing else needs.
+ */
+function backdateDirectoryReads(
+  actorId: string,
+  action: string,
+  count: number,
+  minutesAgo: number,
+  sessionId: string,
+): void {
+  psql(`
+    INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind,
+                           action, detail, source, subject_type, subject_id, metadata,
+                           created_at)
+    SELECT '${SALON_B}', 'staff', '${actorId}', 'backdated by lane D', 'frontdesk', 'access',
+           '${action}', 'backdated to test the rolling hour', 'scanner',
+           'member_search', NULL,
+           ('{"query":"backdated","results":0,"sessionId":"${sessionId}"}')::jsonb,
+           now() - interval '${minutesAgo} minutes'
+      FROM generate_series(1, ${count});
+  `);
+}
 
 interface MemberSearchItem {
   id: string;
@@ -1021,6 +1088,56 @@ function sessionIdOf(accessToken: string): string {
   if (!claims.sid) throw new Error('that access token carries no `sid` claim');
   return claims.sid;
 }
+
+/**
+ * THE GUARD ON THE LITERALS ABOVE.
+ *
+ * Read off disk as text, the way `discoverGetRoutes` reads the route table — no
+ * import, so this suite gains no runtime dependency on `api/` and cannot be made
+ * to agree with the implementation by accident.
+ *
+ * The point is the failure message. Both of these constants have already moved
+ * once: Lane A measured the real cost of serving one customer through the
+ * lookup screen's debounce — 2 requests for a fluent typer, 5 for someone pausing
+ * on each key — and found the old ceiling fired at twelve customers an hour, with a
+ * customer standing at the counter. The mechanism it had had backwards is worth
+ * keeping in mind here: `abort()` does not un-send. It stops the client waiting for
+ * a reply that is already in flight; the server has handled it and written its
+ * audit row, and the audit row IS the counter. Every request that leaves the tablet
+ * costs budget whether or not anybody reads the answer.
+ */
+describe('the rate-limit constants this suite pins are the ones the API holds', () => {
+  const source = (): string =>
+    readFileSync(join(repoRoot, 'api', 'src', 'services', 'memberSearch.ts'), 'utf8');
+
+  const declared = (name: string): number | null => {
+    const m = new RegExp(`export const ${name}\\s*=\\s*(\\d[\\d_]*)`).exec(source());
+    return m ? Number(m[1]!.replace(/_/g, '')) : null;
+  };
+
+  for (const [name, pinned, what] of [
+    ['MEMBER_SEARCH_MAX_PER_WINDOW', SEARCH_MAX_PER_WINDOW, 'the burst tier, per session'],
+    ['MEMBER_SEARCH_ACTOR_MAX_PER_WINDOW', SEARCH_MAX_PER_HOUR, 'the ceiling, per staff member'],
+  ] as const) {
+    it(`${name} is still ${pinned} — ${what}`, () => {
+      const actual = declared(name);
+      expect(
+        actual,
+        `${name} is not declared in api/src/services/memberSearch.ts under that name any more, ` +
+          'so this guard cannot see it and the literals in this file are unverified.',
+      ).not.toBeNull();
+      expect(
+        actual,
+        `${name} is now ${actual} and this suite pins ${pinned}. Every spec in this file that ` +
+          'spends a budget uses the literal, so they are all wrong until it is updated — and ' +
+          'they will each fail with a message about lookups rather than about a changed ' +
+          'constant, which is why this spec exists. Update the literal at the top of this file, ' +
+          'then re-read the heavy specs: raising a limit makes them slower and lowering one makes ' +
+          'them share a budget they used to own.',
+      ).toBe(pinned);
+    });
+  }
+});
 
 describe('GET /members?q= — the manual lookup, and the four controls that keep it one', () => {
   it('finds a customer by name', async () => {
@@ -1245,7 +1362,18 @@ describe('GET /members?q= — the manual lookup, and the four controls that keep
      * begins at zero every time, whatever the previous run left behind — the same
      * property that stops a stolen token inheriting a staff member's leftovers.
      */
-    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    /**
+     * ITS OWN STAFF ROW AS WELL AS ITS OWN SESSION, and the second half is newer.
+     *
+     * A fresh session was enough while the only limit was per session. It is not
+     * enough now: the ceiling counts 60 an hour PER STAFF MEMBER across every
+     * session, so spending 30 here under the shared `scanner` row left barely
+     * enough for the rest of the file — measured, before the merge, as "THE COUNTER
+     * IS THE LOG" failing on its 19th lookup. `audit_log` cannot be trimmed, so the
+     * budget cannot be given back; it can only be spent somewhere nobody else needs.
+     */
+    resetPinState(B_STAFF_BURST, B_BURST_DEVICE);
+    const token = await signInScanner(SALON_B, B_STAFF_BURST_HANDLE, B_BURST_DEVICE);
     const sid = sessionIdOf(token);
     precondition(lookupsLogged(sid) === 0, 'a brand-new session already has lookups against it');
 
@@ -1304,8 +1432,15 @@ describe('GET /members?q= — the manual lookup, and the four controls that keep
      * does not — so twenty-nine real plus one appended cannot be an off-by-one.
      * Against a separate counter table the injected row changes nothing and the
      * thirtieth lookup is served.
+     *
+     * ITS OWN STAFF ROW, for the reason the burst spec above now carries in full:
+     * this is the spec that actually failed when the per-staff hourly ceiling
+     * arrived, on its 19th lookup, because the shared row had already been spent.
+     * The injected row below is written under THIS session's id, so it consumes
+     * this staff member's budget and nobody else's.
      */
-    const token = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+    resetPinState(B_STAFF_COUNTER, B_COUNTER_DEVICE);
+    const token = await signInScanner(SALON_B, B_STAFF_COUNTER_HANDLE, B_COUNTER_DEVICE);
     const sid = sessionIdOf(token);
     precondition(lookupsLogged(sid) === 0, 'a brand-new session already has lookups against it');
 
@@ -1322,7 +1457,7 @@ describe('GET /members?q= — the manual lookup, and the four controls that keep
     psql(`
       INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind,
                              action, detail, source, subject_type, subject_id, metadata)
-      VALUES ('${SALON_B}', 'staff', '${B_STAFF}', 'Layla', 'manager', 'access',
+      VALUES ('${SALON_B}', 'staff', '${B_STAFF_COUNTER}', 'Budget Counter', 'frontdesk', 'access',
               '${LOOKUP_ACTION}', 'appended by lane D to prove the counter is this table',
               'scanner', 'member_search', NULL,
               '{"query":"injected","results":0,"sessionId":"${sid}"}'::jsonb);
@@ -1576,35 +1711,7 @@ describe('GET /members?q= — the manual lookup, and the four controls that keep
  * than inserted and moved. `created_at` carries a DEFAULT rather than a trigger,
  * so an explicit value is honoured.
  */
-describe('GET /members?q= — lane A\'s feat/api work, asserted ahead of the merge', () => {
-  /** Lane A, feat/api 3da4572: 60 an hour, keyed on the staff member alone. */
-  const SEARCH_MAX_PER_HOUR = 60;
-
-  /**
-   * Backdated lookup rows for one staff member under a session that is not the
-   * caller's. Mirrors the row `services/memberSearch.ts` writes, because the
-   * limiter reads those rows rather than a counter of its own — which the spec
-   * further up ("the counter is the log") already proves.
-   */
-  function backdateLookups(
-    actorId: string,
-    count: number,
-    minutesAgo: number,
-    sessionId: string,
-  ): void {
-    psql(`
-      INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind,
-                             action, detail, source, subject_type, subject_id, metadata,
-                             created_at)
-      SELECT '${SALON_B}', 'staff', '${actorId}', 'backdated by lane D', 'manager', 'access',
-             '${LOOKUP_ACTION}', 'backdated to test the rolling hour', 'scanner',
-             'member_search', NULL,
-             ('{"query":"backdated","results":0,"sessionId":"${sessionId}"}')::jsonb,
-             now() - interval '${minutesAgo} minutes'
-        FROM generate_series(1, ${count});
-    `);
-  }
-
+describe('GET /members?q= — the member id, and the ceiling that made the burst limit real', () => {
   /**
    * WHICH STAFF MEMBER EACH SPEC BACKDATES AGAINST, and it is not arbitrary.
    *
@@ -1661,22 +1768,25 @@ describe('GET /members?q= — lane A\'s feat/api work, asserted ahead of the mer
   const MERGE_COLLISION = 'see the note above — measured against feat/api, not predicted';
   void MERGE_COLLISION;
 
-  knownBug(
-    'GET /members?q= does not match the MEMBER ID, so the number printed on the customer\'s own ' +
-      'card is the one query that always fails. It has digits, so it falls through to the phone ' +
-      'branch, and the stored E.164 number does not contain it. Lane A fixed this on feat/api ' +
-      '540b3f1 with `lower(member.id) = lower(q)` — EXACT and not a substring, because ids are ' +
-      'short, dense and sequential, so `%88%` over an id column turns the two-character minimum ' +
-      'into a directory walk',
-    async () => {
-      const res = await search(scanner, B_MEMBER);
-      precondition(res.status === 200, `the id lookup answered ${res.status} ${res.raw}`);
-      expect(
-        res.body.items.map((m) => m.id),
-        'the member id did not find the member it names',
-      ).toContain(B_MEMBER);
-    },
-  );
+  /**
+   * PROMOTED from knownBug. Lane A's 540b3f1 merged, the assertion started passing,
+   * and the helper failed the spec telling me to lock the behaviour in — which is
+   * the whole point of writing it that way rather than waiting for the merge.
+   *
+   * THE MEMBER ID IS THE ONE QUERY THAT MUST NEVER FAIL. It is the number printed
+   * on the customer's own card and the most precise identifier a staff member can
+   * be holding, and it returned nothing: it has digits, so it fell through to the
+   * phone branch, and the stored E.164 number does not contain it. The failure
+   * renders as "she isn't a member here".
+   */
+  it('finds a customer by her MEMBER ID — the number printed on her own card', async () => {
+    const res = await search(scanner, B_MEMBER);
+    expect(res.status, `the id lookup answered ${res.status} ${res.raw}`).toBe(200);
+    expect(
+      res.body.items.map((m) => m.id),
+      'the member id did not find the member it names',
+    ).toContain(B_MEMBER);
+  });
 
   /**
    * The other half of that fix, and it must keep passing AFTER the merge.
@@ -1700,38 +1810,44 @@ describe('GET /members?q= — lane A\'s feat/api work, asserted ahead of the mer
     }
   });
 
-  knownBug(
-    'GET /members?q= has no HOURLY CEILING, so the burst limiter can be reset at will: a staff ' +
-      `member refused after ${SEARCH_MAX_PER_WINDOW} in ${SEARCH_WINDOW_MINUTES} minutes signs ` +
-      `out, signs in, and has a fresh ${SEARCH_MAX_PER_WINDOW} — the spec above proves exactly ` +
-      `that today. Lane A added a second tier on feat/api 3da4572: ${SEARCH_MAX_PER_HOUR} per ` +
-      'rolling hour keyed on audit_log.actor_id ALONE, no session and no device in the ' +
-      'predicate, answering `lookup_hourly_limit`. The session key is what made the first tier ' +
-      'bypassable, so the second one deliberately does not have one',
-    async () => {
-      resetPinState(CEILING_STAFF, CEILING_DEVICE);
-      const fresh = await signInScanner(SALON_B, CEILING_STAFF_HANDLE, CEILING_DEVICE);
-      const sid = sessionIdOf(fresh);
-      precondition(lookupsLogged(sid) === 0, 'this session has already spent budget');
+  /**
+   * PROMOTED from knownBug. Lane A's 3da4572 merged and this started passing.
+   *
+   * THE CEILING IS WHAT MAKES THE BURST LIMIT REAL. The spec above proves the
+   * per-session tier is resettable by signing out and back in — a session was never
+   * a scarce resource, so a limit keyed on one could always be refreshed. This tier
+   * is keyed on `audit_log.actor_id` ALONE, with no session and no device in the
+   * predicate, which is precisely the property the first tier lacked.
+   *
+   * AND IT STILL MUST NOT PASS FOR THE WRONG REASON. Spending 60 real lookups would
+   * trip the 30-per-5-minute burst tier first and answer 429 either way, proving
+   * nothing about which tier fired. So the history is INSERTED backdated under a
+   * DIFFERENT session id and the spec makes exactly ONE real lookup: the burst tier
+   * filters on this session and sees one, and only a ceiling keyed on the staff
+   * member can see sixty. The assertion is on the error CODE, never on the status,
+   * because both tiers answer 429 and the code is the only thing that distinguishes
+   * them.
+   */
+  it(`refuses the ${SEARCH_MAX_PER_HOUR + 1}st lookup by one STAFF MEMBER in a rolling hour, whatever session it comes from`, async () => {
+    resetPinState(CEILING_STAFF, CEILING_DEVICE);
+    const fresh = await signInScanner(SALON_B, CEILING_STAFF_HANDLE, CEILING_DEVICE);
+    const sid = sessionIdOf(fresh);
+    precondition(lookupsLogged(sid) === 0, 'this session has already spent budget');
 
-      // A full hour's history for this STAFF MEMBER under somebody else's session
-      // id, 30 minutes old so it sits inside a rolling hour. The burst tier
-      // filters on `sessionId` and cannot see a single row of it.
-      backdateLookups(CEILING_STAFF, SEARCH_MAX_PER_HOUR, 30, 'not-this-session');
+    backdateDirectoryReads(CEILING_STAFF, LOOKUP_ACTION, SEARCH_MAX_PER_HOUR, 30, 'not-this-session');
 
-      const res = await search(fresh, 'Fatima');
-      // The distinguishing assertion. A 429 alone would not do — that is what the
-      // burst tier answers, and this session has spent nothing.
-      expect(
-        res.body.error,
-        `${SEARCH_MAX_PER_HOUR} lookups by this staff member within the last hour did not stop ` +
-          'the next one. The burst tier cannot see them: they carry another session\'s id and ' +
-          `this session has made ${lookupsLogged(sid)}. So only a ceiling keyed on the staff ` +
-          `member alone can refuse this call. Answered ${res.status}: ${res.raw}`,
-      ).toBe('lookup_hourly_limit');
-    },
-    120_000,
-  );
+    const res = await search(fresh, 'Fatima');
+    expect(
+      res.body.error,
+      `${SEARCH_MAX_PER_HOUR} lookups by this staff member within the last hour did not stop the ` +
+        `next one. The burst tier cannot see them — they carry another session's id and this ` +
+        `session has made ${lookupsLogged(sid)} — so only a ceiling keyed on the staff member ` +
+        `alone can refuse this call. Answered ${res.status}: ${res.raw}`,
+    ).toBe('lookup_hourly_limit');
+    expect(res.status).toBe(429);
+    // The refusal is the whole response: a throttled caller reads no customers.
+    expect(res.body).not.toHaveProperty('items');
+  }, 120_000);
 
   /**
    * THE WINDOW EDGE, green on both sides of the merge on purpose.
@@ -1752,7 +1868,7 @@ describe('GET /members?q= — lane A\'s feat/api work, asserted ahead of the mer
     // 61 minutes: outside a 60-minute rolling window by one minute. Backdated
     // against a DIFFERENT staff member from the ceiling spec above, so the two
     // cannot contaminate each other whichever order they happen to run in.
-    backdateLookups(EDGE_STAFF, SEARCH_MAX_PER_HOUR, 61, 'not-this-session');
+    backdateDirectoryReads(EDGE_STAFF, LOOKUP_ACTION, SEARCH_MAX_PER_HOUR, 61, 'not-this-session');
 
     const res = await search(fresh, 'Fatima');
     expect(
@@ -2020,22 +2136,13 @@ describe('GAP: what the API still owes the scanner', () => {
    * a stale todo saying a money path cannot be tested is worse than no todo,
    * because it reads as a reason not to look.
    */
-  it.todo(
-    'THE HELD DEPOSIT IS A LIVE MONEY PATH WITH NO E2E COVERAGE AT ALL. The only POST /bookings ' +
-      'call in this suite is contract.test.ts, which books 9+ days out and asserts schema shape ' +
-      'only — and 9 days out is OUTSIDE the no-show grace window, so it correctly holds 0 and ' +
-      'proves nothing about a hold. `depositAppliedFils` and `heldDepositFils` appear in this ' +
-      'suite only as interface fields, never inside an expect(). Four cases needed, and the ' +
-      'window is the trap: (1) a NON-ZERO hold, which requires booking INSIDE the grace window ' +
-      '(seed: no_show_return_minutes = 60), since findApplicableHold bails on ' +
-      'noShowReturnDueAt <= now; (2) a ZERO hold outside it, so the boundary is asserted from ' +
-      'both sides; (3) the charge applying the hold, moving the booking to completed, with ' +
-      'applied = min(gross, held); (4) MIGRATION 0014\'s case, which lane A confirms it never ' +
-      'exercised — a service CHEAPER than the deposit, giving a charge with amount_fils = 0 plus ' +
-      'a deposit_return for the remainder. 0014 relaxed transaction_amount_sign_matches_kind to ' +
-      'allow `charge AND amount_fils <= 0` for exactly that case, and nothing has ever produced ' +
-      'one (lane D, next slice)',
-  );
+  /**
+   * COVERED — see `e2e/deposit.test.ts`. This entry twice described a money path as
+   * untestable and was twice wrong: first because `POST /scans` was said to hardcode
+   * `heldDepositFils: 0`, then because the only booking in the suite was nine days
+   * out and so held nothing CORRECTLY. Seven specs now drive it, including migration
+   * 0014's case, which nothing had ever produced.
+   */
 
   // ------------------------------------------------------------------ 6 --
   /**
@@ -2078,4 +2185,212 @@ describe('GAP: what the API still owes the scanner', () => {
       'somebody edits the database by hand. Needs an owner/manager-authorised enrol + revoke pair, ' +
       'audited, before launch. Cross-reference: go-live-checklist.md',
   );
+});
+
+// ----------------------------------------------------------------- 1c --
+/**
+ * GET /members/{id} — THE SECOND DOOR, AND THE BUDGET IT SHARES WITH THE FIRST.
+ *
+ * The manual path used to stop at a name: `GET /members?q=` returns a deliberately
+ * narrow row — no balance, `phoneLast4` and not the number — and nothing turned
+ * that row into something the counter could charge. So "Can't scan? Find member
+ * manually" ended one step short of the thing it exists for.
+ *
+ * `GET /members/{id}` closes it, and it serves the `POST /scans` ENVELOPE rather
+ * than a bare Member, which is the decision worth guarding. Two doors, one screen.
+ */
+describe('GET /members/{id} — the resolve, its envelope, and the directory budget', () => {
+  const RESOLVE_ACTION = 'Customer opened';
+
+  const resolve = (token: string, id: string) =>
+    treq<any>('GET', `/members/${encodeURIComponent(id)}`, { token });
+
+  /** Rows for one action, for one staff member, however many sessions. */
+  const directoryRows = (actorId: string, action: string): number =>
+    Number(
+      scalar(
+        `select count(*) from audit_log where action='${action}' and actor_id='${actorId}'`,
+      ),
+    );
+
+  it('resolves a member to the SAME envelope POST /scans serves — one builder, not two', async () => {
+    /**
+     * THE ASSERTION THAT PROTECTS THE SHARED BUILDER, and the reason it is worth
+     * more than a schema on either path.
+     *
+     * This codebase has already paid for two hand-assembled copies of this
+     * payload: `heldDepositFils` was hardcoded `0` on the scan path while the
+     * charge path read it for real, so the credit line the customer was SHOWN and
+     * the credit the charge APPLIED were different answers, and the one on the
+     * screen is the one she was told. `services/counter.ts` is one function now.
+     *
+     * DEEP-EQUAL, not field-by-field: a spec that checked the fields it thought of
+     * would have missed `heldDepositFils` for exactly the same reason the bug did.
+     * The envelope carries no timestamp of its own, so the two calls are directly
+     * comparable — and if a clock-dependent field is ever added, this spec going
+     * red is the correct way to find out.
+     */
+    const walletToken = await freshWalletToken();
+    const scanned = await treq<any>('POST', '/scans', {
+      token: scanner,
+      body: { token: walletToken },
+    });
+    precondition(scanned.status === 200, `POST /scans answered ${scanned.status} ${scanned.raw}`);
+
+    const opened = await resolve(scanner, B_MEMBER);
+    expect(opened.status, opened.raw).toBe(200);
+
+    expect(
+      opened.body,
+      'the two doors onto the counter screen serve different envelopes. They are built by one ' +
+        'function precisely so they cannot — and the last time they were built twice, the held ' +
+        'deposit was 0 on one path and real on the other.',
+    ).toEqual(scanned.body);
+
+    // And it is the envelope, not a bare Member: the fields the charge screen needs.
+    expect(Object.keys(opened.body).sort()).toEqual(
+      ['heldDepositBooking', 'heldDepositFils', 'member', 'services'].sort(),
+    );
+    expect(opened.body.member.id).toBe(B_MEMBER);
+
+    /**
+     * AND THE HONEST LIMIT OF THIS SPEC, MEASURED RATHER THAN ASSUMED.
+     *
+     * `heldDepositFils` is 0 for this member, because nothing in this file books
+     * her. So the deep comparison above is at its WEAKEST on precisely the field
+     * whose divergence was the original bug: a break that hardcoded
+     * `heldDepositFils: 0` on this door was applied deliberately and the spec stayed
+     * GREEN, because 0 is what the shared builder returns here anyway. A break that
+     * made it 500 was caught immediately.
+     *
+     * That is the "no empty samples" rule from contract.test.ts turning up on the
+     * counter: a comparison whose interesting value is zero on both sides proves
+     * less than it appears to. Asserted rather than left as a comment, so that when
+     * the deposit slice gives this member a real hold, this expectation fails and
+     * whoever is holding it is told to move the comparison onto the non-zero case —
+     * which is the version that would have caught the original defect.
+     */
+    expect(
+      opened.body.heldDepositFils,
+      'this member now HAS a held deposit, which means the envelope comparison above has finally ' +
+        'become able to catch the divergence it was written for. Move it onto a member with a ' +
+        'live hold — booked INSIDE the no-show grace window — and delete this expectation.',
+    ).toBe(0);
+  });
+
+  it('is salon-scoped — a member id from another salon is 404, not a leak', async () => {
+    const res = await resolve(scanner, A_MEMBER);
+    expect(
+      res.status,
+      `salon B opened salon A's customer by id: ${res.raw}`,
+    ).toBe(404);
+    expect(res.body.error).toBe('unknown_member');
+    // The refusal must not confirm she exists somewhere else.
+    expect(res.raw, 'the 404 leaked the foreign member\'s name').not.toContain('Dana');
+  });
+
+  it('writes an audit row BEFORE the 404, because a refused id is what a walk looks like', async () => {
+    const before = directoryRows(B_STAFF, RESOLVE_ACTION);
+
+    const missing = await resolve(scanner, 'MEMBER-DOES-NOT-EXIST');
+    precondition(missing.status === 404, `answered ${missing.status} ${missing.raw}`);
+
+    /**
+     * The row is written whether or not she was found, and that is the whole
+     * design: a staff member trying ids that are not in her salon is precisely
+     * what enumerating the directory looks like from the inside, and it is the case
+     * a log that only recorded successes could not show anybody.
+     */
+    expect(
+      directoryRows(B_STAFF, RESOLVE_ACTION),
+      'a resolve that found nobody wrote no audit row, so trying ids until one lands is the one ' +
+        'access pattern this log cannot see',
+    ).toBe(before + 1);
+
+    const detail = scalar(
+      `select detail from audit_log where action='${RESOLVE_ACTION}'
+         and actor_id='${B_STAFF}' order by seq desc limit 1`,
+    );
+    expect(detail, 'the row does not record which id was attempted').toContain(
+      'MEMBER-DOES-NOT-EXIST',
+    );
+  });
+
+  it('and an unauthorised resolve writes NO row — authorisation fails before any read', async () => {
+    const web = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+    const before = directoryRows(B_STAFF, RESOLVE_ACTION);
+
+    const res = await resolve(web, B_MEMBER);
+    precondition(res.status === 403, `a dashboard session resolved a member: ${res.raw}`);
+
+    // Symmetrical with the search: a refusal that logged would charge the caller
+    // for a read that never happened, and on the shared ceiling below that is a
+    // way to spend somebody else's hour.
+    expect(
+      directoryRows(B_STAFF, RESOLVE_ACTION),
+      'a 403 wrote a "Customer opened" row, so the log claims a customer was opened when the ' +
+        'request never reached the member table',
+    ).toBe(before);
+  });
+
+  /**
+   * THE SHARED BUDGET, PROVED ACROSS THE DOORS RATHER THAN WITHIN ONE.
+   *
+   * Both tiers now count searches AND resolves against one allowance, on the
+   * reasoning that a resolve discloses strictly more than a search row — the full
+   * phone, the email, the balance, the visits — so the unit being protected is the
+   * DIRECTORY and not an endpoint. A ceiling that counted only searches would be
+   * bypassable by walking ids instead of names, which is the cheaper attack and the
+   * one that returns more.
+   *
+   * So the budget is filled with RESOLVES ONLY, never a search, and then a SEARCH
+   * is refused. Testing either endpoint against its own rows could never show that.
+   */
+  it('spends one allowance across BOTH doors — an hour of resolves refuses the next search', async () => {
+    resetPinState(B_STAFF_CROSSDOOR, B_CROSSDOOR_DEVICE);
+    const fresh = await signInScanner(
+      SALON_B,
+      B_STAFF_CROSSDOOR_HANDLE,
+      B_CROSSDOOR_DEVICE,
+    );
+    const sid = sessionIdOf(fresh);
+    precondition(lookupsLogged(sid) === 0, 'this session has already searched');
+    precondition(
+      directoryRows(B_STAFF_CROSSDOOR, RESOLVE_ACTION) === 0,
+      'this staff member has already resolved somebody',
+    );
+
+    // A full hour of RESOLVES, under a different session so the burst tier cannot
+    // see them, and not one search among them.
+    backdateDirectoryReads(
+      B_STAFF_CROSSDOOR,
+      RESOLVE_ACTION,
+      SEARCH_MAX_PER_HOUR,
+      30,
+      'not-this-session',
+    );
+
+    const searched = await search(fresh, 'Fatima');
+    expect(
+      searched.body.error,
+      `${SEARCH_MAX_PER_HOUR} RESOLVES in the last hour did not stop the next SEARCH ` +
+        `(${searched.status} ${searched.raw}). If the ceiling counts only searches, walking ids ` +
+        'is an unlimited directory read that returns strictly more than a search row does — the ' +
+        'full phone, the email, the balance and the visit count.',
+    ).toBe('lookup_hourly_limit');
+
+    // And it is HER hour, not everyone's: the ceiling is per staff member, so a
+    // colleague at the same salon on the same device is unaffected.
+    resetPinState(B_STAFF_RESTRICTED, B_RESTRICTED_DEVICE);
+    const colleague = await signInScanner(
+      SALON_B,
+      B_STAFF_RESTRICTED_HANDLE,
+      B_RESTRICTED_DEVICE,
+    );
+    const hers = await search(colleague, 'Fatima');
+    expect(
+      hers.status,
+      `one staff member's spent hour refused a different staff member: ${hers.raw}`,
+    ).toBe(200);
+  }, 120_000);
 });

@@ -90,9 +90,33 @@ describe('the restricted principal', () => {
     const res = await api('GET', '/staff/me', { scenario: NOPERMS });
     const serialised = JSON.stringify(res.body);
     expect(serialised).not.toMatch(/"pin"\s*:/i);
-    expect(serialised).not.toMatch(/pinHash|password|passwordHash/i);
-    // `pinSet` is a boolean flag and is fine — it is the hash that must never travel.
+
+    /**
+     * MATCHED ON THE CREDENTIAL FORMS, NOT ON THE SUBSTRING `password`.
+     *
+     * This read `/pinHash|password|passwordHash/i` and went red the moment
+     * `passwordSet` arrived on the staff row — which is a BOOLEAN FLAG, and the
+     * exact counterpart of the `pinSet` the line below has always blessed. The
+     * Accounts screen renders it precisely so it can show WHETHER a password is
+     * set without holding one, which is non-negotiable #6 being obeyed rather
+     * than broken.
+     *
+     * So this spec was one report away from being read as "the API leaked a
+     * password" when what it had actually found was the API refusing to. A false
+     * positive on a credential check is expensive in both directions: it spends a
+     * security investigation now, and it teaches the next reader to relax the
+     * pattern instead of looking. The forms below are the ones that would be a
+     * real leak.
+     */
+    expect(serialised).not.toMatch(/pinHash|passwordHash|"password"\s*:|\$argon2/i);
+    // `pinSet` and `passwordSet` are boolean flags and are fine — it is the hash
+    // that must never travel.
     expect((res.body as { pinSet: boolean }).pinSet).toBe(true);
+    expect(
+      (res.body as { passwordSet?: boolean }).passwordSet,
+      'passwordSet is what the Accounts screen shows instead of the password it must never hold, ' +
+        'so it has to be a boolean and not a string that happens to look like one',
+    ).toBe(true);
   });
 });
 

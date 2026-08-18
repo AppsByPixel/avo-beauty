@@ -263,6 +263,33 @@ function at(body: unknown, path?: string): unknown {
   return path.split('.').reduce<any>((acc, k) => (acc == null ? acc : acc[k]), body);
 }
 
+/**
+ * DRIFT (7), CLOSED — AND IT WAS FIXED AT THE CAUSE RATHER THAN THE SYMPTOM.
+ *
+ * Recorded here because the shape of the fix is the lesson, and because this file
+ * argued for it.
+ *
+ * `TransactionSchema` declares `voidedAt` and `reversedByTransactionId` as
+ * `.nullable()` without `.optional()`, which makes them REQUIRED on every
+ * transaction. That is the third outage this project has had from one sentence —
+ * `.nullable()` does not imply `.optional()` — after the Book grid's `reason` (4)
+ * and `SubtractedBlockSchema.from/to` (6).
+ *
+ * But the schema modifier was only the symptom. `serialiseTransactionForCustomer`
+ * was taught to emit both keys and TWO ROUTES STILL FAILED, because
+ * `charge.ts` and `booking.ts` each hand-assembled the transaction literal instead
+ * of calling that serialiser — one payload built in three places, so a fix applied
+ * to one builder reached neither of the others. The same defect had already put
+ * `heldDepositFils` at `0` on the scan path while the charge path read it for real,
+ * and `services/counter.ts` exists because of it.
+ *
+ * There were two candidate fixes and they were not equivalent: `.nullish()` would
+ * have made the contract match the wire and left three builders standing, while
+ * routing both POSTs through the serialiser removes the duplication that caused it.
+ * Lane A took the second. All four probes are plain `it()` now, so the day anything
+ * stops going through that serialiser, this file says so.
+ */
+
 function probes(): Probe[] {
   return [
     // ------------------------------------------------------------- the salon --
@@ -323,18 +350,18 @@ function probes(): Probe[] {
       schemaName: 'paginated(TransactionSchema)',
       schema: paginated(TransactionSchema),
       requireNonEmpty: ['items'],
+      // PROMOTED: `serialiseTransactionForCustomer` emits both void keys now — as
+      // `null` when there is no reversal, which is the shape the schema asks for.
+      // The two POST responses below still do not, because they do not use this
+      // serialiser. See DRIFT (7).
     },
     {
       route: 'GET /members/me/wallet-token',
       label: 'GET /members/me/wallet-token',
       schemaName: 'WalletTokenSchema',
       schema: WalletTokenSchema,
-      knownStripped:
-        'the API also serves `uri` — the exact string the QR encodes, minted by the ' +
-        'server. WalletTokenSchema declares memberId/token/expiresAt only, so zod ' +
-        'deletes it and every client re-derives the URI with walletTokenUri(). Two ' +
-        'implementations of one string, and the client\'s is the one that is not ' +
-        'authoritative.',
+      // PROMOTED: `uri` is declared now, so the server's QR string is the one every
+      // client reads instead of re-deriving its own.
     },
 
     // ----------------------------------------------------------- the booking --
@@ -383,15 +410,13 @@ function probes(): Probe[] {
       // list stays `[]` and SubtractedBlockSchema is never exercised at all —
       // which is precisely how it shipped wrong.
       requireNonEmpty: ['slots', 'subtracted'],
-      knownParseFailure:
-        'SubtractedBlockSchema declares `from` and `to` as DateTimeSchema — ISO 8601 with an ' +
-        'offset — and `services/availability.ts` fills them with `minutesToHhmm()`, i.e. the ' +
-        'salon-local wall clock `"10:00"`, the same shape as the slot\'s own `local`. So ' +
-        'AvailabilityDaySchema.parse() THROWS on any day that has a booking or a busy block, ' +
-        'and passes on an empty one. This is drift (4) repeated inside the fix for (3): a ' +
-        'brand-new schema validated against a sample that happened to be an empty array. ' +
-        'Either type them as wall clock like HappyHourSchema.from/to, or have the API send ' +
-        'instants — lane A\'s call, but the two cannot keep disagreeing.',
+      /**
+       * PROMOTED. `SubtractedBlockSchema` typed `from`/`to` as ISO instants against
+       * an API sending the salon-local wall clock `"10:00"`, so the Book grid threw
+       * on any day that had a booking and passed on an empty one. It is wall clock
+       * on both sides now, and this probe still books into the day it reads, so the
+       * item schema is exercised against a row that exists rather than against `[]`.
+       */
     },
     {
       route: 'GET /artists/me',
@@ -407,19 +432,18 @@ function probes(): Probe[] {
       schemaName: 'paginated(StaffUserSchema)',
       schema: paginated(StaffUserSchema),
       requireNonEmpty: ['items'],
-      knownStripped:
-        'the API serves `passwordSet`, `active` and `deactivatedAt` on every staff ' +
-        'row and StaffUserSchema declares none of them. `active`/`deactivatedAt` is ' +
-        'the whole deactivated-staff state — the dashboard cannot tell a live ' +
-        'account from a retired one through the contract — and `passwordSet` is what ' +
-        'the Accounts screen shows instead of a password it must never hold.',
+      // PROMOTED: `passwordSet`, `active` and `deactivatedAt` are declared now, so
+      // the dashboard can tell a live account from a retired one through the
+      // contract. `passwordSet` is also what permissions.test.ts had to stop
+      // reading as a leaked credential — it is the flag that exists so no password
+      // has to travel.
     },
     {
       route: 'GET /staff/me',
       label: 'GET /staff/me',
       schemaName: 'StaffUserSchema',
       schema: StaffUserSchema,
-      knownStripped: 'same three keys as GET /staff — `passwordSet`, `active`, `deactivatedAt`.',
+      // PROMOTED with GET /staff — same three keys.
     },
     {
       route: 'GET /charges',
@@ -427,12 +451,16 @@ function probes(): Probe[] {
       schemaName: 'paginated(TransactionSchema)',
       schema: paginated(TransactionSchema),
       requireNonEmpty: ['items'],
-      knownStripped:
-        "`GET /charges` serves `voidedAt` and `reversedByTransactionId` and " +
-        'TransactionSchema has neither. That is the void state of a charge: the ' +
-        "scanner's Today screen cannot tell a reversed charge from a live one " +
-        'through the contract, on the one surface where a 15-minute reversal window ' +
-        'is the entire feature.',
+      /**
+       * PROMOTED, AND IT WAS THE FIRST OF FOUR.
+       *
+       * `voidedAt` and `reversedByTransactionId` are the void state of a charge: the
+       * scanner's Today screen could not tell a reversed charge from a live one
+       * through the contract, on the one surface where a 15-minute reversal window is
+       * the entire feature. Adding them to TransactionSchema fixed this route and
+       * broke the three that did not serve them — see DRIFT (7) above, which is now
+       * closed at the cause. All four transaction probes parse.
+       */
     },
 
     // ---------------------------------------------------------- the platform --
@@ -442,14 +470,12 @@ function probes(): Probe[] {
       schemaName: 'LegalDocumentSetSchema',
       schema: LegalDocumentSetSchema,
       requireNonEmpty: ['published.docs'],
-      knownParseFailure:
-        'LegalDocumentSetSchema requires `draft`, and the API serves `{published}` ' +
-        'alone. This is drift (4) again in the other direction and on the customer ' +
-        "app's legal set: a required key the wire does not carry, so `.parse()` " +
-        'THROWS and non-negotiable #10 — the app renders the published policy set ' +
-        'from the API and stamps the version — cannot be satisfied through the ' +
-        'contract at all. `draft` is an owner-console concern and belongs behind ' +
-        '`.optional()` or in a separate schema.',
+      /**
+       * PROMOTED. `draft` was REQUIRED against an API serving `{published}` alone,
+       * so the customer app's whole legal set failed to parse and non-negotiable
+       * #10 could not be satisfied through the contract at all. `draft` is an
+       * owner-console concern and is optional now.
+       */
     },
     {
       route: 'GET /v1/platform/support',
@@ -501,11 +527,8 @@ function probes(): Probe[] {
       label: 'POST /v1/support/tickets',
       schemaName: 'SupportTicketSchema',
       schema: SupportTicketSchema,
-      knownStripped:
-        'the API serves `transactionId` — the charge a wallet dispute is ABOUT — and ' +
-        'SupportTicketSchema has no such field. Non-negotiable #11 routes the ticket ' +
-        'server-side from `topicId`; the transaction it points at is what makes the ' +
-        'ticket answerable, and the contract deletes it.',
+      // PROMOTED: `transactionId` is declared now, so a wallet dispute still names
+      // the charge it is about by the time a client reads it.
     },
   ];
 }
@@ -542,6 +565,22 @@ const UNMODELLED: Record<string, string> = {
     'the audit log page — rows plus `total`, `appendOnly` and `retentionYears`. A view.',
   'GET /salons/:id/activity':
     'the merchant activity feed, a union of transaction and booking streams. A view.',
+  'GET /members/:id':
+    'the scanner\'s member RESOLVE, and it serves the `POST /scans` ENVELOPE rather than a bare ' +
+    'Member — member plus the counter state the charge screen needs. Unmodelled because that ' +
+    'envelope has no schema either, on either of its two doors, which is the gap worth naming: ' +
+    'two hand-assembled copies of one screen\'s payload is exactly how `heldDepositFils` came to ' +
+    'be hardcoded 0 on the scan path while the charge read it for real. `services/counter.ts` is ' +
+    'now the single builder, and scanner.test.ts asserts the two envelopes are DEEP-EQUAL, which ' +
+    'guards the shared builder better than a schema on either path would. A ScanEnvelope schema ' +
+    'is worth having.',
+  'GET /members/me/deletion':
+    'the deletion state — {requestedAt, erasureDueAt, status, graceDays, erasureScheduled}. Same ' +
+    'shape as its POST and DELETE, and unmodelled for the same reason as the notifications set ' +
+    'below: it postdates packages/types. WIRE-PINNED at the bottom of this file against the same ' +
+    'DELETION_WIRE constant as the two writes, with a spec comparing all three live responses to ' +
+    'each other — the wallet renders the pending banner from this read and the confirmation from ' +
+    'the write, so the three cannot be allowed to drift apart. Worth a schema.',
   'GET /members/me/notifications':
     'the notification preference set and its consent record. Genuinely unmodelled and ' +
     'it carries a consent decision (`offersConsent.policyVersion`) — the kind of field ' +
@@ -576,16 +615,19 @@ const PRODUCTS_ROUTE = 'GET /salons/:id/products';
  * where it is visible. This is the second.
  */
 const AWAITING_MERGE: Record<string, string> = {
-  'GET /members/me/deletion':
-    'lane A, feat/api 540b3f1 — the deletion state as a READ, which the wallet needed to ' +
-    'render the pending banner without POSTing to find out. It calls the same ' +
-    '`serialiseDeletion` and the same `requireMember` as POST/DELETE, so the five keys are ' +
-    'already pinned below as DELETION_WIRE. WHEN IT ARRIVES, three things: (1) capture it in ' +
-    'beforeAll and add a WirePin for it reusing DELETION_WIRE, which also proves the read and ' +
-    'the two writes have not diverged; (2) add it to the `calls` array in account.test.ts so ' +
-    'it is refused for a dashboard session, a scanner PIN session and a forged bearer like the ' +
-    'other four; (3) delete this entry. The by-id tenancy spec in account.test.ts needs no ' +
-    'change — `me` is a literal path segment, so `/members/{someone-else}/deletion` still 404s.',
+  /**
+   * EMPTY, AND IT EARNED ITS KEEP ON THE FIRST TRY.
+   *
+   * `GET /members/me/deletion` was listed here before it existed. It landed in the
+   * rebase, the arrival spec below went red printing its own instructions, and the
+   * three things it asked for were done: it is pinned against DELETION_WIRE, it is
+   * in the scope `calls` array in account.test.ts, and the entry is gone. That is
+   * the whole intended life cycle of an entry in this map.
+   *
+   * Leave the mechanism in place for the next one. An empty map costs two passing
+   * specs and is the difference between a route arriving loudly and arriving in
+   * whichever spec happens to break first.
+   */
 };
 
 // ------------------------------------------------------------------- the run --
@@ -725,6 +767,17 @@ beforeAll(async () => {
     throw new Error(`DELETE /members/me/deletion: ${cancelled.status} ${cancelled.raw}`);
   }
   captured.set('DELETE /members/me/deletion', cancelled);
+
+  // The READ, which arrived in lane A's 540b3f1 so the wallet could render the
+  // pending banner without POSTing to find out what the state was. Captured AFTER
+  // the cancel, so the sample is the `none` state — which is the one a client sees
+  // on almost every open, and the one whose two null instants a schema that forgot
+  // `.optional()` would reject. Drift (7) is that mistake, three doors down.
+  const readBack = await treq<any>('GET', '/members/me/deletion', { token: pinMember });
+  if (readBack.status !== 200) {
+    throw new Error(`GET /members/me/deletion: ${readBack.status} ${readBack.raw}`);
+  }
+  captured.set('GET /members/me/deletion', readBack);
 
   // ---- a support ticket -------------------------------------------------------
   const ticket = await treq<any>('POST', '/v1/support/tickets', {
@@ -1144,6 +1197,15 @@ function wirePins(): WirePin[] {
         'and `erasureDueAt` are what make "removed within 30 days" a statement about something.',
     },
     {
+      label: 'GET /members/me/deletion',
+      wire: DELETION_WIRE,
+      why:
+        'the deletion state as a READ — lane A added it so the wallet could render the pending ' +
+        'banner without POSTing to find out. Pinned against the SAME constant as the two writes, ' +
+        'which is the point: three routes serving one state, and a read that drifts from the ' +
+        'writes is a banner that disagrees with the button beside it.',
+    },
+    {
       label: 'DELETE /members/me/deletion',
       wire: DELETION_WIRE,
       why:
@@ -1210,6 +1272,24 @@ describe('wire pins — the served shape of what packages/types does not model y
         'present on one and absent on the other is a switch that appears to work and then ' +
         'reverts on the next open.',
     ).toEqual(get);
+  });
+
+  /**
+   * THREE ROUTES, ONE STATE, COMPARED LIVE.
+   *
+   * The pins above all reference DELETION_WIRE, so editing that one constant would
+   * satisfy all three at once. Comparing the responses to EACH OTHER cannot be
+   * satisfied that way — it needs three handlers to actually agree.
+   */
+  it('the deletion READ serves the same shape as the two writes — a banner cannot disagree with its button', () => {
+    const read = wireShape(response('GET /members/me/deletion').body);
+    expect(
+      read,
+      'GET /members/me/deletion answers with a different key set than POST does. The wallet ' +
+        'renders the pending banner from the read and the confirmation from the write, so a key ' +
+        'on one and not the other is a banner that contradicts the screen that produced it.',
+    ).toEqual(wireShape(response('POST /members/me/deletion').body));
+    expect(read).toEqual(wireShape(response('DELETE /members/me/deletion').body));
   });
 
   /** Same argument for the deletion pair: the shape IS the state. */

@@ -217,12 +217,26 @@ describe('a new environment can be built from an empty database', () => {
      * member row. If they ever disagree, the ledger and the wallet are telling two
      * different stories about the same money.
      */
+    /**
+     * ORDERED BY `seq`, AND THE FIRST VERSION OF THIS ORDERED BY `id`.
+     *
+     * `ledger_entry.id` is `uuid DEFAULT gen_random_uuid()`, so `order by id desc`
+     * is not "the newest entry", it is an arbitrary one — and Dana has more than one
+     * wallet entry carrying a `balance_after_fils`. This spec has therefore been
+     * passing BY LUCK, on whichever UUID happened to sort last, and it finally drew
+     * the other one and reported that the seed's ledger does not reconcile.
+     *
+     * The honest reading of that failure was "the seed is broken"; the truth was
+     * that the spec had no ordering at all. `seq` is the monotonic column, and
+     * `ledger_entry_member_seq_idx` on `(member_id, seq)` exists precisely for this
+     * question — the schema was already telling me which column answers it.
+     */
     const reconciliation = scalarOnDatabase(
       SCRATCH,
       `select coalesce((
          select balance_after_fils::text from ledger_entry
           where member_id='8842' and account='member_wallet' and balance_after_fils is not null
-          order by id desc limit 1
+          order by seq desc limit 1
        ), 'no wallet ledger entry at all')`,
     );
     const balance = scalarOnDatabase(SCRATCH, "select balance_fils::text from member where id='8842'");
