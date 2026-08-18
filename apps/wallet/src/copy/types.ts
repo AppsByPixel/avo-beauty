@@ -123,6 +123,41 @@ export interface Copy {
   rowPending: string;
   rowFailed: string;
 
+  /**
+   * Sign-in. `design/AVO Wallet Home.dc.html:89-109`.
+   *
+   * The two FIELD labels are not here: they are `rowPhone` and `rowPassword`,
+   * already lifted verbatim from the profile rows in both languages, and reusing
+   * them is deliberate — the alternative is a second pair of strings for the same
+   * two words, which is how one language ends up saying something the other does
+   * not.
+   *
+   * There is no `signInForgot` and no `signInCreateAccount`, and their absence is
+   * a decision rather than an oversight. The design offers both links (:104, :107)
+   * and the API can serve neither: there is no member password-reset endpoint —
+   * `/auth/staff/password-reset` is staff-only — and no registration endpoint at
+   * all. A link that does nothing when a customer cannot get into her wallet is
+   * worse than no link, so they are omitted and reported.
+   */
+  /**
+   * The salon's name and the word "Wallet", above the sign-in form (design:86).
+   *
+   * IN THE COPY FILE, AND ONLY BECAUSE SIGN-IN IS PRE-AUTH. Everywhere after
+   * sign-in the name comes off `Salon.name` from the API, which is correct for a
+   * white-label product. Here there is no session yet and therefore no salon to
+   * fetch, so the build carries its own name — which is also why the Arabic form
+   * has to live here: `Salon.name` is a single string with no `nameAr`, the
+   * contract gap HomeScreen already reports.
+   */
+  salonName: string;
+  walletWord: string;
+  signInTitle: string;
+  signInSub: string;
+  signInAction: string;
+  signInWorking: string;
+  signInErrEmpty: string;
+  signInOffline: string;
+
   // failure — "we failed", so it retries
   errorTitle: string;
   errorBody: string;

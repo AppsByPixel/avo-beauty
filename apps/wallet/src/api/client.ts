@@ -12,20 +12,31 @@
  *    no connection (keep the last-known data, stamp it).
  */
 
-import type { z } from 'zod';
+import { z } from 'zod';
 import { scenarioHeader } from './scenario';
+import { clearSession, getAccessToken, getRefreshToken, rotated } from './session';
 
 /**
  * Where the API lives.
  *
- * `packages/mock` serves :4000 and answers everything the Home, top-up and
- * Account screens need. It does NOT implement booking — no `/bookings`, no
- * `/artists/{id}/availability` — so the Book flow is built and driven against
- * the real API (`api/`, lane A), which does. `EXPO_PUBLIC_AVO_API` selects it,
- * exactly as apps/scanner already does, rather than this constant being edited
- * back and forth by whoever ran the app last.
+ * THE DEFAULT WAS THE MOCK, AND THE DEFAULT IS WHAT HID THE GAP.
+ * This read `?? 'http://localhost:4000'` — `packages/mock`, which requires no
+ * authentication. So a wallet that sent no `authorization` header worked
+ * perfectly against the default, on every screen, and nothing ever failed in a
+ * way that pointed at the missing auth. `STATUS.md` recorded the wallet as
+ * working; it was, against a server that asks nothing of it.
+ *
+ * So the default is now the real API — the same port apps/scanner defaults to,
+ * deliberately, so the two apps in this lane agree about where "the API" is —
+ * and the mock is the explicit opt-in it should always have been:
+ *
+ *     EXPO_PUBLIC_AVO_API=http://localhost:4000   # the mock, on purpose
+ *
+ * The mock also cannot serve this flow: it has no `/auth/member/session` and no
+ * `/auth/refresh`. Pointing at it now fails at sign-in rather than silently
+ * succeeding everywhere, which is the correct direction for that failure.
  */
-export const API_BASE_URL: string = process.env['EXPO_PUBLIC_AVO_API'] ?? 'http://localhost:4000';
+export const API_BASE_URL: string = process.env['EXPO_PUBLIC_AVO_API'] ?? 'http://localhost:4100';
 
 /** Timeout past which we treat the request as a connection failure, not a 500. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -135,13 +146,13 @@ interface RequestOptions {
 }
 
 /**
- * The transport half: everything up to and including "the server answered
- * without an error status". Split out from `request` so that a 204 endpoint —
- * `POST /members/me/password`, which returns no body precisely so that it cannot
- * leak a password field (non-negotiable #6) — can share the failure
- * classification without being handed a schema it has nothing to validate.
+ * One attempt. No auth retry, no refresh — just the request and its result.
+ *
+ * Split from `send` so the 401 path has something to call twice without
+ * recursing, and so `/auth/refresh` itself has a way to be sent that cannot
+ * trigger another refresh.
  */
-async function send(
+async function sendOnce(
   path: string,
   options: RequestOptions,
 ): Promise<{ response: Response; reference: string }> {
@@ -152,6 +163,13 @@ async function send(
   const onOuterAbort = () => controller.abort();
   signal?.addEventListener('abort', onOuterAbort);
 
+  /*
+    Read at SEND time, never captured earlier. A request queued behind a refresh
+    must go out with the token the refresh produced, not the dead one that was
+    current when its caller started.
+  */
+  const token = getAccessToken();
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
@@ -159,6 +177,7 @@ async function send(
       headers: {
         accept: 'application/json',
         'x-avo-request-id': reference,
+        ...(token === null ? {} : { authorization: `Bearer ${token}` }),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...(idempotencyKey === undefined ? {} : { 'idempotency-key': idempotencyKey }),
         ...scenarioHeader(),
@@ -199,6 +218,148 @@ async function send(
   }
 
   return { response, reference };
+}
+
+/**
+ * The paths that must never trigger a refresh-and-retry.
+ *
+ * `/auth/refresh` is the refresh — retrying it through itself is infinite
+ * recursion. `/auth/member/session` returning 401 means she typed the wrong
+ * password, and refreshing a session she does not have yet is meaningless; that
+ * 401 has to reach the sign-in screen as a wrong-password message, which is
+ * exactly the "a wrong password is not an outage" rule. `/auth/sign-out` on a 401
+ * is already what it wanted: the session is gone.
+ */
+const NO_REAUTH = new Set(['/auth/refresh', '/auth/member/session', '/auth/sign-out']);
+
+/**
+ * ONE refresh at a time, and this latch is not an optimisation.
+ *
+ * Refresh tokens ROTATE (`rotateSession`), and the API cannot distinguish a
+ * replayed token from a stolen one, so it fails both. The wallet's home screen
+ * fires several reads at once — member, transactions, wallet token — so an expired
+ * access token produces several simultaneous 401s. Without a latch each would
+ * refresh independently: the first rotates and succeeds, the rest present the
+ * token that was just invalidated, fail, and sign the customer out in the middle
+ * of a working session.
+ *
+ * So every 401 in a burst awaits the SAME promise, and exactly one rotation
+ * happens.
+ */
+let inFlightRefresh: Promise<boolean> | null = null;
+
+/**
+ * The rotated pair. Validated like every other response rather than duck-typed:
+ * a refresh that answered 200 with a body missing `refreshToken` would otherwise
+ * store `undefined` and sign her out on the next call, one step removed from the
+ * cause.
+ */
+const RefreshSchema = z.object({
+  accessToken: z.string().min(1),
+  refreshToken: z.string().min(1),
+  expiresAt: z.string(),
+});
+
+async function performRefresh(): Promise<boolean> {
+  const token = getRefreshToken();
+  if (token === null) return false;
+
+  try {
+    const { response } = await sendOnce('/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: token },
+    });
+    const parsed = RefreshSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      await clearSession();
+      return false;
+    }
+    /*
+      The rotated pair is persisted HERE rather than by a caller. Forgetting it
+      works exactly once and then signs her out — a bug that presents as a flaky
+      backend rather than as a client mistake.
+
+      The dependency stays one-way and needs no lazy import: session.ts knows
+      nothing about HTTP, so client.ts -> session.ts is acyclic. auth.ts sits
+      above both.
+    */
+    await rotated({
+      accessToken: parsed.data.accessToken,
+      refreshToken: parsed.data.refreshToken,
+    });
+    return true;
+  } catch {
+    /*
+     * Every failure means the same thing to the customer — sign in again — and the
+     * session is cleared so nothing downstream believes otherwise. An offline
+     * refresh lands here too, which is honest: we cannot prove the session is
+     * alive.
+     */
+    await clearSession();
+    return false;
+  }
+}
+
+/**
+ * Exchange the stored refresh token for a new pair. Resolves false when the
+ * session is genuinely over and the only correct response is to show sign-in.
+ *
+ * Exported because boot needs it explicitly: `restore()` loads a refresh token and
+ * no access token, so the app calls this once rather than letting the first screen
+ * discover the session through a 401.
+ */
+export function refreshSession(): Promise<boolean> {
+  if (inFlightRefresh !== null) return inFlightRefresh;
+  const attempt = performRefresh();
+  inFlightRefresh = attempt;
+  void attempt.finally(() => {
+    // Cleared only if it is still ours; a refresh that started after this one
+    // finished must not be dropped.
+    if (inFlightRefresh === attempt) inFlightRefresh = null;
+  });
+  return attempt;
+}
+
+/**
+ * The transport half: everything up to and including "the server answered
+ * without an error status". Split out from `request` so that a 204 endpoint —
+ * `POST /members/me/password`, which returns no body precisely so that it cannot
+ * leak a password field (non-negotiable #6) — can share the failure
+ * classification without being handed a schema it has nothing to validate.
+ *
+ * And the layer where an expired access token stops being every screen's problem:
+ * a 401 is refreshed and retried ONCE here, so no caller needs to know that
+ * tokens expire.
+ */
+async function send(
+  path: string,
+  options: RequestOptions,
+): Promise<{ response: Response; reference: string }> {
+  try {
+    return await sendOnce(path, options);
+  } catch (err) {
+    const retryable =
+      err instanceof ApiError &&
+      err.status === 401 &&
+      !NO_REAUTH.has(path) &&
+      getRefreshToken() !== null;
+    if (!retryable) throw err;
+
+    const ok = await refreshSession();
+    if (!ok) throw err;
+
+    /*
+      Exactly once. A second 401 after a successful refresh is not an expiry — it
+      is the server refusing this principal for this resource — and retrying it in
+      a loop would hammer the API with a request that will never succeed.
+
+      Safe for the money POSTs, which is the case worth checking rather than
+      assuming: the idempotency key is unchanged on the retry, so if the first
+      attempt somehow reached the server the second replays its stored answer
+      instead of moving money twice (non-negotiable #4).
+    */
+    return await sendOnce(path, options);
+  }
 }
 
 async function request<S extends z.ZodTypeAny>(

@@ -155,6 +155,35 @@ export const en: Copy = {
   rowPending: 'Pending',
   rowFailed: 'Failed',
 
+  // sign-in — design:1168, :1246, :1248
+  salonName: 'Amara',
+  walletWord: 'Wallet',
+  signInTitle: 'Welcome back',
+  signInSub: 'Log in to your Amara wallet',
+  signInAction: 'Log in',
+  /**
+   * INVENTED — the design's button carries no busy label. Same pattern as the
+   * scanner's `chargeWorking`, and the button is disabled for the duration so a
+   * second submit cannot mint a second session.
+   */
+  signInWorking: 'Logging in…',
+  /**
+   * INVENTED, and it replaces a string the design does have.
+   *
+   * `errEmpty` at :1256 reads "Enter your username and password." in English and
+   * :1363 "أدخلي اسم المستخدم وكلمة المرور." in Arabic. Both name a username, and
+   * there is no member username in this system — see api/auth.ts for the whole
+   * conflict. So the design's own validation copy could not be lifted, and this is
+   * the only string on the screen that had to be written rather than taken.
+   */
+  signInErrEmpty: 'Enter your phone number and password.',
+  /**
+   * INVENTED. `offlineBanner` is the wrong sentence here: it promises the last
+   * update, and at sign-in there is no last update to show. A wrong password and a
+   * dead connection must not read the same (interaction-spec §4).
+   */
+  signInOffline: 'No connection. You need one to log in.',
+
   // failure — "we failed", so it retries
   errorTitle: "We couldn't load your wallet",
   errorBody: 'Your balance and history are safe. This is on our side.',
