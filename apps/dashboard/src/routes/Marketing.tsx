@@ -59,6 +59,13 @@ export function Marketing() {
    * `POST /campaigns`, and it would refuse all four if this check were deleted.
    * This is the courtesy, not the control.
    *
+   * THE PERMISSION THE SERVER ENFORCES IS `requireDashboardPerm(req, 'marketing')`
+   * on all four of those routes — named here so the next person can check the
+   * claim against `api/src/routes/platform.ts` without reading the handlers. This
+   * section and Settings are the only two with the ungated-read / gated-write
+   * shape; the ledger in sectionState.tsx has the full table and says why the
+   * other six deliberately have no gate.
+   *
    * The copy is the API's own sentence for `marketing`, so a merchant who hits
    * the server's refusal by another route reads the same words.
    */

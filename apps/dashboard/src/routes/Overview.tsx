@@ -3,6 +3,20 @@ import { Card, EmptyState, ErrorState, Money, Skeleton, StatCard, StaleBanner } 
 import { ApiError } from '../api/client.js';
 import { useRecentActivity, useSalonMetrics, type SalonMetrics } from '../api/salon.js';
 
+/**
+ * Merchant → Overview.
+ *
+ * NO COURTESY PERMISSION GATE, DELIBERATELY. `GET /salons/{id}/metrics` is
+ * `requireDashboardPerm(req, 'dashboard')` server-side, so the refusal arrives on
+ * its own and `SectionError` explains it. A client check here would duplicate the
+ * server and drift from it. The ledger in sectionState.tsx records why — on
+ * Settings the same absence WAS an oversight, and nothing distinguished the two.
+ *
+ * `GET /charges` behind the activity feed is `requireScannerPerm(req, 'charges')`
+ * — a SCANNER-scope guard, not a dashboard one. No web principal satisfies it
+ * whatever permissions she holds, so that refusal is the contract rather than a
+ * permission anyone can grant.
+ */
 export function Overview() {
   // No salon id here at all. Both hooks read it from the session.
   const metrics = useSalonMetrics();

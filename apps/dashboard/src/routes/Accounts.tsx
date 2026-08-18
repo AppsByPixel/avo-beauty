@@ -17,10 +17,16 @@ import {
   type StaffPerms,
 } from '../api/staff.js';
 import { useSalon } from '../api/salon.js';
+import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
 
 /**
  * Merchant → Accounts → Team. `perms.team` on every route it touches.
+ *
+ * NO COURTESY PERMISSION GATE, DELIBERATELY — and "every route" above is the
+ * reason. `GET /staff` and all four writes are `requireDashboardPerm(req, 'team')`,
+ * so the refusal arrives on the read and nobody reaches a control she cannot use.
+ * Ledger in sectionState.tsx.
  *
  * WHAT THESE CONTROLS ACTUALLY DO. Each one writes to the shared staff record,
  * and the staff scanner reads the same record — so switching "Scan & charge" off
@@ -52,6 +58,7 @@ import { SectionError, WriteError } from './sectionState.js';
 type Tab = 'team' | 'customers';
 
 export function Accounts() {
+  const session = useSession('merchant');
   const staff = useStaff();
   const salon = useSalon();
   const updateStaff = useUpdateStaff();
@@ -169,6 +176,7 @@ export function Accounts() {
                   branchNames={branchNames}
                   branches={branches}
                   isSoleTeamAdmin={account.id === soleTeamAdminId}
+                  isSelf={account.id === session.staffId}
                   resetExpiresAt={resetSent[account.id]}
                   busy={
                     (updateStaff.isPending && updateStaff.variables?.staffId === account.id) ||
@@ -244,6 +252,8 @@ interface AccountCardProps {
   branches: ReadonlyArray<BranchLite>;
   /** The only remaining holder of `perms.team`. The server refuses to strip her. */
   isSoleTeamAdmin: boolean;
+  /** The signed-in user's own row. `DELETE /staff/{id}` refuses it, 409. */
+  isSelf: boolean;
   /** ISO instant from the 202, when a link has been issued this session. */
   resetExpiresAt: string | undefined;
   busy: boolean;
@@ -260,6 +270,7 @@ function AccountCard({
   branchNames,
   branches,
   isSoleTeamAdmin,
+  isSelf,
   resetExpiresAt,
   busy,
   resetting,
@@ -377,16 +388,33 @@ function AccountCard({
         )}
 
         {leaver ? null : (
+          /*
+           * Two refusals the server WILL make, pre-empted with the server's own
+           * reason rather than discovered as a 409 after the confirmation.
+           *
+           *   `cannot_deactivate_self`      staff.ts:608 — "You cannot remove
+           *                                 your own account."
+           *   last holder of `perms.team`   refuseLastTeamAdminRemoval
+           *
+           * Both are `requireDashboardPerm(req, 'team')` routes and both refuse
+           * with or without this check, so this is the courtesy. It is here
+           * because a control that can only fail is the same defect Settings had,
+           * just one button wide: a manager clicks ✕ on her own row, reads a
+           * confirmation about deleting her PIN and signing her out, presses
+           * "Remove from team", and only then learns it was never possible.
+           */
           <button
             type="button"
             className="account__remove"
             aria-label={`Remove ${account.name}`}
             title={
-              isSoleTeamAdmin
-                ? 'The last person who can manage the team cannot be removed'
-                : `Remove ${account.name}`
+              isSelf
+                ? 'You cannot remove your own account. Ask another manager to do it.'
+                : isSoleTeamAdmin
+                  ? 'The last person who can manage the team cannot be removed'
+                  : `Remove ${account.name}`
             }
-            disabled={busy || isSoleTeamAdmin}
+            disabled={busy || isSoleTeamAdmin || isSelf}
             onClick={() => setConfirmRemove(true)}
           >
             <span aria-hidden="true">✕</span>
