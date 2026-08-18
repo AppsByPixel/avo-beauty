@@ -520,3 +520,33 @@ would have two agents in one dependency graph competing over shared components.
 **To reverse:** split them once a shared mobile component package exists — that is the point
 at which two lanes stop colliding.
 
+
+### Telling her a top-up cancelled her deletion — HELD, and not faked
+
+**What.** A top-up on a member with a pending deletion request now cancels that request, in
+the same transaction as the credit (lane A, `c8d65e1`). She is **not** proactively told. The
+audit row carries `customerNoticeOwed: true`, following the `oldNumberNoticeOwed` precedent.
+
+**Why not.** There is no customer notification sender: WhatsApp templates are unapproved and
+the transactional domain is undecided, both client-owned. Lane A reported the gap rather than
+inventing a channel, which is right — a confirmation the app cannot back is worse than none,
+the same reasoning that kept `requestAccountDeletion` from faking a success for two commits.
+
+**Why not the top-up outcome screen either, which is the obvious alternative.**
+`TopUpIntentPublicSchema` is `TopUpIntentSchema.omit({ feeFils: true })`, so a field added to
+the base appears on the **merchant** view as well — and whether a salon should learn that a
+customer's account-deletion request was cancelled is a privacy question, not a plumbing one.
+Landing it costs a trunk schema change plus a four-way rebase, and it buys a screen she may
+not be looking at.
+
+**Why the severity is low enough to hold.** She can already discover the state from
+`GET /members/me/deletion`, which lane A built for exactly this reason. And the act that
+triggered the cancellation was her own top-up — funding a wallet is not the behaviour of
+someone who believes her account is being erased. The states that would be dangerous are the
+reverse: a deletion silently *not* cancelled over a funded wallet, which is the bug that was
+fixed, or a UI implying erasure is underway when `erasureScheduled` is false.
+
+**To reverse:** when the notification outbox exists, send it there — that is the right channel
+regardless, and it makes the schema question moot. If it must go on the outcome screen first,
+add the field to the **public** shape only and decide the merchant-visibility question
+explicitly rather than inheriting it from `.omit()`.
