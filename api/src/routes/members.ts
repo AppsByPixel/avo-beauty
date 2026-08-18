@@ -31,6 +31,12 @@ import { serialiseTransactionForCustomer } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { marketingConsentOf, recordConsent } from '../services/consent';
+import {
+  latestPolicyAcceptance,
+  policyAcceptanceState,
+  recordPolicyAcceptance,
+  requireCurrentPolicyVersion,
+} from '../services/policy';
 import { counterEnvelope } from '../services/counter';
 import {
   DIRECTORY_REFUSED_ACTION,
@@ -478,6 +484,102 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
     });
 
     return reply.send(await serialiseNotifications(after ?? me));
+  });
+
+  // ------------------------------------------------- policy acceptance (#10) --
+  /**
+   * "HAS SHE ACCEPTED THE VERSION THAT IS PUBLISHED NOW?"
+   *
+   * Non-negotiable #10 has two halves. Signup covers the first — store the
+   * accepted version against the member. This is the second, which
+   * design/README.md gap 5 states as "re-prompt on a material change".
+   *
+   * IT IS A QUERY BECAUSE ACCEPTANCE IS AN EVENT. That is the whole return on
+   * migration 0025's shape: `member.policy_version` is one mutable integer, so it
+   * can only ever describe the latest acceptance, and the interesting member is
+   * the one whose stamp says v3 while v4 is live. The trail can be asked about
+   * any version; a column cannot.
+   *
+   * `upToDate: false` IS THE RE-PROMPT SIGNAL, and it is deliberately computed
+   * from the event and never from the column — including for a member with a
+   * stamp and no event, who is every member seeded before 0025. `stampedVersion`
+   * is returned beside it so support can see the claim next to the evidence, but
+   * it does not vote: treating a stamp as proof is "they agreed to whatever was
+   * current", which is the exact reasoning gap 5 rules out.
+   */
+  app.get('/members/me/policy-acceptance', async (req, reply) => {
+    const p = requireMember(req);
+    const me = await loadMember(p.id);
+    return reply.send(await policyAcceptanceState(db, me));
+  });
+
+  /**
+   * Accepting the re-prompt.
+   *
+   * Without this the query above is decoration: a client that can detect a
+   * material change but cannot record the answer leaves #10's second half exactly
+   * as unmet as it was before signup existed.
+   *
+   * SAME VALIDATION AS SIGNUP, and through the same function. She sends the
+   * version she was shown and `policy_version_stale` refuses anything else, so a
+   * second publish landing while she reads the first cannot be accepted blind.
+   *
+   * `source: 'wallet_account'` — the enum's value for the Account surface. Not
+   * `'signup'`, which would make the trail claim she agreed at registration to a
+   * document published years later.
+   */
+  app.post('/members/me/policy-acceptance', async (req, reply) => {
+    const p = requireMember(req);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    const policySet = await requireCurrentPolicyVersion(db, body.policyVersion);
+    const me = await loadMember(p.id);
+
+    /**
+     * ALREADY ACCEPTED IS A SUCCESS, NOT A CONFLICT. The fact this endpoint
+     * exists to record is already recorded, so there is nothing to refuse and
+     * nothing to write — re-reading the terms and tapping accept twice is a
+     * customer being careful, and `member_consent_acceptance_once_per_version`
+     * would turn the second tap into a 500 if it reached the insert.
+     */
+    const already = await latestPolicyAcceptance(db, me.id);
+    if (already?.version === policySet.version) {
+      return reply.send(await policyAcceptanceState(db, me));
+    }
+
+    await db.transaction(async (tx) => {
+      await recordPolicyAcceptance(tx, {
+        memberId: me.id,
+        salonId: me.salonId,
+        policyVersion: policySet.version,
+        source: 'wallet_account',
+        ...clientMeta(req),
+      });
+
+      /**
+       * The cached value follows the event, in the same transaction. It is a
+       * projection, so it must never be the only record and must never disagree
+       * with the newest one.
+       */
+      await tx
+        .update(member)
+        .set({ policyVersion: policySet.version, updatedAt: new Date() })
+        .where(eq(member.id, me.id));
+
+      await writeAudit(tx, p, {
+        salonId: me.salonId,
+        kind: 'access',
+        action: 'Policy version accepted',
+        detail: `Accepted policy v${policySet.version} (was v${me.policyVersion})`,
+        source: 'wallet',
+        subjectType: 'member',
+        subjectId: me.id,
+        metadata: { policyVersion: policySet.version, previousVersion: me.policyVersion },
+        ...clientMeta(req),
+      });
+    });
+
+    return reply.send(await policyAcceptanceState(db, { ...me, policyVersion: policySet.version }));
   });
 
   // ---------------------------------------------------- account deletion --
