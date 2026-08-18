@@ -423,6 +423,23 @@ export const en: Copy = {
     }. You stay signed in until then, and you can still change your mind.`,
   deleteCancel: 'Cancel deletion request',
   deleteCancelled: 'Deletion cancelled',
+  deleteScheduledTitle: 'Deletion scheduled',
+  // NOTHING HAS BEEN DELETED, and the first four words say so. `erasureScheduled`
+  // is false and stays false until the retention job exists, so "your data is
+  // being removed" would describe work nobody has done. The date derives from the
+  // server's `erasureDueAt`, never requestedAt plus a local 30.
+  //
+  // Takes the CALENDAR DATE and formats its own, exactly like `legalUpdated` and
+  // for the reason `staleBanner` exists: a date formatted by the caller in the
+  // app's language, dropped into a sentence that is still English because it is
+  // an AR_GAP, produces "…stay as they are until ١٧ سبتمبر ٢٠٢٦." — Eastern
+  // digits inside an English sentence, which reads as a bug in both languages.
+  // The script has to follow the sentence, so the sentence does the formatting.
+  deleteScheduledBody: (dueOn) =>
+    `Nothing has been deleted yet. Your profile and your balance stay as they are until ${formatEffectiveFrom(
+      dueOn,
+    )}. You can cancel any time before then.`,
+  deleteCheckFailed: "We couldn't check whether your account is scheduled for deletion.",
 
   // design/AVO Wallet Home.dc.html:1232 — the English build offers Arabic.
   langSwitch: 'العربية',

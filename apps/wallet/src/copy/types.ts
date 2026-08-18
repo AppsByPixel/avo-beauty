@@ -469,6 +469,33 @@ export interface Copy {
   deletePendingBody(days: number): string;
   deleteCancel: string;
   deleteCancelled: string;
+  /**
+   * The PERSISTENT state, shown on Account whenever `GET /members/me/deletion`
+   * says `pending` — which is what makes the cancel door reachable after a cold
+   * start rather than only in the seconds after requesting.
+   *
+   * NO DESIGN SOURCE, for the same reason as the three above: the design's sheet
+   * never reaches a server, so it has no notion of a request that outlives the
+   * sheet. Both are in AR_GAPS.
+   *
+   * `deleteScheduledBody` takes the CALENDAR DATE the erasure is due on, as
+   * "YYYY-MM-DD", and each language formats its own — the `staleBanner` /
+   * `legalUpdated` rule. A caller that formatted it would put Eastern digits
+   * inside this English AR_GAP sentence, which is the half-translated mix that
+   * reads as a bug in both languages.
+   *
+   * A calendar date, not the raw `erasureDueAt` instant: converting the instant
+   * to a Kuwait date is a timezone decision and belongs in one place, not in two
+   * copy modules.
+   */
+  deleteScheduledTitle: string;
+  deleteScheduledBody(dueOn: string): string;
+  /**
+   * The read failed, so the screen knows neither `none` nor `pending`. BOTH
+   * guesses are harmful — see state/useDeletionState.ts — so the section shows
+   * this with a retry instead of picking one.
+   */
+  deleteCheckFailed: string;
 
   // the language switch itself
   langSwitch: string;
