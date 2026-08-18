@@ -811,3 +811,47 @@ second is a design question. Do not conclude from a passing suite that a layer w
 each spawn a real `tsx` process, two of them concurrently, at roughly three seconds each. The suite
 went from 3:51 for 511 specs to 4:07 and 4:10 for 516. Worth it for a money path that had never
 executed, and flagged rather than absorbed.
+
+### Five calls made without asking, to keep the run moving
+
+Aftab: *"Make decisions that you think are right, do not ask me anything. If you can't move
+forward without asking, leave that task."* These are the open ones, decided.
+
+**1. `TRUST_PROXY` — fail fast in production, default off in development.** `req.ip` became a
+security control when the signup limiter shipped, and both silent defaults are wrong: unset puts
+every caller behind a proxy in one bucket, `true` lets any client forge its own. So the API
+refuses to boot in production with it unset, naming the variable. A deployment that cannot say
+what its proxy is has not been configured, and finding that out at boot beats finding it out
+from a rate limiter that never fires. Added to `go-live-checklist.md`.
+
+**2. The overnight happy hour stays impossible — for the pilot.** `isHappyHourLive` is
+`minutes >= from && minutes < to` and the CHECK is `to > from`, so 23:00–01:00 cannot be
+expressed. A Kuwaiti salon open until 1am is a real case, so this is a genuine product gap —
+but rule and schema **agree**, so it is a limitation rather than a defect, it blocks no plan
+criterion, and fixing it is a `packages/types` change plus a migration plus three consumers,
+i.e. a four-way break landed mid-sprint. Deferred deliberately, not overlooked. **To reverse:**
+allow `to <= from` to mean "wraps midnight" in both the predicate and the CHECK, together, and
+rebase every lane.
+
+**3. Near-duplicate charge: refuse, name the prior charge, require an explicit confirm.** Queue
+item 8. A second charge for the same member and the same basket inside **120 seconds** answers
+`possible_duplicate` carrying the earlier transaction, and proceeds only with an explicit
+confirm flag. A flag-after-the-fact cannot work — the triggering condition is a response the
+client could not read, so a warning arrives after the money moved. Two identical services back
+to back is legitimate, so this costs one extra tap in a rare case to prevent a double debit in
+a case we have already traced end to end. 120s because a genuine repeat is a separate visit.
+
+**4. Show the returned deposit.** A 5.000 hold meeting a 3.000 basket returns 2.000 with
+nothing on screen explaining the balance move. `deposit_return` copy already exists in both
+languages (`en.ts:194`, `ar.ts:244`) with a receipt branch, so this is wiring existing copy
+rather than inventing design.
+
+**5. `expo-secure-store` on native: yes, and it is now safe to land.** It was held because a
+shared-lockfile edit breaks `pnpm install` in four worktrees at once. It goes in as its own
+slice with every lane rebasing immediately after, rather than waiting for a quieter moment that
+does not arrive.
+
+**Left undecided on purpose, because they are not mine:** CBK licensing, who holds the customer's
+balance if MyFatoorah pays the salon at top-up, counsel and PSP sign-off, data residency, support
+staffing, the Arabic native-speaker review, and whether signup needs a verification step to close
+the enumeration oracle. Each is queued above.
