@@ -1,539 +1,601 @@
--- Proof, not documentation.
+-- Proof, not documentation — and now proof a MACHINE can read.
 --
---   pnpm --dir api run db:reset    # fresh database + migrations
---   pnpm --dir api run db:verify   # this file
---
--- Runs the guarantees the schema exists to hold and shows the database refusing
--- each violation.
---
--- HOW TO READ IT. Most statements are EXPECTED TO FAIL — an error here is the
--- guarantee working. The exceptions are named, because a section that only ever
--- fails cannot tell you when it has stopped testing anything:
---
---   MUST SUCCEED   the seeds; 1a; 3f; 3h's NULL update; 4's summary row;
---                  5 (RECONCILED); 6d (the erasure cascade); 7d (loyalty_event is
---                  truncatable BY DECISION, migration 0008); 8b (a member with no
---                  money history does delete); 9d (a non-terminal top-up advances)
---   MUST FAIL      everything else
---
--- The MUST SUCCEED blocks exist because several of these invariants have a
--- DELIBERATE limit, and a limit nobody asserts is one the next person removes while
--- "fixing an inconsistency". 6d and 7d are the two already reasoned about at length,
--- in migrations 0023 and 0008.
---
--- Sections 4a, 4b and 5 RAISE on violation rather than printing a table, so this
--- file fails loudly instead of leaving a reader to notice.
---
--- WHICH DATABASE. `AVO_VERIFY_DB` selects it and defaults to `avo`:
---
+--   pnpm --dir api run db:verify                     # against `avo`
 --   AVO_VERIFY_DB=avo_lane_a pnpm --dir api run db:verify
 --
--- It used to be hardcoded to `avo`, which meant the one command whose whole job
--- is proving invariants could not be pointed at the database you had just
--- seeded — and a lane that ran it anyway would be reading someone else's rows.
--- Section 5 is about seeded data, so this stopped being a convenience.
+-- Exits 0 when every invariant holds and NON-ZERO when any of them does not, so
+-- CI can gate on it.
 --
--- Run sections 1-4 against a freshly migrated database. It deliberately cannot
--- clean up after itself: the rows it writes to audit_log and ledger_entry are
--- ones nothing in this system is allowed to delete, which is the point.
+-- ===========================================================================
+-- WHY THIS FILE WAS REWRITTEN — IT WAS THE FOURTH INSTANCE OF ITS OWN FINDING
+-- ===========================================================================
+-- The previous version ran raw statements under `ON_ERROR_STOP=0` and printed the
+-- transcript. Two defects, both of which it existed to catch in other people's
+-- code:
 --
--- Labels go to stderr (`\warn`) so they interleave with psql's errors in the
--- right order when the whole transcript is captured with 2>&1.
+--   IT COULD NOT FAIL. psql continued past every error and exited 0. A violated
+--   invariant was signalled only by the ABSENCE of an expected error, which needs
+--   a human to read 259 lines and already know which lines should have failed.
+--   Ten sections of assertions were exactly what the prose invariants had been:
+--   true, unread, unenforced. Proved against `avo_ci`, which predates migrations
+--   0023 and 0024: three TRUNCATEs that should have been refused printed
+--   `TRUNCATE TABLE`, and the script exited 0.
+--
+--   IT WAS DESTRUCTIVE. The probes used `BEGIN … COMMIT`, so on a database missing
+--   the triggers it was checking for, it really truncated `ledger_entry` and
+--   committed. `avo_ci` was left with an empty money ledger by a script whose
+--   purpose is to prove that cannot happen. And section 5 printed
+--   `RECONCILED | 2` BEFORE section 7 wiped the table, so the verdict a reader
+--   remembers came from before the damage.
+--
+-- ===========================================================================
+-- HOW IT WORKS NOW
+-- ===========================================================================
+-- Every probe goes through `pg_temp.probe(...)`, which runs the statement inside a
+-- plpgsql `BEGIN … EXCEPTION` block. That block is an implicit SUBTRANSACTION, so:
+--
+--   * a statement that is REFUSED is rolled back by the exception, and the error
+--     is captured rather than printed loose;
+--   * a statement that is ALLOWED is rolled back too, because the probe raises a
+--     sentinel (`ZZZ01`) immediately afterwards purely to force that rollback.
+--
+-- So nothing a probe does survives it, whichever way the invariant went. The whole
+-- run is additionally wrapped in one transaction that ends in ROLLBACK, so even
+-- the fixtures do not persist. THIS SCRIPT NO LONGER WRITES ANYTHING.
+--
+-- Each probe records PASS/FAIL into a temp table with the real error text, the
+-- report prints per-probe, and the VERDICT PRINTS LAST — after the rollback, so a
+-- success line cannot appear above work that would have contradicted it.
+--
+-- EXPECTED FAILURE IS NOT ENOUGH: a probe may also declare `p_match`, a substring
+-- the refusal must contain. Without it, a statement that failed because of a typo'd
+-- column name counts as the invariant holding — which happened to me three times
+-- while writing sections 9 and 10, and is the same "narrower than the claim"
+-- mistake this file keeps finding elsewhere.
+--
+-- MUST-SUCCEED PROBES are declared `allowed` and are the reason the next person
+-- cannot "fix" a deliberate limit: 3f, 6d (the erasure cascade), 7d
+-- (`loyalty_event` is truncatable BY DECISION, migration 0008), 8b (a member with
+-- no money history does delete) and 9d (a non-terminal top-up advances).
+--
+-- The deferred `ledger_entry_balanced` trigger normally fires at COMMIT. Since
+-- nothing here commits, probe 3e forces it with `SET CONSTRAINTS ALL IMMEDIATE` —
+-- the same constraint, evaluated earlier.
+-- ===========================================================================
 
-\set ON_ERROR_STOP off
-\set QUIET on
+\set ON_ERROR_STOP on
+\pset pager off
+
+-- The result table is created OUTSIDE the transaction so it survives the rollback
+-- that discards everything else. Its ROWS are still written inside, so the report
+-- is read before the rollback and the verdict is carried out in psql variables.
+DROP TABLE IF EXISTS _verify_result;
+CREATE TEMP TABLE _verify_result (
+  seq         serial primary key,
+  section     text    not null,
+  label       text    not null,
+  expectation text    not null,
+  passed      boolean not null,
+  detail      text    not null
+);
+
+BEGIN;
+
 SET client_min_messages TO WARNING;
 
--- --------------------------------------------------------------- seed ------
-BEGIN;
+-- --------------------------------------------------------------- harness ------
+
+CREATE FUNCTION pg_temp.probe(
+  p_section text,
+  p_label   text,
+  p_expect  text,               -- 'refused' (must fail) or 'allowed' (must succeed)
+  p_stmt    text,
+  p_match   text DEFAULT NULL,  -- substring the refusal must contain
+  p_role    text DEFAULT NULL   -- run as this role
+) RETURNS void LANGUAGE plpgsql AS $fn$
+DECLARE
+  v_passed boolean;
+  v_detail text;
+BEGIN
+  BEGIN
+    IF p_role IS NOT NULL THEN
+      EXECUTE format('SET LOCAL ROLE %I', p_role);
+    END IF;
+
+    EXECUTE p_stmt;
+
+    -- Reached only when the statement was ALLOWED. The sentinel exists to roll the
+    -- statement back: without it, a probe that discovers a missing guarantee would
+    -- COMMIT the very damage it was checking for. That is what emptied `avo_ci`.
+    RAISE EXCEPTION 'AVO_PROBE_ALLOWED' USING ERRCODE = 'ZZZ01';
+
+  EXCEPTION
+    WHEN sqlstate 'ZZZ01' THEN
+      v_passed := (p_expect = 'allowed');
+      v_detail := CASE WHEN v_passed
+                       THEN 'allowed, as required'
+                       ELSE 'ALLOWED — the guarantee did not hold' END;
+
+    WHEN others THEN
+      IF p_expect = 'refused' THEN
+        IF p_match IS NOT NULL AND position(lower(p_match) in lower(SQLERRM)) = 0 THEN
+          v_passed := false;
+          v_detail := format('refused for the WRONG reason (wanted "%s"): %s', p_match, SQLERRM);
+        ELSE
+          v_passed := true;
+          v_detail := SQLERRM;
+        END IF;
+      ELSE
+        v_passed := false;
+        v_detail := format('REFUSED but had to be allowed: %s', SQLERRM);
+      END IF;
+  END;
+
+  RESET ROLE;
+  INSERT INTO _verify_result (section, label, expectation, passed, detail)
+  VALUES (p_section, p_label, p_expect, v_passed, v_detail);
+END
+$fn$;
+
+/** A property with no statement behind it: schema shape, a reconciliation. */
+CREATE FUNCTION pg_temp.assert(
+  p_section text, p_label text, p_holds boolean, p_detail text
+) RETURNS void LANGUAGE plpgsql AS $fn$
+BEGIN
+  INSERT INTO _verify_result (section, label, expectation, passed, detail)
+  VALUES (p_section, p_label, 'holds', coalesce(p_holds, false),
+          coalesce(p_detail, '(no detail)'));
+END
+$fn$;
+
+-- ---------------------------------------------------------------- fixtures ----
+-- Rolled back with everything else. `ON CONFLICT DO NOTHING` because earlier
+-- versions of this script committed these rows, so some databases still have them.
 
 INSERT INTO salon (id, name, brand_color, loyalty_mode, tiers, deposit_fils, business_hours)
 VALUES ('SL-VERIFY', 'Amara', '#B7A99A', 'tiers',
-        '[{"name":"bronze","minVisits":0,"bonusPercent":0}]'::jsonb,
-        5000,
+        '[{"name":"bronze","minVisits":0,"bonusPercent":0}]'::jsonb, 5000,
         '{"morning":["10:00","13:00"],"evening":["16:00","22:00"]}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO branch (id, salon_id, name)
-VALUES ('BR-VERIFY', 'SL-VERIFY', 'Salmiya')
+INSERT INTO branch (id, salon_id, name) VALUES ('BR-VERIFY', 'SL-VERIFY', 'Salmiya')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
 VALUES ('MB-VERIFY', 'SL-VERIFY', 'Noura S.', '+96599124408', '$argon2id$fake', 18000, 'bronze', 3)
 ON CONFLICT (id) DO NOTHING;
 
-COMMIT;
+INSERT INTO artist (id, salon_id, name) VALUES ('AR-VERIFY', 'SL-VERIFY', 'Rana')
+ON CONFLICT (id) DO NOTHING;
 
-\set QUIET off
+INSERT INTO service (id, salon_id, name, price_fils) VALUES ('SV-VERIFY', 'SL-VERIFY', 'Blow-dry', 8000)
+ON CONFLICT (id) DO NOTHING;
 
-\warn ''
-\warn '=== 1. audit_log is append-only for the application role ==================='
-\warn ''
-
-SET ROLE avo_app;
-SELECT current_user AS connected_as;
-
-\warn '--- 1a. INSERT is allowed (this must SUCCEED) ---'
+-- An audit row for section 1 to try to tamper with. Written by the app role, which
+-- is the only thing it is allowed to do to this table.
+SET LOCAL ROLE avo_app;
 INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role,
                        kind, action, detail, source, amount_fils)
-VALUES ('SL-VERIFY', 'staff', 'ST-1', 'Rana Al-Sabah', 'Manager',
+VALUES ('SL-VERIFY', 'staff', 'ST-VERIFY', 'Rana Al-Sabah', 'Manager',
         'money', 'Charge taken', '6.000 KD · Blow-dry · Noura S.', 'scanner', -6000);
-
-\warn '--- 1b. UPDATE must be REFUSED ---'
-UPDATE audit_log SET detail = 'nothing to see here' WHERE actor_id = 'ST-1';
-
-\warn '--- 1c. DELETE must be REFUSED ---'
-DELETE FROM audit_log WHERE actor_id = 'ST-1';
-
-\warn '--- 1d. TRUNCATE must be REFUSED ---'
-TRUNCATE audit_log;
-
 RESET ROLE;
 
-\warn '--- 1e. and the trigger refuses the OWNER too (defence in depth) ---'
-UPDATE audit_log SET detail = 'owner tried' WHERE actor_id = 'ST-1';
-DELETE FROM audit_log WHERE actor_id = 'ST-1';
+-- =========================================================================
+-- 1. audit_log is append-only
+-- =========================================================================
+SELECT pg_temp.probe('1', 'app role may INSERT', 'allowed',
+  $probe$INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind, action, source, amount_fils)
+    VALUES ('SL-VERIFY','staff','ST-VERIFY','Rana','Manager','money','Charge taken','scanner',-6000)$probe$,
+  NULL, 'avo_app');
 
-\warn '--- 1f. the row is still there, unchanged ---'
-SELECT actor_name, action, detail FROM audit_log WHERE actor_id = 'ST-1';
+-- Found by the harness refusing my own sloppy fixture, which is the instrument
+-- working: a `money` audit row with no figure on it is a money event nobody can
+-- read. Worth asserting rather than only tripping over.
+SELECT pg_temp.probe('1', 'a money audit row with no amount refused', 'refused',
+  $probe$INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind, action, source)
+    VALUES ('SL-VERIFY','staff','ST-VERIFY','Rana','Manager','money','Charge taken','scanner')$probe$,
+  'audit_log_money_has_amount', 'avo_app');
 
-\warn ''
-\warn '=== 2. a negative balance is impossible ===================================='
-\warn ''
+SELECT pg_temp.probe('1', 'a non-system actor with no id refused', 'refused',
+  $probe$INSERT INTO audit_log (salon_id, actor_kind, actor_name, actor_role, kind, action, source)
+    VALUES ('SL-VERIFY','staff','Rana','Manager','access','Customer looked up','scanner')$probe$,
+  'audit_log_actor_id_required', 'avo_app');
 
-SET ROLE avo_app;
+SELECT pg_temp.probe('1', 'app role UPDATE refused', 'refused',
+  $probe$UPDATE audit_log SET detail = 'nothing to see here' WHERE actor_id = 'ST-VERIFY'$probe$,
+  'permission denied', 'avo_app');
 
-\warn '--- 2a. spending more than the balance must be REFUSED ---'
-UPDATE member SET balance_fils = balance_fils - 20000 WHERE id = 'MB-VERIFY';
+SELECT pg_temp.probe('1', 'app role DELETE refused', 'refused',
+  $probe$DELETE FROM audit_log WHERE actor_id = 'ST-VERIFY'$probe$,
+  'permission denied', 'avo_app');
 
-\warn '--- 2b. writing a negative balance directly must be REFUSED ---'
-UPDATE member SET balance_fils = -1 WHERE id = 'MB-VERIFY';
+SELECT pg_temp.probe('1', 'app role TRUNCATE refused', 'refused',
+  $probe$TRUNCATE audit_log$probe$, 'permission denied', 'avo_app');
 
-\warn '--- 2c. so must inserting a member who is already overdrawn ---'
-INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
-VALUES ('MB-NEG', 'SL-VERIFY', 'Overdrawn', '+96599124409', '$argon2id$fake', -1, 'bronze', 3);
+SELECT pg_temp.probe('1', 'OWNER UPDATE refused (the trigger)', 'refused',
+  $probe$UPDATE audit_log SET detail = 'owner tried' WHERE actor_id = 'ST-VERIFY'$probe$, 'append-only');
 
-\warn '--- 2d. the balance is untouched ---'
-SELECT id, balance_fils FROM member WHERE id = 'MB-VERIFY';
+SELECT pg_temp.probe('1', 'OWNER DELETE refused (the trigger)', 'refused',
+  $probe$DELETE FROM audit_log WHERE actor_id = 'ST-VERIFY'$probe$, 'append-only');
 
-RESET ROLE;
+-- =========================================================================
+-- 2. a negative balance is impossible AT THE DATABASE LEVEL
+-- =========================================================================
+SELECT pg_temp.probe('2', 'spending past the balance refused', 'refused',
+  $probe$UPDATE member SET balance_fils = balance_fils - 20000 WHERE id = 'MB-VERIFY'$probe$,
+  'member_balance_non_negative', 'avo_app');
 
-\warn ''
-\warn '=== 3. supporting guarantees =============================================='
-\warn ''
+SELECT pg_temp.probe('2', 'writing a negative balance refused', 'refused',
+  $probe$UPDATE member SET balance_fils = -1 WHERE id = 'MB-VERIFY'$probe$,
+  'member_balance_non_negative', 'avo_app');
 
-SET ROLE avo_app;
+SELECT pg_temp.probe('2', 'inserting an overdrawn member refused', 'refused',
+  $probe$INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
+    VALUES ('MB-NEG','SL-VERIFY','Overdrawn','+96599124409','$argon2id$fake',-1,'bronze',3)$probe$,
+  'member_balance_non_negative', 'avo_app');
 
-\warn '--- 3a. a wallet token cannot be minted with a long life ---'
-INSERT INTO wallet_token (member_id, token_hash, expires_at)
-VALUES ('MB-VERIFY', 'hash-long-lived', now() + interval '1 day');
+-- =========================================================================
+-- 3. supporting guarantees
+-- =========================================================================
+SELECT pg_temp.probe('3', 'a long-lived wallet token refused', 'refused',
+  $probe$INSERT INTO wallet_token (member_id, token_hash, expires_at)
+    VALUES ('MB-VERIFY','hash-long-lived', now() + interval '1 day')$probe$,
+  'wallet_token_expiry_is_short', 'avo_app');
 
-\warn '--- 3b. the same idempotency key twice in one scope must be REFUSED ---'
-INSERT INTO idempotency_key (scope, key, endpoint, request_hash)
-VALUES ('member:MB-VERIFY', 'idem-1', 'POST /charges', 'sha256:aaa');
-INSERT INTO idempotency_key (scope, key, endpoint, request_hash)
-VALUES ('member:MB-VERIFY', 'idem-1', 'POST /charges', 'sha256:bbb');
+SELECT pg_temp.probe('3', 'the same idempotency key twice refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO idempotency_key (scope,key,endpoint,request_hash)
+      VALUES ('member:MB-VERIFY','idem-1','POST /charges','sha256:aaa');
+      INSERT INTO idempotency_key (scope,key,endpoint,request_hash)
+      VALUES ('member:MB-VERIFY','idem-1','POST /charges','sha256:bbb');
+    END $i$ $probe$,
+  'idempotency_key_scope_endpoint_key_uq', 'avo_app');
 
-\warn '--- 3c. void without charges must be REFUSED ---'
-INSERT INTO staff_user (id, salon_id, name, handle, role, perm_void, perm_charges)
-VALUES ('ST-BAD', 'SL-VERIFY', 'Hessa M.', 'hessa', 'frontdesk', true, false);
+SELECT pg_temp.probe('3', 'void without charges refused', 'refused',
+  $probe$INSERT INTO staff_user (id,salon_id,name,handle,role,perm_void,perm_charges)
+    VALUES ('ST-BAD','SL-VERIFY','Hessa M.','hessa','frontdesk',true,false)$probe$,
+  'staff_user_void_implies_charges', 'avo_app');
 
-\warn '--- 3d. a charge that credits the customer must be REFUSED ---'
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils)
-VALUES ('TX-BAD', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'charge', 6000);
+SELECT pg_temp.probe('3', 'a charge that credits the customer refused', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils)
+    VALUES ('TX-BAD','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',6000)$probe$,
+  'transaction_amount_sign_matches_kind', 'avo_app');
 
-\warn '--- 3e. an unbalanced pair of ledger entries must be REFUSED at COMMIT ---'
-BEGIN;
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
-VALUES ('TX-LEDGER', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'charge', -6000, 'settled', now());
-INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction, amount_fils, balance_after_fils)
-VALUES ('TX-LEDGER', 'SL-VERIFY', 'MB-VERIFY', 'member_wallet', 'debit', 6000, 12000);
-INSERT INTO ledger_entry (transaction_id, salon_id, account, direction, amount_fils)
-VALUES ('TX-LEDGER', 'SL-VERIFY', 'salon_revenue', 'credit', 5000);  -- 1000 fils short
-COMMIT;
+-- 3e / 3f: the double-entry trigger, forced immediate because nothing commits.
+SELECT pg_temp.probe('3', 'an unbalanced ledger pair refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-LEDGER','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-6000,'settled',now());
+      INSERT INTO ledger_entry (transaction_id,salon_id,member_id,account,direction,amount_fils,balance_after_fils)
+      VALUES ('TX-LEDGER','SL-VERIFY','MB-VERIFY','member_wallet','debit',6000,12000);
+      INSERT INTO ledger_entry (transaction_id,salon_id,account,direction,amount_fils)
+      VALUES ('TX-LEDGER','SL-VERIFY','salon_revenue','credit',5000);
+      SET CONSTRAINTS ALL IMMEDIATE;
+    END $i$ $probe$,
+  'do not balance');
 
-\warn '--- 3f. the balanced version commits ---'
-BEGIN;
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
-VALUES ('TX-LEDGER-OK', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'charge', -6000, 'settled', now());
-INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction, amount_fils, balance_after_fils)
-VALUES ('TX-LEDGER-OK', 'SL-VERIFY', 'MB-VERIFY', 'member_wallet', 'debit', 6000, 12000);
-INSERT INTO ledger_entry (transaction_id, salon_id, account, direction, amount_fils)
-VALUES ('TX-LEDGER-OK', 'SL-VERIFY', 'salon_revenue', 'credit', 6000);
-COMMIT;
+SELECT pg_temp.probe('3', 'the BALANCED pair is accepted', 'allowed',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-LEDGER-OK','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-6000,'settled',now());
+      INSERT INTO ledger_entry (transaction_id,salon_id,member_id,account,direction,amount_fils,balance_after_fils)
+      VALUES ('TX-LEDGER-OK','SL-VERIFY','MB-VERIFY','member_wallet','debit',6000,12000);
+      INSERT INTO ledger_entry (transaction_id,salon_id,account,direction,amount_fils)
+      VALUES ('TX-LEDGER-OK','SL-VERIFY','salon_revenue','credit',6000);
+      SET CONSTRAINTS ALL IMMEDIATE;
+    END $i$ $probe$);
 
-\warn '--- 3g. and a committed ledger entry cannot be edited afterwards ---'
-UPDATE ledger_entry SET amount_fils = 1 WHERE transaction_id = 'TX-LEDGER-OK';
+SELECT pg_temp.probe('3', 'a committed ledger entry cannot be edited', 'refused',
+  $probe$UPDATE ledger_entry SET amount_fils = 1 WHERE account = 'member_wallet'$probe$, 'append-only');
 
-\warn '--- 3h. a blank Arabic name must be REFUSED; a NULL one must be ACCEPTED ---'
--- The client falls back with `nameAr ?? name`, and `'' ?? name` is `''`. So a
--- blank Arabic name does not fall back, it paints an empty heading — absent has
--- to be NULL and nothing else. Both halves are proven: the whitespace UPDATE
--- fails, and the NULL one is the one legal statement in this block.
-UPDATE salon SET name_ar = '   ' WHERE id = 'SL-VERIFY';
-UPDATE salon SET stamp_reward_ar = '' WHERE id = 'SL-VERIFY';
-UPDATE branch SET name_ar = '' WHERE id = 'BR-VERIFY';
-UPDATE salon SET name_ar = NULL WHERE id = 'SL-VERIFY';
+-- A blank Arabic name paints an empty heading, because `'' ?? name` is `''`.
+-- Absent has to be NULL and nothing else — so the blank is refused and the NULL
+-- must be accepted.
+SELECT pg_temp.probe('3', 'a whitespace Arabic salon name refused', 'refused',
+  $probe$UPDATE salon SET name_ar = '   ' WHERE id = 'SL-VERIFY'$probe$, 'name_ar_not_blank', 'avo_app');
 
-\warn '--- 3i. a wallet token is single use: UPDATE 1 then UPDATE 0 (the 410) ---'
-INSERT INTO wallet_token (member_id, token_hash) VALUES ('MB-VERIFY', 'hash-live-token');
-UPDATE wallet_token SET consumed_at = now()
- WHERE token_hash = 'hash-live-token' AND consumed_at IS NULL AND expires_at > now();
-UPDATE wallet_token SET consumed_at = now()
- WHERE token_hash = 'hash-live-token' AND consumed_at IS NULL AND expires_at > now();
+SELECT pg_temp.probe('3', 'a blank Arabic stamp reward refused', 'refused',
+  $probe$UPDATE salon SET stamp_reward_ar = '' WHERE id = 'SL-VERIFY'$probe$, 'not_blank', 'avo_app');
 
-RESET ROLE;
+SELECT pg_temp.probe('3', 'a blank Arabic branch name refused', 'refused',
+  $probe$UPDATE branch SET name_ar = '' WHERE id = 'BR-VERIFY'$probe$, 'name_ar_not_blank', 'avo_app');
 
-\warn ''
-\warn '=== 4. every money column is bigint, and no float exists at all ==========='
-\warn ''
--- THIS SECTION USED TO PRINT A TABLE AND ASSERT NOTHING.
+SELECT pg_temp.probe('3', 'a NULL Arabic name IS accepted', 'allowed',
+  $probe$UPDATE salon SET name_ar = NULL WHERE id = 'SL-VERIFY'$probe$, NULL, 'avo_app');
+
+-- A row-count property rather than an error: consuming twice must affect 0 rows
+-- the second time, which is the 410 the scanner shows.
+SELECT pg_temp.probe('3', 'a wallet token is single use (1 row then 0)', 'allowed',
+  $probe$DO $i$
+    DECLARE n int;
+    BEGIN
+      INSERT INTO wallet_token (member_id, token_hash) VALUES ('MB-VERIFY','hash-single-use');
+      UPDATE wallet_token SET consumed_at = now()
+       WHERE token_hash='hash-single-use' AND consumed_at IS NULL AND expires_at > now();
+      GET DIAGNOSTICS n = ROW_COUNT;
+      IF n <> 1 THEN RAISE EXCEPTION 'first consume affected % rows, expected 1', n; END IF;
+      UPDATE wallet_token SET consumed_at = now()
+       WHERE token_hash='hash-single-use' AND consumed_at IS NULL AND expires_at > now();
+      GET DIAGNOSTICS n = ROW_COUNT;
+      IF n <> 0 THEN RAISE EXCEPTION 'second consume affected % rows, expected 0', n; END IF;
+    END $i$ $probe$,
+  NULL, 'avo_app');
+
+-- =========================================================================
+-- 4. money is integer fils — non-negotiable #1
+-- =========================================================================
+-- This section used to PRINT a table of `%_fils` columns and assert nothing: a
+-- `double precision` would have appeared in alphabetical order between two correct
+-- ones. The most load-bearing rule in the project was the least checked thing in
+-- the file that exists to check rules.
+SELECT pg_temp.assert('4', 'every %_fils column is bigint',
+  NOT EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema='public' AND column_name LIKE '%\_fils' AND data_type <> 'bigint'),
+  coalesce((SELECT string_agg(format('%s.%s is %s', table_name, column_name, data_type), ', ')
+              FROM information_schema.columns
+             WHERE table_schema='public' AND column_name LIKE '%\_fils' AND data_type <> 'bigint'),
+           (SELECT count(*)::text || ' fils columns, all bigint' FROM information_schema.columns
+             WHERE table_schema='public' AND column_name LIKE '%\_fils')));
+
+-- The `%_fils` rule only catches money that was NAMED correctly. A `legacy_price
+-- real` satisfies every check above and still puts a float one join away from a
+-- total, and the naming convention is structurally incapable of noticing. `numeric`
+-- is refused with the floats: #1 is that money is an integer COUNT of fils, and a
+-- fractional fil has no meaning and no display format.
+SELECT pg_temp.assert('4', 'no float-family column exists anywhere',
+  NOT EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema='public'
+                 AND data_type IN ('double precision','real','numeric','money')),
+  coalesce((SELECT string_agg(format('%s.%s is %s', table_name, column_name, data_type), ', ')
+              FROM information_schema.columns
+             WHERE table_schema='public'
+               AND data_type IN ('double precision','real','numeric','money')),
+           'no double precision, real, numeric or money column in the schema'));
+
+-- =========================================================================
+-- 5. every wallet reconciles to its ledger
+-- =========================================================================
+-- `member.balance_fils` is a cached aggregate and `schema/ledger.ts` states the
+-- property that makes it defensible. Three comments claimed it and nothing checked
+-- it; it was false from the seed's first line until the opening balances got
+-- entries of their own.
 --
--- It listed every `%_fils` column and its type, and left the reader to notice a
--- wrong one. A `double precision` column would have appeared in that list, in
--- alphabetical order, between two correct ones — which is the same failure mode as
--- a comment: information nobody is obliged to act on. Non-negotiable #1 is the
--- most load-bearing rule in this project and it was the least checked thing in
--- this file.
-SELECT table_name, column_name, data_type
-  FROM information_schema.columns
- WHERE table_schema = 'public' AND column_name LIKE '%\_fils'
- ORDER BY table_name, column_name;
-
-\warn '--- 4a. and it now FAILS if any of them is not bigint ---'
-DO $$
-DECLARE offenders text;
-BEGIN
-  SELECT string_agg(format('%s.%s is %s', table_name, column_name, data_type), ', ' ORDER BY table_name, column_name)
-    INTO offenders
-    FROM information_schema.columns
-   WHERE table_schema = 'public' AND column_name LIKE '%\_fils' AND data_type <> 'bigint';
-
-  IF offenders IS NOT NULL THEN
-    RAISE EXCEPTION 'Non-negotiable #1: money must be bigint fils. Offending columns: %', offenders
-      USING HINT = 'Integer fils, never a float. Format to 3 decimals at the display boundary only.';
-  END IF;
-END
-$$;
-
-\warn '--- 4b. AND no float-family column exists anywhere, whatever it is called ---'
--- The `%_fils` rule only catches money that was named correctly. A column called
--- `total`, `price` or `amount` in `double precision` satisfies every check above
--- and still puts a float on the money path — and the naming convention is the only
--- thing that would have flagged it. So the stronger claim is asserted directly:
--- this schema contains no float-family column at all.
---
--- `numeric` is refused with the others. It is exact, so it would not lose fils to
--- binary rounding, but non-negotiable #1 is that money is an INTEGER COUNT of
--- fils, and a numeric column invites a fractional fil that has no meaning and no
--- display format. If a genuine non-money use for numeric ever arrives, narrow this
--- to the money-bearing tables rather than deleting it.
-DO $$
-DECLARE offenders text;
-BEGIN
-  SELECT string_agg(format('%s.%s is %s', table_name, column_name, data_type), ', ' ORDER BY table_name, column_name)
-    INTO offenders
-    FROM information_schema.columns
-   WHERE table_schema = 'public'
-     AND data_type IN ('double precision', 'real', 'numeric', 'money');
-
-  IF offenders IS NOT NULL THEN
-    RAISE EXCEPTION 'Non-negotiable #1: no float may reach money. Offending columns: %', offenders
-      USING HINT = 'Money is integer fils in bigint. A float column on any table is a float one join away from a total.';
-  END IF;
-END
-$$;
-
-SELECT 'no float-family column anywhere' AS money_type_check,
-       count(*) AS fils_columns_all_bigint
-  FROM information_schema.columns
- WHERE table_schema = 'public' AND column_name LIKE '%\_fils' AND data_type = 'bigint';
-
-\warn ''
-\warn '=== 5. every wallet reconciles to its ledger =============================='
-\warn ''
--- THE ONE RECONCILIATION THIS SCHEMA EXISTS TO KEEP TRUE, ASSERTED.
---
--- `member.balance_fils` is a cached aggregate. `schema/ledger.ts` says what makes
--- it defensible, and says it is the reason the table exists:
---
---     SELECT sum(CASE direction WHEN 'credit' THEN amount_fils ELSE -amount_fils END)
---     FROM ledger_entry WHERE account = 'member_wallet' AND member_id = $1;
---
--- That property was asserted in three comments and checked nowhere, and the seed
--- broke it on its first line: both fixture members were INSERTed with a balance
--- already on the row and no entry saying where it came from, so the sum was short
--- by exactly the opening balance on a clean database. An invariant nobody checks
--- is the same thing as a comment, so here is the check.
---
--- LEFT JOIN, not INNER. A member with no wallet entries at all must show up as a
--- drift equal to her whole balance rather than vanishing from the result — that is
--- precisely the shape the missing opening balances had, and an INNER JOIN would
--- have hidden it.
---
--- `SL-VERIFY` IS EXCLUDED, and this is the one exemption. That salon and its
--- member are this script's own scratch fixtures for probing constraints: section 3
--- deliberately writes wallet entries for `MB-VERIFY` without maintaining her
--- balance, because it is testing the balanced-entry trigger rather than modelling
--- a customer. Including it would make this section fail always, which is the same
--- as not having it.
-SELECT m.id,
-       m.balance_fils,
-       coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
-                                      ELSE -le.amount_fils END), 0) AS ledger_fils,
-       m.balance_fils
-         - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
-                                          ELSE -le.amount_fils END), 0) AS difference_fils
-  FROM member m
-  LEFT JOIN ledger_entry le
-         ON le.member_id = m.id
-        AND le.account = 'member_wallet'
- WHERE m.salon_id <> 'SL-VERIFY'
- GROUP BY m.id, m.balance_fils
- ORDER BY m.id;
-
-\warn '--- and it FAILS LOUDLY rather than printing a table nobody reads ---'
-DO $$
-DECLARE
-  drifted text;
-  n int;
-BEGIN
-  SELECT count(*), string_agg(format('%s off by %s fils', id, difference_fils), ', ' ORDER BY id)
-    INTO n, drifted
-    FROM (
-      SELECT m.id,
-             m.balance_fils
-               - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
-                                                ELSE -le.amount_fils END), 0) AS difference_fils
+-- LEFT JOIN, not INNER: a member with no wallet entries must show as a drift equal
+-- to her whole balance rather than vanishing — which is exactly the shape the
+-- missing opening balances had. `SL-VERIFY` is excluded because section 3 writes
+-- wallet entries for `MB-VERIFY` without maintaining her balance, on purpose.
+SELECT pg_temp.assert('5', 'member.balance_fils = sum(member_wallet entries)',
+  NOT EXISTS (
+    SELECT 1 FROM (
+      SELECT m.id, m.balance_fils - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                                                   ELSE -le.amount_fils END),0) AS diff
         FROM member m
-        LEFT JOIN ledger_entry le
-               ON le.member_id = m.id
-              AND le.account = 'member_wallet'
+        LEFT JOIN ledger_entry le ON le.member_id = m.id AND le.account = 'member_wallet'
        WHERE m.salon_id <> 'SL-VERIFY'
-       GROUP BY m.id, m.balance_fils
-    ) per_member
-   WHERE difference_fils <> 0;
+       GROUP BY m.id, m.balance_fils) d
+     WHERE diff <> 0),
+  coalesce((SELECT string_agg(format('%s off by %s fils', id, diff), ', ' ORDER BY id) FROM (
+              SELECT m.id, m.balance_fils - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                                                           ELSE -le.amount_fils END),0) AS diff
+                FROM member m
+                LEFT JOIN ledger_entry le ON le.member_id = m.id AND le.account = 'member_wallet'
+               WHERE m.salon_id <> 'SL-VERIFY'
+               GROUP BY m.id, m.balance_fils) d WHERE diff <> 0),
+           (SELECT count(*)::text || ' member(s) reconcile' FROM member WHERE salon_id <> 'SL-VERIFY')));
 
-  IF n > 0 THEN
-    RAISE EXCEPTION
-      'wallet ledger does not reconcile for % member(s): %', n, drifted
-      USING HINT = 'member.balance_fils must equal the signed sum of its member_wallet entries. '
-                   'A balance with no originating entry is a hole in the record, not a fixture convenience.';
-  END IF;
-END
-$$;
+-- =========================================================================
+-- 6. a consent record cannot be rewritten
+-- =========================================================================
+-- Non-negotiable #8 needs marketing consent readable and TRUTHFUL at send time.
+-- Migration 0020 revoked UPDATE/DELETE from the app role and claimed parity with
+-- `audit_log`; 0023 added the triggers that stop the owner too.
+SELECT pg_temp.probe('6', 'a withdrawal cannot be flipped to a grant', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO member_consent_event (member_id,salon_id,kind,granted,source,policy_version)
+      VALUES ('MB-VERIFY','SL-VERIFY','marketing_offers',false,'wallet_account',3);
+      UPDATE member_consent_event SET granted = true WHERE member_id = 'MB-VERIFY';
+    END $i$ $probe$,
+  'append-only');
 
--- THE VERDICT, ON STDOUT, and not a `RAISE NOTICE` — line 29 of this script sets
--- `client_min_messages TO WARNING` so that the seed's own chatter stays out of the
--- transcript, which silently swallows any NOTICE raised down here. Found by
--- writing one and watching it never appear. A result row cannot be suppressed by
--- a message threshold, and it states the outcome in both directions rather than
--- only shouting on failure.
-SELECT CASE
-         WHEN count(*) FILTER (WHERE difference_fils <> 0) = 0 THEN 'RECONCILED'
-         ELSE 'DRIFT — '
-              || count(*) FILTER (WHERE difference_fils <> 0)
-              || ' member(s) disagree with their ledger'
-       END AS verdict,
-       count(*) AS members_checked
-  FROM (
-    SELECT m.id,
-           m.balance_fils
-             - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
-                                              ELSE -le.amount_fils END), 0) AS difference_fils
-      FROM member m
-      LEFT JOIN ledger_entry le
-             ON le.member_id = m.id
-            AND le.account = 'member_wallet'
-     WHERE m.salon_id <> 'SL-VERIFY'
-     GROUP BY m.id, m.balance_fils
-  ) per_member;
+SELECT pg_temp.probe('6', 'a consent event cannot be backdated', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO member_consent_event (member_id,salon_id,kind,granted,source,policy_version)
+      VALUES ('MB-VERIFY','SL-VERIFY','marketing_offers',true,'signup',3);
+      UPDATE member_consent_event SET created_at = now() - interval '1 year' WHERE member_id = 'MB-VERIFY';
+    END $i$ $probe$,
+  'append-only');
 
-\warn ''
-\warn '=== 6. a consent record cannot be rewritten =============================='
-\warn ''
--- Non-negotiable #8 needs marketing consent readable and TRUTHFUL on the platform
--- send path. Migration 0020 stores it as append-only events and revokes UPDATE and
--- DELETE from the application role; migration 0023 adds the triggers that stop the
--- OWNER too, because 0020's comment claimed parity with `audit_log` and only had
--- half of it. A consent record that can be edited is not evidence of consent.
+SELECT pg_temp.probe('6', 'consent cannot be moved to another policy version', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO member_consent_event (member_id,salon_id,kind,granted,source,policy_version)
+      VALUES ('MB-VERIFY','SL-VERIFY','marketing_offers',true,'signup',3);
+      UPDATE member_consent_event SET policy_version = 99 WHERE member_id = 'MB-VERIFY';
+    END $i$ $probe$,
+  'append-only');
+
+SELECT pg_temp.probe('6', 'consent cannot be emptied wholesale', 'refused',
+  $probe$TRUNCATE member_consent_event$probe$, 'append-only');
+
+-- 6d MUST SUCCEED. `member_consent_event.member_id` is ON DELETE CASCADE and the
+-- 30-day erasure the privacy policy promises ends in a DELETE of the member. A
+-- DELETE trigger here would make that erasure impossible — verified with the exact
+-- trigger `audit_log` uses. This is why 0023's parity deliberately stops at UPDATE
+-- and TRUNCATE, and this probe is what stops someone "completing" it.
+SELECT pg_temp.probe('6', 'the ERASURE CASCADE still works (no DELETE trigger)', 'allowed',
+  $probe$DO $i$
+    DECLARE n int;
+    BEGIN
+      INSERT INTO member (id,salon_id,name,phone,password_hash,balance_fils,tier,policy_version)
+      VALUES ('MB-ERASE','SL-VERIFY','Erasure Probe','+96599100009','$argon2id$fake',0,'bronze',3);
+      INSERT INTO member_consent_event (member_id,salon_id,kind,granted,source,policy_version)
+      VALUES ('MB-ERASE','SL-VERIFY','marketing_offers',true,'signup',3);
+      DELETE FROM member WHERE id = 'MB-ERASE';
+      SELECT count(*) INTO n FROM member_consent_event WHERE member_id = 'MB-ERASE';
+      IF n <> 0 THEN RAISE EXCEPTION 'cascade left % consent row(s)', n; END IF;
+    END $i$ $probe$);
+
+-- =========================================================================
+-- 7. TRUNCATE cannot erase the money ledger
+-- =========================================================================
+-- `schema/ledger.ts` claimed immutability "for the same reason" as `audit_log`, and
+-- 0004 said the same of `gateway_event`. Both had no_update and no_delete; TRUNCATE
+-- is neither, and a FOR EACH ROW trigger never fires for it. One statement emptied
+-- the table every wallet balance is derived from. Migration 0024 closes it.
+SELECT pg_temp.probe('7', 'the wallet ledger cannot be truncated', 'refused',
+  $probe$TRUNCATE ledger_entry$probe$, 'append-only');
+
+SELECT pg_temp.probe('7', 'the gateway event log cannot be truncated', 'refused',
+  $probe$TRUNCATE gateway_event$probe$, 'append-only');
+
+SELECT pg_temp.probe('7', 'audit_log cannot be truncated', 'refused',
+  $probe$TRUNCATE audit_log$probe$, 'append-only');
+
+-- 7d MUST SUCCEED. Migration 0008: "APPEND-ONLY BY INTENT, NOT BY REVOKE, AND THAT
+-- IS THE DECISION" — a derived record feeding one dashboard panel, with nothing
+-- reconciling against it. Asserted so the asymmetry is a decision someone has to
+-- argue with rather than an inconsistency someone tidies.
+SELECT pg_temp.probe('7', 'loyalty_event IS truncatable, by decision (0008)', 'allowed',
+  $probe$TRUNCATE loyalty_event$probe$);
+
+-- =========================================================================
+-- 8. a member with money history cannot be hard-deleted
+-- =========================================================================
+-- Migration 0021 justifies soft deletion partly with "every table that references
+-- member ... are append-only or restrict-on-delete; a DELETE FROM member [would
+-- fail]". Seven of eleven references are RESTRICT; four are CASCADE. So the claim is
+-- true of a customer with history and false of a fresh signup. The design decision
+-- stands on 0021's OTHER argument — two retention periods over one customer — and
+-- what is asserted here is the half that is real.
+SELECT pg_temp.probe('8', 'a member WITH a transaction cannot be deleted', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO member (id,salon_id,name,phone,password_hash,balance_fils,tier,policy_version)
+      VALUES ('MB-MONEYED','SL-VERIFY','Has History','+96599100011','$argon2id$fake',0,'bronze',3);
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-RESTRICT','MB-MONEYED','SL-VERIFY','BR-VERIFY','charge',-1000,'settled',now());
+      DELETE FROM member WHERE id = 'MB-MONEYED';
+    END $i$ $probe$,
+  'violates foreign key constraint');
+
+-- 8b MUST SUCCEED — the overstated half, stated honestly rather than believed.
+SELECT pg_temp.probe('8', 'a member with NO history does delete (0021 overstated)', 'allowed',
+  $probe$DO $i$ BEGIN
+      INSERT INTO member (id,salon_id,name,phone,password_hash,balance_fils,tier,policy_version)
+      VALUES ('MB-CLEAN','SL-VERIFY','No History','+96599100012','$argon2id$fake',0,'bronze',3);
+      DELETE FROM member WHERE id = 'MB-CLEAN';
+    END $i$ $probe$);
+
+-- =========================================================================
+-- 9. a settled top-up cannot leave its terminal state
+-- =========================================================================
+-- Migration 0004: "top-up % is terminal (%): it cannot become %". A succeeded
+-- top-up that could return to pending is one that can be credited twice.
 --
--- Both statements below are EXPECTED TO FAIL, as the owner.
-INSERT INTO member_consent_event (member_id, salon_id, kind, granted, source, policy_version)
-VALUES ('MB-VERIFY', 'SL-VERIFY', 'marketing_offers', false, 'wallet_account', 3);
+-- `topup_intent_succeeded_has_settled_at` and `..._has_transaction` are written as
+-- EQUIVALENCES, so they bite both ways: a succeeded intent with no moment or no
+-- transaction is refused, and so is a pending one claiming either.
+SELECT pg_temp.probe('9', 'succeeded -> pending refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-TOPUP-T','MB-VERIFY','SL-VERIFY','BR-VERIFY','topup',10000,'settled',now());
+      INSERT INTO topup_intent (id,member_id,salon_id,branch_id,amount_fils,bonus_fils,credit_fils,
+                                fee_fils,method,provider,status,reference,settled_at,transaction_id)
+      VALUES ('TI-TERMINAL','MB-VERIFY','SL-VERIFY','BR-VERIFY',10000,0,10000,150,'knet','sandbox',
+              'succeeded','AVO-VERIFY-TERMINAL',now(),'TX-TOPUP-T');
+      UPDATE topup_intent SET status = 'pending' WHERE id = 'TI-TERMINAL';
+    END $i$ $probe$,
+  'is terminal');
 
-\warn '--- 6a. a withdrawal cannot be flipped into a grant ---'
-UPDATE member_consent_event SET granted = true WHERE member_id = 'MB-VERIFY';
+SELECT pg_temp.probe('9', 'succeeded -> failed refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-TOPUP-U','MB-VERIFY','SL-VERIFY','BR-VERIFY','topup',10000,'settled',now());
+      INSERT INTO topup_intent (id,member_id,salon_id,branch_id,amount_fils,bonus_fils,credit_fils,
+                                fee_fils,method,provider,status,reference,settled_at,transaction_id)
+      VALUES ('TI-TERM2','MB-VERIFY','SL-VERIFY','BR-VERIFY',10000,0,10000,150,'knet','sandbox',
+              'succeeded','AVO-VERIFY-TERM2',now(),'TX-TOPUP-U');
+      UPDATE topup_intent SET status = 'failed' WHERE id = 'TI-TERM2';
+    END $i$ $probe$,
+  'is terminal');
 
-\warn '--- 6b. nor can the event be backdated, or moved to another policy version ---'
-UPDATE member_consent_event SET created_at = now() - interval '1 year' WHERE member_id = 'MB-VERIFY';
-UPDATE member_consent_event SET policy_version = 99 WHERE member_id = 'MB-VERIFY';
+SELECT pg_temp.probe('9', 'succeeded with no settled_at refused', 'refused',
+  $probe$INSERT INTO topup_intent (id,member_id,salon_id,branch_id,amount_fils,bonus_fils,credit_fils,
+                              fee_fils,method,provider,status,reference)
+    VALUES ('TI-NOSETTLE','MB-VERIFY','SL-VERIFY','BR-VERIFY',10000,0,10000,150,'knet','sandbox',
+            'succeeded','AVO-VERIFY-NOSETTLE')$probe$,
+  'succeeded_has_settled_at');
 
-\warn '--- 6c. nor emptied wholesale ---'
-TRUNCATE member_consent_event;
+-- 9d MUST SUCCEED: the trigger polices TERMINAL states, not all movement. A top-up
+-- that could never advance is a top-up nobody could pay.
+SELECT pg_temp.probe('9', 'a non-terminal transition still advances', 'allowed',
+  $probe$DO $i$ BEGIN
+      INSERT INTO topup_intent (id,member_id,salon_id,branch_id,amount_fils,bonus_fils,credit_fils,
+                                fee_fils,method,provider,status,reference)
+      VALUES ('TI-MOVING','MB-VERIFY','SL-VERIFY','BR-VERIFY',10000,0,10000,150,'knet','sandbox',
+              'created','AVO-VERIFY-MOVING');
+      UPDATE topup_intent SET status = 'redirected' WHERE id = 'TI-MOVING';
+    END $i$ $probe$);
 
-\warn '--- 6d. but the ERASURE CASCADE must still work: DELETE has NO trigger, deliberately ---'
--- `member_consent_event.member_id` is ON DELETE CASCADE and the 30-day erasure the
--- privacy policy promises ends in a DELETE of the member. A DELETE trigger here
--- would make that erasure impossible — the cascade fails, so the member delete
--- fails. This block is the one in section 6 that must SUCCEED, and it is why the
--- parity with `audit_log` deliberately stops at UPDATE and TRUNCATE.
-BEGIN;
-INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
-VALUES ('MB-ERASE', 'SL-VERIFY', 'Erasure Probe', '+96599100009', '$argon2id$fake', 0, 'bronze', 3);
-INSERT INTO member_consent_event (member_id, salon_id, kind, granted, source, policy_version)
-VALUES ('MB-ERASE', 'SL-VERIFY', 'marketing_offers', true, 'signup', 3);
-DELETE FROM member WHERE id = 'MB-ERASE';
-SELECT count(*) AS consent_rows_left_after_erasure
-  FROM member_consent_event WHERE member_id = 'MB-ERASE';
-COMMIT;
+-- =========================================================================
+-- 10. one artist cannot be double-booked
+-- =========================================================================
+-- A GiST exclusion constraint, which is what makes "two customers, one slot, one
+-- winner" a database fact rather than a race the application hopes to win.
+SELECT pg_temp.probe('10', 'an overlapping booking for one artist refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-HOLD-A','MB-VERIFY','SL-VERIFY','BR-VERIFY','deposit_hold',-5000,'settled',now());
+      INSERT INTO booking (id,salon_id,member_id,artist_id,branch_id,service_id,starts_at,ends_at,
+                           duration_min,deposit_fils,status,source,hold_transaction_id,no_show_return_due_at)
+      VALUES ('BK-V1','SL-VERIFY','MB-VERIFY','AR-VERIFY','BR-VERIFY','SV-VERIFY',
+              '2030-01-01 10:00+00','2030-01-01 10:30+00',30,5000,'deposit_held','app',
+              'TX-HOLD-A','2030-01-01 11:30+00');
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-HOLD-B','MB-VERIFY','SL-VERIFY','BR-VERIFY','deposit_hold',-5000,'settled',now());
+      INSERT INTO booking (id,salon_id,member_id,artist_id,branch_id,service_id,starts_at,ends_at,
+                           duration_min,deposit_fils,status,source,hold_transaction_id,no_show_return_due_at)
+      VALUES ('BK-V2','SL-VERIFY','MB-VERIFY','AR-VERIFY','BR-VERIFY','SV-VERIFY',
+              '2030-01-01 10:15+00','2030-01-01 10:45+00',30,5000,'deposit_held','app',
+              'TX-HOLD-B','2030-01-01 11:45+00');
+    END $i$ $probe$,
+  'booking_artist_slot_no_overlap');
 
-\warn ''
-\warn '=== 7. TRUNCATE cannot erase the money ledger ============================='
-\warn ''
--- THE THIRD INSTANCE OF THE HALF-PARITY PATTERN, on the most load-bearing table in
--- the schema. `schema/ledger.ts` claimed `ledger_entry` was immutable "for the same
--- reason" as `audit_log`, and migration 0004 said the same of `gateway_event`. Both
--- had no_update and no_delete; `audit_log` also has no_truncate, because TRUNCATE
--- is neither an UPDATE nor a DELETE and a FOR EACH ROW trigger never runs for it.
---
--- So one statement emptied the table every wallet balance is derived from, with no
--- error. Migration 0024 closes it. All four statements below must FAIL.
-\warn '--- 7a. the wallet ledger ---'
-TRUNCATE ledger_entry;
+-- =========================================================================
+-- the report, then the verdict — in that order, and the verdict LAST
+-- =========================================================================
+\pset format aligned
+\echo ''
+\echo '=== every invariant checked ==============================================='
+SELECT section AS s, label,
+       CASE WHEN passed THEN 'PASS' ELSE 'FAIL' END AS result,
+       expectation AS wanted,
+       left(replace(detail, E'\n', ' '), 78) AS detail
+  FROM _verify_result ORDER BY seq;
 
-\warn '--- 7b. the gateway event log ---'
-TRUNCATE gateway_event;
+-- Carried out in psql variables, because the rollback below discards the rows.
+-- `has_failures` is a real boolean because psql's `\if` accepts true/false/on/off
+-- and nothing else — a count of "2" is not a value it can branch on.
+SELECT count(*)::text                                    AS total,
+       count(*) FILTER (WHERE NOT passed)::text          AS failures,
+       (count(*) FILTER (WHERE NOT passed) > 0)          AS has_failures,
+       coalesce(string_agg(section || ' ' || label, '; ') FILTER (WHERE NOT passed), '') AS failed_list
+  FROM _verify_result \gset
 
-\warn '--- 7c. and the two that were already protected, so the set stays complete ---'
-TRUNCATE audit_log;
-TRUNCATE member_consent_event;
-
-\warn '--- 7d. loyalty_event is NOT protected, BY WRITTEN DECISION (0008) — must SUCCEED ---'
--- Migration 0008: "APPEND-ONLY BY INTENT, NOT BY REVOKE, AND THAT IS THE DECISION".
--- It is a derived record of something that already happened, it feeds one dashboard
--- panel, and nothing reconciles against it. This block is here so that the decision
--- is asserted rather than assumed, and so that anyone who "fixes" the asymmetry has
--- to change a test that states why it exists.
-BEGIN;
-TRUNCATE loyalty_event;
+-- NOTHING THIS SCRIPT DID SURVIVES. Every probe already rolled itself back inside
+-- its own subtransaction; this discards the fixtures as well.
 ROLLBACK;
-SELECT 'loyalty_event is truncatable by decision, see migration 0008' AS deliberate_asymmetry;
 
-\warn ''
-\warn '=== 8. a member with money history cannot be hard-deleted ================='
-\warn ''
--- Migration 0021 justifies soft deletion partly like this: "every table that
--- references member ... are append-only or restrict-on-delete; a DELETE FROM member
--- [would fail]". That is TRUE OF SEVEN of the eleven references and FALSE OF FOUR:
--- `session`, `wallet_token`, `phone_change_challenge` and `member_consent_event` are
--- ON DELETE CASCADE. A member with no financial history — a signup who never topped
--- up — therefore deletes cleanly today, taking her consent trail with her.
---
--- The DESIGN decision is still right, for 0021's other and better reason: two
--- retention periods over one customer means deletion is an erasure of personal data
--- that leaves the money record standing. Only the supporting claim was overstated.
---
--- So what is asserted here is the half that is real and load-bearing: once a
--- customer has money history, the 7-year record cannot be removed by deleting her.
-\warn '--- 8a. a member WITH a transaction cannot be deleted (RESTRICT) ---'
-BEGIN;
-INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
-VALUES ('MB-MONEYED', 'SL-VERIFY', 'Has History', '+96599100011', '$argon2id$fake', 0, 'bronze', 3);
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
-VALUES ('TX-RESTRICT', 'MB-MONEYED', 'SL-VERIFY', 'BR-VERIFY', 'charge', -1000, 'settled', now());
-DELETE FROM member WHERE id = 'MB-MONEYED';
-ROLLBACK;
-
-\warn '--- 8b. and one with NO history DOES delete — the overstated half, shown honestly ---'
-BEGIN;
-INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
-VALUES ('MB-CLEAN', 'SL-VERIFY', 'No History', '+96599100012', '$argon2id$fake', 0, 'bronze', 3);
-DELETE FROM member WHERE id = 'MB-CLEAN';
-SELECT 'a member with no money history deletes; 0021 rests on its OTHER argument' AS honest_note;
-ROLLBACK;
-
-\warn ''
-\warn '=== 9. a settled top-up cannot leave its terminal state ==================='
-\warn ''
--- Migration 0004: "top-up % is terminal (%): it cannot become %". The terminal
--- states are succeeded, failed and cancelled. A succeeded top-up that could be
--- moved back to pending is a top-up that can be credited twice, so this is a money
--- invariant and not a tidiness one.
---
--- SAVEPOINTS, because a failed statement aborts the enclosing transaction and the
--- fixture has to survive three separate refusals. Each case rolls back to its own
--- savepoint so the next one runs against the same intent.
---
--- Two more invariants surfaced while building this fixture, and both are worth
--- naming: `topup_intent_succeeded_has_settled_at` and
--- `topup_intent_succeeded_has_transaction` are written as EQUIVALENCES
--- (`status = 'succeeded'` IS `settled_at IS NOT NULL`), so they bite in both
--- directions — a succeeded intent with no moment or no transaction is refused, and
--- so is a pending one that claims either. A credit with no transaction behind it is
--- money that appeared from nowhere.
-BEGIN;
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
-VALUES ('TX-TOPUP-T', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'topup', 10000, 'settled', now());
-INSERT INTO topup_intent (id, member_id, salon_id, branch_id, amount_fils, bonus_fils,
-                          credit_fils, fee_fils, method, provider, status, reference,
-                          settled_at, transaction_id)
-VALUES ('TI-TERMINAL', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 10000, 0, 10000, 150,
-        'knet', 'sandbox', 'succeeded', 'AVO-VERIFY-TERMINAL', now(), 'TX-TOPUP-T');
-
-\warn '--- 9a. succeeded -> pending is refused (it could be credited twice) ---'
-SAVEPOINT a; UPDATE topup_intent SET status = 'pending' WHERE id = 'TI-TERMINAL'; ROLLBACK TO a;
-
-\warn '--- 9b. succeeded -> failed is refused ---'
-SAVEPOINT b; UPDATE topup_intent SET status = 'failed' WHERE id = 'TI-TERMINAL'; ROLLBACK TO b;
-
-\warn '--- 9c. a succeeded intent with no settled_at is refused outright ---'
-SAVEPOINT c;
-INSERT INTO topup_intent (id, member_id, salon_id, branch_id, amount_fils, bonus_fils,
-                          credit_fils, fee_fils, method, provider, status, reference)
-VALUES ('TI-NOSETTLE', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 10000, 0, 10000, 150,
-        'knet', 'sandbox', 'succeeded', 'AVO-VERIFY-NOSETTLE');
-ROLLBACK TO c;
-
-\warn '--- 9d. and a NON-terminal transition must SUCCEED (created -> redirected) ---'
--- The deliberate limit: the trigger polices terminal states, not all movement. A
--- top-up that could never advance would be a top-up nobody could pay.
-SAVEPOINT d;
-INSERT INTO topup_intent (id, member_id, salon_id, branch_id, amount_fils, bonus_fils,
-                          credit_fils, fee_fils, method, provider, status, reference)
-VALUES ('TI-MOVING', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 10000, 0, 10000, 150,
-        'knet', 'sandbox', 'created', 'AVO-VERIFY-MOVING');
-UPDATE topup_intent SET status = 'redirected' WHERE id = 'TI-MOVING';
-SELECT id, status AS advanced_normally FROM topup_intent WHERE id = 'TI-MOVING';
-ROLLBACK TO d;
-ROLLBACK;
-
-\warn ''
-\warn '=== 10. one artist cannot be double-booked ================================'
-\warn ''
--- `booking_artist_slot_no_overlap` is a GiST exclusion constraint, and it is what
--- makes "two customers, one slot, one winner" a database fact rather than a race the
--- application hopes to win. Scoped to live statuses, which is the deliberate limit
--- asserted in 10c.
-BEGIN;
-INSERT INTO artist (id, salon_id, name) VALUES ('AR-VERIFY', 'SL-VERIFY', 'Rana');
-INSERT INTO service (id, salon_id, name, price_fils) VALUES ('SV-VERIFY', 'SL-VERIFY', 'Blow-dry', 8000);
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
-VALUES ('TX-HOLD-A', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'deposit_hold', -5000, 'settled', now());
-INSERT INTO booking (id, salon_id, member_id, artist_id, branch_id, service_id, starts_at, ends_at,
-                     duration_min, deposit_fils, status, source, hold_transaction_id,
-                     no_show_return_due_at)
-VALUES ('BK-V1', 'SL-VERIFY', 'MB-VERIFY', 'AR-VERIFY', 'BR-VERIFY', 'SV-VERIFY',
-        '2030-01-01 10:00+00', '2030-01-01 10:30+00', 30, 5000, 'deposit_held', 'app',
-        'TX-HOLD-A', '2030-01-01 11:30+00');
-
-\warn '--- 10a. an overlapping booking for the SAME artist is refused ---'
-INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
-VALUES ('TX-HOLD-B', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'deposit_hold', -5000, 'settled', now());
-INSERT INTO booking (id, salon_id, member_id, artist_id, branch_id, service_id, starts_at, ends_at,
-                     duration_min, deposit_fils, status, source, hold_transaction_id,
-                     no_show_return_due_at)
-VALUES ('BK-V2', 'SL-VERIFY', 'MB-VERIFY', 'AR-VERIFY', 'BR-VERIFY', 'SV-VERIFY',
-        '2030-01-01 10:15+00', '2030-01-01 10:45+00', 30, 5000, 'deposit_held', 'app',
-        'TX-HOLD-B', '2030-01-01 11:45+00');
-ROLLBACK;
+\echo ''
+\echo '=== verdict =============================================================='
+\echo 'invariants checked:' :total '   failed:' :failures
+\if :has_failures
+\echo 'FAILED ->' :failed_list
+-- A STATIC message: psql does not interpolate `:vars` inside dollar-quoted strings,
+-- so the counts are echoed immediately above rather than formatted in here. The
+-- point of this statement is the EXIT CODE — with ON_ERROR_STOP on, psql exits 3.
+DO $verdict$ BEGIN
+  RAISE EXCEPTION 'db:verify failed — one or more invariants do not hold'
+    USING HINT = 'Read the FAIL rows above. An invariant that cannot fail is a comment.';
+END $verdict$;
+\else
+\echo 'ALL INVARIANTS HOLD — and the database is unchanged by this run.'
+\endif
