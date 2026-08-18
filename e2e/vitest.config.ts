@@ -16,28 +16,35 @@
  * `e2e` is in `pnpm-workspace.yaml`, so `pnpm --filter @avo/e2e test` and
  * `pnpm check` both pick this package up.
  *
- * `pnpm check` DOES NOT RE-RUN THIS SUITE ONCE IT HAS PASSED
- * ----------------------------------------------------------
- * `turbo.json` gives the `test` task no `cache: false` and no `inputs`, so turbo
- * caches the result against the package's file hashes. Turbo does not cache
- * failures, which is why a flaky suite appears to re-run every time — each red
- * run genuinely re-executed. The moment it goes green, every later `pnpm check`
- * on the same tree is a log replay: five consecutive runs here reported
- * `>>> FULL TURBO` in nine milliseconds and printed byte-identical output,
- * including a `[lane D] provisioning …` line naming a database that had been
- * dropped an hour earlier.
+ * TURBO NO LONGER CACHES THIS SUITE — FIXED, AND THIS PARAGRAPH USED TO SAY
+ * OTHERWISE
+ * -------------------------------------------------------------------------
+ * It once did. The `test` task had no `cache: false` and no `inputs`, so turbo
+ * cached the result against the package's file hashes; five consecutive runs
+ * reported `>>> FULL TURBO` in nine milliseconds and printed byte-identical
+ * output, including a `[lane D] provisioning …` line naming a database that had
+ * been dropped an hour earlier. Turbo does not cache FAILURES, so a flaky suite
+ * appeared to re-run every time — each red run genuinely re-executed — and the
+ * first green one sealed it. "Green twice in a row" was one real run and a replay.
  *
- * That matters more here than anywhere else in the workspace, because this
- * package's real inputs are a running Postgres, a booted API and the wall clock,
- * and not one of them is in the hash. A cached green from this suite is a green
- * from an arbitrary moment in the past.
+ * `turbo.json`'s `test` task now carries `"cache": false` with that reasoning
+ * written beside it (landed in 6fa34e2). So a `pnpm check` on an unchanged tree
+ * really does re-run this suite, and `TURBO_FORCE=true` is no longer needed to
+ * make a run count as evidence.
  *
- * So a run that is meant to be EVIDENCE has to defeat the cache:
+ * THIS BLOCK IS CORRECTED RATHER THAN DELETED, BECAUSE ITS STALE VERSION DID REAL
+ * DAMAGE. It ended "`"cache": false` on the `test` task is the real fix and is in
+ * the lane report" — present tense, as though still pending — and a lane D session
+ * read that, repeated it to trunk as an outstanding trunk item, and was corrected
+ * with the block from `turbo.json` quoted back at it. The comment outlived the
+ * problem it described and was believed over the code, which is the same defect as
+ * a spec title naming a bug that was fixed underneath it.
  *
- *   TURBO_FORCE=true pnpm check
- *
- * `turbo.json` is trunk-owned; `"cache": false` on the `test` task is the real
- * fix and is in the lane report.
+ * The reason the cache mattered here more than anywhere else still stands and is
+ * why the setting must not be reverted: this package's real inputs are a running
+ * Postgres, a booted API and the wall clock, and not one of them is in the hash.
+ * A cached green from this suite would be a green from an arbitrary moment in the
+ * past.
  */
 
 import { defineConfig } from 'vitest/config';

@@ -153,11 +153,23 @@ describe('#4 — every money-moving POST requires an Idempotency-Key', () => {
     expect(res.body).not.toHaveProperty('balanceAfterFils');
   });
 
+  /**
+   * TITLE CORRECTED. It read "POST /voids accepts a money-moving request with no
+   * Idempotency-Key — a retried void refunds twice", which describes a defect that
+   * was fixed underneath it: the assertion below demands
+   * `400 idempotency_key_required` and gets it.
+   *
+   * This is the sixth instance of the pattern `known-bug.ts` was written for and
+   * that a previous lane D session corrected five of — a spec title naming a bug,
+   * an assertion demanding the contract, and the fix landing so the sentence
+   * quietly becomes false while the spec keeps passing. A reader meets the title
+   * first, so the title is the part that has to stay true.
+   */
   it(
-    'POST /voids accepts a money-moving request with no Idempotency-Key — a retried void refunds twice',
+    'POST /voids without an Idempotency-Key is refused — non-negotiable #4 lists voids explicitly',
     async () => {
-      // Non-negotiable #4 lists voids explicitly: "Top-ups, charges, orders, voids."
-      // A void puts credit back into a wallet, so a retried request is a double refund.
+      // "Top-ups, charges, orders, voids." A void puts credit back into a wallet,
+      // so a retried request would be a double refund.
       const res = await api<{ error: string }>('POST', '/voids', {
         body: { transactionId: 'TX-9021', reason: 'retry safety' },
       });
