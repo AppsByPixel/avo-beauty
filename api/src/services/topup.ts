@@ -443,10 +443,18 @@ export async function createTopUp(
         // Rolls the key back with everything else. The client retries the same
         // attempt with the same key rather than being answered with a cached
         // failure forever.
+        //
+        // `cause`, and it is not decoration. The customer gets one sentence by
+        // design; the operator needs the processor's own words, and without this
+        // they were discarded — a wrong MYFATOORAH_API_KEY and a rejected
+        // `CallBackUrl` both surfaced as nothing but `code: gateway_unavailable`.
+        // The 5xx branch of the error handler is what prints it.
         throw new ApiError(
           502,
           'gateway_unavailable',
           'We could not reach the payment provider. Try again in a moment.',
+          {},
+          { cause: err },
         );
       }
       throw err;

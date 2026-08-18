@@ -62,11 +62,49 @@ const EnvSchema = z.object({
 
   // ------------------------------------------------------------- gateway --
   //
-  // PSP selection is a client decision that has not been made (CLAUDE.md
-  // § Escalate, don't guess). The gateway sits behind an interface with a
-  // sandbox driver; choosing the real one later is this variable plus one
-  // adapter in src/gateway/. `sandbox` is refused in production below.
-  GATEWAY_DRIVER: z.enum(['sandbox']).default('sandbox'),
+  // PSP selection WAS a client decision that had not been made (CLAUDE.md
+  // § Escalate, don't guess). It has now been made in one direction: MyFatoorah,
+  // beginning with their TEST environment and test cards rather than waiting on
+  // live credentials.
+  //
+  // `sandbox` REMAINS THE DEFAULT, and that is a decision rather than inertia.
+  // e2e must stay deterministic and offline — its duplicate and out-of-order
+  // callback specs describe orderings no third-party network service can be asked
+  // to produce on cue, and an unreliable green is worse than no green. So the real
+  // driver is selected explicitly by an operator and exercised deliberately.
+  // `sandbox` is still refused in production below.
+  GATEWAY_DRIVER: z.enum(['sandbox', 'myfatoorah']).default('sandbox'),
+
+  /**
+   * MyFatoorah's endpoint and API key. NO DEFAULTS, on purpose.
+   *
+   * The Kuwait sandbox token is published in MyFatoorah's own documentation, so
+   * defaulting to it would leak nothing. It is still not defaulted, for two
+   * reasons that outlast the token: a credential baked into a driver as a
+   * fallback is how the LIVE one gets committed three weeks from now, and a
+   * driver that works without being configured is a driver nobody notices is
+   * unconfigured. Both public test values are in api/.env.example, which is where
+   * a developer looks for them.
+   *
+   * The assertion below refuses to boot with `GATEWAY_DRIVER=myfatoorah` and any
+   * of the three missing, naming the variable.
+   */
+  MYFATOORAH_BASE_URL: z.string().url().optional(),
+  MYFATOORAH_API_KEY: z.string().min(20).optional(),
+
+  /**
+   * Where MyFatoorah returns the customer's BROWSER — not the app deep link.
+   *
+   * Verified against the live test environment rather than assumed: `CallBackUrl`
+   * must be http(s), and `avo://topup/return?intent=…` is refused outright with
+   * "The field CallBackUrl must be a url. Example http://www.example.com". So
+   * `TOPUP_RETURN_URL` cannot be given to this processor. This is an https URL
+   * AVO owns which forwards to the deep link, carried along in `to=`.
+   *
+   * Which host serves it is an infrastructure decision and is not invented here.
+   * The driver refuses rather than handing the processor a URL that 404s.
+   */
+  MYFATOORAH_RETURN_URL: z.string().url().optional(),
 
   /**
    * HMAC-SHA256 key the PSP signs its callbacks with.
@@ -79,7 +117,17 @@ const EnvSchema = z.object({
    * default that reaches an environment where it matters.
    */
   GATEWAY_WEBHOOK_SECRET: z.string().min(16).optional(),
-  /** Seconds a signed callback stays acceptable. Replay window, keep it small. */
+  /**
+   * Seconds a signed callback stays acceptable. Replay window, keep it small.
+   *
+   * SANDBOX DRIVER ONLY, and that is a property of MyFatoorah rather than a gap
+   * here. The sandbox signs `${timestamp}.${rawBody}`, so moving `t` forward
+   * invalidates the MAC and this window is a real control. MyFatoorah signs an
+   * ordered list of IDENTITY fields with no timestamp in it at all, so a captured
+   * callback of theirs replays forever and nothing this number could be set to
+   * would change that. See gateway/myfatoorah.ts for what carries the weight
+   * instead.
+   */
   GATEWAY_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
   /** Milliseconds. A gateway that has not answered by now has not answered. */
   GATEWAY_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
@@ -248,6 +296,36 @@ if (raw.NODE_ENV === 'production' && raw.GATEWAY_DRIVER === 'sandbox') {
   );
 }
 
+/**
+ * The real driver refuses to boot half-configured, naming the variable.
+ *
+ * This is not a production-only assertion, unlike the four above it. The whole
+ * point of selecting `myfatoorah` in development is to talk to a real processor,
+ * and a driver that boots with no key and sends `Bearer undefined` produces a 401
+ * from MyFatoorah — at which point the operator debugs MyFatoorah instead of
+ * their own environment. Fail here, where the cause has a name.
+ */
+if (raw.GATEWAY_DRIVER === 'myfatoorah') {
+  const missing = (
+    [
+      ['MYFATOORAH_BASE_URL', raw.MYFATOORAH_BASE_URL],
+      ['MYFATOORAH_API_KEY', raw.MYFATOORAH_API_KEY],
+      ['MYFATOORAH_RETURN_URL', raw.MYFATOORAH_RETURN_URL],
+    ] as const
+  )
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `GATEWAY_DRIVER=myfatoorah requires ${missing.join(', ')}. ` +
+        'The public Kuwait test values are documented in api/.env.example — they are ' +
+        'deliberately not defaults, because a credential baked into a driver is how the ' +
+        'live one gets committed.',
+    );
+  }
+}
+
 if (raw.NODE_ENV === 'production' && !raw.GATEWAY_WEBHOOK_SECRET) {
   throw new Error(
     'GATEWAY_WEBHOOK_SECRET is required in production. Without it the webhook ' +
@@ -285,6 +363,9 @@ export const env = {
   pinDeviceWindowMinutes: raw.PIN_DEVICE_WINDOW_MINUTES,
   testPrincipals: raw.AVO_TEST_PRINCIPALS,
   gatewayDriver: raw.GATEWAY_DRIVER,
+  myfatoorahBaseUrl: raw.MYFATOORAH_BASE_URL,
+  myfatoorahApiKey: raw.MYFATOORAH_API_KEY,
+  myfatoorahReturnUrl: raw.MYFATOORAH_RETURN_URL,
   gatewayWebhookSecret,
   gatewayWebhookToleranceSeconds: raw.GATEWAY_WEBHOOK_TOLERANCE_SECONDS,
   gatewayTimeoutMs: raw.GATEWAY_TIMEOUT_MS,

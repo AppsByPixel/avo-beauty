@@ -30,12 +30,34 @@
  *    directly rather than causing a second read. It is authenticated; a client
  *    returning from a redirect is not. That is the whole distinction the
  *    "return URL is a hint" rule rests on.
+ *
+ * 5. A SIGNED EVENT WE DO NOT ACT ON ANSWERS 200 AND SAYS SO. Added with the
+ *    MyFatoorah driver, which subscribes to a processor that also emits
+ *    `REFUND_STATUS_CHANGED` — an event non-negotiable #5 means AVO never causes
+ *    and must never honour by moving a balance. Point 2's reasoning applies
+ *    unchanged: a 4xx to a correctly delivered event buys days of retries. It is
+ *    logged at `warn`, because a refund happening in the portal is something a
+ *    human needs to know about even though no code should react to it.
+ *
+ *    NOT collapsed into the 400 above. "We could not read this" and "we chose not
+ *    to act on this" are different facts, and either one wearing the other's
+ *    status code is a defect — see `GatewayEventUnsupportedError`.
+ *
+ * ONE THING THIS FILE'S POINT 2 NOW OVERSTATES, under MyFatoorah specifically.
+ * It says `UNIQUE (provider, event_id)` and the state machine "both guarantee"
+ * that a duplicate cannot move money twice. MyFatoorah's signature covers
+ * `Invoice.Id`, `Invoice.Status`, `Transaction.Status`, `Transaction.PaymentId`
+ * and `Invoice.ExternalIdentifier` — and NOT `Event.Reference`, which is the id
+ * this route dedupes on. So a captured callback can be re-sent with a fresh event
+ * id and a still-valid signature, and the unique index will not see a duplicate.
+ * The state machine will: `succeeded → succeeded` is not an arrow. Under this
+ * processor that is the guard carrying the weight, not the index.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { gateway } from '../gateway';
-import { GatewayEventMalformedError } from '../gateway/types';
+import { GatewayEventMalformedError, GatewayEventUnsupportedError } from '../gateway/types';
 import { badRequest, notFound, unauthorized } from '../http/errors';
 import { settleFromWebhook } from '../services/topup';
 
@@ -79,6 +101,15 @@ export async function registerWebhookRoutes(app: FastifyInstance): Promise<void>
       try {
         event = gateway.parseEvent(req.body);
       } catch (err) {
+        if (err instanceof GatewayEventUnsupportedError) {
+          // Verified, readable, and deliberately inert. 200 so the PSP stops
+          // retrying; `warn` so a portal-side refund is not silent.
+          req.log.warn(
+            { provider: req.params.provider, reason: err.message },
+            'verified gateway callback of a kind this integration does not act on',
+          );
+          return reply.send({ received: true, outcome: 'ignored_unsupported_event', credited: false });
+        }
         if (err instanceof GatewayEventMalformedError) {
           // Signed but unreadable: a real integration bug on one side or the
           // other. A 400 is right here — retrying it will not help, and it must
