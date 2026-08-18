@@ -1,5 +1,12 @@
 /**
- * Development seed. `pnpm --filter @avo/api run db:seed`
+ * Development seed. `pnpm --dir=/abs/path/to/api run db:seed`
+ *
+ * AN ABSOLUTE `--dir`, NEVER `--filter`, AND NEVER A RELATIVE PATH. `pnpm --filter`
+ * resolves from cwd, so run from a lane worktree it can pick a DIFFERENT worktree's
+ * package — and this file exports nothing: it reads `DATABASE_URL` and DELETES rows.
+ * `scripts/lane-db.sh` exports that URL before invoking pnpm, so the wrong resolution
+ * there means another worktree's seed applied to this lane's database, which looks
+ * exactly like a clean reset. LANES.md § "Every lane isolates its own resources".
  *
  * Mirrors packages/mock/src/fixtures.ts, because Lane D's e2e suite asserts
  * against those exact values as named constants — Amara, member 8842, 24.500 KD,
@@ -41,7 +48,9 @@ import { branch, salon } from './schema/salon';
 import { artist, type ArtistWindows } from './schema/artist';
 import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
-import { member } from './schema/member';
+import { member, memberConsentEvent } from './schema/member';
+import { platformAdmin } from './schema/platformAdmin';
+import { product } from './schema/product';
 import { service } from './schema/service';
 import { staffUser } from './schema/staff';
 import { transaction } from './schema/transaction';
@@ -67,6 +76,7 @@ const BRANCH_KUWAIT_CITY = 'BR-KWC';
 /** Development credentials only. Never a default that reaches an environment. */
 const MEMBER_PASSWORD = 'dana-dev-password';
 const STAFF_PASSWORD = 'noura-dev-password';
+const PLATFORM_PASSWORD = 'yousef-dev-password';
 const STAFF_PIN = '2468';
 const HESSA_PIN = '1357';
 const SCANNER_DEVICE = 'DEV-SCANNER-01';
@@ -148,12 +158,151 @@ function week(open: Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri'
 }
 
 async function seed(): Promise<void> {
-  const [memberHash, staffHash, pinHash, hessaPinHash] = await Promise.all([
+  const [memberHash, staffHash, pinHash, hessaPinHash, platformHash] = await Promise.all([
     hashSecret(MEMBER_PASSWORD),
     hashSecret(STAFF_PASSWORD),
     hashSecret(STAFF_PIN),
     hashSecret(HESSA_PIN),
+    hashSecret(PLATFORM_PASSWORD),
   ]);
+
+  /**
+   * ------------------------------------------------- the platform owner ----
+   *
+   * `PLT-001` / Yousef, and the id is chosen rather than invented: the two
+   * `actor_kind = 'platform_admin'` audit rows this seed has always written use
+   * `actor_id = 'PLT-001'`, from the design's own row ("Yousef · AVO platform ·
+   * Wallet adjusted"). `audit_log.actor_id` is a SOFT reference with no foreign
+   * key, so those rows worked while no such admin existed — and now that one does,
+   * matching the id makes the fixture's history and the live actor the same
+   * person instead of two Yousefs.
+   *
+   * SEEDED BEFORE ANY SESSION, because `session.platform_admin_id` references it.
+   *
+   * `onConflictDoUpdate` on the hash for the reason the member rows document:
+   * every developer database predates migration 0028, so DO NOTHING would be a
+   * no-op on a warm database and the console would be unreachable while the seed
+   * printed success. The perms are in the SET too — `platform_admin_owner_holds_everything`
+   * means an owner row cannot be partially granted, so a future ninth section
+   * added to the table would leave this row violating its own CHECK unless the
+   * seed reasserts it.
+   */
+  await db
+    .insert(platformAdmin)
+    .values({
+      id: 'PLT-001',
+      name: 'Yousef',
+      handle: 'yousef',
+      passwordHash: platformHash,
+      role: 'owner',
+      owner: true,
+      // Spelled out rather than derived from PLATFORM_ROLE_PRESETS by string
+      // manipulation: a `Record<string, boolean>` cast into drizzle's insert
+      // values is a cast, and tsc naming a missing column is worth more here than
+      // nine lines saved. `platform_admin_owner_holds_everything` is the second
+      // check on the same thing.
+      permAnalytics: true,
+      permActivity: true,
+      permSalons: true,
+      permAccounts: true,
+      permAdmins: true,
+      permControls: true,
+      permApprovals: true,
+      permPolicies: true,
+      permAudit: true,
+    })
+    .onConflictDoUpdate({
+      target: platformAdmin.id,
+      set: {
+        passwordHash: platformHash,
+        permAnalytics: true,
+        permActivity: true,
+        permSalons: true,
+        permAccounts: true,
+        permAdmins: true,
+        permControls: true,
+        permApprovals: true,
+        permPolicies: true,
+        permAudit: true,
+        active: true,
+      },
+    });
+
+  /**
+   * A SECOND CONSOLE ADMIN WITH LESS AUTHORITY, and it is the same fixture shape
+   * as ST-002 on the merchant side: `authority.test.ts` can only prove a section
+   * gate exists if some credential is refused by it. `PLT-002` / Mariam is the
+   * design's own second row — "Mariam K. · analyst" with analytics and activity
+   * only — so `perm_approvals` and `perm_policies` are false on a real, signable
+   * account rather than only on a hypothetical one.
+   */
+  await db
+    .insert(platformAdmin)
+    .values({
+      id: 'PLT-002',
+      name: 'Mariam K.',
+      handle: 'mariam.k',
+      passwordHash: platformHash,
+      role: 'analyst',
+      owner: false,
+      permAnalytics: true,
+      permActivity: true,
+      permSalons: false,
+      permAccounts: false,
+      permAdmins: false,
+      permControls: false,
+      permApprovals: false,
+      permPolicies: false,
+      permAudit: false,
+    })
+    .onConflictDoUpdate({
+      target: platformAdmin.id,
+      set: { passwordHash: platformHash, active: true },
+    });
+
+  /**
+   * A THIRD ADMIN, AND SHE EXISTS TO MAKE A GUARD REACHABLE.
+   *
+   * `DELETE /v1/platform/admins/{id}` refuses an admin removing her OWN account —
+   * the console's `admins` section is the only route back in, so a self-removal
+   * locks a section of the product behind a row nobody can edit. Real property.
+   *
+   * And it could not be executed. The owner is refused one line earlier by a
+   * different rule, and the only other signable admin was the analyst, who has no
+   * `admins` permission and so never reaches the handler. So the branch was
+   * unreachable — the shape this repository has already paid for twice, in
+   * `heldDepositFils` sitting at 0 until bookings landed and in the no-show runner
+   * that STATUS.md records as never once executed by a spec. "A branch that cannot
+   * execute cannot be wrong, and cannot be tested either."
+   *
+   * `admin` is the design's own role — "Full admin — everything" in the Admins
+   * editor's select — so this is a fixture of something the product ships rather
+   * than a test-only account. It is also the second full-authority credential the
+   * console needs for any two-reviewer case.
+   */
+  await db
+    .insert(platformAdmin)
+    .values({
+      id: 'PLT-003',
+      name: 'Salem A.',
+      handle: 'salem.a',
+      passwordHash: platformHash,
+      role: 'admin',
+      owner: false,
+      permAnalytics: true,
+      permActivity: true,
+      permSalons: true,
+      permAccounts: true,
+      permAdmins: true,
+      permControls: true,
+      permApprovals: true,
+      permPolicies: true,
+      permAudit: true,
+    })
+    .onConflictDoUpdate({
+      target: platformAdmin.id,
+      set: { passwordHash: platformHash, active: true, permAdmins: true },
+    });
 
   /**
    * THE LEGAL SET FIRST, BEFORE ANY MEMBER.
@@ -236,23 +385,25 @@ async function seed(): Promise<void> {
       plan: 'growth',
       brandColor: '#6E7F6C',
       /**
-       * ON, and it is the one field of Amara's configuration this seed changed
-       * when booking landed.
+       * BOTH MODULES ON, and they are the fields of Amara's configuration this
+       * seed changes — booking when booking landed, shop when the shop did, for
+       * one reason stated once.
        *
        * The modules default OFF for a real salon — AVO-Beauty-Product-Description-v2.md
-       * § Settings, "module toggles (Booking, Shop — both default OFF)" — and
-       * `salon.module_booking` keeps that default. Amara is the fixture every
-       * lane drives, and `POST /bookings` refuses a salon whose booking module is
-       * off, so leaving it false would make the entire phase-6 surface
-       * unreachable in development and every proof run start with a PATCH.
+       * § Settings, "module toggles (Booking, Shop — both default OFF)" — and the
+       * COLUMNS keep that default. Amara is the fixture every lane drives, and
+       * both `POST /bookings` and `POST /orders` refuse a salon whose module is
+       * off, so leaving them false would make the whole of phase 6 unreachable in
+       * development and start every proof run with a PATCH.
        *
-       * SAL-LUMIERE below stays OFF deliberately, which is what keeps the refusal
-       * itself testable: two salons, one with the module and one without, is the
-       * only fixture shape that can prove the gate exists rather than that it is
-       * merely absent.
+       * SAL-LUMIERE below stays OFF on both deliberately, which is what keeps the
+       * refusals themselves testable: two salons, one with the module and one
+       * without, is the only fixture shape that can prove a gate exists rather
+       * than that it is merely absent. It has no products either, so
+       * `shop_not_enabled` and an empty catalog are separately reachable.
        */
       moduleBooking: true,
-      moduleShop: false,
+      moduleShop: true,
       loyaltyMode: 'tiers',
       tiers: [
         { name: 'bronze', minVisits: 0, bonusPercent: 0 },
@@ -285,21 +436,26 @@ async function seed(): Promise<void> {
     // written a translation it did not write — the same class of failure the
     // member rows below document for `passwordHash`.
     //
-    // The Arabic columns and `module_booking` are in the SET; the rest of
+    // The Arabic columns and the two module flags are in the SET; the rest of
     // Amara's configuration is left alone deliberately, because it is a salon a
     // developer may have edited through `PATCH /salons/:id` while working and
     // this insert is not the place that resets it.
     //
-    // `module_booking` is in the SET for exactly the reason `name_ar` is. Every
-    // developer and CI database already holds an Amara row from before booking
-    // existed, with the module off; DO NOTHING there would leave the whole of
-    // phase 6 unreachable on every warm database while the seed printed success.
-    // That is the same silent-claim failure the paragraph above describes, and it
-    // is worse here because the symptom is a 409 on a route the fixture is
-    // supposed to make reachable.
+    // `module_booking` and `module_shop` are in the SET for exactly the reason
+    // `name_ar` is. Every developer and CI database already holds an Amara row
+    // from before those features existed, with the module off; DO NOTHING there
+    // would leave the whole of phase 6 unreachable on every warm database while
+    // the seed printed success. That is the same silent-claim failure the
+    // paragraph above describes, and it is worse here because the symptom is a
+    // 409 on a route the fixture is supposed to make reachable.
     .onConflictDoUpdate({
       target: salon.id,
-      set: { nameAr: 'أمارا', stampRewardAr: 'تصفيف شعر مجاني', moduleBooking: true },
+      set: {
+        nameAr: 'أمارا',
+        stampRewardAr: 'تصفيف شعر مجاني',
+        moduleBooking: true,
+        moduleShop: true,
+      },
     });
 
   await db
@@ -398,6 +554,45 @@ async function seed(): Promise<void> {
       target: service.id,
       set: { nameAr: sql`excluded.name_ar` },
     });
+
+  /**
+   * The shop catalog — `packages/mock/src/fixtures.ts § products`, exactly.
+   *
+   * BYTE-IDENTICAL TO THE MOCK'S THREE ROWS, ids included, for the reason the
+   * promotion fixtures below are: three lanes build against the mock and one
+   * against this, and a seed that invented its own catalog would mean the wallet's
+   * Shop tab showed different products depending on which base URL it happened to
+   * be pointed at. `AVO Wallet Home.dc.html` draws five products of its own with
+   * descriptions and colour swatches; those are prototype presentation — there is
+   * no field on `product` to hold either, and `ProductSchema` declares none — so
+   * the mock's list is the one that is actually a fixture.
+   *
+   * THIS CLOSES A NAMED GAP AND WILL TURN ONE SPEC RED ON PURPOSE.
+   * `e2e/contract.test.ts` carries a placeholder — "ProductSchema is UNWITNESSED
+   * — the seed creates no product for it to be tested against" — which asserts
+   * `items` is EMPTY and tells whoever seeds one to turn the real probe on:
+   *
+   *     'A product now exists, so ProductSchema finally has a live sample. Move
+   *      GET /salons/{id}/products into probes() with requireNonEmpty: ["items"]
+   *      and delete this spec — it was only ever a placeholder for a shape
+   *      nothing could witness.'
+   *
+   * That file is lane D's column, so this is the seed doing its half and saying
+   * so. It is a deliberate red, not a regression.
+   *
+   * `onConflictDoNothing`, unlike the services above: there is no later column to
+   * backfill, and a developer who has repriced a product through the Shop editor
+   * while working should not have it reset by a reseed. Nothing about these rows
+   * predates the migration that created them.
+   */
+  await db
+    .insert(product)
+    .values([
+      { id: 'PR-01', salonId: SALON_ID, name: 'Argan hair oil 100ml', priceFils: fils(8500) },
+      { id: 'PR-02', salonId: SALON_ID, name: 'Repair mask', priceFils: fils(12000) },
+      { id: 'PR-03', salonId: SALON_ID, name: 'Heat protect spray', priceFils: fils(6750) },
+    ])
+    .onConflictDoNothing();
 
   // ---------------------------------------------------------- promotions ----
   //
@@ -769,6 +964,86 @@ async function seed(): Promise<void> {
         : { passwordHash: memberHash },
     });
 
+  /**
+   * ------------------------------------------- MARKETING CONSENT, SEEDED ----
+   *
+   * WITHOUT THIS, NO CAMPAIGN CAN REACH ANYBODY, and that is not a bug in the
+   * campaign code — it is `services/consent.ts`'s rule working as written: "NO
+   * EVENT AT ALL MEANS NO CONSENT. Not 'unknown', not 'assume yes'. A member who
+   * predates this table has never been asked, and inferring a grant from silence
+   * is the one answer that cannot be defended afterwards."
+   *
+   * Both seeded members predate the signup path that records consent, so
+   * `member_consent_event` was EMPTY on every database, every audience resolved to
+   * zero people, and every campaign would have held on "nobody is in this
+   * audience". Correct, and useless as a fixture: the delivery path, the weekly
+   * cap and the monthly cap would all have been unreachable branches — the same
+   * shape as `heldDepositFils` sitting at 0 until bookings landed, which is how a
+   * void came to under-refund a customer for a whole build.
+   *
+   * TWO MEMBERS, TWO ANSWERS, AND 8843 HAS A HISTORY. Dana granted at signup.
+   * Reem granted at signup and WITHDREW from her Account screen afterwards, which
+   * is two rows: consent is append-only, so a withdrawal is a new event saying
+   * `granted: false` and the newest event decides. That gives the audience filter
+   * a real excluded member rather than a hypothetical one, and it exercises the
+   * half of `grantedMarketingConsent` that a LEFT JOIN with `granted IS NOT FALSE`
+   * would silently invert.
+   *
+   * So `audience: 'all'` at Amara is exactly one person, and that is a true
+   * statement about this fixture rather than an accident.
+   *
+   * Guarded on absence rather than `SEED_RESET`: `member_consent_event` has UPDATE
+   * and DELETE revoked from the application role and is not in the destructive
+   * block below, so a reseed must not append a second grant on top of a
+   * developer's withdrawal and silently opt her back in.
+   */
+  const [{ consentRows } = { consentRows: 0 }] = (await db.execute(
+    sql`SELECT count(*)::int AS "consentRows" FROM member_consent_event`,
+  )) as unknown as Array<{ consentRows: number }>;
+
+  if (consentRows === 0) {
+    await db.insert(memberConsentEvent).values([
+      {
+        memberId: '8842',
+        salonId: SALON_ID,
+        kind: 'marketing_offers',
+        granted: true,
+        source: 'signup',
+        policyVersion: 3,
+        createdAt: new Date(Date.now() - 7_200_000),
+      },
+      {
+        memberId: '8843',
+        salonId: SALON_ID,
+        kind: 'marketing_offers',
+        granted: true,
+        source: 'signup',
+        policyVersion: 3,
+        createdAt: new Date(Date.now() - 7_200_000),
+      },
+      {
+        /**
+         * The withdrawal, with an EXPLICIT LATER TIMESTAMP.
+         *
+         * All three rows above would otherwise share `now()` — the transaction
+         * timestamp — and that tie is what migration 0029 exists for: with a grant
+         * and a withdrawal tied, `ORDER BY created_at DESC` returned the grant, so
+         * this fixture originally opted Reem back in. `seq` settles it now, and the
+         * timestamp is set anyway because a withdrawal genuinely happens after the
+         * signup it reverses, and a fixture that reads as simultaneous is a fixture
+         * that tests the tiebreak instead of the rule.
+         */
+        memberId: '8843',
+        salonId: SALON_ID,
+        kind: 'marketing_offers',
+        granted: false,
+        source: 'wallet_account',
+        policyVersion: 3,
+        createdAt: new Date(Date.now() - 3_600_000),
+      },
+    ]);
+  }
+
   // ------------------------------------------------ the destructive part ----
   //
   // Everything above this line CREATES fixture rows and is safe to run against
@@ -813,6 +1088,19 @@ async function seed(): Promise<void> {
       // `loyalty_event.transaction_id` is ON DELETE RESTRICT, so the climbs a
       // charge produced have to go before the charge does.
       await db.execute(sql`DELETE FROM loyalty_event`);
+      /**
+       * `shop_order_line.transaction_id` is ON DELETE restrict as well, so the
+       * lines of an order have to go before the order does — the same reason
+       * `booking` and `loyalty_event` are cleared above rather than below.
+       * Without this, `DELETE FROM transaction` fails with a foreign key
+       * violation on any database where a customer has ever bought a bottle of
+       * anything.
+       *
+       * No trigger to disable. `shop_order_line` is append-only for `avo_app`
+       * only, by GRANT — migration 0027 says why the ledger's TRUNCATE trigger
+       * has no counterpart here — and the seed runs as the owner.
+       */
+      await db.execute(sql`DELETE FROM shop_order_line`);
       await db.execute(sql`DELETE FROM transaction`);
 
       /**
@@ -1168,6 +1456,9 @@ async function seed(): Promise<void> {
   }
   console.log(`  web     noura / ${STAFF_PASSWORD}`);
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
+  console.log(`  console yousef / ${PLATFORM_PASSWORD}       (owner, every section)`);
+  console.log(`  console mariam.k / ${PLATFORM_PASSWORD}     (analyst — no approvals, no policies)`);
+  console.log(`  console salem.a / ${PLATFORM_PASSWORD}      (full admin, not the owner)`);
 }
 
 // This script truncates the money tables and disables an immutability trigger to

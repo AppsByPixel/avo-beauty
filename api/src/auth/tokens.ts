@@ -23,15 +23,26 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { SignJWT, jwtVerify } from 'jose';
 import { env } from '../env';
 
-export type PrincipalKind = 'member' | 'staff';
-export type SessionScope = 'wallet' | 'scanner' | 'dashboard';
+export type PrincipalKind = 'member' | 'staff' | 'platform_admin';
+export type SessionScope = 'wallet' | 'scanner' | 'dashboard' | 'platform';
 
 export interface AccessClaims {
-  /** Principal id — a member id or a staff id. */
+  /** Principal id — a member id, a staff id, or a platform admin id. */
   sub: string;
   kind: PrincipalKind;
   scope: SessionScope;
-  salonId: string;
+  /**
+   * NULL FOR A PLATFORM ADMIN, AND FOR NOBODY ELSE.
+   *
+   * The owner console is the one credential that reads across salons by design,
+   * so it is scoped to none of them — `session_salon_matches_principal` says the
+   * same thing in the database, as an equivalence. A platform token carrying a
+   * salon id would be a merchant token with extra authority, which is precisely
+   * the confusion the console must not be; and a merchant token with a NULL salon
+   * would slip past `requireSameSalon` by having nothing to compare, which is why
+   * `verifyAccessToken` refuses that combination rather than defaulting it.
+   */
+  salonId: string | null;
   /** Session id, so a specific device can be spared a global revoke. */
   sid: string;
 }
@@ -44,6 +55,9 @@ export async function signAccessToken(claims: AccessClaims): Promise<string> {
   return new SignJWT({
     kind: claims.kind,
     scope: claims.scope,
+    // `null`, explicitly, for a platform admin. Omitting the key would be
+    // indistinguishable at verification time from a token minted before the
+    // claim existed, and this is the claim the tenancy boundary reads.
     salonId: claims.salonId,
     sid: claims.sid,
   })
@@ -68,14 +82,38 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims | n
     const { sub } = payload;
     const kind = payload.kind as PrincipalKind | undefined;
     const scope = payload.scope as SessionScope | undefined;
-    const salonId = payload.salonId as string | undefined;
+    const rawSalonId = payload.salonId;
     const sid = payload.sid as string | undefined;
 
-    if (!sub || !kind || !scope || !salonId || !sid) return null;
-    if (kind !== 'member' && kind !== 'staff') return null;
-    if (scope !== 'wallet' && scope !== 'scanner' && scope !== 'dashboard') return null;
+    if (!sub || !kind || !scope || !sid) return null;
+    if (kind !== 'member' && kind !== 'staff' && kind !== 'platform_admin') return null;
+    if (scope !== 'wallet' && scope !== 'scanner' && scope !== 'dashboard' && scope !== 'platform') {
+      return null;
+    }
 
-    return { sub, kind, scope, salonId, sid };
+    /**
+     * THE SCOPE MUST MATCH THE KIND, IN THE TOKEN AS WELL AS IN THE ROW.
+     *
+     * `session_scope_matches_principal` enforces this on the row, and the row is
+     * checked on every request through `sessionIsLive` — but only for LIVENESS,
+     * not for shape. A token is a separate assertion, and if this function
+     * accepted `{ kind: 'staff', scope: 'platform' }` then anything gating on the
+     * scope alone would be reachable by a merchant credential. The two statements
+     * have to agree, so both are made.
+     */
+    if (kind === 'platform_admin' ? scope !== 'platform' : scope === 'platform') return null;
+
+    /**
+     * A platform token has NO salon and every other token has one — refused in
+     * both directions rather than defaulted. See `AccessClaims.salonId`.
+     */
+    if (kind === 'platform_admin') {
+      if (rawSalonId !== null && rawSalonId !== undefined) return null;
+      return { sub, kind, scope, salonId: null, sid };
+    }
+    if (typeof rawSalonId !== 'string' || rawSalonId === '') return null;
+
+    return { sub, kind, scope, salonId: rawSalonId, sid };
   } catch {
     return null;
   }

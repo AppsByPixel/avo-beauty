@@ -1,10 +1,13 @@
 /**
  * Salon reads and edits. Four of the nine permission gates live here.
  *
- *   GET   /salons/{id}/metrics   perms.dashboard
- *   GET   /salons/{id}/products  perms.shop
- *   GET   /salons/{id}/bookings  perms.appointments
- *   PATCH /salons/{id}           perms.loyalty
+ *   GET    /salons/{id}/metrics         perms.dashboard
+ *   GET    /salons/{id}/products        perms.shop for staff, open to her own members
+ *   POST   /salons/{id}/products        perms.shop
+ *   PATCH  /salons/{id}/products/{pid}  perms.shop
+ *   DELETE /salons/{id}/products/{pid}  perms.shop — retires, does not delete
+ *   GET    /salons/{id}/bookings        perms.appointments
+ *   PATCH  /salons/{id}                 perms.loyalty
  *
  * PATCH is the one that matters most. The loyalty editor writes through it, and
  * build-plan.md calls a half-published tier ladder a money bug — a member who
@@ -25,10 +28,15 @@ import { db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
+import { product } from '../db/schema/product';
 import { branch, salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { staffUser } from '../db/schema/staff';
-import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
+import {
+  requireDashboardPerm,
+  requireSalonScoped,
+  requireSameSalon,
+} from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -302,7 +310,7 @@ function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent:
 
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
-    const p = requirePrincipal(req);
+    const p = requireSalonScoped(req);
     requireSameSalon(p, req.params.id);
 
     const s = await loadSalon(req.params.id);
@@ -819,12 +827,271 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** perms.shop */
+  /**
+   * ===================================================================
+   * THE SHOP CATALOG. `perms.shop` for staff, open to the salon's own members.
+   * ===================================================================
+   *
+   * This route returned a hardcoded `{ items: [] }` so that the ninth permission
+   * had a real server-side gate rather than an unguarded 404 that looks like a
+   * gate and is not — the same scaffolding `/salons/{id}/bookings` was built with.
+   * It now returns actual products, and the writes below are the Shop editor the
+   * dashboard draws.
+   *
+   * WHO MAY READ IT, AND WHY THAT IS TWO ANSWERS
+   * -------------------------------------------
+   * A MEMBER of this salon may. The wallet has a Shop tab, and a customer cannot
+   * be sold a catalog she is not allowed to fetch. `GET /salons/{id}/services`
+   * reached the same place by the same route — it is `requirePrincipal`, because
+   * the Book flow needs it — and this is the shop's version of that.
+   *
+   * STAFF STILL NEED `perms.shop`, on the dashboard surface. For a staff member
+   * this IS the Shop section, which is exactly what that permission names, and
+   * the gate is the one lane D's authority and permissions suites assert on. So
+   * the refusal a staff member without it gets is unchanged, byte for byte, and a
+   * scanner PIN still cannot reach it at all.
+   *
+   * The alternative — one gate for everybody — fails whichever way it is set: keep
+   * `requireDashboardPerm` and the customer's Shop tab 403s; relax it to
+   * `requirePrincipal` and a permission the dashboard shows as a chip stops
+   * meaning anything server-side. Two callers with different rights are two
+   * checks.
+   *
+   * ONLY ACTIVE PRODUCTS, TO BOTH. A retired product cannot be ordered —
+   * services/order.ts prices from these rows — so offering one would build a cart
+   * the checkout then refuses. The merchant's editor lists what she can sell;
+   * what she retired is gone from it, which is what the ✕ in the design means.
+   *
+   * EXACTLY `ProductSchema`'S FOUR FIELDS, and `active` is not among them. Zod
+   * strips an undeclared key, so a fifth field would be one the contract silently
+   * deletes in transit — the trap STATUS.md names. `ServiceSchema` declares
+   * `active` and so the services route emits it; this one must not.
+   */
+  const productReadGate = (req: FastifyRequest, salonId: string) => {
+    const p = requireSalonScoped(req);
+    // A member reads her own salon's shopfront; a staff member reads the Shop
+    // section and needs the permission for it. Either way, only her own salon.
+    if (p.kind !== 'member') requireDashboardPerm(req, 'shop');
+    requireSameSalon(p, salonId);
+  };
+
   app.get<{ Params: { id: string } }>('/salons/:id/products', async (req, reply) => {
+    productReadGate(req, req.params.id);
+    const rows = await db
+      .select({
+        id: product.id,
+        salonId: product.salonId,
+        name: product.name,
+        priceFils: product.priceFils,
+      })
+      .from(product)
+      .where(and(eq(product.salonId, req.params.id), eq(product.active, true)))
+      .orderBy(product.id);
+    return reply.send({ items: rows, nextCursor: null });
+  });
+
+  /**
+   * The Shop editor's three writes. `perms.shop`, dashboard surface, audit row
+   * each.
+   *
+   * NOT IN api-contract.md, WHICH DECLARES ONLY THE READ. The design specifies
+   * them in detail — `AVO Merchant Dashboard.dc.html` § SHOP draws "+ Add
+   * product", an inline name field, an inline price field with a KD suffix, a ✕
+   * per row, and the line "changes save as you type" — so the catalog has to be
+   * writable by something. Built to the design and REPORTED as a contract
+   * addition, which is how `POST /bookings/{id}/reschedule` was handled for the
+   * same reason.
+   *
+   * "SAVES AS YOU TYPE" IS A PATCH PER FIELD, NOT A BULK PUT of the whole
+   * catalog. A PUT would make one keystroke in one row a rewrite of every product
+   * the salon sells, so two managers editing different rows would silently
+   * overwrite each other — and the loser's product would come back at the old
+   * price with nothing recording that it had moved. The tier ladder is a single
+   * jsonb document for the opposite reason (a publish must not half-apply); a
+   * catalog is rows, and rows are what independent edits want.
+   *
+   * PRICES ARE INTEGER FILS ON THE WIRE. The design's input reads `0.000` with a
+   * KD suffix because that is the display boundary — non-negotiable #1 puts the
+   * conversion in the client, and `parseAmountFils` refuses `8.5` here with a 400
+   * naming the mistake rather than a 500 from `fils()`.
+   */
+  app.post<{ Params: { id: string } }>('/salons/:id/products', async (req, reply) => {
     const p = requireDashboardPerm(req, 'shop');
     requireSameSalon(p, req.params.id);
-    return reply.send({ items: [], nextCursor: null });
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const name = requireString(body.name, 'name', 200);
+    const priceFils = parseAmountFils(body.priceFils, 'priceFils');
+
+    /**
+     * The id is minted here, never taken from the body. A client-chosen primary
+     * key is a client that can collide with another salon's row, and `product.id`
+     * is global — `PR-` plus six base36 characters, the shape `happyHourId()`
+     * uses. A collision raises a unique violation and the merchant is told to try
+     * again rather than being handed somebody else's product.
+     */
+    const id = `PR-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const now = new Date();
+
+    const [row] = await db
+      .insert(product)
+      .values({ id, salonId: p.salonId, name, priceFils, createdAt: now, updatedAt: now })
+      .returning({
+        id: product.id,
+        salonId: product.salonId,
+        name: product.name,
+        priceFils: product.priceFils,
+      });
+    if (!row) throw conflict('product_not_created', 'That product could not be saved. Try again.');
+
+    await writeAudit(db, p, {
+      salonId: p.salonId,
+      // `rules`, not `money`. Nothing moved; what changed is what the salon
+      // offers and at what price. The dashboard's audit filter draws the same
+      // distinction — "rule change" sits beside "charge" and "void".
+      kind: 'rules',
+      action: 'Product added',
+      detail: `${name} · ${(priceFils / 1000).toFixed(3)} KD`,
+      source: 'merchant',
+      subjectType: 'product',
+      subjectId: id,
+      metadata: { name, priceFils },
+      ipAddress: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    });
+
+    return reply.code(201).send(row);
   });
+
+  app.patch<{ Params: { id: string; pid: string } }>(
+    '/salons/:id/products/:pid',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'shop');
+      requireSameSalon(p, req.params.id);
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      /**
+       * `active` IS NOT EDITABLE HERE. Retiring a product is the DELETE below,
+       * which is the design's ✕ and writes its own audit line; a second door into
+       * the same field is how the tier ladder acquired an unvalidated entrance,
+       * and "product edited" is the wrong sentence in an audit log for "product
+       * withdrawn from sale".
+       */
+      const unknown = Object.keys(body).filter((k) => k !== 'name' && k !== 'priceFils');
+      if (unknown.length > 0) {
+        throw badRequest(
+          'invalid_field',
+          `Not editable: ${unknown.join(', ')}. A product has a name and a price.`,
+        );
+      }
+
+      const patch: { name?: string; priceFils?: ReturnType<typeof parseAmountFils> } = {};
+      if ('name' in body) patch.name = requireString(body.name, 'name', 200);
+      if ('priceFils' in body) patch.priceFils = parseAmountFils(body.priceFils, 'priceFils');
+      if (Object.keys(patch).length === 0) {
+        throw badRequest('invalid_request', 'Send a name, a priceFils, or both.');
+      }
+
+      // Scoped to her own salon IN THE WHERE, not checked after the read: another
+      // salon's product id must not be editable, and it must not be confirmable
+      // to exist either. `active` is in the predicate too — a retired product is
+      // not repriced back into the catalog by a PATCH.
+      const [row] = await db
+        .update(product)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(
+          and(
+            eq(product.id, req.params.pid),
+            eq(product.salonId, p.salonId),
+            eq(product.active, true),
+          ),
+        )
+        .returning({
+          id: product.id,
+          salonId: product.salonId,
+          name: product.name,
+          priceFils: product.priceFils,
+        });
+      if (!row) throw notFound('unknown_product', 'No such product.');
+
+      await writeAudit(db, p, {
+        salonId: p.salonId,
+        kind: 'rules',
+        action: 'Product edited',
+        // What it is NOW. A price move matters to a merchant reading this later,
+        // so the new value is spelled out rather than left to "edited".
+        detail:
+          `${row.name} · ${(row.priceFils / 1000).toFixed(3)} KD` +
+          (patch.priceFils !== undefined ? ' (price changed)' : ''),
+        source: 'merchant',
+        subjectType: 'product',
+        subjectId: row.id,
+        metadata: { changed: Object.keys(patch), name: row.name, priceFils: row.priceFils },
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+
+      return reply.send(row);
+    },
+  );
+
+  /**
+   * The ✕. RETIRES, does not delete.
+   *
+   * `shop_order_line.product_id` is `ON DELETE restrict`, so a product that has
+   * ever been sold cannot be removed — the database would refuse with a foreign
+   * key error, which reaches a merchant as a 500 for pressing a button the design
+   * drew. And it should not be removed: an order line naming a product that no
+   * longer exists is a receipt with a dangling id in it.
+   *
+   * So this is `active = false`, which is what `service.active` has always been
+   * and what `DELETE .../happy-hours/{hid}` does once a window has paid out. The
+   * product leaves the catalog, every past order keeps its line, and the audit row
+   * says which of the two happened.
+   *
+   * IDEMPOTENT BY PREDICATE, NOT BY SILENCE: a second DELETE finds no active row
+   * and answers 404. That is a true statement — there is no such product on sale —
+   * and it is what a dashboard that has just removed a row and lost the response
+   * needs to hear, rather than a 204 implying it removed something.
+   */
+  app.delete<{ Params: { id: string; pid: string } }>(
+    '/salons/:id/products/:pid',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'shop');
+      requireSameSalon(p, req.params.id);
+
+      const [row] = await db
+        .update(product)
+        .set({ active: false, updatedAt: new Date() })
+        .where(
+          and(
+            eq(product.id, req.params.pid),
+            eq(product.salonId, p.salonId),
+            eq(product.active, true),
+          ),
+        )
+        .returning({ id: product.id, name: product.name, priceFils: product.priceFils });
+      if (!row) throw notFound('unknown_product', 'No such product.');
+
+      await writeAudit(db, p, {
+        salonId: p.salonId,
+        kind: 'rules',
+        action: 'Product removed',
+        // "Retired" rather than "deleted", because that is what happened and a
+        // merchant asking why an old receipt still names it deserves the true
+        // word in the log.
+        detail: `${row.name} retired from the catalog`,
+        source: 'merchant',
+        subjectType: 'product',
+        subjectId: row.id,
+        metadata: { name: row.name, priceFils: row.priceFils, retired: true },
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+
+      return reply.code(204).send();
+    },
+  );
 
   /**
    * perms.appointments — the Merchant → Appointments screen.
@@ -926,7 +1193,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * statement rather than a placeholder.
    */
   app.get<{ Params: { id: string } }>('/salons/:id/services', async (req, reply) => {
-    const p = requirePrincipal(req);
+    const p = requireSalonScoped(req);
     requireSameSalon(p, req.params.id);
     const rows = await db
       .select({

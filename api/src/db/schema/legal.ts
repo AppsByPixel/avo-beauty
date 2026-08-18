@@ -75,6 +75,40 @@ export const legalDocumentSet = pgTable(
 );
 
 /**
+ * THE DRAFT. One mutable row, and the asymmetry with the table above is the point.
+ *
+ * Published versions are INSERT-only and kept forever, because
+ * `member.policy_version` points at one and a dispute is about wording somebody
+ * agreed to two versions ago. A draft is a scratchpad: nobody has agreed to it,
+ * nothing references it, and its history is not evidence. So it is edited in place
+ * and `POST /v1/platform/policies/discard` resets it to the published set.
+ *
+ * ITS ABSENCE IS WHY #10's RE-PROMPT WAS ONLY EVER REACHABLE FROM SQL. STATUS.md
+ * records that a previous session "inserted v4 by SQL to test the stale path" —
+ * which is the tell: with no publish endpoint, the one behaviour #10's second half
+ * describes could be exercised in a test and not in the product. Migration 0030.
+ *
+ * An EMPTY draft is legitimate and means "no unpublished changes".
+ * `legal_document_set` has the opposite CHECK, because an empty PUBLISHED set
+ * would satisfy every consent check trivially — one of the two tables is in front
+ * of customers.
+ */
+export const legalDocumentDraft = pgTable(
+  'legal_document_draft',
+  {
+    id: text('id').primaryKey().default('avo'),
+    docs: jsonb('docs').$type<LegalDoc[]>().notNull().default([]),
+    /** The console's "unpublished changes by …". Not an audit trail; that is audit_log. */
+    updatedBy: text('updated_by'),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    check('legal_document_draft_is_singleton', sql`${t.id} = 'avo'`),
+    check('legal_document_draft_docs_is_array', sql`jsonb_typeof(${t.docs}) = 'array'`),
+  ],
+);
+
+/**
  * AVO's support channels. One row.
  *
  * "AVO owns this, not the salon — a merchant cannot point customers at an

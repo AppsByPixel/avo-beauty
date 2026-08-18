@@ -20,9 +20,40 @@
  * question, and this is that half and no more of it.
  *
  * Saying so precisely matters, because a limiter looks like it addresses the
- * oracle and does not. At 20 attempts per five minutes an attacker still walks
- * roughly 100 numbers an hour per address, and the answer for each is definitive.
- * What is bounded is the CPU, which is the claim.
+ * oracle and does not. At 20 attempts per five minutes an attacker walks roughly
+ * 100 numbers an hour per address, and the answer for each is definitive. What is
+ * bounded is the RATE, not the fact.
+ *
+ * THAT SENTENCE WAS FALSE UNTIL routes/auth.ts WAS REORDERED, and it was false in
+ * the dangerous direction — which is worse than an absent claim, because a
+ * security docstring that overstates its own protection is read as a reason not to
+ * look.
+ *
+ * `recordSignupAttempt` used to be called BELOW the duplicate-phone refusal, with
+ * a comment explaining that the row should mark an attempt "that really is about
+ * to cost an argon2 hash". Sound about CPU; fatal to the oracle claim. Lane D
+ * measured it: forty consecutive probes against registered numbers from one
+ * address all answered `409 already_registered` and left `signup_attempt` EMPTY.
+ * The oracle was not bounded at 100 an hour. It was not bounded at all. Both
+ * examples the paragraph reached for — "a duplicate phone, a stale policy version"
+ * — were refused above the recorder.
+ *
+ * FIXED BY MOVING THE CALL, not by softening the sentence. A refusal is an
+ * attempt: it consumed the endpoint and it learned something. The counter now sits
+ * above the duplicate check, so a probe costs a count; argon2 still runs only past
+ * the check, so the CPU claim is untouched.
+ *
+ * A STALE POLICY VERSION IS STILL NOT COUNTED, and that is correct rather than a
+ * remaining half of the bug. `requireCurrentPolicyVersion` refuses a client whose
+ * screen was rendered before a publish landed; it reads the policy set and no
+ * member table, so it discloses nothing about whether a phone number is
+ * registered. It is a client-state refusal, not a probe.
+ *
+ * WHAT ONE COUNTER FOR TWO THINGS COSTS: twenty probes from an address exhaust
+ * that address's signup budget for five minutes. Intended for an attacker, and a
+ * real cost on a shared address — a salon's wifi where staff help customers sign
+ * up. Accepted, and it is why `TRUST_PROXY` matters: behind an untrusted proxy
+ * every caller already shares one bucket, which is strictly worse.
  *
  * REUSED, NOT REINVENTED. This is the shape of `enforceDirectoryReadLimits` in
  * services/memberSearch.ts, and the three properties worth copying are:

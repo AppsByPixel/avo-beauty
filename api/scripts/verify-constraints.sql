@@ -1,7 +1,10 @@
 -- Proof, not documentation — and now proof a MACHINE can read.
 --
---   pnpm --dir api run db:verify                     # against `avo`
---   AVO_VERIFY_DB=avo_lane_a pnpm --dir api run db:verify
+--   pnpm --dir=/abs/path/to/api run db:verify        # against `avo`
+--   AVO_VERIFY_DB=avo_lane_a pnpm --dir=/abs/path/to/api run db:verify
+--
+-- The path is ABSOLUTE deliberately: `--dir api` resolves from cwd, which is the same
+-- failure as `--filter` and can point at another worktree's package. LANES.md.
 --
 -- Exits 0 when every invariant holds and NON-ZERO when any of them does not, so
 -- CI can gate on it.
@@ -169,6 +172,21 @@ INSERT INTO artist (id, salon_id, name) VALUES ('AR-VERIFY', 'SL-VERIFY', 'Rana'
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO service (id, salon_id, name, price_fils) VALUES ('SV-VERIFY', 'SL-VERIFY', 'Blow-dry', 8000)
+ON CONFLICT (id) DO NOTHING;
+
+-- The owner console's principal and one campaign, for section 12. Rolled back with
+-- everything else.
+INSERT INTO platform_admin (id, name, handle, password_hash, role, owner,
+                            perm_analytics, perm_activity, perm_salons, perm_accounts,
+                            perm_admins, perm_controls, perm_approvals, perm_policies, perm_audit)
+VALUES ('PLT-VERIFY', 'Yousef', 'yousef.verify', '$argon2id$fake', 'owner', true,
+        true, true, true, true, true, true, true, true, true)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO campaign (id, salon_id, title, body, channel, audience, reward, reach,
+                      send_when, status, submitted_by)
+VALUES ('CMP-VERIFY', 'SL-VERIFY', 'Thursday late night', 'Every visit counts double.',
+        'push', 'all', 'x2visit', 12, 'now', 'pending', 'Rana Al-Sabah')
 ON CONFLICT (id) DO NOTHING;
 
 -- An audit row for section 1 to try to tamper with. Written by the app role, which
@@ -558,6 +576,286 @@ SELECT pg_temp.probe('10', 'an overlapping booking for one artist refused', 'ref
               'TX-HOLD-B','2030-01-01 11:45+00');
     END $i$ $probe$,
   'booking_artist_slot_no_overlap');
+
+-- =========================================================================
+-- 11. a shop order says what it sold, and cannot be re-itemised afterwards
+-- =========================================================================
+-- Migration 0027. A `shop` transaction IS the order and `shop_order_line` holds
+-- what was in it. Two properties matter and neither is checkable anywhere else:
+--
+--   THE MULTIPLICATION. This is the only money path in the schema that
+--   multiplies — `qty × unit_price_fils` — and non-negotiable #1 is a rule about
+--   arithmetic as much as about column types. A handler that computed a line
+--   total with a float, or dropped a quantity, must not commit.
+--
+--   THE LINES ARE EVIDENCE. UPDATE and DELETE are revoked from `avo_app` exactly
+--   as they are on `ledger_entry`, so a settled purchase cannot be quietly
+--   re-itemised by whatever gets compromised next. Note this is a GRANT and not a
+--   trigger, so the owner can still edit — unlike `ledger_entry`. The asymmetry is
+--   deliberate and 0027's header says why: order lines are reconstructible from a
+--   receipt payload and a total, and the ledger is not reconstructible from
+--   anything.
+SELECT pg_temp.probe('11', 'a free product is refused', 'refused',
+  $probe$INSERT INTO product (id, salon_id, name, price_fils)
+    VALUES ('PR-VERIFY-FREE', 'SL-VERIFY', 'Sample sachet', 0)$probe$,
+  'product_price_positive');
+
+-- The sign CHECK on `transaction` claimed a `shop` row cannot be zero "because
+-- service_price_positive refuses a free line" — but a shop line is priced from
+-- `product`, so it named a constraint that did not govern the kind it explained.
+-- Both halves are checked here so the CORRECTED claim is the one under test: zero
+-- is refused by the sign CHECK, and a free product cannot exist to produce one.
+SELECT pg_temp.probe('11', 'a shop transaction cannot be zero', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-SHOP-ZERO','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',0,'settled',now())$probe$,
+  'transaction_amount_sign_matches_kind');
+
+-- A shop row that PAYS the customer. The mirror of the charge case in section 3.
+SELECT pg_temp.probe('11', 'a shop transaction cannot credit the customer', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-SHOP-POS','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',5000,'settled',now())$probe$,
+  'transaction_amount_sign_matches_kind');
+
+SELECT pg_temp.probe('11', 'a line total that is not qty x unit price is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO product (id, salon_id, name, price_fils)
+      VALUES ('PR-VERIFY', 'SL-VERIFY', 'Argan hair oil 100ml', 8500);
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-SHOP-BAD','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-17000,'settled',now());
+      -- 2 x 8500 is 17000. 16999 is what a float looks like after it has lost a fil.
+      INSERT INTO shop_order_line (transaction_id,product_id,name,qty,unit_price_fils,line_total_fils)
+      VALUES ('TX-SHOP-BAD','PR-VERIFY','Argan hair oil 100ml',2,8500,16999);
+    END $i$ $probe$,
+  'shop_order_line_total_matches_qty');
+
+SELECT pg_temp.probe('11', 'a quantity of zero is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO product (id, salon_id, name, price_fils)
+      VALUES ('PR-VERIFY-Q', 'SL-VERIFY', 'Repair mask', 12000);
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-SHOP-Q','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-12000,'settled',now());
+      INSERT INTO shop_order_line (transaction_id,product_id,name,qty,unit_price_fils,line_total_fils)
+      VALUES ('TX-SHOP-Q','PR-VERIFY-Q','Repair mask',0,12000,0);
+    END $i$ $probe$,
+  'shop_order_line_qty_positive');
+
+-- The append-only pair. Written against whatever lines the database holds, so on
+-- an empty table `UPDATE`/`DELETE` still hit the privilege check before the row
+-- count — a permission denial does not need a row to deny.
+SELECT pg_temp.probe('11', 'the app role cannot re-itemise a settled order', 'refused',
+  $probe$UPDATE shop_order_line SET qty = qty + 1$probe$,
+  'permission denied', 'avo_app');
+
+SELECT pg_temp.probe('11', 'the app role cannot remove an order line', 'refused',
+  $probe$DELETE FROM shop_order_line$probe$,
+  'permission denied', 'avo_app');
+
+-- A reconciliation rather than a probe: every `shop` transaction's lines must add
+-- up to what the customer was debited. `line_total_fils = qty × unit_price_fils`
+-- is enforced per row above; this is the sum ACROSS an order, which no CHECK can
+-- express.
+--
+-- It is the shop's counterpart to invariant 5, and invariant 5 is what caught a
+-- real lost update on this very path: with `FOR UPDATE` removed from
+-- `services/order.ts` to find out whether it was load-bearing, five concurrent
+-- orders of 9.000 KD against a 15.250 balance ALL settled, all five reported the
+-- same `balanceAfterFils: 6250`, and `member.balance_fils` ended 36000 fils apart
+-- from the ledger. Every CHECK in this schema was satisfied the whole way through
+-- — including both non-negative balance constraints, because each writer wrote
+-- the same plausible number. Reconciliation was the only thing that could see it.
+SELECT pg_temp.assert('11', 'every shop order''s lines sum to what was debited',
+  NOT EXISTS (
+    SELECT 1
+      FROM transaction t
+      JOIN shop_order_line l ON l.transaction_id = t.id
+     WHERE t.kind = 'shop'
+     GROUP BY t.id, t.amount_fils
+    HAVING sum(l.line_total_fils) <> -t.amount_fils
+  ),
+  (SELECT CASE
+     WHEN count(*) = 0 THEN 'no shop orders in this database yet'
+     ELSE count(*) || ' order(s) reconcile' END
+     FROM transaction WHERE kind = 'shop'));
+
+-- Every line belongs to a `shop` transaction and to nothing else. No foreign key
+-- can say this — `transaction_id` references the table, not the kind — so a
+-- handler that hung order lines off a charge or a top-up would be refused by
+-- nothing at all.
+SELECT pg_temp.assert('11', 'no order line hangs off a non-shop transaction',
+  NOT EXISTS (
+    SELECT 1 FROM shop_order_line l
+      JOIN transaction t ON t.id = l.transaction_id
+     WHERE t.kind <> 'shop'
+  ),
+  (SELECT count(*) || ' line(s) checked' FROM shop_order_line));
+
+-- =========================================================================
+-- 12. the owner console's principal, and #8's storage
+-- =========================================================================
+-- Migrations 0028 and 0029. Four rules that a handler cannot be trusted with,
+-- because each of them is exactly what a handler forgets:
+--
+--   THE PLATFORM PRINCIPAL HAS NO SALON. `requireSameSalon` is the tenancy
+--   boundary for every other principal, and the console reads across salons by
+--   design. `PlatformPrincipal` has no `salonId` FIELD so the check does not
+--   compile — and the row-level version is an EQUIVALENCE, because a MERCHANT
+--   session with a NULL salon would slip past `requireSameSalon` by having nothing
+--   to compare. Both directions are probed.
+--
+--   "OWNER · FULL ACCESS" is a constraint. The console draws the owner's chips
+--   non-toggleable; this is what backs that, so a row written before the rule
+--   cannot express the forbidden combination either — `void implies charges`'s
+--   treatment, applied to the console.
+--
+--   A REJECTION CARRIES A REASON. api-contract.md: "Rejections must carry a note —
+--   the merchant sees it under the campaign." Left to the handler that is a
+--   promise; here a future second decision path cannot forget it.
+--
+--   A HOLD IS NOT A STATUS. `CampaignSchema` declares four and a fifth on the wire
+--   is a value every client's `.parse()` rejects, so a hold is `approved` +
+--   `held_reason` — and only `approved`, since a hold on a pending, rejected or
+--   sent campaign is a state nobody can act on.
+SELECT pg_temp.probe('12', 'a platform session cannot carry a salon', 'refused',
+  $probe$INSERT INTO session (principal_kind, platform_admin_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('platform_admin', 'PLT-VERIFY', 'SL-VERIFY', 'platform',
+            'verify-hash-salonful', now() + interval '1 day')$probe$,
+  'session_salon_matches_principal');
+
+-- THE OTHER DIRECTION, and it is the one a nullable column would have let through.
+SELECT pg_temp.probe('12', 'a merchant session cannot omit its salon', 'refused',
+  $probe$INSERT INTO session (principal_kind, staff_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('staff', 'ST-VERIFY', NULL, 'dashboard',
+            'verify-hash-salonless', now() + interval '1 day')$probe$,
+  'session_salon_matches_principal');
+
+SELECT pg_temp.probe('12', 'a platform admin cannot hold a dashboard session', 'refused',
+  $probe$INSERT INTO session (principal_kind, platform_admin_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('platform_admin', 'PLT-VERIFY', NULL, 'dashboard',
+            'verify-hash-wrongscope', now() + interval '1 day')$probe$,
+  'session_scope_matches_principal');
+
+SELECT pg_temp.probe('12', 'a session cannot name two principals', 'refused',
+  $probe$INSERT INTO session (principal_kind, platform_admin_id, staff_id, salon_id, scope,
+                          refresh_token_hash, expires_at)
+    VALUES ('platform_admin', 'PLT-VERIFY', 'ST-VERIFY', NULL, 'platform',
+            'verify-hash-twoprincipals', now() + interval '1 day')$probe$,
+  'session_exactly_one_principal');
+
+SELECT pg_temp.probe('12', 'the owner cannot have a section switched off', 'refused',
+  $probe$UPDATE platform_admin SET perm_approvals = false WHERE id = 'PLT-VERIFY'$probe$,
+  'platform_admin_owner_holds_everything');
+
+SELECT pg_temp.probe('12', 'the owner flag and the owner role are one fact', 'refused',
+  $probe$UPDATE platform_admin SET role = 'admin' WHERE id = 'PLT-VERIFY'$probe$,
+  'platform_admin_owner_flag_matches_role');
+
+SELECT pg_temp.probe('12', 'a rejection with no note is refused', 'refused',
+  $probe$UPDATE campaign SET status = 'rejected', decided_by = 'Yousef', decided_at = now()
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_rejection_has_note');
+
+SELECT pg_temp.probe('12', 'a pending campaign cannot name a decider', 'refused',
+  $probe$UPDATE campaign SET decided_by = 'Yousef', decided_at = now()
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_decision_is_attributed');
+
+SELECT pg_temp.probe('12', 'a decided campaign cannot omit its decider', 'refused',
+  $probe$UPDATE campaign SET status = 'approved' WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_decision_is_attributed');
+
+SELECT pg_temp.probe('12', 'only an approved campaign can be held', 'refused',
+  $probe$UPDATE campaign SET held_reason = 'Quiet hours', held_at = now()
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_hold_requires_approved');
+
+SELECT pg_temp.probe('12', 'a hold needs a reason AND a moment', 'refused',
+  $probe$UPDATE campaign SET status = 'approved', decided_by = 'Yousef', decided_at = now(),
+                         held_reason = 'Quiet hours'
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_hold_is_complete');
+
+SELECT pg_temp.probe('12', 'only a sent campaign carries a result', 'refused',
+  $probe$UPDATE campaign SET status = 'approved', decided_by = 'Yousef', decided_at = now(),
+                         result = '612 reached'
+     WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_result_requires_sent');
+
+SELECT pg_temp.probe('12', 'a now campaign cannot carry a scheduled time', 'refused',
+  $probe$UPDATE campaign SET scheduled_at = now() + interval '1 day' WHERE id = 'CMP-VERIFY'$probe$,
+  'campaign_scheduled_at_matches_when');
+
+-- The cap's own rows. A limit whose rows the application can delete is not a limit
+-- — 0026's reasoning about `signup_attempt`, and these rows are also the evidence
+-- that a customer was contacted.
+SELECT pg_temp.probe('12', 'the app role cannot delete a campaign send', 'refused',
+  $probe$DELETE FROM campaign_send$probe$, 'permission denied', 'avo_app');
+
+SELECT pg_temp.probe('12', 'the app role cannot backdate a campaign send', 'refused',
+  $probe$UPDATE campaign_send SET sent_at = now() - interval '30 days'$probe$,
+  'permission denied', 'avo_app');
+
+SELECT pg_temp.probe('12', 'the messaging policy is a singleton', 'refused',
+  $probe$INSERT INTO platform_messaging_policy (id) VALUES ('other')$probe$,
+  'platform_messaging_policy_is_singleton');
+
+SELECT pg_temp.probe('12', 'a weekly cap outside 1..7 is refused', 'refused',
+  $probe$UPDATE platform_messaging_policy SET weekly_cap_per_customer = 8$probe$,
+  'weekly_cap_in_range');
+
+SELECT pg_temp.probe('12', 'quiet hours must be HH:mm', 'refused',
+  $probe$UPDATE platform_messaging_policy SET quiet_from = '25:00'$probe$,
+  'quiet_hours_are_hhmm');
+
+/**
+ * CONSENT ORDER IS UNAMBIGUOUS — migration 0029, and this is the invariant behind
+ * a measured defect rather than a shape.
+ *
+ * `services/consent.ts` derives marketing consent as the newest event, and
+ * `created_at` defaults to `now()` — the TRANSACTION timestamp — so two events
+ * written in one transaction tie. With a grant and a withdrawal tied,
+ * `ORDER BY created_at DESC LIMIT 1` returned the GRANT on eight consecutive runs:
+ * a customer who withdrew read as consenting, in the permissive direction, from the
+ * function the campaign send path is documented as having to call.
+ *
+ * `seq` is the tiebreak. The invariant is that it can BE one: NOT NULL and unique
+ * per member, so "newest" is total rather than partial.
+ */
+SELECT pg_temp.assert('12', 'every consent event has a unique monotonic seq',
+  NOT EXISTS (
+    SELECT 1 FROM member_consent_event
+     WHERE seq IS NULL
+  ) AND NOT EXISTS (
+    SELECT member_id, seq FROM member_consent_event
+     GROUP BY member_id, seq HAVING count(*) > 1
+  ),
+  (SELECT count(*) || ' consent event(s) checked' FROM member_consent_event));
+
+/**
+ * A HELD CAMPAIGN HAS AN OPEN NOTIFICATION. #8's "held and reported, never
+ * silently dropped", as a reconciliation rather than as a promise in a service
+ * function: the merchant learns of a hold from the bell and from nowhere else,
+ * because `CampaignSchema` declares no field for one. A held campaign with no open
+ * `campaign_held` row IS the silent drop the rule forbids, and no constraint can
+ * express it — the two tables are joined only by `subject_id`, which is free text.
+ */
+SELECT pg_temp.assert('12', 'every held campaign has an open notification',
+  NOT EXISTS (
+    SELECT 1 FROM campaign c
+     WHERE c.held_reason IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM merchant_notification n
+          WHERE n.salon_id = c.salon_id
+            AND n.kind = 'campaign_held'
+            AND n.subject_type = 'campaign'
+            AND n.subject_id = c.id
+            AND n.resolved_at IS NULL
+       )
+  ),
+  (SELECT count(*) || ' held campaign(s) checked'
+     FROM campaign WHERE held_reason IS NOT NULL));
 
 -- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST

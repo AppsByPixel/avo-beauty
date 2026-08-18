@@ -14,6 +14,7 @@
 
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   boolean,
   check,
   index,
@@ -160,6 +161,26 @@ export const memberConsentEvent = pgTable(
   'member_consent_event',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /**
+     * MONOTONIC WRITE ORDER, and the reason it exists is a measured defect.
+     *
+     * `services/consent.ts` derives the standing answer as `ORDER BY created_at
+     * DESC LIMIT 1`, and `created_at` defaults to `now()` — the TRANSACTION
+     * timestamp, identical for every row written in one transaction.
+     * `recordConsent` takes an executor precisely so a caller can record consent
+     * inside the transaction that created the account, so a tie is reachable.
+     *
+     * With a grant and a withdrawal tied, the GRANT won: eight consecutive runs
+     * returned `granted = true` for a member whose newest event said false. Silent,
+     * in the permissive direction, in the table whose whole purpose is to be the
+     * record a regulator is shown.
+     *
+     * `id` could not settle it — a random uuid settles a tie by coin flip and does
+     * it reproducibly, which looks fixed and is not. `ledger_entry.seq` is the
+     * precedent and its comment is the reason in full: "the audit read order,
+     * independent of clock skew". Migration 0029.
+     */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
     memberId: text('member_id')
       .notNull()
       .references(() => member.id, { onDelete: 'cascade' }),

@@ -25,17 +25,28 @@ import { sql } from 'drizzle-orm';
 import { boolean, check, index, pgEnum, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 import { member } from './member';
+import { platformAdmin } from './platformAdmin';
 import { salon } from './salon';
 import { staffUser } from './staff';
 
-export const principalKind = pgEnum('principal_kind', ['member', 'staff']);
+/**
+ * `platform_admin` is the owner console, added in migration 0028. It is the one
+ * principal with NO salon — see `salonId` below.
+ */
+export const principalKind = pgEnum('principal_kind', ['member', 'staff', 'platform_admin']);
 
 /**
  * `scanner` is the PIN surface: scan and charge, nothing else.
  * `dashboard` is the merchant web surface, reached only by username + password.
  * `wallet` is the customer app.
+ * `platform` is the owner console — above every salon, and scoped to none.
  */
-export const sessionScope = pgEnum('session_scope', ['wallet', 'scanner', 'dashboard']);
+export const sessionScope = pgEnum('session_scope', [
+  'wallet',
+  'scanner',
+  'dashboard',
+  'platform',
+]);
 
 export const session = pgTable(
   'session',
@@ -46,10 +57,20 @@ export const session = pgTable(
     /** Exactly one of these is set — see the CHECK below. */
     memberId: text('member_id').references(() => member.id, { onDelete: 'cascade' }),
     staffId: text('staff_id').references(() => staffUser.id, { onDelete: 'cascade' }),
-    /** Denormalised so a session can be scoped to a salon without a join. */
-    salonId: text('salon_id')
-      .notNull()
-      .references(() => salon.id, { onDelete: 'restrict' }),
+    platformAdminId: text('platform_admin_id').references(() => platformAdmin.id, {
+      onDelete: 'cascade',
+    }),
+    /**
+     * Denormalised so a session can be scoped to a salon without a join.
+     *
+     * NULLABLE SINCE 0028, AND ONLY FOR THE PLATFORM PRINCIPAL. Every other
+     * principal is salon-scoped and `requireSameSalon` is the tenancy boundary; a
+     * platform admin reads across salons by design, and one carrying a salon id
+     * would be a merchant with extra authority. `session_salon_matches_principal`
+     * is an EQUIVALENCE, so a NULL salon on a merchant session — which would slip
+     * past `requireSameSalon` by having nothing to compare — is refused too.
+     */
+    salonId: text('salon_id').references(() => salon.id, { onDelete: 'restrict' }),
 
     scope: sessionScope('scope').notNull(),
 
@@ -75,14 +96,19 @@ export const session = pgTable(
     uniqueIndex('session_refresh_hash_uq').on(t.refreshTokenHash),
     index('session_member_idx').on(t.memberId).where(sql`revoked_at IS NULL`),
     index('session_staff_idx').on(t.staffId).where(sql`revoked_at IS NULL`),
+    index('session_platform_admin_idx').on(t.platformAdminId).where(sql`revoked_at IS NULL`),
     index('session_expires_idx').on(t.expiresAt),
 
     // A session belongs to exactly one principal. Both set, or neither, is a
     // session that two different people could be holding.
     check(
       'session_exactly_one_principal',
-      sql`(${t.principalKind} = 'member' AND ${t.memberId} IS NOT NULL AND ${t.staffId} IS NULL)
-          OR (${t.principalKind} = 'staff' AND ${t.staffId} IS NOT NULL AND ${t.memberId} IS NULL)`,
+      sql`(${t.principalKind}::text = 'member' AND ${t.memberId} IS NOT NULL
+             AND ${t.staffId} IS NULL AND ${t.platformAdminId} IS NULL)
+          OR (${t.principalKind}::text = 'staff' AND ${t.staffId} IS NOT NULL
+             AND ${t.memberId} IS NULL AND ${t.platformAdminId} IS NULL)
+          OR (${t.principalKind}::text = 'platform_admin' AND ${t.platformAdminId} IS NOT NULL
+             AND ${t.memberId} IS NULL AND ${t.staffId} IS NULL)`,
     ),
     // A PIN session is device-scoped by definition. A scanner session without a
     // device id is a bearer credential anyone can replay from anywhere.
@@ -90,11 +116,29 @@ export const session = pgTable(
       'session_scanner_is_device_scoped',
       sql`${t.scope} <> 'scanner' OR ${t.deviceId} IS NOT NULL`,
     ),
-    // Members hold wallet sessions; staff hold scanner or dashboard sessions.
+    /**
+     * Members hold wallet sessions; staff hold scanner or dashboard; a platform
+     * admin holds `platform` and nothing else. A platform admin with a
+     * `dashboard` session would reach every merchant route through
+     * `requireDashboardPerm`, which reads `staff_user` — a table she has no row in.
+     *
+     * `::text` ON BOTH SIDES, and it is not cosmetic: migration 0028 adds the two
+     * enum values and rewrites these constraints in one transaction, and Postgres
+     * refuses to USE a new enum value in the transaction that added it. The cast
+     * is the same constraint in a form that transaction may evaluate, and the
+     * drizzle schema has to match the SQL or `drizzle-kit generate` will propose
+     * undoing it.
+     */
     check(
       'session_scope_matches_principal',
-      sql`(${t.principalKind} = 'member' AND ${t.scope} = 'wallet')
-          OR (${t.principalKind} = 'staff' AND ${t.scope} IN ('scanner', 'dashboard'))`,
+      sql`(${t.principalKind}::text = 'member' AND ${t.scope}::text = 'wallet')
+          OR (${t.principalKind}::text = 'staff' AND ${t.scope}::text IN ('scanner', 'dashboard'))
+          OR (${t.principalKind}::text = 'platform_admin' AND ${t.scope}::text = 'platform')`,
+    ),
+    /** The tenancy half of the platform principal. See `salonId` above. */
+    check(
+      'session_salon_matches_principal',
+      sql`(${t.principalKind}::text = 'platform_admin') = (${t.salonId} IS NULL)`,
     ),
     check('session_revoked_has_reason', sql`${t.revokedAt} IS NULL OR ${t.revokedReason} IS NOT NULL`),
     check('session_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),

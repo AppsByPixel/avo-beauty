@@ -23,7 +23,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { merchantNotification } from '../db/schema/notification';
 import type { Executor } from './audit';
 
-export type NotificationKind = 'calendar_disconnected' | 'booking_no_show';
+export type NotificationKind = 'calendar_disconnected' | 'booking_no_show' | 'campaign_held';
 
 export interface RaiseNotificationInput {
   salonId: string;

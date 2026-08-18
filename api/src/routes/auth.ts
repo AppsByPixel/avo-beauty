@@ -44,6 +44,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
+import { platformAdmin } from '../db/schema/platformAdmin';
 import { salon } from '../db/schema/salon';
 import { pinAttempt, session } from '../db/schema/session';
 import { staffPasswordReset, staffUser } from '../db/schema/staff';
@@ -73,6 +74,7 @@ import { tierForVisits } from '../services/loyalty';
 import { recordPolicyAcceptance, requireCurrentPolicyVersion } from '../services/policy';
 import { enforceSignupLimits, recordSignupAttempt } from '../services/signupLimit';
 import { serialiseStaff } from './staff';
+import { serialisePlatformAdmin } from './platformAdmins';
 
 /** One body for every credential failure. Never says which half was wrong. */
 const BAD_CREDENTIALS = () => unauthorized('Those details do not match. Try again.', 'invalid_credentials');
@@ -235,6 +237,48 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     /**
+     * RECORDED BEFORE THE DUPLICATE CHECK, AND THAT MOVE IS THE FIX.
+     *
+     * It used to sit BELOW the check, with a comment explaining that "the row
+     * marks an attempt that really is about to cost an argon2 hash — the thing
+     * being rationed". That reasoning is sound about CPU and it made the
+     * limiter's OTHER documented claim false, in the dangerous direction.
+     *
+     * `services/signupLimit.ts` said an attacker "still walks roughly 100 numbers
+     * an hour per address". Lane D measured it: forty consecutive probes against
+     * REGISTERED numbers from one address all answered `409 already_registered`
+     * and left `signup_attempt` EMPTY — because every one of them was refused two
+     * lines above the recorder. The enumeration oracle was not bounded at 100 an
+     * hour. It was not bounded at all, and the docstring said otherwise.
+     *
+     * So the attempt is counted before the probe is answered. A refusal is an
+     * attempt: it consumed the endpoint and it learned something.
+     *
+     * WHAT THIS COSTS, said out loud. One counter now bounds two different things,
+     * so twenty probes from an address exhaust that address's signup budget for
+     * five minutes — intended for an attacker, and a real cost on a shared address
+     * such as a salon's wifi where staff help customers sign up. That is the
+     * accepted tradeoff of an IP-keyed limiter and it is exactly why `TRUST_PROXY`
+     * must name the real proxy: behind an untrusted one every caller already shares
+     * a single bucket, which is strictly worse than this.
+     *
+     * The CPU claim is UNCHANGED. argon2 still runs only on the path past the
+     * duplicate check, so a probe costs a count and a SELECT and no hash.
+     *
+     * Still outside the transaction below, because a row written inside it would be
+     * rolled back by every FAILED signup — which is the traffic being bounded. And
+     * still before the hash, so a burst cannot all pass the count and all pay for a
+     * hash before any of them is visible to the next.
+     *
+     * WHAT IS STILL ESCALATED, AND THIS DOES NOT CLOSE IT: the oracle itself.
+     * `already_registered` still confirms that a number holds a wallet here. It is
+     * now RATIONED rather than free, which is what the docstring always claimed;
+     * closing it needs a verification step at signup, which is migration 0026's
+     * deliberate escalation and a product decision.
+     */
+    await recordSignupAttempt(db, { salonId, ipAddress });
+
+    /**
      * The friendly half of the duplicate check. The database is still the
      * authority — see the catch below — because two taps race past any SELECT.
      */
@@ -244,19 +288,6 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(member.salonId, salonId), eq(member.phone, phone)))
       .limit(1);
     if (existing[0]) throw ALREADY_REGISTERED();
-
-    /**
-     * RECORDED IMMEDIATELY BEFORE THE HASH, and outside any transaction.
-     *
-     * Here rather than at the top so the row marks an attempt that really is
-     * about to cost an argon2 hash — the thing being rationed — rather than one
-     * refused by validation a few lines up. BEFORE the hash rather than after it,
-     * so a burst of simultaneous requests cannot all pass the count and all pay
-     * for a hash before any of them is visible to the next. And outside the
-     * transaction below, because a row written inside it would be rolled back by
-     * every FAILED signup, which is exactly the traffic being bounded.
-     */
-    await recordSignupAttempt(db, { salonId, ipAddress });
 
     const passwordHash = await hashSecret(password);
 
@@ -468,7 +499,23 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       ...clientMeta(req),
     });
 
-    await writeAudit(db, null, {
+    /**
+     * THE ACTOR IS HER, AND IT WAS `null`.
+     *
+     * `writeAudit(db, null, …)` resolves through `actorOf(null)` to
+     * `System / Automatic`, so the audit log's Who column — and every actor
+     * filter over it — could not answer "who signed in", on a row written one
+     * statement after her password was verified. Her name survived only inside
+     * the free-text `detail`, which is not filterable and not the column the
+     * dashboard renders. Non-negotiable #7's trail was weaker than it looked.
+     * Found by lane C, routed through trunk.
+     *
+     * There is no session-backed principal to pass here — the session was minted
+     * three lines up and the request itself is anonymous — so this is the actor
+     * SNAPSHOT case: identity established by a verified credential rather than by
+     * a bearer token. See services/audit.ts § AuditActorSnapshot.
+     */
+    await writeAudit(db, { kind: 'staff', id: staff.id, name: staff.name, role: staff.role }, {
       salonId: staff.salonId,
       kind: 'access',
       action: 'Web sign-in',
@@ -488,6 +535,94 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ------------------------------------------------------------------ refresh --
+  // ------------------------------------------------------- platform sign-in --
+  /**
+   * `POST /auth/platform/session` — the owner console's front door, and the
+   * endpoint whose absence blocked all of phase 7.
+   *
+   * NO WORKSPACE FIELD, unlike `POST /auth/web/session`. That one takes a
+   * `salonId` because `staff_user_salon_handle_uq` is on `(salon_id, handle)`, so
+   * "noura" is not a unique person — a visible departure from the drawn design and
+   * DECISIONS.md queue item 7. There is exactly one platform, so
+   * `platform_admin_handle_uq` is global and there is exactly one "yousef". The
+   * console's sign-in screen therefore matches `AVO Login.dc.html` 5b as drawn.
+   *
+   * THE SESSION CARRIES NO SALON, and the database says so as an equivalence
+   * (`session_salon_matches_principal`). This is the one credential that reads
+   * across salons by design; one carrying a salon id would be a merchant with
+   * extra authority.
+   *
+   * ENUMERATION, same as everywhere else in this file: every failure path answers
+   * the same body and burns the same argon2 time, whether the handle exists or
+   * not. The console's admin list is short and its members are named people, so a
+   * distinguishable "no such user" is a list of AVO's staff.
+   *
+   * A DEACTIVATED ADMIN CANNOT SIGN IN, and it is checked with the same silence.
+   * `loadPlatformPrincipal` also refuses her on every subsequent request, so
+   * deactivating somebody who is already signed in takes effect on her next call
+   * rather than at her next token refresh — the reason permissions are read per
+   * request and not put in the token.
+   */
+  app.post('/auth/platform/session', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    // `@yousef` and `yousef` are the same person. The column is lowercase without
+    // the '@' by CHECK, so the boundary strips what the console renders.
+    const handle = requireString(body.username, 'username', 100)
+      .toLowerCase()
+      .replace(/^@/, '');
+    const password = typeof body.password === 'string' ? body.password : '';
+
+    const rows = await db
+      .select()
+      .from(platformAdmin)
+      .where(eq(platformAdmin.handle, handle))
+      .limit(1);
+    const admin = rows[0];
+
+    if (!admin || !admin.passwordHash || !admin.active) {
+      await burnVerifyTime(password);
+      throw BAD_CREDENTIALS();
+    }
+    if (!(await verifySecret(admin.passwordHash, password))) throw BAD_CREDENTIALS();
+
+    const issued = await issueSession(db, {
+      principalKind: 'platform_admin',
+      platformAdminId: admin.id,
+      // NULL, and required to be. See the header.
+      salonId: null,
+      scope: 'platform',
+      ...clientMeta(req),
+    });
+
+    /**
+     * `salonId: null` on the audit row, which `audit_log` allows — its own header
+     * calls a null salon "platform-wide". This is the first write path that
+     * produces `actor_kind = 'platform_admin'`; the enum has carried the value
+     * since migration 0001 and nothing could emit it.
+     */
+    await writeAudit(
+      db,
+      { kind: 'platform_admin', id: admin.id, name: admin.name, role: admin.role },
+      {
+        salonId: null,
+        kind: 'access',
+        action: 'Console sign-in',
+        detail: `${admin.name} signed in to the owner console`,
+        source: 'owner_console',
+        subjectType: 'platform_admin',
+        subjectId: admin.id,
+        ...clientMeta(req),
+      },
+    );
+
+    return reply.send({
+      accessToken: issued.accessToken,
+      refreshToken: issued.refreshToken,
+      expiresAt: issued.expiresAt.toISOString(),
+      admin: serialisePlatformAdmin(admin),
+    });
+  });
+
   app.post('/auth/refresh', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const raw = requireString(body.refreshToken, 'refreshToken', 500);
@@ -613,7 +748,13 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     // except there is no calling device here worth keeping.
     await revokeAllSessions(db, { kind: 'staff', id: staff.id }, 'password_reset');
 
-    await writeAudit(db, null, {
+    /**
+     * Her too, and for the same reason. The caller holds a single-use reset token
+     * bound to this account, which identifies her as surely as a password does —
+     * it is what `revokeAllSessions` two lines up is acting on. `System` would
+     * claim AVO changed her password.
+     */
+    await writeAudit(db, { kind: 'staff', id: staff.id, name: staff.name, role: staff.role }, {
       salonId: staff.salonId,
       kind: 'access',
       action: reactivating ? 'Account re-activated from reset link' : 'Password set from reset link',
@@ -801,6 +942,17 @@ export async function staffPinSession(req: FastifyRequest): Promise<{
     await recordAttempt(staff.id, false);
 
     if (locked) {
+      /**
+       * `null` HERE IS CORRECT AND IS NOT THE SAME DEFECT as the two above.
+       *
+       * Five failed PINs establish that somebody tried, not who. Attributing the
+       * lockout to the account holder would put "Hessa M. locked her own PIN" in
+       * a `risk` row whose likeliest reader is somebody asking whether it was her
+       * at all. She is the SUBJECT — `subjectType: 'staff_user'` — and the system
+       * is the actor. Left as it is, deliberately, and said so here because the
+       * two fixes above make this line look like a third instance of the same
+       * omission.
+       */
       await writeAudit(db, null, {
         salonId,
         kind: 'risk',

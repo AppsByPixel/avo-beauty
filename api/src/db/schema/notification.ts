@@ -39,6 +39,18 @@ export const notificationKind = pgEnum('merchant_notification_kind', [
   'calendar_disconnected',
   /** A deposit was returned automatically because nobody arrived. */
   'booking_no_show',
+  /**
+   * AVO released a campaign and the platform did not send it — quiet hours, the
+   * per-salon monthly cap, or an audience that is entirely over the per-customer
+   * weekly cap. Non-negotiable #8: "held and reported, never silently dropped",
+   * and THIS is the reporting. `CampaignSchema` has no field for a hold, so the
+   * bell is the only place a merchant can learn of one until trunk widens it.
+   *
+   * Resolved when the campaign eventually sends, which also frees the partial
+   * unique index for a later hold — a scheduler retrying every ten minutes
+   * produces one row, not a hundred and forty.
+   */
+  'campaign_held',
 ]);
 
 export const notificationSeverity = pgEnum('merchant_notification_severity', [
