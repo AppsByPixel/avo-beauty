@@ -36,7 +36,7 @@ export const tokens = {
     "dangerDot": "#B0736F",
     "dangerText": "#8f5a56",
     "dangerBg": "#F6EAE8",
-    "warnText": "#8a6d3b",
+    "warnText": "#7A6034",
     "warnBg": "#F3E9CF",
     "toggleOff": "#D9D6CF",
     "disabledBg": "#E7E4DD",
@@ -56,11 +56,11 @@ export const tokens = {
     },
     "noorRose": {
       "brand": "#B08D8D",
-      "deep": "#8A6565",
+      "deep": "#825F5F",
       "tint": "#F5EDED",
       "cardFrom": "#BC9898",
       "cardTo": "#9C7A7A",
-      "whiteOnDeep": "5.1:1",
+      "whiteOnDeep": "5.6:1",
       "whiteOnBrand": "2.98:1"
     },
     "lilaLilac": {
@@ -77,7 +77,7 @@ export const tokens = {
     "bronze": {
       "dot": "#B08D57",
       "pillBg": "#F0EEE9",
-      "pillText": "#B08D57"
+      "pillText": "#80653C"
     },
     "silver": {
       "dot": "#B7BEC4",
@@ -87,7 +87,7 @@ export const tokens = {
     "gold": {
       "dot": "#C9A24B",
       "pillBg": "#F3E9CF",
-      "pillText": "#8a6d3b"
+      "pillText": "#7A6034"
     },
     "black": {
       "dot": "#3A3A3A",
@@ -103,7 +103,7 @@ export const tokens = {
   "plan": {
     "pro": {
       "bg": "#EAE2D6",
-      "text": "#8a6d3b"
+      "text": "#7A6034"
     },
     "growth": {
       "bg": "#EEF1EC",
@@ -111,7 +111,7 @@ export const tokens = {
     },
     "starter": {
       "bg": "#F0EEE9",
-      "text": "rgba(28,27,25,0.6)"
+      "text": "rgba(28,27,25,0.7)"
     }
   },
   "font": {
@@ -232,7 +232,7 @@ export const tokens = {
     "rulesBg": "#ECEEF0",
     "rulesText": "#5f6b73",
     "accessBg": "#EAE2D6",
-    "accessText": "#8a6d3b"
+    "accessText": "#7A6034"
   }
 } as const;
 

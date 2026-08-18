@@ -36,6 +36,12 @@ const KIND_LABEL: Record<AuditKind, string> = {
  * subscription-plan token, neither of which means "an audit row about a rule
  * change". They are reported to trunk rather than borrowed; the nearest
  * semantically honest tone is used until a token exists. See @avo/ui Pill.
+ *
+ * The design's #8a6d3b above is the value as DRAWN, and it is no longer the
+ * token: it measured 4.01:1 on #F3E9CF and 3.77:1 on #EAE2D6, failing AA at
+ * pill sizes, and `color.warnText` / `plan.pro.text` / `tier.gold.pillText` are
+ * now #7A6034. The design reference is left as the design drew it; what renders
+ * comes from the token.
  */
 const KIND_TONE: Record<AuditKind, PillTone> = {
   money: 'brand',
