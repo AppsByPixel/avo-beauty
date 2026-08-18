@@ -12,6 +12,33 @@
  * have returned is decoration.
  */
 
+/**
+ * READ THIS FIRST: THIS FILE RUNS AGAINST `packages/mock`, NOT AGAINST THE API.
+ *
+ * `support/global-setup.ts` points `E2E_BASE_URL` at `packages/mock`, which holds its
+ * state in `Map`s and has no database. So the money GUARANTEES are not proved here —
+ * they are proved against Postgres elsewhere, and several of the specs below exist to
+ * document where the mock DIVERGES from the API, which is a different and smaller job:
+ *
+ *   non-negotiable #4, replay and the Idempotency-Key
+ *       → scanner.test.ts "a replay with the same key debits once and returns the
+ *         first result verbatim", and tenancy.test.ts "the same key with a DIFFERENT
+ *         body is a 422, not a replay of the first result"
+ *   non-negotiable #4 under a real RACE, two requests at once under one key
+ *       → scanner.test.ts "racing — two charges under ONE idempotency key"
+ *   non-negotiable #3, the shortfall and nothing else happening
+ *       → deposit.test.ts "a shortfall on the remainder leaves the hold, the booking
+ *         and the visit count exactly as they were"
+ *   the tier bonus and the commission on a real top-up
+ *       → gateway.test.ts, which settles through the real gateway path
+ *
+ * The specs here that assert the mock answering 500 on a fractional amount, or
+ * accepting a negative one, or charging an unknown service as 0 fils, are NOT
+ * assertions about the product. They are a written record of what the mock lies about,
+ * for the lanes building against it — which is how the wallet's auth gap stayed hidden
+ * for a week, and worth keeping for exactly that reason.
+ */
+
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   ensureBalanceAtLeast,

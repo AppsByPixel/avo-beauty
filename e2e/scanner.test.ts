@@ -1945,6 +1945,170 @@ describe('GET /charges marks a voided charge, so the scanner stops offering to v
 });
 
 // ------------------------------------------------------------------ 3 --
+// ===========================================================================
+// CONCURRENCY ON THE CHARGE PATH — ported from the mock, where it proved nothing
+// ===========================================================================
+
+describe('two charges at once — the races the mock could not run', () => {
+  /**
+   * PORTED FROM concurrency.test.ts, WHERE IT COULD NOT MEAN ANYTHING.
+   *
+   * That file runs against `packages/mock` — an in-memory `Map` in a single Node
+   * process — and its own comment says so in terms: "the mock wins this by
+   * accident. Its check-and-delete on the token map is synchronous inside one
+   * handler in one process, so the two requests cannot interleave... Passing here
+   * is not evidence that the real one is safe."
+   *
+   * It was right, and it stayed on the mock. So the guarantee that a wallet token
+   * is single-use UNDER A REAL RACE — two connections, two transactions, one row —
+   * has never actually been tested. This is that test.
+   */
+  it('racing — two charges on ONE wallet token, concurrently: exactly one settles', async () => {
+    const token = await freshWalletToken();
+    const before = balanceOf(B_MEMBER);
+    const visitsBefore = visitsOf(B_MEMBER);
+
+    // DIFFERENT idempotency keys, so the key is not what resolves this. The only
+    // thing standing between two simultaneous debits is the token's own
+    // single-use consumption inside the charge transaction.
+    const [a, b] = await Promise.all([
+      treq<any>('POST', '/charges', {
+        token: scanner,
+        idempotencyKey: key('token-race-a'),
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+      }),
+      treq<any>('POST', '/charges', {
+        token: scanner,
+        idempotencyKey: key('token-race-b'),
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+      }),
+    ]);
+
+    expect(
+      [a.status, b.status].sort(),
+      `the racing charges answered: ${a.raw} / ${b.raw}`,
+    ).toEqual([200, 410]);
+
+    const loser = [a, b].find((r) => r.status === 410)!;
+    expect(loser.body.error).toBe('token_consumed_or_unknown');
+
+    /**
+     * ONE DEBIT. This is the assertion the mock could not make honestly: a
+     * check-then-act on a Map cannot interleave, but two Postgres transactions
+     * can, and only a conditional consumption inside the debit's own transaction
+     * makes this hold.
+     */
+    expect(
+      balanceOf(B_MEMBER),
+      'both racing charges debited her, so one QR paid for two visits',
+    ).toBe(before - B_SERVICE_PRICE_FILS);
+    // And the whole rest of the charge went with it, exactly once.
+    expect(visitsOf(B_MEMBER), 'the losing charge still counted a visit').toBe(visitsBefore + 1);
+    expect(
+      Number(
+        scalar(
+          `select count(*) from transaction where member_id='${B_MEMBER}' and kind='charge'
+             and reference in ('${a.body?.transaction?.reference ?? ''}',
+                               '${b.body?.transaction?.reference ?? ''}')`,
+        ),
+      ),
+      'two charge rows exist for one token',
+    ).toBe(1);
+  }, 60_000);
+
+  /**
+   * THE OTHER HALF, ALSO PORTED, AND ALSO PREVIOUSLY UNTESTABLE.
+   *
+   * `scanner.test.ts` already proves a SEQUENTIAL replay under one key returns the
+   * first result verbatim. That is the easy half: the second request arrives after
+   * the first has committed, so it reads a finished key row. The hard half is two
+   * requests under one key IN FLIGHT AT ONCE, where neither can see the other's
+   * uncommitted row — which is what non-negotiable #4 has to survive, because a
+   * double-tap on a salon tablet is exactly two requests at once.
+   *
+   * The mock's version of this could not fail: one process, one Map, no overlap.
+   */
+  it('racing — two charges under ONE idempotency key: one settles, one debit', async () => {
+    const token = await freshWalletToken();
+    const idem = key('key-race');
+    const before = balanceOf(B_MEMBER);
+
+    const [a, b] = await Promise.all([
+      treq<any>('POST', '/charges', {
+        token: scanner,
+        idempotencyKey: idem,
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+      }),
+      treq<any>('POST', '/charges', {
+        token: scanner,
+        idempotencyKey: idem,
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+      }),
+    ]);
+
+    /**
+     * The loser may legitimately be a 200 replay OR a 409 `request_in_progress`,
+     * and both are correct: the key row is claimed inside the transaction, so a
+     * simultaneous second attempt either waits and replays or is told the first is
+     * still running. What is NOT acceptable is two debits, so the assertion is on
+     * the MONEY and on the statuses being drawn from that set — not on which one
+     * happened to win.
+     */
+    for (const r of [a, b]) {
+      expect(
+        [200, 409].includes(r.status),
+        `a racing same-key charge answered ${r.status}, which is neither a replay nor a ` +
+          `refusal: ${r.raw}`,
+      ).toBe(true);
+    }
+    expect([a, b].filter((r) => r.status === 200).length).toBeGreaterThanOrEqual(1);
+
+    expect(
+      balanceOf(B_MEMBER),
+      'two charges under ONE idempotency key both debited her. A double-tap on the tablet is two ' +
+        'requests at once, and this is the guarantee non-negotiable #4 exists to make.',
+    ).toBe(before - B_SERVICE_PRICE_FILS);
+  }, 60_000);
+
+  /**
+   * FIVE, NOT TWO — and this is the case `STATUS.md` claims is proven.
+   *
+   * "five concurrent charges on one token" is listed under What works. It was
+   * tested two-at-a-time, against the mock. Two is enough to find a check-then-act
+   * hole; five is what finds the one that only opens when a third connection
+   * arrives while two are already waiting on the same row lock.
+   */
+  it('and five at once on one token still settle exactly one', async () => {
+    const token = await freshWalletToken();
+    const before = balanceOf(B_MEMBER);
+
+    const results = await Promise.all(
+      [1, 2, 3, 4, 5].map((i) =>
+        treq<any>('POST', '/charges', {
+          token: scanner,
+          idempotencyKey: key(`five-race-${i}`),
+          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+        }),
+      ),
+    );
+
+    const settled = results.filter((r) => r.status === 200);
+    const refused = results.filter((r) => r.status === 410);
+    expect(
+      settled.length,
+      `five concurrent charges settled ${settled.length} of them: ` +
+        results.map((r) => r.status).join(', '),
+    ).toBe(1);
+    expect(refused.length, 'a loser answered something other than 410 Gone').toBe(4);
+    for (const r of refused) expect(r.body.error).toBe('token_consumed_or_unknown');
+
+    expect(
+      balanceOf(B_MEMBER),
+      'five charges on one QR moved more than one visit of money',
+    ).toBe(before - B_SERVICE_PRICE_FILS);
+  }, 60_000);
+});
+
 describe('a double void says already_voided, not request_in_progress', () => {
   /**
    * WHAT IT USED TO ANSWER, AND WHY THAT WAS WORSE THAN A WRONG STATUS CODE.

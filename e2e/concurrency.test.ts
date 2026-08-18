@@ -16,6 +16,35 @@
  * todo rather than a rediscovery six weeks from now.
  */
 
+/**
+ * READ THIS FIRST: THIS FILE RUNS AGAINST `packages/mock`, NOT AGAINST THE API.
+ *
+ * Which matters more here than anywhere else, because a mock CANNOT EXHIBIT A RACE.
+ * `packages/mock` is one Node process holding `Map`s: a check-then-act inside one
+ * handler cannot interleave with another request, so every concurrency spec below
+ * passes by construction. The double-scan spec says so itself — "the mock wins this
+ * by accident... Passing here is not evidence that the real one is safe."
+ *
+ * It was right, and the real versions now exist:
+ *
+ *   two charges on ONE wallet token, concurrently
+ *       → scanner.test.ts "racing — two charges on ONE wallet token"
+ *   FIVE at once on one token
+ *       → scanner.test.ts "and five at once on one token still settle exactly one"
+ *   two charges under ONE idempotency key, concurrently
+ *       → scanner.test.ts "racing — two charges under ONE idempotency key"
+ *   the webhook and the customer's return firing simultaneously
+ *       → gateway.test.ts "the webhook and her return firing AT ONCE credit exactly
+ *         once"
+ *
+ * Those were written by removing the wallet's row lock AND the token's conditional
+ * consumption, and confirming that every SEQUENTIAL spec in this repository stayed
+ * green while the new races went red. That is what this file could never do.
+ *
+ * What remains below is what the mock can honestly say about itself, for the lanes
+ * building against it.
+ */
+
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   ensureBalanceAtLeast,
@@ -214,70 +243,76 @@ describe('double submit of one charge', () => {
 
 // ------------------------------------------------- 3. duplicate callback -----
 
-describe('duplicate gateway callback', () => {
-  it('the mock exposes no gateway callback endpoint at all', async () => {
-    // Stated as a running assertion so this gap is a fact in the report rather
-    // than a claim. When lane A adds the webhook this fails, and the todos below
-    // become the real specs.
+/**
+ * THE NINE CALLBACK TODOS THAT USED TO LIVE HERE ARE COVERED — AGAINST THE REAL API.
+ *
+ * They read "LANE A OWES: ..." because `packages/mock` has no webhook endpoint at
+ * all, so none of them could be written here. Lane A built it, and
+ * `gateway.test.ts` drives every one of them against Postgres. Mapped rather than
+ * deleted, because a todo that vanishes leaves the next reader unable to tell a
+ * covered case from a forgotten one:
+ *
+ *   a second delivery of one PSP reference credits once, answers 200
+ *       → gateway.test.ts "the second delivery of one event id changes nothing"
+ *         and "records the duplicate rather than swallowing it — one event row"
+ *   idempotent on the PSP reference, not on our intent id
+ *       → gateway.test.ts "the event index demonstrably did NOT catch it —
+ *         two rows, one reference"
+ *   an invalid signature credits nothing
+ *       → gateway.test.ts's five signature cases, "→ 401, and the wallet does
+ *         not move", plus "the SAME body, correctly signed, settles"
+ *   an already-terminal intent does not flip to succeeded
+ *       → gateway.test.ts "a terminal `failed` is just as closed as a terminal
+ *         `succeeded`" and the raw-UPDATE trigger specs beside it
+ *   a duplicate writes one ledger entry and one audit row
+ *       → gateway.test.ts "settles exactly one transaction, with one ledger pair
+ *         behind it"
+ *   webhook first, then her GET reads succeeded
+ *       → gateway.test.ts "a callback that lands BEFORE her GET still yields the
+ *         right final state"
+ *   her GET first, then the webhook lands
+ *       → gateway.test.ts "a callback that lands AFTER her GET is ignored, and
+ *         the state is identical"
+ *   webhook and client return firing SIMULTANEOUSLY credit once
+ *       → gateway.test.ts "the webhook and her return firing AT ONCE credit
+ *         exactly once" — the one that was genuinely missing, and the reason this
+ *         mapping was worth doing rather than assuming
+ *   an intent stuck in `pending` past the settlement window is reconciled by a job
+ *       → still open, and already tracked where it belongs: gateway.test.ts's own
+ *         todo for the sweep of OPEN_STATUSES. Not duplicated back here.
+ *
+ * The one thing this file could still say for itself is below.
+ */
+describe('the mock has no gateway callback, and that is the fact worth asserting here', () => {
+  it('POST /webhooks/{psp} does not exist on the mock', async () => {
+    /**
+     * KEPT, AND NARROWED TO WHAT IT PROVES. The UI lanes build against this mock,
+     * so "the mock cannot settle a top-up for you" is a real thing for them to
+     * know — a wallet that waits for a webhook here waits for ever. It is not,
+     * and never was, evidence about the API.
+     */
     const res = await api('POST', '/webhooks/knet', {
       body: { intentId: 'TI-ANY', status: 'succeeded', reference: 'KNET-1' },
     });
     expect(res.status).toBe(404);
   });
 
-  it.todo(
-    'LANE A OWES: POST /webhooks/{psp} — a second delivery of the same PSP reference credits the wallet exactly once and answers 200 (a 4xx makes the PSP retry forever)',
-  );
-  it.todo(
-    'LANE A OWES: the callback is idempotent on the PSP reference, not on our intent id — the PSP controls the retry, so our Idempotency-Key header is not in play',
-  );
-  it.todo(
-    'LANE A OWES: a callback with an invalid signature is rejected and credits nothing',
-  );
-  it.todo(
-    'LANE A OWES: a callback for an already-terminal intent (failed, cancelled) does not flip it to succeeded',
-  );
-  it.todo(
-    'LANE A OWES: a duplicate callback writes one ledger entry and one audit row, not two',
-  );
-});
-
-// -------------------------------- 4. callback before the client returns ------
-
-describe('callback arriving before the client returns from the gateway', () => {
-  it.todo(
-    'LANE A OWES: the webhook settles the intent, then the client hits GET /topups/{id} and reads `succeeded` — the balance moved exactly once and the client-side return is a read, never a second credit',
-  );
-  it.todo(
-    'LANE A OWES: the reverse order — client polls first and sees `pending`, webhook lands, next poll flips to `succeeded` with the same creditFils',
-  );
-  it.todo(
-    'LANE A OWES: webhook and client return firing simultaneously credit once (Promise.all over the webhook and the status read)',
-  );
-  it.todo(
-    'LANE A OWES: an intent stuck in `pending` past the settlement window is reconciled by the daily job, not by a client retry — go-live-checklist § Money',
-  );
-
-  it('until then: `pending` is a distinct terminal-looking state the client must not resolve itself', async () => {
-    // The half of this case that is testable today. A client that treats
-    // `pending` as failure offers a retry, and the retry is the double charge.
-    const created = await api<{ id: string }>('POST', '/topups', {
-      idempotencyKey: idempotencyKey('pending-state'),
+  it('so a top-up on the mock never leaves `redirected` on its own', async () => {
+    // The consequence for a client, stated once. `gateway.test.ts` is where the
+    // real state machine is proved.
+    const opened = await api<{ id: string; status: string }>('POST', '/topups', {
+      idempotencyKey: idempotencyKey('mock-no-webhook'),
       body: { amountFils: 10_000, method: 'knet' },
     });
-    const pending = await api<{ status: string; failureReason: string | null }>(
-      'GET',
-      `/topups/${created.body.id}`,
-      { scenario: 'pending' },
-    );
-
-    expect(pending.status).toBe(200);
-    expect(pending.body.status).toBe('pending');
-    expect(pending.body.failureReason).toBeNull();
+    precondition(opened.status === 200, `POST /topups answered ${opened.status}`);
+    // `created` on the mock, `redirected` on the API — the point is only that it is
+    // NOT terminal, and that nothing on this target can make it terminal.
+    expect(
+      ['created', 'redirected', 'pending'],
+      `a fresh top-up on the mock is already in ${opened.body.status}`,
+    ).toContain(opened.body.status);
   });
 });
-
-// ------------------------------------------- 5. happy-hour boundary ----------
 
 describe('a charge crossing a happy-hour boundary', () => {
   /**
