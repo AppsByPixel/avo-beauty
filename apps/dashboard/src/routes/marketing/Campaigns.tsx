@@ -227,6 +227,30 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
               <div className="mk__pushbody">{body || 'Your message appears here.'}</div>
             </div>
           </div>
+          {/*
+            VERBATIM from AVO Merchant Dashboard.dc.html:1929, and it states two numbers
+            that the owner console treats as CONFIGURABLE. Left exactly as written, with the
+            conflict recorded rather than quietly resolved.
+
+            api-contract.md § PlatformMessagingPolicy makes `quietFrom`/`quietTo` and
+            `weeklyCapPerCustomer` (1..7) owner-settable, and the design's own console reads
+            them as `policy.quietFrom || '22:00'` and `policy.weeklyCapPerCustomer || 2` — so
+            22:00, 09:00 and "two" are DEFAULTS there and fixed facts here. The moment an
+            owner moves either, this sentence becomes a false promise to a merchant about a
+            promise she is in turn making to her customers.
+
+            It cannot be fixed by fetching: the same contract says "a merchant can never read
+            or raise these values", so no endpoint would make this truthful and inventing one
+            would hand the merchant the platform throttle. Softening the wording would
+            paraphrase settled copy, which CLAUDE.md forbids. So it needs Aftab.
+
+            Worth knowing while reading it: NOTHING in api/src enforces any of these values
+            today — `requireApproval`, `weeklyCapPerCustomer`, `monthlyCapPerSalon`,
+            `quietFrom` and `quietTo` have zero occurrences there — so at present the
+            sentence describes a rule no code applies, on top of naming numbers that are not
+            fixed. Tracked in design/go-live-checklist.md under "caps and quiet hours
+            enforced at send".
+          */}
           <p className="mk__quiet">
             Quiet hours are respected — nothing leaves between 22:00 and 09:00. A person gets at
             most two marketing messages a week.
