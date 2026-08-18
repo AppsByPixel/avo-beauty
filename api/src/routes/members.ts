@@ -10,6 +10,7 @@
 
 import { randomInt } from 'node:crypto';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { walletTokenUri } from '@avo/types';
 import { db } from '../db/client';
@@ -20,7 +21,7 @@ import { hashSecret, verifySecret } from '../auth/password';
 import { requireMember, requireScannerPerm } from '../auth/principal';
 import { revokeOtherSessions } from '../auth/sessions';
 import { badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../http/errors';
-import { serialiseTransactionForCustomer, type TransactionRow } from '../http/serialise';
+import { serialiseTransactionForCustomer } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { marketingConsentOf, recordConsent } from '../services/consent';
@@ -786,15 +787,37 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
    */
   app.get('/members/me/transactions', async (req, reply) => {
     const p = requireMember(req);
+
+    /**
+     * THE SELF-JOIN THAT MAKES THE VOID STATE REAL.
+     *
+     * `TransactionSchema` requires `voidedAt` and `reversedByTransactionId`, and
+     * neither is a column: void state lives on the REVERSAL, which points back
+     * here through `reverses_transaction_id`. This handler served neither, and a
+     * cast inside the serialiser stopped tsc from saying so — so the wallet's
+     * contract parse rejected every non-empty feed, Home rendered "We couldn't
+     * load your wallet", and Account became unreachable behind it.
+     *
+     * The same shape `GET /charges` uses, and for the reason stated there: a
+     * self-join rather than a second query, so the flag cannot disagree with the
+     * row it is attached to. `reverses_transaction_id` is uniquely indexed, so
+     * this matches at most one reversal per transaction and cannot duplicate a
+     * row.
+     */
+    const reversal = alias(transaction, 'reversal');
+
     const rows = await db
-      .select()
+      .select({ tx: transaction, reversal })
       .from(transaction)
+      .leftJoin(reversal, eq(reversal.reversesTransactionId, transaction.id))
       .where(eq(transaction.memberId, p.id))
       .orderBy(desc(transaction.createdAt))
       .limit(50);
 
     return reply.send({
-      items: rows.map((t) => serialiseTransactionForCustomer(t as TransactionRow)),
+      // No `as TransactionRow` here either. The row satisfies the interface
+      // structurally; the cast was only ever hiding whether it did.
+      items: rows.map(({ tx, reversal: v }) => serialiseTransactionForCustomer(tx, v)),
       nextCursor: null,
     });
   });
