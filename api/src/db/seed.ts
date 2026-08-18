@@ -48,7 +48,8 @@ import { branch, salon } from './schema/salon';
 import { artist, type ArtistWindows } from './schema/artist';
 import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
-import { member } from './schema/member';
+import { member, memberConsentEvent } from './schema/member';
+import { platformAdmin } from './schema/platformAdmin';
 import { product } from './schema/product';
 import { service } from './schema/service';
 import { staffUser } from './schema/staff';
@@ -75,6 +76,7 @@ const BRANCH_KUWAIT_CITY = 'BR-KWC';
 /** Development credentials only. Never a default that reaches an environment. */
 const MEMBER_PASSWORD = 'dana-dev-password';
 const STAFF_PASSWORD = 'noura-dev-password';
+const PLATFORM_PASSWORD = 'yousef-dev-password';
 const STAFF_PIN = '2468';
 const HESSA_PIN = '1357';
 const SCANNER_DEVICE = 'DEV-SCANNER-01';
@@ -156,12 +158,107 @@ function week(open: Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri'
 }
 
 async function seed(): Promise<void> {
-  const [memberHash, staffHash, pinHash, hessaPinHash] = await Promise.all([
+  const [memberHash, staffHash, pinHash, hessaPinHash, platformHash] = await Promise.all([
     hashSecret(MEMBER_PASSWORD),
     hashSecret(STAFF_PASSWORD),
     hashSecret(STAFF_PIN),
     hashSecret(HESSA_PIN),
+    hashSecret(PLATFORM_PASSWORD),
   ]);
+
+  /**
+   * ------------------------------------------------- the platform owner ----
+   *
+   * `PLT-001` / Yousef, and the id is chosen rather than invented: the two
+   * `actor_kind = 'platform_admin'` audit rows this seed has always written use
+   * `actor_id = 'PLT-001'`, from the design's own row ("Yousef · AVO platform ·
+   * Wallet adjusted"). `audit_log.actor_id` is a SOFT reference with no foreign
+   * key, so those rows worked while no such admin existed — and now that one does,
+   * matching the id makes the fixture's history and the live actor the same
+   * person instead of two Yousefs.
+   *
+   * SEEDED BEFORE ANY SESSION, because `session.platform_admin_id` references it.
+   *
+   * `onConflictDoUpdate` on the hash for the reason the member rows document:
+   * every developer database predates migration 0028, so DO NOTHING would be a
+   * no-op on a warm database and the console would be unreachable while the seed
+   * printed success. The perms are in the SET too — `platform_admin_owner_holds_everything`
+   * means an owner row cannot be partially granted, so a future ninth section
+   * added to the table would leave this row violating its own CHECK unless the
+   * seed reasserts it.
+   */
+  await db
+    .insert(platformAdmin)
+    .values({
+      id: 'PLT-001',
+      name: 'Yousef',
+      handle: 'yousef',
+      passwordHash: platformHash,
+      role: 'owner',
+      owner: true,
+      // Spelled out rather than derived from PLATFORM_ROLE_PRESETS by string
+      // manipulation: a `Record<string, boolean>` cast into drizzle's insert
+      // values is a cast, and tsc naming a missing column is worth more here than
+      // nine lines saved. `platform_admin_owner_holds_everything` is the second
+      // check on the same thing.
+      permAnalytics: true,
+      permActivity: true,
+      permSalons: true,
+      permAccounts: true,
+      permAdmins: true,
+      permControls: true,
+      permApprovals: true,
+      permPolicies: true,
+      permAudit: true,
+    })
+    .onConflictDoUpdate({
+      target: platformAdmin.id,
+      set: {
+        passwordHash: platformHash,
+        permAnalytics: true,
+        permActivity: true,
+        permSalons: true,
+        permAccounts: true,
+        permAdmins: true,
+        permControls: true,
+        permApprovals: true,
+        permPolicies: true,
+        permAudit: true,
+        active: true,
+      },
+    });
+
+  /**
+   * A SECOND CONSOLE ADMIN WITH LESS AUTHORITY, and it is the same fixture shape
+   * as ST-002 on the merchant side: `authority.test.ts` can only prove a section
+   * gate exists if some credential is refused by it. `PLT-002` / Mariam is the
+   * design's own second row — "Mariam K. · analyst" with analytics and activity
+   * only — so `perm_approvals` and `perm_policies` are false on a real, signable
+   * account rather than only on a hypothetical one.
+   */
+  await db
+    .insert(platformAdmin)
+    .values({
+      id: 'PLT-002',
+      name: 'Mariam K.',
+      handle: 'mariam.k',
+      passwordHash: platformHash,
+      role: 'analyst',
+      owner: false,
+      permAnalytics: true,
+      permActivity: true,
+      permSalons: false,
+      permAccounts: false,
+      permAdmins: false,
+      permControls: false,
+      permApprovals: false,
+      permPolicies: false,
+      permAudit: false,
+    })
+    .onConflictDoUpdate({
+      target: platformAdmin.id,
+      set: { passwordHash: platformHash, active: true },
+    });
 
   /**
    * THE LEGAL SET FIRST, BEFORE ANY MEMBER.
@@ -823,6 +920,86 @@ async function seed(): Promise<void> {
         : { passwordHash: memberHash },
     });
 
+  /**
+   * ------------------------------------------- MARKETING CONSENT, SEEDED ----
+   *
+   * WITHOUT THIS, NO CAMPAIGN CAN REACH ANYBODY, and that is not a bug in the
+   * campaign code — it is `services/consent.ts`'s rule working as written: "NO
+   * EVENT AT ALL MEANS NO CONSENT. Not 'unknown', not 'assume yes'. A member who
+   * predates this table has never been asked, and inferring a grant from silence
+   * is the one answer that cannot be defended afterwards."
+   *
+   * Both seeded members predate the signup path that records consent, so
+   * `member_consent_event` was EMPTY on every database, every audience resolved to
+   * zero people, and every campaign would have held on "nobody is in this
+   * audience". Correct, and useless as a fixture: the delivery path, the weekly
+   * cap and the monthly cap would all have been unreachable branches — the same
+   * shape as `heldDepositFils` sitting at 0 until bookings landed, which is how a
+   * void came to under-refund a customer for a whole build.
+   *
+   * TWO MEMBERS, TWO ANSWERS, AND 8843 HAS A HISTORY. Dana granted at signup.
+   * Reem granted at signup and WITHDREW from her Account screen afterwards, which
+   * is two rows: consent is append-only, so a withdrawal is a new event saying
+   * `granted: false` and the newest event decides. That gives the audience filter
+   * a real excluded member rather than a hypothetical one, and it exercises the
+   * half of `grantedMarketingConsent` that a LEFT JOIN with `granted IS NOT FALSE`
+   * would silently invert.
+   *
+   * So `audience: 'all'` at Amara is exactly one person, and that is a true
+   * statement about this fixture rather than an accident.
+   *
+   * Guarded on absence rather than `SEED_RESET`: `member_consent_event` has UPDATE
+   * and DELETE revoked from the application role and is not in the destructive
+   * block below, so a reseed must not append a second grant on top of a
+   * developer's withdrawal and silently opt her back in.
+   */
+  const [{ consentRows } = { consentRows: 0 }] = (await db.execute(
+    sql`SELECT count(*)::int AS "consentRows" FROM member_consent_event`,
+  )) as unknown as Array<{ consentRows: number }>;
+
+  if (consentRows === 0) {
+    await db.insert(memberConsentEvent).values([
+      {
+        memberId: '8842',
+        salonId: SALON_ID,
+        kind: 'marketing_offers',
+        granted: true,
+        source: 'signup',
+        policyVersion: 3,
+        createdAt: new Date(Date.now() - 7_200_000),
+      },
+      {
+        memberId: '8843',
+        salonId: SALON_ID,
+        kind: 'marketing_offers',
+        granted: true,
+        source: 'signup',
+        policyVersion: 3,
+        createdAt: new Date(Date.now() - 7_200_000),
+      },
+      {
+        /**
+         * The withdrawal, with an EXPLICIT LATER TIMESTAMP.
+         *
+         * All three rows above would otherwise share `now()` — the transaction
+         * timestamp — and that tie is what migration 0029 exists for: with a grant
+         * and a withdrawal tied, `ORDER BY created_at DESC` returned the grant, so
+         * this fixture originally opted Reem back in. `seq` settles it now, and the
+         * timestamp is set anyway because a withdrawal genuinely happens after the
+         * signup it reverses, and a fixture that reads as simultaneous is a fixture
+         * that tests the tiebreak instead of the rule.
+         */
+        memberId: '8843',
+        salonId: SALON_ID,
+        kind: 'marketing_offers',
+        granted: false,
+        source: 'wallet_account',
+        policyVersion: 3,
+        createdAt: new Date(Date.now() - 3_600_000),
+      },
+    ]);
+  }
+
   // ------------------------------------------------ the destructive part ----
   //
   // Everything above this line CREATES fixture rows and is safe to run against
@@ -1235,6 +1412,8 @@ async function seed(): Promise<void> {
   }
   console.log(`  web     noura / ${STAFF_PASSWORD}`);
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
+  console.log(`  console yousef / ${PLATFORM_PASSWORD}       (owner, every section)`);
+  console.log(`  console mariam.k / ${PLATFORM_PASSWORD}     (analyst — no approvals, no policies)`);
 }
 
 // This script truncates the money tables and disables an immutability trigger to

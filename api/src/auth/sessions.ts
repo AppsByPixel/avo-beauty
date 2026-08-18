@@ -31,7 +31,14 @@ export interface IssueSessionInput {
   principalKind: PrincipalKind;
   memberId?: string | null;
   staffId?: string | null;
-  salonId: string;
+  platformAdminId?: string | null;
+  /**
+   * NULL for a platform admin, and required for everybody else. The database
+   * says the same as an equivalence — `session_salon_matches_principal` — so a
+   * mistake here does not commit rather than producing a session that slips past
+   * `requireSameSalon` with nothing to compare.
+   */
+  salonId: string | null;
   scope: SessionScope;
   deviceId?: string | null;
   userAgent?: string | null;
@@ -55,6 +62,7 @@ export async function issueSession(db: Db, input: IssueSessionInput): Promise<Is
       principalKind: input.principalKind,
       memberId: input.memberId ?? null,
       staffId: input.staffId ?? null,
+      platformAdminId: input.platformAdminId ?? null,
       salonId: input.salonId,
       scope: input.scope,
       refreshTokenHash: hashRefreshToken(refreshToken),
@@ -68,7 +76,7 @@ export async function issueSession(db: Db, input: IssueSessionInput): Promise<Is
   if (!row) throw new Error('session insert returned no row');
 
   const accessToken = await signAccessToken({
-    sub: input.principalKind === 'member' ? input.memberId! : input.staffId!,
+    sub: principalIdOf(input.principalKind, input),
     kind: input.principalKind,
     scope: input.scope,
     salonId: input.salonId,
@@ -90,7 +98,16 @@ export async function issueSession(db: Db, input: IssueSessionInput): Promise<Is
 export async function rotateSession(
   db: Db,
   rawRefreshToken: string,
-): Promise<(IssuedSession & { scope: SessionScope; principalKind: PrincipalKind; principalId: string; salonId: string }) | null> {
+): Promise<
+  | (IssuedSession & {
+      scope: SessionScope;
+      principalKind: PrincipalKind;
+      principalId: string;
+      /** Null for a platform admin, like the claim it comes from. */
+      salonId: string | null;
+    })
+  | null
+> {
   const presentedHash = hashRefreshToken(rawRefreshToken);
   const nextToken = mintRefreshToken();
   const expiresAt = new Date(Date.now() + env.refreshTokenTtlDays * 86_400_000);
@@ -114,6 +131,7 @@ export async function rotateSession(
       principalKind: session.principalKind,
       memberId: session.memberId,
       staffId: session.staffId,
+      platformAdminId: session.platformAdminId,
       salonId: session.salonId,
       scope: session.scope,
     });
@@ -121,7 +139,11 @@ export async function rotateSession(
   const row = rows[0];
   if (!row) return null;
 
-  const principalId = row.principalKind === 'member' ? row.memberId! : row.staffId!;
+  const principalId = principalIdOf(row.principalKind, row);
+  // A row that satisfies `session_exactly_one_principal` always has one, so this
+  // is unreachable — but it is a `null` the types would otherwise let through
+  // into a signed token's `sub`, which is not a place to discover it.
+  if (!principalId) return null;
   const accessToken = await signAccessToken({
     sub: principalId,
     kind: row.principalKind,
@@ -142,6 +164,39 @@ export async function rotateSession(
   };
 }
 
+/**
+ * Which of the three principal columns this session's kind uses.
+ *
+ * WRITTEN ONCE, because it was `row.principalKind === 'member' ? memberId! :
+ * staffId!` in two places and a third principal turns that expression from
+ * "correct" into "silently attributes a platform session to a staff id of
+ * undefined". The `!` was doing the hiding: it asserted non-null on the branch
+ * that a new kind falls into.
+ */
+function principalIdOf(
+  kind: PrincipalKind,
+  row: { memberId?: string | null; staffId?: string | null; platformAdminId?: string | null },
+): string {
+  const id =
+    kind === 'member' ? row.memberId : kind === 'staff' ? row.staffId : row.platformAdminId;
+  if (!id) throw new Error(`session for kind ${kind} carries no principal id`);
+  return id;
+}
+
+/**
+ * "Every session belonging to this principal", over three kinds.
+ *
+ * Same reasoning as `principalIdOf`: this was a two-branch ternary duplicated in
+ * `revokeOtherSessions` and `revokeAllSessions`, and a third kind made both
+ * silently match on `staff_id = <a platform admin id>` — which matches nothing,
+ * so a password change would have revoked no sessions and reported success.
+ */
+function ownerPredicate(principal: { kind: PrincipalKind; id: string }) {
+  if (principal.kind === 'member') return eq(session.memberId, principal.id);
+  if (principal.kind === 'staff') return eq(session.staffId, principal.id);
+  return eq(session.platformAdminId, principal.id);
+}
+
 /** Sign out one device. */
 export async function revokeSession(db: Db, sessionId: string, reason: string): Promise<void> {
   await db
@@ -160,10 +215,7 @@ export async function revokeOtherSessions(
   keepSessionId: string,
   reason: string,
 ): Promise<number> {
-  const owner =
-    principal.kind === 'member'
-      ? eq(session.memberId, principal.id)
-      : eq(session.staffId, principal.id);
+  const owner = ownerPredicate(principal);
 
   const rows = await db
     .update(session)
@@ -180,10 +232,7 @@ export async function revokeAllSessions(
   principal: { kind: PrincipalKind; id: string },
   reason: string,
 ): Promise<number> {
-  const owner =
-    principal.kind === 'member'
-      ? eq(session.memberId, principal.id)
-      : eq(session.staffId, principal.id);
+  const owner = ownerPredicate(principal);
 
   const rows = await db
     .update(session)

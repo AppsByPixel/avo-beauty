@@ -1,16 +1,10 @@
 /**
- * Shared platform state: promotions, campaigns.
+ * Shared platform state: promotions, the published legal set, support.
  *
- * `POST /v1/salons/{id}/campaigns` is the ninth permission gate (`perms.marketing`)
- * and the place non-negotiable #8 lives:
- *
- *   "A merchant cannot send a customer message. POST /campaigns only creates
- *    pending. Delivery happens on the platform decision endpoint, and caps and
- *    quiet hours are enforced again at send time."
- *
- * So `status` is hardcoded to `pending` and a client-supplied `status` is
- * ignored — not merged, not validated-then-used. `reach` is likewise
- * server-computed and never trusted from the client (api-contract.md § Campaign).
+ * CAMPAIGNS USED TO LIVE HERE and are now routes/campaigns.ts — non-negotiable #8
+ * turned out to be a table, a send log, a messaging policy, the console's queue, a
+ * decision endpoint and send-time cap enforcement, which is most of a phase rather
+ * than one handler.
  *
  * The promotion set is read-only here. It is ONE object that the wallet and the
  * dashboard both read, and it deliberately ships days/from/to with no `live`
@@ -24,6 +18,7 @@ import {
   requireDashboardPerm,
   requireMember,
   requirePrincipal,
+  requireSalonScoped,
   requireSameSalon,
 } from '../auth/principal';
 import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
@@ -265,7 +260,7 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
    * header and db/schema/promotion.ts.
    */
   app.get<{ Params: { id: string } }>('/v1/salons/:id/promotions', async (req, reply) => {
-    const p = requirePrincipal(req);
+    const p = requireSalonScoped(req);
     requireSameSalon(p, req.params.id);
     return reply.send(await readPromotionSet(db, req.params.id));
   });
@@ -586,11 +581,30 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
 
     const set = rows[0];
     if (!set) {
-      // A specific version that was never published is a 404. NO published set
-      // at all is a 503: the deployment is incomplete, the caller did nothing
-      // wrong, and a client must not read it as "there are no terms".
+      // A specific version that was never published is a 404.
       if (wanted !== null) throw notFound('unknown_policy_version', 'No such policy version.');
-      throw serviceUnavailable(
+      /**
+       * NO PUBLISHED SET AT ALL IS A 409, AND IT USED TO BE A 503.
+       *
+       * The reasoning for 503 was sound in isolation — the deployment is
+       * incomplete, the caller did nothing wrong, and a client must not read it as
+       * "there are no terms" — and it collided with how clients classify statuses.
+       * `apps/wallet/src/api/client.ts` maps `503 || 504` to OFFLINE, which is
+       * correct for a gateway timeout, so a deployment with no published terms told
+       * a customer "No connection. You need one to create an account", about a
+       * working network, with a retry that could never succeed. Lane B hit it twice
+       * in the same shape.
+       *
+       * A configuration state is not a transient unavailability. 503 promises "try
+       * again later and it may work"; this will not work until somebody publishes.
+       * 409 says the server is fine and its state is wrong, which is the truth and
+       * is not in any client's offline bucket.
+       *
+       * The client's general 503→offline mapping is right and stays. Trunk's call;
+       * the fix belongs on this side, because every client that classifies by status
+       * would otherwise have to special-case this one code.
+       */
+      throw conflict(
         'policies_not_published',
         'The policy set has not been published yet.',
       );
@@ -754,54 +768,14 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
     return reply.send(await serialiseTicket(row));
   });
 
-  /** perms.marketing. Creates `pending` and nothing else, ever. */
-  app.post<{ Params: { id: string } }>('/v1/salons/:id/campaigns', async (req, reply) => {
-    const p = requireDashboardPerm(req, 'marketing');
-    requireSameSalon(p, req.params.id);
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const title = requireString(body.title, 'title', 200);
-    const text = requireString(body.body, 'body', 2000);
-    const channel = body.channel ?? 'push';
-    if (!['push', 'wa', 'both'].includes(String(channel))) {
-      throw badRequest('invalid_channel', 'channel must be push, wa or both.');
-    }
-
-    const campaign = {
-      id: `CMP-${Math.floor(Math.random() * 900 + 100)}`,
-      salonId: p.salonId,
-      title,
-      body: text,
-      channel,
-      audience: body.audience ?? 'all',
-      branchId: body.branchId ?? 'all',
-      reward: body.reward ?? 'none',
-      // Server-computed, never trusted from the client.
-      reach: 0,
-      when: body.when ?? 'now',
-      scheduledAt: body.scheduledAt ?? '',
-      // Hardcoded. A merchant cannot send — non-negotiable #8.
-      status: 'pending' as const,
-      submittedBy: p.name,
-      submittedAt: new Date().toISOString(),
-      decidedBy: null,
-      decidedAt: null,
-      note: null,
-      result: null,
-    };
-
-    await writeAudit(db, p, {
-      salonId: p.salonId,
-      kind: 'rules',
-      action: 'Campaign submitted',
-      detail: `"${title}" submitted for AVO approval`,
-      source: 'merchant',
-      subjectType: 'campaign',
-      subjectId: campaign.id,
-      ipAddress: req.ip ?? null,
-      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
-    });
-
-    return reply.send(campaign);
-  });
+  /**
+   * CAMPAIGNS HAVE MOVED to routes/campaigns.ts, and it is not a tidy-up.
+   *
+   * `POST /v1/salons/{id}/campaigns` lived here as one handler that built an object
+   * literal, wrote an audit row and returned the literal — it persisted nothing. The
+   * campaign half of non-negotiable #8 is now a table, a per-recipient send log, a
+   * platform messaging policy, the console's queue, the decision endpoint and
+   * send-time enforcement of caps and quiet hours. That is most of a phase, and it
+   * does not belong inside a file whose header says "promotions, campaigns".
+   */
 }

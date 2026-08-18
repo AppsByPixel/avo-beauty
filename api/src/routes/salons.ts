@@ -32,7 +32,11 @@ import { product } from '../db/schema/product';
 import { branch, salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { staffUser } from '../db/schema/staff';
-import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../auth/principal';
+import {
+  requireDashboardPerm,
+  requireSalonScoped,
+  requireSameSalon,
+} from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -306,7 +310,7 @@ function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent:
 
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
-    const p = requirePrincipal(req);
+    const p = requireSalonScoped(req);
     requireSameSalon(p, req.params.id);
 
     const s = await loadSalon(req.params.id);
@@ -864,7 +868,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * `active` and so the services route emits it; this one must not.
    */
   const productReadGate = (req: FastifyRequest, salonId: string) => {
-    const p = requirePrincipal(req);
+    const p = requireSalonScoped(req);
     // A member reads her own salon's shopfront; a staff member reads the Shop
     // section and needs the permission for it. Either way, only her own salon.
     if (p.kind !== 'member') requireDashboardPerm(req, 'shop');
@@ -1189,7 +1193,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * statement rather than a placeholder.
    */
   app.get<{ Params: { id: string } }>('/salons/:id/services', async (req, reply) => {
-    const p = requirePrincipal(req);
+    const p = requireSalonScoped(req);
     requireSameSalon(p, req.params.id);
     const rows = await db
       .select({

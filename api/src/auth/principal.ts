@@ -24,6 +24,12 @@ import { eq } from 'drizzle-orm';
 import type { FastifyRequest } from 'fastify';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
+import {
+  platformAdmin,
+  PLATFORM_SECTIONS,
+  type PlatformRole,
+  type PlatformSection,
+} from '../db/schema/platformAdmin';
 import { staffUser } from '../db/schema/staff';
 import { env } from '../env';
 import { forbidden, unauthorized } from '../http/errors';
@@ -78,7 +84,33 @@ export interface StaffPrincipal {
   branchAccessIds: string[];
 }
 
-export type Principal = MemberPrincipal | StaffPrincipal;
+/**
+ * The owner console. THE ONE PRINCIPAL WITH NO SALON.
+ *
+ * `requireSameSalon` is the tenancy boundary for every other principal, and this
+ * one is above it: the console's Analytics is "across all salons" by design. So
+ * there is no `salonId` field to compare — not a null one, no field at all, so a
+ * handler that tries to call `requireSameSalon(p, id)` on a platform principal
+ * does not compile. That is deliberate. A nullable field would make the tenancy
+ * check silently pass instead.
+ *
+ * `sections` is nine booleans rather than the design's six. The reasoning is in
+ * db/schema/platformAdmin.ts: the console draws ten sidebar sections and six
+ * permission chips, three of the four ungated ones have endpoints here, and #7
+ * does not permit an ungated endpoint.
+ */
+export interface PlatformPrincipal {
+  kind: 'platform_admin';
+  id: string;
+  scope: 'platform';
+  sessionId: string;
+  name: string;
+  role: PlatformRole;
+  owner: boolean;
+  sections: Record<PlatformSection, boolean>;
+}
+
+export type Principal = MemberPrincipal | StaffPrincipal | PlatformPrincipal;
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -141,6 +173,51 @@ async function loadStaffPrincipal(
   };
 }
 
+/**
+ * Section authority for a platform admin row.
+ *
+ * `active` IS CHECKED HERE AND NOT AT SIGN-IN ONLY, for the reason permissions
+ * are read per request rather than put in the token: an admin deactivated at
+ * 14:00 is out at 14:00, not whenever her fifteen-minute access token happens to
+ * expire. A deactivated row resolves to no principal at all, so every one of her
+ * requests is anonymous from the next call onward.
+ */
+async function loadPlatformPrincipal(
+  db: Db,
+  adminId: string,
+  sessionId: string,
+): Promise<PlatformPrincipal | null> {
+  const rows = await db
+    .select()
+    .from(platformAdmin)
+    .where(eq(platformAdmin.id, adminId))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  if (!row.active) return null;
+
+  return {
+    kind: 'platform_admin',
+    id: row.id,
+    scope: 'platform',
+    sessionId,
+    name: row.name,
+    role: row.role,
+    owner: row.owner,
+    sections: {
+      analytics: row.permAnalytics,
+      activity: row.permActivity,
+      salons: row.permSalons,
+      accounts: row.permAccounts,
+      admins: row.permAdmins,
+      controls: row.permControls,
+      approvals: row.permApprovals,
+      policies: row.permPolicies,
+      audit: row.permAudit,
+    },
+  };
+}
+
 async function loadMemberPrincipal(
   db: Db,
   memberId: string,
@@ -172,6 +249,18 @@ const TEST_STAFF_FULL = 'ST-001';
 const TEST_STAFF_NOPERMS = 'ST-002';
 const TEST_MEMBER = '8842';
 /**
+ * The owner console's two seeded admins. `PLT-001` is Yousef, the owner, who holds
+ * every section; `PLT-002` is Mariam, the analyst, who holds analytics and
+ * activity and nothing else.
+ *
+ * The pair exists for the reason ST-001/ST-002 does: a section gate can only be
+ * PROVEN to exist if some credential is refused by it, and a hypothetical
+ * credential proves nothing. `x-avo-scenario: noplatformperms` selects the
+ * analyst.
+ */
+const TEST_PLATFORM_OWNER = 'PLT-001';
+const TEST_PLATFORM_LIMITED = 'PLT-002';
+/**
  * `lowbal` selects a seeded member with 2.500 KD rather than pinning a fake
  * balance. The mock could substitute a number; a real API cannot fabricate a
  * balance without lying about the money, so the scenario changes WHOSE wallet is
@@ -198,6 +287,36 @@ export function hasScenario(req: FastifyRequest, name: string): boolean {
 
 async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal | null> {
   const staffId = hasScenario(req, 'noperms') ? TEST_STAFF_NOPERMS : TEST_STAFF_FULL;
+
+  /**
+   * THE OWNER CONSOLE, and it is matched FIRST because its prefix overlaps
+   * nothing below and its exclusions are exact.
+   *
+   * `/v1/platform/policies` and `/v1/platform/support` are the two reads that live
+   * under this prefix WITHOUT being console-only: the published legal set is
+   * unauthenticated by necessity (a signup screen renders it before there is a
+   * session — non-negotiable #10), and the support config is readable by any
+   * authenticated principal because the wallet's Contact us form needs it. Both
+   * keep resolving to staff, which is what they resolved to before and what the
+   * existing specs drive them with.
+   *
+   * MATCHED EXACTLY, with an optional query string and nothing after the word.
+   * `startsWith('/v1/platform/policies')` would have excluded
+   * `/v1/platform/policies/draft` and `/publish` too, which ARE console-only and
+   * would then have been handed a staff principal and answered 403 for a reason no
+   * spec could see. That is the same prefix-versus-exact trap the `/members`
+   * comment below records.
+   */
+  if (
+    req.url.startsWith('/v1/platform/') &&
+    !/^\/v1\/platform\/(policies|support)(\?|$)/.test(req.url)
+  ) {
+    return loadPlatformPrincipal(
+      db,
+      hasScenario(req, 'noplatformperms') ? TEST_PLATFORM_LIMITED : TEST_PLATFORM_OWNER,
+      'test-session-platform',
+    );
+  }
 
   // Member-scoped routes get the member; everything else gets the staff row.
   // The suite only ever needs one of each.
@@ -302,10 +421,20 @@ export async function resolvePrincipal(db: Db, req: FastifyRequest): Promise<Pri
   // "revokes every other session" true at the moment the password changes.
   if (!(await sessionIsLive(db, claims.sid))) return null;
 
+  if (claims.kind === 'platform_admin') {
+    return loadPlatformPrincipal(db, claims.sub, claims.sid);
+  }
   if (claims.kind === 'member') {
     return loadMemberPrincipal(db, claims.sub, claims.sid);
   }
-  if (claims.scope === 'wallet') return null;
+  /**
+   * A staff token with a wallet or platform scope resolves to nothing.
+   * `verifyAccessToken` already refuses `platform` on a staff kind, so this is the
+   * second statement of the same fact — kept because `claims.scope` is what
+   * `loadStaffPrincipal` stamps on the principal, and narrowing it here is what
+   * makes that parameter provably one of the two surfaces rather than a cast.
+   */
+  if (claims.scope !== 'scanner' && claims.scope !== 'dashboard') return null;
   return loadStaffPrincipal(db, claims.sub, claims.scope, claims.sid);
 }
 
@@ -314,6 +443,43 @@ export async function resolvePrincipal(db: Db, req: FastifyRequest): Promise<Pri
 export function requirePrincipal(req: FastifyRequest): Principal {
   if (!req.principal) throw unauthorized();
   return req.principal;
+}
+
+/**
+ * Authenticated AND belonging to a salon — a member or a staff member, never the
+ * owner console.
+ *
+ * THE TYPE SYSTEM ASKED FOR THIS, WHICH IS THE INTERESTING PART. Adding
+ * `PlatformPrincipal` to the `Principal` union turned five call sites red at once,
+ * every one of them `requireSameSalon(requirePrincipal(req), …)`:
+ *
+ *     routes/salons.ts   GET /salons/:id, /:id/services, /:id/products
+ *     routes/artists.ts  GET /salons/:id/artists
+ *     routes/platform.ts GET /v1/salons/:id/promotions
+ *
+ * Those routes are documented as "readable by any authenticated principal of that
+ * salon", and the second half of that sentence was carried by
+ * `requireSameSalon` — which could only be written because every principal
+ * happened to have a `salonId`. A platform admin has none, so `requireSameSalon`
+ * now takes the narrower union and these five had to say what they meant.
+ *
+ * Nothing about their behaviour changes: no platform principal could reach them
+ * before, because none existed. What changes is that the requirement is now
+ * stated rather than implied by a field that happened to be on every branch.
+ *
+ * A platform admin who needs to read a salon's data reads it through a console
+ * route gated on the `salons` section, where crossing the tenancy boundary is the
+ * declared intent rather than a consequence of an absent field. Those routes are
+ * not built yet, and that is reported rather than papered over here.
+ */
+export function requireSalonScoped(req: FastifyRequest): MemberPrincipal | StaffPrincipal {
+  const p = requirePrincipal(req);
+  if (p.kind === 'platform_admin') {
+    throw forbidden(
+      'This endpoint belongs to a salon. Open it from the console\u2019s Salons section.',
+    );
+  }
+  return p;
 }
 
 export function requireMember(req: FastifyRequest): MemberPrincipal {
@@ -449,9 +615,80 @@ export function requireScannerPerm(
   return requirePerm(req, 'scanner', permission);
 }
 
-/** A staff member may only ever act inside their own salon. */
-export function requireSameSalon(principal: Principal, salonId: string): void {
+/**
+ * A staff member or a member may only ever act inside their own salon.
+ *
+ * TAKES A SALON-SCOPED PRINCIPAL, NOT `Principal`. `PlatformPrincipal` has no
+ * `salonId` field at all, so passing one here does not compile — which is the
+ * point: an owner-console route calling this would either always throw or, with a
+ * nullable field, silently pass. A platform admin's boundary is
+ * `requirePlatform`, and it is a different question.
+ */
+export function requireSameSalon(
+  principal: MemberPrincipal | StaffPrincipal,
+  salonId: string,
+): void {
   if (principal.salonId !== salonId) {
     throw forbidden('That salon is not yours.');
   }
 }
+
+// ------------------------------------------------------- the platform gate --
+
+/**
+ * Copy for a refused section. Named like `PERMISSION_COPY`, and pointed in the
+ * same direction: it tells the reader who can grant it. The console's admins are
+ * a short list, so "the platform owner" is a real answer rather than a shrug.
+ */
+const SECTION_COPY: Record<PlatformSection, string> = {
+  analytics: 'Your console account cannot open Analytics. The platform owner can grant it.',
+  activity: 'Your console account cannot open Activity. The platform owner can grant it.',
+  salons: 'Your console account cannot open Salons. The platform owner can grant it.',
+  accounts: 'Your console account cannot open Accounts. The platform owner can grant it.',
+  admins: 'Your console account cannot manage admins. The platform owner can grant it.',
+  controls: 'Your console account cannot change platform controls. The platform owner can grant it.',
+  approvals:
+    'Your console account cannot decide campaigns. The platform owner can grant it.',
+  policies:
+    'Your console account cannot edit or publish policies. The platform owner can grant it.',
+  audit: 'Your console account cannot read the platform audit log. The platform owner can grant it.',
+};
+
+/** Authenticated on the owner console, whatever section. */
+export function requirePlatformScope(req: FastifyRequest): PlatformPrincipal {
+  const p = requirePrincipal(req);
+  if (p.kind !== 'platform_admin') {
+    /**
+     * A MERCHANT CREDENTIAL MUST NOT REACH AN OWNER ROUTE, and the refusal names
+     * the surface rather than the authority — a manager who lands here is confused,
+     * not attacking, exactly as `SURFACE_COPY` reasons for the scanner/dashboard
+     * wall. Lane D has the inverse test written down as owed in
+     * `e2e/tenancy.test.ts`: "when it lands, every one of its endpoints needs the
+     * inverse test — a merchant credential must not reach an owner route".
+     */
+    throw forbidden('This endpoint is the AVO owner console, not the salon dashboard.');
+  }
+  return p;
+}
+
+/**
+ * THE platform gate. First statement of every `/v1/platform/*` handler that is
+ * not a customer read.
+ *
+ * `section` has no default, for the reason `StaffSurface` has none: a default
+ * here would be a default answer to a security question. Every caller names the
+ * section it belongs to, so a new console endpoint cannot be ungated by accident
+ * — only on purpose, by calling `requirePlatformScope` and being seen to.
+ */
+export function requirePlatform(
+  req: FastifyRequest,
+  section: PlatformSection,
+): PlatformPrincipal {
+  const p = requirePlatformScope(req);
+  if (!p.sections[section]) throw forbidden(SECTION_COPY[section]);
+  return p;
+}
+
+/** Every section name, for the admins editor and for tests that sweep them. */
+export { PLATFORM_SECTIONS };
+export type { PlatformSection, PlatformRole };

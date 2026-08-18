@@ -90,7 +90,7 @@ import { calendar, CalendarNotConfiguredError } from '../calendar';
 import { env } from '../env';
 import {
   requireDashboardPerm,
-  requirePrincipal,
+  requireSalonScoped,
   requireScannerScope,
   requireSameSalon,
   type StaffPrincipal,
@@ -462,7 +462,9 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
   app.get<{ Params: { id: string }; Querystring: { date?: string } }>(
     '/artists/:id/availability',
     async (req, reply) => {
-      const p = requirePrincipal(req);
+      // Salon-scoped: `p.salonId` is the tenancy boundary passed to
+      // `computeAvailability` below, and the owner console has no salon to pass.
+      const p = requireSalonScoped(req);
 
       // Required, not defaulted to "today". "Today" is a question about a zone,
       // and a server that answered it from its own clock would be making exactly
@@ -574,7 +576,7 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
       // Any authenticated principal of this salon — the same gate
       // `GET /salons/{id}/services` uses, and for the same reason: gating the
       // list a customer books from on a merchant permission gates booking.
-      const p = requirePrincipal(req);
+      const p = requireSalonScoped(req);
       requireSameSalon(p, req.params.id);
 
       const rows = await db

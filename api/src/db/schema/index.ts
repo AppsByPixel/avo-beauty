@@ -1,6 +1,12 @@
 /**
  * The AVO schema, in dependency order.
  *
+ *   platform_admin ──── session   the owner console's principal, and the one
+ *                                 credential with NO salon: it reads across all
+ *                                 of them by design
+ *   platform_messaging_policy     one row, platform-wide — approval, caps, quiet
+ *                                 hours. A merchant can never read or raise it.
+ *
  *   salon ─┬─ branch ─┬─ boost
  *          │          └─ happy_hour (branch_id NULL = every branch)
  *          ├─ service
@@ -11,6 +17,7 @@
  *          ├─ session ──── pin_attempt
  *          ├─ booking ──── artist_calendar_connection (per artist)
  *          ├─ merchant_notification
+ *          ├─ campaign ──── campaign_send (→ member)
  *          └─ transaction ─┬─ ledger_entry
  *                          ├─ idempotency_key
  *                          ├─ receipt_job
@@ -54,4 +61,6 @@ export * from './topup';
 export * from './booking';
 export * from './notification';
 export * from './legal';
+export * from './platformAdmin';
+export * from './campaign';
 export * from './sandboxGateway';
