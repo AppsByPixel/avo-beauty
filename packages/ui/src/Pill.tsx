@@ -14,6 +14,10 @@ import type { ReactNode } from 'react';
  *            `--avo-warn-bg` (#F3E9CF) but `plan.pro.bg`, which is a *plan
  *            badge* token and means something else. Using it here would say an
  *            audit row is a subscription tier.
+ *            The #8a6d3b above is the design's drawn value and is no longer the
+ *            token — it failed AA on both backgrounds it served (4.01:1 and
+ *            3.77:1) and `--avo-warn-text` is now #7A6034. The equivalence
+ *            claimed here is to the TOKEN, which still holds.
  *   neutral  PARTIAL. The design paints the Rules pill #ECEEF0 / #5f6b73, which
  *            are `tier.silver.pillBg` / `tier.silver.pillText` — a *loyalty
  *            tier* token. Same objection.

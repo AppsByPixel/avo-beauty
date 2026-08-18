@@ -139,22 +139,51 @@ unless it is explicitly deferred in writing.
         Settings and Audit log. Non-negotiable #9 was never violated — white-on-deep
         measured 5.05:1 throughout; the defect was that one pairing was the only one
         checked.
-      - **STILL NOT TICKED. One designed token pair fails, and it is not Lane C's to
-        change.** `--avo-warn-text` `#8a6d3b` on `--avo-warn-bg` `#F3E9CF` measures
-        **4.01:1** at 11–12.5px. Both are literal values in
-        `design/tokens/avo-tokens.json`, and that same `#8a6d3b` is also `pillText`,
-        `text` and `accessText` there — so it carries the **Gold tier pill** and the access
-        rows on the wallet and scanner too, not only `.settings__notice` and the audit-log
-        pills. Darkening `warnText` to `#7D6234` reaches 4.73:1 and `#775C31` reaches
-        5.17:1 against the same background. Escalated rather than adjusted: it is a
-        designed colour used across the bundle.
-      - Also escalated, found while checking the presets as instructed: the **shipped**
-        `noorRose` preset fails the same pairing by hand — `deep #8A6565` on
-        `tint #F5EDED` = **4.41:1**, where amaraSage measures 5.01 and lilaLilac 5.04. The
-        new validator would refuse that pair from a new salon while AVO ships it itself.
-        Pinned in `derive.test.ts` so it cannot drift unnoticed, and left unchanged because
-        the hex appears in `interaction-spec.md` §2's table and across the design files.
-      - Wallet and scanner have not been scanned; that is Lane B's half of this row.
+      - **SEVEN failures found and fixed** (Lane C, 2026-08-19, trunk-authorised into
+        `packages/tokens`). Six came from a hand DOM scan; the seventh was found by the
+        automated audit below on its first run. All are AA failures for normal text at the
+        11–12.5px sizes they are used at:
+        `color.warnText` 4.01 → **4.82**, `tier.gold.pillText` 4.01 → **4.82**,
+        `plan.pro.text` 3.77 → **4.60**, `audit.accessText` 3.77 → **4.60**
+        (all four were the one hex `#8a6d3b`, now `#7A6034`);
+        `tier.bronze.pillText` **2.67 → 4.71** (`#B08D57` → `#80653C`);
+        `brandPresets.noorRose.deep` 4.41 → **4.86** (`#8A6565` → `#825F5F`, regenerated
+        through the solver); and `plan.starter.text` **4.32 → 5.93** (moved to the 0.7 step
+        of the existing muted scale).
+      - **Trunk's chosen `#7D6234` was not used, and this is why.** It measures 4.73:1 on
+        `#F3E9CF` but only **4.46:1** on `#EAE2D6` — and that one hex served both
+        backgrounds, so it would have left `plan.pro` and `audit.access` still failing.
+        `#7A6034` is the smallest darkening of the same hue that clears both (4.82 / 4.60).
+      - `tier.bronze`'s `dot` keeps `#B08D57` deliberately. It is decoration, and §2 says
+        the pill carries its meaning as text rather than colour, so only `pillText` needed
+        to move.
+      - **THE CHECK IS NOW REPEATABLE WITHOUT A BROWSER** —
+        `packages/tokens/src/audit.ts` + `audit.test.ts`. It discovers
+        `<x>Text`/`<x>Bg` sibling pairs structurally, so a new pill group is audited the
+        day it lands; carries the cross-group `deep`-on-`tint` pairings a structural rule
+        cannot infer; and **composites translucent text rather than skipping it**, which is
+        how the seventh failure was found. Skips are reported with a reason, never counted
+        as passes. All six original failures are pinned as measured ratios that must move
+        the right way.
+      - **Surface coverage, honestly.** Dashboard: re-scanned live, zero failures of any
+        kind. Wallet: booted on its web target and scanned — 10 text elements, zero
+        failures — but only the sign-in screen is reachable, because the wallet still has
+        no auth slice and defaults to port 4000, so the tier pills were not seen in a DOM.
+        **Scanner: a DOM scan is impossible** — it has no web target at all, only
+        `expo run:ios` / `run:android`. What covers both surfaces instead is that the audit
+        is surface-independent and that no surface hardcodes the old values: grepping
+        `apps/wallet`, `apps/scanner`, `apps/dashboard` and `packages/ui` for all six old
+        hexes returns only comments, so every surface reads the token. The wallet and
+        scanner consume `@avo/tokens`' native theme rather than the CSS variables; both are
+        generated from the same JSON.
+      - **One escalation left, and it is bundle-wide.** §2 states
+        `rgba(28,27,25,0.6)` measures "~5.2:1" and mandates it for 51 uppercase
+        micro-labels; composited on the app surface `#FBFAF8` it actually measures
+        **4.48:1** — marginally under the floor it was chosen to clear, and lower on any
+        darker surface. The JSON's own note says it is used 154 times. Not changed: moving
+        it touches all four surfaces. The one place the JSON declared that pairing was
+        `plan.starter`, which is fixed above. Recorded in `audit.ts` under what the audit
+        does not cover.
 - [ ] Tap targets ≥ 44px verified on device
       - Lane C, 2026-08-19 — not a dashboard row. `interaction-spec.md` §1 makes the
         merchant dashboard desktop-only and shows an "open on a larger screen" notice below

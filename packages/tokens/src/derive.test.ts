@@ -206,27 +206,16 @@ describe('assertLabelIsLegible', () => {
 /**
  * The SHIPPED presets, measured on the same pairing.
  *
- * Two of the three clear it by hand. `noorRose` does not — 4.41:1 — so the
- * validator above would refuse that pair from a new salon while we ship it
- * ourselves. That is a designed-value decision (the hex appears in
- * interaction-spec.md §2's table and across the design bundle), so it is
- * reported to trunk rather than changed here, and pinned so it cannot drift
- * unnoticed in either direction.
+ * All three clear it now. This described a `KNOWN_SHORTFALL` exception for
+ * `noorRose` at 4.41:1 — AVO shipping a preset its own validator would refuse
+ * from a new salon — and the exception's own comment said to delete it once the
+ * preset was fixed. Trunk decided to fix it, `deep` was regenerated through the
+ * solver to `#825F5F` (4.86:1), and the branch went red on the next run, which
+ * is what an expiring exception is supposed to do. No exceptions remain.
  */
 describe('the shipped presets on the label pairing', () => {
-  const KNOWN_SHORTFALL: Record<string, number> = { noorRose: 4.41 };
-
-  it.each(Object.entries(presets))('%s', (name, p) => {
-    const ratio = Math.round(contrastRatio(p.deep, p.tint) * 100) / 100;
-    const known = KNOWN_SHORTFALL[name];
-    if (known === undefined) {
-      expect(ratio).toBeGreaterThanOrEqual(MIN_TINT_CONTRAST);
-    } else {
-      // Not an approval. If this becomes >= 4.5 the preset was fixed and this
-      // branch should be deleted; if it drops further something got worse.
-      expect(ratio).toBe(known);
-      expect(ratio).toBeLessThan(MIN_TINT_CONTRAST);
-    }
+  it.each(Object.entries(presets))('%s clears the AA floor for its own label text', (_name, p) => {
+    expect(contrastRatio(p.deep, p.tint)).toBeGreaterThanOrEqual(MIN_TINT_CONTRAST);
   });
 });
 
