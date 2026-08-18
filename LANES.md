@@ -115,6 +115,44 @@ database another lane was asserting against.
 Kill what you start. A `pnpm check` that hangs on *"something prevents N Vite servers from
 exiting"* is a leaked process, not a test failure.
 
+**Prove the cleanup, do not print it.** Two lanes have now shipped a cleanup step that
+reported success while leaving the process alive, and both said so themselves:
+
+- `xargs -r kill` exits 0 on empty input, so a loop printed "killed 4101…4121" for every
+  port whether or not anything was there.
+- `pkill -f 'tsx src/server.ts'` never matched the real command line,
+  `tsx watch --env-file-if-exists=.env src/server.ts`. A Vite server survived on 5173 for
+  hours, an API kept holding 3000, and a later restart died on `EADDRINUSE` — the leak the
+  rule above describes, caused by the code meant to prevent it.
+
+So end with an observation, not an action: a `ps` sweep and a port scan that come back empty.
+A misleading success line is the same defect as a green typecheck bought with a cast — it
+spends your trust on something that did not happen.
+
+### Build freshness — `--dir` alone does not rebuild
+
+The two rules above interact, and the interaction is silent.
+
+`pnpm --dir <pkg> run typecheck` runs that package's `tsc` **directly**, bypassing turbo — so
+`turbo.json`'s `"typecheck": { "dependsOn": ["^build"] }` never fires and `packages/types`
+is never rebuilt. Lane C read `packages/types/dist/entities.d.ts`, found `passwordSet`
+genuinely absent, and concluded the shared schema was missing a field it had actually carried
+since `133a657`. The observation was true of what the compiler could see and still the wrong
+conclusion.
+
+Run turbo from your own worktree root, which gets you both the build edge and the right
+worktree:
+
+```bash
+pnpm --dir /Users/koraspond_developer/dev/avo-web turbo run typecheck
+```
+
+And for a **gate** — a check you are about to trust — add `--force`. Turbo caches `typecheck`
+and `build`, and a post-merge run in trunk reported `FULL TURBO`, 11 of 11 cached, in 29ms on
+a tree whose sources had just changed; the forced run took 8s and was genuinely green. The
+mechanism is still unexplained, which is exactly why a cached gate is not a gate. `test` is
+already uncached — `turbo.json` explains why at length.
+
 ---
 
 ## Lane A — API
