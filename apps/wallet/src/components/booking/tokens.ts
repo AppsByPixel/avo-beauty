@@ -27,11 +27,21 @@ import { ARABIC_FAMILY, text } from '../../theme';
  *   text        #8A7A55
  *   dot         #B6A26A
  *
- * NOT `warnBg` / `warnText`. Those are #F3E9CF and #8a6d3b, which are the GOLD
- * TIER pill (design:690, `Gold: ['#8a6d3b', '#F3E9CF']`) — a different thing
- * that happens to be a similar hue. Substituting them would tint an
- * availability badge with a loyalty colour, and the two would then drift
+ * NOT `warnBg` / `warnText`, which are the GOLD TIER pill (design:690) — a
+ * different thing that happens to be a similar hue. Substituting them would tint
+ * an availability badge with a loyalty colour, and the two would then drift
  * together the first time either is adjusted.
+ *
+ * AND `warnText` HAS NOW BEEN ADJUSTED, which is the drift this paragraph exists
+ * to prevent, arriving from the direction it did not predict. It was `#8a6d3b`
+ * when this was written; `deriveBrandSet`'s contrast audit moved it to `#7A6034`
+ * (4.01 → 4.82 against `warnBg`). The old hex was quoted here as current and was
+ * wrong for as long as it took somebody to notice.
+ *
+ * So the token hexes are deliberately no longer quoted. Naming a token's value in
+ * prose is a promise to update that prose, and this build has been misled by a
+ * stale comment nine times. The three constants BELOW are hexes this file owns and
+ * therefore states; for anything living on the theme, read the token.
  */
 export const AVAIL_SALON_BG = '#F4EFE2';
 export const AVAIL_SALON_TEXT = '#8A7A55';
