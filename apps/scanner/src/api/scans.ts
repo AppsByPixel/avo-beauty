@@ -5,36 +5,32 @@
  * transaction (api/src/routes/staff.ts:236, api/src/services/charge.ts), which
  * is what lets an artist re-read a code while she confirms the services without
  * burning it.
+ *
+ * THE BODY IS DEFINED IN `counter.ts`, NOT HERE.
+ * `GET /members/{id}` — the manual path's last step — returns the same body from
+ * the same server-side builder. One schema for both, for the reason that file's
+ * header gives: two parses of one body is how the held deposit came to be right
+ * on one path and stale on the other.
  */
 
-import { z } from 'zod';
-import { FilsSchema, IdSchema, MemberSchema } from '@avo/types';
+import { CounterEnvelopeSchema, type CounterEnvelope } from './counter';
 import { postJson } from './client';
 
-export const ScanServiceSchema = z.object({
-  id: IdSchema,
-  name: z.string().min(1),
-  priceFils: FilsSchema.nonnegative(),
-});
-
-export const ScanResultSchema = z.object({
-  member: MemberSchema,
-  /**
-   * A deposit already held against a booking. It is applied automatically as a
-   * credit line on the charge — design/AVO Staff Scanner.dc.html:354, and
-   * §Charging in api-contract.md.
-   */
-  heldDepositFils: FilsSchema.nonnegative(),
-  services: z.array(ScanServiceSchema),
-});
-
-export type ScanService = z.infer<typeof ScanServiceSchema>;
-export type ScanResult = z.infer<typeof ScanResultSchema>;
+/**
+ * The old names, kept as aliases so the screens and their tests read unchanged.
+ * `ScanResult` is now literally the same type the lookup path produces, which is
+ * the point rather than a coincidence.
+ */
+export {
+  CounterEnvelopeSchema as ScanResultSchema,
+  CounterServiceSchema as ScanServiceSchema,
+} from './counter';
+export type { CounterEnvelope as ScanResult, CounterService as ScanService } from './counter';
 
 export function resolveScan(
   token: string,
   accessToken: string,
   signal?: AbortSignal,
-): Promise<ScanResult> {
-  return postJson('/scans', { token }, ScanResultSchema, accessToken, signal);
+): Promise<CounterEnvelope> {
+  return postJson('/scans', { token }, CounterEnvelopeSchema, accessToken, signal);
 }

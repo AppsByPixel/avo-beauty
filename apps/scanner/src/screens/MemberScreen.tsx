@@ -217,10 +217,18 @@ export function MemberScreen({
         {/*
           The held deposit — design:352-355. Driven entirely by the server's
           `heldDepositFils`, so it appears only when there genuinely is one.
-          NOTE, REPORTED: the API returns 0 here unconditionally today
-          ("Bookings are not built, so nothing is ever held" —
-          api/src/routes/staff.ts:280), so this line is correct and currently
-          unreachable against a real server.
+
+          NO LONGER UNREACHABLE. This carried a note saying the API returned 0
+          unconditionally because bookings were not built; bookings are built, and
+          `counterEnvelope` now reads the real hold through the same
+          `findApplicableHold` the charge uses. Driven against a real server on
+          both paths — scanned and manually looked up — with a booking inside the
+          no-show grace window.
+
+          The window is the part worth knowing: a hold only applies while the
+          booking is within `noShowReturnMinutes` of now, so a fixture booked far
+          in the future correctly shows 0 here and looks identical to a bug. It has
+          been read as one twice.
         */}
         {heldDeposit > 0 && (
           <View style={styles.depositBanner} testID="deposit-banner">

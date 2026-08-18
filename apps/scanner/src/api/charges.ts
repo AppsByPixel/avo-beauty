@@ -45,13 +45,56 @@ export type LoyaltyOutcome = z.infer<typeof LoyaltyOutcomeSchema>;
 
 // ------------------------------------------------------------------- charge --
 
+/**
+ * WIDENED — three fields the server has been sending and this schema was
+ * silently throwing away.
+ *
+ * `ChargeResult` in api/src/services/charge.ts:80-120 carries
+ * `depositReturnedFils`, `bookingId` and `happyHour` as well. Zod does not fail
+ * on an undeclared field, it STRIPS it, so all three arrived and vanished before
+ * any screen could read them — the same drift STATUS.md calls the trap that keeps
+ * reappearing, found here while closing the manual path because the deposit is
+ * what the manual path had to prove.
+ *
+ * Widening is the correct direction, and the server's own comments say why the
+ * shapes are as they are: `depositReturnedFils` and `bookingId` are "both always
+ * present, both null/0 when there was no booking — a scanner has to be able to
+ * tell 'no deposit was held' from 'this API is too old to say'". Declaring them
+ * nullable rather than optional preserves exactly that distinction.
+ *
+ * `depositReturnedFils` is the one with money in it: when a 5.000 deposit meets a
+ * 3.000 basket the server caps the credit at the basket and hands 2.000 back to
+ * her wallet as its own `deposit_return` transaction (non-negotiable #5 — it never
+ * became salon revenue). A client that strips the field cannot tell the artist
+ * that happened, so the customer sees a balance move nobody at the counter can
+ * explain.
+ */
 export const ChargeResultSchema = z.object({
   transaction: TransactionSchema,
   balanceAfterFils: FilsSchema.nonnegative(),
   depositAppliedFils: FilsSchema.nonnegative(),
+  /** Handed back because the hold was bigger than the basket. Its own transaction. */
+  depositReturnedFils: FilsSchema.nonnegative(),
+  /** The booking the deposit came from. Null when none was held — never omitted. */
+  bookingId: IdSchema.nullable(),
   loyalty: LoyaltyOutcomeSchema,
   /** 15 minutes from the charge. api/src/services/charge.ts VOID_WINDOW_MINUTES. */
   voidableUntil: DateTimeSchema,
+  /**
+   * What the promotion set decided for THIS charge, at one instant, on the server
+   * — an outcome, never an input. `POST /charges` reads no promotion field from
+   * its body at all, so a client claiming a live happy hour is not refused, it is
+   * simply not consulted (non-negotiable #2).
+   */
+  happyHour: z
+    .object({
+      id: IdSchema.nullable(),
+      visitMultiplier: z.number(),
+      stampMultiplier: z.number(),
+      creditFils: FilsSchema.nonnegative(),
+      minutesRemaining: z.number().int(),
+    })
+    .nullable(),
 });
 
 export type ChargeResult = z.infer<typeof ChargeResultSchema>;
