@@ -39,6 +39,8 @@ import {
   useNotificationPreferences,
   type NotificationKey,
 } from '../state/notifications';
+import { useDeletionState } from '../state/useDeletionState';
+import { deletionSection } from '../domain/deletion';
 import { takeContactPrefill } from '../support/contact';
 import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
@@ -50,6 +52,7 @@ import { ContactSheet } from '../components/account/ContactSheet';
 import { EditProfileSheet } from '../components/account/EditProfileSheet';
 import { ChangePasswordSheet } from '../components/account/ChangePasswordSheet';
 import { DeleteAccountSheet } from '../components/account/DeleteAccountSheet';
+import { DeletionScheduled } from '../components/account/DeletionScheduled';
 import { FollowSalon } from '../components/account/FollowSalon';
 import { AccountSkeleton } from '../components/account/AccountSkeleton';
 
@@ -73,6 +76,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
   const { lang, copy, setLang } = useLanguage();
   const account = useAccount();
   const notifications = useNotificationPreferences();
+  const deletion = useDeletionState();
   const toast = useToast();
 
   const [profileOpen, setProfileOpen] = useState(false);
@@ -96,6 +100,10 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
   const [contactRef, setContactRef] = useState(prefill?.reference ?? '');
 
   const { status, data, failure } = account;
+
+  // The four states the exit slot can show, decided in one place. See
+  // domain/deletion.ts — an unknown read must never resolve to the ordinary row.
+  const deletionView = deletionSection(deletion);
 
   if (status === 'loading' || (!data && account.refreshing)) {
     return (
@@ -187,7 +195,19 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
           <DeleteAccountSheet
             open={deleteOpen}
             balanceFils={member.balanceFils}
+            /**
+             * Opened from the scheduled card, this has to be the cancel door
+             * rather than the question — she has already answered it. Null when
+             * nothing is pending, which is the normal path.
+             */
+            pending={deletion.state?.status === 'pending' ? deletion.state : null}
             onClose={() => setDeleteOpen(false)}
+            /**
+             * Re-read after anything that moves the state. The screen outside the
+             * sheet has to agree with the server about whether a clock is running,
+             * and a request or a cancel is exactly when it would stop agreeing.
+             */
+            onDeletionChanged={deletion.reload}
             onToast={toast.show}
           />
           <Toast message={toast.message} />
@@ -393,15 +413,54 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
         style={styles.logOut}
         testID="log-out"
       />
-      <TappableRow
-        onPress={() => setDeleteOpen(true)}
-        accessibilityRole="button"
-        accessibilityLabel={copy.deleteAcct}
-        testID="delete-open"
-        style={styles.deleteBtn}
-      >
-        <Text style={[text('bodyS', lang), styles.deleteText]}>{copy.deleteAcct}</Text>
-      </TappableRow>
+      {/*
+        THREE STATES, AND "DELETE MY ACCOUNT" IS ONLY ONE OF THEM.
+
+        A deletion request outlives the sheet, so this slot has to be able to say
+        so. Rendering the ordinary row while a deletion is pending is the bug this
+        section exists to fix — she would see no sign of the clock and no route to
+        the cancel door. Rendering it while the read has FAILED is the same bug
+        with a different cause, so an unknown state says it is unknown rather than
+        assuming `none`. See state/useDeletionState.ts.
+
+        Nothing at all until the first answer: this is the bottom of a scrolling
+        screen, so there is no layout to hold open, and a row that flips from
+        "Delete my account" to "Deletion scheduled" a beat later has already made
+        a false statement.
+      */}
+      {deletionView.kind === 'unknown' ? null : deletionView.kind === 'failed' ? (
+        <View style={styles.deleteUnknown} testID="deletion-check-failed">
+          <Text style={[text('bodyS', lang), styles.deleteUnknownText]}>
+            {copy.deleteCheckFailed}
+          </Text>
+          <TappableRow
+            onPress={deletion.reload}
+            accessibilityRole="button"
+            accessibilityLabel={copy.tryAgain}
+            testID="deletion-check-retry"
+            style={styles.deleteUnknownRetry}
+          >
+            <Text style={[text('bodyS', lang), styles.deleteUnknownRetryText]}>
+              {copy.tryAgain}
+            </Text>
+          </TappableRow>
+        </View>
+      ) : deletionView.kind === 'scheduled' ? (
+        <DeletionScheduled
+          erasureDueAt={deletionView.erasureDueAt}
+          onOpenCancel={() => setDeleteOpen(true)}
+        />
+      ) : (
+        <TappableRow
+          onPress={() => setDeleteOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel={copy.deleteAcct}
+          testID="delete-open"
+          style={styles.deleteBtn}
+        >
+          <Text style={[text('bodyS', lang), styles.deleteText]}>{copy.deleteAcct}</Text>
+        </TappableRow>
+      )}
 
       <Text style={[text('bodyS', lang), styles.version]}>{copy.appVersion}</Text>
       <View style={styles.footerSpace} />
@@ -560,6 +619,16 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
   },
   deleteText: { color: color.dangerText, fontWeight: '600' },
+  // The read failed, so neither "Delete my account" nor "Deletion scheduled" can
+  // be shown honestly. Same treatment as the notifications failure above.
+  deleteUnknown: { marginTop: 14, gap: 4, alignItems: 'center' },
+  deleteUnknownText: { color: color.textMutedLabel, textAlign: 'center', lineHeight: 18 },
+  deleteUnknownRetry: {
+    minHeight: MIN_TAP_TARGET,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  deleteUnknownRetryText: { color: color.brandDeep, fontWeight: '600' },
   version: { color: color.textMutedSoft, textAlign: 'center', marginTop: 6, fontSize: 11 },
   footerSpace: { height: 24 },
 });

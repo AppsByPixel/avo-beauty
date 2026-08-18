@@ -37,15 +37,16 @@
  * from state the moment the sheet closes, and is sent for exactly one request.
  *
  * THE CANCEL DOOR. The API does not revoke her sessions on request, precisely so
- * the grace window is usable, and `DELETE /members/me/deletion` is the door. It
- * is offered here the moment the request lands.
+ * the grace window is usable, and `DELETE /members/me/deletion` is the door.
  *
- * WHAT IS STILL MISSING, AND IT IS NOT THIS FILE'S TO FIX: `Member` carries no
- * deletion state and there is no GET for it, so a customer who requests deletion
- * and reopens the app sees an Account screen with no sign that her account is
- * scheduled, and no way back to this cancel door. Reported to trunk — it needs
- * either `deletionRequestedAt`/`deletionDueAt` on the member payload or a GET,
- * and both are lane A's shape to decide.
+ * IT IS NO LONGER ONLY REACHABLE IN THE SECONDS AFTER REQUESTING. That was a real
+ * gap and this header used to describe it as unfixable here: `Member` carried no
+ * deletion state and there was no GET, so a customer who requested deletion and
+ * reopened the app saw an ordinary Account screen. `GET /members/me/deletion`
+ * exists now, Account reads it on every mount, and a pending request renders
+ * `DeletionScheduled` with the erasure date and a route back into this sheet —
+ * which is why this sheet takes a `pending` prop and can open straight into the
+ * cancel state rather than asking a question she has already answered.
  */
 
 import { useState } from 'react';
@@ -59,16 +60,37 @@ import { TappableRow } from '../Buttons';
 import { Money } from '../Money';
 import { Field, FieldLabel, InlineError } from './Fields';
 import { deletionSubmitFailure, isAlreadyCancelled } from './deletionOutcome';
+import { erasureDueOn } from '../../domain/deletion';
 
 interface Props {
   open: boolean;
   balanceFils: number;
+  /**
+   * A deletion the SERVER already has, from `GET /members/me/deletion`.
+   *
+   * Non-null means she is mid-grace-window and opened this from the scheduled
+   * card, so the sheet opens on the cancel door instead of asking a question she
+   * answered days ago. Null is the ordinary path.
+   */
+  pending?: { graceDays: number; erasureDueAt: string | null } | null;
   onClose: () => void;
+  /**
+   * A request or a cancel landed, so whatever is showing the deletion state
+   * outside this sheet is now stale. The Account screen re-reads.
+   */
+  onDeletionChanged?: () => void;
   /** The cancellation confirmation. The request itself confirms in-sheet. */
   onToast?: (message: string) => void;
 }
 
-export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Props) {
+export function DeleteAccountSheet({
+  open,
+  balanceFils,
+  pending: alreadyPending = null,
+  onClose,
+  onDeletionChanged,
+  onToast,
+}: Props) {
   const { lang, copy } = useLanguage();
 
   const [password, setPassword] = useState('');
@@ -111,6 +133,9 @@ export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Prop
       setPassword('');
       setGraceDays(state.graceDays);
       setBusy(false);
+      // The clock is running now, so the Account screen behind this sheet is
+      // showing the wrong one of its three states until it re-reads.
+      onDeletionChanged?.();
     } catch (err) {
       setPassword('');
       setBusy(false);
@@ -128,12 +153,16 @@ export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Prop
     try {
       await cancelAccountDeletion();
       onToast?.(copy.deleteCancelled);
+      onDeletionChanged?.();
       close();
     } catch (err) {
       // Nothing pending is not a failure — it is the outcome she asked for, and
       // the only way to reach it is if the request was already cancelled.
       if (isAlreadyCancelled(err)) {
         onToast?.(copy.deleteCancelled);
+        // Still a change from this screen's point of view: it was showing a
+        // pending state that is not pending, which is what the 404 proves.
+        onDeletionChanged?.();
         close();
         return;
       }
@@ -143,7 +172,34 @@ export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Prop
   };
 
   const shownBalance = serverBalanceFils ?? balanceFils;
-  const pending = graceDays !== null;
+  /**
+   * Either she just requested it, or the server already had one.
+   *
+   * `graceDays` state wins so the freshly-requested case still reads from the
+   * response it just got; `alreadyPending` covers the cold start, which is what
+   * makes this sheet reachable as a cancel door at all.
+   */
+  const effectiveGraceDays = graceDays ?? alreadyPending?.graceDays ?? null;
+  const pending = effectiveGraceDays !== null;
+
+  /**
+   * "within 30 days" IS ONLY TRUE ON THE DAY SHE ASKS.
+   *
+   * `deletePendingBody(days)` is the confirmation for a request that just
+   * landed, and it reads correctly there. Opened three weeks later from the
+   * scheduled card it would say "removed within 30 days" all over again — the
+   * window restated from a start date that is in the past, which overstates how
+   * long she has and is exactly the kind of client-side arithmetic about a legal
+   * clock that #2's habit is meant to keep out. So when the server already had
+   * the request, the sentence names its `erasureDueAt` instead.
+   */
+  const bodyText = !pending
+    ? copy.deleteBody
+    : graceDays !== null
+      ? copy.deletePendingBody(graceDays)
+      : alreadyPending?.erasureDueAt
+        ? copy.deleteScheduledBody(erasureDueOn(alreadyPending.erasureDueAt))
+        : copy.deletePendingBody(effectiveGraceDays);
 
   return (
     <Sheet open={open} dismissible onDismiss={close} label={copy.deleteTitle} testID="delete-sheet">
@@ -151,9 +207,7 @@ export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Prop
         <Text style={[text('displayS', lang), styles.title]}>
           {pending ? copy.deletePendingTitle : copy.deleteTitle}
         </Text>
-        <Text style={[text('body', lang), styles.body]}>
-          {pending ? copy.deletePendingBody(graceDays) : copy.deleteBody}
-        </Text>
+        <Text style={[text('body', lang), styles.body]}>{bodyText}</Text>
 
         {pending ? (
           // No balance card: the server refuses a non-zero balance, so by

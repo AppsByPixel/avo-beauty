@@ -136,6 +136,11 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   payRedirectTitle: ['كي نت'],
   // The server's `graceDays`. Two digits so a partial conversion is visible.
   deletePendingBody: [30],
+  // The erasure due date as a CALENDAR date, formatted by the copy string itself
+  // — the `legalUpdated` / `staleBanner` rule. An already-formatted date passed in
+  // here is exactly what would drop Eastern digits into the English AR_GAP
+  // sentence, so the sample is the raw "YYYY-MM-DD" the component supplies.
+  deleteScheduledBody: ['2026-09-17'],
   // `lastUpdated` takes an already-formatted relative string built from
   // `minutesAgo`/`hoursAgo`, which are themselves in this table — so the sample
   // here carries no digits of its own. `staleBanner` takes the raw epoch and

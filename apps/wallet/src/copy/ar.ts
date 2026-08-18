@@ -497,6 +497,12 @@ export const ar: Copy = {
   deletePendingBody: en.deletePendingBody, // AR GAP
   deleteCancel: en.deleteCancel, // AR GAP
   deleteCancelled: en.deleteCancelled, // AR GAP
+  // The persistent scheduled state. Same worksheet priority as the four above and
+  // arguably higher: this is the only sentence a customer mid-grace-window ever
+  // sees, and it is the one that has to make clear NOTHING has been deleted yet.
+  deleteScheduledTitle: en.deleteScheduledTitle, // AR GAP
+  deleteScheduledBody: en.deleteScheduledBody, // AR GAP
+  deleteCheckFailed: en.deleteCheckFailed, // AR GAP
 
   langSwitch: 'EN', // design:1339
   restartNeeded: en.restartNeeded, // AR GAP
@@ -569,6 +575,9 @@ export const AR_GAPS = [
   'deletePendingBody',
   'deleteCancel',
   'deleteCancelled',
+  'deleteScheduledTitle',
+  'deleteScheduledBody',
+  'deleteCheckFailed',
 ] as const;
 
 /**

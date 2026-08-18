@@ -354,6 +354,39 @@ export const DeletionStateSchema = z.object({
 export type DeletionState = z.infer<typeof DeletionStateSchema>;
 
 /**
+ * Is a deletion already scheduled? Read on every Account mount.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THIS IS WHAT MAKES THE GRACE WINDOW REAL.
+ *
+ * Until this landed, the ONLY route to the cancel door was the few seconds
+ * between requesting deletion and closing the sheet. `Member` carried no
+ * deletion state, so a customer who requested it and reopened the app saw an
+ * ordinary Account screen — clock running, nothing saying so, no way back. A
+ * 30-day window she cannot find is not a window.
+ *
+ * WHY AN ENDPOINT RATHER THAN TWO FIELDS ON `Member`, which is what this lane
+ * originally asked for: an undeclared field would have been STRIPPED by zod
+ * rather than rejected. `MemberSchema` is a closed object, so adding
+ * `deletionRequestedAt` to the API's response without also adding it to
+ * `packages/types` would have parsed clean and arrived as `undefined` — the
+ * silent-widening trap, in the direction where the wallet shows nothing and
+ * nobody sees a failure. A separate route with its own schema cannot fail that
+ * way: if it is missing the read fails loudly and the section says so.
+ *
+ * `erasureScheduled` is `false` and is expected to STAY false: the job that
+ * actually nulls the columns is not built, because which columns are nulled at
+ * the due date is the client's retention decision (CLAUDE.md § Escalate). So
+ * nothing on this screen may imply the erasure has happened or is under way —
+ * "we have your request and the clock is running" and "it has been carried out"
+ * are different sentences and only the first is true.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export function getDeletionState(signal?: AbortSignal): Promise<DeletionState> {
+  return getJson('/members/me/deletion', DeletionStateSchema, signal);
+}
+
+/**
  * The password is required and is sent for one request only.
  *
  * Non-negotiable #6: it is never stored, never cached, never logged, and the
