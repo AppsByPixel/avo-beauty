@@ -1,5 +1,37 @@
 {
   "$schema": "https://turbo.build/schema.json",
+
+  // DO NOT ADD AN `inputs` DECLARATION WITHOUT RE-CHECKING THE INPUT COUNTS.
+  //
+  // There is ONE turbo cache for all five worktrees. Trunk holds it —
+  // `~/dev/avo/.turbo/cache` — and avo-api, avo-wallet, avo-web and avo-qa have
+  // none, because each lane's `.git` is a pointer into
+  // `~/dev/avo/.git/worktrees/<name>` and turbo resolves the repository root
+  // through the shared git dir. So a lane's cache entry is what trunk hits when
+  // it merges that lane's work, and two `FULL TURBO` post-merge runs in trunk
+  // were traced to exactly that.
+  //
+  // That sharing is SOUND, and the reason is narrow: with no `inputs` override
+  // every task uses the default input set, which covers every git-tracked file in
+  // the package. Verified — dashboard 48, ui 19, wallet 84, api 120, each an exact
+  // match for `git ls-files` — and responsive: one comment line appended to a
+  // dashboard file moved `@avo/dashboard#typecheck` from c2527732 to f937cbcf.
+  // Content-addressed sharing is correct precisely as long as the hash covers
+  // everything that can change behaviour.
+  //
+  // Declaring `inputs` narrows that set, and is the single change that would break
+  // the property — for every worktree at once, not just the one that made it. A
+  // task that stops hashing a file it depends on would let one lane's stale green
+  // satisfy another lane's gate. If you add one, re-run the count per package
+  // against `git ls-files` and say so in the commit:
+  //
+  //   pnpm turbo run typecheck --dry=json     # prints hash + input count per task
+  //
+  // `build` shares this mechanism, and `build` is what seed.ts imports @avo/types
+  // from and what the contract-drift guard parses against. A key that could no-op
+  // on changed source would mean every downstream check reading yesterday's
+  // contract. See DECISIONS.md § "The turbo cache is shared across all five
+  // worktrees".
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
