@@ -54,11 +54,11 @@ import { fils } from '@avo/types';
 import { color, radius, text, WHITE } from '../../theme';
 import { useLanguage } from '../../i18n/language';
 import { cancelAccountDeletion, requestAccountDeletion } from '../../api/account';
-import { ApiError } from '../../api/client';
 import { Sheet } from '../Sheet';
 import { TappableRow } from '../Buttons';
 import { Money } from '../Money';
 import { Field, FieldLabel, InlineError } from './Fields';
+import { deletionSubmitFailure, isAlreadyCancelled } from './deletionOutcome';
 
 interface Props {
   open: boolean;
@@ -66,12 +66,6 @@ interface Props {
   onClose: () => void;
   /** The cancellation confirmation. The request itself confirms in-sheet. */
   onToast?: (message: string) => void;
-}
-
-/** The server's figure off a 409, which is authoritative over the prop. */
-function balanceFromError(details: Record<string, unknown>): number | null {
-  const value = details.balanceFils;
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Props) {
@@ -120,16 +114,11 @@ export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Prop
     } catch (err) {
       setPassword('');
       setBusy(false);
-      if (err instanceof ApiError) {
-        // A 409 is the only branch that changes what is on screen besides the
-        // message — it corrects the balance she is being told to spend.
-        if (err.code === 'balance_outstanding') {
-          setServerBalanceFils(balanceFromError(err.details));
-        }
-        setError(err.message);
-        return;
-      }
-      setError(copy.errorBody);
+      // A 409 is the only branch that changes what is on screen besides the
+      // message — it corrects the balance she is being told to spend.
+      const outcome = deletionSubmitFailure(err, copy.errorBody);
+      if (outcome.serverBalanceFils !== null) setServerBalanceFils(outcome.serverBalanceFils);
+      setError(outcome.message);
     }
   };
 
@@ -143,13 +132,13 @@ export function DeleteAccountSheet({ open, balanceFils, onClose, onToast }: Prop
     } catch (err) {
       // Nothing pending is not a failure — it is the outcome she asked for, and
       // the only way to reach it is if the request was already cancelled.
-      if (err instanceof ApiError && err.code === 'no_deletion_request') {
+      if (isAlreadyCancelled(err)) {
         onToast?.(copy.deleteCancelled);
         close();
         return;
       }
       setBusy(false);
-      setError(err instanceof ApiError ? err.message : copy.errorBody);
+      setError(deletionSubmitFailure(err, copy.errorBody).message);
     }
   };
 
