@@ -3,12 +3,12 @@
  *
  * HOW TO RUN
  *
- *   pnpm --filter @avo/api run db:up
+ *   pnpm --dir ./api run db:up
  *   cd e2e && ../node_modules/.bin/vitest run seed.test.ts
  *
  * This file boots no API and holds no session. It creates an EMPTY database, runs
  * `api/src/db/migrate.ts` and then `api/src/db/seed.ts` against it exactly the way
- * `pnpm --filter @avo/api run db:migrate && … db:seed` would, and asks whether the
+ * `pnpm --dir ./api run db:migrate && … db:seed` would, and asks whether the
  * result is a working environment. Then it drops the database.
  *
  * WHY THIS IS A SPEC AND NOT A CHORE

@@ -3,7 +3,7 @@
  *
  * HOW TO RUN
  *
- *   pnpm --filter @avo/api run db:up
+ *   pnpm --dir ./api run db:up
  *   cd e2e && ../node_modules/.bin/vitest run promotions.test.ts
  *
  * WHY THIS FILE EXISTS, AND WHY IT IS NOT IN `concurrency.test.ts`

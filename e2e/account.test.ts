@@ -4,7 +4,7 @@
  * HOW TO RUN
  *
  *   pnpm install
- *   pnpm --filter @avo/api run db:up
+ *   pnpm --dir ./api run db:up
  *   cd e2e && ../node_modules/.bin/vitest run account.test.ts
  *
  * WHY THIS FILE EXISTS
@@ -42,14 +42,18 @@
  * in — the shared-fixture failure this suite has now been bitten by three times.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
+  B_SCANNER_DEVICE,
+  B_STAFF_HANDLE,
   SALON_B,
   psql,
   scalar,
+  signInDashboard,
   signInMember,
+  signInScanner,
   startTenancyApi,
   stopTenancyApi,
   treq,
@@ -73,6 +77,7 @@ const MEMBER_BALANCE_FILS = 12_000;
 const PASSWORD = 'noura-dev-password';
 
 let member = '';
+let victim = '';
 
 /** Restore the row to the state `beforeAll` created, whatever the specs did. */
 function reseedMember(): void {
@@ -91,20 +96,156 @@ function reseedMember(): void {
       balance_fils   = ${MEMBER_BALANCE_FILS},
       visits         = 3,
       tier           = 'bronze',
-      policy_version = 3;
+      policy_version = 3,
+      -- The four preference columns and the deletion clock, because this function
+      -- claims to restore the row to what beforeAll created and until the
+      -- notification and deletion specs below existed it silently did not: the
+      -- INSERT never names these, so the column DEFAULTs only apply on a first
+      -- insert and a re-seed left whatever the last run's specs had set. That is
+      -- the shape of the trap lane D was warned about in the seed itself, which
+      -- prints "(24.500 KD)" while not restoring balance_fils.
+      notify_push    = true,
+      notify_remind  = true,
+      notify_wa      = true,
+      notify_receipt = true,
+      deletion_requested_at = NULL,
+      deletion_due_at       = NULL;
   `);
+  // Her consent trail. `member_consent_event` is append-only to the APPLICATION
+  // role and this is the owner connection, which is the only reason a test can
+  // clear it — and the reason the spec below proves the application cannot.
+  psql(`DELETE FROM member_consent_event WHERE member_id = '${MEMBER}';`);
+}
+
+/**
+ * A SECOND MEMBER, WHOSE ONLY JOB IS TO BE LEFT ALONE.
+ *
+ * Every tenancy spec below asks the same question in a different way: can one
+ * customer's session reach another customer's row. That question needs a second
+ * row, and it must not be `B_MEMBER` — she is the salon B fixture half this suite
+ * signs in as, and if one of these probes DID land, the leak would arrive in
+ * other files as an unrelated failure somewhere downstream. A dedicated victim
+ * means a hole shows up here, named, in the spec that went looking for it.
+ *
+ * She is deliberately given a NON-DEFAULT preference state and a positive
+ * balance, so "nothing changed" is a comparison against something distinctive
+ * rather than against the defaults every member happens to share.
+ */
+const VICTIM = 'QA-ACC-0002';
+const VICTIM_PHONE = '+96599777302';
+const VICTIM_BALANCE_FILS = 3_000;
+
+function reseedVictim(): void {
+  psql(`
+    INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                        balance_fils, visits, tier, stamps, policy_version,
+                        notify_push, notify_remind, notify_wa, notify_receipt)
+    SELECT '${VICTIM}', '${SALON_B}', 'Hanan Al-Rashid', '${VICTIM_PHONE}',
+           NULL, false, s.password_hash,
+           ${VICTIM_BALANCE_FILS}, 1, 'bronze', NULL, 3,
+           false, false, false, false
+    FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+    ON CONFLICT (id) DO UPDATE SET
+      password_hash  = EXCLUDED.password_hash,
+      balance_fils   = ${VICTIM_BALANCE_FILS},
+      policy_version = 3,
+      notify_push    = false,
+      notify_remind  = false,
+      notify_wa      = false,
+      notify_receipt = false,
+      deletion_requested_at = NULL,
+      deletion_due_at       = NULL;
+  `);
+  psql(`DELETE FROM member_consent_event WHERE member_id = '${VICTIM}';`);
+}
+
+// ------------------------------------------------ reading the row directly --
+
+/**
+ * The four preference COLUMNS, straight out of Postgres.
+ *
+ * Read from the table and not from the endpoint on purpose. `wa` and `receipt`
+ * are not client-owned settings — the receipt outbox reads the row, not the
+ * phone — so the only assertion that means anything about them is one against
+ * the column the sender will consult. An endpoint that echoed a switch back
+ * without persisting it would satisfy a response-only test perfectly, and the
+ * customer would still get the receipt she turned off.
+ */
+function preferenceColumns(id: string): Record<string, boolean> {
+  const row = scalar(
+    `select notify_push::text || ',' || notify_remind::text || ',' ||
+            notify_wa::text || ',' || notify_receipt::text
+       from member where id='${id}'`,
+  );
+  const [push, remind, wa, receipt] = row.split(',');
+  return {
+    push: push === 'true',
+    remind: remind === 'true',
+    wa: wa === 'true',
+    receipt: receipt === 'true',
+  };
+}
+
+/** Her whole consent trail, oldest first. The evidence, not the derived boolean. */
+function consentTrail(id: string): Array<{ granted: boolean; source: string; policyVersion: number }> {
+  const raw = scalar(
+    `select coalesce(string_agg(granted::text || ':' || source || ':' || policy_version::text,
+                                '|' order by created_at, id), '')
+       from member_consent_event
+      where member_id='${id}' and kind='marketing_offers'`,
+  );
+  if (raw === '') return [];
+  return raw.split('|').map((row) => {
+    const [granted, source, policyVersion] = row.split(':');
+    return { granted: granted === 'true', source: source!, policyVersion: Number(policyVersion) };
+  });
+}
+
+/** The deletion clock as the eventual erasure job will read it. */
+function deletionColumns(id: string): { requestedAt: string; dueAt: string } {
+  const raw = scalar(
+    `select coalesce(deletion_requested_at::text,'') || '|' || coalesce(deletion_due_at::text,'')
+       from member where id='${id}'`,
+  );
+  const [requestedAt, dueAt] = raw.split('|');
+  return { requestedAt: requestedAt ?? '', dueAt: dueAt ?? '' };
+}
+
+/**
+ * Audit rows for one subject and one action.
+ *
+ * ALWAYS COMPARED AS A DELTA, never against an absolute number, and that is not
+ * fastidiousness — it is the table's defining property. `freshRows()` resets the
+ * member and her consent trail because the owner connection may; it cannot reset
+ * `audit_log`, because the owner may not either. So counts accumulate across every
+ * spec in this file, and an absolute expectation would be a spec whose value
+ * depends on how many specs ran before it. The first draft of this block asserted
+ * `toBe(1)` in four places and went red on all four for exactly that reason, with
+ * the API behaving correctly.
+ */
+function auditCount(id: string, action: string): number {
+  return Number(
+    scalar(`select count(*) from audit_log where subject_id='${id}' and action='${action}'`),
+  );
+}
+
+function setBalance(id: string, fils: number): void {
+  psql(`UPDATE member SET balance_fils = ${fils} WHERE id='${id}';`);
 }
 
 beforeAll(async () => {
   await startTenancyApi();
   reseedMember();
+  reseedVictim();
   member = await signInMember(SALON_B, MEMBER_PHONE);
+  victim = await signInMember(SALON_B, VICTIM_PHONE);
 }, 120_000);
 
 afterAll(async () => {
   // Leave the password where the next run expects it, whether or not the
   // password specs got that far.
   reseedMember();
+  reseedVictim();
   await stopTenancyApi();
 });
 
@@ -483,6 +624,877 @@ describe('the profile, the policy set and support — the rest of the Account sc
   });
 });
 
+// ===========================================================================
+// PROMOTED, THE SECOND TIME. The two `it.todo`s at the bottom of this file said
+// account deletion and the notification switches had no server behind them at
+// all. Migrations 0020 and 0021 landed both, the wallet already calls all four
+// routes, and neither had a spec or an entry in the contract-drift guard — so
+// four live endpoints on the most sensitive screen in the app were, between them,
+// covered by two sentences saying they did not exist.
+//
+// The shapes are pinned in `contract.test.ts`. What follows is the behaviour.
+// ===========================================================================
+
+/** The five keys of the notification response. `serialiseNotifications`. */
+interface NotificationView {
+  push: boolean;
+  remind: boolean;
+  wa: boolean;
+  receipt: boolean;
+  offers: boolean;
+  offersConsent: {
+    granted: boolean;
+    at: string | null;
+    source: string | null;
+    policyVersion: number | null;
+  };
+}
+
+interface DeletionView {
+  requestedAt: string | null;
+  erasureDueAt: string | null;
+  status: string;
+  graceDays: number;
+  erasureScheduled: boolean;
+}
+
+/** Every spec below starts from the seeded row, not from the last spec's leavings. */
+function freshRows(): void {
+  reseedMember();
+  reseedVictim();
+}
+
+describe('the notification switches — four preferences and one consent, behind one screen', () => {
+  beforeEach(freshRows);
+
+  it('the seeded read is three service channels on, offers off, and NEVER ASKED beside it', async () => {
+    const res = await treq<NotificationView>('GET', '/members/me/notifications', { token: member });
+    expect(res.status, res.raw).toBe(200);
+
+    // Migration 0020: the three service channels default TRUE because they are
+    // how a customer is told about her own money and her own appointments.
+    expect(res.body.push).toBe(true);
+    expect(res.body.remind).toBe(true);
+    expect(res.body.wa).toBe(true);
+    expect(res.body.receipt).toBe(true);
+
+    // And `offers` is deliberately absent from that list: consent is never a
+    // default. The three nulls are the load-bearing part — they are what makes
+    // "she has never been asked" a DIFFERENT fact from "she said no", which is
+    // the distinction non-negotiable #8's send path has to be able to make.
+    expect(res.body.offers).toBe(false);
+    expect(res.body.offersConsent).toEqual({
+      granted: false,
+      at: null,
+      source: null,
+      policyVersion: null,
+    });
+  });
+
+  it('turning a switch off writes the COLUMN the sender reads, not just the response', async () => {
+    const res = await treq<NotificationView>('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { receipt: false, wa: false },
+    });
+    expect(res.status, res.raw).toBe(200);
+    expect(res.body.receipt).toBe(false);
+    expect(res.body.wa).toBe(false);
+
+    /**
+     * THE ASSERTION THIS SLICE EXISTS FOR.
+     *
+     * `wa` and `receipt` are not client-owned settings. The receipt outbox does
+     * not consult a phone before it queues a message, so a switch held anywhere
+     * but this row does not stop a receipt — and the customer has been told it
+     * did. An endpoint that echoed the value back without persisting it would
+     * satisfy the response check above perfectly.
+     */
+    expect(preferenceColumns(MEMBER)).toEqual({
+      push: true,
+      remind: true,
+      wa: false,
+      receipt: false,
+    });
+
+    // And the switches she did not touch are untouched, not defaulted back on.
+    const after = await treq<NotificationView>('GET', '/members/me/notifications', {
+      token: member,
+    });
+    expect(after.body.push, 'a partial PATCH reset a switch it was not given').toBe(true);
+    expect(after.body.receipt, 'the switch did not survive a re-read').toBe(false);
+  });
+
+  it('an unknown switch is refused by NAME, and the refusal names the five that exist', async () => {
+    const res = await treq<{ error?: string; message?: string }>(
+      'PATCH',
+      '/members/me/notifications',
+      { token: member, body: { nope: true } },
+    );
+    expect(res.status, res.raw).toBe(400);
+    expect(res.body.error).toBe('not_editable');
+    for (const known of ['push', 'remind', 'wa', 'receipt', 'offers']) {
+      expect(res.body.message, `the refusal does not name \`${known}\``).toContain(known);
+    }
+  });
+
+  it('an empty body is refused rather than treated as a no-op success', async () => {
+    const res = await treq<{ error?: string }>('PATCH', '/members/me/notifications', {
+      token: member,
+      body: {},
+    });
+    expect(res.status, res.raw).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+  });
+
+  it('and a switch that is not a boolean is refused before anything is written', async () => {
+    const res = await treq<{ error?: string }>('PATCH', '/members/me/notifications', {
+      token: member,
+      // The shape a form sends when nobody coerced it — and `'false'` is truthy,
+      // so a handler that took the value on trust would turn the switch ON while
+      // the customer was turning it off.
+      body: { push: 'false' },
+    });
+    expect(res.status, res.raw).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+    expect(preferenceColumns(MEMBER).push, 'a rejected value still reached the column').toBe(true);
+  });
+
+  it('a strict body check is also what refuses a client-supplied member id', async () => {
+    const before = preferenceColumns(VICTIM);
+    const res = await treq<{ error?: string; message?: string }>(
+      'PATCH',
+      '/members/me/notifications',
+      { token: member, body: { offers: true, memberId: VICTIM } },
+    );
+
+    // 400 and not a partial success: the whole body is refused, so `offers` is
+    // not applied either. A handler that ignored unknown keys instead would have
+    // written the switch and quietly discarded the id — the same outcome here,
+    // but only by luck, and no test would notice the day someone read the id.
+    expect(res.status, res.raw).toBe(400);
+    expect(res.body.error).toBe('not_editable');
+    expect(res.body.message, 'the refusal does not name the key it refused').toContain('memberId');
+    expect(consentTrail(MEMBER), 'the refused body still recorded a consent event').toEqual([]);
+    expect(preferenceColumns(VICTIM), 'another member\'s row moved').toEqual(before);
+  });
+});
+
+describe('`offers` is marketing consent, so it is an EVENT and not a column (non-negotiable #8)', () => {
+  beforeEach(freshRows);
+
+  it('granting it appends an event carrying when, where and under which terms', async () => {
+    const res = await treq<NotificationView>('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    expect(res.status, res.raw).toBe(200);
+
+    expect(res.body.offers).toBe(true);
+    expect(res.body.offersConsent.granted).toBe(true);
+    expect(res.body.offersConsent.at, 'a grant with no timestamp').toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // `wallet_account` and not `signup`: a cap auditing a send has to know she
+    // chose it on the Account screen rather than inheriting it at registration.
+    expect(res.body.offersConsent.source).toBe('wallet_account');
+    // The terms in force for her. The privacy policy is the document the consent
+    // is given under, and it is republishable.
+    expect(res.body.offersConsent.policyVersion).toBe(3);
+
+    // The row, not the response. This is what the platform send path reads.
+    expect(consentTrail(MEMBER)).toEqual([
+      { granted: true, source: 'wallet_account', policyVersion: 3 },
+    ]);
+  });
+
+  it('there is no `offers` column at all, so the boolean CANNOT fall out of step with the trail', () => {
+    /**
+     * services/consent.ts rests its whole argument on this: "There is no cached
+     * boolean to fall out of step with the trail." That is a claim about the
+     * schema, and it is the kind of claim that stops being true the first time
+     * somebody adds a column for a query that felt slow. Asserted against
+     * `information_schema` rather than against the response, because a cached
+     * column would serve an identical response right up until the day it drifted.
+     */
+    const offersColumns = scalar(
+      `select coalesce(string_agg(column_name, ', ' order by column_name), '')
+         from information_schema.columns
+        where table_name = 'member' and column_name like '%offer%'`,
+    );
+    expect(
+      offersColumns,
+      'a member column now caches the offers answer. The response would look identical and the ' +
+        'send path would read one of the two, so the day they disagree is the day a customer who ' +
+        'turned offers off receives a campaign. The state is derived from the newest event.',
+    ).toBe('');
+  });
+
+  it('re-sending the SAME answer changes nothing — a re-render is not consenting again', async () => {
+    const first = await treq<NotificationView>('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    precondition(first.status === 200, `the first grant answered ${first.status} ${first.raw}`);
+    const firstAt = first.body.offersConsent.at;
+
+    const again = await treq<NotificationView>('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    expect(again.status, again.raw).toBe(200);
+    expect(
+      again.body.offersConsent.at,
+      'the second identical PATCH moved the consent timestamp. A client re-rendering the Account ' +
+        'screen is not the customer agreeing again, and a trail full of duplicate grants makes ' +
+        'the moment she actually agreed harder to find rather than easier.',
+    ).toBe(firstAt);
+
+    expect(consentTrail(MEMBER), 'an identical answer appended a second event').toHaveLength(1);
+  });
+
+  it('withdrawing it APPENDS a withdrawal — the grant is still in the trail afterwards', async () => {
+    const granted = await treq('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    precondition(granted.status === 200, `the grant answered ${granted.status} ${granted.raw}`);
+
+    const withdrawn = await treq<NotificationView>('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: false },
+    });
+    expect(withdrawn.status, withdrawn.raw).toBe(200);
+    expect(withdrawn.body.offers).toBe(false);
+    expect(withdrawn.body.offersConsent.granted).toBe(false);
+    // Not null. A withdrawal is a fact with a time, not the absence of a grant —
+    // and `at` reverting to null would make her indistinguishable from a member
+    // who has never been asked.
+    expect(withdrawn.body.offersConsent.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    expect(
+      consentTrail(MEMBER),
+      'the withdrawal replaced the grant instead of following it. "She turned it on in August ' +
+        'and off in October" is the history a regulator asks for, and an UPDATE erases it.',
+    ).toEqual([
+      { granted: true, source: 'wallet_account', policyVersion: 3 },
+      { granted: false, source: 'wallet_account', policyVersion: 3 },
+    ]);
+  });
+
+  it('a consent change is written down under Access, and an unchanged answer is not', async () => {
+    const before = auditCount(MEMBER, 'Marketing consent given');
+    const withdrawalsBefore = auditCount(MEMBER, 'Marketing consent withdrawn');
+
+    const granted = await treq('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    precondition(granted.status === 200, `the grant answered ${granted.status} ${granted.raw}`);
+    expect(auditCount(MEMBER, 'Marketing consent given')).toBe(before + 1);
+
+    // The same answer again: no event, and so no audit row either. The two have
+    // to agree, or the log and the trail tell different stories about one screen.
+    const again = await treq('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    precondition(again.status === 200, `the repeat answered ${again.status} ${again.raw}`);
+    expect(
+      auditCount(MEMBER, 'Marketing consent given'),
+      'an unchanged answer still wrote an audit row, so the log disagrees with the consent trail',
+    ).toBe(before + 1);
+
+    const withdrawn = await treq('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: false },
+    });
+    precondition(withdrawn.status === 200, `the withdrawal answered ${withdrawn.status}`);
+    expect(auditCount(MEMBER, 'Marketing consent withdrawn')).toBe(withdrawalsBefore + 1);
+
+    // And the row must not carry the customer's contact details as "detail".
+    const detail = scalar(
+      `select coalesce(detail,'') from audit_log
+        where subject_id='${MEMBER}' and action='Marketing consent withdrawn'
+        order by seq desc limit 1`,
+    );
+    expect(detail).toContain('policy v3');
+    expect(detail, 'the audit row carries her phone number').not.toContain(MEMBER_PHONE);
+  });
+
+  it('and the application cannot rewrite the trail — member_consent_event refuses UPDATE and DELETE to avo_app', async () => {
+    const granted = await treq('PATCH', '/members/me/notifications', {
+      token: member,
+      body: { offers: true },
+    });
+    precondition(granted.status === 200, `the grant answered ${granted.status} ${granted.raw}`);
+    precondition(consentTrail(MEMBER).length === 1, 'there is no event to attempt this against');
+
+    /**
+     * `SET ROLE` rather than a second connection, the same construction
+     * `scanner.test.ts` uses on `audit_log`: the privilege check then runs as
+     * `avo_app` on a connection `psql()` already has, and what comes back is
+     * Postgres refusing rather than a test asserting that a grant table looks
+     * right.
+     *
+     * ONE HALF, NOT TWO, and the difference from `audit_log` is deliberate rather
+     * than an omission: `audit_log` also carries a trigger, so it refuses its own
+     * OWNER, and migration 0020 says of this table that "the owner role can still
+     * correct it; the application role that serves requests cannot." Only the
+     * half that is claimed is asserted. If the trigger is ever added here, this
+     * spec is where to add its assertion.
+     */
+    const asApp = (statement: string): string => {
+      try {
+        psql(`SET ROLE avo_app; ${statement}`);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
+
+    expect(
+      asApp(`UPDATE member_consent_event SET granted = false WHERE member_id='${MEMBER}';`),
+      'the application role can UPDATE member_consent_event. A consent trail the application can ' +
+        'rewrite is not evidence of anything, and this table exists to be evidence.',
+    ).toMatch(/permission denied/i);
+
+    expect(
+      asApp(`DELETE FROM member_consent_event WHERE member_id='${MEMBER}';`),
+      'the application role can DELETE from member_consent_event',
+    ).toMatch(/permission denied/i);
+
+    // Still exactly one row, and still a grant.
+    expect(consentTrail(MEMBER)).toEqual([
+      { granted: true, source: 'wallet_account', policyVersion: 3 },
+    ]);
+  });
+});
+
+describe('account deletion — a state with a clock, and the clock must not be nudged', () => {
+  beforeEach(freshRows);
+
+  it('the wrong password is refused and NOTHING starts — no clock, no audit row', async () => {
+    setBalance(MEMBER, 0);
+    const auditBefore = auditCount(MEMBER, 'Account deletion requested');
+
+    const res = await treq<{ error?: string; message?: string }>('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: 'not-my-password' },
+    });
+    expect(res.status, res.raw).toBe(401);
+    expect(res.body.error).toBe('invalid_credentials');
+    expect(res.body.message).toBe('That password does not match.');
+
+    /**
+     * The session alone is not enough for this one, and the reason is the threat
+     * it is written against: an unlocked handset on a salon counter. So the
+     * refusal has to be TOTAL — a 401 that had already stamped the row would give
+     * whoever picked the phone up the outcome anyway.
+     */
+    expect(deletionColumns(MEMBER)).toEqual({ requestedAt: '', dueAt: '' });
+    expect(auditCount(MEMBER, 'Account deletion requested')).toBe(auditBefore);
+
+    // And the refusal never echoes the attempt back.
+    expect(res.raw).not.toContain('not-my-password');
+  });
+
+  it('credit in the wallet refuses the request, in integer fils, and names the amount', async () => {
+    setBalance(MEMBER, 24_500);
+
+    const res = await treq<{ error?: string; balanceFils?: number }>(
+      'POST',
+      '/members/me/deletion',
+      { token: member, body: { password: PASSWORD } },
+    );
+    expect(res.status, res.raw).toBe(409);
+    expect(res.body.error).toBe('balance_outstanding');
+
+    /**
+     * Non-negotiable #1 and #5 together. Her balance is prepaid credit the salon
+     * owes her and every refund is wallet credit, so erasing the account that
+     * NAMES the money while the money is still owed is the one outcome nobody can
+     * undo. The amount is in the refusal because the way out is "spend it or ask
+     * the salon", and a customer cannot act on "you have a balance".
+     */
+    expect(res.body.balanceFils).toBe(24_500);
+    expect(
+      Number.isInteger(res.body.balanceFils),
+      'the outstanding balance is not integer fils',
+    ).toBe(true);
+    // 24.5 is what a float would look like here, and it would type-check nowhere
+    // except on the wire.
+    expect(res.raw, 'the balance was serialised as a decimal').not.toContain('24.5');
+
+    expect(deletionColumns(MEMBER), 'a refused request still started the clock').toEqual({
+      requestedAt: '',
+      dueAt: '',
+    });
+  });
+
+  it('at zero balance the request is accepted, and the due date is exactly 30 days out', async () => {
+    setBalance(MEMBER, 0);
+
+    const res = await treq<DeletionView>('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    expect(res.status, res.raw).toBe(200);
+
+    expect(res.body.status).toBe('pending');
+    expect(res.body.graceDays).toBe(30);
+    /**
+     * `erasureScheduled: false` is the honest field, and the one a reader is most
+     * likely to "tidy away". The clock is real and the state is real; the job that
+     * does the erasing is not built, because which columns are nulled at the due
+     * date and which survive the 7-year financial record is the client's retention
+     * decision. A confirmation screen that said otherwise would be untrue.
+     */
+    expect(
+      res.body.erasureScheduled,
+      'the API now claims an erasure is scheduled. If the job exists, this spec should be ' +
+        'rewritten around it; if it does not, the confirmation screen is saying something untrue.',
+    ).toBe(false);
+
+    expect(res.body.requestedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(res.body.erasureDueAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // 30 days is the number the privacy policy publishes and the wallet's copy
+    // repeats, so it is asserted as an exact interval and not as "about a month".
+    const span = Date.parse(res.body.erasureDueAt!) - Date.parse(res.body.requestedAt!);
+    expect(span, `erasureDueAt is ${span}ms after requestedAt, not 30 days`).toBe(30 * 86_400_000);
+
+    // The clock is on the row the eventual job will read, not only in the reply.
+    const columns = deletionColumns(MEMBER);
+    expect(columns.requestedAt, 'the request was acknowledged and not recorded').not.toBe('');
+    expect(columns.dueAt).not.toBe('');
+  });
+
+  it('asking twice is one request — a mis-tapped button must not extend the 30 days', async () => {
+    setBalance(MEMBER, 0);
+    const auditBefore = auditCount(MEMBER, 'Account deletion requested');
+
+    const first = await treq<DeletionView>('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    precondition(first.status === 200, `the first request answered ${first.status} ${first.raw}`);
+    const columnsAfterFirst = deletionColumns(MEMBER);
+
+    const second = await treq<DeletionView>('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    expect(second.status, second.raw).toBe(200);
+    expect(
+      second.body.requestedAt,
+      'the second request restarted the clock. A double tap would then quietly buy 30 more days, ' +
+        'and the customer would be told the same thing both times.',
+    ).toBe(first.body.requestedAt);
+    expect(second.body.erasureDueAt).toBe(first.body.erasureDueAt);
+    expect(deletionColumns(MEMBER)).toEqual(columnsAfterFirst);
+
+    // One request, one audit row. Non-negotiable #4's reasoning applied to a
+    // non-money POST: the second call is the same request, so it is not an event.
+    expect(
+      auditCount(MEMBER, 'Account deletion requested'),
+      'the idempotent replay wrote a second audit row, so the log says she asked twice',
+    ).toBe(auditBefore + 1);
+  });
+
+  it('her session survives the request, deliberately — the grace window has to be reachable', async () => {
+    setBalance(MEMBER, 0);
+
+    const requested = await treq('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    precondition(requested.status === 200, `the request answered ${requested.status}`);
+
+    /**
+     * The opposite of the password change, which revokes every OTHER session on
+     * purpose. Here nothing is revoked, and that is the design: the 30 days are a
+     * grace window, and an account she is locked out of the moment she asks is one
+     * she cannot change her mind about. If this ever starts returning 401, the
+     * cancel below becomes unreachable and the window is decorative.
+     */
+    const stillIn = await treq('GET', '/members/me', { token: member });
+    expect(
+      stillIn.status,
+      'the deletion request signed her out, so she cannot reach the cancel that the 30-day ' +
+        'grace window exists to give her',
+    ).toBe(200);
+
+    // And she can still sign in fresh, not merely continue on an old token.
+    const reSignedIn = await treq<{ accessToken?: string }>('POST', '/auth/member/session', {
+      token: null,
+      body: { salonId: SALON_B, phone: MEMBER_PHONE, password: PASSWORD },
+    });
+    expect(reSignedIn.status, reSignedIn.raw).toBe(200);
+  });
+
+  it('cancelling clears the clock and says so in the same five keys', async () => {
+    setBalance(MEMBER, 0);
+    const auditBefore = auditCount(MEMBER, 'Account deletion cancelled');
+    const requested = await treq('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    precondition(requested.status === 200, `the request answered ${requested.status}`);
+
+    // No body, and therefore NO `content-type` header — which is what the real
+    // client sends. A body-less request that declares `application/json` makes
+    // Fastify answer 400 before the handler runs, and a suite that sent one would
+    // be testing its own HTTP client.
+    const res = await treq<DeletionView>('DELETE', '/members/me/deletion', { token: member });
+    expect(res.status, res.raw).toBe(200);
+
+    expect(res.body.status).toBe('none');
+    expect(res.body.requestedAt).toBeNull();
+    expect(res.body.erasureDueAt).toBeNull();
+    // The two constants do not become meaningless because the state went back to
+    // none — the screen still renders "removed within 30 days" beside the button.
+    expect(res.body.graceDays).toBe(30);
+    expect(res.body.erasureScheduled).toBe(false);
+
+    expect(deletionColumns(MEMBER)).toEqual({ requestedAt: '', dueAt: '' });
+    expect(auditCount(MEMBER, 'Account deletion cancelled')).toBe(auditBefore + 1);
+  });
+
+  it('and cancelling a request that does not exist is a 404, not a silent success', async () => {
+    const auditBefore = auditCount(MEMBER, 'Account deletion cancelled');
+    const res = await treq<{ error?: string }>('DELETE', '/members/me/deletion', { token: member });
+    expect(res.status, res.raw).toBe(404);
+    expect(res.body.error).toBe('no_deletion_request');
+    // A 404 that logged a cancellation would put an event in the audit log that
+    // never happened, on the one screen where the log is the customer's evidence.
+    expect(auditCount(MEMBER, 'Account deletion cancelled')).toBe(auditBefore);
+  });
+
+  it('both mutating handlers write an audit row, and audit_log refuses to give it back', async () => {
+    setBalance(MEMBER, 0);
+    const requestedBefore = auditCount(MEMBER, 'Account deletion requested');
+    const cancelledBefore = auditCount(MEMBER, 'Account deletion cancelled');
+    const requested = await treq('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    precondition(requested.status === 200, `the request answered ${requested.status}`);
+    const cancelled = await treq('DELETE', '/members/me/deletion', { token: member });
+    precondition(cancelled.status === 200, `the cancel answered ${cancelled.status}`);
+
+    expect(auditCount(MEMBER, 'Account deletion requested')).toBe(requestedBefore + 1);
+    expect(auditCount(MEMBER, 'Account deletion cancelled')).toBe(cancelledBefore + 1);
+
+    // Both halves this time, because `audit_log` claims both: the grants stop the
+    // application role and the trigger stops even the owner.
+    const attempt = (prefix: string, statement: string): string => {
+      try {
+        psql(`${prefix}${statement}`);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
+    const rows = `WHERE subject_id='${MEMBER}' AND action LIKE 'Account deletion%'`;
+
+    expect(
+      attempt('SET ROLE avo_app; ', `DELETE FROM audit_log ${rows};`),
+      'the application role can DELETE the deletion audit rows',
+    ).toMatch(/permission denied/i);
+    expect(
+      attempt('SET ROLE avo_app; ', `UPDATE audit_log SET action='edited' ${rows};`),
+      'the application role can UPDATE the deletion audit rows',
+    ).toMatch(/permission denied/i);
+    expect(
+      attempt('', `DELETE FROM audit_log ${rows};`),
+      'the database OWNER can delete the deletion audit rows, so append-only is a grant and not ' +
+        'a rule',
+    ).toMatch(/append-only/i);
+    expect(
+      attempt('', `UPDATE audit_log SET action='edited' ${rows};`),
+      'the database OWNER can edit the deletion audit rows',
+    ).toMatch(/append-only/i);
+
+    // Four refused attempts later, both rows are still exactly where they were.
+    expect(auditCount(MEMBER, 'Account deletion requested')).toBe(requestedBefore + 1);
+    expect(auditCount(MEMBER, 'Account deletion cancelled')).toBe(cancelledBefore + 1);
+  });
+
+  it('and no response on this screen carries a credential, at any nesting (non-negotiable #6)', async () => {
+    setBalance(MEMBER, 0);
+    const responses = [
+      await treq('GET', '/members/me/notifications', { token: member }),
+      await treq('PATCH', '/members/me/notifications', { token: member, body: { offers: true } }),
+      await treq('POST', '/members/me/deletion', { token: member, body: { password: PASSWORD } }),
+      await treq('DELETE', '/members/me/deletion', { token: member }),
+    ];
+    for (const res of responses) {
+      for (const smell of ['passwordHash', 'password_hash', 'password', '$argon2', PASSWORD]) {
+        expect(res.raw, `a response on this screen leaked ${smell}`).not.toContain(smell);
+      }
+    }
+  });
+});
+
+// ===========================================================================
+// SCOPE. Four routes that are member-only, called with every other kind of
+// credential this API issues.
+//
+// This project has already shipped a browser session that could debit a wallet —
+// `requireStaff`'s `surface` parameter exists because that check ran in one
+// direction only — so "the endpoint reads `requireMember`" is a claim to be
+// tested, not a reason not to test. A PIN session and a web session are two
+// DIFFERENT wrong credentials here, and they fail through different code, so
+// both are called directly.
+// ===========================================================================
+
+describe('the four member routes are member-scoped, and every other credential is refused', () => {
+  let web = '';
+  let pin = '';
+
+  beforeAll(async () => {
+    web = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+    pin = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+  }, 60_000);
+
+  beforeEach(freshRows);
+
+  /** The four calls, as a real client makes them. Reused per credential. */
+  const calls: Array<{ name: string; run: (token: string) => Promise<{ status: number; raw: string }> }> = [
+    {
+      name: 'GET /members/me/notifications',
+      run: (token) => treq('GET', '/members/me/notifications', { token }),
+    },
+    {
+      name: 'PATCH /members/me/notifications',
+      run: (token) => treq('PATCH', '/members/me/notifications', { token, body: { offers: true } }),
+    },
+    {
+      name: 'POST /members/me/deletion',
+      run: (token) => treq('POST', '/members/me/deletion', { token, body: { password: PASSWORD } }),
+    },
+    {
+      name: 'DELETE /members/me/deletion',
+      run: (token) => treq('DELETE', '/members/me/deletion', { token }),
+    },
+  ];
+
+  for (const surface of [
+    {
+      label: 'a dashboard web session',
+      token: () => web,
+      why:
+        'a web session is long-lived, browser-based and refreshable for thirty days. It is the ' +
+        'credential that could already debit a wallet once.',
+    },
+    {
+      label: 'a scanner PIN session',
+      token: () => pin,
+      why:
+        'a PIN belongs on the salon counter. Salon staff reading or writing a customer\'s ' +
+        'marketing consent — or starting the erasure of her account — is not an under-privileged ' +
+        'action, it is the wrong kind of key entirely.',
+    },
+  ]) {
+    for (const call of calls) {
+      it(`${call.name} refuses ${surface.label}`, async () => {
+        const before = { ...preferenceColumns(MEMBER), ...deletionColumns(MEMBER) };
+
+        const res = await call.run(surface.token());
+        expect(
+          res.status,
+          `${call.name} answered ${res.status} to ${surface.label}. ${surface.why}\n${res.raw}`,
+        ).toBe(403);
+        expect(res.raw, 'the refusal does not say whose endpoint this is').toContain('customers');
+
+        // A 403 that had already written is not a refusal. And nothing must have
+        // been resolved either: a staff principal reaching this handler at all
+        // would have to be resolved to SOME member first, and whichever one it
+        // picked would be somebody's row.
+        expect({ ...preferenceColumns(MEMBER), ...deletionColumns(MEMBER) }).toEqual(before);
+      });
+    }
+  }
+
+  it('a forged bearer token is a 401 on all four — the token path never falls back to the test shim', async () => {
+    /**
+     * WHY THIS AND NOT AN ANONYMOUS REQUEST.
+     *
+     * `AVO_TEST_PRINCIPALS` is on in this harness, and under it a request with NO
+     * Authorization header is not anonymous: `testPrincipalFor` resolves anything
+     * under `/members/` to a seeded member. So an anonymous probe here would be
+     * testing the shim, not the API.
+     *
+     * A GARBAGE BEARER IS THE HONEST PROBE, and it is also the more interesting
+     * one: `resolvePrincipal` takes the bearer branch the moment a header is
+     * present, and the shim is unreachable from there. If a malformed token ever
+     * fell through to the shim, every one of these would answer 200 as a real
+     * seeded customer.
+     */
+    for (const call of calls) {
+      const res = await call.run('not.a.real.token');
+      expect(res.status, `${call.name} accepted a forged bearer: ${res.raw}`).toBe(401);
+    }
+  });
+
+  it('and the password gate stands even when a principal is handed over for free', async () => {
+    /**
+     * The one assertion worth making about the shim rather than around it.
+     *
+     * With `AVO_TEST_PRINCIPALS` on, an unauthenticated `POST /members/me/deletion`
+     * arrives holding a real member principal. It is still refused, because the
+     * password is a SECOND factor and not a restatement of the session — the same
+     * reasoning that makes `POST /members/me/password` demand `current`. That is
+     * what stops the most destructive endpoint in the wallet from being reachable
+     * by anyone who can reach the port.
+     */
+    const res = await treq<{ error?: string }>('POST', '/members/me/deletion', {
+      token: null,
+      body: {},
+    });
+    expect(
+      res.status,
+      `an unauthenticated deletion request answered ${res.status}: ${res.raw}`,
+    ).toBe(401);
+    expect(res.body.error).toBe('invalid_credentials');
+  });
+});
+
+// ===========================================================================
+// TENANCY. One customer's session against another customer's row.
+// ===========================================================================
+
+describe('one member cannot read or write another member\'s notifications or deletion state', () => {
+  beforeEach(freshRows);
+
+  it('each session reads HER OWN preferences — two members, two different answers', async () => {
+    /**
+     * The bug class this is written against shipped on this project once already:
+     * a dashboard showed one staff member the previous user's figures. A read that
+     * is keyed on anything but the calling principal — a cache, a module-level
+     * variable, a header — passes every single-user test there is.
+     *
+     * The victim is seeded with all four switches OFF and the member with all four
+     * ON, so the two answers cannot be confused for each other and neither is the
+     * column default.
+     */
+    const mine = await treq<NotificationView>('GET', '/members/me/notifications', {
+      token: member,
+    });
+    const hers = await treq<NotificationView>('GET', '/members/me/notifications', {
+      token: victim,
+    });
+    expect(mine.status, mine.raw).toBe(200);
+    expect(hers.status, hers.raw).toBe(200);
+
+    expect(mine.body.push).toBe(true);
+    expect(mine.body.receipt).toBe(true);
+    expect(hers.body.push, 'the second session was served the first member\'s row').toBe(false);
+    expect(hers.body.receipt).toBe(false);
+
+    // Interleaved, in case the leak is a cache filled by whoever asked first.
+    const mineAgain = await treq<NotificationView>('GET', '/members/me/notifications', {
+      token: member,
+    });
+    expect(mineAgain.body.push, 'the second session\'s read changed the first\'s answer').toBe(true);
+  });
+
+  it('a query parameter naming another member is ignored, not honoured', async () => {
+    const before = preferenceColumns(VICTIM);
+
+    // `?memberId=` is the cheapest possible attempt and the one a broken handler
+    // would honour: `scenariosOf` already reads `req.query.scenario`, so query
+    // parameters are not inert on this API.
+    const res = await treq<NotificationView>(
+      'PATCH',
+      `/members/me/notifications?memberId=${VICTIM}`,
+      { token: member, body: { offers: true } },
+    );
+    expect(res.status, res.raw).toBe(200);
+
+    // It wrote HER OWN consent, which is correct — the parameter is noise.
+    expect(consentTrail(MEMBER)).toHaveLength(1);
+    expect(
+      consentTrail(VICTIM),
+      'a query parameter redirected a consent event onto another member. `offers` is marketing ' +
+        'consent, so this is a campaign arriving at somebody who never agreed to one.',
+    ).toEqual([]);
+    expect(preferenceColumns(VICTIM)).toEqual(before);
+  });
+
+  it('there is no by-id route to reach another member\'s notifications through', async () => {
+    for (const path of [
+      `/members/${VICTIM}/notifications`,
+      `/members/${VICTIM}/deletion`,
+    ]) {
+      const res = await treq('GET', path, { token: member });
+      expect(
+        res.status,
+        `GET ${path} answered ${res.status}. A by-id route on this screen would be a customer ` +
+          `reading another customer's row, which is the leak this project has already shipped ` +
+          `once at the salon level.\n${res.raw}`,
+      ).toBe(404);
+    }
+  });
+
+  it('and a deletion request naming another member starts HER clock and only hers', async () => {
+    setBalance(MEMBER, 0);
+    setBalance(VICTIM, 0);
+    // A delta, not `toBe(0)`: the last spec in this block makes a LEGITIMATE
+    // deletion request as the victim, and an absolute zero here would then depend
+    // on the order the specs happen to be declared in.
+    const victimAuditBefore = auditCount(VICTIM, 'Account deletion requested');
+
+    /**
+     * Both members share the same password hash — `seedSalonB()`'s construction,
+     * copied here — so `password` cannot be what stops this. If the handler read
+     * `memberId` from the body, the credential check would pass and the victim's
+     * 30-day clock would start. That is the whole point of using a hash they
+     * share: it removes the accidental defence and leaves only the real one.
+     */
+    const res = await treq<DeletionView>('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD, memberId: VICTIM, id: VICTIM },
+    });
+    expect(res.status, res.raw).toBe(200);
+
+    expect(deletionColumns(MEMBER).requestedAt, 'her own request did not start').not.toBe('');
+    expect(
+      deletionColumns(VICTIM),
+      'a body field started ANOTHER customer\'s account erasure. She was never asked, never ' +
+        'authenticated, and the first she would know of it is the account being gone.',
+    ).toEqual({ requestedAt: '', dueAt: '' });
+    expect(auditCount(VICTIM, 'Account deletion requested')).toBe(victimAuditBefore);
+
+    // And the cancel is hers too: it must not clear a request it did not create.
+    const cancelled = await treq('DELETE', `/members/me/deletion?memberId=${VICTIM}`, {
+      token: member,
+    });
+    expect(cancelled.status, cancelled.raw).toBe(200);
+    expect(deletionColumns(MEMBER)).toEqual({ requestedAt: '', dueAt: '' });
+  });
+
+  it('a member with a pending deletion request cannot be cancelled by another member\'s session', async () => {
+    setBalance(VICTIM, 0);
+    const hers = await treq('POST', '/members/me/deletion', {
+      token: victim,
+      body: { password: PASSWORD },
+    });
+    precondition(hers.status === 200, `the victim's own request answered ${hers.status} ${hers.raw}`);
+    const victimClock = deletionColumns(VICTIM);
+    precondition(victimClock.requestedAt !== '', 'the victim has no pending request to protect');
+
+    // The other member has none of her own, so a handler that resolved the
+    // subject from anywhere but the token would either clear the victim's or 404.
+    // A 404 is the correct answer and the victim's clock must be untouched.
+    const res = await treq<{ error?: string }>('DELETE', '/members/me/deletion', { token: member });
+    expect(res.status, res.raw).toBe(404);
+    expect(res.body.error).toBe('no_deletion_request');
+    expect(
+      deletionColumns(VICTIM),
+      'one member\'s cancel cleared another member\'s pending deletion request',
+    ).toEqual(victimClock);
+  });
+});
+
 /**
  * GAP — the parts of this screen whose SHAPE is not a client decision, so they
  * cannot be written as a knownBug without inventing the contract first. Each
@@ -490,15 +1502,18 @@ describe('the profile, the policy set and support — the rest of the Account sc
  */
 describe('GAP: Account behaviour with no contract yet', () => {
   it.todo(
-    'account deletion has no endpoint anywhere — not in api-contract.md, not in packages/mock, not in api/src/routes. Whether it is a ticket, a queued 30-day job or a state on the member changes what the confirmation is allowed to say, and the copy already promises "removed within 30 days" (lane A + product)',
-  );
-  it.todo(
-    'the notification switches have no persisted home; the wallet holds them locally today, so a reinstall silently re-enables everything the customer turned off (lane A)',
-  );
-  it.todo(
     'POST /members/me/phone-change/{id}/verify — the second half of the challenge pair, including the notice the server sends to the OLD number (lane A)',
   );
   it.todo(
     'accepting a new policy version: the member stamps a version but nothing lets her accept a newer one, so a re-published set has no path to consent (lane A)',
+  );
+  it.todo(
+    'the balance check on POST /members/me/deletion happens ONCE, at request time. Nothing stops a member with a pending request from topping up afterwards, so `deletion_requested_at` over a positive `balance_fils` is a reachable state — and it is exactly the state the 409 exists to prevent. Whether the top-up is refused, the request is auto-cancelled, or the erasure job simply skips her, is a product call and cannot be asserted without inventing it (lane A + product)',
+  );
+  it.todo(
+    'the erasure itself. `erasureScheduled` is false on every response and no job reads `member_deletion_due_idx`, so the 30-day promise in the published privacy policy currently has a clock and no hand. Which columns are nulled at the due date and which survive the 7-year financial record is the client\'s retention decision — CLAUDE.md § Escalate (client)',
+  );
+  it.todo(
+    'nothing lets a member EXPORT her data, which the same privacy policy offers alongside deletion. No endpoint, no design screen, no contract (lane A + product)',
   );
 });

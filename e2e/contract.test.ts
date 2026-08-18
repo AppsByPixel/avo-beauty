@@ -4,7 +4,7 @@
  * HOW TO RUN
  *
  *   pnpm install
- *   pnpm --filter @avo/api run db:up
+ *   pnpm --dir ./api run db:up
  *   cd e2e && ../node_modules/.bin/vitest run contract.test.ts
  *
  * WHY THIS FILE EXISTS
@@ -76,6 +76,27 @@
  * `POST /charges`, `POST /v1/support/tickets` — are probed by name below but not
  * census-enforced, because most writes return an acknowledgement rather than an
  * entity and a census over them would be a list of exemptions.
+ *
+ * AND THE SHAPES WITH NO SCHEMA AT ALL — the WIRE PINS at the bottom.
+ * -------------------------------------------------------------------
+ * Rule 4 above says a served shape with no schema is named, not skipped, and for
+ * a while naming it was all this file could do. That is not enough for a shape a
+ * client is ALREADY BUILT AGAINST. `GET`/`PATCH /members/me/notifications` and
+ * `POST`/`DELETE /members/me/deletion` shipped after `packages/types` and have no
+ * schema in it; the wallet's Account screen reads all four. A shape with no schema
+ * does not stop drifting, it just drifts against the client instead — and with
+ * nothing in `packages/types` to compare against, `keyDeltas` has no second side.
+ *
+ * So the second side is written by hand: the key set the wire serves, declared
+ * here, compared BOTH WAYS against a real response. `wireShape` in
+ * support/contract-drift.ts explains the two directions and why a `null` leaf is a
+ * PRESENT key and not an absent one — `offersConsent.at` is null until she is
+ * asked, and an API that omits it instead is a different contract behind an
+ * identical screen. Only the shape is pinned, never a value: a pinned value is a
+ * fixture, and rule 1 says this file holds none.
+ *
+ * The pin is a stopgap, and it should lose. The day either shape gets a schema in
+ * `packages/types`, delete its pin and add a probe.
  */
 
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
@@ -106,14 +127,18 @@ import {
   describeParseError,
   discoverGetRoutes,
   keyDeltas,
+  wireShape,
 } from './support/contract-drift.js';
 import {
   A_SERVICE,
+  A_STAFF_FULL,
   QA_MEMBER,
   QA_MEMBER_PHONE,
   SALON_A,
+  SALON_B,
   attemptScannerSignIn,
   mintWalletTokenFor,
+  psql,
   signInDashboard,
   signInMember,
   signInScanner,
@@ -140,6 +165,41 @@ let dashboard = '';
 let scanner = '';
 let artistScanner = '';
 let member = '';
+let pinMember = '';
+
+/**
+ * A MEMBER OF THIS FILE'S OWN, FOR THE DELETION PIN ONLY.
+ *
+ * `POST /members/me/deletion` answers 409 while there is credit in the wallet —
+ * correctly, non-negotiable #5 makes that balance money the salon owes her — so
+ * capturing the 200 shape needs a member at zero. `QA_MEMBER` is not her: this
+ * file tops her up and charges her, and zeroing her balance to take one sample
+ * would make the order of the writes in `beforeAll` load-bearing. It also STARTS
+ * A DELETION CLOCK on whoever it is pointed at, which is not a thing to do to a
+ * row another file signs in as.
+ *
+ * The password hash is copied off `staff_user` rather than pasted, the same way
+ * `seedSalonB()` does it: `hashSecret()` is one function for staff and members, so
+ * the hash is portable and cannot drift out of step with lane A's seed.
+ */
+const PIN_MEMBER = 'QA-CT-0001';
+const PIN_MEMBER_PHONE = '+96599777401';
+const PIN_MEMBER_PASSWORD = 'noura-dev-password';
+
+function seedPinMember(): void {
+  psql(`
+    INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                        balance_fils, visits, tier, stamps, policy_version)
+    SELECT '${PIN_MEMBER}', '${SALON_B}', 'Contract Pin', '${PIN_MEMBER_PHONE}',
+           NULL, false, s.password_hash, 0, 0, 'bronze', NULL, 3
+    FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+    ON CONFLICT (id) DO UPDATE SET
+      password_hash         = EXCLUDED.password_hash,
+      balance_fils          = 0,
+      deletion_requested_at = NULL,
+      deletion_due_at       = NULL;
+  `);
+}
 
 /**
  * NINE DAYS OUT, AND THE NUMBER IS LOAD-BEARING.
@@ -485,7 +545,10 @@ const UNMODELLED: Record<string, string> = {
   'GET /members/me/notifications':
     'the notification preference set and its consent record. Genuinely unmodelled and ' +
     'it carries a consent decision (`offersConsent.policyVersion`) — the kind of field ' +
-    'non-negotiable #10 is about. Worth a schema.',
+    'non-negotiable #10 is about. Worth a schema. UNTIL IT HAS ONE it is WIRE-PINNED at ' +
+    'the bottom of this file, in both directions, along with its PATCH and the two ' +
+    'deletion routes — the wallet reads all four today, so "unmodelled" was the whole ' +
+    'of the guard on a shape a client is already built against.',
   'GET /_gateway/:ref':
     'the sandbox PSP\'s hosted page. Serves HTML to a browser, not JSON to a client, ' +
     'and exists only under the test driver.',
@@ -493,6 +556,37 @@ const UNMODELLED: Record<string, string> = {
 
 /** ProductSchema has no live sample: `api/src/db/seed.ts` seeds no products. */
 const PRODUCTS_ROUTE = 'GET /salons/:id/products';
+
+/**
+ * ROUTES LANE A HAS COMMITTED BUT WHICH HAVE NOT MERGED INTO THIS BRANCH YET.
+ *
+ * NOT AN EXEMPTION, and the difference is the spec at the bottom of the census:
+ * an entry here is green ONLY while the route is absent from disk. The hour it
+ * lands, that spec goes RED holding the instruction below. So a route cannot slip
+ * through in either state — unlisted and served fails the unclassified check,
+ * listed and served fails the arrival check.
+ *
+ * WHY THIS EXISTS AT ALL. Lane D is told to test integrated code, so its branch
+ * necessarily trails lane A's by a merge. Trunk relayed `GET /members/me/deletion`
+ * (feat/api 540b3f1) before it reached this checkout, and the census cannot be
+ * taught about a route in advance: `UNMODELLED` is checked in both directions, so
+ * an entry for a route that is not served yet fails the ghost spec — correctly,
+ * because that check is what stops UNMODELLED becoming a graveyard. The choice was
+ * to weaken the ghost check for everything or to write the pending arrival down
+ * where it is visible. This is the second.
+ */
+const AWAITING_MERGE: Record<string, string> = {
+  'GET /members/me/deletion':
+    'lane A, feat/api 540b3f1 — the deletion state as a READ, which the wallet needed to ' +
+    'render the pending banner without POSTing to find out. It calls the same ' +
+    '`serialiseDeletion` and the same `requireMember` as POST/DELETE, so the five keys are ' +
+    'already pinned below as DELETION_WIRE. WHEN IT ARRIVES, three things: (1) capture it in ' +
+    'beforeAll and add a WirePin for it reusing DELETION_WIRE, which also proves the read and ' +
+    'the two writes have not diverged; (2) add it to the `calls` array in account.test.ts so ' +
+    'it is refused for a dashboard session, a scanner PIN session and a forged bearer like the ' +
+    'other four; (3) delete this entry. The by-id tenancy spec in account.test.ts needs no ' +
+    'change — `me` is a literal path segment, so `/members/{someone-else}/deletion` still 404s.',
+};
 
 // ------------------------------------------------------------------- the run --
 
@@ -584,6 +678,53 @@ beforeAll(async () => {
   });
   if (charged.status !== 200) throw new Error(`POST /charges: ${charged.status} ${charged.raw}`);
   captured.set('POST /charges', charged);
+
+  // ---- the four shapes with no schema, captured in the order that makes them --
+  //
+  // GET first, so the pin sees the never-asked consent record — `granted: false`
+  // with three nulls beside it — which is the shape that distinguishes "she said
+  // no" from "she has never been asked", and the shape a `.nullable()` that
+  // forgot `.optional()` would reject. Then the PATCH, which must serve the
+  // IDENTICAL key set: the wallet binds one screen to both, so a response that
+  // grew on one and not the other is drift the screen cannot see.
+  seedPinMember();
+  pinMember = await signInMember(SALON_B, PIN_MEMBER_PHONE);
+
+  const notifications = await treq<any>('GET', '/members/me/notifications', { token: pinMember });
+  if (notifications.status !== 200) {
+    throw new Error(`GET /members/me/notifications: ${notifications.status} ${notifications.raw}`);
+  }
+  captured.set('GET /members/me/notifications', notifications);
+
+  const patched = await treq<any>('PATCH', '/members/me/notifications', {
+    token: pinMember,
+    body: { offers: true },
+  });
+  if (patched.status !== 200) {
+    throw new Error(`PATCH /members/me/notifications: ${patched.status} ${patched.raw}`);
+  }
+  captured.set('PATCH /members/me/notifications', patched);
+
+  // She is seeded at zero, so the 200 is reachable. A 409 here means the seed
+  // gave her credit, not that the endpoint is wrong — say which.
+  const requested = await treq<any>('POST', '/members/me/deletion', {
+    token: pinMember,
+    body: { password: PIN_MEMBER_PASSWORD },
+  });
+  if (requested.status !== 200) {
+    throw new Error(
+      `POST /members/me/deletion: ${requested.status} ${requested.raw}\n` +
+        `A 409 balance_outstanding means ${PIN_MEMBER} was seeded with credit; this file needs ` +
+        'her at zero to sample the accepted shape at all.',
+    );
+  }
+  captured.set('POST /members/me/deletion', requested);
+
+  const cancelled = await treq<any>('DELETE', '/members/me/deletion', { token: pinMember });
+  if (cancelled.status !== 200) {
+    throw new Error(`DELETE /members/me/deletion: ${cancelled.status} ${cancelled.raw}`);
+  }
+  captured.set('DELETE /members/me/deletion', cancelled);
 
   // ---- a support ticket -------------------------------------------------------
   const ticket = await treq<any>('POST', '/v1/support/tickets', {
@@ -828,7 +969,12 @@ describe('census — every GET the API registers is either probed or explicitly 
       .map((r) => ({ route: `GET ${r.path}`, file: r.file }))
       .filter(
         (r) =>
-          !probed.has(r.route) && !unmodelled.has(r.route) && r.route !== PRODUCTS_ROUTE,
+          !probed.has(r.route) &&
+          !unmodelled.has(r.route) &&
+          // Pending arrivals are classified for THIS check and fail their own,
+          // below, the moment they land. Never both green.
+          !(r.route in AWAITING_MERGE) &&
+          r.route !== PRODUCTS_ROUTE,
       )
       .map((r) => `${r.route}   (${r.file})`);
 
@@ -838,6 +984,24 @@ describe('census — every GET the API registers is either probed or explicitly 
         'to its schema in packages/types, or add it to UNMODELLED with the reason it has no ' +
         'schema. Silence is the failure mode this census exists to remove:\n  ' +
         unclassified.join('\n  '),
+    ).toEqual([]);
+  });
+
+  /**
+   * THE ARRIVAL CHECK. The other half of `AWAITING_MERGE`, and the reason that map
+   * is a note rather than a hole: a pending route is tolerated by the unclassified
+   * check above only for as long as it is genuinely absent.
+   */
+  it('nothing in AWAITING_MERGE has landed yet — the hour one does, classify it properly', () => {
+    const served = new Set(discovered.map((r) => `GET ${r.path}`));
+    const arrived = Object.keys(AWAITING_MERGE).filter((r) => served.has(r));
+
+    expect(
+      arrived,
+      'A route this file was told to expect is now SERVED, so it must stop being a note and ' +
+        'become a classification. Do what its entry says, then delete the entry:\n\n' +
+        arrived.map((r) => `  ${r}\n    ${AWAITING_MERGE[r]}`).join('\n\n') +
+        '\n',
     ).toEqual([]);
   });
 
@@ -874,6 +1038,219 @@ describe('census — every GET the API registers is either probed or explicitly 
       'A product now exists, so ProductSchema finally has a live sample. Move ' +
         "GET /salons/{id}/products into probes() with requireNonEmpty: ['items'] and delete " +
         'this spec — it was only ever a placeholder for a shape nothing could witness.',
+    ).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// WIRE PINS — the shapes `packages/types` has no schema for at all
+// ===========================================================================
+
+/**
+ * Four routes, two shapes, no schema anywhere, and the wallet's Account screen
+ * built on all four.
+ *
+ * The rest of this file compares a response against a schema. These have none, so
+ * they cannot drift against one — they drift against the CLIENT, silently, in the
+ * same direction and with the same symptom: a field the screen reads stops
+ * arriving and nothing anywhere goes red. `changeableUntil` was that, and it had a
+ * schema to be lost from; a shape with no schema does not even have that much.
+ *
+ * So the schema's side is declared here and compared both ways. See `wireShape`.
+ */
+interface WirePin {
+  /** The captured response's key. */
+  label: string;
+  /** The exact key set the wire serves. Values are ignored; only shape is pinned. */
+  wire: unknown;
+  /** Why this shape matters to somebody, in the terms the project already uses. */
+  why: string;
+}
+
+/**
+ * THE NEVER-ASKED CONSENT RECORD, and every leaf of it is a decision.
+ *
+ * `granted: false` with `at`, `source` and `policyVersion` all null is "she has
+ * never been asked" — services/consent.ts is explicit that this is NOT the same
+ * fact as "she said no", and NOT "unknown", and NOT "assume yes". Non-negotiable
+ * #8 makes the send path read this record; a client or a sender that could not
+ * tell those apart would be guessing about consent, which is the one thing there
+ * is no defensible guess about.
+ *
+ * All three nulls are pinned AS PRESENT KEYS. An API that omitted them until she
+ * answered would serve an identical-looking screen and a different contract.
+ */
+const NEVER_ASKED_CONSENT = { granted: false, at: null, source: null, policyVersion: null };
+
+const NOTIFICATIONS_WIRE = {
+  push: true,
+  remind: true,
+  wa: true,
+  receipt: true,
+  /**
+   * Flattened for the switch to bind to, AND carried in full beside it. Both, on
+   * purpose: routes/members.ts says a response with only the boolean "would make
+   * the event storage pointless to everyone but the database". So the pin holds
+   * both, and a fix that drops either half is drift.
+   */
+  offers: false,
+  offersConsent: NEVER_ASKED_CONSENT,
+};
+
+const DELETION_WIRE = {
+  requestedAt: null,
+  erasureDueAt: null,
+  status: 'pending',
+  /**
+   * `graceDays` is the 30 the privacy policy publishes and the wallet's copy
+   * repeats. Served rather than hardcoded in the client for the reason
+   * non-negotiable #10 exists: the number is part of a legal promise, so the
+   * screen must render the server's, not its own.
+   */
+  graceDays: 30,
+  /**
+   * The honest bit, and the one most likely to be "tidied away" by someone who
+   * reads it as redundant. A client has to be able to tell "we have your request
+   * and the clock is running" from "it has been carried out" — the erasure job is
+   * not built, and a response that implied otherwise would make the confirmation
+   * screen say something untrue.
+   */
+  erasureScheduled: false,
+};
+
+function wirePins(): WirePin[] {
+  return [
+    {
+      label: 'GET /members/me/notifications',
+      wire: NOTIFICATIONS_WIRE,
+      why:
+        'the Account screen\'s five switches and the consent record behind the fifth. Four of ' +
+        'them are not client-owned at all — the receipt outbox does not consult a phone before ' +
+        'it queues a message — so a preference lost between the wire and the screen is a false ' +
+        'statement made to the customer, not a lost setting.',
+    },
+    {
+      label: 'PATCH /members/me/notifications',
+      wire: NOTIFICATIONS_WIRE,
+      why:
+        'the write answers with the same screen-shaped read, so the client can render the result ' +
+        'without a second round trip. IDENTICAL to the GET by design: one screen, two routes.',
+    },
+    {
+      label: 'POST /members/me/deletion',
+      wire: DELETION_WIRE,
+      why:
+        'the confirmation screen for the most destructive thing the wallet offers. `requestedAt` ' +
+        'and `erasureDueAt` are what make "removed within 30 days" a statement about something.',
+    },
+    {
+      label: 'DELETE /members/me/deletion',
+      wire: DELETION_WIRE,
+      why:
+        'the way back out of the grace window. Same five keys as the request, with the two ' +
+        'instants null and `status: "none"` — the shape is the state, so one shape serves both.',
+    },
+  ];
+}
+
+describe('wire pins — the served shape of what packages/types does not model yet', () => {
+  for (const pin of wirePins()) {
+    it(`${pin.label} still serves exactly the key set this suite pinned`, () => {
+      const res = response(pin.label);
+      expect([200, 201], `${pin.label} answered ${res.status}: ${res.raw.slice(0, 300)}`).toContain(
+        res.status,
+      );
+
+      const served = wireShape(res.body);
+      const declared = wireShape(pin.wire);
+
+      const missing = declared.filter((k) => !served.includes(k));
+      const extra = served.filter((k) => !declared.includes(k));
+
+      expect(
+        missing,
+        `${pin.label} NO LONGER SERVES ${missing.join(', ')}.\n\n` +
+          'This is the direction that bites. There is no schema in packages/types for this ' +
+          'shape, so nothing else in this repository would have noticed: the wallet reads ' +
+          '`undefined` and cannot tell that from a value the server chose not to send. ' +
+          `Why the shape matters: ${pin.why}\n\n` +
+          'If the field was renamed or genuinely removed, update the pin AND say so in the ' +
+          'lane report — a client is built on it.\n' +
+          `--- what was served ---\n${res.raw.slice(0, 800)}\n`,
+      ).toEqual([]);
+
+      expect(
+        extra,
+        `${pin.label} now serves ${extra.join(', ')}, which this pin does not declare.\n\n` +
+          'Benign on its own — nothing is lost by a response growing — but the pin is the only ' +
+          'record of this shape that exists, and a pin nobody updates stops being evidence of ' +
+          'anything. Add the key here, and consider whether the shape has earned a schema in ' +
+          'packages/types instead (at which point delete the pin and add a probe).\n' +
+          `--- what was served ---\n${res.raw.slice(0, 800)}\n`,
+      ).toEqual([]);
+    });
+  }
+
+  /**
+   * ONE SCREEN, TWO ROUTES, AND THE WALLET BINDS THE SAME STATE TO BOTH.
+   *
+   * Asserted against each other rather than only against the pin, because the pin
+   * is one constant used twice and so cannot catch the case where a fix widens one
+   * handler and not the other — both would have to be edited to make that spec
+   * pass, and a reader editing the pin would make it pass by accident. Comparing
+   * the two live responses cannot be satisfied that way.
+   */
+  it('the notifications GET and PATCH serve the same shape — one screen reads both', () => {
+    const get = wireShape(response('GET /members/me/notifications').body);
+    const patch = wireShape(response('PATCH /members/me/notifications').body);
+    expect(
+      patch,
+      'PATCH /members/me/notifications answers with a different key set than the GET does. The ' +
+        'Account screen renders the write\'s response to avoid a second round trip, so a key ' +
+        'present on one and absent on the other is a switch that appears to work and then ' +
+        'reverts on the next open.',
+    ).toEqual(get);
+  });
+
+  /** Same argument for the deletion pair: the shape IS the state. */
+  it('the deletion POST and DELETE serve the same shape — the shape is the state', () => {
+    const requested = wireShape(response('POST /members/me/deletion').body);
+    const cancelled = wireShape(response('DELETE /members/me/deletion').body);
+    expect(
+      cancelled,
+      'the cancel answers with a different key set than the request does, so a client cannot ' +
+        'hold one state object for the deletion section of the Account screen.',
+    ).toEqual(requested);
+  });
+
+  /**
+   * THE PIN IS NOT A SUBSTITUTE FOR A SCHEMA, and this spec is where that is
+   * written down rather than left in a comment nobody re-reads.
+   *
+   * It goes RED the day either shape gets a schema in `packages/types`, which is
+   * the moment the pin should be deleted and a real probe added — the pin is
+   * hand-maintained and a probe is not, so leaving both would mean the weaker
+   * guard is the one still being edited.
+   */
+  it('and neither shape has a schema yet — the day one does, delete its pin and add a probe', async () => {
+    const types: Record<string, unknown> = await import('../packages/types/dist/index.js');
+    const arrived = [
+      'NotificationPreferencesSchema',
+      'NotificationSettingsSchema',
+      'MemberNotificationsSchema',
+      'ConsentStateSchema',
+      'MarketingConsentSchema',
+      'AccountDeletionSchema',
+      'DeletionStateSchema',
+      'DeletionRequestSchema',
+    ].filter((name) => name in types);
+
+    expect(
+      arrived,
+      `packages/types now exports ${arrived.join(', ')}. If that is the schema for one of the ` +
+        'shapes pinned above, the pin has been superseded: move the route into probes() bound ' +
+        'to the real schema, delete the pin, and remove the route from UNMODELLED. Two guards ' +
+        'over one shape means the hand-written one is the one still being maintained.',
     ).toEqual([]);
   });
 });

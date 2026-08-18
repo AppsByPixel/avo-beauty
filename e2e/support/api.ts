@@ -214,7 +214,7 @@ export async function ensureBalanceAtLeast(minFils: number, label = 'fixture'): 
     throw new Error(
       `The shared member is short ${shortfall} fils and POST /topups answered ` +
         `${created.status} ${JSON.stringify(created.body)}.\n` +
-        'Re-seed lane A\'s fixture:  pnpm --filter @avo/api run db:seed',
+        'Re-seed lane A\'s fixture:  pnpm --dir ./api run db:seed',
     );
   }
 
@@ -227,7 +227,7 @@ export async function ensureBalanceAtLeast(minFils: number, label = 'fixture'): 
       `The shared member is short ${shortfall} fils and this API's top-up does not go ` +
         `through the sandbox gateway (redirectUrl: ${created.body.redirectUrl ?? '(none)'}).\n` +
         'This suite cannot fund her against a real processor. Re-seed instead:\n' +
-        '  pnpm --filter @avo/api run db:seed',
+        '  pnpm --dir ./api run db:seed',
     );
   }
 

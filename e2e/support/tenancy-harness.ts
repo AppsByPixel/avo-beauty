@@ -370,6 +370,24 @@ const PG_USER = process.env.POSTGRES_USER ?? 'avo';
  * likes without taking anyone down. Override with POSTGRES_DB to point the suite
  * back at a shared database deliberately.
  *
+ * AND `--filter` IS A SECOND WAY THAT SEED REACHES THE WRONG DATABASE, worse than
+ * the first because it does not need another lane to be careless. `pnpm --filter
+ * @avo/api run db:seed` resolves the filter against whatever workspace the shell's
+ * cwd belongs to, and FOUR worktrees of this repository each contain a package
+ * called `@avo/api`. Lane A ran it from inside its own worktree and hit
+ * `~/dev/avo-wallet/api` against `avo_lane_b`; the output looked entirely normal.
+ * For lane D that is not a wasted run, it is a seed truncating another lane's
+ * fixtures — the 401 mechanism above, arriving from a command that appeared to be
+ * scoped.
+ *
+ * So the advice printed by this suite now says `pnpm --dir ./api run db:seed`,
+ * which is unambiguous because it names a path instead of a package name. NOTHING
+ * HERE EXECUTES EITHER FORM: `runApiDbScriptResult` invokes lane A's scripts
+ * directly with `cwd: join(repoRoot, 'api')`, and `repoRoot` is derived from
+ * `import.meta.url`, so it is always THIS worktree no matter where the runner was
+ * started. The hazard only ever lives in a command a human copies out of an error
+ * message, which is why the error messages were the thing to fix.
+ *
  * AND IT IS ONE DATABASE PER RUN, NOT ONE DATABASE CALLED `avo_qa`.
  * ------------------------------------------------------------------
  * The paragraphs above were right about the hazard and wrong about the scope of
@@ -520,7 +538,7 @@ export function psql(sql: string): string {
     throw new Error(
       `psql failed against container "${PG_CONTAINER}".\n` +
         why +
-        'Is lane A\'s Postgres up?  pnpm --filter @avo/api run db:up\n' +
+        'Is lane A\'s Postgres up?  pnpm --dir ./api run db:up\n' +
         `--- sql ---\n${sql.trim()}\n--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
     );
   }
@@ -707,7 +725,7 @@ function ensureDatabase(): void {
     const e = err as { stderr?: Buffer | string; message?: string };
     throw new Error(
       `Could not create "${db}" on container "${PG_CONTAINER}".\n` +
-        'Is lane A\'s Postgres up?  pnpm --filter @avo/api run db:up\n' +
+        'Is lane A\'s Postgres up?  pnpm --dir ./api run db:up\n' +
         `--- stderr ---\n${String(e.stderr ?? e.message ?? '')}`,
     );
   }
@@ -928,7 +946,7 @@ function preflight(): void {
   } catch {
     throw new Error(
       `The tenancy suite needs lane A's Postgres. Container "${PG_CONTAINER}" is not there.\n` +
-        '  pnpm --filter @avo/api run db:up',
+        '  pnpm --dir ./api run db:up',
     );
   }
 
@@ -969,7 +987,7 @@ function preflight(): void {
     throw new Error(
       `The schema in "${pgDb()}" is not migrated — this suite reads and writes real rows.\n` +
         `  DATABASE_URL=postgres://avo:avo_dev_password@127.0.0.1:5433/${pgDb()} ` +
-        'pnpm --filter @avo/api run db:migrate',
+        'pnpm --dir ./api run db:migrate',
     );
   }
 
@@ -1553,7 +1571,7 @@ export async function signInDashboard(salonId: string, handle: string): Promise<
       `Web sign-in failed for ${handle}@${salonId}: ${res.status} ${res.raw}\n` +
         'Salon B copies salon A\'s password hash, so this means the seed password in ' +
         'api/src/db/seed.ts changed. Update STAFF_PASSWORD in this file, or re-run ' +
-        'pnpm --filter @avo/api run db:seed.',
+        'pnpm --dir ./api run db:seed.',
     );
   }
   return res.body.accessToken;

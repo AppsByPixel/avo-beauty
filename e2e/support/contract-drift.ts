@@ -95,6 +95,55 @@ export function shapePath(path: string): string {
   return path.replace(/\[\d+\]/g, '[]');
 }
 
+// ----------------------------------------------------------------- wire pins --
+
+/**
+ * THE SAME GUARD FOR A SHAPE THAT HAS NO SCHEMA YET.
+ *
+ * `keyDeltas` compares a response against what a zod schema returned, which is
+ * the right instrument when a schema exists. Two of the shapes this API now
+ * serves have none: the notification preference set and the deletion state are
+ * both newer than `packages/types` and both are already consumed by the wallet.
+ * A shape with no schema cannot drift against one — it drifts against the
+ * CLIENT, silently, in exactly the same way, and the census at the bottom of
+ * contract.test.ts can only say "this is unmodelled", not "this is still the
+ * shape it was".
+ *
+ * So the pin is the same comparison with the schema's side written by hand: the
+ * declared key set against the served key set, BOTH DIRECTIONS.
+ *
+ *   a key served and not declared   the response grew and nothing told the
+ *                                   guard. Benign here, but it is the half that
+ *                                   proves the pin is still being maintained.
+ *   a key declared and not served   THE ONE THAT BITES. A field the client reads
+ *                                   stopped arriving, or started arriving under
+ *                                   a different name, and every consumer sees
+ *                                   `undefined` with no error anywhere.
+ *
+ * A KEY WHOSE VALUE IS `null` IS A KEY THAT IS PRESENT. That distinction is the
+ * whole of drift (4) restated: `offersConsent.at` is `null` until she is asked,
+ * and an API that OMITS it instead of nulling it is a different contract from the
+ * one the wallet was built against, even though every screen looks identical.
+ * `wireShape` therefore records `null` as a leaf and never as an absence.
+ *
+ * Values are NOT pinned — only the shape. Pinning a value would make this a
+ * fixture, and rule 1 of contract.test.ts is that nothing here holds one.
+ */
+export function wireShape(value: unknown, path = '$'): string[] {
+  if (Array.isArray(value)) {
+    // Index-wise would make the pin depend on how many rows happened to exist.
+    // The first element carries the row shape; an empty array is a leaf, and the
+    // caller's `requireNonEmpty` is what refuses to draw conclusions from it.
+    return value.length === 0 ? [`${path}[]`] : wireShape(value[0], `${path}[]`);
+  }
+  if (isPlainObject(value)) {
+    return Object.keys(value)
+      .sort()
+      .flatMap((k) => wireShape(value[k], `${path}.${k}`));
+  }
+  return [path];
+}
+
 /**
  * Every key present on one side of the parse and absent on the other.
  *
