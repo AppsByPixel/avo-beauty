@@ -776,3 +776,38 @@ the session stays alive server-side until expiry; that is the honest gap.
 
 **To reverse / complete:** `expo-secure-store` on native with the web path unchanged, since the web
 target is development and demo rather than a customer surface.
+
+### Defence in depth hides the absence of its own layers — three instances, one method
+
+**What.** Three times tonight a guard was removed and **every relevant spec stayed green**, because
+a second independent guard covered it. Each time the first instinct — "the spec is weak" — was
+wrong, or at least incomplete.
+
+| path | guards | what one removal proved |
+|---|---|---|
+| `POST /charges` race | wallet `FOR UPDATE` + token conditional consumption | nothing; both had to go before five concurrent charges all settled at `balanceAfterFils: 493000` |
+| no-show return job | candidate scan predicate + status re-check under the row lock | nothing; both had to go for a double payout, `expected 202000 to be 192000` — a customer refunded for a visit she attended |
+| the same job, concurrently | — | with **only** the re-check removed, two simultaneous passes both reported `returned: 1` while all four sequential specs stayed green |
+
+**The method, in lane D's words:** *when a break does not fail a spec, the useful question is not
+"is the spec weak" but "how many guards are there".* A single-guard removal that changes nothing is
+evidence about the **design**, not only about the test — and it is good news worth recording rather
+than a dead end.
+
+**But the corollary is the sharp end.** The no-show job's own comment calls the status re-check
+*"the single line that makes the job idempotent"*, and **no sequential spec could reach it**: by the
+second pass the settled row is no longer a candidate, so "run it twice" proves the scan's
+idempotence, not the re-check's. A layer nothing can reach is a layer nobody will notice
+disappearing. Reaching it required two passes launched together, both scanning before either commits
+— which needed `runApiDbScriptAsync` in the harness, because `execFileSync` makes two sequential
+runs trivial and two simultaneous runs impossible.
+
+**How to apply.** When testing a guarantee with more than one guard, break each layer **alone** and
+record what still passes. If nothing fails, either a spec is missing that isolates that layer, or the
+layer is redundant — and which of those it is matters, because the first is a coverage gap and the
+second is a design question. Do not conclude from a passing suite that a layer works.
+
+**Cost, recorded because it is the first change tonight with a measurable one:** the five job specs
+each spawn a real `tsx` process, two of them concurrently, at roughly three seconds each. The suite
+went from 3:51 for 511 specs to 4:07 and 4:10 for 516. Worth it for a money path that had never
+executed, and flagged rather than absorbed.
