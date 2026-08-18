@@ -43,7 +43,7 @@
  * it is a copy decision, and copy is settled by the design, not by this lane.
  */
 
-import { and, asc, eq, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, lte } from 'drizzle-orm';
 import { add, fils, subtract, type Fils } from '@avo/types';
 import type { Db } from '../db/client';
 import { artist } from '../db/schema/artist';
@@ -201,8 +201,42 @@ function assertChangeWindowOpen(row: { startsAt: Date }, now: Date, verb: string
  *                                            back in her wallet and there is
  *                                            nothing to apply.
  *
- * Earliest first, so a customer with two appointments in one afternoon settles
- * them in order.
+ * BOTH PREDICATES ARE IN THE `WHERE`, AND THAT ORDERING IS THE FIX FOR A BUG A
+ * CUSTOMER COULD FEEL.
+ *
+ * `no_show_return_due_at > now` used to be applied in TypeScript AFTER `LIMIT 1`,
+ * so ONE STALE HOLD HID EVERY GOOD ONE. Lane D reproduced it: she no-shows on
+ * Monday and the return job has not run, so Monday's hold is still on the row. She
+ * books Tuesday and pays a second deposit. She attends on Tuesday — and this
+ * function picked Monday (earliest `starts_at`), found it expired, and returned
+ * null. Her Tuesday deposit was invisible, she was charged full price for a visit
+ * she had already part-paid, and the staff member had no credit line to point at
+ * while the customer watched.
+ *
+ * No money was permanently lost — Monday's hold still returns when the job runs —
+ * but it was wrong AT THE TILL, which is the same family as `heldDepositFils: 0`:
+ * right in the database, wrong in front of the customer. Narrowing to one row and
+ * then testing applicability tests the wrong row; filtering first cannot.
+ *
+ * The original reason for the TypeScript check is preserved rather than discarded:
+ * the comparison is still against the CALLER'S `now`, bound as a parameter, not
+ * `now()` evaluated by the database a few milliseconds later. It moved from an `if`
+ * to a `WHERE`; it did not change what it compares.
+ *
+ * WHICH ONE, WHEN TWO ARE LIVE — a rule now, not an accident. `LIMIT 1` implied
+ * there could only ever be one candidate, and this bug proves otherwise: two
+ * appointments inside one grace window are ordinary, and after this fix both can be
+ * applicable at once.
+ *
+ *   EARLIEST `starts_at` WINS. It is the appointment she is most plausibly
+ *   settling: a hold from twenty minutes ago is a visit she has just had, and one
+ *   starting in an hour is a visit she has not. That is also what a staff member
+ *   would pick by eye.
+ *
+ *   AND ONLY ONE IS CONSUMED. A visit settles one appointment, so a second live
+ *   hold must survive this charge untouched — applying two deposits to one basket
+ *   would spend money held against an appointment she has not attended yet, which
+ *   is the Tuesday-deposit failure in the other direction.
  *
  * `forUpdate` when called from inside the charge transaction: the row is about
  * to be marked `completed`, and the no-show job may be looking at exactly this
@@ -224,22 +258,25 @@ export async function findApplicableHold(
         eq(booking.salonId, params.salonId),
         eq(booking.status, 'deposit_held'),
         lte(booking.startsAt, graceEnd),
+        /**
+         * IN THE `WHERE`, not in an `if` after `LIMIT 1`. This is the whole fix —
+         * see the header. `params.now` is the caller's clock bound as a parameter,
+         * so the comparison is against the same instant the charge uses for
+         * everything else; the POSITION changed, not the operand.
+         */
+        gt(booking.noShowReturnDueAt, params.now),
       ),
     )
+    // Earliest APPLICABLE appointment: the one she is most plausibly settling.
     .orderBy(asc(booking.startsAt))
+    // One visit settles one appointment. A second live hold survives this charge.
     .limit(1)
     .$dynamic();
 
   if (options.forUpdate) query = query.for('update');
 
   const rows = await query;
-  const row = rows[0];
-  if (!row) return null;
-  // Applied here rather than in SQL so the comparison is against the same
-  // `now` the charge is using for everything else, not against the database's
-  // clock a few milliseconds later.
-  if (row.noShowReturnDueAt <= params.now) return null;
-  return row as BookingRow;
+  return (rows[0] as BookingRow | undefined) ?? null;
 }
 
 // -------------------------------------------------------------- POST /bookings --

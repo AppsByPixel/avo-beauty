@@ -32,6 +32,7 @@ import { requireDashboardPerm, requirePrincipal, requireSameSalon } from '../aut
 import { badRequest, conflict, notFound } from '../http/errors';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import { branchClosureImpact } from '../services/branchClosure';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
 import { serialiseBooking, type BookingRow } from '../services/booking';
 import { computeMetrics, parsePeriod } from '../services/metrics';
@@ -583,6 +584,72 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * `no_branch` — a total money outage produced by a settings change. Refused
    * here with a sentence instead of discovered at the counter.
    */
+  // ------------------------------------------- the closure preview (read) ----
+  /**
+   * WHAT CLOSING THIS BRANCH WOULD DO — on `perms.loyalty`, the same permission as
+   * the close itself.
+   *
+   * THE PERMISSION IS THE WHOLE POINT. The close returns `staffRescoped`,
+   * `staffLeftWithNoBranch` and `depositHeldBookings`, but computed them inside the
+   * transaction that performs it — so the facts a merchant needs BEFORE deciding
+   * arrived only afterwards. With no preview, lane C had to derive them client-side
+   * from the roster and the appointment list, and those reads need `perms.team` and
+   * `perms.appointments`: a `loyalty`-only account could close a branch it was not
+   * allowed to be warned about. Lane C degraded the warning to categories without
+   * counts rather than invent numbers, which was right, and is a mitigation.
+   *
+   * Gating this on `loyalty` means no second permission stands between a destructive
+   * button and its own consequences. Whoever may close a branch may be told what
+   * closing it does.
+   *
+   * A SEPARATE READ rather than `?dryRun` on the DELETE: it is cacheable, it cannot
+   * be fired by accident, and a destructive verb that sometimes does nothing is a
+   * request whose effect depends on a query parameter nobody sees in a log.
+   *
+   * `closable` IS INCLUDED because the close can be refused outright — a salon with
+   * no open branch cannot take a payment, a top-up or a booking, so the last one is
+   * protected. A merchant should learn that here rather than from an error after she
+   * has decided.
+   *
+   * The numbers come from the same `branchClosureImpact` the close uses. Field names
+   * match the close's response exactly, so the preview and the outcome are
+   * comparable rather than merely similar.
+   */
+  app.get<{ Params: { id: string; bid: string } }>(
+    '/salons/:id/branches/:bid/closure-preview',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'loyalty');
+      requireSameSalon(p, req.params.id);
+
+      const current = await loadBranch(req.params.id, req.params.bid);
+      const open = await openBranchesOf(req.params.id);
+      const impact = await branchClosureImpact(db, req.params.id, current.id);
+
+      const alreadyClosed = current.closedAt !== null;
+      const lastOpen = !alreadyClosed && open.length <= 1;
+
+      return reply.send({
+        ...serialiseBranch(current),
+        /** Whether the DELETE would go through, and why not when it would not. */
+        closable: !alreadyClosed && !lastOpen,
+        blockedReason: alreadyClosed
+          ? 'already_closed'
+          : lastOpen
+            ? 'last_open_branch'
+            : null,
+        openBranchCount: open.length,
+        // The same three the close reports, in the same shape — names, not ids,
+        // because this is what a merchant reads on a confirmation sheet.
+        staffRescoped: impact.staffRescoped.map((x) => x.name),
+        staffLeftWithNoBranch: impact.staffRescoped
+          .filter((x) => x.remaining === 0)
+          .map((x) => x.name),
+        depositHeldBookings: impact.depositHeldBookings,
+        depositHeldBookingsBranchAssumed: impact.depositHeldBookingsBranchAssumed,
+      });
+    },
+  );
+
   app.delete<{ Params: { id: string; bid: string } }>(
     '/salons/:id/branches/:bid',
     async (req, reply) => {
@@ -603,11 +670,15 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         );
       }
 
-      const [liveBookings] = await db
-        .select({ n: sql<number>`count(*)::int` })
-        .from(booking)
-        .where(and(eq(booking.branchId, current.id), eq(booking.status, 'deposit_held')));
-      const heldCount = liveBookings?.n ?? 0;
+      /**
+       * Through the SHARED calculation, so the preview and the close cannot
+       * disagree about money already taken from customers. This used to be its own
+       * inline count; `services/branchClosure.ts` explains why one implementation
+       * matters here specifically.
+       */
+      const impact = await branchClosureImpact(db, req.params.id, current.id);
+      const heldCount = impact.depositHeldBookings;
+      const heldAssumed = impact.depositHeldBookingsBranchAssumed;
 
       const closedAt = new Date();
       const { row, rescoped, stranded } = await db.transaction(async (tx) => {
@@ -675,6 +746,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             })),
             staffLeftWithNoBranch: strandedRows.map((s) => s.id),
             depositHeldBookings: heldCount,
+            depositHeldBookingsBranchAssumed: heldAssumed,
           },
           ...clientMeta(req),
         });
@@ -704,6 +776,13 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         staffRescoped: rescoped.map((s) => s.name),
         staffLeftWithNoBranch: stranded.map((s) => s.name),
         depositHeldBookings: heldCount,
+        /**
+         * How many of those had their branch INFERRED rather than recorded. Lane C's
+         * point, and it is about money: an artist has no branch column, so a warning
+         * about deposits already taken must not read as a fact where part of it is a
+         * guess. Reported by the preview and by the close, identically.
+         */
+        depositHeldBookingsBranchAssumed: heldAssumed,
       });
     },
   );

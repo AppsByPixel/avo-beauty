@@ -18,7 +18,12 @@ import { member } from '../db/schema/member';
 import { phoneChangeChallenge } from '../db/schema/phoneChange';
 import { transaction } from '../db/schema/transaction';
 import { hashSecret, verifySecret } from '../auth/password';
-import { requireMember, requireScannerPerm } from '../auth/principal';
+import {
+  requireMember,
+  requireScannerPerm,
+  requireStaff,
+  type StaffPrincipal,
+} from '../auth/principal';
 import { revokeOtherSessions } from '../auth/sessions';
 import { badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../http/errors';
 import { serialiseTransactionForCustomer } from '../http/serialise';
@@ -26,7 +31,11 @@ import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { marketingConsentOf, recordConsent } from '../services/consent';
 import { counterEnvelope } from '../services/counter';
-import { resolveMember, searchMembers } from '../services/memberSearch';
+import {
+  DIRECTORY_REFUSED_ACTION,
+  resolveMember,
+  searchMembers,
+} from '../services/memberSearch';
 import { mintToken } from '../services/walletToken';
 import { serialiseMember } from './auth';
 
@@ -150,6 +159,81 @@ function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent:
   };
 }
 
+/**
+ * The scanner permission for a DIRECTORY read, with the refusal recorded.
+ *
+ * WHY A REFUSAL IS A DIRECTORY EVENT
+ * ----------------------------------
+ * `requireScannerPerm` throws before `searchMembers` runs, so the audit write
+ * never happened and a staff member WITHOUT `perms.scanner` could probe the search
+ * box and leave nothing behind. That contradicted the reasoning already written
+ * into `resolveMember`, which writes its row BEFORE the 404 because "a refused id
+ * is what a directory walk looks like from the inside". A refused authorisation is
+ * the same argument one step earlier, and it is the step an unauthorised prober
+ * takes.
+ *
+ * WHERE THE LINE IS, AND WHY IT IS NOT "LOG EVERYTHING"
+ * ----------------------------------------------------
+ * An audit row written from an unauthenticated request is an unbounded append-only
+ * write into a table kept for seven years, reachable by anyone on the network with
+ * no credential at all. So the rule is IDENTITY, not refusal:
+ *
+ *   401, no or invalid session        SILENT. `actorOf(null)` would name nobody,
+ *                                     so the row answers no question, and the
+ *                                     write needs no credential.
+ *   a MEMBER token on a staff route   SILENT. She holds no `perms` to probe, and a
+ *                                     customer account is cheap to obtain — logging
+ *                                     it reopens the same flood vector through the
+ *                                     signup form.
+ *   STAFF, wrong surface              LOGGED. A dashboard session reaching a scanner
+ *                                     directory read is an identified holder of a
+ *                                     real staff credential.
+ *   STAFF, missing perms.scanner      LOGGED. The case lane B reported, and the one
+ *                                     an insider probing her own limits takes.
+ *
+ * So: authenticated, identified and refused is a fact worth keeping. Unidentified
+ * noise is not.
+ *
+ * The refusal itself is still thrown by the canonical guard rather than rebuilt
+ * here, so the copy the staff member reads stays in one place.
+ *
+ * NOT THROTTLED, deliberately. A retry loop could append rows, but every one of
+ * them names the actor, so a flood is itself the signal — and inventing a cap
+ * without having measured one is the mistake the 60/hour ceiling already taught.
+ * If volume ever bites, the fix is a per-actor cap on refusal rows, not silence.
+ */
+async function requireDirectoryScanner(req: FastifyRequest): Promise<StaffPrincipal> {
+  // 401 and the member-token case both throw out of here, unlogged.
+  const p = requireStaff(req, 'either');
+
+  if (p.scope === 'scanner' && p.perms.scanner) return p;
+
+  await writeAudit(db, p, {
+    salonId: p.salonId,
+    kind: 'risk',
+    action: DIRECTORY_REFUSED_ACTION,
+    detail:
+      p.scope === 'scanner'
+        ? 'Attempted a customer lookup without scanner authority'
+        : `Attempted a customer lookup from a ${p.scope} session`,
+    source: 'scanner',
+    subjectType: 'member_search',
+    subjectId: null,
+    metadata: {
+      permission: 'scanner',
+      scope: p.scope,
+      hasPermission: p.perms.scanner,
+      sessionId: p.sessionId,
+    },
+    ipAddress: req.ip ?? null,
+    userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+  });
+
+  // Throws the canonical 403 — wrong surface or missing permission, whichever it
+  // is, with the message the staff member is meant to see.
+  return requireScannerPerm(req, 'scanner');
+}
+
 export async function registerMemberRoutes(app: FastifyInstance): Promise<void> {
   // ------------------------------------------------------------ GET /members --
   /**
@@ -167,7 +251,7 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
    * customer — is in services/memberSearch.ts, which explains each one.
    */
   app.get('/members', async (req, reply) => {
-    const p = requireScannerPerm(req, 'scanner');
+    const p = await requireDirectoryScanner(req);
     const { q } = (req.query ?? {}) as { q?: unknown };
 
     const items = await searchMembers(db, p, q, {
@@ -206,7 +290,7 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
    * in services/memberSearch.ts § resolveMember, which explains each.
    */
   app.get<{ Params: { id: string } }>('/members/:id', async (req, reply) => {
-    const p = requireScannerPerm(req, 'scanner');
+    const p = await requireDirectoryScanner(req);
 
     const m = await resolveMember(db, p, req.params.id, {
       ipAddress: req.ip ?? null,
