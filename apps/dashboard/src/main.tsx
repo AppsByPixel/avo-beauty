@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
+import { configureQueryFocus } from './api/queryRuntime.js';
 import { retryPolicy } from './api/retryPolicy.js';
 import { AuthProvider, useAuth } from './auth/AuthProvider.js';
 import { router } from './router.js';
@@ -10,6 +11,14 @@ import { router } from './router.js';
 import '@avo/tokens/css';
 import '@avo/ui/css';
 import './app.css';
+
+/*
+ * Before the client exists, so no query can be created and fail against an
+ * honest-but-unhelpful focus state first. `focusManager` is a module singleton
+ * in query-core, not a property of the client, which is why this is a call
+ * rather than an option in the block below. See api/queryRuntime.ts.
+ */
+configureQueryFocus();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,8 +39,17 @@ const queryClient = new QueryClient({
        * skeleton that never resolves has no way to tell a slow network from a
        * dead one.
        *
-       * 'always' makes the fetch run and reject. `ApiError.isConnectivity`
+       * 'always' makes the first fetch run and reject. `ApiError.isConnectivity`
        * classifies the failure and the screen renders the designed state.
+       *
+       * THIS SETTING IS NECESSARY AND NOT SUFFICIENT, AND THIS COMMENT USED TO
+       * CLAIM OTHERWISE. `networkMode` is checked by the retryer's `canStart`,
+       * which governs the FIRST fetch. Every retry goes through `canContinue`,
+       * which gates on `focusManager.isFocused()` before it looks at
+       * `networkMode` at all — so a failure in a hidden tab still paused with
+       * the error unrecorded, which is exactly the indefinite skeleton the
+       * paragraph above says this prevents. `api/queryRuntime.ts` closes that
+       * half and carries the source references and the cost.
        */
       networkMode: 'always',
       /*
