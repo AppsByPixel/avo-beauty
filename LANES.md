@@ -173,13 +173,20 @@ and `build` is what `seed.ts` imports `@avo/types` from, what the drift guard pa
 and what hid a missing dependency edge for a whole session. A key that could no-op on changed
 source would mean every downstream check reads yesterday's contract. It cannot.
 
-**One observation remains unexplained, and is recorded rather than worked around.** A
-post-merge `turbo run typecheck` in trunk reported `FULL TURBO`, 11 of 11 cached, in 29ms —
-on a merge that changed eleven dashboard files including two new ones. Forced, it took 8s and
-was green, so the tree was sound. The ordinary explanation is a second invocation on an
-unchanged tree, but that does not fit: `pnpm check` never completed in that worktree, and the
-content provably changed between the two runs. Left open on purpose. An anomaly you have
-bounded is worth more than a workaround that hides it.
+**A failed invocation still caches everything that finished before it died.** Turbo writes a
+cache entry per task, at the moment that task succeeds — not at the end of the run. So
+`pnpm build` dying at exit 137 on `@avo/dashboard#build` still left its dependency builds
+cached, and the next `turbo run build --filter=@avo/dashboard` reported `3 successful,
+2 cached`. "The run failed" does not mean "nothing cached", and a fast re-run after a failure
+is not automatically suspicious.
+
+Note also that `typecheck` depends on `^build` — **dependencies'** builds, not its own
+package's. `@avo/dashboard#typecheck` never waits on `@avo/dashboard#build`, which is why a
+build failure in one package does not block typechecking it.
+
+One cache observation in trunk is still unexplained; the elimination trail is in
+`DECISIONS.md` rather than here, because the rule above is what you need and the anomaly is
+not something you have to act on.
 
 ---
 

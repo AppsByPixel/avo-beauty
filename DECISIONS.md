@@ -550,3 +550,43 @@ fixed, or a UI implying erasure is underway when `erasureScheduled` is false.
 regardless, and it makes the schema question moot. If it must go on the outcome screen first,
 add the field to the **public** shape only and decide the merchant-visibility question
 explicitly rather than inheriting it from `.omit()`.
+
+### One turbo cache hit in trunk is unexplained — bounded, and not worked around
+
+**What.** A post-merge `pnpm turbo run typecheck` in trunk reported `FULL TURBO`, 11 of 11
+cached, in 29ms — on a merge (`bebcbba`) that changed eleven `apps/dashboard` files including
+two new ones. Forced, the same tree took 8.16s with 0 cached and was green, so `dev` was sound.
+
+**What has been eliminated, in order.**
+
+1. **The key is not under-covering.** No `inputs` override anywhere, no remote cache, no
+   `TURBO_*` env, so every task uses the default input set — and that set is exact:
+   `@avo/dashboard` 48, `@avo/ui` 19, `@avo/wallet` 84, `@avo/api` 120, each matching
+   `git ls-files` on the package. Both new files are inside the dashboard's 48.
+2. **The key is responsive.** Appending one comment line to a dashboard file moves
+   `@avo/dashboard#typecheck` from `c2527732…` to `f937cbcf…`.
+3. **Per-task caching surviving a failed invocation.** True in general and demonstrated here —
+   `pnpm build` died at exit 137 on `@avo/dashboard#build` and still left its dependency
+   builds cached, so the next filtered build reported `2 cached`. But it does not explain this
+   instance: the invocation that died was **`pnpm build`** (`turbo run build`, four tasks, all
+   builds). `pnpm check` — `turbo run typecheck lint test` — was never invoked in trunk at
+   all, and the first explicit `turbo run typecheck` there reported `2 cached / 11`, nine cold,
+   consistent with the near-empty cache left by `rm -rf .turbo`.
+
+**Why the eliminations matter more than the anomaly.** Had the key been under-covering,
+`build` would share the defect — and `build` is what `seed.ts` imports `@avo/types` from, what
+the contract-drift guard parses against, and what hid a missing dependency edge for a whole
+session. A key that could no-op on changed source would mean every downstream check reading
+yesterday's contract. It cannot. That is the direction that could have hurt, and it is closed.
+
+**What was NOT adopted.** A standing "always `--force`" rule. It costs 8s on every merge, and
+treating a working cache as broken is how the next genuine anomaly gets waved through as
+normal. `LANES.md` carries the rule that fits instead: tree changed, trust the cold run; same
+tree needing independent confirmation, `--force`, because a replay is not a second opinion;
+suspect the cache, `--dry=json`, which answers in seconds and leaves nothing behind.
+
+**To reverse:** if it recurs, capture the full `turbo run typecheck` output *and* a
+`--dry=json` from the same tree before doing anything else — the hash plus cache status per
+task is the artifact that would settle it, and `.turbo/runs` does not exist so there is no
+summary to recover afterwards. Cache-entry mtimes cannot separate "written cold" from
+"rewritten by `--force`", so they are not evidence.
