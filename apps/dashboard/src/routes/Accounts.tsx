@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { StaffUser } from '@avo/types';
 import { Button, Card, Chip, EmptyState, Pill, Segmented, Select, Skeleton, TextField } from '@avo/ui';
 import {
   PERMISSIONS,
@@ -14,7 +15,6 @@ import {
   type BranchAccess,
   type PermissionName,
   type StaffPerms,
-  type TeamAccount,
 } from '../api/staff.js';
 import { useSalon } from '../api/salon.js';
 import { SectionError, WriteError } from './sectionState.js';
@@ -239,7 +239,7 @@ interface BranchLite {
 }
 
 interface AccountCardProps {
-  account: TeamAccount;
+  account: StaffUser;
   branchNames: Map<string, string>;
   branches: ReadonlyArray<BranchLite>;
   /** The only remaining holder of `perms.team`. The server refuses to strip her. */

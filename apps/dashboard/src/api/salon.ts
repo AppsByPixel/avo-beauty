@@ -52,19 +52,14 @@ export function useSalon(enabled = true): UseQueryResult<Salon> {
     queryFn: ({ signal }) => authedRequest<Salon>('merchant', `/salons/${salonId}`, { signal }),
     enabled,
     /*
-     * `retry: 1`, for the reason `useSalonMetrics` gives below: the budget has to
-     * stay small enough that a failure surfaces promptly rather than after four
-     * silent attempts.
-     *
-     * This was the only query in the dashboard without an explicit budget, so it
-     * fell back to TanStack's default of three retries with exponential backoff.
-     * Measured while driving the error state: Settings — which reads the salon
-     * rather than a section endpoint — took about five seconds to show its error
-     * while every other section showed one in about two. Five seconds of an
-     * apparently working settings screen is how a merchant concludes a toggle
-     * saved.
+     * No `retry` here, and the measurement that used to justify one is now the
+     * global default. It is worth keeping the number: on TanStack's built-in
+     * three-retries-with-backoff, Settings took about five seconds to show its
+     * error while every other section took about two, and five seconds of an
+     * apparently-working settings screen is how a merchant concludes a toggle
+     * saved. api/retryPolicy.ts keeps that budget AND the 401/403 short-circuit
+     * that the bare `retry: 1` here silently threw away.
      */
-    retry: 1,
   });
 }
 
@@ -77,10 +72,10 @@ export function useSalonMetrics(): UseQueryResult<SalonMetrics> {
     /*
      * Stale-not-blank (interaction-spec.md §4). A failed refresh must keep the
      * last-known figures on screen behind a timestamped banner, so the cached
-     * value survives the error and the retry budget stays small enough that the
-     * banner appears promptly rather than after four silent attempts.
+     * value survives the error — TanStack does that on its own — and the retry
+     * budget stays small enough that the banner appears promptly. The budget is
+     * the shared one now; only `refetchInterval` is this hook's own.
      */
-    retry: 1,
     refetchInterval: 60_000,
   });
 }
@@ -108,6 +103,12 @@ export function useRecentActivity(): UseQueryResult<Paginated<Transaction>> {
     queryKey: salonKeys.charges(salonId),
     queryFn: ({ signal }) =>
       authedRequest<Paginated<Transaction>>('merchant', '/charges', { signal }),
-    retry: 1,
+    /*
+     * No `retry`. This is the hook where the old override cost the most: a web
+     * principal reading `GET /charges` gets a 403 by design — charging happens on
+     * the scanner — so the refusal is the NORMAL answer here, and `retry: 1` made
+     * every Overview load pay for a second request that could only be refused
+     * again before the explain state appeared.
+     */
   });
 }

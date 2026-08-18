@@ -71,7 +71,8 @@ export function useLoyalty(): UseQueryResult<LoyaltyConfig> {
     queryKey: loyaltyKeys.detail(salonId),
     queryFn: ({ signal }) =>
       authedRequest<LoyaltyConfig>('merchant', `/salons/${salonId}/loyalty`, { signal }),
-    retry: 1,
+    // Retry policy is global — api/retryPolicy.ts. `perms.loyalty` gates this
+    // endpoint, so the 403 short-circuit that override used to defeat matters here.
   });
 }
 

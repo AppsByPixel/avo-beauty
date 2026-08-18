@@ -229,7 +229,19 @@ export function useCampaigns(): UseQueryResult<CampaignList> {
     queryFn: ({ signal }) =>
       authedRequest<CampaignList>('merchant', `/v1/salons/${salonId}/campaigns`, { signal }),
     networkMode: 'always',
-    retry: false,
+    /*
+     * `retry: false` used to sit here, and removing it is a deliberate BEHAVIOUR
+     * CHANGE rather than a tidy-up, so it is called out.
+     *
+     * Nothing in the reasoning above argued for zero retries — it is about
+     * caching, and the conclusion it reaches is that "we cannot show the queue"
+     * beats a row that vanishes, because the merchant's question is "did AVO get
+     * it". One retry on a dropped connection serves that goal better than none:
+     * it makes the queue MORE likely to render the answer she came for. And the
+     * case `retry: false` was really guarding — a refusal asked twice — is now
+     * handled by status in api/retryPolicy.ts rather than by declining to retry
+     * anything at all.
+     */
   });
 }
 
