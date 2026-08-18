@@ -64,7 +64,10 @@ import {
   A_STAFF_FULL,
   SALON_A,
   SALON_B,
+  pgDb,
   psql,
+  runApiDbScriptAsync,
+  runApiDbScriptResult,
   scalar,
   signInMember,
   signInScanner,
@@ -84,6 +87,13 @@ const ARTIST = 'AR-001';
  * constraint is per artist, so a second artist is a second sixty minutes.
  */
 const SECOND_ARTIST = 'AR-002';
+/**
+ * Hessa, for the no-show block. A third diary because the allocator counts
+ * placements PER ARTIST and AR-001's hour is spent by the specs above — it said so
+ * itself, twice, and the advice was to take another artist rather than shorten the
+ * stride. Salon A seeds four.
+ */
+const THIRD_ARTIST = 'AR-003';
 
 /** Salon A's seeded services. `api/src/db/seed.ts`. */
 const MANICURE = 'SV-04';
@@ -328,6 +338,94 @@ function moveOutsideWindow(bookingId: string): void {
      WHERE id = '${bookingId}';
   `);
 }
+
+// ------------------------------------------------- driving the real job ------
+
+interface NoShowTick {
+  candidates: number;
+  returned: number;
+  alreadySettled: number;
+  failed: number;
+  returnedFils: number;
+}
+
+/**
+ * ONE PASS OF THE NO-SHOW RETURN JOB, driven the way an operator drives it.
+ *
+ * `api/src/jobs/no-show-once.ts` exists, and its own docstring says why:
+ *
+ *   "EVIDENTIAL. 'Running the job twice returns the deposit once' is a claim about
+ *    a background loop, and a claim about a background loop that can only be
+ *    exercised by waiting for a timer is a claim nobody checks. This makes it two
+ *    commands and a diff."
+ *
+ * Nothing had ever run it. `no_show_returned` — the terminal state it produces —
+ * appeared in zero assertions in this suite, while STATUS.md listed the job under
+ * What works. So a capability built to make something checkable went unchecked,
+ * which is the same shape as `support/api.ts` having been able to target the real
+ * API all along while three suites drove fixtures.
+ *
+ * Run as the SCRIPT rather than by importing the service: that is the path an
+ * operator actually uses after an outage, it proves the wiring and the connection
+ * env as well as the logic, and the JSON it prints is the diff the docstring
+ * promises. Pointed at this run's own database.
+ */
+function runNoShowJob(): NoShowTick {
+  const res = runApiDbScriptResult('src/jobs/no-show-once.ts', pgDb());
+  if (!res.ok) {
+    throw new Error(
+      `the no-show job failed to run at all.\n--- stdout ---\n${res.stdout}\n` +
+        `--- stderr ---\n${res.stderr}`,
+    );
+  }
+  const start = res.stdout.indexOf('{');
+  if (start < 0) throw new Error(`the job printed no JSON:\n${res.stdout}`);
+  return JSON.parse(res.stdout.slice(start)) as NoShowTick;
+}
+
+/**
+ * TWO PASSES AT ONCE. The only construction that can exercise the status re-check.
+ *
+ * The job's candidate scan is deliberately UNLOCKED — "this read is a hint, not a
+ * decision" — and every row it produces is re-checked under a row lock. Two
+ * SEQUENTIAL passes never test that re-check, because the second pass's scan
+ * already excludes the settled row; the guard exists solely for the window between
+ * one pass's scan and its lock, which is where a second worker can be.
+ */
+async function runNoShowJobTwiceAtOnce(): Promise<NoShowTick[]> {
+  const [a, b] = await Promise.all([
+    runApiDbScriptAsync('src/jobs/no-show-once.ts', pgDb()),
+    runApiDbScriptAsync('src/jobs/no-show-once.ts', pgDb()),
+  ]);
+  return [a, b].map((res) => {
+    if (!res.ok) {
+      throw new Error(
+        `a concurrent no-show pass failed to run.\n--- stdout ---\n${res.stdout}\n` +
+          `--- stderr ---\n${res.stderr}`,
+      );
+    }
+    const start = res.stdout.indexOf('{');
+    if (start < 0) throw new Error(`a pass printed no JSON:\n${res.stdout}`);
+    return JSON.parse(res.stdout.slice(start)) as NoShowTick;
+  });
+}
+
+/** Put a booking's no-show deadline in the past, so the job sees it as due. */
+function makeDue(bookingId: string, minutesAgo = 1): void {
+  psql(`
+    UPDATE booking
+       SET no_show_return_due_at = now() - interval '${minutesAgo} minutes'
+     WHERE id = '${bookingId}';
+  `);
+}
+
+/** Her `deposit_return` transactions, which are what the job writes. */
+const depositReturnsFor = (memberId: string): number =>
+  Number(
+    scalar(
+      `select count(*) from transaction where member_id='${memberId}' and kind='deposit_return'`,
+    ),
+  );
 
 async function mintWalletToken(): Promise<string> {
   const res = await treq<any>('GET', '/members/me/wallet-token', { token: member });
@@ -957,4 +1055,300 @@ describe('with more than one live hold, the earliest applicable one is used — 
     // And exactly one deposit came out of the held account.
     expect(depositHeldFor(MEMBER)).toBe(heldBefore - DEPOSIT_FILS);
   }, 120_000);
+});
+
+// ===========================================================================
+// THE NO-SHOW RETURN JOB — the money path nothing had ever run
+// ===========================================================================
+
+/**
+ * She books, puts a deposit down, and does not come. The grace period passes and
+ * the deposit is hers again — that is the promise, and `no_show_returned` is the
+ * state that keeps it.
+ *
+ * WHY THIS BLOCK IS ABOUT MONEY AND NOT ABOUT A STATUS. A spec asserting only that
+ * the booking reached `no_show_returned` would pass against a job that flipped a
+ * column and returned nothing, which is the worst possible outcome here: the
+ * customer's deposit is neither held nor returned, and the booking says it was
+ * settled. So every assertion below is on the BALANCE and the LEDGER, read out of
+ * Postgres, with the status as a corroborating detail rather than the claim.
+ */
+describe('the no-show return job gives the deposit back, exactly once', () => {
+  it('returns a held deposit whose grace period has expired, in full, to her wallet', async () => {
+    reseedMember();
+    const booking = await bookFuture(MANICURE, THIRD_ARTIST);
+    moveInsideWindow(booking.id);
+
+    const balanceBefore = balanceOf(MEMBER);
+    const heldBefore = depositHeldFor(MEMBER);
+    const returnsBefore = depositReturnsFor(MEMBER);
+    precondition(
+      heldBefore >= DEPOSIT_FILS,
+      `she holds ${heldBefore}, so there is no deposit for the job to return`,
+    );
+
+    // The grace period runs out. This is the ONLY thing that changes.
+    makeDue(booking.id);
+
+    const tick = runNoShowJob();
+    expect(
+      tick.returned,
+      `the job saw ${tick.candidates} candidate(s) and returned ${tick.returned}: ${JSON.stringify(tick)}`,
+    ).toBeGreaterThanOrEqual(1);
+
+    // THE MONEY, from the database.
+    expect(
+      balanceOf(MEMBER),
+      'the job settled the booking without giving the deposit back, so her 5.000 is neither held ' +
+        'nor returned and the row says it was resolved',
+    ).toBe(balanceBefore + DEPOSIT_FILS);
+
+    // The held position is released, not merely forgotten.
+    expect(
+      depositHeldFor(MEMBER),
+      'the deposit_held ledger account still carries this deposit after the job returned it',
+    ).toBe(heldBefore - DEPOSIT_FILS);
+
+    /**
+     * ITS OWN `deposit_return` TRANSACTION. The same reasoning as the change on a
+     * cheap visit: a customer looking at her activity feed has to see the money
+     * come back as an event. A balance that moves with nothing behind it is the
+     * shape of a reconciliation nobody can perform later.
+     */
+    expect(
+      depositReturnsFor(MEMBER),
+      'the balance moved with no deposit_return transaction explaining it',
+    ).toBe(returnsBefore + 1);
+    expect(
+      Number(
+        scalar(
+          `select amount_fils from transaction where member_id='${MEMBER}'
+             and kind='deposit_return' order by created_at desc, id desc limit 1`,
+        ),
+      ),
+      'the returned amount is not the deposit that was held',
+    ).toBe(DEPOSIT_FILS);
+
+    expect(bookingStatus(booking.id)).toBe('no_show_returned');
+  }, 120_000);
+
+  it('and running it AGAIN returns nothing further — the second pass succeeds and is a no-op', async () => {
+    reseedMember();
+    const booking = await bookFuture(MANICURE, THIRD_ARTIST);
+    moveInsideWindow(booking.id);
+    makeDue(booking.id);
+
+    const balanceBefore = balanceOf(MEMBER);
+    const returnsBefore = depositReturnsFor(MEMBER);
+
+    // ---- pass one, which must DO something -----------------------------------
+    const first = runNoShowJob();
+    precondition(
+      first.returned >= 1,
+      `the first pass returned nothing, so this spec cannot tell idempotence from inaction: ` +
+        JSON.stringify(first),
+    );
+    const balanceAfterFirst = balanceOf(MEMBER);
+    const returnsAfterFirst = depositReturnsFor(MEMBER);
+
+    /**
+     * THE ASSERTION THAT STOPS THIS BEING VACUOUS, and it is the one this suite has
+     * got wrong four times in other costumes. "Running it twice returns the deposit
+     * once" is satisfied by a job that returns it ZERO times, so the first pass
+     * having actually moved the money is asserted before the second pass runs — not
+     * assumed from the fact that it exited 0.
+     */
+    expect(
+      balanceAfterFirst,
+      'the first pass did not return the deposit, so the idempotence check below would pass on a ' +
+        'job that does nothing at all',
+    ).toBe(balanceBefore + DEPOSIT_FILS);
+    expect(returnsAfterFirst).toBe(returnsBefore + 1);
+    expect(bookingStatus(booking.id)).toBe('no_show_returned');
+
+    // ---- pass two, which must SUCCEED and change nothing ---------------------
+    /**
+     * AND IT MUST SUCCEED. This is the case where "assert the system refused" does
+     * NOT apply: a second pass is a scheduled worker's next tick, not a caller
+     * doing something wrong, so an error would be a job that breaks itself after an
+     * outage. The correct behaviour is a clean run that finds the work already done
+     * — which the job reports as `alreadySettled` rather than silently.
+     */
+    const second = runNoShowJob();
+    expect(
+      second.returned,
+      `the second pass returned ${second.returned} deposit(s) — she has been paid twice for one ` +
+        `no-show, and the salon is short: ${JSON.stringify(second)}`,
+    ).toBe(0);
+
+    expect(
+      balanceOf(MEMBER),
+      'the second pass moved money. One no-show, two refunds.',
+    ).toBe(balanceAfterFirst);
+    expect(
+      depositReturnsFor(MEMBER),
+      'the second pass wrote a second deposit_return for one deposit',
+    ).toBe(returnsAfterFirst);
+    expect(bookingStatus(booking.id)).toBe('no_show_returned');
+  }, 120_000);
+
+  it('never touches a COMPLETED booking, whose deposit the charge already spent', async () => {
+    reseedMember();
+    const booking = await bookFuture(BLOW_DRY, THIRD_ARTIST);
+    moveInsideWindow(booking.id);
+
+    // She came, and was charged. The deposit was applied to the visit.
+    const charged = await chargeFor([BLOW_DRY]);
+    precondition(charged.status === 200, `the charge answered ${charged.status} ${charged.raw}`);
+    precondition(
+      charged.body.depositAppliedFils === DEPOSIT_FILS,
+      `the charge applied ${charged.body.depositAppliedFils}, so this booking's deposit was not spent`,
+    );
+    precondition(bookingStatus(booking.id) === 'completed', 'the charge did not complete it');
+
+    /**
+     * AND NOW THE DEADLINE PASSES ANYWAY, which is the case worth testing rather
+     * than the obvious one. The no-show clock is stamped at booking time and keeps
+     * running after the visit; nothing rewinds it when she turns up. So a completed
+     * booking becomes DUE by the job's scan predicate, and the only thing standing
+     * between that and a double payout is the status re-check under the lock.
+     */
+    makeDue(booking.id);
+
+    const balanceBefore = balanceOf(MEMBER);
+    const returnsBefore = depositReturnsFor(MEMBER);
+
+    const tick = runNoShowJob();
+
+    expect(
+      balanceOf(MEMBER),
+      'the job refunded a deposit that the charge had already applied to a visit she attended — ' +
+        'she has the service and the money, and the salon has neither',
+    ).toBe(balanceBefore);
+    expect(depositReturnsFor(MEMBER)).toBe(returnsBefore);
+    expect(
+      bookingStatus(booking.id),
+      'the job moved a completed booking to no_show_returned',
+    ).toBe('completed');
+    // The scan may legitimately have had other candidates; what matters is that it
+    // did not count this one.
+    expect(tick.failed, `the job reported failures: ${JSON.stringify(tick)}`).toBe(0);
+  }, 120_000);
+
+  it('and not before the grace period expires — a deposit still inside its window is left alone', async () => {
+    reseedMember();
+    const booking = await bookFuture(MANICURE, THIRD_ARTIST);
+    moveInsideWindow(booking.id);
+
+    /**
+     * NO `makeDue` HERE. `moveInsideWindow` puts the appointment minutes from now
+     * with its deadline an hour past that, so this booking is held and NOT due.
+     *
+     * THE TRAP THIS AVOIDS, which caught two lanes on this path already: a booking
+     * far in the FUTURE is not due either, so a spec built on one passes against a
+     * job with no deadline check whatsoever. This booking is inside the grace
+     * window and genuinely holds a deposit — asserted below — so "the job left it
+     * alone" is a statement about the deadline and not about an empty fixture.
+     */
+    const heldBefore = depositHeldFor(MEMBER);
+    precondition(
+      heldBefore >= DEPOSIT_FILS,
+      'this booking holds no deposit, so leaving it alone proves nothing',
+    );
+    const dueAt = scalar(`select no_show_return_due_at from booking where id='${booking.id}'`);
+    precondition(dueAt !== '', 'the booking has no deadline');
+
+    const balanceBefore = balanceOf(MEMBER);
+    const returnsBefore = depositReturnsFor(MEMBER);
+
+    runNoShowJob();
+
+    expect(
+      balanceOf(MEMBER),
+      `the job returned a deposit whose grace period has not expired (due ${dueAt}). She may still ` +
+        'walk in, and the charge would then find no deposit to apply.',
+    ).toBe(balanceBefore);
+    expect(depositReturnsFor(MEMBER)).toBe(returnsBefore);
+    expect(depositHeldFor(MEMBER), 'the held position moved').toBe(heldBefore);
+    expect(bookingStatus(booking.id)).toBe('deposit_held');
+  }, 120_000);
+});
+
+// ===========================================================================
+// The guard that only a race can reach
+// ===========================================================================
+
+/**
+ * TWO WORKERS AT ONCE, WHICH IS THE ONLY THING THAT TESTS THE RE-CHECK.
+ *
+ * The four specs above are real and they pass, but it is worth being precise about
+ * WHAT they exercise, because it is not what the job's own comment says is
+ * load-bearing. `noShowWorker.ts` calls the status re-check under the lock "the
+ * single line that makes the job idempotent" — and none of those four can reach it.
+ * The candidate scan filters `status = 'deposit_held'`, so by the time a second
+ * SEQUENTIAL pass runs, the settled row is not a candidate at all.
+ *
+ * Measured rather than reasoned: removing the re-check alone left all four green,
+ * and removing the scan predicate alone left all four green. Only removing BOTH
+ * produced a double payout. They are two independent guards that cover each other,
+ * which is good design and bad for evidence — each one hides the other's absence.
+ *
+ * So the re-check needs a race, and this is it: two passes launched together, both
+ * scanning before either commits. Exactly the same shape as the wallet token, where
+ * the row lock and the conditional consumption also had to be removed together
+ * before a five-way charge race could see anything.
+ */
+describe('two no-show passes racing on one deposit still return it once', () => {
+  it('both passes succeed, one returns it, and her balance moves once', async () => {
+    reseedMember();
+    const booking = await bookFuture(MANICURE, THIRD_ARTIST);
+    moveInsideWindow(booking.id);
+    makeDue(booking.id);
+
+    const balanceBefore = balanceOf(MEMBER);
+    const returnsBefore = depositReturnsFor(MEMBER);
+    precondition(
+      depositHeldFor(MEMBER) >= DEPOSIT_FILS,
+      'there is no held deposit for the two passes to contend over',
+    );
+
+    const [a, b] = await runNoShowJobTwiceAtOnce();
+    precondition(a !== undefined && b !== undefined, 'a racing pass produced no result');
+
+    /**
+     * BOTH MUST SUCCEED. A crash here would be a scheduled worker that breaks when
+     * it overlaps its own previous tick — which is exactly what happens after an
+     * outage, when a manual drain and the in-process worker run together. That is
+     * the operational case the one-shot script was written for.
+     */
+    expect(
+      [a, b].every((t) => t.failed === 0),
+      `a racing pass reported failures: ${JSON.stringify([a, b])}`,
+    ).toBe(true);
+
+    /**
+     * EXACTLY ONE RETURN BETWEEN THEM. Asserted on the money, because the counts
+     * are per-process and either pass may legitimately be the one that wins.
+     */
+    expect(
+      balanceOf(MEMBER),
+      `two racing passes returned ${(balanceOf(MEMBER) - balanceBefore) / DEPOSIT_FILS} deposits. ` +
+        'She has been refunded twice for one no-show and the salon is short the difference. ' +
+        `Passes reported: ${JSON.stringify([a, b])}`,
+    ).toBe(balanceBefore + DEPOSIT_FILS);
+
+    expect(
+      depositReturnsFor(MEMBER),
+      'two deposit_return transactions exist for one deposit',
+    ).toBe(returnsBefore + 1);
+
+    // And the loser reported it as already settled rather than silently doing
+    // nothing — which is what makes an operator able to tell a no-op from a miss.
+    expect(
+      a.returned + b.returned,
+      `the two passes returned ${a.returned + b.returned} between them: ${JSON.stringify([a, b])}`,
+    ).toBe(1);
+
+    expect(bookingStatus(booking.id)).toBe('no_show_returned');
+  }, 180_000);
 });
