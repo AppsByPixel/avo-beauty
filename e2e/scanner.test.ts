@@ -48,6 +48,8 @@
  * run. Salon A's Dana is never touched.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { knownBug, precondition } from './support/known-bug.js';
 import {
@@ -87,6 +89,7 @@ import {
   attemptScannerSignIn,
   mintWalletTokenFor,
   psql,
+  repoRoot,
   resetPinState,
   scalar,
   signInDashboard,
@@ -978,17 +981,27 @@ describe('POST /voids', () => {
  * implementation happened to hold, including 30000.
  */
 const SEARCH_MIN_QUERY = 2;
-const SEARCH_MAX_PER_WINDOW = 30;
+const SEARCH_MAX_PER_WINDOW = 60;
 const SEARCH_WINDOW_MINUTES = 5;
 const LOOKUP_ACTION = 'Customer looked up';
 /**
  * The second tier, and it counts BOTH directory reads. `memberSearch.ts`
- * § enforceDirectoryReadLimits: 60 per rolling hour keyed on `audit_log.actor_id`
- * alone, no session and no device in the predicate, across searches AND resolves.
- * Written out as a literal for the reason the four above are — a spec that imported
- * the constant would pass at any value the implementation happened to hold.
+ * § enforceDirectoryReadLimits: keyed on `audit_log.actor_id` alone, no session and
+ * no device in the predicate, across searches AND resolves.
+ *
+ * STILL A LITERAL, AND NOW WITH A GUARD BESIDE IT. The reason not to import it is
+ * unchanged: a spec that read the value from the implementation would pass at any
+ * value the implementation held, including one that had been raised to make a test
+ * go green. The reason that used to be uncomfortable is that a literal rots — and
+ * both of these did, when the measured cost per customer moved the numbers from
+ * 30/60 to 60/240.
+ *
+ * So the literals stay and ONE spec compares them against the API's own source,
+ * read off disk the way the route census reads routes. A change to either constant
+ * then fails a single spec that names the old value, the new value and where to
+ * look, instead of five specs failing for reasons none of them mentions.
  */
-const SEARCH_MAX_PER_HOUR = 60;
+const SEARCH_MAX_PER_HOUR = 240;
 
 /**
  * Backdated directory-read rows for one staff member, under a session that is not
@@ -1075,6 +1088,56 @@ function sessionIdOf(accessToken: string): string {
   if (!claims.sid) throw new Error('that access token carries no `sid` claim');
   return claims.sid;
 }
+
+/**
+ * THE GUARD ON THE LITERALS ABOVE.
+ *
+ * Read off disk as text, the way `discoverGetRoutes` reads the route table — no
+ * import, so this suite gains no runtime dependency on `api/` and cannot be made
+ * to agree with the implementation by accident.
+ *
+ * The point is the failure message. Both of these constants have already moved
+ * once: Lane A measured the real cost of serving one customer through the
+ * lookup screen's debounce — 2 requests for a fluent typer, 5 for someone pausing
+ * on each key — and found the old ceiling fired at twelve customers an hour, with a
+ * customer standing at the counter. The mechanism it had had backwards is worth
+ * keeping in mind here: `abort()` does not un-send. It stops the client waiting for
+ * a reply that is already in flight; the server has handled it and written its
+ * audit row, and the audit row IS the counter. Every request that leaves the tablet
+ * costs budget whether or not anybody reads the answer.
+ */
+describe('the rate-limit constants this suite pins are the ones the API holds', () => {
+  const source = (): string =>
+    readFileSync(join(repoRoot, 'api', 'src', 'services', 'memberSearch.ts'), 'utf8');
+
+  const declared = (name: string): number | null => {
+    const m = new RegExp(`export const ${name}\\s*=\\s*(\\d[\\d_]*)`).exec(source());
+    return m ? Number(m[1]!.replace(/_/g, '')) : null;
+  };
+
+  for (const [name, pinned, what] of [
+    ['MEMBER_SEARCH_MAX_PER_WINDOW', SEARCH_MAX_PER_WINDOW, 'the burst tier, per session'],
+    ['MEMBER_SEARCH_ACTOR_MAX_PER_WINDOW', SEARCH_MAX_PER_HOUR, 'the ceiling, per staff member'],
+  ] as const) {
+    it(`${name} is still ${pinned} — ${what}`, () => {
+      const actual = declared(name);
+      expect(
+        actual,
+        `${name} is not declared in api/src/services/memberSearch.ts under that name any more, ` +
+          'so this guard cannot see it and the literals in this file are unverified.',
+      ).not.toBeNull();
+      expect(
+        actual,
+        `${name} is now ${actual} and this suite pins ${pinned}. Every spec in this file that ` +
+          'spends a budget uses the literal, so they are all wrong until it is updated — and ' +
+          'they will each fail with a message about lookups rather than about a changed ' +
+          'constant, which is why this spec exists. Update the literal at the top of this file, ' +
+          'then re-read the heavy specs: raising a limit makes them slower and lowering one makes ' +
+          'them share a budget they used to own.',
+      ).toBe(pinned);
+    });
+  }
+});
 
 describe('GET /members?q= — the manual lookup, and the four controls that keep it one', () => {
   it('finds a customer by name', async () => {

@@ -919,7 +919,7 @@ describe('`offers` is marketing consent, so it is an EVENT and not a column (non
     expect(detail, 'the audit row carries her phone number').not.toContain(MEMBER_PHONE);
   });
 
-  it('and the application cannot rewrite the trail — member_consent_event refuses UPDATE and DELETE to avo_app', async () => {
+  it('and the trail cannot be rewritten — UPDATE and TRUNCATE are refused to the OWNER too', async () => {
     const granted = await treq('PATCH', '/members/me/notifications', {
       token: member,
       body: { offers: true },
@@ -928,18 +928,10 @@ describe('`offers` is marketing consent, so it is an EVENT and not a column (non
     precondition(consentTrail(MEMBER).length === 1, 'there is no event to attempt this against');
 
     /**
-     * `SET ROLE` rather than a second connection, the same construction
-     * `scanner.test.ts` uses on `audit_log`: the privilege check then runs as
-     * `avo_app` on a connection `psql()` already has, and what comes back is
-     * Postgres refusing rather than a test asserting that a grant table looks
-     * right.
-     *
-     * ONE HALF, NOT TWO, and the difference from `audit_log` is deliberate rather
-     * than an omission: `audit_log` also carries a trigger, so it refuses its own
-     * OWNER, and migration 0020 says of this table that "the owner role can still
-     * correct it; the application role that serves requests cannot." Only the
-     * half that is claimed is asserted. If the trigger is ever added here, this
-     * spec is where to add its assertion.
+     * `SET ROLE` rather than a second connection, the construction `scanner.test.ts`
+     * uses on `audit_log`: the privilege check runs as `avo_app` on a connection
+     * `psql()` already has, so what comes back is Postgres refusing rather than a
+     * test asserting that a grant table looks right.
      */
     const asApp = (statement: string): string => {
       try {
@@ -949,22 +941,108 @@ describe('`offers` is marketing consent, so it is an EVENT and not a column (non
         return String((err as Error).message);
       }
     };
+    const asOwner = (statement: string): string => {
+      try {
+        psql(statement);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
 
+    // The application role: refused by the grants (migration 0020).
     expect(
       asApp(`UPDATE member_consent_event SET granted = false WHERE member_id='${MEMBER}';`),
       'the application role can UPDATE member_consent_event. A consent trail the application can ' +
         'rewrite is not evidence of anything, and this table exists to be evidence.',
     ).toMatch(/permission denied/i);
-
     expect(
       asApp(`DELETE FROM member_consent_event WHERE member_id='${MEMBER}';`),
       'the application role can DELETE from member_consent_event',
     ).toMatch(/permission denied/i);
 
+    /**
+     * AND THE OWNER, which is what migration 0023 added and what 0020 only claimed.
+     * 0020 said it gave this table "the same treatment `audit_log` gets"; it gave it
+     * half — a REVOKE and no trigger — so the owner could still rewrite a consent
+     * record silently. UPDATE and TRUNCATE are now refused to everybody.
+     *
+     * TRUNCATE matters on its own: it is not reachable through a cascade, because
+     * `TRUNCATE member CASCADE` would have to name this table and no code does, and
+     * it is the one statement that could empty the table without deleting a single
+     * member.
+     */
+    expect(
+      asOwner(`UPDATE member_consent_event SET granted = false WHERE member_id='${MEMBER}';`),
+      'the database OWNER can edit a consent record, so "she agreed" can be written after the ' +
+        'fact by anybody with the owner connection',
+    ).toMatch(/append-only/i);
+    expect(
+      asOwner('TRUNCATE member_consent_event;'),
+      'the OWNER can TRUNCATE member_consent_event — the one statement that empties the trail ' +
+        'without erasing a single customer',
+    ).toMatch(/append-only/i);
+
     // Still exactly one row, and still a grant.
     expect(consentTrail(MEMBER)).toEqual([
       { granted: true, source: 'wallet_account', policyVersion: 3 },
     ]);
+  });
+
+  /**
+   * AND DELETE IS DELIBERATELY *NOT* REFUSED, WHICH IS THE HALF A CARELESS SPEC
+   * WOULD GET BACKWARDS.
+   *
+   * "Append-only like `audit_log`" is the wrong model and this spec exists to stop
+   * anybody restoring it. `member_consent_event.member_id` is `ON DELETE CASCADE`
+   * from `member`, whereas `audit_log`'s salon FK is `RESTRICT`. A DELETE trigger
+   * here makes the cascade fail, which makes `DELETE FROM member` fail, which makes
+   * the 30-day erasure the published privacy policy promises IMPOSSIBLE. Migration
+   * 0023 records the exact error it saw when it tried.
+   *
+   * So the trail must be destructible by exactly one route — erasing the whole
+   * person — and by no other. A spec demanding DELETE be refused would be demanding
+   * that the privacy policy be breakable, and it would look like the more rigorous
+   * spec while doing it.
+   *
+   * HER OWN DISPOSABLE MEMBER, because this really does delete a row: a member with
+   * transactions cannot be deleted at all (`transaction` is RESTRICT), which is the
+   * whole reason deletion is an erasure of personal data rather than a DELETE.
+   */
+  it('but the CASCADE still works — a consent row cannot outlive the customer it is about', async () => {
+    const doomed = 'QA-ACC-0009';
+    psql(`
+      INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                          balance_fils, visits, tier, stamps, policy_version)
+      SELECT '${doomed}', '${SALON_B}', 'Erasure Fixture', '+96599777309', NULL, false,
+             s.password_hash, 0, 0, 'bronze', NULL, 3
+      FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+      ON CONFLICT (id) DO NOTHING;
+      INSERT INTO member_consent_event (member_id, salon_id, kind, granted, source, policy_version)
+      VALUES ('${doomed}', '${SALON_B}', 'marketing_offers', true, 'signup', 3);
+    `);
+    precondition(consentTrail(doomed).length === 1, 'the fixture has no consent row to cascade');
+
+    // The erasure the privacy policy promises. It must succeed.
+    let failure = '';
+    try {
+      psql(`DELETE FROM member WHERE id='${doomed}';`);
+    } catch (err) {
+      failure = String((err as Error).message);
+    }
+    expect(
+      failure,
+      'DELETING A MEMBER FAILED, and if the reason is a trigger on member_consent_event then the ' +
+        '30-day erasure this product has published in a legal document cannot be carried out at ' +
+        'all. Migration 0023 leaves DELETE to the cascade for exactly this reason. Do not "fix" ' +
+        'this by adding a DELETE trigger.',
+    ).toBe('');
+
+    expect(
+      consentTrail(doomed),
+      'the member was erased and her consent rows survived her, so the trail outlived the ' +
+        'customer it is about',
+    ).toEqual([]);
   });
 });
 
@@ -1216,6 +1294,145 @@ describe('account deletion — a state with a clock, and the clock must not be n
     // Four refused attempts later, both rows are still exactly where they were.
     expect(auditCount(MEMBER, 'Account deletion requested')).toBe(requestedBefore + 1);
     expect(auditCount(MEMBER, 'Account deletion cancelled')).toBe(cancelledBefore + 1);
+  });
+
+  /**
+   * THE HOLE I REPORTED, NOW CLOSED — AND THE SPEC IS ABOUT THE TRANSACTION.
+   *
+   * The balance check on `POST /members/me/deletion` runs once, at request time.
+   * Nothing stopped her topping up afterwards, so `deletion_requested_at` over a
+   * positive `balance_fils` was reachable: the exact state the 409 exists to
+   * prevent, arrived at from the other direction, with an erasure job due to run on
+   * an account holding money the salon owes her.
+   *
+   * The fix cancels the deletion IN THE SAME TRANSACTION as the credit, on the
+   * member row already held FOR UPDATE — so there is no window in which the money
+   * has landed and the clock is still running. That is non-negotiable #3's reasoning
+   * applied to a state rather than to money, and it is what this spec checks: not
+   * "both things eventually happened" but "there is no ordering in which one
+   * happened without the other".
+   */
+  it('a top-up on a member with a pending deletion CANCELS it, in the same transaction as the credit', async () => {
+    setBalance(MEMBER, 0);
+    const requested = await treq<DeletionView>('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    precondition(requested.status === 200, `the request answered ${requested.status} ${requested.raw}`);
+    precondition(deletionColumns(MEMBER).requestedAt !== '', 'no clock was started to cancel');
+    const cancelsBefore = auditCount(MEMBER, 'Account deletion cancelled');
+
+    const topup = await treq<any>('POST', '/topups', {
+      token: member,
+      idempotencyKey: `acct-deletion-topup-${Date.now()}`,
+      body: { amountFils: 10_000, method: 'knet' },
+    });
+    precondition(topup.status === 200, `POST /topups answered ${topup.status} ${topup.raw}`);
+    const ref = /\/_gateway\/([^/?#]+)/.exec(topup.body.redirectUrl ?? '')?.[1];
+    precondition(Boolean(ref), `no sandbox gateway ref in ${topup.body.redirectUrl}`);
+
+    const settled = await treq('POST', `/_gateway/${ref}`, {
+      token: null,
+      body: { outcome: 'succeeded', notify: true },
+    });
+    precondition(settled.status === 200, `the gateway settle answered ${settled.status}`);
+
+    // The money landed AND the clock stopped. Both, or the state this closes is
+    // still reachable.
+    expect(
+      Number(scalar(`select balance_fils from member where id='${MEMBER}'`)),
+      'the top-up did not credit her',
+    ).toBeGreaterThan(0);
+    expect(
+      deletionColumns(MEMBER),
+      'her balance is positive and the deletion clock is STILL RUNNING. That is the state the 409 ' +
+        'refuses to create, reached from the other side, with an erasure due on an account holding ' +
+        'credit the salon owes her.',
+    ).toEqual({ requestedAt: '', dueAt: '' });
+
+    // And the read agrees, because the wallet renders the banner from it.
+    const state = await treq<DeletionView>('GET', '/members/me/deletion', { token: member });
+    expect(state.status, state.raw).toBe(200);
+    expect(state.body.status).toBe('none');
+
+    expect(auditCount(MEMBER, 'Account deletion cancelled')).toBe(cancelsBefore + 1);
+  });
+
+  it('and that cancellation is attributed to the SYSTEM, not to a button she never saw', async () => {
+    setBalance(MEMBER, 0);
+    const requested = await treq('POST', '/members/me/deletion', {
+      token: member,
+      body: { password: PASSWORD },
+    });
+    precondition(requested.status === 200, `the request answered ${requested.status}`);
+
+    const topup = await treq<any>('POST', '/topups', {
+      token: member,
+      idempotencyKey: `acct-deletion-attrib-${Date.now()}`,
+      body: { amountFils: 5_000, method: 'knet' },
+    });
+    precondition(topup.status === 200, `POST /topups answered ${topup.status} ${topup.raw}`);
+    const ref = /\/_gateway\/([^/?#]+)/.exec(topup.body.redirectUrl ?? '')?.[1];
+    precondition(Boolean(ref), 'no sandbox gateway ref');
+    const settled = await treq('POST', `/_gateway/${ref}`, {
+      token: null,
+      body: { outcome: 'succeeded', notify: true },
+    });
+    precondition(settled.status === 200, `the gateway settle answered ${settled.status}`);
+
+    const row = scalar(
+      `select actor_kind || '|' || coalesce(actor_id,'') || '|' || (metadata ->> 'reason')
+         from audit_log
+        where subject_id='${MEMBER}' and action='Account deletion cancelled'
+        order by seq desc limit 1`,
+    );
+    const [actorKind, actorId, reason] = row.split('|');
+
+    /**
+     * `system`, and the reasoning is worth keeping because it is easy to "improve"
+     * this into a lie. This path runs from the PSP WEBHOOK as often as from the
+     * client, so there is frequently no session behind it — and naming her as the
+     * actor would assert she pressed a cancel button she never saw. She has not
+     * been told; the row says the system did it on her money's behalf.
+     */
+    expect(
+      actorKind,
+      'the automatic cancellation is attributed to the customer. She never saw a cancel button — ' +
+        'this can run from the PSP webhook with no session at all — so naming her as the actor is ' +
+        'the audit log asserting something that did not happen.',
+    ).toBe('system');
+    expect(actorId, 'a system actor should not carry a staff or member id').toBe('');
+    expect(reason).toBe('topup_after_deletion_request');
+  });
+
+  it('a top-up with NO pending deletion writes no cancellation row — the trail records events, not code paths', async () => {
+    setBalance(MEMBER, 0);
+    precondition(
+      deletionColumns(MEMBER).requestedAt === '',
+      'this spec needs her with no pending deletion',
+    );
+    const cancelsBefore = auditCount(MEMBER, 'Account deletion cancelled');
+
+    const topup = await treq<any>('POST', '/topups', {
+      token: member,
+      idempotencyKey: `acct-deletion-none-${Date.now()}`,
+      body: { amountFils: 5_000, method: 'knet' },
+    });
+    precondition(topup.status === 200, `POST /topups answered ${topup.status} ${topup.raw}`);
+    const ref = /\/_gateway\/([^/?#]+)/.exec(topup.body.redirectUrl ?? '')?.[1];
+    precondition(Boolean(ref), 'no sandbox gateway ref');
+    const settled = await treq('POST', `/_gateway/${ref}`, {
+      token: null,
+      body: { outcome: 'succeeded', notify: true },
+    });
+    precondition(settled.status === 200, `the gateway settle answered ${settled.status}`);
+
+    expect(
+      auditCount(MEMBER, 'Account deletion cancelled'),
+      'a top-up on a member with nothing to cancel still wrote "Account deletion cancelled". The ' +
+        'audit log is the record of what HAPPENED to her, not of which branches the code took, ' +
+        'and a cancellation of a request that never existed is a sentence nobody can act on.',
+    ).toBe(cancelsBefore);
   });
 
   it('and no response on this screen carries a credential, at any nesting (non-negotiable #6)', async () => {
@@ -1515,9 +1732,13 @@ describe('GAP: Account behaviour with no contract yet', () => {
   it.todo(
     'accepting a new policy version: the member stamps a version but nothing lets her accept a newer one, so a re-published set has no path to consent (lane A)',
   );
-  it.todo(
-    'the balance check on POST /members/me/deletion happens ONCE, at request time. Nothing stops a member with a pending request from topping up afterwards, so `deletion_requested_at` over a positive `balance_fils` is a reachable state — and it is exactly the state the 409 exists to prevent. Whether the top-up is refused, the request is auto-cancelled, or the erasure job simply skips her, is a product call and cannot be asserted without inventing it (lane A + product)',
-  );
+  /**
+   * RESOLVED — this said the balance check runs once, so a top-up after a pending
+   * request reaches the state the 409 exists to prevent. It did, and it does not
+   * now: the top-up cancels the deletion in the same transaction as the credit.
+   * Three specs above cover it, including the one that matters most — that the
+   * cancellation is attributed to the SYSTEM and not to a button she never saw.
+   */
   it.todo(
     'the erasure itself. `erasureScheduled` is false on every response and no job reads `member_deletion_due_idx`, so the 30-day promise in the published privacy policy currently has a clock and no hand. Which columns are nulled at the due date and which survive the 7-year financial record is the client\'s retention decision — CLAUDE.md § Escalate (client)',
   );
