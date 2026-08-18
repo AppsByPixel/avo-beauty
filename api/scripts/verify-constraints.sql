@@ -1,15 +1,25 @@
 -- Proof, not documentation.
 --
---   pnpm --filter @avo/api run db:reset    # fresh database + migrations
---   pnpm --filter @avo/api run db:verify   # this file
+--   pnpm --dir api run db:reset    # fresh database + migrations
+--   pnpm --dir api run db:verify   # this file
 --
 -- Runs the guarantees the schema exists to hold and shows the database refusing
--- each violation. Every statement below is EXPECTED TO FAIL except the seeds,
--- the legal INSERT into audit_log, and step 3f.
+-- each violation. Every statement in sections 1-4 is EXPECTED TO FAIL except the
+-- seeds, the legal INSERT into audit_log, and step 3f. Section 5 is the opposite:
+-- it must PASS, and raises if it does not.
 --
--- Run it against a freshly migrated database. It deliberately cannot clean up
--- after itself: the rows it writes to audit_log and ledger_entry are ones
--- nothing in this system is allowed to delete, which is the point.
+-- WHICH DATABASE. `AVO_VERIFY_DB` selects it and defaults to `avo`:
+--
+--   AVO_VERIFY_DB=avo_lane_a pnpm --dir api run db:verify
+--
+-- It used to be hardcoded to `avo`, which meant the one command whose whole job
+-- is proving invariants could not be pointed at the database you had just
+-- seeded — and a lane that ran it anyway would be reading someone else's rows.
+-- Section 5 is about seeded data, so this stopped being a convenience.
+--
+-- Run sections 1-4 against a freshly migrated database. It deliberately cannot
+-- clean up after itself: the rows it writes to audit_log and ledger_entry are
+-- ones nothing in this system is allowed to delete, which is the point.
 --
 -- Labels go to stderr (`\warn`) so they interleave with psql's errors in the
 -- right order when the whole transcript is captured with 2>&1.
@@ -164,3 +174,103 @@ SELECT table_name, column_name, data_type
   FROM information_schema.columns
  WHERE table_schema = 'public' AND column_name LIKE '%\_fils'
  ORDER BY table_name, column_name;
+
+\warn ''
+\warn '=== 5. every wallet reconciles to its ledger =============================='
+\warn ''
+-- THE ONE RECONCILIATION THIS SCHEMA EXISTS TO KEEP TRUE, ASSERTED.
+--
+-- `member.balance_fils` is a cached aggregate. `schema/ledger.ts` says what makes
+-- it defensible, and says it is the reason the table exists:
+--
+--     SELECT sum(CASE direction WHEN 'credit' THEN amount_fils ELSE -amount_fils END)
+--     FROM ledger_entry WHERE account = 'member_wallet' AND member_id = $1;
+--
+-- That property was asserted in three comments and checked nowhere, and the seed
+-- broke it on its first line: both fixture members were INSERTed with a balance
+-- already on the row and no entry saying where it came from, so the sum was short
+-- by exactly the opening balance on a clean database. An invariant nobody checks
+-- is the same thing as a comment, so here is the check.
+--
+-- LEFT JOIN, not INNER. A member with no wallet entries at all must show up as a
+-- drift equal to her whole balance rather than vanishing from the result — that is
+-- precisely the shape the missing opening balances had, and an INNER JOIN would
+-- have hidden it.
+--
+-- `SL-VERIFY` IS EXCLUDED, and this is the one exemption. That salon and its
+-- member are this script's own scratch fixtures for probing constraints: section 3
+-- deliberately writes wallet entries for `MB-VERIFY` without maintaining her
+-- balance, because it is testing the balanced-entry trigger rather than modelling
+-- a customer. Including it would make this section fail always, which is the same
+-- as not having it.
+SELECT m.id,
+       m.balance_fils,
+       coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                      ELSE -le.amount_fils END), 0) AS ledger_fils,
+       m.balance_fils
+         - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                          ELSE -le.amount_fils END), 0) AS difference_fils
+  FROM member m
+  LEFT JOIN ledger_entry le
+         ON le.member_id = m.id
+        AND le.account = 'member_wallet'
+ WHERE m.salon_id <> 'SL-VERIFY'
+ GROUP BY m.id, m.balance_fils
+ ORDER BY m.id;
+
+\warn '--- and it FAILS LOUDLY rather than printing a table nobody reads ---'
+DO $$
+DECLARE
+  drifted text;
+  n int;
+BEGIN
+  SELECT count(*), string_agg(format('%s off by %s fils', id, difference_fils), ', ' ORDER BY id)
+    INTO n, drifted
+    FROM (
+      SELECT m.id,
+             m.balance_fils
+               - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                                ELSE -le.amount_fils END), 0) AS difference_fils
+        FROM member m
+        LEFT JOIN ledger_entry le
+               ON le.member_id = m.id
+              AND le.account = 'member_wallet'
+       WHERE m.salon_id <> 'SL-VERIFY'
+       GROUP BY m.id, m.balance_fils
+    ) per_member
+   WHERE difference_fils <> 0;
+
+  IF n > 0 THEN
+    RAISE EXCEPTION
+      'wallet ledger does not reconcile for % member(s): %', n, drifted
+      USING HINT = 'member.balance_fils must equal the signed sum of its member_wallet entries. '
+                   'A balance with no originating entry is a hole in the record, not a fixture convenience.';
+  END IF;
+END
+$$;
+
+-- THE VERDICT, ON STDOUT, and not a `RAISE NOTICE` — line 29 of this script sets
+-- `client_min_messages TO WARNING` so that the seed's own chatter stays out of the
+-- transcript, which silently swallows any NOTICE raised down here. Found by
+-- writing one and watching it never appear. A result row cannot be suppressed by
+-- a message threshold, and it states the outcome in both directions rather than
+-- only shouting on failure.
+SELECT CASE
+         WHEN count(*) FILTER (WHERE difference_fils <> 0) = 0 THEN 'RECONCILED'
+         ELSE 'DRIFT — '
+              || count(*) FILTER (WHERE difference_fils <> 0)
+              || ' member(s) disagree with their ledger'
+       END AS verdict,
+       count(*) AS members_checked
+  FROM (
+    SELECT m.id,
+           m.balance_fils
+             - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                              ELSE -le.amount_fils END), 0) AS difference_fils
+      FROM member m
+      LEFT JOIN ledger_entry le
+             ON le.member_id = m.id
+            AND le.account = 'member_wallet'
+     WHERE m.salon_id <> 'SL-VERIFY'
+     GROUP BY m.id, m.balance_fils
+  ) per_member;
