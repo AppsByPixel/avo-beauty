@@ -1005,40 +1005,37 @@ describe('the signup limiter bounds the argon2 cost, in two tiers', () => {
 });
 
 /**
- * WHAT THE LIMITER DOES NOT BOUND — and the endpoint's own docstring is wrong
- * about it.
+ * THE ORACLE IS NOW BOUNDED — AND THIS BLOCK IS THE RECORD OF IT CLOSING.
  *
- * `services/signupLimit.ts` says, of the enumeration oracle it deliberately does
- * not close:
+ * It used to read "the limiter counts hashes, not probes — so the oracle is
+ * unbounded", and it was true. `recordSignupAttempt` sat BELOW the duplicate-phone
+ * check, so a probe against a registered number was refused before anything was
+ * recorded: no hash, which was the intent, and no counter increment, which was not.
+ * Forty consecutive probes from one address all answered 409 and left
+ * `signup_attempt` empty. `services/signupLimit.ts` meanwhile claimed "an attacker
+ * still walks roughly 100 numbers an hour per address" — a bound the call order did
+ * not deliver, and not in the conservative direction.
  *
- *   "At 20 attempts per five minutes an attacker still walks roughly 100 numbers
- *    an hour per address, and the answer for each is definitive. What is bounded
- *    is the CPU, which is the claim."
+ * Lane B reached the same conclusion independently while driving the consent screen
+ * (8 requests, 1 row), which is the strongest form that evidence takes.
  *
- * The CPU claim is true. THE 100-AN-HOUR FIGURE IS NOT, and it is not conservative
- * — it is unbounded. `recordSignupAttempt` is called at auth.ts:259, AFTER the
- * duplicate-phone check at auth.ts:246. So a probe against a number that IS
- * registered is refused before anything is recorded: it costs no hash, which is
- * the intent, and it also increments no counter, which is not. An attacker can ask
- * "does this number hold a wallet here" as many times as they like, for ever, from
- * one address.
+ * LANE A MOVED `recordSignupAttempt` ABOVE THE DUPLICATE CHECK (auth.ts:279, ahead
+ * of the refusal at :290). So a probe is now counted before it can learn anything,
+ * and the docstring's figure is true.
  *
- * The same docstring names both of the examples it gets wrong: "a request refused
- * after this line — a duplicate phone, a stale policy version — leaves an attempt
- * recorded that did cost a hash but produced no account". Both are refused BEFORE
- * that line. The paragraph is the file's own accounting of its imprecision, and it
- * is the paragraph that is imprecise.
+ * THE SPEC IS INVERTED RATHER THAN DELETED, WHICH IS THE POINT OF HAVING WRITTEN IT
+ * THIS WAY. It was pinned as current behaviour precisely so it would go red the hour
+ * the order changed and ask to be rewritten — and it did. What it guards now is the
+ * ORDER, which is a one-line property that a future refactor moving the duplicate
+ * check back above the counter would silently undo, restoring an unbounded oracle
+ * with every other spec in this file still green.
  *
- * WRITTEN AS A COUNTER-READ, NOT AN ARGUMENT, and pinned as the CURRENT behaviour
- * rather than as a `knownBug`. Lane D does not decide whether the oracle should be
- * bounded — 0026 escalated that deliberately and it needs a verification step at
- * signup, which is a product decision. What lane D can do is make sure the next
- * person to read that docstring meets a spec rather than a sentence: if the order
- * is ever changed so probes ARE counted, this spec goes red and asks to be
- * rewritten, which is exactly when the docstring's figure becomes true.
+ * IT ASSERTS THE COST, NOT THE REFUSAL. That probes get 429s is the visible part; the
+ * load-bearing part is that each probe LEAVES A ROW, because that is what makes the
+ * ceiling arrive at all.
  */
-describe('the limiter counts hashes, not probes — so the oracle is unbounded', () => {
-  it('an already_registered probe is refused free, and increments no counter', async () => {
+describe('an enumeration probe is counted before it is answered, so the oracle is bounded', () => {
+  it('forty probes against a registered number are cut off by the limiter, and every one is counted', async () => {
     const phone = freshPhone();
     const created = await signup(validBody({ phone }));
     precondition(created.status === 201, `the setup signup failed: ${created.raw}`);
@@ -1046,23 +1043,45 @@ describe('the limiter counts hashes, not probes — so the oracle is unbounded',
     clearAttempts();
     precondition(attemptsFor(LOOPBACK) === 0, 'the counter was not cleared');
 
-    // Forty probes against a number that is registered. Well past both tiers.
     const codes: number[] = [];
     for (let i = 0; i < 40; i++) {
       const probe = await signup(validBody({ phone }));
       codes.push(probe.status);
     }
 
-    expect(
-      new Set(codes),
-      `forty probes answered ${JSON.stringify([...new Set(codes)])}. A 429 in here would mean ` +
-        'the oracle IS bounded and this spec should be rewritten — see the block comment.',
-    ).toEqual(new Set([409]));
+    const answered = codes.filter((c) => c === 409).length;
+    const refused = codes.filter((c) => c === 429).length;
 
+    /**
+     * The burst tier is 20 per five minutes. So the first 20 probes are counted and
+     * answered — they cost a hash and they do reveal that the number is registered —
+     * and every probe after that is refused by the limiter before it learns anything.
+     * Asserted as a sum rather than as an exact split so the spec does not break on a
+     * change to the configured limit, and then asserted against the limit itself.
+     */
+    expect(
+      answered + refused,
+      `forty probes answered ${JSON.stringify([...new Set(codes)])} — something other than 409/429 came back`,
+    ).toBe(40);
+    expect(
+      refused,
+      'no probe was refused in forty attempts, so the oracle is unbounded again. ' +
+        '`recordSignupAttempt` must stay ABOVE the duplicate-phone check in auth.ts — below it, ' +
+        'a probe is answered before it is counted and an attacker walks the whole number space.',
+    ).toBeGreaterThan(0);
+    expect(answered, 'more numbers were confirmed than the burst tier allows').toBeLessThanOrEqual(
+      20,
+    );
+
+    /**
+     * AND THE COUNTER MOVED, which is the half that actually bounds it. A run where
+     * every probe answered 409 and the table stayed empty is the old behaviour, and it
+     * would satisfy nothing above except by accident.
+     */
     expect(
       attemptsFor(LOOPBACK),
-      'forty enumeration probes were counted. That is the docstring\'s claim coming true, which ' +
-        'is good news and makes this spec wrong — promote it and correct the 100-an-hour figure.',
-    ).toBe(0);
+      'the probes left no rows behind, so nothing was counted and the refusals above came from ' +
+        'somewhere else. This is the pre-fix behaviour returning.',
+    ).toBe(20);
   }, 120_000);
 });

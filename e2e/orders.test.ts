@@ -1,0 +1,438 @@
+/**
+ * `POST /orders` — the shop, and the race that only the reconciliation saw.
+ *
+ * HOW TO RUN
+ *
+ *   pnpm --dir ./api run db:up
+ *   cd e2e && ../node_modules/.bin/vitest run orders.test.ts
+ *
+ * WHY THIS FILE EXISTS, AND IT IS NOT "THE SHOP IS NEW"
+ * ----------------------------------------------------
+ * Lane A ran the ablation method on its own endpoint and removed the single
+ * `FOR UPDATE` in `performOrder`. The result:
+ *
+ *     five concurrent orders of 9.000, all settled
+ *     all five reported balanceAfterFils: 6250
+ *     ledger off by 36000 fils
+ *     every CHECK satisfied throughout
+ *
+ * `db:verify` invariant 5 was the only thing that saw it. **No spec did.** This file
+ * is the spec that does.
+ *
+ * WHY EVERY `CHECK` STAYED SATISFIED, WHICH IS THE PART WORTH UNDERSTANDING
+ * -----------------------------------------------------------------------
+ * `member_balance_non_negative` is real and this suite drives it
+ * (`scanner.test.ts` § "the money floor is in the schema"). It cannot catch a lost
+ * update, and the reason is structural rather than bad luck: the debit is an
+ * ABSOLUTE write, `SET balance_fils = <balanceAfter>`, computed in the handler from
+ * the balance it read. Five writers that each read 15250 each write 6250 — a
+ * perfectly legal, positive, plausible balance. There is no moment at which any row
+ * is negative, so no CHECK has anything to object to. Four debits simply vanish.
+ *
+ * A conditional decrement — `SET balance_fils = balance_fils - <due>
+ * WHERE id = $1 AND balance_fils >= <due>`, with the row count read — would make the
+ * database do the arithmetic and refuse the fourth and fifth outright, the same shape
+ * `returnDeposit` now uses for `deposit_already_returned`. **That is a lane A
+ * decision and it is put to them in the lane report, not made here.** See the block
+ * comment on the race spec for why the asymmetry with `POST /charges` is the argument
+ * for it: money-in has two independent layers and money-out through orders has one.
+ *
+ * THE RACE IS SET UP SO THAT LOSING IT IS UNAMBIGUOUS
+ * --------------------------------------------------
+ * Firing five concurrent orders at a wallet that can afford five proves nothing: the
+ * correct answer and the broken answer are both "five settled". So this file funds
+ * her for EXACTLY TWO and fires five. Correct behaviour is two settled and three
+ * refused with `insufficient_balance`; the ablated behaviour is five settled. The two
+ * outcomes cannot be confused, and the assertion is on the money rather than on the
+ * count alone.
+ *
+ * ITS OWN MEMBER, cloned from the seeded QA member so the password hash
+ * `signInMember` sends is the one on the row. This file moves a balance to a
+ * deliberately tiny number, which is not something to do to a member another file
+ * asserts against.
+ */
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { precondition } from './support/known-bug.js';
+import {
+  SALON_A,
+  apiLogTail,
+  psql,
+  scalar,
+  signInMember,
+  startTenancyApi,
+  stopTenancyApi,
+  treq,
+} from './support/tenancy-harness.js';
+
+const MEMBER = 'QA-ORD-0001';
+const MEMBER_PHONE = '+96555990001';
+const CLONE_SOURCE = 'QA-GW-0001';
+
+/** `api/src/db/seed.ts`: PR-01 Argan hair oil, salon A, 8.500 KD. */
+const PRODUCT = 'PR-01';
+const PRODUCT_FILS = 8_500;
+
+let member = '';
+let n = 0;
+const key = (label: string) => `order-${label}-${Date.now()}-${n++}`;
+
+const balanceOf = (): number =>
+  Number(scalar(`select balance_fils from member where id='${MEMBER}'`));
+
+/** Her `shop` transactions. One per settled order. */
+const shopRows = (): number =>
+  Number(
+    scalar(`select count(*) from transaction where member_id='${MEMBER}' and kind='shop'`),
+  );
+
+/**
+ * THE RECONCILIATION, and it is the invariant that caught the ablation.
+ *
+ * The sum of every transaction against her must equal the movement in her balance.
+ * This is `db:verify` invariant 5 expressed against one member, and it is the only
+ * assertion in this file that would have failed on the ablated code while every
+ * per-request assertion still passed — a lost update leaves the balance too HIGH for
+ * the transactions written, which no single response can reveal.
+ */
+const ledgerSum = (): number =>
+  Number(
+    scalar(
+      `select coalesce(sum(amount_fils), 0) from transaction where member_id = '${MEMBER}'`,
+    ),
+  );
+
+const order = (idemKey: string, qty = 1) =>
+  treq<any>('POST', '/orders', {
+    token: member,
+    idempotencyKey: idemKey,
+    body: { items: [{ productId: PRODUCT, qty }] },
+  });
+
+/** Set her balance to an exact figure. The only way to make the race decisive. */
+function fund(fils: number): void {
+  psql(`UPDATE member SET balance_fils = ${fils} WHERE id = '${MEMBER}';`);
+}
+
+beforeAll(async () => {
+  await startTenancyApi();
+
+  /**
+   * Cloned rather than written field by field: `member` has columns this file has no
+   * opinion about, and a hand-written row that satisfies today's NOT NULLs breaks the
+   * day one is added. The `SELECT` takes whatever they are, including the password
+   * hash `signInMember` needs.
+   */
+  psql(`
+    INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                        balance_fils, visits, tier, stamps, policy_version, notify_wa)
+    SELECT '${MEMBER}', salon_id, 'Orders QA', '${MEMBER_PHONE}', NULL, false,
+           password_hash, 0, 0, tier, stamps, policy_version, false
+      FROM member WHERE id = '${CLONE_SOURCE}'
+    ON CONFLICT (id) DO UPDATE SET balance_fils = 0;
+  `);
+  precondition(
+    scalar(`select count(*) from member where id='${MEMBER}'`).trim() === '1',
+    `the clone source ${CLONE_SOURCE} is missing, so this file has no member`,
+  );
+
+  member = await signInMember(SALON_A, MEMBER_PHONE);
+
+  // The fixture this file prices everything against, asserted rather than assumed.
+  precondition(
+    scalar(
+      `select price_fils::text from product where id='${PRODUCT}' and salon_id='${SALON_A}'`,
+    ).trim() === String(PRODUCT_FILS),
+    `${PRODUCT} is not ${PRODUCT_FILS} fils at ${SALON_A}, so every figure below is wrong`,
+  );
+  /**
+   * `::text` IS DELIBERATELY ABSENT, and the difference bit once already. A bare
+   * boolean column comes back from `psql -tA` as `t`; the SAME column written
+   * `module_shop::text` comes back as `true`. Casting and then comparing to `'t'`
+   * fails against a salon whose shop is switched ON, which is how this precondition
+   * first reported the opposite of the truth.
+   */
+  precondition(
+    scalar(`select module_shop from salon where id='${SALON_A}'`).trim() === 't',
+    `${SALON_A} has the shop module off, so every order here would be shop_not_enabled`,
+  );
+}, 120_000);
+
+afterAll(async () => {
+  /**
+   * Her transactions and the member are LEFT BEHIND, and the teardown says so rather
+   * than attempting a delete that cannot work. `transaction.member_id` is
+   * `onDelete: 'restrict'` and 0024 makes the ledger unerasable by anyone — which is
+   * the property the money core depends on, so a suite that could clean up after
+   * itself here would be a suite proving that property false. The run database is
+   * minted per run and dropped by `global-setup.ts`; this member's id and phone are
+   * unique to this file.
+   */
+  await stopTenancyApi();
+});
+
+// ===========================================================================
+
+describe('an order debits the wallet, and the ledger reconciles to it', () => {
+  /**
+   * THE CONTROL. Every refusal and every race below asserts that money did NOT move
+   * in some way, and an endpoint broken shut satisfies all of them. So first: an
+   * order really does take the money and really does write the row.
+   */
+  it('takes the price from the wallet and writes exactly one shop transaction', async () => {
+    fund(50_000);
+    const rowsBefore = shopRows();
+    const ledgerBefore = ledgerSum();
+
+    const res = await order(key('control'));
+
+    expect(
+      res.status,
+      `${res.raw}${res.status >= 500 ? `\n--- API log ---\n${apiLogTail()}` : ''}`,
+    ).toBe(201);
+    expect(res.body.totalFils, 'the total was not the catalog price').toBe(PRODUCT_FILS);
+    expect(Number.isInteger(res.body.totalFils)).toBe(true);
+    expect(res.body.balanceAfterFils).toBe(50_000 - PRODUCT_FILS);
+    // A debit is NEGATIVE on the transaction. A shop order stored positive
+    // reconciles the wrong way, which is the whole subject of this file.
+    expect(res.body.transaction.amountFils).toBe(-PRODUCT_FILS);
+
+    expect(balanceOf(), 'the database disagrees with the reply').toBe(50_000 - PRODUCT_FILS);
+    expect(shopRows()).toBe(rowsBefore + 1);
+    expect(
+      ledgerSum(),
+      'the transaction written does not account for the money that left',
+    ).toBe(ledgerBefore - PRODUCT_FILS);
+  }, 60_000);
+
+  it('refuses an order it cannot pay for, and names the shortfall', async () => {
+    fund(PRODUCT_FILS - 1);
+    const rowsBefore = shopRows();
+
+    const res = await order(key('poor'));
+
+    expect(res.status, `${res.raw}`).toBe(402);
+    expect(res.body.error).toBe('insufficient_balance');
+    expect(res.body.shortfallFils, 'the refusal does not say how short she is').toBe(1);
+    expect(balanceOf(), 'a refused order moved money').toBe(PRODUCT_FILS - 1);
+    expect(shopRows(), 'a refused order wrote a shop transaction').toBe(rowsBefore);
+  }, 60_000);
+});
+
+// -------------------------------------------------------------------- the race --
+
+describe('concurrent orders on one wallet cannot spend the same fils twice', () => {
+  /**
+   * THE SPEC THE ABLATION ASKED FOR.
+   *
+   * Lane A removed `performOrder`'s single `FOR UPDATE` and five concurrent orders of
+   * 9.000 all settled, all reporting the same `balanceAfterFils`, leaving the ledger
+   * 36000 fils out. Only `db:verify` invariant 5 noticed. Nothing in this suite did,
+   * because nothing in this suite fired two orders at once.
+   *
+   * FUNDED FOR EXACTLY TWO, FIRED FIVE. That asymmetry is the whole design: a wallet
+   * that can afford all five makes the correct and the broken outcome identical
+   * ("five settled"), so the spec would pass under ablation and prove nothing. Funded
+   * for two, the correct answer is two settled and three `insufficient_balance`, and
+   * the ablated answer is five settled. They cannot be confused.
+   *
+   * FOUR ASSERTIONS, AND THE LAST IS THE ONE THAT CANNOT BE FOOLED:
+   *   1. exactly two settled, three refused — the count;
+   *   2. the balance is opening - 2 x price, and never negative;
+   *   3. exactly two `shop` rows exist — so a settled response corresponds to a row;
+   *   4. the LEDGER RECONCILES — sum(amount_fils) equals the balance movement.
+   *
+   * (4) is `db:verify` invariant 5 scoped to one member, and it is the assertion that
+   * fails under a lost update while every per-response assertion still passes: a lost
+   * update leaves the balance too HIGH for the rows written, which no single reply can
+   * reveal. It is here because the ablation proved a suite can be green while the
+   * reconciliation is the only honest witness.
+   *
+   * WHY THE ASYMMETRY WITH `POST /charges` IS WORTH LANE A'S ATTENTION. A charge
+   * survived the equivalent ablation because it has TWO independent layers: the
+   * wallet-token consumption is a conditional write with a row-count read
+   * (`consumed_at IS NULL AND expires_at > now()`), so two concurrent charges on one
+   * token cannot both proceed even with no lock. An order has no token — it is
+   * member-authenticated directly — so `FOR UPDATE` is its only serialising guard, and
+   * `member_balance_non_negative` cannot be the second one because an absolute write
+   * of a positive balance never violates it. Money-in has two layers; money-out
+   * through the shop has one. Put to lane A as a decision, not fixed here.
+   */
+  it('five orders at once against a balance for two: two settle, three are refused', async () => {
+    const opening = PRODUCT_FILS * 2;
+    fund(opening);
+    const rowsBefore = shopRows();
+    const ledgerBefore = ledgerSum();
+
+    // Five DIFFERENT keys — this is five genuine orders racing, not one retried.
+    // Under one key the idempotency machinery would be the thing under test instead.
+    const results = await Promise.all([
+      order(key('race-a')),
+      order(key('race-b')),
+      order(key('race-c')),
+      order(key('race-d')),
+      order(key('race-e')),
+    ]);
+
+    const settled = results.filter((r) => r.status === 201);
+    const refused = results.filter((r) => r.status === 402);
+    const other = results.filter((r) => r.status !== 201 && r.status !== 402);
+
+    expect(
+      other.map((r) => `${r.status} ${r.raw}`),
+      'a concurrent order answered something other than 201 or 402',
+    ).toEqual([]);
+
+    expect(
+      settled.length,
+      `${settled.length} of five concurrent orders settled against a balance that covers two. ` +
+        'More than two means the debits raced: each read the same balance and wrote its own ' +
+        'absolute result, so the losers vanished. That is the exact state removing ' +
+        "performOrder's FOR UPDATE produced, and no CHECK can see it because every writer " +
+        'writes a plausible POSITIVE balance.',
+    ).toBe(2);
+    expect(refused.length, 'the three unaffordable orders were not refused').toBe(3);
+    for (const r of refused) expect(r.body.error).toBe('insufficient_balance');
+
+    // The money, out of the database rather than out of any reply.
+    expect(
+      balanceOf(),
+      'the balance is not opening minus exactly two orders, so a debit was lost or doubled',
+    ).toBe(opening - PRODUCT_FILS * 2);
+    expect(balanceOf(), 'the wallet went negative').toBeGreaterThanOrEqual(0);
+    expect(shopRows(), 'a settled order did not write a row, or a refused one did').toBe(
+      rowsBefore + 2,
+    );
+
+    /**
+     * AND THE RECONCILIATION. The one that caught this when nothing else could.
+     */
+    expect(
+      ledgerSum(),
+      'the ledger does not account for the balance movement. Under the lost update that ' +
+        'removing FOR UPDATE produced, this is the assertion that fails while every response ' +
+        'above still looks correct — the balance is too HIGH for the rows written.',
+    ).toBe(ledgerBefore - PRODUCT_FILS * 2);
+  }, 120_000);
+
+  /**
+   * AND A SINGLE WALLET CANNOT BE DRAINED BELOW ZERO BY A CROWD, which is the
+   * customer-visible version of the same question and worth its own assertion because
+   * it is the one a merchant would notice.
+   */
+  it('and an exactly-affordable balance ends at zero, never below it', async () => {
+    fund(PRODUCT_FILS);
+    const ledgerBefore = ledgerSum();
+
+    const results = await Promise.all([
+      order(key('drain-a')),
+      order(key('drain-b')),
+      order(key('drain-c')),
+    ]);
+
+    expect(results.filter((r) => r.status === 201).length, 'more than one order was paid for').toBe(
+      1,
+    );
+    expect(balanceOf(), 'the wallet did not land exactly on zero').toBe(0);
+    expect(ledgerSum()).toBe(ledgerBefore - PRODUCT_FILS);
+  }, 120_000);
+});
+
+// ------------------------------------------------------- non-negotiable #4 --
+
+describe('POST /orders is idempotent, which closes the fourth of #4\'s four verbs', () => {
+  /**
+   * Non-negotiable #4 lists four money-moving POSTs — "top-ups, charges, orders,
+   * voids" — and `orders` was the one with no endpoint to test, so the go-live row
+   * for it could not be ticked however green the other three were. It exists now.
+   */
+  it('requires a key, and refuses without one before anything moves', async () => {
+    fund(50_000);
+    const before = balanceOf();
+
+    const res = await treq<any>('POST', '/orders', {
+      token: member,
+      body: { items: [{ productId: PRODUCT, qty: 1 }] },
+    });
+
+    expect(res.status, `an order with no Idempotency-Key answered ${res.status}: ${res.raw}`).toBe(
+      400,
+    );
+    expect(res.body.error).toBe('idempotency_key_required');
+    expect(balanceOf(), 'a keyless order moved money').toBe(before);
+  }, 60_000);
+
+  it('a replay under the same key debits once and returns the first result', async () => {
+    fund(50_000);
+    const k = key('replay');
+    const rowsBefore = shopRows();
+
+    const first = await order(k);
+    precondition(first.status === 201, `the first order failed: ${first.raw}`);
+    const afterFirst = balanceOf();
+
+    const replay = await order(k);
+
+    expect(replay.status, `the replay answered ${replay.status}: ${replay.raw}`).toBe(201);
+    expect(
+      replay.body.transaction.id,
+      'the replay created a SECOND transaction, so a retried order is a second charge',
+    ).toBe(first.body.transaction.id);
+    expect(balanceOf(), 'the replay debited again').toBe(afterFirst);
+    expect(shopRows(), 'the replay wrote a second shop row').toBe(rowsBefore + 1);
+  }, 60_000);
+
+  it('a DIFFERENT cart under the same key is refused, not answered with the first', async () => {
+    fund(50_000);
+    const k = key('mutated');
+
+    const first = await order(k, 1);
+    precondition(first.status === 201, `the first order failed: ${first.raw}`);
+    const afterFirst = balanceOf();
+
+    const mutated = await order(k, 2);
+
+    expect(
+      mutated.status,
+      `a mutated retry answered ${mutated.status}: ${mutated.raw}. Replaying the first result ` +
+        'for a different cart hides a lost order; charging for the second under a spent key ' +
+        'double-debits.',
+    ).toBe(422);
+    expect(balanceOf(), 'the mutated retry moved money').toBe(afterFirst);
+  }, 60_000);
+
+  /**
+   * AND THE PRICE IS NOT THE CLIENT'S TO SEND. Refused by name rather than ignored:
+   * a client that sent `unitPriceFils` believed it was setting the price, and
+   * silently ignoring it charges the customer an amount her app never showed her.
+   */
+  for (const field of ['priceFils', 'unitPriceFils', 'totalFils', 'amountFils'] as const) {
+    it(`refuses a client-supplied ${field} by name`, async () => {
+      fund(50_000);
+      const before = balanceOf();
+
+      const res = await treq<any>('POST', '/orders', {
+        token: member,
+        idempotencyKey: key(`price-${field}`),
+        body: { items: [{ productId: PRODUCT, qty: 1 }], [field]: 1 },
+      });
+
+      expect(res.status, `${field} answered ${res.status}: ${res.raw}`).toBe(400);
+      expect(res.body.error).toBe('price_not_client_supplied');
+      expect(balanceOf()).toBe(before);
+    }, 60_000);
+  }
+
+  it('and refuses a client-supplied branchId — the server resolves the branch', async () => {
+    fund(50_000);
+
+    const res = await treq<any>('POST', '/orders', {
+      token: member,
+      idempotencyKey: key('branch'),
+      body: { items: [{ productId: PRODUCT, qty: 1 }], branchId: 'BR-SAL' },
+    });
+
+    expect(res.status, `${res.raw}`).toBe(400);
+    expect(res.body.error).toBe('branch_not_client_supplied');
+  }, 60_000);
+});

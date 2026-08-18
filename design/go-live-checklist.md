@@ -27,9 +27,10 @@ unless it is explicitly deferred in writing.
         `no-show-once.ts`; there is no reconciliation job, no drift alert and no scheduler.
         Every occurrence of "reconcil*" in `api/src` is a comment in `db/seed.ts` about the
         ledger reconciling to the balance. Lane A's row; there is nothing here to test yet.
-- [ ] Idempotency verified under retry for top-ups, charges, orders, voids
-      - Lane D, 2026-08-19 — **three of the four are driven and pass. Not ticked because
-        `orders` has no endpoint to retry.**
+- [x] Idempotency verified under retry for top-ups, charges, orders, voids
+      - Lane D, 2026-08-19 — **all four now driven.** This row read "three of four, not
+        ticked because `orders` has no endpoint to retry" for most of the day; lane A built
+        the shop, so the fourth verb finally has a door and `e2e/orders.test.ts` closes it.
       - Key REQUIRED, refused without one: `money.test.ts` §#4 for `POST /topups`,
         `POST /charges` and `POST /voids` — each asserts `400 idempotency_key_required` and
         that nothing was created or debited.
@@ -42,10 +43,12 @@ unless it is explicitly deferred in writing.
         `already_voided` rather than `request_in_progress` (`scanner.test.ts`).
       - Gateway retries specifically: `gateway.test.ts` § "a failed gateway leg does not burn
         its idempotency key" — the case where a key is spent on a leg that never moved money.
-      - **`orders` cannot be driven:** the shop is not built. `GET /salons/{id}/products`
-        returns a hardcoded empty list and there are no order or write endpoints at all
-        (`grep "'/orders" api/src/routes` is empty). This row stays unticked on that alone.
-        Lane A.
+      - **`orders` — now driven**, in `orders.test.ts` § "POST /orders is idempotent, which
+        closes the fourth of #4's four verbs": a keyless order is `400
+        idempotency_key_required` before money moves; a replay under the same key returns the
+        SAME `transaction.id` and debits once; and a **different cart** under the same key is
+        `422` rather than either a replay of the first (which hides a lost order) or a second
+        charge under a spent key. The same three shapes the other three verbs are held to.
 - [x] Concurrency suite green: double scan, double submit, duplicate callback, callback
       before client return, charge during a happy-hour boundary
       - Lane D, 2026-08-19 — **all five named cases have specs, and the suite is green.**
@@ -64,6 +67,17 @@ unless it is explicitly deferred in writing.
       - callback before client return — `gateway.test.ts` § "the callback and the customer
         race, and the answer is the same either way", plus § "a late `pending` or `declined`
         cannot walk a settled top-up backwards".
+      - **shop orders — added after this row was first ticked, and it belongs here.** Lane A
+        ran the ablation on its own endpoint and removed `performOrder`'s single `FOR UPDATE`:
+        five concurrent orders of 9.000 all settled, all reported the same
+        `balanceAfterFils: 6250`, the ledger came out 36000 fils short, and **every CHECK
+        stayed satisfied**. `db:verify` invariant 5 was the only thing that saw it; no spec
+        did. `orders.test.ts` § "concurrent orders on one wallet cannot spend the same fils
+        twice" is the spec that does — funded for exactly two and fired five, so the correct
+        answer (two settled, three `insufficient_balance`) and the broken answer (five
+        settled) cannot be confused, with the per-member ledger reconciliation asserted
+        alongside because that is the one assertion a lost update fails while every response
+        still looks right.
       - happy-hour boundary — `promotions.test.ts` § "the boundary is inclusive-start,
         exclusive-end" against the real API and the shared predicate, and
         `concurrency.test.ts` § "a charge crossing a happy-hour boundary". Note this suite
@@ -447,7 +461,7 @@ unless it is explicitly deferred in writing.
 - [ ] Weekly-per-customer and monthly-per-salon caps and quiet hours enforced at send
       - Lane C, 2026-08-19 — **nothing implements this yet.** `requireApproval`,
         `weeklyCapPerCustomer`, `monthlyCapPerSalon`, `quietFrom` and `quietTo` are typed in
-        `packages/types` and `isWithinQuietHours` exists in `rules.ts`, but they have **zero
+        `packages/types` and `isInQuietHours` exists in `rules.ts`, but they have **zero
         occurrences in `api/src`**. Lane A's row.
       - **A conflict Lane C cannot resolve alone:** the merchant dashboard already promises
         the merchant a specific version of this rule — "nothing leaves between 22:00 and
