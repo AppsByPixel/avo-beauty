@@ -868,6 +868,32 @@ export function runApiDbScriptResult(script: string, database: string): ApiScrip
   }
 }
 
+/**
+ * The same script, run WITHOUT blocking — so two passes can be in flight at once.
+ *
+ * `runApiDbScriptResult` uses `execFileSync`, which makes two sequential runs easy
+ * and two SIMULTANEOUS runs impossible. That matters for the no-show job: its
+ * candidate scan is unlocked and its status re-check under the row lock exists
+ * purely for the window between them, so a race is the only thing that can exercise
+ * it. Two sequential passes are protected by the scan predicate instead, and prove
+ * something different — which is worth knowing rather than conflating.
+ */
+export function runApiDbScriptAsync(script: string, database: string): Promise<ApiScriptResult> {
+  return new Promise((resolve) => {
+    const child = spawn(apiTsx(), [script], {
+      cwd: join(repoRoot, 'api'),
+      env: { ...process.env, ...connectionEnv(database) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (c: Buffer) => (stdout += c.toString()));
+    child.stderr?.on('data', (c: Buffer) => (stderr += c.toString()));
+    child.on('close', (code) => resolve({ ok: code === 0, stdout, stderr }));
+    child.on('error', (err) => resolve({ ok: false, stdout, stderr: String(err) }));
+  });
+}
+
 /** The throwing form, for callers that treat a failure as fatal. */
 function runApiDbScript(script: string, database: string): void {
   const res = runApiDbScriptResult(script, database);
