@@ -379,6 +379,24 @@ const SALON_ROUTES: SalonRoute[] = [
     method: 'DELETE',
     template: '/salons/{id}/branches/{bid}',
   },
+  /**
+   * The closure PREVIEW, and it is listed after the DELETE for a reason worth
+   * keeping: on salon B the control calls run in order, so by the time this one
+   * fires the disposable branch has already been closed by the entry above. The
+   * preview answers 200 for a closed branch — `closable: false` with
+   * `blockedReason: 'already_closed'` — so the control still succeeds, and the
+   * ordering is harmless rather than merely lucky.
+   *
+   * A READ that answers what a WRITE would do, which is exactly the shape that
+   * needs the cross-salon check as much as the write does: the impact report names
+   * this salon's staff and counts her customers' held deposits. Leaking it would
+   * leak the roster and the money without changing anything, and a route that only
+   * looks is the one most easily assumed to be safe.
+   */
+  {
+    method: 'GET',
+    template: '/salons/{id}/branches/{bid}/closure-preview',
+  },
 ];
 
 /**

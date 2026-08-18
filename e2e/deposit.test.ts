@@ -59,7 +59,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
   SALON_A,
@@ -78,6 +78,12 @@ const A_SCANNER_DEVICE = 'DEV-SCANNER-01';
 const A_STAFF_HANDLE = 'noura';
 /** Rana. Her week is open six days, so a future date always has a grid. */
 const ARTIST = 'AR-001';
+/**
+ * Dana, for the spec that needs TWO live bookings at once. Her own diary, following
+ * the allocator's own advice when a single artist ran out of window: the exclusion
+ * constraint is per artist, so a second artist is a second sixty minutes.
+ */
+const SECOND_ARTIST = 'AR-002';
 
 /** Salon A's seeded services. `api/src/db/seed.ts`. */
 const MANICURE = 'SV-04';
@@ -177,10 +183,13 @@ function isoDate(daysAhead: number): string {
  * and a fixed offset lands on it once every seven runs and turns this file red for
  * a reason that has nothing to do with deposits.
  */
-async function bookFuture(serviceId: string): Promise<{ id: string; depositFils: number }> {
+async function bookFuture(
+  serviceId: string,
+  artistId: string = ARTIST,
+): Promise<{ id: string; depositFils: number }> {
   let slot: string | undefined;
   for (let d = 9; d < 17 && !slot; d++) {
-    const day = await treq<any>('GET', `/artists/${ARTIST}/availability?date=${isoDate(d)}`, {
+    const day = await treq<any>('GET', `/artists/${artistId}/availability?date=${isoDate(d)}`, {
       token: member,
     });
     if (day.status !== 200) throw new Error(`availability: ${day.status} ${day.raw}`);
@@ -188,7 +197,7 @@ async function bookFuture(serviceId: string): Promise<{ id: string; depositFils:
   }
   if (!slot) {
     throw new Error(
-      `${ARTIST} has no bookable slot in the next fortnight, so this file cannot build a hold. ` +
+      `${artistId} has no bookable slot in the next fortnight, so this file cannot build a hold. ` +
         'That is a defect in availability, not in this suite.',
     );
   }
@@ -196,7 +205,7 @@ async function bookFuture(serviceId: string): Promise<{ id: string; depositFils:
   const res = await treq<any>('POST', '/bookings', {
     token: member,
     idempotencyKey: key('book'),
-    body: { artistId: ARTIST, serviceId, startsAt: slot },
+    body: { artistId, serviceId, startsAt: slot },
   });
   if (res.status !== 201) throw new Error(`POST /bookings: ${res.status} ${res.raw}`);
   return { id: res.body.booking.id, depositFils: res.body.booking.depositFils };
@@ -223,7 +232,36 @@ async function bookFuture(serviceId: string): Promise<{ id: string; depositFils:
  * ones. Ten-minute appointments on a ten-minute stride keeps six of them inside the
  * sixty-minute window with no overlap.
  */
-let placements = 0;
+/**
+ * Release every live hold of hers EXCEPT one, into the far future.
+ *
+ * Extracted because two different specs need it for the same reason and one of them
+ * did not have it. `findApplicableHold` applies the EARLIEST live booking, so any
+ * spec asserting something about a specific hold has to be able to say "this is her
+ * only one" — otherwise it is asserting against whichever booking a previous spec
+ * happened to leave behind.
+ *
+ * One at a time, because each release takes its own never-reused day: the artist's
+ * diary is an exclusion constraint and two bookings parked "30 days out" in two
+ * statements land a second apart on the same day, which overlaps.
+ */
+function parkOtherLiveHolds(exceptId: string): void {
+  const others = scalar(
+    `select coalesce(string_agg(id, ','), '') from booking
+      where member_id='${MEMBER}' and status='deposit_held' and id <> '${exceptId}'`,
+  );
+  for (const other of others.split(',').filter(Boolean)) moveOutsideWindow(other);
+}
+
+/**
+ * Placements PER ARTIST, because the exclusion constraint is per artist.
+ *
+ * A single counter ran the file out of window after six bookings and threw with the
+ * advice "give the next spec its own artist" — which was the right advice, and this
+ * is what taking it requires: one diary's worth of room does not borrow from
+ * another's. Salon A seeds four artists.
+ */
+const placementsByArtist = new Map<string, number>();
 function moveInsideWindow(bookingId: string, options: { parkOthers?: boolean } = {}): void {
   /**
    * FIRST, MAKE THIS HER ONLY LIVE HOLD — and this is API behaviour, not cleanup.
@@ -241,22 +279,20 @@ function moveInsideWindow(bookingId: string, options: { parkOthers?: boolean } =
    * bookings "30 days out" in two statements puts them a second apart on one day,
    * which overlaps.
    */
-  if (options.parkOthers !== false) {
-    const others = scalar(
-      `select coalesce(string_agg(id, ','), '') from booking
-        where member_id='${MEMBER}' and status='deposit_held' and id <> '${bookingId}'`,
-    );
-    for (const other of others.split(',').filter(Boolean)) moveOutsideWindow(other);
-  }
+  if (options.parkOthers !== false) parkOtherLiveHolds(bookingId);
 
-  const startsIn = 4 + placements * 9;
-  placements += 1;
+  const artistId = scalar(`select artist_id from booking where id='${bookingId}'`);
+  const placed = placementsByArtist.get(artistId) ?? 0;
+  placementsByArtist.set(artistId, placed + 1);
+
+  const startsIn = 4 + placed * 9;
   if (startsIn + 9 >= GRACE_MINUTES) {
     throw new Error(
-      `this file has placed ${placements} bookings inside the ${GRACE_MINUTES}-minute grace ` +
-        'window and has run out of room. Give the next spec its own artist rather than shortening ' +
-        'the stride: the appointments would start overlapping and the exclusion constraint would ' +
-        'refuse them, which reads as a deposit failure and is not one.',
+      `this file has placed ${placed + 1} bookings inside the ${GRACE_MINUTES}-minute grace ` +
+        `window for artist ${artistId} and has run out of room. Give the next spec ANOTHER ` +
+        'artist rather than shortening the stride — salon A seeds four — because the appointments ' +
+        'would start overlapping and the exclusion constraint would refuse them, which reads as a ' +
+        'deposit failure and is not one.',
     );
   }
   psql(`
@@ -278,8 +314,8 @@ function moveInsideWindow(bookingId: string, options: { parkOthers?: boolean } =
  * ever increases, so no slot is reused within a run.
  *
  * Used by the expired-grace spec to get its stale booking out of the way, for the
- * reason the `knownBug` at the bottom of this file explains: while it is the
- * earliest live booking, it hides every other hold she has.
+ * reason the last describe in this file records: it used to be the case that while
+ * a stale booking was her earliest live one, it hid every other hold she had.
  */
 let releasedDay = 20;
 function moveOutsideWindow(bookingId: string): void {
@@ -388,6 +424,24 @@ describe('the deposit hold applies only INSIDE the no-show grace window', () => 
 
   it('a hold whose grace period has EXPIRED is not applied — the clock closes the window too', async () => {
     const booking = await bookFuture(MANICURE);
+
+    /**
+     * HER ONLY LIVE HOLD, AND THIS LINE IS THE WHOLE POINT OF THE SPEC.
+     *
+     * Without it the preceding spec's booking is still sitting inside the window,
+     * and this spec passed anyway — because the product bug it now helps guard
+     * against was doing the parking for it. `findApplicableHold` took the earliest
+     * booking, which was this expired one, disqualified it and returned nothing, so
+     * the assertion below saw `0` for the right number and entirely the wrong
+     * reason. Fixing the masking bug removed the accident and exposed the pollution.
+     *
+     * That is the same failure as a refusal probe whose WHERE clause matches no
+     * rows: an assertion satisfied by a coincidence rather than by the behaviour it
+     * names. The answer is not to relax the assertion — it is to make the setup say
+     * what the sentence claims, which is "an expired hold, and nothing else".
+     */
+    parkOtherLiveHolds(booking.id);
+
     // Started an hour ago and the grace ran out a minute ago: `startsAt` is still
     // inside `now + 60`, so only the `noShowReturnDueAt > now` half can refuse it.
     // That half is applied in TypeScript against the same `now` the charge uses,
@@ -773,71 +827,40 @@ describe('a deposit held at one salon cannot be applied to a charge at another',
 });
 
 // ===========================================================================
-// A DEFECT THIS FILE FOUND BY BEING RUN AS A FILE
+// The rule for more than one live hold
 // ===========================================================================
 
 /**
- * `findApplicableHold` takes the earliest live booking and THEN disqualifies it,
- * so one stale hold hides every good one.
+ * PROMOTED FROM knownBug, AND THE FIX WENT IN AT THE CAUSE.
  *
- * services/booking.ts:
+ * `findApplicableHold` used to apply `LIMIT 1` BEFORE testing expiry:
  *
- *     .orderBy(asc(booking.startsAt))
- *     .limit(1)
- *     ...
+ *     .orderBy(asc(booking.startsAt)).limit(1)   ...then, in TypeScript:
  *     if (row.noShowReturnDueAt <= params.now) return null;
  *
- * The expiry test is applied to the single row the query already chose, in
- * TypeScript, for a stated and good reason — so the comparison uses the same `now`
- * the charge uses everywhere else rather than the database's clock a few
- * milliseconds later. The cost is that `LIMIT 1` has already thrown away the rows
- * that would have qualified.
+ * so one stale hold sorted ahead of a live one returned "no hold at all". The
+ * customer-facing version: she no-shows on Monday, the return job has not run yet,
+ * she books Tuesday and attends — and her Tuesday deposit was invisible at the
+ * counter. She was charged full price for a visit she had already put money down
+ * on, with no credit line on screen to dispute. Lane A drove it end to end:
+ * `heldDepositFils` 0 → 5000 and the charge −8000 → −3000.
  *
- * THE CUSTOMER-FACING VERSION. She no-shows on Monday. The no-show job has not run
- * yet, so that booking is still `deposit_held` with its grace period expired. She
- * books again for Tuesday, puts down a second deposit, and attends. At the counter
- * her Tuesday deposit is INVISIBLE: the Monday row sorts first, fails the expiry
- * check, and the endpoint reports no hold at all. She is charged the full price for
- * a visit she has already paid a deposit on, and the screen shows her no credit
- * line to query.
- *
- * It is not a lost-money bug — both deposits are still in `deposit_held` and the
- * no-show job will return the Monday one — but it is a double-charge at the counter,
- * in front of the customer, and the staff member has nothing to point at.
- *
- * REPORTED, NOT FIXED: `api/` is not lane D's column. The fix is to let the
- * database do the disqualifying, or to fetch candidates and pick the first that
- * qualifies — but the `now` argument is load-bearing and belongs in lane A's hands.
- *
- * This also cost four specs above an hour of order-dependence, which is how it was
- * found: they passed one describe at a time and failed as a file.
+ * The expiry test still runs in application code, and still should — it compares
+ * against the same `now` the charge uses everywhere else rather than the database's
+ * clock a few milliseconds later. What changed is that the query no longer throws
+ * away the rows that would have qualified before the test is applied.
  */
-knownBug(
-  'findApplicableHold applies LIMIT 1 before testing whether the hold has expired, so a member ' +
-    'with a stale no-show hold sorted earlier than a live one gets NO deposit applied at all — ' +
-    'she is charged full price at the counter for a visit she has a deposit on, with no credit ' +
-    'line on screen to dispute (api/src/services/booking.ts § findApplicableHold, lane A)',
-  async () => {
+describe('with more than one live hold, the earliest applicable one is used — and only one', () => {
+  it('a stale expired hold does not hide a live one behind it', async () => {
     reseedMember();
 
-    // Tuesday first: her live booking, placed through the normal allocator so it
-    // parks every unrelated hold and takes a slot nothing else in this file owns.
+    // Tuesday: her live booking, through the normal allocator.
     const live = await bookFuture(MANICURE);
     moveInsideWindow(live.id);
 
-    /**
-     * Monday: she no-shows, and the return job has not run.
-     *
-     * Placed straight into the PAST rather than through the allocator — it never
-     * needs an in-window slot, and asking for one burned a slot and tripped the
-     * allocator's own out-of-room guard, which then reported a deposit failure that
-     * was really a diary failure. Exactly what that guard's message warns about.
-     * The past is uncontended: the expired-grace spec releases its booking, so
-     * nothing else of hers is back there.
-     *
-     * And NOT parked, deliberately — the coexistence of this row with the live one
-     * is the entire bug.
-     */
+    // Monday: she no-showed and the return job has not run. Straight into the past,
+    // which needs no in-window slot — and NOT parked, because the coexistence of
+    // these two rows is the entire point.
     const stale = await bookFuture(MANICURE);
     psql(`
       UPDATE booking
@@ -848,14 +871,90 @@ knownBug(
     `);
 
     const opened = await treq<any>('GET', `/members/${MEMBER}`, { token: scanner });
-    precondition(opened.status === 200, `the resolve answered ${opened.status} ${opened.raw}`);
-
+    expect(opened.status, opened.raw).toBe(200);
     expect(
       opened.body.heldDepositFils,
       'her live deposit is hidden by an expired one, so the counter charges her full price for a ' +
         'visit she has already put money down for',
     ).toBe(DEPOSIT_FILS);
     expect(opened.body.heldDepositBooking?.id).toBe(live.id);
-  },
-  120_000,
-);
+
+    // And the stale one is left alone: it is the no-show return job's to settle, and
+    // a counter read must not quietly consume or cancel it.
+    expect(
+      bookingStatus(stale.id),
+      'reading the counter changed the stale booking, so a screen refresh is deciding the fate of ' +
+        'a deposit that belongs to the no-show job',
+    ).toBe('deposit_held');
+  }, 120_000);
+
+  /**
+   * THE RULE NOBODY HAD WRITTEN DOWN, and it is a money rule.
+   *
+   * Two live holds means two deposits she has actually paid. Applying both to one
+   * basket would spend money held against an appointment SHE HAS NOT ATTENDED —
+   * the salon would be crediting her for a visit that may still be a no-show, and
+   * the second booking would then complete with nothing behind it. So exactly one
+   * hold is consumed per charge, and it is the earliest applicable one, because an
+   * older deposit is the one closer to its own no-show deadline.
+   */
+  it('a charge consumes exactly ONE hold, the earliest, and leaves the other standing', async () => {
+    reseedMember();
+
+    /**
+     * A BASELINE, BECAUSE `depositHeldFor` IS MEMBER-WIDE. The `deposit_held` leg
+     * carries neither a member id nor a booking reference, so the position can only
+     * be summed per customer — and earlier specs in this file leave her holding
+     * deposits on bookings they parked and never charged. This spec asserted
+     * `heldBefore === DEPOSIT_FILS * 2` and passed alone and failed in the file,
+     * which is the third time this file has taught me the same lesson in a new
+     * costume: an absolute count against a shared fixture is an order-dependent spec
+     * wearing a disguise.
+     */
+    const heldAtStart = depositHeldFor(MEMBER);
+
+    // Two live bookings, both inside the window, the earlier one first. On her own
+    // artist, because AR-001's hour is spent by the specs above.
+    const earlier = await bookFuture(MANICURE, SECOND_ARTIST);
+    moveInsideWindow(earlier.id);
+    const later = await bookFuture(MANICURE, SECOND_ARTIST);
+    moveInsideWindow(later.id, { parkOthers: false });
+
+    const earlierStart = scalar(`select starts_at from booking where id='${earlier.id}'`);
+    const laterStart = scalar(`select starts_at from booking where id='${later.id}'`);
+    precondition(
+      earlierStart < laterStart,
+      `the allocator did not place ${earlier.id} before ${later.id}`,
+    );
+
+    const heldBefore = depositHeldFor(MEMBER);
+    precondition(
+      heldBefore === heldAtStart + DEPOSIT_FILS * 2,
+      `the two bookings added ${heldBefore - heldAtStart} to the held account, not two deposits`,
+    );
+
+    const charged = await chargeFor([BLOW_DRY]);
+    expect(charged.status, charged.raw).toBe(200);
+
+    // ONE deposit applied, not two: gross 8000 − one 5000 hold = 3000 due.
+    expect(
+      charged.body.depositAppliedFils,
+      'the charge applied more than one held deposit, so it spent money she has down against an ' +
+        'appointment she has not attended yet',
+    ).toBe(DEPOSIT_FILS);
+    expect(charged.body.transaction.amountFils).toBe(-(BLOW_DRY_FILS - DEPOSIT_FILS));
+    expect(charged.body.depositReturnedFils).toBe(0);
+
+    // The EARLIEST one is the one that settled.
+    expect(charged.body.bookingId).toBe(earlier.id);
+    expect(bookingStatus(earlier.id)).toBe('completed');
+    expect(
+      bookingStatus(later.id),
+      'the charge settled the later booking as well, so an appointment she has not been to is ' +
+        'marked complete and its deposit is gone',
+    ).toBe('deposit_held');
+
+    // And exactly one deposit came out of the held account.
+    expect(depositHeldFor(MEMBER)).toBe(heldBefore - DEPOSIT_FILS);
+  }, 120_000);
+});

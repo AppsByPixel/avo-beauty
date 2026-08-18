@@ -565,6 +565,13 @@ const UNMODELLED: Record<string, string> = {
     'the audit log page — rows plus `total`, `appendOnly` and `retentionYears`. A view.',
   'GET /salons/:id/activity':
     'the merchant activity feed, a union of transaction and booking streams. A view.',
+  'GET /salons/:id/branches/:bid/closure-preview':
+    'what closing a branch WOULD do — the branch row plus `closable`, `blockedReason`, ' +
+    '`openBranchCount`, the two staff name lists, and the two held-deposit counts. A view over ' +
+    'a hypothetical, so it is not an entity and has no schema; it is also NOT the place to add ' +
+    'one, because the property that matters is not its shape but its IDENTITY with the close\'s ' +
+    'own report — both are built by `branchClosureImpact` and scanner-style deep equality is a ' +
+    'stronger guard than two schemas would be. Asserted in configuration.test.ts.',
   'GET /members/:id':
     'the scanner\'s member RESOLVE, and it serves the `POST /scans` ENVELOPE rather than a bare ' +
     'Member — member plus the counter state the charge screen needs. Unmodelled because that ' +

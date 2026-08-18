@@ -190,6 +190,23 @@ export const B_COUNTER_DEVICE = 'DEV-SCANNER-B-COUNTER';
  * staff member whose whole hour can be spent on one action and then probed with
  * the other — which means she can be used by exactly one spec.
  */
+/**
+ * TWO BRANCH-SCOPED ROWS FOR THE CLOSURE-PREVIEW IDENTITY SPEC.
+ *
+ * That spec compares what closing a branch WOULD do against what it then DID, and
+ * on a freshly created branch every impact field is empty — so the comparison was
+ * vacuous and a deliberate break to the preview's own money field did not fail it.
+ * Real impact needs staff actually scoped to the branch being closed.
+ *
+ * `SURVIVOR` keeps another branch and so appears only in `staffRescoped`;
+ * `STRANDED` is scoped to the closing branch alone and so appears in
+ * `staffLeftWithNoBranch` as well — which is the field the merchant most needs to
+ * see, and the one a vacuous spec was least able to protect. Dedicated rows because
+ * the spec rewrites their access: `ST-B02` is another file's Accounts target.
+ */
+export const B_STAFF_BRANCH_SURVIVOR = 'ST-B09';
+export const B_STAFF_BRANCH_STRANDED = 'ST-B10';
+
 export const B_STAFF_CROSSDOOR = 'ST-B08';
 export const B_STAFF_CROSSDOOR_HANDLE = 'budgetcrossdoor';
 export const B_CROSSDOOR_DEVICE = 'DEV-SCANNER-B-CROSSDOOR';
@@ -1215,6 +1232,30 @@ SELECT '${B_STAFF_CROSSDOOR}', '${SALON_B}', 'Budget Crossdoor',
 FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
 ON CONFLICT (id) DO UPDATE SET
   pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_CROSSDOOR_DEVICE}', perm_scanner = true;
+
+-- The two branch-scoped rows the closure-preview identity spec re-scopes. Seeded
+-- against the salon's real branch so they start valid; the spec adds the branch it
+-- is about to close and restores them afterwards.
+--
+-- branch_access_all = false with a non-empty id list is what
+-- staff_user_branch_access_exclusive requires, and it is also what makes them
+-- visible to branchClosureImpact at all: the impact query matches on
+-- = ANY(branch_access_ids), which never finds an all-branch principal.
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, perm_scanner)
+SELECT '${B_STAFF_BRANCH_SURVIVOR}', '${SALON_B}', 'Branch Survivor', 'branchsurvivor',
+       'frontdesk', false, ARRAY['${B_BRANCH}'], s.password_hash, true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  branch_access_all = false, branch_access_ids = ARRAY['${B_BRANCH}'];
+
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, perm_scanner)
+SELECT '${B_STAFF_BRANCH_STRANDED}', '${SALON_B}', 'Branch Stranded', 'branchstranded',
+       'frontdesk', false, ARRAY['${B_BRANCH}'], s.password_hash, true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  branch_access_all = false, branch_access_ids = ARRAY['${B_BRANCH}'];
 
 -- Salon B's happy hours. Both OFF, so no promotion is live during the money
 -- specs; see the constants at the top of this file.
