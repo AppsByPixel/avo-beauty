@@ -181,7 +181,25 @@ const depositHeldFor = (memberId: string): number =>
     ),
   );
 
-/** ISO date `daysAhead` from now, for the availability grid. */
+/**
+ * ISO date `daysAhead` from now, for the availability grid.
+ *
+ * THIS IS A UTC DATE AND THE GRID IS A SALON-LOCAL ONE, which is a wall-clock
+ * dependency and a deliberately harmless one. Swept for after `promotions.test.ts`
+ * turned out to fail for two hours a day: this runner is PKT and salon A is
+ * Asia/Kuwait, so for part of the day the date computed here is the salon's
+ * yesterday or tomorrow.
+ *
+ * It cannot bite, because no caller trusts the date — `bookFuture` walks d = 9..17
+ * asking the real endpoint and takes the first day that offers a slot, so a one-day
+ * skew costs one extra request. A fixed offset with no iteration is what would make
+ * it a scheduled failure: AR-001's week is closed one day, and that day would move.
+ *
+ * Left as UTC rather than derived in the salon's zone on purpose. Computing a
+ * salon-local date in JavaScript here would be the pattern `promotions.test.ts`
+ * refuses — asserting that the implementation agrees with itself — and the
+ * iteration already makes the question moot.
+ */
 function isoDate(daysAhead: number): string {
   return new Date(Date.now() + daysAhead * 86_400_000).toISOString().slice(0, 10);
 }
@@ -1413,6 +1431,49 @@ const returnsForBooking = (bookingId: string): number =>
     ),
   );
 
+/**
+ * WHICH LAYER IS ACTUALLY HOLDING THIS, MEASURED BY ABLATION.
+ *
+ * Every spec below asserts `already_cancelled` / `not_cancellable`, which are the
+ * HANDLER's refusals — `cancelBooking`'s `if (row.status !== 'deposit_held')`. Since
+ * that check answers first, none of them can reach the second layer:
+ * `returnDeposit`'s UPDATE now carries `status = 'deposit_held'` in its WHERE and
+ * throws `deposit_already_returned` on a zero row count. So this block proves the
+ * OUTER guard and says nothing about the inner one — and a reader could reasonably
+ * assume the inner one is covered here. It is not, and it cannot be from this file.
+ *
+ * So it was ablated instead. `if (row.status !== 'deposit_held')` in
+ * `api/src/services/booking.ts` was temporarily replaced with `if (false)` — one
+ * line, restored by checksum immediately afterwards
+ * (7affc7401ee10d673549d28f2d4c1d5704516281aec88d0d0a6a4f73cb76eaef), with
+ * `git diff -- api/` confirmed empty. With the handler's check gone, a second
+ * cancel of one booking:
+ *
+ *   second cancel -> 409 {"error":"deposit_already_returned", ...}
+ *   balance settled=200000 after=200000   deposit_return rows for the booking: 1
+ *   settled_transaction_id unchanged
+ *
+ * THE INNER GUARD HOLDS, AND IT HOLDS ON THE MONEY RATHER THAN ONLY ON THE STATUS.
+ * `returnDeposit` credits the wallet a few lines ABOVE that UPDATE, so the throw is
+ * what rolls the credit back — which is why the balance is the assertion that
+ * matters, and why a check of the status alone would not have shown it.
+ *
+ * WHY THIS IS RECORDED RATHER THAN ASSERTED. A spec pinning
+ * `deposit_already_returned` through this route would have to keep the ablation in
+ * place to pass, so it would be a spec for code that does not ship. The four specs
+ * below pin the behaviour a client actually meets; this note records that the layer
+ * underneath them was tested too, by a method that can be repeated. The guard's own
+ * comment says the earlier ablation left the suite green across 14 files and 516
+ * passing specs because nothing had ever called `DELETE /bookings/{id}` — that hole
+ * is closed by the specs below, and this note closes the one after it.
+ *
+ * `cancelled -> cancelled` is why both layers exist at all:
+ * `booking_completed_at_matches_status` and its siblings refuse
+ * `completed -> cancelled` and `no_show_returned -> cancelled`, but
+ * `cancelled -> cancelled` is SELF-CONSISTENT, so every CHECK passes and a second
+ * refund commits. The two transitions the schema does cover are exactly the two
+ * that made this path look adequate.
+ */
 describe('DELETE /bookings/{id} returns the deposit, and only the first one does', () => {
   /**
    * THE CONTROL, AND IT IS LOAD-BEARING RATHER THAN POLITE.

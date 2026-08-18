@@ -48,6 +48,7 @@ import {
   B_SERVICE_PRICE_FILS,
   B_STAFF_HANDLE,
   SALON_B,
+  apiLogTail,
   mintWalletTokenFor,
   psql,
   scalar,
@@ -94,8 +95,107 @@ function retireMyWindows(): void {
   `);
 }
 
+/**
+ * THE SUITE USED TO FAIL FOR ROUGHLY TWO HOURS A DAY, AND ONLY THOSE TWO.
+ *
+ * Every window below is positioned in MINUTES RELATIVE TO THE SALON'S WALL CLOCK,
+ * which is the right way to write them — see `happyHour`. What was missing is that
+ * a salon clock near midnight cannot express such a window at all.
+ * `happy_hour_to_after_from` is `CHECK ("to" > "from")` (0011_promotions.sql:102),
+ * so a window centred on 23:57 becomes `23:47 → 00:07`, and the INSERT is refused.
+ *
+ * `hhmm()` carried `((m % 1440) + 1440) % 1440`, which turned an out-of-range
+ * minute into a plausible time instead of an error, so the failure surfaced as
+ * `psql failed against container "avo-postgres"` — ten specs, no reason given.
+ *
+ * MEASURED, NOT INFERRED, AND THE FIRST TWO ESTIMATES WERE BOTH WRONG.
+ *
+ *   23:36 Kuwait ->  3 failed | 19 passed
+ *   23:57 Kuwait -> 10 failed
+ *   00:00 Kuwait -> 10 failed |  9 passed    same tree, no code change
+ *
+ * The first reasoned estimate was "~30 minutes, in the evening", out by 4x and
+ * pointing at the wrong half of the clock. It considered only `toOffset` pushing
+ * `to` past midnight — but the wrapping modulo took a negative `fromOffset`
+ * BACKWARDS just as happily, so at 00:00 `fromOffset: -10` gives `from = '23:50'`
+ * against `to = '00:10'` and the pair still straddles. More specs trip AFTER
+ * midnight than before it, because more of them use negative `fromOffset`s than
+ * large positive `toOffset`s.
+ *
+ * The real window is 23:00-01:00 salon time — two hours in twenty-four, ~8% of
+ * runs — with the count varying inside it by which offsets wrap. It was corrected
+ * only because a re-run was queued and waited for; a single red treated as
+ * confirmation would have shipped the 4x error.
+ *
+ * IT IS THE SALON'S CLOCK, NOT THE RUNNER'S, AND THE DIFFERENCE HAS ALREADY MISLED
+ * SOMEBODY. This machine runs PKT, two hours ahead of Asia/Kuwait. A gate that
+ * printed `Start at 23:47` was at 21:47 in Kuwait — comfortably outside the danger
+ * window — and was green twice, which read as a contradiction and was not. Anyone
+ * using a vitest timestamp to judge whether they are in the zone is wrong by two
+ * hours in the direction that feels safe. The fixtures depend on
+ * `now() AT TIME ZONE salon.timezone`; the runner's own clock is not in the
+ * question anywhere.
+ *
+ * Same class as the turbo cache replay: a signal that reads as evidence and is not.
+ *
+ * THE FIX IS TO MOVE THE SALON'S CLOCK, NOT THE WINDOW, and the reason it has to
+ * be the clock is worth stating. Clamping cannot work: at 00:30 salon time there
+ * is no same-day window that "ended thirty minutes ago", which is what the
+ * past-window spec needs. That inexpressibility is real and it is lane A's
+ * escalated PRODUCT limitation — a salon open until 1am cannot say 23:00–01:00 —
+ * so the suite must not sit at an hour where its own fixtures are inexpressible.
+ *
+ * So salon B is moved, for the length of this file, to whichever zone is nearest
+ * MIDDAY right now, and put back in `afterAll`. Chosen by POSTGRES from its own
+ * tzdata, keeping the rule in the file header: this file never computes a salon's
+ * time in JavaScript.
+ *
+ * It costs nothing in fidelity. `promotions.ts` reads `salon.timezone` per request
+ * and `offsetFor` resolves it through Node's tzdata, so the two independent
+ * implementations the header is about still have to agree — now across a
+ * DST-observing zone rather than a fixed-offset one, which is a slightly harder
+ * test than before. And it removes a second latent race: `days: [clock.dow]` at
+ * 23:59:59, evaluated by the server at 00:00:01, is the wrong day.
+ */
+const MIDDAY_ZONE_CANDIDATES = [
+  'Pacific/Midway', 'Pacific/Honolulu', 'America/Anchorage', 'America/Los_Angeles',
+  'America/Denver', 'America/Chicago', 'America/New_York', 'America/Halifax',
+  'America/Sao_Paulo', 'Atlantic/South_Georgia', 'Atlantic/Azores', 'UTC',
+  'Europe/Berlin', 'Africa/Cairo', 'Asia/Kuwait', 'Asia/Dubai', 'Asia/Karachi',
+  'Asia/Dhaka', 'Asia/Bangkok', 'Asia/Shanghai', 'Asia/Tokyo', 'Australia/Brisbane',
+  'Pacific/Guadalcanal', 'Pacific/Auckland', 'Pacific/Kiritimati',
+];
+
+/**
+ * The candidate whose local time is closest to 12:00, decided by Postgres.
+ *
+ * Real IANA zones at roughly one-hour spacing from UTC-11 to UTC+14, so one of
+ * them is always within half an hour of midday whatever the UTC time. Both
+ * Postgres and Node know every name on the list, which is why it is curated rather
+ * than read from `pg_timezone_names` — that view carries aliases Node's `Intl`
+ * rejects, and the API resolves this column through `Intl`.
+ */
+function middayZone(): string {
+  return scalar(
+    `select z.name from unnest(ARRAY[${MIDDAY_ZONE_CANDIDATES.map((z) => `'${z}'`).join(',')}])
+              as z(name)
+      order by abs(extract(epoch from (now() AT TIME ZONE z.name)::time - time '12:00'))
+      limit 1`,
+  ).trim();
+}
+
+/** Salon B's real zone, restored in `afterAll`. */
+let salonZoneBefore = '';
+/** What this file moved it to, named in the tripwire's failure message. */
+let salonZoneUnderTest = '';
+
 beforeAll(async () => {
   await startTenancyApi();
+
+  salonZoneBefore = scalar(`select timezone from salon where id = '${SALON_B}'`).trim();
+  salonZoneUnderTest = middayZone();
+  psql(`UPDATE salon SET timezone = '${salonZoneUnderTest}' WHERE id = '${SALON_B}';`);
+
   scanner = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
   wallet = await signInMember(SALON_B, B_MEMBER_PHONE);
   dashboard = await signInDashboard(SALON_B, B_STAFF_HANDLE);
@@ -108,6 +208,18 @@ afterEach(() => {
 
 afterAll(async () => {
   retireMyWindows();
+  /**
+   * PUT THE SALON'S ZONE BACK. `tenancy.test.ts` reads salon B's business hours and
+   * availability, and `fileParallelism: false` means it runs after this file — a
+   * salon left in Honolulu would move every slot it asserts.
+   *
+   * The harness's salon B seed now resets this column every run too, so a crash
+   * between the two `psql` calls above self-heals rather than leaving the next run
+   * to discover it.
+   */
+  if (salonZoneBefore) {
+    psql(`UPDATE salon SET timezone = '${salonZoneBefore}' WHERE id = '${SALON_B}';`);
+  }
   await stopTenancyApi();
 });
 
@@ -134,10 +246,91 @@ function salonClock(): { hhmm: string; dow: number; minutes: number } {
   return { hhmm: hhmm!, dow: Number(dow), minutes: Number(minutes) };
 }
 
+/**
+ * `HH:MM` for a minute of the day, and it REFUSES anything outside one day.
+ *
+ * The wrapping modulo this used to carry — `((m % 1440) + 1440) % 1440` — is what
+ * hid the bug in the header: it turned minute 1447 into `00:07`, a perfectly
+ * well-formed time that the CHECK then rejected for a reason nothing in this file
+ * mentioned. A range error is the honest answer, and `windowFor` below is where it
+ * is turned into a sentence.
+ */
 const hhmm = (minutesFromMidnight: number): string => {
-  const m = ((minutesFromMidnight % 1440) + 1440) % 1440;
+  if (!Number.isInteger(minutesFromMidnight) || minutesFromMidnight < 0 || minutesFromMidnight > 1439) {
+    throw new RangeError(
+      `hhmm(${minutesFromMidnight}): not a minute of the day. This used to wrap silently; ` +
+        'see the header on the midday anchor.',
+    );
+  }
+  const m = minutesFromMidnight;
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 };
+
+/** The widest offset any spec in this file uses, in either direction. */
+export const OFFSET_BOUND_MINUTES = 60;
+
+/**
+ * EVERY OFFSET PAIR THIS FILE IS ALLOWED TO USE, declared once.
+ *
+ * The all-minutes sweep further down proves each of these is expressible at every
+ * minute of the safe band. That proof is only worth having if the list cannot fall
+ * behind the specs, so `happyHour` REFUSES a pair that is not here — a new spec
+ * with a new pair fails immediately and loudly, and closing that failure means
+ * adding the pair, which is what puts it into the sweep.
+ *
+ * A hand-copied list checked by nothing is the shape this whole episode is about:
+ * trunk's first figure for the failure window was out by 4x because it was reasoned
+ * rather than measured, and a stale PAIRS would let the sweep pass while covering
+ * less than it claims.
+ *
+ * Trunk independently verified the real range as fromOffset -60..+30 and toOffset
+ * -30..+60, which is exactly what this list spans.
+ */
+const OFFSET_PAIRS: ReadonlyArray<readonly [number, number]> = [
+  [-10, 10],
+  [-10, 20],
+  [-5, 20],
+  [30, 60],
+  [-60, -30],
+  [0, 30],
+  [-30, 0],
+];
+
+const pairKey = (f: number, t: number): string => `${f}/${t}`;
+const ALLOWED_PAIRS = new Set(OFFSET_PAIRS.map(([f, t]) => pairKey(f, t)));
+
+/**
+ * The `from`/`to` pair for a window at `anchorMinutes`, or a THROWN SENTENCE.
+ *
+ * This is the single place that can produce an unwritable window, so it is the
+ * single place that has to explain one. A `CHECK` violation arriving as
+ * "psql failed against container" cost ten specs' worth of diagnosis; this says
+ * which minute, which offsets, and what the constraint is.
+ *
+ * `to` of exactly midnight is emitted as `'24:00'`, which the schema allows on
+ * `to` and only on `to` — `happy_hour_to_is_hhmm`. So a window ending at the end
+ * of the day is expressible, and the file uses the affordance the schema already
+ * has rather than nudging the number.
+ */
+function windowFor(
+  anchorMinutes: number,
+  fromOffset: number,
+  toOffset: number,
+): { from: string; to: string } {
+  const from = anchorMinutes + fromOffset;
+  const to = anchorMinutes + toOffset;
+  if (from < 0 || to > 1440 || to <= from) {
+    throw new RangeError(
+      `a happy hour at salon-local minute ${anchorMinutes} with offsets ` +
+        `${fromOffset}/${toOffset} would be ${from}..${to}, which does not fit inside one day. ` +
+        'happy_hour_to_after_from is CHECK ("to" > "from"), so a window cannot cross midnight — ' +
+        'that is a real product limitation, not a fixture problem. The salon should have been ' +
+        `moved to a midday zone in beforeAll (it is "${salonZoneUnderTest}"); if this throws, ` +
+        'that mechanism did not work and the tripwire spec says so more directly.',
+    );
+  }
+  return { from: hhmm(from), to: to === 1440 ? '24:00' : hhmm(to) };
+}
 
 /**
  * Create a happy hour at salon B.
@@ -156,6 +349,14 @@ function happyHour(opts: {
   days?: number[];
 }): string {
   const clock = salonClock();
+  if (!ALLOWED_PAIRS.has(pairKey(opts.fromOffset, opts.toOffset))) {
+    throw new Error(
+      `happyHour was asked for offsets ${opts.fromOffset}/${opts.toOffset}, which are not in ` +
+        'OFFSET_PAIRS. Add them there — that list is what the all-minutes sweep checks, and a ' +
+        'pair outside it is a pair nothing has proved is expressible near midnight.',
+    );
+  }
+  const win = windowFor(clock.minutes, opts.fromOffset, opts.toOffset);
   const id = `${MINE}${opts.id}`;
   const days = opts.days ?? [clock.dow];
   const branch = opts.branchId === undefined || opts.branchId === null
@@ -167,8 +368,8 @@ function happyHour(opts: {
   psql(`
     INSERT INTO happy_hour (id, salon_id, branch_id, days, "from", "to", reward, "on", notify)
     VALUES ('${id}', '${SALON_B}', ${branch}, '{${days.join(',')}}',
-            '${hhmm(clock.minutes + opts.fromOffset)}',
-            '${hhmm(clock.minutes + opts.toOffset)}',
+            '${win.from}',
+            '${win.to}',
             '${opts.reward ?? 'x2visit'}', ${opts.on ?? true}, false)
     ON CONFLICT (id) DO UPDATE SET
       branch_id = EXCLUDED.branch_id, days = EXCLUDED.days,
@@ -202,7 +403,11 @@ async function charge(label: string, idemKey?: string): Promise<ChargeResult> {
     idempotencyKey: idemKey ?? key(label),
     body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
   });
-  precondition(res.status === 200, `POST /charges answered ${res.status} ${res.raw}`);
+  precondition(
+    res.status === 200,
+    `POST /charges answered ${res.status} ${res.raw}` +
+      (res.status >= 500 ? `\n--- API log ---\n${apiLogTail()}` : ''),
+  );
   return res.body;
 }
 
@@ -221,6 +426,96 @@ describe('the fixture is positioned against the salon\'s own clock', () => {
     expect(clock.minutes).toBe(
       Number(clock.hhmm.slice(0, 2)) * 60 + Number(clock.hhmm.slice(3)),
     );
+  });
+
+  /**
+   * THE SPEC THAT WOULD HAVE CAUGHT THIS AT TWO IN THE AFTERNOON.
+   *
+   * Pure arithmetic over all 1440 minutes of the day, no database and no clock. It
+   * is the whole point: the defect it guards was invisible for twenty-two hours out
+   * of twenty-four, so a spec that can only see the current minute is the wrong
+   * shape of spec for it. This one asks the question at every minute at once.
+   *
+   * What it pins is not "windows always fit" — they demonstrably cannot near
+   * midnight — but the two things that must both be true:
+   *
+   *   1. inside the safe band, every offset pair this file uses is expressible; and
+   *   2. outside it, `windowFor` THROWS rather than quietly producing a wrapped
+   *      window for the database to reject with an unattributable error.
+   *
+   * The second half is the one that makes the first half honest. Without it, a
+   * future `hhmm` that started wrapping again would pass this spec.
+   */
+  it('every window this file builds is expressible at every minute of the safe band — and refused outside it', () => {
+    const PAIRS = OFFSET_PAIRS;
+    expect(PAIRS.length, 'OFFSET_PAIRS is empty, so this sweep proves nothing').toBeGreaterThan(0);
+    // Every pair must stay inside the bound the throw message and the band cite.
+    for (const [f, t] of PAIRS) {
+      expect(
+        Math.max(Math.abs(f), Math.abs(t)),
+        `offsets ${f}/${t} exceed OFFSET_BOUND_MINUTES, so the safe band below is too narrow`,
+      ).toBeLessThanOrEqual(OFFSET_BOUND_MINUTES);
+    }
+
+    const bandStart = OFFSET_BOUND_MINUTES;
+    const bandEnd = 1440 - OFFSET_BOUND_MINUTES;
+
+    let checked = 0;
+    for (let minute = bandStart; minute <= bandEnd; minute++) {
+      for (const [f, t] of PAIRS) {
+        const win = windowFor(minute, f, t);
+        // The constraint itself, restated: zero-padded HH:MM sorts as the minutes
+        // it denotes, and '24:00' sorts above every real time — which is why the
+        // schema's comparison is lexicographic and why this one can be too.
+        expect(
+          win.to > win.from,
+          `at salon minute ${minute}, offsets ${f}/${t} produced ${win.from}..${win.to}, ` +
+            'which happy_hour_to_after_from refuses',
+        ).toBe(true);
+        expect(win.from).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
+        expect(win.to).toMatch(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/);
+        checked++;
+      }
+    }
+    // The sample is non-empty, and it is the size it should be. An empty loop
+    // satisfies every assertion inside it.
+    expect(checked, 'the sweep checked nothing').toBe((bandEnd - bandStart + 1) * PAIRS.length);
+
+    // And OUTSIDE the band it refuses rather than wraps. 23:57 with -10/+10 is the
+    // exact case that was live in production-of-this-suite when it was found.
+    expect(() => windowFor(23 * 60 + 57, -10, 10)).toThrow(/does not fit inside one day/);
+    expect(() => windowFor(5, -60, -30)).toThrow(/does not fit inside one day/);
+    expect(() => windowFor(1439, 0, 30)).toThrow(/does not fit inside one day/);
+    // A window ending exactly at midnight IS expressible — the schema allows
+    // '24:00' on `to`, and the fixture uses that rather than losing a minute.
+    expect(windowFor(1430, -10, 10)).toEqual({ from: '23:40', to: '24:00' });
+  });
+
+  /**
+   * AND THE ANCHOR REALLY MOVED, which is what keeps the sweep above relevant to
+   * this run rather than being a self-contained arithmetic exercise.
+   *
+   * If the midday mechanism ever fails, this says so in one line naming the zone
+   * and the minute — instead of ten specs reporting `psql failed`.
+   */
+  it('and this run is anchored inside that band, on a zone Postgres chose', () => {
+    expect(
+      MIDDAY_ZONE_CANDIDATES,
+      `beforeAll set salon B to "${salonZoneUnderTest}", which is not a candidate zone`,
+    ).toContain(salonZoneUnderTest);
+    expect(
+      scalar(`select timezone from salon where id='${SALON_B}'`).trim(),
+      'salon B is not on the zone this file set',
+    ).toBe(salonZoneUnderTest);
+
+    const clock = salonClock();
+    expect(
+      clock.minutes,
+      `salon B is at ${clock.hhmm} on ${salonZoneUnderTest}, which is inside ` +
+        `${OFFSET_BOUND_MINUTES} minutes of midnight. The midday anchor did not work, so the ` +
+        'windows below are inexpressible and every failure after this one is that, not promotions.',
+    ).toBeGreaterThanOrEqual(OFFSET_BOUND_MINUTES);
+    expect(clock.minutes).toBeLessThanOrEqual(1440 - OFFSET_BOUND_MINUTES);
   });
 
   it('salon B has nothing live before this file starts', () => {

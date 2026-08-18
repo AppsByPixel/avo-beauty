@@ -595,6 +595,19 @@ const UNMODELLED: Record<string, string> = {
     'the bottom of this file, in both directions, along with its PATCH and the two ' +
     'deletion routes — the wallet reads all four today, so "unmodelled" was the whole ' +
     'of the guard on a shape a client is already built against.',
+  'GET /members/me/policy-acceptance':
+    'the #10 re-prompt decision — {published:{version,effectiveFrom,publishedAt}, ' +
+    'accepted:{version,at,source}, stampedVersion, upToDate}. NOT an entity: it is a computed ' +
+    'answer to "should the terms go in front of her again", derived from the published set, her ' +
+    'acceptance EVENTS and the cached member column, and `upToDate` exists nowhere but here. ' +
+    'Same family as the notifications set above and it carries the same weight — a consent ' +
+    'decision under non-negotiable #10, which is the one non-negotiable about a shape rather ' +
+    'than a behaviour. WIRE-PINNED at the bottom of this file, in both directions, against the ' +
+    'same POLICY_ACCEPTANCE_WIRE constant as its POST, with a spec asserting the two are ' +
+    'identical: the wallet decides whether to show the re-prompt from the read and renders the ' +
+    'confirmation from the write, so a key on one and not the other is a screen that contradicts ' +
+    'the tap that produced it. WORTH A SCHEMA — see the note to trunk in the lane report; ' +
+    'packages/types is trunk-owned, so this lane pins rather than adds one.',
   'GET /_gateway/:ref':
     'the sandbox PSP\'s hosted page. Serves HTML to a browser, not JSON to a client, ' +
     'and exists only under the test driver.',
@@ -785,6 +798,70 @@ beforeAll(async () => {
     throw new Error(`GET /members/me/deletion: ${readBack.status} ${readBack.raw}`);
   }
   captured.set('GET /members/me/deletion', readBack);
+
+  // ---- the #10 re-prompt state, both doors, with `accepted` POPULATED -----------
+  /**
+   * ORDER MATTERS AND IT IS THE POINT. A member who has never accepted anything
+   * serves `accepted: null`, which `wireShape` flattens to one leaf — so a pin
+   * captured in that state would declare nothing about the three keys inside it and
+   * would keep passing if they disappeared.
+   *
+   * So: read to learn which version is published, POST that version to create the
+   * evidence, then read again. The POST is safe to repeat — routes/members.ts treats
+   * an already-accepted version as a success with nothing to write, because
+   * `member_consent_acceptance_once_per_version` would otherwise turn a careful
+   * customer's second tap into a 500.
+   *
+   * The version is read from the API rather than written here. Hardcoding `3` would
+   * make this capture fail the day the seed publishes a fourth set, and the pin is
+   * about the SHAPE — pinning the number as an input would be pinning the fixture.
+   */
+  const policyProbe = await treq<any>('GET', '/members/me/policy-acceptance', {
+    token: pinMember,
+  });
+  if (policyProbe.status !== 200) {
+    throw new Error(
+      `GET /members/me/policy-acceptance: ${policyProbe.status} ${policyProbe.raw}`,
+    );
+  }
+  const publishedVersion = policyProbe.body?.published?.version;
+  if (typeof publishedVersion !== 'number') {
+    throw new Error(
+      'GET /members/me/policy-acceptance served no published.version, so this file cannot ' +
+        'accept a version in order to sample the accepted shape.\n' +
+        `--- served ---\n${policyProbe.raw}`,
+    );
+  }
+
+  const accepted = await treq<any>('POST', '/members/me/policy-acceptance', {
+    token: pinMember,
+    body: { policyVersion: publishedVersion },
+  });
+  if (accepted.status !== 200) {
+    throw new Error(
+      `POST /members/me/policy-acceptance: ${accepted.status} ${accepted.raw}
+` +
+        `A policy_version_stale means the published set moved between the read above and this ` +
+        'write, which is a real race and not a fixture problem — re-run.',
+    );
+  }
+  captured.set('POST /members/me/policy-acceptance', accepted);
+
+  const policyRead = await treq<any>('GET', '/members/me/policy-acceptance', {
+    token: pinMember,
+  });
+  if (policyRead.status !== 200) {
+    throw new Error(`GET /members/me/policy-acceptance: ${policyRead.status} ${policyRead.raw}`);
+  }
+  if (policyRead.body?.accepted == null) {
+    throw new Error(
+      'GET /members/me/policy-acceptance still serves a null `accepted` after the POST above ' +
+        'succeeded, so the pin would declare nothing about its contents. Either the write did ' +
+        'not record the event or the read does not see it — both are defects worth the loud ' +
+        `failure.\n--- served ---\n${policyRead.raw}`,
+    );
+  }
+  captured.set('GET /members/me/policy-acceptance', policyRead);
 
   // ---- a support ticket -------------------------------------------------------
   const ticket = await treq<any>('POST', '/v1/support/tickets', {
@@ -1178,8 +1255,55 @@ const DELETION_WIRE = {
   erasureScheduled: false,
 };
 
+/**
+ * The #10 re-prompt state, as served by both of its doors.
+ *
+ * `accepted` IS SAMPLED POPULATED, DELIBERATELY, and this is the trap the pin had
+ * to be built around. `wireShape` walks values, so a null `accepted` collapses to
+ * the single leaf `$.accepted` and the three keys inside it vanish from the pin —
+ * which would then keep passing on the day the API stopped serving
+ * `accepted.source`. The capture in `beforeAll` therefore POSTs the acceptance
+ * before reading, and asserts the sample is non-null before trusting it.
+ *
+ * Values here are only ever read for their SHAPE, but they are written truthfully
+ * anyway: version 3 effective 2026-07-01 is what `api/src/db/seed.ts` publishes,
+ * and `wallet_account` is the source the Account surface records rather than
+ * `signup` — which would have the trail claim she agreed at registration to a
+ * document published afterwards.
+ */
+const POLICY_ACCEPTANCE_WIRE = {
+  published: { version: 3, effectiveFrom: '2026-07-01', publishedAt: '2026-06-01T06:00:00.000Z' },
+  accepted: { version: 3, at: '2026-08-19T00:00:00.000Z', source: 'wallet_account' },
+  /**
+   * The cached projection, carried BESIDE the evidence rather than instead of it.
+   * `services/policy.ts` is explicit that `upToDate` is not computed from it, and a
+   * `stampedVersion` with a null `accepted` is precisely the pre-0025 member whose
+   * agreement nobody can produce — so a pin that dropped either key would hide the
+   * one state this shape exists to make visible.
+   */
+  stampedVersion: 3,
+  upToDate: true,
+};
+
 function wirePins(): WirePin[] {
   return [
+    {
+      label: 'GET /members/me/policy-acceptance',
+      wire: POLICY_ACCEPTANCE_WIRE,
+      why:
+        'the wallet decides whether to put the terms in front of her again from this one read. ' +
+        '`upToDate` false is the re-prompt; a client that read `undefined` would take it as ' +
+        'falsy and re-prompt for ever, and one that read a missing `published.version` could ' +
+        'not tell her which document she is being asked about. Non-negotiable #10: the customer ' +
+        'app holds no legal copy and stamps the version it was served.',
+    },
+    {
+      label: 'POST /members/me/policy-acceptance',
+      wire: POLICY_ACCEPTANCE_WIRE,
+      why:
+        'the write answers with the same decision state, so the wallet can dismiss the re-prompt ' +
+        'without a second round trip. IDENTICAL to the GET by design: one decision, two routes.',
+    },
     {
       label: 'GET /members/me/notifications',
       wire: NOTIFICATIONS_WIRE,
@@ -1299,6 +1423,36 @@ describe('wire pins — the served shape of what packages/types does not model y
     expect(read).toEqual(wireShape(response('DELETE /members/me/deletion').body));
   });
 
+  /**
+   * The same argument for the policy pair, and here the consequence is a legal one.
+   *
+   * Non-negotiable #10 makes the served version part of the record: the wallet
+   * stamps what it was given. If the read and the write disagree about where the
+   * version lives, the stamp is taken from one shape and the re-prompt decided from
+   * the other.
+   */
+  it('the policy-acceptance READ and WRITE serve the same decision state', () => {
+    const read = wireShape(response('GET /members/me/policy-acceptance').body);
+    expect(
+      read,
+      'GET and POST /members/me/policy-acceptance answer with different key sets. The wallet ' +
+        'decides the re-prompt from the read and dismisses it from the write, so a key on one ' +
+        'and not the other is a prompt that cannot be dismissed by the tap that answers it.',
+    ).toEqual(wireShape(response('POST /members/me/policy-acceptance').body));
+
+    /**
+     * AND `accepted` REALLY WAS POPULATED. Without this the spec above is satisfied
+     * by two responses that both collapsed `accepted` to null — equal to each other
+     * and blind to the three keys inside, which is the whole shape the pin is for.
+     */
+    expect(
+      read,
+      'the sample had a null `accepted`, so the pin above declares nothing about its contents',
+    ).toContain('$.accepted.source');
+    expect(read).toContain('$.accepted.version');
+    expect(read).toContain('$.accepted.at');
+  });
+
   /** Same argument for the deletion pair: the shape IS the state. */
   it('the deletion POST and DELETE serve the same shape — the shape is the state', () => {
     const requested = wireShape(response('POST /members/me/deletion').body);
@@ -1330,6 +1484,9 @@ describe('wire pins — the served shape of what packages/types does not model y
       'AccountDeletionSchema',
       'DeletionStateSchema',
       'DeletionRequestSchema',
+      'PolicyAcceptanceStateSchema',
+      'PolicyAcceptanceSchema',
+      'PublishedPolicySetSchema',
     ].filter((name) => name in types);
 
     expect(
