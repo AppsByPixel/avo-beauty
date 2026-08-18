@@ -733,3 +733,46 @@ match and the stale "not built" comments: an absence read as agreement.
 acceptance event's `source` changes and the `policy_version_stale` race mostly disappears — but
 the event-not-column decision holds regardless, because re-prompting on a material change needs
 history and a column cannot answer it.
+
+### Wallet sign-in identity: phone, not the username the design draws
+
+**What.** `design/AVO Login.dc.html:100` draws a **Username** field, placeholder `dana.k`, in both
+languages, and its signup collects no phone at all. Built with **phone** instead.
+
+**Why, and it is not a close call.** The design contradicts **itself**: `AVO Wallet Home.dc.html:1187`
+and `:1294` say, in both languages, *"Your phone number is how you log in."* Every other source
+agrees — `api-contract.md:76` and rule 1 at `:95` make phone the login identity, and
+`routes/auth.ts:81` takes `{ salonId, phone, password }`. And there is **no member username
+anywhere**: no column, no `MemberSchema` field. Rule 1 is load-bearing rather than incidental — it
+is the reason `PATCH /members/me` must *reject* a phone.
+
+When a design contradicts itself and every other source agrees, the other sources win. Inventing a
+username column to satisfy one drawn field would have been a schema and contract change made to
+match a mock-up against its own copy.
+
+**Two design links deliberately not built:** "Forgot password?" — there is no member reset
+endpoint, `/auth/staff/password-reset` is staff-only — and "New here? Create account", pending the
+signup endpoint specified above.
+
+**To reverse:** if usernames are genuinely wanted, they are a `member` column, a `MemberSchema`
+field, a uniqueness decision per salon, and a change to rule 1 — not a client edit.
+
+### The wallet's refresh token is recoverable from an unlocked handset — authorised fix, held
+
+**What.** The access token is memory-only; the refresh token is persisted, and on web that is
+`localStorage`. Lane B stated plainly that this is not secure and not solved, with server-side
+revocation on sign-out as the mitigation rather than a fix. `expo-secure-store` is neither a
+dependency nor available on the web target.
+
+**Decided: yes, use a real secret store on native — and not in this slice.** Adding a dependency
+edits the shared lockfile, and a shared-lockfile change while three other lanes have work in flight
+breaks `pnpm install` in four worktrees at once. It gets its own slice after `main` tracks `dev`.
+
+**Residual risk until then, stated rather than buried:** an unlocked handset yields a refresh token
+that survives until it expires or is revoked. Two things bound it — sign-out revokes server-side
+(verified: `REVOKED`, `revoked_reason: sign_out`), and the access token is memory-only so a cold
+start must refresh. **An offline sign-out cannot revoke**, so the local clear is unconditional and
+the session stays alive server-side until expiry; that is the honest gap.
+
+**To reverse / complete:** `expo-secure-store` on native with the web path unchanged, since the web
+target is development and demo rather than a customer surface.
