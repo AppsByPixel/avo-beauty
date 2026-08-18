@@ -113,6 +113,23 @@ export const copy = {
     'Manual lookups are logged with your name. The customer gets a WhatsApp confirmation for every charge taken this way.',
   /** :734 — "ID · 8842" */
   memberId: (id: string) => `ID · ${id}`,
+  /**
+   * INVENTED — the design has no copy for this, because in the design picking a
+   * row opens the member card.
+   *
+   * It cannot yet. That card shows her balance and stamp count before the charge,
+   * and `GET /members?q=` returns a directory row without them (deliberately —
+   * see src/api/members.ts), while nothing on the API resolves ONE member for a
+   * staff caller: `POST /scans` needs a QR token, which is exactly what a manual
+   * lookup does not have. Non-negotiable #2 says the server owns the balance, so
+   * the alternative to this sentence is a card showing a 0.000 this client made
+   * up, on the screen where money moves.
+   *
+   * Escalated to trunk. Delete both strings the day the resolve endpoint lands.
+   */
+  lookupPickBlockedTitle: 'Charging from a lookup is not ready yet',
+  lookupPickBlockedBody:
+    'She was found, but her balance has to come from the server before a charge can be taken. Ask her to show her code, or take payment another way.',
 
   // -------------------------------------------------------------- charges --
   /** :249 */
@@ -127,8 +144,17 @@ export const copy = {
   chargeBy: (time: string, by: string) => `${time} · by ${by}`,
   /** :263 */
   voidThis: 'Void this charge',
-  /** :266 */
+  /** :266 — the void this session, where we still hold the reason we sent. */
   voidedNote: (reason: string) => `Voided · refunded to wallet · ${reason}`,
+  /**
+   * The same charge, read back from the server on a later load.
+   *
+   * `GET /charges` serves `voidedAt` but not the reason — the reason lives on
+   * the reversal's audit row, not on this list. So the sentence states the time
+   * instead of inventing a reason, and it is the time of the REVERSAL, which is
+   * what "when was this refunded" means to whoever is asking.
+   */
+  voidedAtNote: (time: string) => `Voided ${time} · refunded to wallet`,
 
   // --------------------------------------------------------------- locked --
   /** :284 */

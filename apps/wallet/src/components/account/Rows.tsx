@@ -46,9 +46,13 @@ export function SettingsCard({
 }
 
 /** The muted note the design sets under a card (design:441, :458). */
-export function CardNote({ children }: { children: string }) {
+export function CardNote({ children, testID }: { children: string; testID?: string }) {
   const { lang } = useLanguage();
-  return <Text style={[text('bodyS', lang), styles.cardNote]}>{children}</Text>;
+  return (
+    <Text style={[text('bodyS', lang), styles.cardNote]} testID={testID}>
+      {children}
+    </Text>
+  );
 }
 
 function Chevron({ rtl }: { rtl: boolean }) {
@@ -161,16 +165,26 @@ function Toggle({
   label,
   hint,
   testID,
+  disabled,
 }: {
   value: boolean;
   onToggle: () => void;
   label: string;
   hint: string;
   testID?: string;
+  /**
+   * A PATCH for THIS switch is in flight. Only this row is inert — the other
+   * four stay live, because one slow write is not a reason to freeze a section.
+   * Both flags again, for the same reason as `checked` below: native reads
+   * `accessibilityState`, the web build needs the ARIA attribute directly.
+   */
+  disabled?: boolean;
 }) {
   return (
     <TappableRow
-      onPress={onToggle}
+      onPress={disabled ? undefined : onToggle}
+      disabled={disabled ?? false}
+      aria-disabled={disabled ?? false}
       accessibilityRole="switch"
       // BOTH, and they are not redundant. `accessibilityState` is what native
       // reads; react-native-web emits `role="switch"` from the role but does NOT
@@ -178,12 +192,12 @@ function Toggle({
       // whose attributes were role/aria-label/tabindex and nothing else. A switch
       // that announces no state is worse than a checkbox, so the ARIA attribute
       // is set directly for the web build.
-      accessibilityState={{ checked: value }}
+      accessibilityState={{ checked: value, disabled: disabled ?? false }}
       aria-checked={value}
       accessibilityLabel={label}
       accessibilityHint={hint}
       testID={testID}
-      style={styles.toggleTarget}
+      style={[styles.toggleTarget, disabled && styles.toggleSaving]}
     >
       {/*
         `brand` for the ON track: a track is a SURFACE, and non-negotiable #9
@@ -212,6 +226,7 @@ export function ToggleRow({
   onToggle,
   last,
   testID,
+  saving,
 }: {
   label: string;
   sub: string;
@@ -219,6 +234,8 @@ export function ToggleRow({
   onToggle: () => void;
   last?: boolean;
   testID?: string;
+  /** This switch's write is in flight. See `Toggle` — only this row goes inert. */
+  saving?: boolean;
 }) {
   const { lang } = useLanguage();
   return (
@@ -232,6 +249,7 @@ export function ToggleRow({
         onToggle={onToggle}
         label={label}
         hint={sub}
+        disabled={saving ?? false}
         {...(testID ? { testID } : {})}
       />
     </View>
@@ -281,6 +299,9 @@ const styles = StyleSheet.create({
   // 26 is under the 44pt minimum, so the TARGET is padded out around it rather
   // than the control being drawn larger than the design.
   toggleTarget: { minHeight: MIN_TAP_TARGET, justifyContent: 'center' },
+  // Dimmed, not hidden, and it keeps its tap target — the row still has to be
+  // reachable and announceable while the write is in flight.
+  toggleSaving: { opacity: 0.5 },
   track: {
     width: theme.control.toggleTrack[0],
     height: theme.control.toggleTrack[1],

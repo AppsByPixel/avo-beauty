@@ -26,14 +26,21 @@
 import { useEffect, useState } from 'react';
 import type { Artist, Language } from '@avo/types';
 import { getArtists, getServices, type BookableService } from '../api/booking';
-import { artistName } from '../domain/booking';
+import { artistName, serviceName } from '../domain/booking';
 
 export interface BookingLabels {
   artists: Map<string, Artist>;
   services: Map<string, BookableService>;
   /** The artist's name in the reading language, or null when unresolvable. */
   artistLabel: (artistId: string, lang: Language) => string | null;
-  serviceLabel: (serviceId: string) => string | null;
+  /**
+   * The service's name in the reading language, or null when unresolvable.
+   *
+   * `lang` is new: this returned `service.name` unconditionally because
+   * `Service` had no `nameAr` to prefer. It has one now, so the Upcoming card
+   * reads "قص وتصفيف" in an Arabic wallet instead of "Cut & style".
+   */
+  serviceLabel: (serviceId: string, lang: Language) => string | null;
 }
 
 const EMPTY = new Map<string, never>();
@@ -68,6 +75,9 @@ export function useBookingLabels(salonId: string | null, enabled: boolean): Book
       const artist = artists.get(id);
       return artist ? artistName(artist, lang) : null;
     },
-    serviceLabel: (id) => services.get(id)?.name ?? null,
+    serviceLabel: (id, lang) => {
+      const service = services.get(id);
+      return service ? serviceName(service, lang) : null;
+    },
   };
 }

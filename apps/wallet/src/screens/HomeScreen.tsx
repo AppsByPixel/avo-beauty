@@ -253,7 +253,7 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
             booking={nextBooking}
             salon={salon}
             artistLabel={labels.artistLabel(nextBooking.artistId, lang)}
-            serviceLabel={labels.serviceLabel(nextBooking.serviceId)}
+            serviceLabel={labels.serviceLabel(nextBooking.serviceId, lang)}
             onReschedule={() => onReschedule(nextBooking)}
             onCancel={() => void onCancel(nextBooking)}
             busy={upcoming.busy}

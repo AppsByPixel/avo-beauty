@@ -60,6 +60,7 @@ import {
   formatWhen,
   hasGrid,
   isFullyTaken,
+  serviceName,
   splitRuns,
 } from '../domain/booking';
 
@@ -139,7 +140,7 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
           salon={salon}
           startsAt={flow.result.booking.startsAt}
           depositFils={flow.result.booking.depositFils}
-          serviceName={flow.selectedService?.name ?? '—'}
+          serviceName={flow.selectedService ? serviceName(flow.selectedService, lang) : '—'}
           artistLabel={flow.selectedArtist ? artistName(flow.selectedArtist, lang) : '—'}
           rescheduled={flow.rescheduling}
           onDone={() => {
@@ -257,7 +258,10 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
         <>
           <StepLabel>{copy.review}</StepLabel>
           <View style={styles.reviewCard}>
-            <ReviewRow label={copy.svcRow} value={flow.selectedService?.name ?? '—'} />
+            <ReviewRow
+              label={copy.svcRow}
+              value={flow.selectedService ? serviceName(flow.selectedService, lang) : '—'}
+            />
             <ReviewRow
               label={copy.artistRow}
               value={flow.selectedArtist ? artistName(flow.selectedArtist, lang) : '—'}

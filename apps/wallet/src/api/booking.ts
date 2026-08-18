@@ -2,61 +2,74 @@
  * The endpoints the Book flow reads and writes.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * WHY THIS FILE DECLARES SHAPES WHEN api/wallet.ts DECLARES NONE
+ * THE SHAPES THIS FILE USED TO DECLARE, AND WHY IT NO LONGER DOES
  * ═══════════════════════════════════════════════════════════════════════════
- * `@avo/types` is the contract and this app adds nothing to it — except that
- * for booking the contract and the API have drifted, and a zod object STRIPS
- * unknown keys rather than complaining about them. Parsing the real responses
- * with the trunk schemas would silently delete the fields the design cannot be
- * drawn without, and it would do it quietly, at runtime, in a way no typecheck
- * catches.
+ * `@avo/types` is the contract and this app adds nothing to it. For a while
+ * booking was the exception: the contract and the API had drifted, and a zod
+ * object STRIPS unknown keys rather than complaining, so parsing the real
+ * responses with the trunk schemas silently deleted fields the design cannot be
+ * drawn without — quietly, at runtime, in a way no typecheck catches.
  *
- * Two drifts, both reported to trunk, neither fixable from this lane
- * (`packages/types` is trunk-owned — CLAUDE.md § one writer per package):
+ * Both drifts are closed on trunk now:
  *
- * 1. `BookingSchema` has nine fields. The API serialises fourteen
- *    (api/src/services/booking.ts § serialiseBooking) and names the extra five
- *    as "fields that are not in it and that the screens cannot be drawn
- *    without". `changeableUntil` is one of them, and it is the entire one-hour
- *    rule: without it the client would compute `startsAt − 1h` for itself,
- *    which is a client deciding when its own deposit is at risk.
+ * 1. `BookingSchema` had nine fields against fourteen serialised. It has all
+ *    fourteen, `changeableUntil` included — the entire one-hour rule, and the
+ *    difference between the server owning when a deposit is at risk and the
+ *    client computing `startsAt − 1h` for itself.
  *
- * 2. `AvailabilitySlotSchema` is `{ time, available, reason? }`. The API
- *    returns `{ startsAt, endsAt, local, available, reason? }` inside an
- *    envelope carrying `timezone`, `slotMinutes`, `open`, `subtracted`,
- *    `hoursSource` and `fallbackReason`. `local` and `time` are not the same
- *    field, and `hoursSource` is the difference between "Live availability" and
- *    "Availability by salon hours" on the artist row.
+ * 2. `AvailabilitySlotSchema` was `{ time, available, reason? }` against a wire
+ *    of `{ startsAt, endsAt, local, available, reason? }`, and
+ *    `AvailabilityDaySchema` declared four of nine envelope fields. Both now
+ *    match, `open` and `subtracted` included.
  *
- * So the trunk schemas are EXTENDED where they exist, and the envelope is
- * declared here. Extending rather than restating means the day trunk widens
- * `BookingSchema`, the duplicate field here becomes a compile error rather than
- * a second opinion.
+ * So the local copies are DELETED rather than kept in sync. The type names
+ * survive as aliases because the call sites read fine as they are; the point
+ * was never the name, it was that there is one schema again.
+ *
+ * The plan this file recorded — extend trunk so a widened base makes the
+ * duplicate "a compile error rather than a second opinion" — would not have
+ * worked. `.extend()` overriding a key the base has since grown is silent. Only
+ * removing the local declaration collapses the two.
+ *
+ * WHAT IS STILL DECLARED HERE, and why each one is not a shape:
+ *   `CreateBookingResultSchema`, `CancelBookingResultSchema`,
+ *   `RescheduleResultSchema` — response ENVELOPES the contract describes in
+ *   prose, each built out of shared schemas rather than restating a field.
+ *   `ServiceSchema` — a narrowed local copy, and the one genuine remaining
+ *   drift. See its note below.
  */
 
 import { z } from 'zod';
-import { ArtistSchema, BookingSchema, TransactionSchema, paginated } from '@avo/types';
-import type { Artist } from '@avo/types';
+import {
+  ArtistSchema,
+  AvailabilityDaySchema,
+  BookingSchema,
+  ServiceSchema,
+  TransactionSchema,
+  paginated,
+} from '@avo/types';
+import type { Artist, AvailabilityDay, AvailabilitySlot, Booking, Service } from '@avo/types';
 import { deleteJson, getJson, postJson } from './client';
 
 // ------------------------------------------------------------------ booking --
 
 /**
- * The wire shape of a booking, as the API actually sends it.
+ * The wire shape of a booking — now just `BookingSchema`, which carries all
+ * five of the fields this file used to add back.
  *
  * `changeableUntil` is the deadline the server enforces and the sentence the
- * Upcoming card states inline. `endsAt` is the server's own arithmetic rather
- * than `startsAt + durationMin` re-done here.
+ * Upcoming card states inline; `endsAt` is the server's own arithmetic rather
+ * than `startsAt + durationMin` re-done here. Both are in the trunk schema now.
+ *
+ * The alias stays so call sites keep reading `BookingView` — what matters is
+ * that there is one schema again, not the name. `.extend()` does NOT error when
+ * the base grows the same key: it silently overrides, so the "duplicate field
+ * becomes a compile error" this file was counting on would never have fired.
+ * Deleting the extension is the only thing that actually collapses the two.
  */
-export const BookingViewSchema = BookingSchema.extend({
-  endsAt: z.string().datetime(),
-  noShowReturnDueAt: z.string().datetime(),
-  changeableUntil: z.string().datetime(),
-  rescheduledCount: z.number().int().nonnegative(),
-  calendarSyncState: z.enum(['not_applicable', 'pending', 'synced', 'failed']),
-});
+export const BookingViewSchema = BookingSchema;
 
-export type BookingView = z.infer<typeof BookingViewSchema>;
+export type BookingView = Booking;
 
 /** `POST /bookings` — the booking, the new balance, and the deposit's ledger row. */
 const CreateBookingResultSchema = z.object({
@@ -83,91 +96,78 @@ const BookingPageSchema = paginated(BookingViewSchema);
 
 // ------------------------------------------------------------- availability --
 
-export const AvailabilityReasonSchema = z.enum(['busy', 'booked', 'closed']);
-
 /**
- * One slot on the grid.
+ * Both of these are trunk's now, and the local copies are gone.
  *
- * `local` — "16:45" in the SALON's zone — is rendered as-is and never
- * reformatted from `startsAt`. api/src/routes/artists.ts is explicit about the
- * failure that would cause: a customer in London would see her Kuwait
- * appointment at 07:00 and believe it.
+ * `AvailabilitySlotSchema` was `{ time, available, reason? }` when this file was
+ * written and the API sends `{ startsAt, endsAt, local, available, reason? }`;
+ * `AvailabilityDaySchema` declared four of the nine served fields and zod
+ * stripped the other five, `open` among them. Both have been widened to the
+ * wire, so restating them here is now the drift rather than the guard against
+ * it — a second definition that no longer disagrees is just a second place to
+ * forget to update.
  *
- * `available: false` slots are RENDERED, struck through, never dropped. That is
- * the contract's instruction and it is the point of the endpoint returning them
- * at all — a missing 16:45 reads as a salon that does not work at 16:45, and a
- * struck-through one reads as a slot somebody took.
+ * What the trunk schema is careful about, and this copy was not:
+ *
+ *   `reason` is OPTIONAL, not nullable. The server omits the key on an
+ *   available slot. A `.nullable()` that is not `.optional()` makes every
+ *   bookable slot fail `.parse()` — the whole grid — and it hides on today's
+ *   date, where every slot is already past and therefore carries a reason.
+ *
+ *   `SubtractedBlock.from`/`to` are salon-local WALL CLOCK, "10:00", not
+ *   instants. Typed as instants they throw on any day with a booking, and pass
+ *   on any day without one.
+ *
+ * The two design facts this file used to carry the comments for are unchanged
+ * and both still hold: `local` ("16:45", salon zone) is rendered as-is and
+ * never reformatted from `startsAt`, or a customer in London reads her Kuwait
+ * appointment as 07:00 and believes it; and `available: false` slots are
+ * RENDERED struck through, never dropped, because a missing 16:45 reads as a
+ * salon that does not work then and a struck-through one reads as a slot
+ * somebody took.
+ *
+ * `hoursSource` is the difference between "Live availability" and "Availability
+ * by salon hours" on the artist row: `salon_hours` means her own window was not
+ * trusted and she is being offered on the salon's, which over-offers.
  */
-export const AvailabilitySlotWireSchema = z.object({
-  startsAt: z.string().datetime(),
-  endsAt: z.string().datetime(),
-  local: z.string(),
-  available: z.boolean(),
-  reason: AvailabilityReasonSchema.optional(),
-});
-
-export type AvailabilitySlotWire = z.infer<typeof AvailabilitySlotWireSchema>;
-
-export const AvailabilitySchema = z.object({
-  artistId: z.string(),
-  date: z.string(),
-  /** IANA zone. The grid's labels are already in it; this is for the record. */
-  timezone: z.string(),
-  slotMinutes: z.number().int().positive(),
-  /** False on a day the artist does not work. An EMPTY DAY, not a blank grid. */
-  open: z.boolean(),
-  slots: z.array(AvailabilitySlotWireSchema),
-  subtracted: z.array(
-    z.object({
-      from: z.string(),
-      to: z.string(),
-      reason: z.enum(['busy', 'booked']),
-      bookingId: z.string().optional(),
-    }),
-  ),
-  /**
-   * WHERE THE HOURS CAME FROM, and the reason the artist row can say "Live
-   * availability" honestly.
-   *
-   * `artist_windows` on a google-sourced artist means her calendar was actually
-   * read. `salon_hours` means it could not be, and she is being offered on the
-   * salon's own hours instead — which over-offers rather than under-offers, and
-   * is a thing the customer is entitled to know before she picks a time.
-   */
-  hoursSource: z.enum(['artist_windows', 'salon_hours']),
-  fallbackReason: z.enum(['calendar_not_connected', 'calendar_unavailable']).nullable(),
-});
-
-export type Availability = z.infer<typeof AvailabilitySchema>;
+export type AvailabilitySlotWire = AvailabilitySlot;
+export type Availability = AvailabilityDay;
 
 // ---------------------------------------------------------------- services --
 
 /**
- * `GET /salons/{id}/services`.
+ * `GET /salons/{id}/services` — trunk's `ServiceSchema`, local copy deleted.
  *
- * TWO FIELDS THE DESIGN NEEDS AND THIS DOES NOT CARRY, both reported:
+ * `nameAr` LANDED, and it was the bigger of the two reported gaps. The Book
+ * flow's service list is the most Arabic-heavy screen in the wallet and every
+ * row of it was rendering a Latin name, because `Salon`, `Branch` and `Artist`
+ * all carried `nameAr` and `Service` alone did not. Lane A added the column and
+ * the list serves it; the fallback is `nameAr ?? name`, and the seed leaves
+ * SV-05 NULL on purpose so the null path is a real one rather than a branch
+ * nothing reaches.
  *
- *   nameAr      the Book flow's service list is the most Arabic-heavy screen in
- *               the wallet and every row of it renders a Latin name. `Salon`,
- *               `Branch` and `Artist` all have `nameAr`; `Service` does not,
- *               and the house pattern in the live AvoRewards app is that
- *               backend entities carry one (PRIOR-ART.md).
- *   durationMin the design shows "45 min" under each service
- *               (AVO Wallet Home.dc.html:1470-1475). The API has no such field:
- *               a booking's duration is the ARTIST's `slotMinutes`, decided at
- *               step 3, not the service's. So the duration is shown where the
- *               server actually decides it — on the slot grid and the review —
- *               and the service rows carry the price alone. That is a design/
- *               contract disagreement rather than a gap, and it is reported
- *               rather than papered over with an invented per-service minute.
+ * `active` comes with it. The list already filters to active rows server-side,
+ * so this is belt and braces rather than a second opinion — but a retired
+ * service in a basket is a 409 from the charge handler, and the field being
+ * present is what would let this screen say so instead of guessing.
+ *
+ * `durationMin` IS STILL ABSENT AND STILL NOT A GAP. The design shows "45 min"
+ * under each service (AVO Wallet Home.dc.html:1470-1475); the API has no such
+ * field because a booking's duration is the ARTIST's `slotMinutes`, decided at
+ * step 3, not the service's. The duration is therefore shown where the server
+ * actually decides it — the slot grid and the review — and the service rows
+ * carry the price alone. A design/contract disagreement, reported, not papered
+ * over with an invented per-service minute.
+ *
+ * ⚠️ `packages/mock`'s services fixture (fixtures.ts:257) serves only
+ * `{id, name, priceFils}` — no `salonId`, `nameAr` or `active` — so this parse
+ * fails against the mock. REPORTED TO TRUNK, not worked around: `packages/mock`
+ * is trunk-owned (CLAUDE.md § one writer per package), and narrowing the client
+ * back to the mock's shape would re-open the Arabic gap to keep a fixture
+ * happy. The Book flow is driven against the real API regardless — the mock
+ * implements neither `/bookings` nor `/artists/{id}/availability`.
  */
-const ServiceSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  priceFils: z.number().int().positive(),
-});
-
-export type BookableService = z.infer<typeof ServiceSchema>;
+export type BookableService = Service;
 
 const ServicePageSchema = paginated(ServiceSchema);
 const ArtistPageSchema = paginated(ArtistSchema);
@@ -220,7 +220,7 @@ export function getAvailability(
 ): Promise<Availability> {
   return getJson(
     `/artists/${encodeURIComponent(artistId)}/availability?date=${encodeURIComponent(date)}`,
-    AvailabilitySchema,
+    AvailabilityDaySchema,
     signal,
   );
 }

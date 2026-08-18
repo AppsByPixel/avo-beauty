@@ -188,6 +188,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
             open={deleteOpen}
             balanceFils={member.balanceFils}
             onClose={() => setDeleteOpen(false)}
+            onToast={toast.show}
           />
           <Toast message={toast.message} />
         </>
@@ -265,20 +266,55 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
       </SettingsCard>
 
       {/* ---------------------------------------------------- notifications -- */}
+      {/*
+        THE READ FAILING IS NOT THE SAME AS THE SWITCHES BEING OFF. Five switches
+        drawn from `DEFAULT_PREFERENCES` look exactly like her settings and are
+        not — and one of them is marketing consent, so a wrong `offers` here is a
+        wrong answer to a question that has legal weight. So a failed read shows
+        the failure and a retry, and no switches at all.
+      */}
       <SectionLabel>{copy.acctNotifs}</SectionLabel>
-      <SettingsCard testID="notification-rows">
-        {notificationRows.map((row, index) => (
-          <ToggleRow
-            key={row.key}
-            label={row.label}
-            sub={row.sub}
-            value={notifications.prefs[row.key]}
-            onToggle={() => notifications.toggle(row.key)}
-            last={index === NOTIFICATION_KEYS.length - 1}
-            testID={`toggle-${row.key}`}
-          />
-        ))}
-      </SettingsCard>
+      {notifications.loadFailed ? (
+        <SettingsCard testID="notification-error">
+          <View style={styles.notifError}>
+            <Text style={[text('body', lang), styles.notifErrorText]}>{copy.notifErr}</Text>
+            <TappableRow
+              onPress={notifications.reload}
+              accessibilityRole="button"
+              accessibilityLabel={copy.tryAgain}
+              testID="notification-retry"
+              style={styles.notifRetry}
+            >
+              <Text style={[text('bodyS', lang), styles.notifRetryText]}>{copy.tryAgain}</Text>
+            </TappableRow>
+          </View>
+        </SettingsCard>
+      ) : (
+        <>
+          <SettingsCard testID="notification-rows">
+            {notificationRows.map((row, index) => (
+              <ToggleRow
+                key={row.key}
+                label={row.label}
+                sub={row.sub}
+                value={notifications.prefs[row.key]}
+                onToggle={() => notifications.toggle(row.key)}
+                saving={notifications.saving.includes(row.key)}
+                last={index === NOTIFICATION_KEYS.length - 1}
+                testID={`toggle-${row.key}`}
+              />
+            ))}
+          </SettingsCard>
+          {/*
+            The switch has already moved back by the time this renders — the hook
+            reverts it. This says why it moved, so the revert does not read as the
+            app ignoring her.
+          */}
+          {notifications.writeFailed ? (
+            <CardNote testID="notification-save-error">{copy.notifSaveErr}</CardNote>
+          ) : null}
+        </>
+      )}
 
       {/* ------------------------------------------------ wallet & policies -- */}
       {/*
@@ -426,6 +462,12 @@ function Shell({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: color.canvas },
+  // The notifications read failed. Inside the same card the switches would have
+  // occupied, so the section keeps its shape and its heading.
+  notifError: { paddingVertical: 16, gap: 4 },
+  notifErrorText: { color: color.ink },
+  notifRetry: { alignSelf: 'flex-start', minHeight: MIN_TAP_TARGET, justifyContent: 'center' },
+  notifRetryText: { color: color.brandDeep, fontWeight: '600' },
   frame: {
     flex: 1,
     width: '100%',

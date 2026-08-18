@@ -409,6 +409,8 @@ export const ar: Copy = {
   nReceiptSub: 'إيصال مفصّل بالبريد الإلكتروني عن كل عملية دفع أو شحن أو استرجاع', // design:1312
   nOffers: 'عروض الصالون', // design:1313
   nOffersSub: 'عروض من أمارا بين حين وآخر. مغلقة افتراضياً.', // design:1313
+  notifErr: en.notifErr, // AR GAP
+  notifSaveErr: en.notifSaveErr, // AR GAP
 
   // design:1320 'آخر تحديث ١ يوليو ٢٠٢٦', and design:1614 which composes the
   // version onto it. Eastern digits throughout — a date and a version are not
@@ -488,6 +490,13 @@ export const ar: Copy = {
   deleteGo: 'طلب الحذف', // design:1337
   deleteFine:
     'لا يُصرف رصيد المحفظة نقداً. استخدمي الرصيد المتبقي في الصالون أو اتفقي معهم على تسويته قبل إغلاق الحساب.', // design:1338
+  // The design's delete sheet never reaches a server, so it has no Arabic for
+  // any outcome. These three are the highest-priority entries on the worksheet:
+  // deletion copy is legally loaded and the English promises a specific window.
+  deletePendingTitle: en.deletePendingTitle, // AR GAP
+  deletePendingBody: en.deletePendingBody, // AR GAP
+  deleteCancel: en.deleteCancel, // AR GAP
+  deleteCancelled: en.deleteCancelled, // AR GAP
 
   langSwitch: 'EN', // design:1339
   restartNeeded: en.restartNeeded, // AR GAP
@@ -551,6 +560,15 @@ export const AR_GAPS = [
   'changeClosedBody',
   'noUpcomingTitle',
   'noUpcomingBody',
+  // ---- account. Same pattern again: the design's Account prototype has no
+  // failing write and no server behind the delete sheet, so the Arabic that
+  // covers its happy path covers none of these.
+  'notifErr',
+  'notifSaveErr',
+  'deletePendingTitle',
+  'deletePendingBody',
+  'deleteCancel',
+  'deleteCancelled',
 ] as const;
 
 /**

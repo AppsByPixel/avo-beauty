@@ -262,6 +262,23 @@ export function artistName(artist: Artist, lang: Language): string {
   return lang === 'ar' ? (artist.nameAr ?? artist.name) : artist.name;
 }
 
+/**
+ * The service's name in the reading language — the same rule, now that it can
+ * be followed.
+ *
+ * `Service.nameAr` did not exist when the Book flow was built, so the most
+ * Arabic-heavy screen in the wallet rendered every service row in Latin. It
+ * exists now. The fallback is the Latin name and never a transliteration
+ * written by this lane; the seed leaves SV-05 NULL deliberately, so the null
+ * path is one a real customer walks rather than a branch nothing reaches.
+ */
+export function serviceName(
+  service: { name: string; nameAr: string | null },
+  lang: Language,
+): string {
+  return lang === 'ar' ? (service.nameAr ?? service.name) : service.name;
+}
+
 // ------------------------------------------------------- the one-hour rule --
 
 /**

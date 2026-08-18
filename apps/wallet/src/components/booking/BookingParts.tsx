@@ -39,6 +39,7 @@ import {
   artistInitial,
   artistName,
   dayNumberLabel,
+  serviceName,
   slotLabel,
   weekdayLabel,
   type StripDay,
@@ -91,23 +92,23 @@ export function ServiceRow({
   onPick: () => void;
 }) {
   const { lang } = useLanguage();
+  // The gap this row used to carry a note about is closed: `Service.nameAr`
+  // exists, the list serves it, and `serviceName` applies the same
+  // `nameAr ?? name` fallback Salon, Branch and Artist already use. Still no
+  // transliteration invented here — a null falls back to the Latin name, which
+  // is a copy decision for the salon rather than one for this lane.
+  const name = serviceName(service, lang);
   return (
     <TappableRow
       onPress={onPick}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
-      accessibilityLabel={`${service.name} · ${formatMoney(service.priceFils as Fils, lang)}`}
+      accessibilityLabel={`${name} · ${formatMoney(service.priceFils as Fils, lang)}`}
       testID={`book-service-${service.id}`}
       style={[styles.optionRow, selected && styles.optionRowOn]}
     >
       <View style={styles.optionBody}>
-        {/*
-          CONTRACT GAP (reported): `Service` has no `nameAr`, so an Arabic
-          wallet shows the Latin service name. `Salon`, `Branch` and `Artist`
-          all carry one. Not invented here — a transliteration written by this
-          lane is a copy defect wearing the right script.
-        */}
-        <Text style={[text('bodyL', lang), styles.optionName]}>{service.name}</Text>
+        <Text style={[text('bodyL', lang), styles.optionName]}>{name}</Text>
       </View>
       <Money amount={service.priceFils} />
     </TappableRow>

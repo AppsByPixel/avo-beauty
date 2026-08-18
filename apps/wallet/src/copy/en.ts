@@ -335,6 +335,8 @@ export const en: Copy = {
   nReceiptSub: 'An itemised receipt by email for every payment, top-up and refund',
   nOffers: 'Salon offers',
   nOffersSub: 'Occasional promotions from Amara. Off by default.',
+  notifErr: "We couldn't load your notification settings.",
+  notifSaveErr: "That didn't save, so the switch has been put back. Try again.",
 
   // design:1213 is the static half ("Last updated 1 July 2026"); design:1615
   // composes the whole stamp including the version.
@@ -411,6 +413,16 @@ export const en: Copy = {
   deleteGo: 'Request deletion',
   deleteFine:
     'Wallet credit cannot be paid out in cash. Spend the remaining balance at the salon, or ask them to settle it with you, before the account closes.',
+  deletePendingTitle: 'Deletion requested',
+  // `days` is the server's `graceDays`. "You stay signed in" is not a courtesy
+  // line — the API deliberately does not revoke her sessions, so the sentence
+  // describes real behaviour and is what makes the cancel door findable.
+  deletePendingBody: (days) =>
+    `Your profile, visit history and loyalty progress are removed within ${days} ${
+      days === 1 ? 'day' : 'days'
+    }. You stay signed in until then, and you can still change your mind.`,
+  deleteCancel: 'Cancel deletion request',
+  deleteCancelled: 'Deletion cancelled',
 
   // design/AVO Wallet Home.dc.html:1232 — the English build offers Arabic.
   langSwitch: 'العربية',

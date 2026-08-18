@@ -134,6 +134,8 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   stampsBadge: [8],
   bonusRow: ['silver'],
   payRedirectTitle: ['كي نت'],
+  // The server's `graceDays`. Two digits so a partial conversion is visible.
+  deletePendingBody: [30],
   // `lastUpdated` takes an already-formatted relative string built from
   // `minutesAgo`/`hoursAgo`, which are themselves in this table — so the sample
   // here carries no digits of its own. `staleBanner` takes the raw epoch and

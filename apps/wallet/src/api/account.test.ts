@@ -42,8 +42,11 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
             message: 'x',
             ref: '',
             // The charge this dispute is ABOUT, resolved server-side from `ref`.
-            // Null here because these specs submit without a receipt reference —
-            // the routing they assert is unaffected by it.
+            // This topic is an appointment question opened with no receipt behind
+            // it, so there is no charge to resolve and `null` is what the server
+            // serves. Kept null on purpose: these three specs are about routing,
+            // and a real id here would read as though one of them asserted the
+            // receipt link.
             transactionId: null,
             via: 'wa',
             at: '2026-08-17T10:00:00+03:00',

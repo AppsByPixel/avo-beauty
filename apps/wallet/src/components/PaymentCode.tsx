@@ -16,7 +16,7 @@
 import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import { walletTokenUri, type WalletToken } from '@avo/types';
+import type { WalletToken } from '@avo/types';
 import { color, radius, text, MIN_TAP_TARGET, WHITE } from '../theme';
 import { useCopy, useLanguage } from '../i18n/language';
 import { toEasternDigits } from '../i18n/digits';
@@ -94,8 +94,15 @@ export function PaymentCode({ memberId, token, secondsRemaining, unavailable, on
         style={styles.panel}
       >
         <View style={styles.qrBox}>
+          {/*
+            The SERVER's string, not one composed here. `uri` was being stripped
+            by the contract, so this re-derived it with walletTokenUri() — two
+            implementations of a bearer credential's format, and the scanner
+            parsing whichever one it met. The server mints the token; it mints
+            how the token is written down too.
+          */}
           <QRCode
-            value={walletTokenUri(token.memberId, token.token)}
+            value={token.uri}
             size={QR_SIZE}
             color={color.ink}
             backgroundColor={WHITE}
