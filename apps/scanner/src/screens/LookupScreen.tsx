@@ -46,10 +46,20 @@ export function LookupScreen({
   accessToken,
   onBack,
   onPick,
+  opening = false,
 }: {
   accessToken: string;
   onBack: () => void;
   onPick: (member: LookupMember) => void;
+  /**
+   * True while `GET /members/{id}` is in flight for a row that was just tapped.
+   *
+   * The rows stop accepting taps for the duration. Picking a second member while
+   * the first is still resolving would leave two envelopes racing for one member
+   * card, and the one that renders would be whichever answered last — on the
+   * screen where money moves, against whichever customer that turned out to be.
+   */
+  opening?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState<Search>({ state: 'idle' });
@@ -149,10 +159,17 @@ export function LookupScreen({
               <Pressable
                 key={m.id}
                 onPress={() => onPick(m)}
+                /*
+                  Both halves matter. `disabled` stops the tap; `accessibilityState`
+                  is how a VoiceOver user is told the row stopped accepting one,
+                  which a visual dim alone does not communicate.
+                */
+                disabled={opening}
                 accessibilityRole="button"
+                accessibilityState={{ disabled: opening, busy: opening }}
                 accessibilityLabel={`${m.name}, number ending ${m.phoneLast4}`}
                 testID={`lookup-${m.id}`}
-                style={styles.row}
+                style={[styles.row, opening && styles.rowOpening]}
               >
                 <View style={styles.rowAvatar}>
                   <Text style={[display(17, '600'), styles.rowInitial]}>
@@ -243,6 +260,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rowInitial: { color: color.brandDeep },
+  /** Opening one row: the list stays readable and stops being actionable. */
+  rowOpening: { opacity: 0.55 },
   rowText: { flex: 1, minWidth: 0 },
   rowNameLine: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   tierPill: { borderRadius: 999, paddingVertical: 3, paddingHorizontal: 9 },

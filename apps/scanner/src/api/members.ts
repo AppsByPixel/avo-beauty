@@ -49,6 +49,7 @@
 
 import { z } from 'zod';
 import { IdSchema, TierNameSchema } from '@avo/types';
+import { CounterEnvelopeSchema, type CounterEnvelope } from './counter';
 import { getJson } from './client';
 
 /**
@@ -111,4 +112,52 @@ export async function lookupMembers(
     signal,
   );
   return body.items;
+}
+
+/**
+ * `GET /members/{id}` — THE LAST STEP OF THE MANUAL PATH, and the one that was
+ * missing.
+ *
+ * The lookup above answers with a directory row: a name, a tier, four digits of a
+ * phone number. Enough to know she is the right customer, not enough to charge
+ * her — no balance, no services, no held deposit. So "Can't scan? Find member
+ * manually" ended at a name the scanner could display and could not act on, in
+ * exactly the situation the fallback exists for: her phone is flat and she is
+ * standing at the counter.
+ *
+ * This resolves that row into the counter envelope — the SAME body `POST /scans`
+ * returns, from the same `counterEnvelope` builder on the server. So the manual
+ * card is not a second member card assembled from a narrower source; it is the
+ * scan card reached through a different door, with the balance, the service list
+ * and the held deposit all read from the server (non-negotiable #2).
+ *
+ * TWO THINGS THE SERVER DOES THAT MAKE THIS SAFE TO CALL, both in
+ * services/memberSearch.ts § resolveMember:
+ *
+ *   - the tenant predicate is in the WHERE — `id = $1 AND salon_id = $2` — so an
+ *     id belonging to another salon does not resolve, rather than resolving and
+ *     being filtered afterwards;
+ *   - an append-only audit row is written BEFORE the refusal, naming this staff
+ *     member and the id she asked for, whether or not it was found. That is what
+ *     makes the screen's promise to the customer — "Manual lookups are logged
+ *     with your name" — true of the OPEN as well as the search. It is also the
+ *     compensating control for the charge this call leads to, which carries no
+ *     wallet token and therefore has no cryptographic proof the customer was
+ *     present. The staff name in the log is the proof.
+ *
+ * Which is why this is a deliberate second call and not something folded into the
+ * search: opening a customer is a heavier act than listing her, and it is audited
+ * as one.
+ */
+export function fetchMember(
+  memberId: string,
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<CounterEnvelope> {
+  return getJson(
+    `/members/${encodeURIComponent(memberId)}`,
+    CounterEnvelopeSchema,
+    accessToken,
+    signal,
+  );
 }

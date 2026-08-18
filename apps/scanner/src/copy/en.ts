@@ -114,22 +114,24 @@ export const copy = {
   /** :734 — "ID · 8842" */
   memberId: (id: string) => `ID · ${id}`,
   /**
-   * INVENTED — the design has no copy for this, because in the design picking a
-   * row opens the member card.
+   * INVENTED — the design has no copy for a failed OPEN, because in the design
+   * picking a row simply opens the member card.
    *
-   * It cannot yet. That card shows her balance and stamp count before the charge,
-   * and `GET /members?q=` returns a directory row without them (deliberately —
-   * see src/api/members.ts), while nothing on the API resolves ONE member for a
-   * staff caller: `POST /scans` needs a QR token, which is exactly what a manual
-   * lookup does not have. Non-negotiable #2 says the server owns the balance, so
-   * the alternative to this sentence is a card showing a 0.000 this client made
-   * up, on the screen where money moves.
+   * It does now: `GET /members/{id}` landed and `ScannerFlow.handlePick` calls it.
+   * The two strings that used to live here — "Charging from a lookup is not ready
+   * yet" — were correct until that endpoint existed. They are DELETED rather than
+   * left in place, because a stale explanation of a solved problem is exactly what
+   * cost this lane a run once already (src/api/members.ts § the stale header was
+   * read as authoritative and briefed onward as a gap).
    *
-   * Escalated to trunk. Delete both strings the day the resolve endpoint lands.
+   * What replaces them is narrower, and it is a real state rather than a
+   * placeholder: the open can still fail after a successful search. She was listed
+   * a moment ago and the resolve 404s because another device deactivated her, or
+   * it 403s, or the network drops between the two requests. The body rendered
+   * alongside this title is the SERVER's message whenever there is one, so the
+   * artist reads why instead of a guess.
    */
-  lookupPickBlockedTitle: 'Charging from a lookup is not ready yet',
-  lookupPickBlockedBody:
-    'She was found, but her balance has to come from the server before a charge can be taken. Ask her to show her code, or take payment another way.',
+  lookupOpenFailedTitle: 'Could not open her account',
 
   // -------------------------------------------------------------- charges --
   /** :249 */
@@ -263,6 +265,26 @@ export const copy = {
   offlineBody: 'The scanner needs a connection to take a charge.',
   chargesEmptyTitle: 'No charges yet today',
   chargesEmptyBody: 'The first charge you take will show here, with 15 minutes to void it.',
+
+  /**
+   * INVENTED, and the reasoning matters more than the wording — see MemberScreen
+   * § THE DOUBLE-CHARGE PATH.
+   *
+   * The design offers "Try again" on a failed load (States:103,137) and that is
+   * right for a load. It is WRONG for a charge, because a client that could not
+   * read the response cannot know whether the money moved. The failure this
+   * sentence appears under includes the case where the debit SUCCEEDED and only
+   * the reply was unreadable, and the recovery staff reach for by instinct —
+   * rescan her code — mints a fresh idempotency key and a fresh token, which the
+   * server correctly treats as a second, genuine charge. No idempotency test
+   * catches that; the server behaved properly both times.
+   *
+   * So the error state deliberately offers no retry button, and says this instead.
+   * Her balance is the only reliable evidence of whether the debit landed, and
+   * checking it is the manual version of the check the client can no longer do.
+   */
+  chargeUnknownOutcome:
+    'Check her balance before charging again — this charge may already have gone through.',
 
   /**
    * States:142-157 — "Scanner · code expired", the one scanner state the

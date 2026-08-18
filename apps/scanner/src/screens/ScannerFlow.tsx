@@ -21,7 +21,7 @@ import { StyleSheet, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { fetchSalonLoyalty, type SalonLoyalty } from '../api/salon';
 import { resolveScan, type ScanResult } from '../api/scans';
-import type { LookupMember } from '../api/members';
+import { fetchMember, type LookupMember } from '../api/members';
 import { copy } from '../copy/en';
 import { useSession } from '../state/session';
 import { color } from '../theme';
@@ -39,7 +39,14 @@ import { ScanScreen } from './ScanScreen';
 type Screen =
   | { name: 'home' }
   | { name: 'scan' }
-  | { name: 'resolving' }
+  /**
+   * `from` because resolving looks different depending on which door she came
+   * through. A scan resolves behind the camera screen, which is what the artist is
+   * already looking at. A manual open must NOT flash the camera — it stays on the
+   * lookup list she just tapped, so the row she picked is still on screen while
+   * the server answers.
+   */
+  | { name: 'resolving'; from: 'scan' | 'lookup' }
   | { name: 'codeRefused'; title: string; body: string }
   | { name: 'member'; scan: ScanResult; token: string | undefined }
   | { name: 'result'; attempt: ChargeAttempt }
@@ -76,7 +83,7 @@ export function ScannerFlow() {
 
   const handleCode = useCallback(
     async (code: { memberId: string; token: string }) => {
-      setScreen({ name: 'resolving' });
+      setScreen({ name: 'resolving', from: 'scan' });
       try {
         const scan = await resolveScan(code.token, accessToken);
         setScreen({ name: 'member', scan, token: code.token });
@@ -102,43 +109,60 @@ export function ScannerFlow() {
   );
 
   /**
-   * A member reached by manual lookup instead of a scan.
+   * A member reached by manual lookup instead of a scan — THE LAST STEP, and it
+   * used to be a dead end.
    *
    * ═══════════════════════════════════════════════════════════════════════════
-   * THIS USED TO ASSEMBLE A MEMBER CARD, AND EVERY PART IT ASSEMBLED WAS MADE UP.
+   * WHAT THIS REPLACES, AND WHY THE REPLACEMENT IS ONE LINE OF FETCH
    *
-   * `GET /members?q=` is live now, so the lookup itself works — but it answers
-   * with a directory row: id, salonId, name, phoneLast4, tier. No balance, no
-   * stamps, by design. The card this used to open renders `member.balanceFils`
-   * and `member.stamps` on the screen where money moves.
+   * Before `GET /members/{id}` existed this had two possible shapes, and both
+   * were wrong. Assembling a card from the directory row meant passing
+   * `heldDepositFils: 0` and `services: []` as literals — a customer with 5.000
+   * held would see no deposit credit line while the charge quietly applied one,
+   * non-negotiable #2 in the direction that embarrasses the salon at the counter.
+   * Refusing to open the card at all was honest but left the fallback failing in
+   * exactly the situation it exists for: her phone is flat and she is at the till.
    *
-   * It also passed `heldDepositFils: 0` and `services: []` as literals. The
-   * zero was the worse of the two: `POST /scans` reads the REAL held deposit
-   * through the same `findApplicableHold` the charge uses, precisely so what the
-   * artist is shown and what the charge applies cannot disagree. A customer with
-   * 5.000 held would have seen no deposit credit line while the charge quietly
-   * applied one — non-negotiable #2 in the direction that embarrasses the salon
-   * at the counter.
+   * The endpoint lands and both problems dissolve, because it returns the SAME
+   * envelope `POST /scans` returns from the SAME server-side builder
+   * (api/src/services/counter.ts). So there is nothing to assemble here. The
+   * manual path is not a second member card — it is `handleCode`'s card reached
+   * through a different door, and the only difference that survives is the one
+   * that matters:
    *
-   * There is no way to do this correctly yet. Nothing on the API resolves ONE
-   * member for a staff caller: `POST /scans` requires a QR token, which is
-   * exactly what a manual lookup does not have, and there is no
-   * `GET /members/{id}`. So the honest outcome is to say so rather than open a
-   * card full of invented money. ESCALATED to trunk — see copy.
+   *   NO TOKEN. `token: undefined` below, and it is deliberate. A wallet token is
+   *   what normally proves the customer was present to authorise the debit; a
+   *   dead phone cannot mint one, and `POST /charges` declares the field optional
+   *   for precisely this case (api/src/routes/charges.ts:118). What replaces the
+   *   proof is the audit trail: the server writes an append-only row naming this
+   *   staff member for the search, another for the open, and another for the
+   *   charge. That is why the screen tells the artist her lookups are logged —
+   *   the log is the control that stands in for the token.
    *
-   * What is owed, and it is one endpoint: a scanner-scoped, salon-scoped read of
-   * one member returning the SAME envelope `POST /scans` returns —
-   * `{ member, heldDepositFils, heldDepositBooking, services }` — so this path
-   * and the scan path show identical numbers because they came from one place.
+   * `resolving` first, so the member card never renders against a stale envelope
+   * — and it also unmounts MemberScreen, which is what stops a previous
+   * customer's service selection from surviving into this one.
    * ═══════════════════════════════════════════════════════════════════════════
    */
-  const handlePick = useCallback((_member: LookupMember) => {
-    setScreen({
-      name: 'codeRefused',
-      title: copy.lookupPickBlockedTitle,
-      body: copy.lookupPickBlockedBody,
-    });
-  }, []);
+  const handlePick = useCallback(
+    async (member: LookupMember) => {
+      setScreen({ name: 'resolving', from: 'lookup' });
+      try {
+        // The id from the row, but every FIGURE on the card comes from this
+        // response. The row carried no balance and no services on purpose.
+        const envelope = await fetchMember(member.id, accessToken);
+        setScreen({ name: 'member', scan: envelope, token: undefined });
+      } catch (err) {
+        if (reportFailure(err)) return;
+        setScreen({
+          name: 'codeRefused',
+          title: copy.lookupOpenFailedTitle,
+          body: err instanceof ApiError ? err.message : copy.errorBody,
+        });
+      }
+    },
+    [accessToken, reportFailure],
+  );
 
   const goHome = useCallback(() => setScreen({ name: 'home' }), []);
 
@@ -167,7 +191,8 @@ export function ScannerFlow() {
     <View style={styles.root}>
       {screen.name === 'home' && <HomeScreen onNavigate={navigate} onSignOut={signOut} />}
 
-      {(screen.name === 'scan' || screen.name === 'resolving') && (
+      {(screen.name === 'scan' ||
+        (screen.name === 'resolving' && screen.from === 'scan')) && (
         <ScanScreen
           onCode={(code) => void handleCode(code)}
           onHome={goHome}
@@ -219,11 +244,20 @@ export function ScannerFlow() {
         />
       )}
 
-      {screen.name === 'lookup' && (
+      {(screen.name === 'lookup' ||
+        (screen.name === 'resolving' && screen.from === 'lookup')) && (
         <LookupScreen
           accessToken={accessToken}
           onBack={() => setScreen({ name: 'scan' })}
-          onPick={handlePick}
+          onPick={(member) => void handlePick(member)}
+          /*
+            Opening is a second request, and while it is in flight the list must
+            not accept another tap: two members opened from one list is two
+            envelopes racing for one member card, and the loser could be the one
+            that renders. The screen shows its existing skeleton, the same one the
+            search uses, rather than a new spinner nobody designed.
+          */
+          opening={screen.name === 'resolving'}
         />
       )}
 
