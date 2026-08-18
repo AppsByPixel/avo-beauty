@@ -689,3 +689,47 @@ against the client's own schema.
 traffic, or a product decision on the window and whether it refuses or requires confirmation.
 The second is faster and is the kind of call that belongs to whoever owns what a salon counter
 should do — it is in "Queued for Aftab" for that reason.
+
+### Member signup — the shape, decided and specified before it is built
+
+Signup does not exist (`auth.ts` has session, refresh, sign-out, staff password-reset and no
+registration), so non-negotiable #10 — *store the accepted version against the member* — is
+unmet for want of a moment at which acceptance happens. The design specifies self-serve:
+`Your name`, `Phone`, `Password`, a required consent checkbox, and a **separate** WhatsApp
+checkbox (`design/README.md:107`/`:113`).
+
+**Acceptance is an event, not a column.** Migration `0020`'s own comment predicted this use —
+*"the next one is already visible: non-negotiable #10's acceptance of a NEW policy version is
+the same shape of fact"* — and `member_consent_source_is_known` **already permits `'signup'`**,
+which is a second confirmation from the enum rather than the comment. `member_consent_kind_is_known`
+is `CHECK (kind = 'marketing_offers')`, so widening it to add policy acceptance is the migration.
+`member.policyVersion` stays as the cached current value, exactly as the `offers` boolean relates
+to its event stream.
+
+**The client sends the version it displayed; the server refuses `policy_version_stale` if that is
+not the currently published one.** So she can only accept what she was shown. A server stamping
+"whatever is current" would satisfy the letter of #10 while reproducing precisely what
+`design/README.md` gap 5 warns against — *"do not rely on 'they agreed to whatever is current'."*
+The refusal is a **renderable client state**, not an edge case: a publish landing between render
+and submit is the ordinary race, and it must read as "the terms changed, here they are again".
+
+**Signup writes NO marketing consent event — not even `granted: false`.** I had assumed the
+signup WhatsApp opt-in was the `offers` marketing field with a second entry point. It is not, and
+the copy proves it verbatim: `consentWa` is *"Send me receipts and appointment confirmations on
+WhatsApp"*, which is **word-for-word** `nWaSub`, the **service** channel — while `nOffersSub` is
+*"Occasional promotions from Amara. Off by default."* There are four `consent*` keys in the copy
+and none mentions offers. So **marketing has no signup entry point at all**, which matches 0020's
+rule that consent is never a default. And a `granted: false` row would be worse than nothing:
+0020 is explicit that *"`granted = false` is a withdrawal event, not the absence of a grant"* —
+recording a withdrawal she never made puts a false fact in an append-only table.
+
+**`notify_wa` must be written explicitly, and an absent value is a client bug.** It is
+`NOT NULL DEFAULT true` (`0020:50`) because service channels default on — but signup presents it
+as a checkbox she can leave unticked. If the payload omits `wa`, the column default makes it
+**true, the opposite of what she chose.** That is the same shape as the `passwordSet` substring
+match and the stale "not built" comments: an absence read as agreement.
+
+**To reverse:** if signup ever becomes staff-operated in-salon rather than self-serve, the
+acceptance event's `source` changes and the `policy_version_stale` race mostly disappears — but
+the event-not-column decision holds regardless, because re-prompting on a material change needs
+history and a column cannot answer it.
