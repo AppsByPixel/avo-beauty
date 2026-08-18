@@ -82,6 +82,37 @@ jobs:
           pnpm run db:migrate
           pnpm run db:seed
 
+      # THE DATABASE GUARANTEES, ASSERTED RATHER THAN DESCRIBED.
+      #
+      # `verify-constraints.sql` proves 42 invariants the schema claims: money is
+      # bigint fils with no float-family column anywhere (#1), a negative balance
+      # is impossible, the append-only tables refuse UPDATE/DELETE/TRUNCATE, every
+      # wallet reconciles to its ledger, and a settled top-up cannot leave its
+      # terminal state.
+      #
+      # WHY THIS STEP EXISTS AT ALL: for its whole life the script was run by
+      # nobody. Ten sections of assertions were exactly what the prose invariants
+      # they replaced had been — true, unread, unenforced. Three separate false
+      # claims had already been found in comments that nothing checked (the ledger
+      # reconciliation, migration 0020's "same treatment as audit_log", and 0021's
+      # restrict-on-delete argument), which is the case for gating rather than
+      # trusting.
+      #
+      # It runs against `avo_migrate_check` — the throwaway the step above just
+      # seeded — and not against a database anyone cares about. That is not
+      # fastidiousness: until `76f0833` the script committed its probes, so on a
+      # database missing a guarantee it would TRUNCATE the money ledger for real
+      # while demonstrating that it could. It now runs every probe inside a
+      # subtransaction and ends in ROLLBACK, and asserts its own
+      # non-destructiveness. Verified here before wiring it in: exit 0 with 42/42
+      # on a clean database and row counts unchanged, exit 3 naming the failure
+      # with a trigger dropped — and the ledger still intact in that run.
+      - name: Database invariants hold on a freshly seeded database
+        working-directory: api
+        env:
+          AVO_VERIFY_DB: avo_migrate_check
+        run: pnpm run db:verify
+
       # The suites mint their own per-run database in global-setup and drop it in
       # teardown. Do NOT set POSTGRES_DB here: global-setup.ts skips the minting
       # when it sees one, which silently puts every concurrent checkout back on
