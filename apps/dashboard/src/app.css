@@ -878,9 +878,18 @@ a:hover {
 
 /* ========================================================== hours editor == */
 
-/* interaction-spec.md §1: "Modals/editors (Team hours…) cap at 720px." */
+/* interaction-spec.md §1: "Modals/editors (Team hours, salon editor, customer
+   detail) cap at 720px and center."
+
+   The comment quoted 720 and the rule said 780, which is the drift this audit
+   was looking for — a citation is not an implementation. Both halves are now
+   real: the cap is the spec's number, and `margin-inline: auto` is the "and
+   center" that had no line at all. This editor replaces the roster in place
+   rather than floating over it (Team.tsx), so "center" means centred in the
+   content column, which is what auto margins do here. */
 .hours-editor {
-  max-width: 780px;
+  max-width: 720px;
+  margin-inline: auto;
   background: var(--avo-white);
   border: 1px solid var(--avo-hairline);
   border-radius: 18px;
