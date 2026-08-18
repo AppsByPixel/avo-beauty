@@ -93,6 +93,8 @@ export function useAuditLog(
       );
     },
     getNextPageParam: (last) => last.nextCursor,
-    retry: 1,
+    // Retry policy is global — api/retryPolicy.ts. `perms.dashboard` gates this
+    // endpoint, and an infinite query would have paid the wasted round trip on
+    // every page fetch, not just the first.
   });
 }

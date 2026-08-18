@@ -60,7 +60,7 @@ export function useArtists(): UseQueryResult<Paginated<DashboardArtist>> {
       authedRequest<Paginated<DashboardArtist>>('merchant', `/salons/${salonId}/artists`, {
         signal,
       }),
-    retry: 1,
+    // Retry policy is global — api/retryPolicy.ts. `perms.team` gates this one.
   });
 }
 

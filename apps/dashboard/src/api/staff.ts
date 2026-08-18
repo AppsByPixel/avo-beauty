@@ -97,44 +97,30 @@ export function roleOptionsFor(currentRole: string): ReadonlyArray<{
 }
 
 /**
- * What `GET /staff` actually sends, which is MORE than `@avo/types`' StaffUser.
+ * `StaffUser` from `@avo/types` IS the wire shape — there is no local widening.
  *
- * `serialiseStaff` in api/src/routes/staff.ts returns `passwordSet`, `active`
- * and `deactivatedAt`; `StaffUserSchema` in packages/types has none of the
- * three. That package is trunk-owned, so this lane cannot add them — REPORTED,
- * and typed locally in the meantime rather than reached for through a cast at
- * each of the six places the Team tab needs them.
+ * A `TeamAccount extends StaffUser` used to sit here adding `passwordSet`,
+ * `active` and `deactivatedAt`, on the belief that `serialiseStaff` sent three
+ * fields the shared schema lacked. The schema had all three; this branch was 14
+ * commits behind the commit that added them. The local type was therefore a
+ * *duplicate* of a shared contract, which is the same drift it was written to
+ * work around, pointing the other way — and the more dangerous direction, because
+ * a duplicate keeps compiling after the shared type moves.
  *
- * `passwordSet` is the field that makes the reset button honest: false means
- * either "invited, never signed in" or "needs a reset", and `active` is what
- * tells those apart from a leaver.
+ * So: one name for this shape, owned by `packages/types`. If a field the screen
+ * needs is genuinely missing, widen the schema on trunk rather than re-adding a
+ * local mirror here.
  */
-export interface TeamAccount extends StaffUser {
-  /** Whether a web password exists. A boolean, never a hash, never a length. */
-  passwordSet: boolean;
-  /** False for a leaver. `DELETE /staff/{id}` deactivates rather than deletes. */
-  active: boolean;
-  deactivatedAt: string | null;
-}
 
 export const staffKeys = {
   list: (salonId: string) => ['staff', salonId] as const,
 };
 
-export function useStaff(): UseQueryResult<Paginated<TeamAccount>> {
+export function useStaff(): UseQueryResult<Paginated<StaffUser>> {
   const salonId = useSalonId();
   return useQuery({
     queryKey: staffKeys.list(salonId),
-    /*
-     * `retry: 1` and not the client default. The default is the 401/403-aware
-     * function in main.tsx, and overriding it with a bare number here means a
-     * 403 gets retried once for nothing — REPORTED as a small drift across the
-     * query layer rather than fixed piecemeal, because the same override sits on
-     * `useSalon`, `useSalonMetrics` and `useAuditLog`, and a consistent fix is
-     * one change to those four rather than one lane's file.
-     */
-    retry: 1,
-  queryFn: ({ signal }) => authedRequest<Paginated<TeamAccount>>('merchant', '/staff', { signal }),
+    queryFn: ({ signal }) => authedRequest<Paginated<StaffUser>>('merchant', '/staff', { signal }),
   });
 }
 
@@ -206,7 +192,7 @@ export interface StaffPatch {
  * branch-access selects from rendered facts into real controls.
  */
 export function useUpdateStaff(): UseMutationResult<
-  TeamAccount,
+  StaffUser,
   unknown,
   { staffId: string; patch: StaffPatch }
 > {
@@ -215,7 +201,7 @@ export function useUpdateStaff(): UseMutationResult<
 
   return useMutation({
     mutationFn: ({ staffId, patch }) =>
-      authedRequest<TeamAccount>('merchant', `/staff/${staffId}`, {
+      authedRequest<StaffUser>('merchant', `/staff/${staffId}`, {
         method: 'PATCH',
         body: patch,
       }),
@@ -259,13 +245,13 @@ export interface CreateStaffInput {
   perms: Partial<StaffPerms>;
 }
 
-export function useCreateStaff(): UseMutationResult<TeamAccount, unknown, CreateStaffInput> {
+export function useCreateStaff(): UseMutationResult<StaffUser, unknown, CreateStaffInput> {
   const salonId = useSalonId();
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (input) =>
-      authedRequest<TeamAccount>('merchant', '/staff', { method: 'POST', body: input }),
+      authedRequest<StaffUser>('merchant', '/staff', { method: 'POST', body: input }),
     /*
      * Appended rather than refetched, for the same reason the patch is applied
      * in place: the 201 body is the serialised row. `invalidateQueries` would
@@ -273,7 +259,7 @@ export function useCreateStaff(): UseMutationResult<TeamAccount, unknown, Create
      * right after an action whose whole point was that something new appeared.
      */
     onSuccess: (created) => {
-      queryClient.setQueryData<Paginated<TeamAccount>>(staffKeys.list(salonId), (current) =>
+      queryClient.setQueryData<Paginated<StaffUser>>(staffKeys.list(salonId), (current) =>
         current ? { ...current, items: [...current.items, created] } : current,
       );
     },
@@ -294,7 +280,7 @@ export function useCreateStaff(): UseMutationResult<TeamAccount, unknown, Create
  * Accounts screen).
  */
 export function useDeactivateStaff(): UseMutationResult<
-  TeamAccount,
+  StaffUser,
   unknown,
   { staffId: string }
 > {
@@ -303,7 +289,7 @@ export function useDeactivateStaff(): UseMutationResult<
 
   return useMutation({
     mutationFn: ({ staffId }) =>
-      authedRequest<TeamAccount>('merchant', `/staff/${staffId}`, { method: 'DELETE' }),
+      authedRequest<StaffUser>('merchant', `/staff/${staffId}`, { method: 'DELETE' }),
     onSuccess: (updated) => patchRow(queryClient, salonId, updated),
   });
 }
@@ -359,9 +345,9 @@ export function useSendPasswordReset(): UseMutationResult<
 function patchRow(
   queryClient: ReturnType<typeof useQueryClient>,
   salonId: string,
-  updated: TeamAccount,
+  updated: StaffUser,
 ): void {
-  queryClient.setQueryData<Paginated<TeamAccount>>(staffKeys.list(salonId), (current) =>
+  queryClient.setQueryData<Paginated<StaffUser>>(staffKeys.list(salonId), (current) =>
     current
       ? { ...current, items: current.items.map((s) => (s.id === updated.id ? updated : s)) }
       : current,

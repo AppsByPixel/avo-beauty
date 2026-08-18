@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
+import { retryPolicy } from './api/retryPolicy.js';
 import { AuthProvider, useAuth } from './auth/AuthProvider.js';
 import { router } from './router.js';
 
@@ -37,13 +38,26 @@ const queryClient = new QueryClient({
        * Stale-not-blank (interaction-spec.md §4). TanStack keeps the cached
        * value alongside the error, which is what lets the Overview render the
        * last-known figures behind a timestamped banner instead of blanking.
+       *
+       * THE ONLY `retry` IN THE DASHBOARD. The reasoning is in
+       * api/retryPolicy.ts; the short version is that a bare `retry: 1` cannot
+       * express both halves of what this needs — a small budget AND no retry on
+       * a refusal — and seven hooks proved it by overriding this policy to buy
+       * the budget and losing the 403 short-circuit with it. If a hook ever
+       * genuinely needs different behaviour it passes a NAMED policy, never a
+       * number, so the next reader can tell intent from copy-paste.
        */
-      retry: (failureCount, error) => {
-        const status = (error as { status?: number }).status;
-        if (status === 401 || status === 403) return false;
-        return failureCount < 2;
-      },
+      retry: retryPolicy,
     },
+    /*
+     * Mutations inherit NOTHING from the block above — TanStack keys defaults by
+     * `queries` and `mutations` separately, and a mutation's default is no retry
+     * at all. That is correct here and is stated rather than left to be
+     * rediscovered: the money-moving posts carry an `Idempotency-Key`
+     * (non-negotiable #4), so a retry would be *safe* — but "safe to retry" is
+     * not "retry automatically", and a charge that silently repeats itself is a
+     * decision for the call site, not a global default.
+     */
   },
 });
 

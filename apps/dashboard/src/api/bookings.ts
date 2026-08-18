@@ -99,7 +99,7 @@ export function useSalonBookings(
       ),
     enabled,
     /*
-     * BOTH OF THESE ARE INHERITED FROM `defaultOptions` AND RESTATED ANYWAY.
+     * INHERITED FROM `defaultOptions` AND RESTATED ANYWAY.
      *
      * `networkMode: 'always'` is why this section can render an error at all.
      * TanStack's default `'online'` *pauses* a fetch rather than failing it, and
@@ -109,11 +109,13 @@ export function useSalonBookings(
      * loading rows indefinitely instead of the refusal. main.tsx §networkMode
      * explains the same trap for the Overview.
      *
-     * `retry` must stay the DEFAULT FUNCTION, not a number. `retry: 1` — which
-     * is what this hook had, copied from the sections that read endpoints with
-     * no permission gate — silently re-enables retrying a 403, and a permission
-     * refusal that is asked twice is the "explain, no retry" rule broken one
-     * layer below the component that implements it.
+     * THE `retry` NOTE THAT USED TO SIT HERE HAS MOVED, AND WON. It said a bare
+     * `retry: 1` — "copied from the sections that read endpoints with no
+     * permission gate" — silently re-enables retrying a 403, and that this hook
+     * must therefore stay on the default function. That was right, and it was
+     * true of seven other hooks that nobody had checked. The rule now lives in
+     * api/retryPolicy.ts as the only `retry` in the dashboard, so there is no
+     * longer a wrong pattern here to copy from.
      */
     networkMode: 'always',
   });
