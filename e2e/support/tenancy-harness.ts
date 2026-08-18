@@ -184,6 +184,16 @@ export const B_STAFF_COUNTER = 'ST-B07';
 export const B_STAFF_COUNTER_HANDLE = 'budgetcounter';
 export const B_COUNTER_DEVICE = 'DEV-SCANNER-B-COUNTER';
 
+/**
+ * The third budget row, for the CROSS-DOOR spec. The hourly ceiling counts
+ * searches AND resolves against one shared allowance, so proving that needs a
+ * staff member whose whole hour can be spent on one action and then probed with
+ * the other — which means she can be used by exactly one spec.
+ */
+export const B_STAFF_CROSSDOOR = 'ST-B08';
+export const B_STAFF_CROSSDOOR_HANDLE = 'budgetcrossdoor';
+export const B_CROSSDOOR_DEVICE = 'DEV-SCANNER-B-CROSSDOOR';
+
 export const B_STAFF_RATELIMIT = 'ST-B05';
 export const B_STAFF_RATELIMIT_HANDLE = 'dalal';
 export const B_RATELIMIT_DEVICE = 'DEV-SCANNER-B-RATELIMIT';
@@ -1196,6 +1206,15 @@ SELECT '${B_STAFF_COUNTER}', '${SALON_B}', 'Budget Counter', '${B_STAFF_COUNTER_
 FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
 ON CONFLICT (id) DO UPDATE SET
   pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_COUNTER_DEVICE}', perm_scanner = true;
+
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id, perm_scanner)
+SELECT '${B_STAFF_CROSSDOOR}', '${SALON_B}', 'Budget Crossdoor',
+       '${B_STAFF_CROSSDOOR_HANDLE}', 'frontdesk', true, '{}', s.password_hash, s.pin_hash,
+       '${B_CROSSDOOR_DEVICE}', true
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_CROSSDOOR_DEVICE}', perm_scanner = true;
 
 -- Salon B's happy hours. Both OFF, so no promotion is live during the money
 -- specs; see the constants at the top of this file.

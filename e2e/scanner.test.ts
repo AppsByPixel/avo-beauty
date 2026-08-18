@@ -69,6 +69,9 @@ import {
   B_STAFF_BURST,
   B_STAFF_BURST_HANDLE,
   B_BURST_DEVICE,
+  B_STAFF_CROSSDOOR,
+  B_STAFF_CROSSDOOR_HANDLE,
+  B_CROSSDOOR_DEVICE,
   B_STAFF_COUNTER,
   B_STAFF_COUNTER_HANDLE,
   B_COUNTER_DEVICE,
@@ -978,6 +981,51 @@ const SEARCH_MIN_QUERY = 2;
 const SEARCH_MAX_PER_WINDOW = 30;
 const SEARCH_WINDOW_MINUTES = 5;
 const LOOKUP_ACTION = 'Customer looked up';
+/**
+ * The second tier, and it counts BOTH directory reads. `memberSearch.ts`
+ * § enforceDirectoryReadLimits: 60 per rolling hour keyed on `audit_log.actor_id`
+ * alone, no session and no device in the predicate, across searches AND resolves.
+ * Written out as a literal for the reason the four above are — a spec that imported
+ * the constant would pass at any value the implementation happened to hold.
+ */
+const SEARCH_MAX_PER_HOUR = 60;
+
+/**
+ * Backdated directory-read rows for one staff member, under a session that is not
+ * the caller's.
+ *
+ * WHY THE HISTORY IS INSERTED RATHER THAN SPENT. Making 60 real reads trips the
+ * 30-per-5-minute BURST tier first, and both tiers answer 429 — so a spec built
+ * that way cannot tell which one refused it, which is the only thing it is trying
+ * to find out. These rows carry a foreign session id, so the burst tier's
+ * `sessionId` filter sees none of them and only a ceiling keyed on the staff member
+ * can. Takes the ACTION as a parameter because the allowance is shared: filling it
+ * with `Customer opened` and then being refused a search is the cross-door case.
+ *
+ * `audit_log` forbids UPDATE, so rows are inserted already backdated rather than
+ * inserted and moved; `created_at` carries a DEFAULT and not a trigger, so an
+ * explicit value is honoured. They also cannot be deleted afterwards by anybody,
+ * which is why each caller uses a staff row nothing else needs.
+ */
+function backdateDirectoryReads(
+  actorId: string,
+  action: string,
+  count: number,
+  minutesAgo: number,
+  sessionId: string,
+): void {
+  psql(`
+    INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind,
+                           action, detail, source, subject_type, subject_id, metadata,
+                           created_at)
+    SELECT '${SALON_B}', 'staff', '${actorId}', 'backdated by lane D', 'frontdesk', 'access',
+           '${action}', 'backdated to test the rolling hour', 'scanner',
+           'member_search', NULL,
+           ('{"query":"backdated","results":0,"sessionId":"${sessionId}"}')::jsonb,
+           now() - interval '${minutesAgo} minutes'
+      FROM generate_series(1, ${count});
+  `);
+}
 
 interface MemberSearchItem {
   id: string;
@@ -1601,34 +1649,6 @@ describe('GET /members?q= — the manual lookup, and the four controls that keep
  * so an explicit value is honoured.
  */
 describe('GET /members?q= — the member id, and the ceiling that made the burst limit real', () => {
-  /** Lane A, feat/api 3da4572: 60 an hour, keyed on the staff member alone. */
-  const SEARCH_MAX_PER_HOUR = 60;
-
-  /**
-   * Backdated lookup rows for one staff member under a session that is not the
-   * caller's. Mirrors the row `services/memberSearch.ts` writes, because the
-   * limiter reads those rows rather than a counter of its own — which the spec
-   * further up ("the counter is the log") already proves.
-   */
-  function backdateLookups(
-    actorId: string,
-    count: number,
-    minutesAgo: number,
-    sessionId: string,
-  ): void {
-    psql(`
-      INSERT INTO audit_log (salon_id, actor_kind, actor_id, actor_name, actor_role, kind,
-                             action, detail, source, subject_type, subject_id, metadata,
-                             created_at)
-      SELECT '${SALON_B}', 'staff', '${actorId}', 'backdated by lane D', 'manager', 'access',
-             '${LOOKUP_ACTION}', 'backdated to test the rolling hour', 'scanner',
-             'member_search', NULL,
-             ('{"query":"backdated","results":0,"sessionId":"${sessionId}"}')::jsonb,
-             now() - interval '${minutesAgo} minutes'
-        FROM generate_series(1, ${count});
-    `);
-  }
-
   /**
    * WHICH STAFF MEMBER EACH SPEC BACKDATES AGAINST, and it is not arbitrary.
    *
@@ -1751,7 +1771,7 @@ describe('GET /members?q= — the member id, and the ceiling that made the burst
     const sid = sessionIdOf(fresh);
     precondition(lookupsLogged(sid) === 0, 'this session has already spent budget');
 
-    backdateLookups(CEILING_STAFF, SEARCH_MAX_PER_HOUR, 30, 'not-this-session');
+    backdateDirectoryReads(CEILING_STAFF, LOOKUP_ACTION, SEARCH_MAX_PER_HOUR, 30, 'not-this-session');
 
     const res = await search(fresh, 'Fatima');
     expect(
@@ -1785,7 +1805,7 @@ describe('GET /members?q= — the member id, and the ceiling that made the burst
     // 61 minutes: outside a 60-minute rolling window by one minute. Backdated
     // against a DIFFERENT staff member from the ceiling spec above, so the two
     // cannot contaminate each other whichever order they happen to run in.
-    backdateLookups(EDGE_STAFF, SEARCH_MAX_PER_HOUR, 61, 'not-this-session');
+    backdateDirectoryReads(EDGE_STAFF, LOOKUP_ACTION, SEARCH_MAX_PER_HOUR, 61, 'not-this-session');
 
     const res = await search(fresh, 'Fatima');
     expect(
@@ -2111,4 +2131,212 @@ describe('GAP: what the API still owes the scanner', () => {
       'somebody edits the database by hand. Needs an owner/manager-authorised enrol + revoke pair, ' +
       'audited, before launch. Cross-reference: go-live-checklist.md',
   );
+});
+
+// ----------------------------------------------------------------- 1c --
+/**
+ * GET /members/{id} — THE SECOND DOOR, AND THE BUDGET IT SHARES WITH THE FIRST.
+ *
+ * The manual path used to stop at a name: `GET /members?q=` returns a deliberately
+ * narrow row — no balance, `phoneLast4` and not the number — and nothing turned
+ * that row into something the counter could charge. So "Can't scan? Find member
+ * manually" ended one step short of the thing it exists for.
+ *
+ * `GET /members/{id}` closes it, and it serves the `POST /scans` ENVELOPE rather
+ * than a bare Member, which is the decision worth guarding. Two doors, one screen.
+ */
+describe('GET /members/{id} — the resolve, its envelope, and the directory budget', () => {
+  const RESOLVE_ACTION = 'Customer opened';
+
+  const resolve = (token: string, id: string) =>
+    treq<any>('GET', `/members/${encodeURIComponent(id)}`, { token });
+
+  /** Rows for one action, for one staff member, however many sessions. */
+  const directoryRows = (actorId: string, action: string): number =>
+    Number(
+      scalar(
+        `select count(*) from audit_log where action='${action}' and actor_id='${actorId}'`,
+      ),
+    );
+
+  it('resolves a member to the SAME envelope POST /scans serves — one builder, not two', async () => {
+    /**
+     * THE ASSERTION THAT PROTECTS THE SHARED BUILDER, and the reason it is worth
+     * more than a schema on either path.
+     *
+     * This codebase has already paid for two hand-assembled copies of this
+     * payload: `heldDepositFils` was hardcoded `0` on the scan path while the
+     * charge path read it for real, so the credit line the customer was SHOWN and
+     * the credit the charge APPLIED were different answers, and the one on the
+     * screen is the one she was told. `services/counter.ts` is one function now.
+     *
+     * DEEP-EQUAL, not field-by-field: a spec that checked the fields it thought of
+     * would have missed `heldDepositFils` for exactly the same reason the bug did.
+     * The envelope carries no timestamp of its own, so the two calls are directly
+     * comparable — and if a clock-dependent field is ever added, this spec going
+     * red is the correct way to find out.
+     */
+    const walletToken = await freshWalletToken();
+    const scanned = await treq<any>('POST', '/scans', {
+      token: scanner,
+      body: { token: walletToken },
+    });
+    precondition(scanned.status === 200, `POST /scans answered ${scanned.status} ${scanned.raw}`);
+
+    const opened = await resolve(scanner, B_MEMBER);
+    expect(opened.status, opened.raw).toBe(200);
+
+    expect(
+      opened.body,
+      'the two doors onto the counter screen serve different envelopes. They are built by one ' +
+        'function precisely so they cannot — and the last time they were built twice, the held ' +
+        'deposit was 0 on one path and real on the other.',
+    ).toEqual(scanned.body);
+
+    // And it is the envelope, not a bare Member: the fields the charge screen needs.
+    expect(Object.keys(opened.body).sort()).toEqual(
+      ['heldDepositBooking', 'heldDepositFils', 'member', 'services'].sort(),
+    );
+    expect(opened.body.member.id).toBe(B_MEMBER);
+
+    /**
+     * AND THE HONEST LIMIT OF THIS SPEC, MEASURED RATHER THAN ASSUMED.
+     *
+     * `heldDepositFils` is 0 for this member, because nothing in this file books
+     * her. So the deep comparison above is at its WEAKEST on precisely the field
+     * whose divergence was the original bug: a break that hardcoded
+     * `heldDepositFils: 0` on this door was applied deliberately and the spec stayed
+     * GREEN, because 0 is what the shared builder returns here anyway. A break that
+     * made it 500 was caught immediately.
+     *
+     * That is the "no empty samples" rule from contract.test.ts turning up on the
+     * counter: a comparison whose interesting value is zero on both sides proves
+     * less than it appears to. Asserted rather than left as a comment, so that when
+     * the deposit slice gives this member a real hold, this expectation fails and
+     * whoever is holding it is told to move the comparison onto the non-zero case —
+     * which is the version that would have caught the original defect.
+     */
+    expect(
+      opened.body.heldDepositFils,
+      'this member now HAS a held deposit, which means the envelope comparison above has finally ' +
+        'become able to catch the divergence it was written for. Move it onto a member with a ' +
+        'live hold — booked INSIDE the no-show grace window — and delete this expectation.',
+    ).toBe(0);
+  });
+
+  it('is salon-scoped — a member id from another salon is 404, not a leak', async () => {
+    const res = await resolve(scanner, A_MEMBER);
+    expect(
+      res.status,
+      `salon B opened salon A's customer by id: ${res.raw}`,
+    ).toBe(404);
+    expect(res.body.error).toBe('unknown_member');
+    // The refusal must not confirm she exists somewhere else.
+    expect(res.raw, 'the 404 leaked the foreign member\'s name').not.toContain('Dana');
+  });
+
+  it('writes an audit row BEFORE the 404, because a refused id is what a walk looks like', async () => {
+    const before = directoryRows(B_STAFF, RESOLVE_ACTION);
+
+    const missing = await resolve(scanner, 'MEMBER-DOES-NOT-EXIST');
+    precondition(missing.status === 404, `answered ${missing.status} ${missing.raw}`);
+
+    /**
+     * The row is written whether or not she was found, and that is the whole
+     * design: a staff member trying ids that are not in her salon is precisely
+     * what enumerating the directory looks like from the inside, and it is the case
+     * a log that only recorded successes could not show anybody.
+     */
+    expect(
+      directoryRows(B_STAFF, RESOLVE_ACTION),
+      'a resolve that found nobody wrote no audit row, so trying ids until one lands is the one ' +
+        'access pattern this log cannot see',
+    ).toBe(before + 1);
+
+    const detail = scalar(
+      `select detail from audit_log where action='${RESOLVE_ACTION}'
+         and actor_id='${B_STAFF}' order by seq desc limit 1`,
+    );
+    expect(detail, 'the row does not record which id was attempted').toContain(
+      'MEMBER-DOES-NOT-EXIST',
+    );
+  });
+
+  it('and an unauthorised resolve writes NO row — authorisation fails before any read', async () => {
+    const web = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+    const before = directoryRows(B_STAFF, RESOLVE_ACTION);
+
+    const res = await resolve(web, B_MEMBER);
+    precondition(res.status === 403, `a dashboard session resolved a member: ${res.raw}`);
+
+    // Symmetrical with the search: a refusal that logged would charge the caller
+    // for a read that never happened, and on the shared ceiling below that is a
+    // way to spend somebody else's hour.
+    expect(
+      directoryRows(B_STAFF, RESOLVE_ACTION),
+      'a 403 wrote a "Customer opened" row, so the log claims a customer was opened when the ' +
+        'request never reached the member table',
+    ).toBe(before);
+  });
+
+  /**
+   * THE SHARED BUDGET, PROVED ACROSS THE DOORS RATHER THAN WITHIN ONE.
+   *
+   * Both tiers now count searches AND resolves against one allowance, on the
+   * reasoning that a resolve discloses strictly more than a search row — the full
+   * phone, the email, the balance, the visits — so the unit being protected is the
+   * DIRECTORY and not an endpoint. A ceiling that counted only searches would be
+   * bypassable by walking ids instead of names, which is the cheaper attack and the
+   * one that returns more.
+   *
+   * So the budget is filled with RESOLVES ONLY, never a search, and then a SEARCH
+   * is refused. Testing either endpoint against its own rows could never show that.
+   */
+  it('spends one allowance across BOTH doors — an hour of resolves refuses the next search', async () => {
+    resetPinState(B_STAFF_CROSSDOOR, B_CROSSDOOR_DEVICE);
+    const fresh = await signInScanner(
+      SALON_B,
+      B_STAFF_CROSSDOOR_HANDLE,
+      B_CROSSDOOR_DEVICE,
+    );
+    const sid = sessionIdOf(fresh);
+    precondition(lookupsLogged(sid) === 0, 'this session has already searched');
+    precondition(
+      directoryRows(B_STAFF_CROSSDOOR, RESOLVE_ACTION) === 0,
+      'this staff member has already resolved somebody',
+    );
+
+    // A full hour of RESOLVES, under a different session so the burst tier cannot
+    // see them, and not one search among them.
+    backdateDirectoryReads(
+      B_STAFF_CROSSDOOR,
+      RESOLVE_ACTION,
+      SEARCH_MAX_PER_HOUR,
+      30,
+      'not-this-session',
+    );
+
+    const searched = await search(fresh, 'Fatima');
+    expect(
+      searched.body.error,
+      `${SEARCH_MAX_PER_HOUR} RESOLVES in the last hour did not stop the next SEARCH ` +
+        `(${searched.status} ${searched.raw}). If the ceiling counts only searches, walking ids ` +
+        'is an unlimited directory read that returns strictly more than a search row does — the ' +
+        'full phone, the email, the balance and the visit count.',
+    ).toBe('lookup_hourly_limit');
+
+    // And it is HER hour, not everyone's: the ceiling is per staff member, so a
+    // colleague at the same salon on the same device is unaffected.
+    resetPinState(B_STAFF_RESTRICTED, B_RESTRICTED_DEVICE);
+    const colleague = await signInScanner(
+      SALON_B,
+      B_STAFF_RESTRICTED_HANDLE,
+      B_RESTRICTED_DEVICE,
+    );
+    const hers = await search(colleague, 'Fatima');
+    expect(
+      hers.status,
+      `one staff member's spent hour refused a different staff member: ${hers.raw}`,
+    ).toBe(200);
+  }, 120_000);
 });

@@ -264,45 +264,53 @@ function at(body: unknown, path?: string): unknown {
 }
 
 /**
- * DRIFT (7), AND IT IS DRIFT (4) FOR THE THIRD TIME.
+ * DRIFT (7) — AND THE DIAGNOSIS CHANGED WHEN THE REBASE NARROWED IT.
  *
- * `.nullable()` WITHOUT `.optional()` MAKES A KEY REQUIRED. That sentence has now
- * cost this project three separate outages of a client surface:
+ * As first recorded, this said `.nullable()` without `.optional()` had broken three
+ * client surfaces. One of the three has since been fixed and the way it was fixed
+ * is what makes the remaining two interesting.
  *
- *   (4) `AvailabilitySlotSchema.reason` — every bookable slot in the Book grid.
- *   (6) `SubtractedBlockSchema.from/to` — every day that had a booking.
- *   (7) `TransactionSchema.voidedAt` and `reversedByTransactionId` — this one.
+ * `TransactionSchema` declares `voidedAt` and `reversedByTransactionId` as
+ * `.nullable()` but NOT `.optional()`, which makes them REQUIRED on every
+ * transaction the API serves. `serialiseTransactionForCustomer` was taught to emit
+ * both — `null` when there is no reversal — so `GET /members/me/transactions` and
+ * `GET /charges` now parse and are promoted.
  *
- * And (7) was introduced BY THE FIX FOR the drift this very file reported: lane D
- * found that `GET /charges` served the void state and `TransactionSchema` declared
- * neither key, so the scanner could not tell a reversed charge from a live one.
- * The fix added both as `DateTimeSchema.nullable()` / `IdSchema.nullable()`, which
- * closed that hole and made the two keys mandatory on EVERY transaction anywhere.
+ * THE TWO THAT STILL FAIL DO NOT GO THROUGH THAT SERIALISER AT ALL:
  *
- * `GET /charges` serves them, so it parses and is promoted above. The three
- * responses that do NOT serve them now fail outright:
+ *   api/src/services/charge.ts:706    `transaction: { id, memberId, branchId, … }`
+ *   api/src/services/booking.ts:525   the same literal again
  *
- *   GET /members/me/transactions   the wallet's entire activity feed
- *   POST /bookings                 the deposit transaction, at the moment of booking
- *   POST /charges                  the charge the scanner just took
+ * Two hand-assembled copies of a shape that also has a serialiser, so a fix
+ * applied to the serialiser reached neither. THAT is the actual defect here, and it
+ * is the third time this codebase has been bitten by one payload built in more than
+ * one place: `heldDepositFils` was hardcoded `0` on the scan path while the charge
+ * read it for real, and `services/counter.ts` exists now because of it.
  *
- * A void is a property of a settled charge in a list. A transaction that was
- * created one millisecond ago has no void state and the serialiser correctly omits
- * the keys rather than inventing `null` for them — so the schema is wrong here, not
- * the API. `.nullish()`, or `.nullable().optional()`, on both.
+ * So there are two candidate fixes and they are not equivalent:
  *
- * REPORTED, NOT FIXED: `packages/types` is trunk-owned and shared by all four
- * surfaces, so a field change there is a four-way break. These go green the hour
- * the schema is corrected, and this file will say so.
+ *   `.nullish()` on both keys      honest about the wire — a transaction created a
+ *                                  millisecond ago genuinely has no void state, and
+ *                                  inventing `null` for it is a small lie.
+ *   use the serialiser in both     removes the duplication that caused this, and
+ *                                  the divergence that will cause the next one.
+ *
+ * The second is the one that stops this recurring; the first is the one that makes
+ * the contract match what is actually sent. Lane A's and trunk's call — but doing
+ * only the first leaves three builders of one shape standing.
+ *
+ * REPORTED, NOT FIXED: packages/types is trunk-owned and shared by four surfaces.
+ * These go green the hour it is corrected, and this file will say so.
  */
 const DRIFT_7 =
   'TransactionSchema declares `voidedAt` and `reversedByTransactionId` as `.nullable()` but NOT ' +
-  '`.optional()`, which makes them REQUIRED on every transaction the API serves. This is the ' +
-  'drift that the fix for lane D\'s GET /charges report created: the charges LIST carries both ' +
-  'keys and parses, but a transaction that has just been created has no void state and the ' +
-  'serialiser omits them, so `.parse()` THROWS on the wallet activity feed, on POST /bookings ' +
-  'and on POST /charges — three client surfaces, silently, for the third time from this exact ' +
-  'mistake. Use `.nullish()` on both. Trunk owns packages/types.';
+  '`.optional()`, so they are REQUIRED on every transaction. The customer serialiser was fixed to ' +
+  'emit both and its two routes now parse — but `charge.ts:706` and `booking.ts:525` each ' +
+  'HAND-ASSEMBLE the transaction literal instead of calling that serialiser, so the fix did not ' +
+  'reach them and `.parse()` still THROWS on the charge the scanner just took and on the deposit ' +
+  'transaction at booking time. One payload built in three places is the same defect that put ' +
+  'heldDepositFils at 0 on the scan path; either mark both keys `.nullish()` or, better, have ' +
+  'those two call the serialiser. Trunk owns packages/types.';
 
 function probes(): Probe[] {
   return [
@@ -364,7 +372,10 @@ function probes(): Probe[] {
       schemaName: 'paginated(TransactionSchema)',
       schema: paginated(TransactionSchema),
       requireNonEmpty: ['items'],
-      knownParseFailure: DRIFT_7,
+      // PROMOTED: `serialiseTransactionForCustomer` emits both void keys now — as
+      // `null` when there is no reversal, which is the shape the schema asks for.
+      // The two POST responses below still do not, because they do not use this
+      // serialiser. See DRIFT (7).
     },
     {
       route: 'GET /members/me/wallet-token',
@@ -577,6 +588,15 @@ const UNMODELLED: Record<string, string> = {
     'the audit log page — rows plus `total`, `appendOnly` and `retentionYears`. A view.',
   'GET /salons/:id/activity':
     'the merchant activity feed, a union of transaction and booking streams. A view.',
+  'GET /members/:id':
+    'the scanner\'s member RESOLVE, and it serves the `POST /scans` ENVELOPE rather than a bare ' +
+    'Member — member plus the counter state the charge screen needs. Unmodelled because that ' +
+    'envelope has no schema either, on either of its two doors, which is the gap worth naming: ' +
+    'two hand-assembled copies of one screen\'s payload is exactly how `heldDepositFils` came to ' +
+    'be hardcoded 0 on the scan path while the charge read it for real. `services/counter.ts` is ' +
+    'now the single builder, and scanner.test.ts asserts the two envelopes are DEEP-EQUAL, which ' +
+    'guards the shared builder better than a schema on either path would. A ScanEnvelope schema ' +
+    'is worth having.',
   'GET /members/me/deletion':
     'the deletion state — {requestedAt, erasureDueAt, status, graceDays, erasureScheduled}. Same ' +
     'shape as its POST and DELETE, and unmodelled for the same reason as the notifications set ' +
