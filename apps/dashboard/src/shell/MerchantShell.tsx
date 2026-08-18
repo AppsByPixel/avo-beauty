@@ -47,6 +47,7 @@ function SignedInShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const menuButtonRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
 
   // No salon id is passed or defaulted: the hook reads it from the session.
   const salonQuery = useSalon();
@@ -69,25 +70,91 @@ function SignedInShell() {
   const title = item?.title ?? 'Overview';
   const subtitle = (item?.subtitle ?? '').replace('{salon}', salonName);
 
-  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
+  /*
+   * Closing the drawer RETURNS FOCUS TO THE TRIGGER — every route out, not just
+   * Esc. interaction-spec.md §2. A drawer that unmounts while it still holds
+   * focus drops the caret on `<body>`, and the next Tab restarts from the top of
+   * the document, which on this shell means the merchant tabs through the header
+   * again to get back to where she was.
+   */
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    menuButtonRef.current?.querySelector('button')?.focus();
+  }, []);
 
   // The drawer only exists at `tablet`. Leaving that width must not strand it open.
   useEffect(() => {
     if (breakpoint !== 'tablet') setDrawerOpen(false);
   }, [breakpoint]);
 
-  // interaction-spec.md §2: Esc closes; focus returns to the trigger.
+  /*
+   * FOCUS MOVES IN, AND IS TRAPPED. interaction-spec.md §2: "Sheets and modals:
+   * focus moves to the sheet on open, is **trapped** while open, and returns to
+   * the trigger on close. `Esc` closes".
+   *
+   * The drawer already carried `role="dialog"` and already closed on Esc, so it
+   * looked done. It was not, and the gap had a real consequence: with the drawer
+   * open, the only tabbable elements in the document were the menu button and
+   * **Sign out** — both *behind* the scrim. Tab twice on an open drawer and the
+   * focus ring is sitting on an invisible Sign out, one Enter from ending the
+   * session, with nothing on screen to say so. `role="dialog"` is a promise to a
+   * screen reader that the rest of the page is inert; the trap is what makes the
+   * promise true.
+   */
   useEffect(() => {
     if (!drawerOpen) return;
+    const mounted = drawerRef.current;
+    if (mounted === null) return;
+    // Re-bound with a non-null type so the nested handler below reads it as one.
+    const drawer: HTMLDivElement = mounted;
+
+    /*
+     * `tabIndex >= 0`, not a hardcoded tag list, because the nav inside this
+     * drawer uses a ROVING TABINDEX (Sidebar.tsx) — exactly one link is tabbable
+     * and the arrow keys move it. So this legitimately resolves to a single
+     * element, and Tab correctly cycles to itself: one tab stop for the nav,
+     * arrows within it, which is what §2 asks of the sidebar.
+     */
+    const tabbable = () =>
+      [...drawer.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]')].filter(
+        (el) => el.tabIndex >= 0 && el.offsetParent !== null,
+      );
+
+    // Land on the current section rather than the container, so the arrow keys
+    // are live on arrival instead of after a first orienting Tab.
+    (tabbable()[0] ?? drawer).focus();
+
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') {
-        setDrawerOpen(false);
-        menuButtonRef.current?.querySelector('button')?.focus();
+        closeDrawer();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const items = tabbable();
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!first || !last) {
+        // Nothing to land on: hold the caret on the drawer rather than letting
+        // it fall through to the page the scrim is covering.
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !drawer.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !drawer.contains(active))) {
+        event.preventDefault();
+        first.focus();
       }
     }
+
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [drawerOpen]);
+  }, [drawerOpen, closeDrawer]);
 
   if (breakpoint === 'unsupported') return <UnsupportedWidth />;
 
@@ -141,8 +208,22 @@ function SignedInShell() {
 
       {breakpoint === 'tablet' && drawerOpen ? (
         <>
-          <div className="dash__scrim" onClick={closeDrawer} />
-          <div id="dash-drawer" className="dash__drawer" role="dialog" aria-label="Sections">
+          {/*
+            Presentational. The dismiss it offers is a convenience for a pointer;
+            the keyboard route out is Esc, which §2 names and the trap above
+            handles, so this is not a second tab stop pretending to be a button.
+          */}
+          <div className="dash__scrim" aria-hidden="true" onClick={closeDrawer} />
+          <div
+            id="dash-drawer"
+            ref={drawerRef}
+            className="dash__drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sections"
+            // Focusable only as the trap's fallback landing spot, never by Tab.
+            tabIndex={-1}
+          >
             <Sidebar
               salonName={salonName}
               brandHex={salon?.brandColor ?? null}
