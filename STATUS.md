@@ -106,6 +106,15 @@ auth hid for a whole build.
 **#7 found no holes when checked properly.** Every gate was already there. What changed is that
 we can now notice if one disappears.
 
+**The no-show return job has never been executed by a spec.** `api/src/jobs/no-show-once.ts`
+exists and its own docstring says it was built *for* evidence — *"a claim about a background loop
+that can only be exercised by waiting for a timer is a claim nobody checks. This makes it two
+commands and a diff."* Nothing runs it: `no_show_returned` appears in **zero** assertions, so the
+suite reaches `deposit_held` and `completed` and never the third terminal state. It is a money
+path that returns held deposits to customers, with a purpose-built runner created to make it
+testable, unused — the same shape as the concurrency gap, and the reason it is listed here rather
+than under *What works*.
+
 Four surfaces: **API** (auth, nine permissions gated both directions, tenancy, booking,
 promotions, audit log), **wallet** (home, QR, top-up, Book, Account, full Arabic with RTL —
 but see the auth caveat below), **scanner** (PIN, scan, charge, void, manual lookup, bookings,
