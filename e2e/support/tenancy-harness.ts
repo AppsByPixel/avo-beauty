@@ -1170,7 +1170,18 @@ VALUES ('${SALON_B}', 'Lumiere', 'starter', '#7A5C8E', false, false, 'tiers',
         '[{"name":"bronze","minVisits":0,"bonusPercent":0},{"name":"silver","minVisits":4,"bonusPercent":10}]'::jsonb,
         NULL, NULL, 5000, 60,
         '{"morning":["10:00","13:00"],"evening":["16:00","21:00"]}'::jsonb, '[]'::jsonb, false)
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  -- TIMEZONE ONLY, and it is reset every run on purpose. promotions.test.ts moves
+  -- salon B to a midday zone for the length of that file -- a salon clock near
+  -- midnight cannot express a happy hour window at all, see its header -- and
+  -- restores it in afterAll. A crash between those two points would otherwise
+  -- leave the next run's availability and business-hours assertions measured
+  -- against Honolulu, so the seed puts it back rather than trusting a teardown.
+  --
+  -- Nothing else is overwritten here: the names, hours and loyalty config stay
+  -- DO NOTHING, because a suite that changed one has changed a merchant's
+  -- configuration and a seed that silently reverted it would hide that.
+  timezone = 'Asia/Kuwait';
 
 -- The two fixture branches. Their NAMES are left alone on conflict: a suite that
 -- renamed one has changed a merchant's configuration, and a seed that silently
@@ -1438,6 +1449,33 @@ let base = '';
 let apiOutput = '';
 let apiExit: { code: number | null; signal: string | null } | undefined;
 
+/**
+ * Read `apiExit` through a call, so the compiler cannot narrow it away.
+ *
+ * `bootApiOnce` sets `apiExit = undefined` before spawning, and the value is then
+ * written by the child's `exit` handler — asynchronously, which control-flow
+ * analysis cannot see. Reading the variable directly after that assignment narrows
+ * it to `undefined` and then to `never` inside the guard, so `.code` stops
+ * compiling. A function return carries the declared type instead.
+ */
+function apiExitStatus(): { code: number | null; signal: string | null } | undefined {
+  return apiExit;
+}
+
+/**
+ * The tail of the API's own stdout/stderr.
+ *
+ * The harness has always captured this and only ever shown it when a BOOT failed,
+ * so a 500 from a request mid-run surfaced as `{"error":"server_error"}` and
+ * nothing else — the stack existed, four lines away, and no spec could reach it.
+ * Seven promotions specs were diagnosed by adding this; it should have been here
+ * from the start.
+ */
+export function apiLogTail(lines = 40): string {
+  const all = apiOutput.split('\n');
+  return all.slice(Math.max(0, all.length - lines)).join('\n');
+}
+
 export function tenancyBaseUrl(): string {
   if (!base) throw new Error('startTenancyApi() has not run.');
   return base;
@@ -1512,11 +1550,69 @@ async function freePort(): Promise<number> {
   });
 }
 
+/**
+ * How many times a boot may lose the port race before it is treated as a real
+ * failure. Three retries, because the race is between this process and the OS's
+ * ephemeral allocator and losing it twice in a row is already improbable.
+ */
+const API_BOOT_ATTEMPTS = 4;
+
+/**
+ * Start lane A's API, retrying if the port was taken between choosing it and
+ * binding it.
+ *
+ * WHY A RETRY IS THE RIGHT SHAPE HERE, AND WHAT IT IS NOT
+ * ------------------------------------------------------
+ * `freePort()` asks the OS for an ephemeral port, CLOSES the probe socket, and
+ * only then does the child bind. That gap is unavoidable — the child is a separate
+ * process and cannot inherit the listener — and it is a genuine race, not a leak:
+ *
+ *     Error: listen EADDRINUSE: address already in use 0.0.0.0:52437
+ *
+ * That was a real full-suite failure. It took contract.test.ts's whole `beforeAll`
+ * with it, so 81 specs reported as SKIPPED rather than failed, and the run before
+ * it had been green on the same tree. A `ps` sweep and a port scan immediately
+ * afterwards were both empty, which is what rules out the leaked-process
+ * explanation LANES.md warns about: nothing was holding the port by then, because
+ * the collision was with an allocation this run had just released.
+ *
+ * Fourteen files each boot an API, so this is drawn fourteen times a run.
+ *
+ * IT IS NOT A RETRY OVER FAILURE IN GENERAL. Only `EADDRINUSE` is retried. A boot
+ * that dies for any other reason — a bad migration, a missing env, a syntax error —
+ * still fails on the first attempt with its output attached, because retrying those
+ * would turn a five-second diagnosis into a twenty-second one and say "flaky" about
+ * something that is not.
+ */
 export async function startTenancyApi(): Promise<void> {
   preflight();
   seedSalonB();
   seedQaMember();
 
+  for (let attempt = 1; attempt <= API_BOOT_ATTEMPTS; attempt++) {
+    if (await bootApiOnce()) return;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[lane D] the API lost the port race on attempt ${attempt}/${API_BOOT_ATTEMPTS}; ` +
+        'retrying on a fresh port.',
+    );
+  }
+
+  throw new Error(
+    `Lane A's API could not bind a free port in ${API_BOOT_ATTEMPTS} attempts, every one of ` +
+      'them EADDRINUSE. That is no longer a race: something on this machine is taking ' +
+      'ephemeral ports as fast as they are offered, or a previous run leaked a server. Check ' +
+      'with a port scan and a `ps` sweep before treating it as a suite failure.',
+  );
+}
+
+/**
+ * One boot attempt. `true` if the API came up healthy, `false` if — and ONLY if —
+ * it died because the port was already taken.
+ *
+ * Throws for every other failure, with the server's output, exactly as before.
+ */
+async function bootApiOnce(): Promise<boolean> {
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   apiOutput = '';
@@ -1640,10 +1736,31 @@ export async function startTenancyApi(): Promise<void> {
   for (;;) {
     try {
       const res = await fetch(`${base}/_health`);
-      if (res.ok && ((await res.json()) as { ok?: boolean }).ok === true) return;
+      if (res.ok && ((await res.json()) as { ok?: boolean }).ok === true) return true;
     } catch {
       /* not up yet */
     }
+
+    /**
+     * THE CHILD IS ALREADY DEAD — stop waiting for it.
+     *
+     * Without this the loop sat out the full sixty seconds polling a port nothing
+     * was listening on, which is where the failing run's extra 59 seconds went
+     * (323s against a 264s baseline). A process that has exited is not going to
+     * become healthy, and the sooner that is said the sooner its output is read.
+     */
+    const exited = apiExitStatus();
+    if (exited !== undefined) {
+      const portTaken = /EADDRINUSE/.test(apiOutput);
+      signalApiGroup('SIGKILL');
+      if (portTaken) return false;
+      throw new Error(
+        `Lane A's API exited before becoming healthy at ${base}/_health ` +
+          `(code ${exited.code}, signal ${exited.signal}).\n` +
+          `--- server output ---\n${apiOutput || '(nothing on stdout/stderr)'}\n---------------------`,
+      );
+    }
+
     if (Date.now() >= deadline) {
       child.kill('SIGKILL');
       throw new Error(

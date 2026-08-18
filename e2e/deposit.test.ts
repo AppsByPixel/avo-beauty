@@ -181,7 +181,25 @@ const depositHeldFor = (memberId: string): number =>
     ),
   );
 
-/** ISO date `daysAhead` from now, for the availability grid. */
+/**
+ * ISO date `daysAhead` from now, for the availability grid.
+ *
+ * THIS IS A UTC DATE AND THE GRID IS A SALON-LOCAL ONE, which is a wall-clock
+ * dependency and a deliberately harmless one. Swept for after `promotions.test.ts`
+ * turned out to fail for two hours a day: this runner is PKT and salon A is
+ * Asia/Kuwait, so for part of the day the date computed here is the salon's
+ * yesterday or tomorrow.
+ *
+ * It cannot bite, because no caller trusts the date — `bookFuture` walks d = 9..17
+ * asking the real endpoint and takes the first day that offers a slot, so a one-day
+ * skew costs one extra request. A fixed offset with no iteration is what would make
+ * it a scheduled failure: AR-001's week is closed one day, and that day would move.
+ *
+ * Left as UTC rather than derived in the salon's zone on purpose. Computing a
+ * salon-local date in JavaScript here would be the pattern `promotions.test.ts`
+ * refuses — asserting that the implementation agrees with itself — and the
+ * iteration already makes the question moot.
+ */
 function isoDate(daysAhead: number): string {
   return new Date(Date.now() + daysAhead * 86_400_000).toISOString().slice(0, 10);
 }
