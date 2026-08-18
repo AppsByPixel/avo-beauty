@@ -551,7 +551,7 @@ regardless, and it makes the schema question moot. If it must go on the outcome 
 add the field to the **public** shape only and decide the merchant-visibility question
 explicitly rather than inheriting it from `.omit()`.
 
-### One turbo cache hit in trunk is unexplained — bounded, and not worked around
+### The turbo cache is shared across all five worktrees — RESOLVED
 
 **What.** A post-merge `pnpm turbo run typecheck` in trunk reported `FULL TURBO`, 11 of 11
 cached, in 29ms — on a merge (`bebcbba`) that changed eleven `apps/dashboard` files including
@@ -585,8 +585,30 @@ normal. `LANES.md` carries the rule that fits instead: tree changed, trust the c
 tree needing independent confirmation, `--force`, because a replay is not a second opinion;
 suspect the cache, `--dry=json`, which answers in seconds and leaves nothing behind.
 
-**To reverse:** if it recurs, capture the full `turbo run typecheck` output *and* a
+**RESOLVED — it was not a cache defect.** **Trunk holds the only turbo cache.** `.turbo/cache`
+in `~/dev/avo` has 84 entries; none of `avo-api`, `avo-wallet`, `avo-web` or `avo-qa` has a
+cache directory at all. Each lane's `.git` is a file pointing into
+`~/dev/avo/.git/worktrees/<name>`, so turbo resolves the repository root through the shared
+git dir and writes every lane's entries into trunk's cache.
+
+The trail, captured on the second occurrence: `@avo/dashboard#typecheck` hashed to
+`3ea15262fe96380e` with status `HIT`, and that entry's `.tar.zst` was written at **14:43:51** —
+while lane C was verifying content it committed at 14:48:50, and thirteen minutes before trunk
+merged it at 14:57:01. Trunk ran no typecheck at 14:43:51. Both occurrences were lane C
+merges, and lane C is also the lane that disclosed its `--filter` runs executing inside
+trunk's worktree.
+
+**Not a correctness problem.** The key is content-derived, complete and responsive, so a hit
+returns a result computed from identical content: a cached green is a real green. What it costs
+is **independence** — trunk's post-merge gate can be satisfied by the lane's own earlier run of
+that same tree. Sound verdict, not a second opinion. Which is exactly why the rule in
+`LANES.md` reads "same tree needing independent confirmation → `--force`" rather than "distrust
+the cache"; that distinction turned out to be load-bearing. `b05e36a` was confirmed that way:
+0 cached, 8.79s, green.
+
+**If a cache anomaly recurs elsewhere:** capture the full `turbo run typecheck` output *and* a
 `--dry=json` from the same tree before doing anything else — the hash plus cache status per
-task is the artifact that would settle it, and `.turbo/runs` does not exist so there is no
-summary to recover afterwards. Cache-entry mtimes cannot separate "written cold" from
-"rewritten by `--force`", so they are not evidence.
+task is the artifact that settles it, and `.turbo/runs` does not exist so there is no summary
+to recover afterwards. Then check the entry's mtime against what each worktree was doing at
+that moment, which is what closed this one. Note that `--force` rewrites entries it just hit,
+so an mtime alone cannot separate "written cold" from "rewritten by force".
