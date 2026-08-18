@@ -162,7 +162,7 @@ Run turbo from your own worktree root, which gets you both the build edge and th
 worktree:
 
 ```bash
-pnpm --dir /Users/koraspond_developer/dev/avo-web turbo run typecheck
+pnpm --dir=/Users/koraspond_developer/dev/avo-web exec turbo run typecheck
 ```
 
 **Do not reach for `--force` by habit.** The cache is sound and paying 8s on every merge to
