@@ -146,4 +146,69 @@ describe('the charge result panel explains a balance that went up', () => {
     // `txKind.deposit_return`. One fact, one phrase, on both surfaces.
     expect(copy.depositReturned).toBe('Deposit returned');
   });
+
+  /**
+   * The APPLIED row, added when the headline gained a "Nothing charged" branch.
+   * Without it the panel cannot reconcile: 6.000 of services, nothing charged,
+   * 4.000 returned, and no line saying what paid for the visit.
+   */
+  it('names what paid for the visit whenever a deposit was applied', () => {
+    expect(resultScreen).toContain('result.depositAppliedFils');
+    expect(resultScreen).toContain('copy.totalDeposit');
+    expect(resultScreen).toContain('depositApplied > 0');
+  });
+});
+
+// -------------------------------------------------- the zero-debit headline ----
+
+/**
+ * "Charged 0.000 KD" over a rising balance.
+ *
+ * `transaction.amountFils` is the WALLET DEBIT, so it is genuinely 0 when the held
+ * deposit covers the whole basket. Every figure was correct and the sentence said
+ * the opposite of what happened. Trunk's call: leave the figure, fix the frame.
+ */
+describe('a visit settled entirely by the deposit does not say it was charged', () => {
+  it('switches the headline instead of recomputing the amount', () => {
+    expect(resultScreen).toContain('copy.chargedNothing');
+    // The guard against the other fix, which would have been worse: showing the
+    // gross under the word "Charged" invents a debit the server never made (#2).
+    expect(resultScreen).toContain('chargedFils === 0 && depositApplied > 0');
+  });
+
+  /**
+   * THE STRING COLLISION, PINNED, because reusing the existing key would have been
+   * the easy move and it is wrong.
+   *
+   * `nothingCharged` ("Nothing was charged.") is the reassurance under an
+   * EXPIRED-CODE title, where no charge happened. `chargedNothing` ("Nothing
+   * charged") sits under the SUCCESS MARK, where the charge DID happen and cost her
+   * nothing from her wallet. One string for both would make a settled visit read
+   * like a failed one, on the one screen where staff have to tell those apart.
+   */
+  it('does not reuse the failed-charge reassurance for a successful one', () => {
+    expect(copy.chargedNothing).not.toBe(copy.nothingCharged);
+    expect(copy.chargedNothing).toBe('Nothing charged');
+    // The success screen must not reach for the failure string.
+    expect(resultScreen).not.toContain('copy.nothingCharged');
+  });
+
+  /**
+   * Lifted, not invented. design:1707 pairs the label `rCharged` with the VALUE
+   * `vNothing`, so the bundle's own answer to a zero debit is these words rather
+   * than a 0.000 figure — and the wallet already carries both languages of it.
+   */
+  it('is the same sentence the customer’s own wallet shows', async () => {
+    const walletEn = readFileSync(
+      join(__dirname, '../../../wallet/src/copy/en.ts'),
+      'utf8',
+    );
+    expect(walletEn).toContain(`vNothing: '${copy.chargedNothing}'`);
+  });
+
+  it('leaves an ordinary charge saying Charged', () => {
+    // The branch is narrow on purpose: a partial deposit still reads "Charged
+    // 3.000", which is the design's own worked example.
+    expect(resultScreen).toContain('copy.charged(moneyOf(chargedFils))');
+  });
 });

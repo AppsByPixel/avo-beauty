@@ -231,6 +231,26 @@ export const copy = {
   // ----------------------------------------------------------------- done --
   /** :380 — "Charged 3.000 KD" */
   charged: (amount: string) => `Charged ${amount}`,
+  /**
+   * The headline when the held deposit covered the whole basket, so the WALLET
+   * DEBIT is 0 and "Charged 0.000 KD" would say the opposite of what happened.
+   *
+   * LIFTED, AND THE DESIGN ALREADY MADE THIS EXACT PAIRING. `AVO Wallet
+   * Home.dc.html:1707` renders a zero debit as the label `rCharged` ("Charged")
+   * carrying the value `vNothing` — "Nothing charged" at :1271, "لم يُخصم شيء" at
+   * :1378. So the bundle's own answer to a zero debit is these words rather than a
+   * 0.000 figure, in both languages, and the customer's receipt already says it.
+   * Nothing is invented here; the scanner takes the English because it is
+   * English-only (design/README.md:273).
+   *
+   * NOT `nothingCharged` BELOW, AND THE COLLISION IS THE POINT. That one is
+   * "Nothing was charged." — the reassurance under an EXPIRED-CODE title, where the
+   * charge did not happen. This one sits under a SUCCESS MARK, where the charge did
+   * happen and simply cost her nothing from her wallet. Reusing one string for both
+   * would make a settled visit read like a failed one on the one screen where staff
+   * have to tell those apart.
+   */
+  chargedNothing: 'Nothing charged',
   /** :384 */
   newBalance: 'New balance',
   /**

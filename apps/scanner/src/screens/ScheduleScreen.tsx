@@ -602,9 +602,21 @@ const styles = StyleSheet.create({
   dotManual: { backgroundColor: color.brand },
   /**
    * design:809 — `#C9A24B` on the Google banner. No token names it: the closest,
-   * `warnText` (#8a6d3b), is the Gold tier pill and reads brown rather than
-   * amber at 8px. Held with its citation and REPORTED, exactly as the scanner's
-   * offline dot was before trunk named it.
+   * `warnText`, is the Gold tier pill and reads brown rather than amber at 8px.
+   * Held with its citation and REPORTED, exactly as the scanner's offline dot was
+   * before trunk named it.
+   *
+   * `warnText`'s hex is no longer quoted here. It said `#8a6d3b`, and
+   * `deriveBrandSet`'s contrast audit has since moved it to `#7A6034` (4.01 →
+   * 4.82), so a comment asserting what the token "is" had gone false inside a file
+   * that reads the token correctly everywhere. The reasoning survives the change
+   * untouched: both values are brown, and the distance from amber is the point
+   * rather than the digits.
+   *
+   * Worth flagging for whoever tokenises this line: `#C9A24B` is also
+   * `tier.gold.dot`, which the audit left unchanged deliberately because it is
+   * decoration rather than text. That is a real candidate for the token this wants,
+   * and it is a `packages/tokens` change rather than a scanner one.
    */
   dotGoogle: { backgroundColor: '#C9A24B' },
   bannerText: { color: color.brandDeeper, flex: 1, lineHeight: 18 },

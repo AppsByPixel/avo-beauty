@@ -46,13 +46,44 @@ export function ResultScreen({
   // The amount charged is the transaction's amount. It is stored negative (a
   // debit), so it is shown by magnitude — the word "Charged" carries the sign.
   const chargedFils = fils(Math.abs(result.transaction.amountFils));
+  const depositApplied = fils(result.depositAppliedFils);
+
+  /**
+   * "CHARGED 0.000 KD" WAS ACCURATE AND SAID THE OPPOSITE OF WHAT HAPPENED.
+   *
+   * `transaction.amountFils` is the WALLET DEBIT, not the basket — which is what
+   * the design's worked example means by charged (8.000 service − 5.000 deposit =
+   * 3.000 charged, AVO Staff Scanner.dc.html:354). When the held deposit covers
+   * the whole basket that debit is genuinely 0, so the headline read "Charged
+   * 0.000 KD" directly above a returned-deposit row and a balance that had gone
+   * UP. Every figure was right and the sentence was wrong.
+   *
+   * THE FIGURE IS NOT RECOMPUTED — the frame is. Putting the gross under the word
+   * "Charged" would be this screen inventing a debit the server never made
+   * (non-negotiable #2), so no amount is swapped for a bigger one; the words change
+   * instead.
+   *
+   * AND THE DESIGN ALREADY DECIDED THIS, which is why nothing is invented here.
+   * `AVO Wallet Home.dc.html:1707` renders exactly this case as the label
+   * `rCharged` ("Charged") carrying the VALUE `vNothing` — "Nothing charged" at
+   * :1271, "لم يُخصم شيء" at :1378. The bundle's own idiom for a zero debit is the
+   * words rather than a 0.000 figure. This screen is English-only
+   * (design/README.md:273) so it lifts the English; the Arabic already reaches the
+   * customer through her own receipt.
+   *
+   * Conditioned on a deposit having been applied. A zero debit with no deposit is
+   * not reachable — a basket must hold a priced service — and were it ever to
+   * become so it would be a different fact, so it keeps the ordinary headline
+   * rather than borrowing this explanation.
+   */
+  const settledByDeposit = chargedFils === 0 && depositApplied > 0;
 
   return (
     <View style={styles.screen}>
       <SuccessMark reduceMotion={reduceMotion} />
 
       <Text style={[display(26), styles.title]} testID="result-amount">
-        {copy.charged(moneyOf(chargedFils))}
+        {settledByDeposit ? copy.chargedNothing : copy.charged(moneyOf(chargedFils))}
       </Text>
       <Text style={[ui(13.5), styles.sub]}>
         {memberName} · {loyaltyPillText}
@@ -81,12 +112,35 @@ export function ResultScreen({
           on almost every visit — 0 means "no remainder", which is exactly why the
           API sends it as 0-not-absent rather than omitting it.
 
-          `depositAppliedFils` is deliberately NOT duplicated here: MemberScreen
-          already showed it before the charge as the design's own "Deposit applied"
-          total (design:369). The RETURN is the half no staff screen has ever shown.
+          THE APPLIED HALF IS NOW HERE TOO, and that reverses an earlier call worth
+          naming rather than quietly changing. It was left out because MemberScreen
+          shows it BEFORE the charge as the design's own "Deposit applied" total
+          (design:369), so repeating it looked redundant. It is not, once the
+          headline can read "Nothing charged": that sentence says no money left her
+          wallet and the panel then has to say what DID pay for the visit. Without
+          it the three figures do not reconcile on screen — 6.000 of services,
+          nothing charged, 4.000 back — and the artist cannot answer the only
+          question a customer asks here.
+
+          Shown whenever a deposit was applied, not only in the fully-covered case:
+          on a partial one it is why the headline says 3.000 and not 8.000.
         */}
+        {depositApplied > 0 ? (
+          <View style={styles.panelRow} testID="result-deposit-applied">
+            <Text style={[ui(13.5), styles.rowLabel]}>{copy.totalDeposit}</Text>
+            <Money
+              amount={depositApplied}
+              figureStyle={display(13.5, '600')}
+              unitStyle={[ui(13.5), styles.rowLabel]}
+            />
+          </View>
+        ) : null}
+
         {result.depositReturnedFils > 0 ? (
-          <View style={styles.panelRow} testID="result-deposit-returned">
+          <View
+            style={[styles.panelRow, depositApplied > 0 && styles.divided]}
+            testID="result-deposit-returned"
+          >
             <Text style={[ui(13.5), styles.rowLabel]}>{copy.depositReturned}</Text>
             <Money
               amount={fils(result.depositReturnedFils)}
@@ -97,11 +151,17 @@ export function ResultScreen({
         ) : null}
 
         {/*
-          The divider follows the row above rather than being fixed to this one:
-          with no returned deposit this is the panel's FIRST row, and design:378's
-          panel does not open with a rule.
+          Each divider belongs to the row BELOW it and is conditional on something
+          having been rendered above — design:378's panel does not open with a rule,
+          and on an ordinary charge with no deposit at all this is still the first
+          row. Two optional rows above it means the condition is "either one".
         */}
-        <View style={[styles.panelRow, result.depositReturnedFils > 0 && styles.divided]}>
+        <View
+          style={[
+            styles.panelRow,
+            (depositApplied > 0 || result.depositReturnedFils > 0) && styles.divided,
+          ]}
+        >
           <Text style={[ui(13.5), styles.rowLabel]}>{copy.newBalance}</Text>
           <Money
             amount={fils(result.balanceAfterFils)}
