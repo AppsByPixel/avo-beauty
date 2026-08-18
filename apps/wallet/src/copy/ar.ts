@@ -211,6 +211,24 @@ export const ar: Copy = {
   rowPending: en.rowPending, // AR GAP
   rowFailed: en.rowFailed, // AR GAP
 
+  // --------------------------------------------------------------- sign-in --
+  // The happy path IS in the bundle's `ar` block, so these three are lifted.
+  // Note the feminine imperative in `signInSub` — سجّلي, not سجّل. The customer
+  // base is women's salons and a masculine form is a copy defect.
+  salonName: 'أمارا', // design:1275
+  walletWord: 'المحفظة', // design:1353
+  signInTitle: 'أهلاً بعودتك', // design:1353
+  signInSub: 'سجّلي الدخول إلى محفظة أمارا', // design:1353
+  signInAction: 'تسجيل الدخول', // design:1355
+  // The three below have no Arabic source. `signInErrEmpty` is the interesting
+  // one: the bundle HAS an Arabic string for the empty-fields error (:1363
+  // "أدخلي اسم المستخدم وكلمة المرور.") and it names the username, which does not
+  // exist in this system — so it cannot be lifted, and translating the phone
+  // version here would be exactly the invention this file refuses to make.
+  signInWorking: en.signInWorking, // AR GAP
+  signInErrEmpty: en.signInErrEmpty, // AR GAP
+  signInOffline: en.signInOffline, // AR GAP
+
   // --------------------------------------------------------------- failure --
   errorTitle: en.errorTitle, // AR GAP
   errorBody: en.errorBody, // AR GAP
@@ -528,6 +546,9 @@ export const AR_GAPS = [
   'emptyActivityAction',
   'rowPending',
   'rowFailed',
+  'signInWorking',
+  'signInErrEmpty',
+  'signInOffline',
   'errorTitle',
   'errorBody',
   'referencePrefix',

@@ -39,7 +39,7 @@ import {
   IBMPlexSansArabic_700Bold,
 } from '@expo-google-fonts/ibm-plex-sans-arabic';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, Text, View, StyleSheet } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -50,6 +50,10 @@ import { PREFERENCES_KEY } from './src/state/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { AccountScreen } from './src/screens/AccountScreen';
 import { BookScreen } from './src/screens/BookScreen';
+import { SignInScreen } from './src/screens/SignInScreen';
+import { signOut } from './src/api/auth';
+import { refreshSession } from './src/api/client';
+import { onSessionEnded, restore } from './src/api/session';
 import { LanguageProvider, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
 import { useWalletHome } from './src/state/useWalletHome';
@@ -96,9 +100,60 @@ export default function App() {
   return (
     <LanguageProvider initial={initialLanguage()}>
       <StatusBar style="dark" />
-      <Wallet />
+      <Gate />
     </LanguageProvider>
   );
+}
+
+/**
+ * Signed in, or not. The wallet's first real gate — until now there was none,
+ * because the app only ever spoke to the mock, which asks for no credentials.
+ *
+ * BOOT GOES THROUGH THE REFRESH, NOT AROUND IT. `restore()` brings back a refresh
+ * token and deliberately no access token, so the only way into a working session
+ * is `refreshSession()` — the same call a mid-session expiry makes. Boot is
+ * therefore not a special case with its own bugs, and a session revoked from
+ * another device is discovered before a screen renders rather than as a 401
+ * underneath one.
+ *
+ * `checking` renders nothing rather than the wallet. A frame of Home with no data
+ * would break the "never render 0.000 before data arrives" rule, and here it would
+ * also be a frame of somebody's wallet shown to whoever is holding the phone.
+ */
+function Gate() {
+  const [state, setState] = useState<'checking' | 'in' | 'out'>('checking');
+
+  useEffect(() => {
+    let alive = true;
+    /*
+      A session that ends while the app is open — a refresh that failed, or a
+      revoke from another device — has to move the UI, not just clear a variable.
+      Registered before the restore so an ending during boot is not missed.
+    */
+    onSessionEnded(() => {
+      if (alive) setState('out');
+    });
+
+    void (async () => {
+      const stored = await restore();
+      if (!alive) return;
+      if (stored === null) {
+        setState('out');
+        return;
+      }
+      const ok = await refreshSession();
+      if (alive) setState(ok ? 'in' : 'out');
+    })();
+
+    return () => {
+      alive = false;
+      onSessionEnded(null);
+    };
+  }, []);
+
+  if (state === 'checking') return <View style={styles.blank} />;
+  if (state === 'out') return <SignInScreen onSignedIn={() => setState('in')} />;
+  return <Wallet onSignedOut={() => setState('out')} />;
 }
 
 /**
@@ -113,7 +168,7 @@ export default function App() {
  * every money move — non-negotiable #2: the new balance is the server's answer
  * to `GET /members/me`, never a figure this app computed.
  */
-function Wallet() {
+function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
   const [screen, setScreen] = useState<Screen>('home');
   const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null);
   const home = useWalletHome();
@@ -192,9 +247,30 @@ function Wallet() {
            * When the auth slice lands this also calls POST /auth/sign-out, which
            * already exists on the API. Reported.
            */
+          /*
+            A REAL SIGN-OUT NOW, AND THE ORDER MATTERS.
+
+            This used to clear two AsyncStorage keys and navigate Home, because
+            there was no session to end — the comment on AccountScreen's prop said
+            so. It now revokes server-side first (`POST /auth/sign-out`), then
+            forgets the tokens, then drops the cached snapshot and preferences.
+
+            Revoking first is the part that matters on a salon counter: this app's
+            refresh token is recoverable from an unlocked handset (see
+            api/session.ts), so forgetting it locally without revoking would leave
+            a working credential on a phone the customer believes she has signed
+            out of.
+
+            `clearLocalState` still runs, and still last: the snapshot holds her
+            balance and her recent activity, and a signed-out device must not keep
+            them.
+          */
           onLogOut={() => {
-            void clearLocalState();
-            setScreen('home');
+            void (async () => {
+              await signOut();
+              await clearLocalState();
+              onSignedOut();
+            })();
           }}
           /**
            * The WhatsApp reset-link flow lives on the auth screens, which are
