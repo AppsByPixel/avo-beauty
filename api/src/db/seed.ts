@@ -722,7 +722,8 @@ async function seed(): Promise<void> {
       // THE MONEY FIELDS FOLLOW `SEED_RESET`; THE CREDENTIAL DOES NOT.
       // Rewriting a balance while `SEED_RESET=0` leaves the ledger untouched
       // would make `member.balance_fils` disagree with `sum(ledger_entry)` —
-      // the one reconciliation this schema exists to keep true. The password is
+      // the one reconciliation this schema exists to keep true, and the one
+      // `db:verify` section 5 now asserts rather than trusting. The password is
       // not money and is always restored, because the line this script prints
       // has to be a line that works.
       set: RESET
@@ -845,6 +846,108 @@ async function seed(): Promise<void> {
     }
   }
 
+  // -------------------------------------------------- the opening balances ----
+  //
+  // WITHOUT THIS BLOCK THE LEDGER DOES NOT RECOMPUTE THE WALLET, AND THREE
+  // SEPARATE COMMENTS IN THIS CODEBASE SAID IT DID.
+  //
+  // `member.balance_fils` is a cached aggregate. `schema/ledger.ts` states the
+  // property that makes it defensible, and states it as the reason the table
+  // exists at all:
+  //
+  //     SELECT sum(CASE direction WHEN 'credit' THEN amount_fils ELSE -amount_fils END)
+  //     FROM ledger_entry WHERE account = 'member_wallet' AND member_id = $1;
+  //
+  // The fixtures broke that on their first line. Both members were INSERTed with
+  // a balance already on the row — 32.500 and 2.500 — and no entry saying where
+  // it came from, so the sum was short by exactly the opening balance before
+  // anybody touched anything. `sum(ledger_entry)` did not recompute the wallet;
+  // it recomputed the wallet MINUS the part the fixture invented.
+  //
+  // It is a footgun aimed at money tests specifically. The next person to write a
+  // reconciliation spec either asserts the sum and watches it fail on a clean
+  // database, or discovers the discrepancy and "fixes" a drift that was never
+  // real. It is also why the reconciliation had to be described in terms of
+  // `balance_after_fils` — a workaround for this gap that read like a design.
+  //
+  // AN OPENING BALANCE IS A REAL CREDIT, so it gets a real entry. The ledger is
+  // the record of how a balance came to be; a balance with no originating entry
+  // is a hole in that record, not a fixture convenience.
+  //
+  // WHY `adjustment` AND NOT `topup`. The kind had to keep the invariant without
+  // distorting a report, and `transaction.kind` is exactly what the merchant
+  // reports filter on: services/metrics.ts sums `kind = 'topup'` for the top-up
+  // tile and `kind = 'charge'` for revenue. A seeded `topup` would inflate a
+  // salon's top-up volume — and its commission — with money that predates the
+  // dataset and was never collected from anyone. `adjustment` is counted by
+  // neither tile, is the kind the enum carries for money that moved for a reason
+  // that is not a sale or a load, and satisfies
+  // `transaction_amount_sign_matches_kind` (adjustment <> 0).
+  //
+  // WHY THE COUNTERPART IS `gateway_clearing`. Double entry needs a source, and
+  // the fixture's story is that she topped up at some point before this dataset
+  // begins. `gateway_clearing` is where money from outside enters this ledger —
+  // it is the account a settled top-up debits (services/topup.ts) — so the pair
+  // reads the same way a real top-up does. Nothing aggregates ledger accounts for
+  // a report; only `transaction.kind` does, which is why the kind is the field
+  // that had to be chosen carefully and the account did not.
+  //
+  // WRITTEN BEFORE TX-9021 so `seq` tells the story in order: the wallet is
+  // funded, then it is charged. And guarded per member, so `SEED_RESET=0` on a
+  // database that already has these entries does not write a second set —
+  // `ledger_entry` has no natural key to conflict on, and the immutability
+  // trigger means a duplicate could never be cleaned up afterwards.
+  const OPENING_BALANCES = [
+    { memberId: '8842', openingFils: 32500 },
+    { memberId: '8843', openingFils: 2500 },
+  ] as const;
+
+  for (const { memberId, openingFils } of OPENING_BALANCES) {
+    const openingTxId = `TX-OPEN-${memberId}`;
+    const [{ present } = { present: 0 }] = (await db.execute(
+      sql`SELECT count(*)::int AS present FROM "transaction" WHERE id = ${openingTxId}`,
+    )) as unknown as Array<{ present: number }>;
+    if (present > 0) continue;
+
+    const openedAt = new Date();
+    await db.insert(transaction).values({
+      id: openingTxId,
+      memberId,
+      salonId: SALON_ID,
+      branchId: BRANCH_SALMIYA,
+      kind: 'adjustment',
+      amountFils: fils(openingFils),
+      // No `method`: nothing was collected through a payment method here. A
+      // method on this row would be a claim about how money arrived.
+      status: 'settled',
+      reference: `AVO-OPEN-${memberId}`,
+      note: 'Opening fixture balance',
+      createdAt: openedAt,
+      settledAt: openedAt,
+    });
+    await db.insert(ledgerEntry).values([
+      {
+        transactionId: openingTxId,
+        salonId: SALON_ID,
+        memberId,
+        account: 'member_wallet',
+        direction: 'credit',
+        amountFils: fils(openingFils),
+        // Her balance at this point in the story. For 8842 that is the
+        // pre-charge 32.500; TX-9021 below takes her to 24.500.
+        balanceAfterFils: fils(openingFils),
+      },
+      {
+        transactionId: openingTxId,
+        salonId: SALON_ID,
+        memberId: null,
+        account: 'gateway_clearing',
+        direction: 'debit',
+        amountFils: fils(openingFils),
+      },
+    ]);
+  }
+
   // ------------------------------------------------------------ TX-9021 ----
   //
   // Lane D's permission specs void `TX-9021` by name and assert it is a settled
@@ -853,11 +956,14 @@ async function seed(): Promise<void> {
   // money row with no ledger behind it, which is exactly the state `ledger_entry`
   // exists to prevent.
   //
-  // So it is seeded the way the API would have written it: Dana is inserted at
-  // 32.500, the charge posts a balanced pair of entries, and her balance lands on
-  // the 24.500 the fixtures specify. The ledger reconciles to the balance, and
-  // `SELECT sum(...) FROM ledger_entry` still recomputes the wallet from first
-  // principles.
+  // So it is seeded the way the API would have written it: Dana is funded to
+  // 32.500 by the opening entry above, this charge posts a balanced pair, and her
+  // balance lands on the 24.500 the fixtures specify. The ledger reconciles to the
+  // balance, and `SELECT sum(...) FROM ledger_entry` recomputes the wallet from
+  // first principles — which became true only when the opening balances above got
+  // entries of their own. This comment used to make that claim while the fixture
+  // contradicted it; `db:verify` section 5 now asserts it instead of asserting it in
+  // prose.
   //
   // It is dated now rather than backdated so it sits inside the 15-minute void
   // window; a two-day-old charge is not voidable, it is a reimbursement.
@@ -1022,14 +1128,44 @@ async function seed(): Promise<void> {
   } else {
     console.log('seeded (SEED_RESET=0) — fixture rows ensured, no live state touched.');
   }
-  // The balances are printed ONLY when they were actually restored. This file
-  // already learned the general form of that lesson from `passwordHash`: a
-  // fixture that prints a value it did not write sends the next person looking
-  // for a bug in the wrong place. Under SEED_RESET=0 the balance is whatever the
-  // last charge left, so it is not claimed.
-  const balances = RESET ? ['   (24.500 KD, Silver)', '   (2.500 KD — the lowbal scenario)'] : ['', ''];
-  console.log(`  member  8842 / ${MEMBER_PASSWORD}${balances[0]}`);
-  console.log(`  member  8843 / ${MEMBER_PASSWORD}${balances[1]}`);
+  /**
+   * THE SUMMARY IS READ BACK OUT OF THE DATABASE, NOT ASSERTED FROM A LITERAL.
+   *
+   * This line used to be the hardcoded string `(24.500 KD, Silver)`, printed
+   * whenever `SEED_RESET` was on. That is true only for as long as nothing else
+   * in this file changes, and it cost a verification run: the printed summary and
+   * the actual row are two claims about the same number, and the reader trusts
+   * the one on their screen. Under `SEED_RESET=0` the literal was suppressed
+   * entirely, which was honest but unhelpful — the balance is exactly what a
+   * developer about to test a charge needs to know, and it is knowable.
+   *
+   * Reading the row covers both modes with one rule and cannot drift: after a
+   * reset it prints what the reset produced, and without one it prints whatever
+   * the last charge left. This is the same lesson `passwordHash` taught a few
+   * hundred lines above, applied to the money instead of the credential.
+   */
+  const printed = await db
+    .select({
+      id: member.id,
+      balanceFils: member.balanceFils,
+      tier: member.tier,
+      visits: member.visits,
+    })
+    .from(member)
+    .where(sql`${member.id} IN ('8842', '8843')`)
+    .orderBy(member.id);
+
+  // Three decimals, Western digits — the display boundary rule, and the only
+  // place in this script where fils become a human-readable figure.
+  const kd = (v: number | bigint) => (Number(v) / 1000).toFixed(3);
+
+  for (const row of printed) {
+    const tier = row.tier ? `, ${row.tier[0]!.toUpperCase()}${row.tier.slice(1)}` : '';
+    const visits = `${row.visits} visit${row.visits === 1 ? '' : 's'}`;
+    console.log(
+      `  member  ${row.id} / ${MEMBER_PASSWORD}   (${kd(row.balanceFils)} KD${tier}, ${visits})`,
+    );
+  }
   console.log(`  web     noura / ${STAFF_PASSWORD}`);
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
 }

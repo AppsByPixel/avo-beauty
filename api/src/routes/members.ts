@@ -407,6 +407,39 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
    * account that names the money, while the money is still owed, is the one
    * outcome nobody can undo. Refused with the amount and the way out named.
    */
+  /**
+   * THE STATE, READABLE. The half of this feature that was missing.
+   *
+   * `POST` and `DELETE` both returned the deletion state, so the only way to
+   * learn it was to change it — which meant a customer who requested erasure and
+   * then closed the app had no way to find out that she had. She reopened it to
+   * an Account screen identical to the one she had before, with the request
+   * invisible and the cancel door unmarked.
+   *
+   * That is not a cosmetic gap. The 30 days are the promise the privacy policy
+   * makes, and a grace window she cannot see is a grace window she cannot use:
+   * the only remaining route to "actually, keep my account" is to guess that
+   * pressing Delete again does something different. `DELETE` is the door and this
+   * is the sign on it.
+   *
+   * WHY A SIBLING GET AND NOT A FIELD ON `GET /members/me`.
+   * `MemberSchema` lives in `packages/types`, which is trunk-owned — this lane
+   * may not widen it. And a member payload carrying `deletion` while the schema
+   * does not declare it is the exact trap this project has now hit five times:
+   * zod does not reject an undeclared field, it STRIPS it, so the state would
+   * arrive at the client and vanish before any screen could read it. Widening the
+   * shared schema is the trunk operation; serving the state beside the profile is
+   * not, and it matches `GET /members/me/notifications`, which is unmodelled for
+   * the same reason and read by the same screen.
+   *
+   * No permission gate beyond the session: this is her own account state, and it
+   * is the same serialiser the two mutating handlers already return.
+   */
+  app.get('/members/me/deletion', async (req, reply) => {
+    const p = requireMember(req);
+    return reply.send(serialiseDeletion(await loadMember(p.id)));
+  });
+
   app.post('/members/me/deletion', async (req, reply) => {
     const p = requireMember(req);
 

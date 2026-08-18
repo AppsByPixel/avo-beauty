@@ -107,6 +107,121 @@ Rules:
 5. Never return a password field. "Forgot my current password" drops into the existing
    WhatsApp reset-link flow; it is not a bypass of `current`.
 
+#### Notification preferences (customer → Account → Notifications)
+```
+GET   /members/me/notifications                     → NotificationPrefs
+PATCH /members/me/notifications { push?, remind?, wa?, receipt?, offers? } → NotificationPrefs
+
+NotificationPrefs
+  push          bool
+  remind        bool
+  wa            bool
+  receipt       bool
+  offers        bool            // flattened for the switch to bind to
+  offersConsent {
+    granted       bool
+    at            datetime | null  // when the latest event was recorded
+    source        string | null  // "wallet_account", "signup", …
+    policyVersion int | null     // the terms in force when she agreed
+  }
+```
+Rules:
+1. **Four of the five are server-owned, not client-owned.** `wa` and `receipt` gate messages
+   the *server* sends — the receipt outbox does not consult a handset before it queues.
+   Holding them only on the client means a local "off" that does not stop a receipt, which is
+   a false statement made to the customer, not a lost setting. `push` and `remind` are stored
+   server-side too, so a reinstall does not silently re-enable what she turned off.
+2. **`offers` is marketing consent and is stored as an append-only event**, not a boolean.
+   Non-negotiable #8 needs it readable on the platform send path, and a boolean cannot answer
+   *when* she agreed, under which terms, or whether she had withdrawn it before. The boolean on
+   the wire is a projection of the latest event; `offersConsent` carries the evidence.
+3. An event is written **only when the answer changes.** Re-sending the same value is a client
+   re-rendering a screen, not the customer consenting again.
+4. An unknown switch name is rejected by name, not ignored.
+
+#### Account deletion (customer → Account → Delete my account)
+```
+GET    /members/me/deletion               → DeletionState
+POST   /members/me/deletion  { password } → DeletionState
+DELETE /members/me/deletion               → DeletionState
+
+DeletionState
+  requestedAt      datetime | null
+  erasureDueAt     datetime | null   // requestedAt + graceDays
+  status           "none" | "pending"
+  graceDays        int               // 30 — the number the privacy policy promises
+  erasureScheduled bool              // false: the clock is real, the job is not built
+```
+Rules:
+1. **Deletion is an erasure of personal data, not a row delete.** The published policy set says
+   transaction records are kept 7 years *and* the rest is deleted within 30 days, so two
+   retention periods cover one customer. `transaction`, `ledger_entry` and `audit_log`
+   reference her with restrict/append-only, so the database would refuse a `DELETE` anyway.
+2. **`password` is required on `POST`.** It is the most destructive thing the wallet offers and
+   an unlocked handset on a salon counter is the threat. Same reasoning as
+   `POST /members/me/password` demanding `current`.
+3. **`POST` is idempotent and must not restart the clock.** Asking twice is one request; a
+   mis-tapped button may not quietly extend the 30 days.
+4. **A non-zero balance is refused** — `409 balance_outstanding`, carrying `balanceFils`. Her
+   wallet is prepaid credit the salon owes her (non-negotiable #5), and erasing the account
+   that names the money while the money is owed is the one outcome nobody can undo.
+5. **Sessions are NOT revoked**, deliberately. The 30 days are a grace window, and an account
+   she is locked out of the moment she asks is one she cannot change her mind about. `DELETE`
+   is that door, and `GET` is the sign on it — a grace window she cannot see is a grace window
+   she cannot use.
+6. `erasureScheduled` is `false` until the erasure job exists. Which columns are nulled at the
+   due date, and which survive the 7-year financial record, is a retention decision that
+   belongs to the client. A response implying the erasure had been carried out would make the
+   confirmation screen say something untrue.
+
+#### Staff member lookup (scanner → "Can't scan? Find member manually")
+```
+GET /members?q={query}   scanner scope + perms.scanner
+  → { items: MemberSearchRow[], nextCursor: string | null }
+
+MemberSearchRow
+  id         string
+  salonId    string
+  name       string
+  phoneLast4 string          // NOT the whole number
+  tier       string | null
+```
+**This is not `Member`, and parsing it as `Member` will fail — correctly.** A disambiguation
+list is not a profile: it carries no balance and no email, and the phone is the last four
+digits only. A balance in a list is a balance readable over a shoulder for every customer
+whose name shares a prefix, and it answers no question the list is asking.
+
+Rules:
+1. **Salon-scoped in the `WHERE`,** not filtered afterwards — this is the endpoint class where a
+   missing tenant predicate hands one salon's client book to another. A row from another salon
+   is never read, so a later mistake in the mapping cannot leak it.
+2. **Matches name (substring, case-insensitive), phone (digits only, substring) or member id
+   (exact, case-insensitive).** The id is exact on purpose: ids are short, dense and
+   sequential, so a substring match there turns the minimum-length rule into a directory walk.
+   A staff member reading a number off a card has the whole number.
+3. **Minimum query length 2.** One character returns the salon. `LIKE` metacharacters are
+   escaped, so `%` searches for a percent sign rather than requesting the whole book.
+4. **Rate-limited in two tiers**, both counted over the audit rows themselves so the counter and
+   the promise cannot disagree:
+   - **burst, per staff session** — 30 per 5 minutes → `429 lookup_rate_limited`
+   - **ceiling, per staff member** — 60 per rolling 60 minutes → `429 lookup_hourly_limit`
+
+   The per-session tier alone was not a limit: a session is not scarce, and the PIN limiter
+   counts only *failed* attempts, so signing in again minted a fresh budget of 30 indefinitely.
+   The per-actor tier is keyed on `audit_log.actor_id` and **nothing else** — no session, no
+   device — so it cannot be reset by a new session, a new tablet or a new token. The ceiling is
+   checked first, because "wait a moment" is the wrong thing to tell someone who must wait an
+   hour. 60/hour sits above the broken-camera case (every customer through the box is ~10–20
+   lookups an hour, and the client debounces to 1–2 requests each) and far below a script.
+5. **Every lookup writes an audit row naming the staff member**, whether or not anything
+   matched. The design promises the *customer* "Manual lookups are logged with your name", and
+   only the server can keep that promise. The **query** is recorded; the **results** are not —
+   copying matched customers into an append-only seven-year log would build a second customer
+   list inside the audit trail.
+6. `perms.scanner`, the same permission as `POST /scans`: this is the fallback for a scan that
+   cannot happen, not a wider capability. A staff member who may not scan may not look a
+   customer up by name instead. A dashboard-scope token is refused.
+
 ### WalletToken (the rotating QR payload)
 ```
 memberId  string
