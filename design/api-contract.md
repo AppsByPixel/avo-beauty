@@ -228,19 +228,30 @@ Rules:
    escaped, so `%` searches for a percent sign rather than requesting the whole book.
 4. **Rate-limited in two tiers**, both counted over the audit rows themselves so the counter and
    the promise cannot disagree:
-   - **burst, per staff session** — 30 per 5 minutes → `429 lookup_rate_limited`
-   - **ceiling, per staff member** — 60 per rolling 60 minutes → `429 lookup_hourly_limit`
+   - **burst, per staff session** — 60 per 5 minutes → `429 lookup_rate_limited`
+   - **ceiling, per staff member** — 240 per rolling 60 minutes → `429 lookup_hourly_limit`
 
    **Both tiers count searches AND resolves together**, because the thing being protected is
    the customer directory, not one endpoint.
 
    The per-session tier alone was not a limit: a session is not scarce, and the PIN limiter
-   counts only *failed* attempts, so signing in again minted a fresh budget of 30 indefinitely.
-   The per-actor tier is keyed on `audit_log.actor_id` and **nothing else** — no session, no
-   device — so it cannot be reset by a new session, a new tablet or a new token. The ceiling is
-   checked first, because "wait a moment" is the wrong thing to tell someone who must wait an
-   hour. 60/hour sits above the broken-camera case (every customer through the box is ~10–20
-   lookups an hour, and the client debounces to 1–2 requests each) and far below a script.
+   counts only *failed* attempts, so signing in again minted a fresh budget indefinitely. The
+   per-actor tier is keyed on `audit_log.actor_id` and **nothing else** — no session, no device
+   — so it cannot be reset by a new session, a new tablet or a new token. The ceiling is checked
+   first, because "wait a moment" is the wrong thing to tell someone who must wait an hour.
+
+   **The numbers are measured, not estimated.** Replaying `LookupScreen`'s debounce (300ms,
+   reset per keystroke, minimum 3 characters) at realistic typing speeds and counting the audit
+   rows the server wrote: a customer costs **2 requests** for a fluent typist and **5** for a
+   deliberate one (4 searches + 1 resolve), because an `abort()` stops the client waiting but
+   does not un-send a request the server has already handled. One front desk with a broken
+   camera can serve ~20 customers an hour, so the worst realistic hour is ~100–140 requests.
+   240 is 1.7× that; the earlier 60 would have fired at **twelve** customers an hour, at a
+   counter with a customer standing there.
+
+   Being honest about the limit's reach: it bounds bulk extraction at machine speed and
+   guarantees attribution — it does not stop a determined insider reading her own salon's book
+   slowly, and the tenant predicate is what confines her to it.
 5. **Every lookup writes an audit row naming the staff member**, whether or not anything
    matched. The design promises the *customer* "Manual lookups are logged with your name", and
    only the server can keep that promise. The **query** is recorded; the **results** are not —
