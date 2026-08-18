@@ -157,6 +157,7 @@ export function signupRefusal(err: unknown, copy: Copy): SignupRefusal {
     return { message: copy.signUpOffline, recovery: 'retype' };
   }
 
+
   /**
    * An unmapped refusal. `signUpErrFailed` rather than `err.message`, on purpose:
    * passing the server's sentence through is how English reaches an Arabic
@@ -165,4 +166,62 @@ export function signupRefusal(err: unknown, copy: Copy): SignupRefusal {
    * conservative one — it neither hides the form nor claims the terms moved.
    */
   return { message: copy.signUpErrFailed, recovery: 'retype' };
+}
+
+// ------------------------------------------------------ loading the terms ----
+
+/**
+ * Why the published set could not be fetched.
+ *
+ * A SECOND CLASSIFIER, and not a duplicate of `signupRefusal`. That one answers
+ * "she submitted and was refused"; this answers "there is nothing to submit
+ * against", which is a different screen with a different question — is there a
+ * Try again button at all?
+ *
+ * Extracted from the component for the reason `deletionOutcome.ts` states: this
+ * workspace has no renderer, so a branch left inline in a screen is a branch no
+ * test can reach. The three outcomes each have a distinct sentence and the
+ * distinction is the whole point:
+ *
+ *   unpublished   a 503 the DEPLOYMENT has to fix. No retry — a button that fails
+ *                 identically teaches her the app is broken.
+ *   offline       her connection. Its own sentence, and a retry, because a
+ *                 connection can come back.
+ *   otherwise     our failure. A sentence and a retry.
+ */
+export interface TermsFailure {
+  /** The API's code, when there was one. Null on a transport failure. */
+  code: string | null;
+  /** True only for a genuine connection failure — never for the 503. */
+  offline: boolean;
+  /** Whether the screen offers Try again. */
+  retryable: boolean;
+}
+
+/** The API's code for "this deployment has published no legal set". */
+export const POLICIES_NOT_PUBLISHED = 'policies_not_published';
+
+export function termsFailure(err: unknown): TermsFailure {
+  if (!(err instanceof ApiError)) {
+    return { code: null, offline: false, retryable: true };
+  }
+
+  /**
+   * THE 503 COLLISION, AGAIN, AND IT IS THE SAME BUG IN A SECOND PLACE.
+   *
+   * `client.ts`'s `classify()` maps 503 to `offline`, and `policies_not_published`
+   * IS a 503 — verified against the real API, which answers it on `GET
+   * /v1/platform/policies` as well as on the signup POST. So `kind === 'offline'`
+   * is NOT sufficient to mean "no connection" anywhere a policy read can fail, and
+   * the code has to be excluded explicitly. Getting this wrong on the submit path
+   * produced "No connection. You need one to create an account" on a working
+   * network; the load path would have produced "We couldn't load the terms" with a
+   * retry that could never succeed.
+   */
+  const unpublished = err.code === POLICIES_NOT_PUBLISHED;
+  return {
+    code: err.code,
+    offline: err.kind === 'offline' && !unpublished,
+    retryable: !unpublished,
+  };
 }

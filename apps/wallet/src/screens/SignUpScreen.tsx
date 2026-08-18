@@ -61,7 +61,13 @@ import type { LegalDoc } from '@avo/types';
 import { ApiError } from '../api/client';
 import { signUp } from '../api/auth';
 import { getPolicies, localiseDoc, type PublishedPolicies } from '../api/account';
-import { MIN_PASSWORD_LENGTH, signupRefusal, type SignupRecovery } from '../domain/signup';
+import {
+  MIN_PASSWORD_LENGTH,
+  POLICIES_NOT_PUBLISHED,
+  signupRefusal,
+  termsFailure,
+  type SignupRecovery,
+} from '../domain/signup';
 import { SALON_ID } from '../config/salon';
 import { useLanguage } from '../i18n/language';
 import { PrimaryButton } from '../components/Buttons';
@@ -72,14 +78,22 @@ import { focusable } from '../theme/focus';
 /**
  * The terms, and whether they are here yet.
  *
- * `failed` carries the API's error CODE so the 503 `policies_not_published` can be
- * told from a 500 — the first means no account can be created at all, the second
- * is worth a retry. Both hide the form; only one of them offers the button.
+ * `failed` carries the API's error CODE **and** the failure KIND, because three
+ * different things have to be told apart and only one of them is our fault:
+ *
+ *   `policies_not_published`  a 503 the deployment has to fix. No account can be
+ *                             created at all, so no retry — a button that will
+ *                             fail identically teaches her the app is broken.
+ *   offline                   its own sentence, per interaction-spec §4. "We
+ *                             couldn't load the terms" reads as our failure when
+ *                             what happened is that she has no connection. Retry
+ *                             IS right here: a connection can come back.
+ *   anything else             our failure, with a retry.
  */
 type Terms =
   | { state: 'loading' }
   | { state: 'ready'; set: PublishedPolicies }
-  | { state: 'failed'; code: string | null };
+  | { state: 'failed'; code: string | null; offline: boolean; retryable: boolean };
 
 type Status =
   | { state: 'idle' }
@@ -131,13 +145,17 @@ export function SignUpScreen({
       .catch((err: unknown) => {
         if (!alive) return;
         /*
-          The code, not the error. Nothing on this screen renders the server's
-          sentence — the copy is ours in both languages — so the only thing worth
-          keeping is which refusal it was. This is also why the effect depends on
-          `reload` alone and reads no copy: a language switch mid-fetch must not
-          re-request the set.
+          Classified in `domain/signup.ts` rather than here, so the 503-vs-offline
+          discrimination is reachable by a test — it is the same collision that made
+          the SUBMIT path tell her the network was down when the terms simply were
+          not published, and it would have been silent on this path too.
+
+          Only the classification is kept, never the server's sentence: the copy is
+          ours in both languages. That is also why this effect reads no copy and
+          depends on `reload` alone — a language switch mid-fetch must not re-request
+          the set.
         */
-        setTerms({ state: 'failed', code: err instanceof ApiError ? err.code : null });
+        setTerms({ state: 'failed', ...termsFailure(err) });
       });
     return () => {
       alive = false;
@@ -236,30 +254,47 @@ export function SignUpScreen({
 
   // ------------------------------------------------------------ terms failed --
   /*
-    #10 again: no set, no form. `policies_not_published` is a 503 the deployment
-    has to fix, so it gets no Try again — a button that will fail identically
-    teaches her the app is broken. Anything else is worth one.
+    #10 again: no set, no form.
+
+    THREE OUTCOMES, NOT ONE, and which of them it is decides whether there is a
+    button. `policies_not_published` is a 503 the deployment has to fix, so no
+    retry — one that fails identically teaches her the app is broken. Offline gets
+    its own sentence AND a retry, because a connection can come back and
+    "We couldn't load the terms" reads as our fault when it is not. Everything else
+    is our failure, with a retry.
+
+    NOTHING GOES STALE HERE, which is why there is no "showing your last update"
+    branch: this screen is pre-auth and has no previous figures to keep. The
+    stale-not-blank rule applies where there is something to preserve.
+
+    A SET THAT PUBLISHED NOTHING TO CONSENT TO LANDS HERE TOO. See `noConsentDocs`
+    below.
   */
   if (terms.state === 'failed') {
-    const unpublished = terms.code === 'policies_not_published';
+    const unpublished = terms.code === POLICIES_NOT_PUBLISHED;
+    const { retryable } = terms;
     return (
       <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
         <Brand />
         <View style={styles.termsFailed} accessibilityRole="alert">
           <Text style={[text('displayS', lang), styles.title]}>
-            {unpublished ? copy.signUpErrTermsMissing : copy.signUpTermsFailedTitle}
+            {unpublished
+              ? copy.signUpErrTermsMissing
+              : terms.offline
+                ? copy.signUpOffline
+                : copy.signUpTermsFailedTitle}
           </Text>
-          {unpublished ? null : (
+          {retryable && !terms.offline ? (
             <Text style={[text('bodyS', lang), styles.sub]}>{copy.signUpTermsFailedBody}</Text>
-          )}
-          {unpublished ? null : (
+          ) : null}
+          {retryable ? (
             <PrimaryButton
               label={copy.tryAgain}
               onPress={() => setReload((n) => n + 1)}
               testID="signup-terms-retry"
               style={styles.submit}
             />
-          )}
+          ) : null}
           <Pressable
             onPress={onLogIn}
             accessibilityRole="link"
@@ -282,6 +317,45 @@ export function SignUpScreen({
    * rather than a list of its own.
    */
   const consentDocs = (ready?.docs ?? []).filter((d) => d.consent);
+
+  /**
+   * A PUBLISHED SET THAT FLAGS NOTHING AS A CONSENT DOCUMENT IS THE SAME PROBLEM
+   * AS NO SET AT ALL, and it is worth catching rather than rendering around.
+   *
+   * The design links "only the documents marked Required at signup"
+   * (AVO Owner Console.dc.html:679) beside the box. If none are marked, the screen
+   * would show a required "I agree to the Wallet terms, the refund policy and the
+   * privacy notice" with nothing to open — which is precisely the state
+   * `GET /v1/platform/policies` was opened up to prevent, described in that commit
+   * as "a consent checkbox above three dead links". #10's first sentence means the
+   * wallet cannot supply the missing text, so the honest answer is that an account
+   * cannot be created here, not a tick against invisible terms.
+   *
+   * Reachable only by an owner-console misconfiguration, not by a customer. The
+   * real API serves five (`gterms`, `gpolicy`, `terms`, `refund`, `privacy`).
+   */
+  const noConsentDocs = ready !== null && consentDocs.length === 0;
+  if (noConsentDocs) {
+    return (
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <Brand />
+        <View style={styles.termsFailed} accessibilityRole="alert">
+          <Text style={[text('displayS', lang), styles.title]} testID="signup-no-consent-docs">
+            {copy.signUpErrTermsMissing}
+          </Text>
+          <Pressable
+            onPress={onLogIn}
+            accessibilityRole="link"
+            dataSet={focusable}
+            testID="signup-to-login"
+            style={styles.footerLink}
+          >
+            <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView
@@ -367,6 +441,18 @@ export function SignUpScreen({
         preference.
       */}
       <View style={styles.consents}>
+        {/*
+          NOT TICKABLE UNTIL THE DOCUMENTS ARE HERE, and this is #10 rather than
+          politeness. While the set is in flight the links below do not exist, so a
+          live box would let her agree to "the Wallet terms, the refund policy and
+          the privacy notice" with no way to read any of them — the state
+          `GET /v1/platform/policies` was made unauthenticated to prevent. The
+          window is short and it is exactly the window in which the guarantee is
+          false.
+
+          The WhatsApp box stays live throughout: it is a notification preference,
+          not an acceptance, and nothing has to be read before setting it.
+        */}
         <Checkbox
           checked={acceptedTerms}
           onToggle={() => {
@@ -376,6 +462,7 @@ export function SignUpScreen({
           label={copy.signUpConsentTerms}
           lang={lang}
           testID="signup-consent-terms"
+          disabled={ready === null}
         />
         <Checkbox
           checked={wa}
@@ -390,8 +477,21 @@ export function SignUpScreen({
         design:145-149 — one link per consent document, opening the real text.
         The label is the document's own localised title from the API; #10 means
         there is no hard-coded "Terms & conditions" string anywhere here.
+
+        WHILE THEY LOAD, SKELETON BARS IN THE SHAPE OF THE LINKS. interaction-spec
+        §4: skeletons match the real layout rather than a spinner, and here it also
+        stops the consent block jumping down the screen when three links appear
+        under a box she may already be reaching for. There is deliberately no
+        placeholder TEXT — a greyed "Terms & conditions" would be the wallet
+        holding legal copy of its own, which is #10's first sentence.
       */}
-      {consentDocs.length > 0 ? (
+      {ready === null ? (
+        <View style={styles.links} accessibilityLabel={copy.loadingAria} testID="signup-docs-skeleton">
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={styles.linkSkeleton} />
+          ))}
+        </View>
+      ) : (
         <View style={styles.links}>
           {consentDocs.map((doc) => (
             <Pressable
@@ -408,7 +508,7 @@ export function SignUpScreen({
             </Pressable>
           ))}
         </View>
-      ) : null}
+      )}
 
       {/*
         DISABLED UNTIL THE TERMS ARE HERE, which is the loading state doing real
@@ -532,24 +632,30 @@ function Checkbox({
   label,
   lang,
   testID,
+  disabled,
 }: {
   checked: boolean;
   onToggle: () => void;
   label: string;
   lang: 'en' | 'ar';
   testID: string;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       onPress={onToggle}
+      disabled={disabled}
       accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
+      // `disabled` in the a11y state as well as the prop: a screen reader has to
+      // be able to say the box cannot be ticked yet, or its silence reads as a
+      // broken control.
+      accessibilityState={{ checked, disabled: Boolean(disabled) }}
       accessibilityLabel={label}
       dataSet={focusable}
       testID={testID}
       style={styles.consentRow}
     >
-      <View style={[styles.box, checked && styles.boxChecked]}>
+      <View style={[styles.box, checked && styles.boxChecked, disabled && styles.boxDisabled]}>
         {checked ? (
           <Svg width={11} height={11} viewBox="0 0 14 14" fill="none">
             <Path
@@ -562,7 +668,9 @@ function Checkbox({
           </Svg>
         ) : null}
       </View>
-      <Text style={[text('bodyS', lang), styles.consentText]}>{label}</Text>
+      <Text style={[text('bodyS', lang), styles.consentText, disabled && styles.consentTextDim]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -630,10 +738,25 @@ const styles = StyleSheet.create({
   },
   // #9: a filled control is brandDeep, because the tick inside it is white.
   boxChecked: { backgroundColor: color.brandDeep, borderColor: color.brandDeep },
+  boxDisabled: { backgroundColor: color.disabledBg, borderColor: color.hairline },
   consentText: { color: color.textMuted, flex: 1, lineHeight: 19 },
+  consentTextDim: { color: color.textMutedSoft },
   // design:145 — the row of document links, gap 14.
   links: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 12 },
   link: { paddingVertical: 6 },
+  /*
+    A bar in the shape of a link label, not a spinner and not placeholder text.
+    Three of them because the published set flags five consent documents and three
+    is what fits the row before it wraps — the count is cosmetic, the SHAPE is the
+    part interaction-spec §4 asks for.
+  */
+  linkSkeleton: {
+    height: 13,
+    width: 92,
+    borderRadius: 4,
+    marginVertical: 6,
+    backgroundColor: color.disabledBg,
+  },
   // Brand text on a light surface is brandDeep, never brand (#9).
   linkText: { color: color.brandDeep, fontWeight: '600', textDecorationLine: 'underline' },
   submit: { marginTop: 20 },

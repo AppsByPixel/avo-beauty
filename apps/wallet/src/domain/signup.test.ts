@@ -390,3 +390,74 @@ describe('the client’s password minimum matches the API’s', () => {
     expect(ar.signUpErrShort).not.toBe(en.signUpErrShort);
   });
 });
+
+// -------------------------------------------------- loading the terms ----
+
+/**
+ * The three ways the policy read can fail, and why they are not one state.
+ *
+ * These exist because of a near-miss: the 503-vs-offline collision was fixed on the
+ * SUBMIT path after a spec caught it, and the LOAD path had the identical branch
+ * written inline in the component, where nothing could reach it. Extracting
+ * `termsFailure` was the fix; these are the assertions that make it stay fixed.
+ */
+const { termsFailure, POLICIES_NOT_PUBLISHED } = await import('./signup');
+
+describe('why the terms could not be loaded', () => {
+  it('does not call an unpublished set “offline”, even though it is a 503', () => {
+    /*
+      `classify()` maps 503 to `offline`, so this is the trap. Calling it offline
+      would tell a customer on a working network to check her connection, and offer
+      a retry that can never succeed because nothing about her end is wrong.
+    */
+    const err = new ApiError('offline', 'x', 'WLT-1', 503, POLICIES_NOT_PUBLISHED);
+    const f = termsFailure(err);
+    expect(f.offline).toBe(false);
+    expect(f.retryable).toBe(false);
+    expect(f.code).toBe(POLICIES_NOT_PUBLISHED);
+  });
+
+  it('calls a real transport failure offline, and offers a retry', () => {
+    // A dead connection never reaches a server, so `sendOnce` builds this with no
+    // code and no status at all — which is what distinguishes it from the 503.
+    const err = new ApiError('offline', 'No connection.', 'WLT-1', null);
+    const f = termsFailure(err);
+    expect(f.offline).toBe(true);
+    expect(f.retryable).toBe(true);
+    expect(f.code).toBeNull();
+  });
+
+  it('treats a 500 as our failure, with a retry and not an offline sentence', () => {
+    const err = new ApiError('server', 'x', 'WLT-1', 500);
+    expect(termsFailure(err)).toEqual({ code: null, offline: false, retryable: true });
+  });
+
+  it('treats a contract mismatch as our failure — the schema threw, not the network', () => {
+    // `request()` raises this when the body does not satisfy PublishedPoliciesSchema.
+    const err = new ApiError('server', 'That response did not match the contract.', 'WLT-1', 200);
+    expect(termsFailure(err).retryable).toBe(true);
+    expect(termsFailure(err).offline).toBe(false);
+  });
+
+  it('survives a non-ApiError and still offers a retry', () => {
+    expect(termsFailure(new TypeError('boom'))).toEqual({
+      code: null,
+      offline: false,
+      retryable: true,
+    });
+  });
+
+  /**
+   * The one that pins the pair together. `signupRefusal` and `termsFailure` are two
+   * classifiers over the same collision, and they must agree that an unpublished
+   * set is not a connection problem — a screen that got one right and the other
+   * wrong would tell her two different things about one deployment fault depending
+   * on whether she had tapped the button yet.
+   */
+  it('agrees with signupRefusal about the unpublished set', () => {
+    const err = new ApiError('offline', 'x', 'WLT-1', 503, POLICIES_NOT_PUBLISHED);
+    expect(termsFailure(err).offline).toBe(false);
+    expect(signupRefusal(err, en).message).toBe(en.signUpErrTermsMissing);
+    expect(signupRefusal(err, en).message).not.toBe(en.signUpOffline);
+  });
+});
