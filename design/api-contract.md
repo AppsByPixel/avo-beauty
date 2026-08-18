@@ -185,7 +185,32 @@ MemberSearchRow
   name       string
   phoneLast4 string          // NOT the whole number
   tier       string | null
+
+GET /members/{id}        scanner scope + perms.scanner
+  → the SAME envelope as POST /scans:
+    { member: Member, heldDepositFils, heldDepositBooking, services[] }
 ```
+**`GET /members/{id}` is the last step of the manual path, and it returns the scan
+envelope rather than a bare `Member` on purpose.** The QR and the manual lookup are two
+doors onto one screen — the same name, balance, held deposit and service list to charge
+against — so one server-side builder serves both (`api/src/services/counter.ts`). Two
+hand-assembled copies is how `heldDepositFils` came to be hardcoded to `0` on the scan path
+while the charge path read it for real, showing the customer a credit line the charge then
+did not apply.
+
+Rules specific to the resolve:
+1. **Salon-predicated in the `WHERE`**, and a member of another salon is `404 unknown_member`
+   — byte-identical to an id that does not exist. A distinct `403` would confirm the id is
+   real, making this an oracle for "is 8842 a customer somewhere in AVO".
+2. **It counts against the same directory-read ceiling as the search** (see rule 4 below).
+   A resolve discloses strictly more than a search row — full phone, email, balance, visits —
+   so metering it separately, or not at all, would reopen the enumeration path from a second
+   door: exhaust the search budget, then walk ids here.
+3. **The audit row names the customer** (`Customer opened`), unlike the search row, and is
+   written **whether or not she was found and before the 404 is thrown**. An attempt on an id
+   that is not in this salon is the most interesting line in the log — it is what a directory
+   walk looks like from the inside — and a log of successful reads only would omit exactly
+   that evidence.
 **This is not `Member`, and parsing it as `Member` will fail — correctly.** A disambiguation
 list is not a profile: it carries no balance and no email, and the phone is the last four
 digits only. A balance in a list is a balance readable over a shoulder for every customer
@@ -205,6 +230,9 @@ Rules:
    the promise cannot disagree:
    - **burst, per staff session** — 30 per 5 minutes → `429 lookup_rate_limited`
    - **ceiling, per staff member** — 60 per rolling 60 minutes → `429 lookup_hourly_limit`
+
+   **Both tiers count searches AND resolves together**, because the thing being protected is
+   the customer directory, not one endpoint.
 
    The per-session tier alone was not a limit: a session is not scarce, and the PIN limiter
    counts only *failed* attempts, so signing in again minted a fresh budget of 30 indefinitely.

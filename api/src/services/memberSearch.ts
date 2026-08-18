@@ -70,12 +70,12 @@
  * delete, keyed on an identity the caller cannot choose.
  */
 
-import { and, eq, gte, ilike, or, sql } from 'drizzle-orm';
+import { and, eq, gte, ilike, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { auditLog } from '../db/schema/audit';
 import { member } from '../db/schema/member';
 import type { StaffPrincipal } from '../auth/principal';
-import { badRequest, tooManyRequests } from '../http/errors';
+import { badRequest, notFound, tooManyRequests } from '../http/errors';
 import { writeAudit } from './audit';
 
 /**
@@ -130,6 +130,33 @@ export const MEMBER_SEARCH_ACTOR_MAX_PER_WINDOW = 60;
 export const MEMBER_LOOKUP_ACTION = 'Customer looked up';
 
 /**
+ * The audit `action` for resolving ONE member by id — `GET /members/{id}`, the
+ * step between finding her in the list and charging her.
+ *
+ * A DIFFERENT ACTION, DELIBERATELY, because it is a different event and the log is
+ * read by people asking different questions. "Searched customers for Fatima" says
+ * what she typed; "Opened customer 8842" names who was actually looked at, which
+ * the search row cannot — a search records the query and never the results, on
+ * purpose, so that the audit trail does not become a second copy of the customer
+ * book. The resolve is where a specific customer's name enters the log, and it
+ * belongs there: it is the read that actually disclosed her.
+ */
+export const MEMBER_RESOLVE_ACTION = 'Customer opened';
+
+/**
+ * BOTH ACTIONS SHARE ONE CEILING, AND THAT IS THE POINT.
+ *
+ * The thing being protected is the customer DIRECTORY, not one endpoint. A resolve
+ * discloses strictly more than a search row does — the full phone, the email, the
+ * balance — so a resolve counted separately, or not at all, would reopen the
+ * enumeration hole that was just closed, from a different door: exhaust the search
+ * budget, then keep walking ids through the resolve.
+ *
+ * So the limiter counts directory READS, whichever endpoint performed them.
+ */
+export const DIRECTORY_READ_ACTIONS = [MEMBER_LOOKUP_ACTION, MEMBER_RESOLVE_ACTION] as const;
+
+/**
  * What the scanner needs to pick the right person and nothing else.
  *
  * NO BALANCE, NO EMAIL. The screen this feeds is a disambiguation list — the
@@ -164,25 +191,22 @@ function likeLiteral(q: string): string {
   return q.replace(/([\\%_])/g, '\\$1');
 }
 
-export async function searchMembers(
+/**
+ * The two ceilings, enforced for any directory read.
+ *
+ * Called by BOTH `searchMembers` and `resolveMember` and counting the rows of
+ * both, because the thing being protected is the customer directory rather than
+ * one endpoint. Extracted when the resolve arrived: a second copy of this, or a
+ * resolve that skipped it, would have reopened the enumeration path from a
+ * different door.
+ *
+ * Counted BEFORE anything is read and before any row is written, so a throttled
+ * caller neither reads anything nor inflates the count it is being judged on.
+ */
+export async function enforceDirectoryReadLimits(
   db: Db,
   principal: StaffPrincipal,
-  rawQuery: unknown,
-  ctx: { ipAddress?: string | null; userAgent?: string | null } = {},
-): Promise<MemberSearchItem[]> {
-  const q = typeof rawQuery === 'string' ? rawQuery.trim() : '';
-
-  if (q.length < MEMBER_SEARCH_MIN_QUERY) {
-    throw badRequest(
-      'query_too_short',
-      `Type at least ${MEMBER_SEARCH_MIN_QUERY} characters to search.`,
-    );
-  }
-
-  // ------------------------------------------------------- the rate limits --
-  // Counted BEFORE the search runs and before the row is written, so a throttled
-  // caller neither reads anything nor inflates the count it is being judged on.
-  //
+): Promise<void> {
   // ONE QUERY, TWO COUNTS. The hourly window contains the five-minute one, so a
   // single scan bounded by the wider window can answer both with FILTER — two
   // round trips to count rows in the same table for the same actor would be a
@@ -212,7 +236,8 @@ export async function searchMembers(
     .where(
       and(
         eq(auditLog.actorId, principal.id),
-        eq(auditLog.action, MEMBER_LOOKUP_ACTION),
+        // Both actions, so a search and a resolve draw on one budget.
+        inArray(auditLog.action, [...DIRECTORY_READ_ACTIONS]),
         gte(auditLog.createdAt, actorSince),
       ),
     );
@@ -233,6 +258,24 @@ export async function searchMembers(
       'Too many customer lookups. Wait a moment and try again.',
     );
   }
+}
+
+export async function searchMembers(
+  db: Db,
+  principal: StaffPrincipal,
+  rawQuery: unknown,
+  ctx: { ipAddress?: string | null; userAgent?: string | null } = {},
+): Promise<MemberSearchItem[]> {
+  const q = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+
+  if (q.length < MEMBER_SEARCH_MIN_QUERY) {
+    throw badRequest(
+      'query_too_short',
+      `Type at least ${MEMBER_SEARCH_MIN_QUERY} characters to search.`,
+    );
+  }
+
+  await enforceDirectoryReadLimits(db, principal);
 
   // ------------------------------------------------------------ the search --
   // Salon-scoped in the WHERE, not filtered afterwards: a row from another salon
@@ -313,4 +356,72 @@ export async function searchMembers(
     phoneLast4: last4(r.phone),
     tier: r.tier,
   }));
+}
+
+/**
+ * Resolve ONE member for a staff caller — the step between finding her in the
+ * lookup list and charging her.
+ *
+ * Without this the manual path was a dead end at its last step: the search returns
+ * `{id, salonId, name, phoneLast4, tier}`, deliberately narrow, and nothing turned
+ * that id into the envelope the counter needs. "Can't scan?" led to a row the
+ * scanner could display and could not act on, in the exact situation the fallback
+ * exists for — a customer standing at the counter with a flat phone.
+ *
+ * THE TENANT PREDICATE IS IN THE `WHERE`, and the refusal for another salon's
+ * member is `404 unknown_member` — byte-identical to a member that does not exist.
+ * A distinct 403 would confirm that the id is real, which turns this endpoint into
+ * an oracle for "is 8842 a customer somewhere in AVO" even when it refuses to say
+ * more. That is the same reasoning `POST /scans` records for its own two reads.
+ *
+ * IT COUNTS AGAINST THE DIRECTORY CEILING, and that is not belt-and-braces. This
+ * discloses strictly more than a search row does — the full phone, the email, the
+ * balance, the visit count — so an unmetered resolve would let someone exhaust the
+ * search budget and then keep walking ids here, reopening the enumeration hole
+ * from a different door. See DIRECTORY_READ_ACTIONS.
+ *
+ * THE AUDIT ROW NAMES HER, unlike the search row. A search records the query and
+ * never the results, so the log does not become a second copy of the customer
+ * book; this is the read that actually disclosed one specific customer, so this is
+ * where her id belongs.
+ */
+export async function resolveMember(
+  db: Db,
+  principal: StaffPrincipal,
+  rawId: unknown,
+  ctx: { ipAddress?: string | null; userAgent?: string | null } = {},
+): Promise<typeof member.$inferSelect> {
+  const id = typeof rawId === 'string' ? rawId.trim() : '';
+  if (id === '') throw badRequest('invalid_request', 'A member id is required.');
+
+  await enforceDirectoryReadLimits(db, principal);
+
+  const rows = await db
+    .select()
+    .from(member)
+    .where(and(eq(member.id, id), eq(member.salonId, principal.salonId)))
+    .limit(1);
+  const m = rows[0];
+
+  /**
+   * Written whether or not she was found, and BEFORE the refusal is thrown. An
+   * attempt on an id that is not in this salon is the single most interesting line
+   * in this log — it is what a directory walk looks like from the inside — and a
+   * log that recorded only successful reads would omit exactly the evidence.
+   */
+  await writeAudit(db, principal, {
+    salonId: principal.salonId,
+    kind: 'access',
+    action: MEMBER_RESOLVE_ACTION,
+    detail: m ? `Opened ${m.name}` : `Attempted an id not in this salon: ${id}`,
+    source: 'scanner',
+    subjectType: 'member',
+    subjectId: m?.id ?? null,
+    metadata: { requestedId: id, found: Boolean(m), sessionId: principal.sessionId },
+    ipAddress: ctx.ipAddress ?? null,
+    userAgent: ctx.userAgent ?? null,
+  });
+
+  if (!m) throw notFound('unknown_member', 'No such member.');
+  return m;
 }
