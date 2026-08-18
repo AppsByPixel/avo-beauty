@@ -8,12 +8,20 @@
  * that gates CI is the part that must not drift, and none of it needs a
  * processor to be reachable.
  *
- * EVERY FIXTURE IS VERBATIM. The status payload is MyFatoorah's own
- * `GetPaymentStatus` example (docs .../reference/get-payment-status.md), typos
- * intact — `"TransactionStatus": "Succss"`, `"TransationValue"` — and the webhook
- * payload is their `PAYMENT_STATUS_CHANGED` sample event
- * (.../webhook-v2-payment-status-data-model.md). Paraphrasing a fixture is how a
- * suite ends up testing what someone remembered the processor sends.
+ * EVERY FIXTURE IS VERBATIM, and there are two. `PAID_WEBHOOK` is MyFatoorah's own
+ * `PAYMENT_STATUS_CHANGED` sample event (docs
+ * .../webhook-v2-payment-status-data-model.md), trimmed only of the card and
+ * supplier detail nothing here reads. `PENDING_STATUS_LIVE` is a real
+ * `GetPaymentStatus` response this driver received from apitest.myfatoorah.com,
+ * pasted whole — including `"InvoiceValue": 8.87`, which is the float hazard, and
+ * an empty `InvoiceTransactions`, which is the shape a mapping that assumed a
+ * first transaction would crash on. Paraphrasing a fixture is how a suite ends up
+ * testing what someone remembered the processor sends.
+ *
+ * Their typos are in the ASSERTIONS rather than in a fixture, because that is
+ * where they matter: `TransactionStatus` is documented and returned as `"Succss"`
+ * (and the transaction amount field as `"TransationValue"`), so `outcomeFor` is
+ * asserted against both that spelling and the correct one.
  *
  * The one thing that CANNOT be tested without their portal secret is whether our
  * base64 equals theirs. What can be — and is, character for character — is the
