@@ -1487,7 +1487,17 @@ a:hover {
 .accounts__count {
   font-size: 13px;
   color: var(--avo-text-muted);
+}
+
+/* The design's count line and "+ Add teammate" share one row, pushed apart. */
+.accounts__count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  max-width: 980px;
 }
 
 .accounts__list {
@@ -1499,6 +1509,18 @@ a:hover {
 
 .account {
   padding: 18px 20px;
+}
+
+/* A leaver's card. Still legible — her name is on years of charges — but plainly
+   not a live account. Never `display: none`: an account that vanishes looks
+   deleted, and deactivation is deliberately not deletion. */
+.account[data-inactive] {
+  background: var(--avo-surface-alt);
+}
+
+.account[data-inactive] .account__name,
+.account[data-inactive] .account__handle {
+  color: var(--avo-text-muted);
 }
 
 .account__head {
@@ -1560,6 +1582,143 @@ a:hover {
   font-size: 12px;
   color: var(--avo-text-muted-soft);
   line-height: 1.5;
+}
+
+/* ---- reset link, remove, and the two confirmations ---- */
+
+/* The design's tinted "Reset password" button: brand text on brand tint, which
+   is the surface use of `--avo-brand` that non-negotiable #9 allows. */
+.account__reset {
+  padding: 8px 12px;
+  font-size: 12px;
+  border-radius: 10px;
+}
+
+/* "Link sent · expires 19:42". The dot is a status graphic, not text — the
+   meaning is in the words beside it (interaction-spec.md §2). */
+.account__sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 7px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.account__sent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9px;
+  background: var(--avo-brand-deep);
+  flex-shrink: 0;
+}
+
+.account__remove {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--avo-ui-ink-12);
+  background: var(--avo-white);
+  color: var(--avo-ui-ink-38);
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition:
+    background var(--avo-motion-fast) ease,
+    color var(--avo-motion-fast) ease;
+}
+
+.account__remove:hover:not(:disabled) {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+}
+
+.account__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/*
+ * The inline confirmation for the two actions that land on somebody else's
+ * phone: removing an account, and revoking Scan & charge. Tinted with the
+ * warning surface rather than the danger one — this is a consequence to read,
+ * not an error that has happened.
+ */
+.account__confirm {
+  margin-top: 14px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+}
+
+.account__confirm-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-warn-text);
+}
+
+.account__confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* ---- new team account ---- */
+
+/* The design outlines this card in brand to mark it as the one thing on the
+   screen awaiting input. A 1.5px border, not a fill: no text sits on it. */
+.new-account {
+  border: 1.5px solid var(--avo-brand);
+  padding: 20px;
+  margin-bottom: 16px;
+  max-width: 980px;
+}
+
+.new-account__title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.new-account__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 13px;
+}
+
+/* interaction-spec.md §1: two-column grids go 1-up at narrow and below. */
+.dash[data-bp='narrow'] .new-account__grid,
+.dash[data-bp='tablet'] .new-account__grid {
+  grid-template-columns: 1fr;
+}
+
+.new-account__error {
+  margin-top: 14px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: var(--avo-danger-bg);
+  font-size: 12.5px;
+  color: var(--avo-danger-text);
+}
+
+.new-account__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.new-account__note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--avo-text-muted-soft);
 }
 
 /* ============================================================== audit log == */

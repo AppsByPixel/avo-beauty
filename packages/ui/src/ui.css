@@ -188,6 +188,54 @@
   color: var(--avo-ui-ink-38);
 }
 
+/* ----------------------------------------------------------------- select -- */
+
+/*
+ * The design's role / branch-access / new-account selects. Same border, radius
+ * and type scale as `.avo-input`, so a row mixing the two reads as one control
+ * set rather than two libraries.
+ *
+ * No `outline` rule of its own, on purpose: the token `:focus-visible` ring is
+ * the entire focus treatment, and a reset here would silently beat it exactly
+ * the way the one on `.avo-input` used to.
+ */
+.avo-select-wrap {
+  display: inline-flex;
+}
+
+.avo-select {
+  box-sizing: border-box;
+  border: 1px solid var(--avo-ui-ink-14);
+  background: var(--avo-white);
+  border-radius: 11px;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--avo-ink);
+  cursor: pointer;
+  transition: border-color var(--avo-motion-fast) ease;
+}
+
+.avo-field .avo-select {
+  width: 100%;
+}
+
+/* The compact in-row variant the team card uses. */
+.avo-select--sm {
+  border-radius: 10px;
+  padding: 8px 11px;
+  font-size: 13px;
+}
+
+.avo-select:focus {
+  border-color: var(--avo-brand);
+}
+
+.avo-select:disabled {
+  color: var(--avo-text-muted-soft);
+  cursor: not-allowed;
+}
+
 /* ------------------------------------------------------------ inline error */
 
 .avo-inline-error {

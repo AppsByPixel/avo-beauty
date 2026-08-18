@@ -15,6 +15,7 @@ export { InlineError, type InlineErrorProps } from './InlineError.js';
 export { Money, type MoneyProps } from './Money.js';
 export { Pill, type PillProps, type PillTone } from './Pill.js';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented.js';
+export { Select, type SelectOption, type SelectProps } from './Select.js';
 export { Stepper, type StepperProps } from './Stepper.js';
 export { Skeleton, type SkeletonProps } from './Skeleton.js';
 export { StatCard, type StatCardProps } from './StatCard.js';
