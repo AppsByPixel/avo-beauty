@@ -120,7 +120,7 @@ NotificationPrefs
   offers        bool            // flattened for the switch to bind to
   offersConsent {
     granted       bool
-    grantedAt     datetime | null
+    at            datetime | null  // when the latest event was recorded
     source        string | null  // "wallet_account", "signup", …
     policyVersion int | null     // the terms in force when she agreed
   }
@@ -201,8 +201,18 @@ Rules:
    A staff member reading a number off a card has the whole number.
 3. **Minimum query length 2.** One character returns the salon. `LIKE` metacharacters are
    escaped, so `%` searches for a percent sign rather than requesting the whole book.
-4. **Rate-limited per staff session** — 30 lookups per 5 minutes, counted over the audit rows
-   themselves so the counter and the promise cannot disagree. `429 lookup_rate_limited`.
+4. **Rate-limited in two tiers**, both counted over the audit rows themselves so the counter and
+   the promise cannot disagree:
+   - **burst, per staff session** — 30 per 5 minutes → `429 lookup_rate_limited`
+   - **ceiling, per staff member** — 60 per rolling 60 minutes → `429 lookup_hourly_limit`
+
+   The per-session tier alone was not a limit: a session is not scarce, and the PIN limiter
+   counts only *failed* attempts, so signing in again minted a fresh budget of 30 indefinitely.
+   The per-actor tier is keyed on `audit_log.actor_id` and **nothing else** — no session, no
+   device — so it cannot be reset by a new session, a new tablet or a new token. The ceiling is
+   checked first, because "wait a moment" is the wrong thing to tell someone who must wait an
+   hour. 60/hour sits above the broken-camera case (every customer through the box is ~10–20
+   lookups an hour, and the client debounces to 1–2 requests each) and far below a script.
 5. **Every lookup writes an audit row naming the staff member**, whether or not anything
    matched. The design promises the *customer* "Manual lookups are logged with your name", and
    only the server can keep that promise. The **query** is recorded; the **results** are not —
