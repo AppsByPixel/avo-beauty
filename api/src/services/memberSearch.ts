@@ -459,3 +459,14 @@ export async function resolveMember(
   if (!m) throw notFound('unknown_member', 'No such member.');
   return m;
 }
+
+/**
+ * The audit `action` for a directory read that was REFUSED before it happened.
+ *
+ * A separate action from the two successful ones, because it answers a different
+ * question: not "who did she look at" but "who tried to reach the directory without
+ * the authority to". `kind: 'risk'` rather than `'access'` for the same reason —
+ * nothing was accessed. See routes/members.ts § requireDirectoryScanner for where
+ * the line between a logged refusal and unlogged noise is drawn.
+ */
+export const DIRECTORY_REFUSED_ACTION = 'Customer directory access refused';
