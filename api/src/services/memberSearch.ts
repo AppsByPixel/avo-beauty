@@ -86,45 +86,79 @@ export const MEMBER_SEARCH_MIN_QUERY = 2;
 /** A picker, not a report. Twenty is more than a human disambiguates by eye. */
 export const MEMBER_SEARCH_LIMIT = 20;
 export const MEMBER_SEARCH_WINDOW_MINUTES = 5;
-/**
- * Generous for the counter, useless for enumeration. A busy front desk does not
- * make thirty distinct lookups in five minutes; a script trying to walk the name
- * space needs thousands.
- */
-export const MEMBER_SEARCH_MAX_PER_WINDOW = 30;
 
 /**
- * THE PER-PERSON CEILING. Sixty lookups in a rolling hour, and the number comes
- * from what a real front desk does rather than from a round figure.
+ * ============================================================================
+ * BOTH CEILINGS COME FROM A MEASUREMENT. THE FIRST PAIR CAME FROM AN ESTIMATE,
+ * AND THE ESTIMATE WAS WRONG.
+ * ============================================================================
  *
- * WHAT LEGITIMATE USE COSTS. Manual lookup is the FALLBACK for a customer whose
- * phone is flat or whose QR will not read — most customers scan, so most visits
- * spend nothing here. `LookupScreen` debounces and aborts the in-flight request
- * on each keystroke, so finding one customer costs one or two requests, not one
- * per character. A busy salon serving sixty visits across a ten-hour day is six
- * visits an hour; even a pathological hour — the camera is broken and EVERY
- * customer goes through the box — is perhaps ten to twenty lookups, so twenty to
- * forty requests.
+ * The original numbers (30 per 5 minutes, 60 per hour) rested on the claim that
+ * `LookupScreen`'s debounce makes one customer cost "one or two requests". Lane D
+ * objected that 60 an hour is one lookup a minute and that a queue of flat-phone
+ * customers is the case this endpoint exists for. Lane D was right, for two
+ * reasons the estimate missed.
  *
- * Sixty an hour is therefore above the broken-camera case and roughly fifteen
- * times ordinary use. It is one lookup a minute sustained for a full hour, which
- * no front desk does with real customers standing in front of it. The window
- * ROLLS, so a receptionist who spends her budget in a bad twenty minutes gets it
- * back continuously rather than at a fixed reset.
+ * FIRST, AN ABORT DOES NOT UN-SEND. `LookupScreen` calls `inflight.abort()` on
+ * each keystroke, and the estimate treated that as if it prevented a request. It
+ * does not: it stops the CLIENT waiting for a reply that is already on its way,
+ * and the server has already handled it and written its audit row. Every request
+ * that leaves the tablet costs budget whether the client still wants the answer or
+ * not.
  *
- * WHY THE HOURLY TIER IS THE REAL BOUND. The burst tier permits 30 per 5 minutes,
- * which is 360 an hour if sustained — so this is the constraint that actually
- * binds, and the burst tier only shapes the shape of the traffic underneath it.
- * That division is deliberate: the hourly cap does not need headroom for bursts,
- * because it only has to sit above sustained legitimate use.
+ * SECOND, THE RESOLVE DOUBLED THE COST PER CUSTOMER. `GET /members/{id}` now
+ * counts against the same budget — correctly, see DIRECTORY_READ_ACTIONS — so a
+ * receptionist who searches and then opens each customer spends one more request
+ * per customer than the estimate assumed.
  *
- * IF THIS EVER FIRES ON REAL WORK it is evidence, not noise — every refusal is
- * preceded by sixty audit rows naming who made them and what they searched for,
- * which is enough to tell a broken scanner from a directory walk. Raise it on
- * that evidence, not on a complaint.
+ * MEASURED, by replaying LookupScreen's own debounce (300ms, reset per keystroke,
+ * minimum 3 characters) at realistic typing speeds against the real endpoint and
+ * counting the audit rows the SERVER wrote:
+ *
+ *     fluent typer, knows the name            1 search + 1 resolve =  2
+ *     normal typing speed                     1 search + 1 resolve =  2
+ *     hunt-and-peck, glances at the screen     2 searches + 1 resolve = 3
+ *     typo then correction                    3 searches + 1 resolve = 4
+ *     deliberate, pauses over each key        4 searches + 1 resolve = 5
+ *
+ * So a customer costs 2 requests at best and 5 at worst, not 1-2. Call a difficult
+ * one — a name spelled differently than she says it, two or three search rounds —
+ * 7 or 8.
+ *
+ * THE ARITHMETIC. The case to survive is the camera being broken with a queue: one
+ * front desk can process perhaps 20 customers an hour that way, three minutes each
+ * including the charge. At the worst measured profile that is 20 x 5 = 100 requests
+ * an hour, and with a share of difficult customers about 140.
+ *
+ *   240 an hour is 1.7x that worst realistic hour, and 48 customers an hour at the
+ *   worst profile — more than double what one counter can physically serve.
+ *   The old 60 fired at TWELVE customers an hour. It would have fired at a counter
+ *   with a customer standing there, which is the one thing it must not do.
+ *
+ *   60 per 5 minutes is 12 customers in five minutes at the worst profile, which is
+ *   25 seconds a customer — impossible with real people. The old 30 fired at six
+ *   customers in five minutes, and a queue of five plus one difficult lookup
+ *   reaches 33.
+ *
+ * The hourly tier still binds and the burst tier still shapes: 60 per 5 minutes
+ * would be 720 an hour if sustained, so 240 is the real constraint underneath it.
+ * The window ROLLS, so a bad twenty minutes refills continuously.
+ *
+ * WHAT THIS DOES AND DOES NOT BUY, honestly. 240 an hour does not stop a
+ * determined insider reading her OWN salon's book slowly — at 20 rows a response
+ * it never could, and the tenant predicate already limits her to the customers she
+ * legitimately works with. What it bounds is bulk extraction at machine speed, and
+ * what it guarantees is attribution: every one of those 240 requests leaves an
+ * audit row naming her, and the resolve rows name the customer. Generosity plus a
+ * complete trail is worth more here than a tight limit that fires on real work and
+ * teaches a salon that AVO breaks at the counter.
+ *
+ * RAISE THESE ON EVIDENCE, and the evidence exists by construction: a refusal is
+ * preceded by 240 rows saying who searched for what.
  */
+export const MEMBER_SEARCH_MAX_PER_WINDOW = 60;
 export const MEMBER_SEARCH_ACTOR_WINDOW_MINUTES = 60;
-export const MEMBER_SEARCH_ACTOR_MAX_PER_WINDOW = 60;
+export const MEMBER_SEARCH_ACTOR_MAX_PER_WINDOW = 240;
 
 /** The audit `action`, used both to write the row and to count the window. */
 export const MEMBER_LOOKUP_ACTION = 'Customer looked up';

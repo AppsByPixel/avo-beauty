@@ -274,3 +274,42 @@ SELECT CASE
      WHERE m.salon_id <> 'SL-VERIFY'
      GROUP BY m.id, m.balance_fils
   ) per_member;
+
+\warn ''
+\warn '=== 6. a consent record cannot be rewritten =============================='
+\warn ''
+-- Non-negotiable #8 needs marketing consent readable and TRUTHFUL on the platform
+-- send path. Migration 0020 stores it as append-only events and revokes UPDATE and
+-- DELETE from the application role; migration 0023 adds the triggers that stop the
+-- OWNER too, because 0020's comment claimed parity with `audit_log` and only had
+-- half of it. A consent record that can be edited is not evidence of consent.
+--
+-- Both statements below are EXPECTED TO FAIL, as the owner.
+INSERT INTO member_consent_event (member_id, salon_id, kind, granted, source, policy_version)
+VALUES ('MB-VERIFY', 'SL-VERIFY', 'marketing_offers', false, 'wallet_account', 3);
+
+\warn '--- 6a. a withdrawal cannot be flipped into a grant ---'
+UPDATE member_consent_event SET granted = true WHERE member_id = 'MB-VERIFY';
+
+\warn '--- 6b. nor can the event be backdated, or moved to another policy version ---'
+UPDATE member_consent_event SET created_at = now() - interval '1 year' WHERE member_id = 'MB-VERIFY';
+UPDATE member_consent_event SET policy_version = 99 WHERE member_id = 'MB-VERIFY';
+
+\warn '--- 6c. nor emptied wholesale ---'
+TRUNCATE member_consent_event;
+
+\warn '--- 6d. but the ERASURE CASCADE must still work: DELETE has NO trigger, deliberately ---'
+-- `member_consent_event.member_id` is ON DELETE CASCADE and the 30-day erasure the
+-- privacy policy promises ends in a DELETE of the member. A DELETE trigger here
+-- would make that erasure impossible — the cascade fails, so the member delete
+-- fails. This block is the one in section 6 that must SUCCEED, and it is why the
+-- parity with `audit_log` deliberately stops at UPDATE and TRUNCATE.
+BEGIN;
+INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
+VALUES ('MB-ERASE', 'SL-VERIFY', 'Erasure Probe', '+96599100009', '$argon2id$fake', 0, 'bronze', 3);
+INSERT INTO member_consent_event (member_id, salon_id, kind, granted, source, policy_version)
+VALUES ('MB-ERASE', 'SL-VERIFY', 'marketing_offers', true, 'signup', 3);
+DELETE FROM member WHERE id = 'MB-ERASE';
+SELECT count(*) AS consent_rows_left_after_erasure
+  FROM member_consent_event WHERE member_id = 'MB-ERASE';
+COMMIT;

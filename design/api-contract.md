@@ -165,11 +165,22 @@ Rules:
 4. **A non-zero balance is refused** — `409 balance_outstanding`, carrying `balanceFils`. Her
    wallet is prepaid credit the salon owes her (non-negotiable #5), and erasing the account
    that names the money while the money is owed is the one outcome nobody can undo.
-5. **Sessions are NOT revoked**, deliberately. The 30 days are a grace window, and an account
+5. **A settled top-up CANCELS a pending deletion request**, in the same transaction as the
+   credit. Rule 4 is checked once, at request time, so `deletion_requested_at` over a positive
+   `balance_fils` was otherwise reachable — the state the 409 exists to prevent, arrived at
+   from the other direction, with a 30-day clock running towards erasing a funded wallet.
+   Paying money in is an unambiguous statement that she intends to keep using the wallet, and
+   it is later and costlier than the deletion request. Blocking the top-up instead would refuse
+   her money to protect a request she has evidently changed her mind about. Audited as
+   `Account deletion cancelled` with `reason: "topup_after_deletion_request"`; she discovers it
+   from `GET /members/me/deletion` answering `none`. **A proactive notice is owed and not
+   sent** — there is no customer notification sender yet, so the audit row carries
+   `customerNoticeOwed: true` rather than implying she was told.
+6. **Sessions are NOT revoked**, deliberately. The 30 days are a grace window, and an account
    she is locked out of the moment she asks is one she cannot change her mind about. `DELETE`
    is that door, and `GET` is the sign on it — a grace window she cannot see is a grace window
    she cannot use.
-6. `erasureScheduled` is `false` until the erasure job exists. Which columns are nulled at the
+7. `erasureScheduled` is `false` until the erasure job exists. Which columns are nulled at the
    due date, and which survive the 7-year financial record, is a retention decision that
    belongs to the client. A response implying the erasure had been carried out would make the
    confirmation screen say something untrue.
@@ -228,19 +239,30 @@ Rules:
    escaped, so `%` searches for a percent sign rather than requesting the whole book.
 4. **Rate-limited in two tiers**, both counted over the audit rows themselves so the counter and
    the promise cannot disagree:
-   - **burst, per staff session** — 30 per 5 minutes → `429 lookup_rate_limited`
-   - **ceiling, per staff member** — 60 per rolling 60 minutes → `429 lookup_hourly_limit`
+   - **burst, per staff session** — 60 per 5 minutes → `429 lookup_rate_limited`
+   - **ceiling, per staff member** — 240 per rolling 60 minutes → `429 lookup_hourly_limit`
 
    **Both tiers count searches AND resolves together**, because the thing being protected is
    the customer directory, not one endpoint.
 
    The per-session tier alone was not a limit: a session is not scarce, and the PIN limiter
-   counts only *failed* attempts, so signing in again minted a fresh budget of 30 indefinitely.
-   The per-actor tier is keyed on `audit_log.actor_id` and **nothing else** — no session, no
-   device — so it cannot be reset by a new session, a new tablet or a new token. The ceiling is
-   checked first, because "wait a moment" is the wrong thing to tell someone who must wait an
-   hour. 60/hour sits above the broken-camera case (every customer through the box is ~10–20
-   lookups an hour, and the client debounces to 1–2 requests each) and far below a script.
+   counts only *failed* attempts, so signing in again minted a fresh budget indefinitely. The
+   per-actor tier is keyed on `audit_log.actor_id` and **nothing else** — no session, no device
+   — so it cannot be reset by a new session, a new tablet or a new token. The ceiling is checked
+   first, because "wait a moment" is the wrong thing to tell someone who must wait an hour.
+
+   **The numbers are measured, not estimated.** Replaying `LookupScreen`'s debounce (300ms,
+   reset per keystroke, minimum 3 characters) at realistic typing speeds and counting the audit
+   rows the server wrote: a customer costs **2 requests** for a fluent typist and **5** for a
+   deliberate one (4 searches + 1 resolve), because an `abort()` stops the client waiting but
+   does not un-send a request the server has already handled. One front desk with a broken
+   camera can serve ~20 customers an hour, so the worst realistic hour is ~100–140 requests.
+   240 is 1.7× that; the earlier 60 would have fired at **twelve** customers an hour, at a
+   counter with a customer standing there.
+
+   Being honest about the limit's reach: it bounds bulk extraction at machine speed and
+   guarantees attribution — it does not stop a determined insider reading her own salon's book
+   slowly, and the tenant predicate is what confines her to it.
 5. **Every lookup writes an audit row naming the staff member**, whether or not anything
    matched. The design promises the *customer* "Manual lookups are logged with your name", and
    only the server can keep that promise. The **query** is recorded; the **results** are not —

@@ -162,6 +162,13 @@
       "when": 1786941200000,
       "tag": "0022_service_arabic_name",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1787027600000,
+      "tag": "0023_consent_events_are_immutable",
+      "breakpoints": true
     }
   ]
 }
