@@ -1235,14 +1235,14 @@ describe('GAP: tenancy surface not reachable yet', () => {
    * hold is applied inside `api/src/services/charge.ts`. So the case is no longer
    * blocked on lane A; it is simply unwritten, and it is now writable.
    */
-  it.todo(
-    'A DEPOSIT HELD AT SALON A MUST NOT BE APPLICABLE TO A CHARGE AT SALON B, and this is now ' +
-      'writable rather than blocked. `findApplicableHold` does scope on salonId, so the spec is a ' +
-      'guard on a control that appears to exist rather than a report of one missing — the same ' +
-      'shape as the salon-scoped service-id spec further up this file. Note the trap that caught ' +
-      'lane A: the hold only applies INSIDE the no-show grace window, so the booking has to be ' +
-      'inside it or the hold is legitimately 0 and the spec proves nothing (lane D, next slice)',
-  );
+  /**
+   * COVERED — `e2e/deposit.test.ts` asserts both walls: salon B's scanner cannot
+   * reach a salon A member at all (404, and the refusal does not leak her name),
+   * and no booking of hers is recorded against salon B. The inner wall is
+   * `findApplicableHold`'s salonId predicate; the outer is the route's own tenancy
+   * check, and a spec proving only the outer would go quiet the day a route stopped
+   * enforcing it.
+   */
   it.todo(
     'the PSP callback has no endpoint yet; a gateway reference must resolve to the salon that created the intent, or one salon confirms another salon top-up',
   );

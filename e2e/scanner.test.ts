@@ -2136,22 +2136,13 @@ describe('GAP: what the API still owes the scanner', () => {
    * a stale todo saying a money path cannot be tested is worse than no todo,
    * because it reads as a reason not to look.
    */
-  it.todo(
-    'THE HELD DEPOSIT IS A LIVE MONEY PATH WITH NO E2E COVERAGE AT ALL. The only POST /bookings ' +
-      'call in this suite is contract.test.ts, which books 9+ days out and asserts schema shape ' +
-      'only — and 9 days out is OUTSIDE the no-show grace window, so it correctly holds 0 and ' +
-      'proves nothing about a hold. `depositAppliedFils` and `heldDepositFils` appear in this ' +
-      'suite only as interface fields, never inside an expect(). Four cases needed, and the ' +
-      'window is the trap: (1) a NON-ZERO hold, which requires booking INSIDE the grace window ' +
-      '(seed: no_show_return_minutes = 60), since findApplicableHold bails on ' +
-      'noShowReturnDueAt <= now; (2) a ZERO hold outside it, so the boundary is asserted from ' +
-      'both sides; (3) the charge applying the hold, moving the booking to completed, with ' +
-      'applied = min(gross, held); (4) MIGRATION 0014\'s case, which lane A confirms it never ' +
-      'exercised — a service CHEAPER than the deposit, giving a charge with amount_fils = 0 plus ' +
-      'a deposit_return for the remainder. 0014 relaxed transaction_amount_sign_matches_kind to ' +
-      'allow `charge AND amount_fils <= 0` for exactly that case, and nothing has ever produced ' +
-      'one (lane D, next slice)',
-  );
+  /**
+   * COVERED — see `e2e/deposit.test.ts`. This entry twice described a money path as
+   * untestable and was twice wrong: first because `POST /scans` was said to hardcode
+   * `heldDepositFils: 0`, then because the only booking in the suite was nine days
+   * out and so held nothing CORRECTLY. Seven specs now drive it, including migration
+   * 0014's case, which nothing had ever produced.
+   */
 
   // ------------------------------------------------------------------ 6 --
   /**
