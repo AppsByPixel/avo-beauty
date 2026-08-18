@@ -10,7 +10,7 @@ import {
   useSubmitCampaign,
 } from '../../api/promotions.js';
 import { ApiError } from '../../api/client.js';
-import { WriteError } from '../sectionState.js';
+import { SectionError, WriteError } from '../sectionState.js';
 
 /**
  * Marketing → Campaigns. NON-NEGOTIABLE #8 LIVES ON THIS SCREEN.
@@ -272,9 +272,42 @@ function Queue({ loading }: { loading: boolean }) {
           you&rsquo;ll be told the decision.
         </p>
       ) : campaigns.isError ? (
-        <p className="mk__none">Couldn&rsquo;t load the queue just now.</p>
+        /*
+         * THIS WAS THE ONE READ ERROR IN THE DASHBOARD NOT GOING THROUGH
+         * `SectionError`, and it collapsed three different situations into one
+         * sentence — "Couldn't load the queue just now" — with no retry.
+         *
+         * interaction-spec.md §4 asks for the opposite: distinguish *we failed*
+         * (retry) from *you can't do that* (explain). The queue is gated on
+         * `perms.marketing`, so a merchant without it was told to wait for
+         * something that will never load, on a screen whose whole subject is
+         * "did AVO get my campaign". Offline said the same thing, so a dropped
+         * connection was indistinguishable from a permission she does not hold.
+         *
+         * `sectionState.tsx` already encodes all three and every other read in
+         * the dashboard uses it. The 404 branch above still comes first: the
+         * endpoint genuinely does not exist yet, which is neither of the two.
+         */
+        <SectionError
+          error={campaigns.error}
+          forbiddenTitle="You don't have access to campaigns"
+          failedTitle="Couldn't load the queue"
+          onRetry={() => void campaigns.refetch()}
+          retrying={campaigns.isFetching}
+        />
       ) : items.length === 0 ? (
-        <p className="mk__none">Nothing submitted yet.</p>
+        /*
+         * "Nothing submitted yet." named neither the thing nor the action —
+         * `AVO States.dc.html` states the rule as "Name the thing, offer the one
+         * action that fills it", and the Happy hours card two files over already
+         * does. No spatial direction: `.mk__campaigns` is two columns at base and
+         * one at tablet, so "on the left" is wrong at the width where the form
+         * sits above this card.
+         */
+        <p className="mk__none">
+          No campaigns yet. Build one in <b>New campaign</b> and submit it — AVO reviews every
+          campaign before it reaches a phone, and you&rsquo;ll be told the decision.
+        </p>
       ) : (
         items.map((c) => <QueueRow key={c.id} campaign={c} />)
       )}

@@ -138,7 +138,15 @@ export function HappyHours({ branches, promotions, loading }: HappyHoursProps) {
           </div>
         ) : windows.length === 0 ? (
           <p className="mk__none">
-            No windows yet. Add one on the right and it goes live at its next start time.
+            {/*
+              Was "Add one on the right". `.mk__happy` is two columns at base and
+              one at tablet (app.css §mk__happy), so at the narrower widths the
+              "Add a window" card sits BELOW this one and the direction was simply
+              wrong. Naming the panel is correct at every breakpoint — which is
+              what §1's reflow means for copy, not just for layout.
+            */}
+            No windows yet. Add one in <b>Add a window</b> and it goes live at its next start
+            time.
           </p>
         ) : (
           windows.map((w) => (
