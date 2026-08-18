@@ -129,6 +129,24 @@ So end with an observation, not an action: a `ps` sweep and a port scan that com
 A misleading success line is the same defect as a green typecheck bought with a cast — it
 spends your trust on something that did not happen.
 
+**Kill by PID or process group. NEVER by name pattern.** The process table is shared by all
+five worktrees, and a pattern does not know which worktree a process belongs to.
+
+One lane ran unscoped `pkill -f vitest` on a loop, twice per cycle, for about an hour. It
+killed **lane D's suite mid-run from a different worktree** — exit 144, no output — and because
+every kill skipped teardown it left **9 orphaned per-run databases and 6 leaked mock
+processes** behind. Lane D lost real time to per-`describe` verification before working out
+that the failures were not its own. `ps` shows vitest workers as `node (vitest)`, so no
+launcher path or filter evades a `-f vitest` pattern.
+
+This is the sixth shared mutable resource, after the database, the browser pane, the
+cross-worktree `pnpm` invocation, the container and the turbo cache. It is the worst of them,
+because the others produced misleading results and this one destroys another lane's work while
+looking like a flaky suite.
+
+Record your own PIDs when you start something and kill those. If you genuinely cannot, scope
+the pattern to your own worktree path and say in your report what you killed.
+
 ### Build freshness — `--dir` alone does not rebuild
 
 The two rules above interact, and the interaction is silent.
