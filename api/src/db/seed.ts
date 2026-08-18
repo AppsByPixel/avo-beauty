@@ -1022,14 +1022,44 @@ async function seed(): Promise<void> {
   } else {
     console.log('seeded (SEED_RESET=0) — fixture rows ensured, no live state touched.');
   }
-  // The balances are printed ONLY when they were actually restored. This file
-  // already learned the general form of that lesson from `passwordHash`: a
-  // fixture that prints a value it did not write sends the next person looking
-  // for a bug in the wrong place. Under SEED_RESET=0 the balance is whatever the
-  // last charge left, so it is not claimed.
-  const balances = RESET ? ['   (24.500 KD, Silver)', '   (2.500 KD — the lowbal scenario)'] : ['', ''];
-  console.log(`  member  8842 / ${MEMBER_PASSWORD}${balances[0]}`);
-  console.log(`  member  8843 / ${MEMBER_PASSWORD}${balances[1]}`);
+  /**
+   * THE SUMMARY IS READ BACK OUT OF THE DATABASE, NOT ASSERTED FROM A LITERAL.
+   *
+   * This line used to be the hardcoded string `(24.500 KD, Silver)`, printed
+   * whenever `SEED_RESET` was on. That is true only for as long as nothing else
+   * in this file changes, and it cost a verification run: the printed summary and
+   * the actual row are two claims about the same number, and the reader trusts
+   * the one on their screen. Under `SEED_RESET=0` the literal was suppressed
+   * entirely, which was honest but unhelpful — the balance is exactly what a
+   * developer about to test a charge needs to know, and it is knowable.
+   *
+   * Reading the row covers both modes with one rule and cannot drift: after a
+   * reset it prints what the reset produced, and without one it prints whatever
+   * the last charge left. This is the same lesson `passwordHash` taught a few
+   * hundred lines above, applied to the money instead of the credential.
+   */
+  const printed = await db
+    .select({
+      id: member.id,
+      balanceFils: member.balanceFils,
+      tier: member.tier,
+      visits: member.visits,
+    })
+    .from(member)
+    .where(sql`${member.id} IN ('8842', '8843')`)
+    .orderBy(member.id);
+
+  // Three decimals, Western digits — the display boundary rule, and the only
+  // place in this script where fils become a human-readable figure.
+  const kd = (v: number | bigint) => (Number(v) / 1000).toFixed(3);
+
+  for (const row of printed) {
+    const tier = row.tier ? `, ${row.tier[0]!.toUpperCase()}${row.tier.slice(1)}` : '';
+    const visits = `${row.visits} visit${row.visits === 1 ? '' : 's'}`;
+    console.log(
+      `  member  ${row.id} / ${MEMBER_PASSWORD}   (${kd(row.balanceFils)} KD${tier}, ${visits})`,
+    );
+  }
   console.log(`  web     noura / ${STAFF_PASSWORD}`);
   console.log(`  PIN     noura ${STAFF_PIN} · hessa ${HESSA_PIN} on device ${SCANNER_DEVICE}`);
 }

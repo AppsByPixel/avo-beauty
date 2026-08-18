@@ -168,6 +168,27 @@ export async function searchMembers(
           digits.length >= MEMBER_SEARCH_MIN_QUERY
             ? sql`${member.phone} LIKE ${`%${digits}%`}`
             : sql`false`,
+          /**
+           * THE MEMBER ID, AND IT WAS MISSING.
+           *
+           * The design's lookup screen offers "name, phone number or member ID"
+           * and this clause is the third of those. Without it, typing the number
+           * off the customer's card returned nothing: `8842` has digits, so it
+           * fell through to the phone branch, and `+96599124408` does not
+           * contain `8842`. The staff member's most precise identifier was the
+           * one query that failed, which reads as "she isn't a member here".
+           *
+           * EXACT, NOT A SUBSTRING, and that is the disclosure decision. `%88%`
+           * over an id column enumerates the salon's membership in a way a name
+           * fragment does not — ids are short, dense and sequential, so a
+           * substring match turns a two-character minimum into a directory walk.
+           * A staff member reading a number off a card has the whole number, so
+           * exactness costs her nothing and removes the vector.
+           *
+           * Case-insensitive because ids are not all numeric: the fixtures carry
+           * `B-9001`, and a front desk types `b-9001`.
+           */
+          sql`lower(${member.id}) = lower(${q})`,
         ),
       ),
     )
