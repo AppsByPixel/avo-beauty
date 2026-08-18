@@ -24,9 +24,10 @@ the failure mode this structure exists to prevent.
 
 ## Every lane isolates its own resources
 
-Three times now a shared mutable resource has crossed lanes: one Postgres database, one
-container, one browser pane. Each time the lane involved caught and disclosed it. This rule
-is cheaper than relying on that.
+Four times now a shared mutable resource has crossed lanes: one Postgres database, one
+container, one browser pane, and one `pnpm` invocation that ran another worktree's code.
+Each time the lane involved caught and disclosed it. This rule is cheaper than relying on
+that.
 
 ### Database — one per lane, already created
 
@@ -48,6 +49,43 @@ prints for anything you run against it. **Never set `POSTGRES_DB`**:
 puts every concurrent checkout back on shared fixtures.
 
 If your database is missing, ask trunk. Do not work around it.
+
+### Commands — `pnpm --dir`, never `pnpm --filter`
+
+**Never `pnpm --filter` from a lane worktree. It resolves from cwd, so it can run another
+worktree's package.** Use `pnpm --dir` with an **absolute** path — not a path relative to
+cwd, which has the same failure.
+
+```bash
+pnpm --dir /Users/koraspond_developer/dev/avo-a/api run db:migrate    # yes
+pnpm --filter @avo/api run db:migrate                                 # no
+```
+
+Lane A watched `pnpm --filter @avo/api run start`, run from its own worktree, boot
+**`~/dev/avo-wallet/api` against `avo_lane_b`** — another lane's code and another lane's
+database. The output looked completely normal and it nearly filed the result as a finding.
+The tell was indirect: `pin_attempt` stayed empty in its own database after a login it had
+just watched succeed.
+
+Inside `scripts/lane-db.sh` the same call was worse, because the script exports
+`DATABASE_URL` before invoking pnpm: **another worktree's migrations and seed applied to
+this lane's database** — the exact cross-lane write the script exists to prevent, and it
+would have looked like a clean reset.
+
+This rule kept regressing because it lived only in `lane-db.sh`'s comments and in 21 e2e
+error strings, so a 22nd place could reintroduce it silently — which is what happened. It is
+written here now because this is where the briefs point.
+
+**Assert what you are actually talking to before you trust output.** Lane A's habit, and it
+is the only reason this was caught:
+
+```bash
+docker exec -i avo-postgres psql -U avo -d postgres \
+  -c "SELECT datname, count(*) FROM pg_stat_activity WHERE usename='avo_app' GROUP BY datname;"
+```
+
+Anchor load-bearing claims in SQL against your own database rather than in the API's own
+reply. A server that answers plausibly is not evidence that it is *your* server.
 
 ### Browser — one context per lane
 
