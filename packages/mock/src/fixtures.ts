@@ -313,6 +313,8 @@ export const campaigns: Campaign[] = [
     decidedBy: null,
     decidedAt: null,
     note: null,
+    heldReason: null,
+    heldAt: null,
     result: null,
   },
 ];

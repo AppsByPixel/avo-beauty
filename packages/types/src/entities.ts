@@ -543,6 +543,24 @@ export const CampaignSchema = z.object({
   scheduledAt: z.string(),
   /** Non-negotiable #8: POST /campaigns can only ever create "pending". */
   status: z.enum(['pending', 'approved', 'rejected', 'sent']),
+  /**
+   * HELD IS NOT A STATUS, AND THAT IS THE POINT.
+   *
+   * Non-negotiable #8 ends "caps and quiet hours are enforced again at send time",
+   * and `design/README.md` gap 6 is explicit that a breaching campaign is "held and
+   * reported, never silently dropped". So a campaign the platform released and the
+   * send path then refused stays `approved` — the platform's decision is a fact and
+   * a later cap does not retract it — and carries the refusal beside it.
+   *
+   * Two fields rather than a boolean because the merchant is owed the sentence, not
+   * the flag: "held until 09:00" and "held — this customer has had two messages this
+   * week" are different things to do next. Without them a dashboard can render
+   * "approved" and a bell and nothing that explains either.
+   *
+   * `null` on every campaign that was never held, which is most of them.
+   */
+  heldReason: z.string().nullable(),
+  heldAt: DateTimeSchema.nullable(),
   submittedBy: z.string(),
   submittedAt: DateTimeSchema,
   decidedBy: z.string().nullable(),
