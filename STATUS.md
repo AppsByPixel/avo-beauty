@@ -81,9 +81,25 @@ duplicate and out-of-order callbacks, five concurrent charges on one token, void
 holds and the no-show return job.
 
 Four surfaces: **API** (auth, nine permissions gated both directions, tenancy, booking,
-promotions, audit log), **wallet** (home, QR, top-up, Book, Account, full Arabic with RTL),
-**scanner** (PIN, scan, charge, void, manual lookup, bookings, schedule), **dashboard**
-(sign-in, and all seven sections).
+promotions, audit log), **wallet** (home, QR, top-up, Book, Account, full Arabic with RTL —
+but see the auth caveat below), **scanner** (PIN, scan, charge, void, manual lookup, bookings,
+schedule, and charge-after-manual-lookup driven on a simulator), **dashboard** (sign-in, and
+all seven sections).
+
+**The wallet has no auth slice, and that qualifies the line above.** `apps/wallet/src/api/client.ts`
+sends no `authorization` header at all — no `Bearer`, no token — and its base URL defaults to
+`http://localhost:4000`, the mock, which requires none. Every real `/members/me*` route is
+behind `requireMember`, which has no dev bypass. So the wallet's screens are built and its
+states are real, but **it has only ever run against the mock**; the scanner, by contrast, is
+wired to real sessions. This was item 1 in lane B's own brief and was never built. It is not a
+regression and nothing hid it — `AccountScreen.tsx:62` says so in its own comment — but "the
+wallet works" should be read as "against the mock" until the auth slice lands.
+
+Consequently **non-negotiable #10 is unmet**: nothing stores the accepted `policyVersion`
+against the member, because there is no signup endpoint to store it at. `api/src/routes/auth.ts`
+registers `/auth/member/session`, `/auth/web/session`, `/auth/refresh`, `/auth/sign-out` and
+`/auth/staff/password-reset` — sign-in exists, registration does not. Sign-in and policy
+rendering are buildable today; consent needs the API side first.
 
 Roughly 400 specs. `pnpm check` runs them; **test caching is off** because turbo was
 replaying a green run in 14ms and calling it a pass.
