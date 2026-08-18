@@ -892,9 +892,30 @@ async function creditWallet(
     },
   });
 
-  // The intent's own move, conditional on it still being open. Zero rows here
-  // means another transaction settled it first, and the throw rolls this credit
-  // back — the last line of defence behind the row lock and the event index.
+  /**
+   * The intent's own move, conditional on it still being open.
+   *
+   * THIS PREDICATE IS UNREACHABLE AS THINGS STAND, and the comment that used to
+   * be here said the opposite — "the last line of defence behind the row lock and
+   * the event index", which reads as a layer that fires. It cannot: `applyOutcome`
+   * took this exact row `FOR UPDATE` and re-read its status inside the same
+   * transaction a few statements ago, so by the time control arrives here the
+   * status is pinned and `predecessorsOf('succeeded')` has already been satisfied
+   * once under the lock. Nothing else can have changed it in between. Lane D's
+   * ablation sweep is what established this, and the correction is worth keeping
+   * because a comment claiming a live guard is how a dead one survives a
+   * refactor that removes the thing actually protecting it.
+   *
+   * IT STAYS ANYWAY, as belt and braces rather than as defence. It costs one
+   * WHERE clause, it is the same statement shape every other transition in this
+   * file uses — so removing it here would make this the odd one out and invite
+   * the question "why is the credit path the loose one?" — and it stops being
+   * unreachable the moment someone shortens the lock, which is exactly when
+   * nobody will be thinking about it.
+   *
+   * Zero rows means another transaction settled it first, and the throw rolls
+   * this credit back with everything else in the transaction.
+   */
   const [next] = await tx
     .update(topUpIntent)
     .set({
