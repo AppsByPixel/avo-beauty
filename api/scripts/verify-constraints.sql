@@ -4,9 +4,25 @@
 --   pnpm --dir api run db:verify   # this file
 --
 -- Runs the guarantees the schema exists to hold and shows the database refusing
--- each violation. Every statement in sections 1-4 is EXPECTED TO FAIL except the
--- seeds, the legal INSERT into audit_log, and step 3f. Section 5 is the opposite:
--- it must PASS, and raises if it does not.
+-- each violation.
+--
+-- HOW TO READ IT. Most statements are EXPECTED TO FAIL — an error here is the
+-- guarantee working. The exceptions are named, because a section that only ever
+-- fails cannot tell you when it has stopped testing anything:
+--
+--   MUST SUCCEED   the seeds; 1a; 3f; 3h's NULL update; 4's summary row;
+--                  5 (RECONCILED); 6d (the erasure cascade); 7d (loyalty_event is
+--                  truncatable BY DECISION, migration 0008); 8b (a member with no
+--                  money history does delete); 9d (a non-terminal top-up advances)
+--   MUST FAIL      everything else
+--
+-- The MUST SUCCEED blocks exist because several of these invariants have a
+-- DELIBERATE limit, and a limit nobody asserts is one the next person removes while
+-- "fixing an inconsistency". 6d and 7d are the two already reasoned about at length,
+-- in migrations 0023 and 0008.
+--
+-- Sections 4a, 4b and 5 RAISE on violation rather than printing a table, so this
+-- file fails loudly instead of leaving a reader to notice.
 --
 -- WHICH DATABASE. `AVO_VERIFY_DB` selects it and defaults to `avo`:
 --
@@ -169,11 +185,69 @@ UPDATE wallet_token SET consumed_at = now()
 RESET ROLE;
 
 \warn ''
-\warn '=== 4. every money column is bigint ======================================='
+\warn '=== 4. every money column is bigint, and no float exists at all ==========='
+\warn ''
+-- THIS SECTION USED TO PRINT A TABLE AND ASSERT NOTHING.
+--
+-- It listed every `%_fils` column and its type, and left the reader to notice a
+-- wrong one. A `double precision` column would have appeared in that list, in
+-- alphabetical order, between two correct ones — which is the same failure mode as
+-- a comment: information nobody is obliged to act on. Non-negotiable #1 is the
+-- most load-bearing rule in this project and it was the least checked thing in
+-- this file.
 SELECT table_name, column_name, data_type
   FROM information_schema.columns
  WHERE table_schema = 'public' AND column_name LIKE '%\_fils'
  ORDER BY table_name, column_name;
+
+\warn '--- 4a. and it now FAILS if any of them is not bigint ---'
+DO $$
+DECLARE offenders text;
+BEGIN
+  SELECT string_agg(format('%s.%s is %s', table_name, column_name, data_type), ', ' ORDER BY table_name, column_name)
+    INTO offenders
+    FROM information_schema.columns
+   WHERE table_schema = 'public' AND column_name LIKE '%\_fils' AND data_type <> 'bigint';
+
+  IF offenders IS NOT NULL THEN
+    RAISE EXCEPTION 'Non-negotiable #1: money must be bigint fils. Offending columns: %', offenders
+      USING HINT = 'Integer fils, never a float. Format to 3 decimals at the display boundary only.';
+  END IF;
+END
+$$;
+
+\warn '--- 4b. AND no float-family column exists anywhere, whatever it is called ---'
+-- The `%_fils` rule only catches money that was named correctly. A column called
+-- `total`, `price` or `amount` in `double precision` satisfies every check above
+-- and still puts a float on the money path — and the naming convention is the only
+-- thing that would have flagged it. So the stronger claim is asserted directly:
+-- this schema contains no float-family column at all.
+--
+-- `numeric` is refused with the others. It is exact, so it would not lose fils to
+-- binary rounding, but non-negotiable #1 is that money is an INTEGER COUNT of
+-- fils, and a numeric column invites a fractional fil that has no meaning and no
+-- display format. If a genuine non-money use for numeric ever arrives, narrow this
+-- to the money-bearing tables rather than deleting it.
+DO $$
+DECLARE offenders text;
+BEGIN
+  SELECT string_agg(format('%s.%s is %s', table_name, column_name, data_type), ', ' ORDER BY table_name, column_name)
+    INTO offenders
+    FROM information_schema.columns
+   WHERE table_schema = 'public'
+     AND data_type IN ('double precision', 'real', 'numeric', 'money');
+
+  IF offenders IS NOT NULL THEN
+    RAISE EXCEPTION 'Non-negotiable #1: no float may reach money. Offending columns: %', offenders
+      USING HINT = 'Money is integer fils in bigint. A float column on any table is a float one join away from a total.';
+  END IF;
+END
+$$;
+
+SELECT 'no float-family column anywhere' AS money_type_check,
+       count(*) AS fils_columns_all_bigint
+  FROM information_schema.columns
+ WHERE table_schema = 'public' AND column_name LIKE '%\_fils' AND data_type = 'bigint';
 
 \warn ''
 \warn '=== 5. every wallet reconciles to its ledger =============================='
@@ -313,3 +387,153 @@ DELETE FROM member WHERE id = 'MB-ERASE';
 SELECT count(*) AS consent_rows_left_after_erasure
   FROM member_consent_event WHERE member_id = 'MB-ERASE';
 COMMIT;
+
+\warn ''
+\warn '=== 7. TRUNCATE cannot erase the money ledger ============================='
+\warn ''
+-- THE THIRD INSTANCE OF THE HALF-PARITY PATTERN, on the most load-bearing table in
+-- the schema. `schema/ledger.ts` claimed `ledger_entry` was immutable "for the same
+-- reason" as `audit_log`, and migration 0004 said the same of `gateway_event`. Both
+-- had no_update and no_delete; `audit_log` also has no_truncate, because TRUNCATE
+-- is neither an UPDATE nor a DELETE and a FOR EACH ROW trigger never runs for it.
+--
+-- So one statement emptied the table every wallet balance is derived from, with no
+-- error. Migration 0024 closes it. All four statements below must FAIL.
+\warn '--- 7a. the wallet ledger ---'
+TRUNCATE ledger_entry;
+
+\warn '--- 7b. the gateway event log ---'
+TRUNCATE gateway_event;
+
+\warn '--- 7c. and the two that were already protected, so the set stays complete ---'
+TRUNCATE audit_log;
+TRUNCATE member_consent_event;
+
+\warn '--- 7d. loyalty_event is NOT protected, BY WRITTEN DECISION (0008) — must SUCCEED ---'
+-- Migration 0008: "APPEND-ONLY BY INTENT, NOT BY REVOKE, AND THAT IS THE DECISION".
+-- It is a derived record of something that already happened, it feeds one dashboard
+-- panel, and nothing reconciles against it. This block is here so that the decision
+-- is asserted rather than assumed, and so that anyone who "fixes" the asymmetry has
+-- to change a test that states why it exists.
+BEGIN;
+TRUNCATE loyalty_event;
+ROLLBACK;
+SELECT 'loyalty_event is truncatable by decision, see migration 0008' AS deliberate_asymmetry;
+
+\warn ''
+\warn '=== 8. a member with money history cannot be hard-deleted ================='
+\warn ''
+-- Migration 0021 justifies soft deletion partly like this: "every table that
+-- references member ... are append-only or restrict-on-delete; a DELETE FROM member
+-- [would fail]". That is TRUE OF SEVEN of the eleven references and FALSE OF FOUR:
+-- `session`, `wallet_token`, `phone_change_challenge` and `member_consent_event` are
+-- ON DELETE CASCADE. A member with no financial history — a signup who never topped
+-- up — therefore deletes cleanly today, taking her consent trail with her.
+--
+-- The DESIGN decision is still right, for 0021's other and better reason: two
+-- retention periods over one customer means deletion is an erasure of personal data
+-- that leaves the money record standing. Only the supporting claim was overstated.
+--
+-- So what is asserted here is the half that is real and load-bearing: once a
+-- customer has money history, the 7-year record cannot be removed by deleting her.
+\warn '--- 8a. a member WITH a transaction cannot be deleted (RESTRICT) ---'
+BEGIN;
+INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
+VALUES ('MB-MONEYED', 'SL-VERIFY', 'Has History', '+96599100011', '$argon2id$fake', 0, 'bronze', 3);
+INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
+VALUES ('TX-RESTRICT', 'MB-MONEYED', 'SL-VERIFY', 'BR-VERIFY', 'charge', -1000, 'settled', now());
+DELETE FROM member WHERE id = 'MB-MONEYED';
+ROLLBACK;
+
+\warn '--- 8b. and one with NO history DOES delete — the overstated half, shown honestly ---'
+BEGIN;
+INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, policy_version)
+VALUES ('MB-CLEAN', 'SL-VERIFY', 'No History', '+96599100012', '$argon2id$fake', 0, 'bronze', 3);
+DELETE FROM member WHERE id = 'MB-CLEAN';
+SELECT 'a member with no money history deletes; 0021 rests on its OTHER argument' AS honest_note;
+ROLLBACK;
+
+\warn ''
+\warn '=== 9. a settled top-up cannot leave its terminal state ==================='
+\warn ''
+-- Migration 0004: "top-up % is terminal (%): it cannot become %". The terminal
+-- states are succeeded, failed and cancelled. A succeeded top-up that could be
+-- moved back to pending is a top-up that can be credited twice, so this is a money
+-- invariant and not a tidiness one.
+--
+-- SAVEPOINTS, because a failed statement aborts the enclosing transaction and the
+-- fixture has to survive three separate refusals. Each case rolls back to its own
+-- savepoint so the next one runs against the same intent.
+--
+-- Two more invariants surfaced while building this fixture, and both are worth
+-- naming: `topup_intent_succeeded_has_settled_at` and
+-- `topup_intent_succeeded_has_transaction` are written as EQUIVALENCES
+-- (`status = 'succeeded'` IS `settled_at IS NOT NULL`), so they bite in both
+-- directions — a succeeded intent with no moment or no transaction is refused, and
+-- so is a pending one that claims either. A credit with no transaction behind it is
+-- money that appeared from nowhere.
+BEGIN;
+INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
+VALUES ('TX-TOPUP-T', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'topup', 10000, 'settled', now());
+INSERT INTO topup_intent (id, member_id, salon_id, branch_id, amount_fils, bonus_fils,
+                          credit_fils, fee_fils, method, provider, status, reference,
+                          settled_at, transaction_id)
+VALUES ('TI-TERMINAL', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 10000, 0, 10000, 150,
+        'knet', 'sandbox', 'succeeded', 'AVO-VERIFY-TERMINAL', now(), 'TX-TOPUP-T');
+
+\warn '--- 9a. succeeded -> pending is refused (it could be credited twice) ---'
+SAVEPOINT a; UPDATE topup_intent SET status = 'pending' WHERE id = 'TI-TERMINAL'; ROLLBACK TO a;
+
+\warn '--- 9b. succeeded -> failed is refused ---'
+SAVEPOINT b; UPDATE topup_intent SET status = 'failed' WHERE id = 'TI-TERMINAL'; ROLLBACK TO b;
+
+\warn '--- 9c. a succeeded intent with no settled_at is refused outright ---'
+SAVEPOINT c;
+INSERT INTO topup_intent (id, member_id, salon_id, branch_id, amount_fils, bonus_fils,
+                          credit_fils, fee_fils, method, provider, status, reference)
+VALUES ('TI-NOSETTLE', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 10000, 0, 10000, 150,
+        'knet', 'sandbox', 'succeeded', 'AVO-VERIFY-NOSETTLE');
+ROLLBACK TO c;
+
+\warn '--- 9d. and a NON-terminal transition must SUCCEED (created -> redirected) ---'
+-- The deliberate limit: the trigger polices terminal states, not all movement. A
+-- top-up that could never advance would be a top-up nobody could pay.
+SAVEPOINT d;
+INSERT INTO topup_intent (id, member_id, salon_id, branch_id, amount_fils, bonus_fils,
+                          credit_fils, fee_fils, method, provider, status, reference)
+VALUES ('TI-MOVING', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 10000, 0, 10000, 150,
+        'knet', 'sandbox', 'created', 'AVO-VERIFY-MOVING');
+UPDATE topup_intent SET status = 'redirected' WHERE id = 'TI-MOVING';
+SELECT id, status AS advanced_normally FROM topup_intent WHERE id = 'TI-MOVING';
+ROLLBACK TO d;
+ROLLBACK;
+
+\warn ''
+\warn '=== 10. one artist cannot be double-booked ================================'
+\warn ''
+-- `booking_artist_slot_no_overlap` is a GiST exclusion constraint, and it is what
+-- makes "two customers, one slot, one winner" a database fact rather than a race the
+-- application hopes to win. Scoped to live statuses, which is the deliberate limit
+-- asserted in 10c.
+BEGIN;
+INSERT INTO artist (id, salon_id, name) VALUES ('AR-VERIFY', 'SL-VERIFY', 'Rana');
+INSERT INTO service (id, salon_id, name, price_fils) VALUES ('SV-VERIFY', 'SL-VERIFY', 'Blow-dry', 8000);
+INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
+VALUES ('TX-HOLD-A', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'deposit_hold', -5000, 'settled', now());
+INSERT INTO booking (id, salon_id, member_id, artist_id, branch_id, service_id, starts_at, ends_at,
+                     duration_min, deposit_fils, status, source, hold_transaction_id,
+                     no_show_return_due_at)
+VALUES ('BK-V1', 'SL-VERIFY', 'MB-VERIFY', 'AR-VERIFY', 'BR-VERIFY', 'SV-VERIFY',
+        '2030-01-01 10:00+00', '2030-01-01 10:30+00', 30, 5000, 'deposit_held', 'app',
+        'TX-HOLD-A', '2030-01-01 11:30+00');
+
+\warn '--- 10a. an overlapping booking for the SAME artist is refused ---'
+INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils, status, settled_at)
+VALUES ('TX-HOLD-B', 'MB-VERIFY', 'SL-VERIFY', 'BR-VERIFY', 'deposit_hold', -5000, 'settled', now());
+INSERT INTO booking (id, salon_id, member_id, artist_id, branch_id, service_id, starts_at, ends_at,
+                     duration_min, deposit_fils, status, source, hold_transaction_id,
+                     no_show_return_due_at)
+VALUES ('BK-V2', 'SL-VERIFY', 'MB-VERIFY', 'AR-VERIFY', 'BR-VERIFY', 'SV-VERIFY',
+        '2030-01-01 10:15+00', '2030-01-01 10:45+00', 30, 5000, 'deposit_held', 'app',
+        'TX-HOLD-B', '2030-01-01 11:45+00');
+ROLLBACK;
