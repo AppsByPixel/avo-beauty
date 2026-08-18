@@ -28,10 +28,16 @@ import { filsColumn, timestamptz } from './_shared';
 import { salon, tierName } from './salon';
 
 /**
- * The kinds of consent this table records. One today; accepting a new policy
- * version is the same shape of fact and is the expected second.
+ * The kinds of consent this table records.
+ *
+ * `policy_acceptance` is the second, added in migration 0025, and 0020 named it
+ * before it existed: "the next one is already visible: non-negotiable #10's
+ * acceptance of a NEW policy version is the same shape of fact". It is what
+ * turns #10's *store the accepted version against the member* into an event, and
+ * what makes "has she accepted the version published NOW" a query rather than a
+ * flag — which is #10's second half, the re-prompt.
  */
-export type ConsentKind = 'marketing_offers';
+export type ConsentKind = 'marketing_offers' | 'policy_acceptance';
 
 /** Which surface the customer gave or withdrew it on. */
 export type ConsentSource = 'signup' | 'wallet_account' | 'support' | 'import';
@@ -177,10 +183,34 @@ export const memberConsentEvent = pgTable(
   },
   (t) => [
     index('member_consent_member_kind_idx').on(t.memberId, t.kind, t.createdAt.desc()),
-    check('member_consent_kind_is_known', sql`${t.kind} IN ('marketing_offers')`),
+    check(
+      'member_consent_kind_is_known',
+      sql`${t.kind} IN ('marketing_offers', 'policy_acceptance')`,
+    ),
     check(
       'member_consent_source_is_known',
       sql`${t.source} IN ('signup', 'wallet_account', 'support', 'import')`,
     ),
+    /**
+     * A POLICY ACCEPTANCE IS NEVER A WITHDRAWAL — migration 0025.
+     *
+     * 0020's rule is that `granted = false` is a withdrawal rather than the
+     * absence of a grant. Marketing has such a fact; policy acceptance does not.
+     * The product's answer to "I no longer agree" is account deletion (0021),
+     * not a row here, so a `granted = false` acceptance would be a false
+     * statement in a table that exists to be evidence.
+     */
+    check(
+      'member_consent_acceptance_is_never_withdrawn',
+      sql`${t.kind} <> 'policy_acceptance' OR ${t.granted} = true`,
+    ),
+    /**
+     * "She accepted v4" is ONE fact however many times the button is tapped, and
+     * the re-prompt screen is where a double tap happens. Partial, because
+     * marketing consent going off-on-off over a year is three real facts.
+     */
+    uniqueIndex('member_consent_acceptance_once_per_version')
+      .on(t.memberId, t.policyVersion)
+      .where(sql`${t.kind} = 'policy_acceptance'`),
   ],
 );

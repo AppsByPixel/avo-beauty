@@ -1,6 +1,7 @@
 /**
- * Authentication. Three sign-ins, one refresh, one password change.
+ * Authentication. One signup, three sign-ins, one refresh, one password change.
  *
+ *   POST /auth/member/signup    name + phone + password + accepted policy version
  *   POST /auth/member/session   phone + password   → wallet scope
  *   POST /staff/session         4-digit PIN        → scanner scope   (staff.ts calls in)
  *   POST /auth/web/session      username + password → dashboard scope
@@ -40,8 +41,10 @@
 
 import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { fils } from '@avo/types';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
+import { salon } from '../db/schema/salon';
 import { pinAttempt, session } from '../db/schema/session';
 import { staffPasswordReset, staffUser } from '../db/schema/staff';
 import { env } from '../env';
@@ -61,13 +64,35 @@ import {
   rotateSession,
 } from '../auth/sessions';
 import { hashPasswordResetToken } from '../auth/tokens';
-import { badRequest, forbidden, tooManyRequests, unauthorized } from '../http/errors';
+import { badRequest, conflict, forbidden, tooManyRequests, unauthorized } from '../http/errors';
+import { parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
+import { tierForVisits } from '../services/loyalty';
+import { recordPolicyAcceptance, requireCurrentPolicyVersion } from '../services/policy';
 import { serialiseStaff } from './staff';
 
 /** One body for every credential failure. Never says which half was wrong. */
 const BAD_CREDENTIALS = () => unauthorized('Those details do not match. Try again.', 'invalid_credentials');
+
+/**
+ * Signup met a phone that already holds a wallet at this salon.
+ *
+ * A DISTINCT CODE FROM `phone_in_use`, which `POST /members/me/phone-change`
+ * answers, because the client's next move is different: there, she picks another
+ * number; here, she already has an account and belongs on the Log in screen.
+ * Same code for both would make the wallet guess which sentence to show.
+ *
+ * The polite pre-check and the unique-violation catch BOTH raise this one
+ * refusal, so a double tap and a slow retype are indistinguishable to the client
+ * — which is the point, since they are indistinguishable to the customer.
+ */
+const ALREADY_REGISTERED = () =>
+  conflict(
+    'already_registered',
+    'There is already an account with that number. Log in instead, or contact support.',
+  );
 
 function clientMeta(req: FastifyRequest) {
   return {
@@ -77,6 +102,243 @@ function clientMeta(req: FastifyRequest) {
 }
 
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
+  // ------------------------------------------------------------ member signup --
+  /**
+   * SELF-SERVE REGISTRATION — and the moment non-negotiable #10 was missing.
+   *
+   * #10: "The customer app holds no legal copy. It renders the published policy
+   * set from the API and stamps the version. Store the accepted version against
+   * the member." Both halves of the data existed — `member.policy_version` since
+   * migration 0000, `legal_document_set` since 0019 — and #10 was still unmet,
+   * because there was no endpoint at which a customer accepted anything. Every
+   * stamped version in the database had been written by a seed script.
+   *
+   * The design is `Your name`, `Phone`, `Password`, a REQUIRED terms checkbox and
+   * a SEPARATE WhatsApp checkbox (design/README.md:113). DECISIONS.md § "Member
+   * signup" and § "Wallet sign-in identity" settle the rest; the four decisions
+   * that show up as code here are:
+   *
+   * 1. PHONE, NOT THE USERNAME THE DESIGN DRAWS. The design contradicts itself —
+   *    it draws a Username field and also says, in both languages, "Your phone
+   *    number is how you log in." Every other source agrees and there is no
+   *    member username column anywhere.
+   *
+   * 2. THE CLIENT SENDS THE VERSION IT DISPLAYED. Stamping "whatever is current"
+   *    would satisfy the letter of #10 and reproduce exactly what design/README.md
+   *    gap 5 forbids. See services/policy.ts.
+   *
+   * 3. `wa` IS REQUIRED AND AN ABSENT VALUE IS A CLIENT BUG. `notify_wa` is
+   *    `NOT NULL DEFAULT true` because service channels default on — but signup
+   *    puts it on screen as a checkbox she can leave unticked, so an omitted
+   *    field would let the column default record the OPPOSITE of her choice.
+   *    An absence read as agreement is the same defect as a stale "not built"
+   *    comment; it is refused rather than defaulted.
+   *
+   * 4. NO MARKETING CONSENT EVENT IS WRITTEN. NOT EVEN `granted: false`. The
+   *    WhatsApp checkbox is `consentWa` — "Send me receipts and appointment
+   *    confirmations on WhatsApp" — which is word-for-word `nWaSub`, the SERVICE
+   *    channel. Marketing is `nOffersSub`, "Occasional promotions from Amara. Off
+   *    by default.", and it has no signup entry point at all. Migration 0020 is
+   *    explicit that `granted = false` is a WITHDRAWAL rather than the absence of
+   *    a grant, so a false row here would put a withdrawal she never made into an
+   *    append-only table. Silence is the correct record of never having been
+   *    asked, and services/consent.ts already reads it that way.
+   *
+   * A NAME IS REQUIRED, which is the one place this extends a settled decision
+   * rather than following it. The design marks the name `optional` — beside a
+   * REQUIRED username. Removing the username (decision 1) leaves the name as the
+   * only human label on the record, and it is what the counter envelope, the
+   * receipt and the staff directory render. `PATCH /members/me` already refuses a
+   * blank name via `requireString`, so accepting one here would create a row its
+   * own edit endpoint could not round-trip.
+   *
+   * UNAUTHENTICATED, AND THEREFORE AN ENUMERATION ORACLE — stated rather than
+   * buried. The duplicate refusal below confirms that a number is registered at
+   * this salon. Any signup form that hands back a session confirms that, because
+   * it must refuse the second registration and cannot pretend to have succeeded.
+   * Bounding it needs a verification step at signup (the shape the phone-change
+   * challenge already uses) and that is a product decision, not one to invent
+   * here. There is also NO RATE LIMIT on this route: argon2 is deliberately
+   * expensive, so an unauthenticated hashing endpoint is a cheap denial of
+   * service. Both are escalated, not fixed quietly.
+   */
+  app.post('/auth/member/signup', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    const salonId = requireString(body.salonId, 'salonId', 100);
+    const name = requireString(body.name, 'name', 120);
+    const phone = parseE164(body.phone);
+    const password = body.password;
+
+    if (!isAcceptablePassword(password)) {
+      throw badRequest('password_too_short', 'Your new password needs at least 6 characters.');
+    }
+
+    /**
+     * Decision 3, and it is a refusal rather than a default on purpose. `'wa' in
+     * body` is not enough — `{ wa: null }` and `{ wa: 'false' }` would both slip
+     * through a presence check and then be read as truthy or coerced.
+     */
+    if (typeof body.wa !== 'boolean') {
+      throw badRequest(
+        'wa_preference_required',
+        'Send the WhatsApp preference as true or false. Leaving it out would turn it on.',
+      );
+    }
+    const wa = body.wa;
+
+    // Decision 2. Throws `policy_version_stale` (409) when a publish landed
+    // between the screen rendering and this request — a renderable client state.
+    const policySet = await requireCurrentPolicyVersion(db, body.policyVersion);
+
+    /**
+     * The salon decides the loyalty mode, so a new member's starting row differs:
+     * a tiers salon puts her on the ladder's floor, a stamps salon on an empty
+     * card. Getting this wrong is not cosmetic — `services/topup.ts` prices the
+     * bonus from `member.tier`, and a null tier in a tiers salon silently pays 0.
+     */
+    const [s] = await db
+      .select({ loyaltyMode: salon.loyaltyMode, tiers: salon.tiers })
+      .from(salon)
+      .where(eq(salon.id, salonId))
+      .limit(1);
+    if (!s) {
+      // Not a 500 from the foreign key. A white-label build pointed at a salon
+      // that does not exist is a deployment mistake with a readable cause.
+      throw badRequest('unknown_salon', 'This app is not set up for a salon yet.');
+    }
+
+    /**
+     * The friendly half of the duplicate check. The database is still the
+     * authority — see the catch below — because two taps race past any SELECT.
+     */
+    const existing = await db
+      .select({ id: member.id })
+      .from(member)
+      .where(and(eq(member.salonId, salonId), eq(member.phone, phone)))
+      .limit(1);
+    if (existing[0]) throw ALREADY_REGISTERED();
+
+    const passwordHash = await hashSecret(password);
+
+    const tiersMode = s.loyaltyMode === 'tiers';
+
+    try {
+      const created = await db.transaction(async (tx) => {
+        /**
+         * ONE TRANSACTION FOR THE MEMBER AND HER ACCEPTANCE. A member created
+         * without the evidence is #10 unmet again with a row to prove it, and an
+         * acceptance for a member who does not exist is a dangling fact in an
+         * append-only table. Neither is recoverable afterwards, so they commit
+         * together or not at all.
+         */
+        const [m] = await tx
+          .insert(member)
+          .values({
+            /**
+             * The customer-facing member number, from the sequence migration 0025
+             * adds. `Math.random()` over four digits — the way `SUP-` and `CMP-`
+             * ids are minted — collides on a PRIMARY KEY within a few thousand
+             * members, and the collision surfaces as a stranger's signup failing.
+             *
+             * A sequence is not rolled back by a failed transaction, so a refused
+             * signup burns a number. That is the correct trade: gaps in a member
+             * number are invisible, a duplicate is a 500.
+             */
+            id: sql`nextval('member_number_seq')::text`,
+            salonId,
+            name,
+            phone,
+            email: null,
+            emailVerified: false,
+            passwordHash,
+            // Non-negotiable #2 and #1: the server owns the balance, in fils.
+            balanceFils: fils(0),
+            visits: 0,
+            tier: tiersMode ? tierForVisits(s.tiers ?? [], 0) : null,
+            stamps: tiersMode ? null : 0,
+            // #10: the version SHE was shown, validated above.
+            policyVersion: policySet.version,
+            /**
+             * EXPLICIT, and the reason this line exists at all. Omitting it lets
+             * `NOT NULL DEFAULT true` record the opposite of an unticked box.
+             */
+            notifyWa: wa,
+            /**
+             * `push`, `remind` and `receipt` are NOT on the signup screen, so the
+             * documented default applies to them and nothing here is inferred
+             * from silence about a question she was asked. All three are on
+             * Account → Notifications with a switch each.
+             */
+          })
+          .returning();
+        if (!m) throw new Error('signup insert returned no row');
+
+        await recordPolicyAcceptance(tx, {
+          memberId: m.id,
+          salonId: m.salonId,
+          policyVersion: policySet.version,
+          source: 'signup',
+          ...clientMeta(req),
+        });
+
+        await writeAudit(tx, null, {
+          salonId: m.salonId,
+          kind: 'access',
+          action: 'Member signed up',
+          detail: `${m.name} created a wallet · accepted policy v${policySet.version}`,
+          source: 'wallet',
+          subjectType: 'member',
+          subjectId: m.id,
+          /**
+           * The actor is `null` — the System actor — because she had no principal
+           * when this row was written. The subject columns carry who it is about,
+           * which is the question asked of a signup.
+           */
+          metadata: { policyVersion: policySet.version, notifyWa: wa, loyaltyMode: s.loyaltyMode },
+          ...clientMeta(req),
+        });
+
+        return m;
+      });
+
+      const issued = await issueSession(db, {
+        principalKind: 'member',
+        memberId: created.id,
+        salonId: created.salonId,
+        scope: 'wallet',
+        deviceId: typeof body.deviceId === 'string' ? body.deviceId : null,
+        ...clientMeta(req),
+      });
+
+      /**
+       * 201, and `serialiseMember` — never the password, never the hash
+       * (non-negotiable #6). The session is issued because the design goes
+       * straight from Create account into the wallet.
+       */
+      return reply.code(201).send({
+        accessToken: issued.accessToken,
+        refreshToken: issued.refreshToken,
+        expiresAt: issued.expiresAt.toISOString(),
+        member: serialiseMember(created),
+      });
+    } catch (err) {
+      /**
+       * THE DOUBLE TAP. `member_salon_phone_uq` is the guard the SELECT above
+       * cannot be: two requests both find nothing, both insert, and exactly one
+       * commits. The loser gets the same refusal as the polite path, so a client
+       * has one state to render either way.
+       *
+       * Named, not blanket. Every other unique violation is a bug and must keep
+       * its 500 — treating all of them as "already registered" is the defect
+       * `violatedConstraint` exists to prevent.
+       */
+      if (violatedConstraint(err) === 'member_salon_phone_uq') throw ALREADY_REGISTERED();
+      if (isUniqueViolation(err)) req.log.error({ err }, 'unexpected unique violation on signup');
+      throw err;
+    }
+  });
+
   // ------------------------------------------------------------ member sign-in --
   app.post('/auth/member/session', async (req, reply) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
