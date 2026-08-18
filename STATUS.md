@@ -80,6 +80,32 @@ Money core proven against real Postgres — charges, top-ups, the signed gateway
 duplicate and out-of-order callbacks, five concurrent charges on one token, voids, deposit
 holds and the no-show return job.
 
+**That sentence was true of less than it sounded, until recently.** `e2e/support/global-setup.ts`
+boots `packages/mock`, which has **no database** — so every suite importing `./support/api.js`
+was driving in-memory fixtures. That was `money.test.ts`, `concurrency.test.ts` and
+`permissions.test.ts`: 74 of the 485 specs, and precisely the three files named for the
+guarantees that matter most. The mock's entire permission model is
+`has(req, 'noperms') ? staff[1] : staff[0]` — it reads no permissions at all, so #7 was being
+asserted against a scenario header. Suites using `e2e/support/tenancy-harness.ts` spawn the real
+API against real Postgres, which is the other 411.
+
+**What settles that it mattered:** with both concurrency guards removed, five simultaneous
+charges all settled and every one reported `balanceAfterFils: 493000` — a lost update in its
+purest form — while **all seven sequential specs in the `POST /charges` describe still passed**,
+including *"consumes the token — the same QR cannot be charged twice"*. 485 green specs with no
+way to see a lost update on the charge path.
+
+Now: the charge races run against real Postgres, and `authority.test.ts` checks the nine
+permissions against the real API. Breaking the race took two attempts because there are **two
+independent guards** — the wallet's `FOR UPDATE` and the token's conditional consumption — and
+each covers the other. Roughly 28 of the 74 turned out to be genuinely covered elsewhere
+already; about 17 are legitimately mock-scoped and now say so in their headers, recording what
+the mock lies about, because three lanes build against it and that is how the wallet's missing
+auth hid for a whole build.
+
+**#7 found no holes when checked properly.** Every gate was already there. What changed is that
+we can now notice if one disappears.
+
 Four surfaces: **API** (auth, nine permissions gated both directions, tenancy, booking,
 promotions, audit log), **wallet** (home, QR, top-up, Book, Account, full Arabic with RTL —
 but see the auth caveat below), **scanner** (PIN, scan, charge, void, manual lookup, bookings,
