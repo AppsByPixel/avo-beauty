@@ -264,53 +264,31 @@ function at(body: unknown, path?: string): unknown {
 }
 
 /**
- * DRIFT (7) — AND THE DIAGNOSIS CHANGED WHEN THE REBASE NARROWED IT.
+ * DRIFT (7), CLOSED — AND IT WAS FIXED AT THE CAUSE RATHER THAN THE SYMPTOM.
  *
- * As first recorded, this said `.nullable()` without `.optional()` had broken three
- * client surfaces. One of the three has since been fixed and the way it was fixed
- * is what makes the remaining two interesting.
+ * Recorded here because the shape of the fix is the lesson, and because this file
+ * argued for it.
  *
  * `TransactionSchema` declares `voidedAt` and `reversedByTransactionId` as
- * `.nullable()` but NOT `.optional()`, which makes them REQUIRED on every
- * transaction the API serves. `serialiseTransactionForCustomer` was taught to emit
- * both — `null` when there is no reversal — so `GET /members/me/transactions` and
- * `GET /charges` now parse and are promoted.
+ * `.nullable()` without `.optional()`, which makes them REQUIRED on every
+ * transaction. That is the third outage this project has had from one sentence —
+ * `.nullable()` does not imply `.optional()` — after the Book grid's `reason` (4)
+ * and `SubtractedBlockSchema.from/to` (6).
  *
- * THE TWO THAT STILL FAIL DO NOT GO THROUGH THAT SERIALISER AT ALL:
+ * But the schema modifier was only the symptom. `serialiseTransactionForCustomer`
+ * was taught to emit both keys and TWO ROUTES STILL FAILED, because
+ * `charge.ts` and `booking.ts` each hand-assembled the transaction literal instead
+ * of calling that serialiser — one payload built in three places, so a fix applied
+ * to one builder reached neither of the others. The same defect had already put
+ * `heldDepositFils` at `0` on the scan path while the charge path read it for real,
+ * and `services/counter.ts` exists because of it.
  *
- *   api/src/services/charge.ts:706    `transaction: { id, memberId, branchId, … }`
- *   api/src/services/booking.ts:525   the same literal again
- *
- * Two hand-assembled copies of a shape that also has a serialiser, so a fix
- * applied to the serialiser reached neither. THAT is the actual defect here, and it
- * is the third time this codebase has been bitten by one payload built in more than
- * one place: `heldDepositFils` was hardcoded `0` on the scan path while the charge
- * read it for real, and `services/counter.ts` exists now because of it.
- *
- * So there are two candidate fixes and they are not equivalent:
- *
- *   `.nullish()` on both keys      honest about the wire — a transaction created a
- *                                  millisecond ago genuinely has no void state, and
- *                                  inventing `null` for it is a small lie.
- *   use the serialiser in both     removes the duplication that caused this, and
- *                                  the divergence that will cause the next one.
- *
- * The second is the one that stops this recurring; the first is the one that makes
- * the contract match what is actually sent. Lane A's and trunk's call — but doing
- * only the first leaves three builders of one shape standing.
- *
- * REPORTED, NOT FIXED: packages/types is trunk-owned and shared by four surfaces.
- * These go green the hour it is corrected, and this file will say so.
+ * There were two candidate fixes and they were not equivalent: `.nullish()` would
+ * have made the contract match the wire and left three builders standing, while
+ * routing both POSTs through the serialiser removes the duplication that caused it.
+ * Lane A took the second. All four probes are plain `it()` now, so the day anything
+ * stops going through that serialiser, this file says so.
  */
-const DRIFT_7 =
-  'TransactionSchema declares `voidedAt` and `reversedByTransactionId` as `.nullable()` but NOT ' +
-  '`.optional()`, so they are REQUIRED on every transaction. The customer serialiser was fixed to ' +
-  'emit both and its two routes now parse — but `charge.ts:706` and `booking.ts:525` each ' +
-  'HAND-ASSEMBLE the transaction literal instead of calling that serialiser, so the fix did not ' +
-  'reach them and `.parse()` still THROWS on the charge the scanner just took and on the deposit ' +
-  'transaction at booking time. One payload built in three places is the same defect that put ' +
-  'heldDepositFils at 0 on the scan path; either mark both keys `.nullish()` or, better, have ' +
-  'those two call the serialiser. Trunk owns packages/types.';
 
 function probes(): Probe[] {
   return [
@@ -474,13 +452,14 @@ function probes(): Probe[] {
       schema: paginated(TransactionSchema),
       requireNonEmpty: ['items'],
       /**
-       * PROMOTED, AND IT IS THE ONLY TRANSACTION PROBE THAT PARSES.
+       * PROMOTED, AND IT WAS THE FIRST OF FOUR.
        *
-       * `voidedAt` and `reversedByTransactionId` were added to TransactionSchema to
-       * close this drift, and for THIS route it worked — the charges list serves
-       * both keys. The same change broke the other three transaction probes, which
-       * do not. See DRIFT (7) below; the two facts belong together, because one is
-       * the fix and the other is what the fix cost.
+       * `voidedAt` and `reversedByTransactionId` are the void state of a charge: the
+       * scanner's Today screen could not tell a reversed charge from a live one
+       * through the contract, on the one surface where a 15-minute reversal window is
+       * the entire feature. Adding them to TransactionSchema fixed this route and
+       * broke the three that did not serve them — see DRIFT (7) above, which is now
+       * closed at the cause. All four transaction probes parse.
        */
     },
 
@@ -522,7 +501,6 @@ function probes(): Probe[] {
       schemaName: 'TransactionSchema',
       schema: TransactionSchema,
       select: 'transaction',
-      knownParseFailure: DRIFT_7,
     },
     {
       route: 'POST /topups',
@@ -543,7 +521,6 @@ function probes(): Probe[] {
       schemaName: 'TransactionSchema',
       schema: TransactionSchema,
       select: 'transaction',
-      knownParseFailure: DRIFT_7,
     },
     {
       route: 'POST /v1/support/tickets',
