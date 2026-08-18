@@ -59,7 +59,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { precondition } from './support/known-bug.js';
+import { knownBug, precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
   SALON_A,
@@ -224,7 +224,31 @@ async function bookFuture(serviceId: string): Promise<{ id: string; depositFils:
  * sixty-minute window with no overlap.
  */
 let placements = 0;
-function moveInsideWindow(bookingId: string): void {
+function moveInsideWindow(bookingId: string, options: { parkOthers?: boolean } = {}): void {
+  /**
+   * FIRST, MAKE THIS HER ONLY LIVE HOLD — and this is API behaviour, not cleanup.
+   *
+   * `findApplicableHold` applies the EARLIEST live booking, which is right: a
+   * customer with two deposits down should have the older one consumed first. But it
+   * means a spec whose booking is not her earliest is asserting against a DIFFERENT
+   * spec's deposit, and the failure says so in the least obvious possible way —
+   * `expected 'BK-2144042' to be 'BK-5749713'`, and a charge that applied 8.000
+   * where 10.000 was held.
+   *
+   * Each spec therefore releases every other live booking of hers into the far
+   * future before placing its own. One at a time, because each release takes its own
+   * never-reused day: the artist's diary is an exclusion constraint, and parking two
+   * bookings "30 days out" in two statements puts them a second apart on one day,
+   * which overlaps.
+   */
+  if (options.parkOthers !== false) {
+    const others = scalar(
+      `select coalesce(string_agg(id, ','), '') from booking
+        where member_id='${MEMBER}' and status='deposit_held' and id <> '${bookingId}'`,
+    );
+    for (const other of others.split(',').filter(Boolean)) moveOutsideWindow(other);
+  }
+
   const startsIn = 4 + placements * 9;
   placements += 1;
   if (startsIn + 9 >= GRACE_MINUTES) {
@@ -244,13 +268,27 @@ function moveInsideWindow(bookingId: string): void {
   `);
 }
 
-/** And the mirror: far enough out that no hold can apply. */
+/**
+ * Release a booking into the far future, out of the window and out of the diary.
+ *
+ * A DAY NOBODY HAS USED, EVER, and that is the third time the artist's exclusion
+ * constraint has shaped this file. `now()` differs between statements, so parking
+ * two bookings "30 days out" in two different specs puts them a second apart on the
+ * same day — which overlaps, because appointments have duration. The counter only
+ * ever increases, so no slot is reused within a run.
+ *
+ * Used by the expired-grace spec to get its stale booking out of the way, for the
+ * reason the `knownBug` at the bottom of this file explains: while it is the
+ * earliest live booking, it hides every other hold she has.
+ */
+let releasedDay = 20;
 function moveOutsideWindow(bookingId: string): void {
+  releasedDay += 1;
   psql(`
     UPDATE booking
-       SET starts_at             = now() + interval '9 days',
-           ends_at               = now() + interval '9 days 30 minutes',
-           no_show_return_due_at = now() + interval '9 days 90 minutes'
+       SET starts_at             = now() + interval '${releasedDay} days',
+           ends_at               = now() + interval '${releasedDay} days' + interval '30 minutes',
+           no_show_return_due_at = now() + interval '${releasedDay} days' + interval '90 minutes'
      WHERE id = '${bookingId}';
   `);
 }
@@ -370,6 +408,15 @@ describe('the deposit hold applies only INSIDE the no-show grace window', () => 
         'credit. The no-show job is what returns that money to her; applying it here as well ' +
         'would spend it twice.',
     ).toBe(0);
+
+    /**
+     * AND THIS SPEC CLEANS UP AFTER ITSELF, which is not housekeeping — it is the
+     * defect at the bottom of this file. While this stale booking is her earliest
+     * live one, `findApplicableHold` picks it, disqualifies it and returns nothing,
+     * hiding every valid hold she has. Leaving it here made four later specs fail
+     * and pass again under `-t`, which is the worst way to find that out.
+     */
+    moveOutsideWindow(booking.id);
   });
 });
 
@@ -388,7 +435,8 @@ describe('POST /charges consumes the hold, and the arithmetic is the whole featu
       afterBooking,
       'the booking did not debit the deposit from her wallet',
     ).toBe(MEMBER_OPENING_FILS - DEPOSIT_FILS);
-    precondition(depositHeldFor(MEMBER) > 0, 'no deposit_held ledger position exists');
+    const heldBefore = depositHeldFor(MEMBER);
+    precondition(heldBefore > 0, 'no deposit_held ledger position exists');
 
     const charged = await chargeFor([BLOW_DRY]);
     expect(charged.status, charged.raw).toBe(200);
@@ -409,13 +457,21 @@ describe('POST /charges consumes the hold, and the arithmetic is the whole featu
     expect(balanceOf(MEMBER)).toBe(MEMBER_OPENING_FILS - BLOW_DRY_FILS);
     expect(charged.body.balanceAfterFils).toBe(balanceOf(MEMBER));
 
-    // The booking is settled, and the hold is released rather than left standing.
+    // The booking is settled, and THIS hold is released rather than left standing.
     expect(bookingStatus(booking.id)).toBe('completed');
+    /**
+     * A DELTA, NOT ZERO. `depositHeldFor` is member-wide — the `deposit_held` leg
+     * carries no booking reference and no member id, so the position can only be
+     * summed per customer — and earlier specs in this file leave her holding
+     * deposits on appointments they never charged. Asserting zero here passed only
+     * while this describe was run on its own, which is the shape of an
+     * order-dependent spec.
+     */
     expect(
       depositHeldFor(MEMBER),
-      'the deposit_held ledger account still carries a balance after the booking completed, so ' +
-        'the money is held against an appointment that is over',
-    ).toBe(0);
+      'completing the booking did not release its deposit from the held account, so the money is ' +
+        'still held against an appointment that is over',
+    ).toBe(heldBefore - DEPOSIT_FILS);
   });
 
   it('MIGRATION 0014: a visit CHEAPER than the deposit charges ZERO and returns the change', async () => {
@@ -498,10 +554,97 @@ describe('POST /charges consumes the hold, and the arithmetic is the whole featu
       // Her wallet ends down by exactly the visit, not by the deposit.
       expect(balanceOf(MEMBER)).toBe(MEMBER_OPENING_FILS - MANICURE_FILS);
       expect(bookingStatus(booking.id)).toBe('completed');
-      expect(depositHeldFor(MEMBER), 'the raised deposit is still held').toBe(0);
     } finally {
       psql(`UPDATE salon SET deposit_fils = ${DEPOSIT_FILS} WHERE id = '${SALON_A}';`);
     }
+  });
+});
+
+// ===========================================================================
+// The ledger these specs read as truth
+// ===========================================================================
+
+describe('and the ledger every assertion above trusts cannot be erased', () => {
+  it('ledger_entry refuses UPDATE, DELETE and — the one that was missing — TRUNCATE', async () => {
+    /**
+     * WHY THIS BELONGS IN THIS FILE. Every deposit assertion above answers "is it
+     * still held" from `ledger_entry`, because there is no column for it: the hold is
+     * a double-entry pair and the position is credits minus debits. That makes this
+     * table the evidence, and evidence is only as good as its immutability.
+     *
+     * TRUNCATE IS NEITHER AN UPDATE NOR A DELETE, and that is the whole point. A
+     * `BEFORE … FOR EACH ROW` trigger never fires for it, because TRUNCATE produces
+     * no row events — so this table refused every UPDATE and every DELETE and could
+     * still be emptied by one statement, which returned "TRUNCATE TABLE" without
+     * complaint and left every `member.balance_fils` a number with nothing behind
+     * it. Exactly the derivation this file spends seven specs establishing.
+     *
+     * Named per verb rather than as "append-only like audit_log", because that
+     * phrase is now wrong for two of the four immutable tables: consent events allow
+     * DELETE through the member cascade on purpose, and `loyalty_event` allows all
+     * three by 0008's written decision.
+     */
+    const asOwner = (statement: string): string => {
+      try {
+        psql(statement);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
+    const asApp = (statement: string): string => {
+      try {
+        psql(`SET ROLE avo_app; ${statement}`);
+        return '';
+      } catch (err) {
+        return String((err as Error).message);
+      }
+    };
+
+    const rowsBefore = Number(scalar('select count(*) from ledger_entry'));
+    precondition(rowsBefore > 0, 'there are no ledger rows to protect');
+
+    /**
+     * AIMED AT A ROW THAT DEFINITELY EXISTS, and the first draft was not.
+     *
+     * It targeted `WHERE account = 'deposit_held'`, and run on its own — with the
+     * booking specs filtered out — nothing had created such a row yet. A
+     * `BEFORE … FOR EACH ROW` trigger never fires when no row matches, so the
+     * statement succeeded trivially and the spec reported that the OWNER CAN REWRITE
+     * THE LEDGER. A false alarm on the money record, from a WHERE clause that
+     * matched nothing.
+     *
+     * That is the "no empty samples" rule for a third time in this suite, and it is
+     * worth naming because the failure mode inverts here: elsewhere an empty sample
+     * makes a spec pass while proving nothing, and here it made one FAIL while
+     * proving nothing. Both come from asserting against a set nobody checked was
+     * non-empty.
+     */
+    const victim = scalar('select id from ledger_entry order by seq limit 1');
+    precondition(victim !== '', 'no ledger row id came back to aim at');
+
+    expect(
+      asApp(`UPDATE ledger_entry SET amount_fils = 1 WHERE id = '${victim}';`),
+      'the application role can rewrite a ledger amount',
+    ).toMatch(/permission denied|append-only/i);
+    expect(
+      asOwner(`UPDATE ledger_entry SET amount_fils = 1 WHERE id = '${victim}';`),
+      'the OWNER can rewrite a ledger amount, so the money record is editable',
+    ).toMatch(/append-only/i);
+    expect(
+      asOwner(`DELETE FROM ledger_entry WHERE id = '${victim}';`),
+      'the OWNER can delete ledger rows',
+    ).toMatch(/append-only/i);
+    expect(
+      asOwner('TRUNCATE ledger_entry;'),
+      'LEDGER_ENTRY CAN BE TRUNCATED. One statement erases every derivation behind every ' +
+        'balance in the system, and a row-level trigger cannot see it coming.',
+    ).toMatch(/append-only/i);
+
+    expect(
+      Number(scalar('select count(*) from ledger_entry')),
+      'ledger rows disappeared while this spec was asserting that they cannot',
+    ).toBe(rowsBefore);
   });
 });
 
@@ -530,6 +673,12 @@ describe('the charge is ONE transaction: if the debit fails, the deposit is unto
     const visitsBefore = visitsOf(MEMBER);
     const balanceBefore = balanceOf(MEMBER);
     const statusBefore = bookingStatus(booking.id);
+    // A DELTA, because earlier specs in this file charged her for real. Absolute
+    // counts against a shared fixture are order-dependent specs wearing a disguise —
+    // this is the third one this file has taught me.
+    const chargeRowsBefore = Number(
+      scalar(`select count(*) from transaction where member_id='${MEMBER}' and kind='charge'`),
+    );
     precondition(statusBefore === 'deposit_held', `the booking is ${statusBefore}`);
 
     const charged = await chargeFor([BLOW_DRY]);
@@ -561,7 +710,7 @@ describe('the charge is ONE transaction: if the debit fails, the deposit is unto
     expect(
       Number(scalar(`select count(*) from transaction where member_id='${MEMBER}' and kind='charge'`)),
       'a charge row was written for a charge that was refused',
-    ).toBe(0);
+    ).toBe(chargeRowsBefore);
 
     // And she can still be charged once she has the money — the hold survived
     // intact and is applied to the retry.
@@ -622,3 +771,91 @@ describe('a deposit held at one salon cannot be applied to a charge at another',
     ).toBe(0);
   });
 });
+
+// ===========================================================================
+// A DEFECT THIS FILE FOUND BY BEING RUN AS A FILE
+// ===========================================================================
+
+/**
+ * `findApplicableHold` takes the earliest live booking and THEN disqualifies it,
+ * so one stale hold hides every good one.
+ *
+ * services/booking.ts:
+ *
+ *     .orderBy(asc(booking.startsAt))
+ *     .limit(1)
+ *     ...
+ *     if (row.noShowReturnDueAt <= params.now) return null;
+ *
+ * The expiry test is applied to the single row the query already chose, in
+ * TypeScript, for a stated and good reason — so the comparison uses the same `now`
+ * the charge uses everywhere else rather than the database's clock a few
+ * milliseconds later. The cost is that `LIMIT 1` has already thrown away the rows
+ * that would have qualified.
+ *
+ * THE CUSTOMER-FACING VERSION. She no-shows on Monday. The no-show job has not run
+ * yet, so that booking is still `deposit_held` with its grace period expired. She
+ * books again for Tuesday, puts down a second deposit, and attends. At the counter
+ * her Tuesday deposit is INVISIBLE: the Monday row sorts first, fails the expiry
+ * check, and the endpoint reports no hold at all. She is charged the full price for
+ * a visit she has already paid a deposit on, and the screen shows her no credit
+ * line to query.
+ *
+ * It is not a lost-money bug — both deposits are still in `deposit_held` and the
+ * no-show job will return the Monday one — but it is a double-charge at the counter,
+ * in front of the customer, and the staff member has nothing to point at.
+ *
+ * REPORTED, NOT FIXED: `api/` is not lane D's column. The fix is to let the
+ * database do the disqualifying, or to fetch candidates and pick the first that
+ * qualifies — but the `now` argument is load-bearing and belongs in lane A's hands.
+ *
+ * This also cost four specs above an hour of order-dependence, which is how it was
+ * found: they passed one describe at a time and failed as a file.
+ */
+knownBug(
+  'findApplicableHold applies LIMIT 1 before testing whether the hold has expired, so a member ' +
+    'with a stale no-show hold sorted earlier than a live one gets NO deposit applied at all — ' +
+    'she is charged full price at the counter for a visit she has a deposit on, with no credit ' +
+    'line on screen to dispute (api/src/services/booking.ts § findApplicableHold, lane A)',
+  async () => {
+    reseedMember();
+
+    // Tuesday first: her live booking, placed through the normal allocator so it
+    // parks every unrelated hold and takes a slot nothing else in this file owns.
+    const live = await bookFuture(MANICURE);
+    moveInsideWindow(live.id);
+
+    /**
+     * Monday: she no-shows, and the return job has not run.
+     *
+     * Placed straight into the PAST rather than through the allocator — it never
+     * needs an in-window slot, and asking for one burned a slot and tripped the
+     * allocator's own out-of-room guard, which then reported a deposit failure that
+     * was really a diary failure. Exactly what that guard's message warns about.
+     * The past is uncontended: the expired-grace spec releases its booking, so
+     * nothing else of hers is back there.
+     *
+     * And NOT parked, deliberately — the coexistence of this row with the live one
+     * is the entire bug.
+     */
+    const stale = await bookFuture(MANICURE);
+    psql(`
+      UPDATE booking
+         SET starts_at             = now() - interval '50 minutes',
+             ends_at               = now() - interval '20 minutes',
+             no_show_return_due_at = now() - interval '1 minute'
+       WHERE id = '${stale.id}';
+    `);
+
+    const opened = await treq<any>('GET', `/members/${MEMBER}`, { token: scanner });
+    precondition(opened.status === 200, `the resolve answered ${opened.status} ${opened.raw}`);
+
+    expect(
+      opened.body.heldDepositFils,
+      'her live deposit is hidden by an expired one, so the counter charges her full price for a ' +
+        'visit she has already put money down for',
+    ).toBe(DEPOSIT_FILS);
+    expect(opened.body.heldDepositBooking?.id).toBe(live.id);
+  },
+  120_000,
+);

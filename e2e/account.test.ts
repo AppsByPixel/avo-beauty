@@ -111,9 +111,15 @@ function reseedMember(): void {
       deletion_requested_at = NULL,
       deletion_due_at       = NULL;
   `);
-  // Her consent trail. `member_consent_event` is append-only to the APPLICATION
-  // role and this is the owner connection, which is the only reason a test can
-  // clear it — and the reason the spec below proves the application cannot.
+  /**
+   * Her consent trail, and the verb matters. `member_consent_event` refuses UPDATE
+   * and TRUNCATE to EVERYONE including the owner (migrations 0020 and 0023), and
+   * leaves DELETE alone — deliberately, because `member_id` is ON DELETE CASCADE
+   * and a DELETE trigger here would make the 30-day erasure impossible. This is the
+   * owner connection using the one verb that is open, which is why the reset works
+   * at all. "Append-only like audit_log" would be the wrong description of this
+   * table in two of the three verbs; the specs below name each one.
+   */
   psql(`DELETE FROM member_consent_event WHERE member_id = '${MEMBER}';`);
 }
 
@@ -1289,6 +1295,25 @@ describe('account deletion — a state with a clock, and the clock must not be n
     expect(
       attempt('', `UPDATE audit_log SET action='edited' ${rows};`),
       'the database OWNER can edit the deletion audit rows',
+    ).toMatch(/append-only/i);
+    /**
+     * AND TRUNCATE, WHICH IS NEITHER OF THE ABOVE. A `BEFORE … FOR EACH ROW`
+     * trigger never fires for TRUNCATE, because TRUNCATE produces no row events —
+     * so a table can refuse every UPDATE and every DELETE and still be emptied by
+     * one statement. `audit_log` has had the statement-level trigger since 0001;
+     * `ledger_entry` and `gateway_event` had only two triggers until 0024, and
+     * `TRUNCATE ledger_entry` really did return "TRUNCATE TABLE" and leave every
+     * balance a number with no derivation behind it.
+     *
+     * Asserted here because this file's whole argument is that the deletion trail
+     * cannot be trimmed, and "cannot be trimmed" that stops at DELETE is not the
+     * claim it sounds like.
+     */
+    expect(
+      attempt('', 'TRUNCATE audit_log;'),
+      'audit_log can be TRUNCATEd. Refusing UPDATE and DELETE is not enough — a row-level ' +
+        'trigger never fires for TRUNCATE, so one statement empties the log that is the ' +
+        'customer\'s evidence.',
     ).toMatch(/append-only/i);
 
     // Four refused attempts later, both rows are still exactly where they were.
