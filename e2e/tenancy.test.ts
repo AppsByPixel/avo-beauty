@@ -4,9 +4,9 @@
  * HOW TO RUN
  *
  *   pnpm install
- *   pnpm --filter @avo/api run db:up
- *   pnpm --filter @avo/api run db:migrate
- *   pnpm --filter @avo/api run db:seed
+ *   pnpm --dir ./api run db:up
+ *   pnpm --dir ./api run db:migrate
+ *   pnpm --dir ./api run db:seed
  *   cd e2e && ../node_modules/.bin/vitest run tenancy.test.ts
  *
  * This file does NOT use `support/api.ts` and is not affected by `E2E_BASE_URL`.
@@ -939,7 +939,7 @@ describe('money — salon B cannot move salon A money', () => {
     const target = scalar(
       `select id from transaction where salon_id='${SALON_A}' and kind='charge' order by created_at desc limit 1`,
     );
-    precondition(target !== '', 'salon A has no charge to try to void — run pnpm --filter @avo/api run db:seed');
+    precondition(target !== '', 'salon A has no charge to try to void — run pnpm --dir ./api run db:seed');
 
     const reversalsBefore = scalar(
       `select count(*) from transaction where reverses_transaction_id='${target}'`,

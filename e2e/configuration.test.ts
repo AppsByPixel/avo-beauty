@@ -4,7 +4,7 @@
  * HOW TO RUN
  *
  *   pnpm install
- *   pnpm --filter @avo/api run db:up
+ *   pnpm --dir ./api run db:up
  *   cd e2e && ../node_modules/.bin/vitest run configuration.test.ts
  *
  * Like the other harness-driven files, this boots lane A's real API against this

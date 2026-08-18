@@ -4,9 +4,9 @@
  * HOW TO RUN
  *
  *   pnpm install
- *   pnpm --filter @avo/api run db:up
- *   pnpm --filter @avo/api run db:migrate
- *   pnpm --filter @avo/api run db:seed
+ *   pnpm --dir ./api run db:up
+ *   pnpm --dir ./api run db:migrate
+ *   pnpm --dir ./api run db:seed
  *   cd e2e && ../node_modules/.bin/vitest run gateway.test.ts
  *
  * Like `tenancy.test.ts` and unlike the other three suites, this file does not

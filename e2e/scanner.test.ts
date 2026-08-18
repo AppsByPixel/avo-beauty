@@ -4,7 +4,7 @@
  * HOW TO RUN
  *
  *   pnpm install
- *   pnpm --filter @avo/api run db:up
+ *   pnpm --dir ./api run db:up
  *   cd e2e && ../node_modules/.bin/vitest run scanner.test.ts
  *
  * Like `tenancy.test.ts`, `gateway.test.ts` and `integration.test.ts` and unlike
