@@ -534,6 +534,65 @@ describe('the callback and the customer race, and the answer is the same either 
     expect(statusOf(view.id)).toBe('succeeded');
   });
 
+  /**
+   * BOTH AT ONCE — the case concurrency.test.ts could only ask for.
+   *
+   * The two specs above are the ORDERED versions: callback then read, read then
+   * callback. Each proves the loser is ignored, and each relies on the winner
+   * having COMMITTED before the loser starts. The case neither reaches is the one
+   * that actually happens in production: the customer's browser returns from the
+   * hosted page at the same instant the PSP posts its webhook, so both paths are
+   * in flight and neither can see the other's uncommitted work.
+   *
+   * `concurrency.test.ts` asked for exactly this — "webhook and client return
+   * firing simultaneously credit once (Promise.all over the webhook and the status
+   * read)" — and could not write it, because `packages/mock` has no webhook at all.
+   * It is writable here, and it is the last of that file's nine callback todos with
+   * no equivalent against the real API.
+   *
+   * ONE CREDIT is the assertion. Which of the two settles it is not specified and
+   * must not be: either is correct, and pinning it would be pinning a race.
+   */
+  it('the webhook and her return firing AT ONCE credit exactly once', async () => {
+    const before = balanceOf(MEMBER);
+    const { view, pspReference, credit } = await openIntent('simultaneous');
+
+    const [hook, read] = await Promise.all([
+      deliver({
+        eventId: eventId('simultaneous'),
+        pspReference,
+        status: 'succeeded',
+        amountFils: AMOUNT_FILS,
+      }),
+      treq<IntentView>('GET', `/topups/${view.id}`, { token: member }),
+    ]);
+
+    expect(hook.status, `the webhook answered ${hook.status}: ${hook.raw}`).toBe(200);
+    expect(read.status, `her return answered ${read.status}: ${read.raw}`).toBe(200);
+
+    /**
+     * EXACTLY ONE CREDIT. A lost update here is the worst shape this endpoint has:
+     * the customer is credited twice for one payment, the salon is owed money it
+     * never took, and both paths reported success to somebody.
+     */
+    expect(
+      balanceOf(MEMBER),
+      'the webhook and the client return both credited her, so one payment paid twice',
+    ).toBe(before + credit);
+
+    // One transaction and one ledger pair behind it, not two of either.
+    expect(
+      Number(scalar(`select count(*) from transaction where reference='${view.reference}'`)),
+      'two transactions exist for one top-up intent',
+    ).toBe(1);
+
+    // And whichever won, the state is terminal and agrees with the money.
+    expect(statusOf(view.id)).toBe('succeeded');
+    const settled = await treq<IntentView>('GET', `/topups/${view.id}`, { token: member });
+    expect(settled.body.status).toBe('succeeded');
+    expect(settled.body.creditFils).toBe(credit);
+  }, 60_000);
+
   it('re-reading a settled intent never moves it, however many times the client polls', async () => {
     const { view, balanceBefore, credit } = await settledIntent('poll');
 

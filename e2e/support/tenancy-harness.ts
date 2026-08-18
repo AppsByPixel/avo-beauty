@@ -204,6 +204,24 @@ export const B_COUNTER_DEVICE = 'DEV-SCANNER-B-COUNTER';
  * see, and the one a vacuous spec was least able to protect. Dedicated rows because
  * the spec rewrites their access: `ST-B02` is another file's Accounts target.
  */
+/**
+ * THE TWO AUTHORITY PROBES, one per surface, and they exist because
+ * non-negotiable #7 needs a principal that HOLDS NOTHING.
+ *
+ * Every other staff fixture in this file holds something on purpose, so a ledger
+ * built on them can only probe the permissions they happen to lack. These two are
+ * seeded with all nine OFF, and `authority.test.ts` grants exactly one at a time to
+ * take its control reading. Two rows because the surface check runs BEFORE the
+ * permission check: a dashboard endpoint refuses a PIN session as the wrong KIND of
+ * credential, which is a different refusal from an under-privileged one, and a
+ * ledger that conflated them would report a gate that is not there.
+ */
+export const B_STAFF_AUTH_WEB = 'ST-B11';
+export const B_STAFF_AUTH_WEB_HANDLE = 'authweb';
+export const B_STAFF_AUTH_PIN = 'ST-B12';
+export const B_STAFF_AUTH_PIN_HANDLE = 'authpin';
+export const B_AUTH_PIN_DEVICE = 'DEV-SCANNER-B-AUTH';
+
 export const B_STAFF_BRANCH_SURVIVOR = 'ST-B09';
 export const B_STAFF_BRANCH_STRANDED = 'ST-B10';
 
@@ -1256,6 +1274,38 @@ SELECT '${B_STAFF_BRANCH_STRANDED}', '${SALON_B}', 'Branch Stranded', 'branchstr
 FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
 ON CONFLICT (id) DO UPDATE SET
   branch_access_all = false, branch_access_ids = ARRAY['${B_BRANCH}'];
+
+-- The two authority probes: every permission OFF. authority.test.ts grants one at
+-- a time and restores them, so their seeded state has to be the empty one.
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id,
+                        perm_dashboard, perm_appointments, perm_shop, perm_loyalty, perm_team,
+                        perm_scanner, perm_charges, perm_void, perm_marketing)
+-- NO pin_hash: staff_user_pin_is_device_scoped requires a device alongside one,
+-- and this probe is the WEB principal. A PIN here would also make it the wrong
+-- fixture — the point of two rows is that each holds exactly one kind of credential.
+SELECT '${B_STAFF_AUTH_WEB}', '${SALON_B}', 'Authority Web', '${B_STAFF_AUTH_WEB_HANDLE}',
+       'frontdesk', true, '{}', s.password_hash, NULL, NULL,
+       false, false, false, false, false, false, false, false, false
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  perm_dashboard = false, perm_appointments = false, perm_shop = false, perm_loyalty = false,
+  perm_team = false, perm_scanner = false, perm_charges = false, perm_void = false,
+  perm_marketing = false;
+
+INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+                        password_hash, pin_hash, pin_device_id,
+                        perm_dashboard, perm_appointments, perm_shop, perm_loyalty, perm_team,
+                        perm_scanner, perm_charges, perm_void, perm_marketing)
+SELECT '${B_STAFF_AUTH_PIN}', '${SALON_B}', 'Authority Pin', '${B_STAFF_AUTH_PIN_HANDLE}',
+       'frontdesk', true, '{}', s.password_hash, s.pin_hash, '${B_AUTH_PIN_DEVICE}',
+       false, false, false, false, false, false, false, false, false
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO UPDATE SET
+  pin_hash = EXCLUDED.pin_hash, pin_device_id = '${B_AUTH_PIN_DEVICE}',
+  perm_dashboard = false, perm_appointments = false, perm_shop = false, perm_loyalty = false,
+  perm_team = false, perm_scanner = false, perm_charges = false, perm_void = false,
+  perm_marketing = false;
 
 -- Salon B's happy hours. Both OFF, so no promotion is live during the money
 -- specs; see the constants at the top of this file.

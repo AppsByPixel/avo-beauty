@@ -16,6 +16,32 @@
  * principal is selected changes.
  */
 
+/**
+ * READ THIS FIRST: THIS FILE RUNS AGAINST `packages/mock`, NOT AGAINST THE API.
+ *
+ * `support/api.js` resolves `E2E_BASE_URL`, and `support/global-setup.ts` always
+ * points that at `packages/mock` — an in-memory `Map` with no Postgres and no
+ * authority layer beyond two hardcoded gates. The `knownBug` at the bottom of this
+ * file has been saying so all along: "packages/mock enforces only charges and void".
+ *
+ * SO NON-NEGOTIABLE #7 IS NOT PROVED HERE. It is proved in `authority.test.ts`,
+ * which drives all nine permissions against the real API and real Postgres, with a
+ * principal that holds nothing, a control reading with each permission granted, and
+ * the design's own refusal copy asserted per permission. That file exists because of
+ * what this one could not do, and it found nothing wrong — every gate was already
+ * there.
+ *
+ * WHAT THIS FILE IS STILL FOR, and it is not nothing: the UI lanes build against
+ * this mock, so "does the mock refuse the way the API refuses" is a real question
+ * for them. A mock that answered 200 where the API answers 403 would have the
+ * dashboard rendering a section the product forbids. That is a shape check on a
+ * stub, which is worth having and is a smaller claim than the file's name suggests.
+ *
+ * The `charges` and `void` probes below are separately proved against the real API
+ * in `scanner.test.ts` — with a genuinely restricted PIN session, not a scenario
+ * header — so nothing here is the only evidence for either.
+ */
+
 import { describe, expect, it } from 'vitest';
 import {
   MEMBER_ID,
