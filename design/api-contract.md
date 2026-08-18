@@ -165,11 +165,22 @@ Rules:
 4. **A non-zero balance is refused** — `409 balance_outstanding`, carrying `balanceFils`. Her
    wallet is prepaid credit the salon owes her (non-negotiable #5), and erasing the account
    that names the money while the money is owed is the one outcome nobody can undo.
-5. **Sessions are NOT revoked**, deliberately. The 30 days are a grace window, and an account
+5. **A settled top-up CANCELS a pending deletion request**, in the same transaction as the
+   credit. Rule 4 is checked once, at request time, so `deletion_requested_at` over a positive
+   `balance_fils` was otherwise reachable — the state the 409 exists to prevent, arrived at
+   from the other direction, with a 30-day clock running towards erasing a funded wallet.
+   Paying money in is an unambiguous statement that she intends to keep using the wallet, and
+   it is later and costlier than the deletion request. Blocking the top-up instead would refuse
+   her money to protect a request she has evidently changed her mind about. Audited as
+   `Account deletion cancelled` with `reason: "topup_after_deletion_request"`; she discovers it
+   from `GET /members/me/deletion` answering `none`. **A proactive notice is owed and not
+   sent** — there is no customer notification sender yet, so the audit row carries
+   `customerNoticeOwed: true` rather than implying she was told.
+6. **Sessions are NOT revoked**, deliberately. The 30 days are a grace window, and an account
    she is locked out of the moment she asks is one she cannot change her mind about. `DELETE`
    is that door, and `GET` is the sign on it — a grace window she cannot see is a grace window
    she cannot use.
-6. `erasureScheduled` is `false` until the erasure job exists. Which columns are nulled at the
+7. `erasureScheduled` is `false` until the erasure job exists. Which columns are nulled at the
    due date, and which survive the 7-year financial record, is a retention decision that
    belongs to the client. A response implying the erasure had been carried out would make the
    confirmation screen say something untrue.

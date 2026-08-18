@@ -671,7 +671,77 @@ async function creditWallet(
   const txId = transactionId();
   const reference = intent.reference;
 
-  await tx.update(member).set({ balanceFils: balanceAfter, updatedAt: now }).where(eq(member.id, m.id));
+  /**
+   * A TOP-UP CANCELS A PENDING DELETION REQUEST.
+   *
+   * `POST /members/me/deletion` refuses a non-zero balance — erasing the account
+   * that names money the salon still owes her is the one outcome nobody can undo
+   * (non-negotiable #5, and the terms' "must settle any remaining balance with
+   * you"). But that check ran ONCE, at request time, and nothing stopped a top-up
+   * afterwards. So `deletion_requested_at` over a positive `balance_fils` was
+   * reachable: exactly the state the 409 exists to prevent, arrived at from the
+   * other direction, with a 30-day clock ticking towards erasing a funded wallet.
+   *
+   * CANCELLING IS THE RIGHT RESOLUTION, not blocking the top-up. Paying money into
+   * a wallet is an unambiguous statement that she intends to keep using it —
+   * clearer than the deletion request, because it is later and it costs her
+   * something. Refusing her money to protect a request she has evidently changed
+   * her mind about would be the worse of the two failures, and it would leave her
+   * unable to fund a wallet without first finding a cancel button she may not know
+   * exists.
+   *
+   * IN THE SAME TRANSACTION AS THE CREDIT, on the row already held FOR UPDATE. If
+   * the credit rolls back the cancellation goes with it, so there is no window in
+   * which the money landed and the clock kept running.
+   */
+  const deletionCancelled = m.deletionRequestedAt !== null;
+
+  await tx
+    .update(member)
+    .set({
+      balanceFils: balanceAfter,
+      updatedAt: now,
+      ...(deletionCancelled ? { deletionRequestedAt: null, deletionDueAt: null } : {}),
+    })
+    .where(eq(member.id, m.id));
+
+  if (deletionCancelled) {
+    /**
+     * `null` principal, deliberately. This settle path runs from the gateway
+     * webhook as often as from the client, so there is frequently no session to
+     * name, and inventing her as the actor would assert she pressed a cancel
+     * button she never saw. The system cancelled it, on her money's behalf.
+     */
+    await writeAudit(tx, null, {
+      salonId: intent.salonId,
+      kind: 'access',
+      action: 'Account deletion cancelled',
+      detail: `Top-up of ${intent.creditFils} fils cancelled the pending deletion`,
+      source: 'system',
+      subjectType: 'member',
+      subjectId: m.id,
+      metadata: {
+        reason: 'topup_after_deletion_request',
+        intentId: intent.id,
+        transactionId: txId,
+        creditFils: intent.creditFils,
+        // What the clock had been set to, so the trail says what was averted.
+        wasDueAt: m.deletionDueAt?.toISOString() ?? null,
+        requestedAt: m.deletionRequestedAt?.toISOString() ?? null,
+        /**
+         * SHE HAS NOT BEEN TOLD, and this says so rather than implying she has.
+         * There is no customer notification sender in this API — the WhatsApp
+         * templates are unapproved and the sending domain is an open client
+         * decision, both recorded in receipts/types.ts — so the same
+         * `oldNumberNoticeOwed` treatment the phone change uses applies here.
+         * She CAN discover it: `GET /members/me/deletion` now answers `none`.
+         * Surfacing it on the top-up outcome screen needs a field on
+         * `TopUpIntentPublicSchema`, which is trunk-owned. Reported, not invented.
+         */
+        customerNoticeOwed: true,
+      },
+    });
+  }
 
   await tx.insert(transaction).values({
     id: txId,
