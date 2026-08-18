@@ -299,15 +299,36 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
       )}
 
       {/*
-        The design has an "+ Add branch" field and a remove button per row.
-        Neither is built: `PATCH /salons/{id}` refuses `branches` and there is no
-        POST/DELETE for one. A branch id is also referenced by staff
-        `branchAccess`, so removing one is a cascade the API has to own.
-        Reported to Lane A.
+        THIS COMMENT WAS WRONG, AND THE COPY BELOW REPEATED THE ERROR TO MERCHANTS.
+
+        It said "there is no POST/DELETE for one. A branch id is also referenced by
+        staff `branchAccess`, so removing one is a cascade the API has to own.
+        Reported to Lane A." All three routes exist and lane A owns the cascade:
+
+          POST   /salons/{id}/branches            requireDashboardPerm(req, 'loyalty')
+          PATCH  /salons/{id}/branches/{bid}      requireDashboardPerm(req, 'loyalty')
+          DELETE /salons/{id}/branches/{bid}      requireDashboardPerm(req, 'loyalty')
+
+        The DELETE even answers with the cascade this comment says the API has to
+        own — `staffRescoped`, `staffLeftWithNoBranch` and `depositHeldBookings`,
+        so a merchant can be told which staff were moved and who was left with no
+        branch at all.
+
+        This is the same failure as the "WHAT IS NOT BUILT" block in Accounts.tsx:
+        a consumer asserting what the API lacks, read later as the record of it,
+        and never re-checked. The difference is that this one reached the merchant
+        — "Ask AVO to change them" sends her to support for something she can do
+        herself.
+
+        The editor is still not built, and that is now honestly a LANE C backlog
+        item rather than an API gap. It is not built in this commit because the
+        cascade above needs real UI — a confirmation naming the staff about to be
+        rescoped is the whole point of those three response fields, and inventing
+        it inside a permissions audit is how a slice turns into two.
       */}
       <div className="settings__notice" role="note">
-        Adding or removing a branch isn&rsquo;t available from the dashboard yet — staff branch
-        access depends on these IDs. Ask AVO to change them.
+        Editing branches from the dashboard isn&rsquo;t built yet — staff branch access depends on
+        these IDs. Ask AVO to change them for now.
       </div>
     </Card>
   );

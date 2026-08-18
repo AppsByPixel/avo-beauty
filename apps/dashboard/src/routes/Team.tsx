@@ -15,6 +15,11 @@ import { SectionError, WriteError } from './sectionState.js';
 /**
  * Merchant → Team. `GET /salons/{id}/artists`, `PUT /artists/{id}/availability`.
  *
+ * NO COURTESY PERMISSION GATE, DELIBERATELY, and this is the section where that
+ * is safest: the read AND the write are both `requireDashboardPerm(req, 'team')`,
+ * so anyone who can see this grid can save from it. There is no ungated-read /
+ * gated-write gap to cover. Ledger in sectionState.tsx.
+ *
  * Two views, as the design has them: a grid of artist cards, and a per-artist
  * hours editor that replaces the grid in place.
  *

@@ -21,6 +21,58 @@ import { ApiError } from '../api/client.js';
  *        so a retry button is a lie about what she can do. The body is the
  *        server's own copy, which names who can grant the permission.
  *   else we failed — offer the retry.
+ *
+ * ---------------------------------------------------------------------------
+ * THE COURTESY-GATE LEDGER. Read this before adding a section.
+ *
+ * A section needs a `session.perms` check ONLY when its READ is ungated and its
+ * WRITES are not. Where the read is already permission-gated the 403 arrives on
+ * its own and `SectionError` explains it — adding a client check there would
+ * duplicate the server and drift from it.
+ *
+ * Settings survived for weeks in the wrong column because the ABSENCE of a gate
+ * is indistinguishable from an oversight. So the decision is written down per
+ * section, with the permission the SERVER enforces, so the next person can check
+ * a claim here against `api/src/routes` without reading the handlers.
+ *
+ * Verified against the guards in api/src/routes, not against the permission name
+ * that sounds right:
+ *
+ *   Section       read → server guard                        writes → guard      gate
+ *   ─────────────────────────────────────────────────────────────────────────────────
+ *   Overview      /metrics            → perms.dashboard      (none)              none needed
+ *                 /charges            → SCANNER perms.charges
+ *   Appointments  /bookings           → perms.appointments   (none)              none needed
+ *   Team          /artists            → perms.team           availability → team none needed
+ *   Loyalty       /loyalty            → perms.loyalty        PUT /loyalty → loyalty
+ *                                                                                none needed
+ *   Audit log     /audit              → perms.dashboard      (none, ever)        none needed
+ *   Accounts      /staff              → perms.team           staff/* → team      none needed
+ *   Marketing     /promotions         → requirePrincipal     boosts, happy-hours,
+ *                                       NO PERMISSION        campaigns → marketing
+ *                                                                                perms.marketing
+ *   Settings      /salons/{id}        → requirePrincipal     PATCH /salons/{id}
+ *                                       NO PERMISSION        + branches → loyalty
+ *                                                                                perms.loyalty
+ *
+ * Only the last two have the ungated-read/gated-write shape, and both now carry a
+ * gate naming the permission the server actually checks. The other six are
+ * deliberately ungated on the client, and that is a decision rather than a gap.
+ *
+ * TWO THINGS THE TABLE MAKES VISIBLE that reading one file does not:
+ *
+ * 1. `GET /charges` is `requireScannerPerm(req, 'charges')` — a SCANNER-scope
+ *    guard, not a dashboard one. No web principal can ever satisfy it, whatever
+ *    permissions she holds, which is why Overview's activity feed renders the
+ *    server's "charging happens on the staff scanner" refusal for everyone. That
+ *    is the contract, not a permission to grant.
+ * 2. Every salon write — `PATCH /salons/{id}` and all three branch routes — is
+ *    `perms.loyalty`, NOT `perms.dashboard`. Gating Settings on `dashboard`
+ *    would hide it from somebody the API would let save, which is a different
+ *    defect and not a safer one.
+ *
+ * Non-negotiable #7 is unchanged by any of this: every gate above is enforced
+ * server-side and would refuse with the check deleted. These are courtesies.
  */
 
 export function isForbidden(error: unknown): boolean {

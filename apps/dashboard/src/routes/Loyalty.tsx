@@ -13,6 +13,10 @@ import { SectionError, WriteError } from './sectionState.js';
 /**
  * Merchant → Loyalty. `GET`/`PUT /salons/{id}/loyalty`, `perms.loyalty`.
  *
+ * NO COURTESY PERMISSION GATE, DELIBERATELY. Read and write are both
+ * `requireDashboardPerm(req, 'loyalty')`, so the refusal arrives on the read and
+ * anyone who can see the ladder can publish it. Ledger in sectionState.tsx.
+ *
  * WHAT "THE OLD LADDER STAYS VISIBLE" MEANS IN PRACTICE
  *
  * A publish is atomic on the server — one jsonb column, one UPDATE, one

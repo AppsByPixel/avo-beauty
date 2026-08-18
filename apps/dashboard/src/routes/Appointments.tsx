@@ -8,6 +8,12 @@ import { SectionError } from './sectionState.js';
 /**
  * Merchant → Appointments. `GET /salons/{id}/bookings`, `perms.appointments`.
  *
+ * NO COURTESY PERMISSION GATE, DELIBERATELY. The read is
+ * `requireDashboardPerm(req, 'appointments')` server-side, so the refusal arrives
+ * on its own and `SectionError` explains it; this section writes nothing. Stated
+ * rather than left blank — the ledger in sectionState.tsx says why an unexplained
+ * absence is not good enough here.
+ *
  * A REAL <table>, for the reason the audit log is one: interaction-spec.md §2,
  * "Data tables: `<table>` with real `<th scope="col">`. Not divs." The design
  * draws six unlabelled grid columns, which read to a screen reader as one

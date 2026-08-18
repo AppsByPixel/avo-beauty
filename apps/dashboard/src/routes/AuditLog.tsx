@@ -6,6 +6,11 @@ import { SectionError } from './sectionState.js';
 /**
  * Merchant → Audit log. `GET /salons/{id}/audit`, `perms.dashboard`.
  *
+ * NO COURTESY PERMISSION GATE, DELIBERATELY. The read is
+ * `requireDashboardPerm(req, 'dashboard')`, so the refusal arrives on its own, and
+ * there is no write here — there is no POST and there never will be. Ledger in
+ * sectionState.tsx.
+ *
  * A REAL <table>, NOT THE DESIGN'S GRID OF DIVS.
  * interaction-spec.md §2 is explicit — "Data tables: `<table>` with real
  * `<th scope="col">`. Not divs." — and §1 adds that a data table never drops
