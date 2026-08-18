@@ -1,7 +1,15 @@
 -- Proof, not documentation — and now proof a MACHINE can read.
 --
---   pnpm --dir=/abs/path/to/api run db:verify        # against `avo`
---   AVO_VERIFY_DB=avo_lane_a pnpm --dir=/abs/path/to/api run db:verify
+--   pnpm --dir=/abs/path/to/api run db:verify        # the database DATABASE_URL names
+--   AVO_VERIFY_DB=avo_ci pnpm --dir=/abs/path/to/api run db:verify   # explicit override
+--
+-- IT NO LONGER DEFAULTS TO `avo`, and the line above used to say it did. The npm
+-- script read `-d "${AVO_VERIFY_DB:-avo}"` and ignored DATABASE_URL entirely, so a
+-- lane that had correctly exported its own URLs and run a bare `db:verify` verified
+-- the SHARED database and got a completely plausible answer. Lane B did exactly that
+-- and disclosed it. `scripts/db-verify.sh` now derives the target from DATABASE_URL,
+-- lets AVO_VERIFY_DB override it, and REFUSES TO RUN with neither — see that file for
+-- why defaulting was the defect rather than a convenience.
 --
 -- The path is ABSOLUTE deliberately: `--dir api` resolves from cwd, which is the same
 -- failure as `--filter` and can point at another worktree's package. LANES.md.
@@ -68,6 +76,25 @@
 
 \set ON_ERROR_STOP on
 \pset pager off
+
+-- ===========================================================================
+-- WHICH DATABASE IS THIS ABOUT?
+--
+-- Printed FIRST, before any probe, because a verdict that does not name its
+-- subject is how the wrong subject stayed invisible. The npm script used to read
+-- `-d "${AVO_VERIFY_DB:-avo}"` and ignore DATABASE_URL entirely, so a lane that
+-- had correctly exported its own URLs and run a bare `pnpm run db:verify`
+-- verified the SHARED `avo` and got a completely plausible answer. Lane B did
+-- exactly that and disclosed it.
+--
+-- `scripts/db-verify.sh` now resolves the target and refuses to guess. This line
+-- is the other half, and it is the half that survives somebody driving psql by
+-- hand without the wrapper: the transcript itself says what it examined.
+-- ===========================================================================
+\pset format aligned
+SELECT current_database() AS verifying,
+       current_user       AS as_role,
+       now()              AS at;
 
 -- The result table is created OUTSIDE the transaction so it survives the rollback
 -- that discards everything else. Its ROWS are still written inside, so the report

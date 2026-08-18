@@ -14,7 +14,7 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down -v",
     "db:reset": "docker compose down -v && docker compose up -d --wait && pnpm run db:migrate",
-    "db:verify": "docker compose exec -T postgres psql -U avo -d \"${AVO_VERIFY_DB:-avo}\" -f - < scripts/verify-constraints.sql",
+    "db:verify": "bash scripts/db-verify.sh",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
