@@ -5,7 +5,7 @@
  * only ever run against `packages/mock`, which asks for no authentication, so
  * every screen worked while sending no credentials at all.
  *
- * WHAT DIFFERS FROM THE DESIGN, AND WHY. All three are reported, none invented.
+ * WHAT DIFFERS FROM THE DESIGN, AND WHY. Both are reported, neither invented.
  *
  * 1. THE IDENTITY IS A PHONE NUMBER, NOT A USERNAME. The design labels this field
  *    `t.username` with the placeholder `dana.k`; there is no member username in
@@ -20,10 +20,13 @@
  *    link that does nothing, on the one screen a customer reaches when she cannot
  *    get into her wallet, is worse than its absence.
  *
- * 3. NO "NEW HERE? CREATE ACCOUNT" LINK (design:107). There is no registration
- *    endpoint. Signup also carries the consent step that non-negotiable #10 needs
- *    — the accepted `policyVersion` stored against the member — so it is a slice
- *    of its own once the endpoint lands, not a link to add now.
+ * THE THIRD ENTRY IS NOW BUILT AND IS NO LONGER A DIFFERENCE. It read: "NO 'NEW
+ * HERE? CREATE ACCOUNT' LINK (design:107). There is no registration endpoint.
+ * Signup also carries the consent step that non-negotiable #10 needs — the accepted
+ * `policyVersion` stored against the member — so it is a slice of its own once the
+ * endpoint lands, not a link to add now." `POST /auth/member/signup` landed; the
+ * link is below, both its strings are the design's own in both languages
+ * (:1249/:1356), and #10's consent step lives on the screen it opens.
  *
  * THE STATES, per interaction-spec §4 — the point being that these are three
  * different sentences and not one "something went wrong":
@@ -43,13 +46,14 @@
  */
 
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { signIn } from '../api/auth';
 import { SALON_ID } from '../config/salon';
 import { useLanguage } from '../i18n/language';
 import { PrimaryButton } from '../components/Buttons';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
+import { focusable } from '../theme/focus';
 
 type Status =
   | { state: 'idle' }
@@ -57,7 +61,14 @@ type Status =
   /** A sentence to show inline. Never a screen-level failure. */
   | { state: 'refused'; message: string };
 
-export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
+export function SignInScreen({
+  onSignedIn,
+  onCreateAccount,
+}: {
+  onSignedIn: () => void;
+  /** design:107 — into the Create account screen. */
+  onCreateAccount: () => void;
+}) {
   const { lang, copy } = useLanguage();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -160,6 +171,20 @@ export function SignInScreen({ onSignedIn }: { onSignedIn: () => void }) {
         testID="signin-submit"
         style={styles.submit}
       />
+
+      {/* design:107 — "New here? · Create account". */}
+      <View style={styles.footer}>
+        <Text style={[text('bodyS', lang), styles.footerText]}>{copy.signInNoAccount}</Text>
+        <Pressable
+          onPress={onCreateAccount}
+          accessibilityRole="link"
+          dataSet={focusable}
+          testID="signin-create-account"
+          style={styles.footerLink}
+        >
+          <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.signInCreateOne}</Text>
+        </Pressable>
+      </View>
     </ScrollView>
   );
 }
@@ -246,4 +271,16 @@ const styles = StyleSheet.create({
   },
   refusalText: { color: color.dangerText, flex: 1 },
   submit: { marginTop: 20 },
+  // design:107 — centred under the button, margin-top 20.
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 20,
+  },
+  footerText: { color: color.textMuted },
+  footerLink: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 4 },
+  // Brand text on a light surface is brandDeep, never brand (#9).
+  footerLinkText: { color: color.brandDeep, fontWeight: '600' },
 });

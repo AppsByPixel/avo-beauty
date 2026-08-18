@@ -51,6 +51,7 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { AccountScreen } from './src/screens/AccountScreen';
 import { BookScreen } from './src/screens/BookScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
+import { SignUpScreen } from './src/screens/SignUpScreen';
 import { signOut } from './src/api/auth';
 import { refreshSession } from './src/api/client';
 import { onSessionEnded, restore } from './src/api/session';
@@ -119,9 +120,20 @@ export default function App() {
  * `checking` renders nothing rather than the wallet. A frame of Home with no data
  * would break the "never render 0.000 before data arrives" rule, and here it would
  * also be a frame of somebody's wallet shown to whoever is holding the phone.
+ *
+ * SIGNED OUT IS NOW TWO SCREENS, NOT ONE. `POST /auth/member/signup` landed, so
+ * design:107's "New here? Create account" leads somewhere and the pre-auth pair
+ * moves between themselves. `signUp` issues a session with its 201 exactly as
+ * sign-in does, so BOTH doors land on `'in'` through the same call — there is no
+ * separate post-registration path, and therefore no second way to get the session
+ * handling wrong.
+ *
+ * The state is a screen name rather than a boolean because that is what the future
+ * navigator will take, and because "out" was never one destination: a customer who
+ * cannot get in is either an existing member or a new one.
  */
 function Gate() {
-  const [state, setState] = useState<'checking' | 'in' | 'out'>('checking');
+  const [state, setState] = useState<'checking' | 'in' | 'signIn' | 'signUp'>('checking');
 
   useEffect(() => {
     let alive = true;
@@ -131,18 +143,23 @@ function Gate() {
       Registered before the restore so an ending during boot is not missed.
     */
     onSessionEnded(() => {
-      if (alive) setState('out');
+      /*
+        Sign-in, not signup. A session that ENDED belongs to somebody who has an
+        account, so dropping her on Create account would ask her to register a
+        number she already holds — and the endpoint would refuse it.
+      */
+      if (alive) setState('signIn');
     });
 
     void (async () => {
       const stored = await restore();
       if (!alive) return;
       if (stored === null) {
-        setState('out');
+        setState('signIn');
         return;
       }
       const ok = await refreshSession();
-      if (alive) setState(ok ? 'in' : 'out');
+      if (alive) setState(ok ? 'in' : 'signIn');
     })();
 
     return () => {
@@ -152,8 +169,20 @@ function Gate() {
   }, []);
 
   if (state === 'checking') return <View style={styles.blank} />;
-  if (state === 'out') return <SignInScreen onSignedIn={() => setState('in')} />;
-  return <Wallet onSignedOut={() => setState('out')} />;
+  if (state === 'signIn') {
+    return (
+      <SignInScreen
+        onSignedIn={() => setState('in')}
+        onCreateAccount={() => setState('signUp')}
+      />
+    );
+  }
+  if (state === 'signUp') {
+    return (
+      <SignUpScreen onSignedUp={() => setState('in')} onLogIn={() => setState('signIn')} />
+    );
+  }
+  return <Wallet onSignedOut={() => setState('signIn')} />;
 }
 
 /**

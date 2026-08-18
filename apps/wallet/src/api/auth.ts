@@ -1,6 +1,6 @@
 /**
- * Sign in, refresh, sign out — `POST /auth/member/session`, `/auth/refresh`,
- * `/auth/sign-out`.
+ * Sign up, sign in, refresh, sign out — `POST /auth/member/signup`,
+ * `/auth/member/session`, `/auth/refresh`, `/auth/sign-out`.
  *
  * ═════════════════════════════════════════════════════════════════════════════
  * THE IDENTITY IS A PHONE NUMBER, AND THE DESIGN SAYS USERNAME. REPORTED.
@@ -65,6 +65,15 @@ export { refreshSession } from './client';
 /**
  * What sign-in returns. `member` comes back with the session so the first screen
  * has her name and balance without a second round trip.
+ *
+ * ONE SCHEMA FOR BOTH DOORS. `POST /auth/member/signup` answers 201 with the same
+ * four fields, and it issues a session for the same reason — the design walks
+ * straight from Create account into the wallet. Declaring a second schema for the
+ * signup response is how the two drift, and this project has already paid for
+ * that four times (DECISIONS.md § "The contract was silently deleting the
+ * cancellation window"). If the shapes ever genuinely diverge, the divergence
+ * shows up here as a failed parse rather than as a field silently stripped from
+ * one of them.
  */
 const MemberSessionSchema = z.object({
   accessToken: z.string().min(1),
@@ -98,6 +107,79 @@ export async function signIn(
     // explicit `undefined` is not the same as an absent key.
     signal === undefined ? {} : { signal },
   );
+  await setSession({
+    accessToken: body.accessToken,
+    refreshToken: body.refreshToken,
+    salonId: body.member.salonId,
+    memberId: body.member.id,
+  });
+  return body.member;
+}
+
+/**
+ * `POST /auth/member/signup` — non-negotiable #10's only moment.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * #10: "The customer app holds no legal copy. It renders the published policy set
+ * from the API and stamps the version. Store the accepted version against the
+ * member."
+ *
+ * `policyVersion` IS THE VERSION THE SCREEN DISPLAYED, and it is a required
+ * argument for the same reason the server refuses to default it: a version this
+ * function chose, or read off a 409, or defaulted to "current", would be a claim
+ * about a document that was never on her screen. The caller fetched the set,
+ * rendered its documents behind the consent links, and passes back the version it
+ * rendered. See `domain/signup.ts` for why the stale path re-fetches rather than
+ * resubmitting the number the server offered.
+ *
+ * `wa` IS A REQUIRED BOOLEAN, NOT AN OPTIONAL FLAG, and this signature is the
+ * client half of the server's refusal. `member.notify_wa` is
+ * `NOT NULL DEFAULT true`, so an omitted value stores `true` — the OPPOSITE of an
+ * unticked box. The API answers `wa_preference_required` rather than defaulting;
+ * typing it non-optional here means a call site cannot reach that refusal by
+ * forgetting. DECISIONS.md § "Member signup" has the reasoning.
+ *
+ * IT IS THE SERVICE CHANNEL AND NOT MARKETING. `wa` writes `notify_wa` —
+ * "Receipts and appointment confirmations". Marketing consent (`offers`) has no
+ * signup entry point at all and this call must never grow one: the API writes no
+ * marketing consent event for a signup, not even `granted: false`, because a
+ * false row in an append-only table is a withdrawal she never made.
+ *
+ * NO IDEMPOTENCY KEY, for the same reason `signIn` has none: this moves no money.
+ * A double tap is not collapsed into one result, it is refused —
+ * `member_salon_phone_uq` lets exactly one insert commit and the loser gets the
+ * same `already_registered` as a slow retype, so the screen has one state to
+ * render either way.
+ *
+ * The password is a parameter and nothing else (#6): not state, not stored, not
+ * logged. The screen clears it the moment this resolves, either way.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export async function signUp(
+  registration: {
+    salonId: string;
+    name: string;
+    phone: string;
+    password: string;
+    /** The version whose documents were rendered to her. Never a default. */
+    policyVersion: number;
+    /** `notify_wa`. Sent explicitly, always — see the header. */
+    wa: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<Member> {
+  const body = await postAction(
+    '/auth/member/signup',
+    registration,
+    MemberSessionSchema,
+    signal === undefined ? {} : { signal },
+  );
+  /*
+    The session is stored exactly as sign-in stores it. The API issues one with
+    the 201 because the design goes straight from Create account into the wallet,
+    so there is no second round trip and no window in which she is registered but
+    not signed in.
+  */
   await setSession({
     accessToken: body.accessToken,
     refreshToken: body.refreshToken,

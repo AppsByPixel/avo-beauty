@@ -228,6 +228,50 @@ export const ar: Copy = {
   signInWorking: en.signInWorking, // AR GAP
   signInErrEmpty: en.signInErrEmpty, // AR GAP
   signInOffline: en.signInOffline, // AR GAP
+  signInNoAccount: 'أول مرة معنا؟', // design:1356
+  signInCreateOne: 'أنشئي حساباً', // design:1356
+
+  // ---------------------------------------------------------------- signup --
+  /*
+    THE HAPPY PATH IS ALL IN THE BUNDLE, AND IT IS ALL FEMININE. أنشئي, لديكِ,
+    سجّلي — the design's own Arabic addresses a woman throughout, which is
+    non-negotiable #12's "feminine address forms" written by the designer rather
+    than inferred by me. Lifted character for character.
+
+    THE REFUSALS ARE NOT. The design's signup has no server, so its Arabic covers
+    three client-side validations and none of the ten the endpoint can answer with.
+    Those hold English and are in AR_GAPS. `signUpErrShort` is the one that crosses
+    over: the design wrote it for its own 6-character check and the server's
+    `password_too_short` means exactly the same thing, so one string serves both and
+    it is NOT a gap.
+  */
+  signUpTitle: 'أنشئي حسابك', // design:1357
+  signUpSub: 'محفظتك في أمارا — صالحة في كل فروع أمارا', // design:1357
+  signUpAction: 'إنشاء الحساب', // design:1358
+  signUpWorking: en.signUpWorking, // AR GAP
+  signUpPassHint: '٦ أحرف على الأقل', // design:1355
+  signUpConfirmPass: 'تأكيد كلمة المرور', // design:1354
+  signUpConsentTerms: 'أوافق على شروط المحفظة وسياسة الاسترجاع وإشعار الخصوصية.', // design:1317
+  signUpConsentWa: 'أرسلوا لي الإيصالات وتأكيد المواعيد على واتساب.', // design:1318
+  signUpHaveAccount: 'لديكِ حساب بالفعل؟', // design:1358
+  signUpLogIn: 'سجّلي الدخول', // design:1358
+
+  signUpErrEmpty: en.signUpErrEmpty, // AR GAP — :1363 names the username; see signInErrEmpty
+  signUpErrConsent: 'يرجى الموافقة على شروط المحفظة للمتابعة.', // design:1319
+  signUpErrMismatch: 'كلمتا المرور غير متطابقتين.', // design:1363
+  signUpErrShort: 'استخدمي ٦ أحرف على الأقل.', // design:1363 — also the server's password_too_short
+  signUpErrRegistered: en.signUpErrRegistered, // AR GAP
+  signUpErrTermsChanged: en.signUpErrTermsChanged, // AR GAP
+  signUpErrTermsReload: en.signUpErrTermsReload, // AR GAP
+  signUpErrPhone: en.signUpErrPhone, // AR GAP
+  signUpErrSalon: en.signUpErrSalon, // AR GAP
+  signUpErrTermsMissing: en.signUpErrTermsMissing, // AR GAP
+  signUpErrBusy: en.signUpErrBusy, // AR GAP
+  signUpErrTooMany: en.signUpErrTooMany, // AR GAP
+  signUpErrFailed: en.signUpErrFailed, // AR GAP
+  signUpOffline: en.signUpOffline, // AR GAP
+  signUpTermsFailedTitle: en.signUpTermsFailedTitle, // AR GAP
+  signUpTermsFailedBody: en.signUpTermsFailedBody, // AR GAP
 
   // --------------------------------------------------------------- failure --
   errorTitle: en.errorTitle, // AR GAP
@@ -549,6 +593,25 @@ export const AR_GAPS = [
   'signInWorking',
   'signInErrEmpty',
   'signInOffline',
+  // ---- signup. The design's Create account screen has no server behind it, so
+  // its Arabic covers the three client-side validations and none of the ten
+  // refusals `POST /auth/member/signup` can answer with. `signUpErrShort` is
+  // absent from this list on purpose: the design wrote it, and it is the same
+  // sentence the server's `password_too_short` needs.
+  'signUpWorking',
+  'signUpErrEmpty',
+  'signUpErrRegistered',
+  'signUpErrTermsChanged',
+  'signUpErrTermsReload',
+  'signUpErrPhone',
+  'signUpErrSalon',
+  'signUpErrTermsMissing',
+  'signUpErrBusy',
+  'signUpErrTooMany',
+  'signUpErrFailed',
+  'signUpOffline',
+  'signUpTermsFailedTitle',
+  'signUpTermsFailedBody',
   'errorTitle',
   'errorBody',
   'referencePrefix',
