@@ -30,6 +30,7 @@ through commit messages.
 | 5 | Who monitors the AVO support queue, in what hours | Operations, not code. |
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
+| 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
 
 ---
 
@@ -653,3 +654,38 @@ whose response the client cannot read — parse failure, timeout, dropped connec
 **current** balance, so staff see a debit that already happened rather than guessing.
 `GET /members/{id}` returns the same envelope as `POST /scans`, so it is cheap. That is a lane B
 decision and has been reported, not imposed.
+
+### A server-side near-duplicate charge guard — HELD, for the reason the ceiling taught us
+
+**What.** The double-charge shape recorded above has **no API-side defence**. Idempotency is
+the only duplicate guard on `POST /charges`, and it is keyed on
+`hashRequestBody({ memberId, serviceIds, token })` plus a client-supplied key. A fresh key with
+a fresh token is a genuinely new charge — which is exactly why the server is correct both times
+and no idempotency or concurrency spec can see it. Lane A verified that rather than assuming it,
+named it as the only unblocked-in-principle work left in `api/`, and did not start it.
+
+**Held, and the deciding reason is lane A's own lesson from tonight.** There is no measurement
+of how often a legitimate same-member, same-basket charge happens inside a short window. Any
+threshold picked without one has precisely the failure mode of the 60-per-hour lookup ceiling:
+a control that fires on real work at a counter with a customer standing there. That ceiling
+turned out to refuse at **twelve customers an hour**, and it was defended with plausible
+arithmetic until someone measured. Two identical services back to back is a legitimate charge.
+
+**And a flag cannot work, which forces the harder version.** The triggering condition is a
+response the client could not read — so a warning field in the response arrives after the money
+has moved. A guard that actually prevents the second debit must **refuse before debiting**,
+which means a refusal real staff will hit legitimately, which is what makes the window, the
+default, and refuse-versus-confirm product decisions rather than an API call.
+
+**It is also not an `api/` change.** A refusal needs a confirm affordance in the scanner with
+copy in both languages, so it is a coordinated lane A + lane B slice.
+
+**Why holding is defensible rather than lazy.** The instance is closed (`509cbda`), the
+contract-drift guard that would catch its return runs in CI, and the two client-side rules are
+recorded above: no retry affordance on a charge error state, and validate a money response
+against the client's own schema.
+
+**To unblock:** either a measurement of legitimate same-basket repeat frequency from real pilot
+traffic, or a product decision on the window and whether it refuses or requires confirmation.
+The second is faster and is the kind of call that belongs to whoever owns what a salon counter
+should do — it is in "Queued for Aftab" for that reason.
