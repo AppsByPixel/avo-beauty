@@ -16,7 +16,7 @@
  * the instant to convert. Nothing here reads the device's zone.
  */
 
-import type { Artist, Language } from '@avo/types';
+import type { BookableArtist, Language } from '@avo/types';
 import type { Availability, AvailabilitySlotWire } from '../api/booking';
 import { dateLocale } from './activity';
 import { toEasternDigits } from '../i18n/digits';
@@ -230,20 +230,37 @@ export function isFullyTaken(availability: Availability): boolean {
 export type HoursSource = 'live' | 'salon';
 
 /**
- * What the artist row promises BEFORE a date is chosen.
+ * What the artist row promises BEFORE a date is chosen — design:1491-1492,
+ * `liveLbl` / `hoursLbl`.
  *
- * `google` + connected reads "Live availability"; anything else reads
- * "Availability by salon hours" (design:1491-1492, `liveLbl` / `hoursLbl`).
+ * THE SERVER DECIDES THIS NOW, AND IT CORRECTS A WRONG BADGE.
  *
- * This is a promise, not a measurement, and the difference matters: an artist
- * marked google-sourced whose calendar cannot actually be reached falls back to
- * salon hours, and only the availability response knows that. The row says what
- * her setting is; the grid says what happened. `fallbackReason` on the day's
- * response is what turns the first into the second, and the grid surfaces it —
- * see BookScreen § the fallback note.
+ * This used to be `availabilitySource === 'google' && googleConnected`, computed
+ * here from two fields the customer's roster deliberately does not carry. It
+ * disagreed with the server for every MANUAL artist: it read her as "Availability
+ * by salon hours" when `resolveWorkingWindow` uses her OWN windows and never
+ * touches the salon's (api/src/services/availability.ts:178-180 — a non-google
+ * artist returns `hoursSource: 'artist_windows'` before any calendar is consulted).
+ *
+ * `availabilityLive` is that answer, computed once by the authority that applies
+ * it. Checked against the grid for all four seeded artists, and it predicts
+ * `hoursSource` exactly:
+ *
+ *   AR-003 Hessa, AR-004 Shaikha   manual, live=true   → artist_windows
+ *   AR-001 Rana, AR-002 Dana       google, live=false  → salon_hours,
+ *                                                        calendar_not_connected
+ *
+ * So the two manual artists' badges flip from "Availability by salon hours" to
+ * "Live availability", and that is the fix rather than a side effect.
+ *
+ * Still a promise and not a measurement. `availabilityLive` is what the roster
+ * read believes; a calendar that dies between the roster and the grid moves the
+ * day's `hoursSource` to `salon_hours` and only the availability response knows.
+ * The row says what is set up; the grid says what happened, via `fallbackReason`
+ * — see BookScreen § the fallback note.
  */
-export function artistHoursPromise(artist: Artist): HoursSource {
-  return artist.availabilitySource === 'google' && artist.googleConnected ? 'live' : 'salon';
+export function artistHoursPromise(artist: BookableArtist): HoursSource {
+  return artist.availabilityLive ? 'live' : 'salon';
 }
 
 /** Rana Al-Sabah → "R". The design's avatar initial, design:1486-1489. */
@@ -254,11 +271,15 @@ export function artistInitial(name: string): string {
 /**
  * The artist's name in the reading language.
  *
- * `nameAr` is nullable on purpose — the seed's Shaikha B. has none — and the
- * fallback is the Latin name rather than a transliteration invented here.
- * Same rule `Salon` and `Branch` already follow.
+ * `nameAr` is nullable on purpose — the seed's Shaikha B. has none, confirmed
+ * still null on the customer roster (`AR-004`, `"nameAr":null`) — and the fallback
+ * is the Latin name rather than a transliteration invented here. Same rule `Salon`
+ * and `Branch` already follow.
+ *
+ * `nameAr` survived the narrowing to the customer shape, which is the field that
+ * mattered most here: step 2 is one of the most Arabic-heavy screens in the wallet.
  */
-export function artistName(artist: Artist, lang: Language): string {
+export function artistName(artist: BookableArtist, lang: Language): string {
   return lang === 'ar' ? (artist.nameAr ?? artist.name) : artist.name;
 }
 

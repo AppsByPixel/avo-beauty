@@ -41,14 +41,20 @@
 
 import { z } from 'zod';
 import {
-  ArtistSchema,
   AvailabilityDaySchema,
+  BookableArtistSchema,
   BookingSchema,
   ServiceSchema,
   TransactionSchema,
   paginated,
 } from '@avo/types';
-import type { Artist, AvailabilityDay, AvailabilitySlot, Booking, Service } from '@avo/types';
+import type {
+  AvailabilityDay,
+  AvailabilitySlot,
+  BookableArtist,
+  Booking,
+  Service,
+} from '@avo/types';
 import { deleteJson, getJson, postJson } from './client';
 
 // ------------------------------------------------------------------ booking --
@@ -170,7 +176,7 @@ export type Availability = AvailabilityDay;
 export type BookableService = Service;
 
 const ServicePageSchema = paginated(ServiceSchema);
-const ArtistPageSchema = paginated(ArtistSchema);
+const BookableArtistPageSchema = paginated(BookableArtistSchema);
 
 // ------------------------------------------------------------------- calls --
 
@@ -181,30 +187,46 @@ export function getServices(salonId: string, signal?: AbortSignal): Promise<Book
 }
 
 /**
- * The bookable roster.
+ * The bookable roster — step 2 of the Book flow, and the artist name on the
+ * upcoming-appointment card.
  *
- * ⚠️ THIS ENDPOINT IS GATED ON `perms.team` AND A CUSTOMER DOES NOT HAVE IT.
+ * `GET /salons/{id}/artists/bookable`, `requirePrincipal` — any authenticated
+ * principal of the salon, which is what a signed-in member is. The customer-scoped
+ * list this file used to say did not exist LANDED IN `bb837ba`
+ * (api/src/routes/artists.ts § "THE ROUTE THAT MAKES BOOKING WORK FOR A CUSTOMER
+ * AT ALL"), and it is gated the same way `GET /salons/{id}/services` is, for the
+ * same reason: gating the list a customer books from on a merchant permission
+ * gates booking itself.
  *
- * `GET /salons/{id}/artists` is the merchant's Team screen
- * (api/src/routes/artists.ts: "perms.team. The roster of bookable people and
- * their hours is the Merchant → Team screen"), and api-contract.md § Operations
- * gives the customer only `GET /artists/{id}/availability` — availability for
- * an artist she is assumed to already have. There is no customer-scoped list.
+ * The merchant roster at `GET /salons/{id}/artists` is still `perms.team` and
+ * still 403s for a member — verified, `{"error":"forbidden","message":"This
+ * endpoint is for salon staff."}`. That is the right answer to the wrong
+ * question, and this call no longer asks it. It only ever appeared to work under
+ * `AVO_TEST_PRINCIPALS`, which answered non-member routes with a seeded staff
+ * row; real auth removed the mask and the blocked state rendered live.
  *
- * A real member session therefore gets a 403 here. It resolves today only
- * because the API's `AVO_TEST_PRINCIPALS` shim answers non-member routes with a
- * seeded staff row, which is a harness affordance and not a permission.
+ * `BookableArtist`, NOT `Artist`, AND THE SCHEMA MUST NOT BE THE WIDER ONE.
+ * The response carries five fields — `id`, `salonId`, `name`, `nameAr`,
+ * `availabilityLive` — and `ArtistSchema` requires six the response does not send
+ * (`hasOwnLogin`, `active`, `availabilitySource`, `googleConnected`,
+ * `slotMinutes`, `windows`) while having no `availabilityLive` of its own.
+ * Parsing this narrow response with the merchant schema throws on every row: zod
+ * strips unknown keys silently but a MISSING required key is an error, which is
+ * the one direction that fails loudly. Trunk already declares
+ * `BookableArtistSchema` for exactly this route, so there is one schema and no
+ * local copy.
  *
- * REPORTED, NOT WORKED AROUND. The alternatives were both worse: hard-coding a
- * roster puts names in front of a customer that no server vouched for, and
- * skipping the artist step deletes a step the design specifies. So the call is
- * written against the endpoint that should exist, and the failure is surfaced
- * as a real error state rather than hidden behind a fallback.
+ * Each omission is deliberate and none of them is a gap this app should fill —
+ * `windows` is the internal week, from which a customer could infer who is booked
+ * when; `slotMinutes` arrives pre-sliced in the grid; `active` is the filter, so
+ * emitting it would say `true` on every row.
  */
-export function getArtists(salonId: string, signal?: AbortSignal): Promise<Artist[]> {
-  return getJson(`/salons/${encodeURIComponent(salonId)}/artists`, ArtistPageSchema, signal).then(
-    (page) => page.items,
-  );
+export function getArtists(salonId: string, signal?: AbortSignal): Promise<BookableArtist[]> {
+  return getJson(
+    `/salons/${encodeURIComponent(salonId)}/artists/bookable`,
+    BookableArtistPageSchema,
+    signal,
+  ).then((page) => page.items);
 }
 
 /**

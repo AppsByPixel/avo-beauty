@@ -9,27 +9,34 @@
  * the two lists are read and the ids looked up here.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * IT FAILS SOFT, ON PURPOSE
+ * IT FAILS SOFT, AND THE FAILURE IT WAS WRITTEN FOR NO LONGER HAPPENS
  * ═══════════════════════════════════════════════════════════════════════════
- * `GET /salons/{id}/artists` is gated on `perms.team` and a customer does not
- * have it (see api/booking.ts § getArtists), so on a real member session this
- * fetch is a 403. That must not take the Upcoming card down with it: the
- * appointment, its time and its deposit are all real and all readable, and the
- * artist's name is the one part that is missing. So a failure yields an empty
- * map and the card renders an em dash where the name would be.
+ * This header used to say the artist fetch was a 403 for every real member,
+ * because the only roster endpoint was `perms.team`. The customer-scoped list it
+ * asked for EXISTS — `GET /salons/{id}/artists/bookable`, see api/booking.ts §
+ * getArtists — so the expected path now resolves and the card says "with Rana"
+ * rather than an em dash.
  *
- * REPORTED. The fix is either a customer-scoped artist list or names on the
- * booking, and both are contract changes — `packages/types` and `api/` are not
- * this lane's to write.
+ * The soft failure stays, because it was never really about the 403: this is a
+ * decoration on a card whose load-bearing facts — the appointment, its time, its
+ * deposit — are all in the booking itself. A roster read that fails for any other
+ * reason (offline, a 500, an aborted signal) must not take those down with it, so
+ * a failure yields an empty map and the name renders as an em dash.
+ *
+ * One consequence worth naming: `/artists/bookable` lists ACTIVE artists only, so
+ * a past appointment with an artist who has since left the salon resolves to no
+ * name and shows the dash. That is the right trade — the alternative is the
+ * merchant roster, which a customer may not read at all — and the fix, if it ever
+ * matters, is names on the booking rather than a wider roster.
  */
 
 import { useEffect, useState } from 'react';
-import type { Artist, Language } from '@avo/types';
+import type { BookableArtist, Language } from '@avo/types';
 import { getArtists, getServices, type BookableService } from '../api/booking';
 import { artistName, serviceName } from '../domain/booking';
 
 export interface BookingLabels {
-  artists: Map<string, Artist>;
+  artists: Map<string, BookableArtist>;
   services: Map<string, BookableService>;
   /** The artist's name in the reading language, or null when unresolvable. */
   artistLabel: (artistId: string, lang: Language) => string | null;
@@ -46,7 +53,7 @@ export interface BookingLabels {
 const EMPTY = new Map<string, never>();
 
 export function useBookingLabels(salonId: string | null, enabled: boolean): BookingLabels {
-  const [artists, setArtists] = useState<Map<string, Artist>>(EMPTY);
+  const [artists, setArtists] = useState<Map<string, BookableArtist>>(EMPTY);
   const [services, setServices] = useState<Map<string, BookableService>>(EMPTY);
 
   useEffect(() => {
@@ -56,7 +63,7 @@ export function useBookingLabels(salonId: string | null, enabled: boolean): Book
     getArtists(salonId, controller.signal)
       .then((list) => setArtists(new Map(list.map((a) => [a.id, a]))))
       .catch(() => {
-        /* 403 for a customer today — see the header. The card copes. */
+        /* Offline, a 500, an abort — see the header. The card copes. */
       });
 
     getServices(salonId, controller.signal)

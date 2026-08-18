@@ -30,7 +30,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Artist, Salon } from '@avo/types';
+import type { BookableArtist, Salon } from '@avo/types';
 import { ApiError, newIdempotencyKey, type FailureKind } from '../api/client';
 import {
   cancelBooking,
@@ -98,13 +98,13 @@ export interface BookingController {
   stepIndex: number;
 
   services: LoadState<BookableService[]>;
-  artists: LoadState<Artist[]>;
+  artists: LoadState<BookableArtist[]>;
   availability: LoadState<Availability>;
 
   strip: StripDay[];
   selectedDate: string | null;
   selectedService: BookableService | null;
-  selectedArtist: Artist | null;
+  selectedArtist: BookableArtist | null;
   selectedSlot: AvailabilitySlotWire | null;
 
   /** Set only by a 402 from the server, and cleared by a fresh attempt. */
@@ -127,7 +127,7 @@ export interface BookingController {
   rescheduling: boolean;
 
   pickService: (service: BookableService) => void;
-  pickArtist: (artist: Artist) => void;
+  pickArtist: (artist: BookableArtist) => void;
   pickDay: (date: string) => void;
   pickSlot: (slot: AvailabilitySlotWire) => void;
   next: () => void;
@@ -151,7 +151,7 @@ export function useBooking(options: {
 
   const [step, setStep] = useState<StepName>(rescheduling ? 'day' : 'service');
   const [services, setServices] = useState<LoadState<BookableService[]>>({ status: 'loading' });
-  const [artists, setArtists] = useState<LoadState<Artist[]>>({ status: 'loading' });
+  const [artists, setArtists] = useState<LoadState<BookableArtist[]>>({ status: 'loading' });
   const [availability, setAvailability] = useState<LoadState<Availability>>({ status: 'loading' });
 
   const [serviceId, setServiceId] = useState<string | null>(reschedule?.serviceId ?? null);
@@ -196,12 +196,19 @@ export function useBooking(options: {
     const controller = new AbortController();
     setArtists({ status: 'loading' });
     getArtists(salon.id, controller.signal)
-      .then((data) =>
-        // Retired artists keep their bookings and stop taking new ones —
-        // `ArtistSchema.active`. Offering one would produce a 409
-        // `artist_not_bookable` after four taps.
-        setArtists({ status: 'ready', data: data.filter((a) => a.active) }),
-      )
+      // NO CLIENT-SIDE `active` FILTER, AND ITS ABSENCE IS THE POINT.
+      //
+      // This used to be `data.filter((a) => a.active)` against the merchant
+      // roster, which lists everyone because reception has to be able to see and
+      // reactivate a retired artist. `/artists/bookable` filters on `active`
+      // server-side — "bookable" is the filter, not a hint — and therefore does
+      // not emit the field at all, since it would read `true` on every row.
+      //
+      // Re-deriving it here is impossible and re-declaring it would be worse: a
+      // second opinion on who may be booked, held by the client, is how a retired
+      // artist gets offered and the charge handler answers with a 409
+      // `artist_not_bookable` after four taps.
+      .then((data) => setArtists({ status: 'ready', data }))
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         setArtists({ status: 'failed', failure: toFailure(err) });
@@ -258,7 +265,7 @@ export function useBooking(options: {
     setConfirmFailure(null);
   }, []);
 
-  const pickArtist = useCallback((artist: Artist) => {
+  const pickArtist = useCallback((artist: BookableArtist) => {
     setArtistId(artist.id);
     // Her grid is a different grid. Keeping the slot would carry a 16:45 from
     // Rana's Tuesday onto Dana's, which the server would then refuse as

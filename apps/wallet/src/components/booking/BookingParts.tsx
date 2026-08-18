@@ -33,7 +33,7 @@ import { alignEnd } from '../../i18n/rtl';
 import { TappableRow } from '../Buttons';
 import { AVAIL_SALON_BG, AVAIL_SALON_DOT, AVAIL_SALON_TEXT, BRAND_BORDER, micro } from './tokens';
 import type { AvailabilitySlotWire, BookableService } from '../../api/booking';
-import type { Artist } from '@avo/types';
+import type { BookableArtist } from '@avo/types';
 import {
   artistHoursPromise,
   artistInitial,
@@ -130,17 +130,24 @@ function Money({ amount }: { amount: number }) {
 /**
  * design:551-561 — the avatar, the name, the role, and the availability badge.
  *
- * THE BADGE IS THE ARTIST'S SETTING, NOT A MEASUREMENT. "Live availability"
- * means her hours are synced from a connected Google Calendar; "Availability by
- * salon hours" means they are not. Whether that sync actually worked TODAY is a
+ * THE BADGE IS THE SERVER'S ANSWER, NOT A MEASUREMENT AND NOT THIS APP'S SUM.
+ * `availabilityLive` says whether the grid will be built from the artist's OWN
+ * hours ("Live availability") or fall back to the salon's ("Availability by salon
+ * hours", which over-offers). It used to be computed here from
+ * `availabilitySource` + `googleConnected` and got every MANUAL artist wrong — see
+ * domain/booking.ts § artistHoursPromise. Whether the sync still holds TODAY is a
  * different question, answered by the grid — see the fallback note on step 3.
+ *
+ * NO `role` LINE. The design's mock rows carry "Senior colorist" / "Stylist"
+ * (design:1485-1489) and neither `Artist` nor `BookableArtist` has the field, so
+ * there is nothing to render rather than a title invented by this lane.
  */
 export function ArtistRow({
   artist,
   selected,
   onPick,
 }: {
-  artist: Artist;
+  artist: BookableArtist;
   selected: boolean;
   onPick: () => void;
 }) {
