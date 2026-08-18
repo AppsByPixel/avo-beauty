@@ -612,3 +612,44 @@ task is the artifact that settles it, and `.turbo/runs` does not exist so there 
 to recover afterwards. Then check the entry's mtime against what each worktree was doing at
 that moment, which is what closed this one. Note that `--force` rewrites entries it just hit,
 so an mtime alone cannot separate "written cold" from "rewritten by force".
+
+### Idempotency protects the attempt, not the recovery — the double-charge path
+
+**What.** A parse failure on a *successful* `POST /charges` produces a customer debited twice,
+and no idempotency test can catch it. The chain, all of it working as designed:
+
+1. `POST /charges` succeeds — token consumed, wallet debited, stamp incremented, receipt queued.
+2. The response fails `ChargeResultSchema` (`apps/scanner/src/api/charges.ts:48`, which embeds
+   `TransactionSchema`). The scanner shows a failure for a charge that landed.
+3. Staff reach for `onRescan` — `setScreen({ name: 'scan' })`, `ScannerFlow.tsx:209` — which
+   unmounts `MemberScreen`. Returning re-runs `useRef(newIdempotencyKey())` at
+   `MemberScreen.tsx:79` and mints a **new key**.
+4. The customer's app mints a **fresh token**; the spent one is gone.
+5. Fresh basket, fresh key, fresh token — a second real charge.
+
+**Why no test catches it.** The server behaved correctly both times. Nothing is a replay and
+nothing is a duplicate submit, so every idempotency and concurrency spec passes. The defect is
+a parse failure on a successful write, and **the idempotency protection ends at exactly the
+attempt boundary the recovery path crosses.** `attemptKey` is reminted only in `toggle`, which
+is right for the reason its comment gives — the API treats a same-key-different-body as a 409
+rather than a replay — and that reasoning is untouched by this.
+
+**The instance is closed** (`509cbda` routes both money POSTs through
+`serialiseTransactionForCustomer`; both contract specs pass). **The shape is not.** Any charge
+whose response the client cannot read — parse failure, timeout, dropped connection — has it.
+
+**Standing rules, until something better exists:**
+
+- **No retry affordance on a charge error state.** A client that could not read the response
+  cannot know whether the money moved, so a "Try again" button makes the double-charge path one
+  tap instead of a rescan. What belongs there is an instruction to **check the customer's
+  balance first** — her balance is the only reliable evidence the debit landed.
+- **Validate a money response against the CLIENT's own schema** when changing a serialiser, not
+  against the API's shape or the shared types in isolation. `ChargeResultSchema` is local to the
+  scanner, and it is the boundary this drift crossed — checking it is what would have caught the
+  bug at the moment the same fix was applied one endpoint over.
+
+**To reverse / improve:** the durable fix is for recovery to re-resolve the member and show her
+**current** balance, so staff see a debit that already happened rather than guessing.
+`GET /members/{id}` returns the same envelope as `POST /scans`, so it is cheap. That is a lane B
+decision and has been reported, not imposed.
