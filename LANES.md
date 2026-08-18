@@ -22,6 +22,58 @@ the failure mode this structure exists to prevent.
 
 ---
 
+## Every lane isolates its own resources
+
+Three times now a shared mutable resource has crossed lanes: one Postgres database, one
+container, one browser pane. Each time the lane involved caught and disclosed it. This rule
+is cheaper than relying on that.
+
+### Database — one per lane, already created
+
+Trunk has created `avo_lane_a`, `avo_lane_b`, `avo_lane_c`, `avo_lane_d` and `avo_ci`.
+**You do not create a database.** `CREATE DATABASE` and `DROP DATABASE` are sandbox-blocked,
+and a lane whose drop silently failed once carried on against the shared `avo_ci` and left a
+row in it. **A blocked isolation step degrades into no isolation, quietly** — which is worse
+than failing loudly.
+
+Reset yours instead:
+
+```bash
+./scripts/lane-db.sh c        # drops the SCHEMA inside avo_lane_c, migrates, seeds
+```
+
+Ordinary DDL inside a database you already own — nothing to block. Export the two URLs it
+prints for anything you run against it. **Never set `POSTGRES_DB`**:
+`e2e/support/global-setup.ts` skips minting its own per-run database when it sees one, which
+puts every concurrent checkout back on shared fixtures.
+
+If your database is missing, ask trunk. Do not work around it.
+
+### Browser — one context per lane
+
+The lanes share one browser pane. Lane B once injected a `fetch` shim into **Lane C's
+dashboard tab** and briefly left `window.fetch` undefined there. It caught it and restored
+it, then moved to an isolated Chromium — but a page you did not open is another lane's
+running app, and `javascript_tool` against it is a write into their process.
+
+- **Open your own tab or your own browser context.** Never evaluate script in a tab you did
+  not open.
+- **Never stub a global** — `fetch`, `localStorage`, `Date` — on a shared surface. A test
+  that needs a stub needs its own context.
+- Check `tabs_context` first. If you did not open it, leave it.
+
+### Ports and processes
+
+Pick a port nobody else is using and name it in your report. The API has been on 4000, 4100,
+4200, 4400 and 4500 across lanes; Vite on 5173 and 5199; Expo on 8081 and 8090. A leaked API
+process — ppid 1, two and a half hours old — was once still polling `receipt_job` against a
+database another lane was asserting against.
+
+Kill what you start. A `pnpm check` that hangs on *"something prevents N Vite servers from
+exiting"* is a leaked process, not a test failure.
+
+---
+
 ## Lane A — API
 
 > Build the API in `api/`. Start with the Postgres schema: salon, branch, member,

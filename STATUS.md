@@ -33,6 +33,13 @@ lanes, four worktrees, listed in `LANES.md`.
 collide; API and dashboard do, because the dashboard consumes what the API has not built
 yet. `LANES.md` carries the order and the reasoning.
 
+**Every brief must name the lane's own database and browser context.** Three shared-resource
+collisions have happened — a lane using the shared `avo_ci` after its `DROP DATABASE` was
+sandbox-blocked, and a lane injecting a `fetch` shim into another lane's browser tab. Trunk
+has pre-created `avo_lane_{a,b,c,d}`; lanes reset theirs with `./scripts/lane-db.sh <lane>`
+and never run `CREATE DATABASE`. Full rules in `LANES.md` § "Every lane isolates its own
+resources" — put a line in each brief pointing at it.
+
 **Every brief has four parts**, and the fourth is the one that has caught every real bug:
 
 1. Who it is and which worktree.
