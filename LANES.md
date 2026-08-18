@@ -32,10 +32,15 @@ that.
 ### Database — one per lane, already created
 
 Trunk has created `avo_lane_a`, `avo_lane_b`, `avo_lane_c`, `avo_lane_d` and `avo_ci`.
-**You do not create a database.** `CREATE DATABASE` and `DROP DATABASE` are sandbox-blocked,
-and a lane whose drop silently failed once carried on against the shared `avo_ci` and left a
-row in it. **A blocked isolation step degrades into no isolation, quietly** — which is worse
-than failing loudly.
+**You do not create a database** — not because you cannot, but because trunk owns them.
+
+`CREATE DATABASE` and `DROP DATABASE` are blocked in **some** lanes' sandboxes and not
+others: lane C's drop was refused, so it carried on against the shared `avo_ci` and left a
+row in it, while lane A's succeeded and it made two scratch databases before this rule
+existed. **A blocked isolation step degrades into no isolation, quietly** — which is worse
+than failing loudly. But do not read the permission as the rule. "It worked for me" is
+exactly the reasoning that produces a database nobody else knows about, and the lane that
+can create one is the lane that can leave one behind.
 
 Reset yours instead:
 
