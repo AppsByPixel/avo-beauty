@@ -65,6 +65,7 @@ import {
   discoverSalonScopedRoutes,
   branchIdsNamed,
   mintSalonAWalletToken,
+  psql,
   retireBranches,
   scalar,
   signInDashboard,
@@ -91,6 +92,42 @@ beforeAll(async () => {
   bDashboard = await signInDashboard(SALON_B, B_STAFF_HANDLE);
   bScanner = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
   bMember = await signInMember(SALON_B, B_MEMBER_PHONE);
+
+  /**
+   * THE SUBJECTS THE SIX NEW ROUTES ADDRESS, at BOTH salons.
+   *
+   * Written with `psql` rather than through the endpoints on purpose: these rows are
+   * the ledger's fixture, and creating them through the very routes the ledger is
+   * about would make the fixture depend on the thing under test. `POST` is the only
+   * one of the six whose control genuinely creates, and it does so through the
+   * endpoint as it should.
+   *
+   * `ON CONFLICT DO UPDATE` so a run interrupted after the DELETE control has its rows
+   * back on the next one. The disposable products are restored to their probe price as
+   * well as re-created, because the PATCH control really writes.
+   */
+  psql(`
+    INSERT INTO product (id, salon_id, name, price_fils) VALUES
+      ('${PROBE_PRODUCT_A}',        '${SALON_A}', 'Tenancy probe A',        1000),
+      ('${PROBE_PRODUCT_B_PATCH}',  '${SALON_B}', 'Tenancy probe B patch',  1000),
+      ('${PROBE_PRODUCT_B_DELETE}', '${SALON_B}', 'Tenancy probe B delete', 1000)
+    ON CONFLICT (id) DO UPDATE SET price_fils = 1000, salon_id = EXCLUDED.salon_id;
+
+    -- Only the columns without defaults. The wire field is \`when\` and the COLUMN is
+    -- \`send_when\`, which is worth naming: \`"when"\` is a reserved word and writing it
+    -- fails with "column does not exist" rather than a syntax error.
+    -- \`branch_id\` is NULL, not 'all'. The WIRE says "all" and the COLUMN is a real
+    -- foreign key to \`branch\`, so the string fails on campaign_branch_id_fkey — the
+    -- serialiser is what turns a null into "all" for the client.
+    INSERT INTO campaign (id, salon_id, title, body, channel, audience, branch_id,
+                          send_when, status, submitted_by)
+    VALUES
+      ('${PROBE_CAMPAIGN_A}', '${SALON_A}', 'Tenancy probe A', 'probe', 'push', 'all',
+       NULL, 'now', 'pending', 'Tenancy'),
+      ('${PROBE_CAMPAIGN_B}', '${SALON_B}', 'Tenancy probe B', 'probe', 'push', 'all',
+       NULL, 'now', 'pending', 'Tenancy')
+    ON CONFLICT (id) DO UPDATE SET status = 'pending', salon_id = EXCLUDED.salon_id;
+  `);
 }, 120_000);
 
 afterAll(async () => {
@@ -235,6 +272,30 @@ const PROBE_BRANCH_PREFIX = 'Tenancy probe branch';
 const PROBE_BRANCH_NAME = `${PROBE_BRANCH_PREFIX} ${Date.now()}`;
 
 /**
+ * DISPOSABLE PRODUCTS AND CAMPAIGNS, created by `beforeAll` and named so this file
+ * owns them outright.
+ *
+ * Lane A's shop and campaign work added six salon-scoped routes and the gap ledger
+ * fired on all six, which is what it is for. Three of them are destructive —
+ * `DELETE …/products/{pid}`, `DELETE …/campaigns/{cid}` — and the CONTROL call really
+ * deletes, so each needs its own row at salon B rather than sharing one.
+ *
+ * Salon A needs them too, and for the reason `happyHourFor` documents: the
+ * cross-salon probe must be refused by `requireSameSalon` BEFORE the row is looked
+ * up, so the id has to be one the handler would recognise. An id that exists nowhere
+ * would answer 404 and a 404 in place of a 403 is exactly how a tenancy check that
+ * runs too late hides.
+ *
+ * The seed makes no campaign at all and puts every product at salon A, so none of
+ * this can be borrowed from fixtures.
+ */
+const PROBE_PRODUCT_A = 'PR-TEN-A';
+const PROBE_PRODUCT_B_PATCH = 'PR-TEN-B-PATCH';
+const PROBE_PRODUCT_B_DELETE = 'PR-TEN-B-DEL';
+const PROBE_CAMPAIGN_A = 'CMP-TEN-A';
+const PROBE_CAMPAIGN_B = 'CMP-TEN-B';
+
+/**
  * Every route that carries a salon id in the path, as registered in
  * `api/src/routes/salons.ts` and `api/src/routes/platform.ts`.
  *
@@ -259,6 +320,38 @@ const SALON_ROUTES: SalonRoute[] = [
     method: 'POST',
     template: '/v1/salons/{id}/campaigns',
     body: { title: 'tenancy probe', body: 'tenancy probe', channel: 'push' },
+    /**
+     * 201, not the default 200. The route answers `created` and this entry asserted
+     * 200 — green while the control was refused for a different reason, red the moment
+     * it started succeeding, which is how it surfaced. The `controlStatus` field exists
+     * for exactly this and `POST …/happy-hours` already uses it.
+     */
+    controlStatus: 201,
+  },
+  // ---- lane A's shop and campaign routes. The gap ledger fired on all six. ----
+  { method: 'GET', template: '/v1/salons/{id}/messaging-policy' },
+  { method: 'GET', template: '/v1/salons/{id}/campaigns' },
+  {
+    method: 'POST',
+    template: '/salons/{id}/products',
+    body: { name: 'Tenancy probe product', priceFils: 1000 },
+    controlStatus: 201,
+  },
+  {
+    method: 'PATCH',
+    template: '/salons/{id}/products/{pid}',
+    body: { priceFils: 9999 },
+    controlBody: { priceFils: 1000 },
+  },
+  {
+    method: 'DELETE',
+    template: '/salons/{id}/products/{pid}',
+    controlStatus: 204,
+  },
+  {
+    method: 'DELETE',
+    template: '/v1/salons/{id}/campaigns/{cid}',
+    controlStatus: 204,
   },
   // Added by trunk when lane A's five new routes merged. The ledger fired
   // correctly on the merge — that is what it is for. Its sibling assertion,
@@ -429,11 +522,30 @@ function happyHourFor(route: SalonRoute, salonId: string): string {
   return route.method === 'DELETE' ? B_HAPPY_HOUR_DISPOSABLE : B_HAPPY_HOUR;
 }
 
+/**
+ * A product belonging to the salon being addressed.
+ *
+ * Salon B gets a DIFFERENT disposable row per verb, because the DELETE control really
+ * deletes and would otherwise take the PATCH's subject with it — the two specs run in
+ * table order and would then pass or fail by that order, which is the shared-fixture
+ * trap this file exists to avoid.
+ */
+function productFor(route: SalonRoute, salonId: string): string {
+  if (salonId !== SALON_B) return PROBE_PRODUCT_A;
+  return route.method === 'DELETE' ? PROBE_PRODUCT_B_DELETE : PROBE_PRODUCT_B_PATCH;
+}
+
+/** A campaign belonging to the salon being addressed. Only DELETE uses it. */
+const campaignFor = (salonId: string): string =>
+  salonId === SALON_B ? PROBE_CAMPAIGN_B : PROBE_CAMPAIGN_A;
+
 const url = (r: SalonRoute, salonId: string) =>
   r.template
     .replace('{id}', salonId)
     .replace('{hid}', happyHourFor(r, salonId))
-    .replace('{bid}', branchFor(salonId));
+    .replace('{bid}', branchFor(salonId))
+    .replace('{pid}', productFor(r, salonId))
+    .replace('{cid}', campaignFor(salonId));
 
 describe("salon-scoped routes — salon B's manager calling salon A's URL", () => {
   for (const route of SALON_ROUTES) {
@@ -1169,6 +1281,14 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'PATCH /v1/salons/:id/promotions/happy-hours/:hid',
       'DELETE /v1/salons/:id/promotions/happy-hours/:hid',
       'POST /v1/salons/:id/campaigns',
+      // Lane A's shop catalog writes and the campaign routes. The ledger fired on all
+      // six when they merged; the auto-discovered sibling assertion drives them too.
+      'GET /v1/salons/:id/campaigns',
+      'DELETE /v1/salons/:id/campaigns/:cid',
+      'GET /v1/salons/:id/messaging-policy',
+      'POST /salons/:id/products',
+      'PATCH /salons/:id/products/:pid',
+      'DELETE /salons/:id/products/:pid',
       // Lane A's phase-4 branch writes. These are what closed the phase-4
       // criterion — a salon can open, rename and close a location without an
       // engineer — so a scan that stops seeing them is a scan that would let the
@@ -1188,14 +1308,19 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
     // translated or a route that IS in the table reads as missing — and the
     // failure lands as "add it to SALON_ROUTES" against an entry already there,
     // which is a confusing hour for whoever adds the next parameterised route.
+    /**
+     * GENERIC, and it was three hard-coded `.replace()` calls until it cost the hour
+     * the comment above predicted. Adding `{pid}` and `{cid}` for lane A's shop and
+     * campaign routes left this normaliser matching neither, so three entries that were
+     * in the table read as missing from it and the failure said "add it to SALON_ROUTES"
+     * about routes already there — the exact confusion that comment warned of, arriving
+     * on schedule.
+     *
+     * `\{(\w+)\}` → `:$1` handles every placeholder the table will ever use, so the
+     * next parameterised route needs a substitution in `url()` and nothing here.
+     */
     const probed = new Set(
-      SALON_ROUTES.map(
-        (r) =>
-          `${r.method} ${r.template
-            .replace('{id}', ':id')
-            .replace('{hid}', ':hid')
-            .replace('{bid}', ':bid')}`,
-      ),
+      SALON_ROUTES.map((r) => `${r.method} ${r.template.replace(/\{(\w+)\}/g, ':$1')}`),
     );
     const missing = discovered
       .map((r) => `${r.method} ${r.path}`)
