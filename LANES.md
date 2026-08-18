@@ -184,9 +184,22 @@ Note also that `typecheck` depends on `^build` — **dependencies'** builds, not
 package's. `@avo/dashboard#typecheck` never waits on `@avo/dashboard#build`, which is why a
 build failure in one package does not block typechecking it.
 
-One cache observation in trunk is still unexplained; the elimination trail is in
-`DECISIONS.md` rather than here, because the rule above is what you need and the anomaly is
-not something you have to act on.
+**Your turbo cache is trunk's cache. There is only one.** Trunk's `.turbo/cache` holds every
+lane's entries — 84 of them — and none of `avo-api`, `avo-wallet`, `avo-web` or `avo-qa` has a
+cache directory at all. Each lane's `.git` is a pointer into
+`/Users/koraspond_developer/dev/avo/.git/worktrees/<name>`, so turbo resolves the repository
+root through the shared git dir and writes there.
+
+This is the fifth shared mutable resource, and unlike the others it is **not** a correctness
+problem: the key is content-derived, complete and responsive, so a hit returns a result
+computed from identical content. A cached green is a real green.
+
+What it costs is **independence**. When trunk merges your branch and typechecks it, a `HIT`
+may be replaying *your* run of that same content minutes earlier — the verdict is sound but it
+is your verdict, not a second opinion. That is exactly the case the `--force` rule above
+covers, and it is why "same tree, independent confirmation" is a real distinction rather than
+a pedantic one. Two `FULL TURBO` post-merge runs in trunk were traced to precisely this, both
+on lane C merges; the trail is in `DECISIONS.md`.
 
 ---
 
