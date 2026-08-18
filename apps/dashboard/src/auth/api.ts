@@ -3,7 +3,13 @@ import { ApiError, request } from '../api/client.js';
 import { deviceId } from '../config.js';
 import { authedRequest } from './authedRequest.js';
 import type { AuthScope } from './scopes.js';
-import { clearSession, readSession, type Session } from './session.js';
+import {
+  clearSession,
+  readSession,
+  type MerchantSession,
+  type OwnerSession,
+} from './session.js';
+import { parsePlatformAdmin } from './platformAdmin.js';
 
 export interface Credentials {
   /**
@@ -41,7 +47,7 @@ interface WebSessionResponse {
  * that matters: the server owns which salon a session is for, and the client
  * records what it was told rather than what it asked for.
  */
-export async function signIn(scope: AuthScope, credentials: Credentials): Promise<Session> {
+export async function signIn(scope: 'merchant', credentials: Credentials): Promise<MerchantSession> {
   const device = deviceId();
   const result = await request<WebSessionResponse>('/auth/web/session', {
     method: 'POST',
@@ -121,4 +127,70 @@ export function displayNameFor(username: string): string {
   if (!trimmed) return '';
   const first = trimmed.replace(/[@._-]+/g, ' ').split(' ')[0] ?? '';
   return first.charAt(0).toUpperCase() + first.slice(1);
+}
+
+// ------------------------------------------------------------ owner console --
+
+export interface ConsoleCredentials {
+  /**
+   * NO SALON, AND THAT IS THE POINT. `platform_admin.handle` is globally unique,
+   * unlike `staff_user`'s (salon_id, handle), so the console's credential is a
+   * pair rather than a triple. `@yousef` and `yousef` are the same person: the
+   * API lowercases and strips the '@' at the boundary, and the console sends
+   * whatever was typed.
+   */
+  username: string;
+  password: string;
+}
+
+/** `POST /auth/platform/session`, verbatim. `expiresAt` is the REFRESH expiry. */
+interface PlatformSessionResponse {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  admin: unknown;
+}
+
+/**
+ * Console sign-in.
+ *
+ * The mirror of `signIn` above, and separate rather than parameterised: the two
+ * endpoints take different credentials, return different bodies, and mint
+ * sessions with different shapes. A single function with `if (scope === 'owner')`
+ * branches inside it would be one function pretending to be one thing.
+ *
+ * THE PASSWORD REACHES HERE AND GOES NO FURTHER — #6. Nothing on `OwnerSession`
+ * can hold it.
+ *
+ * `admin` is PARSED, not trusted. A response that drops `sections` fails here,
+ * at sign-in, instead of rendering a console whose sidebar is empty because
+ * every gate read `undefined`. `parsePlatformAdmin` returns null rather than
+ * throwing so this becomes a sentence in the form.
+ */
+export async function signInToConsole(credentials: ConsoleCredentials): Promise<OwnerSession> {
+  const result = await request<PlatformSessionResponse>('/auth/platform/session', {
+    method: 'POST',
+    body: { username: credentials.username, password: credentials.password },
+  });
+
+  const admin = parsePlatformAdmin(result.admin);
+  if (!admin) {
+    throw new ApiError(
+      "Signed in, but the console couldn't read your account. Tell AVO — this is a server problem, not your password.",
+      { status: 500, code: 'unreadable_admin' },
+    );
+  }
+
+  return {
+    scope: 'owner',
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+    refreshExpiresAt: result.expiresAt,
+    adminId: admin.id,
+    username: admin.handle,
+    displayName: admin.name,
+    role: admin.role,
+    owner: admin.owner,
+    sections: admin.sections,
+  };
 }

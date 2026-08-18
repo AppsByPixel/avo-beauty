@@ -38,7 +38,15 @@ export const SCOPES: Record<AuthScope, ScopeConfig> = {
     storageKey: 'avo.session.merchant',
   },
   /**
-   * Declared, not built. Nothing routes to `/console` yet.
+   * BUILT. Sign-in, the shell, Approvals and Policies are live; the other eight
+   * sections resolve to a named placeholder because the console design draws them
+   * and their endpoints do not exist yet.
+   *
+   * `home` is Approvals rather than the design's Salons, and deliberately: Salons
+   * has no endpoint, so landing a freshly signed-in admin there would open the
+   * console on "isn't built yet". Approvals is the section that actually needs
+   * watching — it is the one thing standing between a salon and a customer's
+   * phone.
    *
    * THIS IS A BLOCKED ITEM, NOT A DEFERRED ONE, AND THE DIFFERENCE IS WRITTEN
    * DOWN HERE BECAUSE A MISSING GATE AND A GATE NOBODY NEEDED LOOK IDENTICAL.
@@ -89,7 +97,7 @@ export const SCOPES: Record<AuthScope, ScopeConfig> = {
    */
   owner: {
     id: 'owner',
-    home: '/console/salons',
+    home: '/console/approvals',
     signIn: '/console/signin',
     prefix: '/console',
     theme: 'dark',

@@ -1,27 +1,35 @@
 import type { StaffPerms } from '@avo/types';
+import type { PlatformRole, PlatformSections } from './platformAdmin.js';
 import { SCOPES, isAuthScope, type AuthScope } from './scopes.js';
 
 /**
- * The signed-in session.
+ * The signed-in session, as a DISCRIMINATED UNION ON SCOPE.
  *
  * Non-negotiable #6: a password is never stored, never returned by an endpoint,
- * never shown in a UI. Nothing on this shape can hold one, and the sign-in form
- * clears the field the moment it submits.
+ * never shown in a UI. Nothing on these shapes can hold one, and the sign-in
+ * form clears the field the moment it submits.
  *
- * Non-negotiable #7: `perms` here drives what the UI *shows*. It is a courtesy.
- * Every gated call is enforced again server-side, and a 403 renders as an
- * explain-state rather than a retry — see ErrorState.
+ * Non-negotiable #7: `perms` and `sections` here drive what the UI *shows*.
+ * They are courtesies. Every gated call is enforced again server-side, and a 403
+ * renders as an explain-state rather than a retry — see ErrorState.
  *
- * `salonId` IS REQUIRED AND IT COMES FROM THE SERVER. It is `staff.salonId` off
- * the `POST /auth/web/session` response, which the API reads from the staff row
- * rather than echoing the `salonId` the sign-in form sent. A session object
- * cannot exist without one: `isStoredSession` rejects it on the way out of
- * storage and `signIn` rejects it on the way in. There is no fallback to guess
- * with — a session with no salon is an authentication failure and the caller
- * signs out.
+ * WHY A UNION AND NOT ONE INTERFACE WITH OPTIONAL FIELDS. This was a single
+ * `Session` with a required `salonId`, which is correct for a merchant and
+ * impossible for a platform admin: `PlatformPrincipal` in api/src/auth has NO
+ * `salonId`, deliberately, so that `requireSameSalon` on it does not compile.
+ * Lane A reported that adding the third member to its `Principal` union turned
+ * five call sites red, each relying on a field that happened to exist on every
+ * branch. The client had the same latent bug, and an optional `salonId?` would
+ * have hidden it — every existing reader would still compile and would read
+ * `undefined` at runtime for a console session.
+ *
+ * So the split is structural. `useSalonId()` takes a `MerchantSession` and there
+ * is no `salonId` on an `OwnerSession` to read, which makes "which salon is the
+ * owner console looking at" a question you cannot ask by accident. It is a real
+ * question — the console's Salons section opens one — but it is answered by a
+ * route parameter the admin chose, never by the credential.
  */
-export interface Session {
-  scope: AuthScope;
+interface SessionBase {
   /** Short-lived JWT, ~15 minutes. Sent as the bearer on every request. */
   accessToken: string;
   /** Opaque, single-use, rotates on every refresh. Never sent as a bearer. */
@@ -32,17 +40,60 @@ export interface Session {
    * be used to refresh ahead of time — see refresh.ts.
    */
   refreshExpiresAt: string;
-  staffId: string;
   username: string;
   displayName: string;
+}
+
+/**
+ * `salonId` IS REQUIRED AND IT COMES FROM THE SERVER. It is `staff.salonId` off
+ * the `POST /auth/web/session` response, which the API reads from the staff row
+ * rather than echoing the `salonId` the sign-in form sent. A merchant session
+ * cannot exist without one.
+ */
+export interface MerchantSession extends SessionBase {
+  scope: 'merchant';
+  staffId: string;
   salonId: string;
   perms: StaffPerms;
 }
 
-interface StoredSession extends Session {
+/**
+ * The owner console. NO `salonId` — see the header.
+ *
+ * `sections` is the nine of `PLATFORM_SECTIONS`, not the design's six chips:
+ * the console draws ten sidebar sections and the API gates nine of them, and #7
+ * does not permit an ungated endpoint. `owner` is the founder flag, which the
+ * API uses to refuse an admin removing themselves.
+ */
+export interface OwnerSession extends SessionBase {
+  scope: 'owner';
+  adminId: string;
+  role: PlatformRole;
+  owner: boolean;
+  sections: PlatformSections;
+}
+
+export type Session = MerchantSession | OwnerSession;
+
+/** Narrowing helper, so a caller reads the discriminant rather than a field. */
+export function isOwnerSession(session: Session): session is OwnerSession {
+  return session.scope === 'owner';
+}
+
+export function isMerchantSession(session: Session): session is MerchantSession {
+  return session.scope === 'merchant';
+}
+
+/**
+ * `type` and an intersection, not `interface ... extends`: an interface cannot
+ * extend a union, and the union is the point. This distributes over both members,
+ * so a stored merchant session keeps `salonId` and a stored owner session keeps
+ * `sections`.
+ */
+type StoredSession = Session & {
   /** Which store it came from, so a rotation writes back to the same one. */
   persistent: boolean;
-}
+};
 
 function stores(): Storage[] {
   if (typeof window === 'undefined') return [];
@@ -52,15 +103,30 @@ function stores(): Storage[] {
 function isStoredSession(value: unknown): value is StoredSession {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return (
+  const common =
     isAuthScope(v['scope']) &&
     typeof v['accessToken'] === 'string' &&
     typeof v['refreshToken'] === 'string' &&
     typeof v['username'] === 'string' &&
-    typeof v['refreshExpiresAt'] === 'string' &&
-    // The whole point of this change: no salon, no session.
-    typeof v['salonId'] === 'string' &&
-    v['salonId'].length > 0
+    typeof v['refreshExpiresAt'] === 'string';
+  if (!common) return false;
+
+  /*
+   * Validated PER SCOPE, because the two shapes have different required fields
+   * and a check that accepted the loosest of them would let a console session
+   * out of storage with no `sections` — which the shell would then read as "no
+   * access to anything" and render an empty sidebar rather than signing out.
+   *
+   * No salon, no merchant session — the original rule, unchanged.
+   */
+  if (v['scope'] === 'merchant') {
+    return typeof v['salonId'] === 'string' && v['salonId'].length > 0;
+  }
+  return (
+    typeof v['adminId'] === 'string' &&
+    v['adminId'].length > 0 &&
+    typeof v['sections'] === 'object' &&
+    v['sections'] !== null
   );
 }
 

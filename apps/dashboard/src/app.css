@@ -2578,3 +2578,649 @@ a:hover {
   white-space: nowrap;
   border: 0;
 }
+
+/* ============================================================ owner console ==
+ *
+ * AVO Owner Console.dc.html — the dark platform frame.
+ *
+ * Colours resolve through `--avo-*` only, same rule as the merchant shell. The
+ * dark ground is `--avo-ink` (#1C1B19), which is the value the design paints the
+ * console sidebar and the scanner frame with, and `.avo-dark` on the root is what
+ * switches the focus ring to `#A9BBA6` — @avo/tokens emits that rule because
+ * interaction-spec.md §2 says #6E7F6C "does not carry enough contrast against
+ * #1C1B19". Until this shell existed that rule had nothing to apply to.
+ *
+ * Breakpoints are `[data-bp]` off the same `useBreakpoint`, so the console cannot
+ * drift from §1's numbers independently of the merchant workspace.
+ */
+
+.console {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  min-height: 100%;
+  background: var(--avo-canvas);
+}
+
+.console[data-bp='narrow'] {
+  grid-template-columns: 68px 1fr;
+}
+
+.console[data-bp='tablet'] {
+  grid-template-columns: 1fr;
+}
+
+.console-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 14px;
+  background: var(--avo-ink);
+  color: var(--avo-white);
+  /* Never scrolls with content — interaction-spec.md §1. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.console-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 12px;
+}
+
+.console-sidebar__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  color: var(--avo-white);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.console-sidebar__name,
+.console-sidebar__sub,
+.console-sidebar__whoname,
+.console-sidebar__whorole {
+  display: block;
+}
+
+.console-sidebar__name {
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.console-sidebar__sub {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 2px;
+}
+
+.console[data-bp='narrow'] .console-sidebar__brand > span:last-child,
+.console[data-bp='narrow'] .console-navitem__label,
+.console[data-bp='narrow'] .console-navitem__soon,
+.console[data-bp='narrow'] .console-sidebar__foot {
+  display: none;
+}
+
+.console-sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.console-navitem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.console-navitem:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--avo-white);
+}
+
+.console-navitem--on {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--avo-white);
+}
+
+.console-navitem__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.console-navitem__label {
+  flex: 1;
+}
+
+/* "soon" rather than a hidden item: a section the design draws and the server
+   cannot serve yet is a known absence, and naming it beats a dead link. */
+.console-navitem__soon {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.console-sidebar__foot {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 12px;
+}
+
+.console-sidebar__whoname {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.console-sidebar__whorole {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: capitalize;
+}
+
+.console-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.console-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 26px 32px 18px;
+}
+
+.console-header__title {
+  font-size: 26px;
+  font-weight: 500;
+  color: var(--avo-ink);
+}
+
+.console-header__sub {
+  font-size: 13.5px;
+  color: var(--avo-text-muted);
+  margin-top: 4px;
+}
+
+.console-content {
+  padding: 0 32px 40px;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- approvals -- */
+
+.approvals__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+/* interaction-spec.md §1: two-column layouts go 1-up at narrow and below. */
+.console[data-bp='narrow'] .approvals__grid,
+.console[data-bp='tablet'] .approvals__grid,
+.console[data-bp='narrow'] .policies__grid,
+.console[data-bp='tablet'] .policies__grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.approvals__queue,
+.approvals__side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.approvals__queuehead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approvals__h2 {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.approvals__h2--decided {
+  margin-top: 10px;
+}
+
+.approvals__note,
+.approvals__none {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.approvals__card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.approvals__cardtop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.approvals__salon {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.approvals__submitted {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}
+
+.approvals__message {
+  background: var(--avo-surface-alt);
+  border-radius: var(--avo-radius-card);
+  padding: 13px 15px;
+}
+
+.approvals__msgtitle {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.approvals__msgbody {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.approvals__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.approvals__facts > span {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-label);
+  background: var(--avo-surface-alt2);
+  border-radius: var(--avo-radius-pill);
+  padding: 4px 10px;
+}
+
+/* A warning, and it carries its meaning as text — §2. */
+.approvals__flag {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-warn-text);
+  background: var(--avo-warn-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.approvals__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.approvals__release {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  flex: 1;
+  min-width: 180px;
+}
+
+.approvals__reject {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.approvals__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--avo-border-control);
+  border-radius: var(--avo-radius-input);
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--avo-ink);
+  background: var(--avo-white);
+  resize: vertical;
+}
+
+.approvals__textarea:focus-visible {
+  border-color: var(--avo-brand);
+}
+
+.approvals__rejectrow,
+.policies__publishrow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.approvals__decided {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.approvals__decidedrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: var(--avo-radius-card);
+  padding: 11px 14px;
+  font-size: 13px;
+}
+
+.approvals__decidedtitle {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.approvals__decidedsalon,
+.approvals__decidedmeta {
+  font-size: 11.5px;
+  color: var(--avo-text-muted);
+}
+
+/* The held sentence spans the row, because it is the row's most important fact. */
+.approvals__held,
+.approvals__reason,
+.approvals__result {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.approvals__held {
+  color: var(--avo-warn-text);
+  background: var(--avo-warn-bg);
+  border-radius: 9px;
+  padding: 8px 11px;
+}
+
+.approvals__reason,
+.approvals__result {
+  color: var(--avo-text-muted-strong);
+}
+
+.approvals__throttle,
+.approvals__stats {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.approvals__lede {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+}
+
+.approvals__rowitem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approvals__rowlabel {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.approvals__rowsub {
+  display: block;
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.approvals__quiet {
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+  border-top: 1px solid var(--avo-hairline);
+  padding-top: 11px;
+}
+
+.approvals__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.approvals__statlabel {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+}
+
+.approvals__statvalue {
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- policies -- */
+
+.policies__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+.policies__col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.policies__colhead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.policies__h2 {
+  font-size: 17px;
+  font-weight: 500;
+  flex: 1;
+}
+
+.policies__meta,
+.policies__empty {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+}
+
+.policies__docs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policies__doc {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--avo-surface-alt);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.policies__doctitle {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.policies__docmeta {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-label);
+  text-transform: capitalize;
+}
+
+.policies__publish {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--avo-hairline);
+  padding-top: 12px;
+}
+
+.policies__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.policies__confirmtext {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-warn-text);
+  background: var(--avo-warn-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+/* ------------------------------------------------------- console sign-in 5b -- */
+
+.csignin {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background: var(--avo-ink);
+}
+
+.csignin__card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--avo-radius-card-lg);
+  padding: 26px 24px;
+  color: var(--avo-white);
+}
+
+.csignin__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.csignin__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  font-weight: 700;
+}
+
+.csignin__brandname {
+  display: block;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.csignin__brandsub {
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 3px;
+}
+
+.csignin__title {
+  font-size: 22px;
+  font-weight: 500;
+  margin-top: 6px;
+}
+
+.csignin__lede {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* The shared field/label primitives are authored for a light ground, so the dark
+   console restates only the colours — never the geometry, which stays in @avo/ui
+   so the two surfaces cannot drift in spacing. */
+.csignin .avo-label {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.csignin input {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--avo-white);
+}
+
+.csignin input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.csignin__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.csignin__keep {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.csignin__forgot {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #b7cbb0;
+  cursor: help;
+}
+
+.csignin__restricted {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.45);
+  text-align: center;
+  margin-top: 4px;
+}
