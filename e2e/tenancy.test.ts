@@ -1229,8 +1229,19 @@ describe('GAP: tenancy surface not reachable yet', () => {
   it.todo(
     'POST /orders and the shop endpoints do not exist; when they do, a product id from another salon must not be priceable (the POST /charges service-id spec above is the pattern)',
   );
+  /**
+   * CORRECTED — this said bookings and held deposits are "unimplemented". They
+   * are: `api/drizzle/0013_booking.sql`, `api/src/services/booking.ts`, and the
+   * hold is applied inside `api/src/services/charge.ts`. So the case is no longer
+   * blocked on lane A; it is simply unwritten, and it is now writable.
+   */
   it.todo(
-    'bookings and held deposits are unimplemented; a deposit held at salon A must not be applicable to a charge at salon B',
+    'A DEPOSIT HELD AT SALON A MUST NOT BE APPLICABLE TO A CHARGE AT SALON B, and this is now ' +
+      'writable rather than blocked. `findApplicableHold` does scope on salonId, so the spec is a ' +
+      'guard on a control that appears to exist rather than a report of one missing — the same ' +
+      'shape as the salon-scoped service-id spec further up this file. Note the trap that caught ' +
+      'lane A: the hold only applies INSIDE the no-show grace window, so the booking has to be ' +
+      'inside it or the hold is legitimately 0 and the spec proves nothing (lane D, next slice)',
   );
   it.todo(
     'the PSP callback has no endpoint yet; a gateway reference must resolve to the salon that created the intent, or one salon confirms another salon top-up',
