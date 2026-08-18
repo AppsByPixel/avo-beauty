@@ -147,11 +147,39 @@ worktree:
 pnpm --dir /Users/koraspond_developer/dev/avo-web turbo run typecheck
 ```
 
-And for a **gate** — a check you are about to trust — add `--force`. Turbo caches `typecheck`
-and `build`, and a post-merge run in trunk reported `FULL TURBO`, 11 of 11 cached, in 29ms on
-a tree whose sources had just changed; the forced run took 8s and was genuinely green. The
-mechanism is still unexplained, which is exactly why a cached gate is not a gate. `test` is
-already uncached — `turbo.json` explains why at length.
+**Do not reach for `--force` by habit.** The cache is sound and paying 8s on every merge to
+distrust it is how the next real anomaly gets waved through as normal. Three cases:
+
+- **Tree changed → trust the cache.** A cold run *is* a gate.
+- **Need independent confirmation of the same tree → `--force`.** A replay is not a second
+  opinion. This is the same trap as "green twice" being one run and a replay, which
+  `turbo.json` documents at length for `test` — the difference is that `test` is uncached, so
+  it cannot bite you there.
+- **Suspect the cache → `--dry=json`.** It prints each task's hash and input count and
+  executes nothing:
+
+  ```bash
+  pnpm turbo run typecheck --dry=json
+  ```
+
+The key mechanism has been checked and is not the problem. There is no `inputs` override, no
+remote cache and no `TURBO_*` env, so every task uses the default input set — and that set is
+complete: `@avo/dashboard` 48, `@avo/ui` 19, `@avo/wallet` 84, `@avo/api` 120, each an exact
+match for `git ls-files` on that package. It is also **responsive**: appending one comment
+line to a dashboard file moves `@avo/dashboard#typecheck` from `c2527732…` to `f937cbcf…`.
+
+That matters more than it looks. If the key under-covered, `build` would share the defect —
+and `build` is what `seed.ts` imports `@avo/types` from, what the drift guard parses against,
+and what hid a missing dependency edge for a whole session. A key that could no-op on changed
+source would mean every downstream check reads yesterday's contract. It cannot.
+
+**One observation remains unexplained, and is recorded rather than worked around.** A
+post-merge `turbo run typecheck` in trunk reported `FULL TURBO`, 11 of 11 cached, in 29ms —
+on a merge that changed eleven dashboard files including two new ones. Forced, it took 8s and
+was green, so the tree was sound. The ordinary explanation is a second invocation on an
+unchanged tree, but that does not fit: `pnpm check` never completed in that worktree, and the
+content provably changed between the two runs. Left open on purpose. An anomaly you have
+bounded is worth more than a workaround that hides it.
 
 ---
 
