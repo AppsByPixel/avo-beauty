@@ -1,5 +1,12 @@
 /**
- * Development seed. `pnpm --filter @avo/api run db:seed`
+ * Development seed. `pnpm --dir=/abs/path/to/api run db:seed`
+ *
+ * AN ABSOLUTE `--dir`, NEVER `--filter`, AND NEVER A RELATIVE PATH. `pnpm --filter`
+ * resolves from cwd, so run from a lane worktree it can pick a DIFFERENT worktree's
+ * package — and this file exports nothing: it reads `DATABASE_URL` and DELETES rows.
+ * `scripts/lane-db.sh` exports that URL before invoking pnpm, so the wrong resolution
+ * there means another worktree's seed applied to this lane's database, which looks
+ * exactly like a clean reset. LANES.md § "Every lane isolates its own resources".
  *
  * Mirrors packages/mock/src/fixtures.ts, because Lane D's e2e suite asserts
  * against those exact values as named constants — Amara, member 8842, 24.500 KD,
@@ -42,6 +49,7 @@ import { artist, type ArtistWindows } from './schema/artist';
 import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
 import { member } from './schema/member';
+import { product } from './schema/product';
 import { service } from './schema/service';
 import { staffUser } from './schema/staff';
 import { transaction } from './schema/transaction';
@@ -236,23 +244,25 @@ async function seed(): Promise<void> {
       plan: 'growth',
       brandColor: '#6E7F6C',
       /**
-       * ON, and it is the one field of Amara's configuration this seed changed
-       * when booking landed.
+       * BOTH MODULES ON, and they are the fields of Amara's configuration this
+       * seed changes — booking when booking landed, shop when the shop did, for
+       * one reason stated once.
        *
        * The modules default OFF for a real salon — AVO-Beauty-Product-Description-v2.md
-       * § Settings, "module toggles (Booking, Shop — both default OFF)" — and
-       * `salon.module_booking` keeps that default. Amara is the fixture every
-       * lane drives, and `POST /bookings` refuses a salon whose booking module is
-       * off, so leaving it false would make the entire phase-6 surface
-       * unreachable in development and every proof run start with a PATCH.
+       * § Settings, "module toggles (Booking, Shop — both default OFF)" — and the
+       * COLUMNS keep that default. Amara is the fixture every lane drives, and
+       * both `POST /bookings` and `POST /orders` refuse a salon whose module is
+       * off, so leaving them false would make the whole of phase 6 unreachable in
+       * development and start every proof run with a PATCH.
        *
-       * SAL-LUMIERE below stays OFF deliberately, which is what keeps the refusal
-       * itself testable: two salons, one with the module and one without, is the
-       * only fixture shape that can prove the gate exists rather than that it is
-       * merely absent.
+       * SAL-LUMIERE below stays OFF on both deliberately, which is what keeps the
+       * refusals themselves testable: two salons, one with the module and one
+       * without, is the only fixture shape that can prove a gate exists rather
+       * than that it is merely absent. It has no products either, so
+       * `shop_not_enabled` and an empty catalog are separately reachable.
        */
       moduleBooking: true,
-      moduleShop: false,
+      moduleShop: true,
       loyaltyMode: 'tiers',
       tiers: [
         { name: 'bronze', minVisits: 0, bonusPercent: 0 },
@@ -285,21 +295,26 @@ async function seed(): Promise<void> {
     // written a translation it did not write — the same class of failure the
     // member rows below document for `passwordHash`.
     //
-    // The Arabic columns and `module_booking` are in the SET; the rest of
+    // The Arabic columns and the two module flags are in the SET; the rest of
     // Amara's configuration is left alone deliberately, because it is a salon a
     // developer may have edited through `PATCH /salons/:id` while working and
     // this insert is not the place that resets it.
     //
-    // `module_booking` is in the SET for exactly the reason `name_ar` is. Every
-    // developer and CI database already holds an Amara row from before booking
-    // existed, with the module off; DO NOTHING there would leave the whole of
-    // phase 6 unreachable on every warm database while the seed printed success.
-    // That is the same silent-claim failure the paragraph above describes, and it
-    // is worse here because the symptom is a 409 on a route the fixture is
-    // supposed to make reachable.
+    // `module_booking` and `module_shop` are in the SET for exactly the reason
+    // `name_ar` is. Every developer and CI database already holds an Amara row
+    // from before those features existed, with the module off; DO NOTHING there
+    // would leave the whole of phase 6 unreachable on every warm database while
+    // the seed printed success. That is the same silent-claim failure the
+    // paragraph above describes, and it is worse here because the symptom is a
+    // 409 on a route the fixture is supposed to make reachable.
     .onConflictDoUpdate({
       target: salon.id,
-      set: { nameAr: 'أمارا', stampRewardAr: 'تصفيف شعر مجاني', moduleBooking: true },
+      set: {
+        nameAr: 'أمارا',
+        stampRewardAr: 'تصفيف شعر مجاني',
+        moduleBooking: true,
+        moduleShop: true,
+      },
     });
 
   await db
@@ -398,6 +413,45 @@ async function seed(): Promise<void> {
       target: service.id,
       set: { nameAr: sql`excluded.name_ar` },
     });
+
+  /**
+   * The shop catalog — `packages/mock/src/fixtures.ts § products`, exactly.
+   *
+   * BYTE-IDENTICAL TO THE MOCK'S THREE ROWS, ids included, for the reason the
+   * promotion fixtures below are: three lanes build against the mock and one
+   * against this, and a seed that invented its own catalog would mean the wallet's
+   * Shop tab showed different products depending on which base URL it happened to
+   * be pointed at. `AVO Wallet Home.dc.html` draws five products of its own with
+   * descriptions and colour swatches; those are prototype presentation — there is
+   * no field on `product` to hold either, and `ProductSchema` declares none — so
+   * the mock's list is the one that is actually a fixture.
+   *
+   * THIS CLOSES A NAMED GAP AND WILL TURN ONE SPEC RED ON PURPOSE.
+   * `e2e/contract.test.ts` carries a placeholder — "ProductSchema is UNWITNESSED
+   * — the seed creates no product for it to be tested against" — which asserts
+   * `items` is EMPTY and tells whoever seeds one to turn the real probe on:
+   *
+   *     'A product now exists, so ProductSchema finally has a live sample. Move
+   *      GET /salons/{id}/products into probes() with requireNonEmpty: ["items"]
+   *      and delete this spec — it was only ever a placeholder for a shape
+   *      nothing could witness.'
+   *
+   * That file is lane D's column, so this is the seed doing its half and saying
+   * so. It is a deliberate red, not a regression.
+   *
+   * `onConflictDoNothing`, unlike the services above: there is no later column to
+   * backfill, and a developer who has repriced a product through the Shop editor
+   * while working should not have it reset by a reseed. Nothing about these rows
+   * predates the migration that created them.
+   */
+  await db
+    .insert(product)
+    .values([
+      { id: 'PR-01', salonId: SALON_ID, name: 'Argan hair oil 100ml', priceFils: fils(8500) },
+      { id: 'PR-02', salonId: SALON_ID, name: 'Repair mask', priceFils: fils(12000) },
+      { id: 'PR-03', salonId: SALON_ID, name: 'Heat protect spray', priceFils: fils(6750) },
+    ])
+    .onConflictDoNothing();
 
   // ---------------------------------------------------------- promotions ----
   //
@@ -813,6 +867,19 @@ async function seed(): Promise<void> {
       // `loyalty_event.transaction_id` is ON DELETE RESTRICT, so the climbs a
       // charge produced have to go before the charge does.
       await db.execute(sql`DELETE FROM loyalty_event`);
+      /**
+       * `shop_order_line.transaction_id` is ON DELETE restrict as well, so the
+       * lines of an order have to go before the order does — the same reason
+       * `booking` and `loyalty_event` are cleared above rather than below.
+       * Without this, `DELETE FROM transaction` fails with a foreign key
+       * violation on any database where a customer has ever bought a bottle of
+       * anything.
+       *
+       * No trigger to disable. `shop_order_line` is append-only for `avo_app`
+       * only, by GRANT — migration 0027 says why the ledger's TRUNCATE trigger
+       * has no counterpart here — and the seed runs as the owner.
+       */
+      await db.execute(sql`DELETE FROM shop_order_line`);
       await db.execute(sql`DELETE FROM transaction`);
 
       /**

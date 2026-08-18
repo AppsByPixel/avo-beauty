@@ -1,7 +1,10 @@
 -- Proof, not documentation — and now proof a MACHINE can read.
 --
---   pnpm --dir api run db:verify                     # against `avo`
---   AVO_VERIFY_DB=avo_lane_a pnpm --dir api run db:verify
+--   pnpm --dir=/abs/path/to/api run db:verify        # against `avo`
+--   AVO_VERIFY_DB=avo_lane_a pnpm --dir=/abs/path/to/api run db:verify
+--
+-- The path is ABSOLUTE deliberately: `--dir api` resolves from cwd, which is the same
+-- failure as `--filter` and can point at another worktree's package. LANES.md.
 --
 -- Exits 0 when every invariant holds and NON-ZERO when any of them does not, so
 -- CI can gate on it.
@@ -558,6 +561,118 @@ SELECT pg_temp.probe('10', 'an overlapping booking for one artist refused', 'ref
               'TX-HOLD-B','2030-01-01 11:45+00');
     END $i$ $probe$,
   'booking_artist_slot_no_overlap');
+
+-- =========================================================================
+-- 11. a shop order says what it sold, and cannot be re-itemised afterwards
+-- =========================================================================
+-- Migration 0027. A `shop` transaction IS the order and `shop_order_line` holds
+-- what was in it. Two properties matter and neither is checkable anywhere else:
+--
+--   THE MULTIPLICATION. This is the only money path in the schema that
+--   multiplies — `qty × unit_price_fils` — and non-negotiable #1 is a rule about
+--   arithmetic as much as about column types. A handler that computed a line
+--   total with a float, or dropped a quantity, must not commit.
+--
+--   THE LINES ARE EVIDENCE. UPDATE and DELETE are revoked from `avo_app` exactly
+--   as they are on `ledger_entry`, so a settled purchase cannot be quietly
+--   re-itemised by whatever gets compromised next. Note this is a GRANT and not a
+--   trigger, so the owner can still edit — unlike `ledger_entry`. The asymmetry is
+--   deliberate and 0027's header says why: order lines are reconstructible from a
+--   receipt payload and a total, and the ledger is not reconstructible from
+--   anything.
+SELECT pg_temp.probe('11', 'a free product is refused', 'refused',
+  $probe$INSERT INTO product (id, salon_id, name, price_fils)
+    VALUES ('PR-VERIFY-FREE', 'SL-VERIFY', 'Sample sachet', 0)$probe$,
+  'product_price_positive');
+
+-- The sign CHECK on `transaction` claimed a `shop` row cannot be zero "because
+-- service_price_positive refuses a free line" — but a shop line is priced from
+-- `product`, so it named a constraint that did not govern the kind it explained.
+-- Both halves are checked here so the CORRECTED claim is the one under test: zero
+-- is refused by the sign CHECK, and a free product cannot exist to produce one.
+SELECT pg_temp.probe('11', 'a shop transaction cannot be zero', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-SHOP-ZERO','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',0,'settled',now())$probe$,
+  'transaction_amount_sign_matches_kind');
+
+-- A shop row that PAYS the customer. The mirror of the charge case in section 3.
+SELECT pg_temp.probe('11', 'a shop transaction cannot credit the customer', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-SHOP-POS','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',5000,'settled',now())$probe$,
+  'transaction_amount_sign_matches_kind');
+
+SELECT pg_temp.probe('11', 'a line total that is not qty x unit price is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO product (id, salon_id, name, price_fils)
+      VALUES ('PR-VERIFY', 'SL-VERIFY', 'Argan hair oil 100ml', 8500);
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-SHOP-BAD','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-17000,'settled',now());
+      -- 2 x 8500 is 17000. 16999 is what a float looks like after it has lost a fil.
+      INSERT INTO shop_order_line (transaction_id,product_id,name,qty,unit_price_fils,line_total_fils)
+      VALUES ('TX-SHOP-BAD','PR-VERIFY','Argan hair oil 100ml',2,8500,16999);
+    END $i$ $probe$,
+  'shop_order_line_total_matches_qty');
+
+SELECT pg_temp.probe('11', 'a quantity of zero is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO product (id, salon_id, name, price_fils)
+      VALUES ('PR-VERIFY-Q', 'SL-VERIFY', 'Repair mask', 12000);
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-SHOP-Q','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-12000,'settled',now());
+      INSERT INTO shop_order_line (transaction_id,product_id,name,qty,unit_price_fils,line_total_fils)
+      VALUES ('TX-SHOP-Q','PR-VERIFY-Q','Repair mask',0,12000,0);
+    END $i$ $probe$,
+  'shop_order_line_qty_positive');
+
+-- The append-only pair. Written against whatever lines the database holds, so on
+-- an empty table `UPDATE`/`DELETE` still hit the privilege check before the row
+-- count — a permission denial does not need a row to deny.
+SELECT pg_temp.probe('11', 'the app role cannot re-itemise a settled order', 'refused',
+  $probe$UPDATE shop_order_line SET qty = qty + 1$probe$,
+  'permission denied', 'avo_app');
+
+SELECT pg_temp.probe('11', 'the app role cannot remove an order line', 'refused',
+  $probe$DELETE FROM shop_order_line$probe$,
+  'permission denied', 'avo_app');
+
+-- A reconciliation rather than a probe: every `shop` transaction's lines must add
+-- up to what the customer was debited. `line_total_fils = qty × unit_price_fils`
+-- is enforced per row above; this is the sum ACROSS an order, which no CHECK can
+-- express.
+--
+-- It is the shop's counterpart to invariant 5, and invariant 5 is what caught a
+-- real lost update on this very path: with `FOR UPDATE` removed from
+-- `services/order.ts` to find out whether it was load-bearing, five concurrent
+-- orders of 9.000 KD against a 15.250 balance ALL settled, all five reported the
+-- same `balanceAfterFils: 6250`, and `member.balance_fils` ended 36000 fils apart
+-- from the ledger. Every CHECK in this schema was satisfied the whole way through
+-- — including both non-negative balance constraints, because each writer wrote
+-- the same plausible number. Reconciliation was the only thing that could see it.
+SELECT pg_temp.assert('11', 'every shop order''s lines sum to what was debited',
+  NOT EXISTS (
+    SELECT 1
+      FROM transaction t
+      JOIN shop_order_line l ON l.transaction_id = t.id
+     WHERE t.kind = 'shop'
+     GROUP BY t.id, t.amount_fils
+    HAVING sum(l.line_total_fils) <> -t.amount_fils
+  ),
+  (SELECT CASE
+     WHEN count(*) = 0 THEN 'no shop orders in this database yet'
+     ELSE count(*) || ' order(s) reconcile' END
+     FROM transaction WHERE kind = 'shop'));
+
+-- Every line belongs to a `shop` transaction and to nothing else. No foreign key
+-- can say this — `transaction_id` references the table, not the kind — so a
+-- handler that hung order lines off a charge or a top-up would be refused by
+-- nothing at all.
+SELECT pg_temp.assert('11', 'no order line hangs off a non-shop transaction',
+  NOT EXISTS (
+    SELECT 1 FROM shop_order_line l
+      JOIN transaction t ON t.id = l.transaction_id
+     WHERE t.kind <> 'shop'
+  ),
+  (SELECT count(*) || ' line(s) checked' FROM shop_order_line));
 
 -- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST

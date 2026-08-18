@@ -225,7 +225,21 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
      * by any authenticated principal, so either kind resolves them, and staff
      * is the useful default there because the dashboard reads them too.
      */
-    req.url.startsWith('/v1/support/tickets')
+    req.url.startsWith('/v1/support/tickets') ||
+    /**
+     * `POST /orders` is the shop checkout — api-contract.md § Operations puts it
+     * at the root and scopes it by the credential, exactly as it does
+     * `POST /bookings`, and the handler is `requireMember`. Without this line it
+     * falls through to the staff branch below and answers 403 "This endpoint is
+     * for customers" to a suite that cannot see why.
+     *
+     * NOT `/salons/{id}/products`, which is one catalog read from two surfaces.
+     * Staff is the useful default there because it is the side that exercises
+     * `perms.shop`, and the `noperms` scenario selects the staff row with the
+     * permission off.
+     */
+    req.url === '/orders' ||
+    req.url.startsWith('/orders?')
   ) {
     const memberId = hasScenario(req, 'lowbal') ? TEST_MEMBER_LOWBAL : TEST_MEMBER;
     return loadMemberPrincipal(db, memberId, 'test-session-member');
