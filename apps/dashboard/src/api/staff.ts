@@ -116,11 +116,22 @@ export const staffKeys = {
   list: (salonId: string) => ['staff', salonId] as const,
 };
 
-export function useStaff(): UseQueryResult<Paginated<StaffUser>> {
+/**
+ * `enabled` exists for ONE caller and one reason: Settings' branch-close warning
+ * needs to know which staff are scoped to a branch, and closing a branch needs
+ * only `perms.loyalty` while this route needs `perms.team`. A `loyalty`-only
+ * account asking anyway would get a 403 that means nothing to her — she is not
+ * being refused the branch close, only the roster behind the warning. So the
+ * caller passes `session.perms.team` and shows the consequence without a count
+ * instead. Same shape as `useSalonBookings`, and the same reason: do not fire a
+ * request whose refusal you would have to explain away.
+ */
+export function useStaff(enabled = true): UseQueryResult<Paginated<StaffUser>> {
   const salonId = useSalonId();
   return useQuery({
     queryKey: staffKeys.list(salonId),
     queryFn: ({ signal }) => authedRequest<Paginated<StaffUser>>('merchant', '/staff', { signal }),
+    enabled,
   });
 }
 

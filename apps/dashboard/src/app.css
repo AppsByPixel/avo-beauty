@@ -1506,6 +1506,100 @@ a:hover {
   border-radius: 8px;
 }
 
+/* The design's 30px ✕ per branch row. Same treatment as the one on a team card
+   (`.account__remove`), a size down, because it is the same action shape: a
+   destructive-looking control that says why it is unavailable before it is
+   pressed. */
+.settings__branch-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--avo-ui-ink-12);
+  background: var(--avo-white);
+  color: var(--avo-ui-ink-38);
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition:
+    background var(--avo-motion-fast) ease,
+    color var(--avo-motion-fast) ease;
+}
+
+.settings__branch-close:hover:not(:disabled) {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+}
+
+.settings__branch-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* The design's inline "New branch name" + "+ Add branch" row. */
+.settings__addbranch {
+  display: flex;
+  gap: 9px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__addbranch .avo-field {
+  flex: 1;
+}
+
+/* The pre-close confirmation. Warning surface, not danger: these are consequences
+   to read before deciding, not an error that has happened. */
+.settings__confirm {
+  margin-top: 14px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+}
+
+.settings__confirm-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-warn-text);
+}
+
+.settings__consequences {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--avo-warn-text);
+}
+
+.settings__consequences li + li {
+  margin-top: 5px;
+}
+
+/* The two that need her attention: somebody left unable to work, and money
+   already taken from customers. */
+.settings__consequence--warn {
+  color: var(--avo-danger-text);
+}
+
+.settings__confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* What the server said it actually did, after the close. */
+.settings__closed {
+  margin-top: 14px;
+  padding: 12px 15px;
+  border-radius: 12px;
+  background: var(--avo-brand-tint);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-brand-deeper);
+}
+
 /* =============================================================== accounts == */
 
 .accounts__head {

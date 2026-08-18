@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_COMMISSION, fils, formatFils, type Salon } from '@avo/types';
-import { Card, ErrorState, Pill, Skeleton, Stepper, Toggle } from '@avo/ui';
+import { Button, Card, ErrorState, Pill, Skeleton, Stepper, TextField, Toggle } from '@avo/ui';
+import { useSalonBookings } from '../api/bookings.js';
 import { useSalon } from '../api/salon.js';
-import { useUpdateSalon } from '../api/settings.js';
+import {
+  useAddBranch,
+  useCloseBranch,
+  useUpdateSalon,
+  type BranchClosure,
+} from '../api/settings.js';
+import { useStaff } from '../api/staff.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
 
@@ -276,7 +283,76 @@ function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
 
 /* ----------------------------------------------------------------- branches */
 
+/**
+ * Branches — the design's list, ✕ per row, and "+ Add branch".
+ *
+ * CLOSING IS NOT DELETING, AND THE SCREEN SAYS SO. `DELETE
+ * /salons/{id}/branches/{bid}` sets `closedAt`; the row survives because
+ * `booking.branch_id` and `transaction` reference it. The design's ✕ carries only
+ * `title="Remove"`, which would be a lie about what the button does.
+ *
+ * THE CONSEQUENCES ARE SHOWN BEFORE THE CONFIRMATION, WHICH THE API CANNOT DO.
+ * The DELETE answers with `staffRescoped`, `staffLeftWithNoBranch` and
+ * `depositHeldBookings`, but computes them inside the transaction that performs
+ * the close — there is no preview route. Those three facts are what a merchant
+ * needs *before* she decides, so they are derived here from the roster and the
+ * appointment list, and the server's own numbers are shown afterwards as
+ * confirmation of what actually happened.
+ *
+ * AND THE WARNING IS PERMISSION-BOUND, WHICH IS WORTH SAYING OUT LOUD.
+ * Closing a branch needs `perms.loyalty`. Knowing who it strands needs
+ * `perms.team` (`GET /staff`), and knowing whose deposit is held needs
+ * `perms.appointments` (`GET /salons/{id}/bookings`). A `loyalty`-only account can
+ * therefore close a branch it cannot be warned about. Rather than fetch and 403,
+ * the reads are `enabled` on the permission and the warning degrades to the
+ * categories of consequence without counts — true either way, and never an
+ * invented number. A closure-preview endpoint on `perms.loyalty` is the real fix;
+ * reported to trunk.
+ */
 function BranchesPanel({ salon }: { salon: Salon | undefined }) {
+  const session = useSession('merchant');
+  const addBranch = useAddBranch();
+  const closeBranch = useCloseBranch();
+  const [newName, setNewName] = useState('');
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [closed, setClosed] = useState<BranchClosure | null>(null);
+
+  // Only fetched when the permission allows it — see the note above.
+  const staff = useStaff(session.perms.team);
+  const bookings = useSalonBookings('deposit_held', session.perms.appointments);
+
+  const branches = salon?.branches ?? [];
+  const onlyOpenBranch = branches.length <= 1;
+
+  /**
+   * What closing this branch would touch, derived the way the server derives it.
+   *
+   * `stranded` mirrors the API's `staffLeftWithNoBranch`: `array_remove` strips
+   * the id, and a member is stranded when that leaves the list empty — so
+   * exactly the branch-scoped staff whose only branch is this one.
+   * `branchAccess === 'all'` staff are untouched by the server's UPDATE (the
+   * `staff_user_branch_access_exclusive` CHECK keeps their id list empty), so
+   * they are filtered out here too rather than counted and then explained away.
+   */
+  function impactOf(branchId: string) {
+    const scoped = (staff.data?.items ?? []).filter(
+      (s) => s.branchAccess !== 'all' && s.branchAccess.includes(branchId),
+    );
+    const held = (bookings.data?.items ?? []).filter((b) => b.branchId === branchId);
+    return {
+      rescoped: scoped.map((s) => s.name),
+      stranded: scoped.filter((s) => s.branchAccess !== 'all' && s.branchAccess.length === 1),
+      deposits: held.length,
+      /*
+       * `branchAssumed` is on `MerchantBooking` precisely so a per-branch count
+       * that rests on a guess is distinguishable from one that does not. Ignoring
+       * it here would turn an inferred branch into a stated fact in a warning
+       * about money already taken from customers.
+       */
+      depositsAssumed: held.some((b) => b.branchAssumed),
+    };
+  }
+
   return (
     <Card className="settings__card">
       <h2 className="settings__title avo-display">Branches</h2>
@@ -288,48 +364,195 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         <Skeleton width="80%" height={16} />
       ) : (
         <ul className="settings__branches">
-          {salon.branches.map((branch) => (
-            <li key={branch.id} className="settings__branch">
-              <span className="settings__branch-dot" aria-hidden="true" />
-              <span className="settings__branch-name">{branch.name}</span>
-              <span className="settings__branch-id">{branch.id}</span>
-            </li>
-          ))}
+          {branches.map((branch) => {
+            const impact = impactOf(branch.id);
+            return (
+              <li key={branch.id} className="settings__branch">
+                <span className="settings__branch-dot" aria-hidden="true" />
+                <span className="settings__branch-name">{branch.name}</span>
+                <span className="settings__branch-id">{branch.id}</span>
+                {/*
+                  The ✕ pattern from Accounts: a control that cannot succeed says
+                  why BEFORE it is pressed. The server refuses the last open
+                  branch with `last_open_branch` — a salon with none cannot take a
+                  payment, a top-up or a booking.
+                */}
+                <button
+                  type="button"
+                  className="settings__branch-close"
+                  aria-label={`Close ${branch.name}`}
+                  title={
+                    onlyOpenBranch
+                      ? "This is the salon's only open branch. Open the new location first, then close this one."
+                      : `Close ${branch.name}`
+                  }
+                  disabled={onlyOpenBranch || closeBranch.isPending}
+                  onClick={() => {
+                    setClosed(null);
+                    setConfirming(branch.id);
+                  }}
+                >
+                  <span aria-hidden="true">✕</span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
 
+      {confirming !== null
+        ? (() => {
+            const branch = branches.find((b) => b.id === confirming);
+            if (!branch) return null;
+            const { rescoped, stranded, deposits, depositsAssumed } = impactOf(branch.id);
+            const busy = closeBranch.isPending;
+            return (
+              <div
+                className="settings__confirm"
+                role="group"
+                aria-label={`Close ${branch.name}?`}
+              >
+                <p className="settings__confirm-text">
+                  Close <b>{branch.name}</b>? It stops taking payments, top-ups and bookings.
+                  Past charges keep its name — it is closed, not deleted.
+                </p>
+
+                <ul className="settings__consequences">
+                  {session.perms.team ? (
+                    <>
+                      <li>
+                        {rescoped.length === 0
+                          ? 'No staff are scoped to this branch.'
+                          : rescoped.length === 1
+                            ? `${rescoped[0]} loses it from her branch access.`
+                            : `${rescoped.length} staff lose it from their branch access: ${rescoped.join(', ')}.`}
+                      </li>
+                      {stranded.length > 0 ? (
+                        /*
+                          `staffLeftWithNoBranch` is the one that needs her
+                          attention — a staff member scoped to branches with none
+                          left cannot work — so it gets its own line and the
+                          warning tone rather than being folded into the count.
+                        */
+                        <li className="settings__consequence--warn">
+                          <b>
+                            {stranded.map((s) => s.name).join(', ')} would be left with no branch
+                            at all
+                          </b>{' '}
+                          and cannot work until you give {stranded.length === 1 ? 'her' : 'them'}{' '}
+                          another one in Accounts → Team.
+                        </li>
+                      ) : null}
+                    </>
+                  ) : (
+                    // No `perms.team`, so no roster to count. Say what is unknown
+                    // rather than implying nothing is affected.
+                    <li>
+                      Staff scoped to this branch will lose it from their branch access. You
+                      don&rsquo;t have permission to see the team, so this can&rsquo;t be counted
+                      here.
+                    </li>
+                  )}
+
+                  {session.perms.appointments ? (
+                    deposits > 0 ? (
+                      <li className="settings__consequence--warn">
+                        <b>
+                          {deposits} appointment{deposits === 1 ? '' : 's'} here still hold
+                          {deposits === 1 ? 's' : ''} a customer&rsquo;s deposit
+                        </b>{' '}
+                        — that money is already taken and stays held against the booking.
+                        {depositsAssumed
+                          ? ' At least one of those bookings has an assumed branch, so treat the count as approximate.'
+                          : ''}
+                      </li>
+                    ) : (
+                      <li>No appointment here is holding a deposit.</li>
+                    )
+                  ) : (
+                    <li>
+                      Appointments here may still hold a customer&rsquo;s deposit. You don&rsquo;t
+                      have permission to see appointments, so this can&rsquo;t be counted here.
+                    </li>
+                  )}
+                </ul>
+
+                <div className="settings__confirm-actions">
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      closeBranch.mutate(
+                        { branchId: branch.id },
+                        {
+                          onSuccess: (result) => {
+                            setConfirming(null);
+                            setClosed(result);
+                          },
+                        },
+                      );
+                    }}
+                  >
+                    {busy ? 'Closing…' : `Close ${branch.name}`}
+                  </Button>
+                  <Button variant="quiet" disabled={busy} onClick={() => setConfirming(null)}>
+                    Keep it open
+                  </Button>
+                </div>
+              </div>
+            );
+          })()
+        : null}
+
       {/*
-        THIS COMMENT WAS WRONG, AND THE COPY BELOW REPEATED THE ERROR TO MERCHANTS.
-
-        It said "there is no POST/DELETE for one. A branch id is also referenced by
-        staff `branchAccess`, so removing one is a cascade the API has to own.
-        Reported to Lane A." All three routes exist and lane A owns the cascade:
-
-          POST   /salons/{id}/branches            requireDashboardPerm(req, 'loyalty')
-          PATCH  /salons/{id}/branches/{bid}      requireDashboardPerm(req, 'loyalty')
-          DELETE /salons/{id}/branches/{bid}      requireDashboardPerm(req, 'loyalty')
-
-        The DELETE even answers with the cascade this comment says the API has to
-        own — `staffRescoped`, `staffLeftWithNoBranch` and `depositHeldBookings`,
-        so a merchant can be told which staff were moved and who was left with no
-        branch at all.
-
-        This is the same failure as the "WHAT IS NOT BUILT" block in Accounts.tsx:
-        a consumer asserting what the API lacks, read later as the record of it,
-        and never re-checked. The difference is that this one reached the merchant
-        — "Ask AVO to change them" sends her to support for something she can do
-        herself.
-
-        The editor is still not built, and that is now honestly a LANE C backlog
-        item rather than an API gap. It is not built in this commit because the
-        cascade above needs real UI — a confirmation naming the staff about to be
-        rescoped is the whole point of those three response fields, and inventing
-        it inside a permissions audit is how a slice turns into two.
+        The server's OWN numbers, after the fact. Not a duplicate of the warning:
+        the warning is this client's estimate from two lists it may not be allowed
+        to read, and this is what the close actually touched, straight from the
+        UPDATE's RETURNING.
       */}
-      <div className="settings__notice" role="note">
-        Editing branches from the dashboard isn&rsquo;t built yet — staff branch access depends on
-        these IDs. Ask AVO to change them for now.
+      {closed !== null ? (
+        <div className="settings__closed" role="status">
+          <b>{closed.name} is closed.</b>{' '}
+          {closed.staffRescoped.length > 0
+            ? `Re-scoped ${closed.staffRescoped.join(', ')}. `
+            : 'No staff needed re-scoping. '}
+          {closed.staffLeftWithNoBranch.length > 0
+            ? `${closed.staffLeftWithNoBranch.join(', ')} now ${closed.staffLeftWithNoBranch.length === 1 ? 'has' : 'have'} no branch access — fix that in Accounts → Team. `
+            : ''}
+          {closed.depositHeldBookings > 0
+            ? `${closed.depositHeldBookings} appointment${closed.depositHeldBookings === 1 ? '' : 's'} still hold a deposit here.`
+            : ''}
+        </div>
+      ) : null}
+
+      <div className="settings__addbranch">
+        <TextField
+          label="New branch name"
+          labelHidden
+          placeholder="New branch name"
+          value={newName}
+          disabled={addBranch.isPending}
+          onChange={(event) => setNewName(event.target.value)}
+        />
+        <Button
+          disabled={addBranch.isPending || newName.trim() === ''}
+          onClick={() =>
+            addBranch.mutate(
+              { name: newName.trim() },
+              { onSuccess: () => setNewName('') },
+            )
+          }
+        >
+          {addBranch.isPending ? 'Adding…' : '+ Add branch'}
+        </Button>
       </div>
+
+      {addBranch.isError ? (
+        <WriteError error={addBranch.error} reassurance="No branch was added." />
+      ) : null}
+      {closeBranch.isError ? (
+        <WriteError error={closeBranch.error} reassurance="That branch is still open." />
+      ) : null}
     </Card>
   );
 }
