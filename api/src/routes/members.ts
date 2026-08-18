@@ -26,6 +26,7 @@ import {
 } from '../auth/principal';
 import { revokeOtherSessions } from '../auth/sessions';
 import { badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../http/errors';
+import { parseE164 } from '../http/fields';
 import { serialiseTransactionForCustomer } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -57,18 +58,6 @@ const PHONE_CHANGE_PER_HOUR = 3;
  */
 function mintNumericCode(): string {
   return String(randomInt(0, 10_000)).padStart(4, '0');
-}
-
-/** E.164, the shape `member_phone_is_e164` enforces. */
-function parseE164(value: unknown): string {
-  const raw = typeof value === 'string' ? value.trim().replace(/[\s-]/g, '') : '';
-  if (!/^\+[1-9][0-9]{6,14}$/.test(raw)) {
-    throw badRequest(
-      'invalid_phone',
-      'Enter the number with its country code, like +96599123456.',
-    );
-  }
-  return raw;
 }
 
 /**
