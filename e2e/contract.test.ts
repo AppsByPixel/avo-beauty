@@ -557,6 +557,37 @@ const UNMODELLED: Record<string, string> = {
 /** ProductSchema has no live sample: `api/src/db/seed.ts` seeds no products. */
 const PRODUCTS_ROUTE = 'GET /salons/:id/products';
 
+/**
+ * ROUTES LANE A HAS COMMITTED BUT WHICH HAVE NOT MERGED INTO THIS BRANCH YET.
+ *
+ * NOT AN EXEMPTION, and the difference is the spec at the bottom of the census:
+ * an entry here is green ONLY while the route is absent from disk. The hour it
+ * lands, that spec goes RED holding the instruction below. So a route cannot slip
+ * through in either state — unlisted and served fails the unclassified check,
+ * listed and served fails the arrival check.
+ *
+ * WHY THIS EXISTS AT ALL. Lane D is told to test integrated code, so its branch
+ * necessarily trails lane A's by a merge. Trunk relayed `GET /members/me/deletion`
+ * (feat/api 540b3f1) before it reached this checkout, and the census cannot be
+ * taught about a route in advance: `UNMODELLED` is checked in both directions, so
+ * an entry for a route that is not served yet fails the ghost spec — correctly,
+ * because that check is what stops UNMODELLED becoming a graveyard. The choice was
+ * to weaken the ghost check for everything or to write the pending arrival down
+ * where it is visible. This is the second.
+ */
+const AWAITING_MERGE: Record<string, string> = {
+  'GET /members/me/deletion':
+    'lane A, feat/api 540b3f1 — the deletion state as a READ, which the wallet needed to ' +
+    'render the pending banner without POSTing to find out. It calls the same ' +
+    '`serialiseDeletion` and the same `requireMember` as POST/DELETE, so the five keys are ' +
+    'already pinned below as DELETION_WIRE. WHEN IT ARRIVES, three things: (1) capture it in ' +
+    'beforeAll and add a WirePin for it reusing DELETION_WIRE, which also proves the read and ' +
+    'the two writes have not diverged; (2) add it to the `calls` array in account.test.ts so ' +
+    'it is refused for a dashboard session, a scanner PIN session and a forged bearer like the ' +
+    'other four; (3) delete this entry. The by-id tenancy spec in account.test.ts needs no ' +
+    'change — `me` is a literal path segment, so `/members/{someone-else}/deletion` still 404s.',
+};
+
 // ------------------------------------------------------------------- the run --
 
 beforeAll(async () => {
@@ -938,7 +969,12 @@ describe('census — every GET the API registers is either probed or explicitly 
       .map((r) => ({ route: `GET ${r.path}`, file: r.file }))
       .filter(
         (r) =>
-          !probed.has(r.route) && !unmodelled.has(r.route) && r.route !== PRODUCTS_ROUTE,
+          !probed.has(r.route) &&
+          !unmodelled.has(r.route) &&
+          // Pending arrivals are classified for THIS check and fail their own,
+          // below, the moment they land. Never both green.
+          !(r.route in AWAITING_MERGE) &&
+          r.route !== PRODUCTS_ROUTE,
       )
       .map((r) => `${r.route}   (${r.file})`);
 
@@ -948,6 +984,24 @@ describe('census — every GET the API registers is either probed or explicitly 
         'to its schema in packages/types, or add it to UNMODELLED with the reason it has no ' +
         'schema. Silence is the failure mode this census exists to remove:\n  ' +
         unclassified.join('\n  '),
+    ).toEqual([]);
+  });
+
+  /**
+   * THE ARRIVAL CHECK. The other half of `AWAITING_MERGE`, and the reason that map
+   * is a note rather than a hole: a pending route is tolerated by the unclassified
+   * check above only for as long as it is genuinely absent.
+   */
+  it('nothing in AWAITING_MERGE has landed yet — the hour one does, classify it properly', () => {
+    const served = new Set(discovered.map((r) => `GET ${r.path}`));
+    const arrived = Object.keys(AWAITING_MERGE).filter((r) => served.has(r));
+
+    expect(
+      arrived,
+      'A route this file was told to expect is now SERVED, so it must stop being a note and ' +
+        'become a classification. Do what its entry says, then delete the entry:\n\n' +
+        arrived.map((r) => `  ${r}\n    ${AWAITING_MERGE[r]}`).join('\n\n') +
+        '\n',
     ).toEqual([]);
   });
 
