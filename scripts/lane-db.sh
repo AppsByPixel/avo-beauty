@@ -16,11 +16,16 @@
 # DDL, no CREATE DATABASE, nothing to block.
 #
 #   ./scripts/lane-db.sh a        -> avo_lane_a
-#   ./scripts/lane-db.sh qa       -> avo_lane_qa
+#   ./scripts/lane-db.sh d        -> avo_lane_d     (lane D / QA)
 #
 set -euo pipefail
 
-LANE="${1:?usage: lane-db.sh <a|b|c|d|qa|ci>}"
+# `d`, not `qa`. The databases trunk created are avo_lane_{a,b,c,d} and avo_ci —
+# there is no avo_lane_qa, and lane D following a `qa` example would land in the
+# "does not exist, ask trunk" branch below. Accepted as an alias rather than a
+# failure, because the lane is called QA everywhere else in LANES.md.
+LANE="${1:?usage: lane-db.sh <a|b|c|d|ci>}"
+[ "$LANE" = "qa" ] && LANE="d"
 DB="avo_lane_${LANE}"
 [ "$LANE" = "ci" ] && DB="avo_ci"
 
@@ -45,9 +50,22 @@ docker exec -i "$CONTAINER" psql -U avo -d "$DB" -q \
 export DATABASE_URL="postgres://avo:avo_dev_password@localhost:${HOST_PORT}/${DB}"
 export APP_DATABASE_URL="postgres://avo_app:avo_app_dev_password@localhost:${HOST_PORT}/${DB}"
 
-pnpm build >/dev/null 2>&1          # seed.ts imports @avo/types from dist
-pnpm --filter @avo/api run db:migrate
-pnpm --filter @avo/api run db:seed
+# `--dir` with an absolute path derived from THIS script's location, never
+# `--filter`, and never a path relative to cwd.
+#
+# `pnpm --filter @avo/api` is the hazard this whole rule exists to stop: run from
+# a lane worktree it once resolved to a DIFFERENT worktree's package — Lane A
+# watched `--filter @avo/api run start` boot `~/dev/avo-wallet/api` against
+# `avo_lane_b`, with entirely normal-looking output. Here it would be worse than
+# a wasted run: the URLs above are already exported, so another worktree's
+# migrations and seed would be applied to THIS lane's database. Lane D rewrote 21
+# error strings away from `--filter` for the same reason; this script was still
+# using it.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+pnpm --dir "$ROOT" build >/dev/null 2>&1     # seed.ts imports @avo/types from dist
+pnpm --dir "$ROOT/api" run db:migrate
+pnpm --dir "$ROOT/api" run db:seed
 
 echo
 echo "  $DB ready. Export these for anything you run against it:"
