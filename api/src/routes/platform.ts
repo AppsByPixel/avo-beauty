@@ -547,13 +547,26 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
    * one and support has to be able to read what she actually agreed to. Without
    * it the stamp is a number nobody can turn back into a document.
    *
-   * Readable by any authenticated principal: staff need the same text to answer
-   * a question about it, and none of it is tenant-specific — the set is
-   * platform-wide, which is why it hangs off `/v1/platform` and not off a salon.
+   * UNAUTHENTICATED, AND THAT WAS A BUG UNTIL SIGNUP EXISTED.
+   *
+   * This route required a principal, which is defensible right up to the moment
+   * something has to render these documents BEFORE there is a session — and that
+   * moment is the signup screen. #10's first sentence is "the customer app holds
+   * no legal copy", and the design's Create account screen links each
+   * `consent: true` document so she can read it before ticking the box
+   * (design/README.md:113). With a 401 here, a client could only satisfy both by
+   * bundling the text, which is precisely what #10 forbids, or by showing her a
+   * consent checkbox above three dead links.
+   *
+   * Nothing is disclosed by opening it. The set is platform-wide with no
+   * tenant-specific field in it — which is why it hangs off `/v1/platform` rather
+   * than a salon — it is PUBLISHED rather than draft, and it is the text a
+   * customer is legally held to. Published terms being publicly readable is the
+   * normal state of affairs for terms.
+   *
+   * Staff and members still read it here; they simply no longer have to.
    */
   app.get('/v1/platform/policies', async (req, reply) => {
-    requirePrincipal(req);
-
     const raw = (req.query as Record<string, unknown> | undefined)?.version;
     let wanted: number | null = null;
     if (raw !== undefined && raw !== '') {
