@@ -64,6 +64,7 @@ import {
   A_STAFF_FULL,
   SALON_A,
   SALON_B,
+  apiLogTail,
   pgDb,
   psql,
   runApiDbScriptAsync,
@@ -886,7 +887,25 @@ describe('the charge is ONE transaction: if the debit fails, the deposit is unto
     // intact and is applied to the retry.
     psql(`UPDATE member SET balance_fils = ${MEMBER_OPENING_FILS} WHERE id = '${MEMBER}';`);
     const retry = await chargeFor([BLOW_DRY]);
-    expect(retry.status, retry.raw).toBe(200);
+    /**
+     * THE API's OWN LOG IS ATTACHED ON A 5xx, AND IT IS ATTACHED BECAUSE THIS SPEC
+     * FAILED ONCE WITHOUT IT.
+     *
+     * A full-suite run answered `500 {"error":"server_error"}` here, and the spec
+     * ran green in isolation on the same tree — so the cause is state or timing left
+     * by an earlier file, and the one thing that would have identified it, the
+     * server's stack, was four lines away in `apiOutput` and unreachable by any
+     * spec. `api/` was byte-identical to the previous green run, so this is not a
+     * regression in the handler; it is an intermittent this suite could not describe.
+     *
+     * Recorded rather than retried into silence: a re-run that goes green does not
+     * explain a 500 in a money path, and "it passed the second time" is the report
+     * this suite exists not to make.
+     */
+    expect(
+      retry.status,
+      `${retry.raw}${retry.status >= 500 ? `\n--- API log ---\n${apiLogTail()}` : ''}`,
+    ).toBe(200);
     expect(
       retry.body.depositAppliedFils,
       'the deposit was not applied to the retry, so the refused charge lost it after all',
