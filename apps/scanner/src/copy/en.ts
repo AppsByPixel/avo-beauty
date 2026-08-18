@@ -233,6 +233,18 @@ export const copy = {
   charged: (amount: string) => `Charged ${amount}`,
   /** :384 */
   newBalance: 'New balance',
+  /**
+   * The remainder of a deposit that was bigger than the basket.
+   *
+   * LIFTED, NOT INVENTED, and from the wallet rather than from this design file —
+   * the scanner's own result panel has no such row to copy. `Deposit returned` is
+   * the bundle's own wording for this exact fact at
+   * `AVO Wallet Home.dc.html:1569`, and it is what the customer's activity feed
+   * and receipt already say (`txKind.deposit_return`, both languages). One fact,
+   * one phrase, so the artist reading it at the counter and the customer reading
+   * it on her phone are looking at the same words.
+   */
+  depositReturned: 'Deposit returned',
   /** :385 */
   loyalty: 'Loyalty',
   /** :610-612 — the two loyalty sentences */

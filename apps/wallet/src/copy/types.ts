@@ -132,13 +132,21 @@ export interface Copy {
    * two words, which is how one language ends up saying something the other does
    * not.
    *
-   * There is no `signInForgot` and no `signInCreateAccount`, and their absence is
-   * a decision rather than an oversight. The design offers both links (:104, :107)
-   * and the API can serve neither: there is no member password-reset endpoint —
-   * `/auth/staff/password-reset` is staff-only — and no registration endpoint at
-   * all. A link that does nothing when a customer cannot get into her wallet is
-   * worse than no link, so they are omitted and reported.
+   * There is still no `signInForgot`, and its absence is a decision rather than an
+   * oversight: the design offers the link (:104) and there is no member
+   * password-reset endpoint — `/auth/staff/password-reset` is staff-only. A link
+   * that does nothing when a customer cannot get into her wallet is worse than no
+   * link, so it is omitted and reported.
+   *
+   * THE OTHER HALF OF THAT PARAGRAPH IS NOW BUILT. It used to read "and no
+   * `signInCreateAccount` … there is no registration endpoint at all".
+   * `POST /auth/member/signup` landed, so design:107's "New here? · Create
+   * account" is a real destination and the two strings below are the design's own,
+   * in both languages.
    */
+  signInNoAccount: string;
+  signInCreateOne: string;
+  /**
   /**
    * The salon's name and the word "Wallet", above the sign-in form (design:86).
    *
@@ -157,6 +165,91 @@ export interface Copy {
   signInWorking: string;
   signInErrEmpty: string;
   signInOffline: string;
+
+  /**
+   * Signup — `design/AVO Wallet Home.dc.html:110-152`, and non-negotiable #10's
+   * only moment.
+   *
+   * THE FIELD LABELS ARE NOT HERE, for the same reason sign-in's are not: `rowName`,
+   * `rowPhone` and `rowPassword` are already lifted verbatim from the profile rows
+   * in both languages.
+   *
+   * TWO OF THE DESIGN'S FOUR FIELDS ARE NOT BUILT, and the difference is settled
+   * rather than mine: there is no `signUpUsername`, because there is no member
+   * username in this system (DECISIONS.md § "Wallet sign-in identity"), and the
+   * name is REQUIRED rather than `optional`, because removing the username leaves
+   * it the only human label on the record. So the design's `optional` string is
+   * deliberately unused, and `t.username` has no key at all.
+   *
+   * THE REFUSALS ARE THE BULK OF THIS BLOCK, AND THEY ARE ALL NEW STRINGS. The
+   * design's signup prototype cannot fail: it has no server, so it has `errConsent`,
+   * `errMismatch` and `errShort` and nothing else. `POST /auth/member/signup` has
+   * ten distinct refusals, each of which is a different sentence to a customer —
+   * "you already have an account" and "the terms changed while you were reading" are
+   * not one "something went wrong". Every one whose Arabic the bundle does not carry
+   * is in AR_GAPS rather than machine-translated. See `signupRefusal()` in
+   * `api/signup.ts` for the code → key mapping and the test that keeps it total.
+   */
+  signUpTitle: string;
+  signUpSub: string;
+  signUpAction: string;
+  signUpWorking: string;
+  /** The password field's placeholder — design:127 reuses `passHint`. */
+  signUpPassHint: string;
+  signUpConfirmPass: string;
+  /** design:1210 — the REQUIRED box. Blocks account creation until ticked. */
+  signUpConsentTerms: string;
+  /**
+   * design:1211 — the SEPARATE box, and it is the SERVICE channel, not marketing.
+   *
+   * Word for word `nWaSub` ("Receipts and appointment confirmations") wrapped in a
+   * sentence. Marketing is `nOffersSub`, "off by default", and it has no signup
+   * entry point at all — so ticking this writes `notify_wa` and nothing else.
+   * DECISIONS.md § "Member signup" has the reasoning; it is repeated here because
+   * this is the string somebody would reach for if they wanted an offers opt-in.
+   */
+  signUpConsentWa: string;
+  signUpHaveAccount: string;
+  signUpLogIn: string;
+
+  /** Caught before the request, so a blank submit is not a round trip. */
+  signUpErrEmpty: string;
+  /** design:1212 — the required box, untucked. */
+  signUpErrConsent: string;
+  /** design:1256 — the two passwords disagree. Never sent. */
+  signUpErrMismatch: string;
+  /** design:1256, and also the server's `password_too_short`. */
+  signUpErrShort: string;
+  /** 409 `already_registered` — she belongs on Log in, and the screen says so. */
+  signUpErrRegistered: string;
+  /** 409 `policy_version_stale` — a publish landed while she was reading. */
+  signUpErrTermsChanged: string;
+  /** 409 `policy_version_required` — we cannot prove which terms she saw. */
+  signUpErrTermsReload: string;
+  /** 400 `invalid_phone`. */
+  signUpErrPhone: string;
+  /** 400 `unknown_salon` — this build points at a salon the API does not have. */
+  signUpErrSalon: string;
+  /** 503 `policies_not_published` — there are no terms to accept. */
+  signUpErrTermsMissing: string;
+  /** 429 `signup_rate_limited` — the five-minute window. */
+  signUpErrBusy: string;
+  /** 429 `signup_hourly_limit` — the ceiling, which she cannot wait out. */
+  signUpErrTooMany: string;
+  /** Anything else, including the two refusals that can only be a client bug. */
+  signUpErrFailed: string;
+  /** Its own sentence: `signInOffline` promises a log-in she is not attempting. */
+  signUpOffline: string;
+  /**
+   * The terms could not be loaded, so there is nothing to accept.
+   *
+   * NON-NEGOTIABLE #10 IS WHY THIS STATE EXISTS AT ALL. "The customer app holds no
+   * legal copy" means there is no bundled set to fall back to, so a failed
+   * `GET /v1/platform/policies` is not a cosmetic gap — the screen cannot honestly
+   * offer a consent checkbox. It shows this and `tryAgain`, and no form.
+   */
+  signUpTermsFailedTitle: string;
+  signUpTermsFailedBody: string;
 
   // failure — "we failed", so it retries
   errorTitle: string;

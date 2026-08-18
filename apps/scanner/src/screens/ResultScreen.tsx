@@ -2,8 +2,13 @@
  * The charge result — design:377-394.
  *
  * Every number on this screen comes off the charge response: the amount, the
- * new balance, the loyalty outcome. Nothing is recomputed from what the screen
- * before it believed (non-negotiable #2).
+ * new balance, the returned deposit, the loyalty outcome. Nothing is recomputed
+ * from what the screen before it believed (non-negotiable #2).
+ *
+ * THE RETURNED DEPOSIT IS THE ONE ROW THAT IS NOT IN THE DESIGN, and it is here
+ * because the design's result panel cannot explain a balance that went UP during
+ * a charge. See the comment on the row itself and DECISIONS.md § "Five calls made
+ * without asking", call 4.
  *
  * MOTION, per interaction-spec.md §3:
  *   - the success mark uses `avopop` (400ms, ease-out). Under reduced motion it
@@ -54,7 +59,49 @@ export function ResultScreen({
       </Text>
 
       <View style={styles.panel}>
-        <View style={styles.panelRow}>
+        {/*
+          THE RETURNED DEPOSIT — DECISIONS.md § "Five calls made without asking",
+          call 4.
+
+          A 5.000 hold meeting a 3.000 basket is capped at the basket, and the
+          remaining 2.000 goes back to her wallet as its own `deposit_return`
+          transaction (non-negotiable #5 — it never became salon revenue). So the
+          New balance below is 2.000 HIGHER than it was a moment ago, on a screen
+          whose headline has just said "Charged". Without this row the artist
+          watching the balance rise has nothing to tell her, and the only number
+          the counter can see contradicts the only word above it.
+
+          THE SERVER'S FIGURE, never `held − basket` computed here: non-negotiable
+          #2 owns the difference as well as the balance, and `charge.ts` says the
+          same thing from its end — "she held 5.000, spent 3.000, and 2.000 came
+          back — three figures, and she is entitled to see all three."
+
+          Rendered only when there IS a remainder. `depositReturnedFils` is 0 on
+          every ordinary charge, and a "Deposit returned 0.000" row would be noise
+          on almost every visit — 0 means "no remainder", which is exactly why the
+          API sends it as 0-not-absent rather than omitting it.
+
+          `depositAppliedFils` is deliberately NOT duplicated here: MemberScreen
+          already showed it before the charge as the design's own "Deposit applied"
+          total (design:369). The RETURN is the half no staff screen has ever shown.
+        */}
+        {result.depositReturnedFils > 0 ? (
+          <View style={styles.panelRow} testID="result-deposit-returned">
+            <Text style={[ui(13.5), styles.rowLabel]}>{copy.depositReturned}</Text>
+            <Money
+              amount={fils(result.depositReturnedFils)}
+              figureStyle={display(13.5, '600')}
+              unitStyle={[ui(13.5), styles.rowLabel]}
+            />
+          </View>
+        ) : null}
+
+        {/*
+          The divider follows the row above rather than being fixed to this one:
+          with no returned deposit this is the panel's FIRST row, and design:378's
+          panel does not open with a rule.
+        */}
+        <View style={[styles.panelRow, result.depositReturnedFils > 0 && styles.divided]}>
           <Text style={[ui(13.5), styles.rowLabel]}>{copy.newBalance}</Text>
           <Money
             amount={fils(result.balanceAfterFils)}

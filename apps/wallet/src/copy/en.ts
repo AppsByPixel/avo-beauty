@@ -183,6 +183,58 @@ export const en: Copy = {
    * dead connection must not read the same (interaction-spec §4).
    */
   signInOffline: 'No connection. You need one to log in.',
+  // design:1249 — the link into signup, now that there is somewhere to go.
+  signInNoAccount: 'New here?',
+  signInCreateOne: 'Create account',
+
+  // signup — design:1250, :1251, :1210-1212, :1247-1248, :1256
+  signUpTitle: 'Create your account',
+  signUpSub: 'Your Amara wallet — valid at every Amara branch',
+  signUpAction: 'Create account',
+  /** INVENTED — the design's button carries no busy label, same as `signInWorking`. */
+  signUpWorking: 'Creating your account…',
+  signUpPassHint: 'At least 6 characters',
+  signUpConfirmPass: 'Confirm password',
+  signUpConsentTerms: 'I agree to the Wallet terms, the refund policy and the privacy notice.',
+  signUpConsentWa: 'Send me receipts and appointment confirmations on WhatsApp.',
+  signUpHaveAccount: 'Already have an account?',
+  signUpLogIn: 'Log in',
+
+  /**
+   * INVENTED, and it replaces a string the design does have — the same trade
+   * `signInErrEmpty` makes. `errEmpty` at :1256 reads "Enter your username and
+   * password." and names a field that does not exist here; the name is also
+   * required in this build where the design marked it optional, so the sentence
+   * had to change on both counts.
+   */
+  signUpErrEmpty: 'Enter your name, phone number and password.',
+  signUpErrConsent: 'Please accept the wallet terms to continue.',
+  signUpErrMismatch: "Passwords don't match.",
+  signUpErrShort: 'Use at least 6 characters.',
+  /**
+   * INVENTED. The server's own sentence adds "or contact support", which is right
+   * advice for somebody who does not recognise the number but not for the ordinary
+   * case — she has an account and this screen puts Log in one tap away, so it
+   * points there instead.
+   */
+  signUpErrRegistered: 'You already have an account with that number.',
+  /**
+   * INVENTED, and this is the string the whole `policy_version_stale` design exists
+   * for: it has to read as "the terms changed, here they are again" rather than as
+   * a failure, because nothing went wrong and she has only to re-read.
+   */
+  signUpErrTermsChanged: 'The terms have been updated. Please read them and accept again.',
+  signUpErrTermsReload: "We couldn't confirm which terms you were shown. Here they are again.",
+  /** INVENTED. The example is the shape `parseE164` accepts. */
+  signUpErrPhone: 'Enter your number with its country code, like +96599123456.',
+  signUpErrSalon: 'This app is not set up for a salon yet.',
+  signUpErrTermsMissing: "The wallet terms aren't published yet, so accounts can't be created.",
+  signUpErrBusy: 'Too many attempts. Wait a moment and try again.',
+  signUpErrTooMany: 'Too many accounts have been created from this connection. Try again later.',
+  signUpErrFailed: "We couldn't create your account. This is on our side.",
+  signUpOffline: 'No connection. You need one to create an account.',
+  signUpTermsFailedTitle: "We couldn't load the terms",
+  signUpTermsFailedBody: 'You need to read them before creating an account.',
 
   // failure — "we failed", so it retries
   errorTitle: "We couldn't load your wallet",

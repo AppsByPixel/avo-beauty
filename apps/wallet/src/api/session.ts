@@ -31,21 +31,29 @@
  *                 five times a day on a counter is worse for her than a stored
  *                 token.
  *
- * AND THE PART THAT IS NOT SECURE, STATED PLAINLY RATHER THAN IMPLIED.
- * `AsyncStorage` is `localStorage` on this app's web target and an unencrypted
- * file on native. It is NOT a secret store. `expo-secure-store` would be the
- * right home for the refresh token, and it is not used here for two reasons worth
- * writing down rather than discovering later: it is not a dependency of this app,
- * and it does not work on web, which is the target this wallet actually builds
- * for (`expo export --platform web`). So the refresh token is recoverable from an
- * unlocked handset.
+ * WHERE THE REFRESH TOKEN IS PERSISTED — AND IT IS NO LONGER `AsyncStorage`.
  *
- * That is the threat model trunk named — an unlocked phone on a salon counter —
- * and the mitigation that IS available is server-side and is used: `signOut()`
- * calls `POST /auth/sign-out`, which revokes the session rather than only
- * forgetting it locally, so a token lifted from a handset stops working the
- * moment she signs out. REPORTED, not solved: a genuinely secret store on native
- * needs a dependency decision that belongs to trunk.
+ * This module used to call `AsyncStorage` directly, and said so plainly: "it is
+ * NOT a secret store … the refresh token is recoverable from an unlocked
+ * handset." It now goes through `./secureStore`, which Metro resolves per target:
+ *
+ *   native   `secureStore.native.ts` — `expo-secure-store`, i.e. Keychain on iOS
+ *            and Keystore-backed storage on Android, WITH a one-time migration
+ *            that moves a legacy plaintext token in and deletes the old copy.
+ *   web      `secureStore.ts` — still `AsyncStorage`, i.e. `localStorage`.
+ *
+ * SO THE HANDSET IS FIXED AND THE BROWSER IS NOT, deliberately.
+ * `expo-secure-store` has no web implementation, and the web target is development
+ * and demo rather than a customer surface (DECISIONS.md § "Five calls made without
+ * asking", call 5). That is stated here as well as there, because this is the file
+ * somebody reads when they want to know where the token is.
+ *
+ * A SECRET STORE IS NOT A SESSION POLICY, and the rest of the mitigation is
+ * unchanged and still load-bearing: the access token is memory-only so a cold
+ * start must refresh, and `signOut()` calls `POST /auth/sign-out` to revoke
+ * server-side BEFORE forgetting anything locally — which is what actually kills a
+ * token somebody has already lifted. An offline sign-out cannot revoke, so that
+ * session stays alive until it expires. This change does not close that gap.
  *
  * REFRESH TOKENS ROTATE, which shapes everything below. `POST /auth/refresh`
  * calls `rotateSession` and returns a NEW refresh token; the old one is dead, and
@@ -56,7 +64,7 @@
  *     a dead token, so there is exactly one in flight at a time (see client.ts).
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { deleteSecret, readSecret, writeSecret } from './secureStore';
 
 /**
  * Versioned, and namespaced like the app's other two keys (`SNAPSHOT_KEY`,
@@ -124,7 +132,7 @@ export async function setSession(next: {
     salonId: next.salonId,
     memberId: next.memberId,
   };
-  await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(stored));
+  await writeSecret(SESSION_KEY, JSON.stringify(stored));
 }
 
 /** A refresh rotated the pair; the access token is new and so is the refresh. */
@@ -134,12 +142,12 @@ export async function rotated(next: {
 }): Promise<void> {
   accessToken = next.accessToken;
   refreshToken = next.refreshToken;
-  const raw = await AsyncStorage.getItem(SESSION_KEY);
+  const raw = await readSecret(SESSION_KEY);
   if (raw === null) return;
   try {
     const prev = JSON.parse(raw) as StoredSession;
     const stored: StoredSession = { ...prev, refreshToken: next.refreshToken };
-    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(stored));
+    await writeSecret(SESSION_KEY, JSON.stringify(stored));
   } catch {
     /* a corrupt stored value is cleared by `restore`, not patched here */
   }
@@ -153,12 +161,13 @@ export async function rotated(next: {
  * sees a sign-in screen with no explanation for why her session vanished.
  */
 export async function restore(): Promise<StoredSession | null> {
-  let raw: string | null;
-  try {
-    raw = await AsyncStorage.getItem(SESSION_KEY);
-  } catch {
-    return null;
-  }
+  /*
+    `readSecret` never throws and, on native, is also where a legacy plaintext
+    token gets moved into the Keychain and deleted — see secureStore.native.ts.
+    The try/catch that used to wrap this is gone because the storage module owns
+    it now; keeping both would suggest the boundary throws when it does not.
+  */
+  const raw = await readSecret(SESSION_KEY);
   if (raw === null) return null;
 
   try {
@@ -169,7 +178,7 @@ export async function restore(): Promise<StoredSession | null> {
       typeof parsed.memberId !== 'string' ||
       parsed.refreshToken === ''
     ) {
-      await AsyncStorage.removeItem(SESSION_KEY);
+      await deleteSecret(SESSION_KEY);
       return null;
     }
     refreshToken = parsed.refreshToken;
@@ -183,7 +192,7 @@ export async function restore(): Promise<StoredSession | null> {
       memberId: parsed.memberId,
     };
   } catch {
-    await AsyncStorage.removeItem(SESSION_KEY);
+    await deleteSecret(SESSION_KEY);
     return null;
   }
 }
@@ -199,11 +208,12 @@ export async function restore(): Promise<StoredSession | null> {
 export async function clearSession(notify = true): Promise<void> {
   accessToken = null;
   refreshToken = null;
-  try {
-    await AsyncStorage.removeItem(SESSION_KEY);
-  } catch {
-    /* nothing useful to do; the in-memory tokens are already gone */
-  }
+  /*
+    On native this clears BOTH stores. A device whose migration never completed
+    still holds a plaintext token, and "sign me out of this phone" has to remove
+    it — see secureStore.native.ts § deleteSecret.
+  */
+  await deleteSecret(SESSION_KEY);
   if (notify) onEnded?.();
 }
 
