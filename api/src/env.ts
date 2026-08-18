@@ -329,6 +329,49 @@ if (raw.NODE_ENV === 'production' && !raw.JWT_SECRET) {
   throw new Error('JWT_SECRET is required in production.');
 }
 
+/**
+ * TRUST_PROXY IS REQUIRED IN PRODUCTION — DECISIONS.md § "Five calls made without
+ * asking", item 1, decided and until now not implemented.
+ *
+ * "`req.ip` became a security control when the signup limiter shipped, and both
+ * silent defaults are wrong: unset puts every caller behind a proxy in one bucket,
+ * `true` lets any client forge its own. So the API refuses to boot in production
+ * with it unset, naming the variable."
+ *
+ * WHY THIS MATTERED MORE AFTER THIS SLICE THAN BEFORE IT. `req.ip` was already the
+ * key for the signup limiter's CPU bound. It is now also what bounds the
+ * ENUMERATION ORACLE: `recordSignupAttempt` moved above the duplicate-phone refusal
+ * in this branch, so "an attacker walks roughly 100 numbers an hour per address" is
+ * a true statement about a real control — and it is true only if the address is
+ * real. Behind an untrusted proxy every caller shares one bucket, so twenty probes
+ * from anybody lock out signup for everybody; behind a blindly trusted one every
+ * caller forges a fresh bucket per request and the bound is nil. The second is a
+ * bypass and the first is a denial of service, and neither announces itself.
+ *
+ * A DEPLOYMENT THAT CANNOT SAY WHAT ITS PROXY IS HAS NOT BEEN CONFIGURED. Finding
+ * that out at boot beats finding it out from a rate limiter that never fires, or
+ * from one that fires at everybody.
+ *
+ * `TRUST_PROXY=false` IS AN ACCEPTABLE ANSWER and is not the same as unset. It says
+ * "there is no proxy, the socket address is the client" — true for a container
+ * talking straight to the internet — and it is a claim somebody made rather than a
+ * default nobody chose. Refusing it too would force a lie on the deployments where
+ * it is correct.
+ *
+ * Development keeps defaulting to off, which is the safer wrong when there is no
+ * proxy anyway and no attacker.
+ */
+if (raw.NODE_ENV === 'production' && (raw.TRUST_PROXY === undefined || raw.TRUST_PROXY === '')) {
+  throw new Error(
+    'TRUST_PROXY is required in production. `req.ip` is a security control — it keys ' +
+      'the signup limiter, which bounds both an argon2 denial of service and the ' +
+      'enumeration oracle on POST /auth/member/signup. Unset puts every caller in one ' +
+      'bucket; `true` lets any client forge its own by sending X-Forwarded-For. Set it ' +
+      'to the number of proxies in front of this process, their addresses, or `false` if ' +
+      'there is genuinely no proxy. See DECISIONS.md and go-live-checklist.md.',
+  );
+}
+
 if (raw.NODE_ENV === 'production' && raw.GATEWAY_DRIVER === 'sandbox') {
   throw new Error(
     'GATEWAY_DRIVER=sandbox settles payments nobody paid for. Select a real ' +
@@ -406,11 +449,31 @@ export const env = {
   signupAttemptsPerHour: raw.SIGNUP_ATTEMPTS_PER_HOUR,
   /**
    * Fastify's own shapes: `true` for "one hop", a number for N hops, or an
-   * address / CIDR / comma-separated list. A bare `true` is passed as a boolean
+   * address / CIDR / comma-separated list. `'true'` is converted to a BOOLEAN
    * because Fastify treats the STRING 'true' as an address to match.
+   *
+   * `'false'` NEEDED THE SAME TREATMENT AND DID NOT HAVE IT, and it was found by
+   * exercising the guard above rather than by reading this expression.
+   *
+   * `'false'` fell through every branch to the final one and reached Fastify as
+   * the STRING "false" — which `proxy-addr` reads as a subnet list containing one
+   * entry called "false". That happens to behave like `false`, because nothing
+   * matches it, so the symptom was nil and the meaning was wrong: the deployment
+   * asked for "there is no proxy" and got "trust this malformed subnet".
+   *
+   * It matters now in a way it did not before, because the production assertion
+   * above TELLS an operator to set `TRUST_PROXY=false` when there is genuinely no
+   * proxy. A guard that directs people to a value the parser mangles is worse than
+   * no guard: it manufactures the misconfiguration it exists to prevent, and it
+   * does it with a documented instruction.
+   *
+   * The accidental behaviour and the intended one coincide TODAY. They would stop
+   * coinciding the moment `proxy-addr` decided an unparseable entry was an error
+   * rather than a non-match — and then "no proxy" would start throwing at boot in
+   * exactly the deployments that had configured it correctly.
    */
   trustProxy:
-    raw.TRUST_PROXY === undefined || raw.TRUST_PROXY === ''
+    raw.TRUST_PROXY === undefined || raw.TRUST_PROXY === '' || raw.TRUST_PROXY === 'false'
       ? false
       : raw.TRUST_PROXY === 'true'
         ? true
