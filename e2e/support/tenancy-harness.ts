@@ -369,6 +369,18 @@ export const RECEIPT_POLL_MS = 250;
 export const RECEIPT_WORKER_ENABLED = (process.env.RECEIPT_WORKER_ENABLED ?? '1') === '1';
 
 /**
+ * The attempt budget the API under test runs with, PINNED HERE rather than left to
+ * `env.ts`'s default of 6.
+ *
+ * A spec about the dead letter has to park a row AT the budget, so it has to know
+ * what the budget is. Reading it from lane A's default would make the literal a
+ * restatement of the implementation — and a spec that computes its own fixture from
+ * the value it is testing against passes whatever that value becomes, including
+ * zero. Three is also cheaper to drive than six.
+ */
+export const RECEIPT_MAX_ATTEMPTS = 3;
+
+/**
  * `x-avo-signature: t=<unix seconds>,v1=<hex hmac>`.
  *
  * Computed here from the documented construction — HMAC-SHA256 over
@@ -1012,12 +1024,55 @@ export function sweepStaleRunDatabases(maxAgeSeconds = 2 * 60 * 60): string[] {
  * Refuses when `POSTGRES_DB` named the database: that is somebody's long-lived
  * environment and dropping it would be a considerably worse bug than the one this
  * file exists to fix.
+ *
+ * AND IT REFUSES ANY NAME THIS FILE DID NOT MINT, which `ownsItsDatabase()` alone
+ * does not cover. That check reads `POSTGRES_DB` and nothing else, so an
+ * externally supplied `AVO_QA_DB` used to satisfy it: `global-setup.ts` skips
+ * minting when it sees that variable — the run therefore does NOT own the
+ * database — and teardown would nonetheless call `DROP DATABASE … WITH (FORCE)`
+ * on whatever it named.
+ *
+ *     AVO_QA_DB=avo_lane_d ../node_modules/.bin/vitest run
+ *
+ * is a plausible thing for a lane to type — LANES.md points at `lane-db.sh d` for
+ * ad-hoc driving and tells you to keep `POSTGRES_DB` unset, which is precisely the
+ * combination — and it would have destroyed a trunk-owned database at teardown,
+ * silently, because `dropDatabase` swallows its own errors.
+ *
+ * `sweepStaleRunDatabases` has carried the equivalent guard since it was written
+ * ("only names carrying `RUN_DB_PREFIX` are considered"). This is the same rule on
+ * the other drop path, which did not have it.
  */
 export function dropRunDatabase(): string | undefined {
   if (!ownsItsDatabase()) return undefined;
   const db = pgDb();
+  if (!isOwnRunDatabaseName(db)) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[lane D] not dropping "${db}": it does not carry ${RUN_DB_PREFIX}, so this run did not ` +
+        'mint it. Set AVO_QA_DB only to a database you are willing to lose, or leave it unset.',
+    );
+    return undefined;
+  }
   dropDatabase(db);
   return db;
+}
+
+/**
+ * Is this a name `newRunDatabaseName()` produced? The prefix is the proof of
+ * authorship: nothing else in this repository emits it, so a name without it came
+ * from somewhere else and is not ours to drop.
+ *
+ * EXPORTED SO IT CAN BE TESTED, and that is not incidental. `pgDb()` caches
+ * `resolvedDb` on its first call, deliberately — see its own comment — so a spec
+ * cannot exercise `dropRunDatabase()` twice with two different names in one
+ * worker: the second `AVO_QA_DB` is never read. The decision therefore has to be
+ * reachable on its own, or the accept half of it is untestable and only the refuse
+ * half ever gets a spec. That asymmetry is exactly how a guard ends up broken shut
+ * with a green suite behind it.
+ */
+export function isOwnRunDatabaseName(database: string): boolean {
+  return database.startsWith(RUN_DB_PREFIX);
 }
 
 // ----------------------------------------------------------------- preflight --
@@ -1554,6 +1609,8 @@ export async function startTenancyApi(): Promise<void> {
       RECEIPT_WORKER_ENABLED: process.env.RECEIPT_WORKER_ENABLED ?? '1',
       // Fast enough that a spec can wait for a send without a long timeout.
       RECEIPT_POLL_MS: String(RECEIPT_POLL_MS),
+      // Pinned, not defaulted — see RECEIPT_MAX_ATTEMPTS above.
+      RECEIPT_MAX_ATTEMPTS: String(RECEIPT_MAX_ATTEMPTS),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

@@ -1352,3 +1352,332 @@ describe('two no-show passes racing on one deposit still return it once', () => 
     expect(bookingStatus(booking.id)).toBe('no_show_returned');
   }, 180_000);
 });
+
+// ===========================================================================
+// DELETE /bookings/{id} — the deposit going back OUT, which nothing had ever
+// called.
+//
+// WHY THIS BLOCK EXISTS
+// ---------------------
+// `cancelBooking` refunds a deposit into a wallet. It was reachable, registered
+// and finished — and `grep` for `/bookings/` inside an `expect`, for
+// `already_cancelled`, for `not_cancellable` or for `DELETE.*bookings` across
+// every `*.test.ts` in this repository returned nothing at all. The no-show
+// route into `returnDeposit` was covered from three angles; the customer-facing
+// route into the same function was covered from none.
+//
+// THE MEASUREMENT THAT SAYS SO, rather than the impression
+// -------------------------------------------------------
+// `cancelBooking`'s only decision is one line:
+//
+//     if (row.status !== 'deposit_held') { throw conflict('already_cancelled' | …) }
+//
+// Replaced with `if (false)` — so a settled booking refunds again — the WHOLE
+// suite stayed green: 14 files, 516 passed, 33 todo, exit 0. Not one spec moved.
+// That is the difference between a layer that is redundant and a layer that is
+// simply unwatched, and this one was unwatched.
+//
+// AND IT HAS NOTHING BEHIND IT, which is what makes the gap matter rather than
+// merely being untidy. The comparable path on the money-IN side, `topup.ts`
+// § creditWallet, ends its credit with a conditional UPDATE — `WHERE id = … AND
+// status IN (predecessors)` — and throws when it matches zero rows. The return
+// path's equivalent write is
+//
+//     await tx.update(booking).set({ status: 'cancelled', … })
+//              .where(eq(booking.id, row.id));
+//
+// unconditional, with no row count consulted. `booking` also carries no
+// status-transition trigger: migration 0013 says so deliberately ("booking is
+// state that legitimately changes"), and its four CHECK constraints police a
+// status against its own timestamp columns, not against the status before it. A
+// second return therefore writes `cancelled` over `cancelled` with a fresh
+// `settled_transaction_id`, and every constraint in the schema is satisfied.
+//
+// So on this path the re-check under the row lock is not the last line of
+// defence, it is the ONLY one, and until this block nothing exercised it.
+// ===========================================================================
+
+/** The fourth diary. The three above are spent; salon A seeds four. */
+const FOURTH_ARTIST = 'AR-004';
+
+const cancel = (bookingId: string) =>
+  treq<any>('DELETE', `/bookings/${bookingId}`, { token: member });
+
+/** Her `deposit_return` rows for ONE booking, which is what a double refund doubles. */
+const returnsForBooking = (bookingId: string): number =>
+  Number(
+    scalar(
+      `select count(*) from transaction t
+         join booking b on b.settled_transaction_id = t.id
+        where b.id = '${bookingId}' and t.kind = 'deposit_return'`,
+    ),
+  );
+
+describe('DELETE /bookings/{id} returns the deposit, and only the first one does', () => {
+  /**
+   * THE CONTROL, AND IT IS LOAD-BEARING RATHER THAN POLITE.
+   *
+   * Every refusal below asserts a 409 and an unmoved balance. An endpoint that
+   * was broken shut — 404 on every id, or a cancel that refunded nothing —
+   * satisfies all of them and would leave this block green while proving the
+   * opposite of what it claims. So the first spec establishes that a cancel
+   * really does move the money, and the refusals are then about the SECOND one.
+   *
+   * NO CLOCK IS MOVED HERE. A cancel is legal until an hour before the
+   * appointment, so a booking nine days out is cancellable exactly as created;
+   * the grace-window mechanics the rest of this file needs are about applying a
+   * hold to a charge, not about holding it. The deposit is debited by
+   * `POST /bookings` whatever the date.
+   */
+  it('gives the whole deposit back, once, and closes the hold in the ledger', async () => {
+    const balanceBefore = balanceOf(MEMBER);
+    const heldBefore = depositHeldFor(MEMBER);
+    const returnsBefore = depositReturnsFor(MEMBER);
+
+    const { id, depositFils } = await bookFuture(MANICURE, FOURTH_ARTIST);
+
+    // The deposit really left her wallet — otherwise "it came back" is vacuous.
+    expect(depositFils, 'the booking held no deposit, so there is nothing to return').toBe(
+      DEPOSIT_FILS,
+    );
+    expect(balanceOf(MEMBER), 'POST /bookings did not debit the deposit').toBe(
+      balanceBefore - DEPOSIT_FILS,
+    );
+    expect(depositHeldFor(MEMBER), 'the deposit_held position did not move').toBe(
+      heldBefore + DEPOSIT_FILS,
+    );
+
+    const res = await cancel(id);
+
+    expect(res.status, `DELETE /bookings/${id} answered ${res.status}: ${res.raw}`).toBe(200);
+    expect(res.body.refundedFils, 'the refund was not the deposit').toBe(DEPOSIT_FILS);
+    // Integer fils on the wire, non-negotiable #1 — never 5 or "5.000".
+    expect(Number.isInteger(res.body.refundedFils)).toBe(true);
+    expect(res.body.balanceAfterFils).toBe(balanceBefore);
+    expect(res.body.transactionId).toMatch(/^TX-/);
+    expect(res.body.booking.status).toBe('cancelled');
+
+    // The money, out of the database rather than out of the reply.
+    expect(balanceOf(MEMBER), 'the deposit did not come back in full').toBe(balanceBefore);
+    expect(bookingStatus(id)).toBe('cancelled');
+    // The liability is discharged, not merely marked: the position is back where
+    // it started, which a status column alone cannot tell you.
+    expect(depositHeldFor(MEMBER), 'the deposit_held position was left open').toBe(heldBefore);
+    expect(depositReturnsFor(MEMBER)).toBe(returnsBefore + 1);
+    expect(returnsForBooking(id), 'one cancel wrote more than one deposit_return').toBe(1);
+  }, 120_000);
+
+  /**
+   * THE SECOND CANCEL. The spec the removed guard would have failed.
+   *
+   * Phrased as "the system refused", not as "nothing changed". A cancel that
+   * 404'd, or one that returned 200 having quietly done nothing, satisfies an
+   * unmoved balance just as well as a correct refusal does — and one of those is
+   * a bug. So the error CODE is asserted before the money is.
+   */
+  it('a second cancel is REFUSED by name, and the deposit does not come back twice', async () => {
+    const { id } = await bookFuture(MANICURE, FOURTH_ARTIST);
+    const first = await cancel(id);
+    precondition(first.status === 200, `the first cancel did not succeed: ${first.raw}`);
+
+    const settledBalance = balanceOf(MEMBER);
+    const settledTx = scalar(`select settled_transaction_id from booking where id='${id}'`);
+
+    const second = await cancel(id);
+
+    expect(second.status, `a second cancel answered ${second.status}: ${second.raw}`).toBe(409);
+    expect(
+      second.body.error,
+      'the refusal did not name the state it refused on',
+    ).toBe('already_cancelled');
+
+    expect(
+      balanceOf(MEMBER),
+      'a second cancel refunded the deposit again — she has been paid twice for one appointment',
+    ).toBe(settledBalance);
+    expect(returnsForBooking(id), 'a second deposit_return was written').toBe(1);
+    // And the first refund was not re-stamped onto a new transaction underneath
+    // her, which is what an unconditional write would do while the status stayed
+    // `cancelled` and every CHECK stayed satisfied.
+    expect(
+      scalar(`select settled_transaction_id from booking where id='${id}'`),
+      'the settled transaction was replaced by a second one',
+    ).toBe(settledTx);
+  }, 120_000);
+
+  /**
+   * TWO CANCELS AT ONCE — the construction that actually reaches the re-check.
+   *
+   * The same shape as the two no-show passes above, and for the same reason. The
+   * sequential spec before this one is answered by the second request reading a
+   * status that was already `cancelled` before it began; the guard exists for the
+   * window between one request's unlocked probe and its lock, which only a
+   * genuine overlap can occupy. `Promise.all` on two `DELETE`s gives two
+   * concurrent transactions, and the loser blocks on the member row.
+   *
+   * A customer double-tapping Cancel on a slow connection is this exact race, so
+   * it is not a synthetic one.
+   */
+  it('two cancels firing AT ONCE refund exactly once, and one of them says why', async () => {
+    const { id } = await bookFuture(MANICURE, FOURTH_ARTIST);
+    const balanceBefore = balanceOf(MEMBER);
+    precondition(
+      bookingStatus(id) === 'deposit_held',
+      'the booking was not held before the race',
+    );
+
+    const [a, b] = await Promise.all([cancel(id), cancel(id)]);
+
+    const codes = [a.status, b.status].sort();
+    expect(
+      codes,
+      `two simultaneous cancels answered ${JSON.stringify(codes)}: ${a.raw} / ${b.raw}`,
+    ).toEqual([200, 409]);
+
+    const loser = a.status === 409 ? a : b;
+    expect(loser.body.error, 'the loser did not say why it refused').toBe('already_cancelled');
+
+    /**
+     * EXACTLY ONE REFUND, asserted on the money. Either request may legitimately
+     * be the winner, so the counts are not the thing to pin — the balance is.
+     */
+    expect(
+      balanceOf(MEMBER),
+      `two racing cancels moved her balance by ${balanceOf(MEMBER) - balanceBefore} fils, ` +
+        `where one deposit is ${DEPOSIT_FILS}. One appointment was refunded twice.`,
+    ).toBe(balanceBefore + DEPOSIT_FILS);
+
+    expect(returnsForBooking(id), 'two deposit_return rows exist for one deposit').toBe(1);
+    expect(bookingStatus(id)).toBe('cancelled');
+  }, 120_000);
+
+  /**
+   * THE CROSS-PATH CASE, and the one with the clearest customer story: the
+   * no-show job has already given the deposit back, and she then opens the app
+   * and taps Cancel on an appointment that still looks live to her.
+   *
+   * Both routes call `returnDeposit`. Only the status re-check stands between
+   * them, so this is the same guard as the two specs above reached from the other
+   * side — a return the job performed being refused to the endpoint.
+   */
+  it('cannot cancel a booking the no-show job already returned — the same deposit, two routes', async () => {
+    /**
+     * AND HERE THE SCHEMA IS A REAL SECOND LAYER — measured, not assumed.
+     *
+     * With the status re-check removed, this spec and the completed-booking one
+     * below both fail with a 500 rather than with a double refund. `returnDeposit`
+     * writes `status='cancelled'` and stamps `cancelled_at` while `returned_at`
+     * (or `completed_at`) is still set, and `booking_returned_at_matches_status` —
+     * `(status='no_show_returned') = (returned_at IS NOT NULL)` — refuses the row.
+     * The transaction rolls back and the money survives on a consistency
+     * constraint that was written for a different purpose.
+     *
+     * `cancelled` → `cancelled` HAS NO SUCH PROTECTION. It is self-consistent, so
+     * every CHECK on the table is satisfied and the second refund COMMITS: the two
+     * specs above are the ones that show real money moving twice.
+     *
+     * That is the asymmetry, and it is the reason these four specs are not
+     * interchangeable. The schema catches a double return that CHANGES the
+     * terminal state and is blind to one that repeats it — so the two cases the
+     * schema covers are exactly the two that would have made this block look
+     * adequate while the uncovered case stayed uncovered.
+     */
+    const { id } = await bookFuture(MANICURE, FOURTH_ARTIST);
+    parkOtherLiveHolds(id);
+    makeDue(id);
+
+    const tick = runNoShowJob();
+    precondition(tick.returned >= 1, `the job returned nothing: ${JSON.stringify(tick)}`);
+    precondition(
+      bookingStatus(id) === 'no_show_returned',
+      `the job did not settle this booking: it is ${bookingStatus(id)}`,
+    );
+
+    const afterJob = balanceOf(MEMBER);
+
+    const res = await cancel(id);
+
+    expect(res.status, `cancelling a returned booking answered ${res.status}: ${res.raw}`).toBe(
+      409,
+    );
+    // `not_cancellable`, and the message is the one written for this state — she
+    // is told the deposit is already back, not that the appointment is missing.
+    expect(res.body.error).toBe('not_cancellable');
+    expect(res.body.message).toMatch(/already been returned/i);
+
+    expect(
+      balanceOf(MEMBER),
+      'the deposit was returned by the job AND by the cancel — refunded twice for one no-show',
+    ).toBe(afterJob);
+    expect(returnsForBooking(id), 'a second deposit_return was written').toBe(1);
+    expect(bookingStatus(id)).toBe('no_show_returned');
+  }, 180_000);
+
+  /**
+   * AND THE OTHER TERMINAL STATE: she attended, the charge consumed the deposit,
+   * and a cancel afterwards would hand back money the salon has already earned.
+   *
+   * This one needs the grace window, because it needs a real charge to consume a
+   * real hold — hence the fourth artist's diary.
+   *
+   * THEN IT MOVES THE CLOCK BACK OUT AGAIN, and that is the point of the spec
+   * rather than housekeeping. A booking sitting four minutes from its start is
+   * inside the one-hour change window, so `assertChangeWindowOpen` refuses a
+   * cancel on its own — and it runs AFTER the status check, which means a spec
+   * left in that state passes whether the status check exists or not. It would
+   * have been an assertion satisfied by the guard next door.
+   *
+   * Pushing `starts_at` back out re-opens the change window, so the status check
+   * is the only thing between a completed appointment and a refund of a deposit
+   * the salon has already earned. No money column is touched — same rule as the
+   * rest of this file.
+   */
+  it('cannot cancel a COMPLETED booking, whose deposit the charge already spent', async () => {
+    const { id } = await bookFuture(BLOW_DRY, FOURTH_ARTIST);
+    moveInsideWindow(id);
+
+    const charge = await chargeFor([BLOW_DRY]);
+    precondition(charge.status === 200, `the charge did not settle: ${charge.raw}`);
+    precondition(
+      bookingStatus(id) === 'completed',
+      `the charge did not complete the booking: it is ${bookingStatus(id)}`,
+    );
+    // The hold really was applied — otherwise this is a spec about an unrelated
+    // booking that happens to be `completed`.
+    expect(
+      charge.body.depositAppliedFils,
+      'the charge consumed no deposit, so there is nothing for a cancel to claw back',
+    ).toBe(DEPOSIT_FILS);
+
+    // Re-open the change window, so the refusal below can only come from the
+    // status. See this spec's header.
+    psql(`
+      UPDATE booking
+         SET starts_at = now() + interval '9 days',
+             ends_at   = now() + interval '9 days' + interval '60 minutes'
+       WHERE id = '${id}';
+    `);
+
+    const afterCharge = balanceOf(MEMBER);
+    const returnsAfterCharge = depositReturnsFor(MEMBER);
+
+    const res = await cancel(id);
+
+    expect(res.status, `cancelling a completed booking answered ${res.status}: ${res.raw}`).toBe(
+      409,
+    );
+    expect(res.body.error).toBe('not_cancellable');
+    expect(res.body.message).toMatch(/already happened/i);
+
+    expect(
+      balanceOf(MEMBER),
+      'a completed appointment was refunded — the salon paid for a visit it delivered',
+    ).toBe(afterCharge);
+    expect(
+      depositReturnsFor(MEMBER),
+      'a deposit_return was written for a booking whose deposit the charge had already spent',
+    ).toBe(returnsAfterCharge);
+    expect(returnsForBooking(id), 'the completed booking acquired a deposit_return').toBe(0);
+    expect(bookingStatus(id)).toBe('completed');
+  }, 180_000);
+});
