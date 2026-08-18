@@ -52,9 +52,13 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
+  RUN_DB_PREFIX,
   createEmptyDatabase,
   dropDatabase,
+  dropRunDatabase,
+  isOwnRunDatabaseName,
   migrateDatabase,
+  newRunDatabaseName,
   scalarOnDatabase,
   seedDatabase,
 } from './support/tenancy-harness.js';
@@ -67,6 +71,17 @@ import {
  * cross-lane interference the isolated database exists to end.
  */
 const SCRATCH = `avo_seedprobe_${process.pid}`;
+
+/**
+ * Does a named database exist? Asked through the maintenance database, so it needs
+ * no connection to the database being asked about — which matters, because the
+ * guard under test is meant to decide on the NAME, before anything is opened.
+ */
+const dbExists = (name: string): boolean =>
+  scalarOnDatabase(
+    'postgres',
+    `select count(*) from pg_database where datname='${name}'`,
+  ).trim() === '1';
 
 afterAll(() => {
   dropDatabase(SCRATCH);
@@ -249,4 +264,154 @@ describe('a new environment can be built from an empty database', () => {
     // And it is the fixture figure the rest of the suite is written against.
     expect(balance).toBe('24500');
   }, 60_000);
+});
+
+
+// ===========================================================================
+// The teardown drop, which had one guard where it needed two.
+// ===========================================================================
+
+/**
+ * WHY THIS IS IN THIS FILE AND NOT A COMMENT
+ *
+ * `dropRunDatabase()` runs in `global-setup.ts`'s teardown and issues
+ * `DROP DATABASE … WITH (FORCE)`. Its only guard was `ownsItsDatabase()`, which
+ * reads `POSTGRES_DB` and nothing else — so an `AVO_QA_DB` supplied from outside
+ * satisfied it, even though `global-setup.ts` skips minting whenever it sees that
+ * variable and the run therefore does not own the database at all.
+ *
+ *     AVO_QA_DB=avo_lane_d ../node_modules/.bin/vitest run
+ *
+ * would have dropped a trunk-owned lane database at teardown. Silently, because
+ * `dropDatabase` swallows its own errors — the same "a misleading success line is
+ * the same defect as a green typecheck bought with a cast" failure LANES.md
+ * describes, arriving as a missing database rather than as a message.
+ *
+ * `sweepStaleRunDatabases` has always carried the prefix check. This is the rule
+ * on the other drop path, and it is a spec rather than a comment because a comment
+ * is what the first version had.
+ *
+ * NO DATABASE IS CREATED HERE. The refusal happens on the name, before any
+ * connection, which is the whole point: the guard cannot depend on the thing it is
+ * protecting still being there to be inspected.
+ */
+describe('dropRunDatabase refuses a database this run did not mint', () => {
+  const savedQaDb = process.env.AVO_QA_DB;
+  const savedPgDb = process.env.POSTGRES_DB;
+
+  afterAll(() => {
+    if (savedQaDb === undefined) delete process.env.AVO_QA_DB;
+    else process.env.AVO_QA_DB = savedQaDb;
+    if (savedPgDb === undefined) delete process.env.POSTGRES_DB;
+    else process.env.POSTGRES_DB = savedPgDb;
+  });
+
+  /**
+   * END TO END, ON THE DATABASE THIS FILE ALREADY OWNS.
+   *
+   * `SCRATCH` is `avo_seedprobe_<pid>`: real, connectable, created by the specs
+   * above, carrying no `RUN_DB_PREFIX`, and dropped in `afterAll` regardless. So
+   * it is exactly the shape of the hazard — a database this run did not mint — and
+   * it is the one database on the container that can stand in for `avo_lane_d`
+   * without the proof costing anything if the guard is ever wrong.
+   *
+   * THAT SUBSTITUTION IS THE POINT. Aiming this spec at `avo_lane_d` and then
+   * checking it by removing the guard would mean deliberately dropping a
+   * trunk-owned database to find out whether the spec noticed — the check would be
+   * the incident. Here, flipping `isOwnRunDatabaseName` to `true` really does drop
+   * `SCRATCH` and this spec really does go red, which is the proof, and the cost is
+   * a database that was about to be destroyed anyway.
+   *
+   * The assertion is on the RETURN VALUE first — `undefined` for a refusal, the
+   * name for a drop — so it says "the function declined" rather than only "the
+   * database is still there". A drop of a database that never existed would leave
+   * nothing behind either.
+   */
+  it('a database it did not mint is declined by name, and survives', () => {
+    delete process.env.POSTGRES_DB;
+    process.env.AVO_QA_DB = SCRATCH;
+
+    // The tripwire. A spec that passed because the name was fictional would prove
+    // nothing: `DROP DATABASE IF EXISTS` is a no-op on a name that resolves to
+    // nothing, so "it still does not exist" is not evidence of a refusal.
+    precondition(dbExists(SCRATCH), `${SCRATCH} does not exist, so nothing here is at stake`);
+
+    const dropped = dropRunDatabase();
+
+    expect(
+      dropped,
+      `dropRunDatabase returned "${dropped}", which means it dropped a database this run did ` +
+        'not mint. Pointed at AVO_QA_DB=avo_lane_d that is a trunk-owned database gone.',
+    ).toBeUndefined();
+
+    // The consequence, checked separately from the refusal so neither can stand in
+    // for the other.
+    expect(dbExists(SCRATCH), `${SCRATCH} was dropped`).toBe(true);
+  });
+
+  /**
+   * AND THE NAME THE REAL HAZARD USES, checked through the predicate because the
+   * function cannot be asked twice — see the control below for why.
+   *
+   * `avo_lane_d` is trunk-owned and pre-created; LANES.md says to ask trunk rather
+   * than create one. This is the assertion that ties the guard to the database it
+   * exists to protect, and it is safe because the refusal happens on the name,
+   * before any connection is opened.
+   */
+  it('and the trunk-owned lane databases are exactly what it refuses', () => {
+    precondition(
+      dbExists('avo_lane_d'),
+      'avo_lane_d does not exist, so this spec is not about anything real',
+    );
+    for (const trunkOwned of ['avo', 'avo_ci', 'avo_lane_a', 'avo_lane_b', 'avo_lane_c', 'avo_lane_d']) {
+      expect(
+        isOwnRunDatabaseName(trunkOwned),
+        `${trunkOwned} would have been dropped at teardown under AVO_QA_DB=${trunkOwned}`,
+      ).toBe(false);
+    }
+    expect(dbExists('avo_lane_d'), 'avo_lane_d was dropped').toBe(true);
+  });
+
+  /**
+   * THE CONTROL, and without it the spec above is satisfied by a `dropRunDatabase`
+   * that had simply been broken shut — which would leak a database per run for
+   * ever, quietly, and pass.
+   *
+   * IT GOES THROUGH THE PREDICATE RATHER THAN THE FUNCTION, and the reason is
+   * worth knowing before writing the obvious version. `pgDb()` caches its
+   * resolution on first call, so the spec above has already fixed this worker's
+   * answer to `avo_lane_d`; a second `dropRunDatabase()` under a fresh
+   * `AVO_QA_DB` re-reads nothing and refuses for the wrong reason. The first draft
+   * of this spec did exactly that and failed with
+   * "declined a name it had minted itself" — the guard was fine and the spec was
+   * measuring the cache.
+   */
+  it('but a name this file minted is still accepted — the guard is a filter, not an off switch', () => {
+    const minted = newRunDatabaseName();
+    expect(minted.startsWith(RUN_DB_PREFIX)).toBe(true);
+    expect(
+      isOwnRunDatabaseName(minted),
+      'the guard declined a name this file had just minted, so every run leaks its database',
+    ).toBe(true);
+
+    // And it discriminates, rather than answering true to everything.
+    for (const foreign of ['avo', 'avo_ci', 'avo_lane_a', 'avo_lane_d', 'postgres']) {
+      expect(isOwnRunDatabaseName(foreign), `${foreign} was treated as ours`).toBe(false);
+    }
+  });
+
+  /**
+   * THE OTHER GUARD IS NOT TESTED HERE, AND SAYING WHY IS THE USEFUL PART.
+   *
+   * `ownsItsDatabase()` closes over `EXPLICIT_DB`, which is `process.env.POSTGRES_DB`
+   * read once at module load. Nothing a spec does to `process.env` afterwards can
+   * change it, so a spec that set `POSTGRES_DB` here and asserted a refusal would
+   * be asserting the PREFIX guard while appearing to assert the `POSTGRES_DB` one —
+   * and it would keep passing if `ownsItsDatabase()` were deleted outright.
+   *
+   * That is the "assertion satisfied by the guard next door" shape, so it is
+   * recorded rather than written. Reaching it needs a separate worker started with
+   * the variable already set, which is a `vitest.config.ts` change and worth doing
+   * only if that guard is ever suspected.
+   */
 });

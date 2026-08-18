@@ -51,6 +51,7 @@ import {
   QA_MEMBER,
   QA_MEMBER_PHONE,
   RECEIPT_POLL_MS,
+  RECEIPT_MAX_ATTEMPTS,
   RECEIPT_WORKER_ENABLED,
   SALON_A,
   SALON_B,
@@ -578,6 +579,123 @@ describe('one settled payment queues two independent receipts', () => {
       ),
     ).toBe(0);
   });
+
+  /**
+   * THE DEAD LETTER, which nothing had ever held the worker to.
+   *
+   * `receiptWorker.ts` states the rule in its header: "Parked rows are not deleted
+   * and not hidden: `failed` with `attempts >= max` is the queue's dead letter",
+   * and the claim predicate implements it as `AND attempts < RECEIPT_MAX_ATTEMPTS`.
+   *
+   * WHY IT IS HERE. Removing that line alone — nothing else — left the whole suite
+   * green: `gateway.test.ts` and this file both passed, 75 specs, exit 0. So did
+   * removing `FOR UPDATE SKIP LOCKED`. Only `available_at <= now()` was covered, by
+   * the two specs above. A receipt that has exhausted its budget would have been
+   * re-claimed and re-sent for ever, and the queue's own dead-letter guarantee had
+   * no spec behind it.
+   *
+   * THE CONTROL IS WHAT MAKES THE NEGATIVE MEAN ANYTHING. "The parked row was not
+   * claimed" is also true of a worker that is asleep, crashed, or switched off — and
+   * two of those three have really happened in this suite. So the same window holds
+   * a SECOND row, one attempt below the budget, which must be claimed. When the
+   * control moves and the parked row does not, the worker demonstrably ran and
+   * demonstrably declined this one.
+   */
+  it('will not re-claim a receipt that has exhausted its attempts — and the control proves it ran', async () => {
+    precondition(
+      RECEIPT_WORKER_ENABLED,
+      'the API under test runs with RECEIPT_WORKER_ENABLED=0, so nothing would claim either row',
+    );
+    const txId = await settleATopUp('receipts-deadletter');
+    precondition(channelsFor(txId).length === 2, 'this case needs both channels queued');
+
+    /**
+     * BUILT OUT OF REACH, CHECKED, THEN RELEASED — in that order, and the order is
+     * the whole reason this reads the way it does.
+     *
+     * The worker polls every ${RECEIPT_POLL_MS}ms against this database. The first
+     * version of this spec wrote the fixture already claimable and then asserted
+     * it, and against a build with the attempt guard removed it lost that race:
+     * the precondition read back `email:sent:3 whatsapp:sent:4`, because the worker
+     * had drained both rows in between. The spec still failed, but at its
+     * precondition rather than at the assertion it exists for — which is the
+     * difference between "this build is broken" and "this spec is flaky", and only
+     * one of those gets acted on.
+     *
+     * So the attempt counts are set an hour out where the claim predicate cannot
+     * see them, verified there, and only then released into the past by a statement
+     * that touches nothing else. Nothing is asserted after the release except the
+     * outcome.
+     *
+     * whatsapp: AT the budget, `failed`. The dead letter.
+     * email:    one BELOW it, `failed`. Must be retried.
+     */
+    psql(`
+      UPDATE receipt_job
+         SET status = 'failed', sent_at = NULL, last_error = 'simulated',
+             attempts = ${RECEIPT_MAX_ATTEMPTS},
+             available_at = now() + interval '1 hour'
+       WHERE transaction_id = '${txId}' AND channel = 'whatsapp';
+      UPDATE receipt_job
+         SET status = 'failed', sent_at = NULL, last_error = 'simulated',
+             attempts = ${RECEIPT_MAX_ATTEMPTS - 1},
+             available_at = now() + interval '1 hour'
+       WHERE transaction_id = '${txId}' AND channel = 'email';
+    `);
+    precondition(
+      outboxOf(txId) ===
+        `email:failed:${RECEIPT_MAX_ATTEMPTS - 1} whatsapp:failed:${RECEIPT_MAX_ATTEMPTS}`,
+      `the fixture did not take: ${outboxOf(txId)}`,
+    );
+
+    // Released. Both are now claimable by time, so `attempts` is the only thing
+    // that can separate them.
+    psql(`
+      UPDATE receipt_job SET available_at = now() - interval '1 minute'
+       WHERE transaction_id = '${txId}';
+    `);
+
+    // Wait for the CONTROL to move. That is the signal the worker has run, and it
+    // is why this is not a fixed sleep.
+    const deadline = Date.now() + 15_000;
+    let emailState = '';
+    for (;;) {
+      emailState = scalar(
+        `select status::text || ':' || attempts::text from receipt_job
+          where transaction_id='${txId}' and channel='email'`,
+      );
+      if (emailState === `sent:${RECEIPT_MAX_ATTEMPTS}`) break;
+      if (Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    expect(
+      emailState,
+      'the control row was never claimed, so this spec cannot say anything about the parked ' +
+        `one — the worker may simply not have run. RECEIPT_POLL_MS is ${RECEIPT_POLL_MS}ms.`,
+    ).toBe(`sent:${RECEIPT_MAX_ATTEMPTS}`);
+
+    // The worker ran. Now the row it must NOT have touched.
+    expect(
+      scalar(
+        `select status::text || ':' || attempts::text from receipt_job
+          where transaction_id='${txId}' and channel='whatsapp'`,
+      ),
+      'a receipt past its attempt budget was claimed again. It is the dead letter — re-claiming ' +
+        'it sends the customer a receipt the queue had already given up on, for ever.',
+    ).toBe(`failed:${RECEIPT_MAX_ATTEMPTS}`);
+
+    // And it was not sent, which is the harm rather than the bookkeeping.
+    expect(
+      Number(
+        scalar(
+          `select count(*) from receipt_job where transaction_id='${txId}'
+            and channel='whatsapp' and sent_at is not null`,
+        ),
+      ),
+      'the dead-lettered receipt was sent',
+    ).toBe(0);
+  }, 60_000);
 
   /**
    * THE MUTATION PROOF FOR THE KEY ITSELF.

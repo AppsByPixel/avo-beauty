@@ -755,6 +755,94 @@ describe('the trigger backstop — the rule holds for callers that are not the s
     expect(statusOf(view.id)).toBe('redirected');
   });
 
+  /**
+   * WHAT THE TRIGGER DOES NOT REACH — and migration 0004 says it does.
+   *
+   * The migration's header states, of the arrow table:
+   *
+   *   "Note that a state cannot reach itself. That is deliberate and
+   *    load-bearing: it is what makes a re-delivered `succeeded` callback a no-op
+   *    rather than a second credit."
+   *
+   * That is true of `LEGAL_TRANSITIONS` in services/topup.ts, where
+   * `succeeded: []`. It is NOT true of the trigger, whose first branch is
+   *
+   *   IF NEW.status = OLD.status THEN RETURN NEW;
+   *
+   * so `succeeded` → `succeeded` returns before the arrow table is ever consulted.
+   * And it cannot be otherwise: at row level an UPDATE that re-asserts the same
+   * status is indistinguishable from one that only touches `updated_at`, which the
+   * spec above requires to keep working. The trigger is structurally incapable of
+   * the property the comment claims for it.
+   *
+   * WHY THAT MATTERS RATHER THAN BEING PEDANTRY. A second credit does not need the
+   * status column to move: `creditWallet` inserts a transaction, a ledger pair and
+   * a balance update, then re-stamps the intent with `status='succeeded'` and a NEW
+   * `transaction_id`. Every one of those writes is accepted by this database — as
+   * the second half of this spec demonstrates. Removing the row lock, the
+   * `canTransition` check and the conditional credit write together produces a
+   * real double credit (`expected 193000 to be 182000`) and this trigger does not
+   * fire. The backstop guards the STATUS, and the money can double without it.
+   *
+   * The spec is written so it fails if the trigger is dropped, rather than only
+   * recording the gap: the first half is a refusal that only the trigger produces.
+   */
+  it('guards the status column and not the credit — a re-asserted `succeeded` is let through', async () => {
+    const { view } = await settledIntent('trigger-self');
+    precondition(statusOf(view.id) === 'succeeded', 'the intent did not settle');
+    const settledTx = scalar(`select transaction_id from topup_intent where id='${view.id}'`);
+    precondition(settledTx.startsWith('TX-'), `no settled transaction: ${settledTx}`);
+
+    // HALF ONE — the arrow the trigger really does refuse. This is what keeps the
+    // spec honest: drop the trigger and this assertion fails.
+    const backwards = updateStatusDirectly(view.id, 'pending');
+    expect(backwards.ok, 'the database allowed a settled top-up back into flight').toBe(false);
+    expect(backwards.message).toMatch(/is terminal/i);
+
+    // HALF TWO — the same terminal status, re-asserted. Permitted.
+    const again = updateStatusDirectly(view.id, 'succeeded');
+    expect(
+      again.ok,
+      'the trigger refused a self-transition — if this is now false, migration 0004 gained ' +
+        'the property its header claims and this spec should be restated',
+    ).toBe(true);
+
+    /**
+     * AND THE WRITE A SECOND CREDIT ACTUALLY MAKES: a fresh `transaction_id` on an
+     * intent that has already settled. `topup_intent_succeeded_has_transaction` is
+     * satisfied either way — it asks only that the column be non-null — so nothing
+     * in the schema notices that the money it points at is the second copy.
+     *
+     * Recorded as the fact it is, so that a future reader looking for the
+     * database-level guarantee against a double credit finds this rather than the
+     * migration's header. The guarantee lives in `creditWallet`'s conditional
+     * UPDATE and nowhere else.
+     */
+    const impostor = `TX-${Date.now() % 9_000_000 + 1_000_000}`;
+    psql(`
+      INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils,
+                               method, status, reference, settled_at)
+      SELECT '${impostor}', t.member_id, t.salon_id, t.branch_id, 'topup', t.amount_fils,
+             t.method, 'settled', 'AVO-TOP-IMPOSTOR-${impostor}', now()
+        FROM transaction t WHERE t.id = '${settledTx}';
+      UPDATE topup_intent
+         SET transaction_id = '${impostor}', settled_at = now()
+       WHERE id = '${view.id}';
+    `);
+    expect(
+      scalar(`select transaction_id from topup_intent where id='${view.id}'`),
+      'the database refused to re-stamp a settled intent — if so, a constraint was added and ' +
+        'this spec should be restated',
+    ).toBe(impostor);
+
+    // Put it back, so nothing downstream reads this probe as product behaviour.
+    psql(`
+      UPDATE topup_intent SET transaction_id = '${settledTx}' WHERE id = '${view.id}';
+      DELETE FROM transaction WHERE id = '${impostor}';
+    `);
+    expect(scalar(`select transaction_id from topup_intent where id='${view.id}'`)).toBe(settledTx);
+  });
+
   it('gateway_event is append-only — the record of what the PSP said cannot be edited', async () => {
     // In a dispute this table is the only account of the other side's behaviour.
     const { pspReference } = await openIntent('append-only');
