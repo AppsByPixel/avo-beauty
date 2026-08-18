@@ -233,7 +233,7 @@ export function useUpdateStaff(): UseMutationResult<
  *
  * NO PASSWORD FIELD, AND THAT IS A DELIBERATE DEPARTURE FROM THE DESIGN.
  *
- * `AVO Merchant Dashboard.dc.html:490` draws a "Temporary password" input on the
+ * `AVO Merchant Dashboard.dc.html:503` draws a "Temporary password" input on the
  * new-account form — "At least 6 characters" — and tells the manager "the
  * teammate signs in with this username & password, then sets their own on first
  * login". That cannot be built. Non-negotiable #6: a password is never stored in

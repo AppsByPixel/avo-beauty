@@ -38,8 +38,54 @@ export const SCOPES: Record<AuthScope, ScopeConfig> = {
     storageKey: 'avo.session.merchant',
   },
   /**
-   * Declared, not built. Lane C's brief is explicit: structure for it, do not
-   * build it. Nothing routes to `/console` yet.
+   * Declared, not built. Nothing routes to `/console` yet.
+   *
+   * THIS IS A BLOCKED ITEM, NOT A DEFERRED ONE, AND THE DIFFERENCE IS WRITTEN
+   * DOWN HERE BECAUSE A MISSING GATE AND A GATE NOBODY NEEDED LOOK IDENTICAL.
+   *
+   * Phase 7 was checked against `api/src` on 2026-08-19, not against
+   * api-contract.md. The console is blocked at its own front door: there is no
+   * platform principal on the server at all.
+   *
+   *   api/src/auth/tokens.ts    `PrincipalKind = 'member' | 'staff'`
+   *                             `SessionScope  = 'wallet' | 'scanner' | 'dashboard'`
+   *   api/src/auth/principal.ts `Principal = MemberPrincipal | StaffPrincipal`
+   *   api/src/db/schema/        no platform_admin table
+   *   packages/types            no PlatformAdmin entity
+   *
+   * So `POST /auth/web/session` can only ever mint a salon-scoped `dashboard`
+   * staff session, and every `/v1/platform/*` route that exists today is gated
+   * by `requireDashboardPerm(req, 'marketing')` + `requireSameSalon` — a
+   * MERCHANT credential. An owner console signing in against that would either
+   * be a salon manager wearing a different shell, or a second sign-in flow
+   * invented here against an endpoint that does not exist.
+   *
+   * The second is what `LANES.md` § "Order of work" records as already having
+   * gone wrong once — "Running it *ahead* of the API is what produced the
+   * throwaway sign-in stand-in that had to be rewritten." So this stays
+   * declared until the server has a principal to authenticate.
+   *
+   * WHAT IS MISSING, endpoint by endpoint, for whoever unblocks it:
+   *
+   *   auth        no platform session endpoint, no platform_admin row to
+   *               authenticate against, no `platform` SessionScope
+   *   Approvals   GET  /v1/platform/campaigns?status=pending   mock only, not the API
+   *               POST /v1/platform/campaigns/{cid}/decision   nowhere
+   *               PATCH /v1/platform/messaging-policy          nowhere
+   *   Policies    GET  /v1/platform/policies answers `{ published }` only; the
+   *               console needs `{ published, draft }` (api-contract.md:464)
+   *               PATCH/POST/DELETE .../policies/draft…        nowhere
+   *               POST .../policies/publish, .../discard       nowhere
+   *   Analytics   GET  /platform/metrics                       nowhere
+   *   Audit       platform-wide read; only salon-scoped
+   *               `GET /salons/{id}/audit` exists
+   *   Admins      no platform_admin table, so no authority editor
+   *   Controls    PATCH /platform/settings                     nowhere
+   *
+   * One thing DOES already anticipate the console, and it is worth knowing:
+   * `audit_log.actor_kind` includes `platform_admin`, and the seed writes rows
+   * with it. `services/audit.ts::actorOf()` cannot produce that value from any
+   * principal that exists — the schema is ready and the write path is not.
    */
   owner: {
     id: 'owner',
