@@ -128,22 +128,33 @@ unless it is explicitly deferred in writing.
         criterion passes: zero white-text failures, and zero brand-filled elements whose
         only white content is an SVG stroke** — the two shapes §2's audit method says a
         naive find-and-replace misses.
-      - **NOT TICKED, because the scan found five real AA failures that are not white
-        text**, and they trace to one cause worth fixing before launch rather than to five
-        separate colour choices. `apps/dashboard/src/shell/useBrandTheme.ts` overrides five
-        custom properties at runtime from the salon's hex, so **the derived set is what
-        actually renders and §2's hand-tuned table does not.** For Amara's `#6E7F6C`,
-        `deriveBrandSet` returns `deep: #637361` and `tint: #E9ECE9`, where the static
-        tokens are `#5A6B58` and `#EEF1EC`. Brand-deep as *text* on brand-tint is then
-        **4.24:1** at the 11–12px sizes it is used at — `.avo-label`, `.avo-pill`,
-        `.settings__branch-id` — and `.settings__notice` measures **4.01:1**.
-      - Non-negotiable #9 is NOT violated: `deriveBrandSet` validates white-on-deep and
-        reports 5.05:1, so every white-text *fill* is fine. The gap is that it validates
-        only that pairing and never deep-on-tint, which §2 fixed by hand for the static
-        tokens and the derivation then undoes for every salon that has a brand hex.
-      - **Trunk item, not Lane C's to fix:** `deriveBrandSet` is in `packages/tokens`,
-        which is shared and trunk-owned, and changing these values is a restyle. Reported
-        rather than adjusted.
+      - **The brand-derived failures are FIXED** (Lane C, 2026-08-19, authorised by trunk
+        as a one-off into `packages/tokens`). `deriveBrandSet` validated white-on-`deep`
+        and never `deep`-on-`tint`, even though `deep` is the *text* colour on tinted
+        chips, pills and labels — and the derived set is what renders, because
+        `useBrandTheme.ts` writes it onto the document for any salon with a brand hex, so
+        §2's hand-tuned table is overridden. Amara's `#6E7F6C` derived `deep: #637361` on
+        `tint: #E9ECE9` = **4.24:1** at 11–12px. It now derives `#5C6A5A` on the same tint
+        = **4.81:1**, and re-scanning the live DOM shows **zero brand-pair failures** on
+        Settings and Audit log. Non-negotiable #9 was never violated — white-on-deep
+        measured 5.05:1 throughout; the defect was that one pairing was the only one
+        checked.
+      - **STILL NOT TICKED. One designed token pair fails, and it is not Lane C's to
+        change.** `--avo-warn-text` `#8a6d3b` on `--avo-warn-bg` `#F3E9CF` measures
+        **4.01:1** at 11–12.5px. Both are literal values in
+        `design/tokens/avo-tokens.json`, and that same `#8a6d3b` is also `pillText`,
+        `text` and `accessText` there — so it carries the **Gold tier pill** and the access
+        rows on the wallet and scanner too, not only `.settings__notice` and the audit-log
+        pills. Darkening `warnText` to `#7D6234` reaches 4.73:1 and `#775C31` reaches
+        5.17:1 against the same background. Escalated rather than adjusted: it is a
+        designed colour used across the bundle.
+      - Also escalated, found while checking the presets as instructed: the **shipped**
+        `noorRose` preset fails the same pairing by hand — `deep #8A6565` on
+        `tint #F5EDED` = **4.41:1**, where amaraSage measures 5.01 and lilaLilac 5.04. The
+        new validator would refuse that pair from a new salon while AVO ships it itself.
+        Pinned in `derive.test.ts` so it cannot drift unnoticed, and left unchanged because
+        the hex appears in `interaction-spec.md` §2's table and across the design files.
+      - Wallet and scanner have not been scanned; that is Lane B's half of this row.
 - [ ] Tap targets ≥ 44px verified on device
       - Lane C, 2026-08-19 — not a dashboard row. `interaction-spec.md` §1 makes the
         merchant dashboard desktop-only and shows an "open on a larger screen" notice below
