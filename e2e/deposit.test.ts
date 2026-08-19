@@ -453,11 +453,33 @@ async function mintWalletToken(): Promise<string> {
   return res.body.token;
 }
 
+/**
+ * `confirmDuplicate: true`, and in THIS file the flag saves an assertion rather
+ * than a precondition — which is worth spelling out because it is the sharper case.
+ *
+ * Lane A's near-duplicate guard runs INSIDE the charge transaction and BEFORE the
+ * balance check (`services/charge.ts`: the basket probe is at the top of the
+ * transaction, `insufficientBalance` is thrown further down). Six specs here call
+ * `chargeFor([BLOW_DRY])` against one fixture member, so the second one inside two
+ * minutes is a near-duplicate — and § "a shortfall on the remainder leaves the
+ * hold" then read `409 possible_duplicate` where it asserts `402`. It failed for
+ * the right reason and about the wrong thing: the deposit was never reached.
+ *
+ * The flag puts these specs back on the deposit arithmetic. The ORDER it exposed —
+ * a duplicate refusal arriving before a shortfall — is pinned deliberately in
+ * `scanner.test.ts` § "the near-duplicate guard", because it is a real decision
+ * about what the counter is told first and it should not flip silently.
+ */
 async function chargeFor(serviceIds: string[]): Promise<any> {
   return treq<any>('POST', '/charges', {
     token: scanner,
     idempotencyKey: key('charge'),
-    body: { memberId: MEMBER, token: await mintWalletToken(), serviceIds },
+    body: {
+      memberId: MEMBER,
+      token: await mintWalletToken(),
+      serviceIds,
+      confirmDuplicate: true,
+    },
   });
 }
 

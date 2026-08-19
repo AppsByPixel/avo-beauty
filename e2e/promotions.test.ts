@@ -396,12 +396,26 @@ interface ChargeResult {
 const visitsOf = (): number =>
   Number(scalar(`select visits from member where id='${B_MEMBER}'`));
 
+/**
+ * One charge against salon B's customer for `[SV-B01]`.
+ *
+ * `confirmDuplicate: true`, for the reason `scanner.test.ts`'s `chargeOnce` gives at
+ * length: this file charges one customer for one service dozens of times inside a
+ * few minutes to sweep happy-hour windows, and lane A's near-duplicate guard
+ * (migration 0031) refuses an identical basket inside 120 seconds. Seventeen specs
+ * here failed on that precondition at 08:54 Kuwait and not one of them was about
+ * duplicates.
+ *
+ * The guard is driven UNCONFIRMED in exactly one place — `scanner.test.ts` § "the
+ * near-duplicate guard" — so the flag here does not leave it uncovered. It leaves it
+ * uncovered *by this file*, which is right: this file is about promotions.
+ */
 async function charge(label: string, idemKey?: string): Promise<ChargeResult> {
   const token = await mintWalletTokenFor(wallet, B_MEMBER);
   const res = await treq<ChargeResult>('POST', '/charges', {
     token: scanner,
     idempotencyKey: idemKey ?? key(label),
-    body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+    body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
   });
   precondition(
     res.status === 200,
@@ -683,7 +697,7 @@ describe('the reward is decided once, at one instant', () => {
      * already has. So does this.
      */
     const token = await mintWalletTokenFor(wallet, B_MEMBER);
-    const body = { memberId: B_MEMBER, serviceIds: [B_SERVICE], token };
+    const body = { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true };
 
     const firstRes = await treq<ChargeResult>('POST', '/charges', {
       token: scanner,
@@ -1091,7 +1105,7 @@ describe('the branch decision — one branch is knowledge, two branches is a gue
     const res = await treq<ChargeResult>('POST', '/charges', {
       token: scanner,
       idempotencyKey: key('client-branch'),
-      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, branchId: B_BRANCH },
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true, branchId: B_BRANCH },
     });
     precondition(res.status === 200, `POST /charges answered ${res.status} ${res.raw}`);
 

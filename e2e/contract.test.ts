@@ -380,36 +380,35 @@ function probes(): Probe[] {
       schema: paginated(CampaignSchema),
       requireNonEmpty: ['items'],
       /**
-       * DRIFT, FOUND BY TURNING THIS PROBE ON, AND THE SCHEMA IS THE CORRECT HALF.
+       * FIXED ON 2026-08-19, AND NOW A PLAIN SPEC. This probe carried
+       * `knownParseFailure`, and the harness is what reported the fix rather than a
+       * human noticing: `knownBug()` FAILS when the contract-correct assertion starts
+       * passing, so the run at 08:54 Kuwait came back "This bug appears to be FIXED" on
+       * both halves. That is the whole reason the wrapper fails forwards.
        *
-       *   items.0.heldReason: Required
-       *   items.0.heldAt: Required
+       * WHAT IT WAS. `serialiseCampaign` omitted both keys. `CampaignSchema` declares
+       * them `.nullable()` but NOT `.optional()` — deliberately, per its own docstring:
+       * "`null` on every campaign that was never held, which is most of them." Zod
+       * fails the whole object on a missing key, so a client built on `CampaignSchema`
+       * could not parse ANY campaign, the ordinary `pending` one included. Lane A now
+       * serves both — `routes/campaigns.ts:112-113`, `heldAt` as an ISO string.
        *
-       * `serialiseCampaign` omits both keys. `CampaignSchema` declares them
-       * `.nullable()` but NOT `.optional()`, and its docstring is explicit that this is
-       * deliberate: "`null` on every campaign that was never held, which is most of
-       * them." So the wire should carry `heldReason: null, heldAt: null` and does not.
+       * WHY THIS BECOMES A PERMANENT SPEC INSTEAD OF A CLOSED TICKET. These are the two
+       * fields non-negotiable #8 turns on. A held campaign keeps `status: 'approved'` —
+       * `CampaignSchema` declares four statuses and a fifth on the wire is a value every
+       * client's `.parse()` rejects — so `heldReason`/`heldAt` are the ONLY thing that
+       * distinguishes a campaign the platform refused to send from one on its way out.
+       * If these keys stop arriving, a held campaign renders to the merchant as approved
+       * and the silent drop #8 forbids is back, with no other field able to report it.
+       * Two fields and not a boolean for the reason the schema gives: "held until 09:00"
+       * and "held — this customer has had two messages this week" are different things
+       * for a merchant to do next.
        *
-       * IT REJECTS THE WHOLE RESPONSE, not the two fields — zod fails the object, so a
-       * client built on `CampaignSchema` cannot parse ANY campaign, including the
-       * ordinary `pending` one every merchant sees first. Same mechanism that made every
-       * bookable slot in the Book grid fail to parse, which is the comparison this
-       * file's own failure message reaches for.
-       *
-       * AND THE TWO FIELDS ARE THE ONES #8 IS ABOUT. The schema explains why they are
-       * two fields and not a boolean: the merchant is owed the sentence, "held until
-       * 09:00" versus "held — this customer has had two messages this week", because
-       * those are different things to do next. `design/README.md` gap 6 says a breaching
-       * campaign is "held and reported, never silently dropped" — and a field that never
-       * arrives is how it gets silently dropped.
-       *
-       * Lane A's fix (serve both as null), not a schema change: `packages/types` is
-       * trunk-owned and it is the half that is right.
+       * This probe pins the SHAPE, on the ordinary never-held campaign every merchant
+       * sees first, which is the half that broke. The VALUES on a genuinely held
+       * campaign are pinned against a campaign that really gets held, in
+       * `campaigns.test.ts`.
        */
-      knownParseFailure:
-        'serialiseCampaign omits heldReason and heldAt. CampaignSchema requires both as ' +
-        'nullable-but-present, so the whole response fails to parse and no client can read any ' +
-        'campaign. Lane A: serve them as null.',
     },
     {
       route: 'GET /v1/salons/:id/promotions',

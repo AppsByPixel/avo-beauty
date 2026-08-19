@@ -63,6 +63,8 @@ import {
   B_SCANNER_DEVICE,
   B_SERVICE,
   B_SERVICE_PRICE_FILS,
+  B_SERVICE_SECOND,
+  B_SERVICE_SECOND_PRICE_FILS,
   B_STAFF,
   B_STAFF_HANDLE,
   B_STAFF_LOCKOUT,
@@ -102,6 +104,18 @@ import {
 
 /** api/src/services/charge.ts — `VOID_WINDOW_MINUTES`. Written out, not imported. */
 const VOID_WINDOW_MINUTES = 15;
+
+/**
+ * api/src/services/charge.ts — `NEAR_DUPLICATE_WINDOW_SECONDS`. Written out for the
+ * reason above it is: a suite that imports the server's constant cannot notice the
+ * server changing it.
+ *
+ * It is pinned against the API's own answer in § "the near-duplicate charge guard",
+ * where the 409's `windowSeconds` is asserted to equal this number — the same
+ * arrangement the PIN rate-limit constants have, and for the same reason: a suite that
+ * drifts from the server's real figure tests a window nobody ships.
+ */
+const NEAR_DUPLICATE_WINDOW_SECONDS = 120;
 
 /** Layla's scanner session. Full authority; the control for every refusal below. */
 let scanner = '';
@@ -158,13 +172,34 @@ interface ChargeResult {
 /**
  * A settled charge against salon B's customer, made the way the scanner makes
  * one: a fresh QR, then `POST /charges` on a real PIN session.
+ *
+ * IT CARRIES `confirmDuplicate: true`, AND THAT IS A DECISION RATHER THAN A FIX
+ * ---------------------------------------------------------------------------
+ * Lane A's near-duplicate guard (migration 0031, `NEAR_DUPLICATE_WINDOW_SECONDS`)
+ * refuses a second charge for the same member and the same basket inside 120
+ * seconds. Every `chargeOnce` in this file is salon B's customer charged for
+ * `[SV-B01]`, so from the guard's point of view this whole file is one long
+ * double-tap: it charges her twenty-odd times in four minutes for one blow-dry.
+ * Without the flag, twenty specs failed on a precondition and not one of them was
+ * about duplicates — which is what the baseline run at 08:54 Kuwait showed.
+ *
+ * A REAL COUNTER DOES NOT DO THIS. Two identical baskets 600ms apart is the
+ * scanner being double-tapped, which is precisely the incident the guard was built
+ * for. This fixture is a machine, so it says so with the flag the API provides for
+ * exactly this: "yes, charge her again for the same thing."
+ *
+ * WHAT THIS COSTS, AND WHERE IT IS PAID BACK. Passing the flag here makes every
+ * spec below blind to the guard — if lane A deleted it, nothing in this helper
+ * would notice. So the guard has its own block, § "the near-duplicate guard",
+ * which drives it UNCONFIRMED and is the only thing in this suite that does. That
+ * block was ablated to prove it is the one that holds.
  */
 async function chargeOnce(label: string): Promise<ChargeResult> {
   const token = await freshWalletToken();
   const res = await treq<ChargeResult>('POST', '/charges', {
     token: scanner,
     idempotencyKey: key(label),
-    body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+    body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
   });
   precondition(res.status === 200, `POST /charges answered ${res.status} ${res.raw}`);
   return res.body;
@@ -539,7 +574,7 @@ describe('POST /scans', () => {
     const charged = await treq<ChargeResult>('POST', '/charges', {
       token: scanner,
       idempotencyKey: key('scan-then-charge'),
-      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
     });
     expect(charged.status, `the scanned token could not charge: ${charged.raw}`).toBe(200);
   });
@@ -698,7 +733,7 @@ describe('POST /charges', () => {
     const first = await treq<ChargeResult>('POST', '/charges', {
       token: scanner,
       idempotencyKey: key('token-single-use-1'),
-      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
     });
     precondition(first.status === 200, `the first charge failed: ${first.raw}`);
 
@@ -738,7 +773,7 @@ describe('POST /charges', () => {
     // twice for one blow-dry.
     const token = await freshWalletToken();
     const k = key('charge-replay');
-    const body = { memberId: B_MEMBER, serviceIds: [B_SERVICE], token };
+    const body = { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true };
     const before = balanceOf(B_MEMBER);
 
     const first = await treq<ChargeResult>('POST', '/charges', {
@@ -2098,6 +2133,22 @@ describe('GET /charges marks a voided charge, so the scanner stops offering to v
 
 describe('two charges at once — the races the mock could not run', () => {
   /**
+   * EVERY RACE IN THIS BLOCK CARRIES `confirmDuplicate: true`, AND HERE THE REASON
+   * IS SHARPER THAN THE HELPER'S.
+   *
+   * These three specs each fire N identical charges at once and assert which ONE
+   * survives, and the whole point is *what* stops the others: the wallet token's
+   * single-use consumption, or the idempotency key. Lane A's near-duplicate guard
+   * refuses an identical basket inside 120 seconds, so without the flag it could
+   * answer the losers first — and the assertions on the money below would still
+   * pass, while measuring the duplicate guard instead of the thing in the title. A
+   * concurrency spec that a *different* guard satisfies is the failure mode this
+   * file exists to avoid.
+   *
+   * The flag therefore keeps these specs pointed at their own subject. What it does
+   * NOT do is prove the duplicate guard survives a race of its own — that is a
+   * separate question, and § "the near-duplicate guard" below is where it is asked.
+   *
    * PORTED FROM concurrency.test.ts, WHERE IT COULD NOT MEAN ANYTHING.
    *
    * That file runs against `packages/mock` — an in-memory `Map` in a single Node
@@ -2122,12 +2173,12 @@ describe('two charges at once — the races the mock could not run', () => {
       treq<any>('POST', '/charges', {
         token: scanner,
         idempotencyKey: key('token-race-a'),
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
       }),
       treq<any>('POST', '/charges', {
         token: scanner,
         idempotencyKey: key('token-race-b'),
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
       }),
     ]);
 
@@ -2184,12 +2235,12 @@ describe('two charges at once — the races the mock could not run', () => {
       treq<any>('POST', '/charges', {
         token: scanner,
         idempotencyKey: idem,
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
       }),
       treq<any>('POST', '/charges', {
         token: scanner,
         idempotencyKey: idem,
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
       }),
     ]);
 
@@ -2234,7 +2285,7 @@ describe('two charges at once — the races the mock could not run', () => {
         treq<any>('POST', '/charges', {
           token: scanner,
           idempotencyKey: key(`five-race-${i}`),
-          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
         }),
       ),
     );
@@ -2383,6 +2434,662 @@ describe('a double void says already_voided, not request_in_progress', () => {
       ),
       'two reversal rows exist for one charge',
     ).toBe('1');
+  });
+});
+
+
+// ===========================================================================
+// THE NEAR-DUPLICATE CHARGE GUARD — migration 0031
+// ===========================================================================
+
+/**
+ * THE ONLY PLACE IN THIS SUITE THAT DRIVES THE GUARD UNCONFIRMED.
+ *
+ * Every other charge in this file, in `promotions.test.ts` and in `deposit.test.ts`
+ * carries `confirmDuplicate: true`, because those files repeat one basket at machine
+ * speed and the guard refuses that by design. Each of them names this block as where
+ * the flag is paid back. So if these specs go soft, the guard has no cover anywhere.
+ *
+ * =========================================================================
+ * WHY NO IDEMPOTENCY TEST COULD EVER HAVE FOUND THIS
+ * =========================================================================
+ * This guard exists because of a traced incident, and the shape of that incident is
+ * the whole reason non-negotiable #4 was not already enough.
+ *
+ * A charge SUCCEEDED and the scanner failed to parse the reply, so the screen showed
+ * a failure over a wallet that had already been debited. The staff member reaches for
+ * the recovery the UI offers — `onRescan` — and that path **remints the idempotency
+ * key**, while the customer's app has meanwhile rotated her QR and minted a **fresh
+ * token**. So the second request is, by every mechanism the API has:
+ *
+ *   - a NEW idempotency key      → #4's replay guard sees an unrelated request
+ *   - a NEW wallet token         → the single-use consumption has nothing to refuse
+ *   - the same member and basket → and the customer pays twice
+ *
+ * Both existing guards are working correctly and neither one is looking at this. That
+ * is why the specs below use a fresh token AND a fresh key every time: anything less
+ * and one of the other two guards would answer, and this block would be measuring
+ * something already covered. The pair of specs at the top of this block makes that
+ * argument executable — the same two requests are refused unconfirmed and BOTH settle
+ * when confirmed, which is only possible if the duplicate guard is the sole thing
+ * standing there.
+ *
+ * =========================================================================
+ * WHAT WAS BROKEN, ONE LAYER AT A TIME — 2026-08-19, 12:34 Kuwait
+ * =========================================================================
+ * Recorded because a break that fails nothing IS the finding, and because the COUNT
+ * matters as much as the pass: a break that fails one spec tells you which layer went, and
+ * a break that fails eight tells you nothing.
+ *
+ * Five layers ablated one at a time in `api/src/services/charge.ts` and
+ * `api/src/routes/charges.ts`, each restored from a checksummed backup and verified
+ * against a clean `git status api/` before the next. All five figures are from the SAME
+ * tree as this file — an earlier table assembled from three different spec versions was
+ * discarded rather than reported, as was a run taken while the machine's load average was
+ * above 500 and docker-exec was timing out at 12s, which produced seventeen failures that
+ * were nothing to do with the ablation.
+ *
+ * `scanner.test.ts` is 89 specs, nine of them in this block.
+ *
+ *   1. `if (!input.confirmDuplicate)` → `if (false)`  — the guard never runs
+ *        → 5 failed, 83 passed. All five are in this block: the refusal, the confirm, the
+ *          order-independence, the window, and the refusal-order. The other 80 specs in
+ *          this file do not move, which is the point: BEFORE THIS BLOCK EXISTED, THE ENTIRE
+ *          GUARD COULD BE REPLACED BY `if (false)` AND THE SUITE STAYED GREEN. Same shape
+ *          as the `DELETE /bookings/{id}` deposit refund whose only decision was
+ *          replaceable by `if (false)` while 516 specs stayed green.
+ *
+ *   2. the `NOT EXISTS (… reverses_transaction_id …)` clause deleted — a voided charge
+ *      counts as a duplicate
+ *        → 1 failed, 87 passed: § "a VOIDED earlier charge is not a duplicate".
+ *          THE MOST VALUABLE OF THE FIVE, because the guard still refuses duplicates and
+ *          specs 1 and 2 stay green — the product breaks only in the direction that strands
+ *          a counter, where a staff member who voids a mistake cannot redo it for two
+ *          minutes. Nothing but a dedicated spec sees that.
+ *
+ *   3. `[...serviceIds].sort()` → `[...serviceIds]` — the hash stops being canonical
+ *        → 1 failed, 87 passed: § "the basket is order-independent". Every other duplicate
+ *          spec sends a single-service basket, where order is not a concept.
+ *
+ *   4. `NEAR_DUPLICATE_WINDOW_SECONDS` 120 → 86_400 — the window never ends
+ *        → 2 failed, 86 passed: § "the window has an end", plus the constant pin in
+ *          § "refuses a second charge" which reports the mismatch by name.
+ *          THIS ABLATION FOUND A DEFECT IN THIS BLOCK'S OWN FIXTURES. It first failed
+ *          EIGHT specs, because the setup helper aged her charges by "the window plus one"
+ *          and so was coupled to the constant under test. `clearHerChargeHistory` now
+ *          clears absolutely and without touching any clock; see its comment.
+ *
+ *   5. the `typeof body.confirmDuplicate !== 'boolean'` refusal deleted from
+ *      `routes/charges.ts` — a string is coerced
+ *        → 1 failed, 87 passed: § "confirmDuplicate must be a boolean".
+ *          THE ABLATION THAT MOVES MONEY: with the refusal gone, `confirmDuplicate: "no"`
+ *          is truthy and charges her again.
+ *
+ * Five layers, five landings, and not one of the five was caught by anything that existed
+ * before this block.
+ */
+describe('the near-duplicate charge guard — the double-tap no idempotency key can see', () => {
+  /**
+   * A charge with a fresh token and a fresh key, unconfirmed. The shape the incident
+   * produced, and the shape every spec in this block is built from.
+   */
+  async function unconfirmedCharge(
+    label: string,
+    serviceIds: string[] = [B_SERVICE],
+  ): Promise<any> {
+    const token = await mintWalletTokenFor(wallet, B_MEMBER);
+    return treq<any>('POST', '/charges', {
+      token: scanner,
+      idempotencyKey: key(label),
+      body: { memberId: B_MEMBER, serviceIds, token },
+    });
+  }
+
+  /**
+   * Move her recent charges back in time. Used by ONE spec — § "the window has an end"
+   * — because that is the only spec whose subject is the boundary.
+   *
+   * PLUS-ONE RATHER THAN EXACTLY THE WINDOW: the server compares
+   * `created_at >= now() - 120s`, so a row sitting exactly on the boundary is still
+   * inside it, and a spec positioned on an inclusive boundary flips with the round-trip
+   * time.
+   *
+   * SCOPED TO THIS MEMBER AND TO CHARGES, so it cannot reposition a `deposit_return` or
+   * another member's history — `deposit.test.ts` and `promotions.test.ts` assert on
+   * "the most recent transaction" for their own fixtures in this same database.
+   */
+  function ageHerCharges(seconds: number): void {
+    psql(
+      `UPDATE transaction SET created_at = created_at - interval '${seconds} seconds'
+        WHERE member_id = '${B_MEMBER}' AND kind = 'charge'
+          AND created_at > now() - interval '6 hours';`,
+    );
+  }
+
+  /**
+   * Start each spec from "she has never been charged for anything" — by clearing the
+   * BASKET HASH on her existing charges rather than by moving any clock.
+   *
+   * WHY NOT AGE THEM, WHICH IS WHAT THIS DID FIRST. Two reasons, and an ablation found
+   * the first:
+   *
+   * 1. AGEING COUPLES EVERY FIXTURE TO THE CONSTANT UNDER TEST. The first version aged
+   *    by 121 seconds — the window plus one. Widening the server's window to 86_400
+   *    (ablation 4) then failed EIGHT of this block's nine specs instead of the one
+   *    about the window: each spec's setup stopped clearing, so its FIRST charge was
+   *    refused as a duplicate of the previous spec's. A break that fails eight specs
+   *    says nothing about which layer broke. Nulling the hash is window-independent, so
+   *    a widened window now fails only the spec that is about the width.
+   *
+   * 2. AGEING A CHARGE MOVES IT ACROSS MIDNIGHT. `GET /charges` serves TODAY's charges,
+   *    and a setup step that pushes rows back an hour would silently empty that list
+   *    for any run between 00:00 and 01:00 Kuwait — the same class of bug as the
+   *    happy-hour window this suite could not pass between 23:00 and 01:00, and it
+   *    would have been introduced by a helper written to make things deterministic.
+   *
+   * IT IS A STATE THE PRODUCT ALREADY TOLERATES, not a fiction: migration 0031 says
+   * every charge written before it has a NULL hash, and the guard matches on a non-null
+   * one deliberately — "treating null as a wildcard would refuse legitimate charges
+   * against history nobody recorded". So this puts her charges exactly where a
+   * pre-migration charge already sits.
+   */
+  function clearHerChargeHistory(): void {
+    psql(
+      `UPDATE transaction SET basket_hash = NULL
+        WHERE member_id = '${B_MEMBER}' AND kind = 'charge' AND basket_hash IS NOT NULL;`,
+    );
+  }
+
+  it('refuses a second charge for the same basket, names the first, and moves no money', async () => {
+    clearHerChargeHistory();
+
+    const first = await unconfirmedCharge('dup-first');
+    precondition(first.status === 200, `the first charge failed: ${first.raw}`);
+    const balanceAfterFirst = balanceOf(B_MEMBER);
+    const visitsAfterFirst = visitsOf(B_MEMBER);
+
+    const second = await unconfirmedCharge('dup-second');
+
+    /**
+     * THE SYSTEM REFUSED — asserted as a refusal, not as an absence.
+     *
+     * "Nothing changed" is satisfied by a request that never arrived, by a 500, and
+     * by a `WHERE` that matched no rows. This suite has shipped that mistake before
+     * (a ledger probe once reported the owner could rewrite the ledger because its
+     * `WHERE` matched nothing), so the status and the error CODE come first and the
+     * money assertion comes after as the consequence.
+     */
+    expect(second.status, `a second identical charge answered: ${second.raw}`).toBe(409);
+    expect(second.body.error).toBe('possible_duplicate');
+
+    /**
+     * IT CARRIES THE EARLIER TRANSACTION, and this is the field the guard is worth
+     * having for. `charge.ts` is explicit: "a confirmation dialogue that cannot name
+     * what it is warning about trains people to tap through it." A bare "are you
+     * sure?" is worse than no guard, because it teaches the counter to confirm
+     * reflexively — and then the guard is a tap, not a control.
+     *
+     * Asserted against the FIRST charge's own id, so this cannot be satisfied by the
+     * handler echoing back some other charge of hers.
+     */
+    expect(second.body.transaction?.id, 'the refusal named no earlier transaction').toBe(
+      first.body.transaction.id,
+    );
+    expect(second.body.transaction.amountFils).toBe(-B_SERVICE_PRICE_FILS);
+    expect(second.body.transaction.status).toBe('settled');
+
+    /** What the client must send to proceed, named rather than left to guesswork. */
+    expect(second.body.confirmWith).toBe('confirmDuplicate');
+    /**
+     * AND IT IS THE WINDOW THIS FILE THINKS IT IS. This is the pin that stops the
+     * suite's constant drifting from the server's — without it, `PAST_THE_WINDOW` in
+     * § "the window has an end" could be computed from a stale 120 while the API had
+     * moved on, and that spec would pass by ageing a row past a window that no longer
+     * exists.
+     */
+    expect(
+      second.body.windowSeconds,
+      'the API reports a different near-duplicate window than this file pins. Every ' +
+        'window-relative fixture below is computed from the local constant.',
+    ).toBe(NEAR_DUPLICATE_WINDOW_SECONDS);
+    expect(
+      second.body.secondsAgo,
+      'secondsAgo is what the counter reads — "34 seconds ago" — so it has to be a real number',
+    ).toBeTypeOf('number');
+    expect(second.body.secondsAgo).toBeLessThanOrEqual(NEAR_DUPLICATE_WINDOW_SECONDS);
+
+    /**
+     * AND THE REFUSAL WAS TOTAL. #3 says a charge is one transaction, and the guard
+     * throws inside it: the debit, the visit and the token consumption all roll back
+     * together. A guard that refused the response but kept the debit would be the
+     * worst of both.
+     */
+    expect(
+      balanceOf(B_MEMBER),
+      'the refused duplicate still debited her — the guard answered 409 and took the money anyway',
+    ).toBe(balanceAfterFirst);
+    expect(visitsOf(B_MEMBER), 'the refused duplicate still counted a visit').toBe(
+      visitsAfterFirst,
+    );
+  });
+
+  it('and the confirm still gets through — the same two requests both settle with the flag', async () => {
+    /**
+     * THE OTHER HALF, AND THE HALF A GUARD USUALLY GETS WRONG. A refusal with no way
+     * forward is worse than no guard: two identical services back to back is
+     * legitimate, and a counter that cannot bill it is a counter that stops using the
+     * scanner.
+     *
+     * It is also the argument that neither other guard is doing this work. These are
+     * the same two requests as the spec above — fresh token, fresh key, same basket,
+     * same 120 seconds — and with the flag BOTH settle. So the thing that refused the
+     * second one a moment ago was the duplicate guard and nothing else.
+     */
+    clearHerChargeHistory();
+
+    const first = await unconfirmedCharge('confirm-first');
+    precondition(first.status === 200, `the first charge failed: ${first.raw}`);
+    const balanceAfterFirst = balanceOf(B_MEMBER);
+
+    const refused = await unconfirmedCharge('confirm-refused');
+    precondition(
+      refused.status === 409 && refused.body.error === 'possible_duplicate',
+      `the guard did not fire, so the confirm below proves nothing: ${refused.raw}`,
+    );
+
+    // The recovery: the SAME attempt, with the flag the refusal named.
+    const token = await mintWalletTokenFor(wallet, B_MEMBER);
+    const confirmed = await treq<any>('POST', '/charges', {
+      token: scanner,
+      idempotencyKey: key('confirm-retry'),
+      body: {
+        memberId: B_MEMBER,
+        serviceIds: [B_SERVICE],
+        token,
+        confirmDuplicate: true,
+      },
+    });
+
+    expect(
+      confirmed.status,
+      `the confirmed retry was refused, so a genuine second visit cannot be billed: ${confirmed.raw}`,
+    ).toBe(200);
+    expect(confirmed.body.transaction.id).not.toBe(first.body.transaction.id);
+    expect(
+      balanceOf(B_MEMBER),
+      'the confirmed charge did not debit her, or debited twice',
+    ).toBe(balanceAfterFirst - B_SERVICE_PRICE_FILS);
+  });
+
+  it('a VOIDED earlier charge is not a duplicate — the redo the void exists for', async () => {
+    /**
+     * THE CASE THAT WOULD HAVE MADE THE GUARD ACTIVELY WRONG, and `charge.ts` says so
+     * itself: "a void refunds the customer, so charging the same basket again is the
+     * correct next action — it is what a staff member does after voiding a mistake."
+     *
+     * Without the `NOT EXISTS` clause the guard refuses exactly the charge the void
+     * was performed in order to redo, and the counter is stuck for two minutes with no
+     * way forward but a flag she has no reason to think she needs. Ablation 2 above:
+     * deleting that clause fails only this spec, and every other duplicate spec here
+     * stays green.
+     */
+    clearHerChargeHistory();
+
+    const charged = await unconfirmedCharge('void-then-recharge');
+    precondition(charged.status === 200, `the charge failed: ${charged.raw}`);
+
+    const voided = await treq<any>('POST', '/voids', {
+      token: scanner,
+      idempotencyKey: key('void-for-redo'),
+      body: { transactionId: charged.body.transaction.id, reason: 'wrong service rung up' },
+    });
+    precondition(voided.status === 200, `the void failed: ${voided.raw}`);
+
+    const balanceAfterVoid = balanceOf(B_MEMBER);
+
+    // Same basket, same member, well inside 120 seconds, and NOT confirmed.
+    const redo = await unconfirmedCharge('redo-after-void');
+
+    expect(
+      redo.status,
+      'a charge whose predecessor was VOIDED was refused as a duplicate. The customer has her ' +
+        'money back and the salon cannot re-ring the visit for two minutes: ' +
+        redo.raw,
+    ).toBe(200);
+    expect(balanceOf(B_MEMBER)).toBe(balanceAfterVoid - B_SERVICE_PRICE_FILS);
+  });
+
+  it('a DIFFERENT basket is not a duplicate, and the guard is not just "charged recently"', async () => {
+    /**
+     * The distinguishing spec. Without it, a guard that refused ANY second charge to
+     * the same member inside two minutes would pass every other spec in this block —
+     * and would break a salon where a customer pays for a blow-dry and then buys a
+     * treatment at the same counter.
+     *
+     * `SV-B02` costs 14.000 against `SV-B01`'s 7.000, so the balance assertion cannot
+     * be satisfied by the two baskets having been confused.
+     */
+    clearHerChargeHistory();
+
+    const first = await unconfirmedCharge('basket-a', [B_SERVICE]);
+    precondition(first.status === 200, `the first charge failed: ${first.raw}`);
+    const balanceAfterFirst = balanceOf(B_MEMBER);
+
+    const second = await unconfirmedCharge('basket-b', [B_SERVICE_SECOND]);
+
+    expect(
+      second.status,
+      `a DIFFERENT basket was refused as a duplicate, so the guard keys on the customer rather ` +
+        `than on what she is being charged for: ${second.raw}`,
+    ).toBe(200);
+    expect(
+      balanceOf(B_MEMBER),
+      'the second charge debited the first basket\'s price, so the two baskets were confused',
+    ).toBe(balanceAfterFirst - B_SERVICE_SECOND_PRICE_FILS);
+  });
+
+  it('the basket is order-independent — [A,B] and [B,A] are one basket', async () => {
+    /**
+     * Migration 0031: "`[SV-01, SV-02]` and `[SV-02, SV-01]` are the same basket to a
+     * human at a counter, so they must be the same to this guard; the ids are sorted
+     * before hashing."
+     *
+     * This is the spec that fails when the `.sort()` goes, and NOTHING ELSE DOES —
+     * every other duplicate spec here sends a single-service basket, where order is
+     * not a concept. A canonicalisation with no spec on it is a canonicalisation that
+     * gets refactored away.
+     */
+    clearHerChargeHistory();
+
+    const first = await unconfirmedCharge('order-ab', [B_SERVICE, B_SERVICE_SECOND]);
+    precondition(first.status === 200, `the two-service charge failed: ${first.raw}`);
+    const balanceAfterFirst = balanceOf(B_MEMBER);
+
+    const reversed = await unconfirmedCharge('order-ba', [B_SERVICE_SECOND, B_SERVICE]);
+
+    expect(
+      reversed.status,
+      'the same two services in the other order was NOT seen as the same basket. A double-tap ' +
+        'whose client happens to build its array differently walks straight through the guard: ' +
+        reversed.raw,
+    ).toBe(409);
+    expect(reversed.body.error).toBe('possible_duplicate');
+    expect(reversed.body.transaction?.id).toBe(first.body.transaction.id);
+    expect(balanceOf(B_MEMBER), 'the refused reordered basket still debited her').toBe(
+      balanceAfterFirst,
+    );
+  });
+
+  it('the window has an end — the same basket two minutes later is a second visit', async () => {
+    /**
+     * A GUARD THAT NEVER STOPS REFUSING IS A DIFFERENT PRODUCT. 120 seconds is the
+     * decision ("a genuine repeat is a separate visit"), and a spec that only ever
+     * proves the refusal would pass just as well against a window of a day — which
+     * would mean a customer who comes back on her lunch break needs a manager.
+     *
+     * The clock is moved rather than waited on, the same way the expired-token spec
+     * back-dates `issued_at`: sleeping 121 seconds in a suite is not a test, it is a
+     * suite nobody runs. `ageHerCharges` ages HER CHARGES ONLY, so nothing else in this
+     * database is repositioned.
+     *
+     * THE ONLY SPEC IN THIS BLOCK THAT AGES BY A WINDOW-RELATIVE AMOUNT, and the only
+     * one that should be: `PAST_THE_WINDOW` is the constant plus one, so if the server's
+     * window widens this spec fails and the other eight do not. Ablation 4 is what
+     * bought that distinction — see `clearHerChargeHistory`.
+     *
+     * PLUS ONE, NOT EXACTLY THE WINDOW: the server's comparison is
+     * `created_at >= now() - 120s`, so a row at exactly the boundary is still inside
+     * it. A spec positioned ON an inclusive boundary flips with the round-trip time.
+     */
+    const PAST_THE_WINDOW = NEAR_DUPLICATE_WINDOW_SECONDS + 1;
+
+    clearHerChargeHistory();
+
+    const first = await unconfirmedCharge('window-first');
+    precondition(first.status === 200, `the first charge failed: ${first.raw}`);
+    const balanceAfterFirst = balanceOf(B_MEMBER);
+
+    // Prove the guard is armed before disarming it by the clock, or this spec passes
+    // on a guard that was never going to fire.
+    const inside = await unconfirmedCharge('window-inside');
+    precondition(
+      inside.status === 409,
+      `the guard did not fire inside the window, so moving the clock proves nothing: ${inside.raw}`,
+    );
+    precondition(
+      balanceOf(B_MEMBER) === balanceAfterFirst,
+      'the refused in-window charge moved money, so the baseline below is wrong',
+    );
+
+    // Now push her charge history just past the window — and no further.
+    ageHerCharges(PAST_THE_WINDOW);
+
+    const outside = await unconfirmedCharge('window-outside');
+    expect(
+      outside.status,
+      `the same basket ${PAST_THE_WINDOW}s later was still refused as a duplicate. The window ` +
+        `has no end, so a customer's second appointment of the day needs an override: ` +
+        outside.raw,
+    ).toBe(200);
+    expect(balanceOf(B_MEMBER)).toBe(balanceAfterFirst - B_SERVICE_PRICE_FILS);
+  });
+
+  it('confirmDuplicate must be a boolean — "no" does not authorise a second debit', async () => {
+    /**
+     * THE ONE COERCION ON THIS ENDPOINT THAT MOVES MONEY, and `routes/charges.ts` says
+     * exactly that: `confirmDuplicate: "no"` and `confirmDuplicate: 1` are both truthy
+     * in JavaScript, and "a string that reads as a refusal turning into a confirmation"
+     * is the failure. A client that serialises its form state as strings — which is
+     * most clients that have ever existed — would confirm every duplicate it meant to
+     * decline.
+     *
+     * REFUSED, not coerced, and not silently ignored either: ignoring it would answer
+     * `possible_duplicate`, which is safe but tells the client its flag was received.
+     * `400 invalid_confirm` is the only answer that tells the truth.
+     *
+     * Asserted for the two shapes that are dangerous — a refusal-shaped string and a
+     * number — plus `"true"`, which is the one a client is most likely to send by
+     * accident and would be a confirmation nobody typed.
+     */
+    clearHerChargeHistory();
+
+    const first = await unconfirmedCharge('coerce-first');
+    precondition(first.status === 200, `the first charge failed: ${first.raw}`);
+    const balanceAfterFirst = balanceOf(B_MEMBER);
+
+    for (const value of ['no', 'false', 'true', 1, 0] as unknown[]) {
+      const token = await mintWalletTokenFor(wallet, B_MEMBER);
+      const res = await treq<any>('POST', '/charges', {
+        token: scanner,
+        idempotencyKey: key(`coerce-${String(value)}`),
+        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: value },
+      });
+
+      expect(
+        res.status,
+        `confirmDuplicate: ${JSON.stringify(value)} answered ${res.status}. Anything but a 400 ` +
+          `means the endpoint made a decision about a second debit from a value nobody typed: ` +
+          res.raw,
+      ).toBe(400);
+      expect(res.body.error).toBe('invalid_confirm');
+      expect(
+        balanceOf(B_MEMBER),
+        `confirmDuplicate: ${JSON.stringify(value)} was treated as a confirmation and charged her ` +
+          'again',
+      ).toBe(balanceAfterFirst);
+    }
+  });
+
+  it('the duplicate refusal comes BEFORE the shortfall, so the counter is told the real problem', async () => {
+    /**
+     * PINNING AN ORDER, because it was discovered by accident and would flip silently.
+     *
+     * The guard runs at the top of the charge transaction and `insufficientBalance` is
+     * thrown further down, so a duplicate against a customer who is ALSO short answers
+     * `409 possible_duplicate` and not `402`. `deposit.test.ts` § "a shortfall on the
+     * remainder" found this the hard way: it asserts 402 and read 409.
+     *
+     * THIS ORDER IS THE RIGHT ONE and that is why it is pinned rather than reported. A
+     * 402 first would send the counter to top the customer up for a charge that should
+     * never have been made at all — money moving to fix a problem that does not exist.
+     *
+     * The spec is built so it cannot pass by accident: the SAME request is sent twice,
+     * and the second one is only reachable after the first has left her short. If the
+     * order ever flips, this reads `402` and says so.
+     */
+    clearHerChargeHistory();
+
+    const her = balanceOf(B_MEMBER);
+    // Leave her with less than one blow-dry, so a second charge cannot be afforded.
+    psql(
+      `UPDATE member SET balance_fils = ${B_SERVICE_PRICE_FILS + 1} WHERE id = '${B_MEMBER}';`,
+    );
+
+    try {
+      const first = await unconfirmedCharge('order-short-first');
+      precondition(
+        first.status === 200,
+        `the funded charge failed, so nothing below is about ordering: ${first.raw}`,
+      );
+      precondition(
+        balanceOf(B_MEMBER) < B_SERVICE_PRICE_FILS,
+        'she can still afford a second blow-dry, so the shortfall half of this spec is inert',
+      );
+
+      const second = await unconfirmedCharge('order-short-second');
+
+      expect(
+        second.status,
+        'a duplicate against a customer who is also short answered a shortfall rather than a ' +
+          'duplicate. The counter will top her up for a charge that should never be made: ' +
+          second.raw,
+      ).toBe(409);
+      expect(second.body.error).toBe('possible_duplicate');
+
+      /**
+       * AND CONFIRMING IT THEN CORRECTLY FAILS ON THE MONEY. The order is a matter of
+       * which refusal comes first, not of the guard hiding a shortfall for ever — a
+       * staff member who confirms must still be told the wallet is empty.
+       */
+      const token = await mintWalletTokenFor(wallet, B_MEMBER);
+      const confirmed = await treq<any>('POST', '/charges', {
+        token: scanner,
+        idempotencyKey: key('order-short-confirmed'),
+        body: {
+          memberId: B_MEMBER,
+          serviceIds: [B_SERVICE],
+          token,
+          confirmDuplicate: true,
+        },
+      });
+      expect(
+        confirmed.status,
+        `confirming a duplicate she cannot afford answered ${confirmed.status}: ${confirmed.raw}`,
+      ).toBe(402);
+      expect(confirmed.body.error).toBe('insufficient_balance');
+    } finally {
+      // Put her back, whatever happened above. Every spec after this one funds from
+      // this balance and a 7-fil wallet would fail all of them.
+      psql(`UPDATE member SET balance_fils = ${her} WHERE id = '${B_MEMBER}';`);
+    }
+  });
+
+  it('a charge RECORDS its basket, and only a charge may carry one', async () => {
+    /**
+     * TWO CLAIMS, AND THE FIRST IS THE LOAD-BEARING ONE NOTHING ELSE ASSERTS.
+     *
+     * 1. A settled charge actually carries a `basket_hash`. Every spec above tests the
+     *    guard's BEHAVIOUR, and all of them would still pass if a refactor populated the
+     *    column from somewhere other than the priced basket — or stopped populating it.
+     *    The guard's index is partial on `basket_hash IS NOT NULL`, so a charge written
+     *    without one is invisible to the guard for ever, and no response says so. That
+     *    is the silent version of this whole feature being off.
+     *
+     * 2. Migration 0031's CHECK, `transaction_basket_hash_is_charge_only`: "a `topup` or
+     *    an `adjustment` has no basket, and a column that could quietly hold one for
+     *    them would be a column nobody could interpret."
+     *
+     * HOW THE SECOND HALF IS ISOLATED, AND THE FIRST ATTEMPT THAT WAS WRONG. The
+     * obvious probe — take a real charge and flip `kind` to `topup` — IS refused, but by
+     * `transaction_amount_sign_matches_kind`: a charge holds a negative `amount_fils`
+     * and a topup must be positive, so that constraint answers first and 0031's is never
+     * reached. The spec passed its "was it refused" check while proving a different
+     * constraint. So the probe is now two INSERTs that differ ONLY in `basket_hash`, and
+     * the accepted one is what makes the refusal attributable:
+     *
+     *   topup + basket_hash NULL  → accepted   (so the row is otherwise legal)
+     *   topup + basket_hash set   → refused    (so the hash is the only reason)
+     *
+     * BOTH DIRECTIONS, because a constraint that refuses everything proves nothing —
+     * the same reasoning the negative-balance row on the go-live checklist records.
+     *
+     * `SET ROLE avo_app`: the claim is about what the database refuses the RUNNING
+     * SYSTEM, not a superuser. And the refusal is asserted BY CONSTRAINT NAME, so what
+     * passes is "the system refused" rather than "nothing changed" — which a request
+     * that never arrived would satisfy too.
+     */
+    clearHerChargeHistory();
+    const charged = await unconfirmedCharge('basket-hash-recorded');
+    precondition(charged.status === 200, `the charge failed: ${charged.raw}`);
+    const txId = charged.body.transaction.id;
+
+    // ---- 1. the charge recorded its basket -----------------------------------
+    const hash = scalar(
+      `select coalesce(basket_hash, '<null>') from transaction where id='${txId}'`,
+    );
+    expect(
+      hash,
+      'a settled charge carries NO basket_hash. The guard\'s index is partial on ' +
+        '`basket_hash IS NOT NULL`, so this charge is invisible to it and the next identical ' +
+        'tap goes through with nothing to compare against.',
+    ).not.toBe('<null>');
+    expect(hash.length, 'the recorded basket hash is not a hash').toBeGreaterThan(16);
+
+    // ---- 2. the CHECK, as avo_app, both directions ---------------------------
+    const legal = 'TX-QA-BH-LEGAL';
+    const withHash = 'TX-QA-BH-HASHED';
+    const insert = (id: string, basket: string): string => `
+      SET ROLE avo_app;
+      INSERT INTO transaction
+        (id, member_id, salon_id, branch_id, kind, amount_fils, method, status, reference,
+         settled_at, basket_hash)
+      SELECT '${id}', member_id, salon_id, branch_id, 'topup', 1000, method, 'settled',
+             'AVO-QA-BH', now(), ${basket}
+        FROM transaction WHERE id = '${txId}';`;
+
+    // Clean up any row a previous interrupted run left, as owner.
+    psql(`DELETE FROM transaction WHERE id IN ('${legal}', '${withHash}');`);
+
+    // The control: identical row, no hash. If THIS is refused the probe below is
+    // meaningless, so it is asserted rather than assumed.
+    psql(insert(legal, 'NULL'));
+    expect(
+      scalar(`select count(*) from transaction where id='${legal}'`),
+      'avo_app could not insert an ordinary topup at all, so the refusal below cannot be ' +
+        'attributed to the basket_hash',
+    ).toBe('1');
+
+    let refusal = '';
+    try {
+      psql(insert(withHash, `'deadbeefdeadbeefdeadbeefdeadbeef'`));
+    } catch (err) {
+      refusal = String((err as Error).message ?? err);
+    }
+
+    expect(
+      refusal,
+      'the database ACCEPTED a basket_hash on a topup row. Nothing else refuses it — the guard ' +
+        'reads only charge rows — so the value would sit in the ledger uninterpretable, and a ' +
+        'later query could believe it.',
+    ).toMatch(/transaction_basket_hash_is_charge_only/);
+    expect(
+      scalar(`select count(*) from transaction where id='${withHash}'`),
+      'the refused INSERT wrote the row anyway',
+    ).toBe('0');
+
+    // Take the control row back out — it is a fabricated topup and `money.test.ts`
+    // reconciles this member's ledger against her balance.
+    psql(`DELETE FROM transaction WHERE id = '${legal}';`);
   });
 });
 

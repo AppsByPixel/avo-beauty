@@ -83,6 +83,26 @@ unless it is explicitly deferred in writing.
         `concurrency.test.ts` § "a charge crossing a happy-hour boundary". Note this suite
         could not pass between 23:00 and 01:00 Kuwait until 2026-08-19; see the note on that
         fix in the commit log, and the all-minutes sweep that now guards it.
+      - **A SIXTH CASE, added 2026-08-19 (08:54 Kuwait baseline), which none of the five
+        above covers.** Lane A landed a near-duplicate charge guard (migration 0031) because
+        of a traced incident that neither idempotency nor the wallet token can see: a charge
+        SUCCEEDED, the scanner failed to parse the reply and showed a failure, and the
+        recovery the UI offers — `onRescan` — **remints the idempotency key** while the
+        customer's app mints a **fresh token**. So the second request is genuinely new by
+        every mechanism the API had, and the customer pays twice. No idempotency test can
+        reach it, which is why "double submit" being ticked above was not enough.
+      - Driven in `scanner.test.ts` § "the near-duplicate charge guard" — nine specs, and
+        the only place in the suite that charges UNCONFIRMED. Covered: the refusal carries
+        the earlier transaction and moves no money; the explicit confirm still gets through
+        (so a genuine second visit is billable); a VOIDED earlier charge is not a duplicate;
+        a different basket is not one; `[A,B]` and `[B,A]` are the same basket; the window
+        has an end; `confirmDuplicate` must be a boolean (`"no"` is refused, not coerced
+        into a confirmation); the duplicate refusal precedes the shortfall; and a charge
+        records its basket while the database refuses that hash on anything else.
+      - **Each layer was broken alone** and the failures land one guard per spec — the
+        method that found the `DELETE /bookings/{id}` hole. Numbers in the lane report.
+        Before this block existed the whole guard could be replaced by `if (false)` with the
+        suite staying green.
 - [x] Negative balance is impossible at the database level, not just in application code
       - Lane D, 2026-08-19 — **driven as the application role, both directions.**
         `member_balance_non_negative` — `CHECK (balance_fils >= 0)`,
@@ -224,6 +244,36 @@ unless it is explicitly deferred in writing.
         census that enumerates the call sites from source and demands a probe for each would go
         red when a new gated endpoint lands untested, and would also catch one gated on the
         **wrong** permission. Lane D's next slice; the row stays unticked until it exists.
+      - Lane D, 2026-08-19 (second pass) — **the OWNER CONSOLE's own gates are now driven,
+        and they widen this row rather than closing it.** The console is a second auth scope
+        with its own nine section permissions (`requirePlatform`), so #7 applies to it too
+        and nothing had called any of it.
+      - `campaigns.test.ts` § "the platform principal" probes the console gates directly
+        with the section OFF, using `PLT-002` (Mariam, analyst — `approvals` and `policies`
+        both false), which is a genuinely restricted console principal: an owner-only
+        fixture could not express this spec at all, because
+        `platform_admin_owner_holds_everything` makes every section true for an owner by
+        CHECK. **Every probe is mirrored as the owner**, so a 403 means authority rather
+        than a route that is broken shut.
+      - Driven: `GET /v1/platform/campaigns`, `GET /v1/platform/messaging-policy`,
+        `GET /v1/platform/policies/draft`, and — with a real campaign and a state assertion
+        after it — `POST /v1/platform/campaigns/{cid}/decision`, where the refused decision
+        is asserted to have left the campaign `pending` with no decider. Plus both surface
+        walls: all three merchant credentials (dashboard, scanner, wallet) are refused on a
+        console route with copy that names the surface, and a console credential is refused
+        on a merchant route with a 403 rather than a 500 — `requireDashboardPerm` reads
+        `staff_user`, a table a platform admin has no row in, so the interesting question
+        was whether it refuses cleanly.
+      - **One thing that looked like a finding and is not, recorded so it is not
+        re-reported:** `GET /v1/platform/policies` answers 200 to a console account without
+        `policies`. It is deliberately ungated — it serves the PUBLISHED policy set, which
+        is what non-negotiable #10 has the customer app render. The draft and the publish
+        verbs are the gated ones. The spec probes `/policies/draft` for that reason.
+      - **So the row's denominator grew.** The merchant census still stands at 9 of 31
+        pairs probed directly, and the console adds its own gated endpoints on top. The
+        census spec that enumerates `require*Perm` AND `requirePlatform` call sites from
+        source and demands a probe for each is still the thing that would make this row
+        self-maintaining, and it still does not exist. Not ticked.
 - [ ] Rate limiting on auth, top-ups, scans, support tickets
       - Lane D, 2026-08-19 — **one of the four named surfaces is limited. Not ticked.**
       - **auth — done, and driven.** Two independent limiters. Staff PIN: per-device rate limit
@@ -458,7 +508,7 @@ unless it is explicitly deferred in writing.
         of figure that belongs beside the CBK and counsel items on the Legal list.
 - [ ] Marketing consent honoured; receipts and support acknowledgements sent regardless
       of it and excluded from any unsubscribe-all path
-- [ ] Weekly-per-customer and monthly-per-salon caps and quiet hours enforced at send
+- [x] Weekly-per-customer and monthly-per-salon caps and quiet hours enforced at send
       - Lane C, 2026-08-19 — **nothing implements this yet.** `requireApproval`,
         `weeklyCapPerCustomer`, `monthlyCapPerSalon`, `quietFrom` and `quietTo` are typed in
         `packages/types` and `isInQuietHours` exists in `rules.ts`, but they have **zero
@@ -472,7 +522,75 @@ unless it is explicitly deferred in writing.
         merchant can never read or raise these values" — so the dashboard cannot be made
         truthful by fetching them. Copy is settled and Lane C will not paraphrase it; this
         needs Aftab.
-- [ ] A held campaign is reported back to the salon, never silently dropped
+      - Lane D, 2026-08-19 — **implemented since Lane C wrote the note above, and now
+        driven. Ticked, with two gaps named that are NOT this row.** Lane C's "zero
+        occurrences in `api/src`" was true when written and is stale: migration 0028 added
+        `platform_messaging_policy` and `campaign_send`, and `services/campaign.ts` is the
+        enforcement.
+      - `campaigns.test.ts` drives all three rules at send time, against the real API and
+        the real database, and the three are asserted to behave DIFFERENTLY because they are
+        different kinds of rule:
+        - **quiet hours → HOLD.** An approval inside the window leaves `status` at
+          `approved`, sets `heldReason`/`heldAt`, delivers zero rows, raises one
+          `campaign_held` merchant notification and writes one audit row.
+        - **monthly cap per salon → HOLD.** With the cap set to 1, the second campaign of
+          the month is held with a reason naming the limit, and delivers nothing.
+        - **weekly cap per customer → SKIP, not hold.** With the cap at 1 and exactly one of
+          three audience members already messaged, the campaign SENDS to the other two, the
+          capped one gets no row, and `result` reads "2 reached · 1 over the weekly cap".
+          Funded so the two outcomes cannot be confused — a fixture where all three were
+          capped would read the same whether the cap skipped or held.
+        - and **an entirely capped-out audience → HOLD**, because "0 reached" reported as a
+          successful send is the failure this boundary exists to prevent.
+      - `isInQuietHours` is the SHARED predicate from `packages/types`, resolved in the
+        SALON's zone. Every quiet-hours fixture in the spec is computed relative to the
+        salon's own current time rather than written as a literal hour, so the file passes at
+        every hour including across midnight — the lesson from the happy-hour suite that
+        could not pass between 23:00 and 01:00 Kuwait.
+      - The cap's evidence is append-only for the application: `avo_app` gets
+        `permission denied` on both UPDATE and DELETE of `campaign_send`, asserted by name.
+        A cap whose rows the API can delete is not a cap.
+      - **GAP 1, and it is lane A's, not this row's:** nothing reads `campaign_send` to
+        dispatch. `services/campaign.ts` says so itself — "a released campaign is recorded
+        as delivered and no push leaves the building". So the enforcement is real and
+        correct and currently guards a send that does not physically happen. It will apply
+        the moment a dispatcher lands, which is why this row is ticked; but do not read the
+        tick as "customers are receiving campaigns".
+      - **GAP 2 is the copy conflict Lane C names above, and it is untouched.** The
+        dashboard promises the merchant "22:00 to 09:00" and "at most two a week" as facts,
+        while the owner console makes both owner-configurable. Still needs Aftab. A spec
+        cannot resolve a contradiction between two pieces of settled copy.
+- [x] A held campaign is reported back to the salon, never silently dropped
+      - Lane D, 2026-08-19 — **driven end to end, including the part that makes a hold
+        different from a slow drop.** Non-negotiable #8's second half and
+        `design/README.md` gap 6.
+      - A hold is **not a fifth status**, and that is what makes this row turn on two
+        fields: `CampaignSchema` declares four statuses and a fifth on the wire is a value
+        every client's `.parse()` rejects, so `heldReason` and `heldAt` are the ONLY thing
+        distinguishing a campaign the platform refused to send from one on its way out.
+      - Those two fields reached the wire today, and **the suite is what reported it**:
+        `contract.test.ts` carried them as a `knownBug()` because `serialiseCampaign` omitted
+        both, and `knownBug()` fails when the correct assertion starts passing — so the
+        08:54 Kuwait run came back "This bug appears to be FIXED" rather than quietly green.
+        Both halves are now plain `it()`s, pinning the SHAPE on an ordinary campaign.
+      - `campaigns.test.ts` pins the VALUES on a campaign that really got held, read back
+        through the MERCHANT's own list endpoint rather than out of the decision reply —
+        which matters because the decision endpoint serialises a row it just wrote while the
+        list endpoint reads it back from Postgres, so a `heldAt` that fails to round-trip
+        would pass one and not the other. `heldAt` is asserted to be an ISO instant.
+      - Reported in all three places, asserted from the database: the fields on the
+        campaign, one `campaign_held` merchant notification (the only place a merchant can
+        learn of a hold), and one audit row.
+      - **One bell, not one per retry.** Three further release passes while still inside
+        quiet hours leave exactly one unresolved notification. A merchant with a hundred
+        identical notifications stops reading them, which is the same outcome as never
+        being told.
+      - **And the hold is a REASON, not a rejection.** `jobs/campaign-release-once.ts` is
+        executed by a spec — quiet hours are ended by moving the policy, the job sends the
+        campaign to the full audience, `held_reason` clears, the notification RESOLVES, and
+        a second pass sends nothing further. That runner's sibling (the no-show one) was
+        built for evidence and STATUS.md records it was never once executed by a spec; this
+        one now is.
 
 ## Store submission
 

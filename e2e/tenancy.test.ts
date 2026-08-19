@@ -1010,7 +1010,7 @@ describe('scope — a dashboard credential must not reach the scanner surface', 
     const charge = await treq<{ transaction: { id: string } }>('POST', '/charges', {
       token: bScanner,
       idempotencyKey: key('scanner-charge-control'),
-      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE] },
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], confirmDuplicate: true },
     });
     expect(charge.status, charge.raw).toBe(200);
     expect(charge.body.transaction.id).toMatch(/^TX-/);
@@ -1096,7 +1096,7 @@ describe('money — salon B cannot move salon A money', () => {
     const charge = await treq<{ transaction: { id: string } }>('POST', '/charges', {
       token: bScanner,
       idempotencyKey: key('own-charge'),
-      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE] },
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], confirmDuplicate: true },
     });
     expect(charge.status, charge.raw).toBe(200);
     expect(charge.body.transaction.id).toMatch(/^TX-/);
