@@ -56,9 +56,21 @@
  *   audit       the platform-wide audit read. The record of authority, across
  *               every salon.
  *
- * `reports` is the fourth ungated section and gets no column here, because
- * nothing in this slice serves it. When CSV export lands it needs a chip too,
- * and adding one then is a smaller decision than guessing at it now.
+ * `reports` is the fourth ungated section and STILL gets no column — but the
+ * reason has to be restated, because the trigger this comment originally named has
+ * since fired without the condition behind it firing.
+ *
+ * It used to read "when CSV export lands it needs a chip too". CSV export HAS
+ * landed: `routes/reports.ts` serves `GET /salons/{id}/reports/{kind}[.csv]`. It is
+ * a MERCHANT endpoint, salon-scoped, and gated per kind on the staff permission
+ * governing the section it exports (`services/reports.ts` § the gate). No console
+ * route reads reports across salons, so there is still no ungated door and #7 is
+ * still satisfied without a column.
+ *
+ * So the condition is not "CSV export exists" — that was a proxy, and a proxy for a
+ * gate is what goes stale. The condition is: A PLATFORM-SCOPED ENDPOINT SERVING
+ * REPORTS. Add `perm_reports` when one is written, and not before; a column nothing
+ * checks is an authority model nobody is enforcing.
  *
  * REPORTED TO TRUNK: the design's chip list and its own sidebar disagree by
  * four. That is a design gap rather than a build decision, and the three columns
