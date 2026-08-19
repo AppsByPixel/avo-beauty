@@ -55,6 +55,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Fils } from '@avo/types';
 import { ApiError, newIdempotencyKey } from '../api/client';
+import { toLoadFailure, type LoadFailure } from '../domain/loadFailure';
 // The salon is configuration, not a request — see config/salon.ts.
 import { SALON_ID as SALON_FROM_CONFIG } from '../config/salon';
 import { getProducts, placeOrder, type OrderResult, type Product } from '../api/shop';
@@ -89,8 +90,17 @@ export interface ShopState {
   status: ShopStatus;
   /** Null until the catalogue lands. Never an empty array standing in for it. */
   products: Product[] | null;
-  /** The reference on a failed load, for the error screen. */
-  reference: string | null;
+  /**
+   * Populated on a failed load, for the error screen — the KIND included.
+   *
+   * It used to be the reference alone, and the screen therefore hardcoded
+   * `kind="server"`: the one thing the failure screen branches on was the one
+   * thing this state threw away. A 403 rendered "We couldn't load your wallet"
+   * with a Try again that could only fail again, which is the exact defect
+   * `FailureScreen`'s own header warns about. Mirrors `useWalletHome`'s
+   * `failure`, which had the shape right from the start.
+   */
+  failure: LoadFailure | null;
   cart: Cart;
   lines: PricedLine[];
   total: Fils;
@@ -119,7 +129,7 @@ export type ShopController = ShopState & ShopActions;
 export function useShop(balanceFils: number, onPaid: () => void): ShopController {
   const [status, setStatus] = useState<ShopStatus>('loading');
   const [products, setProducts] = useState<Product[] | null>(null);
-  const [reference, setReference] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ShopState['failure']>(null);
   const [cart, setCart] = useState<Cart>({});
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<CheckoutRefusal | null>(null);
@@ -150,7 +160,7 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
       .then((items) => {
         if (!aliveRef.current) return;
         setProducts(items);
-        setReference(null);
+        setFailure(null);
         setStatus('ready');
       })
       .catch((err: unknown) => {
@@ -164,7 +174,12 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
           setStatus('off');
           return;
         }
-        setReference(err instanceof ApiError ? err.reference : null);
+        /*
+          The kind travels with the reference. `forbidden` must reach the screen
+          as itself, because that is what suppresses a retry button; flattening
+          it to `server` here is what the previous version did.
+        */
+        setFailure(toLoadFailure(err));
         setStatus('failed');
       });
     // `products` is read only to decide whether to blank; re-running on it would
@@ -245,7 +260,7 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
   return {
     status,
     products,
-    reference,
+    failure,
     cart,
     lines,
     total,

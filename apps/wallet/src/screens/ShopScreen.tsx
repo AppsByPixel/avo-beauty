@@ -83,9 +83,17 @@ export function ShopScreen({
   if (shop.status === 'failed') {
     return (
       <FailureScreen
-        kind="server"
-        message={copy.errorBody}
-        reference={shop.reference ?? '—'}
+        /*
+          THE SERVER'S KIND, not a hardcoded one. This was `kind="server"` with
+          `copy.errorBody` as the message, which meant a 403 drew the retryable
+          "we failed" screen and a Try again that could only fail again — the
+          defect `FailureScreen`'s header names. `message` matters only on the
+          `forbidden` branch, where the screen shows the server's own sentence
+          instead of our words; the other kinds ignore it and use `errorBody`.
+        */
+        kind={shop.failure?.kind ?? 'server'}
+        message={shop.failure?.message ?? copy.errorBody}
+        reference={shop.failure?.reference ?? '—'}
         onRetry={shop.retry}
         retrying={false}
       />

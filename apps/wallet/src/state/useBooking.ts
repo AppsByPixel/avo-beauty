@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookableArtist, Salon } from '@avo/types';
-import { ApiError, newIdempotencyKey, type FailureKind } from '../api/client';
+import { ApiError, newIdempotencyKey } from '../api/client';
 import {
   cancelBooking,
   createBooking,
@@ -52,30 +52,18 @@ export type StepName = 'service' | 'artist' | 'day' | 'review' | 'confirmed';
 /** The four numbered steps of the design's progress bar. `confirmed` is past it. */
 export const TOTAL_STEPS = 4;
 
-export interface LoadFailure {
-  kind: FailureKind;
-  message: string;
-  reference: string;
-  /** The API's `error` field, when it sent one. */
-  code: string | null;
-}
+/**
+ * Re-exported from `domain/loadFailure.ts`, which owns the type and the mapping.
+ * The private `toFailure` that used to live here was one of three copies of the
+ * same reduction, none of them with a spec; see that module's header.
+ */
+export type { LoadFailure } from '../domain/loadFailure';
+import { toLoadFailure as toFailure, type LoadFailure } from '../domain/loadFailure';
 
 export type LoadState<T> =
   | { status: 'loading' }
   | { status: 'ready'; data: T }
   | { status: 'failed'; failure: LoadFailure };
-
-function toFailure(err: unknown): LoadFailure {
-  if (err instanceof ApiError) {
-    return { kind: err.kind, message: err.message, reference: err.reference, code: err.code };
-  }
-  return {
-    kind: 'server',
-    message: 'Something went wrong.',
-    reference: 'WLT-0000-0000',
-    code: null,
-  };
-}
 
 /**
  * A reschedule reuses this whole machine from step 3 onward.
