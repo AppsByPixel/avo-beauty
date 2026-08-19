@@ -132,20 +132,60 @@ export interface Copy {
    * two words, which is how one language ends up saying something the other does
    * not.
    *
-   * There is still no `signInForgot`, and its absence is a decision rather than an
-   * oversight: the design offers the link (:104) and there is no member
-   * password-reset endpoint — `/auth/staff/password-reset` is staff-only. A link
-   * that does nothing when a customer cannot get into her wallet is worse than no
-   * link, so it is omitted and reported.
-   *
-   * THE OTHER HALF OF THAT PARAGRAPH IS NOW BUILT. It used to read "and no
-   * `signInCreateAccount` … there is no registration endpoint at all".
-   * `POST /auth/member/signup` landed, so design:107's "New here? · Create
-   * account" is a real destination and the two strings below are the design's own,
-   * in both languages.
+   * `signInForgot` WAS ABSENT BY DECISION AND THE DECISION'S PREMISE HAS EXPIRED.
+   * The old paragraph read: "there is no member password-reset endpoint —
+   * `/auth/staff/password-reset` is staff-only. A link that does nothing when a
+   * customer cannot get into her wallet is worse than no link, so it is omitted
+   * and reported." The report was answered: `POST /auth/member/password-reset/request`
+   * and `POST /auth/member/password-reset` are real (api/src/routes/auth.ts:835,
+   * :943), so design:104's link has a destination and the string below is the
+   * design's own, in both languages. Third entry in this file's own pattern —
+   * `signInCreateOne` went through the identical absence-then-built cycle when
+   * `POST /auth/member/signup` landed.
    */
   signInNoAccount: string;
   signInCreateOne: string;
+  /** design:104 — "Forgot password?", the link under the sign-in form. */
+  signInForgot: string;
+
+  /**
+   * The reset-request screen — design's `authScreen === 'forgot'`, a sibling of
+   * sign-in and signup, with a `resetSent` sub-state.
+   *
+   * FIVE OF THE SEVEN ARE THE DESIGN'S OWN in both languages. The exceptions:
+   *
+   *   resetSub       the design's sentence names a USERNAME ("Enter your
+   *                  username — we'll send a reset link to your WhatsApp."), and
+   *                  there is no member username anywhere in this system — the
+   *                  same settled conflict `signInScreen` documents. EN is the
+   *                  design's sentence with the identity corrected to the phone;
+   *                  the Arabic names the username too, so it is an AR GAP rather
+   *                  than a spliced sentence no native speaker wrote.
+   *
+   * WHAT `resetSentSub` MUST NEVER BECOME: a conditional. The server answers 202
+   * whether or not the pair matched — unknown phone and right-phone-wrong-salon
+   * are byte-identical, deliberately, so a login form cannot be used as a
+   * customer-list oracle — and this screen renders the SAME sentence on every
+   * 202. One sentence for both outcomes is the anti-enumeration posture rendered
+   * as copy; a "we couldn't find that number" branch here would undo the
+   * server's whole property. (The drawn sentence does claim a link is on its
+   * way, which on an unknown phone is not a fact — recorded and escalated, but
+   * it is the design's sentence and it is uniform, which is the load-bearing
+   * half.)
+   */
+  resetTitle: string;
+  resetSub: string;
+  /** INVENTED — the design's forgot-screen validation reuses `errEmpty`, which
+      names a username and a password; this form has one field and it is the
+      phone. Same correction, same marking, as `signInErrEmpty`. */
+  resetErrEmpty: string;
+  /** INVENTED — the design's button carries no busy label, same as
+      `signInWorking` and `signUpWorking`. */
+  resetWorking: string;
+  resetBtn: string;
+  resetSentTitle: string;
+  resetSentSub: string;
+  backToLogin: string;
   /**
   /**
    * The salon's name and the word "Wallet", above the sign-in form (design:86).

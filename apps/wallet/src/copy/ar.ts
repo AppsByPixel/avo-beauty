@@ -230,6 +230,21 @@ export const ar: Copy = {
   signInOffline: en.signInOffline, // AR GAP
   signInNoAccount: 'أول مرة معنا؟', // design:1356
   signInCreateOne: 'أنشئي حساباً', // design:1356
+  signInForgot: 'نسيت كلمة المرور؟', // design's forgot, drawn
+
+  // ------------------------------------------------- reset request screen --
+  resetTitle: 'إعادة تعيين كلمة المرور', // design's resetTitle, drawn
+  // AR GAP, deliberately: the design's Arabic names a USERNAME (أدخلي اسم
+  // المستخدم…) and the identity is the phone. Swapping one noun into a designed
+  // sentence would be Arabic no native speaker wrote — the exact thing AR_GAPS
+  // exists to prevent — so the English adaptation stands in until review.
+  resetSub: en.resetSub, // AR GAP
+  resetErrEmpty: en.resetErrEmpty, // AR GAP — INVENTED in English, untranslated
+  resetWorking: en.resetWorking, // AR GAP — INVENTED in English, untranslated
+  resetBtn: 'إرسال الرابط', // design's resetBtn, drawn
+  resetSentTitle: 'تحقّقي من واتساب', // design's resetSentTitle, drawn
+  resetSentSub: 'رابط إعادة التعيين في طريقه إلى رقمكِ المسجّل.', // design's resetSentSub, drawn
+  backToLogin: 'العودة لتسجيل الدخول', // design's backToLogin, drawn
 
   // ---------------------------------------------------------------- signup --
   /*
@@ -640,6 +655,9 @@ export const AR_GAPS = [
   'signInWorking',
   'signInErrEmpty',
   'signInOffline',
+  'resetSub',
+  'resetErrEmpty',
+  'resetWorking',
   // ---- signup. The design's Create account screen has no server behind it, so
   // its Arabic covers the three client-side validations and none of the ten
   // refusals `POST /auth/member/signup` can answer with. `signUpErrShort` is
