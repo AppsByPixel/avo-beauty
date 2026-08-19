@@ -359,11 +359,19 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
             })();
           }}
           /**
-           * The WhatsApp reset-link flow lives on the auth screens, which are
-           * not built. api-contract.md rule 5 is explicit that this is a
-           * separate flow and not a bypass of `current`, so it must not quietly
-           * unlock the password sheet. Until the reset screen exists it returns
-           * to Home rather than pretending to send a link. Reported.
+           * THE BLOCKER IS A MISSING ENDPOINT, NOT MISSING SCREENS. This read
+           * "the auth screens, which are not built" — they are built
+           * (`SignInScreen`, `SignUpScreen`). What does not exist is a member
+           * password-reset endpoint: `api/src/routes/auth.ts` carries
+           * `/auth/staff/password-reset` and `/auth/platform/password-reset`,
+           * and `/members/me/password` requires being signed in already.
+           *
+           * So the behaviour is unchanged and still correct — api-contract.md
+           * rule 5 is explicit that this is a separate flow and not a bypass of
+           * `current`, so it must not quietly unlock the password sheet, and
+           * returning Home beats pretending to send a link. Only the stated
+           * reason was wrong, and a wrong reason points the next reader at the
+           * wrong half of the work. Still reported, against `api/`.
            */
             onForgotPassword={() => setScreen('home')}
           />

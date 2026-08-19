@@ -59,15 +59,34 @@ import { AccountSkeleton } from '../components/account/AccountSkeleton';
 interface Props {
   onBack: () => void;
   /**
-   * Ends the session. The wallet's auth slice is not built — there is no login
-   * screen and `api/client.ts` sends no bearer token — so App's implementation
-   * clears local state and returns Home. Reported; see the lane notes.
+   * Ends the session — a real server sign-out, not a local clear.
+   *
+   * THIS COMMENT WAS STALE FOR SEVERAL MERGES and was cited as authority for "the
+   * wallet has no auth slice" while briefing other lanes. It read: "The wallet's
+   * auth slice is not built — there is no login screen and `api/client.ts` sends
+   * no bearer token — so App's implementation clears local state and returns
+   * Home." Every clause was false: `SignInScreen` and `SignUpScreen` exist,
+   * `client.ts` sends `authorization: Bearer`, and `App.tsx`'s handler awaits
+   * `signOut()` before `clearLocalState()`.
+   *
+   * The implementation had been corrected and the comment had not, which is the
+   * worse of the two failure modes: nothing was broken, so nothing failed, so
+   * only a reader was misled.
    */
   onLogOut: () => void;
   /**
-   * "I forgot my current password" → the WhatsApp reset-link flow, which lives
-   * on the not-yet-built auth screens. api-contract.md rule 5 is explicit that
-   * this is a separate flow and NOT a way around `current`.
+   * "I forgot my current password" → the WhatsApp reset-link flow.
+   *
+   * THE BLOCKER IS THE ENDPOINT, NOT THE SCREENS. This said the flow "lives on
+   * the not-yet-built auth screens"; those screens are built. What does not exist
+   * is a MEMBER password-reset endpoint — `api/src/routes/auth.ts` has
+   * `/auth/staff/password-reset` and `/auth/platform/password-reset`, and
+   * `/members/me/password` is a change that requires being signed in already.
+   * So the gap is real and the behaviour below is still right; only the reason
+   * was wrong, and a wrong reason sends the next reader to build the wrong half.
+   *
+   * api-contract.md rule 5 is explicit that this is a separate flow and NOT a way
+   * around `current`.
    */
   onForgotPassword: () => void;
 }

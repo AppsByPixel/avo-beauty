@@ -6,22 +6,31 @@
  * week summary in the footer.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * 1 · WHY THE WEEK IS NOT DRAWN UNTIL A SOURCE IS CHOSEN
+ * 1 · THE WEEK IS READ ON OPEN, AND FOR THREE MERGES IT WAS NOT
  * ═══════════════════════════════════════════════════════════════════════════
- * Because nothing can read it. `PUT /artists/me/availability` writes the week;
- * there is no `GET /artists/me`, `GET /artists/me/availability` falls through
- * to the `:id` route and 404s, and `GET /salons/{id}/artists` needs
- * `perms.team` which the artist account deliberately does not have. All three
- * were checked against the running API — src/api/artist.ts records it.
+ * This section used to be titled "WHY THE WEEK IS NOT DRAWN UNTIL A SOURCE IS
+ * CHOSEN" and it opened "Because nothing can read it… there is no
+ * `GET /artists/me`". That route exists — `api/src/routes/artists.ts:658`,
+ * scanner scope, no permission — and its own header credits this lane for asking
+ * for it. The ask was granted, the comment was never updated, and the workaround
+ * outlived the gap it was written for.
  *
- * The design shows the week already on screen when the artist arrives. It
- * cannot be, so the screen opens on the design's own first control — the source
- * toggle — and the PUT that answers it returns her real row. Choosing "Set
- * manually" when she is already manual writes nothing at all: the API returns
- * before opening a transaction when nothing changed.
+ * WHAT THE WORKAROUND COST, which is why this is a defect and not tidying: the
+ * screen opened on the source toggle and took her week from the PUT's response.
+ * So a Google-synced artist could not LOOK at her own hours without tapping
+ * "Set manually" — which switches her off her calendar. The one case the old
+ * reasoning called harmless ("choosing Manual when she is already manual writes
+ * nothing") was the only case it was harmless in.
  *
- * REPORTED. One route — `GET /artists/me`, returning the `serialiseArtist`
- * shape the PUT already returns — removes this state entirely.
+ * Now: `fetchMyArtist()` on mount, and the design's own layout — the week already
+ * on screen when she arrives — is finally what renders. Which also means this
+ * screen has a real LOADING state for the first time, and therefore a real
+ * failure taxonomy on the read: `not_an_artist` explains, `offline` is her
+ * connection, anything else is ours.
+ *
+ * Still true, and still checked: `GET /artists/me/availability` falls through to
+ * the `:id` route and 404s, and `GET /salons/{id}/artists` needs `perms.team`
+ * which the artist account deliberately lacks.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * 2 · THE 409 IS SURFACED, NOT ONLY PREVENTED
@@ -45,10 +54,11 @@
  * server's row after every save.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ApiError } from '../api/client';
 import {
+  fetchMyArtist,
   putMyAvailability,
   SLOT_LENGTHS,
   type ArtistRow,
@@ -58,7 +68,7 @@ import {
 import { copy } from '../copy/en';
 import { color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { LinkButton, PrimaryButton } from '../components/Buttons';
-import { EmptyState, Refusal } from '../components/States';
+import { EmptyState, Refusal, SkeletonRows } from '../components/States';
 import { useSession } from '../state/session';
 
 /** design:645 — the stepper moves in half-hours. */
@@ -123,6 +133,11 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
    * screen behind this alert.
    */
   const [offline, setOffline] = useState(false);
+  /**
+   * The initial read. True until `GET /artists/me` answers one way or another —
+   * a state this screen could not have had while it opened on a toggle instead.
+   */
+  const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
   const [notArtist, setNotArtist] = useState(false);
 
@@ -131,6 +146,54 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
   const slotMinutes: SlotLength = (draftSlot ??
     (artist?.slotMinutes as SlotLength | undefined) ??
     30) as SlotLength;
+
+  /**
+   * HER WEEK, READ ON OPEN — `GET /artists/me`.
+   *
+   * The read this screen went three merges without, while a comment above
+   * asserted it did not exist. See section 1 of the header for what the
+   * workaround cost a Google-synced artist.
+   *
+   * Failure taxonomy matches the write path exactly, and in the same order:
+   * `reportFailure` first because a 401 is a dead session and not a screen
+   * error; `not_an_artist` before the kind checks because it is a coded 404;
+   * then `offline`; then ours. The pick-a-source state below stays as the
+   * recovery for a failed read — choosing a source is a write that also returns
+   * her row, so she is not stuck behind a read that will not complete.
+   */
+  useEffect(() => {
+    const controller = new AbortController();
+    let alive = true;
+    fetchMyArtist(accessToken, controller.signal)
+      .then((row) => {
+        if (!alive) return;
+        setArtist(row);
+      })
+      .catch((err: unknown) => {
+        if (!alive || controller.signal.aborted) return;
+        if (reportFailure(err)) return;
+        if (err instanceof ApiError) {
+          if (err.code === 'not_an_artist') {
+            setNotArtist(true);
+            return;
+          }
+          if (err.kind === 'offline') {
+            setOffline(true);
+            return;
+          }
+          setFailed(err.message);
+          return;
+        }
+        setFailed(copy.errorBody);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+      controller.abort();
+    };
+  }, [accessToken, reportFailure]);
 
   const send = useCallback(
     async (patch: Parameters<typeof putMyAvailability>[0]) => {
@@ -316,11 +379,25 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
         ) : null}
 
         {/*
-          The first-open state. Not a failure and not an empty week — it is
-          "choose a source and your week loads", which is the honest description
-          of a screen whose read endpoint does not exist yet.
+          The read, in flight. Layout-shaped rows rather than a spinner
+          (interaction-spec §4) — and no figure anywhere, because the footer
+          summary is derived from the week and a zero there would be a count
+          she does not have yet.
         */}
-        {artist === null ? (
+        {loading ? (
+          <View style={styles.body}>
+            <SkeletonRows count={4} />
+          </View>
+        ) : null}
+
+        {/*
+          The RECOVERY state, no longer the first-open state. After a successful
+          read `artist` is set and the week renders, so this shows only when the
+          read failed — and choosing a source is a write that returns her row,
+          which is why it is still worth offering rather than leaving her behind
+          a read that will not complete.
+        */}
+        {!loading && artist === null ? (
           <View style={styles.body}>
             <EmptyState
               title={copy.pickSourceTitle}

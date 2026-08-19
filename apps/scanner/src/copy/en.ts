@@ -461,12 +461,17 @@ export const copy = {
   /** `409 google_not_connected` — no calendar to switch back to. */
   noCalendarTitle: 'No calendar connected',
   /**
-   * The first-open state, and the endpoint that would remove it.
+   * THE RECOVERY STATE, and it used to be the first-open state.
    *
-   * There is no `GET /artists/me`, so the week cannot be drawn before a source
-   * is chosen — see src/api/artist.ts for the three routes that were checked.
-   * Choosing one is the design's own first control and the PUT returns the row,
-   * so nothing is invented and nothing is probed. Reported.
+   * This comment read "There is no `GET /artists/me`, so the week cannot be drawn
+   * before a source is chosen". That route exists — `api/src/routes/artists.ts:658`
+   * — and `ScheduleScreen` reads it on mount now, so after a successful read the
+   * week is simply on screen and these two strings never render.
+   *
+   * They are kept, not deleted, because they are still the honest thing to say
+   * when the READ failed: choosing a source is a write that returns her row, so
+   * it is a way forward rather than a dead end. The sentence is true in that
+   * case and was true in the old one; only the reason it appears has changed.
    */
   pickSourceTitle: 'Choose where your hours come from',
   pickSourceBody:
