@@ -69,6 +69,13 @@ export interface SalonMetrics {
   knetSharePercent: number;
   repeatRatePercent: number;
   upcomingAppointments: number;
+  /**
+   * ISO instant (with offset) of the next still-to-start booking, or null when
+   * the count is 0. SAME QUERY as the count — see the Upcoming block below.
+   * `SalonMetricsSchema` declared this before it was served (widen-then-serve);
+   * once this ships, the schema's `.optional()` comes off.
+   */
+  nextAppointmentAt: string | null;
 }
 
 /**
@@ -265,17 +272,40 @@ export async function computeMetrics(
    * remaining appointments — the same boundary that put a 21:30Z charge on the wrong
    * day in services/reports.ts § sales.
    */
+  /**
+   * THE INSTANT COMES OUT OF THE SAME QUERY AS THE COUNT — `min(starts_at)` over
+   * the identical predicate, not a second query that can drift from the first. A
+   * count of 3 beside a null "next", or a "next" outside the count's window, is a
+   * contract violation rather than a rendering choice, and one SELECT makes the
+   * disagreement unrepresentable: `min` over the rows `count` counted is null
+   * exactly when the count is 0, by construction rather than by discipline.
+   */
   const upcomingRows = await db.execute(sql`
-    SELECT count(*) AS upcoming
+    SELECT count(*) AS upcoming, min(starts_at) AS next_at
       FROM booking
      WHERE salon_id = ${salon.id}
        AND status = 'deposit_held'
        AND starts_at >= ${at(now)}
        AND starts_at < ${at(dayEnd)}
   `);
-  const upcomingAppointments = int(
-    (upcomingRows as unknown as Array<{ upcoming: unknown }>)[0]?.upcoming,
-  );
+  const upcomingRow = (upcomingRows as unknown as Array<{ upcoming: unknown; next_at: unknown }>)[0];
+  const upcomingAppointments = int(upcomingRow?.upcoming);
+  /**
+   * AN INSTANT, NOT A RENDERED TIME. `DateTimeSchema` is an ISO string with
+   * offset; the dashboard localises it into "next at 4:30 PM" itself, in the
+   * salon's zone and the viewer's language. Pre-formatting here would bake one
+   * zone and one language into a field two languages read.
+   *
+   * The driver hands a raw-`sql` timestamptz back without a Drizzle column to
+   * map through, so it is normalised through `Date` rather than trusted to
+   * already be ISO — and `toISOString()`'s trailing `Z` is a valid offset for
+   * `z.string().datetime({ offset: true })`.
+   */
+  const rawNext = upcomingRow?.next_at;
+  const nextAppointmentAt =
+    rawNext === null || rawNext === undefined
+      ? null
+      : new Date(rawNext as string | Date).toISOString();
 
   return {
     activeMembers,
@@ -284,18 +314,11 @@ export async function computeMetrics(
     knetSharePercent,
     repeatRatePercent,
     /**
-     * A REAL COUNT NOW. See the query above for what it includes and what it
-     * deliberately does not.
-     *
-     * The tile's SUB-LABEL is still not served: "next at 4:30 PM" needs the next
-     * booking's start instant, and there is no field for it. Adding one means
-     * editing `SalonMetricsSchema` in `packages/types`, which is trunk-owned and
-     * consumed by four surfaces — so it is reported, not taken. Returning the field
-     * without declaring it there would be worse than useless: zod STRIPS undeclared
-     * keys rather than failing, so the dashboard would parse the response and
-     * silently drop it, which is the contract drift this build has already found
-     * five times.
+     * A REAL COUNT NOW, and since `nextAppointmentAt` landed in
+     * `SalonMetricsSchema` (widen-then-serve), the tile's sub-label rides along —
+     * both out of the one query above.
      */
     upcomingAppointments,
+    nextAppointmentAt,
   };
 }
