@@ -14,11 +14,15 @@
  *    conflict is written out in `api/auth.ts`. The label reuses `rowPhone`, which
  *    the bundle already carries verbatim in Arabic and English.
  *
- * 2. NO "FORGOT PASSWORD?" LINK (design:104). There is no member password-reset
- *    endpoint — `/auth/staff/password-reset` is staff-only, and
- *    `/members/me/password` is a change that requires being signed in already. A
- *    link that does nothing, on the one screen a customer reaches when she cannot
- *    get into her wallet, is worse than its absence.
+ * 2. THE "FORGOT PASSWORD?" LINK IS BUILT, AND THIS ENTRY USED TO BE ITS ABSENCE.
+ *    It read: "There is no member password-reset endpoint … A link that does
+ *    nothing, on the one screen a customer reaches when she cannot get into her
+ *    wallet, is worse than its absence." Correct then, answered since:
+ *    `POST /auth/member/password-reset/request` and its redeem sibling landed
+ *    (api/src/routes/auth.ts:835, :943), so design:104's link is below the
+ *    fields, right-aligned as drawn, into `ForgotPasswordScreen`. Second entry
+ *    in this header to go through the absence-then-built cycle — the third
+ *    paragraph records the first.
  *
  * THE THIRD ENTRY IS NOW BUILT AND IS NO LONGER A DIFFERENCE. It read: "NO 'NEW
  * HERE? CREATE ACCOUNT' LINK (design:107). There is no registration endpoint.
@@ -64,10 +68,13 @@ type Status =
 export function SignInScreen({
   onSignedIn,
   onCreateAccount,
+  onForgotPassword,
 }: {
   onSignedIn: () => void;
   /** design:107 — into the Create account screen. */
   onCreateAccount: () => void;
+  /** design:104 — into the reset-link flow. */
+  onForgotPassword: () => void;
 }) {
   const { lang, copy } = useLanguage();
   const [phone, setPhone] = useState('');
@@ -150,6 +157,17 @@ export function SignInScreen({
           autoComplete="current-password"
         />
       </View>
+
+      {/* design:104 — right-aligned under the fields; flex-end mirrors in RTL. */}
+      <Pressable
+        onPress={onForgotPassword}
+        accessibilityRole="link"
+        dataSet={focusable}
+        testID="signin-forgot"
+        style={styles.forgot}
+      >
+        <Text style={[text('bodyS', lang), styles.forgotText]}>{copy.signInForgot}</Text>
+      </Pressable>
 
       {/* design:105 — the inline refusal, not a failure screen. */}
       {status.state === 'refused' && (
@@ -271,6 +289,15 @@ const styles = StyleSheet.create({
   },
   refusalText: { color: color.dangerText, flex: 1 },
   submit: { marginTop: 20 },
+  // design:104 — text-align:right, margin-top 11. flex-end mirrors under RTL.
+  forgot: {
+    alignSelf: 'flex-end',
+    minHeight: MIN_TAP_TARGET,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    marginTop: 11,
+  },
+  forgotText: { color: color.brandDeep, fontWeight: '600' },
   // design:107 — centred under the button, margin-top 20.
   footer: {
     flexDirection: 'row',

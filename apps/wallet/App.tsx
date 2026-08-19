@@ -53,6 +53,7 @@ import { BookScreen } from './src/screens/BookScreen';
 import { ShopScreen } from './src/screens/ShopScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { SignUpScreen } from './src/screens/SignUpScreen';
+import { ForgotPasswordScreen } from './src/screens/ForgotPasswordScreen';
 import { signOut } from './src/api/auth';
 import { refreshSession } from './src/api/client';
 import { onSessionEnded, restore } from './src/api/session';
@@ -136,7 +137,7 @@ export default function App() {
  * cannot get in is either an existing member or a new one.
  */
 function Gate() {
-  const [state, setState] = useState<'checking' | 'in' | 'signIn' | 'signUp'>('checking');
+  const [state, setState] = useState<'checking' | 'in' | 'signIn' | 'signUp' | 'forgot'>('checking');
 
   useEffect(() => {
     let alive = true;
@@ -177,15 +178,28 @@ function Gate() {
       <SignInScreen
         onSignedIn={() => setState('in')}
         onCreateAccount={() => setState('signUp')}
+        onForgotPassword={() => setState('forgot')}
       />
     );
+  }
+  if (state === 'forgot') {
+    /*
+      Reached from sign-in's "Forgot password?" (design:104) AND from Account →
+      Change password → "I forgot my current password" (contract rule 5). One
+      exit for both: sign-in. From the Account path that leaves a valid session
+      behind by design — requesting a link revokes nothing; only REDEEMING one
+      does, and it revokes every session at once — so landing on sign-in is not
+      a sign-out, it is where someone who cannot remember her password goes
+      next.
+    */
+    return <ForgotPasswordScreen onBack={() => setState('signIn')} />;
   }
   if (state === 'signUp') {
     return (
       <SignUpScreen onSignedUp={() => setState('in')} onLogIn={() => setState('signIn')} />
     );
   }
-  return <Wallet onSignedOut={() => setState('signIn')} />;
+  return <Wallet onSignedOut={() => setState('signIn')} onForgotPassword={() => setState('forgot')} />;
 }
 
 /**
@@ -200,7 +214,14 @@ function Gate() {
  * every money move — non-negotiable #2: the new balance is the server's answer
  * to `GET /members/me`, never a figure this app computed.
  */
-function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
+function Wallet({
+  onSignedOut,
+  onForgotPassword,
+}: {
+  onSignedOut: () => void;
+  /** Contract rule 5 — pwForgot drops into the reset-link flow, owned by App. */
+  onForgotPassword: () => void;
+}) {
   const [screen, setScreen] = useState<Screen>('home');
   const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null);
   const home = useWalletHome();
@@ -359,21 +380,16 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
             })();
           }}
           /**
-           * THE BLOCKER IS A MISSING ENDPOINT, NOT MISSING SCREENS. This read
-           * "the auth screens, which are not built" — they are built
-           * (`SignInScreen`, `SignUpScreen`). What does not exist is a member
-           * password-reset endpoint: `api/src/routes/auth.ts` carries
-           * `/auth/staff/password-reset` and `/auth/platform/password-reset`,
-           * and `/members/me/password` requires being signed in already.
-           *
-           * So the behaviour is unchanged and still correct — api-contract.md
-           * rule 5 is explicit that this is a separate flow and not a bypass of
-           * `current`, so it must not quietly unlock the password sheet, and
-           * returning Home beats pretending to send a link. Only the stated
-           * reason was wrong, and a wrong reason points the next reader at the
-           * wrong half of the work. Still reported, against `api/`.
+           * REAL NOW. The paragraph that stood here traced this handler's
+           * history: first blocked on "the not-yet-built auth screens" (wrong
+           * reason), then on the missing member endpoint (right reason,
+           * reported). `POST /auth/member/password-reset/request` landed
+           * (api/src/routes/auth.ts:835), so the link finally does what
+           * contract rule 5 always specified: drops into the reset-link flow,
+           * NOT a bypass of `current` — the sheet stays locked and the flow is
+           * a different screen entirely.
            */
-            onForgotPassword={() => setScreen('home')}
+            onForgotPassword={onForgotPassword}
           />
         )}
       </View>

@@ -230,7 +230,17 @@ async function sendOnce(
  * exactly the "a wrong password is not an outage" rule. `/auth/sign-out` on a 401
  * is already what it wanted: the session is gone.
  */
-const NO_REAUTH = new Set(['/auth/refresh', '/auth/member/session', '/auth/sign-out']);
+const NO_REAUTH = new Set([
+  '/auth/refresh',
+  '/auth/member/session',
+  '/auth/sign-out',
+  // The reset pair is unauthenticated by design — she is here BECAUSE she cannot
+  // sign in — so a 401 from either can never mean "refresh and retry". And after
+  // a redeem the server has revoked every session, so a refresh attempt here
+  // would fail noisily inside a flow that is working exactly as specified.
+  '/auth/member/password-reset/request',
+  '/auth/member/password-reset',
+]);
 
 /**
  * ONE refresh at a time, and this latch is not an optimisation.

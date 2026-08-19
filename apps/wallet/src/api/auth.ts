@@ -50,6 +50,7 @@ import { z } from 'zod';
 import { MemberSchema } from '@avo/types';
 import { postAction, postNoContent } from './client';
 import { clearSession, setSession } from './session';
+import { SALON_ID } from '../config/salon';
 
 /**
  * `POST /auth/refresh`, re-exported rather than reimplemented.
@@ -188,6 +189,39 @@ export async function signUp(
   });
   return body.member;
 }
+
+/**
+ * `POST /auth/member/password-reset/request` — ask for a WhatsApp reset link.
+ *
+ * THE 202 IS NOT A CONFIRMATION, AND THE RETURN TYPE SAYS SO BY SAYING NOTHING.
+ * The server answers 202 with the same body whether or not the pair matched —
+ * unknown phone and right-phone-wrong-salon are byte-identical, deliberately
+ * (api/src/routes/auth.ts builds `ACCEPTED` before the lookup "so no branch can
+ * be tempted to decorate it"). So this resolves `void`: there is nothing in the
+ * answer a caller could legitimately branch on, and a richer type here would
+ * invite the screen to invent a distinction the server spent effort erasing.
+ *
+ * THE SALON IS THE BUILD'S, NOT A PARAMETER. Identity is the sign-in pair —
+ * `member_salon_phone_uq` means a phone alone is not a person — and this wallet
+ * knows which salon it is the same way sign-in does: `SALON_ID` from build
+ * config (config/salon.ts). Asking her which salon would be asking a question
+ * the white-label model already answered.
+ *
+ * WHAT CAN STILL REFUSE, because the throttle answers BEFORE validation:
+ * 429 `reset_hourly_limit` / `reset_rate_limited` — the caller renders the
+ * server's own sentence and no our-side failure. See domain/resetRequest.ts.
+ */
+export async function requestPasswordReset(phone: string, signal?: AbortSignal): Promise<void> {
+  await postAction(
+    '/auth/member/password-reset/request',
+    { salonId: SALON_ID, phone },
+    AcceptedSchema,
+    signal === undefined ? {} : { signal },
+  );
+}
+
+/** `{ accepted: true }` — the deliberately information-free 202 body. */
+const AcceptedSchema = z.object({ accepted: z.literal(true) });
 
 /**
  * `POST /auth/sign-out` — revoke server-side, THEN forget locally.

@@ -186,6 +186,26 @@ export const en: Copy = {
   // design:1249 — the link into signup, now that there is somewhere to go.
   signInNoAccount: 'New here?',
   signInCreateOne: 'Create account',
+  signInForgot: 'Forgot password?', // design:104
+
+  // the reset-request screen — design § FORGOT
+  resetTitle: 'Reset your password', // design's resetTitle
+  /**
+   * ADAPTED, not the design's sentence verbatim: the design says "Enter your
+   * username — we'll send a reset link to your WhatsApp." and there is no member
+   * username in this system (see api/auth.ts). The identity is the phone, so the
+   * sentence names the phone — the same correction SignInScreen made to its
+   * field label, recorded rather than silent.
+   */
+  resetSub: "Enter your phone number — we'll send a reset link to your WhatsApp.",
+  resetErrEmpty: 'Enter your phone number.', // INVENTED — see types.ts
+  resetWorking: 'Sending…', // INVENTED busy label, like signInWorking
+  resetBtn: 'Send reset link', // design's resetBtn
+  resetSentTitle: 'Check WhatsApp', // design's resetSentTitle
+  // Rendered on EVERY 202, matched or not — see copy/types.ts for why it must
+  // never become a conditional.
+  resetSentSub: 'A secure reset link is on its way to your registered number.', // design's resetSentSub
+  backToLogin: 'Back to log in', // design's backToLogin
 
   // signup — design:1250, :1251, :1210-1212, :1247-1248, :1256
   signUpTitle: 'Create your account',
