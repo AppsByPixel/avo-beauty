@@ -62,7 +62,15 @@ export const dark = {
   border: 'rgba(255,255,255,0.18)',
   text: color.white,
   textMuted: 'rgba(255,255,255,0.55)',
-  textFaint: 'rgba(255,255,255,0.4)',
+  /*
+    `textFaint: 'rgba(255,255,255,0.4)'` WAS HERE AND IS GONE. It had zero uses,
+    and composited over `surface` it is 3.84:1 — under the 4.5 floor. A token that
+    nothing reads and that cannot legally carry text is a trap rather than a
+    spare: the next person to want a de-emphasised label would have found it,
+    used it, and shipped a sub-AA foreground with a token's authority behind it.
+    `contrast.test.ts` now asserts every text token in this object clears AA, so
+    re-adding it fails rather than passing quietly.
+  */
 } as const;
 
 /** interaction-spec.md §2 — the focus ring on a light surface. */
