@@ -729,3 +729,50 @@ So the split is configured **at the PSP**, not computed by this API. That has a 
 for `feeFils`: it is a **record of the split MyFatoorah will apply**, not an amount this
 system moves. Reconciliation must therefore match our `Transaction` rows against
 MyFatoorah's split reporting, not against a single gross settlement figure.
+
+---
+
+## Addendum — Reports, and seven departures from the drawn export
+
+`GET /salons/{id}/reports/{kind}.csv?branch=&period=` is the row in § Operations. Implemented
+alongside a **JSON sibling** `GET /salons/{id}/reports/{kind}` — one aggregate rendered two ways,
+so the card on screen and the file on disk cannot disagree. `kind` is one of `customers`, `sales`,
+`best-selling-services`, `products-sold`, taken from the design's own export filenames. `period`
+reuses the `7d` / `30d` / `90d` vocabulary of `GET /salons/{id}/metrics`.
+
+**Permissions.** A report inherits the permission of the section it exports — `customers`→`team`,
+`sales`→`dashboard`, `best-selling-services`→`appointments`, `products-sold`→`shop`. The design
+draws nine chips and Reports is not one of them, and none of the nine is a customer-data
+permission, so this is an interim rule that errs restrictive rather than a settled answer.
+`DECISIONS.md` carries the reasoning and the reversal; **"who in a salon may export customer PII"
+is queued for the client.** A blanket `dashboard` gate was rejected: it would hand every
+front-desk tablet every customer's name, phone and wallet balance.
+
+**Seven departures from the drawn export, each with its reason.**
+
+1. **`Username` → `Phone`.** No member username column exists, and sign-in identity is already
+   phone by standing decision. Phone is what the design's own Customers tab shows.
+2. **No `Branch` column on `customers`.** A member deliberately has no branch. `?branch=` still
+   applies to that report, read as *"transacted at that branch"*.
+3. **ISO dates, not `06 Jul`.** A 90-day export crosses a year boundary, and a date without a
+   year in a file that gets archived is ambiguous later.
+4. **No thousands separator in CSV money.** `"1,820.000"` is parsed by Excel as **text**, in a
+   file whose entire purpose is being opened in Excel. The JSON sibling carries integer fils.
+5. **`?branch=` is a branch id** (or `all`), not the branch name the segmented control renders.
+6. **Tier exports as the domain value** (`silver`), not the design's pill capitalisation.
+   Presentation belongs to the client.
+7. **A foreign branch answers 404, not an empty report.** An empty report reads as *"no sales
+   there"*, which is a different and false claim.
+
+**Dates are grouped in the salon's IANA zone, not UTC** — a 21:30Z charge belongs to the next
+Kuwait day, and grouping by UTC splits one trading day into two rows.
+
+**CSV cells are neutralised against formula injection.** Quoting is **not** protection: the
+parser strips quotes before the cell is interpreted, so a value beginning `=`, `+`, `-` or `@`
+takes an apostrophe prefix. Files are UTF-8 with a BOM and CRLF, served `cache-control: no-store`.
+
+**One real limitation, recorded rather than hidden.** `best-selling-services` ranks **booked**
+services only. Charges record their basket as a **sha256** (`charge_basket_hash`), so a walk-in
+service sale is not attributable to a service. That is consistent with the card's own stat label
+— "bookings" — but it is not the same as *all* service sales, and anyone reading the number for
+revenue attribution should know it.
