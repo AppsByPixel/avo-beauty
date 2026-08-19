@@ -362,6 +362,44 @@ export const ar: Copy = {
 
   navHome: 'الرئيسية', // design:1340
   navBook: 'احجزي', // design:1340
+  navShop: 'المتجر', // design:1340
+
+  // ------------------------------------------------------------ shop & cart --
+  /*
+    THE WHOLE HAPPY PATH IS IN THE BUNDLE, and it is feminine throughout — ادفعي,
+    أضيفي, اشحني, مستواكِ. Lifted character for character from the `ar` block at
+    :1341-1344, plus the three the design composes inline at :1457 and :1460-1461,
+    which are equally the designer's words and are cited on their own lines.
+
+    Money interpolations stay WESTERN inside Arabic sentences: the designer writes
+    `تم الدفع 22.000 د.ك` that way herself (:1457), which is non-negotiable #12
+    working as specified rather than an exception to it. `cartItems` is a COUNT and
+    is therefore Eastern.
+  */
+  shopTitle: 'المتجر', // design:1341
+  shopSub: 'ادفعي من محفظتك · الاستلام من الصالون.', // design:1341
+  shopAdd: 'أضيفي', // design:1342
+  shopNote: 'مشتريات المتجر تُحتسب كزيارة نحو مستواكِ التالي.', // design:1342
+  cartTitle: 'سلتك', // design:1343
+  // design:1343 — منتج is the counted noun the design uses for every quantity.
+  cartItems: (n) => `${ea(n)} منتج`,
+  qtyValue: (n) => ea(n), // a count, so Eastern
+  cartTotal: 'الإجمالي', // design:1343
+  cartPayFrom: 'الدفع من المحفظة', // design:1343
+  cartShortBy: (amount) => `الرصيد أقل بـ ${amount}`, // design:1344
+  cartEmptyTitle: 'سلتك فارغة', // design:1344
+  cartEmptyBody: 'أضيفي منتجاً للبدء.', // design:1344
+  cartPayCta: (amount) => `ادفعي ${amount} من المحفظة`, // design:1461
+  cartTopUpCta: 'اشحني محفظتك', // design:1460
+  shopPaidToast: (amount) => `تم الدفع ${amount} من المحفظة · أُضيفت زيارة`, // design:1457
+
+  // The six states below have no Arabic source — the design's shop cannot fail.
+  shopEmptyTitle: en.shopEmptyTitle, // AR GAP
+  shopEmptyBody: en.shopEmptyBody, // AR GAP
+  shopOffTitle: en.shopOffTitle, // AR GAP
+  shopOffBody: en.shopOffBody, // AR GAP
+  cartStaleBody: en.cartStaleBody, // AR GAP
+  shopOrderFailed: en.shopOrderFailed, // AR GAP
 
   bookTitle: 'احجزي', // design:1347
   bookStep: (step, total) => `الخطوة ${ea(step)} من ${ea(total)}`, // design:1876
@@ -577,8 +615,12 @@ export const ar: Copy = {
  * translation without removing its entry here fails the build, and adding a key
  * without Arabic and without listing it here fails too.
  *
- * This is the worksheet for the native-speaker review. Twenty-two of the
- * twenty-four entries are state copy, which is not an accident — see the header.
+ * This is the worksheet for the native-speaker review. It stands at 76 entries
+ * and almost every one of them is state or refusal copy, which is not an accident —
+ * see the section notes below. (The count in this comment read "twenty-four" for
+ * several slices after the list passed it; it is recomputed here rather than
+ * carried, and a stale figure in a comment is the defect this project has now
+ * corrected twice.)
  */
 export const AR_GAPS = [
   'qrAria',
@@ -662,6 +704,16 @@ export const AR_GAPS = [
   'deleteScheduledTitle',
   'deleteScheduledBody',
   'deleteCheckFailed',
+  // ---- shop. The design's shop prototype has no server behind it, so its Arabic
+  // covers the whole happy path and none of the six ways the flow can refuse.
+  // Note what is NOT here: every string on the happy path, including the three the
+  // design composes inline, is lifted.
+  'shopEmptyTitle',
+  'shopEmptyBody',
+  'shopOffTitle',
+  'shopOffBody',
+  'cartStaleBody',
+  'shopOrderFailed',
 ] as const;
 
 /**

@@ -342,6 +342,86 @@ export interface Copy {
   // bottom navigation
   navHome: string;
   navBook: string;
+  navShop: string;
+
+  /**
+   * Shop and cart — `design/AVO Wallet Home.dc.html:478-518` and :940-978.
+   *
+   * ALL LIFTED, in both languages, from :1234-1237 and :1341-1344 — plus three
+   * strings the design composes INLINE rather than as `t.` keys (:1457, :1460,
+   * :1461), which are still the designer's own words and are cited individually
+   * below.
+   *
+   * WHAT THE DESIGN DRAWS AND THE API CANNOT FILL: a per-product `desc` ("For
+   * split ends", "Shine & hydration"). `ProductSchema` is exactly
+   * `{id, salonId, name, priceFils}` — the route says so, and declaring a fifth
+   * field would be one the contract strips in transit. So there is no
+   * `shopProductDesc` key and the row renders without it. REPORTED, not invented:
+   * a description is a column, a contract field and a merchant editor input, not
+   * a client string.
+   */
+  shopTitle: string;
+  shopSub: string;
+  /** :511 — the button on a product not yet in the cart. */
+  shopAdd: string;
+  /** :516 — the brand-tinted note under the list. */
+  shopNote: string;
+  cartTitle: string;
+  /** ":945 — `{{ cartCount }} {{ t.items }}`". A count, so Eastern in Arabic. */
+  cartItems(n: number): string;
+  /**
+   * A bare quantity — the number between the − and + of a stepper (design:960).
+   *
+   * IN THE COPY LAYER EVEN THOUGH IT IS ONLY A NUMBER, because that is the
+   * invariant the whole i18n layer rests on: "the raw number goes to the copy
+   * function and the copy function decides the script". A component calling
+   * `toEasternDigits` itself would put digit policy in two places, and the second
+   * one always drifts.
+   */
+  qtyValue(n: number): string;
+  cartTotal: string;
+  /** :966 — the row naming where the money comes from. */
+  cartPayFrom: string;
+  /** :968 — takes an already-formatted amount, so Western digits in both. */
+  cartShortBy(amount: string): string;
+  cartEmptyTitle: string;
+  cartEmptyBody: string;
+  /** :1461, composed inline by the design. Money arg. */
+  cartPayCta(amount: string): string;
+  /** :1460 — the shortfall CTA. It goes to top-up, not to a refused order. */
+  cartTopUpCta: string;
+  /** :1457 — the toast after a successful order. Money arg. */
+  shopPaidToast(amount: string): string;
+
+  /**
+   * Shop STATES. The design's shop prototype has no server, so its Arabic covers
+   * the happy path and none of these. All are in AR_GAPS.
+   *
+   * `shopEmpty*` is NOT `cartEmpty*` and the distinction is the one
+   * `design/AVO States.dc.html` insists on: "nothing booked yet" and "the module
+   * is off" must never share words. Here there are three ways to have no
+   * products — the salon sells none yet, the module is switched off, and her cart
+   * is empty — and they are three different sentences to three different people.
+   */
+  shopEmptyTitle: string;
+  shopEmptyBody: string;
+  shopOffTitle: string;
+  shopOffBody: string;
+  /**
+   * `invalid_products`. A product retired while she shopped is indistinguishable
+   * to the API from one that never existed — and she is holding it. The API names
+   * the ids in `details.unknown`, so the sentence can say WHICH.
+   *
+   * ONE SENTENCE, NOT A TITLE AND A BODY. There was a `cartStaleTitle` beside this
+   * and nothing ever rendered it: the refusal is a danger chip in the cart, the
+   * same one-line shape sign-in and signup use, and a heading inside a chip is
+   * redundant with the sentence under it. Deleted rather than left declared,
+   * because an unrendered key still sat in AR_GAPS and would have cost a native
+   * speaker a sentence nobody would read.
+   */
+  cartStaleBody(names: string): string;
+  /** Any other refused order. Never an undo — `voidable` is always false. */
+  shopOrderFailed: string;
 
   // book — shell
   bookTitle: string;
