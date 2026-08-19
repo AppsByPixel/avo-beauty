@@ -435,6 +435,27 @@ export const SalonMetricsSchema = z.object({
   knetSharePercent: z.number().min(0).max(100),
   repeatRatePercent: z.number().min(0).max(100),
   upcomingAppointments: z.number().int().nonnegative(),
+  /**
+   * Start instant of the next still-to-start booking — the "next at 4:30 PM"
+   * half of the Upcoming tile. `null` when `upcomingAppointments` is 0, and the
+   * tile hides the sub-label. Same window and status filter as the count
+   * (deposit_held, now → salon's own midnight, salon's zone): the two answers
+   * must come from one query so they cannot disagree — a count of 3 with a null
+   * "next" is a contract violation, not a rendering choice.
+   *
+   * Declared BEFORE the API serves it, deliberately. Zod strips undeclared
+   * keys, so serving the field first would mean every client silently drops it
+   * — the drift this contract has shipped five times. Widen, then serve.
+   *
+   * `.optional()` IS A STAGE, NOT THE SHAPE. Required-but-nullable is the end
+   * state — optional hides a server that FORGOT the field. But the contract
+   * guard (e2e/contract.test.ts) parses real responses and would flag a
+   * required key today's API does not send, and `dev` never stays red. So:
+   * this lands optional, the API starts serving it, and then `.optional()`
+   * comes OFF. If you are reading this after the API serves the field, the
+   * tightening is overdue — do it.
+   */
+  nextAppointmentAt: DateTimeSchema.nullable().optional(),
 });
 
 // ----------------------------------------------------------------- staff ---
