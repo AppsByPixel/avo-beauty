@@ -76,6 +76,34 @@ The **near-duplicate charge guard** (`possible_duplicate`, 120s, migration 0031)
 - No schema exists for `PlatformSettings`, `PlatformMetrics`, audit (merchant *or* platform), `PlatformAdmin`, or the policies draft. Lanes are declaring these locally with a note, which is correct but temporary.
 - **`packages/mock` does not implement `possible_duplicate`**, so the three mock-backed suites pass because the guard does not exist there. Three lanes build against that mock; a shape it does not carry is a shape they cannot render.
 
+## The two dirty worktrees, and what is in them
+
+Both are a killed lane mid-slice, **not mess to tidy**. Backups are under
+`~/.claude/lane-{api,web}-recovered-*.patch` and `lane-*-untracked-*.tgz`, but the trees are
+intact — read them, do not reset them.
+
+**`~/dev/avo-api` — the console password-reset, half built.** This is the thing that stops an
+invited platform admin signing in at all, so it is the highest-value resumption in the repo.
+```
+ M api/src/db/schema/platformAdmin.ts
+ M api/src/routes/platformAdmins.ts
+ M api/drizzle/meta/_journal.json
+?? api/drizzle/0033_platform_admin_password_reset.sql
+```
+Its last words were *"Now the redeem endpoint in `auth.ts`, mirroring the staff redeem"* — so the
+mint side exists and the redeem side is next. **#6 permits only a link**: the design's "Temporary
+password" field must not be drawn, and `/auth/staff/password-reset` is the pattern to mirror.
+
+**`~/dev/avo-web` — the console Admins section, half built.**
+```
+ M apps/dashboard/src/{app.css,router.tsx,shell/ConsoleShell.tsx,shell/consoleNavItems.tsx}
+?? apps/dashboard/src/api/platformAdmins.ts
+?? apps/dashboard/src/routes/console/Admins.tsx
+```
+`/v1/platform/admins` is fully built server-side (GET/POST/PATCH/DELETE behind
+`requirePlatform(req, 'admins')`), so this is wiring. Note the two halves pair up: an admin
+Lane C invites cannot sign in until Lane A's redeem endpoint lands, so **dispatch both together**.
+
 ## Why no lanes are running when you arrive
 Deliberate. Subagents belong to the session that spawned them, so dispatching before a handoff leaves four orphaned agents holding uncommitted work — which happened three times in the previous session and cost real recovery effort each time. The machine was left healthy: load **2.5**, no booted simulators, no leaked processes, no orphaned per-run databases, all worktrees clean, everything merged and pushed.
 
