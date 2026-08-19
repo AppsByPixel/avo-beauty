@@ -675,6 +675,35 @@ const UNMODELLED: Record<string, string> = {
    * true of them while "no schema" stayed true. The § note on that map's guard spec has
    * the full accounting.
    */
+  /**
+   * THREE MORE CONSOLE READS, arriving with lane A's `platformConsole.ts` in the rebase onto
+   * dev `a4d0d91` — and **the census is what found them**, at 11:09 Kuwait, by name and with
+   * the file they came from. That is the whole point of the unclassified check: three routes
+   * were served that this file said nothing about, and nothing else in 673 specs noticed.
+   *
+   * All three are UNMODELLED rather than probed because `packages/types` declares no shape
+   * for any of them — there is no `PlatformSettingsSchema`, no `PlatformMetricsSchema` and no
+   * audit schema at all (the merchant `GET /salons/:id/audit` is unmodelled below for the
+   * same reason). They are REACHABLE: `signInPlatform` exists now.
+   */
+  'GET /v1/platform/metrics':
+    'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
+    '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +
+    'money aggregates across every salon and a client that mistypes them shows a merchant ' +
+    'the wrong revenue.',
+  'GET /v1/platform/settings':
+    'the platform controls — switches, fees, and the new-salon default — behind ' +
+    'requirePlatform(controls). Migration 0032, one row, always present. No schema in ' +
+    'packages/types. **AND IT IS A MONEY PATH:** `services/topup.ts` now reads ' +
+    '`platform_settings` INSIDE the top-up transaction, so the commission stored here prices ' +
+    'every subsequent top-up. Unprobed by lane D as of 2026-08-19 and named in the lane ' +
+    'report as the next slice: the PATCH needs a permission-off probe, a range probe, and a ' +
+    'test that a commission change is picked up by the very next top-up rather than at ' +
+    'restart.',
+  'GET /v1/platform/audit':
+    'the platform-wide audit log with its q/kind/limit/cursor/salon filters, behind ' +
+    'requirePlatform(audit). No audit schema exists in packages/types for either the ' +
+    'merchant or the platform view — see `GET /salons/:id/audit` below.',
   'GET /v1/platform/admins':
     'the owner console\'s admin list, behind requirePlatform(admins). REACHABLE since ' +
     'signInPlatform landed; what it lacks is a schema — `PlatformAdmin` is unmodelled in ' +
