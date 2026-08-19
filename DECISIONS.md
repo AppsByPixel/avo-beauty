@@ -38,6 +38,68 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### The offline cold-load sentence — inventing it is AUTHORISED, and marked, because the bundle's one offline string would lie
+
+**The wall Lane B stopped at, correctly.** Two screens still assert our fault when the phone
+is simply offline: `FailureScreen` branches only on `forbidden`, so a cold offline load on Shop
+or Book says *"We couldn't load your wallet … This is on our side."*, and
+`apps/scanner/src/screens/BookingsScreen.tsx:64-73` discards `err.kind` exactly as `useShop`
+did, routing everything but `not_an_artist` into an `ErrorState` that always offers a retry — so
+a 403 gets a retry it cannot use, when the scanner already has `Refusal` built for that.
+
+Lane B did not fix them, because both need a sentence the bundle does not contain. The only
+customer offline string is `offlineBanner: 'No connection · showing your last update'`, verbatim
+from `AVO States.dc.html` — and that is a **stale-data** sentence. On a cold load there is no
+last update, so it would be a lie. Lane B declined to write a third invented string on its own
+authority, noting `signInOffline` and `signUpOffline` are already marked INVENTED for exactly
+this reason.
+
+**Decision: invent it. EN for both apps, AR for the wallet only.** Marked `INVENTED` and added
+to `AR_GAPS` so it reaches the native-speaker worksheet, following the precedent those two
+strings already set. The scanner needs no Arabic — `design/README.md` § Known gaps 1 decides the
+staff scanner ships English-only.
+
+**Why authorise rather than hold.** "Keep the copy verbatim" governs copy that **exists**; it
+cannot govern a sentence the bundle never wrote. Holding leaves a screen that tells a customer
+with no signal that AVO has failed, and offers her a Try again that cannot succeed — a false
+statement about whose fault it is, shipped, versus an unreviewed true one. The build already
+chose the second twice and marked its work. Consistency with that beats a third answer.
+
+**The distinction that keeps this narrow:** the offline state is *product* copy, and inventing
+it is a marked, reversible, one-string decision. **Non-negotiable #10 is untouched — the
+customer app still holds no legal copy**, renders the published policy set from the API, and
+stamps the version. Inventing a connectivity sentence is not inventing a term.
+
+**Reversal.** One string per language, all `INVENTED`-marked and listed in `AR_GAPS`. When the
+native-speaker review lands, the reviewer replaces them; if the client would rather write them,
+delete and re-render from the bundle. Routed back to Lane B.
+
+### A replayed turbo log names whichever worktree first populated the hash — third instance, now generalised
+
+**What.** Lane B saw `@avo/dashboard:typecheck: cache hit, replaying logs` print the path
+`~/dev/avo-api/apps/dashboard` — **Lane A's** worktree — from Lane B's own shell. It forced cold
+and got 11/11, every task correctly under `~/dev/avo-wallet/`.
+
+**This is not a new defect.** It is the same mechanism already recorded and closed under "The
+turbo cache is shared across all five worktreesa — RESOLVED": each lane's `.git` is a file
+pointing into `~/dev/avo/.git/worktrees/<name>`, so turbo resolves the repository root through
+the shared git dir and **every lane writes into trunk's single cache**. Not a key defect; the
+input sets were proven exact.
+
+**What is new, and worth writing down, is the reading rule.** Lane B's generalisation:
+**the path in a replayed log is whichever worktree first populated that hash, so it is never
+evidence about the tree you are standing in.** Three lanes have now been briefly misled by a
+replayed path, and one of them (Lane C) previously drew a *wrong conclusion from a true
+observation* on the same class of staleness.
+
+So a replayed log is not merely weak evidence about your tree — **its paths are affirmatively
+about somebody else's.** Added to `LANES.md` § "Build freshness", where the briefs point.
+
+**Not adopted, again:** a standing `--force`. It costs seconds on every run, and treating a
+working cache as broken is how the next genuine anomaly gets waved through as normal. The
+existing rule stands: tree changed, trust the cold run; same tree needing independent
+confirmation, `--force`, because a replay is not a second opinion.
+
 ### A reset redemption can be driven end to end with no production test hook — routed to Lane D
 
 **The question Lane A raised, correctly.** Nobody has ever driven a password-reset redemption

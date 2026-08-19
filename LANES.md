@@ -199,6 +199,28 @@ worktree:
 pnpm --dir=/Users/koraspond_developer/dev/avo-web exec turbo run typecheck
 ```
 
+**And a replayed log's paths are about another worktree, not yours.** There is exactly one
+turbo cache and trunk holds it: each lane's `.git` is a *file* pointing into
+`~/dev/avo/.git/worktrees/<name>`, so turbo resolves the repository root through the shared
+git dir and every lane writes its entries into `~/dev/avo/.turbo`. This is not a defect and the
+input sets are exact — but it has now briefly misled **three** lanes:
+
+```
+@avo/dashboard:typecheck: cache hit, replaying logs
+  ... /Users/koraspond_developer/dev/avo-api/apps/dashboard      # printed in LANE B's shell
+```
+
+**The path in a replayed log is whichever worktree first populated that hash.** So it is not
+merely weak evidence about the tree you are standing in — it is affirmatively evidence about
+somebody else's. A `FULL TURBO` run in your worktree can be a faithful replay of trunk's or
+another lane's work.
+
+The rule that follows: **tree changed, trust the cold run; same tree needing independent
+confirmation, `--force`, because a replay is not a second opinion; suspect the cache,
+`--dry=json`,** which answers in seconds and leaves nothing behind. Do not adopt a standing
+`--force` — treating a working cache as broken is how the next genuine anomaly gets waved
+through as normal.
+
 **Do not reach for `--force` by habit.** The cache is sound and paying 8s on every merge to
 distrust it is how the next real anomaly gets waved through as normal. Three cases:
 

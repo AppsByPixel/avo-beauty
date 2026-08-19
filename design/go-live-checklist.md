@@ -375,7 +375,7 @@ unless it is explicitly deferred in writing.
         the CSV route and three of the four report aggregates do not exist). The nav shows
         them because the shell design does; they resolve to a "not built yet" placeholder.
       - Wallet and scanner states are Lane B's half of this row.
-- [ ] Reduced motion **removes** the scanner line, success pop, pulse and shimmer
+- [x] Reduced motion **removes** the scanner line, success pop, pulse and shimmer
       - Lane C, 2026-08-19 — **shimmer done.** `@avo/ui`'s `avo-shimmer` is a 1.4s infinite
         loop and `@avo/tokens` emits §3's blanket verbatim, so `*` with
         `animation-iteration-count: 1 !important` and `animation-duration: 0.01ms !important`
@@ -388,6 +388,17 @@ unless it is explicitly deferred in writing.
         under `prefers-reduced-motion` — the Browser pane cannot emulate that media query.
       - Scanner line, success pop and pulse are Lane B's; this row needs them before it
         can be ticked.
+      - Lane B, 2026-08-19 — **native half done, and the row's four items are now
+        exhaustive.** Scanner line **removed, not shortened**: `ScanScreen.tsx:139`
+        `{!reduceMotion && <ScanLine />}`, with `:117` swapping to
+        `scanPromptReducedMotion`. Success pop `ResultScreen.tsx:203-207` starts at final
+        values and returns before animating; pulse `:244,:265`. Native shimmer —
+        which Lane C's CSS blanket cannot reach — `HomeSkeleton.tsx:26`,
+        `AccountSkeleton.tsx:35`. Only four files in `apps/wallet`/`apps/scanner` animate
+        at all, and all four are gated.
+      - **Evidence basis, stated because it is weaker than this build's usual bar:** both
+        lanes verified by reading the gates, not by driving under the OS flag. The claim
+        the row makes is that the element is *removed*, and that is what the code shows.
 - [ ] Focus rings and the full keyboard map on both web surfaces
       - Lane C, 2026-08-19 — **merchant dashboard verified by driving it.** `:focus-visible`
         rings render on inputs and the stepper. §2's map, checked rather than assumed:
@@ -615,10 +626,33 @@ unless it is explicitly deferred in writing.
 
 ## Store submission
 
-- [ ] Account deletion reachable in-app (App Store requirement) with the remaining-balance
+- [x] Account deletion reachable in-app (App Store requirement) with the remaining-balance
       warning, and a working server-side deletion path behind it
+      - Lane B, 2026-08-19 — reachable at Account → `DeleteAccountSheet`; the
+        remaining-balance warning is `deleteBalance`; and the 409 renders the **server's**
+        `details.balanceFils` rather than the stale prop, which is non-negotiable #2 held
+        at the point it is easiest to break. Specs: `deletion.test.ts` 17,
+        `deletionOutcome.test.ts` 13.
+      - Trunk, 2026-08-19 — server half verified independently: `GET` / `POST` /
+        `DELETE /members/me/deletion` (`api/src/routes/members.ts:648,653,703`), with
+        `member.deletion_requested_at` / `deletion_due_at` and a CHECK that the two are
+        null together, so a half-requested deletion cannot exist. Deliberately a soft
+        delete — the published privacy policy promises removal within 30 days, and two
+        retention periods over one row is the reason.
 - [ ] Privacy nutrition labels / Data safety form completed accurately
-- [ ] Camera permission string explains scanning in plain language, EN + AR
+- [x] Camera permission string explains scanning in plain language — **EN only**
+      - **Row amended by trunk, 2026-08-19, because its criterion contradicted a decided
+        gap.** `design/README.md` § Known gaps 1 says, decided: *"Arabic is customer-app
+        only. Merchant dashboard, owner console and the staff scanner ship English-only."*
+        The camera lives **only** in `apps/scanner` — the customer wallet has no camera at
+        all — so "EN + AR" asked for an Arabic string that the scoping decision says will
+        never exist. EN is the complete requirement.
+      - Lane B, 2026-08-19 — satisfied: `apps/scanner/app.json` carries
+        `NSCameraUsageDescription` and the expo-camera `cameraPermission`, identical and in
+        plain language. Lane B **did not invent Arabic** for it, and confirmed the bundle
+        contains no Arabic camera string and neither app declares
+        `CFBundleLocalizations` — it raised the contradiction instead of resolving it
+        alone, which is the reporting rule working as intended.
 - [ ] Push permission requested in context, not on first launch
 - [ ] Payments reviewed against store rules — the wallet funds real-world salon services,
       so it is not in-app purchase, but be ready to argue it
