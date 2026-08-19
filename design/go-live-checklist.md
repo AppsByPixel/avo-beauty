@@ -103,6 +103,27 @@ unless it is explicitly deferred in writing.
         method that found the `DELETE /bookings/{id}` hole. Numbers in the lane report.
         Before this block existed the whole guard could be replaced by `if (false)` with the
         suite staying green.
+      - **The shop order path's SECOND guard, measured alone (10:42 Kuwait).** Lane A added
+        it in answer to the note above — an order had one serialising guard where a charge
+        has two — and its own comment says the new layer is "unreachable while step 2 holds
+        the row". A guard no spec can reach is the no-show job's status re-check again, so it
+        was measured by ablation rather than asserted:
+        - lock removed, guard intact → the ledger, the rows and the balance all agree. **The
+          second guard holds the money together on its own.** But four of five racers answer
+          **500 server_error** and only ONE order settles against a balance for two.
+        - lock removed AND the guard's relative `SET` made absolute → the reconciliation
+          fails, so it genuinely detects a lost update and the RELATIVE half is the half
+          that prevents one.
+        - So the layer is real and protects the ledger, but when it is the layer doing the
+          work the customer gets a 500 rather than the `402` the code intends — the
+          consistency check after the debit throws a bare `Error`. **A net, not a control**,
+          which is the distinction lane A drew about `db:verify` when arguing for this guard.
+          Lane A's call; no spec can pin it, because with the lock in place the path is
+          unreachable. Reported.
+        - `orders.test.ts` § "whatever the five racers are told, the ledger and the rows
+          agree with the balance" is the new spec that separates "the money was wrong" from
+          "the answer was wrong" — the existing race spec asserts statuses first and so
+          stops before the money.
 - [x] Negative balance is impossible at the database level, not just in application code
       - Lane D, 2026-08-19 — **driven as the application role, both directions.**
         `member_balance_non_negative` — `CHECK (balance_fils >= 0)`,
