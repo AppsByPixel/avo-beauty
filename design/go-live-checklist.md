@@ -222,8 +222,22 @@ unless it is explicitly deferred in writing.
       - The spec asserts the CODE, not just the status: `token_consumed_or_unknown` and
         `token_expired` are both `410`, so a server collapsing the two would pass a
         status-only check while telling the counter the wrong thing to do about it.
-- [ ] Every permission enforced server-side and covered by a test that calls the endpoint
+- [x] Every permission enforced server-side and covered by a test that calls the endpoint
       directly with the permission off
+      - **Ticked by trunk, 2026-08-19, on Lane D's generated census** (`3bacf98`).
+        `e2e/permission-census.test.ts` reads `api/src/routes/` and turns every gate it
+        finds into a probe: **57 gated endpoints across all methods and both auth scopes,
+        116 generated cases, all green.** Each probe asserts 403, code `forbidden`, **and
+        the permission's own copy** (the code alone cannot say which permission answered),
+        then grants that one permission and requires the refusal to stop. Eleven
+        deliberately anonymous routes are a ledger checked for staleness in both
+        directions. Because the census is generated, a new gated endpoint cannot ship
+        untested without failing by name.
+      - **Two scoping caveats, recorded with the tick:** wrapper resolution is one level
+        deep by design (stated in the census header), and seven endpoints whose granted
+        mirror would write (tier publish, the commission that prices every top-up) are
+        proved by refusal-plus-copy rather than by a mirror, named in
+        `MIRROR_WOULD_WRITE`.
       - Lane C, 2026-08-19 — **dashboard client half done.** The courtesy-gate ledger in
         `apps/dashboard/src/routes/sectionState.tsx` was re-derived from every `require*Perm`
         in `api/src/routes` and matches on all nine sections, including the two non-obvious
