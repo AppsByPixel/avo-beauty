@@ -6,9 +6,22 @@
  * "العربية", an Arabic wallet shows "EN". That is why `langSwitch` is a copy key
  * rather than a computed label.
  *
- * Sits in Account → Language in the finished product; it is surfaced in the home
- * header here because Account is not built yet and a switch nobody can reach
- * cannot be reviewed. Moving it later is a one-line change.
+ * THE HEADER IS WHERE THE DESIGN PUTS IT. This comment used to read "Sits in
+ * Account → Language in the finished product; it is surfaced in the home header
+ * here because Account is not built yet … Moving it later is a one-line change."
+ * Both halves were wrong by the time anyone could act on them, and acting on them
+ * would have been a REGRESSION rather than tidying:
+ *
+ *   - `AVO Wallet Home.dc.html` renders `t.langSwitch` in the header on TWO
+ *     screens, beside `goAccount` on Home and `openCart` on Shop. The header is
+ *     the design, not a stopgap.
+ *   - Account is built, and it has the Language row too (`AccountScreen.tsx`,
+ *     `testID="row-language"`, `copy.rowLang`). The design carries both controls;
+ *     they are not duplicates of each other by accident.
+ *
+ * So there is nothing to move. Recorded at length because the stale version
+ * invited a specific wrong edit — deleting this component — and a reader who
+ * trusted it would have removed a control the design draws.
  *
  * ON NATIVE THE BUTTON DOES NOT FINISH THE JOB, AND IT SAYS SO. See
  * i18n/language.tsx for why `I18nManager.forceRTL` needs a restart. The notice

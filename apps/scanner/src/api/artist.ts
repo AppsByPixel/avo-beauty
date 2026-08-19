@@ -1,44 +1,40 @@
 /**
  * The artist's own bookings and her own hours.
  *
+ *   GET /artists/me                 her own artist row
  *   GET /artists/me/bookings        her day, with the client's name and phone
  *   PUT /artists/me/availability    her week
  *
- * Both are scanner-scoped and need no permission, which is the point: an
+ * All three are scanner-scoped and need no permission, which is the point: an
  * artist should not need the merchant's `perms.appointments` to see who is
  * coming to see her, or `perms.team` to set the hours she works.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * THERE IS NO WAY TO *READ* HER OWN ARTIST ROW, AND THAT IS A REAL GAP
+ * THE READ EXISTS NOW, AND THIS HEADER SAID IT DID NOT — FOR THREE MERGES
  * ═══════════════════════════════════════════════════════════════════════════
- * `PUT /artists/me/availability` writes the week. Nothing reads it:
+ * This file used to open "THERE IS NO WAY TO *READ* HER OWN ARTIST ROW, AND
+ * THAT IS A REAL GAP", listing `GET /artists/me` as "does not exist", and it
+ * closed by asking for exactly that route "returning the same `serialiseArtist`
+ * shape the PUT already returns".
  *
- *   GET /artists/me                 does not exist
- *   GET /artists/me/availability    falls through to `/artists/:id` with
- *                                   id="me" and answers 404 unknown_artist
- *   GET /salons/{id}/artists        exists, and is gated on `perms.team` —
- *                                   which the seeded artist account (ST-002,
- *                                   Hessa) deliberately does not have, because
- *                                   she is the fixture proving own-hours needs
- *                                   no team authority
+ * Lane A built it — `api/src/routes/artists.ts:658`, scanner scope, no
+ * permission — and its own header credits this lane's reasoning by name. The
+ * request was granted and the comment was never updated, so the workaround below
+ * it stayed live and the screen kept opening on a toggle it no longer needed.
  *
- * So the screen cannot draw her current week on open. `api/` is lane A's
- * column and this lane does not write there, so it is REPORTED rather than
- * patched: `GET /artists/me` returning the same `serialiseArtist` shape the
- * PUT already returns would close it in one route.
+ * THE WORKAROUND WAS THE DEFECT, not the comment. The comment was merely how it
+ * survived review: a paragraph arguing the absence made the workaround look like
+ * a decision rather than a gap. What the screen actually did was open on the
+ * source toggle and take her week from the PUT's response — which meant a
+ * Google-synced artist could not LOOK at her hours without tapping Manual and
+ * switching herself off her calendar. Declining to probe with a speculative
+ * `{ availabilitySource: 'manual' }` on mount was right, and it is now moot:
+ * there is a real read, so the screen reads.
  *
- * WHAT THE SCREEN DOES INSTEAD, AND WHY IT IS NOT A WORKAROUND. The design's
- * own first control on My schedule is the source toggle. Tapping it is a PUT,
- * and `applyAvailability` returns the full artist row — so choosing a source
- * both performs the action the artist intended and yields her real week. When
- * she is already on that source the API returns BEFORE opening a transaction
- * (`if (changed.length === 0) return serialiseArtist(target)`), so it writes
- * nothing and audits nothing.
- *
- * What is NOT done, and was considered: probing with a speculative
- * `{ availabilitySource: 'manual' }` on mount to discover the week. That is a
- * write dressed as a read, and it silently switches a Google-synced artist off
- * her calendar the first time she opens the screen.
+ * (`GET /artists/me/availability` still falls through to `/artists/:id` with
+ * id="me" and answers 404, and `GET /salons/{id}/artists` is still `perms.team`
+ * — which the seeded artist ST-002 deliberately lacks. Both remain true; only
+ * the third line was stale.)
  */
 
 import { z } from 'zod';
@@ -69,6 +65,24 @@ export const ArtistBookingSchema = BookingSchema.extend({
 export type ArtistBooking = z.infer<typeof ArtistBookingSchema>;
 
 const ArtistBookingPageSchema = paginated(ArtistBookingSchema);
+
+/**
+ * Her own artist row — `GET /artists/me`.
+ *
+ * `ArtistSchema` unchanged and deliberately shared with `putMyAvailability`
+ * below: the route returns the same `serialiseArtist` shape the PUT does, so a
+ * second schema here would be a second opinion about one payload. If they ever
+ * diverge, that is the contract's problem to answer, not this file's to paper
+ * over with a looser parse.
+ *
+ * 404 `not_an_artist` for a staff account with no artist row — a receptionist or
+ * a shared terminal — which the caller renders as "no calendar here" rather than
+ * as a failure. Same code `GET /artists/me/bookings` answers, for the same
+ * reason.
+ */
+export function fetchMyArtist(accessToken: string, signal?: AbortSignal): Promise<ArtistRow> {
+  return getJson('/artists/me', ArtistSchema, accessToken, signal);
+}
 
 export function fetchMyBookings(accessToken: string, signal?: AbortSignal): Promise<ArtistBooking[]> {
   return getJson('/artists/me/bookings', ArtistBookingPageSchema, accessToken, signal).then(
