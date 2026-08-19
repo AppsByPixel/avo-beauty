@@ -104,8 +104,115 @@ export interface CampaignDecision {
 }
 
 /**
+ * IS THIS CAMPAIGN HELD — a question about `heldReason`, never about `status`.
+ *
+ * A held campaign's status stays `approved`. That is the API's deliberate choice
+ * and the right one — "AVO did release it; the platform did not send it; both are
+ * true" — but it means `status` alone cannot answer "did this go out", and any
+ * screen that reads `status === 'approved'` as "away" is wrong about every held
+ * campaign. `campaign_hold_is_complete` (both columns arrive together) and
+ * `campaign_hold_requires_approved` (only an approved campaign can carry one) are
+ * what make the single non-null test sufficient.
+ *
+ * Lives here beside the wire shape rather than in the screen that renders it,
+ * because it is a fact about the contract and because a second surface needs the
+ * same answer: the merchant's own Marketing → Campaigns list is owed this sentence
+ * by #8 just as much as the console's queue is.
+ */
+export function isCampaignHeld(c: Pick<Campaign, 'heldReason'>): boolean {
+  return c.heldReason !== null;
+}
+
+/**
+ * What delivery did, the instant the decision was made.
+ *
+ * A SIBLING KEY ON THE ENVELOPE, NOT A FIELD ON THE CAMPAIGN. The API says so in
+ * as many words at the bottom of its decision handler: "`delivery` is NOT part of
+ * `CampaignSchema` — it is a sibling key on the response envelope rather than a
+ * field on the campaign, so a client parsing `body.campaign` with the contract's
+ * schema gets exactly the contract's shape and nothing is stripped."
+ *
+ * `null` on a rejection, and on approval of a `later` or `recurring` campaign —
+ * nothing was delivered in either case, and #8 has the send-time checks run at
+ * the scheduled moment rather than at approval.
+ */
+export interface CampaignDelivery {
+  status: 'sent' | 'held';
+  /** Recipients written. 0 on a hold. */
+  sent: number;
+  /** Audience members skipped for the weekly per-customer cap. */
+  cappedOut: number;
+  /** Set when held. The server's sentence, rendered verbatim. */
+  heldReason: string | null;
+  /** `campaign.result` when it sent — "612 reached · 148 over the weekly cap". */
+  result: string | null;
+}
+
+export interface CampaignDecisionResult {
+  campaign: Campaign;
+  delivery: CampaignDelivery | null;
+}
+
+/**
+ * Hand-checked for the reason `parseItems` above is: there is no
+ * `CampaignDeliverySchema` in `@avo/types` (the shape is the API's
+ * `DeliveryOutcome` interface, not a contract entity) and this package cannot
+ * import `zod` directly.
+ *
+ * A MALFORMED `delivery` IS DROPPED TO NULL RATHER THAN THROWN ON, and that is
+ * the opposite of how `heldReason` is treated one field up — deliberately. The
+ * campaign IS the decision and must parse or fail loudly; `delivery` is a
+ * courtesy sentence about what happened next, and losing the sentence must not
+ * turn a decision that committed on the server into an error in the console.
+ * That failure mode is exactly what this commit is fixing.
+ */
+function parseDelivery(value: unknown): CampaignDelivery | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (v['status'] !== 'sent' && v['status'] !== 'held') return null;
+  return {
+    status: v['status'],
+    sent: typeof v['sent'] === 'number' ? v['sent'] : 0,
+    cappedOut: typeof v['cappedOut'] === 'number' ? v['cappedOut'] : 0,
+    heldReason: typeof v['heldReason'] === 'string' ? v['heldReason'] : null,
+    result: typeof v['result'] === 'string' ? v['result'] : null,
+  };
+}
+
+/**
+ * The whole response, as a pure function, EXPORTED SO A TEST CAN REACH IT.
+ *
+ * Extracted out of the `mutationFn` rather than left inline: this package has no
+ * DOM test harness, so a parse living inside a hook callback is a parse no
+ * assertion can touch — and this is precisely the line that was wrong. A comment
+ * saying "parses body.campaign" is not an assertion; `platform.test.ts` feeds it
+ * the envelope captured from the driven endpoint instead.
+ */
+export function parseDecisionResponse(raw: unknown): CampaignDecisionResult {
+  const envelope = (raw ?? {}) as Record<string, unknown>;
+  return {
+    campaign: CampaignSchema.parse(envelope['campaign']),
+    delivery: parseDelivery(envelope['delivery']),
+  };
+}
+
+/**
  * THE DECISION. This is the endpoint non-negotiable #8 names: "Delivery happens
  * on the platform decision endpoint."
+ *
+ * PARSES `body.campaign`, NOT `body`. It used to do the latter, and the bug was
+ * total rather than cosmetic: the response is `{ campaign, delivery }`, so
+ * `CampaignSchema.parse(raw)` threw `id: Required | salonId: Required | salon:
+ * Required | title: Required` on EVERY decision. The mutation therefore always
+ * settled in error and the screen rendered "Nothing was released." — over a
+ * decision that had already committed, sent the campaign, and written its audit
+ * row. A reviewer told that nothing was released presses Approve again and gets
+ * the 409, which reads as a second failure.
+ *
+ * That is the same defect class the API's own header describes on the other side
+ * of this wire — a serialiser and a schema disagreeing, and the parse failing
+ * shut — and it is why the parse belongs here rather than a cast: it was found by
+ * driving the real endpoint and diffing the shape, not by reading either file.
  *
  * NO IDEMPOTENCY KEY, and that is not an oversight. #4 covers money-moving POSTs;
  * this moves no money. The double-submit protection is the server's, and it is
@@ -117,7 +224,11 @@ export interface CampaignDecision {
  * Invalidates the queue AND the policy: releasing a campaign changes the
  * month's counts, which the throttle panel reads.
  */
-export function useDecideCampaign(): UseMutationResult<Campaign, unknown, CampaignDecision> {
+export function useDecideCampaign(): UseMutationResult<
+  CampaignDecisionResult,
+  unknown,
+  CampaignDecision
+> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ campaignId, status, note }) => {
@@ -126,7 +237,7 @@ export function useDecideCampaign(): UseMutationResult<Campaign, unknown, Campai
         `/v1/platform/campaigns/${encodeURIComponent(campaignId)}/decision`,
         { method: 'POST', body: { status, ...(note ? { note } : {}) } },
       );
-      return CampaignSchema.parse(raw);
+      return parseDecisionResponse(raw);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['platform', 'campaigns'] });
