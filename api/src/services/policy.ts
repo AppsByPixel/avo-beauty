@@ -46,7 +46,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { legalDocumentSet } from '../db/schema/legal';
 import { memberConsentEvent } from '../db/schema/member';
-import { conflict, serviceUnavailable } from '../http/errors';
+import { conflict } from '../http/errors';
 import type { Executor } from './audit';
 import { recordConsent } from './consent';
 
@@ -69,23 +69,48 @@ export async function publishedPolicySet(
 }
 
 /**
- * The published set, or a 503.
+ * The published set, or a 409.
  *
- * Not a 500 and not a 404: nothing is broken and the caller did nothing wrong,
- * the deployment simply has no legal set. The same reasoning and the same code
- * `GET /v1/platform/policies` already answers with, so a client meets one
- * refusal for this condition rather than two.
+ * Not a 500 and not a 404: nothing is broken and the caller did nothing wrong, the
+ * deployment simply has no legal set.
  *
- * It matters that signup fails CLOSED here. A registration that succeeded with
- * no published terms would create a member with a `policy_version` pointing at
- * nothing — which is the state migration 0019 was written to end.
+ * IT WAS A 503, AND THE COMMENT HERE CLAIMED PARITY WITH A ROUTE THAT HAD ALREADY
+ * MOVED. The previous note said the 503 was "the same reasoning and the same code
+ * `GET /v1/platform/policies` already answers with, so a client meets one refusal
+ * for this condition rather than two" — and by the time I read it, that route
+ * answered 409 and this one still answered 503. The comment described the exact
+ * divergence it existed to prevent. A claim about another file is worth less than
+ * a probe, which is the general lesson.
+ *
+ * REPRODUCED BEFORE CHANGING IT, against avo_lane_a with the published set
+ * emptied:
+ *
+ *   POST /auth/member/signup     -> HTTP 503  policies_not_published
+ *   GET  /v1/platform/policies   -> HTTP 409  policies_not_published
+ *
+ * One condition, one error code, two statuses — and 503 is the harmful one.
+ * `apps/wallet/src/api/client.ts` maps `503 || 504` to OFFLINE, which is right for
+ * a gateway timeout, so a deployment with no published terms told a customer
+ * "No connection. You need one to create an account" about a working network, with
+ * a retry that could never succeed. Lane B hit it twice in that shape.
+ *
+ * 409 is the truth: the server is fine and its STATE is wrong. 503 promises "try
+ * again later and it may work"; this will not work until somebody publishes. A
+ * configuration state is not a transient unavailability, and 409 sits in no
+ * client's offline bucket. The clients' general 503-to-offline mapping is correct
+ * and stays; the fix belongs here, because otherwise every client that classifies
+ * by status has to special-case this one code.
+ *
+ * SIGNUP STILL FAILS CLOSED. A registration that succeeded with no published terms
+ * would create a member whose `policy_version` points at nothing — the state
+ * migration 0019 was written to end. The status changed; the refusal did not.
  */
 export async function requirePublishedPolicySet(
   db: Db,
 ): Promise<typeof legalDocumentSet.$inferSelect> {
   const set = await publishedPolicySet(db);
   if (!set) {
-    throw serviceUnavailable(
+    throw conflict(
       'policies_not_published',
       'The policy set has not been published yet.',
     );

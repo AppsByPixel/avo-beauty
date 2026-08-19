@@ -944,20 +944,39 @@ SELECT pg_temp.assert('14', 'platform_settings holds exactly one row, id avo',
   (SELECT format('%s row(s), ids: %s', count(*), coalesce(string_agg(id, ','), 'none'))
      FROM platform_settings));
 
--- The defaults must still BE the shared constant. `DEFAULT_COMMISSION` in
+-- The column DEFAULTS must still be the shared constant. `DEFAULT_COMMISSION` in
 -- packages/types is `{ knetFlatFils: 150, cardPercent: 2.5, cardFlatFils: 50 }`,
 -- and a draft of 0032 wrote `card_flat_fils` 0 from memory — which would have cut
 -- AVO's card commission by 50 fils per top-up, silently, on every deployment. The
 -- constant cannot be read from SQL, so the numbers are restated here; that is the
 -- point rather than a duplication, because two independent statements of the same
 -- figure disagree loudly and one statement drifts quietly.
-SELECT pg_temp.assert('14', 'the seeded commission is DEFAULT_COMMISSION',
-  EXISTS (SELECT 1 FROM platform_settings
-           WHERE id = 'avo' AND knet_flat_fils = 150
-             AND card_percent_bp = 250 AND card_flat_fils = 50),
-  (SELECT format('knet %s fils, card %s bp + %s fils (want 150, 250, 50)',
-                 knet_flat_fils, card_percent_bp, card_flat_fils)
-     FROM platform_settings WHERE id = 'avo'));
+--
+-- THE DEFAULTS AND NOT THE CURRENT ROW, and the first version of this invariant got
+-- that wrong. It asserted the live values, and it FAILED for me the first time it
+-- ran — correctly detecting a rate of 350 bp that my own PATCH probes had left
+-- behind. Which is when the flaw showed: an OWNER CHANGING THE COMMISSION IS THE
+-- ENTIRE POINT OF MIGRATION 0032, so an invariant over the live row would fail on
+-- every deployment where somebody had used the feature. A suite that cries wolf is
+-- the suite this file's own header complains about — "true, unread, unenforced".
+--
+-- `column_default` is a property of the SCHEMA, so it is stable no matter what the
+-- console sets, and it is precisely the thing the near-miss put at risk: the value
+-- a freshly created settings row would be born with.
+SELECT pg_temp.assert('14', 'the column defaults are DEFAULT_COMMISSION',
+  (SELECT count(*) FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'platform_settings'
+      AND ((column_name = 'knet_flat_fils'         AND column_default = '150')
+        OR (column_name = 'card_percent_bp'        AND column_default = '250')
+        OR (column_name = 'card_flat_fils'         AND column_default = '50')
+        OR (column_name = 'new_salon_deposit_fils' AND column_default = '5000'))) = 4,
+  (SELECT coalesce(string_agg(format('%s=%s', column_name, coalesce(column_default,'NULL')),
+                              ', ' ORDER BY column_name),
+                   'no such columns')
+     || '  (want knet_flat_fils=150, card_percent_bp=250, card_flat_fils=50, new_salon_deposit_fils=5000)'
+     FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'platform_settings'
+      AND column_name IN ('knet_flat_fils','card_percent_bp','card_flat_fils','new_salon_deposit_fils')));
 
 -- THE STEP CONSTRAINT IS ARITHMETIC, NOT UI FIDELITY, and it is the one worth
 -- probing. `CommissionRates.cardPercent` is a percentage, so the server hands
