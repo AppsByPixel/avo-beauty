@@ -213,7 +213,14 @@ export function ChargesScreen({
 
       {load.state === 'offline' && (
         <View style={styles.list}>
-          <OfflineBanner />
+          {/*
+            `offlineTitle`, not the default `offlineBanner`. This is a COLD load —
+            the whole list failed — so "No connection · showing your last update"
+            promises a last update that is not on screen and never was. Same lie
+            DECISIONS.md § "The offline cold-load sentence" names, in a screen that
+            otherwise had this state right from the start. No new string needed.
+          */}
+          <OfflineBanner label={copy.offlineTitle} />
           <View style={styles.retry}>
             <PrimaryButton label={copy.tryAgain} onPress={() => void reload()} />
           </View>

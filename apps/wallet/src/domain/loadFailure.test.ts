@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../api/client';
-import { NO_REFERENCE, toLoadFailure } from './loadFailure';
+import { failurePresentation, NO_REFERENCE, toLoadFailure } from './loadFailure';
 
 describe('a refusal the customer cannot retry away', () => {
   it('keeps `forbidden` as itself — the field that suppresses the retry button', () => {
@@ -79,5 +79,72 @@ describe('a thrown value that is not an ApiError', () => {
       // A bare object claiming to be forbidden must NOT be believed.
       expect(toLoadFailure(thrown).kind).toBe('server');
     }
+  });
+});
+
+/**
+ * `FailureKind` has three members and `FailureScreen` branched on one, so
+ * `offline` fell through to the `server` copy and told a customer whose phone had
+ * no signal that her balance was safe and "This is on our side." Shop and Book
+ * both cold-load through that component, so both said it.
+ *
+ * These pin the pairing rather than the sentences: the function returns copy KEYS
+ * so it can be tested without a language, and `copy[key]` resolves them.
+ */
+describe('what the failure screen draws', () => {
+  it('offline gets its OWN sentence, never the "on our side" one', () => {
+    const p = failurePresentation('offline');
+    expect(p.titleKey).toBe('offlineColdTitle');
+    expect(p.bodyKey).toBe('offlineColdBody');
+    // The defect, stated as an assertion: it must not borrow the server copy.
+    expect(p.bodyKey).not.toBe('errorBody');
+    expect(p.titleKey).not.toBe('errorTitle');
+  });
+
+  it('offline KEEPS the retry — reconnecting is something she can do', () => {
+    expect(failurePresentation('offline').canRetry).toBe(true);
+  });
+
+  it('forbidden explains with the SERVER\'s sentence and offers no retry', () => {
+    const p = failurePresentation('forbidden');
+    expect(p.titleKey).toBe('blockedTitle');
+    // null = render the server's own message, which is more specific than ours.
+    expect(p.bodyKey).toBeNull();
+    expect(p.canRetry).toBe(false);
+  });
+
+  it('server is unchanged — our failure, our copy, with a retry', () => {
+    expect(failurePresentation('server')).toEqual({
+      titleKey: 'errorTitle',
+      bodyKey: 'errorBody',
+      canRetry: true,
+    });
+  });
+
+  it('gives all three kinds a distinct title — none shares another\'s', () => {
+    const titles = (['forbidden', 'offline', 'server'] as const).map(
+      (k) => failurePresentation(k).titleKey,
+    );
+    expect(new Set(titles).size).toBe(3);
+  });
+
+  it('only forbidden withholds the retry', () => {
+    const noRetry = (['forbidden', 'offline', 'server'] as const).filter(
+      (k) => !failurePresentation(k).canRetry,
+    );
+    expect(noRetry).toEqual(['forbidden']);
+  });
+});
+
+/**
+ * The end-to-end pairing the two halves of this module make together: a thrown
+ * 503 from the wire has to arrive at the screen as the offline sentence.
+ */
+describe('a 503 from the wire reaches the screen as her connection, not our fault', () => {
+  it('classifies and then presents without losing the kind', () => {
+    const err = new ApiError('offline', 'Service unavailable.', 'WLT-9-9', 503);
+    const presentation = failurePresentation(toLoadFailure(err).kind);
+    expect(presentation.bodyKey).toBe('offlineColdBody');
+    expect(presentation.canRetry).toBe(true);
   });
 });

@@ -247,15 +247,25 @@ export function CodeRefusedState({
  */
 const OFFLINE_DOT = color.neutralDot;
 
-export function OfflineBanner({ label }: { label?: string }) {
+/**
+ * `label` IS REQUIRED, AND THAT IS THE POINT.
+ *
+ * It used to default to `copy.offlineBanner` — "No connection · showing your last
+ * update" — which is a STALE-DATA sentence. Two of the three call sites were cold
+ * loads with nothing on screen, so both promised a last update that did not
+ * exist: `ChargesScreen` when the whole list failed, `LookupScreen` when the
+ * search could not reach the server. Both read as correct, because the component
+ * supplied the wrong sentence silently.
+ *
+ * There is no honest default here: only the caller knows whether data survived.
+ * So the caller says which sentence it means, and the compiler asks.
+ * DECISIONS.md § "The offline cold-load sentence".
+ */
+export function OfflineBanner({ label }: { label: string }) {
   return (
-    <View
-      style={styles.offline}
-      accessibilityRole="alert"
-      accessibilityLabel={label ?? copy.offlineBanner}
-    >
+    <View style={styles.offline} accessibilityRole="alert" accessibilityLabel={label}>
       <View style={styles.offlineDot} />
-      <Text style={[ui(12.5), styles.offlineText]}>{label ?? copy.offlineBanner}</Text>
+      <Text style={[ui(12.5), styles.offlineText]}>{label}</Text>
     </View>
   );
 }

@@ -56,3 +56,44 @@ export function toLoadFailure(err: unknown): LoadFailure {
   }
   return { kind: 'server', message: 'Something went wrong.', reference: NO_REFERENCE, code: null };
 }
+
+// ---------------------------------------------------- what the screen shows --
+
+/**
+ * Which copy a failure screen draws, and whether it offers a retry.
+ *
+ * A PURE FUNCTION FOR THE SAME REASON THE REST OF THIS MODULE IS ONE. This was
+ * three conditional expressions inside `FailureScreen`'s body, where no test
+ * here can reach them — and the branch it was missing had shipped: `FailureKind`
+ * has three members, the component branched on one, so `offline` rendered the
+ * `server` copy and told a customer with no signal that the failure was ours.
+ *
+ * Returns KEY NAMES rather than sentences. This module has no language and must
+ * not choose copy — it decides which of the two dictionaries' entries applies,
+ * and `copy` resolves it in the caller's language.
+ *
+ * `bodyKey: null` means "use the server's own message", which is only ever right
+ * on `forbidden`: that refusal carries a written reason and ours would be vaguer
+ * than the truth.
+ */
+export interface FailurePresentation {
+  titleKey: 'blockedTitle' | 'offlineColdTitle' | 'errorTitle';
+  /** Null = render the server's `message` instead of one of our strings. */
+  bodyKey: 'offlineColdBody' | 'errorBody' | null;
+  /** False only where retrying cannot change the answer. */
+  canRetry: boolean;
+}
+
+export function failurePresentation(kind: FailureKind): FailurePresentation {
+  switch (kind) {
+    case 'forbidden':
+      // Asking again cannot change the answer, so no button that would.
+      return { titleKey: 'blockedTitle', bodyKey: null, canRetry: false };
+    case 'offline':
+      // Her connection, not our failure — but reconnecting IS actionable, which
+      // is why this keeps the retry that `forbidden` does not.
+      return { titleKey: 'offlineColdTitle', bodyKey: 'offlineColdBody', canRetry: true };
+    case 'server':
+      return { titleKey: 'errorTitle', bodyKey: 'errorBody', canRetry: true };
+  }
+}

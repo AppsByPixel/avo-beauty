@@ -6,12 +6,30 @@
  * offer a button that will fail again). A retry on a 403 teaches a customer that
  * the app is broken; the honest answer is that this is not something retrying
  * fixes.
+ *
+ * THERE ARE THREE ANSWERS, NOT TWO. `FailureKind` has always had three members
+ * and this component branched on one of them, so `offline` fell through to the
+ * `server` copy — "Your balance and history are safe. This is on our side."
+ * asserting OUR failure to a customer whose phone simply has no signal. Shop and
+ * Book both cold-load through here, so both said it. The kind was reaching this
+ * component from all five call sites; the branch was the missing half.
+ *
+ *   forbidden  explain, NO retry — asking again cannot change the answer.
+ *   offline     her connection, WITH a retry — reconnecting is something she can
+ *               actually do, which is what separates it from `forbidden`.
+ *   server      ours, with a retry.
+ *
+ * `offlineBanner` is deliberately NOT the sentence here: it promises a last
+ * update, and on a cold load there is nothing to show. `offlineColdTitle` /
+ * `offlineColdBody` exist for exactly this state — INVENTED and marked, per
+ * DECISIONS.md § "The offline cold-load sentence".
  */
 
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import type { FailureKind } from '../api/client';
+import { failurePresentation } from '../domain/loadFailure';
 
 interface Props {
   kind: FailureKind;
@@ -23,7 +41,16 @@ interface Props {
 
 export function FailureScreen({ kind, message, reference, onRetry, retrying }: Props) {
   const { lang, copy } = useLanguage();
-  const canRetry = kind !== 'forbidden';
+  /*
+    The three-way decision lives in `domain/loadFailure.ts` so it has a spec —
+    this workspace has no renderer, so a branch written inline here is a branch
+    no test can reach, which is how `offline` came to render the `server` copy.
+  */
+  const { titleKey, bodyKey, canRetry } = failurePresentation(kind);
+  const title = copy[titleKey];
+  // `bodyKey: null` is `forbidden` — the server's own sentence, not ours.
+  const bodyText = bodyKey === null ? message : copy[bodyKey];
+
   return (
     <View style={styles.wrap} accessibilityRole="alert">
       <View style={styles.icon}>
@@ -32,10 +59,8 @@ export function FailureScreen({ kind, message, reference, onRetry, retrying }: P
         <View style={styles.iconDot} />
       </View>
 
-      <Text style={[text('displayM', lang), styles.title]}>
-        {canRetry ? copy.errorTitle : copy.blockedTitle}
-      </Text>
-      <Text style={[text('body', lang), styles.body]}>{canRetry ? copy.errorBody : message}</Text>
+      <Text style={[text('displayM', lang), styles.title]}>{title}</Text>
+      <Text style={[text('body', lang), styles.body]}>{bodyText}</Text>
 
       {canRetry ? (
         <Pressable
