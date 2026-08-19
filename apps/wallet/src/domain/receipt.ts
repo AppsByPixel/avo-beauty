@@ -101,6 +101,35 @@ export function buildReceipt(
   const headline = tx.kind === 'topup' && bonus !== 0 ? add(paid, bonus) : paid;
   const positive = headline > 0;
   const abs = fils(Math.abs(headline));
+  /**
+   * A ZERO HEADLINE TAKES NO SIGN, AND THIS IS A REAL TRANSACTION, NOT AN EDGE.
+   *
+   * `POST /charges` applies a held deposit capped at the basket — `heldDeposit =
+   * min(gross, held)` — so when the hold covers the whole visit `due` is 0 and the
+   * row is written `amountFils: 0`. Driven on avo_lane_b: a 6.000 Manicure against
+   * a 6.000 held deposit answered `amountFils: 0`, `depositAppliedFils: 6000`,
+   * balance unchanged at 6500.
+   *
+   * `positive` is `headline > 0`, so a zero fell to the negative branch and this
+   * sheet rendered `−0.000` — announced to a screen reader as "minus 0.000 Kuwaiti
+   * dinars", in both languages. The minus asserts a direction that did not happen:
+   * nothing left her wallet, and the deposit she had already paid covered the
+   * visit.
+   *
+   * THE FIGURE IS NOT RECOMPUTED — trunk's call on this frame is "leave the figure,
+   * fix the frame", and putting the 6.000 gross here would be the client inventing
+   * a debit the server never made (#2). Only the sign goes, which needs no new copy
+   * in either language and therefore adds nothing to AR_GAPS.
+   *
+   * ⚠️ WHAT THIS DOES NOT FIX, AND IT NEEDS TRUNK: the sheet still cannot say WHY
+   * it was zero. `depositAppliedFils` is on the CHARGE RESPONSE, not on the
+   * `Transaction` entity this is built from, so the receipt reads "Service ·
+   * 0.000 · Amount 0.000" with nothing reconciling it. The scanner solved the same
+   * frame by showing its applied row, but it has the charge response in hand and
+   * this does not. Naming the gap rather than deriving a figure from two numbers
+   * the entity does not carry.
+   */
+  const signed = headline === 0 ? '' : positive ? '+' : '−';
 
   const rows: ReceiptRow[] = [];
 
@@ -145,8 +174,10 @@ export function buildReceipt(
     // MONEY: Western digits in both languages, per non-negotiable #12 and the
     // design's own Arabic receipt (AVO Wallet Home.dc.html:1579 renders
     // '25.000 د.ك' with Latin numerals inside an otherwise Eastern-digit sheet).
-    amount: `${positive ? '+' : '−'}${formatFils(abs)}`,
-    amountLabel: positive ? copy.plus(spoken) : copy.minus(spoken),
+    amount: `${signed}${formatFils(abs)}`,
+    // The bare spoken amount on a zero — `copy.minus(spoken)` would say "minus
+    // 0.000", which is the same false direction the glyph asserted.
+    amountLabel: headline === 0 ? spoken : positive ? copy.plus(spoken) : copy.minus(spoken),
     positive,
     status: copy.txStatus[tx.status],
     statusTone: statusTone(tx.status),
