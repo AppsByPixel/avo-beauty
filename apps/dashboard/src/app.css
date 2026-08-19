@@ -3455,3 +3455,206 @@ a:hover {
   align-items: center;
   gap: 10px;
 }
+
+/* ----------------------------------------------------------------- analytics -- */
+/*
+ * `AVO Owner Console.dc.html:98` § ANALYTICS. Four KPI tiles, then a 1.35fr/1fr
+ * split of the eight-month chart and the top-five list — the design's own ratio.
+ *
+ * Every colour is an `--avo-*` custom property. ONE VALUE IN THIS SECTION HAS NO
+ * TOKEN and is composed rather than re-typed: the design's resting bar is
+ * `#D5DBCF`, which appears nowhere in `design/tokens/avo-tokens.json`. It is
+ * rendered as `--avo-brand` at 30% instead, which lands within a shade of it and
+ * keeps the chart on one hue when a white-label brand is swapped in — a literal
+ * `#D5DBCF` would stay green under a pink brand. Reported to trunk as a token gap;
+ * `packages/tokens` is trunk-owned.
+ */
+
+.analytics {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.analytics__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.analytics__split {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+/* The design is a desktop console; below the wide breakpoint both stack. */
+.console[data-bp='narrow'] .analytics__kpis,
+.console[data-bp='tablet'] .analytics__kpis {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.console[data-bp='narrow'] .analytics__split,
+.console[data-bp='tablet'] .analytics__split {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.analytics__cardhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.analytics__h2 {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.analytics__cardmeta {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}
+
+/* ---- the bar chart ---- */
+
+.analytics__bars {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  height: 150px;
+}
+
+.analytics__barcol {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.analytics__bar {
+  width: 100%;
+  max-width: 32px;
+  border-radius: 7px 7px 3px 3px;
+  /*
+   * `--avo-brand` as a FILL, which is the one thing non-negotiable #9 says it is
+   * for: "a surface colour: gradients, tints, dots, progress fills". No text sits
+   * on these bars, so there is no contrast pair to get wrong.
+   *
+   * The resting bars are the same hue at 30% — the composed stand-in for the
+   * design's untokenised `#D5DBCF`.
+   */
+  background: var(--avo-brand);
+  opacity: 0.3;
+  transition: opacity 120ms ease;
+}
+
+/* The newest month, which the design fills solid. */
+.analytics__bar[data-latest] {
+  opacity: 1;
+}
+
+.analytics__barmonth {
+  font-size: 11px;
+  color: var(--avo-text-muted-soft);
+}
+
+/*
+ * The figure under each bar. Present in the DOM for screen readers and revealed on
+ * hover or keyboard focus within the column — the design draws bars alone, so this
+ * adds the number without adding furniture.
+ */
+.analytics__barvalue {
+  font-size: 10.5px;
+  color: var(--avo-text-muted);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.analytics__barcol:hover .analytics__barvalue,
+.analytics__barcol:focus-within .analytics__barvalue {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analytics__bar,
+  .analytics__barvalue {
+    transition: none;
+  }
+}
+
+/* ---- top salons ---- */
+
+.analytics__tophead {
+  padding: 6px 0 4px;
+}
+
+.analytics__toplist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.analytics__toprow {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 12px 0;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.analytics__rank {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  /* Text on a tint, never on `--avo-brand` — non-negotiable #9. */
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+.analytics__topwho {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.analytics__topname {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.analytics__topmeta {
+  font-size: 11.5px;
+  color: var(--avo-text-muted);
+}
+
+.analytics__topmoney {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.analytics__topempty {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted);
+  margin: 4px 0 12px;
+}

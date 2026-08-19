@@ -32,7 +32,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     id: 'analytics',
     label: 'Analytics',
     to: '/console/analytics',
-    built: false,
+    built: true,
     section: 'analytics',
     title: 'Analytics',
     subtitle: 'How AVO is performing across every salon',
