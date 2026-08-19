@@ -3,7 +3,8 @@
 Written as a handoff. If you are a fresh session picking this up, read this first, then
 `CLAUDE.md`, then `RUNBOOK.md`. Everything else is detail.
 
-**Day 3 of a 30-day pilot build.** `dev` is the trunk; `main` tracks it when green.
+**Day 4 of a 30-day pilot build** (started 2026-08-16). `dev` is the trunk; `main` tracks it
+when green. The build is far ahead of the calendar — what remains is mostly not code.
 
 ---
 
@@ -33,9 +34,11 @@ lanes, four worktrees, listed in `LANES.md`.
 collide; API and dashboard do, because the dashboard consumes what the API has not built
 yet. `LANES.md` carries the order and the reasoning.
 
-**Every brief must name the lane's own database and browser context.** Three shared-resource
-collisions have happened — a lane using the shared `avo_ci` after its `DROP DATABASE` was
-sandbox-blocked, and a lane injecting a `fetch` shim into another lane's browser tab. Trunk
+**Every brief must name the lane's own database and browser context.** **Seven** shared mutable
+resources have now crossed lanes: the database, the browser pane, a cross-worktree `pnpm
+--filter`, the container, the turbo cache, the process table (an unscoped `pkill -f vitest`
+destroyed a lane's suite for an hour), and the session scratchpad (a `pids.txt` overwritten
+with another lane's live server PIDs). Trunk
 has pre-created `avo_lane_{a,b,c,d}`; lanes reset theirs with `./scripts/lane-db.sh <lane>`
 and never run `CREATE DATABASE`. Full rules in `LANES.md` § "Every lane isolates its own
 resources" — put a line in each brief pointing at it.
