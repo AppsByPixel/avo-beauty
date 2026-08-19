@@ -33,7 +33,11 @@ for l in api wallet web qa; do
 done
 ```
 
-As of handoff: `dev` at **9664707**, `main` **64 behind**. `feat/wallet` was 2 commits ahead; `avo-api` had 7 uncommitted files, `avo-web` 2, `avo-qa` 6. **Those numbers will have moved — re-read them.**
+As of handoff: `dev` at **cfc05d9**, `main` **~70 behind**. **Those numbers will have moved — re-read them.**
+
+**What happened just before handoff, because it explains the state you will find.** Lanes A, B and C were all killed by the 600-second watchdog at once. The cause was not the agents: a previous lane had booted an **iPhone 17 simulator** and died without shutting it down, and that one orphaned simulator drove the machine to **load average 463** on twelve cores with 72% of memory free. Shutting it down took load to **61 in twenty seconds**. Their committed work is merged; their uncommitted work is preserved under `~/.claude/lane-*-recovered-*.patch` and `lane-*-untracked-*.tgz`. **Lane D may still be running** — check `ListAgents` before dispatching a second QA agent into the same worktree.
+
+So before you dispatch anything: `sysctl -n vm.loadavg` and `xcrun simctl list devices booted`. A booted simulator holds no port and matches none of the process names a cleanup greps for, which is exactly why nobody saw it.
 
 **If a worktree is dirty, preserve it before touching anything:**
 ```bash

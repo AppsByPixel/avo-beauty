@@ -24,10 +24,11 @@ the failure mode this structure exists to prevent.
 
 ## Every lane isolates its own resources
 
-Four times now a shared mutable resource has crossed lanes: one Postgres database, one
-container, one browser pane, and one `pnpm` invocation that ran another worktree's code.
-Each time the lane involved caught and disclosed it. This rule is cheaper than relying on
-that.
+**Eight** shared mutable resources have now crossed lanes: a Postgres database, the container,
+the browser pane, a cross-worktree `pnpm --filter`, the turbo cache, the process table, the
+session scratchpad, and an abandoned iOS simulator that starved three lanes to death. Most were
+caught and disclosed by the lane that caused them — which is the standard, and also why this
+rule exists rather than relying on it.
 
 ### Database — one per lane, already created
 
