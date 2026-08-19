@@ -8,6 +8,8 @@
  *   POST /auth/web/session      username + password → dashboard scope
  *   POST /auth/platform/session console handle + password → platform scope
  *   POST /auth/staff/password-reset     redeem a merchant reset link
+ *   POST /auth/member/password-reset/request   ask for a customer reset link
+ *   POST /auth/member/password-reset    redeem a customer reset link
  *   POST /auth/platform/password-reset  redeem a console reset link
  *   POST /auth/refresh          rotate
  *   POST /auth/sign-out         revoke this device
@@ -47,7 +49,7 @@ import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
-import { member } from '../db/schema/member';
+import { member, memberPasswordReset } from '../db/schema/member';
 import { platformAdmin, platformAdminPasswordReset } from '../db/schema/platformAdmin';
 import { salon } from '../db/schema/salon';
 import { pinAttempt, session } from '../db/schema/session';
@@ -68,7 +70,7 @@ import {
   revokeSession,
   rotateSession,
 } from '../auth/sessions';
-import { hashPasswordResetToken } from '../auth/tokens';
+import { hashPasswordResetToken, mintPasswordResetToken } from '../auth/tokens';
 import { badRequest, conflict, forbidden, tooManyRequests, unauthorized } from '../http/errors';
 import { parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
@@ -77,8 +79,19 @@ import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
 import { tierForVisits } from '../services/loyalty';
 import { recordPolicyAcceptance, requireCurrentPolicyVersion } from '../services/policy';
 import { enforceSignupLimits, recordSignupAttempt } from '../services/signupLimit';
+import {
+  enforceResetRequestLimits,
+  recordResetRequestAttempt,
+} from '../services/passwordResetLimit';
 import { serialiseStaff } from './staff';
 import { serialisePlatformAdmin } from './platformAdmins';
+
+/**
+ * How long a reset link is good for — the same sixty minutes as the staff and
+ * console flows (routes/staff.ts, routes/platformAdmins.ts). Three surfaces with
+ * different windows would be a difference nobody chose.
+ */
+const RESET_TTL_MINUTES = 60;
 
 /** One body for every credential failure. Never says which half was wrong. */
 const BAD_CREDENTIALS = () => unauthorized('Those details do not match. Try again.', 'invalid_credentials');
@@ -771,6 +784,245 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       metadata: { requestedBy: reset.requestedBy, reactivated: reactivating },
       ...clientMeta(req),
     });
+
+    // 204: no body, so no body to leak a credential in. She signs in normally.
+    return reply.code(204).send();
+  });
+
+  // ---------------------------------------------- member reset, both halves --
+  /**
+   * The CUSTOMER's reset flow — the third of three, and the one the contract had
+   * promised all along. api-contract.md § Profile edit rule 5: "'Forgot my current
+   * password' drops into the existing WhatsApp reset-link flow" — the wallet draws
+   * the control, and until these two routes existed it led nowhere.
+   *
+   * BOTH HALVES ARE UNAUTHENTICATED BY NECESSITY: she cannot sign in, that is the
+   * point. Which makes the request half different in kind from the staff and
+   * console issue endpoints, where an authenticated manager or inviter asks on
+   * somebody's behalf. Here the caller merely CLAIMS a phone, and everything about
+   * the endpoint follows from taking that seriously:
+   *
+   *   - THE RATE LIMIT COMES FIRST — before the phone is parsed, before anything.
+   *     The posture of an unauthenticated endpoint settles before any statement
+   *     about the request's content (the ordering Reports got wrong once).
+   *   - 202 WHETHER OR NOT THE PHONE HOLDS A WALLET, with one indistinguishable
+   *     body. A member-enumeration oracle is worse here than anywhere else in the
+   *     product: unauthenticated, and the phone list it would leak is the customer
+   *     book. The residual timing channel (a match does two more writes than a
+   *     miss) is bounded by the budget — six an hour is not a measurement
+   *     platform — and stated rather than denied.
+   *   - IDENTITY IS (salonId, phone), the sign-in pair. `member_salon_phone_uq`
+   *     means a phone alone is not a person — she can hold wallets at two salons,
+   *     and a reset issued against "whichever row matched first" would set a
+   *     password on an arbitrary one of them. Each white-labelled wallet knows its
+   *     salon; the shape here is the shape sign-in already demands.
+   *
+   * THE DELETION GRACE WINDOW IS DELIBERATELY NOT A BAR, in either half. The
+   * window exists so she can change her mind ("sessions are not revoked and
+   * sign-in keeps working"), and a customer who forgot her password DURING it
+   * would otherwise be locked out of the one door that cancels the erasure. So a
+   * pending deletion issues and redeems like any other account — and REDEMPTION
+   * DOES NOT TOUCH THE CLOCK. Proving she holds her phone says nothing about
+   * whether she still wants the account gone; cancelling is its own deliberate
+   * act (`DELETE /members/me/deletion`), and a reset that silently cancelled an
+   * erasure request would be this flow deciding a question nobody asked it. The
+   * audit metadata carries `deletionPending` so the sequence stays legible.
+   *
+   * A member PAST her window whose row the eventual erasure job has scrubbed
+   * simply no longer matches by phone — the 202 no-op falls out of the lookup
+   * rather than needing a rule.
+   */
+  app.post('/auth/member/password-reset/request', async (req, reply) => {
+    const ipAddress = req.ip ?? null;
+
+    // Posture first. One indexed count; a throttled caller learns nothing about
+    // which numbers are registered, because nothing has been looked at yet.
+    await enforceResetRequestLimits(db, ipAddress);
+    // And the attempt is on the record BEFORE any work, so a burst cannot race
+    // through the limiter and a flood of unknown-phone probes is still counted.
+    await recordResetRequestAttempt(db, ipAddress);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const salonId = requireString(body.salonId, 'salonId', 100);
+    const phone = parseE164(body.phone);
+
+    /**
+     * ONE RESPONSE, built before the lookup so no branch can be tempted to
+     * decorate it. `accepted` is the only honest word available: nothing has been
+     * delivered (no sender is wired — `sent_at` is the outbox stamp waiting on
+     * the client's WhatsApp/domain decisions), and whether a link even exists is
+     * exactly what this body must not say.
+     */
+    const ACCEPTED = { accepted: true };
+
+    const rows = await db
+      .select()
+      .from(member)
+      .where(and(eq(member.salonId, salonId), eq(member.phone, phone)))
+      .limit(1);
+    const m = rows[0];
+    if (!m) return reply.code(202).send(ACCEPTED);
+
+    const token = mintPasswordResetToken();
+    const expiresAt = new Date(Date.now() + RESET_TTL_MINUTES * 60_000);
+
+    await db.transaction(async (tx) => {
+      // Issuing a second link spends the first — otherwise the older one, which
+      // somebody may already be walking around with, is the one nobody knows is
+      // still valid. Same rule as both sibling flows.
+      await tx
+        .update(memberPasswordReset)
+        .set({ usedAt: new Date() })
+        .where(
+          and(eq(memberPasswordReset.memberId, m.id), isNull(memberPasswordReset.usedAt)),
+        );
+
+      await tx.insert(memberPasswordReset).values({
+        memberId: m.id,
+        tokenHash: hashPasswordResetToken(token),
+        requestedIp: ipAddress,
+        expiresAt,
+      });
+
+      /**
+       * AS HER, because the row is about her account — but the detail says what
+       * is actually known: a reset was REQUESTED for this wallet, by an
+       * unauthenticated caller holding her phone number. Never the token.
+       */
+      await writeAudit(
+        tx,
+        { kind: 'member', id: m.id, name: m.name, role: 'Customer' },
+        {
+          salonId: m.salonId,
+          kind: 'access',
+          action: 'Password reset link requested',
+          detail: `Reset link requested for ${m.name} — valid for ${RESET_TTL_MINUTES} minutes`,
+          source: 'wallet',
+          subjectType: 'member',
+          subjectId: m.id,
+          metadata: {
+            expiresAt: expiresAt.toISOString(),
+            ttlMinutes: RESET_TTL_MINUTES,
+            deletionPending: m.deletionRequestedAt !== null,
+          },
+          ...clientMeta(req),
+        },
+      );
+    });
+
+    // The identical body and code as the miss path. What differs is two database
+    // writes' worth of time, bounded by the budget above.
+    return reply.code(202).send(ACCEPTED);
+  });
+
+  /**
+   * The far end of the customer's reset link. Mirrors the staff and console
+   * redeems; where it differs, the difference is argued:
+   *
+   *   - EVERY FAILURE IS `invalid_reset_token` — unknown, expired, spent, and a
+   *     member erased since issue all answer identically, for the enumeration
+   *     reason above and because the legitimate holder does the same thing in all
+   *     four cases: asks for another link.
+   *   - ONE TRANSACTION for the spend and the password set, as the console redeem
+   *     is and the staff one is not: a crash between the two statements burns her
+   *     only link without setting a password, indistinguishable from theft.
+   *   - THE CONDITIONAL-SPEND UPDATE IS THE RACE MECHANISM. The SELECT above it
+   *     is advisory (it gives the polite early refusals); the UPDATE carrying
+   *     `used_at IS NULL` is what makes exactly one of two simultaneous
+   *     redemptions win. Lane D's console race spec is byte-identical from the
+   *     outside precisely because the SELECT contributes nothing to the outcome.
+   *   - A PENDING DELETION REDEEMS NORMALLY AND KEEPS ITS CLOCK — see the header
+   *     above.
+   *
+   * On success every session dies, reason `password_reset`. She is setting this
+   * password because she lost the old one, and "lost" and "somebody else has it"
+   * are the same event until proven otherwise. (Rule 4's keep-the-calling-device
+   * applies to password CHANGE, where the caller held a session; here there is
+   * none to keep.)
+   */
+  app.post('/auth/member/password-reset', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const token = requireString(body.token, 'token', 500);
+    const password = body.password;
+
+    if (!isAcceptablePassword(password)) {
+      throw badRequest('password_too_short', 'Your new password needs at least 6 characters.');
+    }
+
+    const REFUSED = () =>
+      badRequest(
+        'invalid_reset_token',
+        'That reset link has expired or has already been used. Request a new one.',
+      );
+
+    const resetRows = await db
+      .select()
+      .from(memberPasswordReset)
+      .where(eq(memberPasswordReset.tokenHash, hashPasswordResetToken(token)))
+      .limit(1);
+    const reset = resetRows[0];
+    if (!reset || reset.usedAt || reset.expiresAt.getTime() <= Date.now()) throw REFUSED();
+
+    const memberRows = await db
+      .select()
+      .from(member)
+      .where(eq(member.id, reset.memberId))
+      .limit(1);
+    const m = memberRows[0];
+    if (!m) throw REFUSED();
+
+    // argon2id through the one hashing path, outside the transaction — 19 MiB
+    // and real milliseconds that should not be spent holding a row lock.
+    const passwordHash = await hashSecret(password);
+
+    const spent = await db.transaction(async (tx) => {
+      const burned = await tx
+        .update(memberPasswordReset)
+        .set({ usedAt: new Date() })
+        .where(and(eq(memberPasswordReset.id, reset.id), isNull(memberPasswordReset.usedAt)))
+        .returning({ id: memberPasswordReset.id });
+      if (burned.length === 0) return false;
+
+      await tx
+        .update(member)
+        .set({ passwordHash, updatedAt: new Date() })
+        .where(eq(member.id, m.id));
+
+      /**
+       * HER OWN ROW. The caller holds a single-use token bound to this account,
+       * which identifies her as surely as a password does — it is what the
+       * revoke below acts on. `requestedIp` rides in the metadata so the request
+       * and the redemption can be read as one story.
+       */
+      await writeAudit(
+        tx,
+        { kind: 'member', id: m.id, name: m.name, role: 'Customer' },
+        {
+          salonId: m.salonId,
+          kind: 'access',
+          action: 'Password set from reset link',
+          detail: `${m.name} set a new password from a reset link`,
+          source: 'wallet',
+          subjectType: 'member',
+          subjectId: m.id,
+          metadata: {
+            requestedIp: reset.requestedIp,
+            deletionPending: m.deletionRequestedAt !== null,
+          },
+          ...clientMeta(req),
+        },
+      );
+
+      return true;
+    });
+
+    // The loser of the race — a specific refusal, never a silent no-op.
+    if (!spent) throw REFUSED();
+
+    // Outside the transaction, like both siblings: a failure here must not roll
+    // back a password she has already been told to use. Worst case is a session
+    // that dies at its next request instead of now.
+    await revokeAllSessions(db, { kind: 'member', id: m.id }, 'password_reset');
 
     // 204: no body, so no body to leak a credential in. She signs in normally.
     return reply.code(204).send();
