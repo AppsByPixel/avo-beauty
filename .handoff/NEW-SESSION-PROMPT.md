@@ -63,6 +63,22 @@ Finishing the **Shop screen**, including the retired-product race: a product ret
 **Lane D — `e2e/`**
 The **near-duplicate charge guard** (`possible_duplicate`, 120s, migration 0031), the order path's **new second guard verified reachable alone**, the console's platform routes, and the go-live rows that are testable claims. Its method — *break each guard alone and record what still passes* — has found six real defects; keep using it.
 
+## Fresh queue items — found by Lane D's last run, not yet actioned
+
+**For Lane A (`api/`), in addition to its existing queue:**
+1. **The order path's second guard holds the money but cannot answer.** With `FOR UPDATE` removed the ledger, rows and balance still agree — so the guard works — but **four of five racers get `500 server_error`** and only one order settles, because the consistency check after the debit throws a bare `Error`. The zero-row path is careful to be *"a 402, NOT a 500"*; in the one scenario this layer exists for, most callers never reach it. Lane D's words: *a net, not a control.* No spec can pin it (with the lock in place the path is unreachable), so it is reported rather than covered.
+2. **`POST /campaigns` returns the campaign unwrapped while the decision endpoint returns `{campaign, delivery}`.** Inconsistent shapes for the same object.
+3. **Nothing reads `campaign_send` to dispatch.** So a released campaign is *recorded as delivered* and no push leaves the building — lane A's own comment says so. Delivery being blocked on WhatsApp template approval is fine; **recording it as delivered is not.**
+
+**For Lane D (`e2e/`) — its own next slice, already scoped:** `GET/PATCH /v1/platform/settings` is an unprobed money path. `services/topup.ts` now reads `platform_settings` *inside* the top-up transaction, so commission stored there prices every top-up. Needs a permission-off probe, range probes, and a test that a change is picked up by the very next top-up.
+
+**For trunk (`packages/types`, `packages/mock`) — yours, not a lane's:**
+- No schema exists for `PlatformSettings`, `PlatformMetrics`, audit (merchant *or* platform), `PlatformAdmin`, or the policies draft. Lanes are declaring these locally with a note, which is correct but temporary.
+- **`packages/mock` does not implement `possible_duplicate`**, so the three mock-backed suites pass because the guard does not exist there. Three lanes build against that mock; a shape it does not carry is a shape they cannot render.
+
+## Why no lanes are running when you arrive
+Deliberate. Subagents belong to the session that spawned them, so dispatching before a handoff leaves four orphaned agents holding uncommitted work — which happened three times in the previous session and cost real recovery effort each time. The machine was left healthy: load **2.5**, no booted simulators, no leaked processes, no orphaned per-run databases, all worktrees clean, everything merged and pushed.
+
 ## The gate, and `main`
 `main` advances **only** on a genuinely twice-green run from a clean tree:
 ```bash
