@@ -22,9 +22,27 @@
  * five concurrent orders left the ledger 36000 fils out with every CHECK
  * satisfied. So the key is minted once per cart and reused across retries of the
  * SAME cart: a timed-out POST that actually committed replays instead of debiting
- * twice. It is re-minted when the cart CHANGES, because the API answers 422
- * `idempotency_key_reused` for one key with a different body (verified) — reusing
- * it would turn a corrected cart into a refusal rather than an order.
+ * twice — driven, and the replay returned the identical transaction with exactly
+ * one debit in the table.
+ *
+ * ⚠️ THIS NOTE PREVIOUSLY MISSTATED WHY THE KEY IS RE-MINTED, and the correction
+ * matters because it changes which scenario the re-mint protects. It read: "it is
+ * re-minted when the cart CHANGES, because the API answers 422
+ * `idempotency_key_reused` for one key with a different body — reusing it would
+ * turn a corrected cart into a refusal rather than an order." The 422 is real, but
+ * it does NOT apply to a corrected cart after a refusal. Driven, all three cases:
+ *
+ *   refused, then corrected under the SAME key   → 201. A refusal ROLLS THE
+ *       TRANSACTION BACK, so the key was never persisted and is not burned. The
+ *       retired-product recovery would have worked without any re-mint.
+ *   committed, replayed with the SAME body       → the stored result, one debit.
+ *   committed, then a DIFFERENT body             → 422 `idempotency_key_reused`.
+ *
+ * So the re-mint is load-bearing for the third case only: after an order settles
+ * the cart is emptied, she adds something else, and that new cart must not arrive
+ * under the key the settled order burned. The mechanism was right; the reason
+ * given for it named a scenario that cannot occur. Recorded rather than quietly
+ * amended.
  *
  * AND NO RETRY AFFORDANCE ON AN UNKNOWN OUTCOME, for the reason the scanner's
  * charge screen carries at length: a client that could not read the response does
@@ -35,7 +53,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fils, type Fils } from '@avo/types';
+import { type Fils } from '@avo/types';
 import { ApiError, newIdempotencyKey } from '../api/client';
 // The salon is configuration, not a request — see config/salon.ts.
 import { SALON_ID as SALON_FROM_CONFIG } from '../config/salon';
@@ -53,16 +71,19 @@ import {
   type Cart,
   type PricedLine,
 } from '../domain/cart';
+import { orderRefusal, type CheckoutRefusal } from '../domain/orderRefusal';
+
+/**
+ * Re-exported so the screen and the sheet keep importing it from here.
+ *
+ * It is DECLARED in `domain/orderRefusal.ts` beside the function that produces
+ * it: a domain module must not import from `state/`, and the classifier is what
+ * defines the union.
+ */
+export type { CheckoutRefusal };
 
 /** Why the catalogue is not on screen. `off` is the module, not a failure. */
 export type ShopStatus = 'loading' | 'ready' | 'off' | 'failed';
-
-/** What a refused checkout was. Each is a different sentence. */
-export type CheckoutRefusal =
-  | { kind: 'short'; shortfallFils: Fils }
-  | { kind: 'stale'; ids: string[] }
-  | { kind: 'offline' }
-  | { kind: 'failed' };
 
 export interface ShopState {
   status: ShopStatus;
@@ -207,30 +228,14 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
       onPaid();
       return result;
     } catch (err) {
-      if (!(err instanceof ApiError)) {
-        setRefusal({ kind: 'failed' });
-        return null;
-      }
-      if (err.status === 402 && err.shortfallFils !== null) {
-        // The SERVER's shortfall, replacing the local one the label used.
-        setRefusal({ kind: 'short', shortfallFils: fils(err.shortfallFils) });
-        return null;
-      }
-      if (err.code === 'invalid_products') {
-        const unknown = err.details['unknown'];
-        setRefusal({
-          kind: 'stale',
-          ids: Array.isArray(unknown) ? unknown.filter((v): v is string => typeof v === 'string') : [],
-        });
-        return null;
-      }
-      // Checked AFTER the codes: a 503 classifies as `offline` too, the collision
-      // that made a signup refusal claim the network was down.
-      if (err.kind === 'offline') {
-        setRefusal({ kind: 'offline' });
-        return null;
-      }
-      setRefusal({ kind: 'failed' });
+      /*
+        ONE CALL, AND IT USED TO BE FOUR BRANCHES HERE. The classification of a
+        refused order — the most consequential mapping in this app after the charge
+        — was inline in this catch, where no test could reach it: this workspace
+        has no renderer. It is `domain/orderRefusal.ts` now, and the race that
+        motivated it is driven and pinned in `orderRefusal.test.ts`.
+      */
+      setRefusal(orderRefusal(err));
       return null;
     } finally {
       if (aliveRef.current) setBusy(false);

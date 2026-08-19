@@ -43,7 +43,22 @@ const ORDER_201 = {
     createdAt: '2026-08-19T01:20:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
-    branchAssumed: false,
+    /*
+      NO `branchAssumed` HERE, AND ITS REMOVAL IS THE POINT. This fixture carried
+      `branchAssumed: false` and the real wire does not send it:
+      `serialiseTransactionForCustomer` emits exactly the twelve keys asserted in
+      "the transaction's key set is the wire's" below, and that is not one of
+      them — the column is written on the row so per-branch shop revenue is
+      filterable, and it is merchant data, not customer data.
+
+      Harmless today, because zod strips unknown keys. Dangerous tomorrow, and in
+      the exact direction this file exists to guard: if `TransactionSchema` ever
+      declared `branchAssumed` as required, this test would PASS on the fixture
+      that has it while every real response failed to parse — a *successful* order
+      unparseable, which is the drift that has already happened here once. A
+      fixture whose stated purpose is fidelity to the wire cannot carry a field the
+      wire does not send.
+    */
   },
   balanceAfterFils: 2500,
   totalFils: 22000,
@@ -104,6 +119,42 @@ describe('the real responses parse with nothing lost', () => {
     expect(Object.keys(parsed.data.items[0]!).sort()).toEqual(
       Object.keys(ORDER_201.items[0]!).sort(),
     );
+  });
+
+  /**
+   * THE GAP THAT LET A PHANTOM FIELD SIT IN THIS FILE. The test above compares
+   * TOP-LEVEL keys and the `items[0]` keys, so a stray key nested inside
+   * `transaction` was invisible to it — and `branchAssumed: false` sat there,
+   * a field `serialiseTransactionForCustomer` does not emit.
+   *
+   * Twelve keys, captured from a real 201 on avo_lane_b. `feeFils` is deliberately
+   * absent: it is merchant-visible and customer-never, and the serialiser has its
+   * own comment saying so. If the schema ever grows a required thirteenth, this
+   * fails here rather than on every real response in production.
+   */
+  it("the transaction's key set is the wire's, with no phantom field", () => {
+    const parsed = OrderResultSchema.safeParse(ORDER_201);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(Object.keys(parsed.data.transaction).sort()).toEqual([
+      'amountFils',
+      'bonusFils',
+      'branchId',
+      'createdAt',
+      'id',
+      'kind',
+      'memberId',
+      'method',
+      'reference',
+      'reversedByTransactionId',
+      'status',
+      'voidedAt',
+    ]);
+    expect(Object.keys(ORDER_201.transaction).sort()).toEqual(
+      Object.keys(parsed.data.transaction).sort(),
+    );
+    expect(ORDER_201.transaction).not.toHaveProperty('branchAssumed');
+    expect(ORDER_201.transaction).not.toHaveProperty('feeFils');
   });
 
   it('keeps every field of a real products 200', () => {
