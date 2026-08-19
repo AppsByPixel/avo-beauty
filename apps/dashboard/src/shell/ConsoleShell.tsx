@@ -1,7 +1,10 @@
-import { Link, Outlet, useRouterState } from '@tanstack/react-router';
+import { useEffect } from 'react';
+import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { Button } from '@avo/ui';
 import { useAuth, useSession } from '../auth/AuthProvider.js';
+import { ROLE_LABEL } from '../api/platformAdmins.js';
 import { CONSOLE_NAV_ITEMS, consoleNavItemFor } from './consoleNavItems.js';
+import { SCOPES } from '../auth/scopes.js';
 import { useBreakpoint } from './useBreakpoint.js';
 import { UnsupportedWidth } from './UnsupportedWidth.js';
 
@@ -29,7 +32,49 @@ import { UnsupportedWidth } from './UnsupportedWidth.js';
  * The same width rule as the merchant shell: below 768px this is not a supported
  * surface (interaction-spec.md §1), and that is the design rather than a gap.
  */
+/**
+ * THE GUARD HALF, and it was missing.
+ *
+ * `MerchantShell` is split in two and its own comment says why: "`requireScope`
+ * guards ENTRY to this route, but it does not re-run when the session disappears
+ * underneath a mounted shell — and that is exactly what sign-out does, and what a
+ * sign-out in a second tab does." This shell was written as a SIBLING of that one
+ * and did not copy the one structural thing that comment exists to explain.
+ *
+ * The consequence was reproducible on the first try: pressing Sign out in the
+ * owner console cleared the session from the tree, `useSession('owner')` threw
+ * `No owner session. This route must sit behind requireScope().`, and the admin
+ * got the router's CatchBoundary — "Something went wrong!" — instead of the
+ * sign-in screen. The merchant dashboard lands correctly, from the same click, on
+ * the same session store.
+ *
+ * `signOut` deletes the session from React state BEFORE awaiting the server, on
+ * purpose ("the shell must leave immediately"), so there is no ordering fix on
+ * that side; the shell has to tolerate a sessionless render. The split is also
+ * what keeps `useSession('owner')` strict in the body — a throw is how
+ * `OwnerSession` stays non-optional and how the console avoids the `??` default
+ * that `useSalonId`'s header warns about.
+ */
 export function ConsoleShell() {
+  const session = useAuth().sessionFor('owner');
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!session) void navigate({ to: SCOPES.owner.signIn });
+  }, [session, navigate]);
+
+  /*
+   * Nothing for the tick before the redirect lands, rather than a console with no
+   * admin in it. The null also unmounts <Outlet>, so Approvals and Admins never
+   * render against a missing session either — both read the session or its
+   * sections, and Admins reads `adminId` to decide whose row cannot be removed.
+   */
+  if (!session) return null;
+
+  return <SignedInConsole />;
+}
+
+function SignedInConsole() {
   const session = useSession('owner');
   const { signOut } = useAuth();
   const breakpoint = useBreakpoint();
@@ -86,8 +131,20 @@ export function ConsoleShell() {
         <div className="console-sidebar__foot">
           <span className="console-sidebar__who">
             <span className="console-sidebar__whoname">{session.displayName}</span>
+            {/*
+              "Founder · Owner", verbatim — `AVO Owner Console.dc.html`'s sidebar
+              footer draws a TITLE and a ROLE, not one word. This line rendered
+              "Founder" alone for the owner and the raw lowercase enum value
+              ("analyst") for everybody else, which is not copy from anywhere.
+
+              It is the residue of the `founder`/`owner` mismatch: the ENUM was
+              corrected to `owner` in auth/platformAdmin.ts and the LABEL that had
+              borrowed the design's other word was never revisited. Both questions
+              were already settled and only this line disagreed with both — the
+              API's enum wins on the wire, the design's words win on the screen.
+            */}
             <span className="console-sidebar__whorole">
-              {session.owner ? 'Founder' : session.role}
+              {session.owner ? 'Founder · Owner' : ROLE_LABEL[session.role]}
             </span>
           </span>
         </div>
