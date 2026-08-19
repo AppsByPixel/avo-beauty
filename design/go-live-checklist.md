@@ -457,6 +457,20 @@ unless it is explicitly deferred in writing.
         criterion passes: zero white-text failures, and zero brand-filled elements whose
         only white content is an SVG stroke** — the two shapes §2's audit method says a
         naive find-and-replace misses.
+      - Lane B, 2026-08-19 — **native halves: #9 computed and exhaustive at source level,
+        and the row itself left blocked with the measurement that settles why.** Computed:
+        white on `brand` **4.27:1 REFUSED** (the number the scanner's theme header always
+        claimed, now verified), white on `brandDeep` 5.71:1, ink on white 17.21:1; no style
+        entry sets a text colour in the same entry as a brand fill, and every brand fill is
+        a dot, track, tick or progress bar — a surface. Mutation-checked. One real defect
+        found by compositing alphas the token audit could not see — `dark.textFaint` at
+        3.84:1, zero uses — **removed**, with an assertion that walks every `text*` key so
+        re-adding it fails by name and number.
+      - **Why the native scan stays blocked, precisely:** 569 style entries mention a
+        colour; **5** carry both a foreground and a background. The pair lives across the
+        component tree (text colour on the `Text`, ground on an ancestor `View`), so
+        pairing them requires a render. The row needs a built binary and a device — a
+        stronger grep cannot substitute.
       - **The brand-derived failures are FIXED** (Lane C, 2026-08-19, authorised by trunk
         as a one-off into `packages/tokens`). `deriveBrandSet` validated white-on-`deep`
         and never `deep`-on-`tint`, even though `deep` is the *text* colour on tinted
