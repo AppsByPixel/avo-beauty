@@ -107,6 +107,16 @@ export const member = pgTable(
      */
     deletionRequestedAt: timestamptz('deletion_requested_at'),
     deletionDueAt: timestamptz('deletion_due_at'),
+    /**
+     * THE TOMBSTONE MARKER — migration 0035. Set by the erasure job when it
+     * scrubs the row in place (name, phone, email, password hash all replaced;
+     * the row survives because `transaction`, `ledger_entry` and `booking` are a
+     * salon's books and reference it with restrict). The deletion timestamps are
+     * kept — dates are not personal data — so the row reads "requested X, due Y,
+     * erased Z". See services/erasure.ts for everything the scrub touches and
+     * the two tables it structurally cannot.
+     */
+    erasedAt: timestamptz('erased_at'),
 
     joinedAt: timestamptz('joined_at').notNull().defaultNow(),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -137,6 +147,15 @@ export const member = pgTable(
       'member_deletion_due_after_request',
       sql`${t.deletionDueAt} IS NULL OR ${t.deletionDueAt} > ${t.deletionRequestedAt}`,
     ),
+    /** An erasure without a request is a row nothing can explain. */
+    check(
+      'member_erased_only_after_request',
+      sql`${t.erasedAt} IS NULL OR ${t.deletionRequestedAt} IS NOT NULL`,
+    ),
+    /** The job's candidate scan: who is past due and not yet erased. */
+    index('member_erasure_due_idx')
+      .on(t.deletionDueAt)
+      .where(sql`deletion_due_at IS NOT NULL AND erased_at IS NULL`),
   ],
 );
 
