@@ -107,6 +107,18 @@ Rules:
 5. Never return a password field. "Forgot my current password" drops into the existing
    WhatsApp reset-link flow; it is not a bypass of `current`.
 
+   **The flow's endpoints** (contract addition, 2026-08-19 — the rule above promised the flow
+   and named no shape): `POST /auth/member/password-reset/request { salonId, phone }` → 202,
+   `POST /auth/member/password-reset { token, password }` → 204. Identity is the **sign-in
+   pair**, not the phone — `member_salon_phone_uq` means a phone alone is not a person, and a
+   reset against "whichever row matched first" would set a password on an arbitrary one of her
+   wallets. The request answers **202 regardless of whether the pair matched** (unknown phone
+   and right-phone-wrong-salon are byte-identical), is IP-throttled with the throttle answering
+   **before** validation, and the token is stored only as a sha256, single-use under a race.
+   Redemption revokes every session and **does not touch a pending deletion's clock** — proving
+   she holds her phone says nothing about whether she still wants the account gone; cancelling
+   the erasure is its own act, taken signed-in.
+
 #### Notification preferences (customer → Account → Notifications)
 ```
 GET   /members/me/notifications                     → NotificationPrefs
