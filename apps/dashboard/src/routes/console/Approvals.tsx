@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Campaign } from '@avo/types';
 import { Button, Card, EmptyState, InfoBanner, Pill, Skeleton, Stepper, Toggle } from '@avo/ui';
 import {
+  isCampaignHeld,
   useDecideCampaign,
   useMessagingPolicy,
   usePlatformCampaigns,
@@ -137,6 +138,41 @@ export function Approvals() {
             <WriteError error={decide.error} reassurance="Nothing was released." />
           ) : null}
 
+          {/*
+            WHAT THE DECISION ACTUALLY DID, on the press. The API builds `delivery`
+            for exactly this — "The console needs it to say 'released · 612 reached'
+            or 'approved but held until 09:00' on the row it just acted on" — and
+            nothing read it.
+
+            It matters most in the case that looks like success: Approve on a
+            campaign inside quiet hours returns 200, and without this the row simply
+            moves to Decided wearing a chip. The reviewer's question is "did that
+            send", and this answers it in the server's own sentence before she has to
+            go looking.
+
+            `delivery` is null on a rejection and on a `later`/`recurring` approval —
+            nothing was delivered in either case, so there is nothing to report and
+            this renders nothing.
+          */}
+          {decide.isSuccess && decide.data.delivery ? (
+            <p
+              className={
+                decide.data.delivery.status === 'held' ? 'approvals__held' : 'approvals__result'
+              }
+              role="status"
+            >
+              {decide.data.delivery.status === 'held' ? (
+                <>
+                  <b>Held — nothing was sent.</b> {decide.data.delivery.heldReason}
+                </>
+              ) : (
+                <>
+                  <b>Released.</b> {decide.data.delivery.result}
+                </>
+              )}
+            </p>
+          ) : null}
+
           <h2 className="approvals__h2 approvals__h2--decided avo-display">Decided</h2>
           {decided.length === 0 ? (
             <p className="approvals__none">Nothing decided yet.</p>
@@ -210,17 +246,42 @@ function PendingCard({
         : 'On approval';
 
   /*
-   * The quiet-hours warning is computed from the POLICY, not from a flag on the
-   * campaign, for the same reason the happy-hour banner is a predicate rather than
-   * a `live` field: an owner who narrows the window while this card is on screen
-   * must see the new answer. `isWithinQuietHours` in @avo/types is the shared
-   * predicate the server uses at send time — but it takes a clock instant, and
-   * what this needs is "is the SCHEDULED time inside the window", so the
-   * comparison is done here on the same HH:MM strings the policy carries.
+   * NO PER-CAMPAIGN QUIET-HOURS PREDICTION. This card used to draw one and it was
+   * wrong twice over; both halves were found by driving the real endpoint, and the
+   * comment that stood here asserted the opposite.
+   *
+   *   1. WRONG ZONE. It read `c.scheduledAt.slice(11, 16)` — the UTC wall clock
+   *      out of an ISO string — and compared it against `quietFrom`/`quietTo`,
+   *      which the server resolves IN THE SALON'S ZONE via `offsetFor(salon, now)`
+   *      (api/src/services/campaign.ts § quiet hours). At Kuwait's +03:00 and a
+   *      22:00–09:00 window that is a three-hour band where the server holds and
+   *      the card said nothing, and another three-hour band where the card
+   *      promised a hold that never came.
+   *
+   *   2. WRONG PREDICATE. `at >= from || at < to` is the OVERNIGHT branch only.
+   *      The shared `isInQuietHours` is `from <= to ? (m >= from && m < to) : (m >=
+   *      from || m < to)`, and `PATCH /v1/platform/messaging-policy` accepts each
+   *      bound independently as any HH:mm — the throttle panel on this very screen
+   *      can set 09:00–10:00, which was driven and did hold a campaign. Against a
+   *      same-day window the old formula flags almost everything.
+   *
+   * IT CANNOT BE FIXED IN THIS COLUMN, and that is the reported part rather than
+   * the excuse. A correct answer needs the salon's IANA zone at the scheduled
+   * instant. `GET /v1/platform/campaigns` carries `salonId` and `salon` (the name)
+   * and no zone, and `GET /v1/salons/:id` — which does serialise `timezone` — is
+   * `requireSalonScoped`, so a platform principal cannot read it at all. So the
+   * console has no route to a salon's clock. Asked of lane A in the lane report:
+   * add `salonTimezone` to the campaign wire and this becomes
+   * `isInQuietHours(new Date(c.scheduledAt), quietFrom, quietTo, offset)` — the
+   * shared predicate, not a fourth copy of it.
+   *
+   * Until then the card states the POLICY, which is true of every campaign, and
+   * leaves the per-campaign answer to the server — which composes it as a sentence
+   * and puts it on `heldReason`, where `DecidedRow` renders it verbatim. A guess
+   * that contradicts that sentence is worse than no guess: it teaches a reviewer to
+   * distrust the one field that is authoritative.
    */
-  const at = c.when === 'later' && c.scheduledAt ? c.scheduledAt.slice(11, 16) : null;
-  const insideQuiet =
-    at !== null && quietFrom !== null && quietTo !== null && (at >= quietFrom || at < quietTo);
+  const quietWindow = quietFrom !== null && quietTo !== null ? `${quietFrom}–${quietTo}` : null;
 
   return (
     <Card className="approvals__card">
@@ -244,10 +305,10 @@ function PendingCard({
         <span>{scheduled}</span>
       </div>
 
-      {insideQuiet ? (
+      {quietWindow ? (
         <p className="approvals__flag" role="note">
-          Scheduled inside quiet hours ({quietFrom}&ndash;{quietTo}). Approving will hold it until{' '}
-          {quietTo}.
+          Quiet hours {quietWindow} in the salon&rsquo;s own time zone, and the monthly cap, are
+          checked again at send. If either stops this one, AVO holds it and tells you why here.
         </p>
       ) : null}
 
@@ -297,6 +358,13 @@ function PendingCard({
 /* ------------------------------------------------------------------ decided -- */
 
 function DecidedRow({ campaign: c }: { campaign: Campaign }) {
+  /*
+   * `isCampaignHeld`, not `status === 'approved'`. A held campaign's status stays
+   * `approved`, so the chip that rendered `{c.status}` verbatim said "approved"
+   * over a campaign that reached nobody. The predicate lives in api/platform.ts
+   * beside the wire shape — see its header.
+   */
+  const held = isCampaignHeld(c);
   return (
     <li className="approvals__decidedrow">
       <span className="approvals__decidedtitle">
@@ -307,24 +375,59 @@ function DecidedRow({ campaign: c }: { campaign: Campaign }) {
         {c.decidedBy ? `${c.status === 'rejected' ? 'Rejected' : 'Approved'} by ${c.decidedBy}` : ''}
       </span>
       <span className="approvals__decidedstatus">
-        <Pill tone={c.status === 'rejected' ? 'danger' : c.status === 'sent' ? 'brand' : 'neutral'}>
-          {c.status}
+        {/*
+          "held", not "approved". `warn`, not `neutral` — the row needs to read as
+          unfinished at a glance, because it IS: quiet hours end and the scheduler
+          releases it. `danger` would be wrong; nothing failed.
+        */}
+        <Pill
+          tone={
+            c.status === 'rejected'
+              ? 'danger'
+              : held
+                ? 'warn'
+                : c.status === 'sent'
+                  ? 'brand'
+                  : 'neutral'
+          }
+        >
+          {held ? 'held' : c.status}
         </Pill>
       </span>
       {/*
         THE HELD SENTENCE. `heldReason` is why this exists rather than a bell:
         a campaign can be `approved` and still not have gone out, and #8 requires
-        that be REPORTED rather than silently dropped. Rendered verbatim — the
-        server composes it because only the server knows whether the block was
-        quiet hours, the monthly cap, or a per-customer skip.
+        that be REPORTED rather than silently dropped. Rendered verbatim, because
+        only the server knows which rule stopped it — all four sentences were driven
+        against the real endpoint and they are genuinely different next actions:
+
+          "Quiet hours 09:00–10:00. Held until 10:00."                  wait
+          "This salon has reached the platform limit of 8 campaigns
+           this month (8 already released). Held."                      raise the cap
+          "Every one of the 1 customers in this audience has already
+           had 2 message(s) this week. Held."                           widen the audience
+          "Nobody is in this audience right now. Held rather than
+           sent to nobody."                                            fix the segment
       */}
-      {c.heldReason ? (
+      {held ? (
         <p className="approvals__held" role="note">
-          <b>Held.</b> {c.heldReason}
+          <b>Held — nothing was sent.</b> {c.heldReason}
         </p>
       ) : null}
       {c.note ? <p className="approvals__reason">{c.note}</p> : null}
-      {c.result ? <p className="approvals__result">{c.result}</p> : null}
+      {/*
+        THE SKIP SENTENCE, AND IT IS NOT THE HOLD. `result` is written only on a
+        send, and the weekly per-customer cap lives here rather than in `heldReason`
+        because it skips PEOPLE and lets the campaign go: "1 reached · 1 over the
+        weekly cap" was driven. Labelled "Sent" so the two paragraphs cannot be
+        misread as the same kind of fact — a merchant told "held" when most of it
+        went out, or "sent" when none of it did, has the wrong next move either way.
+      */}
+      {c.result ? (
+        <p className="approvals__result">
+          <b>Sent.</b> {c.result}
+        </p>
+      ) : null}
     </li>
   );
 }
@@ -427,12 +530,25 @@ function ThrottlePanel({
         )}
       </Card>
 
+      {/*
+        HELD IS ITS OWN ROW, AND IT IS SUBTRACTED FROM THE ONE ABOVE IT.
+        `status === 'approved'` was counting held campaigns as approved-and-away,
+        so the only number on the screen that could have told an admin "four
+        releases are stuck behind quiet hours" instead folded them into a column
+        that reads as done. `Sent` is added for the same reason: "approved" and
+        "delivered" were one number, and #8's whole subject is the gap between them.
+      */}
       <Card className="approvals__stats">
         <h2 className="approvals__h2 avo-display">This month</h2>
         <StatRow label="Submitted" value={items.length} />
-        <StatRow label="Approved" value={items.filter((c) => c.status === 'approved').length} />
-        <StatRow label="Rejected" value={items.filter((c) => c.status === 'rejected').length} />
         <StatRow label="Awaiting review" value={items.filter((c) => c.status === 'pending').length} />
+        <StatRow label="Sent" value={items.filter((c) => c.status === 'sent').length} />
+        <StatRow
+          label="Approved, not yet sent"
+          value={items.filter((c) => c.status === 'approved' && !isCampaignHeld(c)).length}
+        />
+        <StatRow label="Held" value={items.filter(isCampaignHeld).length} />
+        <StatRow label="Rejected" value={items.filter((c) => c.status === 'rejected').length} />
       </Card>
     </aside>
   );
