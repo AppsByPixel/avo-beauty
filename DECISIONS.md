@@ -38,6 +38,43 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### A status code is not evidence about which guard answered — a new trap, from Lane C
+
+**What.** Lane C built the console's reset-link button and its first call returned **404**. The
+obvious reading is that the removed-admin guard fired. It had not: the body was
+`not_found` / *"No such endpoint."* — a **stale pre-rebase API binary** that did not have the
+route at all — rather than `unknown_admin` / *"No such console admin."*
+
+**Both directions of the error are bad, which is what makes it worth naming.** Reading only the
+status would have either filed a working client as broken, or — worse, and the direction that
+ships — **filed the removed-admin guard as verified when the route was merely absent.** A
+guard that does not exist and a guard that fires produce the same three digits.
+
+**The rule:** assert on the **error code and the state**, never on the status alone. This build
+already holds two neighbouring versions of this — *"a check that matches a string rather than
+the thing is not a check"* and *"assert the system refused, never that nothing changed"* — and
+this is the third: **a status is a class of answer, not an identification of the answerer.** It
+bites hardest exactly where a lane is verifying a *new* endpoint, because that is when "the
+route is missing" and "the route refused me" are both live hypotheses.
+
+**Two more from the same report, kept for the same reason.**
+
+**A check satisfied by the wrong branch.** Lane C's first self-removal assertion passed — through
+the **owner-not-editable** path, not the self-removal guard. It noticed and re-ran as a
+non-owner. Same family as the order path's two `invalid_products` guards and the charge path's
+two concurrency guards: **when two guards can answer, a passing check does not tell you which
+one did.** Lane A independently applied the same discipline this session, isolating the
+deactivation guard by un-spending a link by hand.
+
+**An unreachable state driven anyway.** The Admins empty state is not merely unlikely but
+**unreachable against the real API** — a successful `GET` is gated on the caller's own row, so
+any 200 implies at least one item. Lane C built it and drove it against a real empty envelope
+over the wire, rather than deleting it as dead or faking a fixture. Correct: the state is
+reachable through an API change, and a screen without its four states is not done.
+
+**Reversal.** Nothing to reverse — these are method, not code. They belong with the trap list in
+`STATUS.md`, and the checks they imply are Lane D's to encode where they touch an endpoint.
+
 ### The offline cold-load sentence — inventing it is AUTHORISED, and marked, because the bundle's one offline string would lie
 
 **The wall Lane B stopped at, correctly.** Two screens still assert our fault when the phone
