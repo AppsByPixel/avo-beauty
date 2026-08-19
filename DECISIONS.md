@@ -31,6 +31,7 @@ through commit messages.
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
 | 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
+| 13 | **The set-new-password screen is not drawn, and the reset link has nowhere to land.** The design's auth flow has login/signup/forgot only — no redeem layout, no copy for its success or refusal states — the sender is the standing WhatsApp/domain escalation, and the wallet has no inbound deep-link routing at all, so the link's shape (`avo://reset?token=…`) is a decision, not a wiring gap. | Needs a drawn screen (designer), the sender (client escalation), and a deep-link ruling. Until all three, the flow honestly ends at "Check WhatsApp" — which is everything it can truthfully do. |
 | 12 | **Erasure cannot reach the audit log, structurally — and the policy promises both.** Her historical `audit_log` rows (`actor_name`, ip, ua, names in `detail`) and `member_consent_event` outlive erasure: the app role had UPDATE/DELETE revoked in 0020/0023, which is what makes the log trustworthy. Policy §5 (deletion) and §7 (audit) are in genuine tension. | The fix needs an owner-role job or a narrow column grant, and the **retention schedule is client-owned** (CLAUDE.md escalations). Every erasure records `retainedBeyondErasure` in its own audit metadata, so the gap is a standing measured fact while it waits. |
 | 11 | **Should a deletion request be refused up front when money is still in motion?** The request checks only `balance_fils` at request time, so residual balance, escrowed `deposit_held`, and a live top-up intent can all reach the due date. The job counts and **defers** each, visibly — a deferred count persisting across runs is a member the platform is quietly failing. | Whether the *request* endpoint should refuse escrow/in-flight states is a product call about what a customer is told at the moment she asks to leave. The safe behaviour (defer, never erase money in motion) ships either way. |
 | 10 | The `marketing` plugin's MCP servers (Slack, Figma, Notion, HubSpot, Klaviyo and others) all report needing authorisation, and the OAuth flow cannot run in a non-interactive session. | Needs Aftab in an interactive session, or the claude.ai connector settings. **No lane has needed one**, so nothing is blocked today — recorded because a capability that silently fails is worse than one known to be off. |
@@ -41,6 +42,26 @@ through commit messages.
 ## Decisions I made
 
 Newest first. Each: what, why, and how to reverse it.
+
+### The drawn sent-state sentence stands, and the tension is recorded where the copy lives
+
+**What Lane B raised.** The design's forgot-password sent state reads *"A secure reset link is
+on its way to your registered number."* — rendered identically on every 202, which is the
+anti-enumeration posture working. But on an unknown phone (or with no sender wired) the
+sentence claims a fact that is not one. Lane B kept the verbatim copy per the rule and asked
+whether a hedged "if that number has an account…" posture should win.
+
+**Decision: the drawn sentence stands.** "Keep the copy verbatim" binds precisely here — both
+languages exist drawn, and replacing designed bilingual copy with a hedge we drafted is the
+paraphrase rule's clearest violation, not an exception to it. The privacy property does not
+depend on the sentence: Lane B made it structural (a void return type, a refusal union with no
+phone-existence member, one unconditional render), so the copy is presentation over an already-
+sealed channel. And the sentence addresses *"your registered number"* — for the person who has
+no account, the referent is empty rather than false in any way that leaks.
+
+**What would reverse it:** the native-speaker review or counsel wanting hedged copy — a
+one-string ruling for the client, on the worksheet where the AR review already lives. The
+tension is recorded in `copy/types.ts` at the string itself, so nobody has to rediscover it.
 
 ### Erasure scope: bookings stay as tombstoned history, support tickets go entirely
 
