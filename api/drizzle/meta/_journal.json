@@ -225,6 +225,13 @@
       "when": 1787718800000,
       "tag": "0031_charge_basket_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1787805200000,
+      "tag": "0032_platform_settings",
+      "breakpoints": true
     }
   ]
 }

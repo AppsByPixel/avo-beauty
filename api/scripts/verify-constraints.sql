@@ -923,6 +923,110 @@ SELECT pg_temp.probe('13', 'a charge without a basket hash is still valid', 'all
     VALUES ('TX-BASKET-N','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-8000,'settled',now())$probe$);
 
 -- =========================================================================
+-- 14. the platform's commission is configurable, and only within the rates
+--     whose arithmetic is exact — migration 0032
+-- =========================================================================
+-- AVO's cut used to be a constant compiled into the server: `services/topup.ts`
+-- called `commissionFor(amount, method)` with no rates argument, so the owner
+-- console's fee steppers would have written a row nothing read. It now reads
+-- `platform_settings`, which makes THIS TABLE a money-path table and its CHECKs
+-- money-path constraints.
+--
+-- THE SINGLETON ROW IS AN INVARIANT AND NOT A CONVENIENCE. `readPlatformSettings`
+-- throws rather than falling back to `DEFAULT_COMMISSION` on a missing row,
+-- deliberately: a fallback would price top-ups at the compiled-in rate while the
+-- console displayed something else, and the difference would surface at
+-- reconciliation months later rather than as an error. So a deployment without the
+-- row is broken, and this asserts it is present.
+SELECT pg_temp.assert('14', 'platform_settings holds exactly one row, id avo',
+  (SELECT count(*) FROM platform_settings WHERE id = 'avo') = 1
+    AND (SELECT count(*) FROM platform_settings) = 1,
+  (SELECT format('%s row(s), ids: %s', count(*), coalesce(string_agg(id, ','), 'none'))
+     FROM platform_settings));
+
+-- The column DEFAULTS must still be the shared constant. `DEFAULT_COMMISSION` in
+-- packages/types is `{ knetFlatFils: 150, cardPercent: 2.5, cardFlatFils: 50 }`,
+-- and a draft of 0032 wrote `card_flat_fils` 0 from memory — which would have cut
+-- AVO's card commission by 50 fils per top-up, silently, on every deployment. The
+-- constant cannot be read from SQL, so the numbers are restated here; that is the
+-- point rather than a duplication, because two independent statements of the same
+-- figure disagree loudly and one statement drifts quietly.
+--
+-- THE DEFAULTS AND NOT THE CURRENT ROW, and the first version of this invariant got
+-- that wrong. It asserted the live values, and it FAILED for me the first time it
+-- ran — correctly detecting a rate of 350 bp that my own PATCH probes had left
+-- behind. Which is when the flaw showed: an OWNER CHANGING THE COMMISSION IS THE
+-- ENTIRE POINT OF MIGRATION 0032, so an invariant over the live row would fail on
+-- every deployment where somebody had used the feature. A suite that cries wolf is
+-- the suite this file's own header complains about — "true, unread, unenforced".
+--
+-- `column_default` is a property of the SCHEMA, so it is stable no matter what the
+-- console sets, and it is precisely the thing the near-miss put at risk: the value
+-- a freshly created settings row would be born with.
+SELECT pg_temp.assert('14', 'the column defaults are DEFAULT_COMMISSION',
+  (SELECT count(*) FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'platform_settings'
+      AND ((column_name = 'knet_flat_fils'         AND column_default = '150')
+        OR (column_name = 'card_percent_bp'        AND column_default = '250')
+        OR (column_name = 'card_flat_fils'         AND column_default = '50')
+        OR (column_name = 'new_salon_deposit_fils' AND column_default = '5000'))) = 4,
+  (SELECT coalesce(string_agg(format('%s=%s', column_name, coalesce(column_default,'NULL')),
+                              ', ' ORDER BY column_name),
+                   'no such columns')
+     || '  (want knet_flat_fils=150, card_percent_bp=250, card_flat_fils=50, new_salon_deposit_fils=5000)'
+     FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'platform_settings'
+      AND column_name IN ('knet_flat_fils','card_percent_bp','card_flat_fils','new_salon_deposit_fils')));
+
+-- THE STEP CONSTRAINT IS ARITHMETIC, NOT UI FIDELITY, and it is the one worth
+-- probing. `CommissionRates.cardPercent` is a percentage, so the server hands
+-- `commissionFor` a `card_percent_bp / 100` — a float division. Measured against
+-- exact integer basis-point arithmetic over bp 0..1000 and every half-fil boundary
+-- in 1..10,000,000 fils, 172,705 of 7,800,000 boundaries came out ONE FIL apart,
+-- across 136 unsafe rates. 29 bp on 25.000 KD is 73 fils exactly and 72 through
+-- the float.
+--
+-- The design's stepper (±0.5% clamped to 5%) only ever produces {0,50,...,500} bp,
+-- and every one of those is exact. So the CHECK is what makes the division correct
+-- over the whole domain rather than correct at the default, and 29 is probed by
+-- name because it is the value that actually diverges.
+SELECT pg_temp.probe('14', 'a card rate off the half-point step is refused', 'refused',
+  $probe$UPDATE platform_settings SET card_percent_bp = 29 WHERE id = 'avo'$probe$,
+  'platform_settings_card_percent_is_half_a_point');
+
+SELECT pg_temp.probe('14', 'a card rate above 5% is refused', 'refused',
+  $probe$UPDATE platform_settings SET card_percent_bp = 550 WHERE id = 'avo'$probe$,
+  'platform_settings_card_percent_in_range');
+
+-- MUST SUCCEED, or the console's stepper would be gated by a constraint and the
+-- fee would be unconfigurable for the second time — which is the defect 0032
+-- exists to fix, reintroduced from the other direction.
+SELECT pg_temp.probe('14', 'a card rate the stepper can produce is allowed', 'allowed',
+  $probe$UPDATE platform_settings SET card_percent_bp = 500 WHERE id = 'avo'$probe$);
+
+SELECT pg_temp.probe('14', 'the KNET flat fee is capped at 500 fils', 'refused',
+  $probe$UPDATE platform_settings SET knet_flat_fils = 501 WHERE id = 'avo'$probe$,
+  'platform_settings_knet_fee_in_range');
+
+-- A NEGATIVE COMMISSION WOULD PAY THE CUSTOMER TO TOP UP. Cheap to state, and the
+-- only reason it is not obviously impossible is that `card_flat_fils` is a bigint.
+SELECT pg_temp.probe('14', 'a negative card flat fee is refused', 'refused',
+  $probe$UPDATE platform_settings SET card_flat_fils = -1 WHERE id = 'avo'$probe$,
+  'platform_settings_card_flat_non_negative');
+
+-- The platform default has to sit inside the range a SALON's own deposit column
+-- allows (1000..10000 fils), or the Controls screen could set a default that mints
+-- salons violating their own constraint on insert.
+SELECT pg_temp.probe('14', 'a new-salon deposit outside the salon range is refused', 'refused',
+  $probe$UPDATE platform_settings SET new_salon_deposit_fils = 500 WHERE id = 'avo'$probe$,
+  'platform_settings_deposit_in_range');
+
+-- No second row, so there is no such thing as "the other platform's rates".
+SELECT pg_temp.probe('14', 'a second settings row is refused', 'refused',
+  $probe$INSERT INTO platform_settings (id) VALUES ('avo2')$probe$,
+  'platform_settings_is_singleton');
+
+-- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST
 -- =========================================================================
 \pset format aligned

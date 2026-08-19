@@ -50,7 +50,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   add,
-  commissionFor,
   percentOf,
   fils,
   TopUpIntentPublicSchema,
@@ -72,6 +71,7 @@ import { GatewayUnavailableError } from '../gateway/types';
 import { env } from '../env';
 import { claimKey, completeKey, isUniqueViolation } from './idempotency';
 import { decideEarning, loadPromotionInputs } from './promotions';
+import { platformCommissionFor } from './platformSettings';
 import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
 
@@ -403,9 +403,29 @@ export async function createTopUp(
       : fils(0);
     const credit = add(add(input.amountFils, bonus), promoBonus);
 
-    // AVO's cut. Recorded on the intent and later on the transaction; never
-    // deducted from what lands in the wallet.
-    const fee = commissionFor(input.amountFils, input.method);
+    /**
+     * AVO's cut. Recorded on the intent and later on the transaction; never
+     * deducted from what lands in the wallet.
+     *
+     * READ FROM `platform_settings`, NOT FROM `DEFAULT_COMMISSION`. This line was
+     * `commissionFor(input.amountFils, input.method)` — the two-argument form,
+     * which takes the compiled-in default. `DEFAULT_COMMISSION`'s own comment says
+     * the rates are "Configurable per platform in Owner → Controls", and
+     * api-contract.md § Commission says the same; nothing made them so. The owner
+     * console's fee steppers would have written a row that no charge ever read.
+     *
+     * INSIDE `tx`, so the rate that priced this intent is the rate that was live
+     * when the row was written, and LOCKED HERE rather than re-read at settlement
+     * — settlement replays `intent.feeFils` verbatim (see `settleFromGatewayRead`),
+     * so a rate change landing while she is on the hosted page cannot reprice a
+     * top-up she has already paid for. Exactly the reasoning the tier bonus and the
+     * promotion bonus are locked at creation for, applied to the other party's
+     * side of the same transaction.
+     *
+     * The defaults in migration 0032 are `DEFAULT_COMMISSION` field for field, so
+     * this change moves no money until somebody deliberately moves a stepper.
+     */
+    const fee = await platformCommissionFor(tx, input.amountFils, input.method);
 
     await tx.insert(topUpIntent).values({
       id,

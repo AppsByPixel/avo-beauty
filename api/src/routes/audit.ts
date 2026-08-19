@@ -45,94 +45,36 @@
  * to.
  */
 
-import { and, desc, eq, ilike, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { auditLog } from '../db/schema/audit';
 import { requireDashboardPerm, requireSameSalon } from '../auth/principal';
-import { badRequest } from '../http/errors';
-
-/** The four filter chips, plus the "All" that means no filter. */
-const KINDS = ['money', 'rules', 'access', 'risk'] as const;
-type AuditKind = (typeof KINDS)[number];
-
-/**
- * The Source column, as the design writes it. The database stores a machine
- * value; the dashboard renders "Owner console", capital O, lower c.
- *
- * Mapped here rather than in the client for the same reason the 403 copy is:
- * one place decides what the product calls a thing, and the audit log is read
- * seven years later by someone reconciling a dispute.
- */
-const SOURCE_LABEL: Record<string, string> = {
-  merchant: 'Merchant',
-  scanner: 'Scanner',
-  wallet: 'Wallet',
-  owner_console: 'Owner console',
-  system: 'System',
-};
-
-const MAX_LIMIT = 100;
-const DEFAULT_LIMIT = 50;
-
-function parseLimit(value: unknown): number {
-  if (value === undefined) return DEFAULT_LIMIT;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > MAX_LIMIT) {
-    throw badRequest('invalid_limit', `limit must be a whole number between 1 and ${MAX_LIMIT}.`);
-  }
-  return n;
-}
+import {
+  auditSearchPredicate,
+  auditTotal,
+  parseAuditCursor,
+  parseAuditKinds,
+  parseAuditLimit,
+  serialiseAuditRow,
+} from '../services/auditRead';
 
 /**
- * The cursor is the `seq` of the last row already delivered.
+ * THE FILTER GRAMMAR, THE CURSOR RULE AND THE ROW SHAPE NOW LIVE IN
+ * `services/auditRead.ts`, shared with the owner console's
+ * `GET /v1/platform/audit`.
  *
- * `seq` and not `created_at`: it is a bigserial, so it is strictly monotonic in
- * write order and unique, which makes `seq < cursor` a total order with no ties
- * to break. Two audit rows written in the same millisecond — a charge and its
- * loyalty line — would otherwise be able to straddle a page boundary and either
- * repeat or vanish.
- */
-function parseCursor(value: unknown): number | null {
-  if (value === undefined || value === '') return null;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0) {
-    throw badRequest('invalid_cursor', 'cursor must be the seq of the last row you received.');
-  }
-  return n;
-}
-
-function parseKinds(value: unknown): AuditKind[] | null {
-  if (value === undefined || value === '' || value === 'all') return null;
-  const raw = String(value)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const bad = raw.filter((k) => !(KINDS as readonly string[]).includes(k));
-  if (bad.length > 0) {
-    throw badRequest('invalid_kind', `Unknown filter: ${bad.join(', ')}. Use ${KINDS.join(', ')} or all.`);
-  }
-  return raw.length > 0 ? (raw as AuditKind[]) : null;
-}
-
-/**
- * The search box: "Search staff, customer or action".
+ * They were defined here, which was correct while this was the only audit screen
+ * and became a hazard the moment there were two. An audit log is read years later
+ * by somebody reconciling a dispute, and the two screens WILL be compared: a
+ * `kind` chip that means something slightly different on the console, or a cursor
+ * that pages differently, turns "these screens disagree" into a question about the
+ * record itself. One function, two surfaces — the rule `readMessagingPolicy`
+ * follows.
  *
- * Matched against the four columns the design's own filter reads —
- * `who + action + detail + role`. `%` and `_` are escaped so a merchant typing a
- * literal underscore (they appear in `subject_type` values and in staff handles)
- * searches for that character rather than for any character.
+ * WHAT STAYS HERE IS THE ONLY REAL DIFFERENCE: the scoping. That is the part that
+ * must NOT be shared, because it is the tenancy boundary.
  */
-function searchPredicate(q: string): SQL | undefined {
-  const escaped = q.replace(/[\\%_]/g, (c) => `\\${c}`);
-  const like = `%${escaped}%`;
-  return or(
-    ilike(auditLog.actorName, like),
-    ilike(auditLog.actorRole, like),
-    ilike(auditLog.action, like),
-    ilike(auditLog.detail, like),
-  );
-}
 
 export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
   app.get<{
@@ -153,15 +95,15 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
     const p = requireDashboardPerm(req, 'dashboard');
     requireSameSalon(p, req.params.id);
 
-    const limit = parseLimit(req.query.limit);
-    const cursor = parseCursor(req.query.cursor);
-    const kinds = parseKinds(req.query.kind);
+    const limit = parseAuditLimit(req.query.limit);
+    const cursor = parseAuditCursor(req.query.cursor);
+    const kinds = parseAuditKinds(req.query.kind);
     const q = (req.query.q ?? '').trim();
 
     // Scoped from the PRINCIPAL, not from the path. See the file header.
     const filters: (SQL | undefined)[] = [eq(auditLog.salonId, p.salonId)];
     if (kinds) filters.push(inArray(auditLog.kind, kinds));
-    if (q !== '') filters.push(searchPredicate(q));
+    if (q !== '') filters.push(auditSearchPredicate(q));
 
     const where = and(...filters.filter((f): f is SQL => f !== undefined));
     // The cursor narrows the page but must not change the count the header shows.
@@ -186,44 +128,12 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
      * pages through.
      */
     const [counted] = await db
-      .select({ total: sql<number>`count(*)::int` })
+      .select({ total: auditTotal })
       .from(auditLog)
       .where(where);
 
     return reply.send({
-      items: page.map((r) => ({
-        id: r.id,
-        seq: r.seq,
-        /**
-         * ISO, not "Today · 6:42 PM". The design's relative phrasing is a
-         * rendering decision that depends on the reader's clock and language —
-         * and non-negotiable #12 makes the Arabic dashboard a first-class
-         * layout, not a string swap. The server sends the instant.
-         */
-        when: r.createdAt.toISOString(),
-        who: r.actorName,
-        role: r.actorRole,
-        actorKind: r.actorKind,
-        /** Soft reference. Null for a system action — see db/schema/audit.ts. */
-        actorId: r.actorId,
-        /** The pill colour: money / rules / access / risk. */
-        kind: r.kind,
-        action: r.action,
-        detail: r.detail,
-        source: r.source,
-        /** "Owner console" — the label the design's Source column renders. */
-        sourceLabel: SOURCE_LABEL[r.source] ?? r.source,
-        /**
-         * True for an AVO platform action on this salon. The dashboard's footnote
-         * calls these out specifically, and a boolean is a cheaper thing for a
-         * client to style on than a string comparison it has to keep in sync.
-         */
-        isPlatformAction: r.source === 'owner_console',
-        subjectType: r.subjectType,
-        subjectId: r.subjectId,
-        /** Present on money rows — the CHECK guarantees it. Integer fils. */
-        amountFils: r.amountFils,
-      })),
+      items: page.map(serialiseAuditRow),
       total: counted?.total ?? 0,
       /** The `seq` to send back as `cursor`. Null when this is the last page. */
       nextCursor: hasMore ? (page[page.length - 1]?.seq ?? null) : null,
