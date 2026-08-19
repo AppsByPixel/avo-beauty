@@ -64,9 +64,15 @@ a short red.
 
 ## CURRENT STATE — 2026-08-19, and the plan from here
 
-`dev` **f91137e** · 315 commits · `main` 62 behind (it advances only on a clean twice-green gate)
-17 e2e files, **440 e2e specs** · `db:verify` **71 invariants** across 13 sections, exit code gated in CI
-`go-live-checklist.md` **8 ticked / 45 unticked**
+`dev` **e50a446** · 337 commits · `main` 84 behind (it advances only on a clean twice-green gate)
+18 e2e files, **~500 `it()`/`test()` calls** (grep count, not a run) · `db:verify` exit code gated in CI
+`go-live-checklist.md` **10 ticked / 43 unticked** · 33 migrations, latest committed `0032_platform_settings.sql`
+
+**Numbers above were re-measured 2026-08-19 14:15 PKT.** The previous handoff's figures
+(`dev` f91137e, 315 commits, `main` 62 behind, 8/45 go-live) were stale by a session — and so
+were its resume points, several of which named work that had already landed. **The lesson
+generalises: this file goes stale faster than the tree.** Verify against git before believing
+any line of it, including this one.
 
 ### Where the 30-day plan actually stands
 
@@ -84,12 +90,45 @@ a short red.
 
 **All twelve non-negotiables are satisfied.** #10 was the last one open and closed when signup landed.
 
-### In flight right now — four lanes, each with a queue
+### In flight right now — four lanes, dispatched 2026-08-19 14:20 PKT
 
-- **Lane A** (`api/`) — finishing `0032_platform_settings.sql`. Then `GET /platform/metrics`, `PATCH /platform/settings`, the platform-wide audit read, the console password-reset (an invited admin **cannot sign in today**; #6 permits only a link, and the design's "Temporary password" field must not be drawn), `policies_not_published` → 409, and `reschedule` + the merchant-readable messaging policy into `api-contract.md`.
-- **Lane B** (`apps/wallet`, `apps/scanner`) — finishing the Shop screen including the **retired-product race** (a product retired between catalogue fetch and order; `POST /orders` answers `invalid_products` naming it). Then the "Charged 0.000 KD" frame, and the legacy-token secure-store migration.
-- **Lane C** (`apps/dashboard`, `packages/ui`) — **Approvals**, now unblocked. Then Admins (`/v1/platform/admins` is fully built). Render the hold *sentence*: quiet hours and the monthly cap hold the **campaign**; the weekly per-customer cap skips **recipients**.
-- **Lane D** (`e2e/`) — the near-duplicate charge guard, the order path's new second guard verified **reachable alone**, the console's platform routes, and the go-live rows that are testable claims.
+**What the previous handoff listed as in-flight was largely already landed.** Verified on `dev`
+by grepping the route registrations rather than reading the headers: `0032_platform_settings.sql`
+is **committed**; `GET /platform/metrics`, `GET` + `PATCH /platform/settings` and
+`GET /platform/audit` are **all built** in `api/src/routes/platformConsole.ts`;
+`policies_not_published` → 409 is **built** (`routes/platform.ts`, `services/policy.ts`);
+`Approvals.tsx` is **on `dev`**; the order path's `invalid_products` guards are **built** in
+`api/src/services/order.ts` (two of them); and the near-duplicate charge guard is **already
+covered** in `e2e/scanner.test.ts`. This is the "never trust a comment" trap in its other
+direction — a *handoff* can be as stale as a header.
+
+The real remaining work, and what each lane was dispatched to do:
+
+- **Lane A** (`api/`) — the console password-reset. Its worktree held uncommitted work
+  building the **issue** half (`0033_platform_admin_password_reset.sql`, the drizzle table, and
+  `POST /v1/platform/admins/{id}/password-reset`, plus deactivation spending outstanding links).
+  **The redeem half does not exist, so an invited admin still cannot sign in** — the invite
+  creates her with `password_hash` NULL, which #6 requires, and `POST /auth/platform/session`
+  refuses a NULL hash. Both halves correct, no door between them. Lane A is building the redeem
+  endpoint against the staff pattern (`routes/staff.ts:701` issues, `routes/auth.ts:669`
+  redeems), single-use under a race, then committing and rebasing.
+- **Lane B** (`apps/wallet`, `apps/scanner`) — the Shop screen's **retired-product race**. The
+  API side is built; `ShopScreen.tsx` makes **no reference to `invalid_products`**, so the
+  wallet does not handle the answer the API gives it. Then the "Charged 0.000 KD" frame, then
+  the legacy-token secure-store migration (whose intended order is already written down in
+  `apps/wallet/src/api/secureStore.native.test.ts`).
+- **Lane C** (`apps/dashboard`, `packages/ui`) — **Admins**. Its worktree held 424 uncommitted
+  lines of a built section with states and an invite form; Lane C is verifying it against the
+  real API, committing, rebasing, then moving to the next console section that has a real
+  endpoint behind it.
+- **Lane D** (`e2e/`) — the order path's **second** `invalid_products` guard verified
+  **reachable alone** (two guards that cover each other are the charge path's lesson repeated),
+  the console platform routes with #7 as the spine, and the testable subset of the go-live rows.
+  Explicitly scoped **off** unmerged Admins/reset work.
+
+**Both dirty worktrees were preserved before anything touched them** — `git diff` to a patch
+plus a tar of the untracked files, because `git diff` does not capture new files and new files
+were the bulk of both slices. Copies in `~/.claude/lane-preserve-2026-08-19/`.
 
 ### What is left after those queues drain
 

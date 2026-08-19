@@ -38,6 +38,57 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Three orphaned lane API servers were still writing to lane databases — killed by PID
+
+**What.** Picking up a session whose four lane agents had died, I found five leaked processes
+with no live parent, ~3 hours old: API servers on ports 4100 (`avo-wallet`), 4101 (`avo-api`)
+and 4300 (`avo-web`), a Vite on 5300, and an Expo on 8090. `pg_stat_activity` confirmed the
+first three held **live connections to `avo_lane_a`, `avo_lane_b` and `avo_lane_c`** — the exact
+shape `LANES.md` § Ports and processes warns about, where a leaked server kept polling
+`receipt_job` against a database another lane was asserting against.
+
+**Why it mattered before dispatch, not after.** Three fresh lanes were about to reset those
+same databases and assert against them. A server holding a connection and writing on a timer
+turns another lane's clean reset into a race it cannot see, and it would have read as flakiness.
+
+**How.** `kill` by **explicit PID**, parents then children, then `kill -9` only for survivors.
+Not `pkill -f` — the process table is shared by five worktrees and an unscoped pattern kill has
+already destroyed one lane's suite for an hour in this build. I left the unrelated `pulsse_cpu`
+container and the MCP servers alone.
+
+**Verified by observation, not by the kill's own output**, per the rule that a cleanup which
+reports success while leaving the process alive is the same defect as a green typecheck bought
+with a cast: a `ps` sweep, a port scan and a `pg_stat_activity` count, **all three empty**.
+
+**Reversal.** Nothing to reverse — no state was written. Restarting any of them is one command
+per lane, and each lane starts its own on its own assigned port now (A 4110, B 4120/8100,
+C 4130/5310).
+
+### The handoff was as stale as the comments it warned about
+
+**What.** The session handoff named resume points for all four lanes. Checked against `dev`
+before dispatching, **most had already landed**: `0032_platform_settings.sql` committed, all
+three platform endpoints built in `routes/platformConsole.ts`, `policies_not_published` → 409
+built, `Approvals.tsx` merged, both `invalid_products` guards built in `services/order.ts`, and
+the near-duplicate charge guard already asserted in `e2e/scanner.test.ts`. The lane branches
+told the same story: all four were **behind `dev` with nothing unique**, so the previous session
+had integrated everything before it ended.
+
+**Why it is worth an entry.** This build already has a documented trap — nine stale "not built"
+comments in `api/src/routes`, and the rule *never trust a comment, grep the routes*. A handoff
+document is the same object: prose about code, written at a moment, aging independently of it.
+Had I dispatched the handoff's queue verbatim, four lanes would have rebuilt landed work, and
+the reports would have looked like success.
+
+**What I did instead.** Grepped the route registrations and the branch topology first, then
+wrote each brief against what the tree actually contained. The genuine remainder was much
+smaller and sharper than the queue: one missing endpoint half (the console reset's **redeem**
+side, which is why an invited admin still cannot sign in), one unhandled API response in the
+wallet, one section to verify and commit, and one guard to prove reachable alone.
+
+**Reversal.** None needed. The durable fix is the note now at the top of `STATUS.md` § CURRENT
+STATE: re-measure before believing it, including that line.
+
 ### My fix for the third drift created the fourth, and hid it the same way
 
 **What.** I set `AvailabilitySlotSchema.reason` to `.nullable()`. The server **omits** the
