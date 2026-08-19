@@ -40,6 +40,46 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### The commission flats stay editable at the endpoint, read-only on the screen
+
+**The question Lane C queued.** `commissionFor(amount, 'card')` is a percentage **plus a
+50-fils flat**, and the design draws one stepper at 2.5% and no flat control — so an owner
+reading the drawn console would predict 500 fils on a 20.000 KD card top-up where the server
+records 550. The design understates AVO's own commission. Lane C stated the flat **read-only**
+on the card rather than inventing a stepper the design never drew, and asked: does the card get
+a control, or does the endpoint stop accepting the field?
+
+**Decision: neither. Keep exactly what Lane C built.** The endpoint keeps accepting the flat
+fields; the screen keeps stating them read-only.
+
+- **Refusing the field protects nobody.** The write is behind `requirePlatform` with the
+  `controls` section — this is AVO's own console, and the flat demonstrably prices every top-up
+  (Lane C drove the same top-up to 550 then 650 across a rate change). Making it immutable at
+  the API would mean a schema migration to change a fee component, which converts a settings
+  edit into a deploy.
+- **Drawing a stepper invents a control the design refused**, and "do not add features" binds.
+  The read-only statement fixes the *understatement* — the defect — without inventing UI.
+- **The drawn design is wrong about the fee, and that is recorded, not silently corrected.**
+  One stepper cannot express `percent + flat`. If the client wants the flat adjustable from the
+  screen, that is a design change with a drawing, not a gap-fill.
+
+**Reversal.** To freeze the flats: remove them from the PATCH allow-list (one array in
+`api/src/routes/platformConsole.ts`) — Lane D's settings suite asserts the row, so the change
+shows up as a failing spec naming the field, which is the correct alarm.
+
+### `git diff dev HEAD` shows somebody else's tree — the merge-base lesson
+
+Lane C's post-slice self-check briefly looked like a column breach: `git diff dev HEAD` listed
+`apps/wallet` files. It was a **tree comparison** against a `dev` that had moved 14 commits —
+Lane B's merged work *missing from the branch*, not the branch's edits. The honest question is
+`git diff $(git merge-base dev HEAD)..HEAD`, which answered `apps/dashboard/` + `packages/ui/`
+only.
+
+Same family as the replayed-turbo-log lesson, and trunk hit the identical false alarm twice this
+session while checking lanes' column discipline (both times the "breach" was dev's own merges
+missing from a behind branch). **The tool showed somebody else's tree.** Now in `LANES.md` next
+to the build-freshness rules, since column self-checks are in every brief.
+
 ### Reports has no permission chip — the interim rule errs restrictive, and the product question is queued
 
 **The gap Lane A found and correctly refused to close alone.** The design draws **nine**

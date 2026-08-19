@@ -221,6 +221,14 @@ confirmation, `--force`, because a replay is not a second opinion; suspect the c
 `--force` — treating a working cache as broken is how the next genuine anomaly gets waved
 through as normal.
 
+**The same lesson wears a git costume.** Checking your column with `git diff dev HEAD` while
+`dev` is ahead of you lists *other lanes' merged files* — a tree comparison, not your edits, and
+it reads exactly like a column breach. Three false alarms so far. Ask the honest question:
+
+```bash
+git diff $(git merge-base dev HEAD)..HEAD --name-only    # YOUR edits, nothing else
+```
+
 **Do not reach for `--force` by habit.** The cache is sound and paying 8s on every merge to
 distrust it is how the next real anomaly gets waved through as normal. Three cases:
 
