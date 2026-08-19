@@ -282,6 +282,11 @@ export const ar: Copy = {
 
   // --------------------------------------------------------------- offline --
   offlineBanner: en.offlineBanner, // AR GAP
+  // INVENTED in English and not yet translated — DECISIONS.md § "The offline
+  // cold-load sentence". Aliased rather than guessed at: writing Arabic no
+  // native speaker wrote is the thing AR_GAPS exists to prevent.
+  offlineColdTitle: en.offlineColdTitle, // AR GAP
+  offlineColdBody: en.offlineColdBody, // AR GAP
   lastUpdated: en.lastUpdated, // AR GAP
   qrOfflineTitle: en.qrOfflineTitle, // AR GAP
   qrOfflineBody: en.qrOfflineBody, // AR GAP
@@ -659,6 +664,8 @@ export const AR_GAPS = [
   'referencePrefix',
   'blockedTitle',
   'offlineBanner',
+  'offlineColdTitle',
+  'offlineColdBody',
   'lastUpdated',
   'qrOfflineTitle',
   'qrOfflineBody',

@@ -138,7 +138,14 @@ export function LookupScreen({
       <View style={styles.results}>
         {search.state === 'searching' && <SkeletonRows count={2} />}
 
-        {search.state === 'offline' && <OfflineBanner />}
+        {/*
+          `offlineTitle`, not the default. A search that could not reach the
+          server has NO last update on screen, so "showing your last update"
+          would promise something that is not there — DECISIONS.md § "The offline
+          cold-load sentence". Third instance of the same default; the prop is
+          required now so there cannot be a fourth.
+        */}
+        {search.state === 'offline' && <OfflineBanner label={copy.offlineTitle} />}
 
         {search.state === 'error' && (
           <ErrorState

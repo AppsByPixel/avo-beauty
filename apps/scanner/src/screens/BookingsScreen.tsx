@@ -32,6 +32,7 @@ import { copy } from '../copy/en';
 import { color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme';
 import { LinkButton } from '../components/Buttons';
 import { EmptyState, ErrorState, Refusal, SkeletonRows } from '../components/States';
+import { useSession } from '../state/session';
 
 /** The salon's zone. Every label on this screen is a salon-local time. */
 const SALON_TIME_ZONE = 'Asia/Kuwait';
@@ -49,9 +50,18 @@ type Load =
   | { status: 'ready'; bookings: ArtistBooking[] }
   /** 404 not_an_artist — no calendar here at all. Explains; offers no retry. */
   | { status: 'notArtist' }
+  /**
+   * Her connection, NOT our failure. `ErrorState`'s body is "Nothing was lost.
+   * This is on our side." — false on a salon phone that has lost signal, which
+   * on a counter device is the common case rather than the edge. `ChargesScreen`
+   * has carried this state from the start; this screen collapsed it into
+   * `failed`.
+   */
+  | { status: 'offline' }
   | { status: 'failed'; message: string; reference: string };
 
 export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandle }: Props) {
+  const { reportFailure } = useSession();
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [token, setToken] = useState(0);
 
@@ -62,8 +72,30 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
       .then((bookings) => setLoad({ status: 'ready', bookings }))
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
+        /*
+          A DEAD SESSION IS NOT A SCREEN-LEVEL ERROR. `reportFailure` returns true
+          when it ended the session, and the shell then replaces this screen with
+          the PIN screen — the honest remedy, because signing in again is the only
+          thing that helps. Rendering an error with a Try again would leave the
+          artist tapping a button that 401s for ever. Three screens already do
+          this; this one did not, so a revoked PIN surfaced here as "we failed".
+
+          FIRST, before the code checks: a 401 carries no `not_an_artist` and its
+          message is the raw "Sign in to continue.", which is exactly the string
+          the session module's header records being printed at a counter.
+        */
+        if (reportFailure(err)) return;
         if (err instanceof ApiError && err.code === 'not_an_artist') {
           setLoad({ status: 'notArtist' });
+          return;
+        }
+        /*
+          AFTER the code check, for the reason `orderRefusal.ts` writes down: the
+          client maps 503 AND 504 to `offline`, so a coded refusal arriving on a
+          503 must not be read as a dead connection.
+        */
+        if (err instanceof ApiError && err.kind === 'offline') {
+          setLoad({ status: 'offline' });
           return;
         }
         setLoad({
@@ -73,7 +105,7 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
         });
       });
     return () => controller.abort();
-  }, [accessToken, token]);
+  }, [accessToken, token, reportFailure]);
 
   const retry = useCallback(() => setToken((t) => t + 1), []);
 
@@ -107,6 +139,21 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
 
         {load.status === 'notArtist' ? (
           <Refusal title={copy.notArtistTitle} body={copy.notArtistBody} />
+        ) : null}
+
+        {/*
+          Her connection. Keeps the retry — reconnecting is actionable — but not
+          the "this is on our side" body. `offlineColdBody` is INVENTED and
+          authorised: DECISIONS.md § "The offline cold-load sentence". Not
+          `offlineBanner`, which promises a last update this cold load never had.
+        */}
+        {load.status === 'offline' ? (
+          <ErrorState
+            title={copy.offlineTitle}
+            body={copy.offlineColdBody}
+            reference={null}
+            onRetry={retry}
+          />
         ) : null}
 
         {load.status === 'failed' ? (

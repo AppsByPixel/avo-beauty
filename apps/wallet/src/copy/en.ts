@@ -245,6 +245,22 @@ export const en: Copy = {
   // failure — "you can't do that", so it explains
   blockedTitle: "We can't show this wallet",
 
+  /**
+   * INVENTED, authorised in DECISIONS.md § "The offline cold-load sentence —
+   * inventing it is AUTHORISED". The bundle has exactly one customer offline
+   * string, `offlineBanner`, and it is a STALE-DATA sentence: on a cold load
+   * there is no last update to show, so it would be a lie. `errorBody`'s "This
+   * is on our side" is the other wrong answer — it blames us for her signal.
+   *
+   * The third such string, after `signInOffline` and `signUpOffline`, and marked
+   * the same way so the native-speaker review picks all three up together.
+   *
+   * The retry stays: reconnecting is something she can actually do, which is
+   * what separates this from `blockedTitle`.
+   */
+  offlineColdTitle: 'No connection',
+  offlineColdBody: 'Reconnect and try again. Nothing is lost.',
+
   // offline
   offlineBanner: 'No connection · showing your last update',
   lastUpdated: (relative) => `Last updated ${relative}`,

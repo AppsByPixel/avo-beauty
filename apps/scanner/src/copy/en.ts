@@ -295,6 +295,23 @@ export const copy = {
   offlineBanner: 'No connection · showing your last update',
   offlineTitle: 'No connection',
   offlineBody: 'The scanner needs a connection to take a charge.',
+  /**
+   * INVENTED, authorised in DECISIONS.md § "The offline cold-load sentence —
+   * inventing it is AUTHORISED". The one string that unblocks a cold offline
+   * load on a LIST screen, where none of the three above fits:
+   *
+   *   offlineBanner  promises a last update; on a cold load there is none.
+   *   offlineBody    is charge-specific ("to take a charge"), and a bookings
+   *                  list is not a charge.
+   *   errorBody      says "This is on our side" — false when the phone has no
+   *                  signal.
+   *
+   * English only, and correctly so: `design/README.md` § Known gaps 1 decides
+   * the staff scanner ships English-only, so this needs no Arabic half and no
+   * AR_GAPS entry. It is the same sentence as the wallet's `offlineColdBody`,
+   * deliberately — one decision, one sentence, two surfaces.
+   */
+  offlineColdBody: 'Reconnect and try again. Nothing is lost.',
   chargesEmptyTitle: 'No charges yet today',
   chargesEmptyBody: 'The first charge you take will show here, with 15 minutes to void it.',
 

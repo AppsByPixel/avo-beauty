@@ -260,6 +260,19 @@ export interface Copy {
   // failure — "you can't do that", so it explains
   blockedTitle: string;
 
+  /**
+   * failure — "your connection", on a COLD load with nothing to keep on screen.
+   *
+   * Distinct from `offlineBanner`, which promises a last update and therefore
+   * cannot be used here: on a cold load there is no last update, so it would
+   * lie. Distinct from `errorTitle`/`errorBody`, which say "this is on our
+   * side" — false when the phone simply has no signal.
+   *
+   * INVENTED, and authorised: DECISIONS.md § "The offline cold-load sentence".
+   */
+  offlineColdTitle: string;
+  offlineColdBody: string;
+
   // offline
   offlineBanner: string;
   lastUpdated(relative: string): string;
