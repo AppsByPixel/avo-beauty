@@ -235,3 +235,66 @@ export const memberConsentEvent = pgTable(
       .where(sql`${t.kind} = 'policy_acceptance'`),
   ],
 );
+
+/**
+ * The customer's own password-reset outbox — migration 0034.
+ *
+ * THE DEFECT IT CLOSES: api-contract.md § Profile edit rule 5 promises that
+ * "Forgot my current password" drops into the existing WhatsApp reset-link flow,
+ * and the wallet draws the control — but only staff and platform flows existed.
+ * A customer who forgot her password had a button that led nowhere, against the
+ * wallet that holds her money.
+ *
+ * THE THIRD RESET TABLE, NOT A WIDENED SECOND — 0034's header carries the full
+ * argument (three principals, three tables, each ageing on its own terms), plus
+ * why the requester column is an IP rather than a name (self-service has no
+ * authenticated requester; inventing "self" would dress a claim up as a fact)
+ * and why there is deliberately NO salon_id (nobody salon-scoped may touch a
+ * customer's reset — a merchant who could would hold an account-takeover path).
+ *
+ * ONLY THE SHA256 IS STORED, as in both sibling tables. The token exists in the
+ * message the customer receives and nowhere else; no endpoint returns it.
+ */
+export const memberPasswordReset = pgTable(
+  'member_password_reset',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    memberId: text('member_id')
+      .notNull()
+      .references(() => member.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    /** Which connection asked. Null when unattributable — counted, not exempt. */
+    requestedIp: text('requested_ip'),
+    expiresAt: timestamptz('expires_at').notNull(),
+    /**
+     * The outbox stamp, EXPECTED TO STAY NULL: no sender is wired, for the same
+     * client-blocked reasons `staff_password_reset.sent_at` and
+     * `platform_admin_password_reset.sent_at` record.
+     */
+    sentAt: timestamptz('sent_at'),
+    usedAt: timestamptz('used_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('member_password_reset_token_uq').on(t.tokenHash),
+    index('member_password_reset_live_idx').on(t.memberId).where(sql`used_at IS NULL`),
+    check('member_password_reset_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),
+  ],
+);
+
+/**
+ * The limiter's counter for the UNAUTHENTICATED issue endpoint — 0026's
+ * `signup_attempt`, repeated for the same endpoint shape and for the same
+ * reasons its header gives. It cannot ride on `member_password_reset` itself:
+ * rows there exist only for phones that MATCHED, so a sweep of unknown numbers
+ * would never be throttled by its own artefacts.
+ */
+export const memberPasswordResetAttempt = pgTable(
+  'member_password_reset_attempt',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ipAddress: text('ip_address'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [index('member_password_reset_attempt_ip_idx').on(t.ipAddress, t.createdAt.desc())],
+);

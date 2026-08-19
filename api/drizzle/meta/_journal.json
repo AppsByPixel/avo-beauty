@@ -239,6 +239,13 @@
       "when": 1787891600000,
       "tag": "0033_platform_admin_password_reset",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787978000000,
+      "tag": "0034_member_password_reset",
+      "breakpoints": true
     }
   ]
 }
