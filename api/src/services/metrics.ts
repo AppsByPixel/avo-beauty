@@ -225,6 +225,58 @@ export async function computeMetrics(
   const repeat = (repeatRows as unknown as Array<{ visitors: unknown; repeaters: unknown }>)[0];
   const repeatRatePercent = percent(int(repeat?.repeaters), int(repeat?.visitors));
 
+  /**
+   * UPCOMING TODAY — bookings still to start, before the salon's own midnight.
+   *
+   * THIS WAS HARDCODED `0` AND THE COMMENT EXPLAINING WHY WENT STALE. It read
+   * "there is no `booking` table … the moment bookings land this becomes a count
+   * and nothing else moves". Bookings landed: `db/schema/booking.ts` defines the
+   * table, `routes/bookings.ts` writes it, `GET /salons/{id}/bookings` reads it.
+   * So an honest zero had quietly become a live tile permanently reporting none —
+   * the third stale "not built" comment found in `api/src` on this build. The
+   * comment was right when written, which is exactly what makes the shape
+   * dangerous: nothing fails when the world catches up with it.
+   *
+   * `deposit_held` ONLY, and each exclusion is a decision rather than a filter
+   * inherited from somewhere else:
+   *
+   *   `completed`         — already happened. Not upcoming.
+   *   `no_show_returned`  — she did not arrive and the deposit went back. Resolved,
+   *                         not pending; counting it would tell a merchant to keep
+   *                         a chair free for somebody who is not coming.
+   *   `cancelled`         — not a booking any more.
+   *
+   * `booking_settlement_matches_status` makes this precise rather than a guess:
+   * held ⟺ nothing settled it, so `deposit_held` IS the set of bookings that have
+   * not yet resolved into anything.
+   *
+   * STILL TO START, not "booked today", and the design's own sub-label is the
+   * argument: "Upcoming today · 18 · next at 4:30 PM". A count that included the
+   * morning's finished appointments could read 18 with no "next" at all, and a
+   * merchant reads this tile to know what is LEFT in her day. So the lower bound is
+   * `now`, not midnight. A 10:00 booking still sitting in `deposit_held` at 16:00 is
+   * therefore excluded — it is overdue, not upcoming, and both filters are doing
+   * real work rather than one covering for the other.
+   *
+   * THE UPPER BOUND IS THE SALON'S MIDNIGHT, reusing the `dayEnd` that
+   * `loadedTodayFils` already computes from `salon.timezone`. It has to be: this
+   * machine runs PKT, two hours ahead of Kuwait, so between 21:00 and 23:59 Kuwait
+   * a host-clock "today" is already tomorrow and the tile would drop the evening's
+   * remaining appointments — the same boundary that put a 21:30Z charge on the wrong
+   * day in services/reports.ts § sales.
+   */
+  const upcomingRows = await db.execute(sql`
+    SELECT count(*) AS upcoming
+      FROM booking
+     WHERE salon_id = ${salon.id}
+       AND status = 'deposit_held'
+       AND starts_at >= ${at(now)}
+       AND starts_at < ${at(dayEnd)}
+  `);
+  const upcomingAppointments = int(
+    (upcomingRows as unknown as Array<{ upcoming: unknown }>)[0]?.upcoming,
+  );
+
   return {
     activeMembers,
     activeMembersDelta,
@@ -232,15 +284,18 @@ export async function computeMetrics(
     knetSharePercent,
     repeatRatePercent,
     /**
-     * ZERO, AND IT IS A TRUE ZERO RATHER THAN A STUB.
+     * A REAL COUNT NOW. See the query above for what it includes and what it
+     * deliberately does not.
      *
-     * There is no `booking` table. The design's "Upcoming today · 18 · next at
-     * 4:30 PM" cannot be computed from anything that exists, and the honest
-     * value for "how many appointments are booked today" in a product with no
-     * bookings is none. It is left in the response rather than dropped because
-     * the tile renders it and lane C should not have to special-case a missing
-     * key; the moment bookings land this becomes a count and nothing else moves.
+     * The tile's SUB-LABEL is still not served: "next at 4:30 PM" needs the next
+     * booking's start instant, and there is no field for it. Adding one means
+     * editing `SalonMetricsSchema` in `packages/types`, which is trunk-owned and
+     * consumed by four surfaces — so it is reported, not taken. Returning the field
+     * without declaring it there would be worse than useless: zod STRIPS undeclared
+     * keys rather than failing, so the dashboard would parse the response and
+     * silently drop it, which is the contract drift this build has already found
+     * five times.
      */
-    upcomingAppointments: 0,
+    upcomingAppointments,
   };
 }
