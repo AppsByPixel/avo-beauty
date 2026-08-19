@@ -20,7 +20,8 @@ import { SectionError } from './sectionState.js';
  * of prose read as one run-on sentence to a screen reader.
  */
 
-const KIND_LABEL: Record<AuditKind, string> = {
+/** Exported: the console's Audit section renders the same chips — see api/audit.ts. */
+export const KIND_LABEL: Record<AuditKind, string> = {
   money: 'Money',
   rules: 'Rules',
   access: 'Access',
@@ -43,7 +44,7 @@ const KIND_LABEL: Record<AuditKind, string> = {
  * now #7A6034. The design reference is left as the design drew it; what renders
  * comes from the token.
  */
-const KIND_TONE: Record<AuditKind, PillTone> = {
+export const KIND_TONE: Record<AuditKind, PillTone> = {
   money: 'brand',
   rules: 'neutral',
   access: 'warn',
@@ -58,7 +59,7 @@ const KIND_TONE: Record<AuditKind, PillTone> = {
  * a first-class layout rather than a string swap. This is that rendering, in the
  * design's own shape.
  */
-function whenLabel(iso: string): string {
+export function whenLabel(iso: string): string {
   const at = new Date(iso);
   const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   const today = new Date();
@@ -145,8 +146,15 @@ export function AuditLog() {
         {/* §1: the table scrolls inside its card; it never drops a column. */}
         <div className="audit__scroll">
           <table className="audit__table">
+            {/*
+              No count while pending — `total` defaults to 0 before the first page,
+              and this caption told a screen reader "0 entries match" while the
+              visible count line correctly showed nothing. Found on the console
+              sibling by asserting on its loading DOM; the same line was here.
+            */}
             <caption className="avo-sr-only">
-              Audit log, newest first. {total} entries match the current filter.
+              Audit log, newest first.
+              {log.isPending ? '' : ` ${total} entries match the current filter.`}
             </caption>
             <thead>
               <tr>
@@ -246,7 +254,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
   );
 }
 
-function ClockGlyph() {
+export function ClockGlyph() {
   return (
     <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <circle cx="10" cy="10" r="7.5" stroke="currentColor" strokeWidth="1.6" />

@@ -152,7 +152,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     id: 'audit',
     label: 'Audit log',
     to: '/console/audit',
-    built: false,
+    built: true,
     section: 'audit',
     title: 'Audit log',
     subtitle: 'Every action on the platform, and who took it',
