@@ -31,12 +31,70 @@ through commit messages.
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
 | 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
+| 9 | **Who in a salon may export customer PII?** The design draws nine permission chips and Reports is not one of them, and none of the nine is a customer-data permission. A `customers.csv` carries every member's name, phone, wallet balance and tier. | A tenth permission is a four-way break in trunk-owned `packages/types`, but the real blocker is that this is a **product** call about salon staff and customer data, not a schema question. Interim rule below errs restrictive so nothing ships open. |
 
 ---
 
 ## Decisions I made
 
 Newest first. Each: what, why, and how to reverse it.
+
+### Reports has no permission chip — the interim rule errs restrictive, and the product question is queued
+
+**The gap Lane A found and correctly refused to close alone.** The design draws **nine**
+permission chips and Reports is not one of them. `StaffPermsSchema` lives in trunk-owned
+`packages/types`, so a tenth is a four-way break — reported, not taken.
+
+**The interim rule, which I am keeping: a report inherits the permission of the section it
+exports.** `customers`→`team`, `sales`→`dashboard`, `best-selling-services`→`appointments`,
+`products-sold`→`shop`.
+
+**Why the obvious answer was the dangerous one.** A blanket `dashboard` gate looks natural —
+Reports sits next to Overview — and it would have handed **every front-desk tablet every
+customer's name, phone number and wallet balance.** Lane A proved it with that exact shape:
+`dashboard` on, `team` off → `sales` 200, `customers` 403. The seeded frontdesk (Hessa, `ST-002`)
+holds neither, so this is a constructed case rather than a shipped one, but the direction of the
+argument is what matters: **customer PII must not ride on the weakest gate a screen happens to
+sit behind.**
+
+**Where the mapping is imperfect, said plainly.** I checked what `team` actually gates today:
+`/staff`, `/staff/{id}`, the password reset, and `/salons/{id}/artists` — **staff and artists,
+not customers.** And `loyalty`, the other candidate, gates salon settings and branches. So
+**none of the nine is a customer-data permission**, and `customers`→`team` is not a semantic fit;
+it is the most administrative gate available, chosen because erring toward restriction is the
+correct direction to err when the right answer does not exist yet. Anyone reading this later
+should know it was picked for its strictness, not its meaning.
+
+**Queued for Aftab as #9**, because the real question is not schema: **who in a salon may export
+customer PII?** That is a product and privacy call about the client's own customers. The interim
+rule means nothing ships open while it waits.
+
+**Reversal.** One constant, `REPORT_PERMISSION` in `api/src/services/reports.ts`, with a unit
+test that asserts the map — including `customers === 'team'` and explicitly `!== 'dashboard'`, so
+a future widening cannot be silent. If a tenth permission is granted, it lands on `dev` in
+`packages/types` first and every lane rebases, per `CLAUDE.md`.
+
+### `money-check` was passing because it audited nothing — the skill is fixed
+
+**What.** Lane A ran `.claude/skills/money-check` over the Reports slice and every grep came back
+clean. **The slice was three new files, and `git diff` does not show untracked files** — so the
+audit inspected an empty diff and reported no findings. Re-run after `git add -N`, it produced a
+real hit (a `Number(raw)` at the money cell, judged safe because it feeds `formatFils(fils(v))`
+and `fils()` throws on a float, asserted by a test).
+
+**Why this is the session's signature failure, for the third time.** A check satisfied by looking
+at nothing: the `rst_` sweep that matched "fi**rst**" because `_` is a `LIKE` wildcard, the
+`--include=*.ts` that zsh ate so a grep never searched the files it named, and now a money audit
+over an empty diff. **This build already recorded the same trap in the lane-preservation step** —
+`git diff` misses new files, which is why preserving a dirty worktree needs a tarball as well as a
+patch — and it still bit, because the knowledge lived in `STATUS.md` and the instruction lived in
+a skill.
+
+**Fixed at the instruction**, not in a report nobody re-reads: `money-check` now stages intent
+first. The same correction applies to any skill that reasons over `git diff`.
+
+**Reversal.** Trivial — it is one added step. The generalisation is not reversible and should not
+be: **a check that can pass by examining nothing must prove it examined something.**
 
 ### `loadFailure.ts` does NOT move to a shared package — held, with the reversal named
 

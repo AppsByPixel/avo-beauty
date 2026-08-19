@@ -11,10 +11,25 @@ whole repo, and every finding is a defect rather than a suggestion.
 
 ## Scope
 
-Run against the working diff by default:
+**FIRST, stage intent — or this whole skill audits nothing.** `git diff` does **not** show
+untracked files, and a new slice is usually mostly new files. A lane ran this skill over a
+three-new-file slice, every grep below came back clean, and the audit had inspected an **empty
+diff**:
 
 ```bash
-git diff --name-only
+git add -N .                 # intent-to-add: makes new files visible to `git diff`
+git diff --name-only         # <- confirm this is NOT empty before trusting anything below
+git diff --stat              # and that the line counts match the slice you think you audited
+```
+
+**If `--name-only` prints nothing, you have not audited anything.** Stop and work out why before
+reporting "no findings" — that is a pass bought by looking at the wrong thing, which is the same
+defect class as a green typecheck bought with a cast. Every grep in this file inherits this
+problem, so fixing it here fixes it once.
+
+Then run against the working diff:
+
+```bash
 git diff
 ```
 

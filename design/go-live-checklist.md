@@ -363,6 +363,36 @@ unless it is explicitly deferred in writing.
 ## Product completeness
 
 - [ ] Every screen has its loading, empty, error and offline states built
+      - Lane B, 2026-08-19 — **wallet and scanner halves DONE**, 6 + 11 screens audited.
+        Wallet: all five `FailureScreen` call sites thread the real kind and the component
+        branches all three; Home and Account keep last-known data with a timestamp; the QR is
+        genuinely **absent** offline (`PaymentCode.tsx:56-66` returns early, so no `QRCode`
+        enters the tree — hidden, not dimmed); Shop has three distinct empties; Book
+        distinguishes an empty day from a fully-booked one. Scanner: offline + `reportFailure`
+        on all five fetching screens, `PinScreen` owing the offline guarantee but correctly
+        **not** calling `reportFailure` (it would end the session to show the screen it already
+        is), and the four non-fetching screens named and argued rather than skipped.
+        `failureStates.test.ts` is a source census that fails by name when a screen appears in
+        no list — **it caught `PinScreen` missing from Lane B's own hand-written list on its
+        first run.** Money skeletons as bars; no `0.000` placeholder; no screen reaches for the
+        stale-data sentence, and `OfflineBanner` has no default label.
+      - **Row stays open on the dashboard/console half only** (Lane C's column), which is why
+        it is not ticked despite both mobile surfaces being complete.
+      - Lane B, 2026-08-19 — **wallet and scanner halves DONE**, 6 + 11 screens audited.
+        Wallet: all five `FailureScreen` call sites thread the real kind and the component
+        branches all three; Home and Account keep last-known data with a timestamp; the QR is
+        genuinely **absent** offline (`PaymentCode.tsx:56-66` returns early, so no `QRCode`
+        enters the tree — hidden, not dimmed); Shop has three distinct empties; Book
+        distinguishes an empty day from a fully-booked one. Scanner: offline + `reportFailure`
+        on all five fetching screens, `PinScreen` owing the offline guarantee but correctly
+        **not** calling `reportFailure` (it would end the session to show the screen it already
+        is), and the four non-fetching screens named and argued rather than skipped.
+        `failureStates.test.ts` is a source census that fails by name when a screen appears in
+        no list — **it caught `PinScreen` missing from Lane B's own hand-written list on its
+        first run.** Money skeletons as bars; no `0.000` placeholder; no screen reaches for the
+        stale-data sentence, and `OfflineBanner` has no default label.
+      - **Row stays open on the dashboard/console half only** (Lane C's column), which is why
+        it is not ticked despite both mobile surfaces being complete.
       (`AVO States.dc.html`, `interaction-spec.md` §4)
       - Lane C, 2026-08-19 — **merchant dashboard: all eight built sections driven** against
         the real API on a real database (Overview, Appointments, Team, Loyalty, Marketing,
