@@ -32,6 +32,14 @@ export interface AuditEntry {
   kind: AuditKind;
   action: string;
   detail: string;
+  /**
+   * Null on a platform action belonging to no salon. On the wire for BOTH reads —
+   * `serialiseAuditRow` emits one shape on purpose ("emitting it from one
+   * serialiser is cheaper than two shapes that drift") — but only the console has
+   * a use for it: every row the merchant can see already carries her own salon id
+   * by construction.
+   */
+  salonId: string | null;
   source: string;
   /** "Owner console", "Merchant", "Scanner", "Wallet", "System" — server copy. */
   sourceLabel: string;
@@ -96,5 +104,68 @@ export function useAuditLog(
     // Retry policy is global — api/retryPolicy.ts. `perms.dashboard` gates this
     // endpoint, and an infinite query would have paid the wasted round trip on
     // every page fetch, not just the first.
+  });
+}
+
+/* ------------------------------------------------------------- the console -- */
+
+/**
+ * `GET /v1/platform/audit` — section `audit`, `requirePlatform`.
+ *
+ * THE SAME LOG, SCOPED TO NOTHING. The server's `auditRead.ts` is explicit that
+ * the two reads share the filter grammar, the cursor rule, the search escaping
+ * and the row shape, and differ ONLY in scoping: the merchant's read filters to
+ * her salon, the console's has no tenancy boundary at all and additionally sees
+ * the null-salon rows that are the platform's own business. That is why this
+ * hook lives in this file rather than a second one — a `kind` chip that meant
+ * something slightly different on the console than on the dashboard would turn
+ * "these two screens disagree" into a question about the record itself.
+ *
+ * `AUDIT_KINDS` above is the one client list, used by both screens — the same
+ * census discipline the server applies by exporting its own `AUDIT_KINDS` to
+ * both routes. The server refuses anything else with `invalid_kind`, so a drift
+ * here is caught loudly on the first request rather than silently filtering
+ * nothing.
+ *
+ * `scope` is the one filter the merchant's read can never express:
+ *
+ *   null         every row — salon-scoped AND the platform's own
+ *   'platform'   the `?salon=platform` literal: null-salon rows only, "AVO's own
+ *                actions". A literal rather than a magic empty string, so it
+ *                cannot be produced by an accidentally blank query parameter.
+ *
+ * A PER-SALON narrowing (`?salon=SAL-…`) exists server-side and is deliberately
+ * not surfaced yet: there is no platform salons-list endpoint (the console's
+ * Salons section is not built), so the only honest control would be a free-text
+ * id box. Named in the lane report, not faked with a hand-typed list.
+ */
+export interface PlatformAuditFilters extends AuditFilters {
+  scope: 'platform' | null;
+}
+
+export const platformAuditKeys = {
+  list: (filters: PlatformAuditFilters) => ['platform', 'audit', filters] as const,
+};
+
+export function usePlatformAuditLog(
+  filters: PlatformAuditFilters,
+): UseInfiniteQueryResult<InfiniteData<AuditPage>> {
+  return useInfiniteQuery({
+    queryKey: platformAuditKeys.list(filters),
+    initialPageParam: null as number | null,
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams();
+      if (filters.q.trim() !== '') params.set('q', filters.q.trim());
+      if (filters.kind) params.set('kind', filters.kind);
+      if (filters.scope) params.set('salon', filters.scope);
+      if (pageParam !== null) params.set('cursor', String(pageParam));
+      const query = params.toString();
+      return authedRequest<AuditPage>(
+        'owner',
+        `/v1/platform/audit${query ? `?${query}` : ''}`,
+        { signal },
+      );
+    },
+    getNextPageParam: (last) => last.nextCursor,
   });
 }
