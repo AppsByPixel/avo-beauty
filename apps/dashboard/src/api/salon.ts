@@ -1,25 +1,32 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import type { Salon, Transaction } from '@avo/types';
+import { SalonMetricsSchema, type Salon, type SalonMetrics, type Transaction } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 
 /**
  * `GET /salons/{id}/metrics`.
  *
- * NOTE — this shape is not in `packages/types`. The API serves it, the contract
- * documents it, but there is no `SalonMetricsSchema`, so this is a hand-written
- * mirror rather than a shared type. Flagged in the lane report: it belongs in
- * `packages/types/src/entities.ts` (trunk-owned), not here.
+ * THE SHAPE IS `SalonMetricsSchema` FROM `packages/types` — entities.ts:429. A
+ * comment here used to say "there is no `SalonMetricsSchema`, so this is a
+ * hand-written mirror", and a 22-line local interface sat under it. That was true
+ * when it was written and had been false since the schema landed; the fourth
+ * stale absence-claim this project has caught, and the same shape as the header
+ * this very file asked for — "it belongs in `packages/types/src/entities.ts`
+ * (trunk-owned), not here". Trunk agreed, landed it, and the mirror outlived its
+ * excuse. Deleted, not kept-but-deprecated: two definitions of "repeat rate" is
+ * how two surfaces start disagreeing about one number.
+ *
+ * `SalonMetrics` is re-exported below so the callers' import site — the hook's
+ * own module — keeps working; the TYPE now has one home.
+ *
+ * `nextAppointmentAt` note: the schema declares it `nullable().optional()` and
+ * its comment is emphatic that OPTIONAL IS A STAGE, NOT THE SHAPE — it is
+ * declared ahead of the API serving it so zod does not strip it the day it
+ * arrives. This client therefore TOLERATES the field today and renders nothing
+ * from it; the Upcoming tile's "next at 4:30 PM" sub-label is a routed follow-up
+ * that starts when lane A's serving lands and `.optional()` comes off.
  */
-export interface SalonMetrics {
-  activeMembers: number;
-  activeMembersDelta: number;
-  /** Integer fils. Non-negotiable #1 — cast through `fils()` at the display boundary. */
-  loadedTodayFils: number;
-  knetSharePercent: number;
-  repeatRatePercent: number;
-  upcomingAppointments: number;
-}
+export type { SalonMetrics } from '@avo/types';
 
 /*
  * THE SALON ID IS NOT A PARAMETER OF THESE HOOKS.
@@ -67,8 +74,16 @@ export function useSalonMetrics(): UseQueryResult<SalonMetrics> {
   const salonId = useSalonId();
   return useQuery({
     queryKey: salonKeys.metrics(salonId),
-    queryFn: ({ signal }) =>
-      authedRequest<SalonMetrics>('merchant', `/salons/${salonId}/metrics`, { signal }),
+    /*
+     * PARSED with the shared schema, not cast. The blind `authedRequest<SalonMetrics>`
+     * this replaces asserted a shape the wire never proved — the `PATCH /v1/salons/{id}`
+     * lesson. Every consumer of these figures is a KPI tile, where a null arriving
+     * as a promised number renders "NaN" under a KD unit.
+     */
+    queryFn: async ({ signal }) =>
+      SalonMetricsSchema.parse(
+        await authedRequest<unknown>('merchant', `/salons/${salonId}/metrics`, { signal }),
+      ),
     /*
      * Stale-not-blank (interaction-spec.md §4). A failed refresh must keep the
      * last-known figures on screen behind a timestamped banner, so the cached
