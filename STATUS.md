@@ -59,6 +59,51 @@ a short red.
 
 ---
 
+## CURRENT STATE — 2026-08-19, and the plan from here
+
+`dev` **f91137e** · 315 commits · `main` 62 behind (it advances only on a clean twice-green gate)
+17 e2e files, **440 e2e specs** · `db:verify` **71 invariants** across 13 sections, exit code gated in CI
+`go-live-checklist.md` **8 ticked / 45 unticked**
+
+### Where the 30-day plan actually stands
+
+| Phase | State |
+|---|---|
+| 0 · Foundations | **Done** |
+| 1 · Wallet read-only | **Done** — sign-in, signup, session layer, secure store proven on a simulator |
+| 2 · Money core | **Done bar receipts.** `RECEIPT_DRIVER: z.enum(['logging'])` — one driver, so nothing sends |
+| 3 · Staff scanner | **Done bar a real QR on real hardware** (needs a device) |
+| 4 · Merchant dashboard | **Done.** Seven sections, Team wired, branches editor, permission ledger verified row by row |
+| 5 · Shared platform state | **Done** |
+| 6 · Booking and shop | Booking done. **Shop: API done, wallet screen in flight** |
+| 7 · Owner console | Platform principal, policy publish, campaign decision and #8-at-send **done**. Approvals + Admins in flight. Metrics, settings, platform audit read and console password-reset **not built** |
+| 8 · Hardening | `go-live-checklist.md`, 8/45 |
+
+**All twelve non-negotiables are satisfied.** #10 was the last one open and closed when signup landed.
+
+### In flight right now — four lanes, each with a queue
+
+- **Lane A** (`api/`) — finishing `0032_platform_settings.sql`. Then `GET /platform/metrics`, `PATCH /platform/settings`, the platform-wide audit read, the console password-reset (an invited admin **cannot sign in today**; #6 permits only a link, and the design's "Temporary password" field must not be drawn), `policies_not_published` → 409, and `reschedule` + the merchant-readable messaging policy into `api-contract.md`.
+- **Lane B** (`apps/wallet`, `apps/scanner`) — finishing the Shop screen including the **retired-product race** (a product retired between catalogue fetch and order; `POST /orders` answers `invalid_products` naming it). Then the "Charged 0.000 KD" frame, and the legacy-token secure-store migration.
+- **Lane C** (`apps/dashboard`, `packages/ui`) — **Approvals**, now unblocked. Then Admins (`/v1/platform/admins` is fully built). Render the hold *sentence*: quiet hours and the monthly cap hold the **campaign**; the weekly per-customer cap skips **recipients**.
+- **Lane D** (`e2e/`) — the near-duplicate charge guard, the order path's new second guard verified **reachable alone**, the console's platform routes, and the go-live rows that are testable claims.
+
+### What is left after those queues drain
+
+1. The **remaining console sections** as Lane A's three endpoints land.
+2. **Reports** — still correctly refused twice: no CSV route, and three of four cards have no aggregate. `build-plan.md` puts it in Phase 7.
+3. **Trunk aggregation of `go-live-checklist.md`.** Its rows are scoped by *concern*, not surface — "states on every screen", "focus on both web surfaces" — so **no single lane can ever tick one**. Only trunk collating lane evidence can, and that is the honest remaining path from 8/45 to green.
+4. Anything the client unblocks (below).
+
+### Standing decisions a fresh session must not re-litigate
+All in `DECISIONS.md` with reasoning and a reversal path. The load-bearing ones:
+- Sign-in identity is **phone**, not the username the design draws — the design contradicts its own copy, and no member username column exists.
+- **The overnight happy hour stays impossible for the pilot.** Rule and schema agree; fixing it is a four-way break for no plan criterion.
+- **Near-duplicate charge**: refuse with `possible_duplicate`, name the earlier transaction, 120s, explicit confirm. A flag cannot work — the triggering condition is a response the client could not read.
+- **No retry affordance on a charge error state.** A client that could not read the response cannot know whether the money moved.
+- `TRUST_PROXY` **fails fast in production** when unset.
+- A merchant **may read** the effective messaging policy; the write stays platform-only.
+
 ## Read these, in this order
 
 | File | What it is |
