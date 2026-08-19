@@ -118,6 +118,23 @@ export const B_BRANCH_DISPOSABLE = 'BR-LUM-ZZDISP';
 export const B_SERVICE = 'SV-B01';
 export const B_SERVICE_PRICE_FILS = 7_000;
 /**
+ * Salon B's SECOND service — 'Cut', 14.000. Seeded since the scanner fixtures
+ * landed and until now never exported, so nothing could name it.
+ *
+ * EXPORTED FOR THE NEAR-DUPLICATE GUARD, which is a claim about a BASKET and
+ * therefore untestable with one service in the salon. Two are the minimum to ask
+ * the three questions that matter: that a different basket is not a duplicate,
+ * that `[SV-B01, SV-B02]` and `[SV-B02, SV-B01]` are the SAME basket (the hash is
+ * sorted before it is taken), and that the guard keys on the basket rather than
+ * simply on "this member was charged recently".
+ *
+ * DELIBERATELY A DIFFERENT PRICE from `B_SERVICE`. If both cost 7.000 a spec that
+ * confused the two baskets would still see the balance it expected, and the
+ * distinguishing assertion would be satisfied by an accident.
+ */
+export const B_SERVICE_SECOND = 'SV-B02';
+export const B_SERVICE_SECOND_PRICE_FILS = 14_000;
+/**
  * Salon B's customer, reset to this on every run.
  *
  * DELIBERATELY SEVERAL TIMES WHAT A RUN SPENDS. It was 30.000 — four blow-dries —
@@ -267,6 +284,51 @@ const STAFF_PASSWORD = 'noura-dev-password';
 const STAFF_PIN = '2468';
 
 /** A salon id that has never existed. The control for the existence-oracle specs. */
+// ------------------------------------------------ the owner console's principals --
+
+/**
+ * Lane A's seeded platform admins — `api/src/db/seed.ts`. Three, and the spread of
+ * their nine section permissions is the whole reason there are three:
+ *
+ *   PLT-001  yousef    owner    every section. The control for every refusal.
+ *   PLT-002  mariam.k  analyst  analytics + activity ONLY. approvals and policies
+ *                               are OFF, so she is a genuinely restricted console
+ *                               principal — which is what non-negotiable #7 needs, and
+ *                               what an owner-only fixture could never provide.
+ *   PLT-003  salem.a   admin    every section, non-owner. The second full-authority
+ *                               credential, for anything needing two reviewers.
+ *
+ * `platform_admin.handle` is GLOBALLY unique, unlike `staff_user.handle` which is
+ * unique per salon — there is one platform, so there is one "yousef". That is also why
+ * console sign-in takes no salon field where merchant sign-in does.
+ */
+export const PLATFORM_OWNER = 'PLT-001';
+export const PLATFORM_OWNER_HANDLE = 'yousef';
+/**
+ * `decided_by` is set to the ADMIN'S NAME, not her id — `routes/campaigns.ts` sets
+ * `decidedBy: p.name`. So a spec asserting who decided a campaign asserts on this
+ * string, and it is 'Yousef' exactly: `api/src/db/seed.ts:194`.
+ */
+export const PLATFORM_OWNER_NAME = 'Yousef';
+/** approvals OFF, policies OFF. The restricted console principal. */
+export const PLATFORM_ANALYST = 'PLT-002';
+export const PLATFORM_ANALYST_HANDLE = 'mariam.k';
+export const PLATFORM_ADMIN2 = 'PLT-003';
+export const PLATFORM_ADMIN2_HANDLE = 'salem.a';
+
+/** `PLATFORM_PASSWORD` in `api/src/db/seed.ts`. All three admins share it. */
+export const PLATFORM_PASSWORD = 'yousef-dev-password';
+
+/**
+ * `platform_messaging_policy` defaults, from migration 0028 and api-contract.md:
+ * requireApproval ON, 2 per customer per week, 8 per salon per month, quiet
+ * 22:00-09:00. Written out so a spec can restore them after changing them.
+ */
+export const POLICY_WEEKLY_CAP_PER_CUSTOMER = 2;
+export const POLICY_MONTHLY_CAP_PER_SALON = 8;
+export const POLICY_QUIET_FROM = '22:00';
+export const POLICY_QUIET_TO = '09:00';
+
 export const SALON_NOWHERE = 'SAL-DOES-NOT-EXIST';
 export const STAFF_NOWHERE = 'ST-DOES-NOT-EXIST';
 
@@ -1934,6 +1996,34 @@ export async function signInDashboard(salonId: string, handle: string): Promise<
         'Salon B copies salon A\'s password hash, so this means the seed password in ' +
         'api/src/db/seed.ts changed. Update STAFF_PASSWORD in this file, or re-run ' +
         'pnpm --dir ./api run db:seed.',
+    );
+  }
+  return res.body.accessToken;
+}
+
+/**
+ * `POST /auth/platform/session` — the owner console's front door, `platform` scope.
+ *
+ * THE THIRD PRINCIPAL, AND THE FIRST THAT IS NOT SALON-SCOPED. Migration 0028 made
+ * `session.salon_id` nullable precisely so a platform admin can have no salon, and the
+ * CHECK requires that in both directions. So this returns a token that
+ * `requireSameSalon` cannot even be called with — `PlatformPrincipal` has no `salonId`
+ * field, which is a compile-time boundary rather than a runtime one.
+ *
+ * PASSWORD FROM THE SEED, and unlike salon B's staff there is no hash-copying trick
+ * here: `PLT-001`, `PLT-002` and `PLT-003` are lane A's own seeded rows and all three
+ * carry `hashSecret(PLATFORM_PASSWORD)`. If this throws, the seed's constant moved.
+ */
+export async function signInPlatform(handle: string): Promise<string> {
+  const res = await treq<SessionResponse>('POST', '/auth/platform/session', {
+    token: null,
+    body: { username: handle, password: PLATFORM_PASSWORD },
+  });
+  if (res.status !== 200 || !res.body.accessToken) {
+    throw new Error(
+      `Console sign-in failed for ${handle}: ${res.status} ${res.raw}\n` +
+        'PLATFORM_PASSWORD in this file must match PLATFORM_PASSWORD in ' +
+        'api/src/db/seed.ts. Re-run pnpm --dir ./api run db:seed if the seed moved.',
     );
   }
   return res.body.accessToken;

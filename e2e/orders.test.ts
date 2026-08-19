@@ -248,15 +248,65 @@ describe('concurrent orders on one wallet cannot spend the same fils twice', () 
    * reveal. It is here because the ablation proved a suite can be green while the
    * reconciliation is the only honest witness.
    *
-   * WHY THE ASYMMETRY WITH `POST /charges` IS WORTH LANE A'S ATTENTION. A charge
+   * WHY THE ASYMMETRY WITH `POST /charges` WAS WORTH LANE A'S ATTENTION. A charge
    * survived the equivalent ablation because it has TWO independent layers: the
    * wallet-token consumption is a conditional write with a row-count read
    * (`consumed_at IS NULL AND expires_at > now()`), so two concurrent charges on one
    * token cannot both proceed even with no lock. An order has no token — it is
-   * member-authenticated directly — so `FOR UPDATE` is its only serialising guard, and
+   * member-authenticated directly — so `FOR UPDATE` was its only serialising guard, and
    * `member_balance_non_negative` cannot be the second one because an absolute write
-   * of a positive balance never violates it. Money-in has two layers; money-out
-   * through the shop has one. Put to lane A as a decision, not fixed here.
+   * of a positive balance never violates it. Money-in had two layers; money-out through
+   * the shop had one. Put to lane A as a decision, not fixed here.
+   *
+   * =========================================================================
+   * LANE A ANSWERED IT, AND THE SECOND GUARD WAS THEN MEASURED ALONE
+   * 2026-08-19, 10:42 Kuwait
+   * =========================================================================
+   * `performOrder` step 5a is now a CONDITIONAL, RELATIVE UPDATE whose row count decides:
+   * `WHERE balance_fils >= total` refuses the loser and `SET balance_fils - total` puts
+   * the arithmetic in the database. Both halves are load-bearing and lane A says so.
+   *
+   * IT IS THE `no-show` PROBLEM IN A NEW COSTUME, WHICH IS WHY IT WAS CHECKED. Lane A's
+   * own comment on that statement reads: "Unreachable while step 2 holds the row — which
+   * is the point: this is the layer that speaks when the other one is gone." A guard that
+   * is unreachable while the guard in front of it works is a guard NO SPEC CAN DRIVE — the
+   * exact shape of the no-show job's status re-check, which no sequential spec could
+   * reach. So it was measured by ablation instead, the only instrument that can:
+   *
+   *   lock removed, second guard intact
+   *     → § "whatever the five racers are told…" PASSES. The ledger, the rows and the
+   *       balance all agree. THE SECOND GUARD HOLDS THE MONEY TOGETHER ON ITS OWN.
+   *     → § "five orders at once…" FAILS: four of the five racers answer **500
+   *       server_error**, and only ONE order settles against a balance for two.
+   *
+   *   lock removed AND the relative SET made absolute (`SET balance_fils = <precomputed>`,
+   *   conditional WHERE kept)
+   *     → § "whatever the five racers are told…" FAILS. So that spec really does detect a
+   *       lost update, and the RELATIVE half of the SET is the half that prevents one —
+   *       lane A's "a conditional WHERE with a precomputed value would still write the
+   *       stale number", confirmed rather than taken on trust.
+   *
+   * SO: REACHABLE, LOAD-BEARING, AND UNABLE TO ANSWER. This is the finding, and it is
+   * lane A's call. The second layer protects the ledger exactly as intended, but when it
+   * is the layer doing the work the customer does not get the `402` the code intends —
+   * she gets a 500. The cause is the consistency check immediately after the debit:
+   *
+   *     if (landed.balanceFils !== balanceAfter) throw new Error(…)
+   *
+   * With the lock gone that comparison is false for every racer that legitimately
+   * debited behind another, so it throws a bare `Error` and Fastify serialises a
+   * `server_error`. The zero-row path below it is careful to be "a 402, NOT a 500" — but
+   * in the one scenario the second layer exists for, most callers never reach it.
+   *
+   * That assertion is still worth keeping: its message ("the FOR UPDATE in step 2 is not
+   * holding") is exactly right, and it is what turned a silent lost update into a loud
+   * refusal. The observation is only that it makes the second layer a NET rather than a
+   * CONTROL — which is the same distinction lane A drew about `db:verify` when arguing
+   * that this guard was needed at all. A shop that answers 500 to four of five shoppers
+   * is not serving them; it is merely not robbing them.
+   *
+   * Nothing here is fixed by lane D, and no spec can pin it: with the lock in place the
+   * whole path is unreachable, so there is no assertion to write. It is reported.
    */
   it('five orders at once against a balance for two: two settle, three are refused', async () => {
     const opening = PRODUCT_FILS * 2;
@@ -313,6 +363,82 @@ describe('concurrent orders on one wallet cannot spend the same fils twice', () 
         'removing FOR UPDATE produced, this is the assertion that fails while every response ' +
         'above still looks correct — the balance is too HIGH for the rows written.',
     ).toBe(ledgerBefore - PRODUCT_FILS * 2);
+  }, 120_000);
+
+  /**
+   * THE MONEY, SEPARATED FROM THE ANSWER — and the separation is the point.
+   *
+   * WHY THIS IS NOT A DUPLICATE OF THE SPEC ABOVE. That spec asserts the STATUSES first
+   * ("nothing other than 201 or 402") and the reconciliation last, so the moment a racer
+   * answers anything unexpected it stops and never reaches the money. That ordering is
+   * right for the spec it is in — a shopper is owed a correct answer — but it means the
+   * suite cannot distinguish two very different failures:
+   *
+   *   A. the ledger is wrong          — fils were spent twice, the salon is short
+   *   B. the ledger is right and the ANSWER is wrong — nobody lost money, but a customer
+   *      who could afford the item was told "something went wrong on our side"
+   *
+   * A is a money defect. B is a bad day for a shopper. Collapsing them means a later
+   * change that turns A into B reads as "still failing" instead of "much better", and a
+   * change that turns B into A reads the same as before.
+   *
+   * SO THIS SPEC ASSERTS ONLY THE INVARIANT, and asserts it about WHATEVER HAPPENED: the
+   * number of `shop` rows, the balance movement and the ledger sum must agree with each
+   * other, whichever statuses came back. It is `db:verify` invariant 5 scoped to one
+   * member and freed from the status assertion.
+   *
+   * IT IS THE SPEC THAT ANSWERS TRUNK'S QUESTION ABOUT THE SECOND GUARD. Measured
+   * 2026-08-19, 10:42 Kuwait, by removing `performOrder`'s step-2 `FOR UPDATE` and
+   * running this file: this spec PASSES — the conditional relative UPDATE holds the
+   * ledger together on its own — while the spec above fails with four `500`s. The second
+   * guard is genuinely reachable and genuinely load-bearing, and it protects the money
+   * without being able to produce the right answer. Details in the § note below.
+   */
+  it('whatever the five racers are told, the ledger and the rows agree with the balance', async () => {
+    const opening = PRODUCT_FILS * 2;
+    fund(opening);
+    const rowsBefore = shopRows();
+    const ledgerBefore = ledgerSum();
+    const balanceBefore = balanceOf();
+
+    const results = await Promise.all([
+      order(key('inv-a')),
+      order(key('inv-b')),
+      order(key('inv-c')),
+      order(key('inv-d')),
+      order(key('inv-e')),
+    ]);
+
+    const settled = results.filter((r) => r.status === 201).length;
+    const rowsAdded = shopRows() - rowsBefore;
+
+    /**
+     * Not asserted as a number, because this spec deliberately has no opinion about how
+     * many should have gone through — that is the spec above's job. Asserted as
+     * AGREEMENT: a settled reply corresponds to a row, a row corresponds to a debit, and
+     * the debits account for the balance exactly.
+     */
+    expect(
+      rowsAdded,
+      `${settled} orders were answered 201 but ${rowsAdded} shop rows exist. A settled reply ` +
+        'with no row means the customer was told she bought something that was never recorded.',
+    ).toBe(settled);
+
+    expect(
+      balanceOf(),
+      `${rowsAdded} order(s) were recorded but the balance moved by ` +
+        `${balanceBefore - balanceOf()} fils rather than ${rowsAdded * PRODUCT_FILS}. Under a ` +
+        'lost update the balance is too HIGH for the rows written, which no single response ' +
+        'can reveal.',
+    ).toBe(balanceBefore - rowsAdded * PRODUCT_FILS);
+
+    expect(
+      ledgerSum(),
+      'the ledger does not account for the balance movement — this is invariant 5, and it is ' +
+        'the assertion that fails on a lost update while every reply still looks plausible',
+    ).toBe(ledgerBefore - rowsAdded * PRODUCT_FILS);
+
+    expect(balanceOf(), 'the wallet went negative').toBeGreaterThanOrEqual(0);
   }, 120_000);
 
   /**

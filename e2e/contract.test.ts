@@ -147,6 +147,8 @@ import {
   startTenancyApi,
   stopTenancyApi,
   treq,
+  PLATFORM_OWNER_HANDLE,
+  signInPlatform,
 } from './support/tenancy-harness.js';
 
 /** Salon A's seeded scanner device and staff. `api/src/db/seed.ts`. */
@@ -168,6 +170,13 @@ let scanner = '';
 let artistScanner = '';
 let member = '';
 let pinMember = '';
+/**
+ * The owner console's credential, added 2026-08-19 — and the census spec below is what
+ * demanded it. `NEEDS_PLATFORM_CREDENTIAL` excused four routes on the grounds that this
+ * harness could not mint a platform principal; the hour `signInPlatform` existed, that
+ * spec went red holding its own instructions. Two of the four are now ordinary probes.
+ */
+let platform = '';
 
 /**
  * A MEMBER OF THIS FILE'S OWN, FOR THE DELETION PIN ONLY.
@@ -380,36 +389,70 @@ function probes(): Probe[] {
       schema: paginated(CampaignSchema),
       requireNonEmpty: ['items'],
       /**
-       * DRIFT, FOUND BY TURNING THIS PROBE ON, AND THE SCHEMA IS THE CORRECT HALF.
+       * FIXED ON 2026-08-19, AND NOW A PLAIN SPEC. This probe carried
+       * `knownParseFailure`, and the harness is what reported the fix rather than a
+       * human noticing: `knownBug()` FAILS when the contract-correct assertion starts
+       * passing, so the run at 08:54 Kuwait came back "This bug appears to be FIXED" on
+       * both halves. That is the whole reason the wrapper fails forwards.
        *
-       *   items.0.heldReason: Required
-       *   items.0.heldAt: Required
+       * WHAT IT WAS. `serialiseCampaign` omitted both keys. `CampaignSchema` declares
+       * them `.nullable()` but NOT `.optional()` — deliberately, per its own docstring:
+       * "`null` on every campaign that was never held, which is most of them." Zod
+       * fails the whole object on a missing key, so a client built on `CampaignSchema`
+       * could not parse ANY campaign, the ordinary `pending` one included. Lane A now
+       * serves both — `routes/campaigns.ts:112-113`, `heldAt` as an ISO string.
        *
-       * `serialiseCampaign` omits both keys. `CampaignSchema` declares them
-       * `.nullable()` but NOT `.optional()`, and its docstring is explicit that this is
-       * deliberate: "`null` on every campaign that was never held, which is most of
-       * them." So the wire should carry `heldReason: null, heldAt: null` and does not.
+       * WHY THIS BECOMES A PERMANENT SPEC INSTEAD OF A CLOSED TICKET. These are the two
+       * fields non-negotiable #8 turns on. A held campaign keeps `status: 'approved'` —
+       * `CampaignSchema` declares four statuses and a fifth on the wire is a value every
+       * client's `.parse()` rejects — so `heldReason`/`heldAt` are the ONLY thing that
+       * distinguishes a campaign the platform refused to send from one on its way out.
+       * If these keys stop arriving, a held campaign renders to the merchant as approved
+       * and the silent drop #8 forbids is back, with no other field able to report it.
+       * Two fields and not a boolean for the reason the schema gives: "held until 09:00"
+       * and "held — this customer has had two messages this week" are different things
+       * for a merchant to do next.
        *
-       * IT REJECTS THE WHOLE RESPONSE, not the two fields — zod fails the object, so a
-       * client built on `CampaignSchema` cannot parse ANY campaign, including the
-       * ordinary `pending` one every merchant sees first. Same mechanism that made every
-       * bookable slot in the Book grid fail to parse, which is the comparison this
-       * file's own failure message reaches for.
-       *
-       * AND THE TWO FIELDS ARE THE ONES #8 IS ABOUT. The schema explains why they are
-       * two fields and not a boolean: the merchant is owed the sentence, "held until
-       * 09:00" versus "held — this customer has had two messages this week", because
-       * those are different things to do next. `design/README.md` gap 6 says a breaching
-       * campaign is "held and reported, never silently dropped" — and a field that never
-       * arrives is how it gets silently dropped.
-       *
-       * Lane A's fix (serve both as null), not a schema change: `packages/types` is
-       * trunk-owned and it is the half that is right.
+       * This probe pins the SHAPE, on the ordinary never-held campaign every merchant
+       * sees first, which is the half that broke. The VALUES on a genuinely held
+       * campaign are pinned against a campaign that really gets held, in
+       * `campaigns.test.ts`.
        */
-      knownParseFailure:
-        'serialiseCampaign omits heldReason and heldAt. CampaignSchema requires both as ' +
-        'nullable-but-present, so the whole response fails to parse and no client can read any ' +
-        'campaign. Lane A: serve them as null.',
+    },
+    /**
+     * THE APPROVAL QUEUE, across every salon. Reachable since `signInPlatform` landed.
+     *
+     * `requireNonEmpty: ['items']` is safe and load-bearing here: this file submits a
+     * campaign at salon A (see the salon-scoped probe above), it stays `pending` because a
+     * merchant cannot send, and the platform queue with no status filter lists every
+     * status — so the row this file created is in it. An empty `items` would witness the
+     * envelope and say nothing about `CampaignSchema`, which is the trap the products
+     * route sat in for weeks.
+     *
+     * IT IS THE SAME SCHEMA AS THE SALON-SIDE LIST AND A DIFFERENT SERIALISER PATH: this
+     * one joins `salon` for the name and orders differently. `heldReason`/`heldAt` were
+     * missing from `serialiseCampaign` until today, and one probe would have caught that
+     * on one door only.
+     */
+    {
+      route: 'GET /v1/platform/campaigns',
+      label: 'GET /v1/platform/campaigns',
+      schemaName: 'paginated(CampaignSchema)',
+      schema: paginated(CampaignSchema),
+      requireNonEmpty: ['items'],
+    },
+    /**
+     * The caps and quiet hours as the platform sees them. The salon-scoped read of the
+     * same shape is probed above; this is the platform door, and the two must not drift —
+     * `api-contract.md` says a merchant can never read or RAISE these values, so the
+     * merchant view being a faithful subset of this one is the whole basis of the
+     * dashboard being able to state them at all.
+     */
+    {
+      route: 'GET /v1/platform/messaging-policy',
+      label: 'GET /v1/platform/messaging-policy',
+      schemaName: 'PlatformMessagingPolicySchema',
+      schema: PlatformMessagingPolicySchema,
     },
     {
       route: 'GET /v1/salons/:id/promotions',
@@ -626,6 +669,53 @@ function probes(): Probe[] {
  * display columns. Two are genuinely unmodelled and should have a schema.
  */
 const UNMODELLED: Record<string, string> = {
+  /**
+   * THE TWO CONSOLE ROUTES THAT MOVED HERE FROM `NEEDS_PLATFORM_CREDENTIAL` on 2026-08-19.
+   * They are reachable now — `signInPlatform` exists — so "no credential" stopped being
+   * true of them while "no schema" stayed true. The § note on that map's guard spec has
+   * the full accounting.
+   */
+  /**
+   * THREE MORE CONSOLE READS, arriving with lane A's `platformConsole.ts` in the rebase onto
+   * dev `a4d0d91` — and **the census is what found them**, at 11:09 Kuwait, by name and with
+   * the file they came from. That is the whole point of the unclassified check: three routes
+   * were served that this file said nothing about, and nothing else in 673 specs noticed.
+   *
+   * All three are UNMODELLED rather than probed because `packages/types` declares no shape
+   * for any of them — there is no `PlatformSettingsSchema`, no `PlatformMetricsSchema` and no
+   * audit schema at all (the merchant `GET /salons/:id/audit` is unmodelled below for the
+   * same reason). They are REACHABLE: `signInPlatform` exists now.
+   */
+  'GET /v1/platform/metrics':
+    'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
+    '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +
+    'money aggregates across every salon and a client that mistypes them shows a merchant ' +
+    'the wrong revenue.',
+  'GET /v1/platform/settings':
+    'the platform controls — switches, fees, and the new-salon default — behind ' +
+    'requirePlatform(controls). Migration 0032, one row, always present. No schema in ' +
+    'packages/types. **AND IT IS A MONEY PATH:** `services/topup.ts` now reads ' +
+    '`platform_settings` INSIDE the top-up transaction, so the commission stored here prices ' +
+    'every subsequent top-up. Unprobed by lane D as of 2026-08-19 and named in the lane ' +
+    'report as the next slice: the PATCH needs a permission-off probe, a range probe, and a ' +
+    'test that a commission change is picked up by the very next top-up rather than at ' +
+    'restart.',
+  'GET /v1/platform/audit':
+    'the platform-wide audit log with its q/kind/limit/cursor/salon filters, behind ' +
+    'requirePlatform(audit). No audit schema exists in packages/types for either the ' +
+    'merchant or the platform view — see `GET /salons/:id/audit` below.',
+  'GET /v1/platform/admins':
+    'the owner console\'s admin list, behind requirePlatform(admins). REACHABLE since ' +
+    'signInPlatform landed; what it lacks is a schema — `PlatformAdmin` is unmodelled in ' +
+    'packages/types, and the nine section booleans plus role/owner/active have no declared ' +
+    'shape. Worth a PlatformAdminSchema when the console\'s Admins editor is wired; that is ' +
+    'a trunk change to packages/types, not lane D\'s.',
+  'GET /v1/platform/policies/draft':
+    'the UNPUBLISHED legal set, behind requirePlatform(policies). REACHABLE since ' +
+    'signInPlatform landed. Non-negotiable #10 is about the PUBLISHED set, which ' +
+    'GET /v1/platform/policies serves and this file probes against LegalSetSchema; a draft ' +
+    'is a console-only shape with no client and no schema. It should get one when publish ' +
+    'gets a client, because a draft that cannot be parsed is a draft nobody can review.',
   'GET /members':
     'the scanner\'s member search — {id, salonId, name, phoneLast4, tier}. DELIBERATELY ' +
     'narrower than MemberSchema: a scanner has no business holding a balance, and ' +
@@ -743,22 +833,16 @@ const UNMODELLED: Record<string, string> = {
  * "untested".
  */
 const NEEDS_PLATFORM_CREDENTIAL: Record<string, string> = {
-  'GET /v1/platform/admins':
-    'the owner console\'s admin list, behind requirePlatform(admins). No schema in ' +
-    'packages/types yet either — PlatformAdmin is unmodelled — so this one is BOTH ' +
-    'unreachable and unmodelled, and gets a schema when the console is built.',
-  'GET /v1/platform/campaigns':
-    'the approval queue: every salon\'s pending campaigns, behind requirePlatform(approvals). ' +
-    'CampaignSchema models it and this file probes the salon-scoped list against that same ' +
-    'schema, so the shape is covered — the platform-wide view is not.',
-  'GET /v1/platform/messaging-policy':
-    'the caps and quiet hours as the platform sees them, behind requirePlatform(approvals). ' +
-    'PlatformMessagingPolicySchema models it and the salon-scoped read of the same shape IS ' +
-    'probed above; only the platform door is unreachable.',
-  'GET /v1/platform/policies/draft':
-    'the unpublished legal set, behind requirePlatform(policies). Non-negotiable #10 is about ' +
-    'the PUBLISHED set, which GET /v1/platform/policies serves and this file probes; a draft ' +
-    'is a console shape with no client and no schema.',
+  /**
+   * EMPTY SINCE 2026-08-19, AND EMPTIED BY ITS OWN GUARD SPEC. All four entries are
+   * accounted for in the § note on that spec below: two became ordinary probes the moment
+   * `signInPlatform` existed, and two moved to `UNMODELLED` because what they actually lack
+   * is a schema, not a credential.
+   *
+   * Kept, inverted, for the next capability this file is missing. The guard spec now
+   * asserts the map is EMPTY and that the harness still has the sign-in — so neither a
+   * silently re-added excuse nor a silently removed capability goes unnoticed.
+   */
 };
 
 const AWAITING_MERGE: Record<string, string> = {
@@ -784,6 +868,7 @@ beforeAll(async () => {
   dashboard = await signInDashboard(SALON_A, A_STAFF_HANDLE);
   scanner = await signInScanner(SALON_A, A_STAFF_HANDLE, A_SCANNER_DEVICE);
   member = await signInMember(SALON_A, QA_MEMBER_PHONE);
+  platform = await signInPlatform(PLATFORM_OWNER_HANDLE);
 
   const hessa = await attemptScannerSignIn({
     salonId: SALON_A,
@@ -1075,6 +1160,14 @@ beforeAll(async () => {
     ['GET /staff', '/staff', dashboard],
     ['GET /staff/me', '/staff/me', dashboard],
     ['GET /charges', '/charges', scanner],
+    /**
+     * THE TWO CONSOLE READS, now that a platform credential exists. Both serve shapes this
+     * file already probes from the salon side, which is exactly why leaving them unprobed
+     * was the drift the census exists to prevent: a route recorded as unreachable when it
+     * has a schema is a shape nobody compares.
+     */
+    ['GET /v1/platform/campaigns', '/v1/platform/campaigns', platform],
+    ['GET /v1/platform/messaging-policy', '/v1/platform/messaging-policy', platform],
     ['GET /v1/platform/policies', '/v1/platform/policies', member],
     ['GET /v1/platform/support', '/v1/platform/support', member],
     ['GET /topups/{id}', `/topups/${topUpId}`, member],
@@ -1307,32 +1400,57 @@ describe('census — every GET the API registers is either probed or explicitly 
    * check above only for as long as it is genuinely absent.
    */
   /**
-   * THE OTHER HALF OF `NEEDS_PLATFORM_CREDENTIAL`. Those routes are excused from the
-   * unclassified check only while the harness genuinely cannot reach them. If a
-   * platform sign-in helper is ever added, this goes red and each of them becomes an
-   * ordinary probe — so "unreachable" cannot decay into "untested".
+   * `NEEDS_PLATFORM_CREDENTIAL` IS EMPTY, AND THIS SPEC IS THE RECEIPT.
    *
-   * Asserted against the harness's own exports rather than against a comment, because
-   * the capability arriving is exactly the event this needs to notice.
+   * THE MECHANISM WORKED, WHICH IS WHY IT IS DOCUMENTED RATHER THAN DELETED. The map used
+   * to hold four routes, excused from the unclassified check on the grounds that this
+   * harness could not mint a platform principal — and the spec that stood here asserted
+   * exactly that, against the harness's own EXPORTS rather than against a comment, so the
+   * capability arriving was the event it would notice.
+   *
+   * On 2026-08-19 lane D added `signInPlatform` for `campaigns.test.ts`. The next full run
+   * (10:44 Kuwait) went red here with the instruction already written: "the harness now
+   * exports something that looks like a platform sign-in. NEEDS_PLATFORM_CREDENTIAL is no
+   * longer an honest excuse: move those four routes into probes() — two of them already
+   * have schemas this file uses from the salon side." That is a self-expiring excuse
+   * expiring on its own, one commit after the thing it was waiting for.
+   *
+   * WHAT HAPPENED TO THE FOUR:
+   *   GET /v1/platform/campaigns         → an ordinary probe, paginated(CampaignSchema)
+   *   GET /v1/platform/messaging-policy  → an ordinary probe, PlatformMessagingPolicySchema
+   *   GET /v1/platform/admins            → UNMODELLED. Reachable now; still has no schema
+   *                                        (`PlatformAdmin` is unmodelled in packages/types).
+   *   GET /v1/platform/policies/draft    → UNMODELLED. Reachable now; a console shape with
+   *                                        no client and no schema.
+   *
+   * THE LAST TWO MOVED TO `UNMODELLED` AND THAT IS THE HONEST FILE FOR THEM NOW. The
+   * distinction the map's own header draws is between "no schema" and "no credential", and
+   * only the first is still true of them. Leaving them here would restate a solved problem
+   * as a live one — the `knownBug` that outlived its bug, which this suite has been bitten
+   * by before.
+   *
+   * The map and this spec stay in place, inverted, for the next capability that is missing:
+   * an empty map costs one passing spec and is the difference between a route being
+   * unreachable on purpose and unreachable by neglect.
    */
-  it('the harness still cannot mint a platform credential — the excuse those routes rely on', async () => {
+  it('NEEDS_PLATFORM_CREDENTIAL is empty — every console GET is now probed or unmodelled', async () => {
     const harness = (await import('./support/tenancy-harness.js')) as Record<string, unknown>;
     const platformSignIn = Object.keys(harness).filter(
       (k) => /platform/i.test(k) && /sign|token|principal|session/i.test(k),
     );
 
     expect(
-      platformSignIn,
-      'The harness now exports something that looks like a platform sign-in ' +
-        `(${platformSignIn.join(', ')}). NEEDS_PLATFORM_CREDENTIAL is no longer an honest ` +
-        'excuse: move those four routes into probes() — two of them already have schemas this ' +
-        'file uses from the salon side — or say why they still cannot be reached.',
-    ).toEqual([]);
+      platformSignIn.length,
+      'the harness lost its platform sign-in. Either restore it, or move the console routes ' +
+        'back into NEEDS_PLATFORM_CREDENTIAL with the reason — the census must not go quiet ' +
+        'about them.',
+    ).toBeGreaterThan(0);
 
     expect(
-      Object.keys(NEEDS_PLATFORM_CREDENTIAL).length,
-      'NEEDS_PLATFORM_CREDENTIAL is empty, so this spec is guarding nothing and should go',
-    ).toBeGreaterThan(0);
+      Object.keys(NEEDS_PLATFORM_CREDENTIAL),
+      'a route is excused for want of a credential the harness now has. Probe it, or move it ' +
+        'to UNMODELLED if what it really lacks is a schema.',
+    ).toEqual([]);
   });
 
   it('nothing in AWAITING_MERGE has landed yet — the hour one does, classify it properly', () => {
