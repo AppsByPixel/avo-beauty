@@ -38,6 +38,44 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### `loadFailure.ts` does NOT move to a shared package — held, with the reversal named
+
+**The question, held open by Lane B rather than answered inside a lane, correctly.** After
+building `apps/wallet/src/domain/loadFailure.ts` — the pure error-kind mapper whose absence let
+two defects ship — Lane B needed the same logic in the scanner and stopped: the scanner has its
+**own** `ApiError` and `FailureKind`, there are no cross-app relative imports anywhere today, and
+`apps/scanner/tsconfig.json` includes only its own files. Sharing it means a new shared package,
+which `CLAUDE.md` makes a trunk conversation. It built the scanner fix in the scanner's own idiom
+and left the move to me.
+
+**Decision: do not move it. The duplication is cheaper than the coupling, for now.**
+
+1. **The taxonomies are genuinely different, not accidentally so.** The wallet's kinds are
+   `forbidden` / `offline` / `server`; the scanner's carry `not_an_artist`, two distinct 409s and
+   a PIN-scope class. A shared type would have to be the **union**, which makes each app handle
+   kinds it cannot produce — and a branch that cannot fire is the dead code Lane B just declined
+   to write when it refused my 403-on-`BookingsScreen` instruction.
+2. **The evidence for sharing is two small modules, and the cost is the build graph.** A new
+   package means tsconfig references, turbo edges and a build ordering that all four surfaces
+   inherit. This build has already lost a session to a missing turbo dependency edge and another
+   to `packages/types/dist` being stale.
+3. **Nothing is blocked by the duplication.** Both surfaces now branch correctly and both are
+   spec-covered.
+
+**What made this decidable rather than a coin flip:** the shared thing would be the *type*, and
+the types genuinely differ. Where the two apps agreed — one **sentence** — the shared artefact is
+the copy string, and that is already shared by decision rather than by import.
+
+**Reversal, and the trigger to watch for.** Move it when a **third** surface needs the same
+mapping, or when the two taxonomies converge to the same union in practice. At that point the
+shared package is `packages/…` with the union type, and both apps narrow from it. If the wallet
+and scanner error shapes are ever unified upstream in the API's error envelope, that is the same
+trigger arriving from the other direction.
+
+**Not a licence to duplicate generally.** `CLAUDE.md`'s rule stands: a component that genuinely
+belongs to both moves to a shared package. This is the narrower finding that *this* module does
+not yet genuinely belong to both, because what it encodes is per-surface.
+
 ### A status code is not evidence about which guard answered — a new trap, from Lane C
 
 **What.** Lane C built the console's reset-link button and its first call returned **404**. The

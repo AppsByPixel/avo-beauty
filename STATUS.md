@@ -204,14 +204,18 @@ auth hid for a whole build.
 **#7 found no holes when checked properly.** Every gate was already there. What changed is that
 we can now notice if one disappears.
 
-**The no-show return job has never been executed by a spec.** `api/src/jobs/no-show-once.ts`
-exists and its own docstring says it was built *for* evidence — *"a claim about a background loop
-that can only be exercised by waiting for a timer is a claim nobody checks. This makes it two
-commands and a diff."* Nothing runs it: `no_show_returned` appears in **zero** assertions, so the
-suite reaches `deposit_held` and `completed` and never the third terminal state. It is a money
-path that returns held deposits to customers, with a purpose-built runner created to make it
-testable, unused — the same shape as the concurrency gap, and the reason it is listed here rather
-than under *What works*.
+**The no-show return job IS covered — this paragraph claimed the opposite for at least a
+session, and two briefs repeated it.** `no_show_returned` appears **12 times** in
+`e2e/deposit.test.ts` with **5 hard `expect(...).toBe('no_show_returned')`** assertions, driven
+through the real `api/src/jobs/no-show-once.ts` runner, including the two-simultaneous-passes
+race. So the third terminal state is reached and the deposit-return money path is exercised.
+
+**How the false claim survived is the part worth keeping.** Lane D re-checked before building and
+its *own first grep also found nothing* — because zsh ate `--include=*.ts`, so the pattern never
+searched the files it named. The claim did not survive a correct grep. **A zero result is a claim
+about your command as much as about the tree**, and this build has now been misled by a silent
+glob, by a `LIKE` wildcard (`rst_` matching "fi**rst**"), and by a single-file grep against a
+deliberately extracted module — three shapes of the same error in one session.
 
 Four surfaces: **API** (auth, nine permissions gated both directions, tenancy, booking,
 promotions, audit log), **wallet** (home, QR, top-up, Book, Account, full Arabic with RTL —
@@ -250,8 +254,15 @@ replaying a green run in 14ms and calling it a pass.
   deep-links through the same function `onBarcodeScanned` calls. Ten minutes with a device.
 - **Google Calendar** is behind a stub driver. `DECISIONS.md` lists the six things AVO must
   provide, starting with a Google Cloud project AVO owns.
-- **31 Arabic strings have no source** in the bundle — `AVO States.dc.html` contains zero
-  Arabic. Tracked in `AR_GAPS`; that list is the worksheet for the native-speaker review.
+- **74 Arabic strings have no source** in the bundle — counted directly from the array, plus a
+  separate derived-forms list and an `AR_UNVERIFIED` set for strings that render Arabic no
+  designer has checked. `AVO States.dc.html` contains zero Arabic. `AR_GAPS` is the worksheet for
+  the native-speaker review, and `i18n/digits.test.ts` asserts the list is **exactly** the set of
+  keys still holding English, so a gap cannot be closed quietly by machine translation — removing
+  an entry fails by name.
+  **This said "31" until 2026-08-19 and was repeated into two lane briefs before Lane B checked
+  it.** The number more than doubled as screens landed, and nothing recomputed it, because a
+  hand-written count in prose has no test.
 - **Owner console** is deferred; policies are seeded rather than administered.
 
 ---
