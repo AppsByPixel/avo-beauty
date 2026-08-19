@@ -31,6 +31,8 @@ through commit messages.
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
 | 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
+| 12 | **Erasure cannot reach the audit log, structurally — and the policy promises both.** Her historical `audit_log` rows (`actor_name`, ip, ua, names in `detail`) and `member_consent_event` outlive erasure: the app role had UPDATE/DELETE revoked in 0020/0023, which is what makes the log trustworthy. Policy §5 (deletion) and §7 (audit) are in genuine tension. | The fix needs an owner-role job or a narrow column grant, and the **retention schedule is client-owned** (CLAUDE.md escalations). Every erasure records `retainedBeyondErasure` in its own audit metadata, so the gap is a standing measured fact while it waits. |
+| 11 | **Should a deletion request be refused up front when money is still in motion?** The request checks only `balance_fils` at request time, so residual balance, escrowed `deposit_held`, and a live top-up intent can all reach the due date. The job counts and **defers** each, visibly — a deferred count persisting across runs is a member the platform is quietly failing. | Whether the *request* endpoint should refuse escrow/in-flight states is a product call about what a customer is told at the moment she asks to leave. The safe behaviour (defer, never erase money in motion) ships either way. |
 | 10 | The `marketing` plugin's MCP servers (Slack, Figma, Notion, HubSpot, Klaviyo and others) all report needing authorisation, and the OAuth flow cannot run in a non-interactive session. | Needs Aftab in an interactive session, or the claude.ai connector settings. **No lane has needed one**, so nothing is blocked today — recorded because a capability that silently fails is worse than one known to be off. |
 | 9 | **Who in a salon may export customer PII?** The design draws nine permission chips and Reports is not one of them, and none of the nine is a customer-data permission. A `customers.csv` carries every member's name, phone, wallet balance and tier. | A tenth permission is a four-way break in trunk-owned `packages/types`, but the real blocker is that this is a **product** call about salon staff and customer data, not a schema question. Interim rule below errs restrictive so nothing ships open. |
 
@@ -39,6 +41,37 @@ through commit messages.
 ## Decisions I made
 
 Newest first. Each: what, why, and how to reverse it.
+
+### Erasure scope: bookings stay as tombstoned history, support tickets go entirely
+
+Two of Lane A's erasure flags were mine to rule on; both rulings keep what it built.
+
+**"Appointment history" is de-identified, not deleted.** Policy §2 lists appointment history
+apart from transaction history, and a strict §5 reading calls it "the rest of your account
+data". But a booking row is **deposit money's paper trail** — `deposit_held →
+completed / no_show_returned / cancelled` is where an escrowed deposit's story lives, and
+non-negotiables #1/#3 do not stop applying because the customer left. A booking pointing at a
+tombstone identifies nobody: the row says *a* deleted account held a slot and a deposit moved,
+which is exactly what a salon's books and a dispute need and nothing more. Deleting the rows
+would erase the salon's side of a money event to serve a reading the policy does not compel.
+**Reversal:** if counsel reads §5 the other way, the erasure service gains one DELETE with the
+FK consequences argued at the migration — but it should carry a decision from the client, not a
+guess from us.
+
+**Support tickets: the full delete stands, salon-routed included.** Her tickets are her own
+correspondence — the clearest possible "rest of your account data" — and a ticket's operational
+value to a salon is *derived from* the customer relationship that erasure ends. Keeping
+salon-routed tickets would preserve her words under a tombstone that was supposed to stop
+identifying her; free text is where names, phones and addresses actually live, and no sweep can
+prove a scrub of prose. **Reversal:** narrow the DELETE to platform-routed rows — one predicate
+— if the client wants salon dispute-history retained, at which point the retained tickets join
+`retainedBeyondErasure` so the residue stays measured.
+
+**The other two flags are genuinely not ours** and are queued as #11 and #12: the
+audit/consent PII that erasure structurally cannot reach (policy §5 vs §7, and the fix needs
+privileges `avo_app` deliberately lacks), and whether the deletion *request* should refuse when
+money is in motion. Both ship safe behaviour while they wait — the audit gap is measured on
+every run, and money in motion defers rather than erases.
 
 ### The commission flats stay editable at the endpoint, read-only on the screen
 
