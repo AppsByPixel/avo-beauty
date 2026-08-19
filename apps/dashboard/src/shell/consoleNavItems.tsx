@@ -90,7 +90,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     id: 'admins',
     label: 'Admins',
     to: '/console/admins',
-    built: false,
+    built: true,
     section: 'admins',
     title: 'Admins',
     subtitle: 'Owner-console users and their authority',

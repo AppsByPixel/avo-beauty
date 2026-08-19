@@ -1,0 +1,424 @@
+import { useState } from 'react';
+import {
+  Button,
+  Card,
+  Chip,
+  EmptyState,
+  InfoBanner,
+  Pill,
+  Select,
+  Skeleton,
+  TextField,
+} from '@avo/ui';
+import { useSession } from '../../auth/AuthProvider.js';
+import type { PlatformAdmin, PlatformSection } from '../../auth/platformAdmin.js';
+import {
+  ASSIGNABLE_ROLES,
+  ROLE_LABEL_LONG,
+  ROLE_LABEL_SHORT,
+  SECTION_LABEL,
+  SECTION_ORDER,
+  useDeactivateAdmin,
+  useInviteAdmin,
+  usePlatformAdmins,
+  useUpdateAdmin,
+  type AssignableRole,
+} from '../../api/platformAdmins.js';
+import { SectionError, WriteError } from '../sectionState.js';
+
+/**
+ * Admins — who can open the owner console, and which of its nine sections.
+ *
+ * This screen is where non-negotiable #7 is either real or decorative: "the UI
+ * hiding a button is a courtesy, not a control". Every chip here posts a PATCH and
+ * the server re-reads `platform_admin` on every subsequent request, so revoking
+ * `approvals` from someone mid-session takes effect on her next call rather than
+ * at her next sign-in. Nothing on this screen enforces anything; it edits the rows
+ * the enforcement reads.
+ *
+ * =========================================================================
+ * THE DESIGN'S "TEMPORARY PASSWORD" FIELD IS NOT DRAWN
+ * =========================================================================
+ * `AVO Owner Console.dc.html` § ADMINS draws four inputs on the invite form —
+ * Full name, Role, Username, and "Temporary password" with the placeholder "At
+ * least 6 characters". The fourth is absent here, and this is the one place in
+ * this build where a design element is deliberately not implemented.
+ *
+ * Non-negotiable #6: "Passwords are never stored in plaintext, never returned by
+ * an endpoint, never shown in a UI. Owner console only sends a reset link." A
+ * field that accepts a password the inviter then has to read out is all three
+ * failures at once. `POST /v1/platform/admins` refuses `password` and
+ * `temporaryPassword` by name with `password_not_accepted` rather than ignoring
+ * them, so drawing the field would produce a form that cannot submit — but the
+ * reason it is not drawn is #6, not the 400.
+ *
+ * =========================================================================
+ * AN INVITED ADMIN CANNOT SIGN IN YET, AND THE SCREEN SAYS SO
+ * =========================================================================
+ * The design pairs the password field with a "Reset password" button and a "Link
+ * sent" confirmation. THERE IS NO ENDPOINT BEHIND EITHER. `POST
+ * /staff/{id}/password-reset` exists for salon staff — `requireDashboardPerm(req,
+ * 'team')`, against `staff_user` — and there is no
+ * `/v1/platform/admins/{id}/password-reset` at all; a platform principal cannot
+ * reach the staff route and it targets the wrong table anyway.
+ *
+ * So an invite creates a row with `password_hash` NULL and she cannot sign in
+ * until the console reset flow lands (lane A has it queued). Drawing "Reset
+ * password" would be a button that does nothing, and "Link sent" would be a
+ * sentence that is not true.
+ *
+ * Instead the row renders the state the API actually reports — `passwordSet`,
+ * the same boolean `serialiseStaff` exposes as `pinSet` — as "Invited · cannot
+ * sign in yet". WRITTEN DOWN RATHER THAN LEFT OUT: a missing button and a button
+ * nobody needed look identical in a diff, and an inviter who is not told this
+ * will believe she has given somebody access.
+ *
+ * =========================================================================
+ * NINE CHIPS, NOT THE DESIGN'S SIX
+ * =========================================================================
+ * See `SECTION_LABEL` in api/platformAdmins.ts. The three the design does not
+ * draw — approvals, policies, audit — gate endpoints that exist and sections this
+ * lane has already built, so omitting them would leave no way to grant Approvals
+ * short of an UPDATE by hand.
+ */
+export function Admins() {
+  const admins = usePlatformAdmins();
+  const invite = useInviteAdmin();
+  const update = useUpdateAdmin();
+  const deactivate = useDeactivateAdmin();
+  /* `adminId`, not `id` — see auth/session.ts § OwnerSession. */
+  const me = useSession('owner');
+
+  const [adding, setAdding] = useState(false);
+
+  if (admins.isError) {
+    return (
+      <SectionError
+        error={admins.error}
+        forbiddenTitle="You don't have access to admins"
+        failedTitle="Couldn't load the console users"
+        onRetry={() => void admins.refetch()}
+        retrying={admins.isFetching}
+      />
+    );
+  }
+
+  /*
+   * DEACTIVATED ADMINS ARE NOT FILTERED OUT HERE, because the API does not send
+   * them: `DELETE` flips `active` to false and the list is unfiltered, so a row
+   * with `active: false` would be a row the server chose to show. Rendering it
+   * dimmed rather than dropping it is the honest treatment — but nothing in the
+   * seed or the handlers produces one today, so there is no state to draw for and
+   * inventing one would be a screen nobody has seen. Named, not built.
+   */
+  const items = admins.data ?? [];
+
+  return (
+    <div className="admins">
+      <InfoBanner icon={<PersonCheckGlyph />}>
+        Invite people to the owner console with their own sign-in. Pick a role, then fine-tune
+        exactly which sections they can open.
+      </InfoBanner>
+
+      <div className="admins__head">
+        <span className="admins__count">
+          {admins.isPending ? '' : `${items.length} console users`}
+        </span>
+        {!adding && !admins.isPending ? (
+          <Button variant="quiet" onClick={() => setAdding(true)}>
+            + Add admin
+          </Button>
+        ) : null}
+      </div>
+
+      {adding ? (
+        <InviteForm
+          busy={invite.isPending}
+          error={invite.isError ? invite.error : null}
+          onCancel={() => {
+            invite.reset();
+            setAdding(false);
+          }}
+          onSubmit={(input) => {
+            invite.mutate(input, { onSuccess: () => setAdding(false) });
+          }}
+        />
+      ) : null}
+
+      {admins.isPending ? (
+        <>
+          <Card className="admins__card">
+            <Skeleton width="34%" height={17} />
+            <Skeleton width="60%" height={13} />
+          </Card>
+          <Card className="admins__card">
+            <Skeleton width="30%" height={17} />
+            <Skeleton width="55%" height={13} />
+          </Card>
+        </>
+      ) : items.length === 0 ? (
+        /*
+         * Unreachable in practice — the platform owner is seeded and cannot be
+         * removed, so the list has at least one row. Built anyway because a screen
+         * without its empty state is not done, and because "unreachable" is a claim
+         * about today's seed rather than about the endpoint.
+         */
+        <EmptyState
+          title="No console users"
+          body="Nobody can open the owner console. Add an admin to give someone access."
+        />
+      ) : (
+        <ul className="admins__list">
+          {items.map((admin) => (
+            <AdminCard
+              key={admin.id}
+              admin={admin}
+              isMe={admin.id === me.adminId}
+              busy={update.isPending || deactivate.isPending}
+              onRole={(role) => update.mutate({ id: admin.id, role })}
+              onToggle={(section, on) =>
+                update.mutate({ id: admin.id, sections: { [section]: on } })
+              }
+              onRemove={() => deactivate.mutate({ id: admin.id })}
+            />
+          ))}
+        </ul>
+      )}
+
+      {update.isError ? (
+        <WriteError error={update.error} reassurance="Nobody's access changed." />
+      ) : null}
+      {deactivate.isError ? (
+        <WriteError error={deactivate.error} reassurance="That admin still has access." />
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------- invite -- */
+
+function InviteForm({
+  busy,
+  error,
+  onCancel,
+  onSubmit,
+}: {
+  busy: boolean;
+  error: unknown;
+  onCancel: () => void;
+  onSubmit: (input: { name: string; username: string; role: AssignableRole }) => void;
+}) {
+  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [role, setRole] = useState<AssignableRole>('admin');
+
+  /*
+   * The API's own rule, restated so the field can refuse before the round trip
+   * rather than after: "2–100 characters of letters, digits, dot, dash or
+   * underscore". A leading '@' is stripped server-side, so it is accepted here and
+   * not required.
+   */
+  const handle = username.trim().replace(/^@/, '').toLowerCase();
+  const handleValid = /^[a-z0-9._-]{2,100}$/.test(handle);
+  const ready = name.trim() !== '' && handleValid;
+
+  return (
+    <Card className="admins__invite">
+      <h2 className="admins__h2 avo-display">New console admin</h2>
+
+      <div className="admins__invitegrid">
+        <TextField
+          label="Full name"
+          placeholder="Salem A."
+          value={name}
+          autoComplete="off"
+          onChange={(e) => setName(e.currentTarget.value)}
+        />
+        <Select
+          label="Role"
+          value={role}
+          options={ASSIGNABLE_ROLES.map((r) => ({ value: r, label: ROLE_LABEL_LONG[r] }))}
+          onChange={(e) => setRole(e.currentTarget.value as AssignableRole)}
+        />
+        <TextField
+          label="Username"
+          placeholder="salem.a"
+          value={username}
+          autoComplete="off"
+          onChange={(e) => setUsername(e.currentTarget.value)}
+        />
+      </div>
+
+      {/*
+        THE FOURTH FIELD IS MISSING ON PURPOSE — #6. The design draws "Temporary
+        password / At least 6 characters" here. See this file's header: an invite
+        creates an admin with no password, and she sets her own through a reset
+        link. This sentence is on the screen rather than only in a comment, because
+        the person it matters to is the inviter, who would otherwise expect the new
+        admin to be able to sign in.
+      */}
+      <p className="admins__note">
+        AVO never sets a password. {name.trim() === '' ? 'The new admin' : name.trim()} will get a
+        reset link and choose her own — and until the console&rsquo;s reset flow ships, an invited
+        admin cannot sign in yet.
+      </p>
+
+      {error ? <WriteError error={error} reassurance="No admin was created." /> : null}
+
+      <div className="admins__inviteactions">
+        <Button
+          disabled={busy || !ready}
+          onClick={() => onSubmit({ name: name.trim(), username: handle, role })}
+        >
+          Create admin
+        </Button>
+        <Button variant="quiet" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/* --------------------------------------------------------------------- card -- */
+
+function AdminCard({
+  admin,
+  isMe,
+  busy,
+  onRole,
+  onToggle,
+  onRemove,
+}: {
+  admin: PlatformAdmin;
+  isMe: boolean;
+  busy: boolean;
+  onRole: (role: AssignableRole) => void;
+  onToggle: (section: PlatformSection, on: boolean) => void;
+  onRemove: () => void;
+}) {
+  /*
+   * THE OWNER IS NOT EDITABLE, which the design draws (no select, no ✕, a static
+   * "Owner · full access") and `platform_admin_owner_holds_everything` enforces in
+   * the database. The API refuses an edit or a removal by name, so this is the
+   * courtesy layer over a real control rather than the control itself.
+   *
+   * `isMe` is the second immovable case and it is NOT the same one: you may edit
+   * your own role and chips — the server allows it, and an admin narrowing her own
+   * access is a legitimate thing to do — but you may not remove yourself, because
+   * the `admins` section is the only route back in. So the ✕ is withheld and the
+   * select is not.
+   */
+  const editable = !admin.owner;
+  const removable = editable && !isMe;
+
+  return (
+    <li>
+      <Card className="admins__card">
+        <div className="admins__cardtop">
+          <span className="admins__avatar" aria-hidden="true">
+            {admin.name.slice(0, 1)}
+          </span>
+
+          <span className="admins__who">
+            <span className="admins__name">
+              {admin.name}
+              {isMe ? <span className="admins__you">You</span> : null}
+            </span>
+            <span className="admins__handle">{admin.handle}</span>
+          </span>
+
+          {editable ? (
+            <Select
+              label={`Role for ${admin.name}`}
+              labelHidden
+              size="sm"
+              value={admin.role}
+              disabled={busy}
+              options={ASSIGNABLE_ROLES.map((r) => ({ value: r, label: ROLE_LABEL_SHORT[r] }))}
+              onChange={(e) => onRole(e.currentTarget.value as AssignableRole)}
+            />
+          ) : (
+            /* The design's static label for the owner row, verbatim. */
+            <Pill tone="warn">Owner &middot; full access</Pill>
+          )}
+
+          {/*
+            WHAT THE DESIGN DRAWS AS "Reset password" / "Link sent".
+
+            Neither is drawn, because neither has an endpoint — there is no
+            `/v1/platform/admins/{id}/password-reset`. What IS true is reported
+            instead, from `passwordSet`: a `false` means the row was created with
+            `password_hash` NULL and she cannot authenticate. Rendering a button
+            here would be the worse failure of the two: the inviter would press it,
+            see nothing, and conclude the admin had been sent a link.
+          */}
+          {admin.passwordSet ? null : (
+            <Pill tone="neutral">Invited &middot; cannot sign in yet</Pill>
+          )}
+
+          {removable ? (
+            <button
+              type="button"
+              className="admins__remove"
+              disabled={busy}
+              title={`Remove ${admin.name}`}
+              aria-label={`Remove ${admin.name}`}
+              onClick={onRemove}
+            >
+              ✕
+            </button>
+          ) : null}
+        </div>
+
+        <div className="admins__access">
+          <div className="admins__accesshead">Console access</div>
+          <div className="admins__chips">
+            {SECTION_ORDER.map((section) => (
+              <Chip
+                key={section}
+                on={admin.sections[section]}
+                label={SECTION_LABEL[section]}
+                dot
+                /*
+                 * The owner's chips are all on and cannot be turned off. Disabled
+                 * rather than absent: the design shows the owner holding every
+                 * section, and hiding the row would make "full access" a claim with
+                 * nothing behind it.
+                 */
+                disabled={!editable || busy}
+                onClick={() => onToggle(section, !admin.sections[section])}
+              />
+            ))}
+          </div>
+          {editable ? (
+            <p className="admins__rolenote">
+              Changing the role resets these to that role&rsquo;s defaults.
+            </p>
+          ) : null}
+        </div>
+      </Card>
+    </li>
+  );
+}
+
+function PersonCheckGlyph() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" fill="none">
+      <circle cx="7" cy="7" r="3" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M2.5 16.5c0-2.6 2-4.2 4.5-4.2s4.5 1.6 4.5 4.2"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <path
+        d="M14 5.5l1.4 1.4L18 4.3"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}

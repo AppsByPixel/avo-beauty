@@ -3224,3 +3224,178 @@ a:hover {
   text-align: center;
   margin-top: 4px;
 }
+
+/* -------------------------------------------------------------------- admins -- */
+/*
+ * `AVO Owner Console.dc.html` § ADMINS. One column, not the approvals two-up:
+ * the design gives a full-width stack of cards, and a permission chip row of nine
+ * needs the width.
+ *
+ * Every colour is an `--avo-*` custom property. The console is dark, and these
+ * cards sit on `.console-content` which is inside `.avo-dark` — the tokens already
+ * resolve per ground, so nothing here restates a hex.
+ */
+
+.admins {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.admins__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.admins__count {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.admins__h2 {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.admins__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.admins__card,
+.admins__invite {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.admins__cardtop {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+
+/* The initial disc. Decoration — the name is right beside it, so aria-hidden. */
+.admins__avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  /*
+   * `--avo-brand-tint` on `--avo-brand-deep`, never white on `--avo-brand`
+   * (non-negotiable #9). `--avo-brand` is a surface colour; this is text.
+   */
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+.admins__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Takes the slack so the role select and the ✕ sit right. */
+  margin-right: auto;
+}
+
+.admins__name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.admins__you {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: var(--avo-radius-pill);
+  background: var(--avo-surface-alt2);
+  color: var(--avo-text-muted-label);
+}
+
+.admins__handle {
+  font-size: 11.5px;
+  color: var(--avo-text-muted);
+}
+
+.admins__remove {
+  flex: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 9px;
+  color: var(--avo-text-muted);
+}
+
+.admins__remove:hover:not(:disabled) {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+}
+
+.admins__remove:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.admins__access {
+  border-top: 1px solid var(--avo-hairline);
+  padding-top: 14px;
+}
+
+.admins__accesshead {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--avo-text-muted-label);
+  margin-bottom: 9px;
+}
+
+.admins__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.admins__rolenote,
+.admins__note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--avo-text-muted);
+  margin-top: 10px;
+}
+
+/* The invite form: three fields, wrapping to one column when it must. */
+.admins__invitegrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.console[data-bp='narrow'] .admins__invitegrid,
+.console[data-bp='tablet'] .admins__invitegrid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.admins__inviteactions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

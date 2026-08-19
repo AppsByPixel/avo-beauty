@@ -8,6 +8,7 @@ import {
 import type { AuthState } from './auth/AuthProvider.js';
 import { SCOPES, type AuthScope } from './auth/scopes.js';
 import { Accounts } from './routes/Accounts.js';
+import { Admins } from './routes/console/Admins.js';
 import { Approvals } from './routes/console/Approvals.js';
 import { ConsoleSignIn } from './routes/ConsoleSignIn.js';
 import { Policies } from './routes/console/Policies.js';
@@ -140,6 +141,7 @@ const consoleIndexRoute = createRoute({
  *  reason the merchant ones are: a section that is built and a sidebar that says
  *  so cannot drift apart. */
 const CONSOLE_SECTIONS = [
+  { path: '/console/admins', component: Admins },
   { path: '/console/approvals', component: Approvals },
   { path: '/console/policies', component: Policies },
 ] as const;
