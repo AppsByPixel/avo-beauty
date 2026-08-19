@@ -55,7 +55,12 @@ export function parsePeriod(value: unknown): Period {
   return value as Period;
 }
 
-const PERIOD_DAYS: Record<Period, number> = { '7d': 7, '30d': 30, '90d': 90 };
+/**
+ * EXPORTED so services/reports.ts measures the same window this does. A report
+ * whose "30d" differed from the Overview tile's "30d" would be two answers to one
+ * question, which is the failure this file's header is entirely about.
+ */
+export const PERIOD_DAYS: Record<Period, number> = { '7d': 7, '30d': 30, '90d': 90 };
 
 export interface SalonMetrics {
   activeMembers: number;
@@ -80,12 +85,18 @@ export interface SalonMetrics {
  * `::timestamptz` gives the driver a string and the planner an unambiguous type,
  * and keeps the comparison on the indexed side of `created_at`.
  */
-function at(instant: Date) {
+export function at(instant: Date) {
   return sql`${instant.toISOString()}::timestamptz`;
 }
 
-/** A whole number from a Postgres aggregate, which arrives as a string or null. */
-function int(value: unknown): number {
+/**
+ * A whole number from a Postgres aggregate, which arrives as a string or null.
+ *
+ * EXPORTED for services/reports.ts, which faces the same problem on every sum it
+ * takes. A second copy of this would be a second place for a float to sneak into
+ * money — non-negotiable #1 is easier to hold with one funnel than with two.
+ */
+export function int(value: unknown): number {
   if (value === null || value === undefined) return 0;
   const n = Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : 0;
