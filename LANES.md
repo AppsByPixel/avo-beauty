@@ -105,6 +105,26 @@ So: **treat generic filenames in the scratchpad as unsafe.** If you must write s
 prefix it with your lane (`lane-c-pids.txt`), and prefer keeping PIDs in shell variables that
 cannot be overwritten by anyone. A file you wrote is not necessarily a file you will read.
 
+### A simulator you boot and abandon starves every other lane — an eighth vector
+
+A lane booted an **iPhone 17 simulator** to verify native behaviour, then died. The simulator
+stayed up, and with its `Virtualization` host and two `VideoToolbox` encoder services it drove
+the machine to **load average 463** on twelve cores with 72% of memory still free — I/O and
+process contention, not compute. **Three other lanes hit the 600-second watchdog and were
+killed** while holding uncommitted work.
+
+Shutting down that one orphaned simulator took the load from **463 to 61** in twenty seconds.
+
+So: **if you boot a simulator, shut it down in the same slice**, and treat it as heavier than
+any server you start. `xcrun simctl shutdown all` if you are unsure what you left behind, and
+`xcrun simctl list devices booted` in your cleanup observation alongside the `ps` sweep and the
+port scan — a booted simulator holds no port and appears under none of the process names a lane
+greps for, which is exactly why three lanes died without anyone seeing the cause.
+
+Trunk's lesson too: **when several lanes stall at once, check the machine before re-dispatching
+them.** Sending three fresh agents into a saturated host reproduces the failure and costs
+another round of interrupted slices.
+
 ### Browser — one context per lane
 
 The lanes share one browser pane. Lane B once injected a `fetch` shim into **Lane C's
