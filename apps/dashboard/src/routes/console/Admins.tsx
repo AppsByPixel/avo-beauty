@@ -104,14 +104,28 @@ export function Admins() {
   }
 
   /*
-   * DEACTIVATED ADMINS ARE NOT FILTERED OUT HERE, because the API does not send
-   * them: `DELETE` flips `active` to false and the list is unfiltered, so a row
-   * with `active: false` would be a row the server chose to show. Rendering it
-   * dimmed rather than dropping it is the honest treatment — but nothing in the
-   * seed or the handlers produces one today, so there is no state to draw for and
-   * inventing one would be a screen nobody has seen. Named, not built.
+   * DEACTIVATED ADMINS ARE NOT FILTERED OUT HERE, because the API does send them:
+   * `DELETE` flips `active` to false and `GET`'s query is unfiltered, so a row
+   * with `active: false` is a row the server chose to show.
+   *
+   * THIS COMMENT USED TO SAY "nothing in the seed or the handlers produces one
+   * today, so there is no state to draw for — named, not built." THAT WAS WRONG,
+   * and the screen's own ✕ is what falsified it: the DELETE this file calls is
+   * precisely what produces the row, one refetch later. Driven against
+   * `avo_lane_c`, GET then returned four items with `PA-FATIMAS · active=False`
+   * and the card rendered her identically to an active admin — live role select,
+   * nine live chips, and a live ✕ that now answers 404 `unknown_admin`, which
+   * `WriteError` would report as a failure over a removal that had already
+   * committed. The count read "4 console users" when three could open the console.
+   *
+   * The treatment the old comment already proposed is the right one and is now
+   * built, mirroring `Accounts.tsx`'s leaver row — the merchant Team screen had
+   * solved this exact shape (`data-inactive`, controls collapsed to one pill, no
+   * ✕) and this sibling had not copied it.
    */
   const items = admins.data ?? [];
+  /* Who can actually open the console. A removed admin cannot, so she is not one. */
+  const activeCount = items.filter((a) => a.active).length;
 
   return (
     <div className="admins">
@@ -122,7 +136,7 @@ export function Admins() {
 
       <div className="admins__head">
         <span className="admins__count">
-          {admins.isPending ? '' : `${items.length} console users`}
+          {admins.isPending ? '' : `${activeCount} console users`}
         </span>
         {!adding && !admins.isPending ? (
           <Button variant="quiet" onClick={() => setAdding(true)}>
@@ -309,12 +323,22 @@ function AdminCard({
    * the `admins` section is the only route back in. So the ✕ is withheld and the
    * select is not.
    */
-  const editable = !admin.owner;
+  /*
+   * THE THIRD IMMOVABLE CASE, and the one this card was missing: a REMOVED admin.
+   * `DELETE` deactivates and `GET` still lists her, so she arrives here with
+   * `active: false` — holding no console access, no session (they are revoked at
+   * removal) and nothing worth editing. Her controls collapse to one pill, exactly
+   * as `Accounts.tsx` does for a leaver: a role select and nine chips over a row
+   * the enforcement already refuses would be edits with no subject, and the ✕
+   * answers 404 `unknown_admin`.
+   */
+  const removed = !admin.active;
+  const editable = !admin.owner && !removed;
   const removable = editable && !isMe;
 
   return (
     <li>
-      <Card className="admins__card">
+      <Card className="admins__card" data-inactive={removed || undefined}>
         <div className="admins__cardtop">
           <span className="admins__avatar" aria-hidden="true">
             {admin.name.slice(0, 1)}
@@ -328,7 +352,17 @@ function AdminCard({
             <span className="admins__handle">{admin.handle}</span>
           </span>
 
-          {editable ? (
+          {/*
+            THREE BRANCHES, NOT TWO. `editable` now excludes the removed row as
+            well as the owner, so an `editable ? Select : Owner-pill` would have
+            labelled a deactivated analyst "Owner · full access" — the defect the
+            two-branch version would have introduced the moment `removed` joined
+            the condition. The removed case is tested first because it is the one
+            that overrides both.
+          */}
+          {removed ? (
+            <Pill tone="quiet">Removed &middot; no console access</Pill>
+          ) : editable ? (
             <Select
               label={`Role for ${admin.name}`}
               labelHidden
@@ -353,7 +387,14 @@ function AdminCard({
             here would be the worse failure of the two: the inviter would press it,
             see nothing, and conclude the admin had been sent a link.
           */}
-          {admin.passwordSet ? null : (
+          {/*
+            `|| removed` for the same reason `Accounts.tsx` writes
+            `account.passwordSet || leaver ? null : …` — a removed admin also has
+            `passwordSet: false` (she never set one), so without this she would
+            carry BOTH pills and read as an invitation still waiting on somebody.
+            "Removed" is the fact that matters; the pending invite is moot.
+          */}
+          {admin.passwordSet || removed ? null : (
             <Pill tone="neutral">Invited &middot; cannot sign in yet</Pill>
           )}
 
@@ -371,6 +412,15 @@ function AdminCard({
           ) : null}
         </div>
 
+        {/*
+          THE CHIP ROW IS ABSENT ON A REMOVED ROW, not merely disabled — the same
+          call `Accounts.tsx` makes with `{leaver ? null : …}` around its authority
+          area. Nine greyed chips describe access she does not have: her sections
+          are whatever they were when the ✕ landed, and `loadPlatformPrincipal`
+          refuses the row on every request regardless of what they say. Showing
+          them would be showing a permission set that no longer decides anything.
+        */}
+        {removed ? null : (
         <div className="admins__access">
           <div className="admins__accesshead">Console access</div>
           <div className="admins__chips">
@@ -397,6 +447,7 @@ function AdminCard({
             </p>
           ) : null}
         </div>
+        )}
       </Card>
     </li>
   );

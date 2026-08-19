@@ -3283,6 +3283,26 @@ a:hover {
   flex-wrap: wrap;
 }
 
+/*
+ * A REMOVED ADMIN'S ROW. `DELETE` deactivates and `GET` still lists her, so this
+ * state arrives from the screen's own ✕ — it is not hypothetical, and the card
+ * used to render it identically to an active admin.
+ *
+ * The same two declarations `.account[data-inactive]` uses on the merchant Team
+ * screen, against the same tokens, so the two rows read as one idiom. Tokens
+ * only — nothing here restates a hex, and the muting is a surface change plus a
+ * text-colour change rather than an `opacity`, which would also have dimmed the
+ * "Removed" pill that is the whole point of the row.
+ */
+.admins__card[data-inactive] {
+  background: var(--avo-surface-alt);
+}
+
+.admins__card[data-inactive] .admins__name,
+.admins__card[data-inactive] .admins__handle {
+  color: var(--avo-text-muted);
+}
+
 /* The initial disc. Decoration — the name is right beside it, so aria-hidden. */
 .admins__avatar {
   flex: none;
