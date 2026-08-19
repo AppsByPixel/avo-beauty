@@ -108,6 +108,8 @@ import {
   BookingSchema,
   LegalDocumentSetSchema,
   MemberSchema,
+  CampaignSchema,
+  PlatformMessagingPolicySchema,
   ProductSchema,
   PromotionSetSchema,
   SalonMetricsSchema,
@@ -321,6 +323,22 @@ function probes(): Probe[] {
       requireNonEmpty: ['items'],
     },
     {
+      /**
+       * WITNESSED AT LAST. This route sat outside the census as `PRODUCTS_ROUTE`
+       * because `ProductSchema` had no live sample — the seed created no products, so
+       * `items` was always `[]` and a parse of an empty array asserts nothing about the
+       * element shape. A placeholder spec asserted the emptiness and carried the
+       * instruction to turn this on, so the gap closed itself the hour lane A seeded
+       * the shop: that spec went red naming the three products, and this is the probe
+       * it asked for. `requireNonEmpty` is what makes it real.
+       */
+      route: 'GET /salons/:id/products',
+      label: `GET /salons/${SALON_A}/products`,
+      schemaName: 'paginated(ProductSchema)',
+      schema: paginated(ProductSchema),
+      requireNonEmpty: ['items'],
+    },
+    {
       // The route whose arrival tripped the tenancy ledger this morning, and the
       // one that had no schema at all until an hour after it shipped.
       route: 'GET /salons/:id/artists/bookable',
@@ -328,6 +346,70 @@ function probes(): Probe[] {
       schemaName: 'paginated(BookableArtistSchema)',
       schema: paginated(BookableArtistSchema),
       requireNonEmpty: ['items'],
+    },
+    {
+      /**
+       * The merchant's own view of the ceiling its campaigns are subject to. Landed
+       * with lane A's campaign work and caught by the unclassified check.
+       *
+       * `PlatformMessagingPolicySchema` is the same shape the platform serves, which is
+       * the point: a merchant reads the caps and quiet hours it is bound by and cannot
+       * raise them (the write verbs are behind `requirePlatform`). Probed with the
+       * salon-scoped credential, because that is who this door is for.
+       */
+      route: 'GET /v1/salons/:id/messaging-policy',
+      label: `GET /v1/salons/${SALON_A}/messaging-policy`,
+      schemaName: 'PlatformMessagingPolicySchema',
+      schema: PlatformMessagingPolicySchema,
+    },
+    {
+      /**
+       * The salon's own campaigns. WITNESSED BY A CAMPAIGN THIS FILE CREATES, because
+       * the seed makes none and an empty `items` would witness the envelope while
+       * saying nothing about `CampaignSchema` — the trap the products route sat in for
+       * weeks.
+       *
+       * Creating one is safe and is itself a check on non-negotiable #8:
+       * `POST /v1/salons/{id}/campaigns` can only ever produce `pending`. A merchant
+       * cannot send a customer message, so there is no way for this fixture to deliver
+       * anything.
+       */
+      route: 'GET /v1/salons/:id/campaigns',
+      label: `GET /v1/salons/${SALON_A}/campaigns`,
+      schemaName: 'paginated(CampaignSchema)',
+      schema: paginated(CampaignSchema),
+      requireNonEmpty: ['items'],
+      /**
+       * DRIFT, FOUND BY TURNING THIS PROBE ON, AND THE SCHEMA IS THE CORRECT HALF.
+       *
+       *   items.0.heldReason: Required
+       *   items.0.heldAt: Required
+       *
+       * `serialiseCampaign` omits both keys. `CampaignSchema` declares them
+       * `.nullable()` but NOT `.optional()`, and its docstring is explicit that this is
+       * deliberate: "`null` on every campaign that was never held, which is most of
+       * them." So the wire should carry `heldReason: null, heldAt: null` and does not.
+       *
+       * IT REJECTS THE WHOLE RESPONSE, not the two fields — zod fails the object, so a
+       * client built on `CampaignSchema` cannot parse ANY campaign, including the
+       * ordinary `pending` one every merchant sees first. Same mechanism that made every
+       * bookable slot in the Book grid fail to parse, which is the comparison this
+       * file's own failure message reaches for.
+       *
+       * AND THE TWO FIELDS ARE THE ONES #8 IS ABOUT. The schema explains why they are
+       * two fields and not a boolean: the merchant is owed the sentence, "held until
+       * 09:00" versus "held — this customer has had two messages this week", because
+       * those are different things to do next. `design/README.md` gap 6 says a breaching
+       * campaign is "held and reported, never silently dropped" — and a field that never
+       * arrives is how it gets silently dropped.
+       *
+       * Lane A's fix (serve both as null), not a schema change: `packages/types` is
+       * trunk-owned and it is the half that is right.
+       */
+      knownParseFailure:
+        'serialiseCampaign omits heldReason and heldAt. CampaignSchema requires both as ' +
+        'nullable-but-present, so the whole response fails to parse and no client can read any ' +
+        'campaign. Lane A: serve them as null.',
     },
     {
       route: 'GET /v1/salons/:id/promotions',
@@ -613,8 +695,13 @@ const UNMODELLED: Record<string, string> = {
     'and exists only under the test driver.',
 };
 
-/** ProductSchema has no live sample: `api/src/db/seed.ts` seeds no products. */
-const PRODUCTS_ROUTE = 'GET /salons/:id/products';
+/**
+ * `GET /salons/:id/products` WAS HERE, exempted from the census because
+ * `ProductSchema` had no live sample to witness. Lane A has seeded the shop, the
+ * placeholder spec went red as designed, and the route is now a real probe in
+ * `probes()` with `requireNonEmpty: ['items']`. The exemption is gone rather than
+ * left in place unused: a stale exemption is a hole nobody remembers opening.
+ */
 
 /**
  * ROUTES LANE A HAS COMMITTED BUT WHICH HAVE NOT MERGED INTO THIS BRANCH YET.
@@ -634,6 +721,46 @@ const PRODUCTS_ROUTE = 'GET /salons/:id/products';
  * to weaken the ghost check for everything or to write the pending arrival down
  * where it is visible. This is the second.
  */
+/**
+ * SERVED, SCHEMA'D, AND UNREACHABLE FROM THIS FILE — a third state, and it needed its
+ * own map rather than a line in `UNMODELLED`.
+ *
+ * `UNMODELLED` means "there is no schema in packages/types and here is why". These
+ * routes are not that: `GET /v1/platform/campaigns` and
+ * `GET /v1/platform/messaging-policy` serve shapes this file already probes from the
+ * salon side, so filing them as unmodelled would be false in the one direction the
+ * census exists to prevent — a route recorded as having no schema when it has one is a
+ * drift nobody will look for.
+ *
+ * What stops them being probed is a CREDENTIAL. Every one is behind
+ * `requirePlatform`, and `support/tenancy-harness.ts` can mint a member, a staff web
+ * session and a scanner PIN session — there is no platform sign-in helper, because
+ * until lane A landed `platformAdmins.ts` there was no platform principal at all.
+ *
+ * SELF-EXPIRING, exactly like `AWAITING_MERGE`. The spec below asserts the harness
+ * still cannot mint a platform credential; the hour it can, this map goes red and each
+ * of these becomes an ordinary probe. So "unreachable" cannot quietly become
+ * "untested".
+ */
+const NEEDS_PLATFORM_CREDENTIAL: Record<string, string> = {
+  'GET /v1/platform/admins':
+    'the owner console\'s admin list, behind requirePlatform(admins). No schema in ' +
+    'packages/types yet either — PlatformAdmin is unmodelled — so this one is BOTH ' +
+    'unreachable and unmodelled, and gets a schema when the console is built.',
+  'GET /v1/platform/campaigns':
+    'the approval queue: every salon\'s pending campaigns, behind requirePlatform(approvals). ' +
+    'CampaignSchema models it and this file probes the salon-scoped list against that same ' +
+    'schema, so the shape is covered — the platform-wide view is not.',
+  'GET /v1/platform/messaging-policy':
+    'the caps and quiet hours as the platform sees them, behind requirePlatform(approvals). ' +
+    'PlatformMessagingPolicySchema models it and the salon-scoped read of the same shape IS ' +
+    'probed above; only the platform door is unreachable.',
+  'GET /v1/platform/policies/draft':
+    'the unpublished legal set, behind requirePlatform(policies). Non-negotiable #10 is about ' +
+    'the PUBLISHED set, which GET /v1/platform/policies serves and this file probes; a draft ' +
+    'is a console shape with no client and no schema.',
+};
+
 const AWAITING_MERGE: Record<string, string> = {
   /**
    * EMPTY, AND IT EARNED ITS KEEP ON THE FIRST TRY.
@@ -799,6 +926,46 @@ beforeAll(async () => {
   }
   captured.set('GET /members/me/deletion', readBack);
 
+  // ---- a campaign, so paginated(CampaignSchema) has a live sample ---------------
+  /**
+   * The seed creates no campaigns, so the salon's list would be `{items: []}` and the
+   * probe would witness the envelope and nothing inside it — the exact trap
+   * `GET /salons/{id}/products` sat in until a product was seeded.
+   *
+   * NON-NEGOTIABLE #8 IS WHY THIS IS SAFE TO CREATE AND WORTH CREATING. "A merchant
+   * cannot send a customer message. POST /campaigns only creates `pending`." So this
+   * write cannot deliver anything to anybody, and the status it comes back with is
+   * itself the check: anything other than `pending` here is #8 broken, which is why
+   * that is asserted rather than assumed.
+   */
+  const campaign = await treq<any>('POST', `/v1/salons/${SALON_A}/campaigns`, {
+    token: dashboard,
+    idempotencyKey: key('campaign'),
+    body: {
+      title: 'Eid offer',
+      body: 'Twenty percent off colour this week.',
+      channel: 'push',
+      audience: 'all',
+      when: 'now',
+      reward: 'none',
+    },
+  });
+  if (campaign.status !== 201 && campaign.status !== 200) {
+    throw new Error(
+      `POST /v1/salons/${SALON_A}/campaigns: ${campaign.status} ${campaign.raw}\n` +
+        'This file needs one campaign so CampaignSchema has something to be witnessed against.',
+    );
+  }
+  const createdStatus = campaign.body?.campaign?.status ?? campaign.body?.status;
+  if (createdStatus !== 'pending') {
+    throw new Error(
+      `POST /v1/salons/{id}/campaigns created a campaign with status "${createdStatus}", not ` +
+        '"pending". NON-NEGOTIABLE #8: a merchant cannot send a customer message — delivery ' +
+        'happens on the platform decision endpoint, and caps and quiet hours are enforced again ' +
+        `at send time.\n--- served ---\n${campaign.raw}`,
+    );
+  }
+
   // ---- the #10 re-prompt state, both doors, with `accepted` POPULATED -----------
   /**
    * ORDER MATTERS AND IT IS THE POINT. A member who has never accepted anything
@@ -881,6 +1048,14 @@ beforeAll(async () => {
     [`GET /salons/${SALON_A}/artists/bookable`, `/salons/${SALON_A}/artists/bookable`, member],
     [`GET /salons/${SALON_A}/products`, `/salons/${SALON_A}/products`, dashboard],
     [`GET /v1/salons/${SALON_A}/promotions`, `/v1/salons/${SALON_A}/promotions`, dashboard],
+    // Both behind perms.marketing, which ST-001 holds. The campaign list is witnessed
+    // by the `pending` campaign created earlier in this hook.
+    [
+      `GET /v1/salons/${SALON_A}/messaging-policy`,
+      `/v1/salons/${SALON_A}/messaging-policy`,
+      dashboard,
+    ],
+    [`GET /v1/salons/${SALON_A}/campaigns`, `/v1/salons/${SALON_A}/campaigns`, dashboard],
     ['GET /members/me', '/members/me', member],
     ['GET /members/me/transactions', '/members/me/transactions', member],
     ['GET /members/me/wallet-token', '/members/me/wallet-token', member],
@@ -1111,7 +1286,9 @@ describe('census — every GET the API registers is either probed or explicitly 
           // Pending arrivals are classified for THIS check and fail their own,
           // below, the moment they land. Never both green.
           !(r.route in AWAITING_MERGE) &&
-          r.route !== PRODUCTS_ROUTE,
+          // Served and schema'd but behind a credential the harness cannot mint.
+          // Its own spec below fails the hour that stops being true.
+          !(r.route in NEEDS_PLATFORM_CREDENTIAL),
       )
       .map((r) => `${r.route}   (${r.file})`);
 
@@ -1129,6 +1306,35 @@ describe('census — every GET the API registers is either probed or explicitly 
    * is a note rather than a hole: a pending route is tolerated by the unclassified
    * check above only for as long as it is genuinely absent.
    */
+  /**
+   * THE OTHER HALF OF `NEEDS_PLATFORM_CREDENTIAL`. Those routes are excused from the
+   * unclassified check only while the harness genuinely cannot reach them. If a
+   * platform sign-in helper is ever added, this goes red and each of them becomes an
+   * ordinary probe — so "unreachable" cannot decay into "untested".
+   *
+   * Asserted against the harness's own exports rather than against a comment, because
+   * the capability arriving is exactly the event this needs to notice.
+   */
+  it('the harness still cannot mint a platform credential — the excuse those routes rely on', async () => {
+    const harness = (await import('./support/tenancy-harness.js')) as Record<string, unknown>;
+    const platformSignIn = Object.keys(harness).filter(
+      (k) => /platform/i.test(k) && /sign|token|principal|session/i.test(k),
+    );
+
+    expect(
+      platformSignIn,
+      'The harness now exports something that looks like a platform sign-in ' +
+        `(${platformSignIn.join(', ')}). NEEDS_PLATFORM_CREDENTIAL is no longer an honest ` +
+        'excuse: move those four routes into probes() — two of them already have schemas this ' +
+        'file uses from the salon side — or say why they still cannot be reached.',
+    ).toEqual([]);
+
+    expect(
+      Object.keys(NEEDS_PLATFORM_CREDENTIAL).length,
+      'NEEDS_PLATFORM_CREDENTIAL is empty, so this spec is guarding nothing and should go',
+    ).toBeGreaterThan(0);
+  });
+
   it('nothing in AWAITING_MERGE has landed yet — the hour one does, classify it properly', () => {
     const served = new Set(discovered.map((r) => `GET ${r.path}`));
     const arrived = Object.keys(AWAITING_MERGE).filter((r) => served.has(r));
@@ -1151,32 +1357,25 @@ describe('census — every GET the API registers is either probed or explicitly 
   });
 
   /**
-   * ProductSchema is the one schema in `packages/types` with no live sample
-   * anywhere: `api/src/db/seed.ts` seeds no products, so `GET /salons/{id}/products`
-   * returns `{items: []}` on every fresh database and there is no write endpoint
-   * to make one with.
+   * THE `ProductSchema is UNWITNESSED` SPEC STOOD HERE AND HAS DONE ITS JOB.
    *
-   * Written as an assertion rather than a comment so the gap closes itself: the
-   * day a product is seeded this spec goes red and whoever seeded it gets told to
-   * turn the probe on.
+   * `ProductSchema` was the one schema in `packages/types` with no live sample
+   * anywhere — the seed created no products, so `GET /salons/{id}/products` returned
+   * `{items: []}` on every fresh database and there was no write endpoint to make one
+   * with. A parse of an empty array witnesses the envelope and says nothing at all
+   * about the element shape, which is the kind of green worth distrusting.
+   *
+   * It was written as an ASSERTION rather than a comment so the gap would close
+   * itself, and that is exactly what happened: lane A seeded the shop, this spec went
+   * red naming PR-01, PR-02 and PR-03, and the instruction it carried — move the route
+   * into `probes()` with `requireNonEmpty: ['items']` — is now done. The route is a
+   * real probe and the census exemption is gone.
+   *
+   * Recorded rather than silently deleted, because the mechanism is the point: a
+   * placeholder that expires on contact with the thing it is waiting for is the shape
+   * this census uses everywhere, and it has now paid off five times (four route
+   * arrivals and this).
    */
-  it('ProductSchema is UNWITNESSED — the seed creates no product for it to be tested against', () => {
-    const res = response(`GET /salons/${SALON_A}/products`);
-    expect(res.status).toBe(200);
-
-    const envelope = paginated(ProductSchema).safeParse(res.body);
-    expect(
-      envelope.success,
-      `the products envelope itself does not parse: ${describeParseError(envelope.error)}`,
-    ).toBe(true);
-
-    expect(
-      res.body.items,
-      'A product now exists, so ProductSchema finally has a live sample. Move ' +
-        "GET /salons/{id}/products into probes() with requireNonEmpty: ['items'] and delete " +
-        'this spec — it was only ever a placeholder for a shape nothing could witness.',
-    ).toEqual([]);
-  });
 });
 
 // ===========================================================================

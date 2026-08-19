@@ -172,9 +172,21 @@ describe('double scan of one wallet token', () => {
     expect(settled.status, `the charge answered: ${JSON.stringify(settled.body)}`).toBe(200);
   });
 
-  it.todo(
-    'an EXPIRED token (older than 45s) is refused with 410 token_expired — needs a way to mint a short-lived or back-dated token; sleeping 45s in a suite is not a test',
-  );
+  /**
+   * EXPIRY IS NOW COVERED, AND NOT HERE. This was an `it.todo` reading "needs a way
+   * to mint a short-lived or back-dated token; sleeping 45s in a suite is not a
+   * test", which was true of THIS file and always will be: it drives
+   * `packages/mock`, which owns no database, so there is nothing to back-date.
+   *
+   * `scanner.test.ts` § POST /charges "an EXPIRED token is refused with 410
+   * token_expired, and debits nothing" closes it against lane A's real API, by
+   * moving `issued_at` and `expires_at` together so `wallet_token_expiry_window`
+   * stays satisfied while `expires_at` lands in the past.
+   *
+   * Left as a note rather than deleted: a todo that vanishes looks like a question
+   * nobody asked, and the next person to want this here should learn why it cannot
+   * live in this file rather than re-adding it.
+   */
   it.todo(
     "one member's token cannot be charged against another member — needs a second member fixture; POST /charges currently trusts body.memberId and never checks it against the token's owner",
   );

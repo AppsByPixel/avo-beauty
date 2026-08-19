@@ -589,6 +589,96 @@ describe('POST /charges', () => {
     expect(visitsOf(B_MEMBER)).toBe(visitsBefore + 1);
   });
 
+  /**
+   * AN EXPIRED TOKEN IS REFUSED WITH 410 — closing `concurrency.test.ts`'s todo.
+   *
+   * That file recorded this as unreachable: "needs a way to mint a short-lived or
+   * back-dated token; sleeping 45s in a suite is not a test." It was right about
+   * itself — it drives `packages/mock`, which owns no database. This file drives
+   * lane A's real API with `psql` beside it, so the token can be back-dated
+   * directly and the 45 seconds never have to be waited out.
+   *
+   * THE ROW IS FOUND BY MEMBER, NOT BY HASHING THE TOKEN IN SQL. The obvious
+   * `where token_hash = encode(digest($token,'sha256'),'hex')` does not work here:
+   * `digest()` is pgcrypto and this database has only `btree_gist` and `plpgsql`
+   * installed, so it fails with "function digest(unknown, unknown) does not exist".
+   * Her newest unconsumed token is the one `freshWalletToken()` just minted, and
+   * `wallet_token_one_live_per_member` — the partial unique index on
+   * (member_id, expires_at) where `consumed_at IS NULL` — is what makes "newest
+   * unconsumed" unambiguous rather than a guess.
+   *
+   * BOTH COLUMNS MOVE, AND THE CONSTRAINT IS WHY. `wallet_token_expiry_window` is
+   * `expires_at > issued_at AND expires_at <= issued_at + interval '2 minutes'`, so
+   * pushing `expires_at` alone into the past is refused by the database — the
+   * fixture cannot express "expired" that way. Moving `issued_at` back five minutes
+   * and `expires_at` back four satisfies every CHECK (ordered, one minute apart,
+   * inside the two-minute cap) and lands `expires_at` genuinely in the past. A
+   * token that could only be expired by violating the schema would not be a token
+   * the server can ever meet.
+   *
+   * EXPIRY IS A DIFFERENT REFUSAL FROM CONSUMPTION, which is the point of asserting
+   * the code rather than just the status. `token_consumed_or_unknown` and
+   * `token_expired` are both 410, so a server that collapsed the two would pass a
+   * status-only check while telling the counter to ask for a fresh code when the
+   * real answer is that this one was already spent — different copy, different
+   * instruction to the person holding the phone.
+   */
+  it('an EXPIRED token is refused with 410 token_expired, and debits nothing', async () => {
+    const token = await freshWalletToken();
+    const before = balanceOf(B_MEMBER);
+
+    // Back-date both columns on her newest unconsumed token. See the comment above
+    // for why both, and for why the row is found this way.
+    psql(`
+      UPDATE wallet_token
+         SET issued_at  = now() - interval '5 minutes',
+             expires_at = now() - interval '4 minutes'
+       WHERE id = (
+         SELECT id FROM wallet_token
+          WHERE member_id = '${B_MEMBER}' AND consumed_at IS NULL
+          ORDER BY issued_at DESC LIMIT 1
+       );
+    `);
+    precondition(
+      scalar(
+        `select count(*) from wallet_token
+          where member_id = '${B_MEMBER}' and consumed_at is null and expires_at < now()`,
+      ).trim() === '1',
+      'the token was not back-dated into an expired, unconsumed state, so this spec proves nothing',
+    );
+
+    const res = await treq<any>('POST', '/charges', {
+      token: scanner,
+      idempotencyKey: key('charge-expired'),
+      body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token },
+    });
+
+    expect(res.status, `an expired token answered ${res.status}: ${res.raw}`).toBe(410);
+    expect(
+      res.body.error,
+      'an expired token was reported as consumed-or-unknown. Both are 410, so the status alone ' +
+        'cannot tell them apart, and the counter is told the wrong thing to do about it.',
+    ).toBe('token_expired');
+
+    expect(balanceOf(B_MEMBER), 'an expired token still debited the wallet').toBe(before);
+    expect(
+      Number(
+        scalar(
+          `select count(*) from wallet_token
+            where member_id = '${B_MEMBER}' and expires_at < now() and consumed_at is not null`,
+        ),
+      ),
+      'a refused charge consumed the expired token anyway',
+    ).toBe(0);
+
+    // And the back-dated row is retired, so it cannot collide with the partial
+    // unique index the next spec's freshly minted token needs.
+    psql(
+      `UPDATE wallet_token SET consumed_at = now()
+        WHERE member_id = '${B_MEMBER}' AND consumed_at IS NULL AND expires_at < now();`,
+    );
+  });
+
   it('offers a void deadline fifteen minutes out', async () => {
     const result = await chargeOnce('charge-voidable');
     const deadline = new Date(result.voidableUntil).getTime();
@@ -754,6 +844,63 @@ describe('GET /charges — the permission gate', () => {
 // ===========================================================================
 // POST /voids — the undo at the counter
 // ===========================================================================
+
+/**
+ * NEGATIVE BALANCE IS IMPOSSIBLE AT THE DATABASE LEVEL, NOT ONLY IN THE HANDLER.
+ *
+ * `member_balance_non_negative` — `CHECK (balance_fils >= 0)`,
+ * `0000_initial_schema.sql:64` — has existed since the first migration and NOTHING
+ * asserted it. That is the shape this suite keeps finding: a guard nobody drives is
+ * a guard nobody would notice the loss of. A later migration dropping it, or a
+ * column rebuilt without it, would leave every application-level check as the only
+ * thing between a race and a customer owing the salon money.
+ *
+ * ASSERTED AS THE APPLICATION ROLE, DELIBERATELY. As the owner a CHECK still fires,
+ * so either would prove the constraint exists — but `avo_app` is the role the API
+ * actually holds, and the claim on the checklist is about what the database refuses
+ * the running system, not what it refuses a superuser.
+ *
+ * BOTH DIRECTIONS, because a constraint that refuses everything proves nothing. A
+ * legal debit to exactly zero must be ACCEPTED: the boundary is that a balance may
+ * reach zero and not pass it, and a CHECK written `> 0` would refuse a customer
+ * spending her last fil — which is a real and correct thing to do.
+ */
+describe('the money floor is in the schema, not only in the handler', () => {
+  it('the application role cannot drive a balance below zero, and CAN take it to exactly zero', () => {
+    const before = balanceOf(B_MEMBER);
+    precondition(before > 0, `${B_MEMBER} has no balance to work against`);
+
+    const attempt = (statement: string): string => {
+      try {
+        psql(`SET ROLE avo_app; ${statement}`);
+        return 'SUCCEEDED';
+      } catch (err) {
+        return String(err);
+      }
+    };
+
+    // One fil below zero. Not a large negative number — the boundary is where a
+    // rounding or ordering mistake actually lands.
+    expect(
+      attempt(`UPDATE member SET balance_fils = -1 WHERE id = '${B_MEMBER}';`),
+      'the application role wrote a NEGATIVE balance. Non-negotiable #2 says the server owns the ' +
+        'balance, and this is the layer that holds when a handler check is removed or raced past.',
+    ).toMatch(/member_balance_non_negative|violates check constraint/i);
+
+    expect(balanceOf(B_MEMBER), 'the refused write changed the balance anyway').toBe(before);
+
+    // And a debit to exactly zero is legal — she may spend her last fil.
+    expect(
+      attempt(`UPDATE member SET balance_fils = 0 WHERE id = '${B_MEMBER}';`),
+      'the floor refuses a balance of exactly zero, so a customer cannot spend her last fil',
+    ).toBe('SUCCEEDED');
+    expect(balanceOf(B_MEMBER)).toBe(0);
+
+    // Put it back. Later specs in this file charge against this member.
+    psql(`UPDATE member SET balance_fils = ${before} WHERE id = '${B_MEMBER}';`);
+    expect(balanceOf(B_MEMBER), 'the fixture balance was not restored').toBe(before);
+  });
+});
 
 describe('POST /voids', () => {
   it('inside the window, returns the money and removes the visit', async () => {
