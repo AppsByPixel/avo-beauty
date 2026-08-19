@@ -49,6 +49,37 @@ export function parseAmountFils(value: unknown, field = 'amountFils'): Fils {
   return fils(value);
 }
 
+/**
+ * A SIGNED whole number of fils — the owner adjustment's amount, and so far only
+ * its. Everything `parseAmountFils` refuses stays refused (non-number, NaN,
+ * fraction, unsafe range); the difference is the sign, because a wallet
+ * adjustment is one operation in two directions — the design draws Add and
+ * Deduct on one card — and `transaction_amount_sign_matches_kind` already pins
+ * `adjustment <> 0` at the database. Zero is refused here for the same reason it
+ * is refused there: an adjustment of nothing is a no-op wearing an audit row.
+ */
+export function parseSignedFils(value: unknown, field = 'amountFils'): Fils {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    throw badRequest('invalid_amount', `${field} must be a number of fils, e.g. 5000 for 5.000 KD.`);
+  }
+  if (!Number.isFinite(value)) {
+    throw badRequest('invalid_amount', `${field} must be a finite number of fils.`);
+  }
+  if (!Number.isInteger(value)) {
+    throw badRequest(
+      'invalid_amount',
+      `${field} must be a whole number of fils. 5.000 KD is 5000, not 5.5.`,
+    );
+  }
+  if (!Number.isSafeInteger(value)) {
+    throw badRequest('invalid_amount', `${field} is out of range.`);
+  }
+  if (value === 0) {
+    throw badRequest('invalid_amount', `${field} must not be zero — nothing to adjust.`);
+  }
+  return fils(value);
+}
+
 /** A non-negative amount — a held deposit or a bonus may legitimately be zero. */
 export function parseNonNegativeFils(value: unknown, field: string): Fils {
   if (value === 0) return fils(0);
