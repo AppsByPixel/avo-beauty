@@ -336,6 +336,17 @@ source       "app" | "google_calendar"
 ```
 - Deposit is held at confirmation, **auto-returned** `noShowReturnMinutes` after a missed
   slot. The return is a `deposit_return` Transaction — money never leaves the ecosystem.
+- **Reschedule carries the deposit** to the new slot rather than returning and re-holding it.
+  `POST /bookings/{id}/reschedule` `{ startsAt }` — a **contract addition**: README § Upcoming
+  appointment specifies the behaviour ("Reschedule (carries the deposit to a new slot)") and
+  names no endpoint. A sub-resource POST rather than `PATCH /bookings/{id}`, because a
+  reschedule is a **transition with rules** — the change window, slot re-validation, the
+  deposit carry — not a field assignment; a PATCH that accepted `startsAt` invites one that
+  accepts `status` or `depositFils` next. Refusals: `not_reschedulable` (409, outside the
+  change window or not in `deposit_held`), `same_slot` and `not_a_slot` (400),
+  `invalid_starts_at` (400), and `slot_taken` (409) from the **same exclusion constraint** that
+  guards `POST /bookings` — two customers moving into one slot is the same race as two booking
+  it, so it is caught in the database on the UPDATE, not in application code.
 
 ### Artist
 ```
@@ -457,7 +468,21 @@ quietFrom: "22:00", quietTo: "09:00"
 ```
 Caps and quiet hours are enforced at **send** time, not at approval time: an approved
 campaign that would breach a cap is held, not dropped, and reported back to the salon.
-A merchant can never read or raise these values.
+A merchant can never **raise** these values — the write is `requirePlatform`-only, and that
+is the half of non-negotiable #8 with teeth.
+
+**A merchant MAY read the effective policy** via `GET /v1/salons/{id}/messaging-policy`
+(`perms.marketing`, same-salon). *This line previously said she could never read them either,
+and the API departed from it deliberately:* quiet hours and caps are constraints she is
+**subject to**, not secrets, and telling a salon when her messages will not send helps her
+comply. A number she cannot verify is worse than one she can. Reading a ceiling is not raising
+it. `requireApproval` is included on purpose — with approval off her campaign goes out
+unreviewed, which changes what she should expect after pressing submit; that is a fact about
+her own workflow, not an internal control.
+
+Both surfaces read through **one function** (`readMessagingPolicy`), so the merchant's screen
+and the console's stepper cannot disagree — the same one-object-two-surfaces rule
+`readPromotionSet` exists for.
 
 ### LegalDocumentSet (owner console → Policies)
 ```
@@ -581,6 +606,7 @@ permissions: { [section: "analytics"|"activity"|"reports"|"salons"|"accounts"|"a
 | Customer | Availability | `GET /artists/{id}/availability?date=` |
 | Customer | Book | `POST /bookings` → holds deposit |
 | Customer | Cancel | `DELETE /bookings/{id}` |
+| Customer | Reschedule | `POST /bookings/{id}/reschedule` `{ startsAt }` — deposit carries |
 | Customer | Shop checkout | `POST /orders` (pays from wallet) |
 | Staff | PIN sign-in | `POST /staff/session` |
 | Staff | Resolve QR | `POST /scans` `{ token }` → Member + heldDeposit |
@@ -608,7 +634,8 @@ permissions: { [section: "analytics"|"activity"|"reports"|"salons"|"accounts"|"a
 | Owner | Reset link | `POST /accounts/{id}/reset-link` |
 | Owner | Approval queue | `GET /v1/platform/campaigns?status=pending` |
 | Owner | Decide a campaign | `POST /v1/platform/campaigns/{cid}/decision` |
-| Owner | Messaging policy | `PATCH /v1/platform/messaging-policy` |
+| Owner | Messaging policy | `GET` / `PATCH /v1/platform/messaging-policy` |
+| Merchant | Read effective messaging policy | `GET /v1/salons/{id}/messaging-policy` (`perms.marketing`; read only) |
 | Owner | Read / edit legal docs | `GET` / `PATCH /v1/platform/policies` |
 | Owner | Publish legal docs | `POST /v1/platform/policies/publish` |
 | Customer | Legal documents | `GET /v1/platform/policies` (published only) |

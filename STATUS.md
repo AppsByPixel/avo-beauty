@@ -112,11 +112,22 @@ The real remaining work, and what each lane was dispatched to do:
   refuses a NULL hash. Both halves correct, no door between them. Lane A is building the redeem
   endpoint against the staff pattern (`routes/staff.ts:701` issues, `routes/auth.ts:669`
   redeems), single-use under a race, then committing and rebasing.
-- **Lane B** (`apps/wallet`, `apps/scanner`) — the Shop screen's **retired-product race**. The
-  API side is built; `ShopScreen.tsx` makes **no reference to `invalid_products`**, so the
-  wallet does not handle the answer the API gives it. Then the "Charged 0.000 KD" frame, then
-  the legacy-token secure-store migration (whose intended order is already written down in
-  `apps/wallet/src/api/secureStore.native.test.ts`).
+- **Lane B** (`apps/wallet`, `apps/scanner`) — **queue already drained; reported back with
+  nothing to build.** All three items were merged before dispatch: the retired-product race
+  (`34df710`), the "Charged 0.000 KD" frame (`d29fdb4`) and the secure-store migration
+  (`e5d376c`) are all ancestors of `e50a446`. 192 wallet specs pass across 13 files.
+
+  **And Lane B corrected me on the mechanism, which is the part worth keeping.** I had written
+  that `ShopScreen.tsx` "makes no reference to `invalid_products`, so the wallet does not handle
+  the answer the API gives it." The grep was true and the inference was false: the handling was
+  *deliberately extracted* into `apps/wallet/src/domain/orderRefusal.ts` because — its own
+  header — *"this workspace has no renderer, so a branch left inline in a hook is a branch no
+  test can reach."* The live chain is `ShopScreen.tsx` → `refusal={shop.refusal}` →
+  `CartSheet.tsx`, which merges catalogue-detected and server-named ids and renders the product
+  name. **A single-file grep is the wrong instrument for a deliberately extracted module** — and
+  I made this error in the very commit warning that a handoff ages like a comment. Extraction for
+  testability moves code *out* of the file a grep would search, so the better-engineered the
+  code, the more misleading the single-file grep.
 - **Lane C** (`apps/dashboard`, `packages/ui`) — **Admins**. Its worktree held 424 uncommitted
   lines of a built section with states and an invite form; Lane C is verifying it against the
   real API, committing, rebasing, then moving to the next console section that has a real
@@ -208,20 +219,23 @@ but see the auth caveat below), **scanner** (PIN, scan, charge, void, manual loo
 schedule, and charge-after-manual-lookup driven on a simulator), **dashboard** (sign-in, and
 all seven sections).
 
-**The wallet has no auth slice, and that qualifies the line above.** `apps/wallet/src/api/client.ts`
-sends no `authorization` header at all — no `Bearer`, no token — and its base URL defaults to
-`http://localhost:4000`, the mock, which requires none. Every real `/members/me*` route is
-behind `requireMember`, which has no dev bypass. So the wallet's screens are built and its
-states are real, but **it has only ever run against the mock**; the scanner, by contrast, is
-wired to real sessions. This was item 1 in lane B's own brief and was never built. It is not a
-regression and nothing hid it — `AccountScreen.tsx:62` says so in its own comment — but "the
-wallet works" should be read as "against the mock" until the auth slice lands.
+**The wallet's auth slice has since landed, and the two paragraphs that used to sit here were
+stale — they said the opposite of the tree.** Re-verified 2026-08-19:
+`apps/wallet/src/api/client.ts:180` sends `authorization: Bearer ${token}` when a token is
+held, and `API_BASE_URL` now defaults to `http://localhost:4100` — the real API — with the mock
+on 4000 available only by setting `EXPO_PUBLIC_AVO_API` explicitly, and the file's own header
+records the switch. So "the wallet works" no longer needs reading as "against the mock".
 
-Consequently **non-negotiable #10 is unmet**: nothing stores the accepted `policyVersion`
-against the member, because there is no signup endpoint to store it at. `api/src/routes/auth.ts`
-registers `/auth/member/session`, `/auth/web/session`, `/auth/refresh`, `/auth/sign-out` and
-`/auth/staff/password-reset` — sign-in exists, registration does not. Sign-in and policy
-rendering are buildable today; consent needs the API side first.
+**Non-negotiable #10 is met**, which the top of this file already said while this section
+denied it. `POST /auth/member/signup` is registered (`api/src/routes/auth.ts:182`), and
+`member.policy_version` is stored `NOT NULL` behind a `member_policy_version_positive` check
+(`api/src/db/schema/member.ts:74`), with acceptance also recorded as an event
+(`api/src/db/schema/legal.ts`) so a published version can never be mutated out from under a
+member's stored consent.
+
+**Worth noticing how this file failed:** it contradicted itself across two screens for at
+least a session, and both halves read as confident. A status file is prose about code, and
+prose does not recompile. Re-measure before quoting any line of this document.
 
 Roughly 400 specs. `pnpm check` runs them; **test caching is off** because turbo was
 replaying a green run in 14ms and calling it a pass.
