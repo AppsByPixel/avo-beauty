@@ -316,6 +316,44 @@ export const en: Copy = {
 
   navHome: 'Home', // design:1233
   navBook: 'Book', // design:1233
+  navShop: 'Shop', // design:1233
+
+  // ------------------------------------------------------------ shop & cart --
+  shopTitle: 'Shop', // design:1234
+  shopSub: 'Pay from your wallet · pick up at the salon.', // design:1234
+  shopAdd: 'Add', // design:1235
+  shopNote: 'Shop purchases count as a visit toward your next tier.', // design:1235
+  cartTitle: 'Your cart', // design:1236
+  // design:945/1236 — `{{ cartCount }} {{ t.items }}`.
+  cartItems: (n) => `${n} ${n === 1 ? 'item' : 'items'}`,
+  qtyValue: (n) => `${n}`,
+  cartTotal: 'Total', // design:1236
+  cartPayFrom: 'Paid from wallet', // design:1236
+  cartShortBy: (amount) => `Balance too low by ${amount}`, // design:1237
+  cartEmptyTitle: 'Your cart is empty', // design:1237
+  cartEmptyBody: 'Add a product to get started.', // design:1237
+  cartPayCta: (amount) => `Pay ${amount} from wallet`, // design:1461
+  cartTopUpCta: 'Top up to continue', // design:1460
+  shopPaidToast: (amount) => `Paid ${amount} from wallet · visit added`, // design:1457
+
+  /**
+   * INVENTED — every one of these is a state the design's shop has no server to
+   * reach. `emptyTitle`/`emptySub` at :1237 are the empty CART and are used above;
+   * an empty CATALOGUE is a different fact told to a different person, and reusing
+   * "Add a product to get started" for it would tell a customer to add something
+   * the salon does not sell.
+   */
+  shopEmptyTitle: 'Nothing in the shop yet',
+  shopEmptyBody: 'This salon has no products for sale right now.',
+  shopOffTitle: 'The shop is closed',
+  shopOffBody: 'This salon does not sell products through AVO.',
+  /**
+   * INVENTED, and the one state trunk singled out. A product retired while she
+   * shopped answers `invalid_products` naming its id, and the honest sentence says
+   * WHICH thing has gone rather than "something went wrong" — she is holding it.
+   */
+  cartStaleBody: (names) => `${names} has been removed from the shop. Take it out of your cart to pay.`,
+  shopOrderFailed: "We couldn't complete your order. Nothing has been charged.",
 
   bookTitle: 'Book', // design:1240
   bookStep: (step, total) => `Step ${step} of ${total}`, // design:1876

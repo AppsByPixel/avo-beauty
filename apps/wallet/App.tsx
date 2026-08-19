@@ -50,30 +50,33 @@ import { PREFERENCES_KEY } from './src/state/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { AccountScreen } from './src/screens/AccountScreen';
 import { BookScreen } from './src/screens/BookScreen';
+import { ShopScreen } from './src/screens/ShopScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { SignUpScreen } from './src/screens/SignUpScreen';
 import { signOut } from './src/api/auth';
 import { refreshSession } from './src/api/client';
 import { onSessionEnded, restore } from './src/api/session';
-import { LanguageProvider, useLanguage } from './src/i18n/language';
+import { LanguageProvider, useCopy, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
 import { useWalletHome } from './src/state/useWalletHome';
+import { useShop } from './src/state/useShop';
 import { Toast, useToast } from './src/components/Toast';
 import { focusable } from './src/theme/focus';
 import type { BookingView } from './src/api/booking';
 import type { RescheduleTarget } from './src/state/useBooking';
 
 /**
- * The three built screens.
+ * The four built screens.
  *
- * STILL NO ROUTER. The design's wallet has five destinations (home, book, shop,
- * pay, account) plus the auth set, and that is a router's job — but a navigation
- * container and a set of typed route params for three screens with no deep
- * links and no back stack is machinery ahead of a need. The seam has not moved:
- * when Shop and the auth screens land, this union becomes a navigator and none
- * of the screens' props change.
+ * STILL NO ROUTER, and the prediction held. This said "when Shop and the auth
+ * screens land, this union becomes a navigator and none of the screens' props
+ * change" — both have now landed and none of them did. The design's wallet has
+ * five destinations (home, book, shop, pay, account); Pay is the QR overlay on the
+ * wallet card and already has its tap target there, so this union is the whole nav
+ * and a navigation container would still be machinery ahead of a need: no deep
+ * links, no back stack.
  */
-type Screen = 'home' | 'book' | 'account';
+type Screen = 'home' | 'book' | 'shop' | 'account';
 
 // interaction-spec.md §2's focus ring, as real CSS. At module scope so the rule
 // exists before the first control paints. Idempotent and a no-op off web.
@@ -202,6 +205,31 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
   const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null);
   const home = useWalletHome();
   const toast = useToast();
+  /**
+   * THE CART LIVES HERE, NOT IN THE SHOP SCREEN, and that reverses an earlier call
+   * of mine — recorded rather than quietly changed.
+   *
+   * `useShop` was mounted BY `ShopScreen`, which is tidier and wrong for two
+   * reasons that only appeared on driving it:
+   *
+   *   1. HER CART EMPTIED WHEN SHE LEFT THE TAB. Tapping Home to check a balance
+   *      unmounted the screen and took the cart with it. Nothing in the design
+   *      suggests a cart that survives only while you look at it.
+   *   2. THE NAV BADGE COULD NOT EXIST. design:626 draws the count on the Shop tab
+   *      as well as in the Shop header, and a nav rendered by this shell cannot
+   *      read state owned by a child. I had written that the badge's absence was
+   *      better than hoisting a cart into the shell "unless something outside Shop
+   *      ever needs it" — the nav is outside Shop, and it does.
+   *
+   * So the cart is app state for exactly the reason the wallet snapshot is: two
+   * owners would be two carts, and the one on screen would be whichever mounted
+   * last. Same shape as `home`, passed down as a prop.
+   *
+   * The balance is read from the snapshot when it exists and 0 before it does. That
+   * only feeds the CTA label, and `ShopScreen` is not rendered without a snapshot
+   * anyway — so no button is ever labelled against a balance we do not have.
+   */
+  const shop = useShop(snapshotBalance(home.snapshot), home.retry);
 
   const goHome = useCallback(() => {
     setScreen('home');
@@ -247,6 +275,35 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
               onBooked={home.retry}
               reschedule={reschedule ?? undefined}
               onToast={toast.show}
+            />
+          ) : (
+            <HomeScreen
+              home={home}
+              onOpenAccount={() => setScreen('account')}
+              onBook={() => setScreen('book')}
+              onReschedule={startReschedule}
+              onToast={toast.show}
+            />
+          ))}
+
+        {/*
+          Shop needs her BALANCE, and only for the cart's CTA label — the server
+          prices the order and refuses a client-supplied price by name. Until the
+          snapshot lands there is no balance to label a button with, so Home stays
+          up with its skeletons rather than Shop rendering "Pay 0.000 from wallet".
+
+          `onPaid` is `home.retry`, not a figure: an order answers
+          `balanceAfterFils` and this app deliberately does not carry it across.
+          Non-negotiable #2 — the balance on screen is the server's answer to
+          `GET /members/me`.
+        */}
+        {screen === 'shop' &&
+          (snapshot ? (
+            <ShopScreen
+              shop={shop}
+              balanceFils={snapshot.member.balanceFils}
+              onToast={toast.show}
+              onTopUp={goHome}
             />
           ) : (
             <HomeScreen
@@ -316,13 +373,15 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
       {/*
         design:622-628 — the bottom navigation.
 
-        TWO TABS, NOT FOUR, AND THAT IS DELIBERATE. The design's nav carries
-        Home, Book, Shop and Pay. Shop is not built (design/README.md § Known
-        gaps) and Pay opens the QR overlay, which lives on the wallet card and
-        already has a tap target there. A tab that leads to a screen that does
-        not exist is worse than a tab that is not there yet — so the nav is a
-        list rather than a fixed four-up, and the other two drop in without a
-        layout change.
+        THREE TABS, NOT FOUR, AND THE PREDICTION HELD. This read "TWO TABS …
+        Shop is not built (design/README.md § Known gaps)". Shop is built, and it
+        dropped in without a layout change exactly as the note said it would,
+        because the nav is a list rather than a fixed four-up.
+
+        Pay is still not a tab, and that is unchanged rather than pending: it
+        opens the QR overlay, which lives on the wallet card and already has a
+        tap target there. A tab that duplicates a control one screen up is
+        clutter, not a destination.
 
         Hidden on Account, which the design pushes as a full screen with its own
         back control rather than as a tab.
@@ -330,10 +389,15 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
       {screen !== 'account' ? (
         <BottomNav
           screen={screen}
+          cartCount={shop.count}
           onHome={goHome}
           onBook={() => {
             setReschedule(null);
             setScreen('book');
+          }}
+          onShop={() => {
+            setReschedule(null);
+            setScreen('shop');
           }}
         />
       ) : null}
@@ -343,15 +407,31 @@ function Wallet({ onSignedOut }: { onSignedOut: () => void }) {
   );
 }
 
-/** design:623-625 — the two built destinations, with the design's own glyphs. */
+/**
+ * The balance the cart's CTA is labelled against, or 0 before the snapshot lands.
+ *
+ * A LABEL INPUT ONLY. The server prices the order and refuses a client-supplied
+ * price by name, so this never decides what is charged — and `ShopScreen` is not
+ * rendered without a snapshot, so no button is ever labelled against this 0.
+ */
+function snapshotBalance(snapshot: { member: { balanceFils: number } } | null): number {
+  return snapshot?.member.balanceFils ?? 0;
+}
+
+/** design:623-626 — the three built destinations, with the design's own glyphs. */
 function BottomNav({
   screen,
+  cartCount,
   onHome,
   onBook,
+  onShop,
 }: {
   screen: Screen;
+  /** design:626 — the count on the Shop tab. 0 renders no badge. */
+  cartCount: number;
   onHome: () => void;
   onBook: () => void;
+  onShop: () => void;
 }) {
   const { lang, copy } = useLanguage();
   return (
@@ -389,6 +469,21 @@ function BottomNav({
           </>
         }
       />
+      {/* design:626 — the bag glyph, with the count the design puts on this tab. */}
+      <NavItem
+        label={copy.navShop}
+        active={screen === 'shop'}
+        onPress={onShop}
+        testID="nav-shop"
+        lang={lang}
+        badge={cartCount}
+        icon={
+          <>
+            <Path d="M6 8h12l-1 12.5H7z" stroke="currentColor" strokeWidth={1.7} strokeLinejoin="round" />
+            <Path d="M9 8.5V6a3 3 0 0 1 6 0v2.5" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" />
+          </>
+        }
+      />
     </View>
   );
 }
@@ -400,6 +495,7 @@ function NavItem({
   icon,
   testID,
   lang,
+  badge,
 }: {
   label: string;
   active: boolean;
@@ -407,10 +503,13 @@ function NavItem({
   icon: React.ReactNode;
   testID: string;
   lang: 'en' | 'ar';
+  /** design:626 — a count over the glyph. Absent or 0 renders nothing. */
+  badge?: number;
 }) {
   // Brand text and brand glyphs on a light surface are `brandDeep`, never
   // `brand` — non-negotiable #9.
   const tint = active ? color.brandDeep : color.textMuted;
+  const copy = useCopy();
   return (
     <Pressable
       onPress={onPress}
@@ -421,9 +520,20 @@ function NavItem({
       testID={testID}
       style={styles.navItem}
     >
-      <Svg width={23} height={23} viewBox="0 0 24 24" fill="none" color={tint}>
-        {icon}
-      </Svg>
+      <View>
+        <Svg width={23} height={23} viewBox="0 0 24 24" fill="none" color={tint}>
+          {icon}
+        </Svg>
+        {/*
+          design:626 — brandDeep because the digits on it are white (#9), and the
+          count goes through the copy layer so Arabic renders it Eastern.
+        */}
+        {badge !== undefined && badge > 0 ? (
+          <View style={styles.navBadge} testID={`${testID}-badge`}>
+            <Text style={[text('bodyS', lang), styles.navBadgeText]}>{copy.qtyValue(badge)}</Text>
+          </View>
+        ) : null}
+      </View>
       <Text style={[text('bodyS', lang), { color: tint, fontWeight: '600', fontSize: 10.5 }]}>
         {label}
       </Text>
@@ -465,6 +575,19 @@ const styles = StyleSheet.create({
     borderTopColor: color.hairline,
     backgroundColor: color.surface,
   },
+  navBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: color.brandDeep,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navBadgeText: { color: color.white, fontWeight: '700', fontSize: 9.5 },
   navItem: {
     minWidth: MIN_TAP_TARGET,
     minHeight: MIN_TAP_TARGET,

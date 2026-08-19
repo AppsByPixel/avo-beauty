@@ -174,6 +174,16 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   cancelledToast: [MONEY_SAMPLE],
   bookShortBy: [MONEY_SAMPLE],
   upDeposit: [MONEY_SAMPLE],
+  // --- shop ---
+  // A COUNT, so Eastern in Arabic. Two digits so a partial conversion shows.
+  cartItems: [12],
+  qtyValue: [12],
+  // Already-formatted money. See MONEY_ARG_KEYS.
+  cartShortBy: [MONEY_SAMPLE],
+  cartPayCta: [MONEY_SAMPLE],
+  shopPaidToast: [MONEY_SAMPLE],
+  // A product NAME, resolved from the API. An identifier, not a number we own.
+  cartStaleBody: ['Repair mask'],
 };
 
 /**
@@ -214,6 +224,11 @@ const IDENTIFIER_KEYS = new Set(['vfSub', 'qrAria', 'appVersion']);
  * would fail the mixed-script test below, which is not exempted here.
  */
 const MONEY_ARG_KEYS = new Set([
+  // --- shop. The cart's three amounts, each one `formatMoney` output and each in
+  // a sentence with no other number in it — which is what keeps this set narrow.
+  'cartShortBy',
+  'cartPayCta',
+  'shopPaidToast',
   'depositNote',
   'bookConfirmCta',
   'bookedToast',
