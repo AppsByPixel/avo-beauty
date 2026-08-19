@@ -133,7 +133,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'reports',
     label: 'Reports',
     to: '/reports',
-    built: false,
+    built: true,
     title: 'Reports',
     subtitle: 'Export any list as a CSV',
     icon: (

@@ -21,6 +21,7 @@ import { Loyalty } from './routes/Loyalty.js';
 import { Marketing } from './routes/Marketing.js';
 import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
+import { Reports } from './routes/Reports.js';
 import { Settings } from './routes/Settings.js';
 import { SignIn } from './routes/SignIn.js';
 import { Team } from './routes/Team.js';
@@ -93,6 +94,7 @@ const SECTIONS = [
   { path: '/settings', component: Settings },
   { path: '/accounts', component: Accounts },
   { path: '/audit', component: AuditLog },
+  { path: '/reports', component: Reports },
 ] as const;
 
 const sectionRoutes = SECTIONS.map(({ path, component }) =>
