@@ -11,7 +11,7 @@
  *   2. lock the wallet                      FOR UPDATE, so the balance read is the balance debited
  *   3. the module gate                      salon.modules.shop, server-side
  *   4. price the basket from `product`      never from the request body
- *   5. debit, or 402 with the exact shortfall
+ *   5. debit, or 402 with the exact shortfall — TWO guards, see step 5a
  *   6. the `shop` transaction + its ledger pair
  *   7. the order lines
  *   8. a visit or a stamp, and the tier evaluation
@@ -77,7 +77,7 @@
  * reported as a gap between the design and the contract rather than half-built.
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, gte, inArray, sql } from 'drizzle-orm';
 import { add, fils, subtract, type Fils, type Transaction } from '@avo/types';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
@@ -290,10 +290,92 @@ export async function performOrder(
     const now = new Date();
     const txId = transactionId();
 
-    await tx
+    /**
+     * ============================================================ 5a. THE DEBIT
+     * A CONDITIONAL, RELATIVE UPDATE WHOSE ROW COUNT DECIDES — the second guard,
+     * and the answer to trunk's question about whether this path needed one.
+     *
+     * IT DOES. The measurement that settled it: with `FOR UPDATE` removed from step
+     * 2, five concurrent orders of 9.000 KD against a 15.250 balance ALL settled,
+     * every one of them reported `balanceAfterFils: 6250`, and `member.balance_fils`
+     * ended 36000 fils apart from the ledger. Every CHECK in the schema was
+     * satisfied throughout — including both non-negative balance constraints,
+     * because each writer wrote the same plausible number — and only invariant 5's
+     * reconciliation could see it.
+     *
+     * "Is the reconciliation enough?" No, and the reason is what reconciliation IS:
+     * it runs later, on demand, and it reports a discrepancy after five customers
+     * have received goods for the price of one. `db:verify` is a net, not a control.
+     * A charge has two layers precisely so that one failing is survivable, and
+     * money-out through a self-service endpoint deserves the same.
+     *
+     * THIS IS THE IDIOM ALREADY TRUSTED HERE, not a new mechanism.
+     * `services/walletToken.ts § consumeToken` is one conditional UPDATE whose row
+     * count decides, and its header says exactly why a read-then-write cannot do
+     * the job: "Two scanners racing the same code both read `consumed_at IS NULL`,
+     * both decide they may proceed, and both debit. With the conditional UPDATE the
+     * second statement blocks on the row lock the first holds; when the first
+     * commits, the second re-evaluates its WHERE against the committed row, matches
+     * nothing, and returns zero rows." Substitute "balance" for "consumed_at" and
+     * the paragraph is about this statement.
+     *
+     * BOTH HALVES ARE LOAD-BEARING, and the relative SET is the half that is easy
+     * to leave out:
+     *
+     *   WHERE balance_fils >= total   is what refuses the loser.
+     *   SET   balance_fils - total    is what makes the winner's arithmetic happen
+     *                                 IN the database.
+     *
+     * A conditional WHERE with `SET balance_fils = <precomputed 6250>` would still
+     * write the stale number, so the lost update would survive the guard. The
+     * subtraction has to be the database's.
+     *
+     * `RETURNING balance_fils` because the ledger's `balance_after_fils` must be
+     * what actually landed, not what this transaction predicted. Under the lock in
+     * step 2 those agree; the point of a second layer is to be right when the first
+     * one is not there.
+     *
+     * A ZERO ROW COUNT IS A 402, NOT A 500. The only way the predicate fails is a
+     * balance that moved between the read and the write, which means she cannot
+     * afford it after all — the same answer the read-time check gives, for the same
+     * reason, and the shortfall is recomputed from the row that refused.
+     */
+    const debited = await tx
       .update(member)
-      .set({ balanceFils: balanceAfter, updatedAt: now })
-      .where(eq(member.id, m.id));
+      .set({
+        balanceFils: sql`${member.balanceFils} - ${total}`,
+        updatedAt: now,
+      })
+      .where(and(eq(member.id, m.id), gte(member.balanceFils, total)))
+      .returning({ balanceFils: member.balanceFils });
+
+    const landed = debited[0];
+    if (!landed) {
+      /**
+       * Re-read to report the truth rather than the stale figure. Unreachable while
+       * step 2 holds the row — which is the point: this is the layer that speaks
+       * when the other one is gone.
+       */
+      const [fresh] = await tx
+        .select({ balanceFils: member.balanceFils })
+        .from(member)
+        .where(eq(member.id, m.id))
+        .limit(1);
+      throw insufficientBalance(total, fils(fresh?.balanceFils ?? 0));
+    }
+    /**
+     * The database's answer, not this transaction's prediction. They agree under the
+     * lock, and asserting the agreement rather than assuming it is what would have
+     * caught the lost update at the moment it happened instead of at the next
+     * `db:verify`.
+     */
+    if (landed.balanceFils !== balanceAfter) {
+      throw new Error(
+        `order debit landed at ${landed.balanceFils} but this transaction computed ` +
+          `${balanceAfter}. The wallet moved under an open transaction, which means ` +
+          `the FOR UPDATE in step 2 is not holding.`,
+      );
+    }
 
     // ------------------------------------------------- 6. transaction record --
     await tx.insert(transaction).values({

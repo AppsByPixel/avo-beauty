@@ -78,7 +78,36 @@ import { sql } from 'drizzle-orm';
 import { boolean, check, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 
-/** The four roles in the design's Admins editor, plus the owner it renders apart. */
+/**
+ * The four roles in the design's Admins editor, plus the owner it renders apart.
+ *
+ * `owner`, NOT `founder`, AND THE CONTRACT SAYS FOUNDER — a three-way disagreement
+ * worth settling in writing, because Lane C hit it at its own boundary parse and had
+ * written `founder` first.
+ *
+ *   api-contract.md:564 § PlatformAdmin   role: "founder" | "admin" | "analyst"
+ *   AVO Owner Console.dc.html             role: 'owner', and a select offering
+ *                                         admin / analyst / support
+ *   here                                  owner | admin | analyst | support
+ *
+ * THE DESIGN WINS, on both counts, and CLAUDE.md is the reason rather than a
+ * preference: "The designs in `design/` are **final**. Build them faithfully; do not
+ * redesign them." `api-contract.md` is a derived specification, and it is stale here
+ * in two independent ways — the word (`founder` where the drawn fixture says
+ * `owner`) and the count (it omits `support`, which the Admins editor's own
+ * `<option value="support">Support — accounts & salons</option>` offers and whose
+ * preset the design spells out).
+ *
+ * `owner` is also the word that makes `platform_admin_owner_flag_matches_role`
+ * readable: `owner = (role = 'owner')` is one fact stated once, where
+ * `owner = (role = 'founder')` would be a flag and a role that have to be remembered
+ * as a pair.
+ *
+ * REPORTED: `api-contract.md` § PlatformAdmin needs both corrections. `design/` is
+ * outside this lane's column, so the fix is trunk's; this comment is here so the
+ * next reader does not "correct" the enum back toward the stale document. Two lanes
+ * independently reached `owner` from the design, which is the evidence.
+ */
 export const PLATFORM_ROLES = ['owner', 'admin', 'analyst', 'support'] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 

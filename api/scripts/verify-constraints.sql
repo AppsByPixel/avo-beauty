@@ -1,7 +1,15 @@
 -- Proof, not documentation — and now proof a MACHINE can read.
 --
---   pnpm --dir=/abs/path/to/api run db:verify        # against `avo`
---   AVO_VERIFY_DB=avo_lane_a pnpm --dir=/abs/path/to/api run db:verify
+--   pnpm --dir=/abs/path/to/api run db:verify        # the database DATABASE_URL names
+--   AVO_VERIFY_DB=avo_ci pnpm --dir=/abs/path/to/api run db:verify   # explicit override
+--
+-- IT NO LONGER DEFAULTS TO `avo`, and the line above used to say it did. The npm
+-- script read `-d "${AVO_VERIFY_DB:-avo}"` and ignored DATABASE_URL entirely, so a
+-- lane that had correctly exported its own URLs and run a bare `db:verify` verified
+-- the SHARED database and got a completely plausible answer. Lane B did exactly that
+-- and disclosed it. `scripts/db-verify.sh` now derives the target from DATABASE_URL,
+-- lets AVO_VERIFY_DB override it, and REFUSES TO RUN with neither — see that file for
+-- why defaulting was the defect rather than a convenience.
 --
 -- The path is ABSOLUTE deliberately: `--dir api` resolves from cwd, which is the same
 -- failure as `--filter` and can point at another worktree's package. LANES.md.
@@ -68,6 +76,25 @@
 
 \set ON_ERROR_STOP on
 \pset pager off
+
+-- ===========================================================================
+-- WHICH DATABASE IS THIS ABOUT?
+--
+-- Printed FIRST, before any probe, because a verdict that does not name its
+-- subject is how the wrong subject stayed invisible. The npm script used to read
+-- `-d "${AVO_VERIFY_DB:-avo}"` and ignore DATABASE_URL entirely, so a lane that
+-- had correctly exported its own URLs and run a bare `pnpm run db:verify`
+-- verified the SHARED `avo` and got a completely plausible answer. Lane B did
+-- exactly that and disclosed it.
+--
+-- `scripts/db-verify.sh` now resolves the target and refuses to guess. This line
+-- is the other half, and it is the half that survives somebody driving psql by
+-- hand without the wrapper: the transcript itself says what it examined.
+-- ===========================================================================
+\pset format aligned
+SELECT current_database() AS verifying,
+       current_user       AS as_role,
+       now()              AS at;
 
 -- The result table is created OUTSIDE the transaction so it survives the rollback
 -- that discards everything else. Its ROWS are still written inside, so the report
@@ -856,6 +883,44 @@ SELECT pg_temp.assert('12', 'every held campaign has an open notification',
   ),
   (SELECT count(*) || ' held campaign(s) checked'
      FROM campaign WHERE held_reason IS NOT NULL));
+
+-- =========================================================================
+-- 13. a basket belongs to a charge and to nothing else
+-- =========================================================================
+-- Migration 0031. `transaction.basket_hash` is what makes a near-duplicate
+-- answerable — DECISIONS.md item 3 — and it is meaningful only on a charge: a
+-- top-up or an adjustment has no basket, and a `shop` row's contents live in
+-- `shop_order_line`. Two answers to "what was this for" is the redundancy 0027
+-- refused to create, so the CHECK is what stops a second one appearing.
+--
+-- NOT AN INVARIANT, and worth saying because it looks like one: "no two unvoided
+-- charges for the same member and basket within 120 seconds". That is exactly what
+-- a CONFIRMED duplicate legitimately is — two identical services back to back is a
+-- real case the decision names — so asserting it would make the confirm path fail
+-- the suite. The guard is a control at the boundary; this section checks only the
+-- shape the guard reads.
+SELECT pg_temp.probe('13', 'a top-up cannot carry a basket', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash)
+    VALUES ('TX-BASKET-T','MB-VERIFY','SL-VERIFY','BR-VERIFY','topup',10000,'settled',now(),'deadbeef')$probe$,
+  'transaction_basket_hash_is_charge_only');
+
+SELECT pg_temp.probe('13', 'a shop order cannot carry a basket hash', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash)
+    VALUES ('TX-BASKET-S','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-5000,'settled',now(),'deadbeef')$probe$,
+  'transaction_basket_hash_is_charge_only');
+
+-- MUST SUCCEED: a charge may carry one, or the column would be useless.
+SELECT pg_temp.probe('13', 'a charge may carry a basket hash', 'allowed',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash)
+    VALUES ('TX-BASKET-C','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-8000,'settled',now(),'deadbeef')$probe$);
+
+-- And a charge from before 0031 may not. Null is "not recorded", which is why the
+-- guard matches on a NON-NULL hash rather than treating null as a wildcard — an old
+-- charge cannot be compared to a new basket, and pretending it can would refuse
+-- legitimate charges against history nobody kept.
+SELECT pg_temp.probe('13', 'a charge without a basket hash is still valid', 'allowed',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-BASKET-N','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-8000,'settled',now())$probe$);
 
 -- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST

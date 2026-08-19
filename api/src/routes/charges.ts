@@ -118,19 +118,78 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const memberId = resolveMemberId(req, requireString(body.memberId, 'memberId', 100));
     const serviceIds = requireStringArray(body.serviceIds, 'serviceIds');
+
+    /**
+     * A REPEATED SERVICE ID IS REFUSED, AND IT USED TO BE SILENTLY COLLAPSED.
+     *
+     * `performCharge` prices the basket with `inArray(service.id, serviceIds)`, which
+     * returns one row per DISTINCT id, and sums those rows. So `[SV-01, SV-01]` was
+     * charged as ONE blow-dry: 8.000 KD for two, and the salon absorbed the
+     * difference with nothing anywhere recording that it had. The `unknown` check
+     * could not catch it either, because it compares against a Set.
+     *
+     * WHY REFUSE RATHER THAN PRICE PER OCCURRENCE. Both are defensible and refusing
+     * is the one that cannot be wrong about money: pricing per occurrence would
+     * change what an existing client is charged, and no client asks for it — the
+     * scanner builds `serviceIds` from a Set (`apps/scanner/src/screens/MemberScreen.tsx:136`)
+     * and cannot produce a duplicate. So the collapse was unreachable from the
+     * scanner and reachable from anything else, and closing it costs nobody a
+     * behaviour they had. A basket that genuinely needs two of one service needs
+     * quantities, which is a contract change and not a thing to infer from a
+     * repeated string.
+     *
+     * The same refusal `POST /orders` gives a repeated `productId`, by name, for the
+     * same reason: a client that has lost track of its own basket should be told.
+     */
+    const duplicates = serviceIds.filter((id, i) => serviceIds.indexOf(id) !== i);
+    if (duplicates.length > 0) {
+      throw badRequest(
+        'duplicate_services',
+        `${[...new Set(duplicates)].join(', ')} appears more than once in serviceIds. ` +
+          'A service is charged once per basket.',
+        { duplicates: [...new Set(duplicates)] },
+      );
+    }
+
     const token = typeof body.token === 'string' && body.token.trim() !== '' ? body.token.trim() : undefined;
+
+    /**
+     * The explicit confirm for the near-duplicate guard — DECISIONS.md item 3, and
+     * `services/charge.ts § NEAR_DUPLICATE_WINDOW_SECONDS` carries the reasoning.
+     *
+     * REFUSED IF IT IS NOT A BOOLEAN, rather than coerced. `confirmDuplicate: "no"`
+     * and `confirmDuplicate: 1` are both truthy, and a string that reads as a refusal
+     * turning into a confirmation is the one coercion on this endpoint that moves
+     * money. The same treatment `POST /auth/member/signup` gives its `wa` flag, for
+     * the same reason it gives it: "Leaving it out would turn it on."
+     */
+    if ('confirmDuplicate' in body && typeof body.confirmDuplicate !== 'boolean') {
+      throw badRequest(
+        'invalid_confirm',
+        'confirmDuplicate must be true or false. It authorises a second charge for the same basket.',
+      );
+    }
+    const confirmDuplicate = body.confirmDuplicate === true;
 
     const idem = {
       scope: principalScope(p),
       endpoint: 'POST /charges',
       key,
+      /**
+       * `confirmDuplicate` IS DELIBERATELY NOT IN THE HASH. It is a decision about
+       * how to handle a refusal, not part of what is being charged, so the confirmed
+       * retry is the SAME request finally allowed to proceed rather than a different
+       * one. Including it would answer that retry with a 422
+       * `idempotency_key_reused` — the client would have to mint a new key to confirm,
+       * which is precisely the state where a lost response causes a double charge.
+       */
       requestHash: hashRequestBody({ memberId, serviceIds, token: token ?? null }),
     };
 
     const { status, body: out } = await withIdempotency(idem, () =>
       performCharge(
         db,
-        { memberId, serviceIds, token },
+        { memberId, serviceIds, token, confirmDuplicate },
         {
           principal: p,
           idempotency: idem,

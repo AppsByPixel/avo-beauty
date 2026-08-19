@@ -50,17 +50,37 @@ import {
 } from '../services/campaign';
 
 /**
- * `CampaignSchema` on the wire, and `heldReason` IS NOT ON IT.
+ * `CampaignSchema` on the wire — TWENTY-ONE FIELDS, INCLUDING THE HOLD.
  *
- * The schema declares eighteen fields and no hold, and Zod STRIPS what it does not
- * declare — so emitting one would be a field the contract silently deletes in
- * transit, which is the trap STATUS.md names and five drifts have already been
- * found through. The merchant learns of a hold from the `campaign_held`
- * notification and the audit row instead.
+ * THIS COMMENT USED TO SAY THE OPPOSITE, AND THAT IS THE FINDING.
  *
- * REPORTED TO TRUNK: that means the Campaigns screen cannot render "approved but
- * not sent, because quiet hours" inline. It can render "approved" and a bell.
- * Widening `CampaignSchema` is a `packages/types` change and therefore trunk's.
+ * It read "`heldReason` IS NOT ON IT … emitting one would be a field the contract
+ * silently deletes in transit", and it was true when written: `CampaignSchema` had
+ * no such field, Zod strips what it does not declare, and the merchant learned of a
+ * hold from the `campaign_held` notification instead. The paragraph ended by
+ * reporting the gap upward, because widening a trunk-owned schema is not this
+ * lane's to do.
+ *
+ * Trunk then widened it — `96fef6b`, "a held campaign carries its reason, because #8
+ * owes the merchant a sentence" — and the serialiser was not changed with it. So the
+ * premise evaporated and the conclusion stayed, and for a while this file carried a
+ * written, confident justification for NOT doing the thing the contract now requires.
+ * That is worse than an out-of-date comment: a reader checking whether the omission
+ * was deliberate would have found a paragraph saying yes.
+ *
+ * The consequence was live. `serialiseCampaign` returned nineteen fields against a
+ * twenty-one-field schema, `CampaignSchema.parse()` failed on two required-and-
+ * nullable keys, and `GET /v1/platform/campaigns` — the owner console's HOME SCREEN
+ * — rendered its error state. Lane C refused to default them to null and was right
+ * to: `heldReason: null` on a campaign that IS held renders it as sent, which is
+ * exactly the outcome non-negotiable #8 exists to prevent. It reported a
+ * money-adjacent safety property rather than papering over it.
+ *
+ * BOTH FIELDS ARE REQUIRED AND NULLABLE, which is the same shape as `voidedAt` on a
+ * transaction and carries the same meaning: `null` is a POSITIVE statement — this
+ * campaign was never held — rather than an absence of information. A client can tell
+ * "not held" from "this API is too old to say". Omitting them is what broke the
+ * parse; sending null when a hold exists is what would break the merchant.
  *
  * `salon` is the salon NAME — the contract carries it beside `salonId` so the
  * console's queue can render a salon rather than an id. `branchId` spells NULL as
@@ -82,6 +102,15 @@ function serialiseCampaign(row: CampaignRow, salonName: string) {
     when: row.sendWhen,
     scheduledAt: row.scheduledAt ? row.scheduledAt.toISOString() : '',
     status: row.status,
+    /**
+     * The hold. `services/campaign.ts` writes both, `campaign_hold_is_complete`
+     * enforces that they arrive together, and `campaign_hold_requires_approved`
+     * enforces that only an approved campaign can carry one — so a non-null pair
+     * here always means "AVO released it and the platform has not sent it", which
+     * is the sentence #8 owes the merchant.
+     */
+    heldReason: row.heldReason,
+    heldAt: row.heldAt ? row.heldAt.toISOString() : null,
     submittedBy: row.submittedBy,
     submittedAt: row.submittedAt.toISOString(),
     decidedBy: row.decidedBy,
