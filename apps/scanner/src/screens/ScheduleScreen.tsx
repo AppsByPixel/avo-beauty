@@ -59,6 +59,7 @@ import { copy } from '../copy/en';
 import { color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { LinkButton, PrimaryButton } from '../components/Buttons';
 import { EmptyState, Refusal } from '../components/States';
+import { useSession } from '../state/session';
 
 /** design:645 — the stepper moves in half-hours. */
 const STEP_MINUTES = 30;
@@ -99,6 +100,7 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
    * `null` until a source has been chosen and the server has answered with the
    * row. There is no invented starting week — see the header.
    */
+  const { reportFailure } = useSession();
   const [artist, setArtist] = useState<ArtistRow | null>(null);
   /** The edits not yet saved. Null means "nothing changed since the last read". */
   const [draftWeek, setDraftWeek] = useState<Week | null>(null);
@@ -106,6 +108,21 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal409>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  /**
+   * Her connection, told apart from our failure.
+   *
+   * It used to fall through to `failed`, and READ TRUTHFULLY BY ACCIDENT: a
+   * transport failure carries `message: 'No connection.'` from `api/client.ts`,
+   * so the body happened to say the right thing while the title above it said
+   * "We couldn't load that". A 503 or 504 had no such luck — it classifies as
+   * `offline` too but carries the SERVER's message, so the screen blamed us for
+   * her signal with no reconnect guidance at all.
+   *
+   * "Nothing is lost" is literally true here: this is a SAVE path, and the draft
+   * is only dropped in the success branch, so her unsaved week is still on
+   * screen behind this alert.
+   */
+  const [offline, setOffline] = useState(false);
   const [saved, setSaved] = useState(false);
   const [notArtist, setNotArtist] = useState(false);
 
@@ -120,6 +137,7 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
       setBusy(true);
       setRefusal(null);
       setFailed(null);
+      setOffline(false);
       setSaved(false);
       try {
         const row = await putMyAvailability(patch, accessToken);
@@ -131,6 +149,13 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
         setDraftSlot(null);
         if (patch.windows || patch.slotMinutes) setSaved(true);
       } catch (err) {
+        /*
+          A DEAD SESSION IS NOT A SCREEN-LEVEL ERROR. `reportFailure` returns true
+          when it ended the session, and the shell then swaps this screen for the
+          PIN screen — the only remedy that helps. Without it a revoked PIN left an
+          artist staring at an alert whose retry 401s for ever.
+        */
+        if (reportFailure(err)) return;
         if (!(err instanceof ApiError)) {
           setFailed(copy.errorBody);
           return;
@@ -155,6 +180,16 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
           setRefusal({ title: copy.noCalendarTitle, body: err.message });
           return;
         }
+        /*
+          AFTER the code checks, and that order is the spec — `orderRefusal.ts`
+          writes down why: the client maps 503 AND 504 to `offline`, so a coded
+          refusal arriving on a 503 must not be read as a dead connection. Both
+          409s above are code checks and therefore win.
+        */
+        if (err.kind === 'offline') {
+          setOffline(true);
+          return;
+        }
         // Everything else keeps the server's sentence: `invalid_windows` names
         // the day and the reason ("Saturday closes at 10:00, at or before it
         // opens at 10:00"), which is more useful than anything written here.
@@ -163,7 +198,7 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
         setBusy(false);
       }
     },
-    [accessToken],
+    [accessToken, reportFailure],
   );
 
   // ------------------------------------------------------------ the editors --
@@ -250,6 +285,19 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
           <View style={styles.refusal} accessibilityRole="alert" testID="schedule-refusal">
             <Text style={[ui(14, '600'), styles.refusalTitle]}>{refusal.title}</Text>
             <Text style={[ui(12.5), styles.refusalBody]}>{refusal.body}</Text>
+          </View>
+        ) : null}
+
+        {/*
+          Her connection. `offlineColdBody` is INVENTED and authorised —
+          DECISIONS.md § "The offline cold-load sentence" — and deliberately not
+          `offlineBanner`, which promises a last update, nor `offlineBody`, which
+          is charge-specific. The draft week is still on screen behind this.
+        */}
+        {offline ? (
+          <View style={styles.refusal} accessibilityRole="alert" testID="schedule-offline">
+            <Text style={[ui(14, '600'), styles.refusalTitle]}>{copy.offlineTitle}</Text>
+            <Text style={[ui(12.5), styles.refusalBody]}>{copy.offlineColdBody}</Text>
           </View>
         ) : null}
 

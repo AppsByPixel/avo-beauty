@@ -32,6 +32,7 @@ import { tierLabel } from '../domain/loyalty';
 import { color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme';
 import { LinkButton } from '../components/Buttons';
 import { EmptyState, ErrorState, OfflineBanner, SkeletonRows } from '../components/States';
+import { useSession } from '../state/session';
 
 type Search =
   | { state: 'idle' }
@@ -61,6 +62,7 @@ export function LookupScreen({
    */
   opening?: boolean;
 }) {
+  const { reportFailure } = useSession();
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState<Search>({ state: 'idle' });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,6 +79,14 @@ export function LookupScreen({
         if (!controller.signal.aborted) setSearch({ state: 'results', rows });
       } catch (err) {
         if (controller.signal.aborted) return;
+        /*
+          A DEAD SESSION IS NOT A SEARCH RESULT. `reportFailure` returns true when
+          it ended the session and the shell swaps in the PIN screen; without it a
+          revoked PIN rendered as an error under the search box, and this screen is
+          the doorway to MemberScreen where money moves — so the wrong answer here
+          is the one that gets acted on.
+        */
+        if (reportFailure(err)) return;
         if (err instanceof ApiError) {
           if (err.kind === 'offline') {
             setSearch({ state: 'offline' });
@@ -88,7 +98,7 @@ export function LookupScreen({
         setSearch({ state: 'error', message: copy.errorBody, reference: '—' });
       }
     },
-    [accessToken],
+    [accessToken, reportFailure],
   );
 
   // Debounced. A search that fires per keystroke is a directory scrape from the
