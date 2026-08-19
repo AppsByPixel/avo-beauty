@@ -447,15 +447,17 @@ export const SalonMetricsSchema = z.object({
    * keys, so serving the field first would mean every client silently drops it
    * — the drift this contract has shipped five times. Widen, then serve.
    *
-   * `.optional()` IS A STAGE, NOT THE SHAPE. Required-but-nullable is the end
-   * state — optional hides a server that FORGOT the field. But the contract
-   * guard (e2e/contract.test.ts) parses real responses and would flag a
-   * required key today's API does not send, and `dev` never stays red. So:
-   * this lands optional, the API starts serving it, and then `.optional()`
-   * comes OFF. If you are reading this after the API serves the field, the
-   * tightening is overdue — do it.
+   * REQUIRED-BUT-NULLABLE, and the staging that got here is worth keeping:
+   * it landed `.optional()` first (the contract guard parses real responses,
+   * and a required key the API did not yet send would have turned `dev` red),
+   * the API began serving it, and the option came off the same day — because
+   * optional hides a server that FORGOT the field. `null` means "no upcoming
+   * appointment — hide the sub-label", and it co-occurs with
+   * `upcomingAppointments: 0` by construction: the instant is `min(starts_at)`
+   * in the same SELECT as the count, so a count beside a missing next is
+   * unrepresentable, not merely untested.
    */
-  nextAppointmentAt: DateTimeSchema.nullable().optional(),
+  nextAppointmentAt: DateTimeSchema.nullable(),
 });
 
 // ----------------------------------------------------------------- staff ---
