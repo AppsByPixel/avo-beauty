@@ -151,9 +151,33 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     /**
-     * `flags` nested, the fee fields flat — the shape `serialisePlatformSettings`
-     * emits, so the console can send back a subset of exactly what it read rather
-     * than transposing between two shapes.
+     * THE WRITE BODY IS FLAT, AND IT IS NOT THE READ SHAPE. This comment used to
+     * claim the opposite — "the shape `serialisePlatformSettings` emits, so the
+     * console can send back a subset of exactly what it read" — and that was false
+     * on the half that matters: the serialiser NESTS the three fee fields under
+     * `commission`, this allow-list is flat, so echoing the read back answers
+     * `invalid_field "Not editable: commission."`. Lane C found it by doing exactly
+     * what the comment invited and contained it client-side (`UpdateSettingsInput`
+     * types the flat form, so the nested one cannot be built by accident).
+     *
+     * THE HANDLER IS THE PART THAT WAS RIGHT, in two ways, so the fix is this
+     * comment and not the code:
+     *
+     *   - it stays ONE body shape. Accepting `commission.cardFlatFils` alongside
+     *     flat `cardFlatFils` means a body can carry both with different values,
+     *     and now the endpoint needs a precedence rule — the "same key, different
+     *     body" ambiguity the idempotency layer exists to refuse elsewhere. Two
+     *     accepted spellings of one write is how that starts.
+     *   - it refuses the nested form BY NAME rather than ignoring it. A console
+     *     that sent `commission: {...}` believed it changed AVO's take; silently
+     *     dropping the key would leave the rate unchanged and the admin sure it
+     *     was not. The loud 400 is what let Lane C find this in an afternoon.
+     *
+     * So, the contract: READ `GET /v1/platform/settings` returns fees nested under
+     * `commission` (grouping is a read affordance); WRITE takes the five flat keys
+     * below, plus `flags` as an object because the switches are one design concept
+     * with a validated id vocabulary. The console transposes on the way out — one
+     * line in the client, versus a permanent ambiguity on the wire.
      */
     const editable = ['flags', 'knetFlatFils', 'cardPercentBp', 'cardFlatFils', 'newSalonDepositFils'];
     const unknown = Object.keys(body).filter((k) => !editable.includes(k));
