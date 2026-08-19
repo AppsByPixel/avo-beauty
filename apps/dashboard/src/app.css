@@ -3658,3 +3658,159 @@ a:hover {
   color: var(--avo-text-muted);
   margin: 4px 0 12px;
 }
+
+/* ------------------------------------------------------------------ controls -- */
+/*
+ * `AVO Owner Console.dc.html:1010` § CONTROLS. Max 820px, a stack of a switches
+ * card, a two-up of fee cards, and the deposit row — the design's own widths.
+ *
+ * Every colour is an `--avo-*` custom property; nothing here restates a hex.
+ */
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 820px;
+}
+
+.controls__h2 {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.controls__switchhead {
+  padding: 8px 0 4px;
+}
+
+.controls__switchrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 0;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+.controls__switchtext {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.controls__switchlabel {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.controls__switchdesc {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
+/* ---- the two fee cards ---- */
+
+.controls__fees {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.console[data-bp='narrow'] .controls__fees,
+.console[data-bp='tablet'] .controls__fees {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.controls__fee {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.controls__feedesc {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+  margin: 0 0 10px;
+}
+
+.controls__feerow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.controls__feenum {
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.controls__feeunit {
+  font-size: 14px;
+  color: var(--avo-text-muted);
+}
+
+/* The design sets the % glyph two points larger than the `fils`/`KD` units. */
+.controls__feeunit--pct {
+  font-size: 16px;
+}
+
+.controls__feerange {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  white-space: nowrap;
+}
+
+/*
+ * The flat card fee the design does not draw a control for. Tinted rather than
+ * plain so it reads as a stated fact and not as an editable field — and
+ * `--avo-brand-deep` text on `--avo-brand-tint`, never white on `--avo-brand`
+ * (non-negotiable #9).
+ */
+.controls__feeflat {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---- the deposit row ---- */
+
+.controls__deposit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.controls__deposittext {
+  min-width: 0;
+}
+
+.controls__deposittext .controls__feedesc {
+  margin: 3px 0 0;
+}
+
+/* ---- the save row ---- */
+
+.controls__save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.controls__saved {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}

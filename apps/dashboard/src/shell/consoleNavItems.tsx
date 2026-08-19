@@ -167,7 +167,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     id: 'controls',
     label: 'Controls',
     to: '/console/controls',
-    built: false,
+    built: true,
     section: 'controls',
     title: 'Controls',
     subtitle: 'Platform-wide settings',
