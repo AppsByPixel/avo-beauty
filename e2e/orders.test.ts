@@ -56,6 +56,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   SALON_A,
+  SALON_B,
   apiLogTail,
   psql,
   scalar,
@@ -560,5 +561,223 @@ describe('POST /orders is idempotent, which closes the fourth of #4\'s four verb
 
     expect(res.status, `${res.raw}`).toBe(400);
     expect(res.body.error).toBe('branch_not_client_supplied');
+  }, 60_000);
+});
+
+// ===========================================================================
+
+/**
+ * `invalid_products` — THE GUARD THAT PRICES NOTHING IT CANNOT NAME.
+ *
+ * `services/order.ts` raises this code in TWO places, and the brief that routed this
+ * slice asked for the second one to be proved reachable on its own, the way the charge
+ * path's `FOR UPDATE` and its conditional token consumption each cover the other.
+ *
+ * IT IS NOT THE SAME SHAPE, AND THE DIFFERENCE IS THE FINDING. On the charge path the
+ * two guards are independent: they serialise different rows, so removing either leaves
+ * the other genuinely load-bearing, which is why breaking that race took two attempts.
+ * Here the second raise is STRICTLY DOMINATED by the first — not merely "usually
+ * covered", but unreachable by construction:
+ *
+ *   guard 1 (:231)  ids     = input.items.map(i => i.productId)
+ *                   unknown = ids.filter(id => !priced.has(id))     -> throws
+ *   guard 2 (:252)  input.items.map(i => { const p = priced.get(i.productId)
+ *                                          if (!p) throw ... })
+ *
+ * Same domain (`input.items` → `productId`), same map, same predicate: `priced.get`
+ * is falsy exactly when `priced.has` is false, because the values are row objects and
+ * a row object is never falsy. Guard 1 has already thrown for every id guard 2 could
+ * object to — including duplicates, which appear in `ids` as many times as they appear
+ * in `items` and so cannot diverge. Order is identical because both walk `input.items`.
+ *
+ * So there is no input that reaches guard 2 while guard 1 stays silent, and no spec
+ * can be written that reaches only it. The code's own comment says so — "Unreachable —
+ * the `unknown` check above threw" — and it is right; it is a type-narrowing fallback
+ * standing in for a `!` assertion, not a second control. Measured by ablation and
+ * reported to trunk rather than tested: a spec claiming to cover it would be a spec
+ * that passes because guard 1 fired.
+ *
+ * WHAT IS COVERED HERE IS GUARD 1, WHICH IS THE ONE THAT REFUSES, and it had NO
+ * `invalid_products` assertion anywhere in `e2e/` before this describe — the endpoint
+ * that takes money out of a wallet for goods, with its "does this product exist"
+ * refusal untested. Three inputs reach it, and they are three different rules wearing
+ * one error code: an id that never existed, an id belonging to ANOTHER SALON (the
+ * tenant boundary `services/order.ts` names as "the case lane D has written down as
+ * owed for the shop"), and an id that has been RETIRED. Each is asserted on the code
+ * and on the database, never on the message.
+ */
+describe('POST /orders refuses a basket it cannot price, by name and without moving money', () => {
+  /** Salon B's product. Priceable at salon B, invisible to a salon A member. */
+  const FOREIGN_PRODUCT = 'PR-QA-B01';
+  /** Salon A's product, `active = false`. Retired, not deleted. */
+  const RETIRED_PRODUCT = 'PR-QA-A99';
+  /** Never existed. */
+  const GHOST_PRODUCT = 'PR-NO-SUCH-THING';
+
+  beforeAll(() => {
+    /**
+     * Written here rather than in `api/src/db/seed.ts` because neither row is a
+     * fixture of something the product ships — lane A's seed gives salon A three
+     * live products and salon B none, which is the honest state of the shop module.
+     * These two exist to make two refusals reachable, so they belong to the spec
+     * that reaches them. Lane D writes only tests; a seed row is lane A's column.
+     */
+    psql(`
+      INSERT INTO product (id, salon_id, name, price_fils, active)
+      VALUES ('${FOREIGN_PRODUCT}', '${SALON_B}', 'Lumiere serum (salon B)', 5000, true),
+             ('${RETIRED_PRODUCT}', '${SALON_A}', 'Discontinued balm', 3000, false)
+      ON CONFLICT (id) DO UPDATE
+        SET salon_id = excluded.salon_id, price_fils = excluded.price_fils,
+            active = excluded.active;
+    `);
+
+    // Asserted, not assumed. A fixture that silently landed active would turn the
+    // retired case into a successful order and the spec would report the opposite.
+    precondition(
+      scalar(`select active from product where id='${RETIRED_PRODUCT}'`).trim() === 'f',
+      `${RETIRED_PRODUCT} is active, so the retired case would settle instead of refusing`,
+    );
+    precondition(
+      scalar(`select salon_id from product where id='${FOREIGN_PRODUCT}'`).trim() === SALON_B,
+      `${FOREIGN_PRODUCT} is not at ${SALON_B}, so the cross-tenant case proves nothing`,
+    );
+  });
+
+  /**
+   * THE MONEY ASSERTION IS THE POINT, in all four cases below.
+   *
+   * The defect this guard exists against is not a bad error message: it is an
+   * unknown id pricing at 0 and settling a real `shop` transaction for goods that do
+   * not exist — which is what the mock's charge path did, and what lane D found there.
+   * So every case reads the balance and the `shop` row count out of Postgres before
+   * and after, and the refusal is only believed if BOTH are unchanged. "The system
+   * refused" is the status and the code; "nothing moved" is the SQL.
+   */
+  const refusal = async (label: string, ids: string[]) => {
+    fund(50_000);
+    const before = balanceOf();
+    const rowsBefore = shopRows();
+    const ledgerBefore = ledgerSum();
+    const k = key(label);
+
+    const res = await treq<any>('POST', '/orders', {
+      token: member,
+      idempotencyKey: k,
+      body: { items: ids.map((productId) => ({ productId, qty: 1 })) },
+    });
+
+    return { res, before, rowsBefore, ledgerBefore, k };
+  };
+
+  it('an id that never existed is refused, and names itself', async () => {
+    const { res, before, rowsBefore } = await refusal('ghost', [GHOST_PRODUCT]);
+
+    expect(res.status, `an unknown product answered ${res.status}: ${res.raw}`).toBe(400);
+    expect(res.body.error).toBe('invalid_products');
+    /**
+     * NAMED, NOT COUNTED — `services/order.ts` puts `{ unknown }` in the error
+     * details for the stated reason that "a client cannot fix 'one of your items is
+     * unavailable'". `ApiError.toBody` spreads details, so it arrives top-level. This
+     * asserts the contract, not the prose.
+     */
+    expect(res.body.unknown, `the refusal did not name the id: ${res.raw}`).toEqual([
+      GHOST_PRODUCT,
+    ]);
+    expect(balanceOf(), 'an unpriceable order moved money').toBe(before);
+    expect(shopRows(), 'an unpriceable order wrote a shop transaction').toBe(rowsBefore);
+  }, 60_000);
+
+  it("another salon's product is not priceable here — the shop's tenant boundary", async () => {
+    const { res, before, rowsBefore } = await refusal('foreign', [FOREIGN_PRODUCT]);
+
+    expect(
+      res.status,
+      `a salon A member ordering salon B's product answered ${res.status}: ${res.raw}. ` +
+        'A cross-tenant price is a wallet debited for another salon\'s goods.',
+    ).toBe(400);
+    expect(res.body.error).toBe('invalid_products');
+    expect(res.body.unknown).toEqual([FOREIGN_PRODUCT]);
+    expect(balanceOf(), "salon B's product debited a salon A wallet").toBe(before);
+    expect(shopRows()).toBe(rowsBefore);
+
+    /**
+     * AND IT IS STILL THERE. The refusal is a visibility rule, not a deletion — the
+     * row must survive so salon B can sell it. A guard that passed by destroying the
+     * fixture would pass once.
+     */
+    expect(scalar(`select count(*) from product where id='${FOREIGN_PRODUCT}'`).trim()).toBe('1');
+  }, 60_000);
+
+  it('a retired product is refused rather than sold at its old price', async () => {
+    const { res, before, rowsBefore } = await refusal('retired', [RETIRED_PRODUCT]);
+
+    expect(res.status, `a retired product answered ${res.status}: ${res.raw}`).toBe(400);
+    expect(res.body.error).toBe('invalid_products');
+    expect(res.body.unknown).toEqual([RETIRED_PRODUCT]);
+    expect(balanceOf(), 'a retired product was sold').toBe(before);
+    expect(shopRows()).toBe(rowsBefore);
+  }, 60_000);
+
+  /**
+   * THE CASE THAT WOULD HAVE CAUGHT A PARTIAL SETTLE, and the reason a
+   * single-bad-item basket is not enough on its own. One good line and one bad line:
+   * a handler that priced what it recognised and skipped what it did not would answer
+   * 201 here, debit 8.500 for the oil, and leave the customer's receipt one item short
+   * of her cart. The whole order has to fail.
+   */
+  it('one bad line refuses the WHOLE basket, including the line that was priceable', async () => {
+    const { res, before, rowsBefore, ledgerBefore } = await refusal('mixed', [
+      PRODUCT,
+      GHOST_PRODUCT,
+    ]);
+
+    expect(
+      res.status,
+      `a mixed basket answered ${res.status}: ${res.raw}. A partial settle debits for a ` +
+        'cart the customer never confirmed.',
+    ).toBe(400);
+    expect(res.body.error).toBe('invalid_products');
+    /** Only the bad one is named. `PRODUCT` priced fine; it just does not get to settle. */
+    expect(res.body.unknown).toEqual([GHOST_PRODUCT]);
+    expect(
+      balanceOf(),
+      `the priceable line settled on its own: balance moved by ${before - balanceOf()} fils`,
+    ).toBe(before);
+    expect(shopRows(), 'a refused mixed basket still wrote a shop transaction').toBe(rowsBefore);
+    /**
+     * And the reconciliation the ablation was caught by. `ledgerBefore` is captured in
+     * `refusal()` BEFORE the request — comparing `ledgerSum()` to itself after would be
+     * a tautology that passes against any behaviour at all.
+     */
+    expect(ledgerSum(), 'the ledger moved for a basket that was refused').toBe(ledgerBefore);
+  }, 60_000);
+
+  /**
+   * AND THE KEY SURVIVES, which is the difference between a refusal and a spent
+   * attempt. `services/order.ts` says of the 402 one section later that "this throw
+   * rolls the transaction back, so the idempotency key is untouched and she can retry
+   * after topping up" — the same rollback covers this 400, and the customer's fix here
+   * is to remove the item rather than top up. If the key were consumed she would have
+   * to be issued a new one by a client that has no idea the old one is dead.
+   */
+  it('and the refused attempt does not spend the idempotency key', async () => {
+    const { res, k } = await refusal('key-survives', [GHOST_PRODUCT]);
+    precondition(res.status === 400, `the refusal did not happen: ${res.raw}`);
+
+    expect(
+      scalar(`select count(*) from idempotency_key where key='${k}'`).trim(),
+      'the rolled-back order left an idempotency_key row, so the key is spent',
+    ).toBe('0');
+
+    // And the behaviour that matters: the same key now works for a corrected cart.
+    const corrected = await treq<any>('POST', '/orders', {
+      token: member,
+      idempotencyKey: k,
+      body: { items: [{ productId: PRODUCT, qty: 1 }] },
+    });
+    expect(
+      corrected.status,
+      `the corrected retry under the same key answered ${corrected.status}: ${corrected.raw}`,
+    ).toBe(201);
   }, 60_000);
 });
