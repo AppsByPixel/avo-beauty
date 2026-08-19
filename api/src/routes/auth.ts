@@ -1,10 +1,14 @@
 /**
- * Authentication. One signup, three sign-ins, one refresh, one password change.
+ * Authentication. One signup, four sign-ins, two reset redemptions, one refresh,
+ * one password change.
  *
  *   POST /auth/member/signup    name + phone + password + accepted policy version
  *   POST /auth/member/session   phone + password   → wallet scope
  *   POST /staff/session         4-digit PIN        → scanner scope   (staff.ts calls in)
  *   POST /auth/web/session      username + password → dashboard scope
+ *   POST /auth/platform/session console handle + password → platform scope
+ *   POST /auth/staff/password-reset     redeem a merchant reset link
+ *   POST /auth/platform/password-reset  redeem a console reset link
  *   POST /auth/refresh          rotate
  *   POST /auth/sign-out         revoke this device
  *   POST /members/me/password   change + revoke every OTHER session
@@ -44,7 +48,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { fils } from '@avo/types';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
-import { platformAdmin } from '../db/schema/platformAdmin';
+import { platformAdmin, platformAdminPasswordReset } from '../db/schema/platformAdmin';
 import { salon } from '../db/schema/salon';
 import { pinAttempt, session } from '../db/schema/session';
 import { staffPasswordReset, staffUser } from '../db/schema/staff';
@@ -767,6 +771,179 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       metadata: { requestedBy: reset.requestedBy, reactivated: reactivating },
       ...clientMeta(req),
     });
+
+    // 204: no body, so no body to leak a credential in. She signs in normally.
+    return reply.code(204).send();
+  });
+
+  // ----------------------------------------------- console reset, redeemed --
+  /**
+   * `POST /auth/platform/password-reset` — the far end of the CONSOLE reset link,
+   * and the door that closes the defect stated in 0033's header.
+   *
+   * `POST /v1/platform/admins/{id}/password-reset` mints the token and answers 202
+   * without it; the admin arrives here holding it. Until this endpoint existed the
+   * invite half was correct, the refusal half was correct, and there was nothing
+   * between them: `POST /v1/platform/admins` creates her with `password_hash` NULL
+   * because non-negotiable #6 permits only a link, and `POST /auth/platform/session`
+   * refuses a NULL hash. An invited platform admin could not sign in at all.
+   *
+   * UNAUTHENTICATED by necessity, exactly as the staff counterpart is: the whole
+   * point is that she cannot sign in yet. The token IS the credential, which is why
+   * it is 32 bytes of CSPRNG, looked up by sha256, single-use, and dead in an hour.
+   *
+   * EVERY FAILURE IS THE SAME REFUSAL — `invalid_reset_token`. Unknown, expired,
+   * already spent, and belonging to an admin who has since been deactivated all
+   * answer identically. The console's admin list is short and its members are named
+   * AVO employees, so a distinguishable "no such admin" is a staff list; and there
+   * is nothing the legitimate holder could do differently in any of the four cases
+   * anyway — she asks for another link.
+   *
+   * A DEACTIVATED ADMIN IS REFUSED, and this is the SECOND of two independent
+   * guards. Deactivation already spends her outstanding links in the same
+   * transaction as the ✕ (see routes/platformAdmins.ts), so the row would normally
+   * be spent before it got here. This guard covers the case that ordering does not:
+   * a link issued, the admin deactivated by a concurrent request that had not yet
+   * committed, the link redeemed. It is also the guard that survives somebody later
+   * changing how deactivation works. One of the two is not enough.
+   *
+   * THE DIVERGENCE FROM THE STAFF PATH, and it is deliberate rather than an
+   * oversight: there, a deactivated account is RE-ACTIVATED here instead of refused,
+   * because a leaver's row is the re-hire path that `handle_taken` on `POST /staff`
+   * points at. The console has no such path. The ✕ IS removal — sessions are revoked
+   * immediately, `loadPlatformPrincipal` refuses the row on every request, and
+   * re-inviting somebody is a separate deliberate act with its own audit row.
+   * Letting a link re-open the owner console for somebody deliberately taken out of
+   * it would be the same mistake in the opposite direction.
+   *
+   * ONE TRANSACTION, unlike the staff path, which spends the row and sets the
+   * password in two unwrapped statements. A crash between them there leaves a spent
+   * link and no password — the admin's one link is gone and she still cannot sign
+   * in, with no way to tell that apart from a link somebody else redeemed. Wrapping
+   * them removes that state. The row lock does the race work either way: the second
+   * redemption blocks on the first, then finds `used_at IS NULL` false and is
+   * refused.
+   *
+   * On success every session for that admin is revoked. She is setting this password
+   * because she lost the old one, and "lost" and "somebody else has it" are the same
+   * event until proven otherwise.
+   */
+  app.post('/auth/platform/password-reset', async (req, reply) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const token = requireString(body.token, 'token', 500);
+    const password = body.password;
+
+    if (!isAcceptablePassword(password)) {
+      throw badRequest('password_too_short', 'Your new password needs at least 6 characters.');
+    }
+
+    const REFUSED = () =>
+      badRequest(
+        'invalid_reset_token',
+        'That reset link has expired or has already been used. Ask for a new one.',
+      );
+
+    /**
+     * Looked up BY HASH. The raw token is never stored, never logged, and never
+     * returned by any endpoint — it exists in the message the admin received and in
+     * this request body, and nowhere else.
+     */
+    const resetRows = await db
+      .select()
+      .from(platformAdminPasswordReset)
+      .where(eq(platformAdminPasswordReset.tokenHash, hashPasswordResetToken(token)))
+      .limit(1);
+    const reset = resetRows[0];
+    if (!reset || reset.usedAt || reset.expiresAt.getTime() <= Date.now()) throw REFUSED();
+
+    const adminRows = await db
+      .select()
+      .from(platformAdmin)
+      .where(eq(platformAdmin.id, reset.platformAdminId))
+      .limit(1);
+    const admin = adminRows[0];
+    // Unknown and deactivated, both silent. See the header.
+    if (!admin || !admin.active) throw REFUSED();
+
+    /**
+     * Whether this is her first sign-in, read BEFORE the write. The audit row wants
+     * it and so does anyone reconstructing an account's history: "set a password for
+     * the first time" and "replaced a password she had" are different events.
+     */
+    const firstSignIn = admin.passwordHash === null;
+
+    /**
+     * argon2id, through the one hashing path this codebase has. Hashed outside the
+     * transaction — it costs 19 MiB and real milliseconds, and none of that should
+     * be spent holding a row lock.
+     */
+    const passwordHash = await hashSecret(password);
+
+    const spent = await db.transaction(async (tx) => {
+      /**
+       * The UPDATE carries `used_at IS NULL` rather than trusting the SELECT above.
+       * Two redemptions of one link racing each other is the double-tapped scanner
+       * in another costume, and the database resolves it: exactly one of them
+       * updates a row and the loser gets zero back.
+       */
+      const burned = await tx
+        .update(platformAdminPasswordReset)
+        .set({ usedAt: new Date() })
+        .where(
+          and(
+            eq(platformAdminPasswordReset.id, reset.id),
+            isNull(platformAdminPasswordReset.usedAt),
+          ),
+        )
+        .returning({ id: platformAdminPasswordReset.id });
+      if (burned.length === 0) return false;
+
+      await tx
+        .update(platformAdmin)
+        .set({ passwordHash, updatedAt: new Date() })
+        .where(eq(platformAdmin.id, admin.id));
+
+      /**
+       * HER OWN ROW, not `System`. The caller holds a single-use token bound to this
+       * account, which identifies her as surely as a password does — it is what the
+       * revoke below is acting on. `actorRole` becomes 'AVO platform' rather than
+       * her console role, which services/audit.ts explains.
+       */
+      await writeAudit(
+        tx,
+        { kind: 'platform_admin', id: admin.id, name: admin.name, role: admin.role },
+        {
+          salonId: null,
+          kind: 'access',
+          action: firstSignIn
+            ? 'Console password set from invite link'
+            : 'Console password set from reset link',
+          detail:
+            `${admin.name} (@${admin.handle}) set a new console password` +
+            (firstSignIn ? ' — first sign-in' : ''),
+          source: 'owner_console',
+          subjectType: 'platform_admin',
+          subjectId: admin.id,
+          // Never the token. An audit row is read by more people, and for longer,
+          // than a response body is.
+          metadata: { requestedBy: reset.requestedBy, firstSignIn },
+          ...clientMeta(req),
+        },
+      );
+
+      return true;
+    });
+
+    // The loser of the race. A specific refusal, not a silent no-op.
+    if (!spent) throw REFUSED();
+
+    /**
+     * Outside the transaction, matching the staff path and routes/staff.ts's
+     * deactivation: revocation is its own write, and a failure here must not roll
+     * back a password the admin has already been told to use. The worst case is a
+     * session that dies at its next request instead of now.
+     */
+    await revokeAllSessions(db, { kind: 'platform_admin', id: admin.id }, 'password_reset');
 
     // 204: no body, so no body to leak a credential in. She signs in normally.
     return reply.code(204).send();

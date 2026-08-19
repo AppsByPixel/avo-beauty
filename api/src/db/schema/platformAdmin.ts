@@ -75,7 +75,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { boolean, check, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, check, index, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 
 /**
@@ -239,3 +239,58 @@ export const platformAdmin = pgTable(
     ),
   ],
 );
+
+/**
+ * The console's password-reset outbox — migration 0033.
+ *
+ * THE DEFECT IT CLOSES: an invited platform admin could not sign in at all. The
+ * invite creates her with `password_hash` NULL, which is what non-negotiable #6
+ * requires ("Owner console only sends a reset link", and the design's "Temporary
+ * password" field is refused by name), and `POST /auth/platform/session` refuses a
+ * NULL hash. Both halves correct, no door between them.
+ *
+ * A SEPARATE TABLE FROM `staff_password_reset`, and 0033's header carries the full
+ * argument: that table's `staff_id` references `staff_user` and its `salon_id` is
+ * NOT NULL, so sharing it would mean making both nullable plus a CHECK that exactly
+ * one is set — three weakenings to save one CREATE TABLE. They also age
+ * differently, because the staff flow has a re-hire path and this one deliberately
+ * does not.
+ *
+ * ONLY THE SHA256 IS STORED. The token lives in the message the admin receives and
+ * nowhere else; no endpoint returns it. Same discipline as
+ * `session.refresh_token_hash` and `wallet_token.token_hash`.
+ */
+export const platformAdminPasswordReset = pgTable(
+  'platform_admin_password_reset',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    platformAdminId: text('platform_admin_id')
+      .notNull()
+      .references(() => platformAdmin.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    /** Who asked. A reset is an access event; the row carries the fact too. */
+    requestedBy: text('requested_by').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    /**
+     * The outbox stamp, and it is EXPECTED TO STAY NULL for now. No sender is
+     * wired — the WhatsApp templates are unapproved and the sending domain is an
+     * open client decision (CLAUDE.md escalations), exactly as
+     * `staff_password_reset.sent_at` records for the merchant flow.
+     */
+    sentAt: timestamptz('sent_at'),
+    usedAt: timestamptz('used_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('platform_admin_password_reset_token_uq').on(t.tokenHash),
+    index('platform_admin_password_reset_live_idx')
+      .on(t.platformAdminId)
+      .where(sql`used_at IS NULL`),
+    check(
+      'platform_admin_password_reset_expires_after_creation',
+      sql`${t.expiresAt} > ${t.createdAt}`,
+    ),
+  ],
+);
+
+export type PlatformAdminPasswordResetRow = typeof platformAdminPasswordReset.$inferSelect;
