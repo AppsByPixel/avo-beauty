@@ -206,6 +206,65 @@ export function useDeactivateAdmin(): UseMutationResult<void, unknown, { id: str
   });
 }
 
+/**
+ * THE RESET LINK — `POST /v1/platform/admins/{id}/password-reset` → 202.
+ *
+ * THE DOOR THIS FILE'S HEADER SAID DID NOT EXIST. It said so correctly at the
+ * time; lane A has since landed both halves (`platformAdmins.ts:461` issues,
+ * `auth.ts:831` redeems), so the "Reset password" and "Link sent" the design draws
+ * now have something behind them and are built. The stale claim is corrected in
+ * place rather than left to be believed — nine "not built" comments in this repo
+ * had already outlived the endpoints they described.
+ *
+ * WHAT COMES BACK CARRIES NO TOKEN, and the endpoint is emphatic about why: "A
+ * link that comes back through the inviter's browser is a credential in the wrong
+ * pair of hands — it would sit in her network log, and she could set the password
+ * herself and know it." So this interface has an id, an expiry and two booleans.
+ * Non-negotiable #6, on the client side of the same rule.
+ *
+ * `delivered` IS FALSE TODAY and is modelled rather than assumed away: no sender
+ * is wired, so the row must not claim the link arrived. `Accounts.tsx` settled the
+ * wording for the identical situation on the merchant Team screen — "'Sent', not
+ * 'delivered'. The endpoint answers 202 — accepted for delivery, with no sender
+ * wired yet — so the card reports what is true: a link exists and it stops working
+ * at a stated time." The console says the same thing for the same reason.
+ *
+ * `firstSignIn` distinguishes an admin who has never had a password from one
+ * resetting an existing one — the API added it so the console can tell the two
+ * apart, which is exactly the distinction the invited row already draws.
+ */
+export interface PlatformResetAccepted {
+  adminId: string;
+  /** ISO. The link stops working at this instant. */
+  expiresAt: string;
+  /** False today — accepted for delivery, not delivered. */
+  delivered: boolean;
+  /** True when `password_hash` was NULL: this is her first sign-in, not a reset. */
+  firstSignIn: boolean;
+}
+
+export function useSendAdminReset(): UseMutationResult<
+  PlatformResetAccepted,
+  unknown,
+  { id: string }
+> {
+  return useMutation({
+    mutationFn: ({ id }) =>
+      authedRequest<PlatformResetAccepted>(
+        'owner',
+        `/v1/platform/admins/${encodeURIComponent(id)}/password-reset`,
+        { method: 'POST' },
+      ),
+    /*
+     * NO CACHE WRITE, deliberately, and the same call `useSendPasswordReset` makes.
+     * Issuing a link changes nothing on the admin row the list renders:
+     * `password_hash` is untouched until she redeems it, so `passwordSet` is still
+     * false and "Invited · cannot sign in yet" is still the true state. Invalidating
+     * here would refetch the list to learn nothing and would flicker every row.
+     */
+  });
+}
+
 /* ------------------------------------------------------------------ labels -- */
 
 /**

@@ -21,6 +21,7 @@ import {
   useDeactivateAdmin,
   useInviteAdmin,
   usePlatformAdmins,
+  useSendAdminReset,
   useUpdateAdmin,
   type AssignableRole,
 } from '../../api/platformAdmins.js';
@@ -53,25 +54,35 @@ import { SectionError, WriteError } from '../sectionState.js';
  * reason it is not drawn is #6, not the 400.
  *
  * =========================================================================
- * AN INVITED ADMIN CANNOT SIGN IN YET, AND THE SCREEN SAYS SO
+ * THE RESET LINK EXISTS NOW, AND THIS COMMENT USED TO SAY IT DID NOT
  * =========================================================================
- * The design pairs the password field with a "Reset password" button and a "Link
- * sent" confirmation. THERE IS NO ENDPOINT BEHIND EITHER. `POST
- * /staff/{id}/password-reset` exists for salon staff — `requireDashboardPerm(req,
- * 'team')`, against `staff_user` — and there is no
- * `/v1/platform/admins/{id}/password-reset` at all; a platform principal cannot
- * reach the staff route and it targets the wrong table anyway.
+ * It read: "The design pairs the password field with a 'Reset password' button and
+ * a 'Link sent' confirmation. THERE IS NO ENDPOINT BEHIND EITHER … Drawing 'Reset
+ * password' would be a button that does nothing."
  *
- * So an invite creates a row with `password_hash` NULL and she cannot sign in
- * until the console reset flow lands (lane A has it queued). Drawing "Reset
- * password" would be a button that does nothing, and "Link sent" would be a
- * sentence that is not true.
+ * That was true when it was written and is false now. Lane A landed both halves —
+ * `POST /v1/platform/admins/{id}/password-reset` issues
+ * (`api/src/routes/platformAdmins.ts:461`) and `POST /auth/platform/password-reset`
+ * redeems (`api/src/routes/auth.ts:831`) — so the button is built. The claim is
+ * corrected in place rather than deleted, because a stale "not built" note is the
+ * repeat failure in this repo: nine of them had outlived their endpoints, and this
+ * one was rebased in still asserting a gap that had closed.
  *
- * Instead the row renders the state the API actually reports — `passwordSet`,
- * the same boolean `serialiseStaff` exposes as `pinSet` — as "Invited · cannot
- * sign in yet". WRITTEN DOWN RATHER THAN LEFT OUT: a missing button and a button
- * nobody needed look identical in a diff, and an inviter who is not told this
- * will believe she has given somebody access.
+ * "Link sent" IS the design's word and is used, with the same care `Accounts.tsx`
+ * takes over the identical 202: the endpoint reports ACCEPTED, not delivered, and
+ * answers `delivered: false` because no sender is wired. So the row says a link
+ * exists and when it stops working, and never that it arrived.
+ *
+ * `passwordSet` still drives "Invited · cannot sign in yet" — issuing a link does
+ * NOT set a password, so the pill is still true after the button is pressed, and
+ * the two are showing different facts rather than contradicting each other.
+ *
+ * THE OWNER GETS THE BUTTON, unlike the ✕ and the chips. The endpoint allows it
+ * deliberately and says why: she is the escape hatch that cannot be removed, so an
+ * owner locked out with no way to request a link is "the one lockout with nothing
+ * behind it". Resetting a credential is not editing authority. A REMOVED admin does
+ * NOT get it — the endpoint refuses her with 404, because a link would be a way
+ * back into the console for somebody deliberately taken out of it.
  *
  * =========================================================================
  * NINE CHIPS, NOT THE DESIGN'S SIX
@@ -86,10 +97,25 @@ export function Admins() {
   const invite = useInviteAdmin();
   const update = useUpdateAdmin();
   const deactivate = useDeactivateAdmin();
+  const sendReset = useSendAdminReset();
   /* `adminId`, not `id` — see auth/session.ts § OwnerSession. */
   const me = useSession('owner');
 
   const [adding, setAdding] = useState(false);
+  /*
+   * WHICH ROW HAS A LIVE LINK, keyed by admin id rather than read off the mutation.
+   * `useMutation` holds one `data`/`variables` pair, so a second reset would move
+   * the "Link sent" line from the first row to the second and quietly imply the
+   * first link had stopped existing. Both are live — the endpoint spends a previous
+   * link only for the SAME admin — so the screen has to remember per row.
+   *
+   * Local state and not the query cache, because the server sends none of this back
+   * on the admin row: `password_hash` is untouched until she redeems the link, so
+   * there is nothing in `GET /v1/platform/admins` to hold it. It is therefore
+   * session-scoped by nature and lost on reload, which is honest — the console
+   * cannot know from the API whether a link is still outstanding.
+   */
+  const [linkSentAt, setLinkSentAt] = useState<Record<string, string>>({});
 
   if (admins.isError) {
     return (
@@ -194,6 +220,18 @@ export function Admins() {
                 update.mutate({ id: admin.id, sections: { [section]: on } })
               }
               onRemove={() => deactivate.mutate({ id: admin.id })}
+              /* Per row, so a second reset does not move the first row's line. */
+              resetting={sendReset.isPending && sendReset.variables?.id === admin.id}
+              linkExpiresAt={linkSentAt[admin.id] ?? null}
+              onReset={() =>
+                sendReset.mutate(
+                  { id: admin.id },
+                  {
+                    onSuccess: (accepted) =>
+                      setLinkSentAt((prev) => ({ ...prev, [accepted.adminId]: accepted.expiresAt })),
+                  },
+                )
+              }
             />
           ))}
         </ul>
@@ -204,6 +242,14 @@ export function Admins() {
       ) : null}
       {deactivate.isError ? (
         <WriteError error={deactivate.error} reassurance="That admin still has access." />
+      ) : null}
+      {sendReset.isError ? (
+        /*
+         * "No link was sent" is the whole reassurance and it is accurate: the issue
+         * is one transaction that spends the previous link and inserts the new one
+         * together, so a failure leaves any earlier link exactly as it was.
+         */
+        <WriteError error={sendReset.error} reassurance="No link was sent." />
       ) : null}
     </div>
   );
@@ -273,8 +319,8 @@ function InviteForm({
       */}
       <p className="admins__note">
         AVO never sets a password. {name.trim() === '' ? 'The new admin' : name.trim()} will get a
-        reset link and choose her own — and until the console&rsquo;s reset flow ships, an invited
-        admin cannot sign in yet.
+        reset link and choose her own — send it with Reset password on her row once she&rsquo;s
+        created.
       </p>
 
       {error ? <WriteError error={error} reassurance="No admin was created." /> : null}
@@ -303,6 +349,9 @@ function AdminCard({
   onRole,
   onToggle,
   onRemove,
+  onReset,
+  resetting,
+  linkExpiresAt,
 }: {
   admin: PlatformAdmin;
   isMe: boolean;
@@ -310,6 +359,10 @@ function AdminCard({
   onRole: (role: AssignableRole) => void;
   onToggle: (section: PlatformSection, on: boolean) => void;
   onRemove: () => void;
+  onReset: () => void;
+  resetting: boolean;
+  /** ISO expiry of a link issued in THIS session, or null. */
+  linkExpiresAt: string | null;
 }) {
   /*
    * THE OWNER IS NOT EDITABLE, which the design draws (no select, no ✕, a static
@@ -378,16 +431,6 @@ function AdminCard({
           )}
 
           {/*
-            WHAT THE DESIGN DRAWS AS "Reset password" / "Link sent".
-
-            Neither is drawn, because neither has an endpoint — there is no
-            `/v1/platform/admins/{id}/password-reset`. What IS true is reported
-            instead, from `passwordSet`: a `false` means the row was created with
-            `password_hash` NULL and she cannot authenticate. Rendering a button
-            here would be the worse failure of the two: the inviter would press it,
-            see nothing, and conclude the admin had been sent a link.
-          */}
-          {/*
             `|| removed` for the same reason `Accounts.tsx` writes
             `account.passwordSet || leaver ? null : …` — a removed admin also has
             `passwordSet: false` (she never set one), so without this she would
@@ -396,6 +439,38 @@ function AdminCard({
           */}
           {admin.passwordSet || removed ? null : (
             <Pill tone="neutral">Invited &middot; cannot sign in yet</Pill>
+          )}
+
+          {/*
+            "Reset password" / "Link sent" — the design's two words, now that lane A
+            has put an endpoint behind them. On EVERY row including the owner's,
+            which the design draws and the endpoint deliberately permits: she is the
+            escape hatch that cannot be removed, so refusing her a link would be the
+            one lockout with no way out. Resetting a credential is not editing
+            authority, which is why this sits outside `editable`.
+
+            NOT on a removed row — the endpoint answers 404 there on purpose, since a
+            link would be a way back in for somebody deliberately taken out.
+
+            "Link sent · expires HH:MM" reports what the 202 actually promises. The
+            response carries `delivered: false` and no token, and neither the link nor
+            anything derived from it is rendered — non-negotiable #6 on this side of
+            the wire too.
+          */}
+          {removed ? null : linkExpiresAt ? (
+            <span className="admins__sent">
+              <span className="admins__sent-dot" aria-hidden="true" />
+              Link sent &middot; expires {formatExpiry(linkExpiresAt)}
+            </span>
+          ) : (
+            <Button
+              variant="secondary"
+              className="admins__reset"
+              disabled={busy || resetting}
+              onClick={onReset}
+            >
+              {resetting ? 'Sending…' : 'Reset password'}
+            </Button>
           )}
 
           {removable ? (
@@ -451,6 +526,23 @@ function AdminCard({
       </Card>
     </li>
   );
+}
+
+/*
+ * The same four lines as `Accounts.tsx`'s `formatExpiry`, which is module-private
+ * there. Duplicated rather than extracted on purpose: sharing it means editing a
+ * file already on `dev` to move a wall-clock formatter, which buys nothing and adds
+ * merge surface to two lanes' worth of console work. If a third caller appears it
+ * belongs in `packages/ui` and that is a trunk conversation.
+ *
+ * 'en-GB' and a 24-hour clock, matching the merchant screen. Not money, so the
+ * three-decimal rule does not apply; `formatMoney` is untouched by this screen
+ * because nothing on it is money.
+ */
+function formatExpiry(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return 'soon';
+  return at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
 function PersonCheckGlyph() {

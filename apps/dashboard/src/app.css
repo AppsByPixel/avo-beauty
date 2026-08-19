@@ -3353,6 +3353,42 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/*
+ * "Link sent · expires HH:MM". The same declarations as `.account__sent` on the
+ * merchant Team screen, against the same tokens, because it is the same 202 being
+ * reported and it should not look like a different fact.
+ *
+ * NON-NEGOTIABLE #9: `--avo-brand-deep` TEXT on a `--avo-brand-tint` surface. Not
+ * white on `--avo-brand` — `--avo-brand` is a surface colour and this is text on it.
+ * Both values come from the token set; no hex is retyped here.
+ */
+.admins__sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 7px 12px;
+  border-radius: var(--avo-radius-pill);
+  white-space: nowrap;
+}
+
+.admins__sent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9px;
+  background: var(--avo-brand-deep);
+  flex-shrink: 0;
+}
+
+/* Keeps the button from stretching in the flex row that holds the name and the ✕. */
+.admins__reset {
+  flex: none;
+  white-space: nowrap;
+}
+
 .admins__remove {
   flex: none;
   border: 0;
