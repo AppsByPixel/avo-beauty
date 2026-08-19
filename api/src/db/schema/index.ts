@@ -62,5 +62,6 @@ export * from './booking';
 export * from './notification';
 export * from './legal';
 export * from './platformAdmin';
+export * from './platformSettings';
 export * from './campaign';
 export * from './sandboxGateway';
