@@ -110,14 +110,50 @@ function KpiRow({ metrics, loading }: { metrics: SalonMetrics | undefined; loadi
           : {})}
       />
       {/*
-        The design shows "+4 pts vs last month" under Repeat rate and "next at
-        4:30 PM" under Upcoming. Neither figure exists on
-        GET /salons/{id}/metrics, so neither is rendered. Flagged, not invented.
+        The design shows "+4 pts vs last month" under Repeat rate; that figure
+        still does not exist on GET /salons/{id}/metrics, so it is still not
+        rendered. The Upcoming tile's "next at 4:30 PM" DOES exist now —
+        `nextAppointmentAt` landed on SalonMetricsSchema and tightened to
+        required at 845dae4 — so half of this comment's old claim expired and
+        only half is kept. Flagged-not-invented cuts both ways: rendering stops
+        being optional once the field is real.
       */}
       <StatCard label="Repeat rate" value={`${metrics.repeatRatePercent}%`} />
-      <StatCard label="Upcoming today" value={String(metrics.upcomingAppointments)} />
+      <StatCard
+        label="Upcoming today"
+        value={String(metrics.upcomingAppointments)}
+        {...(metrics.nextAppointmentAt !== null
+          ? { delta: `next at ${nextAtLabel(metrics.nextAppointmentAt)}` }
+          : {})}
+      />
     </div>
   );
+}
+
+/**
+ * "next at 4:30 PM" — the Upcoming tile's sub-label, in the design's own words.
+ *
+ * THE SERVER SENDS AN INSTANT, DELIBERATELY. The schema's comment ties the field
+ * to the count's own window and zone; the RENDERING is this client's job, in the
+ * salon's clock. The zone is pinned to Asia/Kuwait rather than the browser's:
+ * every salon this product ships to is Kuwaiti (`salon.timezone` defaults to it,
+ * and the platform's own month boundary is defined in it), and an owner checking
+ * the dashboard from abroad should read her salon's 4:30 PM, not her hotel's.
+ *
+ * `null` never reaches here — the schema guarantees it co-occurs with a count of
+ * 0, and the call site hides the sub-label on null, which is the tile's honest
+ * empty. Western digits by construction (#12): `toLocaleTimeString` with an
+ * en locale renders Latin digits, which is what the money rule requires of the
+ * Arabic layout too.
+ */
+function nextAtLabel(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return 'soon';
+  return at.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'Asia/Kuwait',
+  });
 }
 
 /* ------------------------------------------------------------- activity feed */
