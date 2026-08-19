@@ -38,6 +38,46 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### A reset redemption can be driven end to end with no production test hook — routed to Lane D
+
+**The question Lane A raised, correctly.** Nobody has ever driven a password-reset redemption
+end to end, staff or console. The raw token is stored **only** as a sha256 and returned by no
+endpoint — which is non-negotiable #6 working exactly as intended — and no sender is wired, so
+`e2e/configuration.test.ts` stops at the `202`. Lane A stood in for delivery by hand, then
+asked whether a test hook was needed, noting one would have to live outside `api/`.
+
+**My answer: no hook, and nothing in `api/` changes.** The pieces are already there.
+`e2e/support/tenancy-harness.ts` shells out to the real `avo-postgres` container, and
+`hashPasswordResetToken` is a plain sha256 **hex digest** of the raw token
+(`api/src/auth/tokens.ts`). So a spec can:
+
+1. mint its own token locally — any string; `randomBytes` keeps it honest;
+2. compute the sha256 hex **in the spec**, with node's `crypto`, importing nothing from
+   `api/src`;
+3. `UPDATE platform_admin_password_reset SET token_hash = …` for the row the real issue
+   endpoint created — **this is the delivery step, and only the delivery step**;
+4. POST the raw token to the real `POST /auth/platform/password-reset`.
+
+Everything the endpoint does — the hash lookup, the `used_at IS NULL` conditional spend, the
+argon2id write, the session revocation, the refusals — is exercised for real. Only the
+messenger is simulated, which is the one part that is genuinely blocked on a client escalation
+(WhatsApp templates, sending domain).
+
+**Why this is not the "test hook that becomes a back door".** A production endpoint that
+returned the token would be a #6 violation living permanently in the codebase to serve a test,
+and the reason `passwordSet: boolean` exists instead of any password field. Writing a row from a
+test does not weaken the product, because the test's privileges are the database's, not the
+API's — and Lane D already holds those to assert tenancy.
+
+**The one coupling, and why it is a feature.** The spec must know the algorithm is sha256-hex.
+If the API ever changed it, the spec would fail loudly. That is the correct alarm, not
+brittleness — a credential-hashing change nobody noticed is precisely what should break a build.
+
+**Reversal.** If a real sender lands, the delivery step is replaced by reading the outbox
+instead of stamping it, and steps 1–2 disappear. Note the sender will have to receive the raw
+token **at mint time**, from the issue endpoint's own memory — it cannot recover one from the
+table, by design. Worth knowing before anyone designs that worker.
+
 ### Three orphaned lane API servers were still writing to lane databases — killed by PID
 
 **What.** Picking up a session whose four lane agents had died, I found five leaked processes
