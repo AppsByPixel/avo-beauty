@@ -19,12 +19,14 @@ import { useSalonId } from '../auth/AuthProvider.js';
  * `SalonMetrics` is re-exported below so the callers' import site — the hook's
  * own module — keeps working; the TYPE now has one home.
  *
- * `nextAppointmentAt` note: the schema declares it `nullable().optional()` and
- * its comment is emphatic that OPTIONAL IS A STAGE, NOT THE SHAPE — it is
- * declared ahead of the API serving it so zod does not strip it the day it
- * arrives. This client therefore TOLERATES the field today and renders nothing
- * from it; the Upcoming tile's "next at 4:30 PM" sub-label is a routed follow-up
- * that starts when lane A's serving lands and `.optional()` comes off.
+ * `nextAppointmentAt`: required-but-nullable. It landed `.optional()` as a
+ * declared stage ahead of the API serving it, and the tightening happened at
+ * `845dae4` the same day the serving did — this note was updated in the SAME
+ * session that wrote "tolerates the field today", precisely so it would not
+ * become the fifth stale claim of this build. The parse now REQUIRES the key, so
+ * a server that forgot the field fails loudly instead of hiding behind optional.
+ * The Upcoming tile's "next at 4:30 PM" sub-label remains a routed follow-up;
+ * nothing renders the value yet.
  */
 export type { SalonMetrics } from '@avo/types';
 
