@@ -90,56 +90,50 @@ any line of it, including this one.
 
 **All twelve non-negotiables are satisfied.** #10 was the last one open and closed when signup landed.
 
-### In flight right now — four lanes, dispatched 2026-08-19 14:20 PKT
+### Session of 2026-08-19 — four lanes merged, and what each returned
 
-**What the previous handoff listed as in-flight was largely already landed.** Verified on `dev`
-by grepping the route registrations rather than reading the headers: `0032_platform_settings.sql`
-is **committed**; `GET /platform/metrics`, `GET` + `PATCH /platform/settings` and
-`GET /platform/audit` are **all built** in `api/src/routes/platformConsole.ts`;
-`policies_not_published` → 409 is **built** (`routes/platform.ts`, `services/policy.ts`);
-`Approvals.tsx` is **on `dev`**; the order path's `invalid_products` guards are **built** in
-`api/src/services/order.ts` (two of them); and the near-duplicate charge guard is **already
-covered** in `e2e/scanner.test.ts`. This is the "never trust a comment" trap in its other
-direction — a *handoff* can be as stale as a header.
+`dev` **356 commits**, `main` **103 behind**, `origin/dev` still at `e50a446` — **12 commits
+unpushed on purpose.** `RUNBOOK.md` puts `git push origin dev` *after* the twice-green gate, and
+the gate has not run because it must not run under load: one attempt was already OOM-killed, and
+lanes were live throughout this session. Cold `turbo run typecheck --force` after every merge:
+**11/11, 0 cached**. The full `pnpm check` twice from a clean tree is the outstanding step.
 
-The real remaining work, and what each lane was dispatched to do:
+All four lanes merged: **A** `0e0b50f`, **C** `0c6a3fa`, **D** `44f17ec`, **B** `0614e2f` and
+`1bdf6ae`. go-live **10 → 13 ticked / 40**.
 
-- **Lane A** (`api/`) — the console password-reset. Its worktree held uncommitted work
-  building the **issue** half (`0033_platform_admin_password_reset.sql`, the drizzle table, and
-  `POST /v1/platform/admins/{id}/password-reset`, plus deactivation spending outstanding links).
-  **The redeem half does not exist, so an invited admin still cannot sign in** — the invite
-  creates her with `password_hash` NULL, which #6 requires, and `POST /auth/platform/session`
-  refuses a NULL hash. Both halves correct, no door between them. Lane A is building the redeem
-  endpoint against the staff pattern (`routes/staff.ts:701` issues, `routes/auth.ts:669`
-  redeems), single-use under a race, then committing and rebasing.
-- **Lane B** (`apps/wallet`, `apps/scanner`) — **queue already drained; reported back with
-  nothing to build.** All three items were merged before dispatch: the retired-product race
-  (`34df710`), the "Charged 0.000 KD" frame (`d29fdb4`) and the secure-store migration
-  (`e5d376c`) are all ancestors of `e50a446`. 192 wallet specs pass across 13 files.
+**What actually shipped.** Lane A: the console password-reset's *redeem* half, so an invited
+platform admin can sign in — the invite and the refusal were both already correct and there was
+no door between them. Lane C: the console's Admins section, plus a removed admin who still
+rendered with a live role select and nine live chips while the header counted her. Lane B: the
+authorised offline cold-load sentence, the `FailureScreen` kind that `useShop` was discarding,
+and two more screens that had already shipped "showing your last update" with nothing on screen.
+Lane D: the console's eight gates (previously zero coverage), the order path's basket guard, and
+the first reset redemption any spec has driven on either surface — 700 specs, twice, on fresh
+databases with negative controls.
 
-  **And Lane B corrected me on the mechanism, which is the part worth keeping.** I had written
-  that `ShopScreen.tsx` "makes no reference to `invalid_products`, so the wallet does not handle
-  the answer the API gives it." The grep was true and the inference was false: the handling was
-  *deliberately extracted* into `apps/wallet/src/domain/orderRefusal.ts` because — its own
-  header — *"this workspace has no renderer, so a branch left inline in a hook is a branch no
-  test can reach."* The live chain is `ShopScreen.tsx` → `refusal={shop.refusal}` →
-  `CartSheet.tsx`, which merges catalogue-detected and server-named ids and renders the product
-  name. **A single-file grep is the wrong instrument for a deliberately extracted module** — and
-  I made this error in the very commit warning that a handoff ages like a comment. Extraction for
-  testability moves code *out* of the file a grep would search, so the better-engineered the
-  code, the more misleading the single-file grep.
-- **Lane C** (`apps/dashboard`, `packages/ui`) — **Admins**. Its worktree held 424 uncommitted
-  lines of a built section with states and an invite form; Lane C is verifying it against the
-  real API, committing, rebasing, then moving to the next console section that has a real
-  endpoint behind it.
-- **Lane D** (`e2e/`) — the order path's **second** `invalid_products` guard verified
-  **reachable alone** (two guards that cover each other are the charge path's lesson repeated),
-  the console platform routes with #7 as the spine, and the testable subset of the go-live rows.
-  Explicitly scoped **off** unmerged Admins/reset work.
+### The pattern this session, and the reason to read the rest of this file suspiciously
 
-**Both dirty worktrees were preserved before anything touched them** — `git diff` to a patch
-plus a tar of the untracked files, because `git diff` does not capture new files and new files
-were the bulk of both slices. Copies in `~/.claude/lane-preserve-2026-08-19/`.
+**Every lane corrected a claim I gave it, and every one of those claims came from this file.**
+
+- The order path's "second guard verified reachable alone" — **unreachable by construction.**
+  Deliberate type-narrowing the author chose over the file's only `!`, and its own comment says
+  so. The defect was in the description, not the code.
+- "The no-show return job has never been executed by a spec" — **12 occurrences, 5 hard
+  assertions**, driven through the real runner.
+- "31 Arabic strings have no source" — **74**, plus a derived-forms list. It more than doubled as
+  screens landed and nothing recomputed it.
+- "`ShopScreen` makes no reference to `invalid_products`, so the wallet does not handle it" —
+  true grep, false inference; the handling was **deliberately extracted** so a test could reach
+  it.
+- A 403 branch I instructed on `BookingsScreen` — **unreachable**; that route raises 404 by
+  design, so the branch would have been dead code with an invented string attached.
+
+Five for five. **A status file is prose about code, and prose does not recompile.** The
+generalisation worth more than any single fix: **a zero result is a claim about your command as
+much as about the tree.** This session was misled by a silent zsh glob eating `--include=*.ts`,
+by `_` as a `LIKE` wildcard (`rst_` matching "fi**rst**"), and by a single-file grep against an
+extracted module — three shapes of one error, each caught only because a lane re-checked
+something it had been told.
 
 ### What is left after those queues drain
 
