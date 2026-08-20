@@ -376,7 +376,21 @@ unless it is explicitly deferred in writing.
 
 ## Product completeness
 
-- [ ] Every screen has its loading, empty, error and offline states built
+- [x] Every screen has its loading, empty, error and offline states built
+      - **Ticked by trunk, 2026-08-20 — the first concern-scoped row to close on every
+        surface.** Wallet + scanner: Lane B, 6 + 11 screens (`31dc1ff`). Dashboard +
+        console: Lane C, all 23 route components (`7647fb3`). Both halves are held by a
+        **source census** that fails by name when a screen sits in no list, and Lane C's
+        also parses `router.tsx`'s route tables so a new route cannot ship unaudited.
+      - **Both censuses failed on their own authors on first run** — Lane B's on
+        `PinScreen`, Lane C's on `Marketing.tsx` and `marketing/Campaigns.tsx` — and in
+        each case the model was corrected rather than the assertion loosened. That is the
+        evidence the guards are real: a hand-kept list would simply have agreed with
+        whoever wrote it.
+      - The sign-in doors (`SignIn`, `ConsoleSignIn`, `PinScreen`) are their own category,
+        not exclusions: each **owes** the offline guarantee — "can't reach" and "wrong
+        password" are different next moves — but must not render the sections' error
+        vocabulary, because there is no session to explain and the screen *is* the remedy.
       - Lane B, 2026-08-19 — **wallet and scanner halves DONE**, 6 + 11 screens audited.
         Wallet: all five `FailureScreen` call sites thread the real kind and the component
         branches all three; Home and Account keep last-known data with a timestamp; the QR is
