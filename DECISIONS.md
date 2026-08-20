@@ -31,6 +31,7 @@ through commit messages.
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
 | 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
+| 14 | **What should a customer see for a salon-initiated balance change?** The design draws the console's "Adjust wallet" and its audit line, but the wallet's activity fixtures never show an adjustment. The label `'Adjustment'` was **forced by the type** (`txKind` is a Record over every `Transaction` kind) and filled in undocumented — same provenance as three other labels the record demanded, none drawn. She now sees an honest unexplained balance change with **no route to an explanation**, because `note` deliberately never reaches her. | Needs a drawn row and a product call: whether it is even called "Adjustment", whether a credit and a deduction should read the same, and whether an unexplained change is meant to be a support call. Widening `TransactionSchema` to carry `note` is trunk-owned *and* a product question. |
 | 13 | **The set-new-password screen is not drawn, and the reset link has nowhere to land.** The design's auth flow has login/signup/forgot only — no redeem layout, no copy for its success or refusal states — the sender is the standing WhatsApp/domain escalation, and the wallet has no inbound deep-link routing at all, so the link's shape (`avo://reset?token=…`) is a decision, not a wiring gap. | Needs a drawn screen (designer), the sender (client escalation), and a deep-link ruling. Until all three, the flow honestly ends at "Check WhatsApp" — which is everything it can truthfully do. |
 | 12 | **Erasure cannot reach the audit log, structurally — and the policy promises both.** Her historical `audit_log` rows (`actor_name`, ip, ua, names in `detail`) and `member_consent_event` outlive erasure: the app role had UPDATE/DELETE revoked in 0020/0023, which is what makes the log trustworthy. Policy §5 (deletion) and §7 (audit) are in genuine tension. | The fix needs an owner-role job or a narrow column grant, and the **retention schedule is client-owned** (CLAUDE.md escalations). Every erasure records `retainedBeyondErasure` in its own audit metadata, so the gap is a standing measured fact while it waits. |
 | 11 | **Should a deletion request be refused up front when money is still in motion?** The request checks only `balance_fils` at request time, so residual balance, escrowed `deposit_held`, and a live top-up intent can all reach the due date. The job counts and **defers** each, visibly — a deferred count persisting across runs is a member the platform is quietly failing. | Whether the *request* endpoint should refuse escrow/in-flight states is a product call about what a customer is told at the moment she asks to leave. The safe behaviour (defer, never erase money in motion) ships either way. |
@@ -42,6 +43,35 @@ through commit messages.
 ## Decisions I made
 
 Newest first. Each: what, why, and how to reverse it.
+
+### A type-forced label is an undrawn design decision wearing a compiler's authority
+
+**The pattern Lane B named while reporting the adjustment row.** `txKind` is typed
+`Record<Transaction['kind'], string>`, so adding a transaction kind **forces** a label into
+existence. Four of them — `'Adjustment'`, `'Service'`, `'Shop order'`, `'Deposit held'` — were
+never drawn anywhere in the bundle. They exist because the compiler demanded a value, and they
+read as designed copy to anyone who finds them later.
+
+**Why this is worth a decision entry rather than a shrug.** This build's rule is *keep the copy
+verbatim, do not paraphrase, do not invent*. An exhaustive `Record` quietly inverts that rule:
+it makes inventing the **path of least resistance** and the omission **invisible**, because the
+type is satisfied and nothing is missing. That is the opposite failure from the stale absence
+comments — there the prose claimed a gap that had closed; here the type conceals a gap that is
+open.
+
+**What is not changing.** The labels stay, all four are in `AR_GAPS`, and the rendering is
+consistent. Lane B was right to report rather than redesign: what a customer should read for a
+salon-initiated balance change is a product call (queued as #14), and a lane guessing it would
+be exactly the invention the rule forbids.
+
+**What is changing: the provenance is now recorded where the labels live.** An undrawn label
+should be identifiable as undrawn. `AR_GAPS` already marks them as lacking *Arabic*; nothing
+marked them as lacking a *source*. Note this in the copy files when next in them — a
+type-forced value is a decision nobody made, and it should not be able to pass as one that was.
+
+**The generalisable check:** when a discriminated union gains a member, ask what the exhaustive
+records over it just invented. `Record<Kind, …>` is a lint that catches missing *code* and
+launders missing *design*.
 
 ### The drawn sent-state sentence stands, and the tension is recorded where the copy lives
 
