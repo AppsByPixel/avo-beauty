@@ -192,6 +192,31 @@ const MIRROR_WOULD_WRITE: Record<string, string> = {
   'POST /v1/platform/policies/discard': 'destroys the current draft',
 };
 
+/**
+ * Routes whose permission is chosen AT RUNTIME, so the census cannot name it statically.
+ *
+ * THE FIRST ENTRY IS THE CENSUS'S FIRST CATCH, four commits after it merged. Reports
+ * landed with its gate inside a shared `build()` helper calling
+ * `requireDashboardPerm(req, REPORT_PERMISSION[kind])` — the permission is selected BY
+ * the path parameter (customers→team, sales→dashboard, best-selling-services→
+ * appointments, products-sold→shop). The census resolved `build` as a wrapper and then
+ * failed "resolves every gate to a permission it can name", naming both routes and
+ * their lines. That is the designed behaviour: a gate no generated probe can drive is a
+ * gate somebody has to claim out loud.
+ *
+ * An entry here is a CLAIM that per-value probes exist elsewhere, and it must say
+ * where. The generated sweeps skip these routes — a probe that cannot know which
+ * permission to revoke would assert `PERMISSION_COPY[undefined]` and fail for a reason
+ * that is about this file, not the API. Staleness is checked in both directions below.
+ */
+const DYNAMIC_PERMISSION: Record<string, string> = {
+  'GET /salons/:id/reports/:kind':
+    'permission = REPORT_PERMISSION[kind]. All four kinds probed permission-off, with ' +
+    'each permission\'s own copy asserted, in reports.test.ts § "the gate is per kind".',
+  'GET /salons/:id/reports/:kind.csv':
+    'the same gate through the same build() — probed per kind in reports.test.ts.',
+};
+
 // ------------------------------------------------------------ path building --
 
 /**
@@ -227,8 +252,10 @@ const bodyFor = (r: GatedRoute): unknown =>
 // ----------------------------------------------------------------- fixtures --
 
 const census = censusOfRoutes();
-const merchantGates = census.gated.filter((g) => g.surface !== 'platform');
-const platformGates = census.gated.filter((g) => g.surface === 'platform');
+/** Dynamic routes are probed per permission VALUE where their ledger entry says. */
+const probeable = census.gated.filter((g) => !(nameOf(g) in DYNAMIC_PERMISSION));
+const merchantGates = probeable.filter((g) => g.surface !== 'platform');
+const platformGates = probeable.filter((g) => g.surface === 'platform');
 
 let web = '';
 let pin = '';
@@ -313,17 +340,33 @@ describe('the census reads the route table, and the reading is itself checked', 
     expect(platformGates.length, 'console gates went DOWN — a section gate was removed').toBeGreaterThanOrEqual(19);
   });
 
-  it('resolves every gate to a permission it can name', () => {
-    const unresolved = census.gated.filter((g) => g.permission === '');
+  it('resolves every gate to a permission it can name, or the route is claimed as dynamic', () => {
+    const unresolved = census.gated.filter(
+      (g) => g.permission === '' && !(nameOf(g) in DYNAMIC_PERMISSION),
+    );
     expect(
       unresolved.map((g) => `${nameOf(g)} (${g.file}:${g.line})`),
-      'a gate was found whose permission is a variable, so no probe can know what to revoke',
+      'a gate was found whose permission is a variable and which no DYNAMIC_PERMISSION ' +
+        'entry claims. Either name it there with a pointer to its per-value probes, or ' +
+        'the endpoint ships with a gate nothing drives.',
+    ).toEqual([]);
+  });
+
+  it('and the dynamic ledger has no stale or misdirected entries', () => {
+    const dynamicNames = new Set(
+      census.gated.filter((g) => g.permission === '').map(nameOf),
+    );
+    const stale = Object.keys(DYNAMIC_PERMISSION).filter((k) => !dynamicNames.has(k));
+    expect(
+      stale,
+      'a DYNAMIC_PERMISSION entry names a route the census no longer sees as ' +
+        'dynamically gated — the gate moved or became static, so the claim is stale',
     ).toEqual([]);
   });
 
   it('and every permission it names is a real one', () => {
     const known = new Set([...Object.keys(PERMISSION_COPY), ...Object.keys(SECTION_COPY)]);
-    const strange = census.gated.filter((g) => !known.has(g.permission));
+    const strange = probeable.filter((g) => !known.has(g.permission));
     expect(
       strange.map((g) => `${pairOf(g)} (${g.file}:${g.line})`),
       'a gate names a permission this spec has no copy for — either a new permission ' +

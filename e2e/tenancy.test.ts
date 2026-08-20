@@ -328,6 +328,17 @@ const SALON_ROUTES: SalonRoute[] = [
      */
     controlStatus: 201,
   },
+  /**
+   * ---- lane A's Reports routes. The gap ledger fired on both, by name, in the first
+   * full run after the rebase that brought them in — the third census to catch the same
+   * surface arriving (contract.test.ts's UNMODELLED and permission-census.test.ts's
+   * DYNAMIC_PERMISSION ledger are the other two). A report is the densest tenant read
+   * in the API — names, phones and balances by design — so the 403 here is the one that
+   * matters most, and `sales` is used because a valid kind is required to get PAST the
+   * vocabulary check to the salon check (see `url()`).
+   */
+  { method: 'GET', template: '/salons/{id}/reports/{kind}' },
+  { method: 'GET', template: '/salons/{id}/reports/{kind}.csv' },
   // ---- lane A's shop and campaign routes. The gap ledger fired on all six. ----
   { method: 'GET', template: '/v1/salons/{id}/messaging-policy' },
   { method: 'GET', template: '/v1/salons/{id}/campaigns' },
@@ -545,7 +556,15 @@ const url = (r: SalonRoute, salonId: string) =>
     .replace('{hid}', happyHourFor(r, salonId))
     .replace('{bid}', branchFor(salonId))
     .replace('{pid}', productFor(r, salonId))
-    .replace('{cid}', campaignFor(salonId));
+    .replace('{cid}', campaignFor(salonId))
+    /**
+     * `{kind}` is a closed vocabulary, not a row id, so it needs no per-salon
+     * resolution — `sales` exists at every salon by definition. It DOES need to be a
+     * real member of the vocabulary: reports.ts validates the kind BEFORE choosing the
+     * permission (the permission is selected BY the kind), so a placeholder kind is
+     * refused at 400 and the probe never reaches the tenant boundary it exists to test.
+     */
+    .replace('{kind}', 'sales');
 
 describe("salon-scoped routes — salon B's manager calling salon A's URL", () => {
   for (const route of SALON_ROUTES) {
@@ -1335,7 +1354,16 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
     const failures: string[] = [];
 
     for (const route of discovered) {
-      const path = route.path.replace(/:id/, SALON_A);
+      /**
+       * `:kind` gets a REAL kind, for the reason `url()` gives: reports.ts validates
+       * the vocabulary before the permission is even chosen, so a literal `:kind`
+       * answers 400 `invalid_report_kind` and this sweep never reaches the salon
+       * check — it reported both reports routes as tenancy holes that were really
+       * unreachable probes. Every other path parameter stays literal on purpose: for
+       * them the salon check fires FIRST, which is itself part of what this sweep
+       * proves.
+       */
+      const path = route.path.replace(/:id/, SALON_A).replace(/:kind/, 'sales');
       const res = await treq(route.method, path, { token: bDashboard });
 
       if (res.status !== 403) {
