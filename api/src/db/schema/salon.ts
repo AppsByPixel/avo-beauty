@@ -17,6 +17,7 @@ import {
   pgTable,
   text,
   uniqueIndex,
+  uuid,
 } from 'drizzle-orm/pg-core';
 import type { z } from 'zod';
 import type { BusinessHoursSchema, SocialLink, Tier } from '@avo/types';
@@ -164,5 +165,37 @@ export const branch = pgTable(
     index('branch_salon_idx').on(t.salonId),
     uniqueIndex('branch_salon_name_uq').on(t.salonId, t.name),
     check('branch_name_ar_not_blank', sql`${t.nameAr} IS NULL OR length(btrim(${t.nameAr})) > 0`),
+  ],
+);
+
+/**
+ * One-time report download tokens — migration 0036.
+ *
+ * A plain anchor to a `.csv` route carries no authorization header, so the
+ * natural download saved a JSON 401 named `sales.csv` (Lane C's finding). The
+ * dashboard mints one of these immediately before the anchor navigates; the CSV
+ * route spends it. Opaque token, sha256-stored, 60 seconds, single-use under the
+ * conditional-spend UPDATE, and the minting staff member's PERMISSION IS
+ * RE-CHECKED at redemption — routes/reports.ts argues each half.
+ */
+export const reportDownload = pgTable(
+  'report_download',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    staffId: text('staff_id').notNull(),
+    salonId: text('salon_id')
+      .notNull()
+      .references(() => salon.id, { onDelete: 'restrict' }),
+    kind: text('kind').notNull(),
+    branchId: text('branch_id').references(() => branch.id, { onDelete: 'restrict' }),
+    period: text('period').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    usedAt: timestamptz('used_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('report_download_token_uq').on(t.tokenHash),
+    check('report_download_expires_after_creation', sql`${t.expiresAt} > ${t.createdAt}`),
   ],
 );
