@@ -39,12 +39,14 @@
  * default decide what an unrecognised path may read.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
-import { branch, salon } from '../db/schema/salon';
+import { branch, reportDownload, salon } from '../db/schema/salon';
+import { staffUser } from '../db/schema/staff';
 import { requireDashboardPerm, requireDashboardScope, requireSameSalon } from '../auth/principal';
-import { badRequest, notFound } from '../http/errors';
+import { hashWalletToken, mintWalletTokenValue } from '../auth/tokens';
+import { badRequest, notFound, unauthorized } from '../http/errors';
 import { parsePeriod, type Period } from '../services/metrics';
 import {
   computeReport,
@@ -52,6 +54,7 @@ import {
   reportFilename,
   toCsv,
   REPORT_PERMISSION,
+  type ReportKind,
   type ReportShape,
 } from '../services/reports';
 
@@ -158,6 +161,211 @@ async function build(req: FastifyRequest, kindRaw: string, salonId: string): Pro
 }
 
 export async function registerReportRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * `POST /salons/:id/reports/:kind/download-url` — mint a one-time link the
+   * browser can follow WITHOUT a header.
+   *
+   * THE DEFECT (Lane C, driven): `resolvePrincipal` reads `authorization` and
+   * nothing else, so the natural download — a plain anchor to `…/sales.csv` —
+   * saved a JSON 401 named `sales.csv`. A download is a navigation, and a
+   * navigation cannot carry a bearer token; the fetch-and-objectURL workaround
+   * works but re-buffers the file and loses the server's filename cross-origin.
+   *
+   * THE SHAPE IS THE CODEBASE'S OWN TOKEN GRAIN, argued against the alternative:
+   * a signed URL (HMAC over the params) would be stateless — and therefore
+   * NEITHER single-use NOR revocable, exactly the trade `auth/tokens.ts` refuses
+   * for refresh tokens ("a JWT is only revocable by keeping a list, at which
+   * point the JWT is doing nothing"). So: 16 bytes of CSPRNG, sha256-stored,
+   * SIXTY SECONDS (minted by the click handler immediately before the anchor
+   * navigates — the same reasoning as the QR token's 45s), SINGLE-USE under the
+   * conditional-spend UPDATE.
+   *
+   * THE MINT IS THE GATE: same surface check, same per-kind permission, same
+   * tenancy assertion as the report itself, via the same `build`-order calls. The
+   * row stores WHAT was minted — kind, salon, branch, period, and WHO — so the
+   * redemption serves exactly the filter state the user was looking at rather
+   * than trusting the query string on an unauthenticated GET.
+   */
+  app.post<{ Params: { id: string; kind: string }; Querystring: ReportQuery }>(
+    '/salons/:id/reports/:kind/download-url',
+    async (req, reply) => {
+      requireDashboardScope(req);
+      const kind = parseReportKind(req.params.kind);
+      const p = requireDashboardPerm(req, REPORT_PERMISSION[kind]);
+      requireSameSalon(p, req.params.id);
+
+      const query = (req.query ?? {}) as ReportQuery;
+      const period = parsePeriod(query.period);
+      const br = await resolveBranch(req.params.id, query.branch);
+
+      // The wallet token's mint and hash, reused: same entropy class (an opaque
+      // bearer capability with a sub-minute life), same storage discipline.
+      const token = mintWalletTokenValue();
+      const expiresAt = new Date(Date.now() + 60_000);
+
+      await db.insert(reportDownload).values({
+        staffId: p.id,
+        salonId: req.params.id,
+        kind,
+        branchId: br?.id ?? null,
+        period,
+        tokenHash: hashWalletToken(token),
+        expiresAt,
+      });
+
+      return reply.send({
+        /**
+         * Relative, so the dashboard prefixes its own API origin. A STANDALONE
+         * PATH carrying only the token — see `GET /report-downloads/:token`
+         * below for why the kind and salon are deliberately not in it.
+         */
+        url: `/report-downloads/${token}`,
+        expiresAt: expiresAt.toISOString(),
+      });
+    },
+  );
+
+  /**
+   * `GET /report-downloads/:token` — the anchor's half of the mint above.
+   *
+   * ITS OWN ROUTE, AND THE CENSUS IS THE REASON. This began as a `?dl=` branch
+   * inside the `.csv` handler, and `e2e/support/perm-census.ts` recorded that
+   * route as `requireDashboardPerm` — true of the header path and blind to the
+   * token path, so an endpoint reachable with NO header read as gated. The
+   * census's `ANONYMOUS` ledger is exactly where a token-authenticated endpoint
+   * should have to justify itself, and a route can only land there by having no
+   * guard of its own. Splitting it makes the security shape visible to the tool
+   * built to see it, instead of hiding a capability behind a conditional.
+   *
+   * IT ALSO DELETED A WHOLE CLASS OF BUG. With the kind and salon in the path,
+   * the handler had to check that the token's row MATCHED them — a token minted
+   * for `sales` must not fetch `customers`. Carrying only the token removes the
+   * input that could disagree: everything is derived from the stored row, so
+   * there is nothing to mismatch and no check to get wrong.
+   *
+   * THE LEDGER LINE THIS WANTS (Lane D's column, reported not written): the
+   * token IS the credential — 16 bytes of CSPRNG, sha256-stored, sixty seconds,
+   * single-use — and the AUTHORITY behind it is re-read at redemption, so it is
+   * a capability that still answers to the permission table.
+   *
+   * THE PERMISSION IS RE-CHECKED HERE, FROM THE STAFF ROW AS IT IS NOW. A mint
+   * -time-only check would let the URL outlive the authority: `team` revoked
+   * between click and navigation must stop the customer book, and sixty seconds
+   * is not a grace period #7 grants. Same argument `auth/tokens.ts` makes for
+   * reading perms per request instead of baking them into the JWT. Deactivation
+   * and a salon move are checked on the same row for the same reason.
+   *
+   * ONE UNIFORM `invalid_download` for unknown, expired, spent, and
+   * since-revoked — the caller's remedy is identical in all four: export again.
+   */
+  app.get<{ Params: { token: string } }>(
+    '/report-downloads/:token',
+    /**
+     * `logLevel: 'silent'` — AND THIS IS A SECURITY OPTION, not a noise setting.
+     *
+     * The token rides in the URL PATH, because an `<a href>` cannot send a
+     * header, and Fastify logs `req.url` on every request. So the raw credential
+     * was being written to the server log — defeating the exact protection
+     * `app.ts`'s `redact: ['req.headers.authorization']` exists to give: the
+     * codebase deliberately keeps credentials out of its logs, and moving one
+     * into the path walked straight past it. FOUND BY SWEEPING THE SERVER LOG
+     * for `tok_` after driving the download, which is the third time that habit
+     * has caught this class.
+     *
+     * Silencing the automatic request line is the surgical fix — a pino `req`
+     * serializer would have worked too, but adding one flips Fastify's own
+     * overload resolution to its HTTP/2 instance types and breaks the build, so
+     * the cost of the general fix is a type fight for a one-route problem. What
+     * the log actually wants from this route is not the URL anyway; the
+     * `app.log.info` below records who redeemed what, which is the useful half
+     * and carries no secret.
+     */
+    { logLevel: 'silent' },
+    async (req, reply) => {
+    const REFUSED = () =>
+      unauthorized('That download link has expired. Export again from Reports.', 'invalid_download');
+
+    const [row] = await db
+      .select()
+      .from(reportDownload)
+      .where(eq(reportDownload.tokenHash, hashWalletToken(req.params.token)))
+      .limit(1);
+    if (!row || row.expiresAt.getTime() <= Date.now()) throw REFUSED();
+
+    /**
+     * SPEND FIRST, then decide. Any presentation of a live token burns it —
+     * including one that goes on to fail the permission re-check. A capability
+     * that has been shown to a door it may not open should not survive the
+     * visit, and sixty-second tokens are cheap to re-mint. (The first version
+     * validated before spending, which quietly meant a refused attempt left the
+     * link live; caught by driving it.)
+     */
+    const spent = await db
+      .update(reportDownload)
+      .set({ usedAt: new Date() })
+      .where(and(eq(reportDownload.id, row.id), isNull(reportDownload.usedAt)))
+      .returning({ id: reportDownload.id });
+    if (spent.length === 0) throw REFUSED();
+
+    const kind = row.kind as ReportKind;
+    const [staff] = await db.select().from(staffUser).where(eq(staffUser.id, row.staffId)).limit(1);
+    /** The column behind each report's permission — the same map, read live. */
+    const HOLDS: Record<ReportKind, (s: typeof staffUser.$inferSelect) => boolean> = {
+      customers: (x) => x.permTeam,
+      sales: (x) => x.permDashboard,
+      'best-selling-services': (x) => x.permAppointments,
+      'products-sold': (x) => x.permShop,
+    };
+    if (
+      !staff ||
+      staff.deactivatedAt !== null ||
+      staff.salonId !== row.salonId ||
+      !HOLDS[kind](staff)
+    ) {
+      throw REFUSED();
+    }
+
+    const [s] = await db
+      .select({ id: salon.id, timezone: salon.timezone })
+      .from(salon)
+      .where(eq(salon.id, row.salonId))
+      .limit(1);
+    if (!s) throw REFUSED();
+
+    const branchName = row.branchId
+      ? (await db.select({ name: branch.name }).from(branch).where(eq(branch.id, row.branchId)).limit(1))[0]
+          ?.name ?? null
+      : null;
+
+    const shape = await computeReport(db, {
+      kind,
+      salonId: s.id,
+      branchId: row.branchId,
+      period: row.period as Period,
+      timezone: s.timezone,
+    });
+
+    /**
+     * What the silenced request line would have said, minus the secret: who
+     * redeemed which report for which salon. `app.log`, not `req.log` — the
+     * route's own logger is the thing that was silenced.
+     */
+    app.log.info(
+      { event: 'report.download', kind, salonId: row.salonId, staffId: row.staffId, rows: shape.rows.length },
+      'report download redeemed',
+    );
+
+    return reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header(
+        'content-disposition',
+        `attachment; filename="${reportFilename(kind, branchName, row.period as Period)}"`,
+      )
+      .header('cache-control', 'no-store')
+      .send(toCsv(shape));
+    },
+  );
+
   /**
    * The CSV. Registered before the bare `:kind` route: find-my-way matches the
    * longer, more specific pattern regardless of order, but `{kind}.csv` and `{kind}`

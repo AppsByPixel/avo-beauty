@@ -71,7 +71,16 @@ export async function buildApp(): Promise<FastifyInstance> {
     trustProxy: env.trustProxy,
   });
 
-  await app.register(cors, { origin: true });
+  await app.register(cors, {
+    origin: true,
+    /**
+     * `content-disposition` is not on the CORS safelist, so a cross-origin
+     * fetch of a CSV export read the filename as null and Lane C fell back to
+     * client-side naming. The server names the file — the branch tag and
+     * period are baked into it — so the header has to be readable.
+     */
+    exposedHeaders: ['content-disposition'],
+  });
 
   registerErrorHandler(app);
 
