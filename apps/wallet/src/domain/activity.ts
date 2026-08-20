@@ -144,11 +144,27 @@ export function toActivityRow(
     id: tx.id,
     title: title(tx, copy),
     when: when(tx, branches, lang, copy),
-    // U+2212 MINUS, not a hyphen — it is the character the design sets.
-    // MONEY: Western digits in both languages. Not routed through the Eastern
-    // converter, deliberately — this is the exception the digit rule names.
-    amount: `${positive ? '+' : '−'}${formatFils(abs)}`,
-    amountLabel: positive ? copy.plus(spoken) : copy.minus(spoken),
+    /*
+      U+2212 MINUS, not a hyphen — it is the character the design sets.
+      MONEY: Western digits in both languages. Not routed through the Eastern
+      converter, deliberately — this is the exception the digit rule names.
+
+      NO SIGN ON A ZERO, and this row was the HALF OF THAT FIX THAT WAS MISSED.
+      d29fdb4 fixed `domain/receipt.ts` — the detail sheet — for a charge a held
+      deposit covered entirely: `POST /charges` caps the applied deposit at the
+      basket (`heldDeposit = min(gross, held)`), so a 0-fils charge is a real
+      settled row, not an edge. `positive` is `amount > 0`, so zero fell to the
+      negative branch and this LIST row still rendered `−0.000`, announced as
+      "minus 0.000 Kuwaiti dinars" — the same false direction, on the same
+      transaction, in the row above the sheet that had been corrected. Tapping it
+      changed the answer.
+
+      Only the sign goes. Nothing left her wallet, and a minus asserts a
+      direction that did not occur; the figure is the server's and is not
+      recomputed (#2).
+    */
+    amount: `${amount === 0 ? '' : positive ? '+' : '−'}${formatFils(abs)}`,
+    amountLabel: amount === 0 ? spoken : positive ? copy.plus(spoken) : copy.minus(spoken),
     positive,
     pending: tx.status === 'pending',
     failed: tx.status === 'failed' || tx.status === 'cancelled',
