@@ -210,9 +210,25 @@ export function SignIn() {
 
         <div className="signin__row">
           <Toggle checked={keepSignedIn} onChange={setKeepSignedIn} label="Keep me signed in" />
-          <a className="signin__link" href="/forgot-password">
+          {/*
+            NOT A LINK. This was `<a href="/forgot-password">`, and no such route
+            exists in router.tsx — a raw anchor full-loads the app into the
+            router's not-found, from the sign-in door itself. Found by the row-365
+            census: the link's target sits in no route table.
+
+            It cannot honestly BE a link yet: staff resets are issued by a manager
+            from the Team screen ("Reset password" on her row), and the redeem
+            screen for the emailed link is queued as DECISIONS.md #13 — so there
+            is no page self-service could land on. ConsoleSignIn already made
+            this exact call (a span that says so) and is the merged precedent.
+            The title sentence is flagged for copy review in the lane report.
+          */}
+          <span
+            className="signin__link"
+            title="Ask a manager — password resets are sent from the Team screen."
+          >
             Forgot password?
-          </a>
+          </span>
         </div>
 
         {error ? (

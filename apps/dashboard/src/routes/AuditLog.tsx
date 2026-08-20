@@ -59,6 +59,29 @@ export const KIND_TONE: Record<AuditKind, PillTone> = {
  * a first-class layout rather than a string swap. This is that rendering, in the
  * design's own shape.
  */
+/**
+ * The empty line for a filtered read, naming every active filter — composed
+ * across the axes rather than enumerated into variants. Written for the console's
+ * read and MOVED here beside the labels it uses when the row-365 audit found the
+ * merchant screen failing its own standard: with only a kind chip set it said
+ * "No entries match that search" — and there was no search. On an audit log,
+ * "no entries" against a misnamed filter misreports what was looked for.
+ *
+ * `scoped` is the console's `?salon=platform`; the merchant read has no scope
+ * axis and passes false.
+ */
+export function auditEmptyLine(
+  query: string,
+  kind: AuditKind | null,
+  scoped: boolean,
+): string {
+  const what = kind ? `${KIND_LABEL[kind]} entries` : 'entries';
+  const from = scoped ? ' from AVO platform actions' : '';
+  if (query.trim() !== '') return `No ${what}${from} match “${query.trim()}”.`;
+  if (kind || scoped) return `No ${what}${from} yet.`;
+  return 'No entries match that search.';
+}
+
 export function whenLabel(iso: string): string {
   const at = new Date(iso);
   const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -180,7 +203,7 @@ export function AuditLog() {
                 <tr>
                   <td colSpan={5} className="audit__empty">
                     {query || kind ? (
-                      'No entries match that search.'
+                      auditEmptyLine(query, kind, false)
                     ) : (
                       <EmptyState
                         title="Nothing recorded yet"

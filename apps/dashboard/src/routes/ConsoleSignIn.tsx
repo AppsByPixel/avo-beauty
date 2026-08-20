@@ -129,9 +129,15 @@ export function ConsoleSignIn() {
             <span>Keep me signed in</span>
           </label>
           {/*
-            Points at nothing yet, and says so rather than 404ing: there is no
-            console password-reset endpoint. #6 permits only a link, never a
-            temporary password, so this cannot be built client-side.
+            Points at nothing yet, and says so rather than 404ing. THE REASON HAS
+            MOVED SINCE THIS WAS WRITTEN and is corrected in place (the stale-claim
+            habit): the console reset ENDPOINTS exist now — `POST
+            /v1/platform/admins/{id}/password-reset` issues and `POST
+            /auth/platform/password-reset` redeems — but issuance requires an admin
+            holding the `admins` section (the Reset password button on her row),
+            and the redeem screen for the emailed link is queued as DECISIONS.md
+            #13. Self-service "forgot" from this door still has no endpoint and no
+            landing page, so the span stands; only its justification changed.
           */}
           <span className="csignin__forgot" title="Ask another platform admin — AVO has no console reset link yet.">
             Forgot password?

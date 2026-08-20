@@ -584,16 +584,23 @@ function WhatsAppPanel({ salon, update }: { salon: Salon | undefined; update: Up
 
 function CommissionPanel() {
   /*
-   * From the shared constant, not from the design's typed strings. `commissionFor`
-   * prices a real top-up from exactly these numbers, so a rate change is one edit
-   * in @avo/types and this panel follows it.
+   * THE PREMISE THIS PANEL WAS BUILT ON EXPIRED, and this comment is corrected in
+   * the session that noticed rather than left to be believed. It read:
+   * "`commissionFor` prices a real top-up from exactly these numbers, so a rate
+   * change is one edit in @avo/types and this panel follows it." That was true
+   * until `services/topup.ts` began reading `platform_settings` inside the top-up
+   * transaction — the live rate is now a database row the owner console EDITS
+   * (Controls), and this lane proved the divergence on a real payment: the same
+   * 20.000 KD card top-up recorded fee 550 at the compiled default and 650 after
+   * a PATCH, with `DEFAULT_COMMISSION` unchanged.
    *
-   * PER-SALON RATES DO NOT EXIST. `CommissionRates` is a parameter of
-   * `commissionFor`, but no endpoint serves a salon its own rates and the Salon
-   * entity has no such field — so every salon sees the platform default. That is
-   * correct today (the split is configured at the PSP, not computed by the API)
-   * and would be wrong the first time AVO signs a salon on different terms.
-   * Reported rather than faked with a hardcoded override.
+   * So what this panel shows is the LAUNCH DEFAULT, correct until the owner first
+   * moves a stepper and stale after. It cannot do better from this column: the
+   * live row is `GET /v1/platform/settings`, gated `controls` — a platform
+   * permission no merchant holds, correctly. The fix is an api/ change (serve a
+   * salon its current rates on its own read), reported to trunk in the row-365
+   * lane report. Faking it with a hardcoded copy of today's live value would be
+   * the same defect with extra steps.
    */
   const { knetFlatFils, cardPercent, cardFlatFils } = DEFAULT_COMMISSION;
 

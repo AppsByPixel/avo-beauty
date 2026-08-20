@@ -6,7 +6,7 @@ import {
   type AuditEntry,
   type AuditKind,
 } from '../../api/audit.js';
-import { ClockGlyph, KIND_LABEL, KIND_TONE, whenLabel } from '../AuditLog.js';
+import { auditEmptyLine, ClockGlyph, KIND_LABEL, KIND_TONE, whenLabel } from '../AuditLog.js';
 import { SectionError } from '../sectionState.js';
 
 /**
@@ -169,7 +169,7 @@ export function Audit() {
                        * THIS log, "the platform has never done anything" is a
                        * claim worth not making by accident.
                        */
-                      emptyLine(query, kind, scope)
+                      auditEmptyLine(query, kind, scope === 'platform')
                     ) : (
                       <EmptyState
                         title="Nothing recorded yet"
@@ -204,24 +204,6 @@ export function Audit() {
       </p>
     </div>
   );
-}
-
-/**
- * The empty line for a filtered read, naming every active filter.
- *
- * Composed rather than enumerated: the three axes cross (a search inside Money
- * inside AVO-only is one legitimate query), and eight hand-written variants would
- * be the hand-kept list this screen otherwise avoids.
- */
-function emptyLine(query: string, kind: AuditKind | null, scope: 'platform' | null): string {
-  const parts: string[] = [];
-  if (kind) parts.push(`${KIND_LABEL[kind]} entries`);
-  else parts.push('entries');
-  if (scope) parts.push('from AVO platform actions');
-  const what = parts.join(' ');
-  if (query.trim() !== '') return `No ${what} match “${query.trim()}”.`;
-  if (kind || scope) return `No ${what} yet.`;
-  return 'No entries match that search.';
 }
 
 /**
