@@ -707,6 +707,24 @@ const UNMODELLED: Record<string, string> = {
     'Zod schema to say and this census could not parse it if one existed. The bytes are ' +
     'pinned in reports.test.ts down to the BOM, the CRLF, the RFC 4180 quoting and the ' +
     'formula neutralisation.',
+  /**
+   * THE CONSOLE'S SALON LIST, arriving with dev `0a2a6ca` and caught here by name on the
+   * first run after the rebase — the fourth new surface this census has named on arrival.
+   * Behind `requirePlatform(analytics)` and probed permission-off by the generated sweep
+   * in permission-census.test.ts, which discovered it with no edit from me.
+   *
+   * UNMODELLED because `packages/types` declares nothing for it — no `PlatformSalonSchema`
+   * and no list wrapper. It is also NOT a plain entity list: the rows are a per-salon
+   * aggregate (live branch count, member count) assembled in raw SQL, so `SalonSchema`
+   * would be the wrong shape rather than a missing one. Worth a schema of its own, and
+   * that is a trunk/types decision, not lane D's.
+   */
+  'GET /v1/platform/salons':
+    'the owner console\'s salon directory with per-salon branch and member counts, behind ' +
+    'requirePlatform(analytics). No schema in packages/types, and not SalonSchema-shaped: ' +
+    'the rows are an aggregate built in raw SQL, cursor-paginated by salon id. Its gate is ' +
+    'driven in permission-census.test.ts; the counts themselves are unasserted and named ' +
+    'in the lane report as owed.',
   'GET /v1/platform/metrics':
     'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
     '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +

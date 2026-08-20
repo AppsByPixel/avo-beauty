@@ -161,6 +161,30 @@ const ANONYMOUS: Record<string, string> = {
   'POST /auth/refresh': 'the refresh token is the credential, and is checked as one',
   'POST /auth/staff/password-reset':
     'unauthenticated by necessity — she cannot sign in yet. The link is the credential.',
+  /**
+   * THE MEMBER RESET PAIR, arriving with dev `0a2a6ca` and caught here BY NAME on the
+   * first run after the rebase — the ledger's whole purpose. Both halves are
+   * unauthenticated for the same structural reason the staff and console halves are: a
+   * customer who has forgotten her password has no credential to present.
+   *
+   * The REQUEST half is different in kind from the other two issue endpoints, and that
+   * difference is why it belongs here rather than being gated: there is no manager
+   * asking on her behalf, the caller merely CLAIMS a phone. `routes/auth.ts` takes that
+   * seriously — the rate limit runs before the phone is even parsed, and it answers 202
+   * with one indistinguishable body whether or not the phone holds a wallet, so it
+   * cannot be turned into a customer-book enumeration oracle.
+   */
+  'POST /auth/member/password-reset/request':
+    'the customer asks for her own reset link, holding no credential — that is the ' +
+    'premise. Open by necessity and defended by posture instead: IP rate limit BEFORE ' +
+    'the phone is parsed, and a constant 202 regardless of whether the phone matches, ' +
+    'so it is not a member-enumeration oracle. Identity is (salonId, phone), not phone ' +
+    'alone, because one phone can hold wallets at two salons.',
+  'POST /auth/member/password-reset':
+    'the redeem half — the link IS the credential, exactly as the staff and console ' +
+    'redeem endpoints are open for. Single-use, hashed, expiring. The console twin is ' +
+    'driven end to end in console-reset.test.ts; this one is owed the same treatment ' +
+    'and is named in the report as the next slice rather than assumed equivalent.',
   'POST /auth/platform/password-reset':
     'the same, for the console. Driven end to end in console-reset.test.ts.',
   'POST /staff/session': 'the scanner PIN front door, device-scoped and rate limited',
