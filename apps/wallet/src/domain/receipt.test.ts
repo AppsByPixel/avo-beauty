@@ -114,3 +114,106 @@ describe('the sign on every other headline is unchanged', () => {
     expect(r.positive).toBe(true);
   });
 });
+
+/**
+ * An adjustment — the owner console's Wallet adjust, `POST /members/{id}/adjustments`.
+ *
+ * SIGNED, ONE OPERATION TWO WAYS. `parseSignedFils` refuses zero ("nothing to
+ * adjust"), so unlike a charge this kind cannot be 0 — but it can be either
+ * direction, and the direction is carried by `amountFils` alone. The ledger
+ * agrees: `direction: amountFils > 0 ? 'credit' : 'debit'`.
+ *
+ * WHAT THE SHEET MUST NOT SAY is the interesting half, and both omissions are
+ * asserted below rather than described: no payment route (`method` is the
+ * column's default, not a route — and on a credit "Paid from" is backwards) and
+ * no branch (the API writes the salon's first branch with `branchAssumed: true`,
+ * a flag the wire does not carry). The reason is not on the wire at all.
+ */
+function adjustment(amountFils: number): Transaction {
+  return {
+    id: 'TX-ADJ-4f2a9b1c8e03',
+    memberId: '8842',
+    branchId: 'BR-KWC',
+    kind: 'adjustment',
+    amountFils,
+    bonusFils: 0,
+    // As the route writes it — a movement with no payment route.
+    method: 'wallet',
+    status: 'settled',
+    reference: 'AVO-ADJ-4f2a9b1c8e03',
+    createdAt: '2026-08-19T06:16:00.000Z',
+    voidedAt: null,
+    reversedByTransactionId: null,
+  } as Transaction;
+}
+
+describe('an adjustment reads honestly in both directions', () => {
+  it('a credit is a plus, in both languages', () => {
+    for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
+      const r = buildReceipt(adjustment(5000), BRANCHES, lang, copy);
+      expect(r.amount).toBe('+5.000');
+      expect(r.positive).toBe(true);
+      expect(r.amountLabel).toContain('5.000');
+    }
+  });
+
+  it('a deduction is a minus, in both languages', () => {
+    for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
+      const r = buildReceipt(adjustment(-5000), BRANCHES, lang, copy);
+      // U+2212, the character the design sets — not a hyphen.
+      expect(r.amount).toBe('−5.000');
+      expect(r.positive).toBe(false);
+    }
+  });
+
+  it('is titled as an adjustment, not left blank or generic', () => {
+    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title).toBe(en.txKind.adjustment);
+    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title).not.toBe('');
+  });
+
+  it('shows the amount as a row, unsigned, so the figure is legible twice', () => {
+    const rows = buildReceipt(adjustment(-5000), BRANCHES, 'en', en).rows;
+    expect(rows.map((r) => r.label)).toContain(en.txAmountRow);
+    // With the currency, as `money()` formats it — the row is a full figure,
+    // and unsigned: the direction is stated once, in the headline above it.
+    expect(rows.find((r) => r.label === en.txAmountRow)?.value).toBe('5.000 KD');
+  });
+
+  /**
+   * THE TWO OMISSIONS. Both directions, because a credit is the case where
+   * "Paid from" is not merely noise but the opposite of what happened.
+   */
+  it('never claims a payment route — there was none', () => {
+    for (const amount of [5000, -5000]) {
+      const rows = buildReceipt(adjustment(amount), BRANCHES, 'en', en).rows;
+      const labels = rows.map((r) => r.label);
+      expect(labels).not.toContain(en.txPaidFrom);
+      expect(labels).not.toContain(en.txPaidWith);
+      expect(rows.map((r) => r.value)).not.toContain(en.txMethod.wallet);
+    }
+  });
+
+  it('never names a branch — the API assumed one and the wire cannot say so', () => {
+    for (const amount of [5000, -5000]) {
+      const rows = buildReceipt(adjustment(amount), BRANCHES, 'en', en).rows;
+      expect(rows.map((r) => r.label)).not.toContain(en.txBranch);
+      expect(rows.map((r) => r.value)).not.toContain('Kuwait City');
+    }
+  });
+
+  /**
+   * The reason is stored server-side and deliberately not emitted. This asserts
+   * the sheet does not grow a row for it by accident — and that it does not
+   * imply one: exactly one row, the amount.
+   */
+  it('offers no reason and implies none', () => {
+    const rows = buildReceipt(adjustment(-5000), BRANCHES, 'en', en).rows;
+    expect(rows).toHaveLength(1);
+  });
+
+  it('still carries the reference, which is what support can act on', () => {
+    expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en).reference).toBe(
+      'AVO-ADJ-4f2a9b1c8e03',
+    );
+  });
+});

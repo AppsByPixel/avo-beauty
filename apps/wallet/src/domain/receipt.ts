@@ -152,6 +152,34 @@ export function buildReceipt(
     }
     rows.push({ label: copy.txLanded, ...money(add(paid, bonus), lang), emphasis: true });
     rows.push({ label: copy.txBranch, value: branch ?? copy.txBranchOnline });
+  } else if (tx.kind === 'adjustment') {
+    /*
+      AN ADJUSTMENT GETS THE AMOUNT AND NOTHING ELSE, AND THE TWO OMISSIONS ARE
+      THE POINT. It arrives with `method: 'wallet'` and a real `branchId`, and
+      rendering either would state something untrue:
+
+        "Paid from · Wallet balance"  — nothing was paid from anywhere. The
+          console added or removed credit; `method` is the column's default for a
+          movement with no payment route, not a route. On a CREDIT adjustment the
+          row is precisely backwards.
+
+        "Branch · <name>"  — `api/src/routes/adjustments.ts` writes the salon's
+          FIRST branch with `branchAssumed: true`, because "the console adjusts a
+          SALON-level wallet; no branch is named by the design's card and
+          inventing one would put fiat money in one branch's till". The flag is
+          not on the wire (`serialiseTransactionForCustomer` emits twelve keys and
+          that is not one), so the kind is the only thing that can tell us the
+          branch is a placeholder — and for this kind it always is.
+
+      THE REASON IS ABSENT AND STAYS ABSENT. The console requires one and it is
+      stored as `note`; the customer serialiser does not emit it, deliberately,
+      and whether a customer should read "service complaint" is a product
+      question rather than a lane's. So this sheet says WHAT changed, BY HOW
+      MUCH, WHEN, and under which reference — and does not imply an explanation
+      exists that she could tap into. An adjustment she cannot explain is a
+      support call; an adjustment the screen pretends to explain is worse.
+    */
+    rows.push({ label: copy.txAmountRow, ...money(abs, lang), emphasis: true });
   } else {
     rows.push({ label: copy.txAmountRow, ...money(abs, lang), emphasis: true });
     if (tx.kind === 'deposit_return') {
