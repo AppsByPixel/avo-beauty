@@ -100,7 +100,7 @@
  */
 
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
-import { knownBug } from './support/known-bug.js';
+import { knownBug, precondition } from './support/known-bug.js';
 import {
   ArtistSchema,
   AvailabilityDaySchema,
@@ -139,8 +139,10 @@ import {
   SALON_A,
   SALON_B,
   attemptScannerSignIn,
+  A_MEMBER,
   mintWalletTokenFor,
   psql,
+  scalar,
   signInDashboard,
   signInMember,
   signInScanner,
@@ -686,6 +688,60 @@ const UNMODELLED: Record<string, string> = {
    * audit schema at all (the merchant `GET /salons/:id/audit` is unmodelled below for the
    * same reason). They are REACHABLE: `signInPlatform` exists now.
    */
+  /**
+   * THE TWO REPORTS ROUTES, arriving with lane A's `reports.ts` in the rebase onto dev
+   * `8526b13` — and the census found them the same hour, by name and with the file, for
+   * the THIRD census in this suite (permission-census caught their dynamic gate, the
+   * tenancy gap ledger caught their salon scope). Three independent tripwires, one new
+   * surface, three catches: the property all three were built for.
+   */
+  'GET /salons/:id/reports/:kind':
+    'the Reports card aggregate — INTEGER FILS in JSON, behind requireDashboardPerm ' +
+    'of the section each kind exports (REPORT_PERMISSION, services/reports.ts). No ' +
+    'schema in packages/types: `ReportShape` lives in the API only, and the JSON route ' +
+    'is itself a reported contract addition (api-contract.md declares only the .csv). ' +
+    'Worth a schema — these are money aggregates a merchant reconciles her till ' +
+    'against. Numbers, exclusions, zone grouping and gates are driven in reports.test.ts.',
+  'GET /salons/:id/reports/:kind.csv':
+    'the export itself — text/csv with a BOM, not JSON, so there is nothing here for a ' +
+    'Zod schema to say and this census could not parse it if one existed. The bytes are ' +
+    'pinned in reports.test.ts down to the BOM, the CRLF, the RFC 4180 quoting and the ' +
+    'formula neutralisation.',
+  /**
+   * THE CONSOLE'S SALON LIST, arriving with dev `0a2a6ca` and caught here by name on the
+   * first run after the rebase — the fourth new surface this census has named on arrival.
+   * Behind `requirePlatform(analytics)` and probed permission-off by the generated sweep
+   * in permission-census.test.ts, which discovered it with no edit from me.
+   *
+   * UNMODELLED because `packages/types` declares nothing for it — no `PlatformSalonSchema`
+   * and no list wrapper. It is also NOT a plain entity list: the rows are a per-salon
+   * aggregate (live branch count, member count) assembled in raw SQL, so `SalonSchema`
+   * would be the wrong shape rather than a missing one. Worth a schema of its own, and
+   * that is a trunk/types decision, not lane D's.
+   */
+  /**
+   * THE DOWNLOAD ROUTE, arriving with dev `f3ee47d`. UNMODELLED for the same reason the
+   * `.csv` report is: it serves CSV BYTES, not a JSON body, so there is nothing here for a
+   * Zod schema to describe and this census could not parse it if one existed.
+   *
+   * Its own bytes are not unexamined — `reports.test.ts` pins the BOM, the CRLF records,
+   * the RFC 4180 quoting and the formula neutralisation on the header-authenticated `.csv`
+   * path, and `computeReport` is the single aggregate both paths render. What is NOT yet
+   * driven is the capability itself (single-use, 60s, authority re-read at redemption);
+   * that is named in the lane report as owed rather than implied by this line.
+   */
+  'GET /report-downloads/:token':
+    'the CSV download capability — text/csv bytes, not JSON, so no schema applies. The ' +
+    'token is the credential and the staff row\'s authority is re-read at redemption; ' +
+    'the ANONYMOUS ledger in permission-census.test.ts carries the full reasoning. Its ' +
+    'bytes share `computeReport` and `toCsv` with the .csv route, which reports.test.ts ' +
+    'pins; the capability semantics are owed a spec.',
+  'GET /v1/platform/salons':
+    'the owner console\'s salon directory with per-salon branch and member counts, behind ' +
+    'requirePlatform(analytics). No schema in packages/types, and not SalonSchema-shaped: ' +
+    'the rows are an aggregate built in raw SQL, cursor-paginated by salon id. Its gate is ' +
+    'driven in permission-census.test.ts; the counts themselves are unasserted and named ' +
+    'in the lane report as owed.',
   'GET /v1/platform/metrics':
     'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
     '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +
@@ -1814,4 +1870,129 @@ describe('wire pins — the served shape of what packages/types does not model y
         'over one shape means the hand-written one is the one still being maintained.',
     ).toEqual([]);
   });
+});
+
+// ===========================================================================
+
+describe('nextAppointmentAt serves a FUTURE instant, exercised rather than left null', () => {
+  /**
+   * `SalonMetricsSchema` declares `nextAppointmentAt: DateTimeSchema.nullable()
+   * .optional()` — and OPTIONAL IS A STAGE, the widen-then-serve choreography's first
+   * half. The generic probe above validates whatever the seed happens to produce, and
+   * the seed holds no `deposit_held` booking later today, so the field the probe has
+   * been validating is `null` — which `.nullable()` accepts without ever exercising
+   * `DateTimeSchema` itself. The drift guard's own history says that single choice is
+   * the difference between catching and shipping: a field only ever seen null is a
+   * field whose FORMAT nothing has checked.
+   *
+   * So this describe makes the field real: a `deposit_held` booking later TODAY (the
+   * upcoming window is `starts_at >= now AND < the salon's midnight` — metrics.ts), on
+   * a quiet artist, then a FRESH metrics read asserted non-null, ISO-with-offset, and
+   * strictly in the future.
+   *
+   * THE FIXTURE IS SQL, AND WHY THAT IS SAFE HERE: `POST /bookings` books 9–16 days
+   * out (the availability grid), and deposit.test.ts's own header documents moving
+   * clocks by SQL as the established way to place a booking at an exact instant. The
+   * value under test is metrics' READ of `starts_at`, not the booking write path —
+   * deposit.test.ts owns that. The hold transaction is inserted with it because
+   * `hold_transaction_id` is NOT NULL, which is booking's own money invariant.
+   *
+   * KUWAIT MIDNIGHT IS A REAL EDGE, HANDLED RATHER THAN FLAKED ON. A run in the last
+   * minutes of the salon's day cannot place a booking that is both in the future and
+   * inside today. The instant is computed IN SQL, capped two minutes shy of the
+   * salon's midnight, and when the day has fewer than six minutes left the deep
+   * assertions stand down for that run — said out loud below, not silently green.
+   */
+  const BK = 'BK-QACT-NEXT';
+  const TX = 'TX-QACT-NEXT';
+
+  it('a deposit_held booking later today is the tile\'s "next at …"', async () => {
+    const minutesLeft = Number(
+      scalar(`
+        SELECT floor(extract(epoch FROM (
+          ((date_trunc('day', now() AT TIME ZONE 'Asia/Kuwait') + interval '1 day')
+             AT TIME ZONE 'Asia/Kuwait') - now()
+        )) / 60)
+      `),
+    );
+
+    psql(`
+      INSERT INTO "transaction"
+        (id, member_id, salon_id, branch_id, kind, amount_fils, status, created_at, settled_at)
+      VALUES ('${TX}', '${A_MEMBER}', '${SALON_A}', 'BR-SAL', 'deposit_hold', -3000,
+              'settled', now(), now())
+      ON CONFLICT (id) DO NOTHING;
+      INSERT INTO booking
+        (id, salon_id, branch_id, member_id, artist_id, service_id,
+         starts_at, ends_at, duration_min, deposit_fils, status,
+         hold_transaction_id, no_show_return_due_at)
+      SELECT '${BK}', '${SALON_A}', 'BR-SAL', '${A_MEMBER}', '${A_QUIET_ARTIST}', 'SV-01',
+             s.at, s.at + interval '30 minutes', 30, 3000, 'deposit_held',
+             '${TX}', s.at + interval '90 minutes'
+        FROM (SELECT least(
+                now() + interval '10 minutes',
+                ((date_trunc('day', now() AT TIME ZONE 'Asia/Kuwait') + interval '1 day')
+                   AT TIME ZONE 'Asia/Kuwait') - interval '2 minutes'
+              ) AS at) s
+      ON CONFLICT (id) DO NOTHING;
+    `);
+
+    try {
+    const res = await treq<any>('GET', `/salons/${SALON_A}/metrics`, { token: dashboard });
+    precondition(res.status === 200, `metrics answered ${res.status}: ${res.raw}`);
+
+    /** The drift-guard half: the schema must accept the response WITH the field live. */
+    const parsed = SalonMetricsSchema.safeParse(res.body);
+    expect(
+      parsed.success,
+      `SalonMetricsSchema rejects a response carrying a real nextAppointmentAt: ${
+        parsed.success ? '' : JSON.stringify(parsed.error.issues)
+      }`,
+    ).toBe(true);
+
+    if (minutesLeft < 6) {
+      /**
+       * The salon's day is ending as this runs — the booking may have landed inside
+       * the final two minutes or beyond midnight, and either way "is it in today's
+       * window" is a race against the wall clock. The schema assertion above already
+       * ran; the value assertions cannot be made honest in this sliver, and a red
+       * here would be about the clock, not the code.
+       */
+      expect(minutesLeft).toBeLessThan(6);
+      return;
+    }
+
+    // Epoch millis straight from SQL: psql's default timestamptz rendering ends
+    // `+00`, which Date.parse refuses (it wants `+00:00`), and a NaN here turned a
+    // real comparison into `<= NaN`, which can never hold.
+    const storedAt = Number(
+      scalar(`select (extract(epoch from starts_at) * 1000)::bigint from booking where id='${BK}'`),
+    );
+
+    expect(res.body.nextAppointmentAt, 'the field is still null with a live booking today').not.toBeNull();
+    expect(res.body.nextAppointmentAt, 'the field is absent — optional was never served').toBeDefined();
+
+    const served = Date.parse(res.body.nextAppointmentAt);
+    expect(Number.isNaN(served), `not a parseable instant: ${res.body.nextAppointmentAt}`).toBe(false);
+    /** THE FUTURE-DATE CLAUSE — the half a null can never exercise. */
+    expect(served, 'nextAppointmentAt is in the past').toBeGreaterThan(Date.now() - 5_000);
+    /** And it is at most this booking's instant — mine is a candidate, so min() ≤ it. */
+    expect(served).toBeLessThanOrEqual(storedAt + 1_000);
+    expect(res.body.upcomingAppointments, 'the count did not see the booking').toBeGreaterThan(0);
+    } finally {
+      /**
+       * THE DIARY ENTRY IS RETURNED, NOT LEFT. `booking_artist_slot_no_overlap` is an
+       * exclusion constraint over (artist, tstzrange), and this fixture parked AR-003
+       * for thirty minutes starting ten minutes from now — squarely where
+       * deposit.test.ts's clock-moves place ITS bookings, in the same shared run
+       * database, four files later. The first full run with this fixture failed four
+       * no-show specs with `conflicting key value violates exclusion constraint`, all
+       * naming AR-003 and this booking's window. The read above is the fixture's whole
+       * purpose; nothing after it needs the row, so the slot goes back. The hold
+       * transaction goes with it — it carries no ledger rows, so nothing references it.
+       */
+      psql(`DELETE FROM booking WHERE id = '${BK}';
+            DELETE FROM "transaction" WHERE id = '${TX}';`);
+    }
+  }, 60_000);
 });

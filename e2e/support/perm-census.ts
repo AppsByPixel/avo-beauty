@@ -85,6 +85,12 @@ export interface GatedRoute {
   surface: 'dashboard' | 'scanner' | 'platform';
   /** The wrapper the gate arrived through, or null for a direct guard call. */
   via: string | null;
+  /**
+   * The path AS REGISTERED. Differs from `path` only for an expanded indexed gate, where
+   * one registration yields one entry per key — so a count of registrations stays a count
+   * of registrations.
+   */
+  route: string;
 }
 
 /**
@@ -275,6 +281,17 @@ export interface Wrapper {
   guard: GuardName;
   permission: string;
   surface: GatedRoute['surface'];
+  /**
+   * When the wrapper's guard indexes a permission table — `build()` in `routes/reports.ts`
+   * calls `requireDashboardPerm(req, REPORT_PERMISSION[kind])` — the table's name and the
+   * indexer variable, so a route gated THROUGH the wrapper can still be expanded per key.
+   *
+   * Without this the two GET reports routes stayed unresolved while the sibling
+   * `POST …/download-url`, which calls the guard directly, expanded fine. Same gate, same
+   * table, two different code shapes — and only one of them was being read.
+   */
+  mapName?: string;
+  indexer?: string;
 }
 
 /**
@@ -328,12 +345,14 @@ export function discoverWrappers(): Wrapper[] {
       const guard = g[1]! as GuardName;
       const args = argsOf(g[2]!);
       const quoted = args.filter((a) => a !== '');
+      const idx = /(\w+)\s*\[\s*(\w+)\s*\]/.exec(g[2]!);
       found.push({
         name: d.name,
         file: full.slice(full.indexOf('api/src/')),
         guard,
         permission: quoted[quoted.length - 1] ?? '',
         surface: surfaceOf(guard, args),
+        ...(idx ? { mapName: idx[1]!, indexer: idx[2]! } : {}),
       });
     }
   }
@@ -348,6 +367,63 @@ export function discoverWrappers(): Wrapper[] {
   return found.filter((w) => !GATES.has(w.name));
 }
 
+/**
+ * A permission chosen BY a path parameter, through an exported lookup table.
+ *
+ * `routes/reports.ts` gates on `requireDashboardPerm(req, REPORT_PERMISSION[kind])`, so
+ * the permission is not a literal and a name-based read records `''`. The first fix here
+ * was a hand-kept exemption ledger naming the routes; it was WRONG IN THE WAY THIS WHOLE
+ * MODULE EXISTS TO AVOID, and said so within a day — lane A added a THIRD reports route
+ * (`POST /salons/:id/reports/:kind/download-url`) and the ledger, listing two, failed on
+ * it. An exemption list needs an entry per route; reading the map needs none.
+ *
+ * So the table is read from source. `REPORT_PERMISSION` has one owner, and this is not a
+ * second copy of it: a kind added there is probed here on the next run with no edit.
+ */
+export interface PermissionMap {
+  name: string;
+  file: string;
+  /** kind → permission, in declaration order. */
+  entries: Array<[string, string]>;
+}
+
+/**
+ * `export const NAME: Record<Something, PermissionName> = { key: 'value', … }`.
+ *
+ * Deliberately narrow: it matches a `PermissionName`- or `PlatformSection`-valued record,
+ * so an unrelated string map cannot be mistaken for a permission table. The body is
+ * matched to the first `}` because these tables are flat by construction.
+ */
+const PERMISSION_MAP =
+  /export\s+const\s+(\w+)\s*:\s*Record<[^>]*,\s*(?:PermissionName|PlatformSection)\s*>\s*=\s*\{([^}]*)\}/g;
+
+export function discoverPermissionMaps(): PermissionMap[] {
+  const maps: PermissionMap[] = [];
+  const walk = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) out.push(...walk(full));
+      else if (e.name.endsWith('.ts')) out.push(full);
+    }
+    return out;
+  };
+
+  for (const full of walk(join(repoRoot, 'api', 'src'))) {
+    const src = stripComments(readFileSync(full, 'utf8'));
+    for (const m of src.matchAll(PERMISSION_MAP)) {
+      const entries: Array<[string, string]> = [];
+      for (const e of m[2]!.matchAll(/['"]?([\w-]+)['"]?\s*:\s*['"]([\w-]+)['"]/g)) {
+        entries.push([e[1]!, e[2]!]);
+      }
+      if (entries.length > 0) {
+        maps.push({ name: m[1]!, file: full.slice(full.indexOf('api/src/')), entries });
+      }
+    }
+  }
+  return maps;
+}
+
 export interface Census {
   gated: GatedRoute[];
   ungated: UngatedRoute[];
@@ -356,6 +432,8 @@ export interface Census {
   files: string[];
   /** The permission-guard wrappers this census resolved, so the spec can name them. */
   wrappers: Wrapper[];
+  /** The permission lookup tables it read, so the spec can pin what it found. */
+  permissionMaps: PermissionMap[];
 }
 
 /**
@@ -374,6 +452,7 @@ export function censusOfRoutes(): Census {
     .sort();
 
   const wrappers = discoverWrappers();
+  const permissionMaps = discoverPermissionMaps();
   const wrapperByName = new Map(wrappers.map((w) => [w.name, w]));
   const WRAPPER_CALL =
     wrappers.length > 0
@@ -401,6 +480,7 @@ export function censusOfRoutes(): Census {
       index: number;
       guard: GuardName;
       args: string[];
+      raw?: string;
       permission?: string;
       via?: string;
     }[] = [];
@@ -409,6 +489,7 @@ export function censusOfRoutes(): Census {
         index: m.index!,
         guard: m[1]! as GuardName,
         args: argsOf(m[2]!),
+        raw: m[2]!,
       });
     }
 
@@ -457,11 +538,53 @@ export function censusOfRoutes(): Census {
       const quoted = hit.args.filter((a) => a !== '');
       const permission = hit.permission ?? quoted[quoted.length - 1] ?? '';
 
+      /**
+       * AN INDEXED LOOKUP EXPANDS INTO ONE ROUTE PER KEY. `requireDashboardPerm(req,
+       * REPORT_PERMISSION[kind])` on `/salons/:id/reports/:kind` becomes four probeable
+       * routes with `:kind` replaced by each literal kind and the permission resolved —
+       * so the generated sweep drives every kind, and a kind added to the map is driven
+       * on the next run with no edit here.
+       *
+       * The INDEXER NAMES THE PATH PARAMETER: `[kind]` binds `:kind`. Matching them is
+       * what makes the substitution honest rather than positional — a route indexed by
+       * something absent from its path is left unresolved and reported, not guessed at.
+       */
+      if (permission === '') {
+        const w = hit.via ? wrapperByName.get(hit.via) : undefined;
+        const direct = hit.raw ? /(\w+)\s*\[\s*(\w+)\s*\]/.exec(hit.raw) : null;
+        // The call site's own lookup, or the wrapper's — whichever exists.
+        const idx: [string, string] | null = direct
+          ? [direct[1]!, direct[2]!]
+          : w?.mapName && w.indexer
+            ? [w.mapName, w.indexer]
+            : null;
+        const map = idx ? permissionMaps.find((m) => m.name === idx[0]) : undefined;
+        if (idx && map && reg.path.includes(`:${idx[1]}`)) {
+          for (const [k, perm] of map.entries) {
+            gated.push({
+              file,
+              line: lineOf(src, reg.index),
+              method: reg.method,
+              path: reg.path.replace(`:${idx[1]}`, k),
+              route: reg.path,
+              guard: hit.guard,
+              permission: perm,
+              surface: hit.via
+                ? wrapperByName.get(hit.via)!.surface
+                : surfaceOf(hit.guard, hit.args),
+              via: hit.via ?? null,
+            });
+          }
+          return;
+        }
+      }
+
       gated.push({
         file,
         line: lineOf(src, reg.index),
         method: reg.method,
         path: reg.path,
+        route: reg.path,
         guard: hit.guard,
         permission,
         surface: hit.via ? wrapperByName.get(hit.via)!.surface : surfaceOf(hit.guard, hit.args),
@@ -470,7 +593,7 @@ export function censusOfRoutes(): Census {
     });
   }
 
-  return { gated, ungated, totalRoutes, files, wrappers };
+  return { gated, ungated, totalRoutes, files, wrappers, permissionMaps };
 }
 
 /** `GET /salons/:id/audit` — the stable name a failure reports and an exemption lists. */

@@ -161,6 +161,30 @@ const ANONYMOUS: Record<string, string> = {
   'POST /auth/refresh': 'the refresh token is the credential, and is checked as one',
   'POST /auth/staff/password-reset':
     'unauthenticated by necessity — she cannot sign in yet. The link is the credential.',
+  /**
+   * THE MEMBER RESET PAIR, arriving with dev `0a2a6ca` and caught here BY NAME on the
+   * first run after the rebase — the ledger's whole purpose. Both halves are
+   * unauthenticated for the same structural reason the staff and console halves are: a
+   * customer who has forgotten her password has no credential to present.
+   *
+   * The REQUEST half is different in kind from the other two issue endpoints, and that
+   * difference is why it belongs here rather than being gated: there is no manager
+   * asking on her behalf, the caller merely CLAIMS a phone. `routes/auth.ts` takes that
+   * seriously — the rate limit runs before the phone is even parsed, and it answers 202
+   * with one indistinguishable body whether or not the phone holds a wallet, so it
+   * cannot be turned into a customer-book enumeration oracle.
+   */
+  'POST /auth/member/password-reset/request':
+    'the customer asks for her own reset link, holding no credential — that is the ' +
+    'premise. Open by necessity and defended by posture instead: IP rate limit BEFORE ' +
+    'the phone is parsed, and a constant 202 regardless of whether the phone matches, ' +
+    'so it is not a member-enumeration oracle. Identity is (salonId, phone), not phone ' +
+    'alone, because one phone can hold wallets at two salons.',
+  'POST /auth/member/password-reset':
+    'the redeem half — the link IS the credential, exactly as the staff and console ' +
+    'redeem endpoints are open for. Single-use, hashed, expiring. The console twin is ' +
+    'driven end to end in console-reset.test.ts; this one is owed the same treatment ' +
+    'and is named in the report as the next slice rather than assumed equivalent.',
   'POST /auth/platform/password-reset':
     'the same, for the console. Driven end to end in console-reset.test.ts.',
   'POST /staff/session': 'the scanner PIN front door, device-scoped and rate limited',
@@ -168,6 +192,35 @@ const ANONYMOUS: Record<string, string> = {
     'the PUBLISHED legal set. Non-negotiable #10 has the customer app render it before ' +
     'there is a session, so a gate here would break signup. The draft and publish verbs ' +
     'are the gated ones.',
+  /**
+   * THE DOWNLOAD CAPABILITY, and it is the most interesting line in this ledger because
+   * "unauthenticated" is structurally true of it and semantically misleading.
+   *
+   * There is no `require*` guard in the handler, so the census classifies it here — which
+   * is the honest reading of the code and is exactly what lane A wanted it to say: it
+   * SPLIT this route out of the `.csv` handler because as a `?dl=` branch the census
+   * reported the whole thing GATED, true of the header path and blind to the token path.
+   * Verified adversarially after the split: the census now reports the token path with no
+   * gate and no scope guard, which is what it is.
+   *
+   * But it is not OPEN. The token IS the credential — 16 bytes CSPRNG, stored only as a
+   * sha256, 60 seconds, single-use and burnt on ANY presentation including one that then
+   * fails the permission re-check. And the authority is re-read from the `staff_user` row
+   * at redemption: deactivation, a salon mismatch, or the report's own permission having
+   * been revoked all refuse. So it is a bearer capability in the path rather than a
+   * session in a header, and it carries LESS standing authority than a session, not more.
+   *
+   * The path placement is why the route silences its own request log: Fastify logs
+   * `req.url`, so the raw credential was being written to the server log, defeating
+   * `app.ts`'s `redact: ['req.headers.authorization']`. Lane A found that by sweeping the
+   * log for `tok_` after driving a download.
+   */
+  'GET /report-downloads/:token':
+    'the CSV download capability. No session guard by necessity — an <a href> cannot send ' +
+    'a header — so the token is the credential: 16 bytes CSPRNG, sha256-stored, 60s, ' +
+    'single-use, burnt on any touch. Authority is RE-READ from the staff row at ' +
+    'redemption, so a revoked permission or a deactivated account stops the download. ' +
+    'Owed a driven spec of its own; named in the lane report as the next slice.',
   'GET /_gateway/:ref': 'the sandbox gateway, not a product route',
   'POST /_gateway/:ref': 'the sandbox gateway, not a product route',
 };
@@ -227,8 +280,9 @@ const bodyFor = (r: GatedRoute): unknown =>
 // ----------------------------------------------------------------- fixtures --
 
 const census = censusOfRoutes();
-const merchantGates = census.gated.filter((g) => g.surface !== 'platform');
-const platformGates = census.gated.filter((g) => g.surface === 'platform');
+const probeable = census.gated;
+const merchantGates = probeable.filter((g) => g.surface !== 'platform');
+const platformGates = probeable.filter((g) => g.surface === 'platform');
 
 let web = '';
 let pin = '';
@@ -298,7 +352,25 @@ describe('the census reads the route table, and the reading is itself checked', 
       census.totalRoutes,
       'the registration regex matched almost nothing, so every count below is meaningless',
     ).toBeGreaterThan(80);
-    expect(census.gated.length + census.ungated.length).toBe(census.totalRoutes);
+    /**
+     * COUNTED BY REGISTRATION, not by probe. One registration whose permission is chosen
+     * through a lookup table expands into one PROBE per key — the four reports kinds — so
+     * `gated.length` legitimately exceeds the number of routes. `route` carries the path
+     * as registered, which is what has to reconcile with the scan.
+     *
+     * This assertion caught its own obsolescence the run after the expansion landed, which
+     * is the right outcome: an invariant that silently absorbed a 4-for-1 change would
+     * stop being able to detect a route going missing.
+     */
+    const registrations = new Set([
+      ...census.gated.map((g) => `${g.method} ${g.route}`),
+      ...census.ungated.map((u) => `${u.method} ${u.path}`),
+    ]);
+    expect(
+      registrations.size,
+      'the classified registrations do not reconcile with the routes scanned, so some ' +
+        'route was counted twice or dropped',
+    ).toBe(census.totalRoutes);
   });
 
   /**
@@ -317,13 +389,65 @@ describe('the census reads the route table, and the reading is itself checked', 
     const unresolved = census.gated.filter((g) => g.permission === '');
     expect(
       unresolved.map((g) => `${nameOf(g)} (${g.file}:${g.line})`),
-      'a gate was found whose permission is a variable, so no probe can know what to revoke',
+      'a gate was found whose permission this census cannot name, so no probe can know ' +
+        'what to revoke. If it is chosen through a lookup table, the table needs to be ' +
+        'shaped so `discoverPermissionMaps` can read it; if it is computed some other ' +
+        'way, the endpoint ships with a gate nothing drives.',
     ).toEqual([]);
+  });
+
+  /**
+   * THE LOOKUP TABLE IS READ, NOT COPIED — and this spec is why that distinction is worth
+   * the parser. `routes/reports.ts` gates on `REPORT_PERMISSION[kind]`, so the permission
+   * is not a literal. The first fix was a hand-kept ledger naming the two reports routes,
+   * and it broke within a day: lane A added a THIRD (`POST …/download-url`) and the
+   * ledger, listing two, failed on it. An exemption list needs an entry per route.
+   *
+   * So the map is parsed out of `api/src` and each indexed gate EXPANDS into one probe per
+   * key. A kind added to `REPORT_PERMISSION` is probed on the next run with no edit here —
+   * which is the same property that makes the census worth more than its green count.
+   */
+  it('read REPORT_PERMISSION from source and expanded every kind into its own probe', () => {
+    const map = census.permissionMaps.find((m) => m.name === 'REPORT_PERMISSION');
+    expect(
+      map,
+      'REPORT_PERMISSION was not found in api/src. Either it moved, or its shape changed ' +
+        'past what discoverPermissionMaps reads — and the reports gates are now unprobed.',
+    ).toBeDefined();
+
+    /**
+     * The mapping itself, pinned. This is the one place the four pairs are written down in
+     * this suite, and it is an ASSERTION against the source rather than a copy used to
+     * build probes: the probes come from the parsed map, so if this disagrees with lane
+     * A's file the spec fails instead of quietly probing the wrong permission.
+     *
+     * The pairs matter beyond bookkeeping — they are the FRONTDESK property. `frontdesk`
+     * holds `dashboard` and not `team`, so a blanket `dashboard` gate on reports would
+     * hand every front-desk tablet the customer book with phones and balances.
+     */
+    expect(Object.fromEntries(map!.entries)).toEqual({
+      customers: 'team',
+      sales: 'dashboard',
+      'best-selling-services': 'appointments',
+      'products-sold': 'shop',
+    });
+
+    // And every kind really became its own probe, with `:kind` substituted.
+    const reportProbes = census.gated
+      .filter((g) => g.path.includes('/reports/'))
+      .map((g) => `${nameOf(g)} → ${g.permission}`);
+    for (const kind of map!.entries.map(([k]) => k)) {
+      expect(
+        reportProbes.some((r) => r.includes(`/reports/${kind}`)),
+        `no probe was generated for reports kind "${kind}". Probes found:\n  ` +
+          reportProbes.join('\n  '),
+      ).toBe(true);
+    }
   });
 
   it('and every permission it names is a real one', () => {
     const known = new Set([...Object.keys(PERMISSION_COPY), ...Object.keys(SECTION_COPY)]);
-    const strange = census.gated.filter((g) => !known.has(g.permission));
+    const strange = probeable.filter((g) => !known.has(g.permission));
     expect(
       strange.map((g) => `${pairOf(g)} (${g.file}:${g.line})`),
       'a gate names a permission this spec has no copy for — either a new permission ' +
