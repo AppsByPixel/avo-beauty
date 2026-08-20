@@ -339,6 +339,22 @@ const SALON_ROUTES: SalonRoute[] = [
    */
   { method: 'GET', template: '/salons/{id}/reports/{kind}' },
   { method: 'GET', template: '/salons/{id}/reports/{kind}.csv' },
+  /**
+   * The download-URL mint, arriving with dev `f3ee47d` and named by the gap ledger on the
+   * first run after the rebase. It matters more here than its siblings: it mints a
+   * CAPABILITY that is later redeemed with no session at all, so a cross-salon mint would
+   * hand out a bearer token for another salon's customer book.
+   *
+   * 200, NOT 201 — and I asserted 201 first, on the reasoning that a mint "creates"
+   * something. The control call caught it: `{"url":"/report-downloads/tok_…","expiresAt":…}`
+   * with a 200. Left at the default rather than pinned, and written down because the guess
+   * was the same shape as the `POST …/campaigns` entry that once asserted 200 against a
+   * 201 — a plausible status is not an observed one.
+   *
+   * The control really mints a token at salon B. Harmless: 60 seconds, single-use, and
+   * nothing redeems it, so it expires unused inside the run that made it.
+   */
+  { method: 'POST', template: '/salons/{id}/reports/{kind}/download-url' },
   // ---- lane A's shop and campaign routes. The gap ledger fired on all six. ----
   { method: 'GET', template: '/v1/salons/{id}/messaging-policy' },
   { method: 'GET', template: '/v1/salons/{id}/campaigns' },

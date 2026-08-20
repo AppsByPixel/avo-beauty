@@ -719,6 +719,23 @@ const UNMODELLED: Record<string, string> = {
    * would be the wrong shape rather than a missing one. Worth a schema of its own, and
    * that is a trunk/types decision, not lane D's.
    */
+  /**
+   * THE DOWNLOAD ROUTE, arriving with dev `f3ee47d`. UNMODELLED for the same reason the
+   * `.csv` report is: it serves CSV BYTES, not a JSON body, so there is nothing here for a
+   * Zod schema to describe and this census could not parse it if one existed.
+   *
+   * Its own bytes are not unexamined — `reports.test.ts` pins the BOM, the CRLF records,
+   * the RFC 4180 quoting and the formula neutralisation on the header-authenticated `.csv`
+   * path, and `computeReport` is the single aggregate both paths render. What is NOT yet
+   * driven is the capability itself (single-use, 60s, authority re-read at redemption);
+   * that is named in the lane report as owed rather than implied by this line.
+   */
+  'GET /report-downloads/:token':
+    'the CSV download capability — text/csv bytes, not JSON, so no schema applies. The ' +
+    'token is the credential and the staff row\'s authority is re-read at redemption; ' +
+    'the ANONYMOUS ledger in permission-census.test.ts carries the full reasoning. Its ' +
+    'bytes share `computeReport` and `toCsv` with the .csv route, which reports.test.ts ' +
+    'pins; the capability semantics are owed a spec.',
   'GET /v1/platform/salons':
     'the owner console\'s salon directory with per-salon branch and member counts, behind ' +
     'requirePlatform(analytics). No schema in packages/types, and not SalonSchema-shaped: ' +

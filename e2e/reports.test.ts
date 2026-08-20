@@ -657,18 +657,33 @@ describe('a mid-window rename neither relabels the past nor splits the product',
 
 // ===========================================================================
 
-describe('the gate is per kind — the census routed these four probes here by name', () => {
+describe('the gate is per kind, and the CSV twin is gated with it', () => {
   /**
-   * `permission-census.test.ts` cannot probe these two routes: the permission is
-   * `REPORT_PERMISSION[kind]`, chosen by the path. Its DYNAMIC_PERMISSION ledger points
-   * here, so these four probes are the other half of a contract — remove them and the
-   * ledger's claim is a lie.
+   * WHAT THIS ADDS NOW THAT THE CENSUS COVERS THE BASE CASE — and the history is worth
+   * keeping, because this describe changed meaning under it.
    *
-   * The mapping is the FRONTDESK property: `frontdesk` holds `dashboard` and not
-   * `team`, so a blanket `dashboard` gate would hand every front-desk tablet the full
-   * customer book with phone numbers and balances. Each kind carries the permission of
-   * the section whose data it exports, and the cross-kind case below is the one that
-   * proves the mapping is per-kind rather than blanket.
+   * When it was written, `permission-census.test.ts` could not probe the reports routes
+   * at all: the permission is `REPORT_PERMISSION[kind]`, not a literal, and a hand-kept
+   * DYNAMIC_PERMISSION ledger pointed here instead. That ledger broke within a day — lane
+   * A added a third reports route and a two-entry list could not know about it — so the
+   * census now READS `REPORT_PERMISSION` out of `api/src` and expands each route into one
+   * generated probe per kind. The permission-off probe and its granted mirror are covered
+   * there, for every kind, with no list to maintain.
+   *
+   * So these cases are no longer the only coverage; they are the part a generated probe
+   * cannot express:
+   *   - the `.csv` TWIN is refused by the same revoke. The census probes the JSON route
+   *     and the CSV route separately, but nothing there asserts they move TOGETHER, and
+   *     they are two handlers sharing one `build()`.
+   *   - the CROSS-KIND case: revoking `team` kills `customers` and leaves `sales`
+   *     standing. That is the FRONTDESK property — `frontdesk` holds `dashboard` and not
+   *     `team`, so a blanket `dashboard` gate would hand every front-desk tablet the
+   *     customer book with phones and balances — and it is a statement about two kinds at
+   *     once, which a per-route probe cannot make.
+   *
+   * The table below is a SECOND copy of the mapping, deliberately: the census asserts the
+   * parsed map equals these same four pairs, so the two disagree loudly rather than
+   * drifting quietly.
    */
   const KIND_PERMISSION: Record<string, { column: string; copy: string }> = {
     customers: {

@@ -192,6 +192,35 @@ const ANONYMOUS: Record<string, string> = {
     'the PUBLISHED legal set. Non-negotiable #10 has the customer app render it before ' +
     'there is a session, so a gate here would break signup. The draft and publish verbs ' +
     'are the gated ones.',
+  /**
+   * THE DOWNLOAD CAPABILITY, and it is the most interesting line in this ledger because
+   * "unauthenticated" is structurally true of it and semantically misleading.
+   *
+   * There is no `require*` guard in the handler, so the census classifies it here — which
+   * is the honest reading of the code and is exactly what lane A wanted it to say: it
+   * SPLIT this route out of the `.csv` handler because as a `?dl=` branch the census
+   * reported the whole thing GATED, true of the header path and blind to the token path.
+   * Verified adversarially after the split: the census now reports the token path with no
+   * gate and no scope guard, which is what it is.
+   *
+   * But it is not OPEN. The token IS the credential — 16 bytes CSPRNG, stored only as a
+   * sha256, 60 seconds, single-use and burnt on ANY presentation including one that then
+   * fails the permission re-check. And the authority is re-read from the `staff_user` row
+   * at redemption: deactivation, a salon mismatch, or the report's own permission having
+   * been revoked all refuse. So it is a bearer capability in the path rather than a
+   * session in a header, and it carries LESS standing authority than a session, not more.
+   *
+   * The path placement is why the route silences its own request log: Fastify logs
+   * `req.url`, so the raw credential was being written to the server log, defeating
+   * `app.ts`'s `redact: ['req.headers.authorization']`. Lane A found that by sweeping the
+   * log for `tok_` after driving a download.
+   */
+  'GET /report-downloads/:token':
+    'the CSV download capability. No session guard by necessity — an <a href> cannot send ' +
+    'a header — so the token is the credential: 16 bytes CSPRNG, sha256-stored, 60s, ' +
+    'single-use, burnt on any touch. Authority is RE-READ from the staff row at ' +
+    'redemption, so a revoked permission or a deactivated account stops the download. ' +
+    'Owed a driven spec of its own; named in the lane report as the next slice.',
   'GET /_gateway/:ref': 'the sandbox gateway, not a product route',
   'POST /_gateway/:ref': 'the sandbox gateway, not a product route',
 };
@@ -214,31 +243,6 @@ const MIRROR_WOULD_WRITE: Record<string, string> = {
   'PATCH /v1/platform/messaging-policy': 'rewrites the caps and quiet hours #8 enforces',
   'POST /v1/platform/policies/publish': 'publishes the legal set and stamps a version',
   'POST /v1/platform/policies/discard': 'destroys the current draft',
-};
-
-/**
- * Routes whose permission is chosen AT RUNTIME, so the census cannot name it statically.
- *
- * THE FIRST ENTRY IS THE CENSUS'S FIRST CATCH, four commits after it merged. Reports
- * landed with its gate inside a shared `build()` helper calling
- * `requireDashboardPerm(req, REPORT_PERMISSION[kind])` — the permission is selected BY
- * the path parameter (customers→team, sales→dashboard, best-selling-services→
- * appointments, products-sold→shop). The census resolved `build` as a wrapper and then
- * failed "resolves every gate to a permission it can name", naming both routes and
- * their lines. That is the designed behaviour: a gate no generated probe can drive is a
- * gate somebody has to claim out loud.
- *
- * An entry here is a CLAIM that per-value probes exist elsewhere, and it must say
- * where. The generated sweeps skip these routes — a probe that cannot know which
- * permission to revoke would assert `PERMISSION_COPY[undefined]` and fail for a reason
- * that is about this file, not the API. Staleness is checked in both directions below.
- */
-const DYNAMIC_PERMISSION: Record<string, string> = {
-  'GET /salons/:id/reports/:kind':
-    'permission = REPORT_PERMISSION[kind]. All four kinds probed permission-off, with ' +
-    'each permission\'s own copy asserted, in reports.test.ts § "the gate is per kind".',
-  'GET /salons/:id/reports/:kind.csv':
-    'the same gate through the same build() — probed per kind in reports.test.ts.',
 };
 
 // ------------------------------------------------------------ path building --
@@ -276,8 +280,7 @@ const bodyFor = (r: GatedRoute): unknown =>
 // ----------------------------------------------------------------- fixtures --
 
 const census = censusOfRoutes();
-/** Dynamic routes are probed per permission VALUE where their ledger entry says. */
-const probeable = census.gated.filter((g) => !(nameOf(g) in DYNAMIC_PERMISSION));
+const probeable = census.gated;
 const merchantGates = probeable.filter((g) => g.surface !== 'platform');
 const platformGates = probeable.filter((g) => g.surface === 'platform');
 
@@ -349,7 +352,25 @@ describe('the census reads the route table, and the reading is itself checked', 
       census.totalRoutes,
       'the registration regex matched almost nothing, so every count below is meaningless',
     ).toBeGreaterThan(80);
-    expect(census.gated.length + census.ungated.length).toBe(census.totalRoutes);
+    /**
+     * COUNTED BY REGISTRATION, not by probe. One registration whose permission is chosen
+     * through a lookup table expands into one PROBE per key — the four reports kinds — so
+     * `gated.length` legitimately exceeds the number of routes. `route` carries the path
+     * as registered, which is what has to reconcile with the scan.
+     *
+     * This assertion caught its own obsolescence the run after the expansion landed, which
+     * is the right outcome: an invariant that silently absorbed a 4-for-1 change would
+     * stop being able to detect a route going missing.
+     */
+    const registrations = new Set([
+      ...census.gated.map((g) => `${g.method} ${g.route}`),
+      ...census.ungated.map((u) => `${u.method} ${u.path}`),
+    ]);
+    expect(
+      registrations.size,
+      'the classified registrations do not reconcile with the routes scanned, so some ' +
+        'route was counted twice or dropped',
+    ).toBe(census.totalRoutes);
   });
 
   /**
@@ -364,28 +385,64 @@ describe('the census reads the route table, and the reading is itself checked', 
     expect(platformGates.length, 'console gates went DOWN — a section gate was removed').toBeGreaterThanOrEqual(19);
   });
 
-  it('resolves every gate to a permission it can name, or the route is claimed as dynamic', () => {
-    const unresolved = census.gated.filter(
-      (g) => g.permission === '' && !(nameOf(g) in DYNAMIC_PERMISSION),
-    );
+  it('resolves every gate to a permission it can name', () => {
+    const unresolved = census.gated.filter((g) => g.permission === '');
     expect(
       unresolved.map((g) => `${nameOf(g)} (${g.file}:${g.line})`),
-      'a gate was found whose permission is a variable and which no DYNAMIC_PERMISSION ' +
-        'entry claims. Either name it there with a pointer to its per-value probes, or ' +
-        'the endpoint ships with a gate nothing drives.',
+      'a gate was found whose permission this census cannot name, so no probe can know ' +
+        'what to revoke. If it is chosen through a lookup table, the table needs to be ' +
+        'shaped so `discoverPermissionMaps` can read it; if it is computed some other ' +
+        'way, the endpoint ships with a gate nothing drives.',
     ).toEqual([]);
   });
 
-  it('and the dynamic ledger has no stale or misdirected entries', () => {
-    const dynamicNames = new Set(
-      census.gated.filter((g) => g.permission === '').map(nameOf),
-    );
-    const stale = Object.keys(DYNAMIC_PERMISSION).filter((k) => !dynamicNames.has(k));
+  /**
+   * THE LOOKUP TABLE IS READ, NOT COPIED — and this spec is why that distinction is worth
+   * the parser. `routes/reports.ts` gates on `REPORT_PERMISSION[kind]`, so the permission
+   * is not a literal. The first fix was a hand-kept ledger naming the two reports routes,
+   * and it broke within a day: lane A added a THIRD (`POST …/download-url`) and the
+   * ledger, listing two, failed on it. An exemption list needs an entry per route.
+   *
+   * So the map is parsed out of `api/src` and each indexed gate EXPANDS into one probe per
+   * key. A kind added to `REPORT_PERMISSION` is probed on the next run with no edit here —
+   * which is the same property that makes the census worth more than its green count.
+   */
+  it('read REPORT_PERMISSION from source and expanded every kind into its own probe', () => {
+    const map = census.permissionMaps.find((m) => m.name === 'REPORT_PERMISSION');
     expect(
-      stale,
-      'a DYNAMIC_PERMISSION entry names a route the census no longer sees as ' +
-        'dynamically gated — the gate moved or became static, so the claim is stale',
-    ).toEqual([]);
+      map,
+      'REPORT_PERMISSION was not found in api/src. Either it moved, or its shape changed ' +
+        'past what discoverPermissionMaps reads — and the reports gates are now unprobed.',
+    ).toBeDefined();
+
+    /**
+     * The mapping itself, pinned. This is the one place the four pairs are written down in
+     * this suite, and it is an ASSERTION against the source rather than a copy used to
+     * build probes: the probes come from the parsed map, so if this disagrees with lane
+     * A's file the spec fails instead of quietly probing the wrong permission.
+     *
+     * The pairs matter beyond bookkeeping — they are the FRONTDESK property. `frontdesk`
+     * holds `dashboard` and not `team`, so a blanket `dashboard` gate on reports would
+     * hand every front-desk tablet the customer book with phones and balances.
+     */
+    expect(Object.fromEntries(map!.entries)).toEqual({
+      customers: 'team',
+      sales: 'dashboard',
+      'best-selling-services': 'appointments',
+      'products-sold': 'shop',
+    });
+
+    // And every kind really became its own probe, with `:kind` substituted.
+    const reportProbes = census.gated
+      .filter((g) => g.path.includes('/reports/'))
+      .map((g) => `${nameOf(g)} → ${g.permission}`);
+    for (const kind of map!.entries.map(([k]) => k)) {
+      expect(
+        reportProbes.some((r) => r.includes(`/reports/${kind}`)),
+        `no probe was generated for reports kind "${kind}". Probes found:\n  ` +
+          reportProbes.join('\n  '),
+      ).toBe(true);
+    }
   });
 
   it('and every permission it names is a real one', () => {
