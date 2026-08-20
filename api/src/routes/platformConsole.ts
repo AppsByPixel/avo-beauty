@@ -31,7 +31,7 @@
  * section the design's own sidebar puts it behind.
  */
 
-import { and, desc, eq, inArray, isNull, lt, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { auditLog } from '../db/schema/audit';
@@ -109,6 +109,91 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
     requirePlatform(req, 'analytics');
     return reply.send(await computePlatformMetrics(db));
   });
+
+  // ====================================================================
+  // THE SALON LIST — `GET /v1/platform/salons`
+  // ====================================================================
+  /**
+   * Every salon on AVO, as facts that exist. The immediate consumer is Lane C's
+   * Audit section, which shipped a `?salon=` filter with nothing to populate the
+   * picker ("no platform salons-list endpoint — unblocks when the Salons section
+   * lands"); the design's Salons section draws the fuller list.
+   *
+   * WHAT IS DELIBERATELY NOT HERE, because it does not exist and pretending is
+   * how a console lies:
+   *
+   *   - NO `live` / `suspended` field. The design draws a Live toggle ("flip it
+   *     off to instantly suspend it") and the schema has NO SUCH COLUMN — Lane C
+   *     already found this and it is a reported design gap, not a field to fake
+   *     with `true`.
+   *   - NO `city`. `salon` has no city column; the closest real facts are branch
+   *     names ("Salmiya", "Kuwait City"), and `branchCount` is served instead of
+   *     dressing a branch name up as a city.
+   *
+   * GATED `analytics`, ARGUED RATHER THAN DEFAULTED — this is the one console
+   * read where the gate-with-the-screen rule pulls two ways (the list is drawn
+   * in Salons, the picker lives in Audit). The tiebreak is what the section
+   * already reveals: `/v1/platform/metrics`, gated `analytics`, serves a
+   * top-five salon list WITH NAMES AND MONEY FIGURES — so id, name and counts
+   * are already `analytics`-visible facts, and gating this list the same way
+   * widens nothing while unblocking the picker for every preset (each one holds
+   * `analytics`). The Salons MANAGEMENT screen — modules, deposit, the suspend
+   * that does not exist yet — is a different endpoint and takes `salons` when it
+   * is built; authority to SEE the platform's salons and authority to CHANGE one
+   * were never the same thing.
+   *
+   * MEMBER COUNT COUNTS TOMBSTONES, deliberately: an erased member's row still
+   * exists so the books resolve, and "members" here is "wallets on the books",
+   * the same number her transactions still roll up into. Excluding erased rows
+   * would make this list disagree with the ledger by exactly the number of
+   * erasures — a drift with a clock attached.
+   *
+   * Cursor pagination in the auditRead shape (limit+1, keyed by id) — two salons
+   * today, but a list endpoint that only works while the table is small is a
+   * regression waiting for success.
+   */
+  app.get<{ Querystring: { limit?: string; cursor?: string } }>(
+    '/v1/platform/salons',
+    async (req, reply) => {
+      requirePlatform(req, 'analytics');
+
+      const rawLimit = req.query.limit === undefined ? 50 : Number(req.query.limit);
+      if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) {
+        throw badRequest('invalid_limit', 'limit must be an integer between 1 and 100.');
+      }
+      const cursor = req.query.cursor;
+      if (cursor !== undefined && typeof cursor !== 'string') {
+        throw badRequest('invalid_cursor', 'cursor must be a salon id from a previous page.');
+      }
+
+      const rows = (await db.execute(sql`
+        SELECT s.id, s.name, s.name_ar, s.plan, s.loyalty_mode, s.created_at,
+               (SELECT count(*)::int FROM branch b WHERE b.salon_id = s.id AND b.closed_at IS NULL) AS branches,
+               (SELECT count(*)::int FROM member m WHERE m.salon_id = s.id) AS members
+          FROM salon s
+         ${cursor ? sql`WHERE s.id > ${cursor}` : sql``}
+         ORDER BY s.id ASC
+         LIMIT ${rawLimit + 1}
+      `)) as unknown as Array<Record<string, unknown>>;
+
+      const page = rows.slice(0, rawLimit);
+      const hasMore = rows.length > rawLimit;
+
+      return reply.send({
+        items: page.map((r) => ({
+          id: String(r.id),
+          name: String(r.name),
+          nameAr: r.name_ar === null || r.name_ar === undefined ? null : String(r.name_ar),
+          plan: String(r.plan),
+          loyaltyMode: String(r.loyalty_mode),
+          branchCount: Number(r.branches ?? 0),
+          memberCount: Number(r.members ?? 0),
+          createdAt: new Date(r.created_at as string | Date).toISOString(),
+        })),
+        nextCursor: hasMore ? String(page[page.length - 1]!.id) : null,
+      });
+    },
+  );
 
   // ====================================================================
   // CONTROLS — the switches, the fees, the new-salon default
