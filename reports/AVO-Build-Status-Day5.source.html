@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVO Beauty Build Status</title>
+<meta name="description" content="Day 5 of 30 on the AVO Beauty pilot build: seven of nine phases delivered, and why the critical path has moved from engineering to client decisions.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap">
+
+<style>
+  /* ---- AVO's own tokens. design/tokens/avo-tokens.json is the source. ---- */
+  :root {
+    --ink: #1C1B19;
+    --ink-soft: #4A4741;
+    --ink-faint: #6E6A62;
+    --canvas: #EBE8E1;
+    --surface: #FBFAF8;
+    --surface-alt: #F6F4EE;
+    --rule: #DCD8CF;
+    --rule-soft: #E7E4DD;
+
+    /* brand is a SURFACE colour (non-negotiable #9): fills, bars, dots.
+       Text on brand uses brand-deep. Never white on --brand. */
+    --brand: #6E7F6C;
+    --brand-deep: #5A6B58;
+    --brand-deeper: #4F5E4C;
+    --brand-tint: #EEF1EC;
+    --brand-tint2: #F6F7F3;
+
+    /* The only fill allowed to carry near-white text. --brand is 4.27:1 against
+       white and non-negotiable #9 refuses it; brand-deep is 5.5:1 and passes.
+       Deliberately identical in both themes: it must stay dark either way. */
+    --fill-strong: #5A6B58;
+    --fill-strong-on: #FBFAF8;
+
+    --warn-text: #7A6034;
+    --warn-bg: #F3E9CF;
+    --danger-text: #8f5a56;
+    --danger-bg: #F6EAE8;
+    --neutral-dot: #8A867E;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #F2F0EA;
+      --ink-soft: #C3BFB6;
+      --ink-faint: #948F85;
+      --canvas: #14160F;
+      --surface: #1C1F19;
+      --surface-alt: #22261F;
+      --rule: #333829;
+      --rule-soft: #2A2E24;
+
+      --brand: #7E9079;
+      --brand-deep: #A3B79C;
+      --brand-deeper: #C0D0B9;
+      --brand-tint: #262B22;
+      --brand-tint2: #202419;
+      --fill-strong: #5A6B58;
+      --fill-strong-on: #F2F0EA;
+
+      --warn-text: #D9BE85;
+      --warn-bg: #302711;
+      --danger-text: #D4A09B;
+      --danger-bg: #2E1F1D;
+      --neutral-dot: #8A867E;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #F2F0EA;
+    --ink-soft: #C3BFB6;
+    --ink-faint: #948F85;
+    --canvas: #14160F;
+    --surface: #1C1F19;
+    --surface-alt: #22261F;
+    --rule: #333829;
+    --rule-soft: #2A2E24;
+
+    --brand: #7E9079;
+    --brand-deep: #A3B79C;
+    --brand-deeper: #C0D0B9;
+    --brand-tint: #262B22;
+    --brand-tint2: #202419;
+    --fill-strong: #5A6B58;
+    --fill-strong-on: #F2F0EA;
+
+    --warn-text: #D9BE85;
+    --warn-bg: #302711;
+    --danger-text: #D4A09B;
+    --danger-bg: #2E1F1D;
+    --neutral-dot: #8A867E;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 44px 32px 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  /* ---------------- type ---------------- */
+  h1, h2, h3 { font-family: Fraunces, Georgia, serif; font-weight: 500; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(30px, 5vw, 42px); line-height: 1.1; letter-spacing: -.015em; }
+  h2 { font-size: 22px; line-height: 1.25; }
+  h3 { font-size: 16px; font-weight: 600; }
+  p { margin: 0; }
+
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .lede { font-size: 17px; line-height: 1.55; color: var(--ink-soft); max-width: 62ch; }
+  .note { font-size: 13.5px; line-height: 1.55; color: var(--ink-faint); }
+  strong { font-weight: 600; color: var(--ink); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---------------- masthead ---------------- */
+  .masthead { display: flex; flex-direction: column; gap: 16px; }
+  .brandline { display: flex; align-items: center; gap: 11px; }
+  .mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: linear-gradient(150deg, #78886F, #5E6E59);
+    display: grid; place-items: center;
+    font-family: Fraunces, Georgia, serif; font-size: 15px; font-weight: 600;
+    color: #FBFAF8; flex: none;
+  }
+  .brandname { font-family: Fraunces, Georgia, serif; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .masthead-meta {
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+    padding-top: 14px; border-top: 1px solid var(--rule);
+    font-size: 13px; color: var(--ink-faint);
+  }
+
+  /* ---------------- headline stats ---------------- */
+  .headline {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--rule-soft);
+    border: 1px solid var(--rule-soft); border-radius: 12px; overflow: hidden;
+  }
+  .stat { background: var(--surface); padding: 18px 20px; display: flex; flex-direction: column; gap: 3px; }
+  .stat-k { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-faint); }
+  .stat-v {
+    font-family: Fraunces, Georgia, serif; font-size: 29px; font-weight: 500;
+    line-height: 1.05; letter-spacing: -.01em; font-variant-numeric: tabular-nums;
+  }
+  .stat-s { font-size: 12.5px; color: var(--ink-faint); }
+  .stat-v .of { font-size: 17px; color: var(--ink-faint); }
+
+  /* ---------------- section ---------------- */
+  section { display: flex; flex-direction: column; gap: 18px; }
+  .sec-head { display: flex; flex-direction: column; gap: 5px; }
+
+  /* ---------------- the calendar burn ---------------- */
+  .burn { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 22px; display: flex; flex-direction: column; gap: 18px; }
+  .burn-scale { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 34px; background: var(--surface-alt); border-radius: 6px; overflow: hidden; }
+  .track-done { position: absolute; inset: 0 auto 0 0; width: 16.67%; background: var(--fill-strong); }
+  .track-label {
+    position: absolute; top: 50%; transform: translateY(-50%); left: calc(16.67% + 12px);
+    font-size: 12.5px; font-weight: 600; color: var(--ink-soft); white-space: nowrap;
+  }
+  .track-in {
+    position: absolute; top: 50%; transform: translateY(-50%); left: 10px;
+    font-size: 12px; font-weight: 600; color: var(--fill-strong-on); white-space: nowrap;
+  }
+  .burn-legend { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 12.5px; color: var(--ink-faint); }
+  .lg { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+  /* ---------------- velocity chart ---------------- */
+  .chart { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 22px; }
+  .bars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; height: 180px; }
+  .bar-col { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+  .bar-v { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; text-align: center; color: var(--ink-soft); flex: none; }
+  /* The bar's percentage resolves against THIS slot, not the column. Without it the
+     tallest bar clamps to whatever the label left over, and 124 and 148 draw the same. */
+  .bar-slot { flex: 1; min-height: 0; display: flex; align-items: flex-end; }
+  .bar {
+    width: 100%; background: var(--brand); border-radius: 5px 5px 2px 2px; min-height: 4px;
+    animation: rise .7s cubic-bezier(.2,.8,.2,1) both;
+  }
+  .bar.partial {
+    background: repeating-linear-gradient(135deg, var(--brand) 0 5px, var(--brand-tint) 5px 10px);
+    border: 1px solid var(--brand);
+  }
+  @keyframes rise { from { transform: scaleY(.02); transform-origin: bottom; } to { transform: scaleY(1); } }
+  @media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
+  .bar-axis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--rule); }
+  .bar-day { text-align: center; display: flex; flex-direction: column; gap: 1px; }
+  .bar-day b { font-size: 12.5px; font-weight: 600; }
+  .bar-day span { font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+  /* ---------------- phase table ---------------- */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 12px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 500px; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-faint);
+    padding: 13px 18px; border-bottom: 1px solid var(--rule); white-space: nowrap;
+  }
+  td { padding: 12px 18px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.day { font-variant-numeric: tabular-nums; color: var(--ink-faint); white-space: nowrap; font-size: 13px; }
+  .ph { font-weight: 600; }
+  .ph-note { display: block; font-size: 12.5px; color: var(--ink-faint); font-weight: 400; margin-top: 1px; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex: none; }
+  .pill.done { color: var(--brand-deeper); background: var(--brand-tint); }
+  .pill.part { color: var(--warn-text); background: var(--warn-bg); }
+  .pill.open { color: var(--ink-faint); background: var(--surface-alt); }
+
+  /* ---------------- built grid ---------------- */
+  .built { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 12px; padding: 16px 18px; display: flex; flex-direction: column; gap: 7px; }
+  .card h3 { display: flex; align-items: baseline; gap: 8px; }
+  .card h3 .c-n { font-family: Fraunces, Georgia, serif; font-size: 21px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .card ul { margin: 0; padding-left: 17px; font-size: 13px; color: var(--ink-faint); line-height: 1.55; }
+  .card ul li { margin-bottom: 2px; }
+
+  /* ---------------- callout ---------------- */
+  .callout {
+    border-radius: 12px; padding: 20px 22px;
+    display: flex; flex-direction: column; gap: 9px;
+    background: var(--brand-tint); border: 1px solid var(--brand);
+  }
+  .callout.warn { background: var(--warn-bg); border-color: var(--warn-text); }
+  .callout h3 { color: var(--brand-deeper); }
+  .callout.warn h3 { color: var(--warn-text); }
+  .callout p { font-size: 14px; line-height: 1.6; color: var(--ink-soft); max-width: 66ch; }
+
+  /* ---------------- blocked list ---------------- */
+  .blocked { display: flex; flex-direction: column; gap: 1px; background: var(--rule-soft); border: 1px solid var(--rule-soft); border-radius: 12px; overflow: hidden; }
+  .brow { background: var(--surface); padding: 13px 18px; display: flex; gap: 14px; align-items: flex-start; }
+  .brow-n {
+    font-family: Fraunces, Georgia, serif; font-size: 13px; font-weight: 600;
+    color: var(--ink-faint); font-variant-numeric: tabular-nums; flex: none;
+    width: 20px; padding-top: 1px;
+  }
+  .brow-b { display: flex; flex-direction: column; gap: 2px; }
+  .brow-t { font-size: 14px; font-weight: 600; }
+  .brow-w { font-size: 12.5px; color: var(--ink-faint); line-height: 1.5; }
+
+  footer {
+    border-top: 1px solid var(--rule); padding-top: 18px;
+    font-size: 12.5px; color: var(--ink-faint); display: flex; flex-direction: column; gap: 5px;
+  }
+
+  @media (max-width: 620px) {
+    .sheet { padding: 32px 20px 56px; gap: 34px; }
+    .bars { height: 140px; gap: 8px; }
+    .bar-axis, .bars { gap: 8px; }
+    .track-label { display: none; }
+  }
+
+  /* ================= PRINT / PDF =================
+     Three pages. Light palette is forced regardless of the reader's OS theme -
+     a dark ground is wrong on paper - and the sage fills are told to actually
+     print rather than being dropped as "background graphics". */
+  @page { size: A4; margin: 13mm 12mm; }
+
+  @media print {
+    :root, :root[data-theme="dark"] {
+      --ink: #1C1B19; --ink-soft: #4A4741; --ink-faint: #6E6A62;
+      --canvas: #FFFFFF; --surface: #FBFAF8; --surface-alt: #F6F4EE;
+      --rule: #DCD8CF; --rule-soft: #E7E4DD;
+      --brand: #6E7F6C; --brand-deep: #5A6B58; --brand-deeper: #4F5E4C;
+      --brand-tint: #EEF1EC; --brand-tint2: #F6F7F3;
+      --fill-strong: #5A6B58; --fill-strong-on: #FBFAF8;
+      --warn-text: #7A6034; --warn-bg: #F3E9CF;
+      --danger-text: #8f5a56; --danger-bg: #F6EAE8;
+      --neutral-dot: #8A867E;
+    }
+
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
+    body { background: #FFFFFF; font-size: 9pt; line-height: 1.45; }
+    .sheet { max-width: none; padding: 0; gap: 13px; }
+    section { gap: 10px; }
+    .burn, .chart { padding: 14px; gap: 12px; }
+    .stat { padding: 12px 14px; }
+    .card { padding: 11px 13px; gap: 5px; }
+    .callout { padding: 13px 15px; gap: 6px; }
+    th { padding: 8px 14px; }
+    td { padding: 7px 14px; }
+    .brow { padding: 9px 14px; }
+    .masthead { gap: 10px; }
+    .masthead-meta { padding-top: 9px; }
+    footer { padding-top: 11px; gap: 3px; }
+
+    /* The bars animate in from scaleY(.02). Print never runs the animation, so
+       without this every bar renders as a 2% sliver. */
+    .bar { animation: none !important; transform: none !important; }
+
+    h1 { font-size: 21pt; }
+    h2 { font-size: 12.5pt; }
+    h3 { font-size: 10pt; }
+    .lede { font-size: 9.5pt; }
+    .note { font-size: 8pt; }
+    .eyebrow { font-size: 7.5pt; }
+    .stat-v { font-size: 17pt; }
+    .stat-k { font-size: 7.5pt; }
+    .stat-s, .bar-day span, .ph-note, .brow-w, .burn-legend, .card ul { font-size: 8pt; }
+    .card h3 .c-n { font-size: 13pt; }
+    .brow-t { font-size: 9pt; }
+    table { font-size: 9pt; }
+    .bars { height: 104px; }
+    .track { height: 27px; }
+    /* auto-fit lands on 3+1 at A4 width, leaving one card stranded. Pin it to 2x2. */
+    .built { grid-template-columns: repeat(2, 1fr); }
+
+    /* Keep the SMALL units atomic and let everything larger flow. Making whole
+       sections and the phase table unbreakable is what produced a 4-page file with
+       a third of page one empty: a tall block that cannot split gets pushed whole
+       onto the next page and leaves the gap behind. Rows stay atomic; the table
+       they sit in may break. */
+    .burn, .chart, .callout, .headline, .card, .brow, tr, thead {
+      break-inside: avoid; page-break-inside: avoid;
+    }
+    /* A section head is one unit AND must stay with what it introduces. Without
+       break-inside the break landed between the eyebrow and its own h2, leaving
+       "PLAN OF RECORD" alone at the foot of a page. */
+    .sec-head { break-inside: avoid; page-break-inside: avoid; }
+    h2, .sec-head, .eyebrow { break-after: avoid; page-break-after: avoid; }
+    footer { break-inside: avoid; }
+
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="sheet">
+
+  <!-- ============ MASTHEAD ============ -->
+  <header class="masthead">
+    <div class="brandline">
+      <div class="mark">A</div>
+      <div class="brandname">AVO Beauty</div>
+    </div>
+    <div>
+      <p class="eyebrow">Build status report</p>
+      <h1>Five days in, seven of nine phases done</h1>
+    </div>
+    <p class="lede">
+      The pilot build is running roughly four to five times ahead of its 30-day plan. The
+      significant news is not the pace &mdash; it is that <strong>the critical path has already moved
+      off engineering</strong>. What now stands between this build and a launch is a set of
+      decisions and approvals that only AVO and its counsel can make.
+    </p>
+    <div class="masthead-meta">
+      <span>Day 5 of 30</span>
+      <span>16&ndash;20 August 2026</span>
+      <span>Prepared for the project manager</span>
+    </div>
+  </header>
+
+  <!-- ============ HEADLINE NUMBERS ============ -->
+  <div class="headline">
+    <div class="stat">
+      <span class="stat-k">Calendar used</span>
+      <span class="stat-v">5<span class="of">&thinsp;/&thinsp;30</span></span>
+      <span class="stat-s">17% of the schedule</span>
+    </div>
+    <div class="stat">
+      <span class="stat-k">Phases complete</span>
+      <span class="stat-v">7<span class="of">&thinsp;/&thinsp;9</span></span>
+      <span class="stat-s">78% of planned scope</span>
+    </div>
+    <div class="stat">
+      <span class="stat-k">Automated tests</span>
+      <span class="stat-v">889</span>
+      <span class="stat-s">passing, 0 failing</span>
+    </div>
+    <div class="stat">
+      <span class="stat-k">Blocked on client</span>
+      <span class="stat-v">14</span>
+      <span class="stat-s">decisions awaiting AVO</span>
+    </div>
+  </div>
+
+  <!-- ============ SCOPE vs CALENDAR ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Scope against calendar</p>
+      <h2>78% of the plan delivered in 17% of the time</h2>
+    </div>
+
+    <div class="burn">
+      <div class="burn-scale">
+        <span>Day 1</span><span>Day 10</span><span>Day 20</span><span>Day 30</span>
+      </div>
+      <div class="track">
+        <div class="track-done"></div>
+        <div class="track-in">Days 1&ndash;5</div>
+        <div class="track-label">25 days of schedule remaining</div>
+      </div>
+      <div class="track">
+        <div class="track-done" style="width:78%"></div>
+        <div class="track-in">Phases 0&ndash;6 complete, 7 substantially done</div>
+        <div class="track-label" style="left:calc(78% + 12px)">Phase 8</div>
+      </div>
+      <div class="burn-legend">
+        <span class="lg"><span class="sw" style="background:var(--fill-strong)"></span> Delivered</span>
+        <span class="lg"><span class="sw" style="background:var(--surface-alt); border:1px solid var(--rule)"></span> Remaining</span>
+        <span class="lg">Upper bar: calendar consumed &nbsp;&middot;&nbsp; Lower bar: scope delivered</span>
+      </div>
+    </div>
+
+    <p class="note">
+      Read the two bars against each other: we have spent 17% of the days and delivered 78%
+      of the planned build. The gap between them is the schedule we have bought back.
+    </p>
+  </section>
+
+  <!-- ============ VELOCITY ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Daily throughput</p>
+      <h2>How fast, day by day</h2>
+    </div>
+
+    <div class="chart">
+      <div class="bars">
+        <div class="bar-col"><span class="bar-v num">31</span><div class="bar-slot"><div class="bar" style="height:20.9%; animation-delay:0s"></div></div></div>
+        <div class="bar-col"><span class="bar-v num">124</span><div class="bar-slot"><div class="bar" style="height:83.8%; animation-delay:.08s"></div></div></div>
+        <div class="bar-col"><span class="bar-v num">98</span><div class="bar-slot"><div class="bar" style="height:66.2%; animation-delay:.16s"></div></div></div>
+        <div class="bar-col"><span class="bar-v num">148</span><div class="bar-slot"><div class="bar" style="height:100%; animation-delay:.24s"></div></div></div>
+        <div class="bar-col"><span class="bar-v num">14</span><div class="bar-slot"><div class="bar partial" style="height:9.5%; animation-delay:.32s"></div></div></div>
+      </div>
+      <div class="bar-axis">
+        <div class="bar-day"><b>Day 1</b><span>16 Aug</span></div>
+        <div class="bar-day"><b>Day 2</b><span>17 Aug</span></div>
+        <div class="bar-day"><b>Day 3</b><span>18 Aug</span></div>
+        <div class="bar-day"><b>Day 4</b><span>19 Aug</span></div>
+        <div class="bar-day"><b>Day 5</b><span>20 Aug</span></div>
+      </div>
+    </div>
+
+    <p class="note">
+      Changes committed per day, 415 in total. Day 5 (hatched) is partial &mdash; that day went
+      to integration, verification and a working demo rather than new code, which is the shape
+      you want at the end of a push. Four parallel work streams run simultaneously and are
+      merged into one trunk daily.
+    </p>
+  </section>
+
+  <!-- ============ PHASE TABLE ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Plan of record</p>
+      <h2>Every phase, and when it landed</h2>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Landed</th><th>State</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="ph">0 &middot; Foundations</span><span class="ph-note">Monorepo, design tokens, shared contract</span></td>
+            <td class="day">Day 1</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">1 &middot; Customer wallet</span><span class="ph-note">Sign-in, signup, session layer, secure storage</span></td>
+            <td class="day">Day 1&ndash;2</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">2 &middot; Money core</span><span class="ph-note">Charges, top-ups, voids, deposits, ledger</span></td>
+            <td class="day">Day 2</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">3 &middot; Staff scanner</span><span class="ph-note">PIN, scan, charge, void, manual lookup</span></td>
+            <td class="day">Day 2&ndash;3</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">4 &middot; Merchant dashboard</span><span class="ph-note">Nine sections, team authority, audit log</span></td>
+            <td class="day">Day 3</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">5 &middot; Shared platform state</span><span class="ph-note">Promotions, happy hours, loyalty tiers</span></td>
+            <td class="day">Day 3</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">6 &middot; Booking and shop</span><span class="ph-note">Appointments, deposits, product orders</span></td>
+            <td class="day">Day 4</td>
+            <td><span class="pill done">Done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">7 &middot; Owner console</span><span class="ph-note">Admins, approvals, policies, analytics, controls, audit, reports</span></td>
+            <td class="day">Day 4&ndash;5</td>
+            <td><span class="pill part">Substantially done</span></td>
+          </tr>
+          <tr>
+            <td><span class="ph">8 &middot; Hardening and launch</span><span class="ph-note">Launch checklist: 15 of 53 items closed</span></td>
+            <td class="day">Day 5 &rarr;</td>
+            <td><span class="pill open">In progress</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ WHAT EXISTS ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Delivered</p>
+      <h2>What exists and runs today</h2>
+    </div>
+
+    <div class="built">
+      <div class="card">
+        <h3><span class="c-n">111</span> API endpoints</h3>
+        <ul>
+          <li>37 database migrations</li>
+          <li>Money held as integer fils &mdash; no floating point anywhere</li>
+          <li>Negative balances impossible at the database level</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="c-n">40</span> Screens</h3>
+        <ul>
+          <li>Customer wallet &mdash; 7 screens</li>
+          <li>Staff scanner &mdash; 11 screens</li>
+          <li>Dashboard &amp; owner console &mdash; 22 routes</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="c-n">889</span> Automated tests</h3>
+        <ul>
+          <li>Run against real Postgres, not mocks</li>
+          <li>Every money path tested under concurrency</li>
+          <li>All 57 permission gates probed automatically</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3><span class="c-n">12</span> Non-negotiables</h3>
+        <ul>
+          <li>All twelve satisfied and held by tests</li>
+          <li>Full Arabic right-to-left layout</li>
+          <li>Passwords never stored or shown in plain text</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout">
+      <h3>A working demo is available now</h3>
+      <p>
+        The merchant dashboard and owner console run end to end against a real database with
+        seeded salons, staff and customers &mdash; sign-in, appointments, team permissions,
+        loyalty, marketing, audit log, reports and CSV export. Roughly ten minutes to walk
+        through.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ WHAT WE NEED ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Now the constraint</p>
+      <h2>What is blocking launch is no longer code</h2>
+    </div>
+
+    <div class="callout warn">
+      <h3>Fourteen open items need an AVO decision</h3>
+      <p>
+        Each is recorded with its reasoning and a safe default already shipped, so nothing is
+        stalled today. But several have lead times measured in weeks, and they are now the
+        long pole. The four with the longest lead are below.
+      </p>
+    </div>
+
+    <div class="blocked">
+      <div class="brow">
+        <span class="brow-n">1</span>
+        <span class="brow-b">
+          <span class="brow-t">Central Bank position on holding stored value</span>
+          <span class="brow-w">Does AVO holding customer balances need its own licence? Our payment provider being licensed answers who <em>moves</em> money, not who may <em>hold</em> it. Regulatory, and the single largest launch risk.</span>
+        </span>
+      </div>
+      <div class="brow">
+        <span class="brow-n">2</span>
+        <span class="brow-b">
+          <span class="brow-t">Legal sign-off on the policy set</span>
+          <span class="brow-w">Seven documents are written, versioned and served to the apps, each carrying &ldquo;awaiting counsel and payment-provider sign-off&rdquo;. Seeding the text is not approval of it.</span>
+        </span>
+      </div>
+      <div class="brow">
+        <span class="brow-n">3</span>
+        <span class="brow-b">
+          <span class="brow-t">WhatsApp templates and a sending domain</span>
+          <span class="brow-w">Receipts, reset links and campaigns are fully built behind a logging driver &mdash; the queue, retries and de-duplication all work. Nothing can actually send until templates are approved.</span>
+        </span>
+      </div>
+      <div class="brow">
+        <span class="brow-n">4</span>
+        <span class="brow-b">
+          <span class="brow-t">Arabic review by a native speaker</span>
+          <span class="brow-w">74 strings have no Arabic source in the design bundle. They are tracked and deliberately left in English rather than machine-translated; a wrong register in a women&rsquo;s salon product is a defect. The list is ready as a worksheet.</span>
+        </span>
+      </div>
+    </div>
+
+    <p class="note">
+      Also outstanding and lower risk: one hour with a physical phone to prove a live QR charge
+      (the simulator has no camera), a decision on data residency, and who staffs the support
+      queue and in what hours.
+    </p>
+  </section>
+
+  <!-- ============ ASSESSMENT ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Assessment</p>
+      <h2>Where this lands</h2>
+    </div>
+    <p class="lede">
+      On engineering alone, this build would be launch-ready well inside the 30 days. The
+      realistic launch date is now set by the regulatory answer and the legal review, not by
+      remaining development. The most valuable thing that can happen this week is starting
+      items 1 and 2 &mdash; both have external lead times, and both can run in parallel with
+      the hardening work already underway.
+    </p>
+  </section>
+
+  <footer>
+    <p>AVO Beauty pilot build &middot; day 5 of 30 &middot; report generated 20 August 2026.</p>
+    <p>Figures taken directly from the repository: 415 commits, 889 passing tests, 53-item launch checklist. Full decision log and reasoning available on request.</p>
+  </footer>
+
+</div>
+
+</body>
+</html>
