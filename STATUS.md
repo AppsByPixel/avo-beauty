@@ -92,11 +92,19 @@ any line of it, including this one.
 
 ### Session of 2026-08-19 — four lanes merged, and what each returned
 
-`dev` **356 commits**, `main` **103 behind**, `origin/dev` still at `e50a446` — **12 commits
-unpushed on purpose.** `RUNBOOK.md` puts `git push origin dev` *after* the twice-green gate, and
-the gate has not run because it must not run under load: one attempt was already OOM-killed, and
-lanes were live throughout this session. Cold `turbo run typecheck --force` after every merge:
-**11/11, 0 cached**. The full `pnpm check` twice from a clean tree is the outstanding step.
+**THE GATE RAN AND MAIN ADVANCED — 2026-08-23, `e7015f8`.** Everything is level:
+`dev`, `main`, all four `feat/*` branches, `origin/dev` and `origin/main` are the same commit.
+416 commits. Nothing unpushed, nothing behind, no worktree dirty.
+
+The gate was run as `RUNBOOK.md` writes it, with lanes idle and the host quiet (load 1.85 after
+a reboot — the OOM-killed attempt happened under four live lanes, and that is the precondition
+that matters): `rm -rf packages/*/dist .turbo`, then **rebuild before touching the database**,
+then a dropped-and-recreated `avo_ci`, migrate, seed, and `pnpm check` **twice**, with
+`POSTGRES_DB` never set.
+
+**Both runs: 23 files, 889 passed, 32 todo, 0 failed** — at **482s** and **494s**. The differing
+durations are the point: this project has been fooled three times by a single green run, once by
+a turbo replay that took 14ms and was reported as a pass. Two real runs, eight minutes each.
 
 All four lanes merged: **A** `0e0b50f`, **C** `0c6a3fa`, **D** `44f17ec`, **B** `0614e2f` and
 `1bdf6ae`. go-live **10 → 13 ticked / 40**.
