@@ -121,6 +121,7 @@ import {
   TopUpIntentPublicSchema,
   TransactionSchema,
   WalletTokenSchema,
+  countedPage,
   paginated,
 } from '../packages/types/dist/index.js';
 import {
@@ -707,41 +708,38 @@ function probes(): Probe[] {
      * PROBED RATHER THAN UNMODELLED, and the distinction is not a formality:
      * `SupportTicketSchema` exists in `packages/types`, so writing this route into
      * UNMODELLED would be asserting "there is no schema" with the schema sitting three
-     * imports up this file. The ENVELOPE (`items` / `total` / `nextCursor`) has none,
-     * which is what `select` is for — the modelled shape is the row, not the page.
+     * imports up this file.
      *
-     * IT SHARES ITS ROOT CAUSE WITH THE `POST` PROBE ABOVE — which was ALREADY RED when
-     * this route arrived, so probing here adds detail to an existing signal rather than
-     * turning the suite red. Three keys are declared nowhere in `packages/types`:
+     * `countedPage`, NOT `paginated`, AND THE TWO ARE DIFFERENT SHAPES ON PURPOSE. This
+     * endpoint serves `{ items, nextCursor, total }`; the wallet's booking and service
+     * pages serve `{ items, nextCursor }` and send no count. Making `total` optional on
+     * one shared wrapper would have tolerated a server that simply FORGOT to send it,
+     * which is the trap `nextAppointmentAt` avoided by being nullable-and-required. So a
+     * page with a count and a page without are separate types, and this binds to the
+     * counted one.
      *
-     *   salonId   the console queue spans salons, so a row that cannot say which salon
-     *             it belongs to is unreadable there. Stripped on BOTH routes.
-     *   topic     the denormalised {en, ar} label, so the queue renders a topic without
-     *             a second request per row. Stripped on BOTH routes.
-     *   total     GET only. `paginated()` declares `items` and `nextCursor` only, and
-     *             this endpoint counts. `GET /v1/platform/audit` totals too, so the
-     *             honest fix is probably a counted wrapper rather than a field here.
+     * WHAT THAT REFUSAL IS WORTH, concretely: lane C's hand-parsed envelope read
+     * `total: typeof v['total'] === 'number' ? v['total'] : 0`, so an API that stopped
+     * sending the count would have rendered "Messages · 0" over a list of real messages.
+     * A premature zero arriving through a defensive DEFAULT rather than a loading state
+     * — invisible to the census pins, which guard the pending path. `countedPage`
+     * rejects that response instead of rendering it.
      *
-     * Measured, not guessed — that list is what the two specs print. An earlier version
-     * of this note said POST stripped `salonId` alone; it strips `topic` as well, and
-     * the note is corrected rather than left, because a stale annotation in the place a
-     * reader looks first is the defect this census exists to prevent.
-     *
-     * NONE of them is annotated into `wireOnly`, because none is a wire-only field —
-     * every one is a real part of the shape a client needs, and `wireOnly` is for keys
-     * that legitimately belong to no schema. Zod does not fail on an undeclared key, it
-     * DELETES it, so each of these currently reaches a client as `undefined` with no way
-     * to tell that the server sent a value. That is the `changeableUntil` failure exactly.
-     *
-     * The fix is `packages/types`, which is trunk-owned and a four-way break, so it is
-     * REPORTED rather than reached for from this lane. All four ticket specs go green in
-     * the same run when it lands.
+     * THIS PROBE AND THE `POST` ONE ABOVE FOUND THREE UNDECLARED KEYS BETWEEN THEM, and
+     * all three are now closed — recorded because the sequence is the argument for the
+     * census rather than a war story. `salonId` (both routes) and the joined `topic`
+     * (both routes) were widened onto `SupportTicketSchema`; `total` became this
+     * wrapper. Every one was SERVED FIRST AND DECLARED SECOND, and zod deletes an
+     * undeclared key rather than failing on it, so each was reaching clients as
+     * `undefined` with no way to tell the server had sent a value — `changeableUntil`
+     * exactly. None was annotated into `wireOnly`: that escape is for keys which
+     * legitimately belong to no schema, and each of these was a real part of the shape.
      */
     {
       route: 'GET /v1/support/tickets',
       label: 'GET /v1/support/tickets',
-      schemaName: 'paginated(SupportTicketSchema)',
-      schema: paginated(SupportTicketSchema),
+      schemaName: 'countedPage(SupportTicketSchema)',
+      schema: countedPage(SupportTicketSchema),
       requireNonEmpty: ['items'],
     },
   ];
@@ -879,10 +877,29 @@ const UNMODELLED: Record<string, string> = {
     'report as the next slice: the PATCH needs a permission-off probe, a range probe, and a ' +
     'test that a commission change is picked up by the very next top-up rather than at ' +
     'restart.',
+  /**
+   * BOTH AUDIT READS COUNT, AND WHOEVER SCHEMAS THEM MUST BIND `countedPage`.
+   *
+   * Checked rather than assumed, because the ticket queue's `total` strip raised the
+   * question for these two: neither audit route is PROBED — both are unmodelled — so
+   * the strip check never runs on them and no latent `total` strip is possible today.
+   * Their counts are simply unasserted, which is a different gap from the ticket
+   * queue's and is what these entries record.
+   *
+   * The trap is for the next person. `paginated()` is `{ items, nextCursor }` and does
+   * NOT carry a count, so binding an audit schema through it would silently delete the
+   * `total` both these endpoints serve. `countedPage()` is the counted shape, and the
+   * reason the two are separate types rather than one with an optional field is written
+   * out beside the ticket-queue probe above: an optional `total` tolerates a server
+   * that forgot to send it, and lane C's defensive `: 0` default turned exactly that
+   * into "Messages · 0" over a list of real messages.
+   */
   'GET /v1/platform/audit':
     'the platform-wide audit log with its q/kind/limit/cursor/salon filters, behind ' +
     'requirePlatform(audit). No audit schema exists in packages/types for either the ' +
-    'merchant or the platform view — see `GET /salons/:id/audit` below.',
+    'merchant or the platform view — see `GET /salons/:id/audit` below. It serves a ' +
+    '`total`, so the schema it eventually gets must bind through countedPage(), not ' +
+    'paginated().',
   'GET /v1/platform/admins':
     'the owner console\'s admin list, behind requirePlatform(admins). REACHABLE since ' +
     'signInPlatform landed; what it lacks is a schema — `PlatformAdmin` is unmodelled in ' +
@@ -913,7 +930,9 @@ const UNMODELLED: Record<string, string> = {
     'the Loyalty screen\'s read model — the salon\'s tier ladder plus a computed ' +
     '`preview` of what a 10.000 KD top-up credits at each tier. A view, not an entity.',
   'GET /salons/:id/audit':
-    'the audit log page — rows plus `total`, `appendOnly` and `retentionYears`. A view.',
+    'the audit log page — rows plus `total`, `appendOnly` and `retentionYears`. The ' +
+    '`total` means its schema must bind countedPage(), never paginated(), which would ' +
+    'delete the count. A view.',
   'GET /salons/:id/activity':
     'the merchant activity feed, a union of transaction and booking streams. A view.',
   'GET /salons/:id/branches/:bid/closure-preview':
