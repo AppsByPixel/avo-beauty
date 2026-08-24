@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { fetchSalonLoyalty, type SalonLoyalty } from '../api/salon';
+import { adoptSalonName } from '../config/brand';
 import { resolveScan, type ScanResult } from '../api/scans';
 import { fetchMember, type LookupMember } from '../api/members';
 import { copy } from '../copy/en';
@@ -71,7 +72,15 @@ export function ScannerFlow() {
     let alive = true;
     fetchSalonLoyalty(salonId, accessToken)
       .then((s) => {
-        if (alive) setSalon(s);
+        if (!alive) return;
+        setSalon(s);
+        /*
+          The name is read at render time (config/brand.ts), so a rename in the
+          dashboard reaches Home's heading now rather than at the next launch. The
+          COLOUR cannot follow it: the stylesheets copied their colours when their
+          modules were evaluated. See src/theme/sealed.ts.
+        */
+        adoptSalonName(s.name);
       })
       .catch(() => {
         /* reported through the member card's fallback, not a blocking error */

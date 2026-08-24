@@ -10,6 +10,19 @@
 import type { TextStyle } from 'react-native';
 import { theme } from '@avo/tokens/native';
 import { tokens } from '@avo/tokens';
+import { seal } from './sealed';
+
+/**
+ * From here on the palette is fixed for the life of the process.
+ *
+ * `onBrandFill` and `brandTextColor` below read `color.brandDeep` at module
+ * scope, and every screen's `StyleSheet.create` reads the brand tokens the same
+ * way, so this module is the first consumer of the palette by construction. A
+ * salon's hex has to be applied before this line runs; after it, applying one
+ * would theme only the modules not yet evaluated. `./sealed` carries the full
+ * argument, and `./brand` refuses -- loudly -- once this has fired.
+ */
+seal();
 
 export { theme };
 export const color = theme.color;

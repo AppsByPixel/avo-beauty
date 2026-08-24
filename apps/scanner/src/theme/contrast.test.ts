@@ -109,3 +109,22 @@ describe('the dark scan screen — where white on near-black is the normal case'
     );
   });
 });
+
+describe('the light focus ring', () => {
+  /**
+   * `brandDeep`, never `brand`. §2 writes the ring as the literal `2px solid
+   * #6E7F6C` — the Amara `brand` value — and that generalises to a FAILING ring
+   * on a rebranded salon: a focus indicator is a non-text graphic, WCAG 1.4.11
+   * asks 3:1 against the adjacent surface, and `brand` measures 2.86:1 on Noor
+   * rose. The generated stylesheet already made this deviation for the web; this
+   * is the native half of it. Per-tenant numbers are in `brand.test.ts`.
+   */
+  it('is brandDeep, not brand', () => {
+    expect(FOCUS_RING_LIGHT).toBe(color.brandDeep);
+    expect(FOCUS_RING_LIGHT).not.toBe(color.brand);
+  });
+
+  it('and clears the 3:1 non-text floor against the surface it sits on', () => {
+    expect(contrastRatio(FOCUS_RING_LIGHT, color.surface)).toBeGreaterThanOrEqual(3);
+  });
+});
