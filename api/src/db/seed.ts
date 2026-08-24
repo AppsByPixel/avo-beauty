@@ -399,8 +399,27 @@ async function seed(): Promise<void> {
        * SAL-LUMIERE below stays OFF on both deliberately, which is what keeps the
        * refusals themselves testable: two salons, one with the module and one
        * without, is the only fixture shape that can prove a gate exists rather
-       * than that it is merely absent. It has no products either, so
-       * `shop_not_enabled` and an empty catalog are separately reachable.
+       * than that it is merely absent.
+       *
+       * WHAT THIS COMMENT USED TO CLAIM, AND WHY IT WAS WRONG. It said Lumière
+       * "has no products either, so `shop_not_enabled` and an empty catalog are
+       * separately reachable". Neither half held. `shop_not_enabled` was raised
+       * only by `POST /orders`; `GET /salons/{id}/products` had no module check at
+       * all, so with the shop off the catalogue answered 200 with the full list
+       * and the refusal was unreachable on the read. And because Lumière is off
+       * AND empty, its two possible causes were indistinguishable anyway. The
+       * sentence is what made the missing gate look deliberate — it asserted a
+       * property of a file it was not checked against, which is this build's most
+       * expensive recurring defect. The gate now exists: `routes/salons.ts`
+       * § `assertShopReadable`.
+       *
+       * WHAT IS STILL NOT REACHABLE FROM THIS SEED, stated rather than implied: an
+       * EMPTY CATALOGUE ON AN OPEN SHOP. That needs `module_shop = true` with zero
+       * products, and no seeded salon is shaped that way — Amara is on with three
+       * products, Lumière is off with none. So Lumière proves the refusal and
+       * nothing here proves the wallet's `shopEmpty*` copy. A third fixture, or a
+       * test that clears Amara's catalogue, is owed; it is named here rather than
+       * asserted away.
        */
       moduleBooking: true,
       moduleShop: true,

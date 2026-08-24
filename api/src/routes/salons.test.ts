@@ -15,7 +15,9 @@
 import { describe, expect, it } from 'vitest';
 import { fils } from '@avo/types';
 import { ApiError } from '../http/errors';
-import { buildSalonPatch, PLATFORM_EDITABLE } from './salons';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { assertShopReadable, buildSalonPatch, PLATFORM_EDITABLE } from './salons';
 import { salon } from '../db/schema/salon';
 
 type SalonRow = typeof salon.$inferSelect;
@@ -185,5 +187,119 @@ describe('buildSalonPatch, platform set', () => {
   it('still refuses plan', () => {
     expect(refusal(() => buildSalonPatch({ plan: 'pro' }, BEFORE, PLATFORM_EDITABLE)).code)
       .toBe('not_editable');
+  });
+});
+
+/**
+ * `assertShopReadable` — the shop module on the READ path.
+ *
+ * THE DEFECT THIS COVERS. `GET /salons/{id}/products` filtered on `salonId` and
+ * `active` and nothing else, so a salon with `module_shop = false` served its full
+ * catalogue with a 200. `shop_not_enabled` existed in exactly one place —
+ * `services/order.ts` § 3, the WRITE path — so the customer browsed a closed shop,
+ * filled a cart, tapped "Pay 8.500 KD from wallet" and was told "We couldn't
+ * complete your order. Nothing has been charged.": a permanent refusal wearing the
+ * copy of a retryable one, with the button still live.
+ *
+ * The money control held — balance unchanged, no transaction row — so this was
+ * never a money defect. It is an honesty defect, and the permission census cannot
+ * see it because a module is not an authority.
+ *
+ * WHY THESE CASES AND NOT AN ENDPOINT DRIVE. The handler is database-bound, so
+ * "the endpoint answers 409" belongs to Lane D in `e2e/`. What is pure — and what
+ * actually carries the decision — is which callers the module refuses, so that is
+ * taken as an argument and asserted here with no database, the same shape
+ * `buildSalonPatch` above uses.
+ */
+describe('the shop module on the read path', () => {
+  const OPEN = { moduleShop: true };
+  const CLOSED = { moduleShop: false };
+
+  it('refuses a member when the shop module is off', () => {
+    const err = refusal(() => assertShopReadable('member', CLOSED));
+
+    // The CODE, not the status. A 409 here and the `handle_taken` 409 two routes
+    // over are the same three digits; only the code says which fact answered.
+    expect(err.code).toBe('shop_not_enabled');
+    expect(err.statusCode).toBe(409);
+  });
+
+  /**
+   * THE MIRROR. Without it the case above passes against a function that refuses
+   * every member, which would take the shop away from the salons that sell.
+   */
+  it('lets a member read an open shop', () => {
+    expect(() => assertShopReadable('member', OPEN)).not.toThrow();
+  });
+
+  /**
+   * THE DECISION, PINNED. The three product writes have no module check, because
+   * building a catalogue before flipping the module on is how a salon opens a
+   * shop and `module_shop` defaults OFF. Gating the merchant's own read would let
+   * her create a product and then refuse to list it back — an editor that forgets
+   * what it just saved. If someone later "completes" the gate by extending it to
+   * staff, this goes red and the comment says why.
+   */
+  it('does NOT refuse staff, so a merchant can build a catalogue before opening', () => {
+    expect(() => assertShopReadable('staff', CLOSED)).not.toThrow();
+    expect(() => assertShopReadable('platform_admin', CLOSED)).not.toThrow();
+  });
+
+  /**
+   * OFF AND EMPTY MUST STAY DIFFERENT ANSWERS. The wallet renders distinct copy —
+   * "The shop is closed" versus "Nothing in the shop yet" — and picks between them
+   * on the CODE (`apps/wallet/src/state/useShop.ts` maps `shop_not_enabled` to
+   * `status: 'off'`). A closed shop that answered `{ items: [] }` would render
+   * "Nothing in the shop yet" about a salon that does not sell products at all.
+   * So the closed case must THROW rather than return, which is what this asserts
+   * that the two cases above do not, on their own, say.
+   */
+  it('refuses rather than returning an empty catalogue', () => {
+    let returnedNormally = false;
+    try {
+      assertShopReadable('member', CLOSED);
+      returnedNormally = true;
+    } catch {
+      /* expected */
+    }
+    expect(returnedNormally, 'a closed shop must not be reported as an empty one').toBe(false);
+  });
+});
+
+/**
+ * THE READ AND THE WRITE MUST SPEAK ONE VOCABULARY.
+ *
+ * Two files now raise `shop_not_enabled` for one fact. The failure this guards
+ * against is not that either is wrong today — it is that someone reworders one of
+ * them and the wallet, which switches on the CODE and renders the MESSAGE, starts
+ * showing two different sentences about the same closed shop depending on whether
+ * she browsed or checked out. Asserted against `order.ts`'s source rather than
+ * against a copy of the string, so the two cannot drift while the spec stays green.
+ */
+describe('the read refusal matches the write refusal', () => {
+  const orderSource = readFileSync(
+    fileURLToPath(new URL('../services/order.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it('raises the code and message services/order.ts already raises', () => {
+    const written = /conflict\(\s*'shop_not_enabled',\s*'([^']+)'/.exec(orderSource);
+    expect(written, 'services/order.ts no longer raises shop_not_enabled as expected').not.toBeNull();
+
+    const err = refusal(() => assertShopReadable('member', { moduleShop: false }));
+    expect(err.message).toBe(written![1]);
+  });
+});
+
+/**
+ * The seam the pure cases cannot reach: the handler could stop calling the gate
+ * and every assertion above would stay green. Same technique as
+ * `e2e/report-download-capability.test.ts`, and as `policies.test.ts`.
+ */
+describe('the products handler applies the gate', () => {
+  const source = readFileSync(fileURLToPath(new URL('./salons.ts', import.meta.url)), 'utf8');
+
+  it('calls assertShopReadable with the principal kind', () => {
+    expect(source).toContain('assertShopReadable(p.kind, s)');
   });
 });
