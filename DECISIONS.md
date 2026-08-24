@@ -1603,3 +1603,49 @@ does not arrive.
 balance if MyFatoorah pays the salon at top-up, counsel and PSP sign-off, data residency, support
 staffing, the Arabic native-speaker review, and whether signup needs a verification step to close
 the enumeration oracle. Each is queued above.
+
+---
+
+### LANES.md misdiagnosed the cross-worktree incident; the cause is cwd, not `--filter`
+
+**Decided in trunk, without asking, during the verification session of 2026-08-25.**
+
+LANES.md § "Every lane isolates its own resources" attributed Lane A's cross-worktree run —
+`pnpm --filter @avo/api run start` booting `~/dev/avo-wallet/api` against `avo_lane_b` — to
+`--filter` resolving from cwd. I measured it and that diagnosis is incomplete in a way that
+matters.
+
+`--filter` resolves **correctly** when cwd genuinely is your worktree root:
+
+```
+$ cd /Users/koraspond_developer/dev/avo-wallet && pnpm --filter @avo/mock exec pwd
+/Users/koraspond_developer/dev/avo-wallet/packages/mock
+```
+
+What is actually broken is that **cwd does not persist between tool calls** — every command
+starts in trunk regardless of what a previous command `cd`'d to. So "run from its own worktree"
+was never true; the `cd` had happened in an earlier call and the shell had already reset.
+
+**Why the correction is worth making rather than leaving a working rule alone.** If the fault
+is pnpm's, `--dir` closes it and the matter ends. It is not, so the same failure reaches every
+cwd-dependent command — including `./scripts/lane-db.sh <letter>`, which from a reset cwd runs
+*trunk's* copy and, because the script correctly derives `ROOT` from its own location
+(`scripts/lane-db.sh:64`), migrates and seeds **trunk's `api/`** against the lane's database.
+A correctly written script doing the wrong thing is precisely the failure mode this file exists
+to catalogue, and the old diagnosis could not predict it.
+
+It also explains why the rule "kept regressing" — the recorded puzzle in that section. It was
+not being forgotten. It was being followed, in a call where cwd had silently reset.
+
+Recorded as a **ninth vector** in LANES.md, with the `--dir` rule kept intact: `--dir=<absolute>`
+is immune to this by construction, which makes it the right habit whether or not anyone
+remembers the cause. The four root scripts that wrap `--filter` (`package.json:14-17`, which
+CLAUDE.md's Commands section tells every lane to run) are left as they are for now — they are
+correct from trunk, and rewriting shared tooling while four lanes are mid-run is the kind of
+change this project defers to a quiet tree.
+
+**To reverse:** if a future harness makes cwd persist between calls, the ninth-vector section
+becomes historical and can be cut back to a line; the `--dir` rule should survive it regardless.
+**Still open:** rewriting `package.json:14-17` to use `--dir` with a path derived from the
+workspace root, so `pnpm mock` cannot serve trunk's mock to a lane. Queued rather than done,
+deliberately — see above.

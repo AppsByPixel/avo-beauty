@@ -24,9 +24,10 @@ the failure mode this structure exists to prevent.
 
 ## Every lane isolates its own resources
 
-**Eight** shared mutable resources have now crossed lanes: a Postgres database, the container,
+**Nine** shared mutable resources have now crossed lanes: a Postgres database, the container,
 the browser pane, a cross-worktree `pnpm --filter`, the turbo cache, the process table, the
-session scratchpad, and an abandoned iOS simulator that starved three lanes to death. Most were
+session scratchpad, an abandoned iOS simulator that starved three lanes to death, and the
+working directory itself, which resets to trunk between commands. Most were
 caught and disclosed by the lane that caused them — which is the standard, and also why this
 rule exists rather than relying on it.
 
@@ -92,6 +93,59 @@ docker exec -i avo-postgres psql -U avo -d postgres \
 
 Anchor load-bearing claims in SQL against your own database rather than in the API's own
 reply. A server that answers plausibly is not evidence that it is *your* server.
+
+### Cwd resets to trunk between commands — a ninth vector, and the mechanism behind the fourth
+
+**The working directory does not persist between tool calls.** Every command starts in
+`/Users/koraspond_developer/dev/avo` — trunk — no matter what a previous command `cd`'d to.
+
+```
+$ pwd                                    # a fresh command, after cd'ing to avo-wallet earlier
+/Users/koraspond_developer/dev/avo       # trunk
+$ pnpm --filter @avo/mock exec pwd
+/Users/koraspond_developer/dev/avo/packages/mock        # TRUNK's package
+```
+
+With the `cd` in the *same* command it resolves correctly:
+
+```
+$ cd /Users/koraspond_developer/dev/avo-wallet && pnpm --filter @avo/mock exec pwd
+/Users/koraspond_developer/dev/avo-wallet/packages/mock
+```
+
+**This is the proximate cause of the `--filter` incident above, and the section as written
+misdiagnosed it.** `--filter` resolving from cwd is real, but `--filter` resolves *correctly*
+when cwd genuinely is your worktree root — measured, both lines above. What actually happened
+to Lane A is that "run from its own worktree" was an illusion: the `cd` had happened in an
+earlier call and the shell had already reset. The lane was not misusing pnpm; it was reasoning
+about a cwd it no longer had.
+
+That distinction matters because it widens the blast radius. If the fault were pnpm's, `--dir`
+would close it. It is not, so **every cwd-dependent command is affected** — `ls`, `git status`,
+`git diff`, any relative path, and every `./scripts/...` invocation.
+
+Two that bite hardest:
+
+- **`./scripts/lane-db.sh <letter>` is wrong. Use the absolute path.** From a reset cwd that
+  runs *trunk's* copy of the script, and the script sets `ROOT` from its own location
+  (`scripts/lane-db.sh:64`) — so it migrates and seeds **trunk's `api/`** against your lane
+  database. The script is written correctly and still does the wrong thing, because the
+  correctness it protects is relative to the wrong file. Use
+  `/Users/koraspond_developer/dev/avo-<lane>/scripts/lane-db.sh <letter>`.
+
+- **`pnpm mock`, `pnpm tokens`, `pnpm db:migrate` are `--filter` wrappers** (`package.json:14-17`),
+  and CLAUDE.md's Commands section tells every lane to run them. Run without a same-command
+  `cd`, `pnpm mock` serves **trunk's** mock — so a fixture you edited in your worktree is not
+  the fixture being served, and the screen you are reading is not the one you changed.
+
+The rule, which subsumes the `--dir` rule rather than replacing it: **put `cd <your absolute
+worktree> && ` at the front of every command, or use absolute paths throughout. Never rely on a
+`cd` from a previous call.** Keep using `--dir=<absolute>` as well — it is immune to this by
+construction, which is why it is the right habit even once the cause is understood.
+
+And the general lesson, which is this build's oldest one wearing new clothes: the output looked
+completely normal. A command that runs in the wrong tree does not announce it. Assert which tree
+and which database produced a result before you trust it.
 
 ### The scratchpad is shared between lanes — a seventh vector
 
