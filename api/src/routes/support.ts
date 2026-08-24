@@ -39,7 +39,7 @@
  * the WhatsApp number could take AVO's escalation path away from her customers.
  */
 
-import { and, asc, desc, eq, getTableColumns, gte, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   requireDashboardPerm,
@@ -53,6 +53,12 @@ import { badRequest, conflict, forbidden, notFound } from '../http/errors';
 import { E164, requireEmail } from '../http/fields';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import {
+  afterCursor,
+  cursorInstant,
+  encodeCursor,
+  parseCursor,
+} from '../services/streamCursor';
 import { enforceTicketLimits } from '../services/supportLimit';
 import { db } from '../db/client';
 import { supportConfig, supportTicket, supportTopic } from '../db/schema/legal';
@@ -78,42 +84,13 @@ const TICKET_MAX_LIMIT = 100;
 const TICKET_DEFAULT_LIMIT = 50;
 
 /**
- * The cursor separator. A single character that cannot occur in either half: an
- * ISO instant is digits, `-`, `:`, `.`, `T` and `Z`, and a ticket id is `SUP-` plus
- * five digits. Nothing here needs encoding, so the cursor stays readable in a log.
+ * ONE STREAM, SO ONE RANK. `services/streamCursor.ts` keys on `(at, stream, id)`
+ * because two of its three callers merge several tables; this one does not, so its
+ * rank is a constant. Kept rather than special-cased: a second cursor format for
+ * the single-table case is a second thing to get the microsecond truncation wrong
+ * in, which is exactly how that file came to exist.
  */
-const CURSOR_SEP = '|';
-
-/**
- * THE INSTANT, TO THE MICROSECOND, RENDERED BY POSTGRES.
- *
- * `created_at` is `timestamptz`, which stores microseconds; `Date.toISOString()`
- * emits MILLISECONDS. A cursor built from the wire's own `at` field therefore
- * truncates, and this is not a rounding nicety — it silently ENDS THE WALK. Driving
- * it found the bug that this comment used to deny:
- *
- *   four tickets share `16:00:00.123456`. The first is delivered and the cursor
- *   becomes `…16:00:00.123Z`. The next page asks for `created_at < .123`, which the
- *   remaining three (`.123456`) do not satisfy — and neither do they satisfy
- *   `= .123` — so the page comes back EMPTY, `hasMore` is false, `nextCursor` is
- *   null, and three rows are simply gone. A ten-row queue paged eight rows and
- *   reported `total: 10` while doing it.
- *
- * So the database renders the key. `to_char(… 'US')` is six fractional digits and
- * round-trips through `::timestamptz` exactly, and the comparison is still against
- * the raw column, so `support_ticket_route_status_idx` and
- * `support_ticket_member_created_idx` are both still usable — which
- * `date_trunc('milliseconds', created_at)` would have cost, on top of multiplying
- * the ties it was meant to resolve.
- *
- * The lesson is the one `services/signupLimit.ts` records about its own docstring:
- * the previous version of this comment asserted the cursor was "exact to the
- * microsecond", which was false in the direction that stops anybody looking.
- */
-const CURSOR_AT = sql<string>`to_char(${supportTicket.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-
-/** What `CURSOR_AT` produces, and the only thing the cast below is handed. */
-const CURSOR_AT_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const TICKET_RANK = 0;
 
 // ===========================================================================
 // SERIALISERS
@@ -1175,8 +1152,9 @@ export async function registerSupportRoutes(app: FastifyInstance): Promise<void>
    * gives the audit log one for free and this table has to build it. The id breaks
    * the tie, so no row can straddle a page boundary and either repeat or vanish.
    *
-   * THE TIMESTAMP HALF COMES FROM POSTGRES, NOT FROM `at` — see `CURSOR_AT`, which
-   * carries what happened when it did not.
+   * THE TIMESTAMP HALF COMES FROM POSTGRES, NOT FROM `at`, and
+   * `services/streamCursor.ts` carries what happened when it did not: this endpoint
+   * is where the truncation was found, and that file was extracted from the fix.
    *
    * `total` is counted against the FILTER and not the page, so the console's
    * counter does not shrink as it pages — `GET /v1/platform/audit`'s reasoning.
@@ -1204,36 +1182,22 @@ export async function registerSupportRoutes(app: FastifyInstance): Promise<void>
     const scope = queueScope(p, req.query);
     const where = scope.length > 0 ? and(...scope) : undefined;
 
-    /**
-     * `(created_at, id) < (cursorAt, cursorId)` in the DESC ordering, spelled out
-     * because Drizzle has no row-value comparison. The instant is passed through as
-     * TEXT and cast, not parsed into a `Date` — a `Date` is the truncation
-     * `CURSOR_AT` exists to avoid, and going via one would reintroduce it here even
-     * with an exact cursor arriving.
-     */
-    let pageWhere = where;
-    const cursor = (req.query.cursor ?? '').trim();
-    if (cursor !== '') {
-      const sep = cursor.indexOf(CURSOR_SEP);
-      const at = sep === -1 ? '' : cursor.slice(0, sep);
-      const id = sep === -1 ? '' : cursor.slice(sep + 1);
-      if (id === '' || !CURSOR_AT_SHAPE.test(at)) {
-        throw badRequest('invalid_cursor', 'cursor must be the value returned as nextCursor.');
-      }
-      const stamp = sql`${at}::timestamptz`;
-      const after = or(
-        sql`${supportTicket.createdAt} < ${stamp}`,
-        and(sql`${supportTicket.createdAt} = ${stamp}`, lt(supportTicket.id, id)),
-      )!;
-      pageWhere = where === undefined ? after : and(where, after);
-    }
+    const cursor = parseCursor(req.query.cursor, [TICKET_RANK]);
+    const after = afterCursor(cursor, TICKET_RANK, supportTicket.createdAt, supportTicket.id);
+    const pageWhere =
+      after === undefined ? where : where === undefined ? after : and(where, after);
 
     const rows = await db
       /** The row, plus the exact instant Postgres will accept back. */
-      .select({ ...getTableColumns(supportTicket), cursorAt: CURSOR_AT })
+      .select({ ...getTableColumns(supportTicket), cursorAt: cursorInstant(supportTicket.createdAt) })
       .from(supportTicket)
       .where(pageWhere)
-      .orderBy(desc(supportTicket.createdAt), desc(supportTicket.id))
+      /**
+       * `id ASC` inside one instant, matching `afterCursor`'s `id > cursorId`. The
+       * two have to agree or a page boundary inside a same-microsecond group either
+       * repeats a row or loses one — the ordering and the predicate are one decision.
+       */
+      .orderBy(desc(supportTicket.createdAt), asc(supportTicket.id))
       .limit(rawLimit + 1);
 
     const page = rows.slice(0, rawLimit);
@@ -1248,7 +1212,10 @@ export async function registerSupportRoutes(app: FastifyInstance): Promise<void>
     return reply.send({
       items: await serialiseTickets(page),
       total: counted?.total ?? 0,
-      nextCursor: hasMore && last ? `${last.cursorAt}${CURSOR_SEP}${last.id}` : null,
+      nextCursor:
+        hasMore && last
+          ? encodeCursor({ at: last.cursorAt, rank: TICKET_RANK, id: last.id })
+          : null,
     });
   });
 

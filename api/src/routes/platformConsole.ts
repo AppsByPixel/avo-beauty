@@ -36,8 +36,7 @@
  * section the design's own sidebar puts it behind.
  */
 
-import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
-import type { PgColumn } from 'drizzle-orm/pg-core';
+import { and, asc, desc, eq, getTableColumns, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { auditLog } from '../db/schema/audit';
@@ -49,6 +48,13 @@ import { platformSettings } from '../db/schema/platformSettings';
 import { requirePlatform } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
+import {
+  afterCursor,
+  cursorInstant,
+  mergePage,
+  parseCursor,
+  type Keyed,
+} from '../services/streamCursor';
 import {
   describeLoyalty,
   describeTransaction,
@@ -118,111 +124,13 @@ function parseIntegerInRange(
   return value;
 }
 
-// ======================================================================
-// THE PLATFORM ACTIVITY FEED'S COMPOSITE CURSOR
-// ======================================================================
 /**
- * Three streams, one opaque string: `at|stream|id`.
- *
- * `routes/activity.ts` declines a cursor and states the cost of one — "a cursor
- * over a merged stream needs a composite position — one offset per source — and
- * every client that got one would have to carry it correctly". That is the right
- * call for five lines on an Overview and the wrong one for a section whose job is
- * looking backwards, so this pays the cost and keeps the client's side of it to a
- * single value it echoes back.
- *
- * IT IS A POSITION, NOT THREE OFFSETS. An offset per source would drift the moment
- * a row was written between two pages. The sort key is `(at DESC, stream ASC,
- * id ASC)` and the cursor is the last row's key, so the next page is "strictly
- * after this point in that order" — which is exact under concurrent writes, the
- * same property `parseAuditCursor` gets for free from a bigserial.
- */
-const FEED_CURSOR_SEP = '|';
-
-/**
- * The second key, and it is load-bearing rather than cosmetic: a charge writes a
- * `transaction`, a `loyalty_event` and an `audit_log` row inside ONE transaction,
- * and `now()` is the transaction timestamp, so all three carry the SAME
- * `created_at` to the microsecond. Without a stable rank between them a page
- * boundary could fall inside that group and either repeat a line or lose one.
- *
- * The order is the design's own reading order for a simultaneous group — the money
- * happened, then the tier it moved, then the record of it.
+ * THIS FEED'S STREAMS, in the order a simultaneous group reads: the money
+ * happened, then the tier it moved, then the record of it. `services/streamCursor.ts`
+ * owns the mechanics and says why the rank is load-bearing rather than tidy.
  */
 const STREAM_RANK = { transaction: 0, loyalty: 1, audit: 2 } as const;
-
-/** Exactly what `cursorAtOf` emits, and the only thing the cast below is handed. */
-const FEED_CURSOR_AT_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
-
-interface FeedCursor {
-  /** Microsecond-exact, as text. NEVER parsed into a `Date` — see `cursorAtOf`. */
-  at: string;
-  rank: number;
-  id: string;
-}
-
-/**
- * THE INSTANT, TO THE MICROSECOND, RENDERED BY POSTGRES.
- *
- * `created_at` is `timestamptz`, which stores microseconds; `Date.toISOString()`
- * emits milliseconds. `routes/support.ts` records what that costs, because it cost
- * it: a cursor built from the wire's own `at` truncates, and the next page asks for
- * `created_at < .123` while the rows sit at `.123456`, so the page comes back empty,
- * `hasMore` goes false, and the walk ENDS with rows undelivered — reporting a total
- * it never served. Six fractional digits round-trip through `::timestamptz` exactly,
- * and the comparison is still against the raw column, so the `created_at DESC`
- * indexes on all three tables stay usable.
- */
-function cursorAtOf(column: PgColumn) {
-  return sql<string>`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-}
-
-function parseFeedCursor(value: unknown): FeedCursor | null {
-  if (value === undefined) return null;
-  const raw = String(value).trim();
-  if (raw === '') return null;
-
-  const first = raw.indexOf(FEED_CURSOR_SEP);
-  const second = first === -1 ? -1 : raw.indexOf(FEED_CURSOR_SEP, first + 1);
-  const at = first === -1 ? '' : raw.slice(0, first);
-  const rank = second === -1 ? Number.NaN : Number(raw.slice(first + 1, second));
-  const id = second === -1 ? '' : raw.slice(second + 1);
-
-  const ranks = Object.values(STREAM_RANK) as number[];
-  if (!FEED_CURSOR_AT_SHAPE.test(at) || !ranks.includes(rank) || id === '') {
-    throw badRequest('invalid_cursor', 'cursor must be the value returned as nextCursor.');
-  }
-  return { at, rank, id };
-}
-
-/**
- * "Strictly after the cursor row", for a source whose rank is FIXED — so the rank
- * comparison collapses to a constant here rather than becoming SQL:
- *
- *   rank <  cursor's   ->  at < cursorAt
- *   rank == cursor's   ->  at < cursorAt OR (at = cursorAt AND id > cursorId)
- *   rank >  cursor's   ->  at <= cursorAt
- *
- * `::text` on the id because `audit_log.id` is a `uuid` and the other two are
- * `text`; the cast makes one comparison work for all three, and it is only ever
- * reached on rows already pinned to a single microsecond by the equality beside it.
- */
-function cursorAfter(
-  cursor: FeedCursor | null,
-  rank: number,
-  atColumn: PgColumn,
-  idColumn: PgColumn,
-): SQL | undefined {
-  if (cursor === null) return undefined;
-  const stamp = sql`${cursor.at}::timestamptz`;
-  if (rank < cursor.rank) return sql`${atColumn} < ${stamp}`;
-  if (rank > cursor.rank) return sql`${atColumn} <= ${stamp}`;
-  return or(
-    sql`${atColumn} < ${stamp}`,
-    and(sql`${atColumn} = ${stamp}`, sql`${idColumn}::text > ${cursor.id}`),
-  )!;
-}
-
+const FEED_RANKS = Object.values(STREAM_RANK);
 
 export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promise<void> {
   // ====================================================================
@@ -928,11 +836,11 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
    * microsecond. The stream rank is what separates them, and the id separates two
    * rows of one stream.
    *
-   * THE MERGE IS BOUNDED, which is what makes reading three sources sound: taking
-   * `limit + 1` from each is enough, because a row not fetched from a source is
-   * older than every row that was, so it cannot reach the first `limit` of the
-   * merge. Reading 3×(limit+1) rows to serve `limit` is a fixed cost, not one that
-   * grows with the platform — `routes/activity.ts`'s argument, one source wider.
+   * THE MECHANICS ARE `services/streamCursor.ts`, which owns the key, the instant,
+   * the per-source predicate and the bounded merge — extracted when this became the
+   * second of three reads needing them, and carrying the argument for each. What
+   * stays here is the only thing that is this endpoint's own: which streams there
+   * are, and in what order a simultaneous group reads.
    */
   app.get<{ Querystring: { limit?: string; cursor?: string; salon?: string } }>(
     '/v1/platform/activity',
@@ -962,12 +870,12 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
         if (!known) throw notFound('unknown_salon', 'No such salon.');
       }
 
-      const cursor = parseFeedCursor(req.query.cursor);
+      const cursor = parseCursor(req.query.cursor, FEED_RANKS);
       const take = limit + 1;
 
       const [txRows, loyaltyRows, auditRows] = await Promise.all([
         db
-          .select({ ...getTableColumns(transaction), cursorAt: cursorAtOf(transaction.createdAt) })
+          .select({ ...getTableColumns(transaction), cursorAt: cursorInstant(transaction.createdAt) })
           .from(transaction)
           .where(
             and(
@@ -980,31 +888,31 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
                */
               eq(transaction.status, 'settled'),
               salonFilter === '' ? undefined : eq(transaction.salonId, salonFilter),
-              cursorAfter(cursor, STREAM_RANK.transaction, transaction.createdAt, transaction.id),
+              afterCursor(cursor, STREAM_RANK.transaction, transaction.createdAt, transaction.id),
             ),
           )
           .orderBy(desc(transaction.createdAt), asc(transaction.id))
           .limit(take),
         db
-          .select({ ...getTableColumns(loyaltyEvent), cursorAt: cursorAtOf(loyaltyEvent.createdAt) })
+          .select({ ...getTableColumns(loyaltyEvent), cursorAt: cursorInstant(loyaltyEvent.createdAt) })
           .from(loyaltyEvent)
           .where(
             and(
               salonFilter === '' ? undefined : eq(loyaltyEvent.salonId, salonFilter),
-              cursorAfter(cursor, STREAM_RANK.loyalty, loyaltyEvent.createdAt, loyaltyEvent.id),
+              afterCursor(cursor, STREAM_RANK.loyalty, loyaltyEvent.createdAt, loyaltyEvent.id),
             ),
           )
           .orderBy(desc(loyaltyEvent.createdAt), asc(loyaltyEvent.id))
           .limit(take),
         db
-          .select({ ...getTableColumns(auditLog), cursorAt: cursorAtOf(auditLog.createdAt) })
+          .select({ ...getTableColumns(auditLog), cursorAt: cursorInstant(auditLog.createdAt) })
           .from(auditLog)
           .where(
             and(
               /** The duplicate removal. See the header. */
               inArray(auditLog.kind, ['rules', 'access', 'risk']),
               salonFilter === '' ? undefined : eq(auditLog.salonId, salonFilter),
-              cursorAfter(cursor, STREAM_RANK.audit, auditLog.createdAt, auditLog.id),
+              afterCursor(cursor, STREAM_RANK.audit, auditLog.createdAt, auditLog.id),
             ),
           )
           .orderBy(desc(auditLog.createdAt), asc(auditLog.id))
@@ -1029,12 +937,10 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
         for (const r of rows) names.set(r.id, r.name);
       }
 
-      type Keyed = { item: FeedItem; rank: number; cursorAt: string; id: string };
-
-      const keyed: Keyed[] = [
-        ...txRows.map<Keyed>((t) => ({
+      const keyed: Keyed<FeedItem>[] = [
+        ...txRows.map<Keyed<FeedItem>>((t) => ({
           rank: STREAM_RANK.transaction,
-          cursorAt: t.cursorAt,
+          at: t.cursorAt,
           id: t.id,
           item: {
             id: t.id,
@@ -1059,9 +965,9 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
             amountFils: t.amountFils,
           },
         })),
-        ...loyaltyRows.map<Keyed>((l) => ({
+        ...loyaltyRows.map<Keyed<FeedItem>>((l) => ({
           rank: STREAM_RANK.loyalty,
-          cursorAt: l.cursorAt,
+          at: l.cursorAt,
           id: l.id,
           item: {
             id: l.id,
@@ -1075,9 +981,9 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
             amountFils: null,
           },
         })),
-        ...auditRows.map<Keyed>((a) => ({
+        ...auditRows.map<Keyed<FeedItem>>((a) => ({
           rank: STREAM_RANK.audit,
-          cursorAt: a.cursorAt,
+          at: a.cursorAt,
           id: a.id,
           item: {
             id: a.id,
@@ -1120,29 +1026,8 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
         })),
       ];
 
-      keyed.sort(
-        (a, b) =>
-          (a.cursorAt < b.cursorAt ? 1 : a.cursorAt > b.cursorAt ? -1 : 0) ||
-          a.rank - b.rank ||
-          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-      );
-
-      const page = keyed.slice(0, limit);
-      /**
-       * `keyed.length > limit` is exactly "there is another row", and the bound is
-       * why: if it is not greater, every source returned fewer than `limit + 1` rows
-       * and so was exhausted. See the header.
-       */
-      const hasMore = keyed.length > limit;
-      const last = page[page.length - 1];
-
-      return reply.send({
-        items: page.map((k) => k.item),
-        nextCursor:
-          hasMore && last
-            ? `${last.cursorAt}${FEED_CURSOR_SEP}${last.rank}${FEED_CURSOR_SEP}${last.id}`
-            : null,
-      });
+      /** The bounded merge, and the "is there another page" argument. See that file. */
+      return reply.send(mergePage(keyed, limit));
     },
   );
 

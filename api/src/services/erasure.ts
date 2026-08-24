@@ -178,7 +178,18 @@ function tombstonePhone(): string {
  * its try and answers false to every candidate password — sign-in refuses a
  * tombstone with no special case anywhere.
  */
-const ERASED_PASSWORD_SENTINEL = '!erased';
+/**
+ * A NON-NULL VALUE THAT CANNOT VERIFY. `member.password_hash` is `NOT NULL`, so
+ * erasure cannot clear it — it overwrites it with this, and `argon2.verify` refuses
+ * anything that is not a PHC string, so a tombstone cannot sign in.
+ *
+ * EXPORTED, because a bare `password_hash IS NOT NULL` reads this as "she has a
+ * password" and that is a lie a UI will render. `GET /v1/platform/accounts` computes
+ * `passwordSet` and got it wrong until this was exported: an erased member came back
+ * `passwordSet: true` beside `status: 'erased'`, which is the kind of contradiction
+ * non-negotiable #6's screen is the worst place to put. One definition, imported.
+ */
+export const ERASED_PASSWORD_SENTINEL = '!erased';
 
 export const TOMBSTONE_NAME = 'Deleted account';
 
