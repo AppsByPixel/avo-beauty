@@ -21,7 +21,7 @@ import {
   requireSalonScoped,
   requireSameSalon,
 } from '../auth/principal';
-import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
+import { badRequest, conflict, notFound } from '../http/errors';
 /** One definition of "HH:MM" for the whole API — see http/fields.ts. */
 import { HHMM, HHMM_OR_END_OF_DAY } from '../http/fields';
 import { requireString } from '../money/validate';

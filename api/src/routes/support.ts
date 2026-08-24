@@ -49,7 +49,7 @@ import {
   type PlatformPrincipal,
   type StaffPrincipal,
 } from '../auth/principal';
-import { badRequest, conflict, forbidden, notFound, serviceUnavailable } from '../http/errors';
+import { badRequest, conflict, forbidden, notFound } from '../http/errors';
 import { E164, requireEmail } from '../http/fields';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -256,7 +256,8 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 async function lockSupport(tx: Tx): Promise<typeof supportConfig.$inferSelect> {
   const [row] = await tx.select().from(supportConfig).for('update').limit(1);
   if (!row) {
-    throw serviceUnavailable(
+    /** 409 — the same code and now the same status as the read. See it for why. */
+    throw conflict(
       'support_not_configured',
       'Support channels have not been configured yet.',
     );
@@ -467,7 +468,27 @@ export async function registerSupportRoutes(app: FastifyInstance): Promise<void>
 
     const [channels] = await db.select().from(supportConfig).limit(1);
     if (!channels) {
-      throw serviceUnavailable(
+      /**
+       * 409, NOT 503, and this is `services/policy.ts`'s doctrine applied one code
+       * short of where it should have been. That file settled the argument for
+       * `policies_not_published` — "a configuration state is not a transient
+       * unavailability… the clients' 503-to-offline mapping is correct and stays;
+       * the fix belongs here" — and then it was applied PER CODE rather than as a
+       * rule, so this one kept its 503.
+       *
+       * Lane C drove the consequence: 503 is in the client's connectivity bucket, so
+       * an unconfigured deployment told a console admin "No connection — try again
+       * once you're back online" about a server that had just replied, and watched
+       * the retry policy spend its budget on an answer no retry can change. Lane C
+       * has since keyed its client on shape rather than on a status list, so it reads
+       * correctly either way; the point of changing it here is that the doctrine
+       * should hold for every configuration state rather than the ones somebody
+       * remembered.
+       *
+       * `messaging_policy_missing` and `calendar_not_configured` moved with it — the
+       * sweep, not just the reported case.
+       */
+      throw conflict(
         'support_not_configured',
         'Support channels have not been configured yet.',
       );
@@ -1045,6 +1066,20 @@ export async function registerSupportRoutes(app: FastifyInstance): Promise<void>
         .from(supportTopic)
         .where(eq(supportTopic.active, true))
         .orderBy(supportTopic.position);
+      /**
+       * AN EMPTY LIST GETS A DIFFERENT SENTENCE, because the general one degrades
+       * into `Pick a topic from the list: .` — a customer told to choose from a bare
+       * period. Lane C found it. `DELETE …/topics/{id}` refuses to retire the last
+       * active topic precisely so this cannot be reached by an admin's own edits, so
+       * what is left is an unseeded deployment: the same condition
+       * `support_not_configured` names one function up, and the same answer.
+       */
+      if (known.length === 0) {
+        throw conflict(
+          'support_not_configured',
+          'Support is not taking messages yet. Reach us on WhatsApp in the meantime.',
+        );
+      }
       throw badRequest(
         'unknown_topic',
         `Pick a topic from the list: ${known.map((t) => t.id).join(', ')}.`,

@@ -78,7 +78,7 @@ import {
 import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { offsetFor } from '../time/zone';
-import { conflict, notFound, serviceUnavailable } from '../http/errors';
+import { conflict, notFound } from '../http/errors';
 import { grantedMarketingConsent } from './consent';
 import { raiseMerchantNotification, resolveMerchantNotification } from './notifications';
 import { writeAudit, type Executor } from './audit';
@@ -107,18 +107,26 @@ export interface MessagingPolicy {
 }
 
 /**
- * The one row. A MISSING ROW IS A 503, NOT A DEFAULT.
+ * The one row. A MISSING ROW IS A REFUSAL, NOT A DEFAULT.
  *
  * Migration 0028 inserts it, so absence means an incomplete deployment. Inventing
  * fallbacks here is how `TRUST_PROXY` came to have two silent defaults that were
  * both wrong — and the fallbacks would be worse: "no policy" would read as "no
  * limits", so a deployment that failed to seed would send unrestricted messages
  * to customers and look healthy doing it.
+ *
+ * 409 AND NOT 503, changed in the sweep `routes/support.ts` describes.
+ * `services/policy.ts` settled the doctrine for `policies_not_published` and it
+ * was then applied one code at a time; this is a configuration state by its own
+ * paragraph above — "an incomplete deployment" — so 503's promise of "try again
+ * later and it may work" is false, and 503 is what puts it in a client's offline
+ * bucket. Nothing consumes the code yet, so the change costs nothing and stops the
+ * next client having to special-case it.
  */
 export async function readMessagingPolicy(exec: Executor): Promise<MessagingPolicy> {
   const [row] = await exec.select().from(platformMessagingPolicy).limit(1);
   if (!row) {
-    throw serviceUnavailable(
+    throw conflict(
       'messaging_policy_missing',
       'The platform messaging policy has not been configured.',
     );
