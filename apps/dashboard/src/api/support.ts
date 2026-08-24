@@ -1,4 +1,5 @@
 import {
+  countedPage,
   SupportConfigSchema,
   SupportTicketSchema,
   type SupportConfig,
@@ -249,45 +250,19 @@ export function useRetireTopic(): UseMutationResult<unknown, unknown, { id: stri
 /* ------------------------------------------------------------ the tickets -- */
 
 /**
- * A queue row.
+ * A queue row is just `SupportTicket` now.
  *
- * `SupportTicketSchema` FROM TRUNK DOES THE FIELDS IT KNOWS, and it does not know
- * two of them. The API sends `salonId` and a joined `topic: { en, ar }`; the trunk
- * schema declares neither, and `z.object` STRIPS what it does not declare — so
- * parsing with it alone would silently drop the label and leave the queue
- * rendering a bare slug for exactly the tickets a retired topic produced, which is
- * the dangling reference the soft delete was chosen to avoid.
- *
- * So the trunk schema is parsed for its own fields and the two additions are read
- * beside it. `packages/types` is trunk-owned — widening `SupportTicketSchema` is a
- * trunk operation, REPORTED rather than done from this lane.
+ * `salonId` and the joined `topic: { en, ar }` are declared in the trunk schema —
+ * `bd5fa99` and `1feb89c` — so `SupportTicketSchema.parse()` yields both and there
+ * is nothing left for this module to read beside it. The local `QueueTicket`
+ * interface and its `parseTicket` shim are gone rather than kept as a
+ * belt-and-braces layer: `salonId` is `NOT NULL` in the schema and non-nullable in
+ * the contract, and the shim widened it to `string | null`, so keeping it would
+ * have been a workaround contradicting the fix it asked for. That is what turned
+ * dev red.
  */
-export interface QueueTicket extends SupportTicket {
-  salonId: string | null;
-  topic: { en: string; ar: string };
-}
-
-function parseTicket(raw: unknown): QueueTicket {
-  const base = SupportTicketSchema.parse(raw);
-  const v = (raw ?? {}) as Record<string, unknown>;
-  const topic = (v['topic'] ?? {}) as Record<string, unknown>;
-  return {
-    ...base,
-    salonId: typeof v['salonId'] === 'string' ? v['salonId'] : null,
-    topic: {
-      /*
-       * The API already falls back to the id when the join misses. Falling back
-       * again here rather than to '' keeps a row identifiable if the shape ever
-       * changes, and never invents a label.
-       */
-      en: typeof topic['en'] === 'string' && topic['en'] !== '' ? topic['en'] : base.topicId,
-      ar: typeof topic['ar'] === 'string' ? topic['ar'] : '',
-    },
-  };
-}
-
 export interface TicketPage {
-  items: QueueTicket[];
+  items: SupportTicket[];
   total: number;
   nextCursor: string | null;
 }
@@ -331,15 +306,22 @@ export function useTicketQueue(filter: QueueFilter): UseQueryResult<TicketPage> 
         `/v1/support/tickets${qs === '' ? '' : `?${qs}`}`,
         { signal },
       );
-      const v = (raw ?? {}) as Record<string, unknown>;
-      if (!Array.isArray(v['items'])) {
-        throw new Error('GET /v1/support/tickets did not return an { items: [] } envelope.');
-      }
-      return {
-        items: (v['items'] as unknown[]).map(parseTicket),
-        total: typeof v['total'] === 'number' ? v['total'] : 0,
-        nextCursor: typeof v['nextCursor'] === 'string' ? v['nextCursor'] : null,
-      };
+      /*
+       * `countedPage` FROM TRUNK, NOT A HAND-PARSED ENVELOPE — and swapping to it
+       * removed a fabricated zero this module was carrying. The envelope used to
+       * be read field by field, and `total` came out as
+       * `typeof v['total'] === 'number' ? v['total'] : 0`: an API that stopped
+       * sending the count would have made the queue heading render "Messages · 0"
+       * over a list of real messages, silently. Exactly the premature-zero class
+       * the census pins the pending states against, arriving through a defensive
+       * default instead of through a loading state.
+       *
+       * The schema refuses the response instead, which is the louder and correct
+       * failure — and it is a `countedPage` rather than a `paginated` precisely so
+       * that a missing `total` cannot be tolerated: trunk split the two helpers so
+       * "a page with a count and a page without are different shapes".
+       */
+      return countedPage(SupportTicketSchema).parse(raw);
     },
   });
 }
