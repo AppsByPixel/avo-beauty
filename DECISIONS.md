@@ -26,12 +26,15 @@ through commit messages.
 | 1 | CBK position: does AVO holding stored value need its own licence? | Regulatory. MyFatoorah being licensed answers who moves money, not who may hold it. |
 | 2 | If MyFatoorah pays the salon at top-up time, the salon holds cash while the customer holds a balance. Intended? | Determines who owes the customer her balance, and what happens if a salon leaves. |
 | 3 | Counsel + PSP sign-off on the legal set | Named in `go-live-checklist.md` as the remaining launch blocker. |
-| 4 | Native-speaker Arabic review — 31 keys in `AR_GAPS` have no source in the bundle | A person, with a lead time. The list is the worksheet. |
+| 4 | Native-speaker Arabic review — **81** keys in `AR_GAPS` have no source in the bundle | A person, with a lead time. The list is the worksheet. **The count was recorded here as 31 and in the verification handoff as 74; both were stale. Measured 2026-08-25: 81, by two independent methods.** It prices and schedules a paid review, so it is worth re-measuring rather than restating. |
 | 5 | Who monitors the AVO support queue, in what hours | Operations, not code. |
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
 | 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
 | 15 | **The onboarding wizard promises a 14-day trial and nothing implements one.** `AVO Owner Console.dc.html:307`: *"Creating the salon … opens a 14-day trial before the first invoice."* There is **no trial, subscription or invoice column in any schema file**, and neither `api-contract.md` nor `packages/types` names one — Billing is fully designed with no API behind it. So an AVO admin onboarding a salon is told a clock started, and none did. | Unlike the invite gap, this is not a missing implementation of a known thing — **a trial needs commercial terms before it can be built**: does it start at creation or at first charge, what happens on day 15, is it enforced or only billing metadata? Those are AVO's to set. Until then the drawn copy stands and the success state deliberately does not repeat it. |
+| 16 | **Rate limiting on top-ups and charges/scans — what threshold?** The go-live row names four surfaces; auth and support tickets are limited, top-ups and charges are not, and there is no global limiter to fall back on (`api/src/app.ts` has none, `api/package.json` has no plugin). Lane A's recommended shape is sound: key on `(salonId, deviceId)` — the pair `pin_attempt` already indexes — never `req.ip`, since a salon is one NAT and `req.ip` is off by default until `TRUST_PROXY` names the proxy; refuse with a distinct code so the scanner can say "too many attempts, wait a moment" rather than show an authority error to staff standing in front of a customer. | The shape is engineering; **the threshold is not**. A busy salon's real charge rate is a measurement nobody has, and the false-positive cost is a refused sale at the counter. Picking a number unmeasured is how the lookup ceiling came to fire at twelve customers an hour (queue item 8's lesson). Needs either a measurement window in the pilot or a call from AVO on what a counter should tolerate. |
+| 17 | **`PATCH /v1/salons/{id}/social/{linkId}` is in the contract and does not exist.** Named at `api-contract.md:61` (with body `{ handle?, on? }`) and `:647`. Social links *are* editable, but as a whole-array field through `PATCH /salons/:id` — a different endpoint, a different granularity, and a different permission (`requireDashboardPerm(req,'loyalty')`, `salons.ts:591`) than the contract specifies. Two managers editing different links overwrite each other, which is the exact argument `salons.ts:1122` makes for why the product catalog is per-row PATCH rather than bulk PUT. | Contract-versus-implementation. Either the contract is amended to describe the array field that exists, or the per-link endpoint is built to match what was specified. That is a spec decision, not a lane call — and the design bundle is frozen, so amending it is Aftab's. |
+| 18 | **The contract never says how anyone signs in.** 8 of 11 `auth.ts` endpoints are absent from `api-contract.md` — member/web/platform session, refresh, sign-out, both staff and platform password resets, and member signup. `grep -ci "auth/refresh" design/api-contract.md` returns 0. The contract specifies permissions in fine detail and is silent on the session layer that produces a principal for them. | 57 of 124 endpoints are undocumented, but most carry an in-file "reported as a contract addition" note and are known-and-owed. The auth family looks like a genuine oversight rather than a deferral, and it is the layer every permission in the document depends on. Worth a ruling on whether the contract is meant to cover it before it is treated as settled. |
 | 14 | **What should a customer see for a salon-initiated balance change?** The design draws the console's "Adjust wallet" and its audit line, but the wallet's activity fixtures never show an adjustment. The label `'Adjustment'` was **forced by the type** (`txKind` is a Record over every `Transaction` kind) and filled in undocumented — same provenance as three other labels the record demanded, none drawn. She now sees an honest unexplained balance change with **no route to an explanation**, because `note` deliberately never reaches her. | Needs a drawn row and a product call: whether it is even called "Adjustment", whether a credit and a deduction should read the same, and whether an unexplained change is meant to be a support call. Widening `TransactionSchema` to carry `note` is trunk-owned *and* a product question. |
 | 13 | **The set-new-password screen is not drawn, and the reset link has nowhere to land.** The design's auth flow has login/signup/forgot only — no redeem layout, no copy for its success or refusal states — the sender is the standing WhatsApp/domain escalation, and the wallet has no inbound deep-link routing at all, so the link's shape (`avo://reset?token=…`) is a decision, not a wiring gap. | Needs a drawn screen (designer), the sender (client escalation), and a deep-link ruling. Until all three, the flow honestly ends at "Check WhatsApp" — which is everything it can truthfully do. |
 | 12 | **Erasure cannot reach the audit log, structurally — and the policy promises both.** Her historical `audit_log` rows (`actor_name`, ip, ua, names in `detail`) and `member_consent_event` outlive erasure: the app role had UPDATE/DELETE revoked in 0020/0023, which is what makes the log trustworthy. Policy §5 (deletion) and §7 (audit) are in genuine tension. | The fix needs an owner-role job or a narrow column grant, and the **retention schedule is client-owned** (CLAUDE.md escalations). Every erasure records `retainedBeyondErasure` in its own audit metadata, so the gap is a standing measured fact while it waits. |
@@ -1649,3 +1652,40 @@ becomes historical and can be cut back to a line; the `--dir` rule should surviv
 **Still open:** rewriting `package.json:14-17` to use `--dir` with a path derived from the
 workspace root, so `pnpm mock` cannot serve trunk's mock to a lane. Queued rather than done,
 deliberately — see above.
+
+---
+
+### Two counts everyone was restating, and a sixth worktree nobody counted
+
+**Measured in trunk, 2026-08-25, during the verification session.**
+
+**`AR_GAPS` is 81, not 31 and not 74.** This file's queue item 4 said 31. The verification
+handoff said 74. Both were restatements that had aged away from the array. Two independent
+methods agree on 81: comment-stripped string-literal extraction, and bracket-matched
+comma-splitting with a check that every item is a plain string literal (zero anomalies).
+
+Worth correcting rather than shrugging at, because this number is not decoration — it is the
+worksheet for a **paid native-speaker review with a lead time**. Understating it by fifty keys
+misprices the engagement and under-schedules it. Corrected in queue item 4, with the measurement
+date attached so the next reader knows how old the figure is.
+
+**There is a sixth worktree.** `git worktree list` reports
+`/Users/koraspond_developer/dev/avo/.claude/worktrees/youthful-lewin-1e9609`, on branch
+`claude/youthful-lewin-1e9609`, left over from an earlier session's isolated agent.
+
+It is **clean and holds nothing** — `git status --porcelain` empty, `git rev-list --count
+dev..HEAD` = 0, sitting at the old `dev` tip `1ee49a0`. So no work is at risk either way.
+
+It matters anyway, for one reason: RUNBOOK.md and the handoff both warn that **the turbo cache
+is shared across "all five worktrees"**, and that a replayed log's paths name whichever
+worktree first populated the hash. There are six. Any reasoning that enumerates five and
+concludes "therefore this log must be mine" has an unlisted candidate in it — which is exactly
+the shape of error that section exists to prevent.
+
+**Not removed.** It is not mine, and rule 4 of this document forbids destructive operations on
+another session's tree even when it looks empty. Removing it is a one-liner
+(`git worktree remove .claude/worktrees/youthful-lewin-1e9609`) and is safe on the evidence
+above, but it is Aftab's call, not a decision I should make unasked.
+
+**To reverse either:** re-measure. That is the entire point — both of these were wrong because
+they were restated rather than re-measured, and this entry will age the same way.
