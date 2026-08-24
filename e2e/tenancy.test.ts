@@ -39,6 +39,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
+import { censusOfRoutes } from './support/perm-census.js';
 import {
   A_MEMBER,
   A_MEMBER_NAME,
@@ -68,8 +69,10 @@ import {
   psql,
   retireBranches,
   scalar,
+  PLATFORM_OWNER_HANDLE,
   signInDashboard,
   signInMember,
+  signInPlatform,
   signInScanner,
   startTenancyApi,
   stopTenancyApi,
@@ -1336,6 +1339,67 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
     }
   });
 
+  /**
+   * THE CONSOLE DOORS, DERIVED RATHER THAN LISTED.
+   *
+   * `discoverSalonScopedRoutes()` matches any path containing `/salons/:`, which is
+   * the right net for merchant doors and also catches
+   * `GET|PATCH /v1/platform/salons/:id` — the owner console's single-salon read and
+   * edit. Those are NOT merchant doors and the table above must not grow entries for
+   * them: a platform admin reads and writes ACROSS salons by design, so there is no
+   * tenancy boundary at that door to assert. `SALON_ROUTES`'s whole assertion —
+   * "salon B's manager is refused salon A's data" — is not a claim about a console
+   * route at all.
+   *
+   * The membership test is NOT a hand-written exemption list, because an exemption
+   * list is the thing this ledger exists to replace: it would need an entry per
+   * console route, and the day someone added a third one the ledger would fire on it
+   * and the tempting fix would be another line. Instead the classification is read
+   * from source through the permission census — a discovered route is a console door
+   * IFF its handler is gated by `requirePlatform`. A merchant door can never satisfy
+   * that, and a fourth console route classifies itself.
+   */
+  const consoleDoors = new Set(
+    censusOfRoutes()
+      .gated.filter((g) => g.guard === 'requirePlatform')
+      .map((g) => `${g.method} ${g.route}`),
+  );
+
+  it('the console doors classified themselves, and did not swallow a merchant door', () => {
+    const discoveredConsole = discovered
+      .map((r) => `${r.method} ${r.path}`)
+      .filter((s) => consoleDoors.has(s));
+
+    /*
+     * NON-VACUOUS. If the census stopped resolving `requirePlatform` — a rename, a
+     * wrapper it cannot see — this set would empty, the exemption below would exempt
+     * nothing, and the ledger would fire on the console routes again. That failure is
+     * survivable; the reverse is not, so it is asserted here rather than left implied.
+     */
+    expect(
+      discoveredConsole,
+      'no salon-scoped route is classified as a console door, so the exemption below is ' +
+        'doing nothing and the census has stopped reading requirePlatform',
+    ).toContain('GET /v1/platform/salons/:id');
+    expect(discoveredConsole).toContain('PATCH /v1/platform/salons/:id');
+
+    /*
+     * AND THE EXEMPTION CANNOT EAT A MERCHANT DOOR. If `requirePlatform` ever appeared
+     * in a merchant handler — or the census misattributed one — a route that genuinely
+     * needs a tenancy spec would be silently exempted, which is exactly the hole an
+     * exemption mechanism is capable of opening. Every route in the table must stay
+     * outside the console set.
+     */
+    const swallowed = SALON_ROUTES
+      .map((r) => `${r.method} ${r.template.replace(/\{(\w+)\}/g, ':$1')}`)
+      .filter((s) => consoleDoors.has(s));
+    expect(
+      swallowed,
+      `the console-door exemption covers a route that has a tenancy spec: ${swallowed.join(', ')}. ` +
+        'That route would stop being probed for cross-salon leakage.',
+    ).toEqual([]);
+  });
+
   it('the hand-written table above covers every route the scanner finds', () => {
     // `{id}` → `:id`, `{hid}` → `:hid`, `{bid}` → `:bid`: the table writes path
     // parameters in braces so `url()` can substitute them, the route scanner
@@ -1359,7 +1423,9 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
     );
     const missing = discovered
       .map((r) => `${r.method} ${r.path}`)
-      .filter((s) => !probed.has(s));
+      .filter((s) => !probed.has(s))
+      // Console doors are exempt, and they said so themselves — see the block above.
+      .filter((s) => !consoleDoors.has(s));
     expect(
       missing,
       `a salon-scoped route exists with no spec of its own. Add it to SALON_ROUTES:\n  ${missing.join('\n  ')}`,
@@ -1436,4 +1502,90 @@ describe('GAP: tenancy surface not reachable yet', () => {
   it.todo(
     'receipt_job rows carry member data to WhatsApp; the worker does not exist, and when it does it needs a test that a salon B job can never select a salon A member',
   );
+});
+
+// ------------------------------------------------- the console door, asserted --
+/**
+ * WHAT THE CONSOLE DOOR DOES INSTEAD OF A TENANCY WALL.
+ *
+ * Exempting `GET|PATCH /v1/platform/salons/:id` from the gap ledger is only honest
+ * if something asserts what it does instead. An exemption with nothing behind it is
+ * how a route stops being tested; this is the half that stops that.
+ *
+ * TWO CLAIMS, AND THEY ARE THE OPPOSITE OF THE MERCHANT DOORS' CLAIM:
+ *
+ * 1. CROSS-SALON IS THE FEATURE. One platform credential reads BOTH salons. At a
+ *    merchant door that would be the leak the whole tenancy suite exists to catch;
+ *    here it is the console working. The gate is `salons`, driven permission-off by
+ *    the generated census, and that gate is the only boundary there is.
+ *
+ * 2. AN UNKNOWN SALON IS 404, NOT 403 — a deliberate divergence from every merchant
+ *    door in this file, and worth stating because it looks like an inconsistency.
+ *
+ *    The merchant doors answer 403 for a salon that exists and is not yours AND for
+ *    one that does not exist, deliberately identically: `salon-onboarding.test.ts`
+ *    asserts that pair explicitly, because a 403/404 split there would be an
+ *    existence oracle — an outsider could enumerate AVO's client list by watching
+ *    which ids refuse differently.
+ *
+ *    That reasoning does not apply here and the divergence is not an oversight. A
+ *    platform admin is ENTITLED to know which salons exist — the roster is the thing
+ *    the console is for, and `GET /v1/platform/salons` hands her the whole list under
+ *    the same permission. There is no tenancy fact left to leak, so 404 is the
+ *    truthful answer rather than a disclosure, and 403 would be a lie about
+ *    authority she holds.
+ */
+describe('the console door — cross-salon by design, and 404 where a merchant door says 403', () => {
+  let platform = '';
+
+  beforeAll(async () => {
+    platform = await signInPlatform(PLATFORM_OWNER_HANDLE);
+  }, 60_000);
+
+  it('one platform credential reads BOTH salons — the opposite of a merchant door', async () => {
+    const a = await treq('GET', `/v1/platform/salons/${SALON_A}`, { token: platform });
+    const b = await treq('GET', `/v1/platform/salons/${SALON_B}`, { token: platform });
+
+    expect(a.status, `the console cannot read salon A: ${a.raw}`).toBe(200);
+    expect(b.status, `the console cannot read salon B: ${b.raw}`).toBe(200);
+
+    // And it really is two different salons, not the same one twice — which a
+    // handler ignoring its path parameter would produce, and which would make the
+    // "reads both" claim meaningless.
+    expect(a.body?.salon?.id).toBe(SALON_A);
+    expect(b.body?.salon?.id).toBe(SALON_B);
+    expect(a.body?.salon?.name).not.toBe(b.body?.salon?.name);
+  });
+
+  it('an unknown salon is 404 with a code — not the 403 a merchant door gives', async () => {
+    const res = await treq('GET', `/v1/platform/salons/${SALON_NOWHERE}`, { token: platform });
+
+    expect(
+      res.status,
+      `an unknown salon answered ${res.status}. 404 is deliberate here: a platform admin is ` +
+        'entitled to know which salons exist, so there is no existence fact to protect and ' +
+        `403 would misdescribe her authority. Response: ${res.raw}`,
+    ).toBe(404);
+    expect(res.body?.error, 'the refusal carries no machine-readable code').toBeTruthy();
+    expect(res.body?.error, 'a console read answered with the surface-wall code').not.toBe(
+      'forbidden',
+    );
+
+    /*
+     * THE DIVERGENCE, STATED AS A COMPARISON RATHER THAN AS TWO SEPARATE FACTS.
+     *
+     * The same unknown id at a MERCHANT door answers 403 — indistinguishable from a
+     * real salon that is not yours. Asserting both here is what makes the pair a
+     * deliberate design rather than two unrelated numbers a reader has to reconcile,
+     * and it goes red if either side drifts toward the other.
+     */
+    const merchant = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+    const atMerchantDoor = await treq('GET', `/salons/${SALON_NOWHERE}`, { token: merchant });
+    expect(
+      atMerchantDoor.status,
+      'the merchant door stopped answering 403 for an unknown salon, which is the half of ' +
+        'this pair that must NOT become 404 — that split is an existence oracle over the ' +
+        'client list. See salon-onboarding.test.ts.',
+    ).toBe(403);
+  });
 });
