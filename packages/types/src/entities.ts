@@ -751,8 +751,15 @@ export const SupportTicketSchema = z.object({
    * fixing a typo or adding the Arabic should fix it on every ticket rather than
    * leaving the old spelling frozen into the queue.
    *
-   * Falls back to `{ en: topicId, ar: '' }` for a retired topic, so a queue row
-   * degrades to its slug rather than disappearing.
+   * There IS a `{ en: topicId, ar: '' }` fallback in the serialiser, and it is
+   * **not** the retired-topic path — that was this comment's original claim and
+   * it named the one case that cannot reach it. `serialiseTickets` builds its
+   * label map with `inArray(id, topicIds)` and **no `active` filter**, so a
+   * retired topic's real wording survives; the API also never hard-deletes,
+   * because `support_ticket.topic_id` is `ON DELETE RESTRICT`. So the customer
+   * keeps the words she chose from while the Contact-us form stops offering
+   * them. The fallback is defence against a future shape change, unreachable by
+   * two independent mechanisms today — proved by Lane D and driven by Lane C.
    *
    * Declared here because the API already serves it and this schema was
    * **stripping** it — the sixth instance of schema-narrower-than-wire in this
