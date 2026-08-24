@@ -44,6 +44,54 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Lane B's three routed items: two decided, one sequenced behind Lane A
+
+**1. `brandDeeper` and `brandTint2` WILL be white-labelled — but not while Lane A is building on
+the deriver.**
+
+`packages/tokens/src/generate.ts:42` white-labels exactly three values — `brand`, `brandDeep`,
+`brandTint`. Lane B found that `brandDeeper` and `brandTint2` therefore stay sage in a rose app,
+**on the dashboard as well as the wallet**, and correctly declined to derive them locally because
+that would be a second derivation policy outside the trunk-owned package.
+
+I checked what they are actually used for, because "fidelity gap" undersells it in one direction
+and oversells it in the other. `brandDeeper` is a **text** colour — six places in
+`apps/dashboard/src/app.css`, two in the wallet. `brandTint2` is a **background wash**, two
+places in the wallet's booking parts. So a rose-branded salon renders **sage-green text** inside
+its own app. Lane B's contrast numbers are reassuring (fixed `brandDeeper` on a themed tint is
+5.81 / 5.67 / 5.60:1, themed `deep` on fixed `brandTint2` is 5.33 / 5.48 / 5.56:1), so this is
+**not** an accessibility failure — but "one `--brand` token restyles the entire app" is the
+product's first sentence, and green text in a rose app is a visible contradiction of it.
+
+**Why it waits.** Deriving two more values means two more contrast constraints inside
+`deriveBrandSet`, and **a tighter deriver can make a previously viable hex non-viable.** Lane A
+is at this moment wiring that exact function into `POST /v1/platform/salons` and the `PATCH`
+path, with fixtures built against today's answers. Moving the goalposts under the lane building
+on them is how one failing spec became four, once. So: after Lane A lands, as a trunk operation
+on `dev`, then every lane rebases — per `CLAUDE.md`'s rule for the shared packages.
+
+**Lane B left a tripwire and it should be honoured, not deleted:** `brand.test.ts` asserts the
+two are untouched, so whoever white-labels them gets a failing test naming the fact. That is the
+test doing its job — update it deliberately in the same change, do not silence it first.
+
+**2. `applyBrandColor` stays duplicated across the two apps.** Same ruling as `loadFailure.ts`,
+for the same reason: ~15 lines whose surroundings genuinely differ — different theme objects,
+different storage keys, and different fallback stories (the wallet has a signed-in source, the
+scanner has a pre-enrolment default it must keep). A shared helper would have to be parameterised
+over all three differences, which is more coupling than the duplication costs. **Reversal trigger
+unchanged:** a third surface needing it, or the two fallback stories converging.
+
+**3. An unauthenticated salon-identity read is a good idea, and it is Lane A's to shape.** Lane B
+wants name + brand hex (+ logo, when it exists) readable with no principal, to close the wallet's
+first-ever launch and the scanner's pre-enrolment PIN screen. The precedent it cites is real —
+`/v1/platform/policies` is unauthenticated by necessity because a signup screen renders it before
+there is a session. Queued for Lane A's next slice rather than injected into its current one.
+**One thing whoever builds it must settle:** an unauthenticated endpoint keyed by salon id is an
+enumeration surface, and this build already has a worked answer for that shape in the member
+password-reset flow — byte-identical responses, throttle before validation. A salon's name and
+brand colour are not secrets, but *which ids exist* is a different question and deserves the
+explicit sentence rather than a shrug.
+
 ### White-label onboarding: the answer is a wizard, not a branch — and no salon can be created today
 
 **The question put to me:** for each new client, does the backend get a tenant and the frontend
