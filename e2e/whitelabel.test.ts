@@ -59,36 +59,59 @@
  * colour. The accepted half is the discriminator that makes the refused half mean
  * something.
  *
- * TWO DEFECTS, AND THE SECOND ONE IS NOT THE ONE I WAS LOOKING FOR
- * ----------------------------------------------------------------
- * Probing the live endpoint turned up a second, separate failure in the same
- * field, recorded in its own section at the bottom: a MALFORMED hex answers
- * `500 server_error`, "Something went wrong on our side". The database CHECK
- * refuses the string and the constraint violation reaches the merchant as an
- * outage.
+ * THREE DEFECTS, AND TWO OF THEM WERE NOT THE ONE I WAS LOOKING FOR
+ * -----------------------------------------------------------------
+ * Probing the live endpoint before writing anything turned up two more failures in
+ * the same field, both since fixed in the same change:
  *
- * This is not a new class of bug in this file — it is the bug the numeric fields
- * on this very route already had fixed. `salons.ts` carries a block comment about
- * it in the present tense, about `depositFils: 5500.5`: "the refusal reached the
- * merchant as `server_error` … She cannot tell a typed '5.5' from an outage, and
- * the API logged an unhandled error every time somebody mistyped a number." The
- * numbers were pulled forward to a door check. `brandColor` was not, and it is
- * about to acquire a door check anyway for the contrast rule, so the shape
- * refusal belongs in the same fix.
+ *   2. A MALFORMED hex answered `500 server_error`, "Something went wrong on our
+ *      side" — the database CHECK refused the string and the constraint violation
+ *      reached the merchant as an outage. Not a new class of bug: it is the bug the
+ *      NUMERIC fields on this very route already had fixed. `salons.ts` carries a
+ *      block comment about `depositFils: 5500.5` — "She cannot tell a typed '5.5'
+ *      from an outage, and the API logged an unhandled error every time somebody
+ *      mistyped a number." The numbers were pulled forward to a door check;
+ *      `brandColor` never was.
  *
- * WHY EVERY REFUSAL SPEC IS A `knownBug()`. Because none of them pass today and
- * this suite has to stay green for the daily merge. `knownBug()` requires the
- * contract-correct assertion to FAIL, reports the spec as passing, and goes RED
- * the hour the endpoint is fixed — with a message asking for promotion to a plain
- * `it()`. A defect written down any other way either rots into prose or gets
- * cemented as `expect(200) // wrong, but that's what it does`.
+ *   3. `brandColor: ["#8A7CB0"]` was ACCEPTED and stored, because
+ *      `String(['#8A7CB0'])` is `'#8A7CB0'`. There was no type check on the field
+ *      at all — the CHECK constraint was the whole guard, and it can only see what
+ *      survives coercion.
+ *
+ * (3) is the one worth having found before the fix rather than after: a guard
+ * written as `deriveBrandSet(String(value))` would have closed the contrast hole
+ * and left the coercion open. The shipped `parseBrandColor` checks the type first.
+ *
+ * EVERY REFUSAL SPEC HERE WAS A `knownBug()`, AND ALL FIFTEEN HAVE BEEN PROMOTED.
+ *
+ * They were written as the contract while the endpoint did the opposite, so they
+ * failed, and `knownBug()` reported them as passing to keep the daily merge green.
+ * Lane A's `services/brandColor.ts` landed in dev `59e8628` and all fifteen went
+ * RED in one run, each with "This bug appears to be FIXED" naming itself and asking
+ * for promotion. That is the whole mechanism working: a claim that something is
+ * broken should be the thing that breaks when it stops being true.
+ *
+ * THEY ARE NOT DELETED FOR GOING GREEN, and the defect they replace is the argument.
+ * `db/schema/salon.ts` carried the sentence "Validated through deriveBrandSet() at
+ * onboarding" while nothing validated anything — the rule was documented, believed,
+ * and absent. A comment is not a guard. These fifteen are now the guard, and the
+ * fix's own reasoning (`parseBrandColor` checks the TYPE, then the SHAPE, then the
+ * CONTRAST, in that order) is pinned by which code each one demands.
+ *
+ * The promoted titles state the RULE rather than the bug. The originals named the
+ * defect ("PATCH /salons/{id} stores #FFFF00"), which is right for a knownBug and
+ * becomes a false sentence the moment it passes — the same rot this directory has
+ * been bitten by three times.
  *
  * SALON B THROUGHOUT, and the original colour is put back in `afterAll`, so a run
  * against a shared API (`E2E_BASE_URL=…`) leaves no fixture moved.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+// `knownBug` is deliberately no longer imported: every defect this file recorded has
+// been fixed and promoted. The businessHours hole of the same shape lives in
+// `salon-settings-validation.test.ts`, which still needs it.
+import { precondition } from './support/known-bug.js';
 /**
  * The real deriver, from the BUILT package — the same module `packages/tokens`
  * ships and the same one the wallet and the dashboard consume.
@@ -267,96 +290,120 @@ describe('A usable brand colour is accepted and persists — the discriminator',
 
 // ---------------------------------------------------------------------------
 describe('A brand colour that cannot make a 4.5:1 fill is refused (non-negotiable #9)', () => {
+  /**
+   * PROMOTED FROM `knownBug()` — every spec in this block was a recorded defect and
+   * is now a regression guard. Lane A's `services/brandColor.ts` closed all of it
+   * (dev `59e8628`), and the promotion is the mechanism working end to end: the
+   * assertions were written as the contract, they failed, they went RED the hour the
+   * fix landed asking to be promoted, and the titles below now state the rule rather
+   * than the bug.
+   *
+   * NOT DELETED FOR GOING GREEN. The defect this replaces survived on the word of a
+   * comment — `db/schema/salon.ts` claimed the column was "validated through
+   * deriveBrandSet() at onboarding" while nothing validated anything, which is
+   * exactly why a prose claim is not a guard.
+   */
   for (const hex of EXPECT_REFUSED) {
     const r = verdict(hex);
-    const best = r.ok ? Infinity : r.bestContrast;
+    precondition(r.ok === false, `${hex} derives; it does not belong in this block`);
+    const best = r.bestContrast;
 
-    knownBug(
-      `PATCH /salons/{id} stores ${hex}, whose best fill is ${best.toFixed(2)}:1 — #9 says reject it`,
-      async () => {
-        const known = await readBrandColor();
-        precondition(known !== hex, `salon B is already set to ${hex}; nothing to prove`);
+    it(`${hex} tops out at ${best.toFixed(2)}:1, under #9's floor of 4.5, so PATCH refuses it`, async () => {
+      const known = await readBrandColor();
+      precondition(known !== hex, `salon B is already set to ${hex}; nothing to prove`);
 
-        const res = await setBrandColor(hex);
+      const res = await setBrandColor(hex);
 
-        /*
-         * THE REFUSAL IS THE ASSERTION, not the absence of a change. A handler
-         * that accepted the value, wrote nothing and answered 200 would be a
-         * worse defect than one that wrote it, and only this line can tell them
-         * apart.
-         */
-        expect(
-          res.status,
-          `${hex} was accepted (best fill ${best.toFixed(2)}:1, floor 4.5). Response: ${res.raw}`,
-        ).toBe(400);
+      /*
+       * THE REFUSAL IS THE ASSERTION, not the absence of a change. A handler that
+       * accepted the value, wrote nothing and answered 200 would be a worse defect
+       * than one that wrote it, and only this line can tell them apart.
+       */
+      expect(
+        res.status,
+        `${hex} was accepted (best fill ${best.toFixed(2)}:1, floor 4.5). Response: ${res.raw}`,
+      ).toBe(400);
 
-        /*
-         * AND IT SAYS WHICH GUARD ANSWERED, because a status cannot.
-         *
-         * 403 `forbidden` is this API's code for a surface wall and for every
-         * missing permission, so a spec that only counted non-200s here would go
-         * green if the endpoint were accidentally gated shut — the wizard would be
-         * just as broken and the test just as quiet. Each exclusion below names a
-         * DIFFERENT wrong answer that would otherwise read as a pass:
-         */
-        const code = res.body?.error;
-        expect(code, 'the refusal carries no machine-readable code').toBeTruthy();
-        expect(code, 'a permission wall answered, not the contrast guard').not.toBe('forbidden');
-        expect(code, 'the database CHECK refused it — that is a 500, not a validation').not.toBe(
-          'server_error',
-        );
-        expect(
-          code,
-          'brandColor was dropped from EDITABLE rather than validated — see the accepted-hex ' +
-            'specs above, which must still pass',
-        ).not.toBe('not_editable');
+      /*
+       * AND IT SAYS WHICH GUARD ANSWERED, because a status cannot. 403 `forbidden`
+       * is this API's code for a surface wall and for every missing permission, so a
+       * spec that only counted non-200s would go green if the endpoint were
+       * accidentally gated shut — the wizard just as broken, the test just as quiet.
+       * That is not hypothetical here: a negative control that pointed this file at a
+       * mistyped salon id got `403 forbidden` and every refusal spec reported green.
+       */
+      expect(res.body?.error, `${hex} was refused by something else: ${res.raw}`).toBe(
+        'brand_color_not_viable',
+      );
 
-        // A refusal an onboarding wizard cannot show a human is half a refusal;
-        // deriveBrandSet returns `reason` for exactly this purpose.
-        expect(res.body?.message, 'the refusal has no copy the wizard can render').toBeTruthy();
+      /*
+       * THE DISCRIMINATOR IS DATA, AND THIS IS THE ASSERTION THE FIRST DRAFT COULD
+       * NOT MAKE.
+       *
+       * `derive.ts` says why it returns `failed` as a two-value union rather than a
+       * sentence: "Both refusals legitimately begin 'can't be used as a brand
+       * colour', so a test or a UI that discriminated on the prose would match
+       * either — and a check that a comment could satisfy is not a check." Lane A's
+       * refusal carries `failed` and `bestContrast` through as details, so the API's
+       * answer can be checked against the LIBRARY'S OWN verdict rather than against
+       * a number typed into this file.
+       *
+       * That is what makes this pair strong: the endpoint and the deriver must agree
+       * on WHY the hex failed and BY HOW MUCH it missed. A guard that refused
+       * everything, or refused with a stale threshold, disagrees here.
+       */
+      expect(res.body?.failed, `the API and the deriver disagree on why ${hex} failed`).toBe(
+        r.failed,
+      );
+      expect(
+        res.body?.bestContrast,
+        `the API reports a different best contrast for ${hex} than deriveBrandSet does`,
+      ).toBeCloseTo(best, 5);
+      expect(res.body?.field, 'the refusal does not name the field the wizard must re-prompt').toBe(
+        'brandColor',
+      );
 
-        // Corroboration, second request: the stored value is untouched.
-        expect(await readBrandColor(), `${hex} was persisted despite the refusal`).toBe(known);
-      },
-      60_000,
-    );
+      // A refusal an onboarding wizard cannot show a human is half a refusal;
+      // deriveBrandSet returns `reason` for exactly this purpose.
+      expect(res.body?.message, 'the refusal has no copy the wizard can render').toBeTruthy();
+
+      // Corroboration, second request: the stored value is untouched.
+      expect(await readBrandColor(), `${hex} was persisted despite the refusal`).toBe(known);
+    }, 60_000);
   }
 
-  knownBug(
-    'every unusable hex is refused with the SAME code, so a wizard can branch on one thing',
-    async () => {
-      const codes = new Map<string, unknown>();
-      for (const hex of EXPECT_REFUSED) {
-        const res = await setBrandColor(hex);
-        /*
-         * THE REFUSAL IS REQUIRED BEFORE THE CODES ARE COMPARED, AND THE FIRST
-         * DRAFT OF THIS SPEC DID NOT DO THAT.
-         *
-         * It collected `body.error ?? '<${status} with no code>'` and asserted the
-         * set had one element. Every hex is accepted today, so every entry was the
-         * identical placeholder string, the set had exactly one member, and the
-         * spec reported ITSELF as fixed — `knownBug` went red announcing that a
-         * guard which does not exist had started working.
-         *
-         * A UNIFORM 200 IS UNIFORM. "They all agree" was satisfied by the endpoint
-         * agreeing to store all of them, which is the defect, not the fix. So the
-         * status is asserted per hex first: consistency is only a question worth
-         * asking about answers that are refusals.
-         */
-        expect(res.status, `${hex} was not refused at all: ${res.raw}`).toBe(400);
-        codes.set(hex, res.body?.error);
-      }
-      const distinct = new Set(codes.values());
-      expect(
-        [...distinct],
-        `the contrast refusal has ${distinct.size} different codes: ${JSON.stringify([
-          ...codes.entries(),
-        ])}`,
-      ).toHaveLength(1);
-      expect([...distinct][0], 'the refusals carry no code at all').toBeTruthy();
-    },
-    60_000,
-  );
+  it('every unusable hex is refused with the SAME code, so a wizard can branch on one thing', async () => {
+    const codes = new Map<string, unknown>();
+    for (const hex of EXPECT_REFUSED) {
+      const res = await setBrandColor(hex);
+      /*
+       * THE REFUSAL IS REQUIRED BEFORE THE CODES ARE COMPARED, AND THE FIRST DRAFT
+       * OF THIS SPEC DID NOT DO THAT.
+       *
+       * It collected `body.error ?? '<${status} with no code>'` and asserted the set
+       * had one element. Every hex was accepted at the time, so every entry was the
+       * identical placeholder string, the set had exactly one member, and the spec
+       * reported ITSELF as fixed — `knownBug` went red announcing that a guard which
+       * did not yet exist had started working.
+       *
+       * A UNIFORM 200 IS UNIFORM. "They all agree" was satisfied by the endpoint
+       * agreeing to store all of them, which was the defect, not the fix. So the
+       * status is asserted per hex first: consistency is only a question worth
+       * asking about answers that are refusals. Kept now that the guard exists,
+       * because the failure it guards against is the one that fooled it.
+       */
+      expect(res.status, `${hex} was not refused at all: ${res.raw}`).toBe(400);
+      codes.set(hex, res.body?.error);
+    }
+    const distinct = new Set(codes.values());
+    expect(
+      [...distinct],
+      `the contrast refusal has ${distinct.size} different codes: ${JSON.stringify([
+        ...codes.entries(),
+      ])}`,
+    ).toHaveLength(1);
+    expect([...distinct][0]).toBe('brand_color_not_viable');
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -381,92 +428,87 @@ describe('A malformed brand colour is a 400, not an outage', () => {
    * check that validates contrast but not shape would still 500 on `#GGGGGG`.
    */
   for (const value of MALFORMED) {
-    knownBug(
-      `PATCH /salons/{id} with brandColor ${JSON.stringify(value)} answers 500 server_error`,
-      async () => {
-        const known = await readBrandColor();
-        const res = await setBrandColor(value);
-
-        expect(
-          res.status,
-          `${JSON.stringify(value)} answered ${res.status} — a mistyped colour is a client ` +
-            `error the merchant can act on. Response: ${res.raw}`,
-        ).toBe(400);
-        expect(
-          res.body?.error,
-          'the merchant cannot tell a typo from an outage',
-        ).not.toBe('server_error');
-        expect(res.body?.message, 'the refusal has no copy the form can render').toBeTruthy();
-
-        // The CHECK does hold, and that is worth pinning: this is the wrong
-        // MESSAGE, not a wrong write.
-        expect(await readBrandColor(), 'a malformed hex reached the column').toBe(known);
-      },
-      60_000,
-    );
-  }
-
-  /**
-   * A NON-STRING `brandColor` GETS THE SAME TREATMENT, and these were nearly
-   * written as one plain `it()` asserting `status).not.toBe(200)`.
-   *
-   * That assertion would pass today — every value below except the array answers
-   * 500 — and it would have been INCOHERENT with the section it sits in: this
-   * whole describe block exists to say that a 500 here is the defect. A spec that
-   * accepts the 500 as proof of refusal contradicts the five specs above it and
-   * would have to be rewritten the moment they were fixed. So the demand is the
-   * same one: 400, with a code.
-   */
-  for (const value of [123456, null, true, { hex: '#8A7CB0' }]) {
-    knownBug(
-      `PATCH /salons/{id} with brandColor ${JSON.stringify(value)} (${typeof value}) answers 500`,
-      async () => {
-        const known = await readBrandColor();
-        const res = await setBrandColor(value);
-
-        expect(
-          res.status,
-          `brandColor ${JSON.stringify(value)} answered ${res.status}. Response: ${res.raw}`,
-        ).toBe(400);
-        expect(res.body?.error, 'a mistyped field reads as an outage').not.toBe('server_error');
-        expect(await readBrandColor(), 'a non-string reached the column').toBe(known);
-      },
-      60_000,
-    );
-  }
-
-  /**
-   * THE ONE THAT IS NOT LIKE THE OTHERS, AND THE REASON THIS SECTION EXISTS.
-   *
-   * `["#8A7CB0"]` is not refused at all. It answers 200 and the colour is STORED,
-   * because `String(['#8A7CB0'])` is `'#8A7CB0'` — `Array.prototype.toString`
-   * joins on commas and a single-element array is just its element. So the value
-   * is coerced somewhere between the body and the column, arrives as a
-   * well-formed hex, and satisfies the `salon_brand_color_is_hex` CHECK that is
-   * currently the field's only guard.
-   *
-   * WHY IT MATTERS BEYOND THE ODDITY. It proves there is no type check on this
-   * field at all — the CHECK constraint is doing the entire job, and it can only
-   * see what survives coercion. That is a live concern for the guard Lane A is
-   * about to add: `deriveBrandSet(String(value))` would close the contrast hole
-   * and leave this one open, still accepting an array. `typeof value !== 'string'`
-   * → 400, checked BEFORE the deriver, closes both.
-   */
-  knownBug(
-    'brandColor ["#8A7CB0"] — an array is coerced to its element and STORED, not refused',
-    async () => {
+    it(`brandColor ${JSON.stringify(value)} is a 400 with a code, not an outage`, async () => {
       const known = await readBrandColor();
-      precondition(known !== '#8A7CB0', 'salon B is already #8A7CB0; nothing to prove');
-
-      const res = await setBrandColor(['#8A7CB0']);
+      const res = await setBrandColor(value);
 
       expect(
         res.status,
-        `an array was accepted and stored as a string. Response: ${res.raw}`,
+        `${JSON.stringify(value)} answered ${res.status} — a mistyped colour is a client ` +
+          `error the merchant can act on. Response: ${res.raw}`,
       ).toBe(400);
-      expect(res.body?.error, 'the refusal carries no code').toBeTruthy();
-      expect(await readBrandColor(), 'the coerced array reached the column').toBe(known);
-    },
-    60_000,
-  );
+      expect(res.body?.error, 'the merchant cannot tell a typo from an outage').toBe(
+        'invalid_brand_color',
+      );
+      expect(res.body?.message, 'the refusal has no copy the form can render').toBeTruthy();
+
+      // The CHECK held throughout, which is why this was a usability defect and
+      // never a data one. Pinned so the door check cannot regress into relying on it.
+      expect(await readBrandColor(), 'a malformed hex reached the column').toBe(known);
+    }, 60_000);
+  }
+
+  /**
+   * A NON-STRING `brandColor`, AND THESE WERE NEARLY WRITTEN AS ONE `it()`
+   * ASSERTING `status).not.toBe(200)`.
+   *
+   * That assertion would have passed against the broken build — every value below
+   * except the array answered 500 — and it would have been INCOHERENT with the
+   * section it sits in, which exists to say that the 500 WAS the defect. A spec
+   * that accepts a 500 as proof of refusal contradicts the specs above it and has
+   * to be rewritten the moment they are fixed. Written as the same demand instead —
+   * 400, with a code — it needed no rewriting when the fix landed.
+   *
+   * `parseBrandColor` checks `typeof value !== 'string'` FIRST, so all four land on
+   * `invalid_brand_color` rather than reaching the deriver.
+   */
+  for (const value of [123456, null, true, { hex: '#8A7CB0' }]) {
+    it(`brandColor ${JSON.stringify(value)} (${typeof value}) is refused at the door`, async () => {
+      const known = await readBrandColor();
+      const res = await setBrandColor(value);
+
+      expect(
+        res.status,
+        `brandColor ${JSON.stringify(value)} answered ${res.status}. Response: ${res.raw}`,
+      ).toBe(400);
+      expect(res.body?.error, 'a mistyped field reads as an outage').toBe('invalid_brand_color');
+      expect(await readBrandColor(), 'a non-string reached the column').toBe(known);
+    }, 60_000);
+  }
+
+  /**
+   * THE ONE THAT WAS NOT LIKE THE OTHERS, AND THE REASON THIS SECTION EXISTS.
+   *
+   * `["#8A7CB0"]` was not refused at all: it answered 200 and the colour was
+   * STORED, because `String(['#8A7CB0'])` is `'#8A7CB0'` — `Array.prototype
+   * .toString` joins on commas and a single-element array is just its element. The
+   * value was coerced somewhere between the body and the column, arrived as a
+   * well-formed hex, and satisfied the `salon_brand_color_is_hex` CHECK that was
+   * then the field's only guard.
+   *
+   * WHY IT MATTERED BEYOND THE ODDITY, and this is the part worth keeping: it
+   * proved there was no type check on the field at all — the CHECK constraint was
+   * doing the entire job and could only see what survived coercion. Which made it a
+   * live risk for the very fix that was being written: `deriveBrandSet(String(value))`
+   * would have closed the contrast hole and left this one open, still accepting an
+   * array. `typeof value !== 'string'` checked BEFORE the deriver closes both, and
+   * that is the order `parseBrandColor` shipped in.
+   *
+   * Kept as its own spec rather than folded into the loop above, because it is the
+   * only one of the type cases that was ACCEPTED rather than 500'd, and a future
+   * refactor that reintroduces coercion would show up here first.
+   */
+  it('brandColor ["#8A7CB0"] — an array is not coerced to its element', async () => {
+    const known = await readBrandColor();
+    precondition(known !== '#8A7CB0', 'salon B is already #8A7CB0; nothing to prove');
+
+    const res = await setBrandColor(['#8A7CB0']);
+
+    expect(
+      res.status,
+      `an array was accepted and stored as a string. Response: ${res.raw}`,
+    ).toBe(400);
+    expect(res.body?.error).toBe('invalid_brand_color');
+    expect(await readBrandColor(), 'the coerced array reached the column').toBe(known);
+  }, 60_000);
 });

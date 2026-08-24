@@ -98,8 +98,14 @@ interface SalonRow {
   createdAt: string;
 }
 
+/**
+ * `error` is in the type because the limit-validation spec reads it off a 400. A
+ * response type that only described the success shape made `res.body.error` a
+ * compile error, and the tempting fix — casting at the call site — would have hidden
+ * the refusal's own field from the type system on every other read too.
+ */
 const listSalons = (query = '') =>
-  treq<{ items: SalonRow[]; nextCursor: string | null }>(
+  treq<{ items: SalonRow[]; nextCursor: string | null; error?: string; message?: string }>(
     'GET',
     `/v1/platform/salons${query}`,
     { token: owner },
