@@ -36,7 +36,43 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
             id: 'SUP-48263',
             memberId: '8842',
             member: 'Dana Al-Sabah',
+            /*
+              Which salon's customer wrote it. `support_ticket.salon_id` is
+              `text NOT NULL REFERENCES salon (id)` in the DDL
+              (api/drizzle/0019_policies_and_support.sql:103), so it is never
+              absent and never null on the wire — hence a bare `IdSchema` with no
+              `.nullable()`, and hence a plain string here. It is the value the
+              merchant queue's tenancy predicate is built on, and it is on the
+              response for that reason rather than for this screen's benefit: the
+              wallet never reads it. Present so the fixture is the shape the API
+              actually serves, which is the whole reason this spec caught the
+              schema widening.
+            */
+            salonId: 'SAL-AMARA',
             topicId: 'tp-appt',
+            /*
+              THESE NEXT TWO ARE NOT THE SAME KIND OF THING, and a fixture that
+              lets them read as interchangeable teaches the wrong lesson.
+
+                `topic`  is JOINED at read time. It is WORDING, so an admin
+                         fixing a typo or adding the Arabic fixes it on every
+                         ticket ever raised, including this one.
+                `route`  is SNAPSHOTTED onto the row when the ticket is created
+                         (api/src/db/schema/legal.ts — "resolved from the topic
+                         ON THE SERVER, and SNAPSHOTTED rather than joined").
+                         It is a DECISION, frozen, so re-routing a topic
+                         tomorrow does not move disputes already sent.
+
+              Both are derived from `topicId` by the server and neither is
+              derived from the other — the label does not decide the queue. The
+              wording is verbatim from the one place it is defined,
+              packages/mock/src/fixtures.ts:390 and api/src/db/seed.ts's
+              `supportTopic` seed, both of which take it from
+              design/avo-promotions.js. Not retyped, and not invented: a label
+              this fixture made up would be a plausible-looking string that no
+              customer has ever been shown.
+            */
+            topic: { en: 'My appointment', ar: 'موعدي' },
             // The server answers `salon` for this topic. The client never said so.
             route: 'salon',
             message: 'x',
