@@ -314,6 +314,24 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
   const staffId = hasScenario(req, 'noperms') ? TEST_STAFF_NOPERMS : TEST_STAFF_FULL;
 
   /**
+   * `GET`/`PATCH /v1/support/tickets` IS ONE PATH FOR TWO AUTHORITIES — the console
+   * admin holding `policies` and the merchant holding `perms.dashboard`. Neither is
+   * inferable from the URL, because the contract deliberately gives them one
+   * endpoint, so the scenario says which one is being driven. Staff is the default;
+   * `console` opts into the other side.
+   *
+   * FIRST, above the `/v1/platform/` block, because a path that is not under that
+   * prefix could never reach it and the reader should not have to work that out.
+   */
+  if (hasScenario(req, 'console') && req.url.startsWith('/v1/support/tickets')) {
+    return loadPlatformPrincipal(
+      db,
+      hasScenario(req, 'noplatformperms') ? TEST_PLATFORM_LIMITED : TEST_PLATFORM_OWNER,
+      'test-session-platform',
+    );
+  }
+
+  /**
    * THE OWNER CONSOLE, and it is matched FIRST because its prefix overlaps
    * nothing below and its exclusions are exact.
    *
@@ -365,11 +383,26 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
      * customers" to a suite that cannot see why — the endpoint's own gate
      * refusing the shim's choice of principal.
      *
+     * THE METHOD IS PART OF THE MATCH, and it is the only place in this function
+     * where that is true. One path now carries three verbs for three audiences:
+     * `POST` is the customer, `GET` is a staffed queue and `PATCH` closes a row in
+     * one. A path-only match sent the queue reads to the member branch too, and
+     * `requireQueueReader` answers those 403 "This is a staffed support queue" —
+     * the endpoint's gate refusing the shim's choice again, one layer along. So
+     * `POST` is matched here and everything else falls through to the staff branch
+     * below, where `perms.dashboard` and the salon predicate are what the queue is
+     * actually worth testing.
+     *
+     * THE CONSOLE'S HALF OF THAT QUEUE cannot be selected by URL — it is not under
+     * `/v1/platform/`, because api-contract.md § Operations lists ONE endpoint for
+     * "Owner / Merchant". `x-avo-scenario: console` selects it, handled above the
+     * `/v1/platform/` block so the two cannot disagree.
+     *
      * NOT `/v1/platform/support` or `/v1/platform/policies`: those are readable
      * by any authenticated principal, so either kind resolves them, and staff
      * is the useful default there because the dashboard reads them too.
      */
-    req.url.startsWith('/v1/support/tickets') ||
+    (req.method === 'POST' && req.url.startsWith('/v1/support/tickets')) ||
     /**
      * `POST /orders` is the shop checkout — api-contract.md § Operations puts it
      * at the root and scopes it by the credential, exactly as it does

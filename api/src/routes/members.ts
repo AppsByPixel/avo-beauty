@@ -26,7 +26,7 @@ import {
 } from '../auth/principal';
 import { revokeOtherSessions } from '../auth/sessions';
 import { badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../http/errors';
-import { parseE164 } from '../http/fields';
+import { parseE164, parseEmail } from '../http/fields';
 import { serialiseTransactionForCustomer } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -64,27 +64,6 @@ const PHONE_CHANGE_PER_HOUR = 3;
  */
 function mintNumericCode(): string {
   return String(randomInt(0, 10_000)).padStart(4, '0');
-}
-
-/**
- * An email, or null to clear it.
- *
- * Deliberately permissive: the only structural claim made here is that there is
- * something either side of an `@` and a dot in the domain. An address is proved
- * by sending to it, not by a regular expression, and a stricter pattern here
- * would reject valid addresses while proving nothing about the rest.
- */
-function parseEmail(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== 'string') {
-    throw badRequest('invalid_email', 'email must be an address or null.');
-  }
-  const trimmed = value.trim();
-  if (trimmed === '') return null;
-  if (trimmed.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-    throw badRequest('invalid_email', 'That does not look like an email address.');
-  }
-  return trimmed.toLowerCase();
 }
 
 /** The five switches the Account screen draws. */
