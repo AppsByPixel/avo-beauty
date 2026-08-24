@@ -15,6 +15,7 @@ import { Approvals } from './routes/console/Approvals.js';
 import { Controls } from './routes/console/Controls.js';
 import { ConsoleSignIn } from './routes/ConsoleSignIn.js';
 import { Policies } from './routes/console/Policies.js';
+import { Salons } from './routes/console/Salons.js';
 import { Appointments } from './routes/Appointments.js';
 import { AuditLog } from './routes/AuditLog.js';
 import { Loyalty } from './routes/Loyalty.js';
@@ -152,6 +153,7 @@ const CONSOLE_SECTIONS = [
   { path: '/console/approvals', component: Approvals },
   { path: '/console/controls', component: Controls },
   { path: '/console/policies', component: Policies },
+  { path: '/console/salons', component: Salons },
 ] as const;
 
 const consoleSectionRoutes = CONSOLE_SECTIONS.map(({ path, component }) =>

@@ -134,13 +134,31 @@ export function useAuditLog(
  *                actions". A literal rather than a magic empty string, so it
  *                cannot be produced by an accidentally blank query parameter.
  *
- * A PER-SALON narrowing (`?salon=SAL-…`) exists server-side and is deliberately
- * not surfaced yet: there is no platform salons-list endpoint (the console's
- * Salons section is not built), so the only honest control would be a free-text
- * id box. Named in the lane report, not faked with a hand-typed list.
+ *   {salonId}    the `?salon=SAL-…` narrowing — "what happened at Glow Bar".
+ *
+ * THE PER-SALON NARROWING IS NOW SURFACED, and this comment used to say why it
+ * was not: "there is no platform salons-list endpoint (the console's Salons
+ * section is not built), so the only honest control would be a free-text id box."
+ * `GET /v1/platform/salons` landed and the Salons section is built, so the picker
+ * is populated from the real list. That was the stated unblock.
+ *
+ * ONE WIRE PARAMETER, SO ONE FIELD. `?salon=` carries either the `platform`
+ * literal or a salon id, never both, and modelling it as two client fields would
+ * invite a UI that sets both and then needs a precedence rule the server does not
+ * have. The object form makes the id case impossible to confuse with the literal:
+ * a salon whose id happened to be the string "platform" cannot be produced by
+ * accident, and the discriminant is structural rather than a magic string.
  */
+export type PlatformAuditScope = 'platform' | { salonId: string } | null;
+
 export interface PlatformAuditFilters extends AuditFilters {
-  scope: 'platform' | null;
+  scope: PlatformAuditScope;
+}
+
+/** The one place the scope becomes the wire's single `?salon=` value. */
+export function auditScopeParam(scope: PlatformAuditScope): string | null {
+  if (scope === null) return null;
+  return scope === 'platform' ? 'platform' : scope.salonId;
 }
 
 export const platformAuditKeys = {
@@ -157,7 +175,8 @@ export function usePlatformAuditLog(
       const params = new URLSearchParams();
       if (filters.q.trim() !== '') params.set('q', filters.q.trim());
       if (filters.kind) params.set('kind', filters.kind);
-      if (filters.scope) params.set('salon', filters.scope);
+      const salon = auditScopeParam(filters.scope);
+      if (salon !== null) params.set('salon', salon);
       if (pageParam !== null) params.set('cursor', String(pageParam));
       const query = params.toString();
       return authedRequest<AuditPage>(
