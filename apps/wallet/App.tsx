@@ -56,7 +56,8 @@ import { SignUpScreen } from './src/screens/SignUpScreen';
 import { ForgotPasswordScreen } from './src/screens/ForgotPasswordScreen';
 import { signOut } from './src/api/auth';
 import { refreshSession } from './src/api/client';
-import { onSessionEnded, restore } from './src/api/session';
+import { isSignedIn, onSessionEnded, restore } from './src/api/session';
+import { bootDestination } from './src/domain/bootGate';
 import { LanguageProvider, useCopy, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
 import { useWalletHome } from './src/state/useWalletHome';
@@ -158,12 +159,35 @@ function Gate() {
     void (async () => {
       const stored = await restore();
       if (!alive) return;
-      if (stored === null) {
-        setState('signIn');
-        return;
-      }
-      const ok = await refreshSession();
-      if (alive) setState(ok ? 'in' : 'signIn');
+      /*
+        `refreshSession()` returning false meant two different things and this
+        used to read it as one: `setState(ok ? 'in' : 'signIn')`. A refresh the
+        server REFUSED ends the session; a refresh we could not DELIVER does not,
+        and sending her to sign-in for the second asks her to type a password to
+        see a balance already sitting in storage.
+
+        Driven, before the fix: a cold launch with the API unreachable deleted
+        `avo.wallet.session.v1`, kept `avo.wallet.home.v1` beside it, and showed
+        sign-in — so interaction-spec.md §4's offline Home, which exists to
+        render exactly that cached snapshot with a "last updated" stamp, could
+        never be reached on a cold start.
+
+        `isSignedIn()` read AFTER the attempt is what tells them apart, because
+        `client.ts § sessionWasRepudiated` now clears only on a 401/403.
+        `domain/bootGate.ts` carries the rule and the spec.
+      */
+      // Not called at all with nothing restored: there is no token to exchange,
+      // and `refreshSession()` answering false for a third distinct reason is
+      // exactly the conflation this change exists to remove.
+      const refreshed = stored === null ? false : await refreshSession();
+      if (!alive) return;
+      setState(
+        bootDestination({
+          hasStoredSession: stored !== null,
+          refreshed,
+          stillSignedIn: isSignedIn(),
+        }),
+      );
     })();
 
     return () => {
