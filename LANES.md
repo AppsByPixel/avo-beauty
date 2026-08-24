@@ -372,6 +372,18 @@ a shared package, and that is a trunk conversation, not something either app doe
 >
 > You write only to `**/*.test.ts` and `e2e/`.
 
+**Clarified 2026-08-24 — that glob overlaps three other lanes, and the rule is ownership by
+package, not by filename.** Lane D owns `e2e/` and any cross-cutting suite. A **colocated** test
+inside another lane's package — `apps/dashboard/src/**/*.test.ts`, `api/src/**/*.test.ts`,
+`apps/wallet/src/**/*.test.ts` — belongs to **that** lane, because it is usually inseparable from
+the code beside it. Lane C hit this honestly: adding a file to `routes/console/` fails its own
+`stateCensus.test.ts`, which asserts every screen in that directory is classified, so the test
+*had* to change in the same commit. That is not a breach; the alternative would be shipping a
+knowingly-red suite and asking another lane to fix it.
+
+The test that decides it: **could the other lane land its change without touching this file?** If
+no, the file is theirs. If the suite spans packages or lives in `e2e/`, it is Lane D's.
+
 
 ---
 
