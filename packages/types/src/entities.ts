@@ -34,6 +34,29 @@ export function paginated<T extends z.ZodTypeAny>(item: T) {
   return z.object({ items: z.array(item), nextCursor: z.string().nullable() });
 }
 
+/**
+ * A page that also carries the size of the whole filtered set — the audit reads
+ * and the support queue, where the screen renders "N entries match".
+ *
+ * A SEPARATE HELPER RATHER THAN AN OPTIONAL `total` ON `paginated`. The wallet's
+ * booking and service pages use `paginated` and do **not** send a total, so
+ * making it optional there would tolerate a server that simply forgot it — the
+ * same trap `nextAppointmentAt` avoided by being nullable-and-required rather
+ * than optional. A page with a count and a page without are different shapes;
+ * saying so lets each be wrong loudly.
+ *
+ * `total` is the count of the whole filter, NOT of `items` — that distinction is
+ * what makes the cursor bug lane A found so hard to see, where a page returned
+ * one row and still reported ten.
+ */
+export function countedPage<T extends z.ZodTypeAny>(item: T) {
+  return z.object({
+    items: z.array(item),
+    nextCursor: z.string().nullable(),
+    total: z.number().int().nonnegative(),
+  });
+}
+
 // ------------------------------------------------------------------ salon --
 
 export const TierNameSchema = z.enum(['bronze', 'silver', 'gold', 'black']);
@@ -712,6 +735,14 @@ export const SupportTicketSchema = z.object({
   id: IdSchema,
   memberId: IdSchema,
   member: z.string(),
+  /**
+   * Which salon's customer wrote it. Served by the API and previously stripped
+   * here, which mattered more than a missing field usually does: it is the value
+   * the queue's tenancy predicate is *built on* — a merchant read is forced to
+   * `salon_id = hers AND route = 'salon'` — so a client validating through this
+   * schema could not see the scoping it was subject to.
+   */
+  salonId: IdSchema,
   topicId: IdSchema,
   /**
    * The topic's label at READ time, joined rather than snapshotted — the

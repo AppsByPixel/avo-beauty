@@ -677,6 +677,11 @@ app.post('/v1/support/tickets', async (req, reply) => {
     id: `SUP-${Math.floor(Math.random() * 90000 + 10000)}`,
     memberId: member.id,
     member: member.name,
+    // The salon whose customer wrote it — what the real queue's tenancy
+    // predicate is built on. Omitted here until 2026-08-24, which is the second
+    // required field this fixture was short; typecheck cannot see either,
+    // because the mock is not typed against the schema it imitates.
+    salonId: SALON_ID,
     topicId: topic.id,
     // The joined label the real API serves. Present here because a mock that
     // omits a required field teaches every client the field is optional — and
