@@ -19,13 +19,14 @@
  * the same property `/members/me/…` has, achieved by scoping the QUERY instead of
  * the path, and it is what the contract asks for.
  *
- * `POST /bookings/{id}/reschedule` IS NOT IN THE CONTRACT. README § Upcoming
- * appointment specifies the behaviour — "Reschedule (carries the deposit to a new
+ * `POST /bookings/{id}/reschedule` IS IN THE CONTRACT, as a contract addition
+ * this file proposed and api-contract.md:367 has since adopted. README § Upcoming
+ * appointment specified the behaviour — "Reschedule (carries the deposit to a new
  * slot)" — and no endpoint. A sub-resource POST rather than `PATCH /bookings/{id}`
  * because a reschedule is a transition with rules (the one-hour window, the slot
  * re-validation, the deposit carry), not a field assignment, and a PATCH that
  * accepted `startsAt` invites a PATCH that accepts `status` or `depositFils`
- * next. Reported as a contract addition.
+ * next. The contract now carries that reasoning and the refusal vocabulary.
  *
  * THE IDEMPOTENCY ASYMMETRY, said out loud: `POST /bookings` requires a key and
  * `DELETE /bookings/{id}` does not. A POST creates a new thing every time it

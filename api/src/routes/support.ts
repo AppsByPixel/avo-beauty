@@ -226,7 +226,7 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * The cost is that a channels edit and a topic reorder contend. They are two halves
  * of one panel on one screen; serialising them is the intent, not a side effect.
  *
- * A MISSING CONFIG ROW IS A 503, the same refusal `GET /v1/platform/support`
+ * A MISSING CONFIG ROW IS A 409, the same refusal `GET /v1/platform/support`
  * already gives. There is no such thing as a configured topic list on an
  * unconfigured support panel.
  */
