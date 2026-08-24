@@ -210,9 +210,24 @@ export const staff: StaffUser[] = [
   },
 ];
 
+/**
+ * IDS MATCH `api/src/db/seed.ts`, AND THAT IS THE POINT — not a coincidence.
+ *
+ * `artistId` ROUND-TRIPS: the wallet reads an artist here and sends the same id
+ * back to `GET /artists/{id}/availability` (state/useBooking.ts) and in the
+ * `POST /bookings` body (routes/bookings.ts:96). An id this file invents is an
+ * id the real API refuses, and the booking flow would work perfectly against the
+ * mock and fail against the server on every attempt.
+ *
+ * That is exactly what the support topics did for the whole build. These were
+ * `AR-01`/`AR-02` against the seed's `AR-001`-`AR-004` until 2026-08-25 —
+ * the same defect, in the flow that takes a deposit. The NAMES may differ from
+ * the seed's (this file follows the design bundle for display, the header says
+ * so); the IDS may not. `fixtures.test.ts` asserts it.
+ */
 export const artists: Artist[] = [
   {
-    id: 'AR-01',
+    id: 'AR-001',
     salonId: SALON_ID,
     name: 'Maryam',
     nameAr: 'مريم',
@@ -232,7 +247,7 @@ export const artists: Artist[] = [
     },
   },
   {
-    id: 'AR-02',
+    id: 'AR-002',
     salonId: SALON_ID,
     name: 'Fatima',
     nameAr: 'فاطمة',

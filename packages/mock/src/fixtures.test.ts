@@ -29,7 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { support } from './fixtures.js';
+import { artists, products, services, support } from './fixtures.js';
 
 /**
  * `design/avo-promotions.js` is the vocabulary's source. `api/src/db/seed.ts`
@@ -95,5 +95,63 @@ describe('the mock serves the design bundle’s support topics', () => {
       expect(byId.get(t.id), `topic "${t.id}" is not in the design bundle at all`).toBeDefined();
       expect(t.route, `topic "${t.id}" routes to the wrong queue in the mock`).toBe(byId.get(t.id));
     }
+  });
+});
+
+/**
+ * ROUND-TRIPPING IDS, CHECKED AGAINST THE REAL SEED.
+ *
+ * The topics above are checked against the DESIGN bundle, because the design
+ * names them. Artists, services and products it does not — `grep -ohE "AR-[0-9]+"
+ * design/` is empty — so for these the operative authority is the database the
+ * client will actually meet. The mock imitates the real API; where the design is
+ * silent, the seed is what "correct" means.
+ *
+ * WHY THESE THREE AND NOT EVERY FIXTURE. An id matters here when the client sends
+ * it BACK. `artistId` and `serviceId` go to `POST /bookings` (routes/bookings.ts:96)
+ * and `GET /artists/{id}/availability`; a product id goes to `POST /orders`. A
+ * transaction id is only ever read, so an invented `TX-8511` misleads nobody.
+ * That is the same test the support topics failed: `support_ticket.topic_id` is a
+ * foreign key under ON DELETE RESTRICT, so an invented id was refused on arrival.
+ *
+ * This found a live one on 2026-08-25: artists were `AR-01`/`AR-02` against the
+ * seed's `AR-001`-`AR-004`. The wallet's whole booking flow — the one that takes a
+ * deposit — would have worked against this mock and been refused by the real API
+ * on every booking. Same defect as the topics, one flow further in.
+ */
+const SEED = fileURLToPath(new URL('../../../api/src/db/seed.ts', import.meta.url));
+
+function seedIds(prefix: string): Set<string> {
+  const src = readFileSync(SEED, 'utf8');
+  const found = [...src.matchAll(new RegExp(`'(${prefix}-[0-9A-Za-z]+)'`, 'g'))].map((m) => m[1]!);
+  // Throwing rather than returning empty: a prefix that matches nothing means the
+  // seed changed shape, and an empty set would make every `has()` below vacuously
+  // pass — a guard that reports success precisely when it has stopped working.
+  if (found.length === 0) {
+    throw new Error(`no ${prefix}-* ids in ${SEED} — has the seed changed shape?`);
+  }
+  return new Set(found);
+}
+
+describe('every id the client sends back exists in the real seed', () => {
+  it('reads a non-empty id set for each prefix (the positive control)', () => {
+    expect(seedIds('AR').size).toBeGreaterThan(0);
+    expect(seedIds('SV').size).toBeGreaterThan(0);
+    expect(seedIds('PR').size).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['artist', 'AR', () => artists.map((a) => a.id)],
+    ['service', 'SV', () => services.map((s) => s.id)],
+    ['product', 'PR', () => products.map((p) => p.id)],
+  ])('serves %s ids the API would accept', (label, prefix, get) => {
+    const seeded = seedIds(prefix);
+    const invented = get().filter((id) => !seeded.has(id));
+    expect(
+      invented,
+      `the mock serves ${label} id(s) ${invented.join(', ')}, which api/src/db/seed.ts ` +
+        `does not seed (it has ${[...seeded].sort().join(', ')}). The client sends this id ` +
+        `back to the API, so the real server would refuse it. Align the mock to the seed.`,
+    ).toEqual([]);
   });
 });
