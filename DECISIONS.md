@@ -44,6 +44,57 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### The salon list regates to `salons`, the wizard gets a success state, and I propagated a false premise
+
+**1. `GET /v1/platform/salons` moves from `analytics` to `salons`.** Routed to Lane A.
+
+Lane C found the list refuses a **support** admin. I verified the preset table myself rather
+than take it on report: `PLATFORM_ROLE_PRESETS.support` is `{analytics: false, salons: true}`.
+So the role whose job is customers, and which explicitly holds `salons`, cannot list salons —
+while `analyst`, which holds `analytics: true, salons: false`, reads the tenant list fine. The
+gate and the section name point at different people.
+
+**Lane A's original tiebreak was sound and still gets the wrong answer.** It reasoned that
+`GET /platform/metrics` already exposes salon names and money under `analytics`, so gating the
+list there "widens nothing". True — that is a good argument for why `analytics` would be
+*acceptable*, and not an argument that it is *correct*. `salons` is what "may see the platform's
+salons" means, and regating widens nothing either: owner, admin and support all hold it. The
+analyst loses the tenant list and keeps metrics, which already names its top five salons — so
+nothing it needs disappears. The Audit picker's only consumers are owner and admin, who hold
+`salons` too, so the unblock survives.
+
+**The route's comment must go with it.** It justifies the gate with "each one holds `analytics`",
+which is false. That is the same stale-or-wrong-comment class this build has now paid for four
+times, and it is *how* the mis-gating survived review.
+
+**2. The wizard gets a success state, and the copy is authorised.** English only — `design/README.md`
+§ Known gaps 1 makes the console English-only, so there is no Arabic half.
+
+The design draws no success state, so the wizard closed and the row appeared. Lane C declined to
+draft copy and asked. The reason it needs one is operational, not decorative: the last thing the
+admin read was the drawn promise *"sends the owner a WhatsApp invite"*, **no sender is wired**,
+and the owner cannot sign in (`passwordSet: false`). An AVO admin who believes an invite went out
+will tell a salon owner to check WhatsApp for a message that will never arrive.
+
+So the state must carry three facts and no promises: the salon exists, the owner's sign-in handle
+(which the API returns and nothing rendered), and that the invite is **queued with delivery not
+yet enabled**. Mark it `INVENTED`. This is the same call as the offline cold-load sentence —
+*"keep the copy verbatim" governs copy that exists*, and holding here ships a false impression to
+AVO's own staff. **Reversal:** when the sender lands, the delivery clause is the only part that
+changes.
+
+**3. There is still no per-salon editor, and no endpoint for one.** Routed to Lane A:
+`GET` / `PATCH /v1/platform/salons/{id}`. `GET /salons/:id` refuses a platform principal and
+points at "the console's Salons section" — a guard pointing at a screen that has no remedy. Lane
+C drew no Manage button rather than shipping a control that only 403s, which was right.
+
+**4. A correction of my own, twice over.** I told Lane C that `city` is not served. It is. I had
+grepped `api/src/routes/salons.ts`; the platform list lives in `platformConsole.ts`. That is a
+zero result that was a claim about my command — the exact trap I had written into three briefs
+that same hour. And I repeated Lane A's "analytics is the one section every preset holds" onward
+without checking the preset table. **Both are the same failure: passing on a claim I had not
+verified, while telling four agents to verify claims.**
+
 ### Lane B's three routed items: two decided, one sequenced behind Lane A
 
 **1. `brandDeeper` and `brandTint2` WILL be white-labelled — but not while Lane A is building on
