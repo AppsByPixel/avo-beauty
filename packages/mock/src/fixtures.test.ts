@@ -46,9 +46,18 @@ function topicsFromDesign(): Topic[] {
   const src = readFileSync(DESIGN, 'utf8');
   const block = /topics\s*:\s*\[(.*?)\]/s.exec(src);
   if (!block) throw new Error(`no topics array in ${DESIGN} — has the design bundle changed shape?`);
-  return [...block[1].matchAll(/\{[^}]*\}/g)].map((m) => {
-    const pick = (k: string) => new RegExp(`${k}:\\s*'([^']*)'`).exec(m[0])?.[1];
-    return { id: pick('id')!, route: pick('route')!, en: pick('en')!, ar: pick('ar')! };
+  const body = block[1] ?? '';
+  return [...body.matchAll(/\{[^}]*\}/g)].map((m) => {
+    const entry = m[0];
+    const pick = (k: string): string => {
+      const found = new RegExp(`${k}:\\s*'([^']*)'`).exec(entry)?.[1];
+      // Throwing rather than defaulting: a topic missing a field means the
+      // design's shape changed, and a silent '' would let this suite compare
+      // two sets of empty strings and call them equal.
+      if (found === undefined) throw new Error(`topic entry has no ${k}: ${entry}`);
+      return found;
+    };
+    return { id: pick('id'), route: pick('route'), en: pick('en'), ar: pick('ar') };
   });
 }
 
