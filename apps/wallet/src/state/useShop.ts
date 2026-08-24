@@ -54,7 +54,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Fils } from '@avo/types';
-import { ApiError, newIdempotencyKey } from '../api/client';
+import { ApiError, newIdempotencyKey, type FailureKind } from '../api/client';
 import { toLoadFailure, type LoadFailure } from '../domain/loadFailure';
 // The salon is configuration, not a request — see config/salon.ts.
 import { SALON_ID as SALON_FROM_CONFIG } from '../config/salon';
@@ -83,8 +83,46 @@ import { orderRefusal, type CheckoutRefusal } from '../domain/orderRefusal';
  */
 export type { CheckoutRefusal };
 
-/** Why the catalogue is not on screen. `off` is the module, not a failure. */
-export type ShopStatus = 'loading' | 'ready' | 'off' | 'failed';
+/**
+ * Why the catalogue is or is not on screen. `off` is the module, not a failure.
+ *
+ * `stale` AND `offline` ARE NEW, AND THEY ARE THE FOUR-STATE RULE THIS HOOK WAS
+ * MISSING. The catch below set `failed` unconditionally, and `ShopScreen`
+ * renders a full-page `FailureScreen` for `failed` — so a refresh that failed
+ * over a catalogue already on screen would REPLACE it, which is one of the four
+ * failures interaction-spec.md §4 names outright: "Network failure keeps the
+ * last-known data visible with a stale banner rather than blanking."
+ *
+ * It was latent rather than live — `retry` is only reachable FROM the failure
+ * screen, so there was no path to a refresh over data. That is not a reason to
+ * leave it: the next slice that adds pull-to-refresh, a focus refetch or a
+ * post-order reload makes it reachable, and nothing would fail when it did.
+ * `useWalletHome` and `useAccount` have had `statusForFailure(kind, hasData)`
+ * from the start; this is the same function for the same reason.
+ */
+export type ShopStatus = 'loading' | 'ready' | 'off' | 'stale' | 'offline' | 'failed';
+
+/**
+ * Which status a failure produces, given whether anything is already on screen.
+ *
+ * Exported and pure so it has a spec — the two hooks that got this right keep it
+ * private, and the one that got it wrong is the one nothing could test.
+ *
+ *   no data  → `failed`, the cold failure screen; there is nothing to keep.
+ *   data     → `stale` / `offline`, the catalogue plus a banner saying so.
+ *
+ * `forbidden` is `failed` in BOTH cases, deliberately, and it is the one place
+ * this differs from a plain "keep what we have". A 403 means she may not see
+ * this catalogue; continuing to render rows she has just been refused — priced,
+ * tappable, addable to a cart — would be the UI overriding the server's answer.
+ * Non-negotiable #7 makes the server the control, and the honest screen for a
+ * refusal is the refusal.
+ */
+export function shopStatusForFailure(kind: FailureKind, hasData: boolean): ShopStatus {
+  if (kind === 'forbidden') return 'failed';
+  if (!hasData) return 'failed';
+  return kind === 'offline' ? 'offline' : 'stale';
+}
 
 export interface ShopState {
   status: ShopStatus;
@@ -101,6 +139,8 @@ export interface ShopState {
    * `failure`, which had the shape right from the start.
    */
   failure: LoadFailure | null;
+  /** Epoch ms the catalogue on screen was read. Null before the first success. */
+  fetchedAt: number | null;
   cart: Cart;
   lines: PricedLine[];
   total: Fils;
@@ -134,6 +174,8 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<CheckoutRefusal | null>(null);
   const [reload, setReload] = useState(0);
+  /** When the catalogue on screen was read, for the stale banner's stamp. */
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const aliveRef = useRef(true);
@@ -161,6 +203,7 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
         if (!aliveRef.current) return;
         setProducts(items);
         setFailure(null);
+        setFetchedAt(Date.now());
         setStatus('ready');
       })
       .catch((err: unknown) => {
@@ -179,8 +222,11 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
           as itself, because that is what suppresses a retry button; flattening
           it to `server` here is what the previous version did.
         */
-        setFailure(toLoadFailure(err));
-        setStatus('failed');
+        const failure = toLoadFailure(err);
+        setFailure(failure);
+        // Stale, not blank — see `shopStatusForFailure`. `products` is read from
+        // the closure the same way the `loading` guard above reads it.
+        setStatus(shopStatusForFailure(failure.kind, products !== null));
       });
     // `products` is read only to decide whether to blank; re-running on it would
     // refetch the catalogue every time it arrives.
@@ -261,6 +307,7 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
     status,
     products,
     failure,
+    fetchedAt,
     cart,
     lines,
     total,

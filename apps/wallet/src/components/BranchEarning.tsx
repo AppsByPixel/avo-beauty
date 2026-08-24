@@ -12,7 +12,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import type { Branch, PromotionSet, Salon } from '@avo/types';
 import { color, ARABIC_FAMILY, FRAUNCES_ITALIC, MICRO_LABEL_COLOR, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
-import { branchName } from '../domain/activity';
+import { branchName } from '../domain/names';
 import type { Copy } from '../copy/types';
 
 interface Props {

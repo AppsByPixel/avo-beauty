@@ -41,6 +41,7 @@ import {
 } from '../state/notifications';
 import { useDeletionState } from '../state/useDeletionState';
 import { deletionSection } from '../domain/deletion';
+import { salonName } from '../domain/names';
 import { takeContactPrefill } from '../support/contact';
 import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
@@ -419,7 +420,13 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
       {salon.social.some((s) => s.on && s.handle.trim()) ? (
         <>
           <SectionLabel>
-            {copy.followTitle(lang === 'ar' && salon.nameAr ? salon.nameAr : salon.name)}
+            {/*
+              Was an inline `lang === 'ar' && salon.nameAr ? … : …`. Same rule,
+              fifth copy, and a fifth place for it to drift — `&&` also differs
+              from `??` on an empty string, which only a CHECK constraint on
+              `salon.name_ar` currently prevents from reaching a customer.
+            */}
+            {copy.followTitle(salonName(salon, lang))}
           </SectionLabel>
           <FollowSalon social={salon.social} />
         </>

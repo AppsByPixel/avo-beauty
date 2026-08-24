@@ -29,6 +29,7 @@ import { focusable } from '../theme/focus';
 import { TappableRow } from './Buttons';
 import type { BookingView } from '../api/booking';
 import { formatWhen } from '../domain/booking';
+import { failureCopy, type LoadFailure } from '../domain/loadFailure';
 
 interface Props {
   booking: BookingView;
@@ -171,22 +172,50 @@ export function NoUpcomingCard({ onBook }: { onBook: () => void }) {
  * failed" from "there is nothing here" for exactly this reason, and the two
  * were collapsed. So a failure now says so, and offers the retry.
  */
-export function UpcomingFailedCard({ onRetry }: { onRetry: () => void }) {
+/**
+ * The appointment read failed — and WHICH failure decides what this says.
+ *
+ * This hardcoded `copy.errorTitle` / `copy.errorBody` and took no kind at all,
+ * so an offline customer was told "This is on our side" about her own signal,
+ * and a `forbidden` got a Try again that could only fail again. Driven against
+ * lane B with the API answering 503: the card read "We couldn't load your wallet
+ * · Your balance and history are safe. This is on our side." with the wallet
+ * card rendered, correctly, immediately above it.
+ *
+ * `useUpcoming` had been carrying `failure: LoadFailure` the whole time; the
+ * kind simply was not being asked for. See `failureCopy` in domain/loadFailure.ts
+ * — the resolution is shared with `FailureScreen` so the two cannot drift.
+ */
+export function UpcomingFailedCard({
+  failure,
+  onRetry,
+}: {
+  /** Null only if a caller has none; treated as ours, which offers the retry. */
+  failure: LoadFailure | null;
+  onRetry: () => void;
+}) {
   const { lang, copy } = useLanguage();
+  const { title, body, canRetry } = failureCopy(
+    failure?.kind ?? 'server',
+    failure?.message ?? copy.errorBody,
+    copy,
+  );
   return (
     <View style={styles.card} accessibilityRole="alert" testID="upcoming-failed">
       <Text style={[text('label', lang), styles.headLabel]}>{copy.upcomingLabel}</Text>
-      <Text style={[text('displayS', lang), styles.emptyTitle]}>{copy.errorTitle}</Text>
-      <Text style={[text('body', lang), styles.meta]}>{copy.errorBody}</Text>
-      <TappableRow
-        onPress={onRetry}
-        accessibilityRole="button"
-        dataSet={focusable}
-        testID="upcoming-retry"
-        style={[styles.action, styles.emptyAction]}
-      >
-        <Text style={[text('body', lang), styles.actionText]}>{copy.tryAgain}</Text>
-      </TappableRow>
+      <Text style={[text('displayS', lang), styles.emptyTitle]}>{title}</Text>
+      <Text style={[text('body', lang), styles.meta]}>{body}</Text>
+      {canRetry ? (
+        <TappableRow
+          onPress={onRetry}
+          accessibilityRole="button"
+          dataSet={focusable}
+          testID="upcoming-retry"
+          style={[styles.action, styles.emptyAction]}
+        >
+          <Text style={[text('body', lang), styles.actionText]}>{copy.tryAgain}</Text>
+        </TappableRow>
+      ) : null}
     </View>
   );
 }

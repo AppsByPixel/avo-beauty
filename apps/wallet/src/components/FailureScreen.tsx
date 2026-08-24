@@ -29,7 +29,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import type { FailureKind } from '../api/client';
-import { failurePresentation } from '../domain/loadFailure';
+import { failureCopy } from '../domain/loadFailure';
 
 interface Props {
   kind: FailureKind;
@@ -46,10 +46,7 @@ export function FailureScreen({ kind, message, reference, onRetry, retrying }: P
     this workspace has no renderer, so a branch written inline here is a branch
     no test can reach, which is how `offline` came to render the `server` copy.
   */
-  const { titleKey, bodyKey, canRetry } = failurePresentation(kind);
-  const title = copy[titleKey];
-  // `bodyKey: null` is `forbidden` — the server's own sentence, not ours.
-  const bodyText = bodyKey === null ? message : copy[bodyKey];
+  const { title, body: bodyText, canRetry } = failureCopy(kind, message, copy);
 
   return (
     <View style={styles.wrap} accessibilityRole="alert">

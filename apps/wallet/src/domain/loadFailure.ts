@@ -30,6 +30,7 @@
  */
 
 import { ApiError, type FailureKind } from '../api/client';
+import type { Copy } from '../copy/types';
 
 /** What a failed load leaves behind for the screen. */
 export interface LoadFailure {
@@ -96,4 +97,53 @@ export function failurePresentation(kind: FailureKind): FailurePresentation {
     case 'server':
       return { titleKey: 'errorTitle', bodyKey: 'errorBody', canRetry: true };
   }
+}
+
+// ------------------------------------------------------ resolved, not keyed --
+
+/**
+ * The same decision, with the strings already chosen.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * WHY A SECOND FUNCTION RATHER THAN THREE LINES AT EACH CALL SITE.
+ *
+ * `failurePresentation` returns KEYS, and turning keys into sentences is three
+ * lines: look up the title, and use the server's `message` when `bodyKey` is
+ * null. `FailureScreen` wrote those three lines and was correct.
+ * `UpcomingFailedCard` did not consult the decision at all — it hardcoded
+ * `copy.errorTitle` / `copy.errorBody`, so a customer with no signal was told
+ * "We couldn't load your wallet · Your balance and history are safe. This is on
+ * our side." while her wallet sat rendered directly above the card, and a 403
+ * was offered a Try again.
+ *
+ * That is the SAME defect `failurePresentation` was extracted to fix, one
+ * component over: "`FailureKind` has three members, the component branched on
+ * one". Extracting the decision did not stop it recurring, because the decision
+ * was still optional to call. So the resolution is a function too — a card that
+ * wants failure copy now has one obvious thing to call, and `copy.errorBody`
+ * appearing anywhere near a failure branch is visible as a smell rather than as
+ * a plausible line.
+ *
+ * `copy/en.ts` names the rule this enforces, in the comment above
+ * `offlineColdTitle`: "`errorBody`'s 'This is on our side' is the other wrong
+ * answer — it blames us for her signal."
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export interface FailureCopy {
+  title: string;
+  body: string;
+  canRetry: boolean;
+}
+
+/**
+ * `message` is the SERVER's sentence and is read on the `forbidden` branch only.
+ * The other two kinds ignore it and use ours — see `failurePresentation`.
+ */
+export function failureCopy(kind: FailureKind, message: string, copy: Copy): FailureCopy {
+  const { titleKey, bodyKey, canRetry } = failurePresentation(kind);
+  return {
+    title: copy[titleKey],
+    body: bodyKey === null ? message : copy[bodyKey],
+    canRetry,
+  };
 }

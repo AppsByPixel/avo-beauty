@@ -44,6 +44,7 @@ import type { ShopController } from '../state/useShop';
 import { initialFor, swatchFor } from '../domain/cart';
 import { CartSheet } from '../components/CartSheet';
 import { FailureScreen } from '../components/FailureScreen';
+import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
 
@@ -80,6 +81,13 @@ export function ShopScreen({
   }, [shop, copy, lang, onToast]);
 
   // --------------------------------------------------------------- failed --
+  /*
+    ONLY WHEN THERE IS NOTHING TO KEEP. `shopStatusForFailure` resolves a failure
+    over an existing catalogue to `stale` / `offline` instead, and those fall
+    through to the list below with a banner above it — interaction-spec.md §4:
+    "Network failure keeps the last-known data visible with a stale banner rather
+    than blanking." A full-page failure screen here used to be every failure.
+  */
   if (shop.status === 'failed') {
     return (
       <FailureScreen
@@ -106,6 +114,17 @@ export function ShopScreen({
   return (
     <View style={styles.screen}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+        {/*
+          The same two banners Home uses, for the same reason and with the same
+          strings — no new copy, and therefore nothing new for the Arabic
+          worksheet. `offline` is the connection; `stale` is a refresh that
+          failed for any other reason.
+        */}
+        {shop.status === 'offline' ? <OfflineBanner /> : null}
+        {shop.status === 'stale' && shop.fetchedAt !== null ? (
+          <StaleBanner at={shop.fetchedAt} onRetry={shop.retry} />
+        ) : null}
+
         {/* design:480-491 — the title and the cart button with its badge. */}
         <View style={styles.head}>
           <Text style={[text('displayM', lang), styles.title]}>{copy.shopTitle}</Text>
