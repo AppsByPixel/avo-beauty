@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button, Pill, Segmented, Skeleton } from '@avo/ui';
-import { useSetTicketStatus, useTicketQueue, type QueueFilter, type QueueTicket } from '../../api/support.js';
+import type { SupportTicket } from '@avo/types';
+import { useSetTicketStatus, useTicketQueue, type QueueFilter } from '../../api/support.js';
 import { SectionError, WriteError } from '../sectionState.js';
 
 /**
@@ -180,7 +181,7 @@ function TicketRow({
   onToggle,
   busy,
 }: {
-  ticket: QueueTicket;
+  ticket: SupportTicket;
   onToggle: () => void;
   busy: boolean;
 }) {
