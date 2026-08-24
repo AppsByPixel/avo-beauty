@@ -713,6 +713,23 @@ export const SupportTicketSchema = z.object({
   memberId: IdSchema,
   member: z.string(),
   topicId: IdSchema,
+  /**
+   * The topic's label at READ time, joined rather than snapshotted — the
+   * deliberate opposite of `route` directly below. A route is a **decision**
+   * about the ticket and is frozen onto it; a label is **wording**, so an admin
+   * fixing a typo or adding the Arabic should fix it on every ticket rather than
+   * leaving the old spelling frozen into the queue.
+   *
+   * Falls back to `{ en: topicId, ar: '' }` for a retired topic, so a queue row
+   * degrades to its slug rather than disappearing.
+   *
+   * Declared here because the API already serves it and this schema was
+   * **stripping** it — the sixth instance of schema-narrower-than-wire in this
+   * contract, and the rule it breaks is the one written down in STATUS.md: *do
+   * not narrow a response to match a schema — widen the schema.* Served first,
+   * declared second, which is the wrong order and is why it needed catching.
+   */
+  topic: z.object({ en: z.string(), ar: z.string() }),
   route: z.enum(['salon', 'avo']),
   message: z.string(),
   ref: z.string(),

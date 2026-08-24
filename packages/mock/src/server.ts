@@ -678,6 +678,11 @@ app.post('/v1/support/tickets', async (req, reply) => {
     memberId: member.id,
     member: member.name,
     topicId: topic.id,
+    // The joined label the real API serves. Present here because a mock that
+    // omits a required field teaches every client the field is optional — and
+    // this one is the mock's whole job: `POST /v1/support/tickets` is what the
+    // wallet's Contact-us form calls, so the wallet would learn the wrong shape.
+    topic: { en: topic.en, ar: topic.ar ?? '' },
     route: topic.route, // server-resolved
     message: body.message,
     ref: body.ref ?? '',
