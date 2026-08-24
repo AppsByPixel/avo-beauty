@@ -62,6 +62,7 @@ import { requirePlatform } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import { PLATFORM_TIMEZONE, salonWallClock } from '../time/zone';
 
 /** api-contract.md § LegalDoc — `scope` is one of two. */
 const DOC_SCOPES = ['platform', 'wallet'] as const;
@@ -182,6 +183,62 @@ function parseClauses(
 
 function docId(): string {
   return `doc-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * THE PUBLICATION-DATE RULE, as a pure function of an instant.
+ *
+ * Refuses an `effectiveFrom` before today and returns the notice the publish
+ * reports. Both halves need the same "today" and this is the only place either can
+ * get one, which is the point of extracting it: they were two expressions reading
+ * one `const` before, and two expressions is one edit away from two answers.
+ *
+ * WHAT WAS WRONG WITH THE LINE IT REPLACES
+ * ----------------------------------------
+ *     const today = new Date().toISOString().slice(0, 10);
+ *
+ * `toISOString()` is UTC, always. Kuwait is UTC+3, so between 00:00 and 03:00
+ * Kuwait time the API's idea of "today" was still YESTERDAY in the country whose
+ * legal set it is publishing. In that window a console admin could publish a set
+ * effective the previous Kuwait day — the exact claim the refusal exists to
+ * prevent, waved through by the check meant to catch it — and the reported
+ * `noticeDays` was one day too many for the whole window.
+ *
+ * `time/zone.ts`'s own header says it: `getHours()`, `getTimezoneOffset()` and
+ * friends "read the process zone; none of them appear here, and none of them
+ * should appear in a handler either". `toISOString().slice(0, 10)` is the same
+ * mistake wearing a zone that merely happens to be constant.
+ *
+ * WHY THE COMPARISON AND THE ARITHMETIC ARE UNCHANGED, having been checked rather
+ * than assumed. `effectiveFrom < today` compares two zero-padded `YYYY-MM-DD`
+ * strings, for which lexicographic order IS chronological order — true of any
+ * calendar date, whatever zone named it. `Date.parse` is applied to both dates at
+ * `T00:00:00Z`, so it measures the whole-day distance between two calendar dates
+ * and never touches a zone. Only the SOURCE of `today` was wrong.
+ *
+ * `now` IS A PARAMETER, NOT `new Date()` INSIDE. The handler is database-bound and
+ * this rule is not, so injecting the instant is what lets `policies.test.ts` pin a
+ * clock at 00:30 Kuwait with no database and no fake timers — the same move
+ * `queueScope` makes in `routes/support.ts` for the same reason.
+ */
+export function publicationNotice(effectiveFrom: string, now: Date): number {
+  const today = salonWallClock(now, PLATFORM_TIMEZONE).date;
+
+  if (effectiveFrom < today) {
+    /**
+     * A set that took effect before it was published is a claim nobody can
+     * defend. Refused, unlike the 30-day notice, because this one needs no
+     * judgement about what changed.
+     */
+    throw badRequest(
+      'effective_from_in_the_past',
+      'A policy set cannot take effect before it is published.',
+    );
+  }
+
+  return Math.round(
+    (Date.parse(`${effectiveFrom}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000,
+  );
 }
 
 export async function registerPolicyRoutes(app: FastifyInstance): Promise<void> {
@@ -352,18 +409,9 @@ export async function registerPolicyRoutes(app: FastifyInstance): Promise<void> 
       throw badRequest('invalid_effective_from', 'effectiveFrom must be YYYY-MM-DD.');
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    if (effectiveFrom < today) {
-      /**
-       * A set that took effect before it was published is a claim nobody can
-       * defend. Refused, unlike the 30-day notice below, because this one needs no
-       * judgement about what changed.
-       */
-      throw badRequest(
-        'effective_from_in_the_past',
-        'A policy set cannot take effect before it is published.',
-      );
-    }
+    // Refuses a past date and yields the notice reported below. One instant, one
+    // "today", resolved in the PLATFORM's zone — see `publicationNotice`.
+    const noticeDays = publicationNotice(effectiveFrom, new Date());
 
     const docs = await readDraft();
     if (docs.length === 0) {
@@ -388,10 +436,6 @@ export async function registerPolicyRoutes(app: FastifyInstance): Promise<void> 
           .join(', ')}.`,
       );
     }
-
-    const noticeDays = Math.round(
-      (Date.parse(`${effectiveFrom}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000,
-    );
 
     const published = await db.transaction(async (tx) => {
       const [current] = await tx

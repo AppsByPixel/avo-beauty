@@ -53,6 +53,26 @@ import { badRequest } from '../http/errors';
 export const MINUTES_PER_DAY = 1440;
 
 /**
+ * THE PLATFORM'S OWN ZONE, as opposed to a salon's.
+ *
+ * Almost every date boundary in this API resolves against `salon.timezone`,
+ * because a business day is a salon-local fact. A few do not: a PLATFORM month
+ * and a PLATFORM publication date belong to AVO, not to any one tenant. AVO is a
+ * Kuwait company and `salon.timezone` defaults to Asia/Kuwait, so the platform
+ * zone is Asia/Kuwait — stated as a decision rather than inherited by accident
+ * from `TZ=UTC`, which is three hours away and moves every boundary with it.
+ * `services/platformMetrics.ts` carries the longer form of the argument for the
+ * month-bucketing case.
+ *
+ * IT LIVES HERE, not in the metrics service that first needed it, because it is
+ * not a metrics fact. `routes/policies.ts` reaches for the same decision when it
+ * asks what day it is for a legal publication, and a route importing a constant
+ * out of a reporting service to answer that would be the wrong direction — the
+ * constant would look like a metrics detail two callers happened to share.
+ */
+export const PLATFORM_TIMEZONE = 'Asia/Kuwait';
+
+/**
  * Formatter cache. `Intl.DateTimeFormat` construction is the expensive part and
  * every charge does at least one lookup; the objects are immutable and safe to
  * share.
