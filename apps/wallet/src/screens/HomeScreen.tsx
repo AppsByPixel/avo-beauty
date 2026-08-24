@@ -203,13 +203,23 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
         <View style={styles.headerText}>
           <Text style={[text('body', lang), styles.greeting]}>{copy.greeting(firstName)}</Text>
           {/*
-            CONTRACT GAP (reported, not filled): `Salon.name` is one string. The
-            design's own reference set carries `nameAr: 'أمارا'`
-            (design/avo-promotions.js:33) and renders it in AR, but
-            api-contract.md's Salon has no Arabic field — so an Arabic wallet
-            shows the Latin salon name. Shared-package change, belongs on trunk.
+            THE GAP THIS NOTE USED TO REPORT IS CLOSED, and the note outlived it.
+            It read: "CONTRACT GAP (reported, not filled): `Salon.name` is one
+            string … api-contract.md's Salon has no Arabic field — so an Arabic
+            wallet shows the Latin salon name. Shared-package change, belongs on
+            trunk." The trunk change landed: `SalonSchema.nameAr` is in
+            `packages/types`, `GET /salons/SAL-AMARA` answers `nameAr: "أمارا"`,
+            and the design has written it since design:1275 (`salon: 'أمارا'`).
+            Only this line had not been updated, so the Arabic home screen
+            greeted her in Arabic and then named her salon in Latin.
+
+            `nameAr ?? name` — the fallback `branchName`, `artistName` and the
+            follow-salon title all use. Lumiere's row is seeded with a NULL
+            `name_ar` on purpose, so the fallback has a live path.
           */}
-          <Text style={[text('displayM', lang), styles.salon]}>{salon.name}</Text>
+          <Text style={[text('displayM', lang), styles.salon]}>
+            {lang === 'ar' ? (salon.nameAr ?? salon.name) : salon.name}
+          </Text>
         </View>
         {/* design:195-198 — the switch and the avatar, in that order. */}
         <View style={styles.headerControls}>
