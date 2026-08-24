@@ -740,8 +740,15 @@ const UNMODELLED: Record<string, string> = {
     'the owner console\'s salon directory with per-salon branch and member counts, behind ' +
     'requirePlatform(analytics). No schema in packages/types, and not SalonSchema-shaped: ' +
     'the rows are an aggregate built in raw SQL, cursor-paginated by salon id. Its gate is ' +
-    'driven in permission-census.test.ts; the counts themselves are unasserted and named ' +
-    'in the lane report as owed.',
+    'driven in permission-census.test.ts. THE COUNTS ARE NO LONGER OWED, and this line used ' +
+    'to end "the counts themselves are unasserted and named in the lane report as owed" — ' +
+    'corrected rather than left, because a stale annotation in the place a reader looks ' +
+    'first is the defect this census exists to prevent. `platform-salons.test.ts` now ' +
+    'drives them: the row shape and its ::int casts, the cursor walk, the limit refusals, ' +
+    'and the deliberate asymmetry between memberCount (counts tombstones, so the console ' +
+    'cannot drift from the ledger by the number of erasures) and branchCount (excludes ' +
+    'closed branches). The tombstone spec manufactures the divergence itself rather than ' +
+    'trusting the seed to hold one.',
   'GET /v1/platform/metrics':
     'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
     '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +
