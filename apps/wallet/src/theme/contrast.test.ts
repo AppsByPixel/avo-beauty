@@ -36,7 +36,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { AA_NORMAL_TEXT, contrastRatio } from '@avo/tokens';
+import { AA_NORMAL_TEXT, contrastRatio, deriveBrandSet } from '@avo/tokens';
 import { color, onBrandFill, brandTextColor, WHITE } from './index';
 
 // --------------------------------------------------------------- the source --
@@ -158,8 +158,18 @@ describe('non-negotiable #9 — white text never on --avo-brand', () => {
 
 // ------------------------------------- every pair the source actually states --
 
-describe('every foreground/background pair stated in one style entry clears AA', () => {
-  const resolved = ENTRIES.flatMap(({ file, entry }) => {
+/**
+ * Resolve the app's colour identifiers against a PALETTE, rather than against
+ * the module's own `color`.
+ *
+ * The palette is a parameter because it is no longer a constant. A salon's
+ * `brandColor` is applied onto `theme.color` at boot (`./brand`), so the values
+ * these entries resolve to at runtime depend on the tenant — and a scan that only
+ * ever checked the sage defaults would be checking one of an unbounded number of
+ * palettes and reporting success for all of them.
+ */
+function resolvePairs(palette: Record<string, string>) {
+  return ENTRIES.flatMap(({ file, entry }) => {
     const fgRaw = FG.exec(entry)?.[1]?.trim();
     const bgRaw = BG.exec(entry)?.[1]?.trim();
     if (!fgRaw || !bgRaw) return [];
@@ -167,7 +177,7 @@ describe('every foreground/background pair stated in one style entry clears AA',
       if (raw === 'WHITE') return WHITE;
       const named = /^color\.([A-Za-z0-9_]+)$/.exec(raw);
       if (named) {
-        const v = (color as Record<string, unknown>)[named[1] as string];
+        const v = palette[named[1] as string];
         return typeof v === 'string' ? v : null;
       }
       return /^'#[0-9a-fA-F]{3,8}'$/.test(raw) ? raw.slice(1, -1) : null;
@@ -176,7 +186,38 @@ describe('every foreground/background pair stated in one style entry clears AA',
     const bg = lookup(bgRaw);
     return fg && bg ? [{ file, fgRaw, bgRaw, fg, bg }] : [];
   });
+}
 
+/** The palette as it stands for this build — the sage the token file ships. */
+const DEFAULT_PALETTE = color as unknown as Record<string, string>;
+
+/**
+ * The palette a rebranded salon actually gets: the three white-labelled entries
+ * replaced by `deriveBrandSet`'s output, everything else left alone — which is
+ * exactly what `./brand` writes and exactly what `generate.ts:42` white-labels.
+ * `brandDeeper` and `brandTint2` deliberately stay sage here, so the cross-hue
+ * pairs a rebrand creates are inside the scan rather than excluded from it.
+ */
+function rebranded(hex: string): Record<string, string> {
+  const result = deriveBrandSet(hex);
+  if (!result.ok) throw new Error(`${hex} is not viable: ${result.reason}`);
+  return {
+    ...DEFAULT_PALETTE,
+    brand: result.set.brand,
+    brandDeep: result.set.deep,
+    brandTint: result.set.tint,
+  };
+}
+
+/** The three shipped demo salons, by the hex a salon row carries. */
+const TENANTS: Array<[string, Record<string, string>]> = [
+  ['the shipped sage default', DEFAULT_PALETTE],
+  ['Amara sage #6E7F6C, derived', rebranded('#6E7F6C')],
+  ['Noor rose #B08D8D, derived', rebranded('#B08D8D')],
+  ['Lila lilac #8A7CB0, derived', rebranded('#8A7CB0')],
+];
+
+describe('every foreground/background pair stated in one style entry clears AA', () => {
   /**
    * Guards the scan itself. If a refactor moves every colour out of StyleSheet
    * objects this suite would pass by finding nothing — the failure mode
@@ -184,13 +225,37 @@ describe('every foreground/background pair stated in one style entry clears AA',
    * asserted as a floor, not an equality, so adding pairs does not fail it.
    */
   it('found pairs to check at all', () => {
-    expect(resolved.length).toBeGreaterThanOrEqual(3);
+    expect(resolvePairs(DEFAULT_PALETTE).length).toBeGreaterThanOrEqual(3);
   });
 
-  it('and all of them clear AA', () => {
-    const failures = resolved
-      .filter(({ fg, bg }) => contrastRatio(fg, bg) < AA_NORMAL_TEXT)
-      .map(({ file, fgRaw, bgRaw, fg, bg }) => `${file}: ${fgRaw} on ${bgRaw} = ${contrastRatio(fg, bg).toFixed(2)}:1`);
-    expect(failures).toEqual([]);
+  /**
+   * AND IT CLEARS AA FOR EVERY TENANT, not just for the build's own colour.
+   * White-labelling means the same source resolves to a different palette per
+   * salon, so #9's guarantee has to be a property of the SOURCE under any viable
+   * hex — and the only reason it can be checked exhaustively at all is that the
+   * shared package refuses a hex whose derived set cannot carry white.
+   */
+  for (const [label, palette] of TENANTS) {
+    it(`and all of them clear AA under ${label}`, () => {
+      const failures = resolvePairs(palette)
+        .filter(({ fg, bg }) => contrastRatio(fg, bg) < AA_NORMAL_TEXT)
+        .map(({ file, fgRaw, bgRaw, fg, bg }) => `${file}: ${fgRaw} on ${bgRaw} = ${contrastRatio(fg, bg).toFixed(2)}:1`);
+      expect(failures).toEqual([]);
+    });
+  }
+
+  /**
+   * The two source scans above — "never sets a text colour in the same entry as a
+   * brand fill" and "never pairs a white foreground with any brand-family
+   * background" — are palette-INDEPENDENT: they match identifiers, not values, so
+   * they already hold for every tenant. This asserts the property that makes that
+   * true rather than leaving it as a claim in a comment: no viable brand hex can
+   * make white legible on `brand`, so the rule can never become optional.
+   */
+  it('and no viable brand hex ever makes white legible on `brand`', () => {
+    const legible = TENANTS.filter(
+      ([, palette]) => contrastRatio(WHITE, palette.brand as string) >= AA_NORMAL_TEXT,
+    ).map(([label]) => label);
+    expect(legible).toEqual([]);
   });
 });

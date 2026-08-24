@@ -24,6 +24,20 @@
 
 import type { TextStyle } from 'react-native';
 import { theme } from '@avo/tokens/native';
+import { seal } from './sealed';
+
+/**
+ * From here on the palette is fixed for the life of the process.
+ *
+ * `onBrandFill` and `FOCUS_RING_LIGHT` below read `color.brandDeep` and
+ * `color.brand` at module scope, and every screen's `StyleSheet.create` reads the
+ * brand tokens the same way, so this module is the first consumer of the palette
+ * by construction. A salon's hex has to be applied before this line runs; after
+ * it, applying one would theme only the modules not yet evaluated. `./sealed`
+ * carries the full argument, and `./brand` refuses -- loudly -- once this has
+ * fired.
+ */
+seal();
 
 export { theme };
 export const color = theme.color;
@@ -73,8 +87,24 @@ export const dark = {
   */
 } as const;
 
-/** interaction-spec.md §2 — the focus ring on a light surface. */
-export const FOCUS_RING_LIGHT = color.brand;
+/**
+ * interaction-spec.md §2 — the focus ring on a light surface.
+ *
+ * `brandDeep`, NOT `brand`, and the deviation is the same one the generated
+ * stylesheet already makes for the web `:focus-visible` rule. §2 writes the ring
+ * as the literal `2px solid #6E7F6C`, i.e. the Amara `brand` value. A focus
+ * indicator is a non-text graphic, so WCAG 1.4.11 asks 3:1 against the adjacent
+ * surface, and measured against `surface` (#FBFAF8) `brand` gives 4.10:1 on
+ * Amara, 3.60:1 on Lila lilac and 2.86:1 on Noor rose — a FAIL. The derived
+ * `deep` gives 5.49 / 5.74 / 5.66.
+ *
+ * packages/tokens' own words for this: "Same class of bug as non-negotiable #9 —
+ * a value that holds for the default preset and breaks the white-label promise."
+ * It was latent here while the palette was always sage; `./brand` applying a
+ * tenant's hex is what makes it reachable, so it is fixed in the same change.
+ * `contrast.test.ts` asserts the 3:1 floor for every shipped preset.
+ */
+export const FOCUS_RING_LIGHT = color.brandDeep;
 
 // -------------------------------------------------------------------- type --
 

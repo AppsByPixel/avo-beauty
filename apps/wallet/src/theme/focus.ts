@@ -51,7 +51,24 @@ export function installFocusRing(): void {
   style.id = STYLE_ID;
   style.textContent = [
     '[data-avo-focus="ring"]{outline:none}',
-    `[data-avo-focus="ring"]:focus-visible{outline:2px solid ${color.brand};outline-offset:2px}`,
+    /*
+      `brandDeep`, NOT `brand`, and this is a deviation from the spec's literal
+      with the same standing as the one packages/tokens already makes on the web.
+
+      interaction-spec.md §2 writes the ring as `2px solid #6E7F6C`, which is the
+      Amara `brand` value. A focus indicator is a non-text graphic, so WCAG 1.4.11
+      asks 3:1 against the adjacent surface — and measured against `surface`
+      (#FBFAF8), `brand` gives 4.10:1 on Amara, 3.60:1 on Lila lilac and 2.86:1 on
+      Noor rose, which FAILS. The derived `deep` gives 5.49 / 5.74 / 5.66. The
+      generated stylesheet already reached this conclusion and says so in the
+      `:focus-visible` block: "Same class of bug as non-negotiable #9 — a value
+      that holds for the default preset and breaks the white-label promise."
+
+      Until this app read `salon.brandColor` the palette was always Amara sage and
+      `brand` passed, so the bug was latent. Applying a tenant's hex is exactly
+      what makes it reachable, which is why it is fixed in the same change.
+    */
+    `[data-avo-focus="ring"]:focus-visible{outline:2px solid ${color.brandDeep};outline-offset:2px}`,
   ].join('\n');
   document.head.appendChild(style);
 }

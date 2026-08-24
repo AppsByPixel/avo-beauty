@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, type FailureKind } from '../api/client';
 import { getMember, getPromotions, getSalon, getTransactions } from '../api/wallet';
 import { readSnapshot, writeSnapshot, type WalletSnapshot } from './cache';
+import { cacheBrandColor } from './brandCache';
 
 export type HomeStatus = 'loading' | 'ready' | 'stale' | 'offline' | 'error' | 'blocked';
 
@@ -108,6 +109,15 @@ export function useWalletHome(): HomeState & { retry: () => void } {
       if (!mountedRef.current || controller.signal.aborted) return;
       const fetchedAt = Date.now();
       void writeSnapshot(snapshot, fetchedAt);
+      /*
+        The one place in the app that learns the salon's brand hex, so the one
+        place that remembers it. It cannot be applied now — a React Native
+        stylesheet copies its colours when its module is evaluated, which happened
+        long before this line — so it is written for the NEXT launch, where
+        `Boot.tsx` reads it back and sets the palette before anything is
+        evaluated. See src/theme/brand.ts and src/theme/sealed.ts.
+      */
+      void cacheBrandColor(snapshot.salon.brandColor);
       setState({
         status: 'ready',
         snapshot,
