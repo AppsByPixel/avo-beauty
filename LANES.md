@@ -248,6 +248,27 @@ looking like a flaky suite.
 Record your own PIDs when you start something and kill those. If you genuinely cannot, scope
 the pattern to your own worktree path and say in your report what you killed.
 
+### A green `test` is not a green package — the mirror of the typecheck lesson
+
+RUNBOOK.md and the verification handoff both warn that **a green `turbo run typecheck` is not
+evidence for a `packages/types` change**: four shared-package changes passed `tsc` and broke a
+mock fixture, a dashboard interface and a wallet test fixture, all runtime shape.
+
+Lane B hit the same wall from the other side. `pnpm run test` was **green** while the package's
+`typecheck` was **red** — a helper typed as `typeof BRANCHES` inferred `nameAr: string` and
+rejected a deliberate null fixture. A test-only run would have shipped it; only running both
+tasks caught it.
+
+So the rule is symmetric, and neither half substitutes for the other:
+
+```bash
+pnpm --dir=<absolute-pkg> run typecheck && pnpm --dir=<absolute-pkg> exec vitest run
+```
+
+Run **both** before reporting a slice green, and `pnpm check` after any shared-package change.
+"Tests pass" and "it compiles" are two different claims, and this repo has now been wrong about
+each of them while holding the other.
+
 ### Build freshness — `--dir` alone does not rebuild
 
 The two rules above interact, and the interaction is silent.
