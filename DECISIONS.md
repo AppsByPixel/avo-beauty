@@ -52,7 +52,17 @@ I listed four endpoints as built. **Two exist.** `GET /v1/platform/support` and
 `POST /v1/support/tickets`, both in `api/src/routes/platform.ts`. Specified in
 `api-contract.md` §§ 555–586 and implemented nowhere: `PATCH /v1/platform/support/channels`,
 `POST /v1/platform/support/topics`, `PATCH /v1/platform/support/topics/{id}`,
-`GET /v1/support/tickets?route=&status=`, `PATCH /v1/support/tickets/{id}`.
+**`DELETE /v1/platform/support/topics/{id}`**, `GET /v1/support/tickets?route=&status=`,
+`PATCH /v1/support/tickets/{id}`.
+
+**CORRECTED TWICE, BOTH BY LANE D, BOTH INSIDE THIS ENTRY.** It is **six** missing, not five —
+I omitted the `DELETE`, which the contract writes as `DELETE/v1/…` with no space, and which Lane
+D found by **computing** the difference between the contract's list and the route registrations
+rather than reading either. That method would have caught all five of my errors this session.
+
+And this entry originally said the endpoint *"refuses a client-supplied route"*. **It ignores
+it** — `platform.ts:707` says so in those words, and ignoring is the right behaviour. So the
+entry about doc/code drift contained doc/code drift. Lane D caught that too.
 
 So **every editor and the entire ticket queue have no endpoint.** Lane D caught the premise
 before it wrote anything; all three lanes were then interrupted for unrelated reasons, which is
