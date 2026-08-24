@@ -55,6 +55,7 @@ const SECTION_SCREENS = [
   'console/Approvals.tsx',
   'console/Controls.tsx',
   'console/Policies.tsx',
+  'console/Salons.tsx',
   /**
    * IN THIS LIST, NOT THE SUBVIEW ONE, and the census itself made the point: the
    * first run of this file classed Campaigns as a pure subview and FAILED — it
@@ -200,9 +201,23 @@ describe('a pending screen does not announce a zero it is not painting', () => {
    * does the same. `?? 0` may exist — it is the fallback AFTER data lands — but
    * the caption must not interpolate a total unguarded.
    */
+  /**
+   * WHITESPACE-NORMALISED, AND THAT IS A CORRECTION THIS PIN EARNED. It used to
+   * match the literal `isPending ? ''`, and it FAILED on a change that did not
+   * touch the guarantee at all: making the caption say "1 entry" instead of "1
+   * entries" pushed the ternary onto three lines, and the pin broke while the
+   * guard it protects was still exactly there.
+   *
+   * A source-scanning test that asserts on a SPELLING fails on formatting and
+   * passes on a rewrite that keeps the words — which is the wrong way round, and
+   * the house rule ("assert on the thing, not the string") applied to the census
+   * itself. Collapsing whitespace keeps it strict about the construct and blind to
+   * the line breaks: deleting the guard, or interpolating `total` unguarded, still
+   * fails.
+   */
   it.each(['AuditLog.tsx', 'console/Audit.tsx'])('%s guards its caption count', (name) => {
     const src = read(name);
     const caption = src.slice(src.indexOf('<caption'), src.indexOf('</caption>'));
-    expect(caption).toContain("isPending ? ''");
+    expect(caption.replace(/\s+/g, '')).toContain("isPending?''");
   });
 });

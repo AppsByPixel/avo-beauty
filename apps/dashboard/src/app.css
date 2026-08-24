@@ -1879,6 +1879,15 @@ a:hover {
   flex-wrap: wrap;
 }
 
+/*
+ * The `?salon=` picker. Sits with the chip because they are one axis — see the
+ * comment at the control. `max-width` so a long salon name cannot push the count
+ * off the row on a tablet.
+ */
+.audit__salon {
+  max-width: 190px;
+}
+
 .audit__count {
   margin-left: auto;
   font-size: 12.5px;
@@ -3963,4 +3972,168 @@ a:hover {
 /* A refused card is quieted, not hidden — the refusal is the content. */
 .reports__card[data-refused] {
   background: var(--avo-surface-alt);
+}
+
+/* ================================================== console · salons list == */
+
+.salons {
+  max-width: 960px;
+}
+
+.salons__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 14px;
+  flex-wrap: wrap;
+}
+
+.salons__search {
+  flex: 1;
+  max-width: 340px;
+  border-radius: 11px;
+  padding: 11px 14px;
+}
+
+.salons__count {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.salons__card {
+  overflow: hidden;
+}
+
+/* interaction-spec.md §1: data tables scroll, they never drop columns. */
+.salons__scroll {
+  overflow-x: auto;
+}
+
+.salons__table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.salons__table thead th {
+  background: var(--avo-surface-alt);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 22px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.salons__table tbody td {
+  padding: 15px 22px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: middle;
+}
+
+.salons__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.salons__name {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.salons__initial {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 15px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.salons__salon {
+  display: block;
+  font-weight: 600;
+}
+
+/*
+ * The id under the name. It is not decoration: the audit log renders `salonId`
+ * and the `?salon=` picker is keyed by it, so this is the column that lets an
+ * admin carry an id between the two screens.
+ */
+.salons__id {
+  display: block;
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  margin-top: 1px;
+}
+
+/*
+ * The plan badge, on the plan tokens. `--avo-plan-starter-text` is the only one
+ * of the three that is a translucent ink rather than a hue, which is the design's
+ * own choice: Starter is the quiet one.
+ */
+.salons__plan {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.salons__plan[data-plan='pro'] {
+  background: var(--avo-plan-pro-bg);
+  color: var(--avo-plan-pro-text);
+}
+
+.salons__plan[data-plan='growth'] {
+  background: var(--avo-plan-growth-bg);
+  color: var(--avo-plan-growth-text);
+}
+
+.salons__plan[data-plan='starter'] {
+  background: var(--avo-plan-starter-bg);
+  color: var(--avo-plan-starter-text);
+}
+
+/* Counts in the display face, as the design sets `membersStr`. */
+.salons__num {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.salons__loyalty {
+  color: var(--avo-text-muted-label);
+}
+
+.salons__empty {
+  padding: 34px 22px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.salons__more {
+  margin-top: 14px;
+}
+
+.salons__foot {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.5;
+  max-width: 680px;
 }

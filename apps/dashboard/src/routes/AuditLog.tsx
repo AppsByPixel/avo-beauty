@@ -67,18 +67,23 @@ export const KIND_TONE: Record<AuditKind, PillTone> = {
  * "No entries match that search" — and there was no search. On an audit log,
  * "no entries" against a misnamed filter misreports what was looked for.
  *
- * `scoped` is the console's `?salon=platform`; the merchant read has no scope
- * axis and passes false.
+ * `scope` is the console's `?salon=` axis, given as the PHRASE that names it —
+ * "AVO platform actions" for the `platform` literal, or a salon's own name now
+ * that the `?salon=SAL-…` picker can resolve one. A phrase rather than a boolean
+ * because the axis stopped being binary when the picker landed: "No Money entries
+ * yet" under a salon filter misreports what was looked for in exactly the way
+ * this function exists to prevent. The merchant read has no scope axis and passes
+ * null.
  */
 export function auditEmptyLine(
   query: string,
   kind: AuditKind | null,
-  scoped: boolean,
+  scope: string | null,
 ): string {
   const what = kind ? `${KIND_LABEL[kind]} entries` : 'entries';
-  const from = scoped ? ' from AVO platform actions' : '';
+  const from = scope === null ? '' : ` from ${scope}`;
   if (query.trim() !== '') return `No ${what}${from} match “${query.trim()}”.`;
-  if (kind || scoped) return `No ${what}${from} yet.`;
+  if (kind || scope !== null) return `No ${what}${from} yet.`;
   return 'No entries match that search.';
 }
 
@@ -177,7 +182,9 @@ export function AuditLog() {
             */}
             <caption className="avo-sr-only">
               Audit log, newest first.
-              {log.isPending ? '' : ` ${total} entries match the current filter.`}
+              {log.isPending
+                ? ''
+                : ` ${total} ${total === 1 ? 'entry matches' : 'entries match'} the current filter.`}
             </caption>
             <thead>
               <tr>
@@ -203,7 +210,7 @@ export function AuditLog() {
                 <tr>
                   <td colSpan={5} className="audit__empty">
                     {query || kind ? (
-                      auditEmptyLine(query, kind, false)
+                      auditEmptyLine(query, kind, null)
                     ) : (
                       <EmptyState
                         title="Nothing recorded yet"

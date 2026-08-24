@@ -60,10 +60,38 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     id: 'salons',
     label: 'Salons',
     to: '/console/salons',
-    built: false,
-    section: 'salons',
+    built: true,
+    /**
+     * `analytics`, NOT `salons`, AND IT IS NOT A TYPO.
+     *
+     * This field means "the section the SERVER gates this with", and the only
+     * endpoint behind this item — `GET /v1/platform/salons` — is
+     * `requirePlatform(req, 'analytics')` (platformConsole.ts:156). Naming
+     * `salons` here would make the sidebar and the API disagree in both
+     * directions at once: an analyst who CAN read the list would not be offered
+     * it, and a `support` admin who cannot would be offered a link that 403s.
+     *
+     * Driven against the real API rather than reasoned about — the `support`
+     * preset holds `salons: true, analytics: false`, and its list read answers
+     * 403 "Your console account cannot open Analytics." The gate lives in `api/`
+     * and the mismatch is reported to trunk; until it moves, the courtesy follows
+     * the server, because a courtesy that contradicts the enforcement is not a
+     * courtesy.
+     *
+     * When the per-salon editor and the onboarding wizard land they will be gated
+     * on `salons`, and this item will need splitting or the list regating. Written
+     * down so that is a decision and not a discovery.
+     */
+    section: 'analytics',
     title: 'Salons',
-    subtitle: 'Open a salon to edit its setup and loyalty',
+    /*
+     * The design's own subtitle is "Open a salon to edit its setup and loyalty"
+     * (`AVO Owner Console.dc.html:1144`), and there is no endpoint a console
+     * admin can use to open one — see `routes/console/Salons.tsx`. A header that
+     * offers the editor above a screen that has none is the same false claim as a
+     * Manage button, so it carries the design's other true sentence instead.
+     */
+    subtitle: 'Every salon on AVO',
     icon: (
       <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
         <path d="M3 17V8l7-4 7 4v9" {...stroke} strokeLinejoin="round" />
