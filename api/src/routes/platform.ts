@@ -22,6 +22,8 @@ import {
   requireSameSalon,
 } from '../auth/principal';
 import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
+/** One definition of "HH:MM" for the whole API — see http/fields.ts. */
+import { HHMM, HHMM_OR_END_OF_DAY } from '../http/fields';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { db } from '../db/client';
@@ -41,10 +43,6 @@ import {
   readPromotionSet,
   serialiseHappyHour,
 } from '../services/promotions';
-
-/** "10:00"..."23:59", plus "24:00" on `to` only — see db/schema/promotion.ts. */
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-const HHMM_OR_END_OF_DAY = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
 
 function happyHourId(): string {
   return `HH-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;

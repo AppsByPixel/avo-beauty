@@ -2,8 +2,10 @@
  * The owner console's three remaining sections — Analytics, Controls, Audit.
  *
  *   GET   /v1/platform/metrics    analytics   "How AVO is performing across every salon"
- *   GET   /v1/platform/salons     analytics   every salon, as facts that exist
+ *   GET   /v1/platform/salons     salons      every salon, as facts that exist
  *   POST  /v1/platform/salons     salons      the onboarding wizard's write
+ *   GET   /v1/platform/salons/{id} salons      the per-salon editor's read
+ *   PATCH /v1/platform/salons/{id} salons     the per-salon editor's write
  *   GET   /v1/platform/settings   controls    "Every platform switch, fee and default"
  *   PATCH /v1/platform/settings   controls
  *   GET   /v1/platform/audit      audit       the platform-wide log
@@ -59,6 +61,13 @@ import {
 } from '../services/idempotency';
 import { computePlatformMetrics } from '../services/platformMetrics';
 import { mintSalonId, onboardSalon, parseOnboardInput } from '../services/salonOnboarding';
+import {
+  buildSalonPatch,
+  loadSalon,
+  openBranchesOf,
+  PLATFORM_EDITABLE,
+  serialiseSalon,
+} from './salons';
 import {
   CARD_PERCENT_STEP_BP,
   FLAG_COLUMN,
@@ -145,17 +154,51 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
    *     row nobody supplied one for. `branchCount` stays: a salon's city and the
    *     number of places it has chairs were never the same fact.
    *
-   * GATED `analytics`, ARGUED RATHER THAN DEFAULTED — this is the one console
-   * read where the gate-with-the-screen rule pulls two ways (the list is drawn
-   * in Salons, the picker lives in Audit). The tiebreak is what the section
-   * already reveals: `/v1/platform/metrics`, gated `analytics`, serves a
-   * top-five salon list WITH NAMES AND MONEY FIGURES — so id, name and counts
-   * are already `analytics`-visible facts, and gating this list the same way
-   * widens nothing while unblocking the picker for every preset (each one holds
-   * `analytics`). The Salons MANAGEMENT screen — modules, deposit, the suspend
-   * that does not exist yet — is a different endpoint and takes `salons` when it
-   * is built; authority to SEE the platform's salons and authority to CHANGE one
-   * were never the same thing.
+   * ======================= GATED `salons`, AND WHY IT MOVED =======================
+   * IT WAS `analytics`, AND THAT WAS WRONG. I wrote the original gate and the
+   * argument for it, so this correction is mine to record rather than to soften.
+   *
+   * The old reasoning: `/v1/platform/metrics` is gated `analytics` and already
+   * serves a top-five salon list with names and money figures, so gating this
+   * list the same way "widens nothing" and unblocks the Audit picker "for every
+   * preset (each one holds `analytics`)".
+   *
+   * TWO FAULTS IN ONE PARAGRAPH.
+   *
+   *   - THE PARENTHESIS WAS SIMPLY FALSE. `PLATFORM_ROLE_PRESETS.support` is
+   *     `{ analytics: false, salons: true }` — from the design's own preset copy,
+   *     "Support — accounts & salons". So the role whose job is customers, and
+   *     which explicitly HOLDS `salons`, could not list salons, while `analyst`
+   *     (`analytics: true, salons: false`) read the whole tenant list fine. The
+   *     gate and the section name pointed at different people. Lane C hit the
+   *     403; trunk verified the preset table rather than taking the report.
+   *   - AND THE ARGUMENT PROVED THE WRONG THING. "Metrics already reveals this,
+   *     so `analytics` widens nothing" is a sound argument that `analytics` is
+   *     ACCEPTABLE. It is not an argument that it is CORRECT. `salons` is what
+   *     "may see the platform's salons" means, and it widens nothing either:
+   *     owner, admin and support all hold it.
+   *
+   * WHAT THE MOVE COSTS: the analyst loses the tenant list and keeps metrics,
+   * which already names its top five salons — so nothing it needs disappears. The
+   * Audit picker's only consumers are owner and admin, both of whom hold `salons`,
+   * so the unblock this endpoint was written for survives the regate.
+   *
+   * THE COMMENT IS THE POINT, not just the gate. A false premise stated
+   * confidently in a header is how the mis-gating survived review, and trunk then
+   * propagated the same sentence into another brief before checking it. Fourth
+   * instance of the wrong-comment class in this build — the others being
+   * `salon.brandColor`'s claimed `deriveBrandSet` validation, the
+   * `PATCH /v1/platform/settings` body shape, and "CSV export has landed" as a
+   * proxy for a gate condition. The lesson each time is the same one: a comment
+   * that asserts a fact about another file has to be re-read against that file,
+   * because the comment is what the next reader trusts instead of looking.
+   *
+   * The READ and the WRITE are now the same authority, which is the honest
+   * outcome: `GET`, `POST` and `GET`/`PATCH /v1/platform/salons/{id}` all take
+   * `salons`. Seeing the platform's salons and changing one are still different
+   * ACTS — that half of the old comment was right — but they are not different
+   * SECTIONS, because the design draws one sidebar entry for both and the presets
+   * hand out one chip for it.
    *
    * MEMBER COUNT COUNTS TOMBSTONES, deliberately: an erased member's row still
    * exists so the books resolve, and "members" here is "wallets on the books",
@@ -170,7 +213,7 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
   app.get<{ Querystring: { limit?: string; cursor?: string } }>(
     '/v1/platform/salons',
     async (req, reply) => {
-      requirePlatform(req, 'analytics');
+      requirePlatform(req, 'salons');
 
       const rawLimit = req.query.limit === undefined ? 50 : Number(req.query.limit);
       if (!Number.isInteger(rawLimit) || rawLimit < 1 || rawLimit > 100) {
@@ -210,6 +253,120 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
       });
     },
   );
+
+  // ====================================================================
+  // THE PER-SALON EDITOR — `GET` / `PATCH /v1/platform/salons/{id}`
+  // ====================================================================
+  /**
+   * The screen `design/README.md` § Owner Console calls "list → per-salon editor:
+   * modules, deposit, loyalty structure with tier thresholds/bonuses or stamp
+   * target, branches".
+   *
+   * THE DEFECT THESE CLOSE: a guard pointing at a screen with no remedy. Lane C
+   * drove all three doors and every one of them refused a platform admin —
+   * `GET /salons/:id` 403 "Open it from the console's Salons section",
+   * `PATCH /salons/:id` 403 "for salon staff", and `GET /v1/platform/salons/:id`
+   * 404 because nothing was registered. So the merchant route's refusal named a
+   * console section that could not do the thing it was named for, and nothing in
+   * `api/src/routes` was gated on `salons` for a read at all. Lane C drew no
+   * Manage button rather than ship a control that only 403s, which was right and
+   * is also why this was invisible from the UI.
+   *
+   * A CONTRACT ADDITION, reported: `api-contract.md` names neither, the way it
+   * named neither `POST /v1/platform/salons` nor the four admin routes.
+   *
+   * ============= THE FIELD SET IS THE MERCHANT'S, PLUS TWO =============
+   * `PATCH /salons/{id}` has accepted modules, deposit and the whole loyalty
+   * shape since it was written, so this route calls the SAME translator —
+   * `buildSalonPatch` in `routes/salons.ts` — with `PLATFORM_EDITABLE` instead of
+   * the merchant set. The only difference is two fields: `city` and `ownerPhone`,
+   * which arrived with the wizard and had exactly one door until now, creation.
+   *
+   * That is a superset, not a parallel set, and the distinction is the one the
+   * `modules` comment in that file draws: two spellings of one field is how the
+   * tier ladder acquired an unvalidated second entrance, and the console's copy
+   * would have been the one nobody was watching. Every guard the merchant door
+   * has — `deriveBrandSet` on the hex, the deposit range, `parseTimeZone`,
+   * `parseBusinessHours`, the four-rung ladder — applies here because it is
+   * literally the same function.
+   *
+   * `plan` is in NEITHER set. It prices the account, the design puts per-salon
+   * plan and fee in BILLING, and Billing has no API behind it. Reported.
+   *
+   * ============= WHY THERE IS AN ENVELOPE =============
+   * `{ salon, ownerPhone }` rather than the salon shape with one more key on it.
+   * `ownerPhone` is not part of `serialiseSalon` on purpose — `GET /salons/{id}`
+   * is readable by any authenticated principal of the salon, members included, and
+   * the owner's personal number is not a customer-facing fact. Putting it at the
+   * top level of a Salon-shaped body would also mean a client parsing through
+   * `SalonSchema` silently strips it, which is the argument
+   * `POST /v1/platform/salons` makes for its own envelope.
+   *
+   * NOT KEYED FOR IDEMPOTENCY, and this is the `PATCH /v1/platform/settings`
+   * reasoning rather than an omission: it sets fields to absolute values, so a
+   * replay produces the same row. There is no second application to prevent. What
+   * a retry can do is overwrite a concurrent edit, which is a lost update rather
+   * than a double-spend — the same exposure the merchant's own PATCH has carried
+   * since it was written, and the same one this note records there.
+   */
+  app.get<{ Params: { id: string } }>('/v1/platform/salons/:id', async (req, reply) => {
+    requirePlatform(req, 'salons');
+
+    const s = await loadSalon(req.params.id);
+    return reply.send({
+      salon: serialiseSalon(s, await openBranchesOf(s.id)),
+      /** The owner contact. Console-only — see the header. */
+      ownerPhone: s.ownerPhone,
+    });
+  });
+
+  app.patch<{ Params: { id: string } }>('/v1/platform/salons/:id', async (req, reply) => {
+    const p = requirePlatform(req, 'salons');
+
+    const before = await loadSalon(req.params.id);
+    const { patch, keys } = buildSalonPatch(
+      (req.body ?? {}) as Record<string, unknown>,
+      before,
+      PLATFORM_EDITABLE,
+    );
+
+    const [after] = await db
+      .update(salon)
+      .set(patch)
+      .where(eq(salon.id, req.params.id))
+      .returning();
+    if (!after) throw notFound('unknown_salon', 'No such salon.');
+
+    /**
+     * THE SAME `action` AS THE MERCHANT DOOR, and `source` is what separates
+     * them. The design's audit log renders Who / What / Detail / Source as four
+     * columns and filters on kind, so an AVO edit and a merchant edit of the same
+     * field should read as the same ACT by different actors — inventing a second
+     * action string would split one thing across two rows of a table somebody
+     * scans for "who changed the deposit".
+     *
+     * `salonId` is the TARGET salon, not null. A platform admin has no salon of
+     * her own, and an AVO action on a salon belongs in that salon's log —
+     * `seed.ts` § the platform-actor rows argues this at length.
+     */
+    await writeAudit(db, p, {
+      salonId: after.id,
+      kind: 'rules',
+      action: 'Salon settings changed',
+      detail: `Changed by AVO: ${keys.join(', ')}`,
+      source: 'owner_console',
+      subjectType: 'salon',
+      subjectId: after.id,
+      metadata: { changed: keys },
+      ipAddress: req.ip ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    });
+
+    return reply.send({
+      salon: serialiseSalon(after, await openBranchesOf(after.id)),
+      ownerPhone: after.ownerPhone,
+    });
+  });
 
   // ====================================================================
   // ONBOARD A SALON — `POST /v1/platform/salons`

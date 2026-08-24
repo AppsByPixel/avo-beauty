@@ -39,6 +39,7 @@ import {
   requireSameSalon,
 } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
+import { parseBusinessHours, parseE164 } from '../http/fields';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { parseBrandColor } from '../services/brandColor';
@@ -53,7 +54,7 @@ import { loyaltyConfigOf } from './loyalty';
 const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
-const EDITABLE = new Set([
+const MERCHANT_EDITABLE = new Set([
   'name',
   /**
    * `{ booking, shop }` — the shape `GET /salons/{id}` serves and the shape
@@ -104,6 +105,45 @@ const EDITABLE = new Set([
   'businessHours',
   'social',
   'whatsappEnabled',
+]);
+
+/**
+ * The two fields ONLY AVO SETS, and the reason they are not in the set above.
+ *
+ * `city` and `ownerPhone` arrived with the onboarding wizard (migration 0037) and
+ * until now had exactly one door: creation. A salon that moves, or an owner whose
+ * number changes, had no way to correct either — and a field the API serves but
+ * nothing can ever set is the half-implemented state `nameAr`'s comment above
+ * describes.
+ *
+ * THEY ARE ACCOUNT FACTS, NOT SETTINGS. `city` is the registered location AVO
+ * bills and reports against; `ownerPhone` is the number AVO calls and the
+ * destination of the owner's invite. A salon changing either about itself is the
+ * account changing, which is the console's business — the same line the design
+ * draws by rendering both read-only in the editor header while making modules,
+ * deposit and loyalty editable there.
+ *
+ * `plan` IS DELIBERATELY IN NEITHER SET. It prices the account, the design puts
+ * per-salon plan and fee in the BILLING section, and Billing has no API behind it
+ * at all. Adding a plan write here would be inventing the cheap half of a
+ * subscription model. Reported, not built.
+ */
+const PLATFORM_ONLY_EDITABLE = new Set(['city', 'ownerPhone']);
+
+/**
+ * What `PATCH /v1/platform/salons/{id}` accepts: everything a merchant may edit,
+ * plus the two above.
+ *
+ * A SUPERSET, NOT A PARALLEL SET, and that is the whole point. The console's
+ * editor draws "modules, deposit, loyalty structure with tier thresholds/bonuses
+ * or stamp target, branches" — fields `PATCH /salons/{id}` has accepted since it
+ * was written. Giving the console its own spelling of them would be the second
+ * door the `modules` comment above refuses, and the console's copy is the one
+ * nobody would be watching.
+ */
+export const PLATFORM_EDITABLE: ReadonlySet<string> = new Set([
+  ...MERCHANT_EDITABLE,
+  ...PLATFORM_ONLY_EDITABLE,
 ]);
 
 /**
@@ -359,8 +399,16 @@ export function openBranchesOf(salonId: string) {
     .orderBy(branch.id);
 }
 
-/** Read the salon or 404. Used by every handler in this file that writes one. */
-async function loadSalon(id: string): Promise<typeof salon.$inferSelect> {
+/**
+ * Read the salon or 404. Used by every handler in this file that writes one, and
+ * by `GET`/`PATCH /v1/platform/salons/{id}`.
+ *
+ * A PLAIN 404 IS RIGHT FOR BOTH CALLERS, for different reasons that happen to
+ * agree: a merchant has already been through `requireSameSalon`, so by the time
+ * she is here the id is her own; and a platform admin reads across salons by
+ * design, so there is no tenancy fact for a 404-vs-403 distinction to leak.
+ */
+export async function loadSalon(id: string): Promise<typeof salon.$inferSelect> {
   const rows = await db.select().from(salon).where(eq(salon.id, id)).limit(1);
   const s = rows[0];
   if (!s) throw notFound('unknown_salon', 'No such salon.');
@@ -406,6 +454,129 @@ function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent:
   };
 }
 
+/**
+ * THE SALON PATCH BODY — one translator, two gates.
+ *
+ * This was inline in `PATCH /salons/{id}` until `PATCH /v1/platform/salons/{id}`
+ * needed the same thing. It is a function rather than a copy for the reason this
+ * file already gives twice: the tier ladder acquired an unvalidated second
+ * entrance exactly this way, and the console's copy would have been the one
+ * nobody was watching. `editable` is the ONLY difference between the two callers
+ * — the merchant set, or that set plus `city` and `ownerPhone`.
+ *
+ * It returns the patch and the key list rather than performing the UPDATE,
+ * because the two callers write different audit rows (`merchant` vs
+ * `owner_console`) against different principals, and the salon id comes from the
+ * URL either way.
+ */
+export function buildSalonPatch(
+  body: Record<string, unknown>,
+  before: SalonRow,
+  editable: ReadonlySet<string>,
+): { patch: Record<string, unknown>; keys: string[] } {
+  const keys = Object.keys(body);
+  if (keys.length === 0) throw badRequest('invalid_request', 'Nothing to change.');
+
+  const rejected = keys.filter((k) => !editable.has(k));
+  if (rejected.length > 0) {
+    /**
+     * NAMED, and the message says "here" on purpose. A merchant sending `city`
+     * gets told that field is not editable HERE rather than that it does not
+     * exist — it does, and the console can change it. A field refused with the
+     * wrong reason sends somebody looking for a bug in the wrong place.
+     */
+    throw badRequest('not_editable', `These fields cannot be edited here: ${rejected.join(', ')}.`);
+  }
+
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
+
+  // Refused here, before the UPDATE, so a typo is a 400 naming the tz database
+  // rather than a 500 thrown out of `Intl.DateTimeFormat` inside the next
+  // charge that tries to resolve a happy hour.
+  if ('timezone' in body) patch.timezone = parseTimeZone(body.timezone);
+
+  // Every remaining field whose wire type is not its column type, or whose
+  // range the database states as a CHECK. See the helpers at the top.
+  //
+  // `brandColor` is here rather than left to `salon_brand_color_is_hex`
+  // because that CHECK only asks whether the string is a hex, and #9 asks
+  // whether the hex can carry white text. See services/brandColor.ts.
+  if ('brandColor' in body) patch.brandColor = parseBrandColor(body.brandColor);
+  if ('depositFils' in body) patch.depositFils = parseDepositFils(body.depositFils);
+  if ('noShowReturnMinutes' in body) {
+    patch.noShowReturnMinutes = parseNoShowReturnMinutes(body.noShowReturnMinutes);
+  }
+  /**
+   * THE LAST UNVALIDATED JSONB DOOR ON THIS TABLE, closed.
+   *
+   * `businessHours` was in the editable set from the day this route existed and
+   * nothing checked it, so `{ morning: ["banana", 7] }` was storable — and
+   * `services/availability.ts` then calls `hhmmToMinutes` on it inside
+   * `computeAvailability`, which THROWS. One bad Settings save turned every
+   * availability read for that salon into a 500, on the booking screen, three
+   * screens from the field that was typed wrong. Same shape as `brandColor`, same
+   * reasoning as `timezone` right above. See `http/fields.ts § parseBusinessHours`.
+   */
+  if ('businessHours' in body) {
+    patch.businessHours = parseBusinessHours(body.businessHours);
+  }
+  if ('modules' in body) {
+    // `modules` is a wire shape, not a column. Remove it before the UPDATE or
+    // Drizzle would try to set a column that does not exist.
+    delete patch.modules;
+    applyModules(body.modules, patch);
+  }
+  /**
+   * The two platform-only fields. Unreachable unless the caller passed
+   * `PLATFORM_EDITABLE`, because the allow-list above has already refused them —
+   * but parsed here rather than in the console route, so the ONE translator owns
+   * every field's shape and a future reader does not have to check two files to
+   * know what `ownerPhone` accepts.
+   *
+   * `city` goes through `requireString` and NOT `normaliseArabic`: an empty city
+   * is not a cleared translation, it is a missing fact, and
+   * `salon_city_not_blank` refuses `''` at the database. `ownerPhone` goes
+   * through the same `parseE164` that produced the stored value at onboarding, so
+   * "+965 9912 4408" is accepted with its spaces the way a person types it.
+   */
+  if ('city' in body) patch.city = requireString(body.city, 'city', 120);
+  if ('ownerPhone' in body) patch.ownerPhone = parseE164(body.ownerPhone);
+
+  /**
+   * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.
+   *
+   * `tiers`, `loyaltyMode`, `stampTarget` and the stamp reward copy were in the
+   * editable set since this route was written, and until this guard landed
+   * nothing checked them. Every rule the publish endpoint enforces — four rungs,
+   * Bronze locked at 0/0, each threshold above the one below — could be walked
+   * around by sending the same fields one route over, which makes the validation
+   * decorative: an invalid ladder published through the unguarded door is not a
+   * smaller money bug than one published through the guarded one.
+   *
+   * So the loyalty fields go through the SAME validator
+   * (services/loyaltyRules.ts), and the result replaces them wholesale rather
+   * than being merged key by key. The validator returns a COMPLETE
+   * configuration — it fills in whatever the request did not mention from the
+   * current row — which is what keeps `salon_loyalty_config_complete`
+   * satisfiable when a caller flips `loyaltyMode` and nothing else.
+   *
+   * `PUT /salons/{id}/loyalty` remains the endpoint the editor should use: it
+   * returns the preview and writes the "Tier rules published" audit line. This
+   * is the guard on the general-purpose door, not a second front entrance.
+   */
+  if (keys.some((k) => LOYALTY_FIELDS.has(k))) {
+    const config = parseLoyaltyConfig(body, loyaltyConfigOf(before));
+    patch.loyaltyMode = config.mode;
+    patch.tiers = config.tiers;
+    patch.stampTarget = config.stampTarget;
+    patch.stampReward = config.stampReward;
+    patch.stampRewardAr = config.stampRewardAr;
+  }
+
+  return { patch, keys };
+}
+
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
     const p = requireSalonScoped(req);
@@ -420,74 +591,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     const p = requireDashboardPerm(req, 'loyalty');
     requireSameSalon(p, req.params.id);
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const keys = Object.keys(body);
-    if (keys.length === 0) throw badRequest('invalid_request', 'Nothing to change.');
-
-    const rejected = keys.filter((k) => !EDITABLE.has(k));
-    if (rejected.length > 0) {
-      throw badRequest('not_editable', `These fields cannot be edited here: ${rejected.join(', ')}.`);
-    }
-
     const before = await loadSalon(req.params.id);
-
-    const patch: Record<string, unknown> = { updatedAt: new Date() };
-    for (const k of keys) patch[k] = normaliseArabic(k, body[k]);
-
-    // Refused here, before the UPDATE, so a typo is a 400 naming the tz database
-    // rather than a 500 thrown out of `Intl.DateTimeFormat` inside the next
-    // charge that tries to resolve a happy hour.
-    if ('timezone' in body) patch.timezone = parseTimeZone(body.timezone);
-
-    // Every remaining field whose wire type is not its column type, or whose
-    // range the database states as a CHECK. See the helpers at the top.
-    //
-    // `brandColor` is here rather than left to `salon_brand_color_is_hex`
-    // because that CHECK only asks whether the string is a hex, and #9 asks
-    // whether the hex can carry white text. See services/brandColor.ts.
-    if ('brandColor' in body) patch.brandColor = parseBrandColor(body.brandColor);
-    if ('depositFils' in body) patch.depositFils = parseDepositFils(body.depositFils);
-    if ('noShowReturnMinutes' in body) {
-      patch.noShowReturnMinutes = parseNoShowReturnMinutes(body.noShowReturnMinutes);
-    }
-    if ('modules' in body) {
-      // `modules` is a wire shape, not a column. Remove it before the UPDATE or
-      // Drizzle would try to set a column that does not exist.
-      delete patch.modules;
-      applyModules(body.modules, patch);
-    }
-
-    /**
-     * THE SECOND DOOR INTO THE TIER LADDER, AND WHY IT IS VALIDATED HERE TOO.
-     *
-     * `tiers`, `loyaltyMode`, `stampTarget` and the stamp reward copy have been
-     * in `EDITABLE` since this route was written, and until now nothing checked
-     * them. Every rule the publish endpoint enforces — four rungs, Bronze locked
-     * at 0/0, each threshold above the one below — could be walked around by
-     * sending the same fields one route over, which makes the validation
-     * decorative: an invalid ladder published through the unguarded door is not
-     * a smaller money bug than one published through the guarded one.
-     *
-     * So the loyalty fields go through the SAME validator
-     * (services/loyaltyRules.ts), and the result replaces them wholesale rather
-     * than being merged key by key. The validator returns a COMPLETE
-     * configuration — it fills in whatever the request did not mention from the
-     * current row — which is what keeps `salon_loyalty_config_complete`
-     * satisfiable when a caller flips `loyaltyMode` and nothing else.
-     *
-     * `PUT /salons/{id}/loyalty` remains the endpoint the editor should use: it
-     * returns the preview and writes the "Tier rules published" audit line. This
-     * is the guard on the general-purpose door, not a second front entrance.
-     */
-    const touchesLoyalty = keys.some((k) => LOYALTY_FIELDS.has(k));
-    if (touchesLoyalty) {
-      const config = parseLoyaltyConfig(body, loyaltyConfigOf(before));
-      patch.loyaltyMode = config.mode;
-      patch.tiers = config.tiers;
-      patch.stampTarget = config.stampTarget;
-      patch.stampReward = config.stampReward;
-      patch.stampRewardAr = config.stampRewardAr;
-    }
+    const { patch, keys } = buildSalonPatch(
+      (req.body ?? {}) as Record<string, unknown>,
+      before,
+      MERCHANT_EDITABLE,
+    );
 
     const [after] = await db
       .update(salon)
