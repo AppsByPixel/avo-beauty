@@ -45,10 +45,12 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
-### Support is five endpoints short, and I read that from the contract instead of the routes
+### Support is SIX endpoints short, and I read that from the contract instead of the routes
 
 **What.** Briefing two lanes that the Support panel was "purely unrendered, no API work needed",
-I listed four endpoints as built. **Two exist.** `GET /v1/platform/support` and
+I listed four endpoints as built. **Two exist.** (This heading said "five" until Lane C pointed
+out that the correction had corrected the body and left the title — the most-read line in the
+entry. Third correction to an entry about corrections.) `GET /v1/platform/support` and
 `POST /v1/support/tickets`, both in `api/src/routes/platform.ts`. Specified in
 `api-contract.md` §§ 555–586 and implemented nowhere: `PATCH /v1/platform/support/channels`,
 `POST /v1/platform/support/topics`, `PATCH /v1/platform/support/topics/{id}`,
