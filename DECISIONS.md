@@ -45,6 +45,56 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Three undeclared keys in one round, and the shape of my five wrong claims
+
+**The round.** The owner console went from 7 of 10 sections to 9 of 10: Lane A built the six
+support endpoints (seven, with the `DELETE` I had missed), `GET /v1/platform/activity` and
+`GET /v1/platform/accounts`; Lane C built Support & contact end to end; Lane D asserted the
+predicate boundary and #11 in both directions. **Billing remains blocked on #15** and console
+Reports still needs a `reports` section that `PLATFORM_SECTIONS` does not have.
+
+**Three keys were served first and declared second**, each reaching clients as `undefined`
+because zod **deletes** an undeclared key rather than failing on it: `topic` (the joined label),
+`salonId` (the value the queue's own tenancy predicate is built on), and `total`. Every one was
+found by a probe, none by a client noticing data missing — which is the argument for that census
+existing at all.
+
+`total` got a **new helper rather than an optional field**. `paginated()` is used by the wallet's
+booking and service pages, which do not send a count, so an optional `total` there would tolerate
+a server that forgot it. Lane C then found the concrete case that justifies the split better than
+my reasoning did: its hand-parsed envelope defaulted `total` to `0`, so an API that stopped
+sending the count would render **"Messages · 0" over a list of real messages** — the premature-zero
+class arriving through a defensive *default* rather than a loading state, invisible to census pins
+that guard only the pending path.
+
+**And the audit reads are not probed at all** — both `UNMODELLED`, because no audit schema exists.
+So there is no latent strip there today, but the trap is armed for whoever schemas them next,
+since binding through `paginated()` would delete a `total` both endpoints serve. Lane D wrote
+that into both entries rather than leaving it for someone to rediscover.
+
+### My five wrong claims this round had one cause
+
+`city` unserved; "every preset holds `analytics`"; the backwards-window rule (twice, from two
+directions); console Reports' endpoints; Support's endpoint list (twice — five instead of six, and
+the heading left saying five after the body was fixed); the retired-topic fallback; and "792
+passed" reported to Aftab as a result when it was a **mid-run progress count** from a run that
+never finished.
+
+**Every one was me trusting a representation of state instead of the state.** A contract document
+that says what *should* exist. A comment that describes another file. A partial log. A commit
+message. My own earlier sentence. The build already has this rule pointed at code — *never trust a
+comment, grep the routes* — and I did not point it at the artefacts I was reading.
+
+**The habit, one line:** before telling a lane something exists, run the command that would prove
+it. `grep app\.\(get\|post\|patch\|delete\) api/src/routes/`. Before quoting a run, check it
+has a summary line.
+
+Lane D's framing is better than treating this as a lane-catches-trunk story, and it is the version
+to keep: the same habit that produces the slip catches it when applied, and the durable fix is not
+vigilance but **making the claim executable so it fails by name when it stops being true.** That is
+what the census, the regex-agreement corpus, the overlap precondition and the known-positive
+control all are — and all of them caught something real this round.
+
 ### Support is SIX endpoints short, and I read that from the contract instead of the routes
 
 **What.** Briefing two lanes that the Support panel was "purely unrendered, no API work needed",
