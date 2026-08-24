@@ -96,13 +96,12 @@ import {
   type StaffPrincipal,
 } from '../auth/principal';
 import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
+/** One definition of "HH:MM" for the whole API — see http/fields.ts. */
+import { HHMM } from '../http/fields';
 import { writeAudit } from '../services/audit';
 import { computeAvailability } from '../services/availability';
 import { resolveMerchantNotification } from '../services/notifications';
 import { parseDate } from '../time/zone';
-
-/** "10:00", "23:45". 24-hour, zero-padded, no seconds — the contract's "HH:mm". */
-const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 /** JS `getDay()` order, 0 = Sunday. All seven, always — see `parseWindows`. */
 const DAY_KEYS = ['0', '1', '2', '3', '4', '5', '6'] as const;

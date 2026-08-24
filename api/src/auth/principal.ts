@@ -494,8 +494,16 @@ export function requirePrincipal(req: FastifyRequest): Principal {
  *
  * A platform admin who needs to read a salon's data reads it through a console
  * route gated on the `salons` section, where crossing the tenancy boundary is the
- * declared intent rather than a consequence of an absent field. Those routes are
- * not built yet, and that is reported rather than papered over here.
+ * declared intent rather than a consequence of an absent field.
+ *
+ * THOSE ROUTES NOW EXIST, and this paragraph used to end "not built yet, and that
+ * is reported rather than papered over here". Reported is not the same as
+ * harmless: for as long as it was true, the refusal below pointed a console admin
+ * at a Salons section that had no remedy in it — `GET /salons/:id` 403,
+ * `PATCH /salons/:id` 403, `GET /v1/platform/salons/:id` 404, three doors and no
+ * way in. Lane C drew no Manage button rather than ship a control that only 403s,
+ * which is the only reason nobody hit it. The message is true now:
+ * `GET`/`PATCH /v1/platform/salons/{id}` in `routes/platformConsole.ts`.
  */
 export function requireSalonScoped(req: FastifyRequest): MemberPrincipal | StaffPrincipal {
   const p = requirePrincipal(req);

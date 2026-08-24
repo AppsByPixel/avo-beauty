@@ -80,7 +80,7 @@
  * billing slice, not a column smuggled in with this one.
  */
 
-import { BusinessHoursSchema, formatMoney, type Fils } from '@avo/types';
+import { formatMoney, type Fils } from '@avo/types';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { branch, salon } from '../db/schema/salon';
@@ -95,7 +95,7 @@ import {
   mintPasswordResetToken as mintResetToken,
 } from '../auth/tokens';
 import { badRequest, conflict } from '../http/errors';
-import { parseE164 } from '../http/fields';
+import { parseBusinessHours, parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
 import { parseTimeZone } from '../time/zone';
 import { writeAudit } from './audit';
@@ -336,32 +336,23 @@ function parsePlan(value: unknown): Plan {
 }
 
 /**
- * `businessHours`, validated through the SHARED schema rather than a local one.
+ * `businessHours` — the default when the wizard is silent, otherwise the shared
+ * parser.
  *
- * `BusinessHoursSchema` is what every client parses this against, so the API
- * refusing a different set of shapes than the clients accept would be a
- * disagreement about the same jsonb document.
- *
- * NOTE, REPORTED: `PATCH /salons/{id}` lists `businessHours` as editable and does
- * NOT validate it — the jsonb column takes whatever arrives. That is the same
- * shape of hole `brandColor` had and it is a separate defect from this slice;
- * flagged rather than fixed here because it is not what this change is about.
+ * The validation itself moved to `http/fields.ts` when `PATCH /salons/{id}` got
+ * the same guard: that was the last unvalidated jsonb door on this table, and a
+ * bad save there turns every availability read into a 500 out of
+ * `hhmmToMinutes`. Both doors now call one function, for the reason the file this
+ * lives in states about `parseE164`.
  */
-function parseBusinessHours(value: unknown): OnboardInput['businessHours'] {
+function businessHoursOrDefault(value: unknown): OnboardInput['businessHours'] {
   if (value === undefined) {
     return {
       morning: [...DEFAULT_BUSINESS_HOURS.morning],
       evening: [...DEFAULT_BUSINESS_HOURS.evening],
     };
   }
-  const parsed = BusinessHoursSchema.safeParse(value);
-  if (!parsed.success) {
-    throw badRequest(
-      'invalid_business_hours',
-      'businessHours must be { morning: ["10:00","13:00"], evening: ["16:00","21:00"] }.',
-    );
-  }
-  return parsed.data;
+  return parseBusinessHours(value);
 }
 
 /** Letters, digits, dot, dash, underscore — `POST /staff`'s rule, restated. */
@@ -448,7 +439,7 @@ export function parseOnboardInput(
      */
     brandColor: body.brandColor === undefined ? '#6E7F6C' : parseBrandColor(body.brandColor),
     timezone: body.timezone === undefined ? 'Asia/Kuwait' : parseTimeZone(body.timezone),
-    businessHours: parseBusinessHours(body.businessHours),
+    businessHours: businessHoursOrDefault(body.businessHours),
     ownerName: body.ownerName === undefined ? `${name} owner` : requireString(body.ownerName, 'ownerName', 120),
     ownerHandle: parseHandle(body.ownerHandle),
     branchName,
