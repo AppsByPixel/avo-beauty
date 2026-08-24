@@ -59,6 +59,8 @@ import {
   A_STAFF_FULL,
   B_SCANNER_DEVICE,
   B_STAFF_HANDLE,
+  PLATFORM_OWNER_HANDLE,
+  SALON_A,
   SALON_B,
   pgDb,
   psql,
@@ -67,6 +69,7 @@ import {
   scalar,
   signInDashboard,
   signInMember,
+  signInPlatform,
   signInScanner,
   startTenancyApi,
   stopTenancyApi,
@@ -91,6 +94,17 @@ const DOOMED = 'QA-SUP-0002';
 const DOOMED_NAME = 'Munira Al-Harbi';
 const DOOMED_PHONE = '+96599777452';
 
+/**
+ * A member in ANOTHER SALON, for the queue-boundary specs.
+ *
+ * Her own row rather than the shared `8842`: the tenancy specs need a ticket that
+ * belongs to salon A, and attaching it to a member three other suites sign in as
+ * would make this file's teardown their problem.
+ */
+const OTHER_MEMBER = 'QA-SUP-000A';
+const OTHER_MEMBER_NAME = 'Shaikha Al-Ajmi';
+const OTHER_MEMBER_PHONE = '+96599777454';
+
 /** The control for the erasure spec: due LATER, so the job must leave her alone. */
 const SPARED = 'QA-SUP-0003';
 const SPARED_NAME = 'Wadha Al-Enezi';
@@ -99,6 +113,7 @@ const SPARED_PHONE = '+96599777453';
 let member = '';
 let merchant = '';
 let scanner = '';
+let consoleOwner = '';
 
 // ---------------------------------------------------------------------------
 // The independent authority.
@@ -160,11 +175,11 @@ const opposite = (route: 'salon' | 'avo'): 'salon' | 'avo' => (route === 'avo' ?
  * `hashSecret()` is one function for staff and members, so the hash is portable
  * and cannot drift out of step with the seed the way a pasted constant would.
  */
-function seedMember(id: string, name: string, phone: string): void {
+function seedMember(id: string, name: string, phone: string, salonId = SALON_B): void {
   psql(`
     INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
                         balance_fils, visits, tier, stamps, policy_version)
-    SELECT '${id}', '${SALON_B}', '${name}', '${phone}', NULL, false,
+    SELECT '${id}', '${salonId}', '${name}', '${phone}', NULL, false,
            s.password_hash, 0, 0, 'bronze', NULL, 3
     FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
     ON CONFLICT (id) DO UPDATE SET
@@ -200,13 +215,20 @@ function seedMember(id: string, name: string, phone: string): void {
  */
 function dropFixtures(): void {
   psql(`
-    DELETE FROM support_ticket WHERE member_id IN ('${MEMBER}', '${DOOMED}', '${SPARED}');
-    DELETE FROM member WHERE id IN ('${MEMBER}', '${DOOMED}', '${SPARED}');
+    DELETE FROM support_ticket
+     WHERE member_id IN ('${MEMBER}', '${DOOMED}', '${SPARED}', '${OTHER_MEMBER}');
+    DELETE FROM member WHERE id IN ('${MEMBER}', '${DOOMED}', '${SPARED}', '${OTHER_MEMBER}');
   `);
 }
 
 /** A ticket written straight to the table, for the specs that are not about submission. */
-function insertTicket(id: string, memberId: string, topicId: string, message: string): void {
+function insertTicket(
+  id: string,
+  memberId: string,
+  topicId: string,
+  message: string,
+  salonId = SALON_B,
+): void {
   const route = scalar(`select route from support_topic where id='${topicId}'`);
   precondition(
     route === 'salon' || route === 'avo',
@@ -214,7 +236,7 @@ function insertTicket(id: string, memberId: string, topicId: string, message: st
   );
   psql(`
     INSERT INTO support_ticket (id, member_id, salon_id, topic_id, route, message, ref, via)
-    VALUES ('${id}', '${memberId}', '${SALON_B}', '${topicId}', '${route}',
+    VALUES ('${id}', '${memberId}', '${salonId}', '${topicId}', '${route}',
             '${message.replace(/'/g, "''")}', '', 'email');
   `);
 }
@@ -273,6 +295,7 @@ beforeAll(async () => {
   member = await signInMember(SALON_B, MEMBER_PHONE);
   merchant = await signInDashboard(SALON_B, B_STAFF_HANDLE);
   scanner = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+  consoleOwner = await signInPlatform(PLATFORM_OWNER_HANDLE);
 }, 120_000);
 
 afterAll(async () => {
@@ -843,6 +866,227 @@ describe('#11 — who may file a ticket, and as whom', () => {
       scalar(`select ref from support_ticket where id='${res.body.id}'`),
       'the unmatched ref was discarded, so support cannot see the number the customer quoted',
     ).toBe(foreign);
+  });
+});
+
+// ===========================================================================
+/**
+ * THE QUEUE READ, WHERE THE TENANCY BOUNDARY IS A PREDICATE AND NOT A PATH.
+ *
+ * `GET /v1/support/tickets` is shared between the owner console and the merchant
+ * dashboard and carries NO salon id in its path. So `requireSameSalon` never runs,
+ * and the boundary lives in `queueScope()`'s WHERE clause instead. That is exactly
+ * the shape `discoverSalonScopedRoutes()` cannot see — it filters on `/\/salons\/:/`,
+ * so this route can never appear in the gap ledger however complete that ledger is.
+ * Hence its own assertions, here.
+ *
+ * THE DESIGN DECISION WORTH ASSERTING, because it is counter-intuitive: a merchant
+ * asking for `?route=avo` is REFUSED, not silently narrowed to an empty page. An
+ * empty page is a sentence — it says "AVO is holding no tickets about you" — and
+ * that is a claim the server must not make to a merchant, because AVO-routed
+ * tickets are very often complaints ABOUT her. A filter the caller supplies must
+ * not be able to turn the boundary into an answer.
+ *
+ * A CONSOLE ADMIN GETS NO PREDICATE AT ALL, and the ABSENCE is the difference
+ * between the two audiences. So the console specs here are not "the admin sees
+ * more" — they are the control that proves the merchant's narrowing is imposed
+ * rather than being a property of the data.
+ */
+describe('the ticket queue — a boundary in the query, not in the path', () => {
+  const T_MINE_SALON = 'SUP-QA-91001';
+  const T_MINE_AVO = 'SUP-QA-91002';
+  const T_THEIRS_SALON = 'SUP-QA-91003';
+
+  beforeAll(() => {
+    seedMember(OTHER_MEMBER, OTHER_MEMBER_NAME, OTHER_MEMBER_PHONE, SALON_A);
+    resetTicketBudget(OTHER_MEMBER);
+    psql(`DELETE FROM support_ticket WHERE id IN ('${T_MINE_SALON}','${T_MINE_AVO}','${T_THEIRS_SALON}');`);
+
+    // Hers, salon-routed — the one row a merchant is entitled to.
+    insertTicket(T_MINE_SALON, MEMBER, 'booking', 'Can I move Saturday?', SALON_B);
+    // Hers by salon, AVO-routed — a wallet dispute she must NOT see.
+    insertTicket(T_MINE_AVO, MEMBER, 'wallet', 'My top-up has not arrived.', SALON_B);
+    // Another salon's, salon-routed — visible to THAT merchant, not this one.
+    insertTicket(T_THEIRS_SALON, OTHER_MEMBER, 'visit', 'The service was rushed.', SALON_A);
+  });
+
+  /**
+   * The precondition that stops every spec below being vacuous. "The merchant sees
+   * only her own" proves nothing if the only ticket in the table is her own.
+   */
+  it('the fixture actually contains the rows the boundary has to exclude', () => {
+    expect(
+      scalar(`select route || '/' || salon_id from support_ticket where id='${T_MINE_AVO}'`),
+      'the AVO-routed fixture is not AVO-routed, so the route half of the boundary is untested',
+    ).toBe(`avo/${SALON_B}`);
+    expect(
+      scalar(`select route || '/' || salon_id from support_ticket where id='${T_THEIRS_SALON}'`),
+      'the other-salon fixture is not in another salon, so the tenancy half is untested',
+    ).toBe(`salon/${SALON_A}`);
+  });
+
+  it('a merchant sees her own salon-routed tickets and nothing else', async () => {
+    const res = await treq<{ items?: Array<{ id: string; route: string; salonId?: string }>; total?: number }>(
+      'GET',
+      '/v1/support/tickets',
+      { token: merchant },
+    );
+    expect(res.status, `the queue answered ${res.status} to a merchant: ${res.raw}`).toBe(200);
+
+    const ids = (res.body.items ?? []).map((t) => t.id);
+    expect(ids, 'the merchant cannot see her own salon-routed ticket').toContain(T_MINE_SALON);
+    expect(
+      ids,
+      'AN AVO-ROUTED TICKET IS VISIBLE TO THE MERCHANT. Rule 2: "Salon-routed tickets are ' +
+        'visible to the merchant; AVO-routed ones are not." This one is a wallet dispute, ' +
+        'which is very often a complaint about her.',
+    ).not.toContain(T_MINE_AVO);
+    expect(
+      ids,
+      'ANOTHER SALON\'S TICKET IS VISIBLE. The boundary is in the query rather than the path, ' +
+        'so nothing in the salon-scope ledger can catch this.',
+    ).not.toContain(T_THEIRS_SALON);
+
+    // Every row that came back, not just the ones the fixture named.
+    for (const t of res.body.items ?? []) {
+      expect(t.route, `ticket ${t.id} reached the merchant with route "${t.route}"`).toBe('salon');
+    }
+
+    /**
+     * THE COUNT IS SCOPED TOO. `total` is computed for the pager, and a total built
+     * without the predicate leaks the size of queues the caller cannot read — "37
+     * tickets" over one visible row tells a merchant exactly how much is being
+     * withheld about her.
+     */
+    const visible = Number(
+      scalar(
+        `select count(*) from support_ticket where salon_id='${SALON_B}' and route='salon'`,
+      ),
+    );
+    expect(
+      res.body.total,
+      `total is ${res.body.total} where ${visible} rows are within the merchant's scope — a ` +
+        `count computed without the predicate discloses the queues she cannot read`,
+    ).toBe(visible);
+  });
+
+  it('a merchant asking for the AVO queue is refused, not handed an empty page', async () => {
+    const res = await treq<{ error?: string }>('GET', '/v1/support/tickets?route=avo', {
+      token: merchant,
+    });
+    expect(
+      res.status,
+      `?route=avo from a merchant answered ${res.status}. 200 with an empty list would be the ` +
+        `server telling her AVO holds no tickets about her, which is a claim it must not make; ` +
+        `a client-supplied filter must not be able to answer the question the boundary hides: ` +
+        `${res.raw}`,
+    ).toBe(403);
+  });
+
+  it('a merchant asking for another salon is refused', async () => {
+    const res = await treq<{ error?: string }>(
+      `GET`,
+      `/v1/support/tickets?salon=${SALON_A}`,
+      { token: merchant },
+    );
+    expect(
+      res.status,
+      `?salon=${SALON_A} from a merchant answered ${res.status}: ${res.raw}`,
+    ).toBe(403);
+  });
+
+  it('an unknown route value is refused by name rather than ignored', async () => {
+    const res = await treq<{ error?: string }>('GET', '/v1/support/tickets?route=banana', {
+      token: merchant,
+    });
+    expect(res.status, `?route=banana answered ${res.status}: ${res.raw}`).toBe(400);
+    expect(res.body.error).toBe('invalid_route');
+  });
+
+  /**
+   * THE CONTROL FOR ALL THREE ABOVE. The merchant's narrowing has to be something
+   * the SERVER imposes, not something the data happens to look like. A console
+   * admin holding `policies` gets no predicate, so all three rows are reachable —
+   * which is what makes the merchant's two exclusions meaningful.
+   */
+  it('a console admin gets no predicate at all — both routes, both salons', async () => {
+    const res = await treq<{ items?: Array<{ id: string }> }>('GET', '/v1/support/tickets', {
+      token: consoleOwner,
+    });
+    expect(res.status, `the queue answered ${res.status} to the console owner: ${res.raw}`).toBe(200);
+
+    const ids = (res.body.items ?? []).map((t) => t.id);
+    for (const [id, what] of [
+      [T_MINE_SALON, 'a salon-routed ticket'],
+      [T_MINE_AVO, 'the AVO-routed ticket'],
+      [T_THEIRS_SALON, "another salon's ticket"],
+    ] as const) {
+      expect(
+        ids,
+        `the console cannot see ${what} (${id}). If the console is scoped like a merchant then ` +
+          `AVO support cannot read its own queue, and the merchant exclusions above prove ` +
+          `nothing about the boundary.`,
+      ).toContain(id);
+    }
+  });
+
+  it('a member cannot read the staffed queue at all', async () => {
+    const res = await treq('GET', '/v1/support/tickets', { token: member });
+    expect(
+      res.status,
+      `a customer read the staffed support queue (${res.status}) — it holds other customers\' ` +
+        `messages: ${res.raw}`,
+    ).toBe(403);
+  });
+
+  /**
+   * 404, NOT 403, AND THE DIFFERENCE IS THE POINT. A 403 confirms that a ticket
+   * with that id exists and is being handled somewhere she cannot see. For an
+   * AVO-routed complaint about her own salon, that confirmation is the fact rule 2
+   * exists to withhold.
+   */
+  it('a merchant reaching an invisible ticket gets 404, and cannot change it', async () => {
+    for (const [id, what] of [
+      [T_MINE_AVO, 'an AVO-routed ticket in her own salon'],
+      [T_THEIRS_SALON, "another salon's ticket"],
+    ] as const) {
+      const before = scalar(`select status from support_ticket where id='${id}'`);
+
+      const res = await treq<{ error?: string }>('PATCH', `/v1/support/tickets/${id}`, {
+        token: merchant,
+        body: { status: 'closed' },
+      });
+
+      expect(
+        res.status,
+        `PATCH on ${what} (${id}) answered ${res.status}. 403 would confirm the ticket exists, ` +
+          `which is exactly what a merchant must not learn about a complaint routed past her: ` +
+          `${res.raw}`,
+      ).toBe(404);
+      expect(res.body.error).toBe('unknown_ticket');
+
+      // The refusal, asserted as a refusal.
+      expect(
+        scalar(`select status from support_ticket where id='${id}'`),
+        `the merchant could not read ${id} but still changed its status`,
+      ).toBe(before);
+    }
+  });
+
+  it('and she CAN close the one that is hers — or the 404s above prove nothing', async () => {
+    const res = await treq<{ status?: string }>('PATCH', `/v1/support/tickets/${T_MINE_SALON}`, {
+      token: merchant,
+      body: { status: 'closed' },
+    });
+    expect(
+      res.status,
+      `the merchant could not close her OWN salon-routed ticket (${res.status}), so every 404 ` +
+        `above may simply be a broken endpoint rather than a boundary: ${res.raw}`,
+    ).toBe(200);
+    expect(
+      scalar(`select status from support_ticket where id='${T_MINE_SALON}'`),
+      'the close was answered but not stored',
+    ).toBe('closed');
   });
 });
 
