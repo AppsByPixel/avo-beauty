@@ -137,6 +137,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopTenancyApi();
+  // Belt and braces over the support spec's own `finally`.
+  try {
+    psql(`DELETE FROM platform_admin WHERE id = 'PLT-QA-SUP1';`);
+  } catch {
+    /* reported by the next run's stale-fixture sweep */
+  }
   /*
    * Dependency order, and best-effort: the run database is dropped by global
    * teardown, so this matters only for a run pointed at a shared API — where
@@ -159,12 +165,38 @@ afterAll(async () => {
 });
 
 // ---------------------------------------------------------------------------
-describe('The gate is `salons`, and the presets are why that is not `analytics`', () => {
-  it('the analyst preset really is analytics-yes / salons-no, or the pair below proves nothing', () => {
+describe('The console gates, and the presets are the argument for which one', () => {
+  /**
+   * THIS SECTION WAS WRONG FOR A DAY, AND THE REASON IS WORTH KEEPING.
+   *
+   * It used to assert "an analyst READS the salon list — 200, because that is what
+   * `analytics` buys". That was true when it was written: the LIST took `analytics`
+   * on the argument that `/v1/platform/metrics` already exposes salon names and
+   * money under that gate, so the list widened nothing.
+   *
+   * Trunk then REGATED the list to `salons` on this lane's and lane C's finding, and
+   * the spec went red having faithfully captured a truth that stopped being one.
+   * That is the spec doing its job — the same event as the fifteen brandColour
+   * knownBugs going red, arriving from the other direction.
+   *
+   * THE PAIR IS STILL THE ARGUMENT; regating moved it rather than removing it. The
+   * presets are opposite on this axis:
+   *
+   *   analyst   analytics YES, salons NO   -> metrics yes, salon list no, create no
+   *   support   analytics NO,  salons YES  -> metrics no,  salon list yes, create yes
+   *
+   * So the claim now under test is that authority to see AGGREGATE platform
+   * performance and authority to see and change the TENANT ROSTER are different
+   * things, held by different presets. What must NOT have happened is the analyst
+   * losing the figures she is employed to read — the entire tiebreak for the old
+   * gating was that metrics already names salons and their money, and that is still
+   * true and still hers.
+   */
+  it('the two presets really are opposite on this axis, or every pair below is vacuous', () => {
     /*
-     * DERIVED FROM THE FIXTURE, not restated. If Mariam's preset ever changes, this
-     * fails here with a clear reason instead of making the two specs below
-     * mysterious — a spec whose premise has silently rotted is worse than no spec.
+     * DERIVED FROM THE FIXTURE, not restated. If Mariam's preset changes, this fails
+     * here with a clear reason rather than making the specs below mysterious — a
+     * spec whose premise has silently rotted is worse than no spec.
      */
     const analytics = scalar(
       `select perm_analytics from platform_admin where id='${PLATFORM_ANALYST}'`,
@@ -172,31 +204,111 @@ describe('The gate is `salons`, and the presets are why that is not `analytics`'
     const salons = scalar(
       `select perm_salons from platform_admin where id='${PLATFORM_ANALYST}'`,
     ).trim();
-    expect(analytics, 'the analyst cannot read the list, so the pair is not a tiebreak').toBe('t');
-    expect(salons, 'the analyst already lacks nothing, so creating proves no gate choice').toBe('f');
+    expect(analytics, 'the analyst holds no analytics, so the metrics half proves nothing').toBe('t');
+    expect(salons, 'the analyst already holds salons, so the refusals prove no gate choice').toBe('f');
   });
 
-  it('an analyst READS the salon list — 200, because that is what `analytics` buys', async () => {
+  it('the analyst still reads METRICS — 200, with its named top salons', async () => {
+    const res = await treq('GET', '/v1/platform/metrics', { token: analyst });
+    expect(res.status, `the analyst lost the figures she is employed to read: ${res.raw}`).toBe(200);
+
+    /*
+     * NOT JUST A 200. The old gating's entire tiebreak was that metrics ALREADY
+     * exposes salon names and money under `analytics`, so moving the list to
+     * `salons` widened nothing and took nothing away. If regating had also stripped
+     * the names out of metrics, that argument would have quietly become false and a
+     * status-only assertion would not have noticed.
+     */
+    expect(Array.isArray(res.body.topSalons), 'metrics serves no top-salon list').toBe(true);
+    precondition(
+      res.body.topSalons.length > 0,
+      'no salon has loaded any money, so the naming assertion below is vacuous',
+    );
+    for (const s of res.body.topSalons) {
+      expect(typeof s.name, 'a top salon has no name').toBe('string');
+      expect(s.name.length, 'a top salon is named with an empty string').toBeGreaterThan(0);
+    }
+  });
+
+  it('but the analyst is refused the salon LIST — 403, which is the regating', async () => {
     const res = await treq('GET', '/v1/platform/salons?limit=5', { token: analyst });
-    expect(res.status, `the analyst cannot read the list: ${res.raw}`).toBe(200);
-    expect(Array.isArray(res.body.items)).toBe(true);
+    expect(
+      res.status,
+      'the analyst read the tenant roster. The list takes `salons` now, precisely so that ' +
+        `seeing aggregate performance does not carry seeing the client list. Response: ${res.raw}`,
+    ).toBe(403);
+    expect(res.body?.error).toBe('forbidden');
   });
 
-  it('and the SAME analyst cannot create one — 403, which is the whole argument', async () => {
+  it('and the analyst cannot create one — 403, and nothing is written', async () => {
     const before = num(`select count(*) from salon`);
     const res = await create(validBody(uniqueName('AnalystDenied')), uniqueKey('analyst'), analyst);
 
-    expect(
-      res.status,
-      'an analyst onboarded a tenant. Had this gate been `analytics` — the gate the LIST ' +
-        'takes — every analyst preset could create salons, which is exactly why it is not. ' +
-        `Response: ${res.raw}`,
-    ).toBe(403);
+    expect(res.status, `an analyst onboarded a tenant. Response: ${res.raw}`).toBe(403);
     expect(res.body?.error).toBe('forbidden');
 
     // A refusal that still created something would be the worst of both.
     expect(num(`select count(*) from salon`), 'the refused create still made a salon').toBe(before);
   });
+
+  /**
+   * THE OTHER HALF OF THE PAIR, and it needs an admin the seed does not provide.
+   *
+   * `seed.ts` creates an owner, an analyst and an admin — no `support`. Rather than
+   * flip Mariam's columns and put them back (she is the fixture the specs above and
+   * the generated permission census both lean on), this hires its own: the `support`
+   * preset as `PLATFORM_ROLE_PRESETS` declares it, cloned onto her password hash so
+   * the standard sign-in works, and deleted afterwards.
+   */
+  it('a `support` admin gets the mirror image — the list yes, the metrics no', async () => {
+    const SUPPORT = 'PLT-QA-SUP1';
+    const SUPPORT_HANDLE = 'qasupport';
+
+    /*
+     * The support preset from api/src/db/schema/platformAdmin.ts:
+     *   analytics false, activity true, salons true, accounts true,
+     *   admins false, controls false, approvals false, policies false, audit false
+     * Spelled out rather than derived by string manipulation, for the reason seed.ts
+     * gives for doing the same — and the two columns this spec asserts on are the
+     * two that decide the mirror.
+     */
+    psql(`
+      INSERT INTO platform_admin (id, name, handle, password_hash, role, owner,
+                                  perm_analytics, perm_activity, perm_salons, perm_accounts,
+                                  perm_admins, perm_controls, perm_approvals, perm_policies,
+                                  perm_audit, active)
+      SELECT '${SUPPORT}', 'QA Support', '${SUPPORT_HANDLE}', password_hash, 'support', false,
+             false, true, true, true, false, false, false, false, false, true
+        FROM platform_admin WHERE id = '${PLATFORM_ANALYST}'
+      ON CONFLICT (id) DO UPDATE SET perm_analytics = false, perm_salons = true, active = true;
+    `);
+
+    try {
+      precondition(
+        scalar(`select count(*) from platform_admin where id='${SUPPORT}'`).trim() === '1',
+        'the support fixture was not created',
+      );
+
+      const support = await signInPlatform(SUPPORT_HANDLE);
+
+      // THE LIST: yes. Under the old gating this preset could NOT read it — holding
+      // `salons` bought the create and not the roster it creates into.
+      const list = await treq('GET', '/v1/platform/salons?limit=5', { token: support });
+      expect(list.status, `support cannot read the roster it maintains: ${list.raw}`).toBe(200);
+      expect(Array.isArray(list.body.items)).toBe(true);
+
+      // THE METRICS: no. Exactly inverted from the analyst above, which is what makes
+      // these two gates two gates rather than one with a second name.
+      const metrics = await treq('GET', '/v1/platform/metrics', { token: support });
+      expect(
+        metrics.status,
+        `support read the platform's aggregate money without analytics: ${metrics.raw}`,
+      ).toBe(403);
+      expect(metrics.body?.error).toBe('forbidden');
+    } finally {
+      psql(`DELETE FROM platform_admin WHERE id = '${SUPPORT}';`);
+    }
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------

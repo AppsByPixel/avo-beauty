@@ -592,6 +592,48 @@ function probes(): Probe[] {
 
     // ---------------------------------------------------------- the platform --
     {
+      /**
+       * THE CONSOLE'S SINGLE-SALON READ. `SalonSchema` after all — but one level down,
+       * which is the whole point of classifying it rather than parking it in
+       * `UNMODELLED`.
+       *
+       * IT SERVES AN ENVELOPE, `{ salon, ownerPhone }`, and the route's own comment
+       * gives two reasons that are both about this file's subject:
+       *
+       *   - `GET /salons/{id}` is readable by any authenticated principal of the salon,
+       *     MEMBERS INCLUDED, so `ownerPhone` is deliberately not part of
+       *     `serialiseSalon`. The owner's personal number is not a customer-facing fact.
+       *   - putting it at the top level of a Salon-shaped body would mean a client
+       *     parsing through `SalonSchema` SILENTLY STRIPS IT — which is this census's
+       *     entire reason for existing, arrived at independently by the route author.
+       *
+       * So `select: 'salon'` is not a convenience. It states that the modelled shape is
+       * the nested salon and that `ownerPhone` lives outside it ON PURPOSE — and it
+       * means this probe would go red if someone ever flattened the envelope, because
+       * `$.salon` would stop existing. `ownerPhone` needs no `wireOnly` entry: it is not
+       * inside the compared subtree, which is exactly the design.
+       *
+       * `salon-onboarding.test.ts` carries the behavioural half — a MEMBER reading her
+       * own salon receives no `ownerPhone`, asserted against a salon whose column is
+       * actually populated, because migration 0037 landed after the seed and every
+       * seeded salon has NULL there.
+       */
+      route: 'GET /v1/platform/salons/:id',
+      label: `GET /v1/platform/salons/${SALON_A}`,
+      schemaName: 'SalonSchema',
+      schema: SalonSchema,
+      select: 'salon',
+      /**
+       * ENVELOPE-RELATIVE, and this cost a run to learn. `requireNonEmpty` resolves its
+       * paths against the WHOLE body while `schema` is applied to `select`'s subtree, so
+       * the bare `['branches', …]` that every other salon probe uses looked for
+       * `$.branches` here and found nothing — reporting "empty (or missing)" for arrays
+       * that are populated one level down. The two options are deliberately not the same
+       * coordinate space; the guard did its job and named the missing path.
+       */
+      requireNonEmpty: ['salon.branches', 'salon.social', 'salon.tiers'],
+    },
+    {
       route: 'GET /v1/platform/policies',
       label: 'GET /v1/platform/policies',
       schemaName: 'LegalDocumentSetSchema',
@@ -1230,6 +1272,13 @@ beforeAll(async () => {
      * has a schema is a shape nobody compares.
      */
     ['GET /v1/platform/campaigns', '/v1/platform/campaigns', platform],
+    /**
+     * THE CONSOLE'S SINGLE-SALON READ, arriving with the onboarding wizard and caught
+     * by the unclassified check on the first run after the rebase. Behind
+     * `requirePlatform('salons')` — the same gate the list took after regating — so it
+     * needs the platform credential rather than the salon-scoped one.
+     */
+    [`GET /v1/platform/salons/${SALON_A}`, `/v1/platform/salons/${SALON_A}`, platform],
     ['GET /v1/platform/messaging-policy', '/v1/platform/messaging-policy', platform],
     ['GET /v1/platform/policies', '/v1/platform/policies', member],
     ['GET /v1/platform/support', '/v1/platform/support', member],
