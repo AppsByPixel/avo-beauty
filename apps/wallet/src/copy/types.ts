@@ -19,7 +19,7 @@
  * "Arabic is a first-class layout, not a translation pass."
  */
 
-import type { PaymentMethod, TierName, Transaction } from '@avo/types';
+import type { PaymentMethod, RewardKey, TierName, Transaction } from '@avo/types';
 
 export interface Copy {
   // header
@@ -49,6 +49,55 @@ export interface Copy {
   qrAria(memberId: string, seconds: number): string;
   /** The skeleton's single announcement. */
   loadingAria: string;
+  /**
+   * The enlarged code overlay — design:641-643. Its dismiss button reuses the
+   * existing `done` key, which is the same word the design uses at :643 and at
+   * :1379 and is already lifted in both languages.
+   */
+  qrBig: string;
+  qrBigSub: string;
+
+  // happy hour — design:201-231 (the markup) and :1136-1151 (the strings)
+  /**
+   * The reward a window carries. `design/avo-promotions.js:18-26` writes all six
+   * in both languages; nothing here is a translation.
+   *
+   * `none` is deliberately absent: `RewardKeySchema` has no such member, so a
+   * `PromotionSet` off the wire cannot carry one.
+   */
+  happyReward: Record<RewardKey, string>;
+  /** "Happy hour · Double visit credit" — takes the resolved reward label. */
+  happyLiveTitle(reward: string): string;
+  /** "Next happy hour · Double visit credit". */
+  happyNextTitle(reward: string): string;
+  /**
+   * "All branches · until 18:00".
+   *
+   * `endsAt` arrives as the contract's raw "HH:MM" and each language renders its
+   * own digits — the `staleBanner` rule. A time is a count, not money, so Arabic
+   * is Eastern; handing a pre-formatted clock string across languages is exactly
+   * how Eastern digits got into an English sentence once already.
+   */
+  happyLiveSub(branch: string, endsAt: string): string;
+  /**
+   * "Salmiya · today 16:00–18:00" / "All branches · Sunday 16:00–18:00".
+   *
+   * ONE function rather than a "when" phrase composed elsewhere and passed in,
+   * for the same reason: a caller that formatted "today 16:00–18:00" in English
+   * and handed it to the Arabic sentence would produce precisely the half-script
+   * line that `no rendered string mixes the two digit scripts` exists to catch.
+   *
+   * `day` is a JS `getDay()` index, or null when the window opens later today.
+   */
+  happyNextSub(branch: string, day: number | null, from: string, to: string): string;
+  /** "1h 28m left". English IS `formatCountdown` from @avo/types — see en.ts. */
+  happyLiveLabel(minutes: number): string;
+  /** "in 3h 24m". */
+  happyNextLabel(minutes: number): string;
+  /** "now 16:32" — the SALON's wall clock, never the phone's. Raw "HH:MM" in. */
+  happyClock(hhmm: string): string;
+  /** The branch label for a window that applies everywhere. design:271-272. */
+  happyAllBranches: string;
 
   // branches
   branchEarnLabel: string;

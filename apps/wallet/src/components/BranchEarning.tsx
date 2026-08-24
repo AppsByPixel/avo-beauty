@@ -17,7 +17,8 @@ import type { Copy } from '../copy/types';
 
 interface Props {
   salon: Salon;
-  promotions: PromotionSet;
+  /** Null when the promotions read failed — `useWalletHome § loadSnapshot`. */
+  promotions: PromotionSet | null;
 }
 
 /**
@@ -47,6 +48,17 @@ function badgesFor(
 
 export function BranchEarning({ salon, promotions }: Props) {
   const { lang, copy } = useLanguage();
+  /**
+   * NO PROMOTION SET, NO SECTION — not a section full of "Standard earning".
+   *
+   * Every chip here is a claim about how much a visit is worth at a branch.
+   * `badgesFor` returns no badges both when a branch genuinely has no boost and
+   * when there is no set to look in, and those two must not render the same
+   * thing: telling a customer she earns standard at Kuwait City, on a day the
+   * merchant published 2× there, is a wrong statement about her money made from
+   * an absent read. The whole section is absent instead.
+   */
+  if (!promotions) return null;
   return (
     <View style={styles.section}>
       <Text style={[text('label', lang), styles.sectionLabel]}>{copy.branchEarnLabel}</Text>

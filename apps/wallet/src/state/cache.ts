@@ -28,7 +28,14 @@ export interface WalletSnapshot {
   member: Member;
   salon: Salon;
   transactions: Transaction[];
-  promotions: PromotionSet;
+  /**
+   * NULL WHEN THE PROMOTIONS READ FAILED AND THE REST OF THE LOAD DID NOT.
+   *
+   * Promotions are the one part of this snapshot Home can render without — see
+   * `useWalletHome § loadSnapshot`. A snapshot cached before this field became
+   * nullable still parses, so nothing has to be invalidated.
+   */
+  promotions: PromotionSet | null;
 }
 
 export interface CachedSnapshot {
@@ -42,7 +49,9 @@ const CachedSchema = z.object({
     member: MemberSchema,
     salon: SalonSchema,
     transactions: z.array(TransactionSchema),
-    promotions: PromotionSetSchema,
+    // `.nullable()` and not `.optional()`: a cache entry that FORGOT the key
+    // must fail to parse and be discarded, exactly as every other field here.
+    promotions: PromotionSetSchema.nullable(),
   }),
   fetchedAt: z.number().int().positive(),
 });

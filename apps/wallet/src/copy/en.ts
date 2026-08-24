@@ -7,9 +7,23 @@
  * so a key added here that is not added there does not compile.
  */
 
-import type { TierName } from '@avo/types';
+import { formatCountdown, type RewardKey, type TierName } from '@avo/types';
 import type { Copy } from './types';
 import { clockTime } from '../domain/activity';
+import { durationParts } from '../domain/happyHour';
+
+/** design/avo-promotions.js:19-24 — the six rewards a window can carry. */
+const REWARD_EN: Record<RewardKey, string> = {
+  x2stamp: 'Double stamps',
+  x3stamp: 'Triple stamps',
+  x2visit: 'Double visit credit',
+  topup10: '+10% top-up bonus',
+  topup20: '+20% top-up bonus',
+  credit3: '3 KD wallet credit',
+};
+
+/** design:1143 — the weekday names the "next happy hour" line is built from. */
+const DAYS_EN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const TIER_NAME: Record<TierName, string> = {
   bronze: 'Bronze',
@@ -79,6 +93,35 @@ export const en: Copy = {
   qrAria: (memberId, seconds) =>
     `Payment code for member ${memberId}, refreshes in ${seconds} seconds`,
   loadingAria: 'Loading your wallet',
+  qrBig: 'Show this to the cashier', // design:1172
+  qrBigSub: 'Screen brightened for scanning', // design:1172
+
+  // ------------------------------------------------------------ happy hour --
+  happyReward: REWARD_EN,
+  happyLiveTitle: (reward) => `Happy hour · ${reward}`, // design:1136
+  happyNextTitle: (reward) => `Next happy hour · ${reward}`, // design:1145
+  happyLiveSub: (branch, endsAt) => `${branch} · until ${endsAt}`, // design:1137
+  happyNextSub: (branch, day, from, to) =>
+    // design:1146-1150 — "today" when it opens later the same salon day, the
+    // weekday otherwise.
+    `${branch} · ${day === null ? 'today' : DAYS_EN[day]} ${from}–${to}`,
+  /**
+   * `formatCountdown` from @avo/types, not a copy of its wording.
+   *
+   * Its own docstring says "the wallet banner and the dashboard row share this",
+   * and a salon looking at its dashboard while a customer looks at her wallet is
+   * the case where two near-identical strings become a support call. Arabic
+   * cannot use it — it is English-only and hard-codes "left" — so only English
+   * delegates, and `happyHour.test.ts` pins the two together at every minute
+   * value the banner can hold.
+   */
+  happyLiveLabel: (minutes) => formatCountdown(minutes),
+  happyNextLabel: (minutes) => {
+    const { hours, minutes: mins } = durationParts(minutes);
+    return hours > 0 ? `in ${hours}h ${mins}m` : `in ${mins}m`; // design:1151
+  },
+  happyClock: (hhmm) => `now ${hhmm}`, // design:1140
+  happyAllBranches: 'All branches', // design/avo-promotions.js:272
 
   // branches
   branchEarnLabel: 'Earning by branch',
