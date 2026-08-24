@@ -55,6 +55,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { precondition } from './support/known-bug.js';
+import type { TenancyResponse } from './support/tenancy-harness.js';
 import {
   A_STAFF_FULL,
   B_SCANNER_DEVICE,
@@ -1263,6 +1264,53 @@ describe('erasure takes the customer\'s own words with her', () => {
    * reachable assertion is the join the queue will do: it must resolve, and it
    * must not produce her name.
    */
+  /**
+   * NON-NEGOTIABLE #6 ON THE WIDEST READ IN THE PRODUCT.
+   *
+   * `GET /v1/platform/accounts` is every account AVO holds, and `passwordSet` is the
+   * one boolean on it that must never be wrong. `member.password_hash` is `NOT NULL`,
+   * so an erased member cannot have it cleared -- the erasure overwrites it with a
+   * sentinel argon2 refuses -- and the naive `IS NOT NULL` therefore answered
+   * `passwordSet: true` beside `status: 'erased'`. Lane A found and fixed that, and
+   * exported the sentinel so the two spellings cannot drift.
+   *
+   * A fixed defect with no spec is a defect waiting for the next refactor, and this
+   * one is a contradiction on the screen whose banner is #6's own sentence. It runs
+   * here rather than in a console suite because THIS file is what erases a member.
+   */
+  it('an erased member never reads as having a password (non-negotiable #6)', async () => {
+    precondition(
+      scalar(`select coalesce(erased_at::text,'') from member where id='${DOOMED}'`) !== '',
+      'the member is not erased yet, so this spec is not about a tombstone',
+    );
+    // The sentinel really is still a non-null value -- which is why the naive check lied.
+    expect(
+      scalar(`select password_hash <> '' from member where id='${DOOMED}'`),
+      'the erased password column is empty, so this spec no longer probes the sentinel case',
+    ).toBe('t');
+
+    const res = await treq<{
+      items?: Array<{ id: string; kind: string; status: string; passwordSet: boolean }>;
+    }>('GET', `/v1/platform/accounts?salon=${SALON_B}&limit=100`, { token: consoleOwner });
+    expect(res.status, `GET /v1/platform/accounts answered ${res.status}: ${res.raw}`).toBe(200);
+
+    const her = (res.body.items ?? []).find((a) => a.id === DOOMED);
+    precondition(
+      her !== undefined,
+      `the erased member is absent from the accounts directory entirely, so passwordSet ` +
+        `cannot be checked -- a tombstone must still be listed or the console cannot see ` +
+        `that she was erased`,
+    );
+
+    expect(her!.status, 'the directory does not report her as erased').toBe('erased');
+    expect(
+      her!.passwordSet,
+      'AN ERASED MEMBER READS AS HAVING A PASSWORD. password_hash is NOT NULL so the ' +
+        'erasure writes a sentinel rather than clearing it, and a bare IS NOT NULL check ' +
+        'therefore contradicts the erased banner on the same row.',
+    ).toBe(false);
+  });
+
   it('the join a ticket queue will make still resolves after an erasure', () => {
     const joined = scalar(`
       select coalesce(string_agg(t.id || '=' || m.name, ', '), '(no rows)')
@@ -1426,3 +1474,283 @@ describe('support endpoints — the contract against the routes', () => {
  * left as a red spec, because it is a production gap and this lane's column is
  * tests.
  */
+
+// ===========================================================================
+/**
+ * THE CURSOR THAT SILENTLY LOST ROWS — a regression spec for a defect that is
+ * already fixed, which is exactly when one is worth writing.
+ *
+ * `toISOString()` is milliseconds; `created_at` is microseconds. So a cursor built
+ * from the wire's own `at` value rounded DOWN below the row it was meant to
+ * resume after, and the walk ended. Four tickets sharing one microsecond paged
+ * ONE and lost THREE — while `total` still said ten.
+ *
+ * That combination is what makes it worth a spec: a pagination bug that drops rows
+ * AND reports a correct count is nearly invisible from outside. Every page looks
+ * well-formed, the total agrees with the database, and the only symptom is rows
+ * that never appear. Nothing but a union check catches it.
+ *
+ * Lane A consolidated three copies of this logic into `services/streamCursor.ts`
+ * and re-walked all three consumers at several page sizes. This is the e2e half:
+ * the union of the pages must equal the unpaged set, at every page size, across a
+ * deliberate same-microsecond tie. It guards the ticket queue directly and the
+ * other two consumers by sharing their cursor.
+ */
+interface TicketPage {
+  items?: Array<{ id: string }>;
+  nextCursor?: string | null;
+}
+
+describe('the queue cursor — a same-microsecond tie must not lose rows', () => {
+  /** Four, because four is what the defect dropped three of. */
+  const TIED = ['SUP-QA-92001', 'SUP-QA-92002', 'SUP-QA-92003', 'SUP-QA-92004'];
+
+  beforeAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id IN (${TIED.map((t) => `'${t}'`).join(',')});`);
+    for (const id of TIED) insertTicket(id, MEMBER, 'booking', `Tie probe ${id}`, SALON_B);
+
+    /**
+     * THE TIE, forced rather than hoped for. `defaultNow()` gives four distinct
+     * microsecond values on any machine fast enough to matter, so the condition the
+     * defect needed would simply never arise. One explicit microsecond value across
+     * all four is the fixture.
+     */
+    psql(`
+      UPDATE support_ticket
+         SET created_at = timestamptz '2026-08-01 10:00:00.123456+03'
+       WHERE id IN (${TIED.map((t) => `'${t}'`).join(',')});
+    `);
+  });
+
+  afterAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id IN (${TIED.map((t) => `'${t}'`).join(',')});`);
+  });
+
+  it('the fixture really does share one microsecond, or there is no tie to page', () => {
+    expect(
+      scalar(`
+        select count(distinct created_at)
+          from support_ticket
+         where id in (${TIED.map((t) => `'${t}'`).join(',')})
+      `),
+      'the four tied rows do not share an instant, so this whole block tests ordinary paging',
+    ).toBe('1');
+    expect(
+      scalar(`
+        select count(*) from support_ticket
+         where id in (${TIED.map((t) => `'${t}'`).join(',')})
+      `),
+      'the tie fixture is incomplete',
+    ).toBe(String(TIED.length));
+  });
+
+  /**
+   * One walk per page size. 1 and 2 and 3 straddle the tie: with four tied rows a
+   * page boundary falls INSIDE the tied group for every one of them, which is the
+   * only place the defect could express itself.
+   */
+  for (const pageSize of [1, 2, 3, 5]) {
+    it(`a walk at limit=${pageSize} returns every tied row exactly once`, async () => {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+
+      do {
+        const query: string =
+          `/v1/support/tickets?limit=${pageSize}` +
+          (cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`);
+        const res: TenancyResponse<TicketPage> = await treq<TicketPage>('GET', query, {
+          token: consoleOwner,
+        });
+        expect(res.status, `page ${pages + 1} answered ${res.status}: ${res.raw}`).toBe(200);
+
+        for (const t of res.body.items ?? []) seen.push(t.id);
+        cursor = res.body.nextCursor ?? null;
+        pages += 1;
+
+        /**
+         * A walk that will not terminate is its own defect — a cursor that never
+         * advances loops for ever — so it is bounded and the bound is asserted rather
+         * than silently exited.
+         */
+        expect(pages, 'the cursor walk did not terminate within 200 pages').toBeLessThan(200);
+      } while (cursor !== null);
+
+      // NO ROW TWICE, anywhere in the walk. The other failure mode of a boundary
+      // inside a tie is repeating a row rather than losing one.
+      const duplicates = seen.filter((id, i) => seen.indexOf(id) !== i);
+      expect(
+        [...new Set(duplicates)],
+        `the walk returned rows more than once at limit=${pageSize}`,
+      ).toEqual([]);
+
+      // AND EVERY TIED ROW PRESENT. This is the assertion the defect failed.
+      const missing = TIED.filter((id) => !seen.includes(id));
+      expect(
+        missing,
+        `paging at limit=${pageSize} LOST ${missing.length} of ${TIED.length} rows that share ` +
+          `one microsecond: ${missing.join(', ')}. This is the shape of the fixed cursor ` +
+          `defect — the walk ends early inside a tied group while the total still reports ` +
+          `every row, so the page looks well-formed and the rows simply never appear.`,
+      ).toEqual([]);
+    });
+  }
+
+  /**
+   * The union check needs something to be equal TO. An unpaged read is the control:
+   * if the tied rows were missing from this too, the walk specs above would be
+   * agreeing with a broken baseline rather than proving anything.
+   */
+  it('and an unpaged read carries them all, so the union has a baseline', async () => {
+    const res = await treq<{ items?: Array<{ id: string }> }>(
+      'GET',
+      '/v1/support/tickets?limit=100',
+      { token: consoleOwner },
+    );
+    expect(res.status, `the unpaged read answered ${res.status}: ${res.raw}`).toBe(200);
+
+    const ids = (res.body.items ?? []).map((t) => t.id);
+    expect(
+      TIED.filter((id) => !ids.includes(id)),
+      'the unpaged read is missing tied rows, so it cannot serve as the baseline',
+    ).toEqual([]);
+  });
+});
+
+// ===========================================================================
+/**
+ * TWO ADMINS ADDING A TOPIC AT ONCE — the double-submit shape in another costume.
+ *
+ * `support_topic_position_uq` is a UNIQUE index on `position`, and every write to
+ * this table rewrites the whole list as a dense `0 … n-1`. So two simultaneous
+ * writers do not merely interleave badly: they both compute the same next position
+ * and one of them violates a unique index. The guard is a `FOR UPDATE` on the
+ * `support_config` SINGLETON rather than on the topic rows, and Lane A's reasoning
+ * for that is worth restating because it is the non-obvious part — with an empty
+ * or newly-read topic table, row locks lock nothing, so the thing to serialise on
+ * has to be a row that always exists.
+ *
+ * WHAT THIS SPEC HAS TO AVOID BEING. "Fire two requests, assert both succeeded" is
+ * satisfied by two requests that never overlapped, and a sequential pair proves
+ * only that the endpoint works twice. This lane's standing counter-example is a
+ * concurrency control that measured MINUS 0.003 ms between two requests that were
+ * actually one after the other. So the overlap is measured and asserted, and the
+ * spec fails by name when it did not happen.
+ */
+describe('two admins adding a topic at once — the position index is the referee', () => {
+  const PROBE_PREFIX = 'qa-race-';
+
+  const probeTopicIds = (): string[] =>
+    scalar(
+      `select coalesce(string_agg(id, ',' order by id), '')
+         from support_topic where id like '${PROBE_PREFIX}%'`,
+    )
+      .split(',')
+      .filter((x) => x !== '');
+
+  function dropProbeTopics(): void {
+    psql(`DELETE FROM support_topic WHERE id LIKE '${PROBE_PREFIX}%';`);
+  }
+
+  beforeAll(dropProbeTopics);
+  afterAll(dropProbeTopics);
+
+  it('both writes land, positions stay unique and dense, and the requests really overlapped', async () => {
+    const before = Number(scalar('select count(*) from support_topic'));
+    precondition(before > 0, 'there are no topics at all, so a dense-index guard has no subject');
+
+    /** Wall-clock envelope of one request, so overlap is measured rather than assumed. */
+    const timed = async (en: string) => {
+      const startedAt = Date.now();
+      const res = await treq<{ id?: string; error?: string }>(
+        'POST',
+        '/v1/platform/support/topics',
+        { token: consoleOwner, body: { en } },
+      );
+      return { res, startedAt, endedAt: Date.now() };
+    };
+
+    // Fired together, not awaited in turn. `Promise.all` is what puts them in flight
+    // at the same time; the timestamps below are what prove it did.
+    const [a, b] = await Promise.all([
+      timed(`${PROBE_PREFIX}alpha racing`),
+      timed(`${PROBE_PREFIX}beta racing`),
+    ]);
+
+    /**
+     * THE OVERLAP, ASSERTED. Two intervals overlap iff each begins before the other
+     * ends. If this fails the rest of the spec is about a sequential pair and proves
+     * nothing about the lock, so it is checked before the outcomes.
+     */
+    const overlapped = a.startedAt < b.endedAt && b.startedAt < a.endedAt;
+    expect(
+      overlapped,
+      `the two topic writes did not overlap — A ran ${a.startedAt}..${a.endedAt} and B ran ` +
+        `${b.startedAt}..${b.endedAt}, so they were sequential and this spec says nothing ` +
+        `about the FOR UPDATE on support_config. A sequential pair passing a concurrency ` +
+        `spec is the failure this assertion exists to prevent.`,
+    ).toBe(true);
+
+    /**
+     * WHAT THE GUARD IS ALLOWED TO ANSWER. Serialising is the point, not a particular
+     * status: both writes succeeding in some order is correct, and one being refused
+     * with a conflict is also correct. What is NOT correct is a 500 — a duplicate key
+     * escaping as an unhandled error is the guard being absent.
+     *
+     * `201`, NOT `200`, AND THIS SPEC LEARNED THAT THE HARD WAY. It was written
+     * expecting 200 and went red naming a 201 as if it were a failure, which is the
+     * assertion working on its author: a create that answers `201 Created` is the
+     * correct answer and the spec was the thing that was wrong. Both are listed rather
+     * than just 201, because a create answering 200 is a style difference and not a
+     * concurrency defect — this spec is about the index, and widening here keeps it
+     * from failing for a reason it does not care about.
+     */
+    const ACCEPTED = [200, 201];
+    for (const [label, out] of [['A', a], ['B', b]] as const) {
+      expect(
+        [...ACCEPTED, 409].includes(out.res.status),
+        `concurrent topic write ${label} answered ${out.res.status}: ${out.res.raw}. A 500 here ` +
+          `is a duplicate key on support_topic_position_uq escaping as an unhandled error, ` +
+          `which is precisely what the singleton lock exists to prevent.`,
+      ).toBe(true);
+    }
+
+    const settled = [a, b].filter((o) => ACCEPTED.includes(o.res.status)).length;
+    expect(
+      settled,
+      'neither concurrent write was accepted, so the endpoint refused them both and the ' +
+        'position index was never actually contended',
+    ).toBeGreaterThanOrEqual(1);
+
+    // ---- the invariant the index encodes, checked in SQL ----
+    expect(
+      scalar('select count(*) from (select position from support_topic group by position having count(*) > 1) d'),
+      'two topics share a position — the dense rewrite raced and the unique index did not ' +
+        'hold, which means the list order a console admin sees is now ambiguous',
+    ).toBe('0');
+
+    /**
+     * DENSE, not merely unique. The rewrite's contract is that the ACTIVE list
+     * occupies `0 … n-1`; a gap means one writer's rewrite was partially overwritten
+     * by the other's, which unique-ness alone would not reveal.
+     */
+    const active = Number(scalar('select count(*) from support_topic where active'));
+    expect(
+      scalar('select coalesce(max(position), -1) from support_topic where active'),
+      `the active topic list has ${active} rows but its highest position is not ${active - 1}, ` +
+        `so the dense 0..n-1 rewrite left a gap — two interleaved rewrites, not one after ` +
+        `the other`,
+    ).toBe(String(active - 1));
+    expect(
+      scalar('select count(*) from support_topic where active and position < 0'),
+      'an active topic is parked on a negative position — the two-phase rewrite was ' +
+        'interrupted and left a placeholder visible',
+    ).toBe('0');
+
+    // And the writes that succeeded are really there, by id.
+    expect(
+      probeTopicIds().length,
+      'the accepted writes created no topic rows',
+    ).toBe(settled);
+  });
+});
