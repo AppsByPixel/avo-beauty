@@ -62,17 +62,22 @@ a short red.
 
 ---
 
-## CURRENT STATE — 2026-08-19, and the plan from here
+## CURRENT STATE — 2026-08-25, and the plan from here
 
-`dev` **e50a446** · 337 commits · `main` 84 behind (it advances only on a clean twice-green gate)
-18 e2e files, **~500 `it()`/`test()` calls** (grep count, not a run) · `db:verify` exit code gated in CI
-`go-live-checklist.md` **10 ticked / 43 unticked** · 33 migrations, latest committed `0032_platform_settings.sql`
+`dev` **773d66a** · 496 commits · `main` 14 behind (it advances only on a clean twice-green gate)
+29 e2e files, **673 `it()`/`test()` calls** (grep count, not a run) · `db:verify` exit code gated in CI
+`go-live-checklist.md` **15 ticked / 38 unticked** · 38 migrations, latest committed `0037_salon_onboarding.sql`
+**24 route files** (not 26 — `salons.test.ts` and `support.test.ts` sit in `routes/` and register
+zero routes) · 122 `app.<method>` registrations, but **124 endpoints**: `POST /webhooks/:provider`
+registers on `scoped.post` and `GET /_health` lives outside `routes/`, so both are invisible to
+every `app.`-anchored sweep — including the permission census's.
 
-**Numbers above were re-measured 2026-08-19 14:15 PKT.** The previous handoff's figures
-(`dev` f91137e, 315 commits, `main` 62 behind, 8/45 go-live) were stale by a session — and so
-were its resume points, several of which named work that had already landed. **The lesson
-generalises: this file goes stale faster than the tree.** Verify against git before believing
-any line of it, including this one.
+**Numbers above were re-measured 2026-08-25 01:50 PKT.** The block they replace was stale by six
+days on every line: it said 337 commits (496), 10/43 go-live (15/38), 33 migrations (38). It also
+carried its own warning that it goes stale faster than the tree — which it then did. **Verify
+against git before believing any line of this file, including this one.** The commands are in
+§ "the habit" of the verification handoff; a zero result is a claim about your command as much as
+about the tree.
 
 ### Where the 30-day plan actually stands
 
