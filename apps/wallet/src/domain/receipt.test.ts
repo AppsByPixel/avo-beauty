@@ -28,10 +28,16 @@
 import { describe, expect, it } from 'vitest';
 import type { Transaction } from '@avo/types';
 import { buildReceipt } from './receipt';
+import { toActivityRow } from './activity';
+import { branchName } from './names';
 import { en } from '../copy/en';
 import { ar } from '../copy/ar';
 
-const BRANCHES = [{ id: 'BR-KWC', name: 'Kuwait City' }];
+/** Both names — see the note on the same fixture in activity.test.ts. */
+const BRANCHES = [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت' }];
+
+/** SAL-LUMIERE's branches are seeded with `name_ar` NULL deliberately. */
+const BRANCHES_NO_ARABIC = [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: null }];
 
 /** The driven zero-debit charge, field for field off the wire. */
 function charge(amountFils: number): Transaction {
@@ -215,5 +221,44 @@ describe('an adjustment reads honestly in both directions', () => {
     expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en).reference).toBe(
       'AVO-ADJ-4f2a9b1c8e03',
     );
+  });
+});
+
+
+describe('the receipt names the branch in the reading language', () => {
+  /*
+    design/AVO Wallet Home.dc.html:1582 writes the Arabic detail rows as
+    `['الفرع', 'أمارا السالمية']`. Driven against lane B: before the fix this row
+    read `الفرع · Salmiya`.
+  */
+  const branchRow = (
+    // The structural shape, not `typeof BRANCHES` — that infers `nameAr: string`
+    // and would reject the null fixture, which is the case worth testing.
+    branches: { id: string; name: string; nameAr: string | null }[],
+    lang: 'en' | 'ar',
+    copy: typeof en | typeof ar,
+  ) =>
+    buildReceipt(charge(-6000), branches, lang, copy).rows.find((r) => r.label === copy.txBranch);
+
+  it('renders the Arabic branch name in ar', () => {
+    expect(branchRow(BRANCHES, 'ar', ar)?.value).toBe('مدينة الكويت');
+  });
+
+  it('renders the Latin branch name in en', () => {
+    expect(branchRow(BRANCHES, 'en', en)?.value).toBe('Kuwait City');
+  });
+
+  it('falls back to Latin in ar when the branch has no Arabic name', () => {
+    const row = branchRow(BRANCHES_NO_ARABIC, 'ar', ar);
+    expect(row?.value).toBe('Kuwait City');
+    expect(row?.value).not.toBe('');
+  });
+
+  it('agrees with the activity row on the same transaction, in ar', () => {
+    // The pair that disagreed once before — d29fdb4 fixed the sheet and left the
+    // list. Whatever the rule is, both surfaces must apply it.
+    const tx = charge(-6000);
+    expect(branchRow(BRANCHES, 'ar', ar)?.value).toBe(branchName(BRANCHES[0]!, 'ar'));
+    expect(toActivityRow(tx, BRANCHES, 'ar', ar).when).toContain(branchName(BRANCHES[0]!, 'ar'));
   });
 });

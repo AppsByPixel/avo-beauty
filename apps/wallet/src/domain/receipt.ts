@@ -36,7 +36,8 @@ import {
   type Transaction,
 } from '@avo/types';
 import type { Copy } from '../copy/types';
-import { branchName, dateLocale } from './activity';
+import { dateLocale } from './activity';
+import { branchName, type Named } from './names';
 
 export interface ReceiptRow {
   label: string;
@@ -89,7 +90,7 @@ function money(amount: number, lang: Language): { value: string; valueLabel: str
 
 export function buildReceipt(
   tx: Transaction,
-  branches: { id: string; name: string; nameAr?: string | null }[],
+  branches: (Named & { id: string })[],
   lang: Language,
   copy: Copy,
 ): Receipt {

@@ -25,7 +25,17 @@ import { toActivityRow } from './activity';
 import { en } from '../copy/en';
 import { ar } from '../copy/ar';
 
-const BRANCHES = [{ id: 'BR-KWC', name: 'Kuwait City' }];
+/**
+ * BOTH NAMES, AND THAT IS THE POINT. This was
+ * `[{ id: 'BR-KWC', name: 'Kuwait City' }]` — a branch carrying no `nameAr` —
+ * so every Arabic assertion in this file passed whether or not `toActivityRow`
+ * read the field. It did not read it, for months, and this fixture is the reason
+ * nothing here noticed. See domain/names.ts.
+ */
+const BRANCHES = [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت' }];
+
+/** SAL-LUMIERE's branches are seeded with `name_ar` NULL deliberately. */
+const BRANCHES_NO_ARABIC = [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: null }];
 
 function tx(over: Partial<Transaction>): Transaction {
   return {
@@ -153,6 +163,42 @@ describe('an adjustment', () => {
     expect(row.amount).toBe('−5.000');
     for (const eastern of ['٠', '١', '٢', '٣', '٤', '٥']) {
       expect(row.amount).not.toContain(eastern);
+    }
+  });
+});
+
+
+describe('the branch on a row is named in the reading language', () => {
+  /*
+    The row subtitle is `<when> · <branch>`, and the design writes it in Arabic:
+    `أمس · أمارا السالمية` (AVO Wallet Home.dc.html:1580). Driven against lane B:
+    before the fix this rendered `اليوم · ١١:٢٢ م · Salmiya`.
+  */
+  it('renders the Arabic branch name in ar', () => {
+    const row = toActivityRow(tx({}), BRANCHES, 'ar', ar);
+    expect(row.when).toContain('مدينة الكويت');
+    expect(row.when).not.toContain('Kuwait City');
+  });
+
+  it('renders the Latin branch name in en', () => {
+    const row = toActivityRow(tx({}), BRANCHES, 'en', en);
+    expect(row.when).toContain('Kuwait City');
+    expect(row.when).not.toContain('مدينة الكويت');
+  });
+
+  it('falls back to Latin in ar when the branch has no Arabic name', () => {
+    const row = toActivityRow(tx({}), BRANCHES_NO_ARABIC, 'ar', ar);
+    expect(row.when).toContain('Kuwait City');
+    // The failure mode a missing fallback would produce is a dangling separator.
+    expect(row.when).not.toMatch(/·\s*$/);
+  });
+
+  it('still omits the branch on a top-up, in both languages', () => {
+    // A top-up has no branch a customer would recognise — unchanged by the fix.
+    for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
+      const row = toActivityRow(tx({ kind: 'topup', amountFils: 25000 }), BRANCHES, lang, copy);
+      expect(row.when).not.toContain('Kuwait City');
+      expect(row.when).not.toContain('مدينة الكويت');
     }
   });
 });

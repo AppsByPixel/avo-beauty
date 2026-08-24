@@ -17,6 +17,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { failureCopy } from './loadFailure';
+import { en } from '../copy/en';
+import { ar } from '../copy/ar';
 import { ApiError } from '../api/client';
 import { failurePresentation, NO_REFERENCE, toLoadFailure } from './loadFailure';
 
@@ -146,5 +149,72 @@ describe('a 503 from the wire reaches the screen as her connection, not our faul
     const presentation = failurePresentation(toLoadFailure(err).kind);
     expect(presentation.bodyKey).toBe('offlineColdBody');
     expect(presentation.canRetry).toBe(true);
+  });
+});
+
+
+/**
+ * The resolved copy, against the REAL dictionaries.
+ *
+ * `failurePresentation` is well covered above, and the Upcoming card still
+ * shipped the bug — because consulting it was optional and that component did
+ * not. These assert the sentences a customer actually reads, so a surface that
+ * resolves them by hand is failing a spec rather than passing a key check.
+ */
+describe('the sentence a failing surface renders', () => {
+  const SERVER_MESSAGE = 'This wallet is not available on this account.';
+
+  it('never tells an offline customer the failure is ours', () => {
+    for (const copy of [en, ar]) {
+      const { title, body } = failureCopy('offline', SERVER_MESSAGE, copy);
+      // copy/en.ts § offlineColdTitle: "`errorBody`'s 'This is on our side' is
+      // the other wrong answer — it blames us for her signal."
+      expect(body).not.toBe(copy.errorBody);
+      expect(title).not.toBe(copy.errorTitle);
+      expect(body).toBe(copy.offlineColdBody);
+      expect(title).toBe(copy.offlineColdTitle);
+    }
+  });
+
+  it('does not promise a last update on a cold offline failure', () => {
+    // `offlineBanner` is the stale-data sentence and would be a lie here.
+    for (const copy of [en, ar]) {
+      expect(failureCopy('offline', SERVER_MESSAGE, copy).body).not.toBe(copy.offlineBanner);
+    }
+  });
+
+  it("renders the server's own sentence on forbidden, and ours on the rest", () => {
+    for (const copy of [en, ar]) {
+      expect(failureCopy('forbidden', SERVER_MESSAGE, copy).body).toBe(SERVER_MESSAGE);
+      expect(failureCopy('offline', SERVER_MESSAGE, copy).body).not.toBe(SERVER_MESSAGE);
+      expect(failureCopy('server', SERVER_MESSAGE, copy).body).not.toBe(SERVER_MESSAGE);
+    }
+  });
+
+  it('withholds the retry only where retrying cannot change the answer', () => {
+    for (const copy of [en, ar]) {
+      expect(failureCopy('forbidden', SERVER_MESSAGE, copy).canRetry).toBe(false);
+      expect(failureCopy('offline', SERVER_MESSAGE, copy).canRetry).toBe(true);
+      expect(failureCopy('server', SERVER_MESSAGE, copy).canRetry).toBe(true);
+    }
+  });
+
+  it('gives the three kinds three distinct sentences, in both languages', () => {
+    for (const copy of [en, ar]) {
+      const bodies = (['forbidden', 'offline', 'server'] as const).map(
+        (k) => failureCopy(k, SERVER_MESSAGE, copy).body,
+      );
+      expect(new Set(bodies).size).toBe(3);
+    }
+  });
+
+  it('never resolves to an empty string, whatever the kind or language', () => {
+    for (const copy of [en, ar]) {
+      for (const kind of ['forbidden', 'offline', 'server'] as const) {
+        const { title, body } = failureCopy(kind, SERVER_MESSAGE, copy);
+        expect(title.trim()).not.toBe('');
+        expect(body.trim()).not.toBe('');
+      }
+    }
   });
 });

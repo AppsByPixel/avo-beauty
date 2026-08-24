@@ -26,6 +26,7 @@ import { useWalletToken } from '../state/useWalletToken';
 import { useTopUp } from '../state/useTopUp';
 import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
 import { relativeTime, toActivityRow } from '../domain/activity';
+import { salonName } from '../domain/names';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { WalletCard } from '../components/WalletCard';
 import { PaymentCode } from '../components/PaymentCode';
@@ -213,13 +214,12 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
             Only this line had not been updated, so the Arabic home screen
             greeted her in Arabic and then named her salon in Latin.
 
-            `nameAr ?? name` — the fallback `branchName`, `artistName` and the
-            follow-salon title all use. Lumiere's row is seeded with a NULL
-            `name_ar` on purpose, so the fallback has a live path.
+            The choice is `salonName()` rather than the ternary that first fixed
+            it, because a ternary HERE is a branch no test can reach — this
+            workspace has no renderer, and an untested render site is exactly how
+            this shipped. domain/names.ts carries the rule and the spec.
           */}
-          <Text style={[text('displayM', lang), styles.salon]}>
-            {lang === 'ar' ? (salon.nameAr ?? salon.name) : salon.name}
-          </Text>
+          <Text style={[text('displayM', lang), styles.salon]}>{salonName(salon, lang)}</Text>
         </View>
         {/* design:195-198 — the switch and the avatar, in that order. */}
         <View style={styles.headerControls}>
@@ -257,7 +257,10 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
           // NOT the empty card. See UpcomingFailedCard — a failed read here once
           // told a customer she had no appointment moments after her deposit
           // left her balance.
-          <UpcomingFailedCard onRetry={upcoming.reload} />
+          //
+          // The FAILURE, not just the fact of one: without it the card said
+          // "This is on our side" to a customer whose phone had no signal.
+          <UpcomingFailedCard failure={upcoming.failure} onRetry={upcoming.reload} />
         ) : nextBooking ? (
           <UpcomingCard
             booking={nextBooking}

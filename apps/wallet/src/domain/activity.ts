@@ -17,6 +17,7 @@ import {
   type Transaction,
 } from '@avo/types';
 import type { Copy } from '../copy/types';
+import { branchName, type Named } from './names';
 
 export interface ActivityRow {
   id: string;
@@ -51,35 +52,14 @@ export function dateLocale(lang: Language): string {
 }
 
 /**
- * A branch's name in the reading language.
- *
- * `Branch.nameAr` LANDED AND FOUR RENDER SITES WERE STILL IGNORING IT. This
- * module, `receipt.ts`, `BranchEarning.tsx` and `HomeScreen.tsx` each carried a
- * note reading "CONTRACT GAP (reported, not filled): `Branch.name` is a single
- * string … api-contract.md's Branch and Salon have no Arabic field." That was
- * true when it was written and is not now: `BranchSchema.nameAr` and
- * `SalonSchema.nameAr` are in `packages/types`, `GET /salons/{id}` serves them
- * (driven: `nameAr: "أمارا"`, `"السالمية"`, `"مدينة الكويت"`), and the design's
- * own reference set has carried them all along (design/avo-promotions.js:42-43).
- *
- * So an Arabic wallet was rendering `اليوم · ١١:٢٢ م · Salmiya` where the design
- * writes `أمس · أمارا السالمية` (AVO Wallet Home.dc.html:1580) — non-negotiable
- * #12, a first-class layout rather than a translation pass.
- *
- * The fallback is `nameAr ?? name`, the same one `artistName` and `serviceName`
- * in `domain/booking.ts` and the follow-salon title in `AccountScreen` already
- * use — and it has a real null path to exercise, because the seed leaves
- * Lumiere's branches without Arabic deliberately.
+ * Structural rather than `Branch`, so a caller holding a narrowed shape can pass
+ * it. `nameAr` is OPTIONAL here and that is the hazard this comment exists for:
+ * a fixture that omits it type-checks, which is precisely how `activity.test.ts`
+ * asserted Arabic rows for months against `[{ id: 'BR-KWC', name: 'Kuwait City' }]`
+ * and could not have caught a site ignoring the field. Fixtures in this module's
+ * spec carry `nameAr`.
  */
-export function branchName(
-  branch: { name: string; nameAr?: string | null },
-  lang: Language,
-): string {
-  return lang === 'ar' ? (branch.nameAr ?? branch.name) : branch.name;
-}
-
-/** Structural rather than `Branch`, so a test can pass a two-field fixture. */
-type BranchLike = { id: string; name: string; nameAr?: string | null };
+type BranchLike = Named & { id: string };
 
 function branchLabel(tx: Transaction, branches: BranchLike[], lang: Language): string | null {
   const branch = branches.find((b) => b.id === tx.branchId);

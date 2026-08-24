@@ -635,12 +635,24 @@ export const ar: Copy = {
  * translation without removing its entry here fails the build, and adding a key
  * without Arabic and without listing it here fails too.
  *
- * This is the worksheet for the native-speaker review. It stands at 76 entries
+ * This is the worksheet for the native-speaker review. It stands at 81 entries
  * and almost every one of them is state or refusal copy, which is not an accident —
- * see the section notes below. (The count in this comment read "twenty-four" for
- * several slices after the list passed it; it is recomputed here rather than
- * carried, and a stale figure in a comment is the defect this project has now
- * corrected twice.)
+ * see the section notes below.
+ *
+ * THE COUNT IN THIS COMMENT HAS NOW BEEN WRONG THREE TIMES. It read
+ * "twenty-four", then "76" — the latter while asserting, in the same sentence,
+ * that it "is recomputed here rather than carried". It was carried. STATUS.md
+ * said 74 and DECISIONS.md said 31 at the same moment the array held 81, and one
+ * of those figures had already been repeated into two lane briefs.
+ *
+ * The list itself cannot rot — `i18n/digits.test.ts` asserts it is EXACTLY the
+ * set of keys where `ar` and `en` are identical, so adding a gap without listing
+ * it fails, and translating one without delisting it fails too. Only this prose
+ * can rot, and it does, because prose does not recompile. Recount before quoting
+ * it:
+ *
+ *     awk '/^export const AR_GAPS = \[/{f=1;next} /^\] as const;/{f=0} f' \
+ *       apps/wallet/src/copy/ar.ts | grep -c "^  '"
  */
 export const AR_GAPS = [
   'qrAria',
