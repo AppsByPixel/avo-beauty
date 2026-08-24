@@ -1684,10 +1684,19 @@ worktree first populated the hash. There are six. Any reasoning that enumerates 
 concludes "therefore this log must be mine" has an unlisted candidate in it — which is exactly
 the shape of error that section exists to prevent.
 
-**Not removed.** It is not mine, and rule 4 of this document forbids destructive operations on
-another session's tree even when it looks empty. Removing it is a one-liner
-(`git worktree remove .claude/worktrees/youthful-lewin-1e9609`) and is safe on the evidence
-above, but it is Aftab's call, not a decision I should make unasked.
+**Not removed — and the reason got stronger an hour later.** I first recorded it as an abandoned
+leftover that was clean and therefore safe to remove, and noted that removing it was a one-liner
+Aftab could run. **That was wrong.** `ListAgents` subsequently showed a *live interactive session*
+running in that worktree, started 44 minutes before I looked. It is not abandoned; it is someone
+else's working tree, and `git worktree remove` on it would have destroyed an active session's
+checkout.
+
+Correcting it here rather than quietly editing, because the mistake is instructive and is this
+file's own subject: **"clean" is a statement about committed state, not about whether anyone is
+using it.** `git status --porcelain` empty and `rev-list --count dev..HEAD` = 0 say nobody has
+saved anything yet — which is exactly what an active session looks like before its first commit.
+I read an empty tree as an unused one, and they are the same picture. Rule 4 of this document
+already forbade the removal; the evidence I offered against it was simply not evidence.
 
 **To reverse either:** re-measure. That is the entire point — both of these were wrong because
 they were restated rather than re-measured, and this entry will age the same way.

@@ -220,10 +220,15 @@ spends your trust on something that did not happen.
 **Kill by PID or process group. NEVER by name pattern.** The process table is shared by all
 six worktrees, and a pattern does not know which worktree a process belongs to.
 
-**Six, not five.** `git worktree list` includes a leftover at
-`.claude/worktrees/youthful-lewin-1e9609` from an earlier session's isolated agent. It is clean
-and holds nothing, but any reasoning of the form "there are five, so this must be mine" has an
-unlisted candidate in it.
+**Six, not five.** `git worktree list` includes `.claude/worktrees/youthful-lewin-1e9609`, which
+has a **live session running in it** — check `ListAgents` before assuming otherwise. Any reasoning
+of the form "there are five, so this must be mine" has an unlisted candidate in it, and that
+candidate is not idle.
+
+**Do not remove it, and do not trust "clean" to mean "unused".** It reports an empty
+`git status` and zero commits ahead of `dev` — which is indistinguishable from an active session
+that has not committed yet. Trunk recorded it as an abandoned leftover on exactly that evidence
+and was wrong.
 
 **And a replayed turbo log names the wrong worktree — in the direction nobody expects.** Lane B
 measured this: `turbo run typecheck` printed `@avo/types:build … /Users/koraspond_developer/dev/avo/packages/types`
