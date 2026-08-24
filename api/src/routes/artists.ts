@@ -95,7 +95,7 @@ import {
   requireSameSalon,
   type StaffPrincipal,
 } from '../auth/principal';
-import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
+import { badRequest, conflict, notFound } from '../http/errors';
 /** One definition of "HH:MM" for the whole API — see http/fields.ts. */
 import { HHMM } from '../http/fields';
 import { writeAudit } from '../services/audit';
@@ -719,7 +719,15 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
       return reply.send({ authorizeUrl: started.authorizeUrl, state: started.state });
     } catch (err) {
       if (err instanceof CalendarNotConfiguredError) {
-        throw serviceUnavailable('calendar_not_configured', err.message, {
+        /**
+         * 409, in the sweep `routes/support.ts` describes. `services/policy.ts`
+         * settled that a configuration state is not a transient unavailability, and
+         * a calendar driver that has not been configured is exactly that: no retry
+         * makes it work, and 503 is what puts a refusal in a client's offline
+         * bucket, so a merchant pressing Connect was told her network was down
+         * about a server that had just answered.
+         */
+        throw conflict('calendar_not_configured', err.message, {
           driver: calendar.id,
           artistId: target.id,
         });

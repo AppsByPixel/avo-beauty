@@ -1,5 +1,5 @@
 /**
- * Shared platform state: promotions, the published legal set, support.
+ * Shared platform state: promotions and the published legal set.
  *
  * CAMPAIGNS USED TO LIVE HERE and are now routes/campaigns.ts — non-negotiable #8
  * turned out to be a table, a send log, a messaging policy, the console's queue, a
@@ -21,19 +21,13 @@ import {
   requireSalonScoped,
   requireSameSalon,
 } from '../auth/principal';
-import { badRequest, conflict, notFound, serviceUnavailable } from '../http/errors';
+import { badRequest, conflict, notFound } from '../http/errors';
 /** One definition of "HH:MM" for the whole API — see http/fields.ts. */
 import { HHMM, HHMM_OR_END_OF_DAY } from '../http/fields';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { db } from '../db/client';
-import {
-  legalDocumentDraft,
-  legalDocumentSet,
-  supportConfig,
-  supportTicket,
-  supportTopic,
-} from '../db/schema/legal';
+import { legalDocumentDraft, legalDocumentSet } from '../db/schema/legal';
 import { member } from '../db/schema/member';
 import { branch } from '../db/schema/salon';
 import { transaction } from '../db/schema/transaction';
@@ -47,14 +41,6 @@ import {
 function happyHourId(): string {
   return `HH-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }
-
-/** "SUP-48263" — api-contract.md § SupportTicket. Shown to the customer verbatim. */
-function ticketId(): string {
-  return `SUP-${Math.floor(Math.random() * 90_000 + 10_000)}`;
-}
-
-/** api-contract.md rule 5: "Deduplicate an identical message inside 5 minutes". */
-const TICKET_DEDUPE_MINUTES = 5;
 
 /**
  * The published set, on the wire.
@@ -71,34 +57,6 @@ function serialiseLegalSet(row: typeof legalDocumentSet.$inferSelect) {
     publishedAt: row.publishedAt.toISOString(),
     publishedBy: row.publishedBy,
     docs: row.docs,
-  };
-}
-
-/**
- * api-contract.md § SupportTicket. `member` is the customer's NAME, which the
- * contract carries beside `memberId` so a staffed queue can render a person
- * rather than an id.
- */
-async function serialiseTicket(row: typeof supportTicket.$inferSelect) {
-  const [m] = await db
-    .select({ name: member.name })
-    .from(member)
-    .where(eq(member.id, row.memberId))
-    .limit(1);
-
-  return {
-    id: row.id,
-    memberId: row.memberId,
-    member: m?.name ?? '',
-    topicId: row.topicId,
-    /** Resolved server-side from the topic. Never echoed from the request. */
-    route: row.route,
-    message: row.message,
-    ref: row.ref,
-    transactionId: row.transactionId,
-    via: row.via,
-    at: row.createdAt.toISOString(),
-    status: row.status,
   };
 }
 
@@ -653,160 +611,16 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
     return reply.send({ published: serialiseLegalSet(set) });
   });
 
-  // ======================================================================
-  // SUPPORT — non-negotiable #11.
-  // ======================================================================
-
   /**
-   * The Contact us form's channels, hours and topics.
+   * SUPPORT HAS MOVED to routes/support.ts, and it is the same move campaigns made.
    *
-   * Every topic carries its `route`, and serving it is deliberate rather than
-   * careless: the client does not USE it — `POST /v1/support/tickets` below
-   * ignores any route it is sent — but the wallet does tell the customer who
-   * she is writing to ("this goes to the salon" / "this goes to AVO"), and it
-   * cannot say that truthfully from a field it was never given. Reading it is
-   * fine; sending it back is what #11 forbids.
+   * `GET /v1/platform/support` and `POST /v1/support/tickets` lived here, which was
+   * fine while support was a read and one insert. Non-negotiable #11 turned out to
+   * be a channels editor, a reorderable topic list whose `route` column IS #11's
+   * subject, two staffed queues sharing one path, and a tenancy boundary carried by
+   * a predicate rather than by `requireSameSalon`. That is a phase, not a section of
+   * a file about promotions.
    */
-  app.get('/v1/platform/support', async (req, reply) => {
-    requirePrincipal(req);
-
-    const [channels] = await db.select().from(supportConfig).limit(1);
-    if (!channels) {
-      throw serviceUnavailable(
-        'support_not_configured',
-        'Support channels have not been configured yet.',
-      );
-    }
-
-    const topics = await db
-      .select()
-      .from(supportTopic)
-      .where(eq(supportTopic.active, true))
-      .orderBy(supportTopic.position);
-
-    return reply.send({
-      channels: {
-        whatsapp: channels.whatsapp,
-        email: channels.email,
-        hoursEn: channels.hoursEn,
-        hoursAr: channels.hoursAr,
-        replyEn: channels.replyEn,
-        replyAr: channels.replyAr,
-      },
-      topics: topics.map((t) => ({ id: t.id, route: t.route, en: t.en, ar: t.ar })),
-    });
-  });
-
-  /**
-   * `POST /v1/support/tickets` — NON-NEGOTIABLE #11, in one line of code.
-   *
-   *     route: topic.route
-   *
-   * Never `body.route`. A client-supplied route lands a wallet dispute in the
-   * salon's inbox, and the customer's money question is then answered by the
-   * merchant she is disputing. A `route` in the body is IGNORED rather than
-   * refused — the same treatment `POST /campaigns` gives a client-supplied
-   * `status`, and for the same reason: the field is not the client's to have an
-   * opinion about, so there is nothing to negotiate over.
-   *
-   * The topic must EXIST. An unknown `topicId` is a 400 naming the list rather
-   * than a ticket routed to a default, because "route it somewhere sensible"
-   * is the decision this endpoint exists to take away from guesswork.
-   *
-   * RULE 5 — "Deduplicate an identical message inside 5 minutes rather than
-   * opening a second ticket." A double-tapped Send is the scanner's double scan
-   * in another costume: the customer gets the SAME ticket id back, because two
-   * reference numbers for one question is a customer told two different things
-   * by two different agents.
-   *
-   * RULE 3 — a `ref` matching one of HER OWN transactions is linked. Scoped to
-   * her: an unscoped lookup would let anyone confirm whether a receipt number
-   * exists by watching whether it linked.
-   */
-  app.post('/v1/support/tickets', async (req, reply) => {
-    const p = requireMember(req);
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const topicId = requireString(body.topicId, 'topicId', 100);
-    const message = requireString(body.message, 'message', 4000);
-    const ref = typeof body.ref === 'string' ? body.ref.trim().slice(0, 100) : '';
-    const via = body.via ?? 'wa';
-    if (via !== 'wa' && via !== 'email') {
-      throw badRequest('invalid_via', 'via must be wa or email.');
-    }
-
-    const [topic] = await db
-      .select()
-      .from(supportTopic)
-      .where(and(eq(supportTopic.id, topicId), eq(supportTopic.active, true)))
-      .limit(1);
-    if (!topic) {
-      const known = await db
-        .select({ id: supportTopic.id })
-        .from(supportTopic)
-        .where(eq(supportTopic.active, true))
-        .orderBy(supportTopic.position);
-      throw badRequest(
-        'unknown_topic',
-        `Pick a topic from the list: ${known.map((t) => t.id).join(', ')}.`,
-      );
-    }
-
-    // Rule 5, before anything is written.
-    const since = new Date(Date.now() - TICKET_DEDUPE_MINUTES * 60_000);
-    const [duplicate] = await db
-      .select()
-      .from(supportTicket)
-      .where(
-        and(
-          eq(supportTicket.memberId, p.id),
-          eq(supportTicket.topicId, topic.id),
-          eq(supportTicket.message, message),
-          gte(supportTicket.createdAt, since),
-        ),
-      )
-      .limit(1);
-    if (duplicate) return reply.send(await serialiseTicket(duplicate));
-
-    // Rule 3. Scoped to her own transactions.
-    let transactionId: string | null = null;
-    if (ref) {
-      const [t] = await db
-        .select({ id: transaction.id })
-        .from(transaction)
-        .where(and(eq(transaction.id, ref), eq(transaction.memberId, p.id)))
-        .limit(1);
-      transactionId = t?.id ?? null;
-    }
-
-    const [row] = await db
-      .insert(supportTicket)
-      .values({
-        id: ticketId(),
-        memberId: p.id,
-        salonId: p.salonId,
-        topicId: topic.id,
-        // ---- NON-NEGOTIABLE #11 ----
-        // From the TOPIC. `body.route` is never read, anywhere in this handler.
-        route: topic.route,
-        message,
-        ref,
-        transactionId,
-        via,
-      })
-      .returning();
-    if (!row) throw conflict('ticket_not_created', 'That message could not be sent. Try again.');
-
-    /**
-     * NOT an audit_log row. `audit_log` is the salon's record of authority and
-     * money being spent, filtered by Money / Rules / Access / Risk, and it is
-     * readable by any merchant holding the right permission. A customer's
-     * support message — very often a complaint ABOUT that merchant, and
-     * routed to AVO precisely so the merchant does not see it — has no
-     * business in it. The ticket row is its own record.
-     */
-    return reply.send(await serialiseTicket(row));
-  });
 
   /**
    * CAMPAIGNS HAVE MOVED to routes/campaigns.ts, and it is not a tidy-up.

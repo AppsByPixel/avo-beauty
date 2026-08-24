@@ -27,15 +27,61 @@ import { ApiError, badRequest } from './errors';
  * is the same pattern, so a value that passes here cannot be refused by the
  * database with a 500.
  */
+export const E164 = /^\+[1-9][0-9]{6,14}$/;
+
 export function parseE164(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim().replace(/[\s-]/g, '') : '';
-  if (!/^\+[1-9][0-9]{6,14}$/.test(raw)) {
+  if (!E164.test(raw)) {
     throw badRequest(
       'invalid_phone',
       'Enter the number with its country code, like +96599123456.',
     );
   }
   return raw;
+}
+
+/**
+ * AN EMAIL, OR NULL TO CLEAR IT — the third field with two doors onto it.
+ *
+ * This is `routes/members.ts`'s own function, unchanged, moved here when
+ * `PATCH /v1/platform/support/channels` became the second writer of an email
+ * address. It arrives with its original reasoning intact:
+ *
+ *   Deliberately permissive: the only structural claim made here is that there is
+ *   something either side of an `@` and a dot in the domain. An address is proved
+ *   by sending to it, not by a regular expression, and a stricter pattern here
+ *   would reject valid addresses while proving nothing about the rest.
+ *
+ * The reason it MOVED is the reason `parseE164` is in this file at all, and the
+ * reason `HHMM` is: the copy that drifts is the one nobody is reading. A support
+ * inbox and a customer's contact address are both "an email this product will
+ * send to", and two patterns able to disagree about that is a receipt that
+ * bounces from one door and not from the other.
+ */
+export function parseEmail(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') {
+    throw badRequest('invalid_email', 'email must be an address or null.');
+  }
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  if (trimmed.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw badRequest('invalid_email', 'That does not look like an email address.');
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * The same address, REQUIRED. `support_config.email` is `NOT NULL` — a support
+ * panel with no inbox on it is a Contact us screen that cannot be contacted —
+ * so the nullable form above is not the right shape for that door.
+ */
+export function requireEmail(value: unknown): string {
+  const parsed = parseEmail(value);
+  if (parsed === null) {
+    throw badRequest('invalid_email', 'An email address is required.');
+  }
+  return parsed;
 }
 
 /**
