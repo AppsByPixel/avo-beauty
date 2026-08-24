@@ -1,13 +1,17 @@
 import { useEffect } from 'react';
 import {
   useInfiniteQuery,
+  useMutation,
+  useQueryClient,
   type InfiniteData,
   type UseInfiniteQueryResult,
+  type UseMutationResult,
 } from '@tanstack/react-query';
 import { authedRequest } from '../auth/authedRequest.js';
 
 /**
- * `GET /v1/platform/salons` — the owner console's Salons list.
+ * The owner console's Salons section: `GET /v1/platform/salons` (the list) and
+ * `POST /v1/platform/salons` (the onboarding wizard's write, at the bottom).
  *
  * ONE CLIENT FILE PER SERVER ROUTE FILE is the house rule, and this endpoint
  * lives in `api/src/routes/platformConsole.ts` beside metrics/settings/audit. It
@@ -50,11 +54,11 @@ import { authedRequest } from '../auth/authedRequest.js';
  * That is stated at the item rather than left to look like a typo.
  *
  * =========================================================================
- * TWO FIELDS THE DESIGN DRAWS AND THE WIRE DOES NOT CARRY
+ * WHAT THE DESIGN DRAWS AND THE WIRE DOES NOT CARRY
  * =========================================================================
- * Both were refused by the API on purpose, and the screen follows the refusal
- * rather than overriding it from the design — the same discipline `Analytics.tsx`
- * applies to the "Salons live" tile:
+ * Refused by the API on purpose, and the screen follows the refusal rather than
+ * overriding it from the design — the same discipline `Analytics.tsx` applies to
+ * the "Salons live" tile:
  *
  *   `live` / `suspended`   The design draws a Live toggle per row ("flip it off
  *                          to instantly suspend it") and `salon` has NO SUCH
@@ -63,10 +67,24 @@ import { authedRequest } from '../auth/authedRequest.js';
  *                          `true` — a list that says five salons are live when the
  *                          product cannot suspend one is worse than a list that
  *                          does not raise the question.
- *   `city`                 No city column either. `branchCount` is served in its
- *                          place, which is a real fact about a salon, and the
- *                          column is relabelled rather than a branch name dressed
- *                          up as a city.
+ *
+ * `city` WAS ONE OF THEM AND IS NOT ANY MORE. Migration 0037 added
+ * `salon.city` (nullable) for the onboarding wizard's step 1, and the list
+ * serialiser now emits it — checked on the wire, not taken from a summary, which
+ * matters because the summary said the opposite:
+ *
+ *     GET /v1/platform/salons  →  {"id":"SAL-AMARA", … "city":null …}
+ *                                 {"id":"SAL-GLOWBAR", … "city":"Jabriya" …}
+ *
+ * So the design's City column is drawn, and it is EMPTY for every salon that
+ * predates the column — which is the honest rendering: the seeded two have no
+ * city on record, and a dash says exactly that. `branchCount` keeps its column
+ * too; it was never a stand-in for the city, it is its own fact.
+ *
+ * `ownerPhone` IS COLLECTED AND NEVER READ BACK. The wizard posts it, no endpoint
+ * serves it — deliberately, per the migration, because members can read a salon.
+ * So the console cannot show an admin the number she just typed. Named here so
+ * nobody looks for the field.
  *
  * `memberCount` COUNTS TOMBSTONED (erased) MEMBERS, deliberately and per the
  * handler: an erased member's row survives so the books resolve, and this figure
@@ -100,6 +118,8 @@ export interface PlatformSalon {
   name: string;
   /** Null where the salon has not been given an Arabic name. Never guessed. */
   nameAr: string | null;
+  /** Null for every salon created before migration 0037. See the header. */
+  city: string | null;
   plan: SalonPlan;
   loyaltyMode: LoyaltyMode;
   /** Open branches only — the handler excludes `closed_at IS NOT NULL`. */
@@ -165,10 +185,21 @@ export function parsePlatformSalonPage(raw: unknown): PlatformSalonPage {
       if (s.nameAr !== null && typeof s.nameAr !== 'string') {
         throw new Error(`salons.items[${i}].nameAr was neither a string nor null.`);
       }
+      /*
+       * `city` MUST be present as a key, and MAY be null. Missing entirely is a
+       * different fact from null — it would mean this client is talking to an API
+       * from before 0037, and rendering an empty City column for that is a silent
+       * downgrade rather than an empty record.
+       */
+      if (!('city' in s)) throw new Error(`salons.items[${i}] carried no city key.`);
+      if (s.city !== null && typeof s.city !== 'string') {
+        throw new Error(`salons.items[${i}].city was neither a string nor null.`);
+      }
       return {
         id: str(s.id, `salons.items[${i}].id`),
         name: str(s.name, `salons.items[${i}].name`),
         nameAr: s.nameAr,
+        city: s.city,
         plan: plan as SalonPlan,
         loyaltyMode: mode as LoyaltyMode,
         branchCount: count(s.branchCount, `salons.items[${i}].branchCount`),
@@ -235,4 +266,120 @@ export function useAllPlatformSalons(): {
     isError: query.isError,
     complete: query.isSuccess && !hasNextPage,
   };
+}
+
+/* ==================================================== ONBOARD — the write == */
+
+/**
+ * `POST /v1/platform/salons`, the four-step wizard's write.
+ *
+ * =========================================================================
+ * THE CREATE'S GATE IS `salons`. THE LIST'S IS `analytics`. THEY ARE DIFFERENT
+ * AUTHORITIES AND THE SCREEN HAS TO SAY SO.
+ * =========================================================================
+ * Driven on `avo_lane_c`, with `mariam.k` — the seeded analyst, `analytics: true,
+ * salons: false`:
+ *
+ *   GET  /v1/platform/salons   200   she reads every salon
+ *   POST /v1/platform/salons   403   "Your console account cannot open Salons.
+ *                                     The platform owner can grant it."
+ *
+ * The handler's reasoning is worth carrying: `analytics` is the ONE section every
+ * preset holds, and the design calls an analyst "read-only metrics" — gating
+ * creation there would hand every analyst the power to mint a tenant, an owner
+ * credential and an invite to a phone number.
+ *
+ * So `Salons.tsx` courtesy-gates the "+ Onboard a salon" button on
+ * `sections.salons` while the list stays open to `analytics`. That is the one
+ * place in this console where the two facts diverge on a single screen, and #7 is
+ * intact either way: the button is a courtesy and the 403 above is the control.
+ *
+ * =========================================================================
+ * IDEMPOTENCY: MINTED ON ENTERING REVIEW, HELD ACROSS RETRIES
+ * =========================================================================
+ * `Idempotency-Key` is REQUIRED — 400 `idempotency_key_required` without one, and
+ * the handler's own note explains why a create is keyed when
+ * `PATCH /v1/platform/settings` next door is not: there is no natural key (two
+ * clients can share a name), the id is server-minted so a retry cannot be
+ * idempotent by id, and a double submit does not merely duplicate a row — it
+ * sends one client two sign-ins for two salons, one of them a ghost.
+ *
+ * Measured, both halves, against the real endpoint:
+ *
+ *   same key + same body       201 and the SAME salon id back (a replay)
+ *   same key + different body  422 `idempotency_key_reused`
+ *
+ * That second line is what fixes WHERE the key is minted. It cannot be minted per
+ * click (a double-tap would make two salons) and it cannot be minted once per
+ * wizard (going Back, editing a field and resubmitting would 422 forever). It is
+ * minted on every ENTRY into the review step: a double-tapped Confirm replays one
+ * key, and an edit-then-resubmit arrives with a fresh one. The key lives in the
+ * wizard, not in this hook, because only the wizard knows when review was entered.
+ *
+ * TWO GLOW BARS EXIST ON THIS LANE'S DATABASE because the first driven create ran
+ * twice under two different keys. That is the hazard, reproduced: the endpoint
+ * accepted both, minted `SAL-GLOWBAR` and `SAL-GLOWBAR2`, and neither is wrong on
+ * its own. The key is the only thing standing between a fat-fingered Confirm and
+ * exactly that.
+ */
+export interface OnboardSalonInput {
+  /* step 1 — details & plan */
+  name: string;
+  nameAr?: string;
+  city: string;
+  /** E.164. The server refuses anything else by name: `invalid_phone`. */
+  ownerPhone: string;
+  /** The design's Title-Case label. `parsePlan` case-folds it at the door. */
+  plan: string;
+  /* step 2 — modules & deposit */
+  modules: { booking: boolean; shop: boolean };
+  /** INTEGER FILS. Non-negotiable #1 — no float reaches this field. */
+  depositFils: number;
+  /* step 3 — loyalty & brand */
+  loyaltyMode: LoyaltyMode;
+  /** Stamps mode only. The server fills the tier ladder from DEFAULT_LOYALTY. */
+  stampTarget?: number;
+  brandColor: string;
+}
+
+/**
+ * `{ salon, owner, invite }` — an ENVELOPE, and the handler is explicit that it is
+ * deliberately not the entity with extra keys, because `SalonSchema` strips
+ * undeclared ones and a top-level `invite` would vanish in exactly the client
+ * that validates.
+ *
+ * `invite.delivered` IS TYPED `false`, not `boolean`. No WhatsApp sender is wired
+ * — the standing client escalation — and the server sends the literal. Typing it
+ * as the literal means a screen cannot branch on it and accidentally grow a
+ * "sent!" path that is unreachable today and wrong tomorrow.
+ */
+export interface OnboardSalonResult {
+  salon: { id: string; name: string; city: string | null; brandColor: string };
+  owner: { staffId: string; name: string; handle: string; role: string; passwordSet: false };
+  invite: { channel: 'whatsapp'; to: string; expiresAt: string; delivered: false };
+}
+
+export function useOnboardSalon(): UseMutationResult<
+  OnboardSalonResult,
+  unknown,
+  { input: OnboardSalonInput; idempotencyKey: string }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ input, idempotencyKey }) =>
+      authedRequest<OnboardSalonResult>('owner', '/v1/platform/salons', {
+        method: 'POST',
+        body: input,
+        idempotencyKey,
+      }),
+    /*
+     * INVALIDATED, NOT PUSHED. The response carries the salon but not
+     * `branchCount`/`memberCount`, and the list is keyed by id ASC with a cursor —
+     * so splicing a row in would put it in the wrong place with two invented
+     * zeros. A refetch is one request and the numbers are the server's.
+     */
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: platformSalonKeys.list });
+    },
+  });
 }

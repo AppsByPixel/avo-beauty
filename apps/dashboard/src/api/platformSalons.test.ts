@@ -7,14 +7,19 @@ import { parsePlatformSalonPage } from './platformSalons.js';
  * The salon list parser and the `?salon=` scope, against the body the real
  * endpoint actually sent.
  *
- * THE FIXTURE IS A CAPTURED RESPONSE, not a hand-written shape — the seed's two
- * salons off `GET /v1/platform/salons` on `avo_lane_c`, with the API booted on
- * 4130 and an owner-console token. It carries three things a written fixture
- * would have got wrong and the screen depends on: `nameAr` present on one salon
- * and NULL on the other, the enums LOWERCASE on the wire against a design that
- * draws them capitalised, and a genuine `memberCount: 0` — which is a real zero
- * after data lands, and the reason the no-fabricated-zero rule is about PENDING
- * rather than about the digit.
+ * THE FIXTURE IS A CAPTURED RESPONSE, not a hand-written shape — off
+ * `GET /v1/platform/salons` on `avo_lane_c`, API on 4130, owner-console token,
+ * after onboarding a salon through the real wizard endpoint. It carries four
+ * things a written fixture would have got wrong and the screen depends on:
+ *
+ *   - `nameAr` present on one salon and NULL on the other.
+ *   - `city` PRESENT AND NULL on a seeded salon, present and real on an
+ *     onboarded one. Migration 0037 made the column nullable, so the two
+ *     coexist permanently and the City column has to render both.
+ *   - the enums LOWERCASE on the wire, against a design that draws them
+ *     capitalised.
+ *   - a genuine `memberCount: 0`, which is a real zero after data lands and the
+ *     reason the no-fabricated-zero rule is about PENDING rather than the digit.
  */
 const WIRE = {
   items: [
@@ -22,21 +27,23 @@ const WIRE = {
       id: 'SAL-AMARA',
       name: 'Amara',
       nameAr: 'أمارا',
+      city: null,
       plan: 'growth',
       loyaltyMode: 'tiers',
       branchCount: 2,
       memberCount: 2,
-      createdAt: '2026-08-24T11:03:52.265Z',
+      createdAt: '2026-08-24T11:37:38.149Z',
     },
     {
-      id: 'SAL-LUMIERE',
-      name: 'Lumiere',
+      id: 'SAL-GLOWBAR',
+      name: 'Glow Bar',
       nameAr: null,
+      city: 'Jabriya',
       plan: 'starter',
-      loyaltyMode: 'tiers',
-      branchCount: 2,
+      loyaltyMode: 'stamps',
+      branchCount: 1,
       memberCount: 0,
-      createdAt: '2026-08-24T11:03:52.268Z',
+      createdAt: '2026-08-24T11:38:14.902Z',
     },
   ],
   nextCursor: null,
@@ -51,21 +58,25 @@ describe('parsePlatformSalonPage reads the real wire', () => {
       id: 'SAL-AMARA',
       name: 'Amara',
       nameAr: 'أمارا',
+      city: null,
       plan: 'growth',
       loyaltyMode: 'tiers',
       branchCount: 2,
       memberCount: 2,
-      createdAt: '2026-08-24T11:03:52.265Z',
+      createdAt: '2026-08-24T11:37:38.149Z',
     });
     expect(page.items[1]?.nameAr).toBeNull();
+    // The two city cases the column has to render, side by side on one page.
+    expect(page.items[0]?.city).toBeNull();
+    expect(page.items[1]?.city).toBe('Jabriya');
     // A real zero survives. The rule the screen enforces is about pending, and a
     // parser that "helpfully" dropped a zero count would break the honest case.
     expect(page.items[1]?.memberCount).toBe(0);
   });
 
   it('carries a cursor when the server sends one', () => {
-    expect(parsePlatformSalonPage({ ...WIRE, nextCursor: 'SAL-LUMIERE' }).nextCursor).toBe(
-      'SAL-LUMIERE',
+    expect(parsePlatformSalonPage({ ...WIRE, nextCursor: 'SAL-GLOWBAR' }).nextCursor).toBe(
+      'SAL-GLOWBAR',
     );
   });
 
@@ -95,6 +106,23 @@ describe('parsePlatformSalonPage reads the real wire', () => {
   it('refuses an nameAr that is neither a string nor null', () => {
     const bad = { ...WIRE, items: [{ ...WIRE.items[0], nameAr: 42 }] };
     expect(() => parsePlatformSalonPage(bad)).toThrow(/nameAr/);
+  });
+
+  /**
+   * A MISSING `city` KEY IS NOT THE SAME AS `city: null`, and this is the
+   * assertion that says so. Null means "no city on record" and renders a dash;
+   * absent means this client is talking to an API from before migration 0037, and
+   * silently drawing an empty column for every salon would hide that entirely.
+   */
+  it('refuses a row with no city key at all, while accepting a null one', () => {
+    const { city: _dropped, ...withoutCity } = WIRE.items[1] as { city: unknown };
+    expect(() => parsePlatformSalonPage({ ...WIRE, items: [withoutCity] })).toThrow(/city/);
+    expect(parsePlatformSalonPage({ ...WIRE, items: [WIRE.items[0]] }).items[0]?.city).toBeNull();
+  });
+
+  it('refuses a city that is neither a string nor null', () => {
+    const bad = { ...WIRE, items: [{ ...WIRE.items[0], city: 7 }] };
+    expect(() => parsePlatformSalonPage(bad)).toThrow(/city/);
   });
 
   it('refuses a body that is not the page shape at all', () => {

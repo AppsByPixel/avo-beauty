@@ -222,9 +222,28 @@ export function parsePlatformSettings(raw: unknown): PlatformSettings {
   };
 }
 
-export function usePlatformSettings(): UseQueryResult<PlatformSettings> {
+/**
+ * `enabled` EXISTS FOR A SECOND CONSUMER, and it is not a permission check.
+ *
+ * Controls calls this with no argument and is gated by the section it lives in.
+ * The onboarding wizard next door reads ONE field from it — the platform's
+ * new-salon deposit default, which `POST /v1/platform/salons` applies when the
+ * body omits `depositFils` — and the wizard is reachable by an admin who holds
+ * `salons` and NOT `controls` (the `support` preset is exactly that shape). For
+ * her this read is a guaranteed 403.
+ *
+ * So the flag says "do not make a request whose refusal is already known", which
+ * is a courtesy about network noise rather than a control: #7 is unaffected, the
+ * server still refuses, and the caller falls back to a value it shows on screen.
+ * Passing `enabled: false` must never be how a screen decides what someone may
+ * see.
+ */
+export function usePlatformSettings(
+  options: { enabled?: boolean } = {},
+): UseQueryResult<PlatformSettings> {
   return useQuery({
     queryKey: consoleKeys.settings,
+    enabled: options.enabled ?? true,
     queryFn: async ({ signal }) =>
       parsePlatformSettings(
         await authedRequest<unknown>('owner', '/v1/platform/settings', { signal }),

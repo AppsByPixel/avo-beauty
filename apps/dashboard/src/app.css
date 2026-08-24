@@ -4137,3 +4137,335 @@ a:hover {
   line-height: 1.5;
   max-width: 680px;
 }
+
+/* ========================================== console · onboarding wizard == */
+
+/*
+ * The design paints the scrim `rgba(20,21,17,0.5)` with a 4px blur. The colour
+ * comes from `--avo-ink` through `color-mix` — the same construction the tablet
+ * drawer's scrim uses — rather than a re-typed rgba, so a white-label build that
+ * moves the ink moves both overlays together.
+ */
+.wiz {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: color-mix(in srgb, var(--avo-ink) 50%, transparent);
+  backdrop-filter: blur(4px);
+  animation: avo-fade 180ms ease-out;
+}
+
+/*
+ * interaction-spec.md §3, reduced motion: the sheet's arrival cross-fades rather
+ * than being shortened. The scrim's fade is the only motion here, so removing it
+ * is the whole answer.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .wiz {
+    animation: none;
+  }
+}
+
+.wiz__panel {
+  width: 640px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  background: var(--avo-surface);
+  border-radius: 22px;
+  box-shadow: 0 40px 80px -30px color-mix(in srgb, var(--avo-ink) 50%, transparent);
+}
+
+.wiz__head {
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
+.wiz__headrow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wiz__title {
+  font-size: 22px;
+  margin: 0;
+}
+
+.wiz__steplabel {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin: 3px 0 0;
+}
+
+.wiz__close {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
+  background: var(--avo-surface-alt2);
+  border-radius: 10px;
+  color: var(--avo-text-muted);
+}
+
+.wiz__progress {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--avo-disabled-bg);
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+/* A SURFACE fill, which is what `--avo-brand` is for. No text sits on it — #9. */
+.wiz__progressfill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--avo-brand);
+  transition: width 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wiz__progressfill {
+    transition: none;
+  }
+}
+
+.wiz__body {
+  padding: 24px 28px;
+}
+
+.wiz__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wiz__label {
+  display: block;
+  font-size: var(--avo-type-label-size);
+  font-weight: var(--avo-type-label-weight);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  margin-bottom: 7px;
+}
+
+.wiz__hint {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin: 0;
+}
+
+.wiz__plans {
+  display: flex;
+  gap: 9px;
+}
+
+.wiz__plan {
+  flex: 1;
+  border-radius: 11px;
+  padding: 12px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--avo-white);
+  color: var(--avo-text-muted-label);
+  border: 1px solid var(--avo-border-control);
+}
+
+/*
+ * The selected plan is `--avo-brand-deep` with white text, never `--avo-brand`.
+ * #9: `--avo-brand` is a surface colour and this button carries a label.
+ */
+.wiz__plan[data-on] {
+  background: var(--avo-brand-deep);
+  border-color: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+.wiz__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+.wiz__rowlabel {
+  font-size: 14.5px;
+  font-weight: 500;
+}
+
+.wiz__rowsub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.wiz__unit {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+.wiz__note {
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: 14px;
+  padding: 18px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--avo-text-muted-strong);
+  margin: 0;
+}
+
+.wiz__swatches {
+  display: flex;
+  gap: 9px;
+}
+
+.wiz__swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  cursor: pointer;
+  border: 2.5px solid transparent;
+  padding: 0;
+}
+
+.wiz__swatch[data-on] {
+  border-color: var(--avo-ink);
+}
+
+/*
+ * A field-level refusal, in the danger tokens — the same pair the sign-in error
+ * banner uses. Not an ErrorState: this is input validation on one field, and the
+ * wizard is still usable around it.
+ */
+.wiz__fielderror {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-danger-text);
+  background: var(--avo-danger-bg);
+  border-radius: 12px;
+  padding: 11px 14px;
+}
+
+.wiz__derived {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.wiz__chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  padding: 3px 8px;
+}
+
+/*
+ * White on the DERIVED deep, which `deriveBrandSet` has already proven clears
+ * 4.5:1 — that is the whole contract of the value being shown. The dark variant
+ * sits on the tint, whose pairing the same function checked.
+ */
+.wiz__chiplabel {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--avo-white);
+}
+
+.wiz__chiplabel--dark {
+  color: var(--avo-ink);
+}
+
+.wiz__summary {
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: 16px;
+  padding: 6px 20px;
+  margin: 0;
+}
+
+.wiz__summaryrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+}
+
+.wiz__summaryrow:last-child {
+  border-bottom: none;
+}
+
+.wiz__summaryrow dt {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+.wiz__summaryrow dd {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.wiz__invite {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--avo-brand-tint);
+  border-radius: 12px;
+  padding: 13px 16px;
+  margin-top: 16px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-brand-deeper);
+}
+
+.wiz__invitedot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.wiz__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 28px 24px;
+  border-top: 1px solid var(--avo-hairline);
+}
+
+/* The narrow console still gets the full wizard — it scrolls, it never drops a step. */
+.console[data-bp='narrow'] .wiz,
+.console[data-bp='tablet'] .wiz {
+  padding: 16px;
+}
+
+/* ------------------------------------------------------- the city column -- */
+
+.salons__city {
+  color: var(--avo-text-muted-strong);
+}
