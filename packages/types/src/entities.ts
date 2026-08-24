@@ -71,10 +71,44 @@ export const SocialLinkSchema = z.object({
   on: z.boolean(),
 });
 
+/**
+ * A wall-clock time. `24:00` is admitted because it is a real END of a trading
+ * day and the API accepts it as one — the API also refuses it as a START, which
+ * is a POSITIONAL rule and deliberately not expressed here. See below.
+ *
+ * Mirrors `HHMM_OR_END_OF_DAY` in `api/src/http/fields.ts`. Two copies of one
+ * regex is one more than anybody wants, but the alternative is `packages/types`
+ * importing from `api/`, which inverts the dependency every surface relies on.
+ * `e2e` asserts the two agree, so a drift fails rather than silently diverging.
+ */
+const CLOCK = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
+
+/**
+ * WHY THIS VALIDATES THE CLOCK AND NOT THE ORDERING.
+ *
+ * It used to be `z.tuple([z.string(), z.string()])` — "two strings", which is a
+ * lossy description of "two times", and the gap between the two is what let
+ * `{"morning":["banana",7]}` reach the column. That value then threw inside
+ * `hhmmToMinutes` during `computeAvailability`, so ONE bad Settings save answered
+ * 500 on every availability read for that salon, three screens from the field
+ * that was typed wrong. Lane A closed the door; this closes the description, so a
+ * client building business hours fails locally on its own field instead of
+ * meeting an unpredicted 400 — and so `packages/mock` cannot serve a shape the
+ * real API would refuse.
+ *
+ * ORDERING IS DELIBERATELY NOT CHECKED, and this is the part not to "tighten"
+ * later. `tradingSpans` drops a span with `to <= from`, which makes
+ * `evening: ["21:00", "21:00"]` the ESTABLISHED way to say "no second sitting" —
+ * so a `from < to` refinement here would break every salon that trades straight
+ * through the afternoon with no evening session. The artist-windows route DOES
+ * refuse a zero-length span, correctly, because an open day with no bookable slot
+ * is a merchant who meant something else. Two different questions about
+ * same-looking data; only one of them belongs to the shape.
+ */
 export const BusinessHoursSchema = z.object({
   /** ["10:00", "13:00"] — the Kuwaiti afternoon closure is the norm, not an edge case. */
-  morning: z.tuple([z.string(), z.string()]),
-  evening: z.tuple([z.string(), z.string()]),
+  morning: z.tuple([z.string().regex(CLOCK), z.string().regex(CLOCK)]),
+  evening: z.tuple([z.string().regex(CLOCK), z.string().regex(CLOCK)]),
 });
 
 export const SalonSchema = z.object({
