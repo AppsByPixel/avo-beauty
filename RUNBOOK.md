@@ -81,6 +81,15 @@ Repeat for `feat/qa`, `feat/wallet`, `feat/web`. **Check after every merge, not 
 Then verify the way CI does. **Two kinds of state lie to you, and wiping one is not enough.**
 
 ```bash
+# 0. Workspace links — a warm tree has symlinks a changed manifest does not.
+#    Cheap, and it fails LOUDLY in the most misleading way when skipped: a new
+#    workspace dependency (api gaining @avo/tokens, 2026-08-24) typechecks fine in
+#    the lane that added it, because that worktree has its own node_modules, and
+#    then dies in trunk with "Cannot find module '@avo/tokens'" — which reads
+#    exactly like a broken import rather than a missing link. CI already does this
+#    (`pnpm install --frozen-lockfile`); the local recipe did not, so trunk hit it.
+pnpm install
+
 # 1. Build artifacts — a warm tree has a dist a clean checkout does not
 rm -rf packages/*/dist .turbo
 
@@ -124,6 +133,11 @@ Then push and level every lane:
 ```bash
 git push origin dev
 for l in api wallet web qa; do git -C ~/dev/avo-$l rebase dev && git -C ~/dev/avo-$l push -f origin feat/$l; done
+
+# Each worktree has its OWN node_modules, so a rebase that brings in a manifest
+# change leaves that lane's links stale. Tell the lane to `pnpm install`, or it
+# will chase a "Cannot find module" that is nothing to do with its own work.
+for l in api wallet web qa; do (cd ~/dev/avo-$l && pnpm install); done
 ```
 
 ### 5 · Route the findings
