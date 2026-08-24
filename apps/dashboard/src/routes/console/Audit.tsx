@@ -33,11 +33,17 @@ import { SectionError } from '../sectionState.js';
  * =========================================================================
  * THE PICKER IS A COURTESY BUILT ON A SECOND, DIFFERENTLY-GATED READ
  * =========================================================================
- * The log is `requirePlatform(req, 'audit')`; the salon list behind the picker is
- * `requirePlatform(req, 'analytics')`. The role presets happen to give both to
- * `owner` and `admin` and neither to `support`, but sections are editable one chip
- * at a time, so an admin CAN hold `audit` without `analytics` — and then the
- * picker's read 403s while the log itself is perfectly readable.
+ * The log is `requirePlatform(req, 'audit')` (platformConsole.ts:1068); the salon
+ * list behind the picker is `requirePlatform(req, 'salons')` (:243). That second
+ * gate read `analytics` until commit 4cc03c5 regated it, and this paragraph named
+ * the old section for some weeks after — the argument below never depended on
+ * WHICH section it was, only that it is a different one, which is why the
+ * conclusion survived the staleness intact.
+ *
+ * The presets give both to `owner` and `admin`; `support` holds `salons` but not
+ * `audit`, and `analyst` holds neither. But sections are editable one chip at a
+ * time, so an admin CAN hold `audit` without `salons` — and then the picker's read
+ * 403s while the log itself is perfectly readable.
  *
  * That case renders the log and no picker. It must not reach `SectionError`: a
  * failed optional control is not a failed section, and taking the audit log to an
