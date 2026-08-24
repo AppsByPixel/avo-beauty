@@ -29,6 +29,9 @@ importers:
 
   api:
     dependencies:
+      '@avo/tokens':
+        specifier: workspace:*
+        version: link:../packages/tokens
       '@avo/types':
         specifier: workspace:*
         version: link:../packages/types

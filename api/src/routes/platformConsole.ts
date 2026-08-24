@@ -2,6 +2,8 @@
  * The owner console's three remaining sections — Analytics, Controls, Audit.
  *
  *   GET   /v1/platform/metrics    analytics   "How AVO is performing across every salon"
+ *   GET   /v1/platform/salons     analytics   every salon, as facts that exist
+ *   POST  /v1/platform/salons     salons      the onboarding wizard's write
  *   GET   /v1/platform/settings   controls    "Every platform switch, fee and default"
  *   PATCH /v1/platform/settings   controls
  *   GET   /v1/platform/audit      audit       the platform-wide log
@@ -38,7 +40,7 @@ import { auditLog } from '../db/schema/audit';
 import { salon } from '../db/schema/salon';
 import { platformSettings } from '../db/schema/platformSettings';
 import { requirePlatform } from '../auth/principal';
-import { badRequest, notFound } from '../http/errors';
+import { badRequest, conflict, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
 import {
   auditSearchPredicate,
@@ -48,7 +50,15 @@ import {
   parseAuditLimit,
   serialiseAuditRow,
 } from '../services/auditRead';
+import {
+  awaitCommittedKey,
+  hashRequestBody,
+  principalScope,
+  readIdempotencyKey,
+  violatedConstraint,
+} from '../services/idempotency';
 import { computePlatformMetrics } from '../services/platformMetrics';
+import { mintSalonId, onboardSalon, parseOnboardInput } from '../services/salonOnboarding';
 import {
   CARD_PERCENT_STEP_BP,
   FLAG_COLUMN,
@@ -126,9 +136,14 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
    *     off to instantly suspend it") and the schema has NO SUCH COLUMN — Lane C
    *     already found this and it is a reported design gap, not a field to fake
    *     with `true`.
-   *   - NO `city`. `salon` has no city column; the closest real facts are branch
-   *     names ("Salmiya", "Kuwait City"), and `branchCount` is served instead of
-   *     dressing a branch name up as a city.
+   *   - `city` NOW EXISTS AND IS SERVED. This note used to read "NO `city`.
+   *     `salon` has no city column" and refused to dress a branch name up as one,
+   *     which was right — but the onboarding wizard's step 1 REQUIRES a city, so
+   *     migration 0037 added the column rather than let the create endpoint drop
+   *     a field the design insists on. It is nullable, and every salon that
+   *     predates 0037 answers `null` here, which is the true statement about a
+   *     row nobody supplied one for. `branchCount` stays: a salon's city and the
+   *     number of places it has chairs were never the same fact.
    *
    * GATED `analytics`, ARGUED RATHER THAN DEFAULTED — this is the one console
    * read where the gate-with-the-screen rule pulls two ways (the list is drawn
@@ -167,7 +182,7 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
       }
 
       const rows = (await db.execute(sql`
-        SELECT s.id, s.name, s.name_ar, s.plan, s.loyalty_mode, s.created_at,
+        SELECT s.id, s.name, s.name_ar, s.city, s.plan, s.loyalty_mode, s.created_at,
                (SELECT count(*)::int FROM branch b WHERE b.salon_id = s.id AND b.closed_at IS NULL) AS branches,
                (SELECT count(*)::int FROM member m WHERE m.salon_id = s.id) AS members
           FROM salon s
@@ -184,6 +199,7 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
           id: String(r.id),
           name: String(r.name),
           nameAr: r.name_ar === null || r.name_ar === undefined ? null : String(r.name_ar),
+          city: r.city === null || r.city === undefined ? null : String(r.city),
           plan: String(r.plan),
           loyaltyMode: String(r.loyalty_mode),
           branchCount: Number(r.branches ?? 0),
@@ -194,6 +210,140 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
       });
     },
   );
+
+  // ====================================================================
+  // ONBOARD A SALON — `POST /v1/platform/salons`
+  // ====================================================================
+  /**
+   * The four-step wizard's write. `design/README.md:165`: Salons →
+   * "+ Onboard a salon" → details & plan, modules & deposit, loyalty & brand
+   * colour, review → "Create salon & send invite".
+   *
+   * THIS IS THE ENDPOINT THAT DID NOT EXIST. `DECISIONS.md` § "White-label
+   * onboarding is a wizard" put it plainly: no `POST /salons`, no
+   * `POST /v1/platform/salons`, `api-contract.md` names neither, so every salon
+   * exists because `seed.ts` inserted it and onboarding a real client meant a
+   * hand-written INSERT. `build-plan.md` Phase 7 lists "Salons with the
+   * onboarding wizard"; this is its server half. A CONTRACT ADDITION, reported,
+   * the way `PATCH /v1/platform/messaging-policy` and the four admin routes were.
+   *
+   * ================= THE GATE IS `salons`, NOT `analytics` =================
+   * The GET above takes `analytics`, and its own comment says why that was the
+   * right call for a READ while naming the boundary this endpoint is on the other
+   * side of:
+   *
+   *     "The Salons MANAGEMENT screen — modules, deposit, the suspend that does
+   *      not exist yet — is a different endpoint and takes `salons` when it is
+   *      built; authority to SEE the platform's salons and authority to CHANGE
+   *      one were never the same thing."
+   *
+   * CREATING one is management, and it is the strongest form of it: it mints a
+   * tenant, an owner credential and an invite to a phone number. `analytics` is
+   * the one section EVERY role preset holds, `analyst` included — and the design
+   * describes an analyst as "read-only metrics". Gating creation there would hand
+   * every analyst the ability to onboard a client. `salons` is held by owner,
+   * admin and support, which matches the design's own preset copy for support
+   * ("accounts & salons").
+   *
+   * `PLATFORM_SECTIONS` already carries `salons` and `platform_admin` already has
+   * `perm_salons`, so nothing new was needed — no column, no `packages/types`
+   * change. `requirePlatform` has no default section, so this is gated on purpose
+   * rather than by omission.
+   *
+   * ================= WHY IT IS IDEMPOTENCY-KEYED =================
+   * Non-negotiable #4's letter names "top-ups, charges, orders, voids" and this
+   * is none of those. It is keyed on #4's REASON, and the argument is in
+   * `services/salonOnboarding.ts`: there is no natural key (two clients can share
+   * a name), the id is server-minted so a retry cannot be idempotent by id, and a
+   * double submit does not merely duplicate a row — it sends the client two
+   * sign-ins for two salons, one of them a ghost. `PATCH /v1/platform/settings`
+   * one screen over is deliberately NOT keyed, and its comment gives the
+   * distinction: it sets absolute values, so a replay produces the same row.
+   *
+   * The body is validated BEFORE the transaction opens, so a bad hex or a
+   * malformed phone number costs no lock and burns no key.
+   */
+  app.post('/v1/platform/salons', async (req, reply) => {
+    // FIRST. #7 — a tenant and a credential get created here.
+    const p = requirePlatform(req, 'salons');
+    // Then the key, before any work. #4's shape, `POST /orders` § the same line.
+    const key = readIdempotencyKey(req);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    /**
+     * The platform's own new-salon deposit default, read once. It has been
+     * settable in Controls since 0032 and NOTHING HAS EVER READ IT — see
+     * `parseDeposit` in the service. This is the join.
+     */
+    const settings = await readPlatformSettings(db);
+    const input = parseOnboardInput(body, settings.newSalonDepositFils);
+
+    const salonId = await mintSalonId(db, input.name);
+
+    const idem = {
+      scope: principalScope(p),
+      endpoint: 'POST /v1/platform/salons',
+      key,
+      /**
+       * THE VALIDATED INPUT, not the raw body — so two bodies that differ only in
+       * `plan: 'Growth'` vs `'growth'`, or that rely on different defaults, hash
+       * the same when they mean the same thing. `salonId` is NOT in the hash: it
+       * is minted per attempt, so including it would make every retry a
+       * "different body" 422 and defeat the whole mechanism.
+       */
+      requestHash: hashRequestBody(input),
+    };
+
+    try {
+      const result = await onboardSalon(db, input, salonId, {
+        principal: p,
+        idempotency: idem,
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+      return reply.code(result.status).send(result.body);
+    } catch (err) {
+      /**
+       * WHICH unique index fired, asked explicitly. `routes/orders.ts` does not
+       * have to ask because its transaction can only violate one; this one can
+       * violate three, and treating them alike is exactly the defect
+       * `violatedConstraint` was written for — a void answered
+       * "request_in_progress" for something permanent.
+       *
+       *   idempotency_key_*          a double submit. Replay the winner's 201.
+       *   salon_pkey                 two admins onboarding same-named salons in
+       *                              the same instant. The id probe is a
+       *                              check-then-act and this is its backstop.
+       *   staff_user_salon_handle_uq cannot happen — the salon is brand new, so
+       *                              its handle space is empty — but it is named
+       *                              here rather than swept into the replay path,
+       *                              because the day a second staff row is created
+       *                              on this path the honest answer is not "still
+       *                              being processed".
+       */
+      const constraint = violatedConstraint(err);
+      if (constraint === null) throw err;
+
+      if (constraint === 'salon_pkey') {
+        throw conflict(
+          'salon_id_taken',
+          'Another salon with that name was created a moment ago. Submit again.',
+        );
+      }
+      if (constraint === 'staff_user_salon_handle_uq') {
+        throw conflict('handle_taken', 'That owner handle is already in use at this salon.');
+      }
+
+      const stored = await awaitCommittedKey(db, idem);
+      if (stored) return reply.code(stored.status).send(stored.body);
+
+      throw conflict(
+        'request_in_progress',
+        'That request is still being processed. Try again in a moment.',
+      );
+    }
+  });
 
   // ====================================================================
   // CONTROLS — the switches, the fees, the new-salon default

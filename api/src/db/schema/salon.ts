@@ -45,8 +45,61 @@ export const salon = pgTable(
      * `name`, the same way an untranslated legal document falls back to `en`.
      */
     nameAr: text('name_ar'),
+    /**
+     * "Salmiya". NULLABLE — migration 0037 added it to a table with rows in it,
+     * and a backfilled city would be an invented fact about a real salon.
+     *
+     * WHY IT EXISTS NOW. The designed onboarding wizard's step 1 requires it
+     * (`wizReady` gates Continue on name + city + phone), the console renders it
+     * in the salon list row and the editor header, and there was no column — so
+     * `POST /v1/platform/salons` would have had to silently drop one of the three
+     * fields the wizard insists on. `routes/platformConsole.ts` had already
+     * recorded the absence: "NO `city`. `salon` has no city column". A CONTRACT
+     * ADDITION, reported; `packages/types` § SalonSchema is trunk's to extend.
+     *
+     * Not a branch name dressed up as a city, which is what that comment refused
+     * to do. A salon's city is where the business is; its branches are where its
+     * chairs are, and Amara has two of those in two different cities.
+     */
+    city: text('city'),
+    /**
+     * The owner's WhatsApp number, E.164 — the wizard's "Owner contact
+     * (WhatsApp)", and the DESTINATION of the invite the design promises
+     * ("Creating the salon sends the owner a WhatsApp invite with their dashboard
+     * sign-in").
+     *
+     * NULLABLE for the same reason `city` is: 0037 landed on a populated table.
+     *
+     * ON THE SALON RATHER THAN ON THE INVITE ROW. `staff_password_reset` is an
+     * outbox and its rows are consumed; the owner contact is the durable answer to
+     * "who does AVO call about this account", and re-issuing an invite must not
+     * require re-typing the number. It is also NOT on `staff_user`: putting a
+     * phone there would add a contact field to every scanner account across four
+     * surfaces, which is a different decision than this one.
+     *
+     * IT IS NOT SERVED BY `GET /salons/{id}`. That endpoint is readable by any
+     * authenticated principal of the salon — the customer wallet reads it for the
+     * name and brand colour — and the owner's personal number is not a
+     * customer-facing fact. `routes/salons.ts § serialiseSalon` says so at the
+     * omission.
+     */
+    ownerPhone: text('owner_phone'),
     plan: salonPlan('plan').notNull().default('starter'),
-    /** Drives the white-label token set. Validated through deriveBrandSet() at onboarding. */
+    /**
+     * Drives the white-label token set.
+     *
+     * VALIDATED THROUGH `deriveBrandSet()` AT BOTH DOORS —
+     * `POST /v1/platform/salons` and `PATCH /salons/{id}` — by
+     * `api/src/services/brandColor.ts`.
+     *
+     * This comment used to say "Validated through deriveBrandSet() at onboarding"
+     * and NOTHING DID IT. There was no create endpoint at all, and the update
+     * path's only guard was the hex CHECK below, so `#FFFF00` was a storable brand
+     * colour. A comment asserting a check that does not exist is worse than no
+     * comment: it stops the next reader looking. Third instance of that class in
+     * this build, and the reason the sentence above names the module rather than
+     * the intention.
+     */
     brandColor: text('brand_color').notNull(),
     moduleBooking: boolean('module_booking').notNull().default(false),
     moduleShop: boolean('module_shop').notNull().default(false),
@@ -108,6 +161,16 @@ export const salon = pgTable(
     // happen: `'' ?? name` is `''`, so a blank Arabic name defeats the client's
     // fallback and paints an empty heading. Absent is NULL; present is present.
     check('salon_name_ar_not_blank', sql`${t.nameAr} IS NULL OR length(btrim(${t.nameAr})) > 0`),
+    // Absent is NULL; present is present. Same rule as `name_ar` above, and for
+    // the same reason: `'' ?? name` is `''`, and a city rendered as an empty
+    // string in "Salmiya · Growth plan" leaves a stray separator.
+    check('salon_city_not_blank', sql`${t.city} IS NULL OR length(btrim(${t.city})) > 0`),
+    // The same shape `member_phone_is_e164` enforces and `parseE164` produces, so
+    // a number that passes the boundary cannot be refused here with a 500.
+    check(
+      'salon_owner_phone_is_e164',
+      sql`${t.ownerPhone} IS NULL OR ${t.ownerPhone} ~ '^\\+[1-9][0-9]{6,14}$'`,
+    ),
     check(
       'salon_stamp_reward_ar_not_blank',
       sql`${t.stampRewardAr} IS NULL OR length(btrim(${t.stampRewardAr})) > 0`,

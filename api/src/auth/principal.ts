@@ -63,6 +63,31 @@ export const PERMISSION_NAMES = [
 
 export type PermissionName = (typeof PERMISSION_NAMES)[number];
 
+/**
+ * The nine permission names, mapped to their nine columns.
+ *
+ * It lived in `routes/staff.ts` and moved here when a SECOND writer of
+ * `staff_user`'s permission columns appeared — the onboarding wizard's owner
+ * account, created by `services/salonOnboarding.ts`. A private copy in each
+ * writer is the shape of the defect `routes/salons.ts` records against the tier
+ * ladder: two doors into one set of columns, and the one nobody is reading is
+ * the one that drifts.
+ *
+ * `satisfies` is what makes a tenth permission a compile error here rather than
+ * a silently unwritten column at the far end.
+ */
+export const PERM_COLUMN = {
+  dashboard: 'permDashboard',
+  appointments: 'permAppointments',
+  shop: 'permShop',
+  loyalty: 'permLoyalty',
+  team: 'permTeam',
+  scanner: 'permScanner',
+  charges: 'permCharges',
+  void: 'permVoid',
+  marketing: 'permMarketing',
+} as const satisfies Record<PermissionName, keyof typeof staffUser.$inferSelect>;
+
 export interface MemberPrincipal {
   kind: 'member';
   id: string;

@@ -21,6 +21,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@avo/tokens": "workspace:*",
     "@avo/types": "workspace:*",
     "@fastify/cors": "^10.0.1",
     "@node-rs/argon2": "^2.1.0",
