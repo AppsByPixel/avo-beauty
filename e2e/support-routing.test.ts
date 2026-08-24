@@ -1754,3 +1754,202 @@ describe('two admins adding a topic at once — the position index is the refere
     ).toBe(settled);
   });
 });
+
+// ===========================================================================
+/**
+ * `topic` IS JOINED AND `route` IS SNAPSHOTTED, AND THE ASYMMETRY IS DELIBERATE.
+ *
+ * Two fields sit next to each other on the wire and behave in opposite ways, on
+ * purpose. `db/schema/legal.ts` freezes `route` onto the ticket because a route is
+ * a DECISION — "a ticket that silently changed queue afterwards would be a
+ * customer's dispute changing hands with no record of it". `topic` is looked up at
+ * read time because a label is WORDING — an admin fixing a typo or adding the
+ * Arabic should fix it on every ticket, not leave the old spelling frozen in the
+ * queue.
+ *
+ * An asymmetry a reader could mistake for an inconsistency needs a spec that
+ * asserts BOTH halves in one breath, or the next person to notice it "fixes" one
+ * of them. That is what the first spec below does: one rename, two assertions,
+ * opposite expectations.
+ *
+ * `topic` was being STRIPPED from both ticket routes until `bd5fa99` — served by
+ * `serialiseTicket` and undeclared in `SupportTicketSchema`, so zod deleted it and
+ * every client read `undefined`. The contract census caught it. These specs are the
+ * behavioural half of that guard: the census proves the field survives the parse,
+ * and these prove it means what the schema comment says it means.
+ */
+describe('the topic label is joined, and the route it was filed under is not', () => {
+  const PROBE_TOPIC = 'qa-label-probe';
+  const PROBE_TICKET = 'SUP-QA-93001';
+  const ORIGINAL_EN = 'Label probe, original wording';
+  const RENAMED_EN = 'Label probe, corrected wording';
+
+  beforeAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id = '${PROBE_TICKET}';`);
+    psql(`DELETE FROM support_topic WHERE id = '${PROBE_TOPIC}';`);
+    /**
+     * Its own topic rather than one of the seeded six: renaming `booking` would
+     * leave every other spec in this file asserting against a table this one edited,
+     * and retiring it would change what the Contact-us form offers.
+     */
+    psql(`
+      INSERT INTO support_topic (id, route, en, ar, position, active)
+      VALUES ('${PROBE_TOPIC}', 'salon', '${ORIGINAL_EN}', 'صياغة أصلية', 9500, true);
+    `);
+    insertTicket(PROBE_TICKET, MEMBER, PROBE_TOPIC, 'Filed under the probe topic.', SALON_B);
+  });
+
+  afterAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id = '${PROBE_TICKET}';`);
+    psql(`DELETE FROM support_topic WHERE id = '${PROBE_TOPIC}';`);
+  });
+
+  /** The one ticket, as the console queue serves it. */
+  async function probeRow(): Promise<{ topic?: { en: string; ar: string }; route?: string }> {
+    const res = await treq<{ items?: Array<{ id: string; topic: { en: string; ar: string }; route: string }> }>(
+      'GET',
+      '/v1/support/tickets?limit=100',
+      { token: consoleOwner },
+    );
+    expect(res.status, `the queue answered ${res.status}: ${res.raw}`).toBe(200);
+    const row = (res.body.items ?? []).find((t) => t.id === PROBE_TICKET);
+    precondition(row !== undefined, `the probe ticket ${PROBE_TICKET} is not in the queue at all`);
+    return row!;
+  }
+
+  it('renaming the topic changes the label on existing tickets, and not their route', async () => {
+    const before = await probeRow();
+    precondition(
+      before.topic?.en === ORIGINAL_EN,
+      `the probe ticket shows "${before.topic?.en}" rather than the original wording`,
+    );
+    precondition(before.route === 'salon', `the probe ticket is routed ${before.route}, not salon`);
+
+    // The rename, through the console's own endpoint.
+    const patched = await treq<{ en?: string }>(
+      'PATCH',
+      `/v1/platform/support/topics/${PROBE_TOPIC}`,
+      { token: consoleOwner, body: { en: RENAMED_EN } },
+    );
+    expect(
+      [200, 201].includes(patched.status),
+      `PATCH …/topics/${PROBE_TOPIC} answered ${patched.status}: ${patched.raw}`,
+    ).toBe(true);
+
+    const after = await probeRow();
+
+    // ---- half one: the WORDING followed the rename ----
+    expect(
+      after.topic?.en,
+      `the ticket still shows "${after.topic?.en}" after the topic was renamed to ` +
+        `"${RENAMED_EN}". The label is documented as JOINED rather than snapshotted, so a ` +
+        `typo fixed in the console has to be fixed on every ticket already filed — otherwise ` +
+        `the old spelling is frozen into the queue for ever.`,
+    ).toBe(RENAMED_EN);
+
+    // ---- half two: the DECISION did not move ----
+    expect(
+      after.route,
+      'the ticket changed queue because its topic was RENAMED. `route` is snapshotted onto ' +
+        'the row precisely so that editing a topic cannot move a customer\'s dispute between ' +
+        'queues without a record of it.',
+    ).toBe('salon');
+    expect(
+      scalar(`select route from support_ticket where id='${PROBE_TICKET}'`),
+      'the stored route moved under a rename',
+    ).toBe('salon');
+  });
+
+  /**
+   * AND THE BRIEF FOR THIS SPEC WAS WRONG, WHICH IS WORTH RECORDING RATHER THAN
+   * QUIETLY WRITING THE PASSING VERSION.
+   *
+   * It said a retired topic degrades to `{ en: topicId, ar: '' }`, so a queue row
+   * shows its slug rather than vanishing. It does not, and the reason is one line in
+   * `serialiseTickets`: the label lookup is
+   * `inArray(supportTopic.id, topicIds)` with NO `active` filter. A soft delete sets
+   * `active = false` and leaves the row, so the join still finds it and the real
+   * label survives retirement.
+   *
+   * Which is the better behaviour, and worth pinning: a customer's ticket keeps the
+   * words she chose from, and the console's own list (active only) still stops
+   * offering the topic. The degradation is a defensive branch, not this path.
+   */
+  it('retiring the topic keeps the real label on tickets already filed under it', async () => {
+    const retired = await treq<{ error?: string }>(
+      'DELETE',
+      `/v1/platform/support/topics/${PROBE_TOPIC}`,
+      { token: consoleOwner },
+    );
+    expect(
+      [200, 204].includes(retired.status),
+      `DELETE …/topics/${PROBE_TOPIC} answered ${retired.status}: ${retired.raw}`,
+    ).toBe(true);
+
+    // A SOFT delete: the row survives, deactivated.
+    expect(
+      scalar(`select active from support_topic where id='${PROBE_TOPIC}'`),
+      'the topic row is gone or still active — the delete is documented as a soft retire',
+    ).toBe('f');
+
+    // It has left the Contact-us form.
+    const config = await treq<{ topics?: Array<{ id: string }> }>('GET', '/v1/platform/support', {
+      token: member,
+    });
+    expect(
+      (config.body.topics ?? []).map((t) => t.id),
+      'a retired topic is still offered to customers on the Contact-us form',
+    ).not.toContain(PROBE_TOPIC);
+
+    // But the queue still names it properly.
+    const row = await probeRow();
+    expect(
+      row.topic?.en,
+      `a ticket filed under a retired topic renders "${row.topic?.en}". The label join does ` +
+        `not filter on \`active\`, so retirement must not change what an existing ticket ` +
+        `says — a queue row degrading to a bare slug is the dangling-reference problem the ` +
+        `soft delete was chosen to avoid.`,
+    ).toBe(RENAMED_EN);
+  });
+
+  /**
+   * THE FALLBACK IS UNREACHABLE, AND THIS ASSERTS THE REASON RATHER THAN THE BRANCH.
+   *
+   * `topic: labels.get(row.topicId) ?? { en: row.topicId, ar: '' }` can only fire
+   * when the topic row is ABSENT. Two independent things prevent that for any ticket
+   * that exists:
+   *
+   *   the API      never hard-deletes a topic — `DELETE` retires it, asserted above;
+   *   the database `support_ticket.topic_id` is `ON DELETE RESTRICT`, so the row
+   *                cannot be removed while a ticket points at it.
+   *
+   * So the branch is defensive depth, not a state the product can produce. Asserting
+   * the FK refusal is the honest way to "drive" it: it proves WHY the fallback never
+   * fires, which is more durable than a spec that manufactures an impossible row.
+   */
+  it('and the slug fallback cannot be reached — the FK refuses to orphan a ticket', () => {
+    let failure = '';
+    try {
+      psql(`DELETE FROM support_topic WHERE id = '${PROBE_TOPIC}';`);
+    } catch (err) {
+      failure = String((err as Error).message);
+    }
+
+    expect(
+      failure,
+      'a topic with tickets filed under it was DELETED outright. `topic_id` is ON DELETE ' +
+        'RESTRICT precisely so a ticket cannot be orphaned; without it the queue would render ' +
+        'bare slugs for real customer messages and the soft delete would be decorative.',
+    ).not.toBe('');
+    expect(
+      failure.toLowerCase().includes('foreign key') || failure.toLowerCase().includes('violates'),
+      `the delete failed for a reason other than the foreign key: ${failure}`,
+    ).toBe(true);
+
+    // Still there, still retired, still readable.
+    expect(
+      scalar(`select active from support_topic where id='${PROBE_TOPIC}'`),
+      'the refused delete removed the row anyway',
+    ).toBe('f');
+  });
+});
