@@ -83,6 +83,17 @@ const SECTION_SCREENS = [
    * This one has no such host.
    */
   'console/SupportPanel.tsx',
+  /**
+   * The queue, and it is a SECOND fetch inside the same panel rather than a
+   * subview of it — `SupportPanel` owns `GET /v1/platform/support` and this owns
+   * `GET /v1/support/tickets`, on a different guard again (`requireQueueReader`,
+   * which resolves to `policies` for a console principal and `perms.dashboard` for
+   * a merchant one). Two reads, two failures, two answers.
+   *
+   * So it is here and not in HOST_SUBVIEWS: nothing hands it a loading state, and
+   * a `SectionError` in it is its own and not a drifting copy of its host's.
+   */
+  'console/SupportQueue.tsx',
 ] as const;
 
 /**
@@ -252,7 +263,18 @@ describe('a pending screen does not announce a zero it is not painting', () => {
   it('console/SupportPanel.tsx withholds its topic count while pending', () => {
     const src = read('console/SupportPanel.tsx').replace(/\s+/g, '');
     expect(src).toContain("isPending?'Topics'");
-    // And the count itself is never interpolated outside that ternary.
-    expect(src.match(/topics\.length\}/g) ?? []).toHaveLength(1);
+    /*
+     * The count reaches a STRING in exactly one place, and that place is the
+     * guarded arm above.
+     *
+     * THIS ASSERTION WAS `/topics\.length\}/g` HAVING LENGTH 1 AND IT WAS WRONG,
+     * in the direction this file already warns about twice — it asserted on a
+     * spelling rather than on the thing. `}` terminates a JSX prop as readily as a
+     * template interpolation, so passing `count={…topics.length}` down to the row
+     * component tripped it while the guarantee was untouched: a legitimate second
+     * READ of the length, not a second ANNOUNCEMENT of it. Matching the interpolated
+     * label instead distinguishes the two, and still fails if the guard is deleted.
+     */
+    expect(src.match(/`Topics·\$\{/g) ?? []).toHaveLength(1);
   });
 });

@@ -4513,28 +4513,34 @@ a:hover {
 
 /* ------------------------------------------------- policies · support panel -- */
 /*
- * Policies → Support & contact. The design draws it as a white card below the two
- * policy columns, on a 300px / 1fr split: channels down the left, topics with
- * their route down the right.
+ * Policies → Support & contact, and the ticket queue below it. The design draws a
+ * white card under the two policy columns on a 300px / 1fr split: channels down
+ * the left, topics with their route down the right, then a hairline and the
+ * message list.
  *
  * Every colour is an `--avo-*` token. The drawn values map exactly rather than
  * approximately, which is worth recording because two of them look like the same
  * off-white and are not:
  *
- *   card         #fff              --avo-white         (via .avo-card)
- *   topic row    #FBFAF8           --avo-surface
- *   channel row  #F6F4EE           --avo-surface-alt   (matches .policies__doc)
+ *   card          #fff             --avo-white         (via .avo-card)
+ *   topic row     #FBFAF8          --avo-surface
+ *   segment track #F0EEE9          --avo-surface-alt2  (via @avo/ui Segmented)
+ *
+ * THE CHANNEL ROWS HAVE NO BACKGROUND OF THEIR OWN ANY MORE. The read-only version
+ * of this panel painted them `--avo-surface-alt` at an 11px radius to match
+ * `.policies__doc`, because they were values. They are `TextField`s now, and
+ * @avo/ui owns an input's border, radius and focus ring — a second background
+ * under one would have been this file disagreeing with the component library about
+ * what an input looks like.
  *
  * NON-NEGOTIABLE #9: no rule here paints text on `--avo-brand`. The one branded
  * element is the AVO route pill, and `Pill[data-tone='brand']` in @avo/ui already
  * resolves to `--avo-brand-deep` on `--avo-brand-tint`.
  *
- * TWO DRAWN MEASUREMENTS ARE NOT MATCHED, both on purpose. The card's padding is
+ * ONE DRAWN MEASUREMENT IS NOT MATCHED, on purpose: the card's padding is
  * `--avo-space-card-padding` (20px) where the design draws 22, because `.avo-card`
- * imposes it on every other panel in this console and one card 2px looser reads
- * as a mistake rather than as fidelity. And the channel rows take the design's
- * 11px radius rather than `--avo-radius-input` (13px), because they are not
- * inputs — they are read-only values, sitting beside `.policies__doc` at 10px.
+ * imposes it on every other panel in this console and one card 2px looser reads as
+ * a mistake rather than as fidelity.
  */
 
 .support {
@@ -4569,8 +4575,9 @@ a:hover {
 
 /*
  * The narrow and tablet breakpoints stack, the same way `.policies__grid` does
- * above — a 300px fixed column beside a topic list does not survive a 900px
- * console, and the topic rows are the part that needs the width.
+ * above — a 300px fixed column beside a topic row carrying two fields, a
+ * segmented control and three buttons does not survive a 900px console, and the
+ * topic rows are the part that needs the width.
  */
 .console[data-bp='narrow'] .support__grid,
 .console[data-bp='tablet'] .support__grid {
@@ -4580,51 +4587,19 @@ a:hover {
 .support__channels {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 .support__channel {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  background: var(--avo-surface-alt);
-  border-radius: 11px;
-  padding: 10px 12px;
   min-width: 0;
 }
 
-.support__value {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13.5px;
-  /* `break-word` and not `anywhere`: help@avobeauty.com wraps at the @ rather
-     than mid-token, and an E.164 number never has to wrap at all. */
-  overflow-wrap: break-word;
-}
-
-.support__lang {
-  line-height: 1.5;
-}
-
 /* Arabic is a first-class layout, not a fallback — #12. The face is the token's,
-   not a re-typed family name. */
-.support__lang[lang='ar'],
-.support__topicar {
+   not a re-typed family name. Applies to the inputs themselves now that the
+   channel and topic labels are editable in both languages. */
+.support input[lang='ar'] {
   font-family: var(--avo-font-arabic);
-  color: var(--avo-text-muted-strong);
-}
-
-/*
- * A NAMED GAP, NOT A BLANK. An empty Arabic value is what a customer with the
- * wallet in Arabic actually sees, so it is called out in the warn colours rather
- * than left as whitespace an admin reads as "fine".
- */
-.support__missing {
-  font-size: 11.5px;
-  color: var(--avo-warn-text);
-  line-height: 1.5;
 }
 
 .support__topics {
@@ -4648,35 +4623,189 @@ a:hover {
   min-width: 0;
 }
 
+/*
+ * A topic is now two fields plus its controls, so the row is a two-column grid
+ * rather than the single flex line the read-only version used. The controls keep
+ * their intrinsic width and the labels take the rest.
+ */
 .support__topic {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
   background: var(--avo-surface);
   border: 1px solid var(--avo-hairline-inner);
   border-radius: 12px;
-  padding: 9px 11px;
+  padding: 10px 11px;
   min-width: 0;
 }
 
 .support__topiclabels {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  flex: 1;
+  gap: 6px;
   min-width: 0;
 }
 
-.support__topicen {
-  font-size: 13px;
+.support__topicctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.support__topicar {
-  font-size: 12.5px;
+.support__topicmove {
+  display: flex;
+  gap: 5px;
+}
+
+/* The design's 28px squares. */
+.support__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--avo-border-control);
+  background: var(--avo-white);
+  color: var(--avo-text-muted-soft);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.support__icon[data-tone='danger'] {
+  border-color: var(--avo-danger-dot);
+  color: var(--avo-danger-text);
+}
+
+.support__icon:focus-visible {
+  outline: 2px solid var(--avo-brand-deep);
+  outline-offset: 2px;
+}
+
+/*
+ * A DISABLED ARROW IS A BOUNDARY, not a broken control — the first topic cannot
+ * move up and the reason is on screen. Muted rather than hidden so the row's
+ * shape does not change as topics move.
+ */
+.support__icon:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.support__add {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 2px;
+}
+
+.support__add > *:first-child {
+  flex: 1;
+  min-width: 0;
 }
 
 .support__empty {
   font-size: 12.5px;
   color: var(--avo-text-muted);
   line-height: 1.5;
+}
+
+/* ------------------------------------------------------------ the queue -- */
+/*
+ * The design separates the message list from the configuration above it with a
+ * hairline and a 20px gap, and that separation is doing real work: everything
+ * above is AVO's configuration and everything below is customers' words.
+ */
+.support__queue {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.support__queuehead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.support__queuefilters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.support__tickets {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.support__ticket {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+  min-width: 0;
+}
+
+/*
+ * An answered message is dimmed, and the dimming is NOT the state: the button
+ * says "Reopen" and the row keeps its full text. interaction-spec.md §2 —
+ * "status must carry its meaning as text, not color alone."
+ */
+.support__ticket[data-status='closed'] {
+  opacity: 0.62;
+}
+
+.support__ticketbody {
+  flex: 1;
+  min-width: 0;
+}
+
+.support__ticketmsg {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+  line-height: 1.5;
+  /* A complaint is prose and can be long. Wrap it, never clip it — a truncated
+     dispute is a dispute somebody has to open the database to read. */
+  overflow-wrap: break-word;
+}
+
+.support__ticketmeta {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  margin-top: 3px;
+  overflow-wrap: break-word;
+}
+
+.support__more {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  padding-top: 10px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+/*
+ * An edit that has been typed and not yet committed. See `EditableText` — the
+ * panel commits on blur, and this is what stops the gap between the two being
+ * invisible.
+ */
+.support__unsaved {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--avo-warn-text);
 }
