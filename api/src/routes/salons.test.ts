@@ -17,7 +17,8 @@ import { fils } from '@avo/types';
 import { ApiError } from '../http/errors';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { assertShopReadable, buildSalonPatch, PLATFORM_EDITABLE } from './salons';
+import { buildSalonPatch, PLATFORM_EDITABLE } from './salons';
+import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
 import { salon } from '../db/schema/salon';
 
 type SalonRow = typeof salon.$inferSelect;
@@ -301,5 +302,122 @@ describe('the products handler applies the gate', () => {
 
   it('calls assertShopReadable with the principal kind', () => {
     expect(source).toContain('assertShopReadable(p.kind, s)');
+  });
+});
+
+/**
+ * `assertBookingReadable` — the booking module on the three READ paths.
+ *
+ * THE SYMMETRY THIS CLOSES. `services/booking.ts` :324 refuses `POST /bookings`
+ * with `booking_not_enabled`; no route handler checked `moduleBooking` at all, so
+ * `GET /salons/{id}/services`, `GET /salons/{id}/artists/bookable` and
+ * `GET /artists/{id}/availability` all served a member of a salon that takes no
+ * appointments.
+ *
+ * LESS SEVERE THAN THE SHOP, AND THE CASES SAY SO RATHER THAN PRETENDING
+ * OTHERWISE. No customer was misled: `BookScreen` renders `bookingOffTitle` from
+ * `modules.booking` before it fetches, and `HomeScreen` does not fetch booking
+ * labels at all when the module is off. This is a #7 gap — a courtesy with no
+ * control behind it — not an active defect. `GET /salons/{id}` still serves
+ * `modules` ungated, which is what keeps the honest-before-refused property.
+ */
+describe('the booking module on the read paths', () => {
+  const OPEN = { moduleBooking: true };
+  const CLOSED = { moduleBooking: false };
+
+  it('refuses a member when the booking module is off', () => {
+    const err = refusal(() => assertBookingReadable('member', CLOSED));
+
+    expect(err.code).toBe('booking_not_enabled');
+    expect(err.statusCode).toBe(409);
+  });
+
+  it('lets a member read a salon that takes appointments', () => {
+    expect(() => assertBookingReadable('member', OPEN)).not.toThrow();
+  });
+
+  /**
+   * THE DECISION, PINNED — the same one the shop gate makes, re-derived rather
+   * than copied. Artists and their hours are written by `perms.team` endpoints
+   * with no module check, and `module_booking` defaults OFF, so a salon builds a
+   * roster before it opens for appointments. Gating the merchant's own read would
+   * refuse to show her the Tuesday she just set.
+   *
+   * It matters for the SCANNER too: `GET /salons/{id}/services` is where a charge
+   * is priced from, and a counter sale is not an appointment. A salon that never
+   * takes bookings still sells services across the desk.
+   */
+  it('does NOT refuse staff, so a roster and a price list survive the module', () => {
+    expect(() => assertBookingReadable('staff', CLOSED)).not.toThrow();
+    expect(() => assertBookingReadable('platform_admin', CLOSED)).not.toThrow();
+  });
+
+  it('refuses rather than returning an empty list', () => {
+    let returnedNormally = false;
+    try {
+      assertBookingReadable('member', CLOSED);
+      returnedNormally = true;
+    } catch {
+      /* expected */
+    }
+    expect(returnedNormally, 'a closed booking module must not read as an empty roster').toBe(
+      false,
+    );
+  });
+
+  /**
+   * THE TWO MODULES ARE INDEPENDENT. One salon may sell products and take no
+   * appointments, or the reverse. A gate that read the wrong flag would pass every
+   * case above, because the fixtures there set only the flag under test.
+   */
+  it('reads its own flag and not the other module', () => {
+    expect(() => assertBookingReadable('member', { moduleBooking: true })).not.toThrow();
+    expect(() => assertShopReadable('member', { moduleShop: false })).toThrow();
+
+    expect(() => assertShopReadable('member', { moduleShop: true })).not.toThrow();
+    expect(() => assertBookingReadable('member', { moduleBooking: false })).toThrow();
+  });
+});
+
+/**
+ * The booking read refusal must match the booking WRITE refusal, for the reason
+ * the shop pair already carries: the wallet switches on the CODE and renders the
+ * MESSAGE, so two sentences about one closed module is a defect a reworder
+ * introduces silently. Asserted against `services/booking.ts`'s source.
+ */
+describe('the booking read refusal matches the booking write refusal', () => {
+  const bookingSource = readFileSync(
+    fileURLToPath(new URL('../services/booking.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it('raises the code and message services/booking.ts already raises', () => {
+    const written = /conflict\(\s*'booking_not_enabled',\s*\n?\s*'([^']+)'/.exec(bookingSource);
+    expect(written, 'services/booking.ts no longer raises booking_not_enabled as expected')
+      .not.toBeNull();
+
+    const err = refusal(() => assertBookingReadable('member', { moduleBooking: false }));
+    expect(err.message).toBe(written![1]);
+  });
+});
+
+/**
+ * The seam again: all three handlers could stop calling the gate and every case
+ * above would stay green. `routes/artists.ts` routes both of its reads through one
+ * local loader, so the assertion is that the loader exists and that both call it.
+ */
+describe('the three booking reads apply the gate', () => {
+  const salonsSrc = readFileSync(fileURLToPath(new URL('./salons.ts', import.meta.url)), 'utf8');
+  const artistsSrc = readFileSync(fileURLToPath(new URL('./artists.ts', import.meta.url)), 'utf8');
+
+  it('GET /salons/:id/services applies it', () => {
+    expect(salonsSrc).toContain('assertBookingReadable(p.kind, mod)');
+  });
+
+  it('both artist reads apply it, through the shared loader', () => {
+    expect(artistsSrc).toContain('assertSalonTakesBookings(p.kind, p.salonId)');
+    expect(artistsSrc).toContain('assertSalonTakesBookings(p.kind, req.params.id)');
+    // …and the loader is what actually raises, rather than being a name that lies.
+    expect(artistsSrc).toContain('assertBookingReadable(kind, row)');
   });
 });

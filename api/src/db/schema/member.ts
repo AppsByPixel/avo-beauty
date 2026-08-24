@@ -101,9 +101,27 @@ export const member = pgTable(
      * The window is also a GRACE period: sessions are not revoked and sign-in
      * keeps working, because she has to be able to change her mind.
      *
-     * The erasure job itself is NOT built. Which columns are nulled at the due
-     * date and which survive the 7 years is a retention decision that belongs
-     * to the client (CLAUDE.md § Open decisions), and it is escalated.
+     * THE JOB IS BUILT: `services/erasure.ts` § `runErasureOnce` does the work,
+     * `jobs/erasure-once.ts` is the operator entrypoint, and `pnpm run
+     * job:erasure` invokes it. It is safe to run against a live API — every
+     * decision is re-made under the member row's `FOR UPDATE` lock.
+     *
+     * This comment said "the erasure job itself is NOT built" long after it
+     * landed, while the tombstone note four lines below already described that
+     * job in the present tense. A consumer of a fact asserting the fact's
+     * absence, contradicted by its own file: the shape that has produced two
+     * real defects in this build, so it is corrected rather than left as
+     * harmless prose.
+     *
+     * NOT SCHEDULED, which is a different thing and is deliberate.
+     * `jobs/erasure-once.ts`'s header argues for a manual entrypoint over a
+     * timer on operational, evidential and accountability grounds, and
+     * `design/go-live-checklist.md` :353 records the absence of a configured
+     * window as a known gap. Do not "fix" it here.
+     *
+     * STILL ESCALATED, and this half was always true: which columns are nulled
+     * at the due date and which survive the 7 years is a retention decision that
+     * belongs to the client (CLAUDE.md § Open decisions).
      */
     deletionRequestedAt: timestamptz('deletion_requested_at'),
     deletionDueAt: timestamptz('deletion_due_at'),

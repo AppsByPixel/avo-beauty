@@ -42,6 +42,7 @@ import { badRequest, conflict, notFound } from '../http/errors';
 import { parseBusinessHours, parseE164 } from '../http/fields';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
 import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
@@ -415,58 +416,6 @@ export async function loadSalon(id: string): Promise<typeof salon.$inferSelect> 
   return s;
 }
 
-/**
- * THE SHOP MODULE, ON THE READ PATH — the half that was missing.
- *
- * `services/order.ts` § 3 refuses a checkout with `shop_not_enabled` when
- * `modules.shop` is off. `GET /salons/{id}/products` had no such check, so with
- * the module off the CATALOGUE still answered 200 with every product on it. Lane
- * B drove the consequence end to end: the customer browses a shop that is closed,
- * fills a cart, taps "Pay 8.500 KD from wallet", and is told "We couldn't complete
- * your order. Nothing has been charged." — a PERMANENT refusal wearing the copy of
- * a retryable one, with the button still live to be pressed again.
- *
- * The money control held throughout: balance unchanged, no transaction row. This
- * is not a money defect. It is the product telling a customer to shop in a shop
- * that is closed, and then blaming the till.
- *
- * A 409 AND NOT AN EMPTY LIST, because the wallet already distinguishes the two
- * and the design gives them different words:
- *
- *   shopOffTitle    "The shop is closed"          ← this refusal
- *   shopEmptyTitle  "Nothing in the shop yet"     ← a 200 with zero rows
- *
- * `apps/wallet/src/state/useShop.ts` maps code `shop_not_enabled` to
- * `status: 'off'` and everything else to a failure, so the client half of this
- * contract was already written and waiting — the server simply never sent it.
- * Returning `{ items: [] }` instead would render "Nothing in the shop yet" about a
- * salon that does not sell products at all, which is the same class of lie in a
- * quieter voice. The code and message are byte-identical to `order.ts` § 3 so the
- * read and the write cannot drift into two vocabularies for one fact.
- *
- * MEMBERS ONLY, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.
- *
- * The three product WRITES (`POST`/`PATCH`/`DELETE /salons/{id}/products`) have no
- * module check and should not get one: building the catalogue BEFORE flipping the
- * module on is the obvious way a salon opens a shop, and `module_shop` defaults
- * OFF. Gating the merchant's own read would therefore let her create a product and
- * then refuse to list it back to her — an editor that forgets what it just saved.
- * The dashboard has no product reader today, so nothing breaks either way; the
- * argument is the workflow, not the current consumer.
- *
- * So the gate is on the SHOPFRONT, not on the catalogue. `productReadGate` already
- * branches on `p.kind !== 'member'` for exactly this seam.
- */
-export function assertShopReadable(
-  kind: 'member' | 'staff' | 'platform_admin',
-  salonRow: { moduleShop: boolean },
-): void {
-  // Staff manage a catalogue whether or not it is on sale yet.
-  if (kind !== 'member') return;
-  if (salonRow.moduleShop) return;
-
-  throw conflict('shop_not_enabled', 'This salon does not sell products through AVO.');
-}
 
 /**
  * A branch of THIS salon, open or closed, or a 404.
@@ -1477,6 +1426,21 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id/services', async (req, reply) => {
     const p = requireSalonScoped(req);
     requireSameSalon(p, req.params.id);
+
+    /**
+     * Authority first, then the module — `reports.ts` § `build`'s ordering. A
+     * customer of a salon that does not take appointments is not shown the list
+     * she would book from; staff still read it, because the scanner prices a
+     * charge from these same rows and a counter sale is not an appointment.
+     */
+    const [mod] = await db
+      .select({ moduleBooking: salon.moduleBooking })
+      .from(salon)
+      .where(eq(salon.id, req.params.id))
+      .limit(1);
+    if (!mod) throw notFound('unknown_salon', 'No such salon.');
+    assertBookingReadable(p.kind, mod);
+
     const rows = await db
       .select({
         id: service.id,

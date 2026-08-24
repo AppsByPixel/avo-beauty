@@ -86,6 +86,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist, SLOT_MINUTES, type ArtistWindows } from '../db/schema/artist';
 import { artistCalendarConnection } from '../db/schema/booking';
+import { salon } from '../db/schema/salon';
 import { calendar, CalendarNotConfiguredError } from '../calendar';
 import { env } from '../env';
 import {
@@ -100,6 +101,7 @@ import { badRequest, conflict, notFound } from '../http/errors';
 import { HHMM } from '../http/fields';
 import { writeAudit } from '../services/audit';
 import { computeAvailability } from '../services/availability';
+import { assertBookingReadable, type PrincipalKind } from '../services/moduleAccess';
 import { resolveMerchantNotification } from '../services/notifications';
 import { parseDate } from '../time/zone';
 
@@ -429,6 +431,28 @@ async function requireOwnArtist(p: StaffPrincipal): Promise<typeof artist.$infer
   return target;
 }
 
+/**
+ * `modules.booking`, for the two reads in this file that feed the Book flow.
+ *
+ * The flag lives on the salon and both callers already know which salon governs
+ * them, so this is one narrow SELECT rather than a `loadSalon` — the row is read
+ * to answer one question. The rule itself is in `services/moduleAccess.ts`, shared
+ * with `routes/salons.ts` so the two files cannot drift on who the gate applies to.
+ */
+async function assertSalonTakesBookings(kind: PrincipalKind, salonId: string): Promise<void> {
+  // Staff read the roster and its hours while setting the salon up — see the rule.
+  if (kind !== 'member') return;
+
+  const [row] = await db
+    .select({ moduleBooking: salon.moduleBooking })
+    .from(salon)
+    .where(eq(salon.id, salonId))
+    .limit(1);
+  if (!row) throw notFound('unknown_salon', 'No such salon.');
+
+  assertBookingReadable(kind, row);
+}
+
 export async function registerArtistRoutes(app: FastifyInstance): Promise<void> {
   // ------------------------------------ GET /artists/{id}/availability?date= --
   /**
@@ -464,6 +488,16 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
       // Salon-scoped: `p.salonId` is the tenancy boundary passed to
       // `computeAvailability` below, and the owner console has no salon to pass.
       const p = requireSalonScoped(req);
+
+      /**
+       * The module, before the grid. `p.salonId` IS the governing salon: the
+       * artist is resolved against it (`services/availability.ts` :289 refuses
+       * one whose `salonId` differs), so there is no other salon this read could
+       * be about. Checked before `parseDate` for the reason `reports.ts` § build
+       * gives — an invalid date must not answer differently from a valid one to
+       * somebody who may not read this at all.
+       */
+      await assertSalonTakesBookings(p.kind, p.salonId);
 
       // Required, not defaulted to "today". "Today" is a question about a zone,
       // and a server that answered it from its own clock would be making exactly
@@ -577,6 +611,7 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
       // list a customer books from on a merchant permission gates booking.
       const p = requireSalonScoped(req);
       requireSameSalon(p, req.params.id);
+      await assertSalonTakesBookings(p.kind, req.params.id);
 
       const rows = await db
         .select({
