@@ -33,6 +33,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as Linking from 'expo-linking';
 import { copy } from '../copy/en';
 import { parsePaymentCode } from '../domain/paymentCode';
+import { deepLinkAction } from '../domain/deepLink';
 import { useReducedMotion } from '../motion/useReducedMotion';
 import { color, dark, display, ui } from '../theme';
 import { DarkButton, LinkButton, PrimaryButton } from '../components/Buttons';
@@ -88,15 +89,31 @@ export function ScanScreen({
    *
    * `avo://pay?m=…&t=…` is a URI, so the OS can deliver it directly — from a
    * link in a message, from another app, or from `simctl openurl` on a
-   * simulator, which is the only way to exercise this path on hardware with no
-   * camera. It is handled by `accept`, the SAME function the camera calls, so
+   * simulator. It is handled by `accept`, the SAME function the camera calls, so
    * there is one code path into a charge and no test-only branch beside it.
+   *
+   * A URL IS FILTERED BEFORE IT BECOMES A SCAN, AND THAT IS THE FIX.
+   * `getInitialURL()` returns the URL that LAUNCHED THE APP, not a scanned code.
+   * It used to go straight into `accept`, which parsed it, failed, and set
+   * `unreadable` — so this screen rendered "That isn't an AVO wallet code."
+   * with the camera off and nothing ever scanned. Driven on a simulator: the
+   * message was already there, under the "Allow camera access" button. Under
+   * Expo Go it happened every launch, because the launch URL is always `exp://`.
+   *
+   * `deepLinkAction` draws the line: a scan that did not parse deserves the
+   * message, a URL that was never a scan deserves silence. Both paths still call
+   * `accept`, so the one-way-in property above is unchanged — see
+   * domain/deepLink.ts, which also records why `simctl openurl` cannot exercise
+   * this under Expo Go.
    */
   useEffect(() => {
-    const sub = Linking.addEventListener('url', ({ url }) => accept(url));
-    void Linking.getInitialURL().then((url) => {
-      if (url) accept(url);
-    });
+    // `string | null`, because `getInitialURL()` resolves null when the app was
+    // not launched from a link at all — the standalone-from-home-screen case.
+    const onUrl = (url: string | null) => {
+      if (deepLinkAction(url).kind === 'charge' && url !== null) accept(url);
+    };
+    const sub = Linking.addEventListener('url', ({ url }) => onUrl(url));
+    void Linking.getInitialURL().then(onUrl);
     return () => sub.remove();
   }, [accept]);
 

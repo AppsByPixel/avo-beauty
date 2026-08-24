@@ -42,6 +42,7 @@ import { StyleSheet, View } from 'react-native';
 import { theme } from '@avo/tokens/native';
 import { applyBrandColor } from './src/theme/brand';
 import { readCachedBrandColor } from './src/state/brandCache';
+import { cacheLanguage, readStoredLanguage } from './src/i18n/languagePreference';
 
 export default function Boot() {
   const [App, setApp] = useState<ComponentType | null>(null);
@@ -65,6 +66,20 @@ export default function Boot() {
       */
       const hex = await readCachedBrandColor();
       applyBrandColor(hex);
+
+      /*
+        The remembered language, resolved here for the same reason the hex is:
+        `LanguageProvider` takes it as a plain prop, so it has to be readable
+        synchronously by the time `App` renders. Reading it in an effect instead
+        would show a frame of English to an Arabic customer on every launch —
+        and on native the reload that finishes an RTL switch IS a launch, so that
+        frame would land on exactly the customer who just asked for Arabic.
+
+        `languagePreference` imports AsyncStorage and nothing else, so it does
+        not reach `src/theme` and the sealing order above is unaffected —
+        `theme/brandBootOrder.test.ts` asserts that and would fail if it did.
+      */
+      cacheLanguage(await readStoredLanguage());
 
       // Only now. This import is what evaluates every stylesheet in the app.
       const mod = await import('./App');

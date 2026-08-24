@@ -21,12 +21,17 @@
  * module's header.
  * ═════════════════════════════════════════════════════════════════════════════
  *
- * ⚠️ REPORTED, NOT BUILT: `qrBigSub` reads "Screen brightened for scanning" and
- * nothing here raises the screen brightness. Doing so needs `expo-brightness`,
- * a native module that is not in this app's dependency set, and adding one is a
- * bigger decision than a component. The copy is the design's, verbatim, in both
- * languages; the behaviour it names is outstanding. Flagged rather than quietly
- * dropped or quietly depended upon.
+ * `qrBigSub` READS "SCREEN BRIGHTENED FOR SCANNING", AND NOW IT IS.
+ *
+ * That sentence shipped with nothing behind it. It was flagged rather than
+ * built, on the reasoning that the wallet is web-first and a native module was a
+ * bigger decision than a component — which was half right: web-first is how the
+ * pilot ships, not what the product is, and on a handset the copy was an
+ * ordinary promise that was visibly false. `useScreenBoost` raises the screen
+ * while this overlay is up and puts the previous level back on the way out,
+ * including the way out that is an unmount rather than a close. Web is a no-op;
+ * a page cannot set a device's brightness, so the sentence stays unfulfilled
+ * there and that is reported, not papered over. See platform/screenBoost.ts.
  */
 
 import { useEffect, useRef } from 'react';
@@ -46,6 +51,7 @@ import { color, MIN_TAP_TARGET, motion, radius, text, WHITE } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { toEasternDigits } from '../i18n/digits';
 import { useDismissible } from './useDismissible';
+import { useScreenBoost } from '../platform/screenBoost';
 import { PulseDot } from './PulseDot';
 
 /** design:643 — `width:246px;height:246px`. A content dimension, not a token. */
@@ -75,6 +81,10 @@ export function QrOverlay({
   // this app, and it is non-dismissible because money is live at the bank;
   // nothing is live here beyond a code that expires on its own.
   useDismissible({ open, dismissible: true, onDismiss: onClose, label: copy.qrBig });
+  // Makes `qrBigSub` true. Restores the previous level on close AND on unmount —
+  // and this component IS unmounted, not merely closed, when the token mint
+  // fails. See platform/brightness.ts for why that is the hard half.
+  useScreenBoost(open);
   const zoom = useZoomIn(open);
 
   if (!open) return null;

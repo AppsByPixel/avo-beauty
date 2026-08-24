@@ -33,11 +33,24 @@
  * that appears to do nothing, which is the failure mode the lane brief called
  * out. A visible, honest notice is the only option that is not a defect.
  *
- * This module deliberately does NOT depend on `react-native-restart`: the wallet
- * ships web first, and pulling a native-only restart module into the tree for a
- * surface that does not need it would break the web build for a feature that
- * cannot be exercised there yet. When the native build lands, `pendingRestart`
- * is the flag the restart prompt reads.
+ * THE NATIVE BUILD HAS LANDED, SO THE RESTART IS WIRED — AND THE TRIGGER THIS
+ * PARAGRAPH NAMED IS WHAT FIRED IT. It used to read: "This module deliberately
+ * does NOT depend on `react-native-restart`: the wallet ships web first … When
+ * the native build lands, `pendingRestart` is the flag the restart prompt
+ * reads." That is exactly what happened, and `pendingRestart` is exactly the
+ * flag it reads.
+ *
+ * The dependency is `expo-updates`, NOT `react-native-restart`, and the
+ * difference is not preference: `react-native-restart` is a bare native module
+ * absent from the Expo Go binary, so adding it would break the Expo Go workflow
+ * the app is developed and driven under. `expo-updates` is Expo-managed and
+ * works in Expo Go and EAS builds alike. It is reached through
+ * `platform/appReload.native.ts`, so the web bundle never sees it — the concern
+ * the old paragraph raised was right and the platform split is what answers it.
+ *
+ * WHAT DID NOT CHANGE: she taps it. The reload is a control, never a timer and
+ * never automatic. Restarting under her loses whatever she was doing, and in
+ * this app that can be a live payment at the bank.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -47,13 +60,18 @@ import type { Language } from '@avo/types';
 import type { Copy } from '../copy/types';
 import { en } from '../copy/en';
 import { ar } from '../copy/ar';
+import { directionOutcome, isRtl } from './direction';
+import { storeLanguage } from './languagePreference';
+import { reloadApp } from '../platform/appReload';
 
 const COPY: Record<Language, Copy> = { en, ar };
 
-/** Arabic is the only RTL language the product ships. */
-export function isRtl(lang: Language): boolean {
-  return lang === 'ar';
-}
+/**
+ * Re-exported so the many call sites that already read it from here keep
+ * working. It is DEFINED in `./direction`, beside the rest of the direction
+ * rule — see that module for why the dependency points that way.
+ */
+export { isRtl };
 
 export interface LanguageState {
   lang: Language;
@@ -66,6 +84,12 @@ export interface LanguageState {
    * restarts. Always false on web, where the swap is immediate.
    */
   pendingRestart: boolean;
+  /**
+   * Finish the turn-around by reloading the app. Only meaningful while
+   * `pendingRestart` is true, and only ever called from a control the customer
+   * taps — see `LanguageToggle` and `platform/appReload.native.ts`.
+   */
+  applyDirection: () => void;
 }
 
 const LanguageContext = createContext<LanguageState | null>(null);
@@ -102,30 +126,87 @@ export function LanguageProvider({
     applyWebDirection(lang);
   }, [lang]);
 
+  /**
+   * RECONCILE THE REMEMBERED LANGUAGE WITH THE DIRECTION ACTUALLY IN FORCE.
+   *
+   * `initialLanguage()` can now open the app in Arabic (see
+   * `languagePreference.ts`) without `setLang` ever being called — so nothing
+   * had compared the stored choice against `I18nManager.isRTL`, and a launch
+   * whose flag disagreed rendered Arabic copy on an LTR layout with NOTHING
+   * saying so. Driven: exactly that, on a fresh launch under Expo Go, which
+   * clears the flag every time.
+   *
+   * In a standalone build the flag persists and this is a no-op on almost every
+   * launch. It matters when the two can disagree at all — a fresh install whose
+   * preference survived a reinstall, a reload that did not complete, or a host
+   * that resets the flag — and in every one of those the honest thing is the
+   * same notice the switch itself raises, not silence.
+   */
+  useEffect(() => {
+    const outcome = directionOutcome({
+      platform: Platform.OS,
+      currentIsRtl: I18nManager.isRTL,
+      next: lang,
+    });
+    if (outcome === 'restart-required') {
+      I18nManager.allowRTL(true);
+      I18nManager.forceRTL(isRtl(lang));
+      setPendingRestart(true);
+    }
+    // Deliberately not an `else`: a switch made during this session already set
+    // the flag, and clearing `pendingRestart` here would erase its notice on the
+    // very next render.
+  }, [lang]);
+
   const setLang = useCallback((next: Language) => {
     setLangState(next);
+    /*
+      Remembered before anything else, because on native the very next thing she
+      may do is reload the app — and a reload that came back in English would
+      throw the switch away. Driven: it did, until this line existed.
+      Fire-and-forget: `storeLanguage` never throws, and a failed write costs the
+      memory of the choice, not the choice.
+    */
+    void storeLanguage(next);
 
-    if (Platform.OS === 'web') {
-      // Live. `applyWebDirection` runs in the effect above on the same commit.
-      setPendingRestart(false);
-      return;
-    }
+    // The three-way decision lives in `./direction` so the web guard is testable
+    // — this workspace has no renderer, and "web never asks for a restart" is a
+    // guard rather than a preference.
+    const outcome = directionOutcome({
+      platform: Platform.OS,
+      currentIsRtl: I18nManager.isRTL,
+      next,
+    });
 
-    // Native. allowRTL must be on before forceRTL means anything.
-    const wantRtl = isRtl(next);
-    I18nManager.allowRTL(true);
-    if (I18nManager.isRTL !== wantRtl) {
-      I18nManager.forceRTL(wantRtl);
+    if (outcome === 'restart-required') {
+      // allowRTL must be on before forceRTL means anything.
+      I18nManager.allowRTL(true);
+      I18nManager.forceRTL(isRtl(next));
       // The flag is written; Yoga will not read it until the next launch.
       setPendingRestart(true);
-    } else {
-      setPendingRestart(false);
+      return;
     }
+    // 'live' (web, already re-laid out by the effect above) and 'unchanged'
+    // (native, already facing the right way) both leave nothing pending.
+    setPendingRestart(false);
   }, []);
 
+  /**
+   * Reload, so Yoga re-reads the flag `forceRTL` wrote.
+   *
+   * Guarded on `pendingRestart` rather than on the platform: web never sets it,
+   * so web can never get here, and `platform/appReload.ts` THROWS rather than
+   * no-ops if it somehow does — a caller that reaches it on web has a broken
+   * guard, and a silent no-op would hide that.
+   */
+  const applyDirection = useCallback(() => {
+    if (!pendingRestart) return;
+    void reloadApp();
+  }, [pendingRestart]);
+
   const value = useMemo<LanguageState>(
-    () => ({ lang, copy: COPY[lang], rtl: isRtl(lang), setLang, pendingRestart }),
-    [lang, setLang, pendingRestart],
+    () => ({ lang, copy: COPY[lang], rtl: isRtl(lang), setLang, pendingRestart, applyDirection }),
+    [lang, setLang, pendingRestart, applyDirection],
   );
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;
