@@ -1742,3 +1742,43 @@ and is actually a routing instruction.
 
 **To reverse any of them:** they are ordinary work now. Revert the commit. The reasoning above
 survives so the next reader knows what was decided rather than assumed.
+
+---
+
+### The wallet outgrew Expo Go, and trunk picked the dependency for the wrong reason
+
+**Decided in trunk, 2026-08-25, with Aftab's standing authorisation to complete both mobile apps.**
+
+Native RTL needs a reload: `I18nManager.forceRTL()` writes a flag Yoga reads at bridge start, so the
+running app does not turn around. `i18n/language.tsx` had documented this and deliberately declined
+a restart dependency, naming its own trigger — *"when the native build lands"*. The native build
+landed this session, so the trigger fired and the restart was wired.
+
+**Trunk told Lane B to use `expo-updates` rather than `react-native-restart`, on the stated grounds
+that it works in Expo Go. That reason was wrong.** Lane B disproved it by measurement rather than
+argument:
+
+- Adding the dependency made the wallet fail to launch in Expo Go at all —
+  `UNIQUE constraint failed: updates.scope_key, updates.commit_time`. Expo Go carries its own
+  updates table; `commit_time` has second resolution and `scope_key` is the Metro URL, so two
+  relaunches inside one second collide and the app is bricked until the table is cleared.
+- `Updates.reloadAsync()` throws in Expo Go and in dev mode.
+- And mirroring was never observable there anyway: Expo Go's own preferences show the app writing
+  `forceRTL: true` correctly and **Expo Go clearing it at every process launch**.
+
+**The dependency stays; the host changes.** `expo-updates` is the right mechanism for a shipping
+native app — `reloadAsync()` is what it exists for. What was wrong was the premise that Expo Go
+could host it, and that premise was never survivable: the collision is structural, not a bug. An
+app that needs native modules beyond Expo Go's bundle has outgrown Expo Go, which is the ordinary
+Expo trajectory. Native verification moves to a development build (`expo run:ios`); `ios/` is
+generated and stays uncommitted.
+
+**Why this is recorded rather than quietly amended.** The instruction was wrong in exactly the way
+this project keeps paying for — a plausible claim about a tool, asserted rather than run. The lane
+ran it. That is the standard, and a reversal that hides its own cause teaches nothing.
+
+**To reverse:** if a future Expo Go stops shipping `expo-updates`, or the app drops its native
+modules, Expo Go becomes viable again and the dev-client step can go. Neither is likely.
+**Also unblocked by this:** `platform/gateway.ts` declined `expo-web-browser` on the grounds that a
+lockfile change was outside a lane's column. That precedent is now broken — the in-app-browser
+gateway deviation it records can be revisited, but it needs its own decision, not a drive-by.
