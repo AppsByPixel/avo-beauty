@@ -15,7 +15,8 @@
  */
 
 import { BusinessHoursSchema } from '@avo/types';
-import { badRequest } from './errors';
+import type { z } from 'zod';
+import { ApiError, badRequest } from './errors';
 
 /**
  * E.164, the exact shape `member_phone_is_e164` enforces in the database.
@@ -72,12 +73,52 @@ export const HHMM_OR_END_OF_DAY = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
  * describes and exactly the shape `brandColor` had. `parseTimeZone` and
  * `parseBrandColor` are the two doors already closed; this is the third.
  *
- * THE SHARED SCHEMA FIRST, THEN MORE. `BusinessHoursSchema` from `@avo/types` is
- * what every client parses this against, so the API must not refuse a shape the
- * clients accept. But that schema is `z.tuple([z.string(), z.string()])` — it
- * says "two strings", not "two clock times", because zod is describing the wire
- * and the API is the authority on what may be STORED. So the shape comes from the
- * shared schema and the clock check is added here.
+ * THE DIVISION OF LABOUR, AND IT MOVED ONCE — read this before editing.
+ *
+ * It used to read "that schema is `z.tuple([z.string(), z.string()])` — it says
+ * two strings, not two clock times… so the shape comes from the shared schema and
+ * the clock check is added here". That was true when it was written and is not any
+ * more: trunk tightened `BusinessHoursSchema` to validate the clock (`e8ea6b3`,
+ * Lane D's finding 3), because a schema that said "two strings" while meaning "two
+ * times" made every client and `packages/mock` validate against something that
+ * disagreed with this endpoint.
+ *
+ * So the line is now:
+ *
+ *   `packages/types`  the SHAPE and the CLOCK. Is this two sessions of two
+ *                     well-formed 24-hour times, "00:00".."23:59" or "24:00"?
+ *   here              POSITION, and every MESSAGE. "24:00" is a closing time and
+ *                     never an opening one, which the shared schema accepts in
+ *                     both places — verified at runtime against the built package,
+ *                     not inferred. That is the only rule left on this side.
+ *
+ * WHY THE MESSAGES ARE STILL THIS FUNCTION'S JOB, and why that took a fix. The
+ * tightening broke two specs in `fields.test.ts` — correctly. `safeParse` ran
+ * first, so a non-clock string now failed THERE and returned the generic shape
+ * sentence, and the loop below that names the session and the offending value was
+ * never reached. A merchant fixing a typo got `businessHours must be { morning:
+ * … }` instead of `businessHours.morning opens at "banana"`, which is the
+ * difference between finding the typo and re-reading the docs. The schema's
+ * verdict is authoritative; its PHRASING is not, because zod does not know this
+ * field is a salon's trading day. `businessHoursRefusal` below turns the verdict
+ * into a sentence, driven by zod's own issue PATH so there is nothing here that
+ * has to be kept in step with the schema by hand.
+ *
+ * THE TWO REGEX CHECKS BELOW STAY, in this arrangement, deliberately. Post-schema
+ * neither can fire on a clock error any more, and both are still worth their two
+ * lines: `HHMM` on `from` IS the position rule (it is the one that excludes
+ * "24:00"), and `HHMM_OR_END_OF_DAY` on `to` is the backstop that keeps this
+ * endpoint from silently widening if `CLOCK` in `packages/types` is ever loosened
+ * — the shared schema describes the wire, this function is the authority on what
+ * may be STORED. They are also what Lane D's `endpointAccepts` model mirrors, by
+ * name, lifted out of this file as text ("the handler's own two checks using the
+ * handler's own two regexes"), and a behaviourally-equivalent rewrite here would
+ * make that comment false in a file this lane cannot edit.
+ *
+ * NO THIRD COPY OF THE CLOCK RULE. `CLOCK` in `packages/types` and
+ * `HHMM_OR_END_OF_DAY` here are the two that exist — trunk chose that over
+ * inverting the `packages/types` → `api/` dependency — and Lane D computes their
+ * agreement over a generated corpus rather than listing it.
  *
  * WHAT IS DELIBERATELY NOT REFUSED: a zero-length span. `tradingSpans` already
  * drops one (`if (span.to > span.from)`), which makes
@@ -92,21 +133,25 @@ export function parseBusinessHours(
   field = 'businessHours',
 ): { morning: [string, string]; evening: [string, string] } {
   const parsed = BusinessHoursSchema.safeParse(value);
-  if (!parsed.success) {
-    throw badRequest(
-      'invalid_business_hours',
-      `${field} must be { morning: ["10:00","13:00"], evening: ["16:00","21:00"] }.`,
-    );
-  }
+  if (!parsed.success) throw businessHoursRefusal(value, parsed.error, field);
 
   for (const session of ['morning', 'evening'] as const) {
     const [from, to] = parsed.data[session];
+    /**
+     * THE POSITION RULE — the one thing left on this side of the line. The shared
+     * schema accepts "24:00" in both slots because it validates one clock at a
+     * time and has no notion of which end it is looking at; `HHMM` is the copy
+     * that excludes it, so this is where a session that opens at end-of-day is
+     * refused. The copy says WHY rather than "not a 24-hour time", which "24:00"
+     * plainly is.
+     */
     if (!HHMM.test(from)) {
       throw badRequest(
         'invalid_business_hours',
-        `${field}.${session} opens at "${from}", which is not a 24-hour time like "10:00".`,
+        `${field}.${session} cannot open at "${from}" — end-of-day is a closing time, not an opening one.`,
       );
     }
+    /** Unreachable while `CLOCK` and `HHMM_OR_END_OF_DAY` agree. See the header. */
     if (!HHMM_OR_END_OF_DAY.test(to)) {
       throw badRequest(
         'invalid_business_hours',
@@ -116,4 +161,51 @@ export function parseBusinessHours(
   }
 
   return parsed.data;
+}
+
+/**
+ * The shared schema's verdict, said in this field's own words.
+ *
+ * DRIVEN BY ZOD'S ISSUE PATH, not by a second copy of the rules. An issue on
+ * `["morning", 0]` is all this needs to know to name the session and the end, and
+ * the offending value is read back out of the CALLER'S input rather than out of
+ * `parsed.data` — which does not exist on a failure. So when trunk tightens
+ * `CLOCK` again, the messages keep working with nothing here to update: that is
+ * the property the previous version lacked, having put its own check second and
+ * let zod answer first.
+ *
+ * ONLY A STRING GETS THE POSITIONAL SENTENCE. `"banana"` and `"25:00"` are values
+ * a person typed into one field, and naming that field is the whole point. A
+ * number, a null or an absent element is a document the client assembled wrongly —
+ * there is no typo to point at, and the shape sentence is the more useful answer.
+ * Everything structural — not an object, a missing session, a range sent as one
+ * string, a one-element window — falls through to it too.
+ */
+function businessHoursRefusal(
+  value: unknown,
+  error: z.ZodError,
+  field: string,
+): ApiError {
+  for (const issue of error.issues) {
+    const [session, index] = issue.path;
+    if (
+      (session === 'morning' || session === 'evening') &&
+      (index === 0 || index === 1)
+    ) {
+      const supplied = (value as Record<string, unknown[]> | null | undefined)
+        ?.[session]?.[index];
+      if (typeof supplied === 'string') {
+        return badRequest(
+          'invalid_business_hours',
+          `${field}.${session} ${index === 0 ? 'opens' : 'closes'} at "${supplied}", ` +
+            `which is not a 24-hour time like "${index === 0 ? '10:00' : '21:00'}".`,
+        );
+      }
+    }
+  }
+
+  return badRequest(
+    'invalid_business_hours',
+    `${field} must be { morning: ["10:00","13:00"], evening: ["16:00","21:00"] }.`,
+  );
 }
