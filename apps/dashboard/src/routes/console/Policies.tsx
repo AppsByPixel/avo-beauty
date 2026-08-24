@@ -7,6 +7,7 @@ import {
   usePublishedPolicies,
 } from '../../api/platform.js';
 import { SectionError, WriteError } from '../sectionState.js';
+import { SupportPanel } from './SupportPanel.js';
 
 /**
  * Policies — non-negotiable #10's other half.
@@ -42,20 +43,37 @@ export function Policies() {
   const [effectiveFrom, setEffectiveFrom] = useState(() => isoDaysFromNow(30));
   const [confirming, setConfirming] = useState(false);
 
-  if (draft.isError) {
-    return (
-      <SectionError
-        error={draft.error}
-        forbiddenTitle="You don't have access to policies"
-        failedTitle="Couldn't load the policy draft"
-        onRetry={() => void draft.refetch()}
-        retrying={draft.isFetching}
-      />
-    );
-  }
-
+  /*
+   * A FAILED DRAFT READ NO LONGER EMPTIES THE WHOLE SCREEN, and the reason
+   * arrived with the Support panel below.
+   *
+   * This was an early `return` of the refusal alone. Correct while the legal set
+   * was all this route rendered; wrong the moment a second, independently guarded
+   * read joined it. `GET /v1/platform/policies/draft` is `policies`-gated and
+   * `GET /v1/platform/support` is `requirePrincipal` with no section, so one
+   * failing says nothing about the other — and an admin whose draft read broke
+   * would have lost a support configuration that was answering perfectly.
+   *
+   * The refusal now replaces the policy columns and nothing else, which is what
+   * the InfoBanner above it already assumed by describing only the legal set.
+   */
   const draftDocs = draft.data?.docs ?? [];
   const hasDraft = draftDocs.length > 0;
+
+  if (draft.isError) {
+    return (
+      <div className="policies">
+        <SectionError
+          error={draft.error}
+          forbiddenTitle="You don't have access to policies"
+          failedTitle="Couldn't load the policy draft"
+          onRetry={() => void draft.refetch()}
+          retrying={draft.isFetching}
+        />
+        <SupportPanel />
+      </div>
+    );
+  }
 
   return (
     <div className="policies">
@@ -73,16 +91,31 @@ export function Policies() {
 
           {published.isError ? (
             /*
-             * A 503 `policies_not_published` is a REAL answer and not a failure to
-             * hide: it means the deployment has no legal set at all, and every
-             * wallet is currently unable to show terms. Rendering the server's own
-             * sentence is the only honest option — an empty list would read as
-             * "there are no policies", which is a different and much calmer claim.
+             * `policies_not_published` is a REAL answer and not a failure to hide:
+             * the deployment has no legal set at all, and every wallet is currently
+             * unable to show terms. Rendering the server's own sentence is the only
+             * honest option — an empty list would read as "there are no policies",
+             * which is a different and much calmer claim.
+             *
+             * THIS COMMENT SAID "A 503" AND CLAIMED THE SENTENCE WAS RENDERED.
+             * Both were wrong, which is what `stateTitle` is doing here now.
+             *
+             * The status is 409: lane A moved it deliberately
+             * (api/src/services/policy.ts — "a configuration state is not a
+             * transient unavailability") after the wallet told a customer "No
+             * connection" about a working network. And a 409 fell through to
+             * `SectionError`'s last branch, so what actually painted was
+             * "Something went wrong on our side. Nothing has changed in your
+             * salon." — a generic failure, in the merchant's vocabulary, on the
+             * platform console, discarding the one sentence that explains the
+             * state. `namedStateAnswer` renders it now, and drops the retry button,
+             * because publishing is the only thing that changes this answer.
              */
             <SectionError
               error={published.error}
               forbiddenTitle="You don't have access to the published set"
               failedTitle="Couldn't load the published set"
+              stateTitle="Nothing is published"
               onRetry={() => void published.refetch()}
               retrying={published.isFetching}
             />
@@ -224,6 +257,24 @@ export function Policies() {
           )}
         </Card>
       </div>
+
+      {/*
+        Below the two policy columns, where the design draws it, and NOT gated on
+        the draft above it.
+
+        `SupportPanel` owns its own fetch and its own four states because it is a
+        different endpoint with a different guard: `GET /v1/platform/support` is
+        `requirePrincipal` and no section, where the draft is `policies`. Folding
+        it into this component's early return would tie a working support read to
+        an unrelated failure, and the two most likely failures are exactly the ones
+        that would do it — a deployment with no published legal set, and an admin
+        holding `policies` on a deployment whose support row was never seeded.
+
+        The panel renders no editor and no ticket queue: six of the eight support
+        endpoints api-contract.md declares do not exist. Its own header carries the
+        computed list and the reasoning.
+      */}
+      <SupportPanel />
     </div>
   );
 }

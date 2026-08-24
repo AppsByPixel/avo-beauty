@@ -2,9 +2,11 @@ import {
   CampaignSchema,
   LegalDocSchema,
   PlatformMessagingPolicySchema,
+  SupportConfigSchema,
   type Campaign,
   type LegalDoc,
   type PlatformMessagingPolicy,
+  type SupportConfig,
 } from '@avo/types';
 import {
   useMutation,
@@ -31,10 +33,28 @@ import { authedRequest } from '../auth/authedRequest.js';
  *   GET    /v1/platform/policies/draft         policies    policies.ts:193
  *   POST   /v1/platform/policies/publish       policies    policies.ts:347
  *   POST   /v1/platform/policies/discard       policies    policies.ts:496
+ *   GET    /v1/platform/support                NONE        platform.ts:670
  *
  * Note `approvals` covers the throttle as well as the queue: the same permission
  * that decides a campaign sets the caps it is decided against. That is the
  * server's grouping and the console follows it rather than inventing a finer one.
+ *
+ * THE LAST ROW BREAKS THE SENTENCE THIS HEADER OPENS WITH, so it is spelled out
+ * rather than filed under `policies` because it happens to render inside that
+ * screen. `GET /v1/platform/support` is `requirePrincipal` and NO section —
+ * read out of the handler, not inferred from api-contract.md. It has to be that
+ * way: the customer wallet's Contact-us form is the endpoint's primary reader,
+ * and a `policies`-gated read would leave a member unable to see who she is
+ * writing to. Nothing in the response is private from a customer either — the
+ * channels are printed in the wallet and every topic label is a button she taps.
+ *
+ * What that means for the console is worth stating, because the ABSENCE of a
+ * gate is indistinguishable from an oversight — the lesson written up at length
+ * in routes/sectionState.tsx after Settings sat in the wrong column for weeks.
+ * Here the support read succeeds for any platform admin who can reach the
+ * Policies route at all, and reaching that route is what `sections.policies`
+ * gates. There is no ungated-read/gated-write shape to guard yet because there
+ * are no writes: see `useSupportConfig`.
  */
 
 /*
@@ -49,6 +69,14 @@ export const platformKeys = {
   messagingPolicy: ['platform', 'messaging-policy'] as const,
   publishedPolicies: ['platform', 'policies', 'published'] as const,
   draftPolicies: ['platform', 'policies', 'draft'] as const,
+  /*
+   * NOT under `['platform', 'policies', …]`, even though the panel renders inside
+   * the Policies screen. Publish and discard both invalidate that whole prefix,
+   * and support config has no publish step at all — sweeping it up in a policy
+   * publish would refetch it for no reason and, worse, imply the two move
+   * together. `design/README.md` is explicit that they do not.
+   */
+  support: ['platform', 'support'] as const,
 };
 
 /* ------------------------------------------------------------- approvals -- */
@@ -394,6 +422,60 @@ export function useDiscardDraft(): UseMutationResult<unknown, unknown, void> {
       authedRequest<unknown>('owner', '/v1/platform/policies/discard', { method: 'POST' }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['platform', 'policies'] });
+    },
+  });
+}
+
+/* --------------------------------------------------------------- support -- */
+
+/**
+ * The wallet's Contact-us configuration: AVO's channels, and the topic list with
+ * each topic's queue.
+ *
+ * READ ONLY, AND THAT IS THE WHOLE HOOK. api-contract.md declares EIGHT support
+ * endpoints and `api/src/routes` registers TWO. The six missing are
+ * `PATCH /v1/platform/support/channels`, `POST`, `PATCH` and `DELETE` on
+ * `.../support/topics`, and `GET` and `PATCH /v1/support/tickets`. Computed by
+ * differencing the contract's declarations against the route registrations rather
+ * than read off either — the `DELETE` is written `DELETE/v1/…` with no space after
+ * the verb and had been skipped by four consecutive readings of that block,
+ * including one that existed to correct this very count. The only two registered
+ * anywhere are this read and `POST /v1/support/tickets`, which is the wallet's
+ * form and not the console's. So there is no `useUpdateSupportChannel`,
+ * no `useAddSupportTopic`, no `useSetSupportTopicRoute` and no ticket query here,
+ * because there is nothing for them to call. The panel draws no control it cannot
+ * honour — the same call as the Manage button left off the Salons list.
+ *
+ * WHEN THE EDITORS LAND, ROUTE IS THE ONE THAT MATTERS. Non-negotiable #11 says
+ * routing is resolved server-side from `topicId`, and `supportTopic.route` is the
+ * table that resolution reads. The switch in the design is therefore not a UI
+ * preference; it is the routing table for every wallet dispute. Which is exactly
+ * why the current route is worth rendering before it can be changed.
+ *
+ * AND NO PUBLISH BUTTON, EVER. `design/README.md`: support config saves
+ * immediately, "unlike legal documents there is no draft/publish step, because
+ * nothing here is a legal representation". The neighbouring policy panel has
+ * draft/publish/version-stamping precisely because it IS one. Giving this panel a
+ * publish button for visual symmetry with the panel above it would be a claim
+ * about legal status that is not true.
+ *
+ * `SupportConfigSchema` from @avo/types, parsed rather than trusted — the same
+ * schema the wallet parses this endpoint with, so a field the API drops fails
+ * here instead of rendering an empty channel as a configured one.
+ *
+ * ONE THING THE SHAPE DOES NOT SAY: the handler filters
+ * `where(eq(supportTopic.active, true))`, so `topics` is the ACTIVE list and not
+ * the whole table. A deactivated topic is invisible to this console exactly as it
+ * is to the wallet. That is right for a panel describing what the Contact-us form
+ * offers, and it is a limit the eventual editor will have to lift — you cannot
+ * reactivate a topic you cannot see.
+ */
+export function useSupportConfig(): UseQueryResult<SupportConfig> {
+  return useQuery({
+    queryKey: platformKeys.support,
+    queryFn: async ({ signal }) => {
+      const raw = await authedRequest<unknown>('owner', '/v1/platform/support', { signal });
+      return SupportConfigSchema.parse(raw);
     },
   });
 }

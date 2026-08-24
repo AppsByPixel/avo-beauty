@@ -83,6 +83,56 @@ export function isUnauthenticated(error: unknown): boolean {
   return error instanceof ApiError && error.isUnauthenticated;
 }
 
+/**
+ * A CONFIGURATION STATE THE SERVER NAMED — not a failure, and not the network.
+ *
+ * `policies_not_published` and `support_not_configured` are answers. The server
+ * is healthy, its STATE is wrong, and it says so in a sentence written to be
+ * read: "The policy set has not been published yet." Both were being thrown away
+ * before this existed, and in the two worst possible directions:
+ *
+ *   409 policies_not_published  -> "Something went wrong on our side. Nothing
+ *                                   has changed in your salon."  Nothing went
+ *                                   wrong; every wallet cannot show terms.
+ *   503 support_not_configured  -> "No connection … try again once you're back
+ *                                   online."  The connection is fine. `503` is
+ *                                   in `ApiError.isConnectivity`, correctly, and
+ *                                   that is exactly how a served answer ended up
+ *                                   in the offline bucket.
+ *
+ * Console/Policies.tsx carried a comment claiming the server's own sentence was
+ * rendered here ("the only honest option"). It was not, and it named the wrong
+ * status while doing it. An announced-not-painted defect in prose rather than in
+ * a caption: the intent was written down, the code never did it, and the comment
+ * is why nobody re-checked.
+ *
+ * KEYED ON SHAPE, NOT ON A LIST OF CODES. A hardcoded set of code strings drifts
+ * the moment the API names a third state — which it will, and which is how this
+ * one survived `policies_not_published` being fixed. The discriminator instead:
+ *
+ *   status 409 or 503, `code` is not the client's `http_error` fallback, and the
+ *   request was not a connection failure.
+ *
+ * A reverse proxy's 503 has no JSON body, so `client.ts` labels it `http_error`
+ * and it stays in the offline bucket where it belongs. Only a 503 the API itself
+ * composed through `serviceUnavailable(code, message)` carries a real code.
+ *
+ * NO RETRY BUTTON. api/src/services/policy.ts is emphatic about why: "503
+ * promises 'try again later and it may work'; this will not work until somebody
+ * publishes." A retry on a configuration state is the same lie a retry on a 403
+ * is. Lane A moved the policy route 503 -> 409 for that reason and has not yet
+ * moved `support_not_configured`, so until it does, `retryPolicy.ts` still spends
+ * its budget on that one before the sentence appears — reported to lane A rather
+ * than special-cased here, because the status is the API's to state.
+ */
+export function namedStateAnswer(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  if (error.offline) return null;
+  if (error.status !== 409 && error.status !== 503) return null;
+  if (error.code === 'http_error') return null;
+  return error.message;
+}
+
 export interface SectionErrorProps {
   error: unknown;
   /** "You don't have access to the team" — names the section, not the endpoint. */
@@ -91,6 +141,12 @@ export interface SectionErrorProps {
   failedTitle: string;
   onRetry: () => void;
   retrying: boolean;
+  /**
+   * The heading over a `namedStateAnswer`. Optional: a screen that cannot reach
+   * one does not need it, and where it is absent the state answer falls back to
+   * `failedTitle` rather than going unrendered.
+   */
+  stateTitle?: string;
 }
 
 export function SectionError({
@@ -99,6 +155,7 @@ export function SectionError({
   failedTitle,
   onRetry,
   retrying,
+  stateTitle,
 }: SectionErrorProps) {
   if (isUnauthenticated(error)) return null;
 
@@ -106,6 +163,13 @@ export function SectionError({
     // Server-authored copy, rendered verbatim. It names the permission and who
     // can grant it; a paraphrase here would drop that.
     return <ErrorState title={forbiddenTitle} body={(error as ApiError).message} />;
+  }
+
+  // Before the offline check, because a served 503 is in `isConnectivity` and
+  // would otherwise be reported as a dead network.
+  const named = namedStateAnswer(error);
+  if (named !== null) {
+    return <ErrorState title={stateTitle ?? failedTitle} body={named} />;
   }
 
   const offline = error instanceof ApiError && error.isConnectivity;
@@ -151,8 +215,18 @@ export function WriteError({ error, reassurance }: WriteErrorProps) {
    * written for a merchant. `availability_is_synced` names the fix ("Switch to
    * Manual hours"); `void_requires_charges` names the order to do it in. Those
    * are rendered verbatim; inventing a friendlier version loses the fix.
+   *
+   * `namedStateAnswer` is folded in for the same reason it exists above, and the
+   * write path had the identical hole: `POST /artists/{id}/calendar` answers 503
+   * `calendar_not_configured` with a five-clause sentence naming exactly what the
+   * deployment is missing and what happens meanwhile ("artists are bookable on
+   * salon hours") — and 503 is in `isConnectivity`, so all of it was replaced by
+   * "We couldn't reach the workspace." on a workspace that answered. Fixing the
+   * read half and not this one is how the two would have drifted apart.
    */
-  const serverExplained = api !== null && (api.status === 400 || api.status === 409 || forbidden);
+  const serverExplained =
+    api !== null &&
+    (api.status === 400 || api.status === 409 || forbidden || namedStateAnswer(api) !== null);
 
   return (
     <div className="section-write-error" role="alert">

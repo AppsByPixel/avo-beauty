@@ -4510,3 +4510,173 @@ a:hover {
   border-radius: 8px;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------- policies · support panel -- */
+/*
+ * Policies → Support & contact. The design draws it as a white card below the two
+ * policy columns, on a 300px / 1fr split: channels down the left, topics with
+ * their route down the right.
+ *
+ * Every colour is an `--avo-*` token. The drawn values map exactly rather than
+ * approximately, which is worth recording because two of them look like the same
+ * off-white and are not:
+ *
+ *   card         #fff              --avo-white         (via .avo-card)
+ *   topic row    #FBFAF8           --avo-surface
+ *   channel row  #F6F4EE           --avo-surface-alt   (matches .policies__doc)
+ *
+ * NON-NEGOTIABLE #9: no rule here paints text on `--avo-brand`. The one branded
+ * element is the AVO route pill, and `Pill[data-tone='brand']` in @avo/ui already
+ * resolves to `--avo-brand-deep` on `--avo-brand-tint`.
+ *
+ * TWO DRAWN MEASUREMENTS ARE NOT MATCHED, both on purpose. The card's padding is
+ * `--avo-space-card-padding` (20px) where the design draws 22, because `.avo-card`
+ * imposes it on every other panel in this console and one card 2px looser reads
+ * as a mistake rather than as fidelity. And the channel rows take the design's
+ * 11px radius rather than `--avo-radius-input` (13px), because they are not
+ * inputs — they are read-only values, sitting beside `.policies__doc` at 10px.
+ */
+
+.support {
+  margin-top: 18px;
+}
+
+.support__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.support__h2 {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.support__note {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+}
+
+.support__grid {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+/*
+ * The narrow and tablet breakpoints stack, the same way `.policies__grid` does
+ * above — a 300px fixed column beside a topic list does not survive a 900px
+ * console, and the topic rows are the part that needs the width.
+ */
+.console[data-bp='narrow'] .support__grid,
+.console[data-bp='tablet'] .support__grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.support__channels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.support__channel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--avo-surface-alt);
+  border-radius: 11px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.support__value {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13.5px;
+  /* `break-word` and not `anywhere`: help@avobeauty.com wraps at the @ rather
+     than mid-token, and an E.164 number never has to wrap at all. */
+  overflow-wrap: break-word;
+}
+
+.support__lang {
+  line-height: 1.5;
+}
+
+/* Arabic is a first-class layout, not a fallback — #12. The face is the token's,
+   not a re-typed family name. */
+.support__lang[lang='ar'],
+.support__topicar {
+  font-family: var(--avo-font-arabic);
+  color: var(--avo-text-muted-strong);
+}
+
+/*
+ * A NAMED GAP, NOT A BLANK. An empty Arabic value is what a customer with the
+ * wallet in Arabic actually sees, so it is called out in the warn colours rather
+ * than left as whitespace an admin reads as "fine".
+ */
+.support__missing {
+  font-size: 11.5px;
+  color: var(--avo-warn-text);
+  line-height: 1.5;
+}
+
+.support__topics {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.support__topichead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.support__topiclist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.support__topic {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--avo-surface);
+  border: 1px solid var(--avo-hairline-inner);
+  border-radius: 12px;
+  padding: 9px 11px;
+  min-width: 0;
+}
+
+.support__topiclabels {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.support__topicen {
+  font-size: 13px;
+}
+
+.support__topicar {
+  font-size: 12.5px;
+}
+
+.support__empty {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+}

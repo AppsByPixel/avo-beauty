@@ -66,6 +66,23 @@ const SECTION_SCREENS = [
    * the census.
    */
   'marketing/Campaigns.tsx',
+  /**
+   * A PANEL INSIDE A SCREEN, and it belongs here for Campaigns' exact reason.
+   *
+   * `console/Policies.tsx` renders it, so the router never mounts it and the
+   * second test below will not see it — but it owns its own fetch
+   * (`useSupportConfig`, on `GET /v1/platform/support`) against a DIFFERENT guard
+   * from its host's: `requirePrincipal` with no section, where the policy draft
+   * is `policies`-gated. Two independent guards means two independent failures,
+   * which is why Policies stopped early-returning over the whole screen and why
+   * this panel answers for itself.
+   *
+   * The distinction the census keeps making: not "is it routed" but "does it own
+   * a read". `marketing/Boosts.tsx` is handed its loading state by a host that
+   * owns the fetch, and a `SectionError` in it would be a drifting second copy.
+   * This one has no such host.
+   */
+  'console/SupportPanel.tsx',
 ] as const;
 
 /**
@@ -219,5 +236,23 @@ describe('a pending screen does not announce a zero it is not painting', () => {
     const src = read(name);
     const caption = src.slice(src.indexOf('<caption'), src.indexOf('</caption>'));
     expect(caption.replace(/\s+/g, '')).toContain("isPending?''");
+  });
+
+  /**
+   * The same class, in a VISIBLE heading rather than an sr-only caption.
+   *
+   * The design draws "Topics · {n}". `topics.length` on an undefined list needs a
+   * `?? 0` to compile, and the result is "Topics · 0" announced beside a column of
+   * skeletons — an empty support configuration claimed while the real one is still
+   * in flight. The guard withholds the number, not the word.
+   *
+   * Asserts on the construct and not on the spelling, per the correction above:
+   * the count must sit on the far side of a pending check.
+   */
+  it('console/SupportPanel.tsx withholds its topic count while pending', () => {
+    const src = read('console/SupportPanel.tsx').replace(/\s+/g, '');
+    expect(src).toContain("isPending?'Topics'");
+    // And the count itself is never interpolated outside that ternary.
+    expect(src.match(/topics\.length\}/g) ?? []).toHaveLength(1);
   });
 });
