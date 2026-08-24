@@ -47,12 +47,19 @@
 
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
+import { PLATFORM_TIMEZONE } from '../time/zone';
 
 /**
  * The zone every boundary on this screen resolves against. See the header — this
  * is a decision, and `Asia/Kuwait` has no DST so the offset is a constant +03.
+ *
+ * DEFINED IN `time/zone.ts` AND RE-EXPORTED HERE. It moved when `routes/policies.ts`
+ * turned out to need the same decision for a publication date: a second caller made
+ * it a platform fact rather than this screen's fact. Re-exported rather than merely
+ * imported so this module's surface is unchanged for anything already reading it
+ * from here.
  */
-export const PLATFORM_TIMEZONE = 'Asia/Kuwait';
+export { PLATFORM_TIMEZONE };
 
 /** The design's chart is "Last 8 months · KD", including the current one. */
 export const CHART_MONTHS = 8;
