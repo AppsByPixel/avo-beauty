@@ -54,7 +54,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
   B_SCANNER_DEVICE,
@@ -223,6 +223,26 @@ function ticketExists(id: string): boolean {
   return scalar(`select count(*) from support_ticket where id='${id}'`) === '1';
 }
 
+/**
+ * Give this file's member her ticket budget back.
+ *
+ * RULE 5'S OTHER HALF LANDED UNDERNEATH THIS FILE, and it is the half this lane
+ * reported as missing. `services/supportLimit.ts` allows 5 tickets per 15 minutes
+ * and 12 per hour, and -- this is the part that matters here -- it counts
+ * `support_ticket` ROWS rather than keeping a separate attempt table. So deleting
+ * her tickets IS the reset, the same shape as `resetPinState`.
+ *
+ * THIS IS NOT DISABLING THE GUARD TO MAKE SPECS PASS. The limiter has its own
+ * spec below, which drives the boundary deliberately and asserts the refusal by
+ * code. What the specs around it are about is routing, authorship and linking --
+ * every one of them needs to submit, and a spec that trips a rate limiter while
+ * trying to prove something about routing reports the wrong failure. The reset is
+ * a fixture operation; the guard is asserted where it is the subject.
+ */
+function resetTicketBudget(memberId = MEMBER): void {
+  psql(`DELETE FROM support_ticket WHERE member_id = '${memberId}';`);
+}
+
 interface ErasureResult {
   candidates: number;
   erased: number;
@@ -328,6 +348,13 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
           `this request contradicts nothing and would pass against any implementation`,
       );
 
+      /**
+       * Six topics is more than the limiter's five-per-15-minutes, so the budget
+       * is returned between submissions. Without this the sixth topic answers 429
+       * and the spec reports a rate limit where it means to report a route.
+       */
+      resetTicketBudget();
+
       const message = `Route probe for ${topic.id}. ${Date.now()}-${Math.random()}`;
       const res = await treq<{ id?: string; route?: string; topicId?: string }>(
         'POST',
@@ -415,6 +442,7 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
     );
 
     const file = async (label: string, contradicting: 'salon' | 'avo'): Promise<string> => {
+      resetTicketBudget();
       const res = await treq<{ id?: string }>('POST', '/v1/support/tickets', {
         token: member,
         body: {
@@ -472,6 +500,7 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
    * the same ticket six times.
    */
   it('rule 5 deduplicates an identical message, and does not collapse different ones', async () => {
+    resetTicketBudget();
     const message = `Duplicate probe. ${Date.now()}-${Math.random()}`;
     const send = () =>
       treq<{ id?: string }>('POST', '/v1/support/tickets', {
@@ -500,6 +529,84 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
       'a different message was folded into the previous ticket, so the dedupe is keyed on ' +
         'something coarser than the message and a customer\'s second question is lost',
     ).not.toBe(first.body.id);
+  });
+
+  /**
+   * RULE 5'S FIRST HALF: "Rate-limit per member."
+   *
+   * This lane reported it absent -- there was no limiter and no 429 anywhere in the
+   * support routes -- and `services/supportLimit.ts` is the answer. So this spec
+   * exists because the gap was reported, and it drives the boundary rather than
+   * asserting that a limiter exists somewhere.
+   *
+   * THE NUMBERS ARE LANE A'S, NOT THE CONTRACT'S. api-contract.md says
+   * "Rate-limit per member" and gives no figure, so 5-per-15-minutes is a chosen
+   * boundary rather than a specified one. That makes this spec a pin on a decision:
+   * if it goes red because the constant moved, that is a conversation about the
+   * number, not an automatic defect. Written as a literal on purpose -- importing
+   * `TICKET_MAX_PER_WINDOW` would make the spec agree with whatever the code says,
+   * which is the tautology `support/api.ts` warns about in its header.
+   *
+   * DISTINCT MESSAGES, because rule 5's OTHER half would fold identical ones into
+   * one ticket and the budget would never be spent. The two halves interact, and
+   * this is the spec that proves the limiter is not just the deduplicator wearing
+   * a different status code.
+   */
+  it('rule 5 rate-limits a member after five distinct messages in the window', async () => {
+    resetTicketBudget();
+
+    const send = (n: number) =>
+      treq<{ id?: string; error?: string; message?: string }>('POST', '/v1/support/tickets', {
+        token: member,
+        body: {
+          topicId: 'other',
+          message: `Budget probe ${n}. ${Date.now()}-${Math.random()}`,
+          ref: '',
+          via: 'email',
+        },
+      });
+
+    /**
+     * THE CONTROL, and it is the half that makes the refusal mean something: all
+     * five must be ACCEPTED. A limiter set to 0, a broken topic, or a member who
+     * cannot submit at all would produce a 429 on the first call and a spec that
+     * only checked the last response would call that a pass.
+     */
+    for (let n = 1; n <= 5; n += 1) {
+      const ok = await send(n);
+      expect(
+        ok.status,
+        `submission ${n} of 5 answered ${ok.status} -- the budget is smaller than the ` +
+          `boundary this spec is about, so the refusal below would prove nothing: ${ok.raw}`,
+      ).toBe(200);
+    }
+
+    const refused = await send(6);
+    expect(
+      refused.status,
+      `the sixth distinct message in the window answered ${refused.status}. Rule 5 asks for a ` +
+        `per-member rate limit and five submissions were accepted, so this one had to be ` +
+        `refused: ${refused.raw}`,
+    ).toBe(429);
+    expect(refused.body.error, 'the refusal carries no machine-readable code').toBe(
+      'ticket_rate_limited',
+    );
+
+    // Assert the system REFUSED, rather than that a count stayed put.
+    expect(
+      scalar(`select count(*) from support_ticket where member_id='${MEMBER}'`),
+      'the refused sixth submission was written anyway',
+    ).toBe('5');
+
+    /**
+     * And the refusal points at a channel that is still open. A customer disputing
+     * a charge who is told only "try again later" has been closed off, which is the
+     * wrong shape of refusal for this endpoint specifically.
+     */
+    expect(
+      String(refused.body.message ?? '').toLowerCase(),
+      'the rate-limit refusal names no alternative way to reach support',
+    ).toContain('whatsapp');
   });
 
   it('an absent topicId is refused, and nothing is written', async () => {
@@ -650,6 +757,7 @@ describe('#11 — who may file a ticket, and as whom', () => {
    * change that would let anyone put words in any customer's mouth.
    */
   it('memberId and salonId in the body are ignored — the ticket belongs to the token', async () => {
+    resetTicketBudget();
     const message = `Authorship probe. ${Date.now()}-${Math.random()}`;
     const foreignSalon = scalar(`select min(id) from salon where id <> '${SALON_B}'`);
     precondition(
@@ -702,6 +810,7 @@ describe('#11 — who may file a ticket, and as whom', () => {
    * linked — an oracle over another salon's transaction ids.
    */
   it('a ref belonging to somebody else is not linked', async () => {
+    resetTicketBudget();
     const foreign = scalar(
       `select coalesce(min(id), '') from transaction where member_id <> '${MEMBER}'`,
     );
@@ -946,12 +1055,17 @@ describe('erasure takes the customer\'s own words with her', () => {
  * would itself go stale the moment one landed. The contract says what should
  * exist; the routes say what does; the spec asserts the difference is empty.
  *
- * It is a `knownBug()` because the difference is NOT empty today. It is six
- * endpoints, which the helper's contract makes self-expiring: the hour Lane A
- * lands them the assertion passes, this spec goes RED, and whoever sees it is
- * told to promote it and write the real coverage. A gap that announces its own
- * closing is the only kind that does not rot into a false footnote — which is
- * precisely how the brief's premise came to be wrong in the first place.
+ * IT WAS A `knownBug()` AND IT IS NOT ANY MORE, WHICH IS THE MECHANISM WORKING.
+ * When this file was written the difference was six endpoints, so the spec was
+ * written as a self-expiring one: the assertion the contract demands, failing
+ * today, reported green, and going RED the hour it started passing. Lane A landed
+ * all six (in a new `routes/support.ts`) and it went red on the next run with
+ * "This bug appears to be FIXED" — so it is a plain `it()` now, holding the
+ * property permanently rather than announcing a gap.
+ *
+ * A gap that announces its own closing is the only kind that does not rot into a
+ * false footnote, which is precisely how this file's brief came to be wrong in the
+ * first place.
  */
 describe('support endpoints — the contract against the routes', () => {
   /** `{id}` in the contract, `:id` in Fastify. Compared shape-wise, not verbatim. */
@@ -1005,13 +1119,14 @@ describe('support endpoints — the contract against the routes', () => {
     return found;
   }
 
-  knownBug('every support endpoint api-contract.md specifies is actually registered', () => {
+  it('every support endpoint api-contract.md specifies is actually registered', () => {
     const specified = specifiedSupportEndpoints();
     const registered = registeredEndpoints();
 
     // The control: the two endpoints that DO exist must be found by this
     // mechanism, or an empty/mis-parsed `registered` set would report all eight
-    // missing and the spec would "pass" as a knownBug for the wrong reason.
+    // missing, which would read as a catastrophic regression rather than a broken
+    // regex. This is the check that tells those two apart.
     precondition(
       registered.has('GET /v1/platform/support') && registered.has('POST /v1/support/tickets'),
       'the route parser cannot even find the two support endpoints that exist, so its verdict ' +
@@ -1029,9 +1144,8 @@ describe('support endpoints — the contract against the routes', () => {
       missing,
       `${missing.length} endpoint(s) specified in api-contract.md §§ 555–586 are registered ` +
         `nowhere in api/src/routes:\n  ${missing.join('\n  ')}\n\n` +
-        `Every owner-console editor and the entire ticket queue are among them. If this spec ` +
-        `has just gone RED, the list is empty and Lane A has landed them — promote this to a ` +
-        `plain it() and write the behavioural coverage the footer below describes.`,
+        `A specified endpoint that is registered nowhere is a console control with no server ` +
+        `behind it, which is how a screen full of dead buttons gets built.`,
     ).toEqual([]);
   });
 });
