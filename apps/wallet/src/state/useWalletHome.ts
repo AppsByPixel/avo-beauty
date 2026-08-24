@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { PromotionSet } from '@avo/types';
 import { ApiError, type FailureKind } from '../api/client';
 import { getMember, getPromotions, getSalon, getTransactions } from '../api/wallet';
 import { readSnapshot, writeSnapshot, type WalletSnapshot } from './cache';
@@ -44,6 +45,43 @@ const INITIAL: HomeState = {
   refreshing: false,
 };
 
+/**
+ * PROMOTIONS ARE THE ONE READ THAT MAY FAIL WITHOUT TAKING THE SCREEN WITH IT.
+ *
+ * They sat inside the `Promise.all` unguarded, so a 500 from
+ * `GET /v1/salons/{id}/promotions` failed the whole snapshot — and on a cold
+ * start that is the full-page failure screen, with no balance, no activity and
+ * no payment code, because a strip of decoration above the wallet card could not
+ * be read. The stale-not-blank rule `useShop` already carries, one level down.
+ *
+ * Nothing else here is like that. A member, a salon or a transaction list that
+ * will not load leaves nothing honest to render, so those still fail the load
+ * and reach the state machine below.
+ *
+ * `null` reaches `HappyHourBanner` and `BranchEarning`, and both then render
+ * NOTHING rather than a neutral default: a "Standard earning" chip for a branch
+ * whose 2× boost we merely could not read is a false statement about her money.
+ */
+/**
+ * Exported and taking its reader as an argument for the reason
+ * `shopStatusForFailure` is: this workspace has no renderer and no HTTP double,
+ * so a decision left inside a `.catch` in a `Promise.all` is a decision no test
+ * can reach — which is exactly how the unguarded version shipped.
+ */
+export async function readPromotionsOrNull(
+  read: () => Promise<PromotionSet>,
+  signal: { aborted: boolean },
+): Promise<PromotionSet | null> {
+  try {
+    return await read();
+  } catch (err) {
+    // An abort is not a promotions failure — it is this whole load being
+    // replaced. Swallowing it would let a superseded snapshot land on screen.
+    if (signal.aborted) throw err;
+    return null;
+  }
+}
+
 async function loadSnapshot(signal: AbortSignal): Promise<WalletSnapshot> {
   // The member carries the salon id, so it has to land first. Everything that
   // depends on it goes out together rather than in a chain.
@@ -51,7 +89,7 @@ async function loadSnapshot(signal: AbortSignal): Promise<WalletSnapshot> {
   const [salon, transactions, promotions] = await Promise.all([
     getSalon(member.salonId, signal),
     getTransactions(signal),
-    getPromotions(member.salonId, signal),
+    readPromotionsOrNull(() => getPromotions(member.salonId, signal), signal),
   ]);
   return { member, salon, transactions, promotions };
 }

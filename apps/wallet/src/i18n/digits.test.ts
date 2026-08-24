@@ -126,6 +126,23 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   stampsPill: [3, 8],
   tierLadder: ['silver', 'gold'],
   qrAria: ['AVO-1204', 45],
+  // --- happy hour ---
+  // The reward label is a STATIC string in `happyReward`, so `render` already
+  // checks it directly; these two only have to prove the sentence wrapped round
+  // it adds no digits of its own. Same reasoning as `lastUpdated` below.
+  happyLiveTitle: ['—'],
+  happyNextTitle: ['—'],
+  // The raw "HH:MM" off the contract, exactly as the banner supplies it — the
+  // `staleBanner` rule, so a pre-formatted clock string can never carry the
+  // wrong script into the other language's sentence.
+  happyLiveSub: ['السالمية', '18:00'],
+  // A weekday INDEX, not a formatted day name, for the same reason. 6 = Saturday.
+  happyNextSub: ['السالمية', 6, '16:00', '18:00'],
+  // Minutes. 88 and 204 both cross the hour boundary, so a formatter that lost
+  // the hours or converted only one of the two numbers is visible.
+  happyLiveLabel: [88],
+  happyNextLabel: [204],
+  happyClock: ['16:32'],
   visitsMultiplier: [2],
   stampsMultiplier: [2],
   topupBoost: [30],
