@@ -79,13 +79,27 @@ const DELETION_GRACE_DAYS = 30;
 /**
  * The deletion state, on the wire.
  *
- * `erasureScheduled: false` is the honest part. The clock is real and the state
- * is real, but the job that does the erasing is not built — which columns are
- * nulled at the due date and which survive the 7-year financial record is a
- * retention decision that belongs to the client (CLAUDE.md § Open decisions).
+ * `erasureScheduled: false` is the honest part, and it stays `false` — but for a
+ * narrower reason than this comment used to give.
+ *
+ * IT SAID THE JOB WAS NOT BUILT. It is: `services/erasure.ts` § `runErasureOnce`,
+ * driven by `jobs/erasure-once.ts` and `pnpm run job:erasure`. The same false
+ * claim sat in `db/schema/member.ts` and is corrected there too; both outlived the
+ * job by a long way.
+ *
+ * WHAT IS ACTUALLY FALSE IS THE WORD "SCHEDULED", which is why the value does not
+ * change. There is no timer and no configured window — the entrypoint is manual by
+ * a documented decision, and `design/go-live-checklist.md` :353 records the
+ * absence of a window as a known gap. So nothing is SCHEDULED, and telling a
+ * customer otherwise would be the untruth this field exists to avoid.
+ *
  * A client must be able to tell "we have your request and the clock is running"
  * from "it has been carried out", and a response that implied the second would
- * make the confirmation screen say something untrue.
+ * make the confirmation screen say something untrue. That reasoning is unchanged.
+ *
+ * STILL ESCALATED: which columns are nulled at the due date and which survive the
+ * 7-year financial record is a retention decision that belongs to the client
+ * (CLAUDE.md § Open decisions).
  */
 function serialiseDeletion(m: typeof member.$inferSelect) {
   return {
