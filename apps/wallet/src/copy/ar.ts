@@ -29,10 +29,58 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import type { TierName } from '@avo/types';
+import type { RewardKey, TierName } from '@avo/types';
 import { toEasternDigits as ea, ARABIC_PERCENT as PC } from '../i18n/digits';
 import type { Copy } from './types';
 import { en } from './en';
+import { durationParts } from '../domain/happyHour';
+
+/**
+ * design/avo-promotions.js:19-24 — the six rewards, in the designer's Arabic.
+ *
+ * ⚠️ `credit3` IS A DESIGN/NON-NEGOTIABLE CONFLICT, REPORTED AND NOT RESOLVED
+ * HERE. `'٣ د.ك رصيد'` puts a money figure in EASTERN digits, which
+ * non-negotiable #12 forbids — and the same design bundle writes money the other
+ * way everywhere else in Arabic (`'عربون 5.000 د.ك'`, design:1286). So two
+ * design strings disagree with each other about the same question, and one of
+ * them disagrees with a non-negotiable.
+ *
+ * It is lifted VERBATIM rather than silently corrected, because "do not restyle,
+ * keep the copy verbatim" is also a rule and choosing between two rules is not a
+ * decision this lane gets to make quietly. It is reachable in production — a
+ * merchant can publish a `credit3` window — and it is not in the seeded fixture,
+ * so it is flagged rather than shipped-and-forgotten. One word changes it if the
+ * ruling goes the other way: `'3 د.ك رصيد'`.
+ */
+const REWARD_AR: Record<RewardKey, string> = {
+  x2stamp: 'ختمان بدل ختم',
+  x3stamp: 'ثلاثة أختام',
+  x2visit: 'رصيد زيارة مضاعف',
+  topup10: `+${ea(10)}${PC} على الشحن`,
+  topup20: `+${ea(20)}${PC} على الشحن`,
+  credit3: '٣ د.ك رصيد', // ⚠️ see above
+};
+
+/** design:1144 — the design's own `dayNamesAr`, not a transliteration. */
+const DAYS_AR = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+/**
+ * "١ س ٣٠ د" / "٣٠ د" — design:349-353, minus the seconds.
+ *
+ * The design's prototype formatter resolves to seconds below one hour ("٣٠ د ٠٥
+ * ث"). This banner does not, because `minutesRemaining` in @avo/types — the
+ * shared rule both surfaces must agree on — is whole minutes, and README §119's
+ * own examples of this banner ("1h 28m left") and of the dashboard row
+ * ("Live · 42m left") are both minute-resolution. The predicate is still
+ * re-evaluated every second, so the banner still disappears on the second the
+ * window closes; only the digits are coarser than the prototype's.
+ */
+function countdownAr(minutes: number): string {
+  const parts = durationParts(minutes);
+  return parts.hours > 0
+    ? `${ea(parts.hours)} س ${ea(parts.minutes)} د`
+    : `${ea(parts.minutes)} د`;
+}
 
 /**
  * design:1722–1725 — the membership ladder, all four tiers.
@@ -136,6 +184,30 @@ export const ar: Copy = {
   memberIdPrefix: 'ID · ',
   qrAria: en.qrAria, // AR GAP
   loadingAria: en.loadingAria, // AR GAP
+  qrBig: 'اعرضي هذا على الكاشير', // design:1279 — feminine imperative
+  qrBigSub: 'تم رفع الإضاءة لتسهيل المسح', // design:1279
+
+  // ------------------------------------------------------------ happy hour --
+  happyReward: REWARD_AR,
+  happyLiveTitle: (reward) => `الساعة السعيدة · ${reward}`, // design:1136
+  // design:1145 — the design's Arabic drops "الساعة السعيدة" from the next
+  // banner and says only "القادمة". Lifted as written; not padded out to match
+  // the English sentence.
+  happyNextTitle: (reward) => `القادمة · ${reward}`,
+  happyLiveSub: (branch, endsAt) => `${branch} · حتى ${ea(endsAt)}`, // design:1137
+  happyNextSub: (branch, day, from, to) =>
+    // design:1146-1150. A clock time is a count, not money, so it is Eastern.
+    `${branch} · ${day === null ? 'اليوم' : DAYS_AR[day]} ${ea(from)}–${ea(to)}`,
+  /**
+   * design:1138 + :346-355. `formatCountdown` in @avo/types cannot serve this —
+   * it is English-only and hard-codes the word "left" — so the units come from
+   * the design's own countdown formatter (س / د) and only the minute count is
+   * shared with English.
+   */
+  happyLiveLabel: (minutes) => `باقي ${countdownAr(minutes)}`,
+  happyNextLabel: (minutes) => `بعد ${countdownAr(minutes)}`, // design:1151
+  happyClock: (hhmm) => `الآن ${ea(hhmm)}`, // design:1140
+  happyAllBranches: 'كل الفروع', // design/avo-promotions.js:272
 
   // -------------------------------------------------------------- branches --
   branchEarnLabel: 'الكسب حسب الفرع', // design:1152
