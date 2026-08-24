@@ -54,11 +54,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
+import type { TenancyResponse } from './support/tenancy-harness.js';
 import {
   A_STAFF_FULL,
   B_SCANNER_DEVICE,
   B_STAFF_HANDLE,
+  PLATFORM_OWNER_HANDLE,
+  SALON_A,
   SALON_B,
   pgDb,
   psql,
@@ -67,6 +70,7 @@ import {
   scalar,
   signInDashboard,
   signInMember,
+  signInPlatform,
   signInScanner,
   startTenancyApi,
   stopTenancyApi,
@@ -91,6 +95,17 @@ const DOOMED = 'QA-SUP-0002';
 const DOOMED_NAME = 'Munira Al-Harbi';
 const DOOMED_PHONE = '+96599777452';
 
+/**
+ * A member in ANOTHER SALON, for the queue-boundary specs.
+ *
+ * Her own row rather than the shared `8842`: the tenancy specs need a ticket that
+ * belongs to salon A, and attaching it to a member three other suites sign in as
+ * would make this file's teardown their problem.
+ */
+const OTHER_MEMBER = 'QA-SUP-000A';
+const OTHER_MEMBER_NAME = 'Shaikha Al-Ajmi';
+const OTHER_MEMBER_PHONE = '+96599777454';
+
 /** The control for the erasure spec: due LATER, so the job must leave her alone. */
 const SPARED = 'QA-SUP-0003';
 const SPARED_NAME = 'Wadha Al-Enezi';
@@ -99,6 +114,7 @@ const SPARED_PHONE = '+96599777453';
 let member = '';
 let merchant = '';
 let scanner = '';
+let consoleOwner = '';
 
 // ---------------------------------------------------------------------------
 // The independent authority.
@@ -160,11 +176,11 @@ const opposite = (route: 'salon' | 'avo'): 'salon' | 'avo' => (route === 'avo' ?
  * `hashSecret()` is one function for staff and members, so the hash is portable
  * and cannot drift out of step with the seed the way a pasted constant would.
  */
-function seedMember(id: string, name: string, phone: string): void {
+function seedMember(id: string, name: string, phone: string, salonId = SALON_B): void {
   psql(`
     INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
                         balance_fils, visits, tier, stamps, policy_version)
-    SELECT '${id}', '${SALON_B}', '${name}', '${phone}', NULL, false,
+    SELECT '${id}', '${salonId}', '${name}', '${phone}', NULL, false,
            s.password_hash, 0, 0, 'bronze', NULL, 3
     FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
     ON CONFLICT (id) DO UPDATE SET
@@ -200,13 +216,20 @@ function seedMember(id: string, name: string, phone: string): void {
  */
 function dropFixtures(): void {
   psql(`
-    DELETE FROM support_ticket WHERE member_id IN ('${MEMBER}', '${DOOMED}', '${SPARED}');
-    DELETE FROM member WHERE id IN ('${MEMBER}', '${DOOMED}', '${SPARED}');
+    DELETE FROM support_ticket
+     WHERE member_id IN ('${MEMBER}', '${DOOMED}', '${SPARED}', '${OTHER_MEMBER}');
+    DELETE FROM member WHERE id IN ('${MEMBER}', '${DOOMED}', '${SPARED}', '${OTHER_MEMBER}');
   `);
 }
 
 /** A ticket written straight to the table, for the specs that are not about submission. */
-function insertTicket(id: string, memberId: string, topicId: string, message: string): void {
+function insertTicket(
+  id: string,
+  memberId: string,
+  topicId: string,
+  message: string,
+  salonId = SALON_B,
+): void {
   const route = scalar(`select route from support_topic where id='${topicId}'`);
   precondition(
     route === 'salon' || route === 'avo',
@@ -214,13 +237,33 @@ function insertTicket(id: string, memberId: string, topicId: string, message: st
   );
   psql(`
     INSERT INTO support_ticket (id, member_id, salon_id, topic_id, route, message, ref, via)
-    VALUES ('${id}', '${memberId}', '${SALON_B}', '${topicId}', '${route}',
+    VALUES ('${id}', '${memberId}', '${salonId}', '${topicId}', '${route}',
             '${message.replace(/'/g, "''")}', '', 'email');
   `);
 }
 
 function ticketExists(id: string): boolean {
   return scalar(`select count(*) from support_ticket where id='${id}'`) === '1';
+}
+
+/**
+ * Give this file's member her ticket budget back.
+ *
+ * RULE 5'S OTHER HALF LANDED UNDERNEATH THIS FILE, and it is the half this lane
+ * reported as missing. `services/supportLimit.ts` allows 5 tickets per 15 minutes
+ * and 12 per hour, and -- this is the part that matters here -- it counts
+ * `support_ticket` ROWS rather than keeping a separate attempt table. So deleting
+ * her tickets IS the reset, the same shape as `resetPinState`.
+ *
+ * THIS IS NOT DISABLING THE GUARD TO MAKE SPECS PASS. The limiter has its own
+ * spec below, which drives the boundary deliberately and asserts the refusal by
+ * code. What the specs around it are about is routing, authorship and linking --
+ * every one of them needs to submit, and a spec that trips a rate limiter while
+ * trying to prove something about routing reports the wrong failure. The reset is
+ * a fixture operation; the guard is asserted where it is the subject.
+ */
+function resetTicketBudget(memberId = MEMBER): void {
+  psql(`DELETE FROM support_ticket WHERE member_id = '${memberId}';`);
 }
 
 interface ErasureResult {
@@ -253,6 +296,7 @@ beforeAll(async () => {
   member = await signInMember(SALON_B, MEMBER_PHONE);
   merchant = await signInDashboard(SALON_B, B_STAFF_HANDLE);
   scanner = await signInScanner(SALON_B, B_STAFF_HANDLE, B_SCANNER_DEVICE);
+  consoleOwner = await signInPlatform(PLATFORM_OWNER_HANDLE);
 }, 120_000);
 
 afterAll(async () => {
@@ -327,6 +371,13 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
         `the body route and the expected route are both "${sent}" for topic ${topic.id} — ` +
           `this request contradicts nothing and would pass against any implementation`,
       );
+
+      /**
+       * Six topics is more than the limiter's five-per-15-minutes, so the budget
+       * is returned between submissions. Without this the sixth topic answers 429
+       * and the spec reports a rate limit where it means to report a route.
+       */
+      resetTicketBudget();
 
       const message = `Route probe for ${topic.id}. ${Date.now()}-${Math.random()}`;
       const res = await treq<{ id?: string; route?: string; topicId?: string }>(
@@ -415,6 +466,7 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
     );
 
     const file = async (label: string, contradicting: 'salon' | 'avo'): Promise<string> => {
+      resetTicketBudget();
       const res = await treq<{ id?: string }>('POST', '/v1/support/tickets', {
         token: member,
         body: {
@@ -472,6 +524,7 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
    * the same ticket six times.
    */
   it('rule 5 deduplicates an identical message, and does not collapse different ones', async () => {
+    resetTicketBudget();
     const message = `Duplicate probe. ${Date.now()}-${Math.random()}`;
     const send = () =>
       treq<{ id?: string }>('POST', '/v1/support/tickets', {
@@ -500,6 +553,84 @@ describe('#11 — the route is resolved from the topic, in both directions', () 
       'a different message was folded into the previous ticket, so the dedupe is keyed on ' +
         'something coarser than the message and a customer\'s second question is lost',
     ).not.toBe(first.body.id);
+  });
+
+  /**
+   * RULE 5'S FIRST HALF: "Rate-limit per member."
+   *
+   * This lane reported it absent -- there was no limiter and no 429 anywhere in the
+   * support routes -- and `services/supportLimit.ts` is the answer. So this spec
+   * exists because the gap was reported, and it drives the boundary rather than
+   * asserting that a limiter exists somewhere.
+   *
+   * THE NUMBERS ARE LANE A'S, NOT THE CONTRACT'S. api-contract.md says
+   * "Rate-limit per member" and gives no figure, so 5-per-15-minutes is a chosen
+   * boundary rather than a specified one. That makes this spec a pin on a decision:
+   * if it goes red because the constant moved, that is a conversation about the
+   * number, not an automatic defect. Written as a literal on purpose -- importing
+   * `TICKET_MAX_PER_WINDOW` would make the spec agree with whatever the code says,
+   * which is the tautology `support/api.ts` warns about in its header.
+   *
+   * DISTINCT MESSAGES, because rule 5's OTHER half would fold identical ones into
+   * one ticket and the budget would never be spent. The two halves interact, and
+   * this is the spec that proves the limiter is not just the deduplicator wearing
+   * a different status code.
+   */
+  it('rule 5 rate-limits a member after five distinct messages in the window', async () => {
+    resetTicketBudget();
+
+    const send = (n: number) =>
+      treq<{ id?: string; error?: string; message?: string }>('POST', '/v1/support/tickets', {
+        token: member,
+        body: {
+          topicId: 'other',
+          message: `Budget probe ${n}. ${Date.now()}-${Math.random()}`,
+          ref: '',
+          via: 'email',
+        },
+      });
+
+    /**
+     * THE CONTROL, and it is the half that makes the refusal mean something: all
+     * five must be ACCEPTED. A limiter set to 0, a broken topic, or a member who
+     * cannot submit at all would produce a 429 on the first call and a spec that
+     * only checked the last response would call that a pass.
+     */
+    for (let n = 1; n <= 5; n += 1) {
+      const ok = await send(n);
+      expect(
+        ok.status,
+        `submission ${n} of 5 answered ${ok.status} -- the budget is smaller than the ` +
+          `boundary this spec is about, so the refusal below would prove nothing: ${ok.raw}`,
+      ).toBe(200);
+    }
+
+    const refused = await send(6);
+    expect(
+      refused.status,
+      `the sixth distinct message in the window answered ${refused.status}. Rule 5 asks for a ` +
+        `per-member rate limit and five submissions were accepted, so this one had to be ` +
+        `refused: ${refused.raw}`,
+    ).toBe(429);
+    expect(refused.body.error, 'the refusal carries no machine-readable code').toBe(
+      'ticket_rate_limited',
+    );
+
+    // Assert the system REFUSED, rather than that a count stayed put.
+    expect(
+      scalar(`select count(*) from support_ticket where member_id='${MEMBER}'`),
+      'the refused sixth submission was written anyway',
+    ).toBe('5');
+
+    /**
+     * And the refusal points at a channel that is still open. A customer disputing
+     * a charge who is told only "try again later" has been closed off, which is the
+     * wrong shape of refusal for this endpoint specifically.
+     */
+    expect(
+      String(refused.body.message ?? '').toLowerCase(),
+      'the rate-limit refusal names no alternative way to reach support',
+    ).toContain('whatsapp');
   });
 
   it('an absent topicId is refused, and nothing is written', async () => {
@@ -650,6 +781,7 @@ describe('#11 — who may file a ticket, and as whom', () => {
    * change that would let anyone put words in any customer's mouth.
    */
   it('memberId and salonId in the body are ignored — the ticket belongs to the token', async () => {
+    resetTicketBudget();
     const message = `Authorship probe. ${Date.now()}-${Math.random()}`;
     const foreignSalon = scalar(`select min(id) from salon where id <> '${SALON_B}'`);
     precondition(
@@ -702,6 +834,7 @@ describe('#11 — who may file a ticket, and as whom', () => {
    * linked — an oracle over another salon's transaction ids.
    */
   it('a ref belonging to somebody else is not linked', async () => {
+    resetTicketBudget();
     const foreign = scalar(
       `select coalesce(min(id), '') from transaction where member_id <> '${MEMBER}'`,
     );
@@ -734,6 +867,227 @@ describe('#11 — who may file a ticket, and as whom', () => {
       scalar(`select ref from support_ticket where id='${res.body.id}'`),
       'the unmatched ref was discarded, so support cannot see the number the customer quoted',
     ).toBe(foreign);
+  });
+});
+
+// ===========================================================================
+/**
+ * THE QUEUE READ, WHERE THE TENANCY BOUNDARY IS A PREDICATE AND NOT A PATH.
+ *
+ * `GET /v1/support/tickets` is shared between the owner console and the merchant
+ * dashboard and carries NO salon id in its path. So `requireSameSalon` never runs,
+ * and the boundary lives in `queueScope()`'s WHERE clause instead. That is exactly
+ * the shape `discoverSalonScopedRoutes()` cannot see — it filters on `/\/salons\/:/`,
+ * so this route can never appear in the gap ledger however complete that ledger is.
+ * Hence its own assertions, here.
+ *
+ * THE DESIGN DECISION WORTH ASSERTING, because it is counter-intuitive: a merchant
+ * asking for `?route=avo` is REFUSED, not silently narrowed to an empty page. An
+ * empty page is a sentence — it says "AVO is holding no tickets about you" — and
+ * that is a claim the server must not make to a merchant, because AVO-routed
+ * tickets are very often complaints ABOUT her. A filter the caller supplies must
+ * not be able to turn the boundary into an answer.
+ *
+ * A CONSOLE ADMIN GETS NO PREDICATE AT ALL, and the ABSENCE is the difference
+ * between the two audiences. So the console specs here are not "the admin sees
+ * more" — they are the control that proves the merchant's narrowing is imposed
+ * rather than being a property of the data.
+ */
+describe('the ticket queue — a boundary in the query, not in the path', () => {
+  const T_MINE_SALON = 'SUP-QA-91001';
+  const T_MINE_AVO = 'SUP-QA-91002';
+  const T_THEIRS_SALON = 'SUP-QA-91003';
+
+  beforeAll(() => {
+    seedMember(OTHER_MEMBER, OTHER_MEMBER_NAME, OTHER_MEMBER_PHONE, SALON_A);
+    resetTicketBudget(OTHER_MEMBER);
+    psql(`DELETE FROM support_ticket WHERE id IN ('${T_MINE_SALON}','${T_MINE_AVO}','${T_THEIRS_SALON}');`);
+
+    // Hers, salon-routed — the one row a merchant is entitled to.
+    insertTicket(T_MINE_SALON, MEMBER, 'booking', 'Can I move Saturday?', SALON_B);
+    // Hers by salon, AVO-routed — a wallet dispute she must NOT see.
+    insertTicket(T_MINE_AVO, MEMBER, 'wallet', 'My top-up has not arrived.', SALON_B);
+    // Another salon's, salon-routed — visible to THAT merchant, not this one.
+    insertTicket(T_THEIRS_SALON, OTHER_MEMBER, 'visit', 'The service was rushed.', SALON_A);
+  });
+
+  /**
+   * The precondition that stops every spec below being vacuous. "The merchant sees
+   * only her own" proves nothing if the only ticket in the table is her own.
+   */
+  it('the fixture actually contains the rows the boundary has to exclude', () => {
+    expect(
+      scalar(`select route || '/' || salon_id from support_ticket where id='${T_MINE_AVO}'`),
+      'the AVO-routed fixture is not AVO-routed, so the route half of the boundary is untested',
+    ).toBe(`avo/${SALON_B}`);
+    expect(
+      scalar(`select route || '/' || salon_id from support_ticket where id='${T_THEIRS_SALON}'`),
+      'the other-salon fixture is not in another salon, so the tenancy half is untested',
+    ).toBe(`salon/${SALON_A}`);
+  });
+
+  it('a merchant sees her own salon-routed tickets and nothing else', async () => {
+    const res = await treq<{ items?: Array<{ id: string; route: string; salonId?: string }>; total?: number }>(
+      'GET',
+      '/v1/support/tickets',
+      { token: merchant },
+    );
+    expect(res.status, `the queue answered ${res.status} to a merchant: ${res.raw}`).toBe(200);
+
+    const ids = (res.body.items ?? []).map((t) => t.id);
+    expect(ids, 'the merchant cannot see her own salon-routed ticket').toContain(T_MINE_SALON);
+    expect(
+      ids,
+      'AN AVO-ROUTED TICKET IS VISIBLE TO THE MERCHANT. Rule 2: "Salon-routed tickets are ' +
+        'visible to the merchant; AVO-routed ones are not." This one is a wallet dispute, ' +
+        'which is very often a complaint about her.',
+    ).not.toContain(T_MINE_AVO);
+    expect(
+      ids,
+      'ANOTHER SALON\'S TICKET IS VISIBLE. The boundary is in the query rather than the path, ' +
+        'so nothing in the salon-scope ledger can catch this.',
+    ).not.toContain(T_THEIRS_SALON);
+
+    // Every row that came back, not just the ones the fixture named.
+    for (const t of res.body.items ?? []) {
+      expect(t.route, `ticket ${t.id} reached the merchant with route "${t.route}"`).toBe('salon');
+    }
+
+    /**
+     * THE COUNT IS SCOPED TOO. `total` is computed for the pager, and a total built
+     * without the predicate leaks the size of queues the caller cannot read — "37
+     * tickets" over one visible row tells a merchant exactly how much is being
+     * withheld about her.
+     */
+    const visible = Number(
+      scalar(
+        `select count(*) from support_ticket where salon_id='${SALON_B}' and route='salon'`,
+      ),
+    );
+    expect(
+      res.body.total,
+      `total is ${res.body.total} where ${visible} rows are within the merchant's scope — a ` +
+        `count computed without the predicate discloses the queues she cannot read`,
+    ).toBe(visible);
+  });
+
+  it('a merchant asking for the AVO queue is refused, not handed an empty page', async () => {
+    const res = await treq<{ error?: string }>('GET', '/v1/support/tickets?route=avo', {
+      token: merchant,
+    });
+    expect(
+      res.status,
+      `?route=avo from a merchant answered ${res.status}. 200 with an empty list would be the ` +
+        `server telling her AVO holds no tickets about her, which is a claim it must not make; ` +
+        `a client-supplied filter must not be able to answer the question the boundary hides: ` +
+        `${res.raw}`,
+    ).toBe(403);
+  });
+
+  it('a merchant asking for another salon is refused', async () => {
+    const res = await treq<{ error?: string }>(
+      `GET`,
+      `/v1/support/tickets?salon=${SALON_A}`,
+      { token: merchant },
+    );
+    expect(
+      res.status,
+      `?salon=${SALON_A} from a merchant answered ${res.status}: ${res.raw}`,
+    ).toBe(403);
+  });
+
+  it('an unknown route value is refused by name rather than ignored', async () => {
+    const res = await treq<{ error?: string }>('GET', '/v1/support/tickets?route=banana', {
+      token: merchant,
+    });
+    expect(res.status, `?route=banana answered ${res.status}: ${res.raw}`).toBe(400);
+    expect(res.body.error).toBe('invalid_route');
+  });
+
+  /**
+   * THE CONTROL FOR ALL THREE ABOVE. The merchant's narrowing has to be something
+   * the SERVER imposes, not something the data happens to look like. A console
+   * admin holding `policies` gets no predicate, so all three rows are reachable —
+   * which is what makes the merchant's two exclusions meaningful.
+   */
+  it('a console admin gets no predicate at all — both routes, both salons', async () => {
+    const res = await treq<{ items?: Array<{ id: string }> }>('GET', '/v1/support/tickets', {
+      token: consoleOwner,
+    });
+    expect(res.status, `the queue answered ${res.status} to the console owner: ${res.raw}`).toBe(200);
+
+    const ids = (res.body.items ?? []).map((t) => t.id);
+    for (const [id, what] of [
+      [T_MINE_SALON, 'a salon-routed ticket'],
+      [T_MINE_AVO, 'the AVO-routed ticket'],
+      [T_THEIRS_SALON, "another salon's ticket"],
+    ] as const) {
+      expect(
+        ids,
+        `the console cannot see ${what} (${id}). If the console is scoped like a merchant then ` +
+          `AVO support cannot read its own queue, and the merchant exclusions above prove ` +
+          `nothing about the boundary.`,
+      ).toContain(id);
+    }
+  });
+
+  it('a member cannot read the staffed queue at all', async () => {
+    const res = await treq('GET', '/v1/support/tickets', { token: member });
+    expect(
+      res.status,
+      `a customer read the staffed support queue (${res.status}) — it holds other customers\' ` +
+        `messages: ${res.raw}`,
+    ).toBe(403);
+  });
+
+  /**
+   * 404, NOT 403, AND THE DIFFERENCE IS THE POINT. A 403 confirms that a ticket
+   * with that id exists and is being handled somewhere she cannot see. For an
+   * AVO-routed complaint about her own salon, that confirmation is the fact rule 2
+   * exists to withhold.
+   */
+  it('a merchant reaching an invisible ticket gets 404, and cannot change it', async () => {
+    for (const [id, what] of [
+      [T_MINE_AVO, 'an AVO-routed ticket in her own salon'],
+      [T_THEIRS_SALON, "another salon's ticket"],
+    ] as const) {
+      const before = scalar(`select status from support_ticket where id='${id}'`);
+
+      const res = await treq<{ error?: string }>('PATCH', `/v1/support/tickets/${id}`, {
+        token: merchant,
+        body: { status: 'closed' },
+      });
+
+      expect(
+        res.status,
+        `PATCH on ${what} (${id}) answered ${res.status}. 403 would confirm the ticket exists, ` +
+          `which is exactly what a merchant must not learn about a complaint routed past her: ` +
+          `${res.raw}`,
+      ).toBe(404);
+      expect(res.body.error).toBe('unknown_ticket');
+
+      // The refusal, asserted as a refusal.
+      expect(
+        scalar(`select status from support_ticket where id='${id}'`),
+        `the merchant could not read ${id} but still changed its status`,
+      ).toBe(before);
+    }
+  });
+
+  it('and she CAN close the one that is hers — or the 404s above prove nothing', async () => {
+    const res = await treq<{ status?: string }>('PATCH', `/v1/support/tickets/${T_MINE_SALON}`, {
+      token: merchant,
+      body: { status: 'closed' },
+    });
+    expect(
+      res.status,
+      `the merchant could not close her OWN salon-routed ticket (${res.status}), so every 404 ` +
+        `above may simply be a broken endpoint rather than a boundary: ${res.raw}`,
+    ).toBe(200);
+    expect(
+      scalar(`select status from support_ticket where id='${T_MINE_SALON}'`),
+      'the close was answered but not stored',
+    ).toBe('closed');
   });
 });
 
@@ -910,6 +1264,53 @@ describe('erasure takes the customer\'s own words with her', () => {
    * reachable assertion is the join the queue will do: it must resolve, and it
    * must not produce her name.
    */
+  /**
+   * NON-NEGOTIABLE #6 ON THE WIDEST READ IN THE PRODUCT.
+   *
+   * `GET /v1/platform/accounts` is every account AVO holds, and `passwordSet` is the
+   * one boolean on it that must never be wrong. `member.password_hash` is `NOT NULL`,
+   * so an erased member cannot have it cleared -- the erasure overwrites it with a
+   * sentinel argon2 refuses -- and the naive `IS NOT NULL` therefore answered
+   * `passwordSet: true` beside `status: 'erased'`. Lane A found and fixed that, and
+   * exported the sentinel so the two spellings cannot drift.
+   *
+   * A fixed defect with no spec is a defect waiting for the next refactor, and this
+   * one is a contradiction on the screen whose banner is #6's own sentence. It runs
+   * here rather than in a console suite because THIS file is what erases a member.
+   */
+  it('an erased member never reads as having a password (non-negotiable #6)', async () => {
+    precondition(
+      scalar(`select coalesce(erased_at::text,'') from member where id='${DOOMED}'`) !== '',
+      'the member is not erased yet, so this spec is not about a tombstone',
+    );
+    // The sentinel really is still a non-null value -- which is why the naive check lied.
+    expect(
+      scalar(`select password_hash <> '' from member where id='${DOOMED}'`),
+      'the erased password column is empty, so this spec no longer probes the sentinel case',
+    ).toBe('t');
+
+    const res = await treq<{
+      items?: Array<{ id: string; kind: string; status: string; passwordSet: boolean }>;
+    }>('GET', `/v1/platform/accounts?salon=${SALON_B}&limit=100`, { token: consoleOwner });
+    expect(res.status, `GET /v1/platform/accounts answered ${res.status}: ${res.raw}`).toBe(200);
+
+    const her = (res.body.items ?? []).find((a) => a.id === DOOMED);
+    precondition(
+      her !== undefined,
+      `the erased member is absent from the accounts directory entirely, so passwordSet ` +
+        `cannot be checked -- a tombstone must still be listed or the console cannot see ` +
+        `that she was erased`,
+    );
+
+    expect(her!.status, 'the directory does not report her as erased').toBe('erased');
+    expect(
+      her!.passwordSet,
+      'AN ERASED MEMBER READS AS HAVING A PASSWORD. password_hash is NOT NULL so the ' +
+        'erasure writes a sentinel rather than clearing it, and a bare IS NOT NULL check ' +
+        'therefore contradicts the erased banner on the same row.',
+    ).toBe(false);
+  });
+
   it('the join a ticket queue will make still resolves after an erasure', () => {
     const joined = scalar(`
       select coalesce(string_agg(t.id || '=' || m.name, ', '), '(no rows)')
@@ -946,12 +1347,17 @@ describe('erasure takes the customer\'s own words with her', () => {
  * would itself go stale the moment one landed. The contract says what should
  * exist; the routes say what does; the spec asserts the difference is empty.
  *
- * It is a `knownBug()` because the difference is NOT empty today. It is six
- * endpoints, which the helper's contract makes self-expiring: the hour Lane A
- * lands them the assertion passes, this spec goes RED, and whoever sees it is
- * told to promote it and write the real coverage. A gap that announces its own
- * closing is the only kind that does not rot into a false footnote — which is
- * precisely how the brief's premise came to be wrong in the first place.
+ * IT WAS A `knownBug()` AND IT IS NOT ANY MORE, WHICH IS THE MECHANISM WORKING.
+ * When this file was written the difference was six endpoints, so the spec was
+ * written as a self-expiring one: the assertion the contract demands, failing
+ * today, reported green, and going RED the hour it started passing. Lane A landed
+ * all six (in a new `routes/support.ts`) and it went red on the next run with
+ * "This bug appears to be FIXED" — so it is a plain `it()` now, holding the
+ * property permanently rather than announcing a gap.
+ *
+ * A gap that announces its own closing is the only kind that does not rot into a
+ * false footnote, which is precisely how this file's brief came to be wrong in the
+ * first place.
  */
 describe('support endpoints — the contract against the routes', () => {
   /** `{id}` in the contract, `:id` in Fastify. Compared shape-wise, not verbatim. */
@@ -1005,13 +1411,14 @@ describe('support endpoints — the contract against the routes', () => {
     return found;
   }
 
-  knownBug('every support endpoint api-contract.md specifies is actually registered', () => {
+  it('every support endpoint api-contract.md specifies is actually registered', () => {
     const specified = specifiedSupportEndpoints();
     const registered = registeredEndpoints();
 
     // The control: the two endpoints that DO exist must be found by this
     // mechanism, or an empty/mis-parsed `registered` set would report all eight
-    // missing and the spec would "pass" as a knownBug for the wrong reason.
+    // missing, which would read as a catastrophic regression rather than a broken
+    // regex. This is the check that tells those two apart.
     precondition(
       registered.has('GET /v1/platform/support') && registered.has('POST /v1/support/tickets'),
       'the route parser cannot even find the two support endpoints that exist, so its verdict ' +
@@ -1029,9 +1436,8 @@ describe('support endpoints — the contract against the routes', () => {
       missing,
       `${missing.length} endpoint(s) specified in api-contract.md §§ 555–586 are registered ` +
         `nowhere in api/src/routes:\n  ${missing.join('\n  ')}\n\n` +
-        `Every owner-console editor and the entire ticket queue are among them. If this spec ` +
-        `has just gone RED, the list is empty and Lane A has landed them — promote this to a ` +
-        `plain it() and write the behavioural coverage the footer below describes.`,
+        `A specified endpoint that is registered nowhere is a console control with no server ` +
+        `behind it, which is how a screen full of dead buttons gets built.`,
     ).toEqual([]);
   });
 });
@@ -1068,3 +1474,482 @@ describe('support endpoints — the contract against the routes', () => {
  * left as a red spec, because it is a production gap and this lane's column is
  * tests.
  */
+
+// ===========================================================================
+/**
+ * THE CURSOR THAT SILENTLY LOST ROWS — a regression spec for a defect that is
+ * already fixed, which is exactly when one is worth writing.
+ *
+ * `toISOString()` is milliseconds; `created_at` is microseconds. So a cursor built
+ * from the wire's own `at` value rounded DOWN below the row it was meant to
+ * resume after, and the walk ended. Four tickets sharing one microsecond paged
+ * ONE and lost THREE — while `total` still said ten.
+ *
+ * That combination is what makes it worth a spec: a pagination bug that drops rows
+ * AND reports a correct count is nearly invisible from outside. Every page looks
+ * well-formed, the total agrees with the database, and the only symptom is rows
+ * that never appear. Nothing but a union check catches it.
+ *
+ * Lane A consolidated three copies of this logic into `services/streamCursor.ts`
+ * and re-walked all three consumers at several page sizes. This is the e2e half:
+ * the union of the pages must equal the unpaged set, at every page size, across a
+ * deliberate same-microsecond tie. It guards the ticket queue directly and the
+ * other two consumers by sharing their cursor.
+ */
+interface TicketPage {
+  items?: Array<{ id: string }>;
+  nextCursor?: string | null;
+}
+
+describe('the queue cursor — a same-microsecond tie must not lose rows', () => {
+  /** Four, because four is what the defect dropped three of. */
+  const TIED = ['SUP-QA-92001', 'SUP-QA-92002', 'SUP-QA-92003', 'SUP-QA-92004'];
+
+  beforeAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id IN (${TIED.map((t) => `'${t}'`).join(',')});`);
+    for (const id of TIED) insertTicket(id, MEMBER, 'booking', `Tie probe ${id}`, SALON_B);
+
+    /**
+     * THE TIE, forced rather than hoped for. `defaultNow()` gives four distinct
+     * microsecond values on any machine fast enough to matter, so the condition the
+     * defect needed would simply never arise. One explicit microsecond value across
+     * all four is the fixture.
+     */
+    psql(`
+      UPDATE support_ticket
+         SET created_at = timestamptz '2026-08-01 10:00:00.123456+03'
+       WHERE id IN (${TIED.map((t) => `'${t}'`).join(',')});
+    `);
+  });
+
+  afterAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id IN (${TIED.map((t) => `'${t}'`).join(',')});`);
+  });
+
+  it('the fixture really does share one microsecond, or there is no tie to page', () => {
+    expect(
+      scalar(`
+        select count(distinct created_at)
+          from support_ticket
+         where id in (${TIED.map((t) => `'${t}'`).join(',')})
+      `),
+      'the four tied rows do not share an instant, so this whole block tests ordinary paging',
+    ).toBe('1');
+    expect(
+      scalar(`
+        select count(*) from support_ticket
+         where id in (${TIED.map((t) => `'${t}'`).join(',')})
+      `),
+      'the tie fixture is incomplete',
+    ).toBe(String(TIED.length));
+  });
+
+  /**
+   * One walk per page size. 1 and 2 and 3 straddle the tie: with four tied rows a
+   * page boundary falls INSIDE the tied group for every one of them, which is the
+   * only place the defect could express itself.
+   */
+  for (const pageSize of [1, 2, 3, 5]) {
+    it(`a walk at limit=${pageSize} returns every tied row exactly once`, async () => {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+
+      do {
+        const query: string =
+          `/v1/support/tickets?limit=${pageSize}` +
+          (cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`);
+        const res: TenancyResponse<TicketPage> = await treq<TicketPage>('GET', query, {
+          token: consoleOwner,
+        });
+        expect(res.status, `page ${pages + 1} answered ${res.status}: ${res.raw}`).toBe(200);
+
+        for (const t of res.body.items ?? []) seen.push(t.id);
+        cursor = res.body.nextCursor ?? null;
+        pages += 1;
+
+        /**
+         * A walk that will not terminate is its own defect — a cursor that never
+         * advances loops for ever — so it is bounded and the bound is asserted rather
+         * than silently exited.
+         */
+        expect(pages, 'the cursor walk did not terminate within 200 pages').toBeLessThan(200);
+      } while (cursor !== null);
+
+      // NO ROW TWICE, anywhere in the walk. The other failure mode of a boundary
+      // inside a tie is repeating a row rather than losing one.
+      const duplicates = seen.filter((id, i) => seen.indexOf(id) !== i);
+      expect(
+        [...new Set(duplicates)],
+        `the walk returned rows more than once at limit=${pageSize}`,
+      ).toEqual([]);
+
+      // AND EVERY TIED ROW PRESENT. This is the assertion the defect failed.
+      const missing = TIED.filter((id) => !seen.includes(id));
+      expect(
+        missing,
+        `paging at limit=${pageSize} LOST ${missing.length} of ${TIED.length} rows that share ` +
+          `one microsecond: ${missing.join(', ')}. This is the shape of the fixed cursor ` +
+          `defect — the walk ends early inside a tied group while the total still reports ` +
+          `every row, so the page looks well-formed and the rows simply never appear.`,
+      ).toEqual([]);
+    });
+  }
+
+  /**
+   * The union check needs something to be equal TO. An unpaged read is the control:
+   * if the tied rows were missing from this too, the walk specs above would be
+   * agreeing with a broken baseline rather than proving anything.
+   */
+  it('and an unpaged read carries them all, so the union has a baseline', async () => {
+    const res = await treq<{ items?: Array<{ id: string }> }>(
+      'GET',
+      '/v1/support/tickets?limit=100',
+      { token: consoleOwner },
+    );
+    expect(res.status, `the unpaged read answered ${res.status}: ${res.raw}`).toBe(200);
+
+    const ids = (res.body.items ?? []).map((t) => t.id);
+    expect(
+      TIED.filter((id) => !ids.includes(id)),
+      'the unpaged read is missing tied rows, so it cannot serve as the baseline',
+    ).toEqual([]);
+  });
+});
+
+// ===========================================================================
+/**
+ * TWO ADMINS ADDING A TOPIC AT ONCE — the double-submit shape in another costume.
+ *
+ * `support_topic_position_uq` is a UNIQUE index on `position`, and every write to
+ * this table rewrites the whole list as a dense `0 … n-1`. So two simultaneous
+ * writers do not merely interleave badly: they both compute the same next position
+ * and one of them violates a unique index. The guard is a `FOR UPDATE` on the
+ * `support_config` SINGLETON rather than on the topic rows, and Lane A's reasoning
+ * for that is worth restating because it is the non-obvious part — with an empty
+ * or newly-read topic table, row locks lock nothing, so the thing to serialise on
+ * has to be a row that always exists.
+ *
+ * WHAT THIS SPEC HAS TO AVOID BEING. "Fire two requests, assert both succeeded" is
+ * satisfied by two requests that never overlapped, and a sequential pair proves
+ * only that the endpoint works twice. This lane's standing counter-example is a
+ * concurrency control that measured MINUS 0.003 ms between two requests that were
+ * actually one after the other. So the overlap is measured and asserted, and the
+ * spec fails by name when it did not happen.
+ */
+describe('two admins adding a topic at once — the position index is the referee', () => {
+  const PROBE_PREFIX = 'qa-race-';
+
+  const probeTopicIds = (): string[] =>
+    scalar(
+      `select coalesce(string_agg(id, ',' order by id), '')
+         from support_topic where id like '${PROBE_PREFIX}%'`,
+    )
+      .split(',')
+      .filter((x) => x !== '');
+
+  function dropProbeTopics(): void {
+    psql(`DELETE FROM support_topic WHERE id LIKE '${PROBE_PREFIX}%';`);
+  }
+
+  beforeAll(dropProbeTopics);
+  afterAll(dropProbeTopics);
+
+  it('both writes land, positions stay unique and dense, and the requests really overlapped', async () => {
+    const before = Number(scalar('select count(*) from support_topic'));
+    precondition(before > 0, 'there are no topics at all, so a dense-index guard has no subject');
+
+    /** Wall-clock envelope of one request, so overlap is measured rather than assumed. */
+    const timed = async (en: string) => {
+      const startedAt = Date.now();
+      const res = await treq<{ id?: string; error?: string }>(
+        'POST',
+        '/v1/platform/support/topics',
+        { token: consoleOwner, body: { en } },
+      );
+      return { res, startedAt, endedAt: Date.now() };
+    };
+
+    // Fired together, not awaited in turn. `Promise.all` is what puts them in flight
+    // at the same time; the timestamps below are what prove it did.
+    const [a, b] = await Promise.all([
+      timed(`${PROBE_PREFIX}alpha racing`),
+      timed(`${PROBE_PREFIX}beta racing`),
+    ]);
+
+    /**
+     * THE OVERLAP, ASSERTED. Two intervals overlap iff each begins before the other
+     * ends. If this fails the rest of the spec is about a sequential pair and proves
+     * nothing about the lock, so it is checked before the outcomes.
+     */
+    const overlapped = a.startedAt < b.endedAt && b.startedAt < a.endedAt;
+    expect(
+      overlapped,
+      `the two topic writes did not overlap — A ran ${a.startedAt}..${a.endedAt} and B ran ` +
+        `${b.startedAt}..${b.endedAt}, so they were sequential and this spec says nothing ` +
+        `about the FOR UPDATE on support_config. A sequential pair passing a concurrency ` +
+        `spec is the failure this assertion exists to prevent.`,
+    ).toBe(true);
+
+    /**
+     * WHAT THE GUARD IS ALLOWED TO ANSWER. Serialising is the point, not a particular
+     * status: both writes succeeding in some order is correct, and one being refused
+     * with a conflict is also correct. What is NOT correct is a 500 — a duplicate key
+     * escaping as an unhandled error is the guard being absent.
+     *
+     * `201`, NOT `200`, AND THIS SPEC LEARNED THAT THE HARD WAY. It was written
+     * expecting 200 and went red naming a 201 as if it were a failure, which is the
+     * assertion working on its author: a create that answers `201 Created` is the
+     * correct answer and the spec was the thing that was wrong. Both are listed rather
+     * than just 201, because a create answering 200 is a style difference and not a
+     * concurrency defect — this spec is about the index, and widening here keeps it
+     * from failing for a reason it does not care about.
+     */
+    const ACCEPTED = [200, 201];
+    for (const [label, out] of [['A', a], ['B', b]] as const) {
+      expect(
+        [...ACCEPTED, 409].includes(out.res.status),
+        `concurrent topic write ${label} answered ${out.res.status}: ${out.res.raw}. A 500 here ` +
+          `is a duplicate key on support_topic_position_uq escaping as an unhandled error, ` +
+          `which is precisely what the singleton lock exists to prevent.`,
+      ).toBe(true);
+    }
+
+    const settled = [a, b].filter((o) => ACCEPTED.includes(o.res.status)).length;
+    expect(
+      settled,
+      'neither concurrent write was accepted, so the endpoint refused them both and the ' +
+        'position index was never actually contended',
+    ).toBeGreaterThanOrEqual(1);
+
+    // ---- the invariant the index encodes, checked in SQL ----
+    expect(
+      scalar('select count(*) from (select position from support_topic group by position having count(*) > 1) d'),
+      'two topics share a position — the dense rewrite raced and the unique index did not ' +
+        'hold, which means the list order a console admin sees is now ambiguous',
+    ).toBe('0');
+
+    /**
+     * DENSE, not merely unique. The rewrite's contract is that the ACTIVE list
+     * occupies `0 … n-1`; a gap means one writer's rewrite was partially overwritten
+     * by the other's, which unique-ness alone would not reveal.
+     */
+    const active = Number(scalar('select count(*) from support_topic where active'));
+    expect(
+      scalar('select coalesce(max(position), -1) from support_topic where active'),
+      `the active topic list has ${active} rows but its highest position is not ${active - 1}, ` +
+        `so the dense 0..n-1 rewrite left a gap — two interleaved rewrites, not one after ` +
+        `the other`,
+    ).toBe(String(active - 1));
+    expect(
+      scalar('select count(*) from support_topic where active and position < 0'),
+      'an active topic is parked on a negative position — the two-phase rewrite was ' +
+        'interrupted and left a placeholder visible',
+    ).toBe('0');
+
+    // And the writes that succeeded are really there, by id.
+    expect(
+      probeTopicIds().length,
+      'the accepted writes created no topic rows',
+    ).toBe(settled);
+  });
+});
+
+// ===========================================================================
+/**
+ * `topic` IS JOINED AND `route` IS SNAPSHOTTED, AND THE ASYMMETRY IS DELIBERATE.
+ *
+ * Two fields sit next to each other on the wire and behave in opposite ways, on
+ * purpose. `db/schema/legal.ts` freezes `route` onto the ticket because a route is
+ * a DECISION — "a ticket that silently changed queue afterwards would be a
+ * customer's dispute changing hands with no record of it". `topic` is looked up at
+ * read time because a label is WORDING — an admin fixing a typo or adding the
+ * Arabic should fix it on every ticket, not leave the old spelling frozen in the
+ * queue.
+ *
+ * An asymmetry a reader could mistake for an inconsistency needs a spec that
+ * asserts BOTH halves in one breath, or the next person to notice it "fixes" one
+ * of them. That is what the first spec below does: one rename, two assertions,
+ * opposite expectations.
+ *
+ * `topic` was being STRIPPED from both ticket routes until `bd5fa99` — served by
+ * `serialiseTicket` and undeclared in `SupportTicketSchema`, so zod deleted it and
+ * every client read `undefined`. The contract census caught it. These specs are the
+ * behavioural half of that guard: the census proves the field survives the parse,
+ * and these prove it means what the schema comment says it means.
+ */
+describe('the topic label is joined, and the route it was filed under is not', () => {
+  const PROBE_TOPIC = 'qa-label-probe';
+  const PROBE_TICKET = 'SUP-QA-93001';
+  const ORIGINAL_EN = 'Label probe, original wording';
+  const RENAMED_EN = 'Label probe, corrected wording';
+
+  beforeAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id = '${PROBE_TICKET}';`);
+    psql(`DELETE FROM support_topic WHERE id = '${PROBE_TOPIC}';`);
+    /**
+     * Its own topic rather than one of the seeded six: renaming `booking` would
+     * leave every other spec in this file asserting against a table this one edited,
+     * and retiring it would change what the Contact-us form offers.
+     */
+    psql(`
+      INSERT INTO support_topic (id, route, en, ar, position, active)
+      VALUES ('${PROBE_TOPIC}', 'salon', '${ORIGINAL_EN}', 'صياغة أصلية', 9500, true);
+    `);
+    insertTicket(PROBE_TICKET, MEMBER, PROBE_TOPIC, 'Filed under the probe topic.', SALON_B);
+  });
+
+  afterAll(() => {
+    psql(`DELETE FROM support_ticket WHERE id = '${PROBE_TICKET}';`);
+    psql(`DELETE FROM support_topic WHERE id = '${PROBE_TOPIC}';`);
+  });
+
+  /** The one ticket, as the console queue serves it. */
+  async function probeRow(): Promise<{ topic?: { en: string; ar: string }; route?: string }> {
+    const res = await treq<{ items?: Array<{ id: string; topic: { en: string; ar: string }; route: string }> }>(
+      'GET',
+      '/v1/support/tickets?limit=100',
+      { token: consoleOwner },
+    );
+    expect(res.status, `the queue answered ${res.status}: ${res.raw}`).toBe(200);
+    const row = (res.body.items ?? []).find((t) => t.id === PROBE_TICKET);
+    precondition(row !== undefined, `the probe ticket ${PROBE_TICKET} is not in the queue at all`);
+    return row!;
+  }
+
+  it('renaming the topic changes the label on existing tickets, and not their route', async () => {
+    const before = await probeRow();
+    precondition(
+      before.topic?.en === ORIGINAL_EN,
+      `the probe ticket shows "${before.topic?.en}" rather than the original wording`,
+    );
+    precondition(before.route === 'salon', `the probe ticket is routed ${before.route}, not salon`);
+
+    // The rename, through the console's own endpoint.
+    const patched = await treq<{ en?: string }>(
+      'PATCH',
+      `/v1/platform/support/topics/${PROBE_TOPIC}`,
+      { token: consoleOwner, body: { en: RENAMED_EN } },
+    );
+    expect(
+      [200, 201].includes(patched.status),
+      `PATCH …/topics/${PROBE_TOPIC} answered ${patched.status}: ${patched.raw}`,
+    ).toBe(true);
+
+    const after = await probeRow();
+
+    // ---- half one: the WORDING followed the rename ----
+    expect(
+      after.topic?.en,
+      `the ticket still shows "${after.topic?.en}" after the topic was renamed to ` +
+        `"${RENAMED_EN}". The label is documented as JOINED rather than snapshotted, so a ` +
+        `typo fixed in the console has to be fixed on every ticket already filed — otherwise ` +
+        `the old spelling is frozen into the queue for ever.`,
+    ).toBe(RENAMED_EN);
+
+    // ---- half two: the DECISION did not move ----
+    expect(
+      after.route,
+      'the ticket changed queue because its topic was RENAMED. `route` is snapshotted onto ' +
+        'the row precisely so that editing a topic cannot move a customer\'s dispute between ' +
+        'queues without a record of it.',
+    ).toBe('salon');
+    expect(
+      scalar(`select route from support_ticket where id='${PROBE_TICKET}'`),
+      'the stored route moved under a rename',
+    ).toBe('salon');
+  });
+
+  /**
+   * AND THE BRIEF FOR THIS SPEC WAS WRONG, WHICH IS WORTH RECORDING RATHER THAN
+   * QUIETLY WRITING THE PASSING VERSION.
+   *
+   * It said a retired topic degrades to `{ en: topicId, ar: '' }`, so a queue row
+   * shows its slug rather than vanishing. It does not, and the reason is one line in
+   * `serialiseTickets`: the label lookup is
+   * `inArray(supportTopic.id, topicIds)` with NO `active` filter. A soft delete sets
+   * `active = false` and leaves the row, so the join still finds it and the real
+   * label survives retirement.
+   *
+   * Which is the better behaviour, and worth pinning: a customer's ticket keeps the
+   * words she chose from, and the console's own list (active only) still stops
+   * offering the topic. The degradation is a defensive branch, not this path.
+   */
+  it('retiring the topic keeps the real label on tickets already filed under it', async () => {
+    const retired = await treq<{ error?: string }>(
+      'DELETE',
+      `/v1/platform/support/topics/${PROBE_TOPIC}`,
+      { token: consoleOwner },
+    );
+    expect(
+      [200, 204].includes(retired.status),
+      `DELETE …/topics/${PROBE_TOPIC} answered ${retired.status}: ${retired.raw}`,
+    ).toBe(true);
+
+    // A SOFT delete: the row survives, deactivated.
+    expect(
+      scalar(`select active from support_topic where id='${PROBE_TOPIC}'`),
+      'the topic row is gone or still active — the delete is documented as a soft retire',
+    ).toBe('f');
+
+    // It has left the Contact-us form.
+    const config = await treq<{ topics?: Array<{ id: string }> }>('GET', '/v1/platform/support', {
+      token: member,
+    });
+    expect(
+      (config.body.topics ?? []).map((t) => t.id),
+      'a retired topic is still offered to customers on the Contact-us form',
+    ).not.toContain(PROBE_TOPIC);
+
+    // But the queue still names it properly.
+    const row = await probeRow();
+    expect(
+      row.topic?.en,
+      `a ticket filed under a retired topic renders "${row.topic?.en}". The label join does ` +
+        `not filter on \`active\`, so retirement must not change what an existing ticket ` +
+        `says — a queue row degrading to a bare slug is the dangling-reference problem the ` +
+        `soft delete was chosen to avoid.`,
+    ).toBe(RENAMED_EN);
+  });
+
+  /**
+   * THE FALLBACK IS UNREACHABLE, AND THIS ASSERTS THE REASON RATHER THAN THE BRANCH.
+   *
+   * `topic: labels.get(row.topicId) ?? { en: row.topicId, ar: '' }` can only fire
+   * when the topic row is ABSENT. Two independent things prevent that for any ticket
+   * that exists:
+   *
+   *   the API      never hard-deletes a topic — `DELETE` retires it, asserted above;
+   *   the database `support_ticket.topic_id` is `ON DELETE RESTRICT`, so the row
+   *                cannot be removed while a ticket points at it.
+   *
+   * So the branch is defensive depth, not a state the product can produce. Asserting
+   * the FK refusal is the honest way to "drive" it: it proves WHY the fallback never
+   * fires, which is more durable than a spec that manufactures an impossible row.
+   */
+  it('and the slug fallback cannot be reached — the FK refuses to orphan a ticket', () => {
+    let failure = '';
+    try {
+      psql(`DELETE FROM support_topic WHERE id = '${PROBE_TOPIC}';`);
+    } catch (err) {
+      failure = String((err as Error).message);
+    }
+
+    expect(
+      failure,
+      'a topic with tickets filed under it was DELETED outright. `topic_id` is ON DELETE ' +
+        'RESTRICT precisely so a ticket cannot be orphaned; without it the queue would render ' +
+        'bare slugs for real customer messages and the soft delete would be decorative.',
+    ).not.toBe('');
+    expect(
+      failure.toLowerCase().includes('foreign key') || failure.toLowerCase().includes('violates'),
+      `the delete failed for a reason other than the foreign key: ${failure}`,
+    ).toBe(true);
+
+    // Still there, still retired, still readable.
+    expect(
+      scalar(`select active from support_topic where id='${PROBE_TOPIC}'`),
+      'the refused delete removed the row anyway',
+    ).toBe('f');
+  });
+});

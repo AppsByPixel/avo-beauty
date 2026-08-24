@@ -699,6 +699,51 @@ function probes(): Probe[] {
       // PROMOTED: `transactionId` is declared now, so a wallet dispute still names
       // the charge it is about by the time a client reads it.
     },
+    /**
+     * THE STAFFED QUEUE, arriving with lane A's `routes/support.ts` and caught by the
+     * unclassified check on the first run after the rebase — the fifth new surface this
+     * census has named on arrival.
+     *
+     * PROBED RATHER THAN UNMODELLED, and the distinction is not a formality:
+     * `SupportTicketSchema` exists in `packages/types`, so writing this route into
+     * UNMODELLED would be asserting "there is no schema" with the schema sitting three
+     * imports up this file. The ENVELOPE (`items` / `total` / `nextCursor`) has none,
+     * which is what `select` is for — the modelled shape is the row, not the page.
+     *
+     * IT SHARES ITS ROOT CAUSE WITH THE `POST` PROBE ABOVE — which was ALREADY RED when
+     * this route arrived, so probing here adds detail to an existing signal rather than
+     * turning the suite red. Three keys are declared nowhere in `packages/types`:
+     *
+     *   salonId   the console queue spans salons, so a row that cannot say which salon
+     *             it belongs to is unreadable there. Stripped on BOTH routes.
+     *   topic     the denormalised {en, ar} label, so the queue renders a topic without
+     *             a second request per row. Stripped on BOTH routes.
+     *   total     GET only. `paginated()` declares `items` and `nextCursor` only, and
+     *             this endpoint counts. `GET /v1/platform/audit` totals too, so the
+     *             honest fix is probably a counted wrapper rather than a field here.
+     *
+     * Measured, not guessed — that list is what the two specs print. An earlier version
+     * of this note said POST stripped `salonId` alone; it strips `topic` as well, and
+     * the note is corrected rather than left, because a stale annotation in the place a
+     * reader looks first is the defect this census exists to prevent.
+     *
+     * NONE of them is annotated into `wireOnly`, because none is a wire-only field —
+     * every one is a real part of the shape a client needs, and `wireOnly` is for keys
+     * that legitimately belong to no schema. Zod does not fail on an undeclared key, it
+     * DELETES it, so each of these currently reaches a client as `undefined` with no way
+     * to tell that the server sent a value. That is the `changeableUntil` failure exactly.
+     *
+     * The fix is `packages/types`, which is trunk-owned and a four-way break, so it is
+     * REPORTED rather than reached for from this lane. All four ticket specs go green in
+     * the same run when it lands.
+     */
+    {
+      route: 'GET /v1/support/tickets',
+      label: 'GET /v1/support/tickets',
+      schemaName: 'paginated(SupportTicketSchema)',
+      schema: paginated(SupportTicketSchema),
+      requireNonEmpty: ['items'],
+    },
   ];
 }
 
@@ -791,6 +836,35 @@ const UNMODELLED: Record<string, string> = {
     'cannot drift from the ledger by the number of erasures) and branchCount (excludes ' +
     'closed branches). The tombstone spec manufactures the divergence itself rather than ' +
     'trusting the seed to hold one.',
+  /**
+   * THE CONSOLE'S ACTIVITY FEED AND ACCOUNTS DIRECTORY, arriving with lane A's
+   * `platformConsole.ts` / `accounts.ts` and caught by the unclassified check on the
+   * first run after the rebase, by name and with the file — alongside the ticket queue
+   * above, which had a schema and is probed instead.
+   *
+   * UNMODELLED because `packages/types` declares nothing for either: there is no
+   * `PlatformActivitySchema` and no `PlatformAccountSchema`, and neither is an entity
+   * list wearing a wrapper. Activity is THREE merged streams behind one cursor with the
+   * money rows deliberately excluded, so no single entity describes a row; Accounts is a
+   * cross-salon aggregate assembled in SQL. Both are reachable — `signInPlatform` exists
+   * — and both are worth schemas, which is a trunk/types decision rather than lane D's.
+   *
+   * Their cursor is the one that silently dropped rows: `services/streamCursor.ts` now
+   * carries the composite, and a same-microsecond tie is paged in
+   * `support-routing.test.ts` rather than trusted here.
+   */
+  'GET /v1/platform/activity':
+    'the console Activity feed — three streams merged under one composite cursor, with ' +
+    'the money rows deliberately dropped, behind requirePlatform(activity). No schema ' +
+    'in packages/types and no single entity per row, so there is nothing to bind a ' +
+    'probe to. Its gate is driven by the generated sweep in permission-census.test.ts.',
+  'GET /v1/platform/accounts':
+    'the console Accounts directory — a cross-salon aggregate built in SQL behind ' +
+    'requirePlatform(accounts), the widest read in the product. No schema in ' +
+    'packages/types and not MemberSchema-shaped. Its gate is driven in ' +
+    'permission-census.test.ts; that an ERASED member never reads as having a password ' +
+    'is driven in support-routing.test.ts, because #6 makes that the one field on this ' +
+    'read that must never be wrong.',
   'GET /v1/platform/metrics':
     'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
     '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +
@@ -1282,6 +1356,14 @@ beforeAll(async () => {
     ['GET /v1/platform/messaging-policy', '/v1/platform/messaging-policy', platform],
     ['GET /v1/platform/policies', '/v1/platform/policies', member],
     ['GET /v1/platform/support', '/v1/platform/support', member],
+    /**
+     * The console credential, not the merchant one: `queueScope` gives a platform
+     * admin no predicate, so this reads the whole queue and the probe sees the widest
+     * row shape the endpoint can serve. A merchant token would narrow it to one salon
+     * and one route, and a schema exercised against the narrow case would not notice a
+     * key that only appears on the wide one.
+     */
+    ['GET /v1/support/tickets', '/v1/support/tickets', platform],
     ['GET /topups/{id}', `/topups/${topUpId}`, member],
   ];
 
