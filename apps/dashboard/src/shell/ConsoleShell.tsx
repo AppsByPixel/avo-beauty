@@ -84,10 +84,24 @@ function SignedInConsole() {
   if (breakpoint === 'unsupported') return <UnsupportedWidth />;
 
   /*
-   * A section is offered when the admin holds it AND it is built. `built` and
-   * `section` are separate facts: Analytics is gated by a real permission the
-   * admin may well hold, and still has no endpoint to call, so offering it would
-   * be a link to a screen that cannot load.
+   * A section is offered when the admin HOLDS IT — that is the whole filter, and
+   * `built` is not part of it. `built` drives `aria-disabled` on the link below,
+   * so an unbuilt section is listed and announced as unavailable rather than
+   * hidden; the design's sidebar draws all ten.
+   *
+   * (The previous note here claimed this filter checked `built` too, and that
+   * Analytics "has no endpoint to call". Neither was true — the filter is the one
+   * line below it, and `GET /v1/platform/metrics` has existed since
+   * platformConsole.ts:154. A comment that describes its own adjacent code
+   * wrongly is the same defect class as the gate mismatch this shell just had.)
+   *
+   * THE COURTESY IS ONLY AS GOOD AS THE SECTION NAMED. This reads whatever
+   * `item.section` says, so a wrong section here silently mis-filters the whole
+   * sidebar — it cannot tell a right answer from a stale one. That is enforced one
+   * level up, in `consoleNavGates.test.ts`, against the real routes.
+   *
+   * Still a courtesy and not a control (#7): every one of these endpoints refuses
+   * on its own.
    */
   const visible = CONSOLE_NAV_ITEMS.filter(
     (item) => item.section === null || session.sections[item.section],

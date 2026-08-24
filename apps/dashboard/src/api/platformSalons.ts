@@ -16,42 +16,42 @@ import { authedRequest } from '../auth/authedRequest.js';
  * ONE CLIENT FILE PER SERVER ROUTE FILE is the house rule, and this endpoint
  * lives in `api/src/routes/platformConsole.ts` beside metrics/settings/audit. It
  * gets its own file anyway, for the reason that rule exists in the first place:
- * the thing a consumer most needs to get right here is the GATE, and this one is
- * not the gate its section name implies. Burying that four hundred lines down
- * `platformConsole.ts` is how it gets missed.
+ * the thing a consumer most needs to get right here is the GATE. Burying that
+ * four hundred lines down `platformConsole.ts` is how it gets missed.
  *
  * =========================================================================
- * THE GATE IS `analytics`, NOT `salons` — AND THAT LOCKS OUT `support`
+ * THE GATE IS `salons`, AND THIS FILE ARGUED THE OPPOSITE FOR EIGHT WEEKS
  * =========================================================================
- * Checked in the handler, not inferred from the name (platformConsole.ts:156):
+ * Checked in the handler, not inferred from the name (platformConsole.ts:243):
  *
- *     requirePlatform(req, 'analytics');
+ *     requirePlatform(req, 'salons');
  *
- * The route's own comment argues the choice and states the tiebreak as "gating
- * this list the same way widens nothing while unblocking the picker for every
- * preset (each one holds `analytics`)". THE PARENTHESIS IS FALSE, and it is the
- * half the console has to live with. `PLATFORM_ROLE_PRESETS` in
- * `api/src/db/schema/platformAdmin.ts:166`:
+ * This header used to carry forty lines proving the gate was `analytics`, with a
+ * driven 403 and a preset table, under the heading "THE GATE IS `analytics`, NOT
+ * `salons` — AND THAT LOCKS OUT `support`". All of it was true when written.
+ * Commit 4cc03c5 regated the route and every word of it inverted at once: the
+ * gate, the locked-out preset, and the advice it gave `consoleNavItems.tsx`.
  *
- *     support: { analytics: false, activity: true, salons: TRUE, accounts: true, … }
+ * THE COMPLAINT WAS ANSWERED, WHICH IS WHY IT IS GONE RATHER THAN AMENDED. The
+ * old note reported the mismatch to trunk and said "the gate is in `api/` and is
+ * not this lane's to move". It was moved, in the direction this file asked for.
+ * `support` — the preset the design labels "Support — accounts & salons" — now
+ * holds `salons` and can read the salon list, which is what that label always
+ * implied. `PLATFORM_ROLE_PRESETS`, `api/src/db/schema/platformAdmin.ts:166`:
  *
- * So the one preset the design labels "Support — accounts & salons" holds
- * `salons` and does NOT hold `analytics`. Driven against the real API on
- * `avo_lane_c`, with PLT-003 patched to `role: support` through
- * `PATCH /v1/platform/admins/:id`:
- *
- *     GET /v1/platform/salons   403
- *     {"error":"forbidden","message":"Your console account cannot open Analytics.
- *      The platform owner can grant it."}
- *
- * A support admin is refused the salon list, and told she lacks Analytics — a
- * section she is not trying to open. Reported to trunk; the gate is in `api/` and
- * is not this lane's to move.
+ *     support: { analytics: false, activity: true, salons: true, accounts: true, … }
  *
  * WHAT THE CONSOLE DOES ABOUT IT: `consoleNavItems.tsx` marks the Salons item
- * `section: 'analytics'`, because the courtesy gate has to name the section the
+ * `section: 'salons'`, because the courtesy gate has to name the section the
  * SERVER checks or it stops being a courtesy and becomes a second, wrong answer.
- * That is stated at the item rather than left to look like a typo.
+ * It named `analytics` for the whole eight weeks — correct prose, obsolete fact,
+ * and it mis-filtered the sidebar in both directions the entire time.
+ *
+ * SO THE GATE IS NO LONGER MERELY DOCUMENTED HERE, IT IS ASSERTED.
+ * `shell/consoleNavGates.test.ts` parses `api/src/routes/` and fails if the
+ * sidebar's section is not the one the server enforces. If this paragraph and
+ * that test ever disagree, THE TEST IS RIGHT — it re-reads the server on every
+ * run, and this paragraph was last read by a human on the day it was written.
  *
  * =========================================================================
  * WHAT THE DESIGN DRAWS AND THE WIRE DOES NOT CARRY
@@ -274,25 +274,28 @@ export function useAllPlatformSalons(): {
  * `POST /v1/platform/salons`, the four-step wizard's write.
  *
  * =========================================================================
- * THE CREATE'S GATE IS `salons`. THE LIST'S IS `analytics`. THEY ARE DIFFERENT
- * AUTHORITIES AND THE SCREEN HAS TO SAY SO.
+ * THE CREATE'S GATE IS `salons` — AND SO IS THE LIST'S, NOW
  * =========================================================================
- * Driven on `avo_lane_c`, with `mariam.k` — the seeded analyst, `analytics: true,
- * salons: false`:
+ * This block used to open "THE CREATE'S GATE IS `salons`. THE LIST'S IS
+ * `analytics`. THEY ARE DIFFERENT AUTHORITIES AND THE SCREEN HAS TO SAY SO", and
+ * proved it by driving both calls as the seeded analyst `mariam.k`
+ * (`analytics: true, salons: false`): the GET answered 200 and the POST 403.
  *
- *   GET  /v1/platform/salons   200   she reads every salon
- *   POST /v1/platform/salons   403   "Your console account cannot open Salons.
- *                                     The platform owner can grant it."
+ * Commit 4cc03c5 regated the list to `salons`, so that same analyst is now
+ * refused BOTH — and the divergence this section was written to explain is gone.
+ * The two routes are still separate gates that could diverge again; they simply
+ * name the same section today.
  *
- * The handler's reasoning is worth carrying: `analytics` is the ONE section every
- * preset holds, and the design calls an analyst "read-only metrics" — gating
- * creation there would hand every analyst the power to mint a tenant, an owner
- * credential and an invite to a phone number.
+ * The create's own reasoning is unchanged and still worth carrying: the design
+ * calls an analyst "read-only metrics", and gating creation on `analytics` would
+ * hand every analyst the power to mint a tenant, an owner credential and an
+ * invite to a phone number.
  *
- * So `Salons.tsx` courtesy-gates the "+ Onboard a salon" button on
- * `sections.salons` while the list stays open to `analytics`. That is the one
- * place in this console where the two facts diverge on a single screen, and #7 is
- * intact either way: the button is a courtesy and the 403 above is the control.
+ * `Salons.tsx` still courtesy-gates the "+ Onboard a salon" button on
+ * `sections.salons`. On a rendered Salons screen that is now always true, since
+ * the list read demands the same section — kept because it names ITS OWN
+ * endpoint's gate, which is the only form of courtesy that survives a regating.
+ * #7 intact either way: the button is a courtesy and the 403 is the control.
  *
  * =========================================================================
  * IDEMPOTENCY: MINTED ON ENTERING REVIEW, HELD ACROSS RETRIES

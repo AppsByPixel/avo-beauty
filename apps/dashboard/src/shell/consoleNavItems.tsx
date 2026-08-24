@@ -11,15 +11,37 @@ export interface ConsoleNavItem {
   title: string;
   subtitle: string;
   /**
-   * The `requirePlatform` section the API gates this with, or null where no
-   * endpoint exists yet.
+   * The endpoint this item's screen loads from — the one whose refusal decides
+   * whether the screen can render at all, not every call it makes. `Audit` also
+   * reads the salon list to fill a filter picker and `Salons` also reads platform
+   * settings for the wizard's deposit default; both of those are courtesy-gated
+   * at the call site and degrade to a narrower screen rather than an error.
    *
-   * NULL IS NOT "UNGATED", IT IS "UNBUILT ON THE SERVER". Billing has no route at
-   * all, and Analytics, Activity and Audit are listed by the design but their
-   * endpoints (`GET /platform/metrics`, the platform-wide audit read) do not
-   * exist — so there is nothing to gate yet and nothing to render. Writing the
-   * distinction down is the lesson from Settings sitting in the wrong column for
-   * weeks: an absent gate and a gate nobody needed look identical in a diff.
+   * NULL MEANS "NO SUCH ROUTE ON THE SERVER", and it is the only honest reason to
+   * leave `section` null. Billing is the sole case.
+   *
+   * THIS FIELD IS WHY THE GATE BELOW CANNOT GO STALE AGAIN. `consoleNavGates.test.ts`
+   * parses `api/src/routes/` for this exact method and path and asserts `section`
+   * equals the `requirePlatform` argument it finds there. So the item declares the
+   * endpoint — a fact its own screen owns — and the gate is DERIVED rather than
+   * transcribed. Transcribing it is what put this file eight weeks behind the API.
+   */
+  endpoint: string | null;
+  /**
+   * The `requirePlatform` section the API gates `endpoint` with, or null where
+   * there is no endpoint at all.
+   *
+   * NULL IS NOT "UNGATED", IT IS "UNBUILT ON THE SERVER" — Billing has no route of
+   * any kind. Writing the distinction down is the lesson from Settings sitting in
+   * the wrong column for weeks: an absent gate and a gate nobody needed look
+   * identical in a diff.
+   *
+   * DO NOT HAND-EDIT THIS TO MATCH A COMMENT. It is asserted against the routes;
+   * if the test disagrees with you, the server is right and this field is wrong.
+   * The previous docstring here claimed the metrics, activity and audit endpoints
+   * "do not exist". All three exist and are gated — `platformConsole.ts:155`,
+   * `:848`, `:1068` — and had for some time before anyone noticed, because nothing
+   * checked.
    */
   section: PlatformSection | null;
 }
@@ -33,6 +55,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Analytics',
     to: '/console/analytics',
     built: true,
+    endpoint: 'GET /v1/platform/metrics',
     section: 'analytics',
     title: 'Analytics',
     subtitle: 'How AVO is performing across every salon',
@@ -47,6 +70,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Activity',
     to: '/console/activity',
     built: false,
+    endpoint: 'GET /v1/platform/activity',
     section: 'activity',
     title: 'Activity',
     subtitle: 'Live events across every salon',
@@ -61,35 +85,50 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Salons',
     to: '/console/salons',
     built: true,
-    /**
-     * `analytics`, NOT `salons`, AND IT IS NOT A TYPO.
+    endpoint: 'GET /v1/platform/salons',
+    /*
+     * `salons`, and it agrees with the server again.
      *
-     * This field means "the section the SERVER gates this with", and the only
-     * endpoint behind this item — `GET /v1/platform/salons` — is
-     * `requirePlatform(req, 'analytics')` (platformConsole.ts:156). Naming
-     * `salons` here would make the sidebar and the API disagree in both
-     * directions at once: an analyst who CAN read the list would not be offered
-     * it, and a `support` admin who cannot would be offered a link that 403s.
+     * THIS FIELD SAID `analytics` FOR EIGHT WEEKS AFTER THAT STOPPED BEING TRUE,
+     * and the story is worth keeping because the mechanism will recur. The old
+     * comment here was correct when written: the list really was gated
+     * `analytics`, the reasoning was argued, the refusal was driven against a real
+     * API, and the note even named its own expiry — "when the per-salon editor and
+     * the onboarding wizard land they will be gated on `salons`". Commit 4cc03c5
+     * is the one that landed the editor and regated the list. The trigger fired
+     * and nobody reread the note, because a comment cannot fail a build.
      *
-     * Driven against the real API rather than reasoned about — the `support`
-     * preset holds `salons: true, analytics: false`, and its list read answers
-     * 403 "Your console account cannot open Analytics." The gate lives in `api/`
-     * and the mismatch is reported to trunk; until it moves, the courtesy follows
-     * the server, because a courtesy that contradicts the enforcement is not a
-     * courtesy.
+     * So the fix is not this line. The fix is `consoleNavGates.test.ts`, which
+     * derives the gate from `api/src/routes/` and would have gone red on the same
+     * commit. This line is now a consequence of that test rather than a claim
+     * anyone has to keep in their head.
      *
-     * When the per-salon editor and the onboarding wizard land they will be gated
-     * on `salons`, and this item will need splitting or the list regating. Written
-     * down so that is a decision and not a discovery.
+     * WHAT THE MISMATCH DID WHILE IT LASTED, against the shipped presets in
+     * `api/src/db/schema/platformAdmin.ts:162-169` — both directions at once:
+     *
+     *   analyst   analytics:true  salons:false  sidebar SHOWED Salons → 403 on open
+     *   support   analytics:false salons:true   sidebar HID Salons → allowed, never offered
+     *
+     * The second half is the one that hides: "Support — accounts & salons" is the
+     * preset's own description, and the section it is named for was missing from
+     * its sidebar. Nobody reports a door they were never shown.
      */
-    section: 'analytics',
+    section: 'salons',
     title: 'Salons',
     /*
      * The design's own subtitle is "Open a salon to edit its setup and loyalty"
-     * (`AVO Owner Console.dc.html:1144`), and there is no endpoint a console
-     * admin can use to open one — see `routes/console/Salons.tsx`. A header that
-     * offers the editor above a screen that has none is the same false claim as a
-     * Manage button, so it carries the design's other true sentence instead.
+     * (`AVO Owner Console.dc.html:1144`). This comment used to justify dropping it
+     * with "there is no endpoint a console admin can use to open one" — THAT IS NO
+     * LONGER TRUE either, and it went stale on the same commit as the gate above:
+     * 4cc03c5 added `GET /v1/platform/salons/:id` (platformConsole.ts:339) and
+     * `PATCH /v1/platform/salons/:id` (:350), both gated `salons`.
+     *
+     * The subtitle still carries the design's other sentence, but for a DIFFERENT
+     * and much narrower reason: the endpoints exist, the SCREEN does not draw an
+     * editor yet (`routes/console/Salons.tsx` is the list only). A header that
+     * offers an editor above a screen that has none is still a false claim. This is
+     * now a lane-C build gap with the server ready and waiting, not an API absence
+     * — reported to trunk as such, because those are different queues.
      */
     subtitle: 'Every salon on AVO',
     icon: (
@@ -104,6 +143,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Accounts',
     to: '/console/accounts',
     built: false,
+    endpoint: 'GET /v1/platform/accounts',
     section: 'accounts',
     title: 'Accounts',
     subtitle: 'Every customer and staff account on the platform',
@@ -119,6 +159,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Admins',
     to: '/console/admins',
     built: true,
+    endpoint: 'GET /v1/platform/admins',
     section: 'admins',
     title: 'Admins',
     subtitle: 'Owner-console users and their authority',
@@ -135,6 +176,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Approvals',
     to: '/console/approvals',
     built: true,
+    endpoint: 'GET /v1/platform/campaigns',
     section: 'approvals',
     title: 'Approvals',
     subtitle: 'Salon campaigns waiting on AVO, and the platform throttle',
@@ -150,6 +192,15 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Policies',
     to: '/console/policies',
     built: true,
+    /*
+     * The DRAFT read, not `GET /v1/platform/policies` — the published set is
+     * public (`platform.ts:526`, no gate at all, the wallet reads it), so gating
+     * the sidebar on it would gate on nothing. The draft is what this screen
+     * blocks on: `Policies.tsx:63` renders `SectionError` off `draft.isError`.
+     * The Support panel below it is a subview and its writes are gated `policies`
+     * too (`support.ts:514`), so one section covers the whole screen.
+     */
+    endpoint: 'GET /v1/platform/policies/draft',
     section: 'policies',
     title: 'Policies',
     subtitle: 'The legal documents every wallet shows — draft, version and publish',
@@ -166,6 +217,9 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     to: '/console/billing',
     built: false,
     // No endpoint of any kind, so no section to name. See the interface docstring.
+    // The test pins both nulls together: a route appearing for Billing without a
+    // section named here goes red rather than shipping an ungated-looking item.
+    endpoint: null,
     section: null,
     title: 'Billing',
     subtitle: 'Commission and platform revenue',
@@ -181,6 +235,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Audit log',
     to: '/console/audit',
     built: true,
+    endpoint: 'GET /v1/platform/audit',
     section: 'audit',
     title: 'Audit log',
     subtitle: 'Every action on the platform, and who took it',
@@ -196,6 +251,7 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     label: 'Controls',
     to: '/console/controls',
     built: true,
+    endpoint: 'GET /v1/platform/settings',
     section: 'controls',
     title: 'Controls',
     subtitle: 'Platform-wide settings',

@@ -28,8 +28,13 @@ import { ApiError } from '../../api/client.js';
 import { SectionError, WriteError } from '../sectionState.js';
 
 /**
- * Console → Salons. `GET /v1/platform/salons`, gated `analytics` — see
- * `api/platformSalons.ts` for why that is not a typo and who it locks out.
+ * Console → Salons. `GET /v1/platform/salons`, gated `salons`
+ * (platformConsole.ts:243).
+ *
+ * It was gated `analytics` when this screen was written, and this header said so
+ * at length. Commit 4cc03c5 regated it. See `shell/consoleNavItems.tsx` § salons
+ * for the full story and `shell/consoleNavGates.test.ts` for the check that now
+ * makes a repeat fail a build instead of a reader.
  *
  * `AVO Owner Console.dc.html:202` § SALONS — the list half.
  *
@@ -37,37 +42,43 @@ import { SectionError, WriteError } from '../sectionState.js';
  * WHAT THIS SCREEN DELIBERATELY DOES NOT DRAW
  * =========================================================================
  * The design's section is "list → per-salon editor", and this is the list only.
- * The editor is NOT built, and the reason is an absence rather than a decision to
- * defer: THERE IS NO ENDPOINT A CONSOLE ADMIN CAN USE TO READ OR WRITE ONE SALON.
- * Driven against the real API on `avo_lane_c` with an owner-console token, which
- * is the only way to tell a refusal from a missing route — three digits do not
- * say which guard answered:
  *
- *   GET   /salons/SAL-AMARA                403  "This endpoint belongs to a
- *                                               salon. Open it from the console’s
- *                                               Salons section."      ← the guard
- *   PATCH /salons/SAL-AMARA                403  "This endpoint is for salon
- *                                               staff."               ← the guard
- *   GET   /v1/platform/salons/SAL-AMARA    404  "No such endpoint."   ← absence
+ * THE REASON CHANGED AND THE CONCLUSION DID NOT, WHICH IS WHY THIS IS REWRITTEN
+ * RATHER THAN DELETED. This block used to read "THERE IS NO ENDPOINT A CONSOLE
+ * ADMIN CAN USE TO READ OR WRITE ONE SALON", evidenced by a driven 404 on
+ * `GET /v1/platform/salons/SAL-AMARA`, and it closed by naming the two endpoints
+ * that would fix it. Commit 4cc03c5 BUILT EXACTLY THOSE TWO:
  *
- * The first refusal points at THIS SCREEN for the remedy, and the remedy does not
- * exist yet: `requireSalonScoped` in `api/src/auth/principal.ts` says so in as
- * many words — "A platform admin who needs to read a salon's data reads it
- * through a console route gated on the `salons` section… Those routes are not
- * built yet." Nothing in `api/src/routes` is gated on `salons` at all today.
+ *   GET   /v1/platform/salons/:id   gated `salons`   platformConsole.ts:339
+ *   PATCH /v1/platform/salons/:id   gated `salons`   platformConsole.ts:350
  *
- * So there is no `Manage` button on a row. A control that opens a screen which
- * can only 403 is worse than a column that is not there: it teaches an admin that
- * the console is broken rather than that the feature is unbuilt. The row action
- * and the Live toggle are absent for the same reason — each would be a claim the
- * product cannot honour. Reported to trunk with the two endpoints that would fix
- * it: `GET` and `PATCH /v1/platform/salons/{id}`, gated `salons`.
+ * So the old 404 evidence is spent, and the sentence it supported is false. The
+ * editor is still not drawn here — but that is now a LANE C BUILD GAP with the
+ * server ready, not an API absence. Different queue, different owner, and worth
+ * the distinction: the first is "we have not got to it", the second was "we are
+ * blocked". Reported to trunk as unblocked work rather than a missing dependency.
  *
- * THE WIZARD, BY CONTRAST, IS HERE — `POST /v1/platform/salons` landed. See
- * `OnboardWizard` below, and `api/platformSalons.ts` for the gate and the
- * idempotency rule it turns on. The button that opens it is courtesy-gated on
- * `sections.salons` while this list is gated `analytics`, because those are
- * genuinely two authorities and this screen is the one place they diverge.
+ * `api/src/auth/principal.ts:532` already corrected its own half of this — the
+ * paragraph that used to end "not built yet" now begins "THOSE ROUTES NOW EXIST".
+ * Lane A updated its comment and this lane's copy of the same fact sat stale, in
+ * three files. That is the argument for deriving a claim instead of restating it.
+ *
+ * Until the editor is drawn there is still no `Manage` button on a row: a control
+ * that opens a screen which does not exist is worse than a column that is not
+ * there. The Live toggle stays absent for the ORIGINAL reason, which has NOT
+ * expired — `salon` has no live/suspended column, so there is nothing to write.
+ *
+ * THE WIZARD IS HERE — `POST /v1/platform/salons` landed. See `OnboardWizard`
+ * below, and `api/platformSalons.ts` for the gate and the idempotency rule it
+ * turns on. Its button is courtesy-gated on `sections.salons`, which is now the
+ * SAME section as this screen's read — so on this screen the check is always true
+ * and this is no longer "the one place two authorities diverge", as it read while
+ * the list was gated `analytics`.
+ *
+ * The check is kept rather than deleted: it names the gate of its own endpoint
+ * (`POST /v1/platform/salons`), which is a different route from the list and free
+ * to be regated independently — as the list just was. A courtesy that reads its
+ * own endpoint's section costs nothing and stays correct through that.
  *
  * =========================================================================
  * THE BANNER COPY IS THE DESIGN'S FIRST SENTENCE AND NOT ITS SECOND
@@ -76,17 +87,18 @@ import { SectionError, WriteError } from '../sectionState.js';
  * and loyalty structure — or flip it off to instantly suspend it. Customers keep
  * their balance."
  *
- * Only the first sentence is true of what ships. The rest describes the editor
- * that has no endpoint and a suspend that has no column, so it is dropped rather
- * than paraphrased into something vaguer — copy is verbatim or absent, never
- * softened.
+ * Only the first sentence is true of what ships. The rest describes an editor
+ * this screen does not draw and a suspend that has no column, so it is dropped
+ * rather than paraphrased into something vaguer — copy is verbatim or absent,
+ * never softened. (The editor's ENDPOINTS now exist; see above. When the screen
+ * draws them, the second sentence becomes true and this banner should take it.)
  *
- * NO COURTESY GATE ON THE READ. It is `requirePlatform(req, 'analytics')`, so an
+ * NO COURTESY GATE ON THE READ. It is `requirePlatform(req, 'salons')`, so an
  * admin without it gets a 403 on load and `SectionError` renders the server's own
  * sentence. A second check here would duplicate the server and drift from it —
- * non-negotiable #7, the sidebar mark is a courtesy and not a control. The
- * onboard BUTTON is the exception, and it is a courtesy over a different section
- * entirely rather than a second copy of this one.
+ * non-negotiable #7, the sidebar mark is a courtesy and not a control. Drift is
+ * not hypothetical: the sidebar's copy of this section name was wrong for eight
+ * weeks, which is precisely the argument for not making a second one here.
  */
 export function Salons() {
   const [search, setSearch] = useState('');
@@ -94,10 +106,13 @@ export function Salons() {
   const onboardButton = useRef<HTMLButtonElement>(null);
   const list = usePlatformSalons();
   /*
-   * The courtesy over `salons`, which is NOT the section this screen's read is
-   * gated on. #7 unchanged — `POST /v1/platform/salons` refuses without it, and
-   * that refusal is what protects the tenant. This only stops offering a wizard
-   * whose last step is guaranteed to fail.
+   * The courtesy over `salons`, the section gating `POST /v1/platform/salons`
+   * (platformConsole.ts:452). This IS now the same section the list read is gated
+   * on, so on a rendered Salons screen it is always true — it used to be the one
+   * divergence on this screen and no longer is.
+   *
+   * #7 unchanged — the POST refuses without it, and that refusal is what protects
+   * the tenant. This only stops offering a wizard whose last step would fail.
    */
   const canOnboard = useConsoleSections().salons;
 
