@@ -45,6 +45,42 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### Support is five endpoints short, and I read that from the contract instead of the routes
+
+**What.** Briefing two lanes that the Support panel was "purely unrendered, no API work needed",
+I listed four endpoints as built. **Two exist.** `GET /v1/platform/support` and
+`POST /v1/support/tickets`, both in `api/src/routes/platform.ts`. Specified in
+`api-contract.md` §§ 555–586 and implemented nowhere: `PATCH /v1/platform/support/channels`,
+`POST /v1/platform/support/topics`, `PATCH /v1/platform/support/topics/{id}`,
+`GET /v1/support/tickets?route=&status=`, `PATCH /v1/support/tickets/{id}`.
+
+So **every editor and the entire ticket queue have no endpoint.** Lane D caught the premise
+before it wrote anything; all three lanes were then interrupted for unrelated reasons, which is
+the only reason Lane C had not already built a screen full of dead controls.
+
+**The mechanism, stated plainly because it is now a pattern rather than an incident.** This is
+the **fifth** unverified claim I have passed to a lane this session — after `city` being unserved,
+"every preset holds `analytics`", the backwards-window rule (twice), and console Reports' gate.
+Four of the five share one cause: **I trusted a document that describes code instead of reading
+the code.** `api-contract.md` is a specification, not an inventory; it says what should exist. The
+routes say what does. I even caught myself making this exact mistake about Reports an hour
+earlier and did not generalise it.
+
+**The habit that would have prevented all four:** before telling a lane an endpoint exists,
+`grep app\.\(get\|post\|patch\|delete\) api/src/routes/` for it. One command. It is the same
+discipline the build already writes into every brief — *never trust a comment, grep the routes* —
+applied to the contract, and to me.
+
+**What changed as a result.** Lane A's slice is reordered to put the five support endpoints
+**first**, because they unblock another lane. Lane C is scoped to the **read half only** and
+explicitly told not to draw editors or a queue that have no endpoint — its own Manage-button
+precedent, where it refused to ship a control that only 403s. Lane D starts with #11, which is
+fully drivable today: `POST /v1/support/tickets` plus the existing config is enough to prove the
+server resolves routing from `topicId` and refuses a client-supplied route.
+
+**Not reversible, and not a decision — a correction.** Recorded so the count is visible: five in
+one session, four with one cause.
+
 ### The owner console is 7 of 10, and two of its sections are not in the nav at all
 
 **Asked whether the console is complete. It is not**, and the shape of what is missing is worth
