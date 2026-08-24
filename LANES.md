@@ -218,7 +218,20 @@ A misleading success line is the same defect as a green typecheck bought with a 
 spends your trust on something that did not happen.
 
 **Kill by PID or process group. NEVER by name pattern.** The process table is shared by all
-five worktrees, and a pattern does not know which worktree a process belongs to.
+six worktrees, and a pattern does not know which worktree a process belongs to.
+
+**Six, not five.** `git worktree list` includes a leftover at
+`.claude/worktrees/youthful-lewin-1e9609` from an earlier session's isolated agent. It is clean
+and holds nothing, but any reasoning of the form "there are five, so this must be mine" has an
+unlisted candidate in it.
+
+**And a replayed turbo log names the wrong worktree — in the direction nobody expects.** Lane B
+measured this: `turbo run typecheck` printed `@avo/types:build … /Users/koraspond_developer/dev/avo/packages/types`
+— *trunk's* path — while the `dist` it actually wrote was Lane B's own, confirmed by mtime. So the
+log is evidence about whichever worktree first populated the hash, and the artifact is yours. A
+lane reading that log would reasonably conclude it had just built another worktree's package and
+start hunting a cross-lane bug that never happened. **The log lies; the artifact is right.**
+`--force` when you intend to trust a log.
 
 One lane ran unscoped `pkill -f vitest` on a loop, twice per cycle, for about an hour. It
 killed **lane D's suite mid-run from a different worktree** — exit 144, no output — and because

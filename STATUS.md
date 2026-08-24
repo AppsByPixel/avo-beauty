@@ -256,7 +256,9 @@ replaying a green run in 14ms and calling it a pass.
   deep-links through the same function `onBarcodeScanned` calls. Ten minutes with a device.
 - **Google Calendar** is behind a stub driver. `DECISIONS.md` lists the six things AVO must
   provide, starting with a Google Cloud project AVO owns.
-- **74 Arabic strings have no source** in the bundle — counted directly from the array, plus a
+- **81 Arabic strings have no source** in the bundle — re-counted from the array on 2026-08-25 by
+  two independent methods; this line said 74 and DECISIONS.md said 31, both while claiming to have
+  been counted directly. The array is test-guarded and was always right; only the prose rotted. Plus a
   separate derived-forms list and an `AR_UNVERIFIED` set for strings that render Arabic no
   designer has checked. `AVO States.dc.html` contains zero Arabic. `AR_GAPS` is the worksheet for
   the native-speaker review, and `i18n/digits.test.ts` asserts the list is **exactly** the set of
