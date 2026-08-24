@@ -49,7 +49,7 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
               schema widening.
             */
             salonId: 'SAL-AMARA',
-            topicId: 'tp-appt',
+            topicId: 'booking',
             /*
               THESE NEXT TWO ARE NOT THE SAME KIND OF THING, and a fixture that
               lets them read as interchangeable teaches the wrong lesson.
@@ -64,17 +64,57 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
                          tomorrow does not move disputes already sent.
 
               Both are derived from `topicId` by the server and neither is
-              derived from the other — the label does not decide the queue. The
-              wording is verbatim from the one place it is defined,
-              packages/mock/src/fixtures.ts:390 and api/src/db/seed.ts's
-              `supportTopic` seed, both of which take it from
-              design/avo-promotions.js. Not retyped, and not invented: a label
-              this fixture made up would be a plausible-looking string that no
-              customer has ever been shown.
+              derived from the other — the label does not decide the queue.
+
+              The wording is `booking`'s, verbatim from design/avo-promotions.js
+              — the vocabulary's source, which CLAUDE.md names as the reference
+              implementation of the shared platform rules. `api/src/db/legalSeed.ts`
+              seeds it and `packages/mock` now serves it; all three agree on all
+              six topics, ids and both languages, checked by extraction rather
+              than by eye. Not retyped and not invented: a label this fixture made
+              up would be a plausible-looking string no customer has ever been
+              shown.
+
+              THIS FIXTURE USED TO SAY `tp-appt` / 'My appointment' / 'موعدي',
+              which existed only in `packages/mock` and which the real API would
+              have refused outright — `support_ticket.topic_id` references
+              `support_topic` under ON DELETE RESTRICT and no such row is ever
+              seeded. Re-anchored onto the real vocabulary in the same change that
+              fixed the mock, so this file can no longer be the thing that keeps a
+              dead id alive.
             */
-            topic: { en: 'My appointment', ar: 'موعدي' },
-            // The server answers `salon` for this topic. The client never said so.
-            route: 'salon',
+            topic: { en: 'An appointment', ar: 'موعد' },
+            /*
+              `avo`, AND THAT DISAGREES WITH `booking`'s REAL ROUTE ON PURPOSE.
+              DO NOT "FIX" IT BACK TO `salon`.
+
+              `booking` is configured salon-routed, and in all three authorities
+              at once: design/avo-promotions.js, the `supportTopic` seed in
+              api/src/db/legalSeed.ts, and packages/mock. This fixture server
+              answers `avo` anyway, because the spec below has to be able to tell
+              the real client from a plausible wrong one — a client that resolved
+              the route ITSELF from the topic instead of reading the server's
+              answer. While the fixture agreed with the configuration, both
+              implementations produced `salon` and the spec could not separate
+              them: the correct answer and the wrong answer coincided.
+
+              That is not hypothetical, it is this file's second instance. Lane D
+              found the first in the API-side #11 spec, where a contradicting-route
+              submission would have passed a handler hardcoded to `route: 'avo'`
+              because `wallet` is AVO-routed. Same cause both times — a fixture
+              that picked a value agreeing with the topic's real configuration.
+
+              So the value is chosen to be one no client-side derivation can
+              produce. Reconciling it with the seed would restore the coincidence
+              and quietly turn the spec below back into a test of nothing.
+
+              It costs no realism where it matters: #11 is that ROUTING IS THE
+              SERVER'S, and the client's whole obligation is to report the answer
+              it is given rather than to have an opinion about which answers are
+              plausible. A client that only worked when the server agreed with the
+              client's own table would be the defect.
+            */
+            route: 'avo',
             message: 'x',
             ref: '',
             // The charge this dispute is ABOUT, resolved server-side from `ref`.
@@ -98,7 +138,7 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
   it('posts topicId, message, ref and via — and nothing else', async () => {
     const captured = captureBody();
     await submitTicket({
-      topicId: 'tp-appt',
+      topicId: 'booking',
       message: 'Can I move Saturday?',
       ref: 'AVO-77219',
       via: 'wa',
@@ -108,14 +148,28 @@ describe('submitTicket — routing is the server’s, not the client’s', () =>
 
   it('never sends a route, which is the whole of non-negotiable #11', async () => {
     const captured = captureBody();
-    await submitTicket({ topicId: 'tp-appt', message: 'Hello there', via: 'wa' });
+    await submitTicket({ topicId: 'booking', message: 'Hello there', via: 'wa' });
     expect(captured.read()).not.toHaveProperty('route');
   });
 
-  it('returns the route the SERVER resolved, for the confirmation to read', async () => {
+  /**
+   * The name states the property, because the property is the whole point: not
+   * merely that a route comes back, but that the one that comes back is the
+   * SERVER'S — provably, because it is one the client had no way to compute. See
+   * the fixture's `route` above for why it contradicts the topic's configuration.
+   *
+   * Complementary to `e2e/support-routing.test.ts` rather than overlapping it.
+   * That file drives the SERVER resolving route from `topicId` against the live
+   * configuration, in both directions, moving `support_topic.route` in the
+   * database to prove the stored answer follows it — so a server hardcode fails
+   * there. This drives the CLIENT: it never sends a route, and it surfaces what
+   * came back. After this flip a CLIENT hardcode fails here, which is the half
+   * that was missing. Neither file can be satisfied by the other's defect.
+   */
+  it('returns the route the SERVER resolved — one the client could not have derived', async () => {
     captureBody();
-    const ticket = await submitTicket({ topicId: 'tp-appt', message: 'Hello there', via: 'wa' });
-    expect(ticket.route).toBe('salon');
+    const ticket = await submitTicket({ topicId: 'booking', message: 'Hello there', via: 'wa' });
+    expect(ticket.route).toBe('avo');
     expect(ticket.id).toBe('SUP-48263');
   });
 });
