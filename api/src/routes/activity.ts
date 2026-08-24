@@ -47,6 +47,20 @@
  * client that got one would have to carry it correctly. The endpoint that pages
  * is `GET /salons/{id}/audit`, which has a single monotonic `seq` and is the
  * screen built for looking backwards.
+ *
+ * THE CONSOLE'S FEED DOES PAGE, and the paragraph above is still the reason this
+ * one does not. `GET /v1/platform/activity` in `routes/platformConsole.ts` is a
+ * whole screen rather than five lines on an Overview, so it pays for the composite
+ * cursor described above and carries it as one opaque string. Same vocabulary,
+ * different screen — the vocabulary is now `services/activityFeed.ts`.
+ *
+ * THE PHRASING MOVED OUT OF THIS FILE. `FEED_KINDS`, `FeedItem`,
+ * `describeTransaction` and `describeLoyalty` are in `services/activityFeed.ts`
+ * because a second read of the same streams appeared, and the top-up sentence is
+ * exactly the kind of thing that must not be written twice: `amount_fils` is
+ * "what actually landed, bonus included", so the obvious version of that line
+ * tells a merchant her customer paid five dinars she did not. That header carries
+ * the argument; `services/auditRead.ts` is the precedent.
  */
 
 import { and, desc, eq, inArray } from 'drizzle-orm';
@@ -56,131 +70,14 @@ import { member } from '../db/schema/member';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import { transaction } from '../db/schema/transaction';
 import { requireDashboardPerm, requireSameSalon } from '../auth/principal';
-import { badRequest } from '../http/errors';
-
-const MAX_LIMIT = 100;
-const DEFAULT_LIMIT = 20;
-
-/**
- * The kinds that belong in a merchant's feed.
- *
- * `deposit_hold` is excluded deliberately. It is the money moving from the
- * customer's spendable balance into escrow at the moment she books — the
- * merchant already sees the booking in Appointments, and the feed would report
- * the same event twice, once as an appointment and once as a debit that is not a
- * sale. Its counterpart `deposit_return` IS included, because that one is the
- * salon giving money back and the design shows it by name.
- */
-const FEED_KINDS = ['topup', 'charge', 'deposit_return', 'shop', 'adjustment'] as const;
-
-const TIER_LABEL: Record<string, string> = {
-  bronze: 'Bronze',
-  silver: 'Silver',
-  gold: 'Gold',
-  black: 'Black',
-};
-
-const METHOD_LABEL: Record<string, string> = {
-  knet: 'KNET',
-  card: 'card',
-  applepay: 'Apple Pay',
-  wallet: 'wallet',
-};
-
-export interface FeedItem {
-  id: string;
-  /** 'transaction' | 'loyalty' — which stream this line came from. */
-  stream: 'transaction' | 'loyalty';
-  at: string;
-  who: string;
-  memberId: string | null;
-  /** The predicate the design renders after the bolded name. */
-  what: string;
-  kind: string;
-  /** Signed fils, as stored. Null on a line that moved no money. */
-  amountFils: number | null;
-}
-
-function parseLimit(value: unknown): number {
-  if (value === undefined) return DEFAULT_LIMIT;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 1 || n > MAX_LIMIT) {
-    throw badRequest('invalid_limit', `limit must be a whole number between 1 and ${MAX_LIMIT}.`);
-  }
-  return n;
-}
-
-/** "12.000". The display boundary is the client's, but the feed's copy is prose. */
-function kd(amountFils: number): string {
-  return (Math.abs(amountFils) / 1000).toFixed(3);
-}
-
-/**
- * The design's own phrasing, per kind:
- *   "topped up 25.000 via KNET" · "paid 12.000 · Cut & style"
- *   "returned 5.000 deposit · Aisha M. no-show" · "bought Repair serum · 9.500"
- *
- * Composed server-side so both languages resolve from one place later, and so
- * `note` — the void reason, the adjustment reason — reaches the merchant without
- * a client having to know which kinds carry one.
- */
-function describeTransaction(row: typeof transaction.$inferSelect): string {
-  const amount = kd(row.amountFils);
-  switch (row.kind) {
-    case 'topup': {
-      /**
-       * "topped up 25.000 via KNET" — the amount she PAID, which is not what
-       * `amount_fils` holds. That column is "what actually landed, bonus
-       * included" (services/topup.ts), so a 25.000 KNET top-up at Gold stores
-       * 30000 with 5000 in `bonus_fils`. Printing the column would read
-       * "topped up 30.000 · +5.000 bonus", which counts the bonus twice and
-       * tells a merchant her customer paid five dinars she did not.
-       */
-      const paid = row.amountFils - row.bonusFils;
-      const via = row.method ? ` via ${METHOD_LABEL[row.method] ?? row.method}` : '';
-      const bonus = row.bonusFils > 0 ? ` · +${kd(row.bonusFils)} bonus` : '';
-      return `topped up ${kd(paid)}${via}${bonus}`;
-    }
-    case 'charge':
-      return `paid ${amount}`;
-    case 'deposit_return':
-      return `deposit returned ${amount}${row.note ? ` · ${row.note}` : ''}`;
-    case 'shop':
-      return `bought from the shop · ${amount}`;
-    case 'adjustment':
-      /**
-       * A void arrives here as a compensating `adjustment` pointing back at the
-       * charge it reverses — routes/charges.ts § POST /voids. Named as the
-       * reversal it is, because "adjusted 12.000" in a feed is the one line a
-       * merchant will stop and ask about.
-       */
-      return row.reversesTransactionId
-        ? `charge voided · ${amount} returned${row.note ? ` · ${row.note}` : ''}`
-        : `wallet adjusted ${row.amountFils > 0 ? '+' : '−'}${amount}${row.note ? ` · ${row.note}` : ''}`;
-    default:
-      return `${row.kind} ${amount}`;
-  }
-}
-
-function describeLoyalty(row: typeof loyaltyEvent.$inferSelect): string {
-  if (row.kind === 'tier_climb') {
-    const to = TIER_LABEL[row.toTier ?? ''] ?? row.toTier ?? '';
-    /**
-     * A republished ladder can move a member DOWN — see services/charge.ts. The
-     * row carries both ends so the feed can say which happened rather than
-     * announcing "reached Bronze" to someone who was demoted.
-     */
-    const from = row.fromTier ? TIER_LABEL[row.fromTier] ?? row.fromTier : null;
-    const order = ['bronze', 'silver', 'gold', 'black'];
-    const descended =
-      row.fromTier !== null &&
-      row.toTier !== null &&
-      order.indexOf(row.toTier) < order.indexOf(row.fromTier);
-    if (descended) return `moved to ${to} tier${from ? ` from ${from}` : ''}`;
-    return `reached ${to} tier`;
-  }
-  return `filled the stamp card · ${row.stampsAfter ?? 0} of ${row.stampTarget ?? 0}`;
-}
+import {
+  describeLoyalty,
+  describeTransaction,
+  FEED_KINDS,
+  kd,
+  parseFeedLimit,
+  type FeedItem,
+} from '../services/activityFeed';
 
 export async function registerActivityRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
@@ -191,7 +88,7 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
       const p = requireDashboardPerm(req, 'dashboard');
       requireSameSalon(p, req.params.id);
 
-      const limit = parseLimit(req.query.limit);
+      const limit = parseFeedLimit(req.query.limit);
 
       /**
        * Scoped from the principal, not the path — the same doubling as
@@ -258,6 +155,8 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
               ? 'System'
               : (names.get(t.memberId) ?? t.memberId),
           memberId: t.memberId,
+          /** Always her own salon. `FeedItem` carries it for the console's pill. */
+          salonId: p.salonId,
           what:
             t.kind === 'deposit_return' && t.createdByStaffId === null
               ? `returned ${kd(t.amountFils)} deposit · ${names.get(t.memberId) ?? t.memberId}`
@@ -278,6 +177,7 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
           at: l.createdAt.toISOString(),
           who: names.get(l.memberId) ?? l.memberId,
           memberId: l.memberId,
+          salonId: p.salonId,
           what: describeLoyalty(l),
           kind: l.kind,
           amountFils: null,

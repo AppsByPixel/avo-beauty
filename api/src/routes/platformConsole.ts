@@ -1,5 +1,5 @@
 /**
- * The owner console's three remaining sections — Analytics, Controls, Audit.
+ * The owner console's remaining sections — Analytics, Salons, Controls, Activity, Audit.
  *
  *   GET   /v1/platform/metrics    analytics   "How AVO is performing across every salon"
  *   GET   /v1/platform/salons     salons      every salon, as facts that exist
@@ -8,6 +8,7 @@
  *   PATCH /v1/platform/salons/{id} salons     the per-salon editor's write
  *   GET   /v1/platform/settings   controls    "Every platform switch, fee and default"
  *   PATCH /v1/platform/settings   controls
+ *   GET   /v1/platform/activity   activity    the platform-wide live feed
  *   GET   /v1/platform/audit      audit       the platform-wide log
  *
  * Lane C has the console shell and Policies built and named these three as what
@@ -35,15 +36,27 @@
  * section the design's own sidebar puts it behind.
  */
 
-import { and, desc, eq, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
+import type { PgColumn } from 'drizzle-orm/pg-core';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { auditLog } from '../db/schema/audit';
+import { loyaltyEvent } from '../db/schema/loyaltyEvent';
+import { member } from '../db/schema/member';
+import { transaction } from '../db/schema/transaction';
 import { salon } from '../db/schema/salon';
 import { platformSettings } from '../db/schema/platformSettings';
 import { requirePlatform } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { writeAudit } from '../services/audit';
+import {
+  describeLoyalty,
+  describeTransaction,
+  FEED_KINDS,
+  kd,
+  parseFeedLimit,
+  type FeedItem,
+} from '../services/activityFeed';
 import {
   auditSearchPredicate,
   auditTotal,
@@ -104,6 +117,112 @@ function parseIntegerInRange(
   }
   return value;
 }
+
+// ======================================================================
+// THE PLATFORM ACTIVITY FEED'S COMPOSITE CURSOR
+// ======================================================================
+/**
+ * Three streams, one opaque string: `at|stream|id`.
+ *
+ * `routes/activity.ts` declines a cursor and states the cost of one — "a cursor
+ * over a merged stream needs a composite position — one offset per source — and
+ * every client that got one would have to carry it correctly". That is the right
+ * call for five lines on an Overview and the wrong one for a section whose job is
+ * looking backwards, so this pays the cost and keeps the client's side of it to a
+ * single value it echoes back.
+ *
+ * IT IS A POSITION, NOT THREE OFFSETS. An offset per source would drift the moment
+ * a row was written between two pages. The sort key is `(at DESC, stream ASC,
+ * id ASC)` and the cursor is the last row's key, so the next page is "strictly
+ * after this point in that order" — which is exact under concurrent writes, the
+ * same property `parseAuditCursor` gets for free from a bigserial.
+ */
+const FEED_CURSOR_SEP = '|';
+
+/**
+ * The second key, and it is load-bearing rather than cosmetic: a charge writes a
+ * `transaction`, a `loyalty_event` and an `audit_log` row inside ONE transaction,
+ * and `now()` is the transaction timestamp, so all three carry the SAME
+ * `created_at` to the microsecond. Without a stable rank between them a page
+ * boundary could fall inside that group and either repeat a line or lose one.
+ *
+ * The order is the design's own reading order for a simultaneous group — the money
+ * happened, then the tier it moved, then the record of it.
+ */
+const STREAM_RANK = { transaction: 0, loyalty: 1, audit: 2 } as const;
+
+/** Exactly what `cursorAtOf` emits, and the only thing the cast below is handed. */
+const FEED_CURSOR_AT_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+interface FeedCursor {
+  /** Microsecond-exact, as text. NEVER parsed into a `Date` — see `cursorAtOf`. */
+  at: string;
+  rank: number;
+  id: string;
+}
+
+/**
+ * THE INSTANT, TO THE MICROSECOND, RENDERED BY POSTGRES.
+ *
+ * `created_at` is `timestamptz`, which stores microseconds; `Date.toISOString()`
+ * emits milliseconds. `routes/support.ts` records what that costs, because it cost
+ * it: a cursor built from the wire's own `at` truncates, and the next page asks for
+ * `created_at < .123` while the rows sit at `.123456`, so the page comes back empty,
+ * `hasMore` goes false, and the walk ENDS with rows undelivered — reporting a total
+ * it never served. Six fractional digits round-trip through `::timestamptz` exactly,
+ * and the comparison is still against the raw column, so the `created_at DESC`
+ * indexes on all three tables stay usable.
+ */
+function cursorAtOf(column: PgColumn) {
+  return sql<string>`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+function parseFeedCursor(value: unknown): FeedCursor | null {
+  if (value === undefined) return null;
+  const raw = String(value).trim();
+  if (raw === '') return null;
+
+  const first = raw.indexOf(FEED_CURSOR_SEP);
+  const second = first === -1 ? -1 : raw.indexOf(FEED_CURSOR_SEP, first + 1);
+  const at = first === -1 ? '' : raw.slice(0, first);
+  const rank = second === -1 ? Number.NaN : Number(raw.slice(first + 1, second));
+  const id = second === -1 ? '' : raw.slice(second + 1);
+
+  const ranks = Object.values(STREAM_RANK) as number[];
+  if (!FEED_CURSOR_AT_SHAPE.test(at) || !ranks.includes(rank) || id === '') {
+    throw badRequest('invalid_cursor', 'cursor must be the value returned as nextCursor.');
+  }
+  return { at, rank, id };
+}
+
+/**
+ * "Strictly after the cursor row", for a source whose rank is FIXED — so the rank
+ * comparison collapses to a constant here rather than becoming SQL:
+ *
+ *   rank <  cursor's   ->  at < cursorAt
+ *   rank == cursor's   ->  at < cursorAt OR (at = cursorAt AND id > cursorId)
+ *   rank >  cursor's   ->  at <= cursorAt
+ *
+ * `::text` on the id because `audit_log.id` is a `uuid` and the other two are
+ * `text`; the cast makes one comparison work for all three, and it is only ever
+ * reached on rows already pinned to a single microsecond by the equality beside it.
+ */
+function cursorAfter(
+  cursor: FeedCursor | null,
+  rank: number,
+  atColumn: PgColumn,
+  idColumn: PgColumn,
+): SQL | undefined {
+  if (cursor === null) return undefined;
+  const stamp = sql`${cursor.at}::timestamptz`;
+  if (rank < cursor.rank) return sql`${atColumn} < ${stamp}`;
+  if (rank > cursor.rank) return sql`${atColumn} <= ${stamp}`;
+  return or(
+    sql`${atColumn} < ${stamp}`,
+    and(sql`${atColumn} = ${stamp}`, sql`${idColumn}::text > ${cursor.id}`),
+  )!;
+}
+
 
 export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promise<void> {
   // ====================================================================
@@ -711,6 +830,321 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
 
     return reply.send(serialisePlatformSettings(row));
   });
+
+  // ====================================================================
+  // ACTIVITY — the platform-wide live feed
+  // ====================================================================
+  /**
+   * `GET /v1/platform/activity` — the console's Activity section, which the design
+   * describes in its own banner as "Live events across every salon — top-ups,
+   * charges, deposits, tier changes and account actions."
+   *
+   * ================= IS THIS THE SALON FEED WITHOUT THE PREDICATE? NO =================
+   *
+   * Trunk asked the question directly and the honest answer is that it is neither
+   * that nor the audit log renamed. It is BOTH, merged, and the design settles it —
+   * the eight rows it draws are three different sources:
+   *
+   *     Latifa A.  topped up 25.000 via KNET        transaction   kind=topup
+   *     Huda M.    upgraded to the Pro plan         (no source — see below)
+   *     Maya S.    paid 18.000 · Balayage           transaction   kind=charge
+   *     Owner      adjusted Silver tier bonus …     audit_log     kind=rules
+   *     Owner      reset password for Sara H.       audit_log     kind=access
+   *     Nour A.    enabled the Shop module          audit_log     kind=rules
+   *     Reem S.    reached Gold tier                loyalty_event
+   *     System     suspended Glow Bar · billing …   (no source — see below)
+   *
+   * `routes/activity.ts` reads `transaction` and `loyalty_event`, so it cannot
+   * produce rows 4, 5 or 6 — a permission change and a rule change are not
+   * transactions, and dropping the salon predicate would not make them appear.
+   * `GET /v1/platform/audit` reads `audit_log`, so it cannot produce row 7: nothing
+   * writes an audit row for a tier climb, and `grep subject_type='loyalty_event'`
+   * over the log returns nothing. So the console's feed is the union, and the
+   * merchant's Overview is the same union minus the audit stream — which the design
+   * agrees with, because the merchant's Overview draws five lines and none of them
+   * is an authority change.
+   *
+   * ================= AND IT IS NOT A SECOND DOOR ONTO THE AUDIT LOG =================
+   *
+   * That was the risk trunk named: `audit` is a separate section with its own gate,
+   * so an "activity" feed that is the audit log renamed would let `activity` read
+   * what `audit` gates. Two things stop that here.
+   *
+   * `kind: 'money'` AUDIT ROWS ARE EXCLUDED, which is most of the log's volume and
+   * is not a privacy dodge — it is a DUPLICATE removal. Every money audit action
+   * has a transaction behind it that this feed already reads: `Top-up settled` →
+   * `topup`, `Charge taken` → `charge`, `Charge voided` and `Wallet adjusted` →
+   * `adjustment`, `Shop order paid` → `shop`, `Deposit returned` →
+   * `deposit_return`. Including both would print every money line twice, and the
+   * transaction is the better of the pair for a feed: it renders as the design
+   * writes it, with the MEMBER as the actor ("Latifa A. topped up 25.000 via KNET"),
+   * where the audit row's actor for a settled top-up is `System` — correctly, since
+   * "the money was moved by the processor confirming a payment". The one money
+   * action with no counterpart is `Deposit held`, and `FEED_KINDS` excludes
+   * `deposit_hold` on its own argument.
+   *
+   * WHAT REMAINS IS STILL A STRICT SUBSET OF THE AUDIT SECTION, and that is the
+   * honest statement of the overlap rather than a denial of it: an admin holding
+   * `activity` and not `audit` can see rules/access/risk rows in feed form. The
+   * design intends that — its banner says "account actions" and draws a password
+   * reset — and the two reads are not equivalent, because `audit` gets the search
+   * box, the four filters, `?salon=platform`, `total`, `subjectType/subjectId`,
+   * `ipAddress`-backed metadata and the money rows. Reported to trunk as a
+   * deliberate overlap rather than left for somebody to find.
+   *
+   * SIGN-INS ARE IN, AND THEY WILL DOMINATE. `Web sign-in` and `Console sign-in`
+   * are `access` rows and are by far the highest-volume action in the log, so at a
+   * hundred salons this feed is mostly sign-ins and the eight kinds of line the
+   * design draws are buried — none of its example rows is a sign-in. They are
+   * included anyway, because excluding them means a hardcoded list of action
+   * strings, which is a filter that silently stops matching the first time somebody
+   * rewords an action, and "account actions" in the design's own banner plainly
+   * covers them. If it matters the honest mechanism is a `?kind=` narrowing, which
+   * `GET /v1/platform/audit` already has and this could take unchanged. Reported to
+   * trunk rather than guessed at here.
+   *
+   * TWO OF THE DESIGN'S ROWS HAVE NO SOURCE AT ALL, and they are absent rather than
+   * faked: `plan` is in neither `PLATFORM_EDITABLE` nor the merchant set — it prices
+   * the account and Billing has no API — and there is no salon-suspension endpoint,
+   * so "upgraded to the Pro plan" and "suspended Glow Bar · billing hold" cannot be
+   * produced by anything. Both are Billing, which `DECISIONS.md` #15 blocks.
+   * Reported.
+   *
+   * ================= THE CURSOR =================
+   *
+   * `routes/activity.ts` has none, on purpose, and says why: "a cursor over a merged
+   * stream needs a composite position", and the Overview draws five lines with no
+   * "load more". This screen is the other case — a whole section whose job is
+   * looking backwards — so it pays for the composite key: `(at, stream, id)`, one
+   * opaque string, exactly one thing for a client to carry.
+   *
+   * THE INSTANT IS RENDERED BY POSTGRES, for the reason `routes/support.ts` records
+   * at length after it cost a walk: `timestamptz` stores microseconds and
+   * `Date.toISOString()` emits milliseconds, so a cursor built from the wire's own
+   * `at` truncates and silently ENDS the walk on any group of rows sharing a
+   * millisecond. That is not a corner case here — a charge writes a `transaction`,
+   * a `loyalty_event` and an `audit_log` row inside ONE transaction, and `now()` is
+   * the transaction timestamp, so all three carry the SAME `created_at` to the
+   * microsecond. The stream rank is what separates them, and the id separates two
+   * rows of one stream.
+   *
+   * THE MERGE IS BOUNDED, which is what makes reading three sources sound: taking
+   * `limit + 1` from each is enough, because a row not fetched from a source is
+   * older than every row that was, so it cannot reach the first `limit` of the
+   * merge. Reading 3×(limit+1) rows to serve `limit` is a fixed cost, not one that
+   * grows with the platform — `routes/activity.ts`'s argument, one source wider.
+   */
+  app.get<{ Querystring: { limit?: string; cursor?: string; salon?: string } }>(
+    '/v1/platform/activity',
+    async (req, reply) => {
+      requirePlatform(req, 'activity');
+
+      const limit = parseFeedLimit(req.query.limit);
+
+      /**
+       * `?salon=` NARROWS and widens nothing — `GET /v1/platform/audit`'s reasoning,
+       * including the refusal by name: "no activity" and "you typed the wrong id"
+       * look identical otherwise and only one of them is worth acting on.
+       *
+       * There is no `?salon=platform` here, unlike the audit read. A feed line with
+       * no salon is a platform action, and it is reachable — it just cannot be
+       * SELECTED on its own, because the two streams that could accompany it always
+       * have a salon, so the filter would degenerate into the audit read with a
+       * `kind` filter. The audit section already expresses it.
+       */
+      const salonFilter = (req.query.salon ?? '').trim();
+      if (salonFilter !== '') {
+        const [known] = await db
+          .select({ id: salon.id })
+          .from(salon)
+          .where(eq(salon.id, salonFilter))
+          .limit(1);
+        if (!known) throw notFound('unknown_salon', 'No such salon.');
+      }
+
+      const cursor = parseFeedCursor(req.query.cursor);
+      const take = limit + 1;
+
+      const [txRows, loyaltyRows, auditRows] = await Promise.all([
+        db
+          .select({ ...getTableColumns(transaction), cursorAt: cursorAtOf(transaction.createdAt) })
+          .from(transaction)
+          .where(
+            and(
+              inArray(transaction.kind, [...FEED_KINDS]),
+              /**
+               * Settled only. A `pending` top-up is a customer staring at a gateway
+               * page — reporting it as activity would put money in the feed that may
+               * yet decline, and api-contract.md § TopUpIntent is explicit that
+               * pending is "never a failure, never a success".
+               */
+              eq(transaction.status, 'settled'),
+              salonFilter === '' ? undefined : eq(transaction.salonId, salonFilter),
+              cursorAfter(cursor, STREAM_RANK.transaction, transaction.createdAt, transaction.id),
+            ),
+          )
+          .orderBy(desc(transaction.createdAt), asc(transaction.id))
+          .limit(take),
+        db
+          .select({ ...getTableColumns(loyaltyEvent), cursorAt: cursorAtOf(loyaltyEvent.createdAt) })
+          .from(loyaltyEvent)
+          .where(
+            and(
+              salonFilter === '' ? undefined : eq(loyaltyEvent.salonId, salonFilter),
+              cursorAfter(cursor, STREAM_RANK.loyalty, loyaltyEvent.createdAt, loyaltyEvent.id),
+            ),
+          )
+          .orderBy(desc(loyaltyEvent.createdAt), asc(loyaltyEvent.id))
+          .limit(take),
+        db
+          .select({ ...getTableColumns(auditLog), cursorAt: cursorAtOf(auditLog.createdAt) })
+          .from(auditLog)
+          .where(
+            and(
+              /** The duplicate removal. See the header. */
+              inArray(auditLog.kind, ['rules', 'access', 'risk']),
+              salonFilter === '' ? undefined : eq(auditLog.salonId, salonFilter),
+              cursorAfter(cursor, STREAM_RANK.audit, auditLog.createdAt, auditLog.id),
+            ),
+          )
+          .orderBy(desc(auditLog.createdAt), asc(auditLog.id))
+          .limit(take),
+      ]);
+
+      /**
+       * One lookup for every name the page will print, rather than a join on each
+       * stream — `routes/activity.ts`'s reasoning, and NOT scoped to a salon here,
+       * because this read crosses every tenant by design and the ids came out of
+       * rows the caller is already entitled to.
+       */
+      const memberIds = [
+        ...new Set([...txRows.map((t) => t.memberId), ...loyaltyRows.map((l) => l.memberId)]),
+      ];
+      const names = new Map<string, string>();
+      if (memberIds.length > 0) {
+        const rows = await db
+          .select({ id: member.id, name: member.name })
+          .from(member)
+          .where(inArray(member.id, memberIds));
+        for (const r of rows) names.set(r.id, r.name);
+      }
+
+      type Keyed = { item: FeedItem; rank: number; cursorAt: string; id: string };
+
+      const keyed: Keyed[] = [
+        ...txRows.map<Keyed>((t) => ({
+          rank: STREAM_RANK.transaction,
+          cursorAt: t.cursorAt,
+          id: t.id,
+          item: {
+            id: t.id,
+            stream: 'transaction',
+            at: t.createdAt.toISOString(),
+            /**
+             * An automatic deposit return has no staff behind it and the design
+             * attributes it to "System" — the same actor `writeAudit` records for a
+             * principal-less write.
+             */
+            who:
+              t.kind === 'deposit_return' && t.createdByStaffId === null
+                ? 'System'
+                : (names.get(t.memberId) ?? t.memberId),
+            memberId: t.memberId,
+            salonId: t.salonId,
+            what:
+              t.kind === 'deposit_return' && t.createdByStaffId === null
+                ? `returned ${kd(t.amountFils)} deposit · ${names.get(t.memberId) ?? t.memberId}`
+                : describeTransaction(t),
+            kind: t.kind,
+            amountFils: t.amountFils,
+          },
+        })),
+        ...loyaltyRows.map<Keyed>((l) => ({
+          rank: STREAM_RANK.loyalty,
+          cursorAt: l.cursorAt,
+          id: l.id,
+          item: {
+            id: l.id,
+            stream: 'loyalty',
+            at: l.createdAt.toISOString(),
+            who: names.get(l.memberId) ?? l.memberId,
+            memberId: l.memberId,
+            salonId: l.salonId,
+            what: describeLoyalty(l),
+            kind: l.kind,
+            amountFils: null,
+          },
+        })),
+        ...auditRows.map<Keyed>((a) => ({
+          rank: STREAM_RANK.audit,
+          cursorAt: a.cursorAt,
+          id: a.id,
+          item: {
+            id: a.id,
+            stream: 'audit',
+            at: a.createdAt.toISOString(),
+            /** The actor SNAPSHOT, which is why this reads right seven years later. */
+            who: a.actorName,
+            /**
+             * `memberId` is the member this line is ABOUT, when it is about one, and
+             * null otherwise. It is read from `subjectId` and only when
+             * `subjectType` says so, rather than from `actorId`: the design's row is
+             * "Owner reset password for Sara H." — the actor is the console and the
+             * member is the subject, and conflating them would attribute a reset to
+             * the person it was done to.
+             */
+            memberId: a.subjectType === 'member' ? a.subjectId : null,
+            /** Null on a platform action belonging to no salon. */
+            salonId: a.salonId,
+            /**
+             * `action · detail`, which is how the design's lines read — "enabled the
+             * Shop module", "adjusted Silver tier bonus to 12%". `detail` is
+             * "rendered verbatim" per `db/schema/audit.ts` and defaults to the empty
+             * string, so a row without one is its action alone rather than a line
+             * with a dangling separator.
+             */
+            what: a.detail === '' ? a.action : `${a.action} · ${a.detail}`,
+            /** money / rules / access / risk — the pill colour, as the audit read serves it. */
+            kind: a.kind,
+            /**
+             * Always null on this stream, and deliberately so rather than passing
+             * `a.amountFils` through: the money rows are EXCLUDED as duplicates, so
+             * a non-null amount here would be a line whose money is also being
+             * reported by a transaction. `rules`/`access`/`risk` rows carry no amount
+             * anyway — the `audit_log_money_has_amount` CHECK only constrains the
+             * other direction — so this states the invariant instead of relying on
+             * it.
+             */
+            amountFils: null,
+          },
+        })),
+      ];
+
+      keyed.sort(
+        (a, b) =>
+          (a.cursorAt < b.cursorAt ? 1 : a.cursorAt > b.cursorAt ? -1 : 0) ||
+          a.rank - b.rank ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      );
+
+      const page = keyed.slice(0, limit);
+      /**
+       * `keyed.length > limit` is exactly "there is another row", and the bound is
+       * why: if it is not greater, every source returned fewer than `limit + 1` rows
+       * and so was exhausted. See the header.
+       */
+      const hasMore = keyed.length > limit;
+      const last = page[page.length - 1];
+
+      return reply.send({
+        items: page.map((k) => k.item),
+        nextCursor:
+          hasMore && last
+            ? `${last.cursorAt}${FEED_CURSOR_SEP}${last.rank}${FEED_CURSOR_SEP}${last.id}`
+            : null,
+      });
+    },
+  );
 
   // ====================================================================
   // AUDIT — the platform-wide log
