@@ -35,6 +35,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
+import { assertRaced, timed, valuesOf } from './support/race.js';
 import {
   PLATFORM_OWNER_HANDLE,
   SALON_A,
@@ -395,7 +396,24 @@ describe('two concurrent deductions move the balance exactly once', () => {
     const rowsBefore = adjRows();
     const k = key('same-key');
 
-    const [a, b] = await Promise.all([adjust(-5_000, k), adjust(-5_000, k)]);
+    const fired = await Promise.all([
+      timed(() => adjust(-5_000, k)),
+      timed(() => adjust(-5_000, k)),
+    ]);
+
+    /**
+     * MEASURED — and this is the ONE spec in this block that was not.
+     *
+     * The two `insufficient_balance` races above already bracket their requests and
+     * refuse to proceed on a sequential pair; this one, which is the idempotency
+     * case, did not. That is backwards: a sequential same-key pair is exactly the
+     * ordinary replay path, already covered elsewhere, and it satisfies every
+     * assertion below — one transaction id, one debit, a 409 or a 200. Concurrent
+     * is the only version that tests what the title says, because it is the only
+     * version where neither request can see the other's uncommitted key row.
+     */
+    assertRaced(fired, 'two adjustments under ONE idempotency key');
+    const [a, b] = valuesOf(fired);
 
     /**
      * Non-negotiable #4. One of three shapes is acceptable: both 200 with the SAME

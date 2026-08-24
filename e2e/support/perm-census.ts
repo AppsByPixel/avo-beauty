@@ -230,14 +230,39 @@ const lineOf = (src: string, index: number): number =>
   src.slice(0, index).split('\n').length;
 
 /**
- * `app.get('/x')`, `app.post<{ Params: … }>('/x')`, across five methods.
+ * `app.get('/x')`, `app.post<{ Params: … }>('/x')`, across five methods — and on ANY
+ * receiver, not only `app`.
  *
- * The generic parameter list is optional and may contain `>` inside it, so it is matched
- * non-greedily up to the `(` rather than by balancing brackets — which is enough here
- * and is asserted to be enough by the route COUNT the spec pins.
+ * THE THIRD FAILURE MODE, AND IT HID THE PAYMENT WEBHOOK.
+ *
+ * The module header names two ways this reading can be wrong: a gate reached through a
+ * wrapper, and a gate mentioned in a comment. There is a third, and it is not about the
+ * GATE at all — it is about the ROUTE. This pattern was anchored on the literal receiver
+ * `app.`, so a route registered on anything else was not merely mis-gated, it was
+ * INVISIBLE: outside `totalRoutes`, outside the ungated ledger, and outside every
+ * generated probe. A census cannot report a hole in a route it never enumerated.
+ *
+ * `POST /webhooks/:provider` is registered on `scoped`, an encapsulated Fastify context,
+ * because it needs its own raw-body content-type parser for signature verification
+ * (`api/src/routes/webhooks.ts:87`). `grep -c 'app\.(get|post|…)'` on that file returns
+ * ZERO. So the unauthenticated payment-gateway callback — the one endpoint on the platform
+ * that adds money to a wallet and is reachable by a stranger — was the single route this
+ * census could not see. Encapsulation is exactly the pattern a security-sensitive route
+ * reaches for, which is what makes this the wrong blind spot to have.
+ *
+ * THE FIX IS THE CLASS, NOT THE CASE. Matching `scoped.` as well would leave the next
+ * encapsulated context invisible. The receiver is now any identifier.
+ *
+ * WHAT STOPS THAT MATCHING EVERYTHING. A bare `<identifier>.<method>(` also describes
+ * `names.get(memberId)`, `labels.get(row.topicId)`, `db.delete(campaign)` and
+ * `tx.delete(happyHour)` — all of which appear in `api/src/routes/` and none of which is a
+ * route. The discriminator is not the receiver's NAME, which is why an allowlist was the
+ * wrong shape: it is that a route registration's first argument is a STRING LITERAL
+ * BEGINNING WITH `/`. Map keys and Drizzle table objects are neither. That is held by the
+ * route COUNT the spec pins, which would move the moment this let a Map lookup in.
  */
 const REGISTRATION =
-  /\bapp\.(get|post|put|patch|delete)\s*(?:<[\s\S]*?>)?\s*\(\s*(['"])([^'"]+)\2/g;
+  /\b[A-Za-z_$][\w$]*\.(get|post|put|patch|delete)\s*(?:<[\s\S]*?>)?\s*\(\s*(['"])(\/[^'"]*)\2/g;
 
 /**
  * A permission gate, with its argument list captured up to the closing paren.
@@ -336,24 +361,66 @@ export function discoverWrappers(): Wrapper[] {
        * A declaration that registers routes is a route registrar, not a wrapper — every
        * `registerXRoutes` contains dozens of guards and would make every call to it look
        * like a gate. With an accurately-matched body this now excludes exactly those.
+       *
+       * SAME RECEIVER WIDENING AS `REGISTRATION`, AND FOR THE SAME REASON. Anchored on
+       * `app.` this missed `registerWebhookRoutes`, whose body registers on `scoped` —
+       * so that registrar was eligible to be recorded as a WRAPPER, and every call to it
+       * would have looked like a gate. The two patterns have to agree about what a route
+       * registration is, or the census disagrees with itself about the same file.
        */
-      if (/\bapp\.(get|post|put|patch|delete)\s*(?:<[\s\S]*?>)?\s*\(/.test(body)) continue;
+      if (
+        /\b[A-Za-z_$][\w$]*\.(get|post|put|patch|delete)\s*(?:<[\s\S]*?>)?\s*\(\s*(['"])\//.test(
+          body,
+        )
+      ) {
+        continue;
+      }
 
-      const g = new RegExp(GUARD.source).exec(body);
-      if (!g) continue;
-
-      const guard = g[1]! as GuardName;
-      const args = argsOf(g[2]!);
-      const quoted = args.filter((a) => a !== '');
-      const idx = /(\w+)\s*\[\s*(\w+)\s*\]/.exec(g[2]!);
-      found.push({
-        name: d.name,
-        file: full.slice(full.indexOf('api/src/')),
-        guard,
-        permission: quoted[quoted.length - 1] ?? '',
-        surface: surfaceOf(guard, args),
-        ...(idx ? { mapName: idx[1]!, indexer: idx[2]! } : {}),
-      });
+      /**
+       * EVERY GUARD IN THE BODY, NOT THE FIRST — a wrapper can be DISJUNCTIVE.
+       *
+       * This was `.exec(body)`, which takes the first match and stops, and the assumption
+       * underneath it was that a wrapper applies one gate. `requireQueueReader`
+       * (`api/src/routes/support.ts:414`) does not:
+       *
+       *     if (p.kind === 'member')         throw forbidden(...)
+       *     if (p.kind === 'platform_admin') return requirePlatform(req, 'policies');
+       *     return requireDashboardPerm(req, 'dashboard');
+       *
+       * Two guards, chosen by principal kind. Reading only the first censused
+       * `GET /v1/support/tickets` and `PATCH /v1/support/tickets/:id` as `policies` and
+       * gave the merchant `dashboard` branch NO generated probe at all — so a merchant-side
+       * authority regression on the staffed support queue would have been silent. The only
+       * nearby hand-written test (`support-routing.test.ts:1034`) probes the MEMBER
+       * refusal, which is the `throw` above and neither of these branches.
+       *
+       * A wrapper with N guard paths is now N wrapper records under one name, and the
+       * census expands the routes that call it into one (route, gate) pair per path. The
+       * `throw forbidden(...)` branch is deliberately NOT one of them: it is a flat refusal
+       * with no permission to switch off, so there is nothing for a probe to grant back.
+       *
+       * DE-DUPLICATED ON (guard, permission), because a wrapper that calls the same gate
+       * twice — an early return and a fallthrough — is one gate, not two, and would
+       * otherwise generate two identical probes.
+       */
+      const seen = new Set<string>();
+      for (const g of body.matchAll(new RegExp(GUARD.source, 'g'))) {
+        const guard = g[1]! as GuardName;
+        const args = argsOf(g[2]!);
+        const quoted = args.filter((a) => a !== '');
+        const permission = quoted[quoted.length - 1] ?? '';
+        if (seen.has(`${guard} ${permission}`)) continue;
+        seen.add(`${guard} ${permission}`);
+        const idx = /(\w+)\s*\[\s*(\w+)\s*\]/.exec(g[2]!);
+        found.push({
+          name: d.name,
+          file: full.slice(full.indexOf('api/src/')),
+          guard,
+          permission,
+          surface: surfaceOf(guard, args),
+          ...(idx ? { mapName: idx[1]!, indexer: idx[2]! } : {}),
+        });
+      }
     }
   }
 
@@ -454,9 +521,21 @@ export function censusOfRoutes(): Census {
   const wrappers = discoverWrappers();
   const permissionMaps = discoverPermissionMaps();
   const wrapperByName = new Map(wrappers.map((w) => [w.name, w]));
+  /**
+   * All of a wrapper's gates, under its one name — see the disjunctive-wrapper note in
+   * `discoverWrappers`. `wrapperByName` keeps the FIRST for the places that need a single
+   * representative (surface, indexed-map fallback); this is what the route expansion below
+   * iterates so a two-branch wrapper yields two probes.
+   */
+  const wrapperGates = new Map<string, Wrapper[]>();
+  for (const w of wrappers) {
+    const list = wrapperGates.get(w.name);
+    if (list) list.push(w);
+    else wrapperGates.set(w.name, [w]);
+  }
   const WRAPPER_CALL =
     wrappers.length > 0
-      ? new RegExp(`\\b(${wrappers.map((w) => w.name).join('|')})\\s*\\(`, 'g')
+      ? new RegExp(`\\b(${[...new Set(wrappers.map((w) => w.name))].join('|')})\\s*\\(`, 'g')
       : /(?!)/g;
 
   const gated: GatedRoute[] = [];
@@ -579,17 +658,42 @@ export function censusOfRoutes(): Census {
         }
       }
 
-      gated.push({
-        file,
-        line: lineOf(src, reg.index),
-        method: reg.method,
-        path: reg.path,
-        route: reg.path,
-        guard: hit.guard,
-        permission,
-        surface: hit.via ? wrapperByName.get(hit.via)!.surface : surfaceOf(hit.guard, hit.args),
-        via: hit.via ?? null,
-      });
+      /**
+       * ONE PAIR PER GATE PATH. A direct guard call is one; a DISJUNCTIVE wrapper is one
+       * per branch, so `GET /v1/support/tickets` now censuses as both
+       * `→ policies` (the console admin) and `→ dashboard` (the merchant) instead of only
+       * the first branch the regex happened to reach.
+       */
+      const paths =
+        hit.via && (wrapperGates.get(hit.via)?.length ?? 0) > 1
+          ? wrapperGates.get(hit.via)!.map((w) => ({
+              guard: w.guard,
+              permission: w.permission,
+              surface: w.surface,
+            }))
+          : [
+              {
+                guard: hit.guard,
+                permission,
+                surface: hit.via
+                  ? wrapperByName.get(hit.via)!.surface
+                  : surfaceOf(hit.guard, hit.args),
+              },
+            ];
+
+      for (const p of paths) {
+        gated.push({
+          file,
+          line: lineOf(src, reg.index),
+          method: reg.method,
+          path: reg.path,
+          route: reg.path,
+          guard: p.guard,
+          permission: p.permission,
+          surface: p.surface,
+          via: hit.via ?? null,
+        });
+      }
     });
   }
 

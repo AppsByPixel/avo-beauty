@@ -188,6 +188,35 @@ const ANONYMOUS: Record<string, string> = {
   'POST /auth/platform/password-reset':
     'the same, for the console. Driven end to end in console-reset.test.ts.',
   'POST /staff/session': 'the scanner PIN front door, device-scoped and rate limited',
+  /**
+   * THE PAYMENT WEBHOOK, AND IT IS IN THIS LEDGER ONLY BECAUSE THE CENSUS CAN FINALLY
+   * SEE IT.
+   *
+   * Until the receiver widening in `support/perm-census.ts`, this route was not ungated —
+   * it was ABSENT. It registers on `scoped`, an encapsulated Fastify context that carries
+   * its own raw-body parser, so a `REGISTRATION` pattern anchored on `app.` never
+   * enumerated it. It sat outside `totalRoutes`, outside this ledger, and outside every
+   * generated probe, which means this file could not have reported a hole in it. The
+   * unauthenticated endpoint whose job is to ADD MONEY TO A WALLET was the one route the
+   * permission census did not know existed.
+   *
+   * WHY IT IS LEGITIMATELY ANONYMOUS. A PSP posts this; there is no principal to gate on
+   * and there never will be. Its defence is not a permission at all — it is
+   * `gateway.verifySignature(raw, req.headers)` at `webhooks.ts:93`, an HMAC over the raw
+   * body with a timestamp tolerance.
+   *
+   * WHAT THIS LINE DOES AND DOES NOT BUY. It makes the route's unauthenticated status a
+   * recorded decision rather than an absence, and it makes the NEXT encapsulated route
+   * fail this file by name instead of vanishing. It does NOT probe the signature check —
+   * an ANONYMOUS entry is an exemption from permission probing by definition. That guard
+   * is covered, and covered well, in `gateway.test.ts`: five bad-signature cases each
+   * asserting 401 AND that the balance did not move, paired with a correctly-signed
+   * control that settles, so a webhook broken shut cannot pass them either.
+   */
+  'POST /webhooks/:provider':
+    'the payment gateway posts this; there is no principal to gate on. Defended by HMAC ' +
+    'signature verification over the RAW body with a timestamp tolerance (webhooks.ts:93), ' +
+    'not by perms — and driven end to end, including five forgery cases, in gateway.test.ts.',
   'GET /v1/platform/policies':
     'the PUBLISHED legal set. Non-negotiable #10 has the customer app render it before ' +
     'there is a session, so a gate here would break signup. The draft and publish verbs ' +
