@@ -22,6 +22,7 @@
  * merchant-only in it.
  */
 
+import type { Fils } from '@avo/types';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
@@ -40,6 +41,7 @@ import {
 import { badRequest, conflict, notFound } from '../http/errors';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
+import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
 import { serialiseBooking, type BookingRow } from '../services/booking';
@@ -71,6 +73,17 @@ const EDITABLE = new Set([
   // state this change exists to close: it would leave the Arabic name settable
   // only by a hand-written UPDATE.
   'nameAr',
+  /**
+   * Editable, and — since `services/brandColor.ts` landed — validated through
+   * `deriveBrandSet()` on the way in, which is what non-negotiable #9's second
+   * clause asks for and what nothing here did before.
+   *
+   * It sat in this set from the day the route was written with no guard but the
+   * database's six-hex-digit regex, so `#FFFF00` was a storable brand colour and
+   * every surface then painted white text on a 1.25:1 fill. See that module's
+   * header; the same function guards `POST /v1/platform/salons`, because a check
+   * on one of two doors into one column is the hole the tier ladder had.
+   */
   'brandColor',
   'loyaltyMode',
   'tiers',
@@ -149,7 +162,14 @@ function normaliseArabic(key: string, value: unknown): unknown {
 const DEPOSIT_MIN_FILS = 1_000;
 const DEPOSIT_MAX_FILS = 10_000;
 
-function parseDepositFils(value: unknown): number {
+/**
+ * EXPORTED, so `POST /v1/platform/salons` refuses a bad deposit with the same
+ * sentence rather than a second one saying the same thing slightly differently.
+ * The onboarding wizard's stepper and the merchant's Settings stepper are the two
+ * doors into one column and one range; the message a merchant reads should not
+ * depend on which of them she came through.
+ */
+export function parseDepositFils(value: unknown): Fils {
   const n = parseAmountFils(value, 'depositFils');
   if (n < DEPOSIT_MIN_FILS || n > DEPOSIT_MAX_FILS) {
     throw badRequest(
@@ -214,11 +234,64 @@ function applyModules(value: unknown, patch: Record<string, unknown>): void {
  *
  * `branches` carries only OPEN branches: a closed one is history, and every
  * client renders this list as the places a customer can be sent to.
+ *
+ * EXPORTED for `POST /v1/platform/salons`, which is a third writer of this
+ * shape. The header's own rule is why: one function, so a read and a write
+ * cannot disagree. `serialiseStaff` and `serialisePlatformAdmin` are exported
+ * from their route modules for the same reason.
  */
-function serialiseSalon(
+type SalonRow = typeof salon.$inferSelect;
+
+/**
+ * The wire shape, DECLARED rather than inferred — the same treatment `MemberView`
+ * gets in routes/auth.ts, and for a reason that is not style.
+ *
+ * `depositFils` is a branded `Fils` on the row and a plain `number` here, because
+ * the brand is a guarantee about arithmetic INSIDE the server and JSON has no
+ * brands. Inferring the return type of an exported function instead made `tsc`
+ * refuse it outright — TS4058, "using name 'FilsBrand' from external module …
+ * but cannot be named", since the brand symbol is deliberately not exported from
+ * `@avo/types`. So the boundary where money stops being `Fils` is stated here, in
+ * the type, at the exact place the value leaves the process.
+ *
+ * The columns' own types are reused (`SalonRow['plan']`, `['tiers']`,
+ * `['businessHours']`, `['social']`) rather than re-spelled, so a schema change
+ * moves this shape with it instead of drifting from it.
+ */
+export interface SalonView {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  city: string | null;
+  plan: SalonRow['plan'];
+  brandColor: string;
+  modules: { booking: boolean; shop: boolean };
+  loyaltyMode: SalonRow['loyaltyMode'];
+  tiers: SalonRow['tiers'];
+  stampTarget: number | null;
+  stampReward: string | null;
+  stampRewardAr: string | null;
+  /** Integer fils. `Fils` on the way in, a plain number on the wire. */
+  depositFils: number;
+  noShowReturnMinutes: number;
+  timezone: string;
+  businessHours: SalonRow['businessHours'];
+  branches: BranchView[];
+  social: SalonRow['social'];
+  whatsappEnabled: boolean;
+}
+
+export interface BranchView {
+  id: string;
+  salonId: string;
+  name: string;
+  nameAr: string | null;
+}
+
+export function serialiseSalon(
   s: typeof salon.$inferSelect,
   branches: Array<typeof branch.$inferSelect>,
-) {
+): SalonView {
   return {
     id: s.id,
     name: s.name,
@@ -228,6 +301,24 @@ function serialiseSalon(
     // case is now a value the client can actually see and a spec can actually
     // assert on. What must never reach a client is the STRING "null".
     nameAr: s.nameAr,
+    /**
+     * "Salmiya". NULLABLE, and emitted null rather than omitted, for exactly the
+     * reason `nameAr` above is.
+     *
+     * NEW, and a reported contract addition — see migration 0037. The
+     * onboarding wizard's step 1 collects it as one of its three required
+     * fields, `AVO Owner Console.dc.html` renders it in the salon list row and
+     * the editor header ("Salmiya · Growth plan · 1,284 members"), and until
+     * 0037 there was no column, which is what made
+     * `GET /v1/platform/salons` say "NO `city`" and serve `branchCount`
+     * instead. `packages/types`' `SalonSchema` does not carry it yet; that is
+     * trunk's to add, and a Zod parse strips it meanwhile rather than failing.
+     *
+     * `ownerPhone` is deliberately NOT here. See the migration: this endpoint is
+     * readable by any authenticated principal of the salon, members included,
+     * and the owner's personal WhatsApp number is not a customer-facing fact.
+     */
+    city: s.city,
     plan: s.plan,
     brandColor: s.brandColor,
     modules: { booking: s.moduleBooking, shop: s.moduleShop },
@@ -255,12 +346,12 @@ function serialiseSalon(
 }
 
 /** api-contract.md § Branch. `nameAr` for the reason db/schema/salon.ts gives. */
-function serialiseBranch(b: typeof branch.$inferSelect) {
+function serialiseBranch(b: typeof branch.$inferSelect): BranchView {
   return { id: b.id, salonId: b.salonId, name: b.name, nameAr: b.nameAr };
 }
 
-/** The open branches of a salon, in a stable order. */
-function openBranchesOf(salonId: string) {
+/** The open branches of a salon, in a stable order. Exported with `serialiseSalon`. */
+export function openBranchesOf(salonId: string) {
   return db
     .select()
     .from(branch)
@@ -296,7 +387,14 @@ async function loadBranch(salonId: string, id: string): Promise<typeof branch.$i
   return b;
 }
 
-function branchId(): string {
+/**
+ * Exported so the onboarding wizard's first branch is minted by the SAME
+ * generator as every branch added afterwards. The design's own wizard names that
+ * first branch after the city (`branches: [{ id: 'BR-NEW', name: x.wCity }]`),
+ * and a second id scheme for the first branch of a salon would be a difference
+ * nobody chose.
+ */
+export function branchId(): string {
   return `BR-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }
 
@@ -343,6 +441,11 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
 
     // Every remaining field whose wire type is not its column type, or whose
     // range the database states as a CHECK. See the helpers at the top.
+    //
+    // `brandColor` is here rather than left to `salon_brand_color_is_hex`
+    // because that CHECK only asks whether the string is a hex, and #9 asks
+    // whether the hex can carry white text. See services/brandColor.ts.
+    if ('brandColor' in body) patch.brandColor = parseBrandColor(body.brandColor);
     if ('depositFils' in body) patch.depositFils = parseDepositFils(body.depositFils);
     if ('noShowReturnMinutes' in body) {
       patch.noShowReturnMinutes = parseNoShowReturnMinutes(body.noShowReturnMinutes);

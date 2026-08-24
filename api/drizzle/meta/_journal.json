@@ -260,6 +260,13 @@
       "when": 1788150800000,
       "tag": "0036_report_download",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788237200000,
+      "tag": "0037_salon_onboarding",
+      "breakpoints": true
     }
   ]
 }

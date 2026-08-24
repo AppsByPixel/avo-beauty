@@ -37,6 +37,7 @@ import { branch, salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { staffPasswordReset, staffUser } from '../db/schema/staff';
 import {
+  PERM_COLUMN,
   PERMISSION_NAMES,
   permsOf,
   requireDashboardPerm,
@@ -275,18 +276,6 @@ function clientMeta(req: FastifyRequest): { ipAddress: string | null; userAgent:
     userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
   };
 }
-
-const PERM_COLUMN = {
-  dashboard: 'permDashboard',
-  appointments: 'permAppointments',
-  shop: 'permShop',
-  loyalty: 'permLoyalty',
-  team: 'permTeam',
-  scanner: 'permScanner',
-  charges: 'permCharges',
-  void: 'permVoid',
-  marketing: 'permMarketing',
-} as const satisfies Record<PermissionName, keyof typeof staffUser.$inferSelect>;
 
 export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
   // -------------------------------------------------------------- PIN sign-in --
