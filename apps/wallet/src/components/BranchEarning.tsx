@@ -12,6 +12,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import type { Branch, PromotionSet, Salon } from '@avo/types';
 import { color, ARABIC_FAMILY, FRAUNCES_ITALIC, MICRO_LABEL_COLOR, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
+import { branchName } from '../domain/activity';
 import type { Copy } from '../copy/types';
 
 interface Props {
@@ -55,16 +56,15 @@ export function BranchEarning({ salon, promotions }: Props) {
           return (
             <View key={branch.id} style={styles.chip}>
               {/*
-                CONTRACT GAP (reported, not filled): `Branch.name` is a single
-                string. The design's own reference implementation carries
-                `nameAr` for every branch and for the salon
-                (design/avo-promotions.js:33, :42-43) and renders it in AR, but
-                api-contract.md's Branch and Salon have no Arabic field. So an
-                Arabic wallet shows "Kuwait City" here. That is a shared-package
-                change and belongs on trunk.
+                THE GAP THIS NOTE REPORTED IS CLOSED. It said `Branch.name` is a
+                single string and "an Arabic wallet shows 'Kuwait City' here" —
+                which it did, long after `BranchSchema.nameAr` landed in
+                `packages/types` and `GET /salons/{id}` started serving
+                `"السالمية"` and `"مدينة الكويت"`. See `branchName` in
+                domain/activity.ts for the whole history and the fallback.
               */}
               <Text style={[text('bodyL', lang), styles.chipName]} numberOfLines={1}>
-                {branch.name}
+                {branchName(branch, lang)}
               </Text>
               <View style={styles.badgeRow}>
                 {badges.length === 0 ? (

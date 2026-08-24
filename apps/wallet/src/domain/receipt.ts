@@ -36,7 +36,7 @@ import {
   type Transaction,
 } from '@avo/types';
 import type { Copy } from '../copy/types';
-import { dateLocale } from './activity';
+import { branchName, dateLocale } from './activity';
 
 export interface ReceiptRow {
   label: string;
@@ -89,11 +89,14 @@ function money(amount: number, lang: Language): { value: string; valueLabel: str
 
 export function buildReceipt(
   tx: Transaction,
-  branches: { id: string; name: string }[],
+  branches: { id: string; name: string; nameAr?: string | null }[],
   lang: Language,
   copy: Copy,
 ): Receipt {
-  const branch = branches.find((b) => b.id === tx.branchId)?.name ?? null;
+  // `nameAr ?? name` — the design's Arabic receipt names the branch in Arabic
+  // ("الفرع · أمارا السالمية", AVO Wallet Home.dc.html:1582). See `branchName`.
+  const found = branches.find((b) => b.id === tx.branchId);
+  const branch = found ? branchName(found, lang) : null;
   const bonus = fils(tx.bonusFils);
   const paid = fils(tx.amountFils);
   // Same rule as the activity row: for a top-up the headline is what LANDED,

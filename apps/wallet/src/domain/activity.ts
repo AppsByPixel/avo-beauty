@@ -50,13 +50,45 @@ export function dateLocale(lang: Language): string {
   return lang === 'ar' ? 'ar-u-nu-arab' : 'en-GB';
 }
 
-function branchLabel(tx: Transaction, branches: { id: string; name: string }[]): string | null {
-  return branches.find((b) => b.id === tx.branchId)?.name ?? null;
+/**
+ * A branch's name in the reading language.
+ *
+ * `Branch.nameAr` LANDED AND FOUR RENDER SITES WERE STILL IGNORING IT. This
+ * module, `receipt.ts`, `BranchEarning.tsx` and `HomeScreen.tsx` each carried a
+ * note reading "CONTRACT GAP (reported, not filled): `Branch.name` is a single
+ * string … api-contract.md's Branch and Salon have no Arabic field." That was
+ * true when it was written and is not now: `BranchSchema.nameAr` and
+ * `SalonSchema.nameAr` are in `packages/types`, `GET /salons/{id}` serves them
+ * (driven: `nameAr: "أمارا"`, `"السالمية"`, `"مدينة الكويت"`), and the design's
+ * own reference set has carried them all along (design/avo-promotions.js:42-43).
+ *
+ * So an Arabic wallet was rendering `اليوم · ١١:٢٢ م · Salmiya` where the design
+ * writes `أمس · أمارا السالمية` (AVO Wallet Home.dc.html:1580) — non-negotiable
+ * #12, a first-class layout rather than a translation pass.
+ *
+ * The fallback is `nameAr ?? name`, the same one `artistName` and `serviceName`
+ * in `domain/booking.ts` and the follow-salon title in `AccountScreen` already
+ * use — and it has a real null path to exercise, because the seed leaves
+ * Lumiere's branches without Arabic deliberately.
+ */
+export function branchName(
+  branch: { name: string; nameAr?: string | null },
+  lang: Language,
+): string {
+  return lang === 'ar' ? (branch.nameAr ?? branch.name) : branch.name;
+}
+
+/** Structural rather than `Branch`, so a test can pass a two-field fixture. */
+type BranchLike = { id: string; name: string; nameAr?: string | null };
+
+function branchLabel(tx: Transaction, branches: BranchLike[], lang: Language): string | null {
+  const branch = branches.find((b) => b.id === tx.branchId);
+  return branch ? branchName(branch, lang) : null;
 }
 
 function when(
   tx: Transaction,
-  branches: { id: string; name: string }[],
+  branches: BranchLike[],
   lang: Language,
   copy: Copy,
 ): string {
@@ -83,7 +115,7 @@ function when(
     : yesterday
       ? `${copy.yesterday} · ${time}`
       : `${day} · ${time}`;
-  const branch = branchLabel(tx, branches);
+  const branch = branchLabel(tx, branches, lang);
   // A top-up has no branch a customer would recognise; a charge always does.
   const withBranch = branch && tx.kind !== 'topup' ? `${head} · ${branch}` : head;
 
@@ -129,7 +161,7 @@ function creditedAmount(tx: Transaction): Fils {
 
 export function toActivityRow(
   tx: Transaction,
-  branches: { id: string; name: string }[],
+  branches: BranchLike[],
   lang: Language,
   copy: Copy,
 ): ActivityRow {

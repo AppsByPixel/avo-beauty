@@ -193,9 +193,12 @@ export interface Copy {
    * IN THE COPY FILE, AND ONLY BECAUSE SIGN-IN IS PRE-AUTH. Everywhere after
    * sign-in the name comes off `Salon.name` from the API, which is correct for a
    * white-label product. Here there is no session yet and therefore no salon to
-   * fetch, so the build carries its own name — which is also why the Arabic form
-   * has to live here: `Salon.name` is a single string with no `nameAr`, the
-   * contract gap HomeScreen already reports.
+   * fetch, so the build carries its own name — and that, not a missing field, is
+   * why the Arabic form lives here. The clause that used to follow ("`Salon.name`
+   * is a single string with no `nameAr`, the contract gap HomeScreen already
+   * reports") was stale: `SalonSchema.nameAr` exists and is served. Pre-auth
+   * still cannot read it, so this key stays; the reason is the session, not the
+   * schema.
    */
   salonName: string;
   walletWord: string;
