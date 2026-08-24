@@ -270,6 +270,63 @@ const RefreshSchema = z.object({
   expiresAt: z.string(),
 });
 
+/**
+ * Did the SERVER repudiate this refresh token, or did we simply fail to ask it?
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THIS IS A SECURITY-SHAPED TRADEOFF, SO HERE IS THE ARGUMENT AND NOT JUST THE
+ * OUTCOME.
+ *
+ * `performRefresh` used to clear the session in one `catch`, for every failure.
+ * The comment there conceded the offline case landed in it too and called that
+ * honest: "we cannot prove the session is alive." True, and the wrong thing to
+ * do about it. Driven: a cold launch with the API unreachable DELETED
+ * `avo.wallet.session.v1` while leaving the cached wallet beside it. A dropped
+ * connection permanently signed the customer out — and it also made the entire
+ * `interaction-spec.md` §4 offline treatment for Home unreachable on a cold
+ * start, because the screen that renders the kept balance and the "last updated"
+ * stamp never mounted.
+ *
+ * So: only an ANSWER FROM THE SERVER ABOUT THIS CREDENTIAL ends the session.
+ * 401 and 403 are that answer. Everything else keeps it:
+ *
+ *   fetch rejected      no route, DNS, TLS, or our own 15s abort — nothing was
+ *                       delivered, so nothing was refused. `status` is null.
+ *   408 429 5xx         the server answered, but about ITSELF. A 500 from
+ *                       /auth/refresh says the API had a bad minute; it says
+ *                       nothing about whether this token is still good.
+ *   200, bad body       it said yes and then said something we cannot read. A
+ *                       contract violation is not a repudiation, and nothing is
+ *                       stored either way — `rotated` is never reached.
+ *   anything else       unknown, and the default below decides it.
+ *
+ * WHERE THE TWO ARE GENUINELY INDISTINGUISHABLE, KEEP THE SESSION. Our own
+ * timeout is the honest example: a server that DID refuse, whose 401 we never
+ * saw, is byte-for-byte identical here to a server we never reached. Keeping is
+ * the safe side of that coin, and asymmetrically so — a customer wrongly kept
+ * signed in meets the refusal on her next real request and is signed out one
+ * screen later, whereas a customer wrongly signed out loses her wallet in an
+ * airport with no way back in.
+ *
+ * What keeping costs: the refresh token stays on the device a while longer. It
+ * would have anyway — the only thing given up is a proactive local delete on a
+ * failure we could not prove, and the server remains the authority that decides
+ * whether the token still works. It cannot loop, either: the decision is driven
+ * by the server's answer, so the first delivered attempt settles it.
+ * ═════════════════════════════════════════════════════════════════════════════
+ *
+ * Exported because this workspace has no HTTP double at the unit level and the
+ * rule is the whole fix; `session.test.ts` drives it through a stubbed `fetch`
+ * as well, which is where the transport cases are actually reproduced.
+ */
+export function sessionWasRepudiated(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  // `status === null` is the transport failure `sendOnce` synthesises. It is
+  // ALSO classified 'offline', but so is a real 503 from the server, so the
+  // status is what separates them and the kind is not.
+  return err.status === 401 || err.status === 403;
+}
+
 async function performRefresh(): Promise<boolean> {
   const token = getRefreshToken();
   if (token === null) return false;
@@ -281,7 +338,9 @@ async function performRefresh(): Promise<boolean> {
     });
     const parsed = RefreshSchema.safeParse(await response.json());
     if (!parsed.success) {
-      await clearSession();
+      // Not a repudiation — see `sessionWasRepudiated`. The pair is left alone
+      // rather than cleared: `rotated` was never reached, so the stored token is
+      // still the one the server last issued, and the next attempt can use it.
       return false;
     }
     /*
@@ -298,14 +357,21 @@ async function performRefresh(): Promise<boolean> {
       refreshToken: parsed.data.refreshToken,
     });
     return true;
-  } catch {
+  } catch (err) {
     /*
-     * Every failure means the same thing to the customer — sign in again — and the
-     * session is cleared so nothing downstream believes otherwise. An offline
-     * refresh lands here too, which is honest: we cannot prove the session is
-     * alive.
+     * ONLY a refusal ends the session. The long argument is on
+     * `sessionWasRepudiated` above; the short version is that this `catch` used
+     * to treat "the server said no" and "we never reached the server" as the
+     * same event, and only one of them is about the customer's credential.
+     *
+     * `clearSession()` notifies, which is what moves the UI to sign-in. Not
+     * clearing therefore leaves the app where it is — and `App.tsx`'s `Gate`
+     * reads `isSignedIn()` after a false refresh for exactly this reason, so an
+     * unproven failure lands on the offline wallet instead of on sign-in.
      */
-    await clearSession();
+    if (sessionWasRepudiated(err)) {
+      await clearSession();
+    }
     return false;
   }
 }

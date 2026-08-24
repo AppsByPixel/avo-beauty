@@ -269,6 +269,142 @@ describe('the refresh latch', () => {
   });
 });
 
+// ------------------------------------------- refused vs never delivered ----
+
+/**
+ * THE AIRPORT BUG.
+ *
+ * `performRefresh` cleared the session in a single `catch`, and its own comment
+ * conceded "An offline refresh lands here too, which is honest: we cannot prove
+ * the session is alive." The cost of that honesty was not an inconvenience — it
+ * was the whole offline design.
+ *
+ * Driven before the fix: a cold launch with the API unreachable left
+ * `avo.wallet.home.v1` (the cached wallet) in storage and DELETED
+ * `avo.wallet.session.v1`. So the customer was permanently signed out by a
+ * dropped connection, and `interaction-spec.md` §4's offline treatment for Home
+ * — the kept balance and the "last updated" stamp, both built and both tested —
+ * became unreachable on a cold start, because the screen that renders them never
+ * mounted.
+ *
+ * The distinction these tests pin: a refresh that was REFUSED (the server
+ * answered, and said no) ends the session. A refresh that was never DELIVERED,
+ * or that reached a server which did not repudiate the credential, does not.
+ *
+ * Where the two cannot be told apart the session is KEPT, and that asymmetry is
+ * deliberate: a customer wrongly kept signed in meets a refusal on her next real
+ * request and is signed out then, one screen later. A customer wrongly signed out
+ * loses her wallet in an airport with no way back in.
+ */
+describe('a refresh that was never delivered is not a refusal', () => {
+  const signedIn = () =>
+    setSession({
+      accessToken: 'AT-1',
+      refreshToken: 'RT-1',
+      salonId: 'SAL-AMARA',
+      memberId: '8842',
+    });
+
+  /** No route to host / DNS / TLS / our own 15s abort all reject `fetch` itself. */
+  it('keeps the session when fetch never reaches the server', async () => {
+    await signedIn();
+    stubFetch(() => {
+      throw new TypeError('Failed to fetch');
+    });
+
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBe('RT-1');
+    expect(store.has(SESSION_KEY)).toBe(true);
+  });
+
+  it('keeps the session when the request timed out', async () => {
+    await signedIn();
+    stubFetch(() => {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    });
+
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBe('RT-1');
+    expect(store.has(SESSION_KEY)).toBe(true);
+  });
+
+  /**
+   * A server that answered but did NOT repudiate the credential. A 500 from
+   * `/auth/refresh` says something is wrong with the server, not that this
+   * refresh token is dead — and signing a customer out because the API had a bad
+   * minute is the same wrong outcome by a different route.
+   */
+  it('keeps the session for every status that is not a refusal', async () => {
+    for (const status of [408, 429, 500, 502, 503, 504]) {
+      __resetSessionForTest();
+      store.clear();
+      await signedIn();
+      stubFetch(() => json({ error: 'oops', message: 'Something went wrong.' }, status));
+
+      expect(await refreshSession()).toBe(false);
+      expect(getRefreshToken(), `status ${status} must not end the session`).toBe('RT-1');
+      expect(store.has(SESSION_KEY), `status ${status} must not clear storage`).toBe(true);
+    }
+  });
+
+  /**
+   * A 200 whose body does not match `RefreshSchema`. The server said yes and
+   * then said something we cannot read — which is a contract violation, not a
+   * repudiation. Nothing is stored (`rotated` is never reached), so the old pair
+   * simply stands and the next attempt tries again.
+   */
+  it('keeps the session when a 200 body does not match the contract', async () => {
+    await signedIn();
+    stubFetch(() => json({ accessToken: 'AT-2' }, 200));
+
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBe('RT-1');
+    expect(store.has(SESSION_KEY)).toBe(true);
+  });
+
+  it('still clears on a 401 — a refusal is a refusal', async () => {
+    await signedIn();
+    stubFetch(() => json({ error: 'session_ended', message: 'That session has ended.' }, 401));
+
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBeNull();
+    expect(store.has(SESSION_KEY)).toBe(false);
+  });
+
+  it('clears on a 403 too — the server answered, about this credential', async () => {
+    await signedIn();
+    stubFetch(() => json({ error: 'forbidden', message: 'No.' }, 403));
+
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBeNull();
+    expect(store.has(SESSION_KEY)).toBe(false);
+  });
+
+  /**
+   * THE LOOP CHECK, and the reason keeping is safe rather than merely kinder.
+   *
+   * A kept-but-genuinely-dead session must not retry forever. It cannot: the
+   * decision is driven by the server's answer, so the first attempt that is
+   * actually delivered settles it. Offline, then the network returns and the
+   * token really is expired — one 401 and it is gone.
+   */
+  it('does not hold a dead session once the network comes back', async () => {
+    await signedIn();
+
+    stubFetch(() => {
+      throw new TypeError('Failed to fetch');
+    });
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBe('RT-1');
+
+    vi.unstubAllGlobals();
+    stubFetch(() => json({ error: 'session_ended', message: 'That session has ended.' }, 401));
+    expect(await refreshSession()).toBe(false);
+    expect(getRefreshToken()).toBeNull();
+    expect(store.has(SESSION_KEY)).toBe(false);
+  });
+});
+
 // ------------------------------------------------- a wrong password is not ----
 
 describe('sign-in failure is not an expiry', () => {
