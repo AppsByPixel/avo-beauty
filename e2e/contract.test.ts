@@ -710,20 +710,38 @@ function probes(): Probe[] {
      * imports up this file. The ENVELOPE (`items` / `total` / `nextCursor`) has none,
      * which is what `select` is for — the modelled shape is the row, not the page.
      *
-     * IT SHARES ONE ROOT CAUSE WITH THE `POST` PROBE ABOVE, so expect them to fail and
-     * pass together: the wire now carries `salonId` and `SupportTicketSchema` does not
-     * declare it, so a parse deletes it. That is a real gap rather than a wire-only
-     * field — the console queue spans salons and a row that cannot say which salon it
-     * belongs to is unreadable there — so it is NOT annotated into `wireOnly`. It needs
-     * one line in `packages/types`, which is a trunk operation, and it is reported as
-     * such. When that lands both probes go green in the same run.
+     * IT SHARES ITS ROOT CAUSE WITH THE `POST` PROBE ABOVE — which was ALREADY RED when
+     * this route arrived, so probing here adds detail to an existing signal rather than
+     * turning the suite red. Three keys are declared nowhere in `packages/types`:
+     *
+     *   salonId   the console queue spans salons, so a row that cannot say which salon
+     *             it belongs to is unreadable there. Stripped on BOTH routes.
+     *   topic     the denormalised {en, ar} label, so the queue renders a topic without
+     *             a second request per row. Stripped on BOTH routes.
+     *   total     GET only. `paginated()` declares `items` and `nextCursor` only, and
+     *             this endpoint counts. `GET /v1/platform/audit` totals too, so the
+     *             honest fix is probably a counted wrapper rather than a field here.
+     *
+     * Measured, not guessed — that list is what the two specs print. An earlier version
+     * of this note said POST stripped `salonId` alone; it strips `topic` as well, and
+     * the note is corrected rather than left, because a stale annotation in the place a
+     * reader looks first is the defect this census exists to prevent.
+     *
+     * NONE of them is annotated into `wireOnly`, because none is a wire-only field —
+     * every one is a real part of the shape a client needs, and `wireOnly` is for keys
+     * that legitimately belong to no schema. Zod does not fail on an undeclared key, it
+     * DELETES it, so each of these currently reaches a client as `undefined` with no way
+     * to tell that the server sent a value. That is the `changeableUntil` failure exactly.
+     *
+     * The fix is `packages/types`, which is trunk-owned and a four-way break, so it is
+     * REPORTED rather than reached for from this lane. All four ticket specs go green in
+     * the same run when it lands.
      */
     {
       route: 'GET /v1/support/tickets',
       label: 'GET /v1/support/tickets',
-      schemaName: 'SupportTicketSchema',
-      schema: SupportTicketSchema,
-      select: 'items',
+      schemaName: 'paginated(SupportTicketSchema)',
+      schema: paginated(SupportTicketSchema),
       requireNonEmpty: ['items'],
     },
   ];
