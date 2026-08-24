@@ -44,6 +44,63 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### White-label onboarding: the answer is a wizard, not a branch — and no salon can be created today
+
+**The question put to me:** for each new client, does the backend get a tenant and the frontend
+get a new branch or repo? And should a new client be web or mobile?
+
+**I read the handoff and the plan before answering, and the premise needed correcting.** The
+distribution question is downstream of a gap nobody had named: **there is no way to create a
+salon.** No `POST /salons`, no `POST /v1/platform/salons`, and `api-contract.md` names neither.
+Every salon in existence is there because `seed.ts` inserted it. Onboarding a real client today
+means a hand-written `INSERT`. Deciding per-client app distribution before that exists is
+choosing the roof before the foundation.
+
+**And the flow is already designed**, so there was nothing for me to invent. `README.md:165`:
+Owner Console → Salons → **+ Onboard a salon**, a four-step wizard — *details & plan → modules &
+deposit → loyalty & brand colour → review* — which creates the salon and sends the owner a
+WhatsApp invite with a 14-day trial. `build-plan.md` Phase 7 lists "Salons with the onboarding
+wizard". The console ships six sections today; **Salons is not one of them.**
+
+**Decisions.**
+
+1. **No branches, no repos per client. This was already settled and stays settled.**
+   `ADR-0001` rejects branch-per-brand *by name*, against AvoRewards' live model of one branch
+   and one Xcode scheme per brand, with the reason that "every fix must be cherry-picked ten
+   times". Per-client identity is **data**: a salon row, a brand hex, and (later) a logo and
+   type pairing.
+
+2. **Web and mobile both, from the one Expo codebase — this was never either/or.** The ADR:
+   the wallet "builds to mobile web for the pilot — no forced download, no App Store review
+   inside the 30 days, **no rewrite when it does go to the stores**." Store submission is in
+   scope and partly built: in-app account deletion is ticked *because Apple requires it*. What
+   I recommend on **sequencing** is that a new client's web URL goes live the day their row
+   exists, and their native build follows through the store queue — the native app arriving
+   second, not being dropped.
+
+3. **Per-client native store distribution is deferred as a business decision, not a technical
+   one.** How many store listings, under whose developer account, is about review cycles and
+   credentials. It does not block the pilot and the ADR guarantees no rewrite. What it does
+   change: a hardcoded hex hurts *more* in a native build than on the web, which is why the
+   runtime-brand work below comes first either way.
+
+4. **Logo and typography storage is deferred, deliberately.** Neither has a column anywhere.
+   The wizard as designed sets **colour only**, so this blocks nothing today, and the merchant
+   Brand kit (`README.md:141` — logo drop plus four type pairings) is its own design slice.
+   Recorded so the go-live pipeline row is not read as closable without it.
+
+**What I dispatched, in dependency order.** Lane A: `POST /v1/platform/salons`, with
+`brandColor` validated through `deriveBrandSet` on **create and update** — which closes the #9
+write-path defect in the same slice, since both doors need the same guard. Lane C: the Salons
+section and the four-step wizard. Lane B: the wallet reading `brandColor` at runtime, which is
+the single change that turns "per-client build" into "per-client config", plus the scanner
+taking its pre-auth name from the enrolment binding it already holds. Lane D: coverage for the
+new endpoint, its tenancy, and the refusal of a non-viable hex.
+
+**Reversal.** Every piece is additive. If AVO later wants per-client repos, the wizard still
+produces the row that such a build would read from; nothing here forecloses it, and the
+argument against it is `ADR-0001`'s, not mine.
+
 ### A type-forced label is an undrawn design decision wearing a compiler's authority
 
 **The pattern Lane B named while reporting the adjustment row.** `txKind` is typed
