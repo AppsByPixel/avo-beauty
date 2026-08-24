@@ -45,6 +45,55 @@ through commit messages.
 
 Newest first. Each: what, why, and how to reverse it.
 
+### The owner console is 7 of 10, and two of its sections are not in the nav at all
+
+**Asked whether the console is complete. It is not**, and the shape of what is missing is worth
+recording because two pieces are invisible from the nav.
+
+**Built (7):** Analytics, Salons, Admins, Approvals, Policies, Audit log, Controls — all routed,
+all with endpoints.
+
+**Stubbed as `NotBuiltYet` (3):** Activity, Accounts, Billing.
+
+- **Activity** — no endpoint of any kind.
+- **Accounts** — *the verbs exist and the list does not.* `POST /members/{id}/adjustments` and
+  `POST /accounts/{id}/reset-link` were both built last session, but `GET /members` and
+  `GET /staff` are salon-scoped merchant doors behind `requireDashboardPerm`. **The console can
+  act on an account it cannot find.**
+- **Billing** — no endpoint, and blocked rather than merely unbuilt: same gap as #15, no trial,
+  subscription or invoice column exists and the design's figures are prototype fixtures.
+
+**Missing and invisible (2):**
+
+- **Support & contact.** The design puts it at the bottom of Policies. `Policies.tsx` contains
+  **zero** references to it — while `GET`/`PATCH /v1/platform/support` and
+  `GET`/`POST /v1/support/tickets` all exist. **Endpoints built, nothing renders them**, and
+  because it is a panel inside a screen rather than a nav item, no "not built yet" stub reveals
+  the gap. This is the inverse of the stale-comment class: not prose claiming something is
+  absent, but a *nav* implying completeness because the missing thing was never an item.
+- **Console Reports.** The design's section list names it ("per-salon CSV export") and it is not
+  routed, not stubbed, not in the nav. **And I got this wrong once already:** I told Lane C its
+  endpoints existed. They do not work for this caller — `requireDashboardPerm` returns a
+  `StaffPrincipal` and demands a `dashboard` scope, so a platform admin cannot call
+  `/salons/{id}/reports/{kind}` at all. It also has **no `reports` entry in
+  `PLATFORM_SECTIONS`**, so there is no section to gate it on — the same shape as the merchant
+  Reports having no permission chip (#9 in the queue). Adding a section is a `packages/types`
+  change and therefore trunk's.
+
+**Dispatched:** Lane A the two API-blocked sections (Activity, the Accounts list) with branch
+add/remove and the Reports gate as stretch; Lane C Support inside Policies, which needs no API
+work; Lane D the support endpoints nothing has driven — #11 is the point of that feature and
+`POST /v1/support/tickets` must refuse a client-supplied route.
+
+**Billing is deliberately not dispatched.** Building a billing screen against invented invoice
+shapes is how prototype figures end up on a real merchant's account, and `Settings.tsx` already
+refuses it for that reason.
+
+**The lesson I keep paying for.** I asserted Reports' endpoints existed without checking, which
+is the fourth unverified claim of mine this session after `city`, the preset table, and the
+ordering rule. I checked this one *before* briefing because of the previous three — and it was
+wrong. **The habit that works is checking before speaking, not after being corrected.**
+
 ### The wizard's second drawn promise — the 14-day trial — is queued, not corrected
 
 **What.** Having authorised a success state that fixes the invite promise, Lane C pointed out the
