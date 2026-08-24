@@ -31,6 +31,7 @@ through commit messages.
 | 6 | Data residency: Kuwait or EU | Leaning Kuwait. Schema stays provider-neutral until decided. |
 | 7 | Sign-in now needs a Workspace field, which is not in `AVO Login.dc.html` | Forced by `staff_user` being unique on `(salon_id, handle)`. A visible departure from the drawn design. |
 | 8 | Should `POST /charges` refuse a near-duplicate — same member, same basket, short window — or only confirm? What window? | The double-charge path has no API-side guard. Picking a threshold without measuring legitimate repeats is how the lookup ceiling came to fire at twelve customers an hour. Needs a call on what a salon counter should do. |
+| 15 | **The onboarding wizard promises a 14-day trial and nothing implements one.** `AVO Owner Console.dc.html:307`: *"Creating the salon … opens a 14-day trial before the first invoice."* There is **no trial, subscription or invoice column in any schema file**, and neither `api-contract.md` nor `packages/types` names one — Billing is fully designed with no API behind it. So an AVO admin onboarding a salon is told a clock started, and none did. | Unlike the invite gap, this is not a missing implementation of a known thing — **a trial needs commercial terms before it can be built**: does it start at creation or at first charge, what happens on day 15, is it enforced or only billing metadata? Those are AVO's to set. Until then the drawn copy stands and the success state deliberately does not repeat it. |
 | 14 | **What should a customer see for a salon-initiated balance change?** The design draws the console's "Adjust wallet" and its audit line, but the wallet's activity fixtures never show an adjustment. The label `'Adjustment'` was **forced by the type** (`txKind` is a Record over every `Transaction` kind) and filled in undocumented — same provenance as three other labels the record demanded, none drawn. She now sees an honest unexplained balance change with **no route to an explanation**, because `note` deliberately never reaches her. | Needs a drawn row and a product call: whether it is even called "Adjustment", whether a credit and a deduction should read the same, and whether an unexplained change is meant to be a support call. Widening `TransactionSchema` to carry `note` is trunk-owned *and* a product question. |
 | 13 | **The set-new-password screen is not drawn, and the reset link has nowhere to land.** The design's auth flow has login/signup/forgot only — no redeem layout, no copy for its success or refusal states — the sender is the standing WhatsApp/domain escalation, and the wallet has no inbound deep-link routing at all, so the link's shape (`avo://reset?token=…`) is a decision, not a wiring gap. | Needs a drawn screen (designer), the sender (client escalation), and a deep-link ruling. Until all three, the flow honestly ends at "Check WhatsApp" — which is everything it can truthfully do. |
 | 12 | **Erasure cannot reach the audit log, structurally — and the policy promises both.** Her historical `audit_log` rows (`actor_name`, ip, ua, names in `detail`) and `member_consent_event` outlive erasure: the app role had UPDATE/DELETE revoked in 0020/0023, which is what makes the log trustworthy. Policy §5 (deletion) and §7 (audit) are in genuine tension. | The fix needs an owner-role job or a narrow column grant, and the **retention schedule is client-owned** (CLAUDE.md escalations). Every erasure records `retainedBeyondErasure` in its own audit metadata, so the gap is a standing measured fact while it waits. |
@@ -43,6 +44,39 @@ through commit messages.
 ## Decisions I made
 
 Newest first. Each: what, why, and how to reverse it.
+
+### The wizard's second drawn promise — the 14-day trial — is queued, not corrected
+
+**What.** Having authorised a success state that fixes the invite promise, Lane C pointed out the
+review step carries a **second** one: *"opens a 14-day trial before the first invoice"*. It
+declined to repeat it in the success state, on the grounds that restating it would invent a
+second false claim while fixing the first. Correct.
+
+**I verified the gap rather than take it on report:** zero `trial` / `subscription` / `invoice`
+columns across every schema file, and neither `api-contract.md` nor `packages/types` names one.
+Billing is fully designed with no API behind it.
+
+**Decision: queue it (#15), keep the drawn copy, and do not correct it in the UI.**
+
+**Why this is not treated like the invite.** The invite promise was an *implementation* gap: the
+thing is specified, the fix is known (wire a sender), and the interim statement — "queued,
+delivery not enabled" — is a plain fact about the system. A trial is a **commercial term**, and
+there is nothing to state a fact about. Building one means choosing when the clock starts
+(creation? first charge?), what day 15 does (a hard stop? a flag? an invoice?), and whether it is
+enforced at all or is only billing metadata. Those are AVO's decisions, and inventing a
+`trial_ends_at` that nothing reads would be worse than the gap — Lane A already refused it for
+that reason.
+
+**Why not soften the drawn copy in the meantime.** Editing a commercial commitment out of a
+designed screen is a bigger act than adding an honest success line, and it is not reversible by
+anyone but the client. The consistent position across both promises is the same:
+**do not invent, and do not propagate.** The success state says nothing about a trial, so an
+admin who reads it learns only true things — and the queue entry is where the contradiction gets
+resolved by someone who can set the terms.
+
+**Reversal.** If AVO says trials are tracked manually for the pilot, the answer is a line in the
+success state and no schema at all. If they are a product feature, it is a column, a Billing API,
+and the drawn copy becomes true.
 
 ### The salon list regates to `salons`, the wizard gets a success state, and I propagated a false premise
 
