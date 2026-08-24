@@ -27,6 +27,11 @@ export const salon: Salon = {
   id: SALON_ID,
   name: 'Amara',
   nameAr: 'أمارا',
+  // Kuwait City, matching BRANCH_KUWAIT_CITY. A string rather than null on
+  // purpose: null is the honest value for a salon predating migration 0037, and
+  // this fixture is what the mock-backed suites read — a mock that serves the
+  // emptier answer teaches every client the field is usually absent.
+  city: 'Kuwait City',
   plan: 'growth',
   brandColor: '#6E7F6C',
   // Both default OFF — AVO-Beauty-Product-Description-v2.md §2.3. The pilot runs

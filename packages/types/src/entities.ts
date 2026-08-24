@@ -83,6 +83,23 @@ export const SalonSchema = z.object({
   /** Arabic salon name. See BranchSchema.nameAr. Falls back to `name`. */
   nameAr: z.string().nullable(),
   plan: z.enum(['starter', 'growth', 'pro']),
+  /**
+   * The salon's city. Arrived with the onboarding wizard, whose first step gates
+   * Continue on name + city + phone — migration 0037 added the column because two
+   * of those three had none.
+   *
+   * `.nullable()` and NOT `.optional()`: the seeded pair predate the column and
+   * read null, so null is a real answer, but a server that FORGETS the key must
+   * fail rather than pass. Declared here because the API already serves it and
+   * this schema is what strips an undeclared key — the sixth instance of that
+   * drift in this contract, and the first found by a lane reporting its own
+   * endpoint's field as unrepresentable rather than by a client losing data.
+   *
+   * `ownerPhone` is deliberately NOT here. The API serves it outside the salon
+   * shape, in an envelope, precisely so this schema cannot carry it: members read
+   * `GET /salons/{id}`, and a salon owner's phone number is not theirs to have.
+   */
+  city: z.string().nullable(),
   /** Drives the white-label token. Validated through deriveBrandSet at onboarding. */
   brandColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   modules: z.object({ booking: z.boolean(), shop: z.boolean() }),

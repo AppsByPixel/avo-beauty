@@ -20,6 +20,7 @@ mocks stand for, so the three apps agree on shapes before anyone writes an endpo
 ```
 id            string
 name          string          // "Amara"
+city          string | null   // registered city; null on salons predating migration 0037
 plan          "starter" | "growth" | "pro"
 brandColor    string          // hex; drives the white-label token
 modules       { booking: bool, shop: bool }
@@ -34,6 +35,20 @@ branches      Branch[]
 social        SocialLink[]    // the salon's public channels, shown in the wallet
 whatsappEnabled bool
 ```
+
+**Contract addition, 2026-08-24 — `city`, and an account fact that is deliberately absent.**
+The onboarding wizard's first step gates Continue on name + city + phone, and two of the three
+had no column; migration 0037 added them. `city` is served by **both** doors
+(`GET /salons/{id}` and `GET /v1/platform/salons/{id}`) and is `null` on salons created before
+the column existed, so it is **nullable and required** rather than optional — null is a real
+answer, but a server that forgets the key should fail rather than pass.
+
+**`ownerPhone` is NOT part of this entity, on purpose.** It is served only by the console's
+per-salon read, outside the salon shape, in an envelope — precisely so `SalonSchema` cannot
+carry it. Members read `GET /salons/{id}`; a salon owner's phone number is not theirs to have.
+Editing either field is **platform-only** (`PATCH /v1/platform/salons/{id}`); the merchant door
+does not accept them, because they are account facts AVO holds rather than settings a salon
+tunes. `plan` is editable through neither: it prices the account, and that belongs to Billing.
 
 ### SocialLink (merchant → Settings → Social links)
 ```
