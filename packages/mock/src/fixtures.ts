@@ -386,11 +386,34 @@ export const support: SupportConfig = {
     replyEn: 'We usually reply within one working day.',
     replyAr: 'نرد عادةً خلال يوم عمل واحد.',
   },
+  /**
+   * THE IDS AND WORDING THE REAL API SEEDS, verbatim from
+   * `design/avo-promotions.js` — which `api/src/db/seed.ts` also seeds, verified
+   * against a live `support_topic` table rather than read across.
+   *
+   * These were `tp-appt` / `tp-visit` / `tp-wallet` / `tp-charge` / `tp-account`
+   * until 2026-08-25: five invented ids, none of which exist in the real
+   * database, with different wording and no `other`. The consequence was not
+   * cosmetic — `support_ticket.topic_id` references `support_topic` under
+   * `ON DELETE RESTRICT`, so **the wallet's Contact-us form worked against this
+   * mock and would have been refused by the real API on every topic**. A mock
+   * that teaches a client ids the server has never heard of is worse than no
+   * mock, because the failure surfaces only after the client is finished.
+   *
+   * Nothing caught it: `e2e` drives the real seed and the design file, which
+   * agree with each other, so the drift was invisible to the one suite that
+   * spans both. Lane B found it by going to the design file to check whether a
+   * comment it was writing was TRUE rather than plausible.
+   *
+   * Keep this list byte-identical to the design's. It is the contract's
+   * vocabulary, not a fixture's taste.
+   */
   topics: [
-    { id: 'tp-appt', route: 'salon', en: 'My appointment', ar: 'موعدي' },
-    { id: 'tp-visit', route: 'salon', en: 'Something about my visit', ar: 'بخصوص زيارتي' },
-    { id: 'tp-wallet', route: 'avo', en: 'My wallet or balance', ar: 'محفظتي أو رصيدي' },
-    { id: 'tp-charge', route: 'avo', en: "A charge I don't recognise", ar: 'خصم لا أعرفه' },
-    { id: 'tp-account', route: 'avo', en: 'My account or my data', ar: 'حسابي أو بياناتي' },
+    { id: 'wallet', route: 'avo', en: 'Wallet, top-ups or refunds', ar: 'المحفظة أو الشحن أو الاسترجاع' },
+    { id: 'charge', route: 'avo', en: 'A charge I do not recognise', ar: 'خصم لا أعرفه' },
+    { id: 'booking', route: 'salon', en: 'An appointment', ar: 'موعد' },
+    { id: 'visit', route: 'salon', en: 'My visit or the service', ar: 'زيارتي أو الخدمة' },
+    { id: 'account', route: 'avo', en: 'My account or my data', ar: 'حسابي أو بياناتي' },
+    { id: 'other', route: 'avo', en: 'Something else', ar: 'شيء آخر' },
   ],
 };
