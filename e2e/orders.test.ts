@@ -54,6 +54,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
+import { assertRaced, timed, valuesOf } from './support/race.js';
 import {
   SALON_A,
   SALON_B,
@@ -317,13 +318,27 @@ describe('concurrent orders on one wallet cannot spend the same fils twice', () 
 
     // Five DIFFERENT keys — this is five genuine orders racing, not one retried.
     // Under one key the idempotency machinery would be the thing under test instead.
-    const results = await Promise.all([
-      order(key('race-a')),
-      order(key('race-b')),
-      order(key('race-c')),
-      order(key('race-d')),
-      order(key('race-e')),
+    const fired = await Promise.all([
+      timed(() => order(key('race-a'))),
+      timed(() => order(key('race-b'))),
+      timed(() => order(key('race-c'))),
+      timed(() => order(key('race-d'))),
+      timed(() => order(key('race-e'))),
     ]);
+
+    /**
+     * ALL FIVE GENUINELY IN FLIGHT TOGETHER — asserted, not assumed.
+     *
+     * Five DIFFERENT keys against a balance for two is a lost-update experiment,
+     * and it only IS one while the five overlap. Run sequentially the API needs no
+     * lock at all to get this right: each order reads a balance the previous one
+     * already committed, two settle, three are refused 402, and every assertion
+     * below passes against an implementation with a plain read-modify-write. That
+     * is the shape of the five-simultaneous-charges lost update this suite was
+     * built to catch, and a sequential batch is blind to it by construction.
+     */
+    assertRaced(fired, 'five orders against a balance for two');
+    const results = valuesOf(fired);
 
     const settled = results.filter((r) => r.status === 201);
     const refused = results.filter((r) => r.status === 402);
@@ -402,13 +417,24 @@ describe('concurrent orders on one wallet cannot spend the same fils twice', () 
     const ledgerBefore = ledgerSum();
     const balanceBefore = balanceOf();
 
-    const results = await Promise.all([
-      order(key('inv-a')),
-      order(key('inv-b')),
-      order(key('inv-c')),
-      order(key('inv-d')),
-      order(key('inv-e')),
+    const fired = await Promise.all([
+      timed(() => order(key('inv-a'))),
+      timed(() => order(key('inv-b'))),
+      timed(() => order(key('inv-c'))),
+      timed(() => order(key('inv-d'))),
+      timed(() => order(key('inv-e'))),
     ]);
+
+    /**
+     * The agreement invariants below hold TRIVIALLY for a sequential batch — rows
+     * match replies and the ledger matches the balance whenever nothing raced. The
+     * comment on the balance assertion says the failure it is looking for is the
+     * one where "the balance is too HIGH for the rows written", and only a genuine
+     * overlap can produce that. So the overlap is the precondition of the whole
+     * spec, and it is checked before the invariants rather than hoped for.
+     */
+    assertRaced(fired, 'five orders, ledger-agreement round');
+    const results = valuesOf(fired);
 
     const settled = results.filter((r) => r.status === 201).length;
     const rowsAdded = shopRows() - rowsBefore;
@@ -451,11 +477,20 @@ describe('concurrent orders on one wallet cannot spend the same fils twice', () 
     fund(PRODUCT_FILS);
     const ledgerBefore = ledgerSum();
 
-    const results = await Promise.all([
-      order(key('drain-a')),
-      order(key('drain-b')),
-      order(key('drain-c')),
+    const fired = await Promise.all([
+      timed(() => order(key('drain-a'))),
+      timed(() => order(key('drain-b'))),
+      timed(() => order(key('drain-c'))),
     ]);
+
+    /**
+     * "DRAINED BY A CROWD" needs a crowd. Three sequential orders against a
+     * balance for exactly one land on zero without any concurrency control
+     * whatever, so this spec's assertions are satisfied by the very implementation
+     * it exists to rule out unless the three genuinely overlap.
+     */
+    assertRaced(fired, 'three orders against an exactly-affordable balance');
+    const results = valuesOf(fired);
 
     expect(results.filter((r) => r.status === 201).length, 'more than one order was paid for').toBe(
       1,

@@ -50,6 +50,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { knownBug, precondition } from './support/known-bug.js';
+import { assertRaced, timed, valuesOf } from './support/race.js';
 import {
   GATEWAY_WEBHOOK_SECRET,
   GATEWAY_WEBHOOK_TOLERANCE_SECONDS,
@@ -557,15 +558,35 @@ describe('the callback and the customer race, and the answer is the same either 
     const before = balanceOf(MEMBER);
     const { view, pspReference, credit } = await openIntent('simultaneous');
 
-    const [hook, read] = await Promise.all([
-      deliver({
-        eventId: eventId('simultaneous'),
-        pspReference,
-        status: 'succeeded',
-        amountFils: AMOUNT_FILS,
-      }),
-      treq<IntentView>('GET', `/topups/${view.id}`, { token: member }),
+    const fired = await Promise.all([
+      timed(() =>
+        deliver({
+          eventId: eventId('simultaneous'),
+          pspReference,
+          status: 'succeeded',
+          amountFils: AMOUNT_FILS,
+        }),
+      ),
+      timed(() => treq<IntentView>('GET', `/topups/${view.id}`, { token: member })),
     ]);
+
+    /**
+     * "BOTH IN FLIGHT AND NEITHER CAN SEE THE OTHER'S UNCOMMITTED WORK" — measured.
+     *
+     * This spec's whole reason for existing is that it reaches a case the two
+     * ORDERED specs above it cannot, and the comment says exactly why: each of
+     * those "relies on the winner having COMMITTED before the loser starts". If
+     * these two stopped overlapping, this spec would silently collapse into a
+     * third copy of the ordered pair and stay green — the one outcome that would
+     * make having written it pointless.
+     *
+     * `deliver()` is worth naming here: it does real work before its `fetch` —
+     * `JSON.stringify` and an HMAC over the body — so it is exactly the shape of
+     * helper that can eat the head start and turn a `Promise.all` into a
+     * staggered pair. Measured now rather than assumed.
+     */
+    assertRaced(fired, 'the webhook and her return, at once');
+    const [hook, read] = valuesOf(fired);
 
     expect(hook.status, `the webhook answered ${hook.status}: ${hook.raw}`).toBe(200);
     expect(read.status, `her return answered ${read.status}: ${read.raw}`).toBe(200);

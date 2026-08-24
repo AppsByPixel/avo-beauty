@@ -52,6 +52,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { knownBug, precondition } from './support/known-bug.js';
+import { assertRaced, timed, valuesOf } from './support/race.js';
 import {
   A_MEMBER,
   B_BRANCH,
@@ -2169,18 +2170,35 @@ describe('two charges at once — the races the mock could not run', () => {
     // DIFFERENT idempotency keys, so the key is not what resolves this. The only
     // thing standing between two simultaneous debits is the token's own
     // single-use consumption inside the charge transaction.
-    const [a, b] = await Promise.all([
-      treq<any>('POST', '/charges', {
-        token: scanner,
-        idempotencyKey: key('token-race-a'),
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
-      }),
-      treq<any>('POST', '/charges', {
-        token: scanner,
-        idempotencyKey: key('token-race-b'),
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
-      }),
+    const fired = await Promise.all([
+      timed(() =>
+        treq<any>('POST', '/charges', {
+          token: scanner,
+          idempotencyKey: key('token-race-a'),
+          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
+        }),
+      ),
+      timed(() =>
+        treq<any>('POST', '/charges', {
+          token: scanner,
+          idempotencyKey: key('token-race-b'),
+          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
+        }),
+      ),
     ]);
+
+    /**
+     * THE RACE IS MEASURED, NOT ASSUMED — see `support/race.ts`.
+     *
+     * Every assertion below is satisfied just as well by a SEQUENTIAL pair: the
+     * first charge consumes the token and the second is told 410, one debit, one
+     * row. That is the same outcome a correctly-guarded concurrent pair produces,
+     * so without this line the spec cannot tell the guard it is named after from
+     * a client that never raced anything. Measured here at ~56ms of overlap on
+     * ~58ms requests, which is very nearly perfect parallelism.
+     */
+    assertRaced(fired, 'two charges on ONE wallet token');
+    const [a, b] = valuesOf(fired);
 
     expect(
       [a.status, b.status].sort(),
@@ -2231,18 +2249,36 @@ describe('two charges at once — the races the mock could not run', () => {
     const idem = key('key-race');
     const before = balanceOf(B_MEMBER);
 
-    const [a, b] = await Promise.all([
-      treq<any>('POST', '/charges', {
-        token: scanner,
-        idempotencyKey: idem,
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
-      }),
-      treq<any>('POST', '/charges', {
-        token: scanner,
-        idempotencyKey: idem,
-        body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
-      }),
+    const fired = await Promise.all([
+      timed(() =>
+        treq<any>('POST', '/charges', {
+          token: scanner,
+          idempotencyKey: idem,
+          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
+        }),
+      ),
+      timed(() =>
+        treq<any>('POST', '/charges', {
+          token: scanner,
+          idempotencyKey: idem,
+          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
+        }),
+      ),
     ]);
+
+    /**
+     * MEASURED, AND THIS IS THE SPEC THAT MOST NEEDS IT.
+     *
+     * The whole point of this case is that neither request can see the other's
+     * UNCOMMITTED idempotency row — "in flight at once", as the block comment
+     * above says. A sequential pair is precisely the easy half the spec above it
+     * already covers: the second arrives after the first committed and reads a
+     * finished key row. So if these two stopped overlapping, this spec would
+     * silently become a duplicate of the sequential replay test and keep passing.
+     * That is the exact shape of the double-submit spec measured at -0.003ms.
+     */
+    assertRaced(fired, 'two charges under ONE idempotency key');
+    const [a, b] = valuesOf(fired);
 
     /**
      * The loser may legitimately be a 200 replay OR a 409 `request_in_progress`,
@@ -2280,15 +2316,29 @@ describe('two charges at once — the races the mock could not run', () => {
     const token = await freshWalletToken();
     const before = balanceOf(B_MEMBER);
 
-    const results = await Promise.all(
+    const fired = await Promise.all(
       [1, 2, 3, 4, 5].map((i) =>
-        treq<any>('POST', '/charges', {
-          token: scanner,
-          idempotencyKey: key(`five-race-${i}`),
-          body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
-        }),
+        timed(() =>
+          treq<any>('POST', '/charges', {
+            token: scanner,
+            idempotencyKey: key(`five-race-${i}`),
+            body: { memberId: B_MEMBER, serviceIds: [B_SERVICE], token, confirmDuplicate: true },
+          }),
+        ),
       ),
     );
+
+    /**
+     * ALL FIVE AT ONCE, MEASURED — and with five the check earns more than it does
+     * with two. The case this spec exists for is "a third connection arriving while
+     * two are already waiting on the same row lock", which requires all five to be
+     * genuinely in flight together, not merely more than one at a time.
+     * `overlapMs` is `min(end) - max(start)` over the whole batch, so it is
+     * positive only when every one of the five was open at one instant. Measured
+     * here at ~35ms of five-way overlap: 44ms of wall clock for 194ms of work.
+     */
+    assertRaced(fired, 'five charges on ONE wallet token');
+    const results = valuesOf(fired);
 
     const settled = results.filter((r) => r.status === 200);
     const refused = results.filter((r) => r.status === 410);
@@ -2403,18 +2453,46 @@ describe('a double void says already_voided, not request_in_progress', () => {
      * right sentence instead of `request_in_progress`.
      */
     const charged = await chargeOnce('void-race');
-    const [a, b] = await Promise.all([
-      treq<{ error?: string }>('POST', '/voids', {
-        token: scanner,
-        idempotencyKey: key('void-race-a'),
-        body: { transactionId: charged.transaction.id, reason: 'a' },
-      }),
-      treq<{ error?: string }>('POST', '/voids', {
-        token: scanner,
-        idempotencyKey: key('void-race-b'),
-        body: { transactionId: charged.transaction.id, reason: 'b' },
-      }),
+    /**
+     * THE BALANCE BEFORE THE VOIDS, WHICH THIS SPEC USED NOT TO READ AT ALL.
+     *
+     * A void is a refund to wallet credit (non-negotiable #5), so the whole point
+     * of "one reversal" is that she is credited ONCE. The spec asserted the reply
+     * statuses and the reversal ROW COUNT and never looked at `member.balance_fils`
+     * — so a double credit that still wrote one reversal row satisfied every
+     * assertion in it. The row count and the money are two different claims, and
+     * only one of them is the one a customer would notice.
+     */
+    const before = balanceOf(B_MEMBER);
+    const fired = await Promise.all([
+      timed(() =>
+        treq<{ error?: string }>('POST', '/voids', {
+          token: scanner,
+          idempotencyKey: key('void-race-a'),
+          body: { transactionId: charged.transaction.id, reason: 'a' },
+        }),
+      ),
+      timed(() =>
+        treq<{ error?: string }>('POST', '/voids', {
+          token: scanner,
+          idempotencyKey: key('void-race-b'),
+          body: { transactionId: charged.transaction.id, reason: 'b' },
+        }),
+      ),
     ]);
+
+    /**
+     * "TWO DIFFERENT KEYS IN FLIGHT AT THE SAME INSTANT", asserted rather than
+     * hoped for. The comment above says the case this reaches is the one where
+     * "neither transaction can see the other's uncommitted reversal and the
+     * read-first path finds nothing" — which is true ONLY if they overlap. Run
+     * sequentially, the second void finds the first's COMMITTED reversal, takes
+     * the read-first path, and answers `already_voided` from a completely
+     * different branch of the code — passing every assertion below while testing
+     * the spec above it instead of the unique index.
+     */
+    assertRaced(fired, 'two voids on ONE charge');
+    const [a, b] = valuesOf(fired);
 
     expect(
       [a.status, b.status].sort(),
@@ -2434,6 +2512,32 @@ describe('a double void says already_voided, not request_in_progress', () => {
       ),
       'two reversal rows exist for one charge',
     ).toBe('1');
+
+    /**
+     * AND THE MONEY, WHICH IS THE CLAIM THE ROW COUNT ONLY STANDS IN FOR.
+     *
+     * Exactly one basket back, to the fil. The row count above is evidence about
+     * `reverses_transaction_id`'s unique index; this is evidence about her wallet,
+     * and the two can disagree — a credit applied outside the reversal row, or
+     * applied twice inside one transaction, moves the balance without adding a
+     * second row. Refunds are wallet credit and nothing else (non-negotiable #5),
+     * so the balance is the customer-visible statement of what this spec means.
+     */
+    expect(
+      balanceOf(B_MEMBER),
+      'a raced double void refunded her twice — the salon paid one charge back two times',
+    ).toBe(before + B_SERVICE_PRICE_FILS);
+
+    // …and the ledger accounts for exactly that movement, not merely the balance.
+    expect(
+      Number(
+        scalar(
+          `select count(*) from transaction where reverses_transaction_id='${charged.transaction.id}'
+             and amount_fils=${B_SERVICE_PRICE_FILS}`,
+        ),
+      ),
+      'the one reversal that exists is not for one basket',
+    ).toBe(1);
   });
 });
 
