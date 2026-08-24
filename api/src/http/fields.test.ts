@@ -8,9 +8,25 @@
  * So the assertion that matters is the pairing — everything this parser accepts
  * must be something `hhmmToMinutes` can read — and that is asserted directly
  * below rather than assumed.
+ *
+ * THE DIVISION MOVED UNDER THIS FILE, AND TWO OF ITS SPECS CAUGHT IT. Trunk
+ * tightened `BusinessHoursSchema` to validate the clock (`e8ea6b3`), which was
+ * right and which broke the two specs asserting that a non-clock string produced a
+ * message naming the session and the value — `safeParse` now failed first and
+ * returned the generic shape sentence instead. Those two specs are renamed rather
+ * than relaxed, because the behaviour they pin is still wanted; what changed is
+ * WHO enforces the rule, not what a merchant should read when she breaks it.
+ *
+ * The line as it stands, and the reason each half is asserted here:
+ *
+ *   the shared schema  shape and clock. Not re-asserted here except through this
+ *                      function, which is the only thing the API calls.
+ *   this function      POSITION — "24:00" as a start, the one rule left on the
+ *                      endpoint side — and every MESSAGE.
  */
 
 import { describe, expect, it } from 'vitest';
+import { BusinessHoursSchema } from '@avo/types';
 import { ApiError } from './errors';
 import { HHMM, HHMM_OR_END_OF_DAY, parseBusinessHours } from './fields';
 import { hhmmToMinutes } from '../time/zone';
@@ -39,11 +55,29 @@ describe('parseBusinessHours', () => {
     expect(parseBusinessHours(straightThrough)).toEqual(straightThrough);
   });
 
+  /**
+   * THE POSITION RULE, and it is the only rule this function still enforces on its
+   * own. Asserted against the shared schema's own verdict rather than in isolation:
+   * the schema must ACCEPT this document (it validates one clock at a time and has
+   * no notion of which end it is looking at) and the endpoint must REFUSE it. If
+   * that gap ever closes, this spec is where it shows.
+   */
   it('accepts 24:00 as a closing time and refuses it as an opening one', () => {
     expect(parseBusinessHours({ ...KUWAITI_DAY, evening: ['16:00', '24:00'] }).evening)
       .toEqual(['16:00', '24:00']);
-    expect(refusal(() => parseBusinessHours({ ...KUWAITI_DAY, evening: ['24:00', '24:00'] })).code)
-      .toBe('invalid_business_hours');
+
+    const openingAtEndOfDay = { ...KUWAITI_DAY, evening: ['24:00', '24:00'] };
+    expect(
+      BusinessHoursSchema.safeParse(openingAtEndOfDay).success,
+      'the shared schema accepts this — the position rule is the endpoint’s alone',
+    ).toBe(true);
+
+    const err = refusal(() => parseBusinessHours(openingAtEndOfDay));
+    expect(err.code).toBe('invalid_business_hours');
+    // NOT "is not a 24-hour time" — "24:00" plainly is one. The copy has to say
+    // why, or it reads as a bug in the validator.
+    expect(err.message).toContain('cannot open at "24:00"');
+    expect(err.message).toContain('closing time');
   });
 
   it('refuses the shape the shared schema refuses', () => {
@@ -60,10 +94,11 @@ describe('parseBusinessHours', () => {
     }
   });
 
-  it('refuses a string that is not a clock, which the shared schema allows', () => {
-    // BusinessHoursSchema is `z.tuple([z.string(), z.string()])` — two strings,
-    // not two times. This is the gap between the wire shape and what may be
-    // stored, and it is the gap that produced the availability 500.
+  it('answers a non-clock string with the session and the value, not the schema’s shape sentence', () => {
+    // The schema catches this now; the SENTENCE is still this function's job. zod
+    // does not know the field is a salon's trading day, so its own message is
+    // `businessHours must be { morning: … }` — true, and useless to somebody who
+    // typed one character wrong in one box.
     const err = refusal(() =>
       parseBusinessHours({ morning: ['banana', '13:00'], evening: ['16:00', '21:00'] }),
     );
@@ -81,7 +116,7 @@ describe('parseBusinessHours', () => {
     }
   });
 
-  it('names the session and the offending value, not just the field', () => {
+  it('names the session and the offending value for a bad closing time too', () => {
     const err = refusal(() =>
       parseBusinessHours({ morning: ['10:00', '13:00'], evening: ['16:00', 'late'] }),
     );
