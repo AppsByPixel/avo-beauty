@@ -759,6 +759,84 @@ MyFatoorah's split reporting, not against a single gross settlement figure.
 
 ---
 
+## Addendum — the session layer, which this contract never described
+
+This document specifies permissions in detail across 124 endpoints and was **silent on how
+anyone obtains a principal to carry them**. `grep -ci "auth/refresh" api-contract.md` returned
+0. **Eight** of the eleven endpoints in `api/src/routes/auth.ts` were undocumented — not
+deferred, not marked as owed, simply absent — and every `perms.*` rule in this file depends on
+them: both signups and all three sign-ins, refresh, sign-out, and the staff and platform
+password resets.
+
+The three that *were* already specified are the member reset pair and `POST /members/me/password`
+(§ Entities, above) — so the gap was the session layer proper, not password handling.
+
+Found during the verification session of 2026-08-25 and documented from the implementation, so
+this addendum is **descriptive** of what shipped, except where it says "ruling", which is
+normative and was decided at implementation time for a reason recorded here.
+
+### Sessions
+
+```
+POST /auth/member/session      { salonId, phone, password }        customer
+POST /auth/web/session         { salonId, username, password }     merchant dashboard
+POST /auth/platform/session    { username, password }              owner console
+POST /auth/member/signup       customer self-registration
+```
+
+**Ruling — merchant sign-in carries a workspace field and platform sign-in does not.** This is
+a visible departure from `AVO Login.dc.html`, which draws neither. `staff_user` is unique on
+`(salon_id, handle)`, because "noura" is not a unique person inside AVO — so a merchant sign-in
+cannot resolve a handle without knowing the salon. `platform_admin.handle` is globally unique,
+because there is exactly one platform, so the console needs no such field. The asymmetry is
+forced by the data model rather than chosen, and it is queue item 7 in `DECISIONS.md`.
+
+### Tokens
+
+```
+POST /auth/refresh    { refreshToken }  →  { accessToken, refreshToken }
+POST /auth/sign-out                     →  204
+```
+
+**Refresh tokens rotate.** The response returns a new refresh token as well as a new access
+token; the presented one does not survive. **Ruling — a replayed or unknown refresh token fails
+plainly and says nothing more.** An expired token and a stolen one are indistinguishable to the
+server, and any error that told them apart would be a disclosure.
+
+### Password reset — four endpoints, one rule
+
+```
+POST /auth/member/password-reset/request   { salonId, phone }  →  202     already specified
+POST /auth/member/password-reset           { token, password } →  204     already specified
+POST /auth/staff/password-reset            { token, … }                   NEW HERE
+POST /auth/platform/password-reset         { token, … }                   NEW HERE
+POST /members/me/password                                                 already specified
+```
+
+The member pair is restated for completeness only — it is specified above with its shapes and
+codes, and nothing here changes it. The **staff and platform** resets are the two this addendum
+adds.
+
+The request half answers **202 regardless of whether the account exists** — an endpoint that
+404s on an unknown phone number is an account-enumeration oracle.
+
+The redemption half takes a `token` and **the token is the credential**. Non-negotiable #6
+governs the whole family: a console or merchant admin only ever *sends a reset link* and never
+sets, sees or returns a password. `staff_user.password_hash` and `platform_admin.password_hash`
+are nullable precisely so that "invited, not yet signed in" is representable, and sign-in
+refuses a null hash without saying which half failed.
+
+**Ruling — an expired token and an unknown token both answer `invalid_reset_token`.**
+Distinguishing them would let a holder of a stale link learn that it had once been valid.
+
+### What is still not settled here
+
+The screen the reset link lands on is **not drawn anywhere in the bundle** — no redeem layout,
+no success or refusal copy — and the wallet has no inbound deep-link routing, so the link's
+shape (`avo://reset?token=…`) is a decision rather than a wiring gap. That is queue item 13 in
+`DECISIONS.md` and it needs a designer, a sending domain, and a deep-link ruling. Until all
+three exist the flow honestly ends at "Check WhatsApp", which is everything it can truthfully do.
+
 ## Addendum — Reports, and seven departures from the drawn export
 
 `GET /salons/{id}/reports/{kind}.csv?branch=&period=` is the row in § Operations. Implemented
