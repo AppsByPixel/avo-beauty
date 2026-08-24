@@ -4469,3 +4469,44 @@ a:hover {
 .salons__city {
   color: var(--avo-text-muted-strong);
 }
+
+/* --------------------------------------------- the wizard's done panel -- */
+
+.wiz__done {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* One button, so it sits where the primary always was rather than jumping left. */
+.wiz__foot[data-done] {
+  justify-content: flex-end;
+}
+
+.wiz__signin {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/*
+ * The handle in the display face and tabular figures: it is a credential an admin
+ * reads out or copies, so it wants to be unambiguous rather than pretty.
+ */
+.wiz__handle {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+}
+
+.wiz__workspace {
+  font-family: var(--avo-font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 4px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+}

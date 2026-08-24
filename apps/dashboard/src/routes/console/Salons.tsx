@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { fils } from '@avo/types';
 import { deriveBrandSet } from '@avo/tokens';
 import {
@@ -19,6 +19,7 @@ import {
   useOnboardSalon,
   usePlatformSalons,
   type LoyaltyMode,
+  type OnboardSalonResult,
   type PlatformSalon,
 } from '../../api/platformSalons.js';
 import { usePlatformSettings } from '../../api/platformConsole.js';
@@ -99,6 +100,21 @@ export function Salons() {
    * whose last step is guaranteed to fail.
    */
   const canOnboard = useConsoleSections().salons;
+
+  /**
+   * STABLE, and that is load-bearing rather than tidy. As an inline arrow this was
+   * a new function on every render of this screen, which re-ran the wizard's focus
+   * effect and moved the caret — see the note on that effect. A background refetch
+   * of the salon list was enough to do it.
+   *
+   * §2: focus "returns to the trigger on close". The button is still mounted — the
+   * courtesy gate that rendered it cannot change while the wizard is open — so this
+   * is a plain restore rather than a search for somewhere plausible to land.
+   */
+  const closeWizard = useCallback(() => {
+    setWizardOpen(false);
+    onboardButton.current?.focus();
+  }, []);
 
   const rows = (list.data?.pages ?? []).flatMap((p) => p.items);
   const query = search.trim().toLowerCase();
@@ -267,20 +283,7 @@ export function Salons() {
         figure its transactions still roll up into.
       </p>
 
-      {wizardOpen ? (
-        <OnboardWizard
-          onClose={() => {
-            setWizardOpen(false);
-            /*
-             * §2: focus "returns to the trigger on close". The button is still
-             * mounted — the courtesy gate that rendered it cannot change while the
-             * wizard is open — so this is a plain restore rather than a search for
-             * somewhere plausible to land.
-             */
-            onboardButton.current?.focus();
-          }}
-        />
-      ) : null}
+      {wizardOpen ? <OnboardWizard onClose={closeWizard} /> : null}
     </div>
   );
 }
@@ -456,6 +459,19 @@ const LOYALTY_NOTE: Record<LoyaltyMode, string> = {
 /** The design's stamps summary says "8 to reward", and the server's default is 8. */
 const DEFAULT_STAMP_TARGET = 8;
 
+/**
+ * Everything inside the panel a Tab can reach. `tabIndex >= 0` and a laid-out
+ * `offsetParent` rather than a tag allow-list, so a step that hides a control does
+ * not leave a hole in the cycle.
+ */
+function tabbableIn(panel: HTMLElement): HTMLElement[] {
+  return [
+    ...panel.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]',
+    ),
+  ].filter((el) => el.tabIndex >= 0 && el.offsetParent !== null);
+}
+
 function OnboardWizard({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(1);
   const [name, setName] = useState('');
@@ -469,9 +485,16 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
   const [depositTouched, setDepositTouched] = useState(false);
   const [deposit, setDeposit] = useState<number | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
+  /**
+   * The response, held rather than discarded, because the wizard has a fifth
+   * panel now — see `DoneStep`. `null` means "still onboarding"; non-null means the
+   * salon exists and every control that could change it is gone.
+   */
+  const [created, setCreated] = useState<OnboardSalonResult | null>(null);
 
   const create = useOnboardSalon();
   const dialog = useRef<HTMLDivElement>(null);
+  const doneButton = useRef<HTMLButtonElement>(null);
   const titleId = useId();
 
   /*
@@ -496,6 +519,23 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
    * §2: "focus moves to the sheet on open, is trapped while open, and returns to
    * the trigger on close. Esc closes."
    *
+   * SPLIT IN TWO, AND THE SPLIT IS A BUG FIX. This was one effect keyed on
+   * `[onClose]`, and `onClose` is an inline arrow in `Salons` — so it is a new
+   * function on every parent render, so the effect re-ran, so IT RE-FOCUSED. Two
+   * consequences, one of which I watched happen:
+   *
+   *   - the success panel has no control inside `.wiz__body`, so the re-run fell
+   *     through to `tabbable()[0]` — the ✕ — and yanked the caret off the Done
+   *     button a moment after the effect below had put it there. Driving it was the
+   *     only way to see that; the code reads correctly in isolation.
+   *   - worse, and latent: any background refetch of the salon list re-renders
+   *     `Salons`, which would have thrown a typing admin back to the first field
+   *     mid-step. Nothing in the happy path makes that visible.
+   *
+   * So: moving focus IN happens once, on mount. Trapping it is a listener that may
+   * re-bind as often as it likes. `onClose` is `useCallback`-stable in the parent
+   * now as well, which keeps the listener from churning at all.
+   *
    * NOT SHARED WITH `MerchantShell`'s TRAP, and deliberately: that one is written
    * around a roving tabindex (its nav has exactly one tabbable link and arrow keys
    * move it), so its `tabbable()` correctly resolves to a single element. A wizard
@@ -503,28 +543,28 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
    * lesser wrong until a third caller shows what the shared one should be.
    */
   useEffect(() => {
-    const mounted = dialog.current;
-    if (mounted === null) return;
-    const panel: HTMLDivElement = mounted;
-
-    const tabbable = () =>
-      [
-        ...panel.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]',
-        ),
-      ].filter((el) => el.tabIndex >= 0 && el.offsetParent !== null);
-
+    const panel = dialog.current;
+    if (panel === null) return;
     /*
      * LAND ON THE STEP, NOT ON THE CLOSE BUTTON. `tabbable()[0]` is the ✕ — it
      * comes first in DOM order — and driving the wizard showed the caret arriving
      * there on open: the first thing a keyboard user is offered is the exit. So the
-     * body's first control wins, and the ✕ is only the fallback for a step that has
-     * none (there is none today; step 4 is a summary plus the footer buttons, which
-     * are outside `.wiz__body`).
+     * body's first control wins, and the ✕ is only the fallback for a panel that
+     * has none.
      */
     const body = panel.querySelector<HTMLElement>('.wiz__body');
-    const inBody = body === null ? [] : tabbable().filter((el) => body.contains(el));
-    (inBody[0] ?? tabbable()[0] ?? panel).focus();
+    const inBody = body === null ? [] : tabbableIn(panel).filter((el) => body.contains(el));
+    (inBody[0] ?? tabbableIn(panel)[0] ?? panel).focus();
+    // Mount only. See the header — a re-run steals focus from wherever it went.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const mounted = dialog.current;
+    if (mounted === null) return;
+    const panel: HTMLDivElement = mounted;
+
+    const tabbable = () => tabbableIn(panel);
 
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') {
@@ -553,6 +593,18 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  /**
+   * The done panel replaces the whole body, and the effect above does not re-run —
+   * its job is the one-time trap. Without this the caret stays wherever "Create
+   * salon & send invite" was, on a button that no longer exists, and a screen
+   * reader is never told the panel changed. `DoneStep` also carries
+   * `role="status"`, so the facts are announced; this puts the caret on the only
+   * remaining control.
+   */
+  useEffect(() => {
+    if (created !== null) doneButton.current?.focus();
+  }, [created]);
 
   /**
    * `wizReady` in the design: `s.wName.trim() && s.wCity.trim() && s.wPhone.trim()`
@@ -613,10 +665,13 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
       },
       {
         /*
-         * The design closes the modal and the row appears. Nothing is announced,
-         * because nothing true is drawn to announce — see the header's flag.
+         * THE MODAL STAYS OPEN. It used to close here, which is what the design's
+         * prototype does — and that is the behaviour DECISIONS.md § "The wizard
+         * gets a success state" overturned: closing left the drawn promise
+         * ("sends the owner a WhatsApp invite") as the last thing the admin read,
+         * over a message no sender will pick up.
          */
-        onSuccess: () => onClose(),
+        onSuccess: (result) => setCreated(result),
         /*
          * A brand refusal sends the admin back to the field that caused it. Any
          * other refusal stays on review, where `WriteError` renders the server's
@@ -648,10 +703,18 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
           <div className="wiz__headrow">
             <div>
               <h2 className="wiz__title avo-display" id={titleId}>
-                Onboard a salon
+                {/* INVENTED heading — see `DoneStep`. */}
+                {created === null ? 'Onboard a salon' : 'Salon created'}
               </h2>
               <p className="wiz__steplabel">
-                Step {step} of 4 · {STEP_LABELS[step - 1]}
+                {created === null
+                  ? `Step ${step} of 4 · ${STEP_LABELS[step - 1]}`
+                  : /*
+                     * FACT ONE, in the header: the salon exists, by name and id. The
+                     * id is not decoration — it is the workspace the owner types at
+                     * sign-in, which is why it appears again beside the handle below.
+                     */
+                    `${created.salon.name} · ${created.salon.id}`}
               </p>
             </div>
             <Button variant="quiet" className="wiz__close" onClick={onClose} aria-label="Close">
@@ -668,15 +731,22 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
             role="progressbar"
             aria-valuemin={1}
             aria-valuemax={4}
-            aria-valuenow={step}
+            aria-valuenow={created === null ? step : 4}
             aria-label="Onboarding progress"
           >
-            <span className="wiz__progressfill" style={{ width: `${(step / 4) * 100}%` }} />
+            <span
+              className="wiz__progressfill"
+              style={{ width: created === null ? `${(step / 4) * 100}%` : '100%' }}
+            />
           </div>
         </div>
 
         <div className="wiz__body">
-          {step === 1 ? (
+          {created !== null ? (
+            <DoneStep created={created} />
+          ) : null}
+
+          {created === null && step === 1 ? (
             <div className="wiz__stack">
               <TextField
                 label="Salon name"
@@ -727,7 +797,7 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
             </div>
           ) : null}
 
-          {step === 2 ? (
+          {created === null && step === 2 ? (
             <div className="wiz__stack">
               <p className="wiz__hint">
                 Modules start off. Turn on only what this salon has agreed to run.
@@ -776,7 +846,7 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
             </div>
           ) : null}
 
-          {step === 3 ? (
+          {created === null && step === 3 ? (
             <div className="wiz__stack">
               <p className="wiz__hint">
                 One mechanic per salon. It can be switched later, but not applied
@@ -860,7 +930,7 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
             </div>
           ) : null}
 
-          {step === 4 ? (
+          {created === null && step === 4 ? (
             <div>
               <dl className="wiz__summary">
                 <SummaryRow label="Salon" value={`${name.trim()} · ${city.trim()}`} />
@@ -914,17 +984,35 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
           ) : null}
         </div>
 
-        <div className="wiz__foot">
-          <Button variant="secondary" onClick={() => (step > 1 ? toStep(step - 1) : onClose())}>
-            Back
-          </Button>
-          <Button onClick={onPrimary} disabled={!ready || create.isPending}>
-            {step === 4
-              ? create.isPending
-                ? 'Creating…'
-                : 'Create salon & send invite'
-              : 'Continue'}
-          </Button>
+        {/*
+          ONE BUTTON WHEN IT IS DONE, and no Back. The salon exists; there is
+          nothing to go back to and nothing left to edit from here — the per-salon
+          editor has no endpoint yet, so offering "Back" would be a control that
+          either lies or resubmits. Dismissing is the only remaining action, and
+          `onClose` returns focus to the trigger exactly as Esc already does.
+        */}
+        <div className="wiz__foot" data-done={created === null ? undefined : ''}>
+          {created === null ? (
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => (step > 1 ? toStep(step - 1) : onClose())}
+              >
+                Back
+              </Button>
+              <Button onClick={onPrimary} disabled={!ready || create.isPending}>
+                {step === 4
+                  ? create.isPending
+                    ? 'Creating…'
+                    : 'Create salon & send invite'
+                  : 'Continue'}
+              </Button>
+            </>
+          ) : (
+            <Button ref={doneButton} onClick={onClose}>
+              Done
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -959,6 +1047,98 @@ function SummaryRow({ label, value }: { label: string; value: ReactNode }) {
     <div className="wiz__summaryrow">
       <dt>{label}</dt>
       <dd>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The wizard's fifth panel. EVERY STRING HERE IS `INVENTED` AND AUTHORISED —
+ * `DECISIONS.md` § "The wizard gets a success state, and the copy is authorised"
+ * (`9620372`). English only: `design/README.md` § Known gaps 1 makes the owner
+ * console English-only, so there is no Arabic half to write.
+ *
+ * WHY IT EXISTS, because "keep the copy verbatim" would otherwise say close the
+ * modal and say nothing. That rule governs copy that EXISTS, and the design draws
+ * no success state at all — its prototype closes and appends a row. Doing the same
+ * leaves the review step's drawn promise ("Creating the salon sends the owner a
+ * WhatsApp invite with their dashboard sign-in") as the last thing an AVO admin
+ * read, over an invite no process will pick up. She then tells a salon owner to
+ * check WhatsApp for a message that will never arrive. That is not a missing
+ * flourish, it is a false impression shipped to AVO's own staff.
+ *
+ * THREE FACTS AND NO PROMISES, which is the whole specification:
+ *
+ *   1. THE SALON EXISTS — name and id, in the panel header. The id doubles as the
+ *      workspace the owner types at sign-in, so it is repeated beside the handle.
+ *   2. THE OWNER'S SIGN-IN HANDLE. `owner.handle` has been in the response since
+ *      the endpoint shipped and NOTHING RENDERED IT. It is the actionable fact:
+ *      without it an admin has to go and find it, and there is no console screen
+ *      that shows salon staff.
+ *   3. THE INVITE IS QUEUED, DELIVERY NOT ENABLED. Stated as a state of the
+ *      system, not an apology and not a workaround. "Queued" is exact rather than
+ *      diplomatic: `onboardSalon` writes a real `staff_password_reset` outbox row
+ *      inside the same transaction and leaves `sent_at` NULL, and its own audit
+ *      line says "WhatsApp invite queued to …". The response's `delivered: false`
+ *      is the same fact on the wire.
+ *
+ * WHAT IS DELIBERATELY *NOT* SAID:
+ *
+ *   - No instruction about how the owner gets a password. #6 allows a link and
+ *     nothing else, the console has no screen that issues one for salon staff, and
+ *     inventing "send them a reset link" would name an action that does not exist
+ *     on this surface.
+ *   - The review step's other drawn promise — "opens a 14-day trial before the
+ *     first invoice" — is NOT repeated. There is no trial, subscription or invoice
+ *     column in the schema; `onboardSalon`'s own header says so. Restating it here
+ *     would be inventing a second false claim while fixing the first.
+ *   - The invite's 60-minute expiry is not shown. It is true and it is moot: the
+ *     message was never sent, so how long it stays valid changes nothing about the
+ *     admin's next move. Raised with trunk rather than added unasked.
+ *
+ * REVERSAL, and this is the part that keeps the change cheap: when a sender lands,
+ * `INVITE_STATE` below is the only string that changes. The other two facts are
+ * facts either way.
+ */
+
+/** INVENTED. The lead line — what did NOT happen, before the details of what did. */
+const DONE_LEAD = 'Nothing has been sent to the owner yet. Their sign-in details are below.';
+
+/**
+ * INVENTED. The delivery clause, isolated so the reversal is one edit. Not
+ * "failed" and not "couldn't" — nothing was attempted, and an apology would
+ * misdescribe a system that is working as configured.
+ */
+const INVITE_STATE = 'Queued — WhatsApp delivery is not enabled yet';
+
+function DoneStep({ created }: { created: OnboardSalonResult }) {
+  return (
+    /*
+     * `role="status"`, not `role="alert"`. This is the successful outcome of
+     * something the admin just did, announced once when it replaces the body —
+     * `alert` is for an interruption, and interaction-spec.md §4 keeps the two
+     * apart. The whole panel is the announcement because the three facts only mean
+     * something together.
+     */
+    <div className="wiz__done" role="status">
+      <p className="wiz__hint">{DONE_LEAD}</p>
+      <dl className="wiz__summary">
+        <SummaryRow label="Salon" value={created.salon.name} />
+        {/*
+          The handle AND the workspace, because the merchant sign-in takes both —
+          `staff_user_salon_handle_uq` is on (salon_id, handle), so "@owner" alone
+          identifies nobody. Giving one without the other is half a credential.
+        */}
+        <SummaryRow
+          label="Owner sign-in"
+          value={
+            <span className="wiz__signin">
+              <span className="wiz__handle">{created.owner.handle}</span>
+              <span className="wiz__workspace">workspace {created.salon.id}</span>
+            </span>
+          }
+        />
+        <SummaryRow label="Invite" value={INVITE_STATE} />
+      </dl>
     </div>
   );
 }
