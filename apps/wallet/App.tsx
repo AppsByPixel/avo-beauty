@@ -50,7 +50,7 @@ import { PREFERENCES_KEY } from './src/state/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { QrOverlay } from './src/components/QrOverlay';
 import { paymentCodeView, type PaymentCodeView } from './src/domain/paymentCode';
-import { payTabAction } from './src/domain/payTab';
+import { enlargedCodeIsOpen, payTabAction } from './src/domain/payTab';
 import { salonName } from './src/domain/names';
 import { useWalletToken } from './src/state/useWalletToken';
 import { AccountScreen } from './src/screens/AccountScreen';
@@ -312,16 +312,26 @@ function Wallet({
     unavailable:
       home.status === 'offline' ? 'offline' : walletToken.failed ? 'failed' : null,
   });
-  /*
-    `interaction-spec.md` §4 takes the QR off the screen when the wallet goes
-    offline. An enlarged one left standing would be the same stale code, at
-    246pt, in front of a cashier — so a code that stops being enlargeable closes
-    the overlay that is already up, rather than waiting for her to notice.
-  */
+  /**
+   * WHETHER THE ENLARGED CODE IS UP, AND WHY IT IS A DERIVATION AND NOT A FLAG.
+   *
+   * `payRequested` is only ever "she asked". Whether anything OPENS is
+   * `enlargedCodeIsOpen`, which ands that request with `codeView.canEnlarge` —
+   * so §4's suppression is not something this component can be talked out of.
+   * The whole account is in `domain/payTab.ts`; the short version is that trunk
+   * mutated the handler below to `if (true)` and the suite stayed green, and a
+   * property that survives only because nobody edited a line is not enforced.
+   *
+   * This replaces `useEffect(() => { if (!canEnlarge) setEnlarged(false) })`.
+   * The effect closed a live overlay one render AFTER the code went stale;
+   * derivation closes it in the same render. The effect that remains drops the
+   * REQUEST, so that a code which comes back does not pop the overlay open again
+   * without her asking — a convenience, not the guard.
+   */
   const canEnlarge = codeView.canEnlarge;
-  const [enlarged, setEnlarged] = useState(false);
+  const [payRequested, setPayRequested] = useState(false);
   useEffect(() => {
-    if (!canEnlarge) setEnlarged(false);
+    if (!canEnlarge) setPayRequested(false);
   }, [canEnlarge]);
 
   const goHome = useCallback(() => {
@@ -340,13 +350,15 @@ function Wallet({
    * app already explains itself — `qrOfflineTitle` / `qrFailedTitle` sit on the
    * payment-code panel in the design's own words. Flagged for DECISIONS.md; this
    * is the minimum honest answer, not a settled one.
+   *
+   * Read once into `action` and applied twice, rather than branched on twice:
+   * the two arms are the two halves of ONE answer and must not be able to
+   * disagree with each other.
    */
   const onPay = () => {
-    if (payTabAction(codeView) === 'enlarge') {
-      setEnlarged(true);
-      return;
-    }
-    goHome();
+    const action = payTabAction(codeView);
+    setPayRequested(action === 'enlarge');
+    if (action === 'home') goHome();
   };
 
   const startReschedule = useCallback((booking: BookingView) => {
@@ -377,7 +389,13 @@ function Wallet({
       onToast={toast.show}
       codeView={codeView}
       codeSecondsRemaining={walletToken.secondsRemaining}
-      onEnlargeCode={() => setEnlarged(true)}
+      /*
+        design:254 and design:627 are the same handler (`openQr`), so the panel's
+        tap is the same REQUEST the Pay tab makes — and it passes the same gate
+        at the prop below. It is reached only from the `ready` panel, so it never
+        asks for what is not there anyway.
+      */
+      onEnlargeCode={() => setPayRequested(true)}
       onRetryCode={walletToken.refresh}
     />
   );
@@ -544,9 +562,15 @@ function Wallet({
       <PaymentCodeLayer
         codeView={codeView}
         snapshot={snapshot}
-        open={enlarged}
+        /*
+          THE GUARD IS HERE, AT THE PROP, and it is `domain/payTab.ts`'s to give.
+          Not `payRequested` — that is only "she asked". §4's suppression is
+          anded in at the moment of rendering, so no handler above can open a
+          code this app is not allowed to show. See `enlargedCodeIsOpen`.
+        */
+        open={enlargedCodeIsOpen(payRequested, codeView)}
         secondsRemaining={walletToken.secondsRemaining}
-        onClose={() => setEnlarged(false)}
+        onClose={() => setPayRequested(false)}
       />
 
       <Toast message={toast.message} />

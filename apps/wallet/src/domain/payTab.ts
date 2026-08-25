@@ -61,3 +61,42 @@ export type PayTabAction =
 export function payTabAction(view: PaymentCodeView): PayTabAction {
   return view.canEnlarge ? 'enlarge' : 'home';
 }
+
+/**
+ * Whether the enlarged code is ACTUALLY on the screen — the value handed to
+ * `QrOverlay`'s `open` prop, and the last word on the subject.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THIS EXISTS BECAUSE `payTabAction` ALONE IS A GUARD ON TRUST, and trunk proved
+ * it with a mutation I had not run: change the Pay handler's
+ * `if (payTabAction(codeView) === 'enlarge')` to `if (true)` and all 434 tests
+ * stayed green. The rule was tested to the hilt; nothing tested that the button
+ * asks it. Someone could inline or delete the call and the suite would applaud —
+ * and the resulting defect is the exact one §4 exists to prevent, a stale code
+ * held up at a counter where it "looks like the salon's fault".
+ *
+ * This workspace has no renderer (see `domain/names.ts`), so the honest fix is
+ * not a test of the call site — it is to make the call site unable to cause the
+ * harm. `open` is DERIVED rather than stored:
+ *
+ *     open  =  she asked for it   AND   there is a code to show
+ *
+ * The second conjunct is not the component's to skip. Mutate the handler to
+ * `if (true)` now and the request flag flips, but `enlargedCodeIsOpen(true,
+ * offlineView)` is still false and no QR renders. What breaks instead is the
+ * fallback to Home — visible, recoverable, and not somebody's money.
+ *
+ * IT ALSO REMOVES A FRAME, and only a frame — the claim is worth stating
+ * exactly. The rule used to be enforced by an effect,
+ * `useEffect(() => { if (!canEnlarge) setEnlarged(false) })`, which closes a
+ * live overlay one render AFTER the code went stale. Driven: a code enlarged
+ * over the Shop tab closed 13s after the mint began failing — but those 13s are
+ * the wait for the SERVER's expiry to lapse and the retry to fail, and
+ * derivation does not shorten them. What it removes is the render in between,
+ * where a code the app had ALREADY judged dead was still 246pt on the screen.
+ * That frame is the one a scanner samples in.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export function enlargedCodeIsOpen(requested: boolean, view: PaymentCodeView): boolean {
+  return requested && view.canEnlarge;
+}
