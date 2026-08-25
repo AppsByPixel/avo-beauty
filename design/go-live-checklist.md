@@ -310,6 +310,18 @@ unless it is explicitly deferred in writing.
         source and demands a probe for each is still the thing that would make this row
         self-maintaining, and it still does not exist. Not ticked.
 - [ ] Rate limiting on auth, top-ups, scans, support tickets
+      <!-- 2026-08-26, trunk. Top-ups, scans and support tickets ARE limited and
+      verified: enforceTopUpLimits (topup.ts:344), chargeScannerBudget for
+      scan/charge/void (staff.ts:819, charges.ts:125, charges.ts:320),
+      enforceTicketLimits (support.ts:1090). Under "auth", signup and password
+      reset are limited (auth.ts:211, :840) and staff PIN sign-in is fully
+      protected — device limit, then account lockout (auth.ts:~1272).
+      NOT TICKED because the three PASSWORD sign-in endpoints have no limit, no
+      lockout and no attempt record: POST /auth/member/session, /auth/web/session
+      and /auth/platform/session. Non-negotiable #6 names PINs and is silent on
+      passwords, which is the likely cause. There is no global limiter in app.ts.
+      Lane A is fixing it; retick only when all three are covered AND a locked
+      real account is indistinguishable from an absent one. -->
       - Lane D, 2026-08-19 — **one of the four named surfaces is limited. Not ticked.**
       - **auth — done, and driven.** Two independent limiters. Staff PIN: per-device rate limit
         plus lockout after N failures (`scanner.test.ts` § "PIN rate limiting", § "PIN lockout"),
@@ -334,6 +346,19 @@ unless it is explicitly deferred in writing.
 - [ ] Secrets in a manager, not in env files in the repo
 - [ ] Penetration test or an external security review completed on the money paths
 - [ ] Audit log verified append-only at the database level; 7-year retention configured
+      <!-- 2026-08-26, trunk. FIRST HALF VERIFIED EMPIRICALLY, both layers
+      independently, against avo_lane_c — not read off the migration:
+        as avo_app (the role the API connects as): UPDATE, DELETE and TRUNCATE
+          all "permission denied for table audit_log" (0001 revokes all, grants
+          only SELECT + INSERT);
+        as avo (owner, whom privileges do not stop): all three refused by the
+          trigger — "audit_log is append-only: UPDATE is not permitted on this
+          table", HINT "Correct a wrong entry by appending a correcting one".
+      The second layer was tested separately on purpose; this file's own
+      DECISIONS entry "Defence in depth hides the absence of its own layers"
+      exists because a layer nobody exercises can be missing.
+      NOT TICKED: the 7-year retention half is a deployment/ops concern and is
+      not configured anywhere. Tick only when retention is real. -->
       - Lane D, 2026-08-19 — **append-only is proven at the database level. Retention is not
         configured at all. Two clauses, one met, so not ticked.**
       - Append-only, driven as the application role: `account.test.ts` and `scanner.test.ts`
