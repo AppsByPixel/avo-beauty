@@ -243,12 +243,40 @@ export async function revokeAllSessions(
   return rows.length;
 }
 
-/** Is this session still usable? Checked on every authenticated request. */
-export async function sessionIsLive(db: Db, sessionId: string): Promise<boolean> {
+/**
+ * The session row, if it is still usable. Read on every authenticated request.
+ *
+ * IT RETURNS THE DEVICE, which is the only reason it exists rather than
+ * `sessionIsLive` below. The scanner limiter keys on `(salonId, deviceId)` — see
+ * services/scannerLimit.ts — and the device is a property of the SESSION, not of
+ * the staff row and not of anything a client sends. `resolvePrincipal` was already
+ * making this exact query once per request to answer "is it live", so widening the
+ * projection carries the device out on the same round trip instead of adding a
+ * second one to the hot path.
+ *
+ * The device must come from here and nowhere else. A header would make the key
+ * client-chosen, and a limiter whose key an attacker can edit is not a limiter. On
+ * this surface the device is part of the credential: a PIN is scoped to
+ * device+salon, and `session_scanner_is_device_scoped` refuses a scanner session
+ * without one.
+ */
+export async function liveSession(
+  db: Db,
+  sessionId: string,
+): Promise<{ id: string; deviceId: string | null } | null> {
   const rows = await db
-    .select({ id: session.id })
+    .select({ id: session.id, deviceId: session.deviceId })
     .from(session)
     .where(and(eq(session.id, sessionId), isNull(session.revokedAt), sql`${session.expiresAt} > now()`))
     .limit(1);
-  return rows.length > 0;
+  return rows[0] ?? null;
+}
+
+/**
+ * Is this session still usable? The predicate on its own, for a caller that wants
+ * the question and not the row. `resolvePrincipal` uses `liveSession` instead,
+ * because it also needs the device.
+ */
+export async function sessionIsLive(db: Db, sessionId: string): Promise<boolean> {
+  return (await liveSession(db, sessionId)) !== null;
 }

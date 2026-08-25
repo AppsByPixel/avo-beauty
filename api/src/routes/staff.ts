@@ -56,6 +56,7 @@ import { requireString } from '../money/validate';
 import { peekToken } from '../services/walletToken';
 import { writeAudit } from '../services/audit';
 import { counterEnvelope } from '../services/counter';
+import { chargeScannerBudget } from '../services/scannerLimit';
 import { serialiseMember, staffPinSession } from './auth';
 
 /**
@@ -795,6 +796,27 @@ export async function registerStaffRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post('/scans', async (req, reply) => {
     const p = requireScannerPerm(req, 'scanner');
+
+    /**
+     * THE TILL'S BUDGET, second — after authority and before the token is even
+     * read off the body.
+     *
+     * The ordering rule this endpoint's own header states ("perms.scanner is
+     * checked BEFORE the token is looked up… answering a 410 to an unauthorised
+     * caller has already told them whether that code exists") applies to the
+     * limiter too, one step down: a caller who has spent the budget must not learn
+     * whether a token resolves either. Authority, then budget, then the token.
+     *
+     * There is no idempotency key and no transaction here, so unlike `POST
+     * /charges` and `POST /voids` this is simply first. Nothing on this path moves
+     * money — the token is peeked, never consumed — so a refusal here costs a
+     * re-scan and nothing else.
+     *
+     * `POST /scans` is the reason the budget is generous. It is the one endpoint a
+     * staff member fires repeatedly for a single customer, because re-reading a QR
+     * before the artist confirms is deliberately free.
+     */
+    await chargeScannerBudget(db, p, 'scan');
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const token = typeof body.token === 'string' ? body.token.trim() : '';

@@ -72,6 +72,7 @@ import { env } from '../env';
 import { claimKey, completeKey, isUniqueViolation } from './idempotency';
 import { decideEarning, loadPromotionInputs } from './promotions';
 import { platformCommissionFor } from './platformSettings';
+import { enforceTopUpLimits } from './topupLimit';
 import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
 
@@ -321,6 +322,26 @@ export async function createTopUp(
 ): Promise<TopUpIntentPublic> {
   return db.transaction(async (tx) => {
     const keyId = await claimKey(tx, ctx.idempotency);
+
+    /**
+     * Her budget, AFTER the claim and before anything is priced or sent to the
+     * gateway.
+     *
+     * AFTER THE CLAIM, deliberately: a retry under the same key is a wallet that
+     * lost the response to an intent that already exists — possibly one she is
+     * mid-payment on at the hosted page — and `claimKey` has already raised for
+     * that so `routes/topups.ts` can replay the stored intent. A limiter in front
+     * of it would answer 429 to "did my top-up start?" and strand her.
+     *
+     * ON `tx`, not on `db`, and that is the opposite of what
+     * services/scannerLimit.ts does — the two files disagree on purpose and both
+     * say why. The scanner's counter is a separate table that must SURVIVE the
+     * rollback of a refused charge, because refusals are the traffic being
+     * bounded. This counter is `topup_intent` itself, so the count and the insert
+     * it gates belong to one snapshot, and a rolled-back intent correctly costs
+     * nothing: it reached no payment provider.
+     */
+    await enforceTopUpLimits(tx, ctx.principal);
 
     const memberRows = await tx
       .select()

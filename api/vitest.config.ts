@@ -82,6 +82,20 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     /**
+     * `*.int.test.ts` IS NOT A UNIT SPEC AND MUST NOT RUN HERE.
+     *
+     * Vitest's default `include` would sweep it up, and it would then run against
+     * the deliberately unreachable URL below. It would skip rather than fail —
+     * those specs check `AVO_INT_DATABASE_URL` before importing anything — but a
+     * suite that reports "skipped" in the middle of `pnpm check` is a suite people
+     * learn to read past. It has its own config, its own script and its own
+     * reason: see `vitest.int.config.ts`.
+     *
+     * The default exclusions are re-stated because naming `exclude` replaces them
+     * rather than adding to them.
+     */
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.int.test.ts'],
+    /**
      * The environment a UNIT spec in this package may assume, and nothing more.
      *
      * These are values, not connections. `db/client.ts` builds a `postgres()`

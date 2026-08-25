@@ -223,3 +223,57 @@ export const signupAttempt = pgTable(
     index('signup_attempt_salon_idx').on(t.salonId, t.createdAt.desc()),
   ],
 );
+
+/**
+ * The till's budget — one row per attempt at `POST /scans`, `POST /charges` or
+ * `POST /voids`.
+ *
+ * THIRD SIBLING OF `pin_attempt` AND `signup_attempt`, and the family resemblance
+ * is the argument. `pin_attempt` exists so "N attempts from this device in the
+ * last minute" is answerable independently of any account's own counter;
+ * `signup_attempt` exists so the same question is answerable when there is no
+ * account yet. This one exists because the three endpoints that read a customer's
+ * card or move her money had no budget at all, and nothing that already existed
+ * could count them: `transaction` gets a row only when a charge SUCCEEDS, and a
+ * flood of refusals is the traffic worth bounding; `audit_log` is merchant-facing
+ * and `POST /scans` writes to it not at all; `pin_attempt` counts only FAILED
+ * sign-ins and so is silent about everything after one.
+ *
+ * KEYED ON (salon_id, device_id) — the same pair `pin_attempt_device_idx` indexes,
+ * and NEVER on `req.ip`. A salon is one NAT, so an address-keyed budget is a
+ * salon-wide budget the busiest till spends on behalf of the others; and
+ * `app.ts` runs with `trustProxy` OFF until `TRUST_PROXY` names the real proxy, so
+ * `req.ip` behind a balancer is the balancer. The device is not telemetry on this
+ * surface — a staff PIN is scoped to device+salon, and
+ * `session_scanner_is_device_scoped` refuses a scanner session without one.
+ *
+ * NO `succeeded` COLUMN, exactly as `signup_attempt` has none and for the same
+ * mechanical reason: the row is written BEFORE the work, or a burst of
+ * simultaneous requests all read a count of zero and all proceed. Migration 0038
+ * revokes the UPDATE that would let the outcome be filled in afterwards, and
+ * carries the rest — including why the key is the till and not the staff member.
+ */
+export const scannerAttempt = pgTable(
+  'scanner_attempt',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    salonId: text('salon_id')
+      .notNull()
+      .references(() => salon.id, { onDelete: 'restrict' }),
+    /**
+     * Null only where the server cannot attribute a device — in production
+     * unreachable, since every principal that reaches these endpoints holds a
+     * device-scoped `scanner` session. Counted rather than exempted when it does
+     * happen, and the whole class shares one bucket: `signup_attempt.ip_address`
+     * takes the same position for the same reason.
+     */
+    deviceId: text('device_id'),
+    /** 'scan' | 'charge' | 'void'. A CHECK, not an enum — migration 0038 says why. */
+    action: text('action').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('scanner_attempt_device_idx').on(t.salonId, t.deviceId, t.createdAt.desc()),
+    check('scanner_attempt_action_known', sql`${t.action} IN ('scan', 'charge', 'void')`),
+  ],
+);

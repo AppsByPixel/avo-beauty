@@ -8,6 +8,9 @@
  *   DELETE /salons/{id}/products/{pid}  perms.shop — retires, does not delete
  *   GET    /salons/{id}/bookings        perms.appointments
  *   PATCH  /salons/{id}                 perms.loyalty
+ *   PATCH  /v1/salons/{id}/social/{linkId}   perms.loyalty — and that name is
+ *                                       wrong; see the route for what should
+ *                                       replace it and why this lane may not.
  *
  * PATCH is the one that matters most. The loyalty editor writes through it, and
  * build-plan.md calls a half-published tier ladder a money bug — a member who
@@ -22,7 +25,7 @@
  * merchant-only in it.
  */
 
-import type { Fils } from '@avo/types';
+import { socialUrl, type Fils } from '@avo/types';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
@@ -46,6 +49,14 @@ import { assertBookingReadable, assertShopReadable } from '../services/moduleAcc
 import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
+import {
+  applySocialPatch,
+  isSocialId,
+  parseSocialHandle,
+  parseSocialLinks,
+  parseSocialOn,
+  SOCIAL_IDS,
+} from '../services/socialLinks';
 import { serialiseBooking, type BookingRow } from '../services/booking';
 import { computeMetrics, parsePeriod } from '../services/metrics';
 import { parseTimeZone } from '../time/zone';
@@ -523,6 +534,24 @@ export function buildSalonPatch(
   if ('businessHours' in body) {
     patch.businessHours = parseBusinessHours(body.businessHours);
   }
+  /**
+   * AND `social` WAS THE OTHER ONE. Same door, same class of defect, closed the
+   * same way and one release later than it should have been.
+   *
+   * `social` has been in `MERCHANT_EDITABLE` since this route was written and
+   * nothing checked it, so the loop above handed `{"social": "banana"}` straight
+   * to a jsonb column — and `visibleSocialLinks` in `@avo/types` then calls
+   * `.flatMap` on whatever came back, in the WALLET, on the Help screen. Exactly
+   * the `businessHours` failure one line up: one bad Settings save breaking a
+   * screen three screens away from the field that was typed wrong.
+   *
+   * The parser is shared with `PATCH /v1/salons/{id}/social/{linkId}` rather than
+   * written twice — see services/socialLinks.ts, which also records why this
+   * whole-array door is kept rather than narrowed away, and what should replace it.
+   */
+  if ('social' in body) {
+    patch.social = parseSocialLinks(body.social);
+  }
   if ('modules' in body) {
     // `modules` is a wire shape, not a column. Remove it before the UPDATE or
     // Drizzle would try to set a column that does not exist.
@@ -623,6 +652,198 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     // The SAME shape `GET` answers. See `serialiseSalon`.
     return reply.send(serialiseSalon(after, await openBranchesOf(after.id)));
   });
+
+  /**
+   * ======================================================================
+   * PATCH /v1/salons/{id}/social/{linkId}   { handle?, on? }
+   * ======================================================================
+   * api-contract.md names this endpoint twice — § SocialLink and § Operations,
+   * "Merchant | Social links" — and it did not exist. The only way to change a
+   * handle was to send the whole `social` array through `PATCH /salons/{id}`
+   * above: a different endpoint, a different granularity and a different
+   * permission from the one specified. Aftab's call (DECISIONS.md #17) is to build
+   * what the contract says, because the contract is the specification and the
+   * array field was the improvisation.
+   *
+   * THE PRECEDENT IS THE PRODUCT CATALOGUE, twenty lines further down this file,
+   * and its comment is the argument here verbatim: a bulk write makes "one
+   * keystroke in one row a rewrite of every product the salon sells, so two
+   * managers editing different rows would silently overwrite each other". Four
+   * social channels instead of forty products; identical failure. The design's own
+   * reference implementation already works per link —
+   * `API.setSocial(so.id, { handle })` on each keystroke,
+   * `API.setSocial(so.id, { on })` on each toggle — so this is the shape the
+   * screen was drawn against.
+   *
+   * ---------------------------------------------------------------------
+   * THE PERMISSION IS `perms.loyalty`, AND THAT NAME IS WRONG. REPORTED.
+   * ---------------------------------------------------------------------
+   * Social links are a SETTINGS concern — `AVO Merchant Dashboard.dc.html` draws
+   * them in Settings, between the customer-app preview and Optional modules — and
+   * every other write on that screen is already gated on `perms.loyalty`:
+   * `PATCH /salons/{id}` and the three branch routes below, which carry the same
+   * note. The nine permissions in api-contract.md § StaffUser have no "settings"
+   * among them.
+   *
+   * So the choice is between the gate the rest of the screen uses and inventing a
+   * tenth permission, and inventing one is a contract change this lane may not
+   * make. Gating on anything WEAKER would be the real defect: a staff member who
+   * cannot change the deposit would be able to repoint the salon's public
+   * Instagram, which is the salon's identity in every customer's app.
+   *
+   * `perms.marketing` was considered and rejected. It gates campaigns — messages
+   * AVO sends to customers on a merchant's behalf, under caps and quiet hours and
+   * platform approval (non-negotiable #8) — and a handle in a Settings form shares
+   * none of that machinery. Putting social links there would make `marketing` mean
+   * two unrelated things and would hand campaign authority to whoever is trusted to
+   * type an Instagram name.
+   *
+   * ESCALATED TO TRUNK, not decided here: the honest name for this gate is
+   * `perms.settings`, and adding it is a four-way break — `PERMISSION_NAMES`,
+   * `PERM_COLUMN`, the `staff_user` columns, the Accounts → Team chips and the
+   * permission census all move together. Until that decision is made, `loyalty` is
+   * the gate the screen already has.
+   * ---------------------------------------------------------------------
+   *
+   * THE WHOLE-ARRAY FIELD STILL EXISTS, deliberately, and is now validated for the
+   * first time. services/socialLinks.ts carries that decision in full: `social`
+   * lives in `MERCHANT_EDITABLE`, `PLATFORM_EDITABLE` is that set plus two fields,
+   * and a separate session is building the console salon editor in
+   * `apps/dashboard/` right now — so removing the field would delete a capability
+   * out from under another lane's in-flight work. The recommendation to trunk is
+   * that it become console-only once the dashboard uses this endpoint.
+   */
+  app.patch<{ Params: { id: string; linkId: string } }>(
+    '/v1/salons/:id/social/:linkId',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'loyalty');
+      requireSameSalon(p, req.params.id);
+
+      /**
+       * An unknown channel is a 400 naming the four, not a 404. A 404 would read
+       * as "this salon has no Instagram", which is a true-sounding answer to a
+       * question that was never asked — the id space is closed by the contract, so
+       * a value outside it is a malformed request rather than a missing thing.
+       */
+      const linkId = req.params.linkId;
+      if (!isSocialId(linkId)) {
+        throw badRequest(
+          'unknown_social_link',
+          `Unknown social channel "${linkId}". AVO supports ${SOCIAL_IDS.join(', ')}.`,
+        );
+      }
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const unknown = Object.keys(body).filter((k) => k !== 'handle' && k !== 'on');
+      if (unknown.length > 0) {
+        /**
+         * `label` is the field somebody will try, and it is refused BY NAME here
+         * rather than ignored. It is derived from the id — see
+         * services/socialLinks.ts § SOCIAL_LABELS — because it renders under the
+         * icon in every customer's app and a merchant-settable string there is
+         * arbitrary copy in the wallet with no review path.
+         */
+        throw badRequest(
+          'invalid_field',
+          `Not editable: ${unknown.join(', ')}. A social link has a handle and an on switch.`,
+        );
+      }
+
+      const patch: { handle?: string; on?: boolean } = {};
+      if ('handle' in body) patch.handle = parseSocialHandle(linkId, body.handle);
+      if ('on' in body) patch.on = parseSocialOn(body.on);
+      if (Object.keys(patch).length === 0) {
+        throw badRequest('invalid_request', 'Send a handle, an on switch, or both.');
+      }
+
+      /**
+       * ONE TRANSACTION WITH THE SALON ROW LOCKED, and that lock is the endpoint.
+       *
+       * Without it this is a read-modify-write of a jsonb array, which is exactly
+       * the overwrite the per-link granularity exists to prevent — performed by
+       * the thing that was supposed to prevent it. Two managers saving Instagram
+       * and WhatsApp in the same instant would both read the array as it was, and
+       * whichever committed second would put the other's channel back.
+       *
+       * `FOR UPDATE` serialises them, so the second reads the first's result and
+       * both edits survive. It is the same mechanism `performCharge` uses on the
+       * member row for the same class of reason: the value this transaction reads
+       * is the value it writes.
+       */
+      const { link, after } = await db.transaction(async (tx) => {
+        const [before] = await tx
+          .select({ social: salon.social })
+          .from(salon)
+          .where(eq(salon.id, req.params.id))
+          .for('update')
+          .limit(1);
+        if (!before) throw notFound('unknown_salon', 'No such salon.');
+
+        const applied = applySocialPatch(before.social, linkId, patch);
+
+        const [row] = await tx
+          .update(salon)
+          .set({ social: applied.links, updatedAt: new Date() })
+          .where(eq(salon.id, req.params.id))
+          .returning({ social: salon.social });
+        if (!row) throw notFound('unknown_salon', 'No such salon.');
+
+        await writeAudit(tx, p, {
+          salonId: p.salonId,
+          // `rules`, not `money`. Nothing moved; what changed is how the salon
+          // presents itself in the customer app. The same kind the product and
+          // branch writes on this screen use.
+          kind: 'rules',
+          action: 'Social link changed',
+          /**
+           * WHAT IT IS NOW, spelled out, the way "Product edited" spells out the
+           * new price. A merchant reading this later is asking "who repointed our
+           * Instagram and to what", and "changed" does not answer it. An empty
+           * handle is named as cleared rather than rendered as a blank.
+           */
+          detail:
+            `${applied.link.label} · ` +
+            (applied.link.handle === '' ? 'handle cleared' : applied.link.handle) +
+            ` · ${applied.link.on ? 'shown' : 'hidden'}`,
+          source: 'merchant',
+          subjectType: 'social_link',
+          subjectId: linkId,
+          metadata: {
+            changed: Object.keys(patch),
+            handle: applied.link.handle,
+            on: applied.link.on,
+          },
+          ...clientMeta(req),
+        });
+
+        return { link: applied.link, after: row.social };
+      });
+
+      /**
+       * The one link, not the salon — the same shape `PATCH .../products/{pid}`
+       * answers with, and what a form that saves as you type needs back.
+       *
+       * `url` IS DERIVED AND SENT WITH IT, from the shared `socialUrl` in
+       * `@avo/types`, so the merchant screen can show where the icon now points
+       * without reimplementing the four rules. It is derived on every read and
+       * stored nowhere — api-contract.md: "Never persist a URL: a salon that edits
+       * its handle would leave the icon pointing at a dead profile." `null` when
+       * the handle is empty, which is a fact the form should render rather than
+       * hide.
+       *
+       * `links` is the whole array as it now stands, because the client that just
+       * wrote one link is holding a copy of all four and a colleague may have moved
+       * another one a second ago. Returning it costs nothing — it is the row that
+       * was just written — and it is what stops the save-as-you-type screen
+       * drifting from the server.
+       */
+      return reply.send({
+        ...link,
+        url: socialUrl(link.id, link.handle),
+        links: after,
+      });
+    },
+  );
 
   // ========================================================================
   // BRANCHES — the write path phase 4 was missing.
