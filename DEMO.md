@@ -23,7 +23,15 @@ cd apps/dashboard && pnpm run dev     # dashboard on :5173
 | Owner console | username `yousef`, `yousef-dev-password` (every section) |
 | Owner console — analyst | `mariam.k` / `yousef-dev-password` (no approvals, no policies) |
 | Scanner PIN | `noura` 2468, `hessa` 1357, device `DEV-SCANNER-01` |
-| Wallet member | `8843` / `dana-dev-password` |
+| Wallet member | salon `SAL-AMARA`, phone `+96599124408`, `dana-dev-password` — Dana, 24.500 KD, Silver |
+| Wallet member — low balance | phone `+96599124409`, same password — Reem, 2.500 KD (the insufficient-funds fixture) |
+
+**The wallet signs in with the PHONE, not the member id.** This row used to read
+``8843 / dana-dev-password``, which is wrong twice: `8843` is an *id* and the sign-in takes a
+phone number, and `8843` is **Reem**, not Dana. It cost one lane three failed sign-ins and sent
+another to the database to find out. `api/src/db/seed.ts:1473` still prints
+``member <id> / dana-dev-password`` on every seed for the same reason — that line is in `api/`
+and is owed a fix there; the ids it prints are correct, the label is what misleads.
 
 **The workspace field is a departure from the drawn design**, forced by `staff_user` being
 unique on `(salon_id, handle)`. Queued for Aftab as #7 — mention it before someone asks.
