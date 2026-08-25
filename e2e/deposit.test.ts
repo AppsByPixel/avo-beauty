@@ -62,6 +62,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
+  NO_SHOW_WORKER_ENABLED,
   SALON_A,
   SALON_B,
   apiLogTail,
@@ -403,6 +404,20 @@ function runNoShowJob(): NoShowTick {
 }
 
 /**
+ * ONE PASS, TIMED. The window matters as much as the result — see `overlapMs`.
+ *
+ * A pass that ran entirely after the other one finished would report exactly what
+ * the spec wants to see (`returned: 0` on the loser) for entirely the wrong
+ * reason, so the spec below asserts the overlap as well as the money.
+ */
+interface RacedPass {
+  tick: NoShowTick;
+  /** Wall clock, milliseconds, around the whole child process. */
+  startedAt: number;
+  finishedAt: number;
+}
+
+/**
  * TWO PASSES AT ONCE. The only construction that can exercise the status re-check.
  *
  * The job's candidate scan is deliberately UNLOCKED — "this read is a hint, not a
@@ -411,12 +426,11 @@ function runNoShowJob(): NoShowTick {
  * already excludes the settled row; the guard exists solely for the window between
  * one pass's scan and its lock, which is where a second worker can be.
  */
-async function runNoShowJobTwiceAtOnce(): Promise<NoShowTick[]> {
-  const [a, b] = await Promise.all([
-    runApiDbScriptAsync('src/jobs/no-show-once.ts', pgDb()),
-    runApiDbScriptAsync('src/jobs/no-show-once.ts', pgDb()),
-  ]);
-  return [a, b].map((res) => {
+async function runNoShowJobTwiceAtOnce(): Promise<RacedPass[]> {
+  const launch = async (): Promise<RacedPass> => {
+    const startedAt = Date.now();
+    const res = await runApiDbScriptAsync('src/jobs/no-show-once.ts', pgDb());
+    const finishedAt = Date.now();
     if (!res.ok) {
       throw new Error(
         `a concurrent no-show pass failed to run.\n--- stdout ---\n${res.stdout}\n` +
@@ -425,8 +439,9 @@ async function runNoShowJobTwiceAtOnce(): Promise<NoShowTick[]> {
     }
     const start = res.stdout.indexOf('{');
     if (start < 0) throw new Error(`a pass printed no JSON:\n${res.stdout}`);
-    return JSON.parse(res.stdout.slice(start)) as NoShowTick;
-  });
+    return { tick: JSON.parse(res.stdout.slice(start)) as NoShowTick, startedAt, finishedAt };
+  };
+  return Promise.all([launch(), launch()]);
 }
 
 /** Put a booking's no-show deadline in the past, so the job sees it as due. */
@@ -1359,6 +1374,48 @@ describe('the no-show return job gives the deposit back, exactly once', () => {
  */
 describe('two no-show passes racing on one deposit still return it once', () => {
   it('both passes succeed, one returns it, and her balance moves once', async () => {
+    /**
+     * A TWO-WAY RACE CANNOT BE MEASURED INSIDE A THREE-WAY ONE, and this is the
+     * check that says so before the spec spends a fixture finding out.
+     *
+     * This spec failed once in a twice-run gate on an identical tree, an identical
+     * build and a freshly seeded database, with BOTH passes reporting
+     * `{candidates: 1, returned: 0, alreadySettled: 1}` — while her balance and her
+     * `deposit_return` count had each moved by exactly one. Every assertion below
+     * except the last was therefore green: one deposit came back, once, correctly.
+     * Neither pass had done it. Somebody else had.
+     *
+     * That somebody was the API's own in-process no-show worker.
+     * `api/src/server.ts` starts `startNoShowWorker` whenever
+     * `NO_SHOW_WORKER_ENABLED` is on, `api/src/env.ts` defaults it ON, and this
+     * suite's harness boots `src/server.ts` — not `buildApp()` — against the run's
+     * database while never setting the variable. So a 30-second timer no spec
+     * controls has been returning deposits throughout every run of this file.
+     * `support/tenancy-harness.ts` pins it off now; the long argument is there.
+     *
+     * REPRODUCED BOTH WAYS BEFORE IT WAS FIXED, because a failure nobody can summon
+     * is a failure nobody can prove fixed:
+     *
+     *   NO_SHOW_POLL_MS=1000 vitest run deposit.test.ts
+     *       — four specs in this file red, this one among them, every time.
+     *
+     *   a third pass launched alongside the two below
+     *       — `the two passes returned 0 between them:
+     *          [{"candidates":1,"returned":0,"alreadySettled":1,…},
+     *           {"candidates":1,"returned":0,"alreadySettled":1,…}]`
+     *         which is the gate's failure character for character.
+     *
+     * Named here rather than left to the arithmetic, so that if the pin is ever
+     * lifted the spec says which mechanism came back instead of printing a bare
+     * `expected +0 to be 1` and being re-run until green.
+     */
+    precondition(
+      !NO_SHOW_WORKER_ENABLED,
+      'the API under test is running its own no-show worker, so a third pass on a timer can ' +
+        'return this deposit between the precondition below and the two passes. This spec can ' +
+        'only measure a two-way race.',
+    );
+
     reseedMember();
     const booking = await bookFuture(MANICURE, THIRD_ARTIST);
     moveInsideWindow(booking.id);
@@ -1373,6 +1430,39 @@ describe('two no-show passes racing on one deposit still return it once', () => 
 
     const [a, b] = await runNoShowJobTwiceAtOnce();
     precondition(a !== undefined && b !== undefined, 'a racing pass produced no result');
+    const ticks = [a.tick, b.tick];
+
+    /**
+     * DID THE TWO PASSES ACTUALLY OVERLAP, and the answer has to come out of the
+     * data rather than out of `Promise.all` looking like it should.
+     *
+     * Wall clock is the coarse half: each pass is a `tsx` cold start of around half
+     * a second, so `overlapMs` being a large fraction of the shorter one says they
+     * were alive together. Measured across twelve consecutive runs it is 100% every
+     * time — 451-529ms of a 451-529ms pass, one process's whole lifetime inside the
+     * other's — and the winner alternates, 7 runs to 5, which is what a coin-flip
+     * race looks like rather than a fixed order.
+     *
+     * The sharp half is `candidates` on the LOSER — see the assertion further down.
+     * Wall clock can only say the processes overlapped; only the loser's own numbers
+     * say their CRITICAL SECTIONS did.
+     */
+    const overlapMs = Math.min(a.finishedAt, b.finishedAt) - Math.max(a.startedAt, b.startedAt);
+    const shorterMs = Math.min(a.finishedAt - a.startedAt, b.finishedAt - b.startedAt);
+    const shape = () =>
+      `passes: ${JSON.stringify(ticks)}\n` +
+      `overlap: ${overlapMs}ms of a ${shorterMs}ms shorter pass ` +
+      `(${Math.round((overlapMs / Math.max(shorterMs, 1)) * 100)}%)`;
+
+    /**
+     * REPORTED, NOT ONLY ASSERTED. A number in the log is what lets somebody
+     * reviewing a gate run see that the race is still a race without re-deriving
+     * it. A fix that quietly serialised the two passes would still go green on
+     * every assertion except the loser's shape below; this line is what makes the
+     * degradation visible in a passing run rather than only in a failing one.
+     */
+    // eslint-disable-next-line no-console
+    console.log(`[lane D] no-show race: ${shape().replace(/\n/g, ' | ')}`);
 
     /**
      * BOTH MUST SUCCEED. A crash here would be a scheduled worker that breaks when
@@ -1380,10 +1470,9 @@ describe('two no-show passes racing on one deposit still return it once', () => 
      * outage, when a manual drain and the in-process worker run together. That is
      * the operational case the one-shot script was written for.
      */
-    expect(
-      [a, b].every((t) => t.failed === 0),
-      `a racing pass reported failures: ${JSON.stringify([a, b])}`,
-    ).toBe(true);
+    expect(ticks.every((t) => t.failed === 0), `a racing pass reported failures: ${shape()}`).toBe(
+      true,
+    );
 
     /**
      * EXACTLY ONE RETURN BETWEEN THEM. Asserted on the money, because the counts
@@ -1393,7 +1482,7 @@ describe('two no-show passes racing on one deposit still return it once', () => 
       balanceOf(MEMBER),
       `two racing passes returned ${(balanceOf(MEMBER) - balanceBefore) / DEPOSIT_FILS} deposits. ` +
         'She has been refunded twice for one no-show and the salon is short the difference. ' +
-        `Passes reported: ${JSON.stringify([a, b])}`,
+        shape(),
     ).toBe(balanceBefore + DEPOSIT_FILS);
 
     expect(
@@ -1404,9 +1493,38 @@ describe('two no-show passes racing on one deposit still return it once', () => 
     // And the loser reported it as already settled rather than silently doing
     // nothing — which is what makes an operator able to tell a no-op from a miss.
     expect(
-      a.returned + b.returned,
-      `the two passes returned ${a.returned + b.returned} between them: ${JSON.stringify([a, b])}`,
+      a.tick.returned + b.tick.returned,
+      `the two passes returned ${a.tick.returned + b.tick.returned} between them. ` +
+        'If that is 0 while the balance assertion above passed, somebody OTHER than these two ' +
+        `passes returned the deposit.\n${shape()}\n--- API log ---\n${apiLogTail(60)}`,
     ).toBe(1);
+
+    /**
+     * THE RACE STILL RACES, and this is the assertion that says so.
+     *
+     * The loser must report `candidates: 1` and `alreadySettled: 1`. Both halves
+     * are load-bearing:
+     *
+     *   `candidates: 1` means the loser's UNLOCKED scan ran while the booking was
+     *   still `deposit_held` — i.e. BEFORE the winner committed. Had the two passes
+     *   been serialised by anything, the second one's scan would have excluded the
+     *   settled row and reported `candidates: 0`.
+     *
+     *   `alreadySettled: 1` means it then reached the row lock, woke to a status
+     *   that had changed underneath it, and declined. That is the re-check in
+     *   `noShowWorker.ts` step 3 firing, which is the only reason this spec exists.
+     *
+     * So a future change that quietly serialises the two passes — a lock taken
+     * earlier, a queue, a harness that runs them one after the other — turns this
+     * red instead of leaving a green spec that tests nothing.
+     */
+    const loser = a.tick.returned === 1 ? b.tick : a.tick;
+    expect(
+      { candidates: loser.candidates, alreadySettled: loser.alreadySettled },
+      'the losing pass did not overlap the winner: it either never saw the booking as a ' +
+        'candidate (its scan ran after the winner committed) or never reached the row ' +
+        `re-check. The two passes are no longer racing.\n${shape()}`,
+    ).toEqual({ candidates: 1, alreadySettled: 1 });
 
     expect(bookingStatus(booking.id)).toBe('no_show_returned');
   }, 180_000);
