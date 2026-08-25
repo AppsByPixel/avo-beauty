@@ -115,6 +115,24 @@ pnpm build
 #    lanes solved it weeks earlier: scripts/lane-db.sh does ordinary DDL inside
 #    a database that already exists, and nothing blocks that. `avo_ci` is
 #    created once by trunk and never dropped.
+#
+#    `scripts/lane-db.sh` NO LONGER NEEDS THE PATH EXPORT ABOVE — it resolves its
+#    own toolchain (2026-08-26). Three things it now gets right, each of which had
+#    already cost someone time:
+#      - It checks for `pnpm`/`corepack` and for `docker` BEFORE the schema drop,
+#        because discovering a missing tool afterwards leaves the lane an EMPTY
+#        database rather than a stale one.
+#      - When `pnpm` is missing it puts a real `pnpm` shim on PATH rather than
+#        calling `corepack pnpm`, because turbo spawns `pnpm` by name itself and
+#        otherwise dies with the "cannot find binary path" error noted above —
+#        which names neither PATH nor pnpm and reads like a turbo bug.
+#      - It no longer sends the build to `/dev/null`. Under `set -e` that combination
+#        exited silently before the "ready" banner, which is indistinguishable from
+#        success; a lane then worked against a database it believed was fresh.
+#
+#    For the record, `pnpm` IS on this machine — `~/miniconda3/bin/pnpm`, a symlink
+#    to corepack's `pnpm.js`. A lane reporting "pnpm is not installed" has a PATH
+#    problem, not a missing binary, and should not go install a second copy.
 docker exec -i avo-postgres psql -U avo -d avo_ci -q \
   -c "DROP SCHEMA IF EXISTS public CASCADE;" \
   -c "DROP SCHEMA IF EXISTS drizzle CASCADE;" \
