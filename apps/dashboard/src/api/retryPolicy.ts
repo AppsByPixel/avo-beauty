@@ -66,12 +66,35 @@ export function retryPolicy(failureCount: number, error: unknown): boolean {
      * only delays the sentence that explains it. This is the case the seven
      * overrides broke.
      *
-     * NOT WIDENED to every 4xx, deliberately. A 400, 404 or 409 is equally
-     * unretryable in principle, but nothing in this dashboard currently reaches
-     * one on a *read*, and quietly changing behaviour for statuses I have not
-     * driven would be inventing policy. Reported rather than assumed.
+     * STILL NOT WIDENED TO EVERY 4xx — but 404 is now in, and the paragraph that
+     * used to sit here is why it took a while. It read: "A 400, 404 or 409 is
+     * equally unretryable in principle, but nothing in this dashboard currently
+     * reaches one on a *read*, and quietly changing behaviour for statuses I have
+     * not driven would be inventing policy."
+     *
+     * That was true and it named its own trigger. `GET /v1/platform/salons/:id`
+     * fired it: the console's per-salon editor is the first screen in this
+     * dashboard that can 404 on a READ, and it does so on an ordinary path — a
+     * bookmarked editor URL, or a salon id pasted out of a support ticket.
+     *
+     *     GET /v1/platform/salons/SAL-NOPE
+     *       → 404 {"error":"unknown_salon","message":"No such salon."}
+     *
+     * So it is driven now rather than assumed, and the reasoning is the 403's
+     * word for word: the request was understood, an identical one produces an
+     * identical answer, and the budget only delays the sentence. What the delay
+     * costs here is specific — the editor holds a full-page skeleton through two
+     * attempts and a backoff before admitting the salon does not exist, which
+     * reads as a slow load rather than as an answer.
+     *
+     * 400 and 409 STAY OUT, for the reason the old note gave and which has not
+     * expired for them: this is the READ policy, no read in this dashboard
+     * produces either, and `namedStateAnswer` already handles a 409 as a served
+     * answer where one does appear. Widening on principle rather than on a driven
+     * case is what this comment was written to prevent.
      */
     if (error.isForbidden) return false;
+    if (error.status === 404) return false;
   }
 
   /*

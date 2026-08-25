@@ -57,6 +57,14 @@ const SECTION_SCREENS = [
   'console/Policies.tsx',
   'console/Salons.tsx',
   /**
+   * The per-salon editor. Owns its OWN read (`GET /v1/platform/salons/:id`), not a
+   * slice of the list's — a different route, a different 404, and a bookmarked URL
+   * can land on it with no list ever fetched. So it answers for its own four states
+   * rather than borrowing `Salons.tsx`'s, which is the host/subview distinction
+   * this census keeps drawing.
+   */
+  'console/SalonEditor.tsx',
+  /**
    * IN THIS LIST, NOT THE SUBVIEW ONE, and the census itself made the point: the
    * first run of this file classed Campaigns as a pure subview and FAILED — it
    * owns a second fetch (the submitted-campaigns queue) with its own
@@ -157,27 +165,43 @@ describe('the screen census stays honest', () => {
   });
 
   /**
-   * The router agrees with the census — every component the two route tables
-   * mount is a screen this file classifies as owning its states. Extracted from
-   * the source rather than restated, so a new route cannot ship unaudited.
+   * The router agrees with the census — every component ANY route in that file
+   * mounts is either a screen this file classifies, or one of the two frames.
+   *
+   * THIS USED TO SCAN THE TWO `SECTIONS` TABLES AND ONLY THOSE, and the narrower
+   * version had a hole exactly the shape of the first route that could not live in
+   * a table. `/console/salons/$id` is declared beside `CONSOLE_SECTIONS` rather
+   * than inside it, because `.map()` over a tuple containing one parameterised path
+   * makes `params` required on every route it builds — see router.tsx § the
+   * per-salon editor. A table-only scan would have mounted a fetching screen with
+   * no four-state classification and reported nothing.
+   *
+   * So the scan is the whole file now, and the exemptions are NAMED rather than
+   * implied by where a route happens to be declared. `NotBuiltYet` is not among
+   * them because it is mounted as an inline arrow (`component: () => <NotBuiltYet`)
+   * which this pattern does not match, and it is in NON_SCREENS regardless.
    */
-  it('every routed section component is census-listed as owning its states', () => {
+  it('every routed component is census-listed, wherever its route is declared', () => {
     const router = readFileSync(join(here, '..', 'router.tsx'), 'utf8');
-    const tables = router.match(/const (?:CONSOLE_)?SECTIONS = \[[\s\S]*?\] as const;/g) ?? [];
-    expect(tables).toHaveLength(2);
-    const mounted = tables
-      .join('\n')
-      .match(/component: (\w+)/g)!
-      .map((m) => m.replace('component: ', ''));
-    expect(mounted.length).toBeGreaterThanOrEqual(15);
-    const censusNames = [...SECTION_SCREENS, HOST].map((f) =>
+    const mounted = [...router.matchAll(/component: ([A-Z]\w+)/g)].map((m) => m[1]!);
+    // A smoke alarm for a regex that stopped matching: every route in both trees.
+    expect(mounted.length).toBeGreaterThanOrEqual(17);
+
+    /** The two shells. Layout routes, not screens — they own no read of their own. */
+    const FRAMES = ['MerchantShell', 'ConsoleShell'];
+    const censusNames = [...SECTION_SCREENS, HOST, ...DOORS].map((f) =>
       f.replace(/^(console|marketing)\//, '').replace('.tsx', ''),
     );
     for (const name of mounted) {
-      expect(censusNames, `router mounts <${name}> but the census does not class it`).toContain(
-        name,
-      );
+      expect(
+        [...censusNames, ...FRAMES],
+        `router mounts <${name}> but the census does not class it. Add it to a list ` +
+          `in stateCensus.test.ts — a routed screen that owns a read owes four states.`,
+      ).toContain(name);
     }
+    // The editor is the route the widened scan exists for; pin it by name so a
+    // regression to a table-only scan fails here rather than going quiet.
+    expect(mounted).toContain('SalonEditor');
   });
 });
 

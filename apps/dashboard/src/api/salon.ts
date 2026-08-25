@@ -1,5 +1,5 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { SalonMetricsSchema, type Salon, type SalonMetrics, type Transaction } from '@avo/types';
+import { SalonMetricsSchema, type Salon, type SalonMetrics } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 
@@ -46,7 +46,13 @@ export const salonKeys = {
   all: ['salon'] as const,
   detail: (salonId: string) => [...salonKeys.all, salonId] as const,
   metrics: (salonId: string) => [...salonKeys.detail(salonId), 'metrics'] as const,
-  charges: (salonId: string) => [...salonKeys.detail(salonId), 'charges'] as const,
+  /*
+   * `activity`, not `charges`. The key is renamed with the endpoint rather than
+   * left behind: a cache key that names the wrong resource is how the next
+   * reader concludes this panel reads charges, which is the belief that kept the
+   * bug below alive.
+   */
+  activity: (salonId: string) => [...salonKeys.detail(salonId), 'activity'] as const,
 };
 
 /**
@@ -103,29 +109,177 @@ export interface Paginated<T> {
 }
 
 /**
- * Recent activity.
+ * One line of the Overview feed, as the API sends it.
  *
- * `GET /charges` is the only salon-scoped transaction stream in the contract, so
- * the feed is charges only. The designed feed mixes top-ups, deposit returns,
- * tier changes and shop purchases — that needs an endpoint that does not exist.
- * Flagged in the lane report rather than faked here.
+ * THIS IS NOT A `Transaction`, AND THE DIFFERENCE IS THE POINT. The hook below
+ * used to declare `Paginated<Transaction>` over a stream that is two sources
+ * merged — `transaction` and `loyalty_event` — with no shared key between them.
+ * `Transaction` has `reference` and `createdAt`; this has `what` and `at`, plus
+ * `who` and a `stream` discriminator, and its `amountFils` is nullable because a
+ * tier climb moves no money. A cast would have compiled against every one of
+ * those mismatches.
  *
- * The path carries no salon id: the API scopes it to `principal.salonId` server
- * side. That is the shape every salon-scoped endpoint should have, and it is why
- * a client-named salon was never the real exposure here.
+ * THE SENTENCE IS COMPOSED SERVER-SIDE, ON PURPOSE. `what` arrives as
+ * "topped up 25.000 via KNET", not as a kind this client switches on. That is
+ * `api/src/services/activityFeed.ts`'s decision and it carries a live defect as
+ * its reason: a top-up's `amount_fils` is what LANDED, bonus included, so the
+ * obvious client-side rendering tells a merchant her customer paid five dinars
+ * she did not. The console's feed reads the same helper. Two copies of that
+ * sentence is two chances to get it wrong, so this client renders the string.
+ *
+ * The design agrees: `AVO Merchant Dashboard.dc.html` § Overview draws the row
+ * as `{{ f.who }} {{ f.what }} {{ f.when }}` and nothing else.
  */
-export function useRecentActivity(): UseQueryResult<Paginated<Transaction>> {
+export interface ActivityItem {
+  id: string;
+  /** Which source the line came from. `audit` is console-only. */
+  stream: 'transaction' | 'loyalty' | 'audit';
+  /** ISO instant. */
+  at: string;
+  /** The bolded name — a member, or "System" for an automatic deposit return. */
+  who: string;
+  memberId: string | null;
+  salonId: string | null;
+  /** The predicate the design renders after the name, already phrased. */
+  what: string;
+  /** Transaction kind or loyalty kind, whichever stream this is. */
+  kind: string;
+  /** Signed fils as stored. Null on a line that moved no money. */
+  amountFils: number | null;
+}
+
+/*
+ * PARSE HELPERS, LOCAL TO THIS FILE — the same shape `platformConsole.ts` keeps
+ * for `parsePlatformMetrics` and `platformSalons.ts` for `str`. Small enough
+ * that a shared module would buy less than the import costs.
+ */
+function str(v: unknown, where: string): string {
+  if (typeof v !== 'string') throw new Error(`${where} was not a string.`);
+  return v;
+}
+
+function nullableNum(v: unknown, where: string): number | null {
+  if (v === null) return null;
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new Error(`${where} was not a number or null.`);
+  }
+  return v;
+}
+
+/**
+ * PARSED, NOT CAST, and this hook is the reason the rule exists.
+ *
+ * `authedRequest<Paginated<Transaction>>` asserted a shape the wire never
+ * proved, and the assertion was wrong in every field that mattered. A cast
+ * cannot fail, so nothing here could notice — the same lesson `useSalonMetrics`
+ * above records, and the `PATCH /v1/salons/{id}` crash before it.
+ *
+ * A SCHEMA NARROWER THAN THE WIRE SILENTLY STRIPS FIELDS in this codebase, so
+ * this reads every key the endpoint documents rather than the subset the screen
+ * happens to render today. `memberId`, `salonId`, `kind` and `amountFils` are
+ * not drawn by the Overview row; they are parsed anyway, because the next reader
+ * of this feed should find the record whole rather than discover a hole.
+ */
+export function parseActivityFeed(raw: unknown): Paginated<ActivityItem> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error('GET /salons/{id}/activity did not answer an object.');
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.items)) throw new Error('activity.items was not an array.');
+
+  return {
+    items: r.items.map((row, i) => {
+      if (typeof row !== 'object' || row === null) {
+        throw new Error(`activity.items[${i}] was not an object.`);
+      }
+      const it = row as Record<string, unknown>;
+      const stream = str(it.stream, `activity.items[${i}].stream`);
+      if (stream !== 'transaction' && stream !== 'loyalty' && stream !== 'audit') {
+        throw new Error(`activity.items[${i}].stream was "${stream}".`);
+      }
+      return {
+        id: str(it.id, `activity.items[${i}].id`),
+        stream,
+        at: str(it.at, `activity.items[${i}].at`),
+        who: str(it.who, `activity.items[${i}].who`),
+        memberId: it.memberId === null ? null : str(it.memberId, `activity.items[${i}].memberId`),
+        salonId: it.salonId === null ? null : str(it.salonId, `activity.items[${i}].salonId`),
+        what: str(it.what, `activity.items[${i}].what`),
+        kind: str(it.kind, `activity.items[${i}].kind`),
+        amountFils: nullableNum(it.amountFils, `activity.items[${i}].amountFils`),
+      };
+    }),
+    /*
+     * Always `null` from this endpoint — the Overview draws five lines and no
+     * "load more", and a cursor over a MERGED stream would need a composite
+     * position. `GET /salons/{id}/audit` is the screen that pages. Read rather
+     * than assumed, so a server that grows one is not silently ignored.
+     */
+    nextCursor: r.nextCursor === undefined || r.nextCursor === null
+      ? null
+      : str(r.nextCursor, 'activity.nextCursor'),
+  };
+}
+
+/**
+ * Recent activity — Merchant → Overview.
+ *
+ * IT USED TO REQUEST `GET /charges`, AND WAS REFUSED ON EVERY LOAD.
+ *
+ * This is the first screen a salon owner sees after signing in. `GET /charges`
+ * is `requireScannerPerm(req, 'charges')` (charges.ts:226) — a SCANNER-surface
+ * guard. The dashboard holds a web session, so the refusal had nothing to do
+ * with authority: Noura holds all nine permissions including `charges` and got a
+ * 403 every time, because the surface check runs before the permission check and
+ * no grant can satisfy it. Proven on the running API with one owner session:
+ *
+ *   GET /charges                    → 403
+ *   GET /salons/SAL-AMARA/activity  → 200
+ *
+ * The panel rendered that 403 as "You don't have access to this", under a
+ * heading reading "Recent activity". It has presumably never worked.
+ *
+ * WHAT MADE IT INVISIBLE. The comment that stood here said the feed was charges
+ * "because `GET /charges` is the only salon-scoped transaction stream in the
+ * contract", and that a web principal being refused it was "by design". The
+ * second half is true of `GET /charges` and is not a reason for this panel to
+ * read it; the first half had expired. `GET /salons/{id}/activity` was built FOR
+ * this panel — its header opens "Recent activity — design/AVO Merchant
+ * Dashboard.dc.html § Overview" and argues at length against sourcing it from
+ * charges — and the client simply never pointed at it. Two "not built" claims
+ * outliving the thing they described, in one dashboard, in one week.
+ *
+ * `merchantScopeGates.test.ts` now derives every route's surface guard from
+ * `api/src/routes/` and fails on any merchant-scope call that lands on a scanner
+ * one, so the class cannot come back quietly.
+ *
+ * AND THE FEED IS NOW THE DESIGNED FEED, not a smaller version of it. Charges
+ * alone showed money leaving wallets and never arriving; the merged stream adds
+ * top-ups, deposit returns, shop purchases and tier climbs, which is the five
+ * lines the design draws.
+ *
+ * THE SALON ID IS IN THE PATH AGAIN, and that is not a step backwards. This
+ * endpoint scopes its queries from `principal.salonId` and calls
+ * `requireSameSalon` on the path id — so a client naming another salon is
+ * refused rather than served. The id comes from `useSalonId()`, the single
+ * accessor, exactly as every other salon-scoped hook in this file takes it.
+ */
+export function useRecentActivity(): UseQueryResult<Paginated<ActivityItem>> {
   const salonId = useSalonId();
   return useQuery({
-    queryKey: salonKeys.charges(salonId),
-    queryFn: ({ signal }) =>
-      authedRequest<Paginated<Transaction>>('merchant', '/charges', { signal }),
+    queryKey: salonKeys.activity(salonId),
+    queryFn: async ({ signal }) =>
+      parseActivityFeed(
+        await authedRequest<unknown>('merchant', `/salons/${salonId}/activity`, { signal }),
+      ),
     /*
-     * No `retry`. This is the hook where the old override cost the most: a web
-     * principal reading `GET /charges` gets a 403 by design — charging happens on
-     * the scanner — so the refusal is the NORMAL answer here, and `retry: 1` made
-     * every Overview load pay for a second request that could only be refused
-     * again before the explain state appeared.
+     * No `retry` override. The old one was justified by "a web principal reading
+     * `GET /charges` gets a 403 by design, so the refusal is the NORMAL answer
+     * here" — an argument for not retrying a request that should never have been
+     * made. A refusal is no longer normal on this panel: `perms.dashboard` is the
+     * gate, and a staff member without it does not reach the Overview at all.
+     * The shared budget in `retryPolicy.ts` keeps the 401/403 short-circuit that
+     * a bare `retry: 1` threw away.
      */
   });
 }

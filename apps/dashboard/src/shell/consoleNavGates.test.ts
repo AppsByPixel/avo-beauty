@@ -59,71 +59,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CONSOLE_NAV_ITEMS } from './consoleNavItems.js';
 import { PLATFORM_SECTIONS } from '../auth/platformAdmin.js';
+/*
+ * Lifted out of this file into `src/testing/` when `settingsModules.test.ts` needed the
+ * same guarantee against the same hazard. See that module's header for why one copy.
+ */
+import { stripComments } from '../testing/stripComments.js';
 
 /** `apps/dashboard/src/shell` → repo root → `api/src/routes`. */
 const ROUTES_DIR = join(__dirname, '..', '..', '..', '..', 'api', 'src', 'routes');
 
-/**
- * Blank every comment and leave everything else — including line breaks — exactly where
- * it was, so a reported line number is the line in the real file.
- *
- * String literals are tracked because a `//` inside one is not a comment. The method is
- * `e2e/support/perm-census.ts`'s; it is reimplemented rather than imported because
- * `e2e/` is another lane's column and a cross-column import would make this test fail
- * whenever that package is mid-edit.
- */
-function stripComments(src: string): string {
-  const out = src.split('');
-  let i = 0;
-  const n = src.length;
-  type State = 'code' | 'single' | 'double' | 'template';
-  let state: State = 'code';
-
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' ';
-  };
-
-  while (i < n) {
-    const c = src[i];
-    const d = src[i + 1];
-
-    if (state === 'code') {
-      if (c === '/' && d === '/') {
-        const start = i;
-        while (i < n && src[i] !== '\n') i++;
-        blank(start, i);
-        continue;
-      }
-      if (c === '/' && d === '*') {
-        const start = i;
-        i += 2;
-        while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++;
-        i = Math.min(i + 2, n);
-        blank(start, i);
-        continue;
-      }
-      if (c === "'") state = 'single';
-      else if (c === '"') state = 'double';
-      else if (c === '`') state = 'template';
-      i++;
-      continue;
-    }
-
-    if (c === '\\') {
-      i += 2;
-      continue;
-    }
-    if (
-      (state === 'single' && c === "'") ||
-      (state === 'double' && c === '"') ||
-      (state === 'template' && c === '`')
-    ) {
-      state = 'code';
-    }
-    i++;
-  }
-  return out.join('');
-}
 
 /**
  * `app.get('/path'` and `app.get<{ Querystring: … }>(\n  '/path'`.
