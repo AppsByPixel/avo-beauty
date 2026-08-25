@@ -227,6 +227,41 @@ const EnvSchema = z.object({
    */
   BOOKING_CHANGE_WINDOW_MINUTES: z.coerce.number().int().positive().default(60),
 
+  // ------------------------------------------------------------- top-ups --
+
+  /**
+   * THE ABANDONED TOP-UP REAPER. OFF BY DEFAULT — the opposite of the two
+   * workers above, deliberately, and services/topupReaper.ts § OFF BY DEFAULT
+   * carries the full argument. The two halves of it:
+   *
+   *   `NO_SHOW_WORKER_ENABLED` defaulting to '1' twenty lines above is the
+   *   direct cause of `deposit.test.ts` being flaky for weeks — the e2e harness
+   *   boots `src/server.ts`, so a production loop ran inside every test run
+   *   settling deposits at a moment no spec chose, and Lane D had to pin it off
+   *   in the harness. Defaulting this one off means no harness anywhere has to
+   *   remember anything.
+   *
+   *   And unlike its siblings, leaving this off costs nobody anything: no
+   *   receipt goes unsent, no customer's deposit is withheld. The table grows,
+   *   which is exactly where this project already is, and
+   *   `pnpm --dir=… run job:topup-reap` drains it with the numbers printed.
+   *
+   * `TOPUP_REAP_AFTER_HOURS` is a CONSTANT in services/topupReaper.ts and not a
+   * variable here on purpose: the window is a product decision queued for Aftab,
+   * not a per-deployment knob. Flip this default to '1' when he picks the number
+   * — and pin `TOPUP_REAPER_ENABLED=0` in the e2e harness in the same commit.
+   */
+  TOPUP_REAPER_ENABLED: z
+    .enum(['0', '1'])
+    .default('0')
+    .transform((v) => v === '1'),
+  /**
+   * Milliseconds between passes, measured from the END of the previous one.
+   * Fifteen minutes: every candidate costs a gateway round trip and nothing here
+   * is urgent — the youngest row a pass can touch is a week old.
+   */
+  TOPUP_REAPER_POLL_MS: z.coerce.number().int().positive().default(15 * 60_000),
+
   // ------------------------------------------------------------ receipts --
   //
   // Neither channel can be wired yet and neither is waiting on us:
@@ -497,6 +532,9 @@ export const env = {
   noShowWorkerEnabled: raw.NO_SHOW_WORKER_ENABLED,
   noShowPollMs: raw.NO_SHOW_POLL_MS,
   noShowBatchSize: raw.NO_SHOW_BATCH_SIZE,
+
+  topupReaperEnabled: raw.TOPUP_REAPER_ENABLED,
+  topupReaperPollMs: raw.TOPUP_REAPER_POLL_MS,
   bookingChangeWindowMinutes: raw.BOOKING_CHANGE_WINDOW_MINUTES,
   receiptDriver: raw.RECEIPT_DRIVER,
   receiptWorkerEnabled: raw.RECEIPT_WORKER_ENABLED,
