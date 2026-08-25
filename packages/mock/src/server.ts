@@ -368,6 +368,84 @@ app.get<{ Params: { id: string } }>('/_gateway/:id', async (req, reply) => {
 
 // ------------------------------------------------------------------- staff --
 
+/*
+ * ------------------------------------------------------------------ auth --
+ *
+ * WHY THESE EXIST NOW. `/staff/session` below has been here all along, so the
+ * SCANNER could always sign in against the mock — but the WALLET's doors
+ * (`/auth/*`) were never served at all. The customer app's `Gate` therefore
+ * could not be passed, and a lane told to "drive it with `pnpm mock`" reached a
+ * sign-in screen and stopped. Lane B hit exactly that and worked around it by
+ * hand-planting `avo.wallet.session.v1` into localStorage, which drives the app
+ * with the whole sign-in path skipped — the opposite of what driving is for.
+ *
+ * The shapes are taken from what the wallet actually PARSES, not from what
+ * seemed reasonable: `MemberSessionSchema` (apps/wallet/src/api/auth.ts:79) for
+ * session and signup, `RefreshSchema` (api/client.ts:267) for refresh. A mock
+ * that answers a shape the client rejects is worse than no mock, because the
+ * failure surfaces as a parse error far from here.
+ *
+ * NO CREDENTIAL IS CHECKED, DELIBERATELY. This is a fixture server; it holds no
+ * hashes and must never look like it does. It is also why it binds to localhost
+ * and why nothing here may be reused by the API — non-negotiable #6 is about
+ * the real thing, and the way to keep this honest is for it to obviously not be
+ * an authenticator rather than to be a weak one.
+ */
+
+/** Far enough out that no drive expires mid-session; the wallet only reads it. */
+function sessionEnvelope(req: FastifyRequest) {
+  const who = has(req, 'stamps') ? memberStamps : member;
+  return {
+    accessToken: `mock_access_${who.id}`,
+    refreshToken: `mock_refresh_${who.id}`,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    member: who,
+  };
+}
+
+app.post('/auth/member/session', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  return sessionEnvelope(req);
+});
+
+/*
+ * 201, and the same four fields as sign-in. The wallet parses BOTH with one
+ * schema on purpose (auth.ts:69 — "ONE SCHEMA FOR BOTH DOORS"), because the
+ * design walks straight from Create account into the wallet. Answering a
+ * different shape here would reintroduce the drift that comment exists to stop.
+ */
+app.post('/auth/member/signup', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  return reply.code(201).send(sessionEnvelope(req));
+});
+
+app.post('/auth/refresh', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  const { member: _omitted, ...pair } = sessionEnvelope(req);
+  return pair;
+});
+
+/** 204. `postNoContent` (auth.ts:243) wants no body, and a body would fail it. */
+app.post('/auth/sign-out', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  return reply.code(204).send();
+});
+
+/*
+ * 202 both. The real endpoints answer the same way whether or not the account
+ * exists — that is the anti-enumeration property, and a mock that 404s on an
+ * unknown phone would teach a lane the opposite of how the API behaves.
+ */
+app.post('/auth/member/password-reset/request', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  return reply.code(202).send({ delivered: false });
+});
+
+app.post('/auth/member/password-reset', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  return reply.code(202).send({ delivered: false });
+});
+
 app.post('/staff/session', async (req, reply) => {
   if (await intercept(req, reply)) return;
   const who = has(req, 'noperms') ? staff[1]! : staff[0]!;
