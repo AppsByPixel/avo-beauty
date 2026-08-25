@@ -10,8 +10,10 @@
  * `i18n/language.tsx` carries the why. This carries the decision.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { directionOutcome } from './direction';
+import { directionEffect, directionOutcome, isRtl } from './direction';
 
 const LTR = false;
 const RTL = true;
@@ -73,5 +75,144 @@ describe('the invariant', () => {
         }
       }
     }
+  });
+});
+
+/**
+ * The persisted flag, as opposed to the notice.
+ *
+ * These exist because the app was DRIVEN on an iOS dev client and the sequence
+ * below left `RCTI18nUtil_forceRTL: false` in the app's own preferences while
+ * the customer was looking at a mirrored Arabic screen with no notice on it.
+ * See `direction.ts § directionEffect` for the trace.
+ */
+describe('what the switch writes', () => {
+  it('never touches I18nManager on web, in either direction', () => {
+    for (const currentIsRtl of [LTR, RTL]) {
+      for (const next of ['en', 'ar'] as const) {
+        expect(directionEffect({ platform: 'web', currentIsRtl, next })).toEqual({
+          flag: null,
+          pendingRestart: false,
+        });
+      }
+    }
+  });
+
+  it('writes the flag AND owes a restart when the direction actually changes', () => {
+    expect(directionEffect({ platform: 'ios', currentIsRtl: LTR, next: 'ar' })).toEqual({
+      flag: true,
+      pendingRestart: true,
+    });
+    expect(directionEffect({ platform: 'android', currentIsRtl: RTL, next: 'en' })).toEqual({
+      flag: false,
+      pendingRestart: true,
+    });
+  });
+
+  /**
+   * THE REGRESSION. 'unchanged' means "no restart owed", never "no flag owed" —
+   * the running layout and the persisted flag are different facts.
+   */
+  it('still writes the flag when no restart is owed', () => {
+    expect(directionEffect({ platform: 'ios', currentIsRtl: RTL, next: 'ar' })).toEqual({
+      flag: true,
+      pendingRestart: false,
+    });
+    expect(directionEffect({ platform: 'ios', currentIsRtl: LTR, next: 'en' })).toEqual({
+      flag: false,
+      pendingRestart: false,
+    });
+  });
+
+  /**
+   * The driven sequence, as a test. A mirrored Arabic app, switched to English
+   * and straight back, must not be left persisting `false` — she chose Arabic
+   * and the next launch has to agree with her.
+   */
+  it('leaves the flag agreeing with her choice after she switches away and back', () => {
+    // Yoga is laying out RTL for the whole sequence: it is fixed at bridge start
+    // and neither tap reloads the app.
+    const layoutInForce = RTL;
+
+    const away = directionEffect({ platform: 'ios', currentIsRtl: layoutInForce, next: 'en' });
+    expect(away).toEqual({ flag: false, pendingRestart: true });
+
+    const back = directionEffect({ platform: 'ios', currentIsRtl: layoutInForce, next: 'ar' });
+    // The flag she is left with, NOT the notice, is what the next launch reads.
+    expect(back.flag).toBe(true);
+    // And no restart is owed, because the layout on screen is already right.
+    expect(back.pendingRestart).toBe(false);
+  });
+
+  it('always persists exactly the direction of the language chosen, on native', () => {
+    for (const platform of ['ios', 'android']) {
+      for (const currentIsRtl of [LTR, RTL]) {
+        for (const next of ['en', 'ar'] as const) {
+          expect(directionEffect({ platform, currentIsRtl, next }).flag).toBe(isRtl(next));
+        }
+      }
+    }
+  });
+});
+
+/**
+ * THE PROVIDER ACTUALLY USES IT — asserted structurally, because this workspace
+ * has no renderer.
+ *
+ * `directionEffect` was landed with the five tests above and NOT wired in: it sat
+ * exported, green, and unreachable while `LanguageProvider` went on gating the
+ * flag write on `directionOutcome`. Passing tests for a function nothing calls is
+ * the most expensive kind of green, because it reads exactly like a fixed bug.
+ *
+ * Scanning source rather than importing follows `theme/brandBootOrder.test.ts`,
+ * for the same reason: the thing being measured is which module the provider
+ * reaches for, and `language.tsx` cannot be imported here anyway — it is a `.tsx`
+ * carrying a React context, which is why `direction.ts` exists as a separate
+ * module in the first place.
+ */
+describe('the provider writes the flag through directionEffect', () => {
+  /**
+   * COMMENTS ARE STRIPPED BEFORE ANYTHING IS ASSERTED, and the first version of
+   * this file did not strip them and failed for it. `language.tsx`'s header
+   * explains the mechanism in prose — "`I18nManager.forceRTL()` writes a native
+   * flag" — which a call-site scan happily read as a call with no arguments. A
+   * structural test that cannot tell code from the paragraph describing it will
+   * eventually fail on a comment edit, and whoever hits that will fix the
+   * comment rather than the code.
+   */
+  const provider = readFileSync(join(__dirname, 'language.tsx'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+
+  it('imports directionEffect', () => {
+    expect(provider).toMatch(/import\s*{[^}]*\bdirectionEffect\b[^}]*}\s*from\s*'\.\/direction'/);
+  });
+
+  /**
+   * Both decisions — the switch and the launch-time reconcile — go through the
+   * one function. `directionOutcome` is still exported and still tested above;
+   * it is simply not what the provider asks, because its three-way answer is the
+   * thing that got misread as "nothing to write".
+   */
+  it('asks directionEffect and not directionOutcome', () => {
+    expect(provider).not.toMatch(/\bdirectionOutcome\b/);
+  });
+
+  /**
+   * THE REGRESSION, in the shape a diff would reintroduce it. `forceRTL(isRtl(x))`
+   * is the old form: it can only appear inside a branch that already decided the
+   * direction changed, which is the branch that skipped the write. The flag must
+   * come from the effect, so the write is unconditional on native.
+   */
+  it('passes the effect flag to forceRTL, never a recomputed isRtl', () => {
+    expect(provider).not.toMatch(/forceRTL\s*\(\s*isRtl/);
+    const calls = [...provider.matchAll(/I18nManager\.forceRTL\s*\(([^)]*)\)/g)].map((m) => m[1]?.trim());
+    expect(calls.length).toBeGreaterThan(0);
+    for (const arg of calls) expect(arg).toMatch(/\.flag$/);
+  });
+
+  /** And the write is guarded on `flag !== null`, which is the web guard. */
+  it('guards the write on the null flag rather than on the platform', () => {
+    expect(provider).toMatch(/\.flag\s*!==\s*null/);
   });
 });
