@@ -103,6 +103,69 @@ describe('a charge the held deposit covered entirely', () => {
   });
 });
 
+/**
+ * The top-up sheet, which had NO test at all — which is how a headline that
+ * overstated every top-up by its bonus survived.
+ *
+ * The fixture is TX-2665307, captured field for field from
+ * `GET /members/me/transactions` on avo_lane_b immediately after driving a
+ * 10.000 KNET top-up on a Silver member whose balance went 24.500 → 35.500.
+ * `amountFils` is 11000 — the CREDIT — because `services/topup.ts` writes
+ * `amountFils: intent.creditFils`. `bonusFils` is the 1000 split beside it, not
+ * something to add on.
+ */
+const TOPUP: Transaction = {
+  id: 'TX-2665307',
+  memberId: '8842',
+  branchId: 'BR-KWC',
+  kind: 'topup',
+  amountFils: 11000,
+  bonusFils: 1000,
+  method: 'knet',
+  status: 'settled',
+  reference: 'AVO-TOP-FAR19T',
+  createdAt: '2026-08-25T21:38:22.862Z',
+  voidedAt: null,
+  reversedByTransactionId: null,
+} as Transaction;
+
+describe('a top-up receipt', () => {
+  it('headlines the credit the balance actually moved by, not credit plus bonus', () => {
+    // 12.000 is the old answer and it is a number nothing holds: not the
+    // intent, not the ledger row, not her balance.
+    expect(buildReceipt(TOPUP, BRANCHES, 'en', en).amount).toBe('+11.000');
+  });
+
+  it('agrees with the activity row on the same transaction', () => {
+    // The two used to agree while both were wrong, which is why neither looked
+    // wrong beside the other. They agree here on the server's figure.
+    expect(buildReceipt(TOPUP, BRANCHES, 'en', en).amount).toBe(
+      toActivityRow(TOPUP, BRANCHES, 'en', en).amount,
+    );
+  });
+
+  it('the three money rows sum: paid + bonus = landed', () => {
+    const rows = buildReceipt(TOPUP, BRANCHES, 'en', en).rows;
+    const value = (label: string) => rows.find((r) => r.label === label)?.value;
+    expect(value(en.txYouPaid)).toBe('10.000 KD');
+    expect(value(en.txTierBonus(null))).toBe('+1.000 KD');
+    expect(value(en.txLanded)).toBe('11.000 KD');
+  });
+
+  it('never reports landed as more than the balance moved', () => {
+    const rows = buildReceipt(TOPUP, BRANCHES, 'en', en).rows;
+    expect(rows.find((r) => r.label === en.txLanded)?.value).not.toContain('12.000');
+  });
+
+  it('drops the bonus row entirely when there is none — stamps mode', () => {
+    const noBonus = { ...TOPUP, amountFils: 10000, bonusFils: 0 } as Transaction;
+    const receipt = buildReceipt(noBonus, BRANCHES, 'en', en);
+    expect(receipt.amount).toBe('+10.000');
+    expect(receipt.rows.some((r) => r.label === en.txTierBonus(null))).toBe(false);
+    expect(receipt.rows.find((r) => r.label === en.txYouPaid)?.value).toBe('10.000 KD');
+  });
+});
+
 describe('the sign on every other headline is unchanged', () => {
   it('keeps the minus on a real debit', () => {
     const r = buildReceipt(charge(-6000), BRANCHES, 'en', en);

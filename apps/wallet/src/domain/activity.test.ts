@@ -105,18 +105,45 @@ describe('the sign on every other row is unchanged', () => {
   });
 
   /**
-   * A top-up's row shows what LANDED — amount + bonus — which is the design's
-   * own "+27.500" for a 25.000 payment with a 2.500 bonus. Pinned here because
-   * the zero change touches the same expression.
+   * A top-up's row shows what LANDED — and what landed is `amountFils`, because
+   * that is what the server writes there.
+   *
+   * THE FIXTURE IS A REAL ONE AND THE OLD ONE WAS NOT. This test used to pass
+   * `{amountFils: 25000, bonusFils: 2500}` and expect `+27.500`, on the theory
+   * that `amountFils` is what she paid and the row must add the bonus back. The
+   * wire disagrees: `GET /members/me/transactions` on avo_lane_b answered
+   * `{"kind":"topup","amountFils":11000,"bonusFils":1000}` for the 10.000
+   * payment that moved a Silver member from 24.500 to 35.500 — `amountFils` IS
+   * the credit and `bonusFils` is the split beside it. `services/topup.ts`
+   * writes `amountFils: intent.creditFils` and says so in a comment.
+   *
+   * Driven with the old arithmetic, the row read `+12.000` under a balance that
+   * had gone up by 11.000.
    */
-  it('still shows a top-up as what landed, not what was paid', () => {
+  it('shows a top-up as the credit the server recorded, not credit plus bonus', () => {
     const row = toActivityRow(
-      tx({ kind: 'topup', amountFils: 25000, bonusFils: 2500, method: 'knet' }),
+      // Captured, not composed: TX-2665307 on avo_lane_b.
+      tx({ kind: 'topup', amountFils: 11000, bonusFils: 1000, method: 'knet' }),
       BRANCHES,
       'en',
       en,
     );
-    expect(row.amount).toBe('+27.500');
+    expect(row.amount).toBe('+11.000');
+  });
+
+  it('never adds bonusFils to a top-up figure, whatever the split says', () => {
+    // The bonus is reconciliation data travelling alongside the credit. A row
+    // that adds it invents money: 11.000 + 1.000 is not a number the ledger,
+    // the intent or her balance has ever held.
+    for (const bonusFils of [0, 1000, 2500, 5000]) {
+      const row = toActivityRow(
+        tx({ kind: 'topup', amountFils: 11000, bonusFils, method: 'knet' }),
+        BRANCHES,
+        'en',
+        en,
+      );
+      expect(row.amount).toBe('+11.000');
+    }
   });
 });
 

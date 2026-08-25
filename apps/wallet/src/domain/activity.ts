@@ -8,7 +8,6 @@
  */
 
 import {
-  add,
   fils,
   formatFils,
   moneyAriaLabel,
@@ -115,28 +114,42 @@ function title(tx: Transaction, copy: Copy): string {
 }
 
 /**
- * What the row's figure is.
+ * What the row's figure is: `amountFils`, signed, for every kind including a
+ * top-up.
  *
- * For everything except a top-up it is `amountFils`, signed. For a top-up the
- * design shows what LANDED in the wallet, not what was paid to the gateway:
- * AVO Wallet Home.dc.html renders "Top-up · KNET  +27.500" for a top-up whose
- * detail rows read "You paid 25.000 / Silver bonus +2.500 / Landed in wallet
- * 27.500". The fixtures agree — 25000 + 2500 and 10000 + 1000 — so
- * `amountFils` is what the customer paid and the credit is amount + bonus.
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THIS FUNCTION USED TO ADD `bonusFils` TO A TOP-UP AND IT DOUBLE-COUNTED THE
+ * BONUS. Driven on a simulator against the real API: a 10.000 top-up on Silver
+ * moved the balance by 11.000, and the activity row underneath said +12.000.
  *
- * CONTRACT AMBIGUITY (reported, not resolved): api-contract.md § Transaction
- * describes `bonusFils` as "tier bonus portion of a topup", which reads as
- * though the bonus is already inside `amountFils`. Read that way this row would
- * show 25.000, and a customer's activity total would not reconcile with her
- * balance. The TopUpIntent definition three lines below — "creditFils =
- * amountFils + bonusFils" — and the design copy both point the other way, so
- * that is what is implemented. The wording should be tightened either way; this
- * is a display decision only and moves no money.
+ * The old code was reasoning from the design's "+27.500" and from
+ * `creditFils = amountFils + bonusFils` on the **intent** — where that identity
+ * is true — and carrying it onto the **transaction**, where it is not. It said
+ * so itself, filed as a "CONTRACT AMBIGUITY (reported, not resolved)". The
+ * running API resolves it, in its own words at `services/topup.ts`:
+ *
+ *     // Signed, credit positive: what actually landed, both bonuses included.
+ *     amountFils: intent.creditFils,
+ *
+ * So a top-up transaction's `amountFils` IS the credit, `bonusFils` is the tier
+ * split carried alongside it for reconciliation, and adding them produces a
+ * number that exists nowhere — not on the intent, not in the ledger, not in her
+ * balance. Captured from `GET /members/me/transactions` on avo_lane_b:
+ * `{"kind":"topup","amountFils":11000,"bonusFils":1000}` for the 10.000 payment
+ * that took 24.500 to 35.500.
+ *
+ * The design is still satisfied. It asks the row to show what LANDED, and what
+ * landed is now what the server sent rather than what the client recomputed —
+ * which is the same rule as non-negotiable #2 one level down.
+ *
+ * The fixture that pinned the old behaviour was hand-written. A real one would
+ * have caught this on the day, which is the lesson `api/shop.test.ts` already
+ * carries: "four contract drifts in this project were a schema narrower than
+ * the wire", and this was a fifth wearing arithmetic instead.
+ * ═════════════════════════════════════════════════════════════════════════════
  */
 function creditedAmount(tx: Transaction): Fils {
-  const amount = fils(tx.amountFils);
-  if (tx.kind !== 'topup' || tx.bonusFils === 0) return amount;
-  return add(amount, fils(tx.bonusFils));
+  return fils(tx.amountFils);
 }
 
 export function toActivityRow(

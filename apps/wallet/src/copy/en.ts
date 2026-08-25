@@ -167,6 +167,21 @@ export const en: Copy = {
     'Finish the payment on your bank page — you will come back here automatically.',
   payDontClose: 'Keep this screen open until the bank sends you back.',
 
+  /*
+    INVENTED — see copy/types.ts for why none of the existing failure sentences
+    could be reused, and DECISIONS.md § "The offline cold-load sentence" for the
+    precedent that authorises writing one.
+
+    "still waiting" is the load-bearing phrase. The intent is real, unpaid and
+    unconsumed, and a customer who is told "nothing happened" starts a second
+    top-up — which is the behaviour that leaves a trail of orphaned intents
+    behind a phone whose browser will not open.
+  */
+  gatewayFailedTitle: 'The payment page did not open',
+  gatewayFailedBody:
+    'Nothing was charged and your top-up is still waiting. Open the payment page again, or choose another method.',
+  gatewayFailedRetry: 'Open the payment page',
+
   // top-up sheet — the four outcomes. Four sets of words, deliberately.
   doneTitle: 'Top-up complete',
   doneMsg: 'Your wallet is ready to use at any branch.',
