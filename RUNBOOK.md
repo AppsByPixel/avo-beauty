@@ -97,14 +97,38 @@ rm -rf packages/*/dist .turbo
 #    dist for the money helpers, so on a genuinely clean tree the seed dies with
 #    ERR_MODULE_NOT_FOUND. This line was missing from the recipe for a day —
 #    Lane D found it by running the recipe as written, which nobody had done.
+# PATH, BEFORE ANY OF THIS. Two binaries disagree and the error blames the
+#    wrong thing. `pnpm` lives in miniconda's bin, and THAT DIRECTORY ALSO SHIPS
+#    node v20.17.0, which has no `--env-file-if-exists`; nvm has v25.7.0, which
+#    does. Put nvm first or migrate and seed fail with `node: .env: not found`,
+#    which names a file rather than the node that cannot read it. And turbo
+#    needs pnpm ON PATH — an absolute path alone gives "cannot find binary path".
+export PATH="/Users/koraspond_developer/.nvm/versions/node/v25.7.0/bin:/Users/koraspond_developer/miniconda3/bin:$PATH"
+node --version   # must print v25.7.0
+
 pnpm build
 
-# 3. Database state — a warm database has rows a fresh one does not
-docker exec -i avo-postgres psql -U avo -d postgres \
-  -c "DROP DATABASE IF EXISTS avo_ci;" -c "CREATE DATABASE avo_ci OWNER avo;"
+# 3. Database state — a warm database has rows a fresh one does not.
+#    RESET THE SCHEMA, NOT THE DATABASE. `DROP DATABASE` is blocked in some
+#    sandboxes, and a recipe whose first step is refused reads as "the gate
+#    cannot run" — it cost this project a day of believing exactly that. The
+#    lanes solved it weeks earlier: scripts/lane-db.sh does ordinary DDL inside
+#    a database that already exists, and nothing blocks that. `avo_ci` is
+#    created once by trunk and never dropped.
+docker exec -i avo-postgres psql -U avo -d avo_ci -q \
+  -c "DROP SCHEMA IF EXISTS public CASCADE;" \
+  -c "DROP SCHEMA IF EXISTS drizzle CASCADE;" \
+  -c "CREATE SCHEMA public;" \
+  -c "GRANT ALL ON SCHEMA public TO avo;"
 export DATABASE_URL="postgres://avo:avo_dev_password@localhost:5433/avo_ci"
 export APP_DATABASE_URL="postgres://avo_app:avo_app_dev_password@localhost:5433/avo_ci"
-pnpm --filter @avo/api run db:migrate && pnpm --filter @avo/api run db:seed
+
+#    `--dir` WITH AN ABSOLUTE PATH, NEVER `--filter` — the rule every lane
+#    already follows, which this recipe was quietly breaking. `--filter` runs
+#    from the workspace root, so `--env-file-if-exists=.env` resolves against
+#    the wrong directory and both commands die with exit 9.
+pnpm --dir=/Users/koraspond_developer/dev/avo/api run db:migrate && \
+pnpm --dir=/Users/koraspond_developer/dev/avo/api run db:seed
 
 # 4. Twice. A single green run has been wrong three times: once on a stale dist,
 #    once on a warm database, once on a turbo cache replay that took 14ms.
