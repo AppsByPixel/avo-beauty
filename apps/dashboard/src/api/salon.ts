@@ -180,9 +180,27 @@ function nullableNum(v: unknown, where: string): number | null {
  * not drawn by the Overview row; they are parsed anyway, because the next reader
  * of this feed should find the record whole rather than discover a hole.
  */
-export function parseActivityFeed(raw: unknown): Paginated<ActivityItem> {
+/**
+ * `where` NAMES THE CALLER, because there are two and they fail differently.
+ *
+ * `GET /v1/platform/activity` serves the SAME `FeedItem` — one server interface
+ * in `api/src/services/activityFeed.ts`, imported by both routes, and that file
+ * exists precisely so the merchant's feed and the console's cannot answer the
+ * same question two ways. A second parser here would be the client-side version
+ * of the duplication it was written to prevent, and the sentence it renders
+ * (`what`) is the thing that would drift.
+ *
+ * What is NOT shared is the endpoint in the message. A parse failure that names
+ * `/salons/{id}/activity` while the console was reading `/v1/platform/activity`
+ * sends the next reader to the wrong handler, so the path is a parameter and
+ * defaults to the caller that had this file first.
+ */
+export function parseActivityFeed(
+  raw: unknown,
+  where = 'GET /salons/{id}/activity',
+): Paginated<ActivityItem> {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error('GET /salons/{id}/activity did not answer an object.');
+    throw new Error(`${where} did not answer an object.`);
   }
   const r = raw as Record<string, unknown>;
   if (!Array.isArray(r.items)) throw new Error('activity.items was not an array.');
@@ -210,10 +228,18 @@ export function parseActivityFeed(raw: unknown): Paginated<ActivityItem> {
       };
     }),
     /*
-     * Always `null` from this endpoint — the Overview draws five lines and no
-     * "load more", and a cursor over a MERGED stream would need a composite
-     * position. `GET /salons/{id}/audit` is the screen that pages. Read rather
-     * than assumed, so a server that grows one is not silently ignored.
+     * ALWAYS `null` FROM THE MERCHANT'S READ, AND A REAL STRING FROM THE
+     * CONSOLE'S — which is why it was read rather than assumed here.
+     *
+     * `routes/activity.ts` has no cursor on purpose: the Overview draws five
+     * lines and no "load more", and a cursor over a MERGED stream needs a
+     * composite position. `GET /v1/platform/activity` is the other case — a
+     * whole section whose job is looking backwards — so it pays for that
+     * composite key and sends `"<instant>|<rank>|<id>"`, one opaque string.
+     *
+     * Both are `string | null` on the wire and neither is interpreted here; the
+     * console's hook hands it straight back as `?cursor=`. Parsing it would be
+     * this client claiming to know a format `services/streamCursor.ts` owns.
      */
     nextCursor: r.nextCursor === undefined || r.nextCursor === null
       ? null

@@ -38,62 +38,73 @@ export const SCOPES: Record<AuthScope, ScopeConfig> = {
     storageKey: 'avo.session.merchant',
   },
   /**
-   * BUILT. Sign-in, the shell, Approvals and Policies are live; the other eight
-   * sections resolve to a named placeholder because the console design draws them
-   * and their endpoints do not exist yet.
+   * BUILT, and nine of its ten sections now read from the API.
    *
-   * `home` is Approvals rather than the design's Salons, and deliberately: Salons
-   * has no endpoint, so landing a freshly signed-in admin there would open the
-   * console on "isn't built yet". Approvals is the section that actually needs
-   * watching — it is the one thing standing between a salon and a customer's
-   * phone.
+   * Analytics, Activity, Salons (with the per-salon editor), Accounts, Admins,
+   * Approvals, Policies, Audit log and Controls are live. Billing alone resolves
+   * to `NotBuiltYet`.
    *
-   * THIS IS A BLOCKED ITEM, NOT A DEFERRED ONE, AND THE DIFFERENCE IS WRITTEN
-   * DOWN HERE BECAUSE A MISSING GATE AND A GATE NOBODY NEEDED LOOK IDENTICAL.
+   * `home` IS APPROVALS AND STAYS APPROVALS, but only half the original reason
+   * survives. It used to read "rather than the design's Salons… Salons has no
+   * endpoint, so landing a freshly signed-in admin there would open the console on
+   * 'isn't built yet'." That is spent — Salons has `GET /v1/platform/salons`, an
+   * editor and an onboarding wizard. The reason that still holds is the second
+   * one: Approvals is the section that actually needs watching, because it is the
+   * one thing standing between a salon and a customer's phone (non-negotiable #8 —
+   * a merchant cannot send a customer message; `POST /campaigns` only creates
+   * `pending`, and delivery happens on the platform decision endpoint).
    *
-   * Phase 7 was checked against `api/src` on 2026-08-19, not against
-   * api-contract.md. The console is blocked at its own front door: there is no
-   * platform principal on the server at all.
+   * =========================================================================
+   * WHAT THIS COMMENT USED TO SAY, AND WHY IT IS WORTH ONE PARAGRAPH
+   * =========================================================================
+   * Roughly sixty lines here explained that the console COULD NOT BE BUILT: no
+   * platform principal on the server, no `platform_admin` table, no session
+   * endpoint, and an endpoint-by-endpoint list of everything Approvals, Policies,
+   * Analytics, Audit, Admins and Controls were missing. It was accurate when it
+   * was written and dated itself honestly — "checked against `api/src` on
+   * 2026-08-19".
    *
-   *   api/src/auth/tokens.ts    `PrincipalKind = 'member' | 'staff'`
-   *                             `SessionScope  = 'wallet' | 'scanner' | 'dashboard'`
-   *   api/src/auth/principal.ts `Principal = MemberPrincipal | StaffPrincipal`
-   *   api/src/db/schema/        no platform_admin table
-   *   packages/types            no PlatformAdmin entity
+   * Every blocking claim in it is now false, and it was contradicted by this
+   * file's own neighbours long before anyone reread it: `ConsoleShell`, nine built
+   * sections and `consoleNavGates.test.ts` all sit on top of the principal it said
+   * did not exist. Verified one at a time before deleting it:
    *
-   * So `POST /auth/web/session` can only ever mint a salon-scoped `dashboard`
-   * staff session, and every `/v1/platform/*` route that exists today is gated
-   * by `requireDashboardPerm(req, 'marketing')` + `requireSameSalon` — a
-   * MERCHANT credential. An owner console signing in against that would either
-   * be a salon manager wearing a different shell, or a second sign-in flow
-   * invented here against an endpoint that does not exist.
+   *   PrincipalKind        includes 'platform_admin'   auth/tokens.ts:26
+   *   SessionScope         includes 'platform'         auth/tokens.ts:27
+   *   Principal            includes PlatformPrincipal  auth/principal.ts:156
+   *   platform_admin       the table exists            db/schema/platformAdmin.ts
+   *   the session endpoint POST /auth/platform/session routes/auth.ts:583
    *
-   * The second is what `LANES.md` § "Order of work" records as already having
-   * gone wrong once — "Running it *ahead* of the API is what produced the
-   * throwaway sign-in stand-in that had to be rewritten." So this stays
-   * declared until the server has a principal to authenticate.
+   * and every route on its "WHAT IS MISSING" list is registered today — the
+   * campaigns decision, the messaging policy, the four policy-draft routes,
+   * `/v1/platform/metrics`, `/v1/platform/audit`, `/v1/platform/admins` and
+   * `/v1/platform/settings`.
    *
-   * WHAT IS MISSING, endpoint by endpoint, for whoever unblocks it:
+   * THE MECHANISM, WHICH IS THE PART THAT RECURS: a comment cannot fail a build.
+   * This is the fifth stale explanation found in this build and the second in this
+   * lane's own files; the Salons nav item carried one for eight weeks that shipped
+   * a real defect in both directions at once. The remedy that worked there is a
+   * DERIVED test, not a better comment — `consoleNavGates.test.ts` reads the gates
+   * out of `api/src/routes/` so no one has to keep them in their head. There is no
+   * equivalent guard for a prose paragraph, which is exactly why this one is being
+   * kept short.
    *
-   *   auth        no platform session endpoint, no platform_admin row to
-   *               authenticate against, no `platform` SessionScope
-   *   Approvals   GET  /v1/platform/campaigns?status=pending   mock only, not the API
-   *               POST /v1/platform/campaigns/{cid}/decision   nowhere
-   *               PATCH /v1/platform/messaging-policy          nowhere
-   *   Policies    GET  /v1/platform/policies answers `{ published }` only; the
-   *               console needs `{ published, draft }` (api-contract.md:464)
-   *               PATCH/POST/DELETE .../policies/draft…        nowhere
-   *               POST .../policies/publish, .../discard       nowhere
-   *   Analytics   GET  /platform/metrics                       nowhere
-   *   Audit       platform-wide read; only salon-scoped
-   *               `GET /salons/{id}/audit` exists
-   *   Admins      no platform_admin table, so no authority editor
-   *   Controls    PATCH /platform/settings                     nowhere
+   * TWO THINGS FROM THE OLD NOTE ARE STILL TRUE and are kept rather than deleted
+   * with the rest:
    *
-   * One thing DOES already anticipate the console, and it is worth knowing:
-   * `audit_log.actor_kind` includes `platform_admin`, and the seed writes rows
-   * with it. `services/audit.ts::actorOf()` cannot produce that value from any
-   * principal that exists — the schema is ready and the write path is not.
+   *   `packages/types` HAS NO `PlatformAdmin` ENTITY. The console's admin shape
+   *   lives in `auth/platformAdmin.ts` on this side and `db/schema/platformAdmin.ts`
+   *   on the server, and the two are not derived from one another. `packages/types`
+   *   is trunk-owned, so this lane cannot close it — it is named here so the gap is
+   *   visible rather than assumed handled.
+   *
+   *   `LANES.md` § "Order of work" — "Running it *ahead* of the API is what
+   *   produced the throwaway sign-in stand-in that had to be rewritten." That is a
+   *   rule about sequencing, not a claim about the API, so nothing falsified it.
+   *   It is why this lane builds a section only once its endpoint exists, which is
+   *   why Billing is still `NotBuiltYet`: no trial, subscription or invoice column
+   *   exists anywhere in the schema and the design's figures are prototype
+   *   fixtures. Queued as `DECISIONS.md` #15 — blocked, not deferred.
    */
   owner: {
     id: 'owner',

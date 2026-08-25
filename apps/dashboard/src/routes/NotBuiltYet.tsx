@@ -13,9 +13,14 @@ import type { AuthScope } from '../auth/scopes.js';
  * True on the merchant dashboard, which has an Overview. The owner console does
  * not — its sections are Analytics, Activity, Salons, Accounts, Admins,
  * Approvals, Policies, Billing, Audit log, Controls. So the platform owner was
- * told to go and look at something that is not in her sidebar, on all three of
- * her unbuilt sections at once (`/console/activity`, `/console/accounts`,
- * `/console/billing`).
+ * told to go and look at something that is not in her sidebar, on what were then
+ * all three of her unbuilt sections at once (`/console/activity`,
+ * `/console/accounts`, `/console/billing`).
+ *
+ * ONLY `/console/billing` REACHES THIS COMPONENT ON THE CONSOLE NOW. The other
+ * two were built once it was established that their endpoints already existed.
+ * The `owner` sentence below is unaffected and still has to be right: Billing is
+ * the section a platform owner is most likely to go looking for on day one.
  *
  * THE SURFACE IS A REQUIRED PROP, NOT A ROUTE SNIFF. Two reasons, and the second
  * is the one that matters. Reading the current path inside this component would
@@ -26,14 +31,19 @@ import type { AuthScope } from '../auth/scopes.js';
  * scope does not compile until someone writes its sentence.
  *
  * WHAT IS DELIBERATELY NOT CLAIMED HERE. This says a section is later in the
- * plan; it does not say why, because the three console sections do not share a
- * reason and a single sentence would have to be wrong about two of them.
- * Activity and Accounts are unbuilt SCREENS whose endpoints already exist
- * (`GET /v1/platform/activity`, `GET /v1/platform/accounts`) — unblocked work.
- * Billing is genuinely blocked: no trial, subscription or invoice column exists
- * anywhere, and the product question is queued as `DECISIONS.md` #15. Saying
- * "later in the build plan" is true of all three; saying anything more specific
- * from one shared component would not be.
+ * plan; it does not say why. The reason it does not is worth keeping, because it
+ * is what the last slice acted on: the three console sections behind this screen
+ * did NOT share a reason, and a single sentence would have been wrong about two
+ * of them. Activity and Accounts were unbuilt SCREENS whose endpoints already
+ * existed (`GET /v1/platform/activity`, `GET /v1/platform/accounts`) — unblocked
+ * work, and now built. Billing is genuinely blocked: no trial, subscription or
+ * invoice column exists anywhere in the schema and the design's figures are
+ * prototype fixtures, so the product question is queued as `DECISIONS.md` #15.
+ *
+ * That distinction is the reason this component stays vague rather than growing a
+ * per-section explanation: "later in the build plan" was true of all three and
+ * survived two of them shipping, where anything more specific would have gone
+ * stale on the same commit.
  */
 const LANDMARK: Record<AuthScope, string> = {
   /** The merchant's landing section, and live. */
