@@ -430,6 +430,77 @@ export const RECEIPT_POLL_MS = 250;
 /** Whether the API under test runs the receipt worker. See the boot env below. */
 export const RECEIPT_WORKER_ENABLED = (process.env.RECEIPT_WORKER_ENABLED ?? '1') === '1';
 
+// -------------------------------------------------------------- the no-show --
+
+/**
+ * THE NO-SHOW WORKER IS OFF UNDER TEST, AND THIS IS A BUG FIX RATHER THAN A
+ * PREFERENCE. It is the opposite call to `RECEIPT_WORKER_ENABLED` above, so the
+ * difference is worth spelling out.
+ *
+ * WHAT IT COST. `deposit.test.ts` § "two no-show passes racing on one deposit
+ * still return it once" failed in one gate run and passed in the next, on an
+ * identical tree, an identical build and a freshly seeded database. Both of the
+ * spec's spawned passes reported `{candidates: 1, returned: 0, alreadySettled: 1}`
+ * while the member's balance and her `deposit_return` count had each moved by
+ * exactly one. Nothing was lost and nothing was double-paid — the deposit came
+ * back once, correctly. It was simply returned by somebody the spec had not
+ * launched, so the spec's last assertion, `returned === 1 between them`, read 0.
+ *
+ * WHO. `api/src/server.ts` starts `startNoShowWorker` whenever
+ * `NO_SHOW_WORKER_ENABLED` is on, and `api/src/env.ts` defaults it to `'1'`,
+ * polling every `NO_SHOW_POLL_MS` (30s). This harness boots `src/server.ts` — not
+ * `buildApp()` — against this run's database, and never set the variable. So every
+ * deposit spec in the suite has been running against a third, invisible worker on
+ * a timer that no test chose.
+ *
+ * AND IT IS NOT ONE SPEC'S PROBLEM, WHICH IS WHY THE PIN IS AT THE HARNESS RATHER
+ * THAN A GUARD IN ONE FILE. Turned up to `NO_SHOW_POLL_MS=1000` so the timer wins
+ * reliably, FOUR of `deposit.test.ts`'s twenty specs go red, every run:
+ *
+ *   a charge consumes exactly ONE hold, the earliest, …
+ *       precondition failed: the two bookings added 5000 to the held account,
+ *       not two deposits
+ *   returns a held deposit whose grace period has expired, in full, to her wallet
+ *       the job saw 0 candidate(s) and returned 0
+ *   and running it AGAIN returns nothing further …
+ *       precondition failed: the first pass returned nothing, so this spec cannot
+ *       tell idempotence from inaction
+ *   two no-show passes racing on one deposit …
+ *       expected 200000 to be 205000
+ *
+ * Three of those four fail LOUDLY, on a precondition or a candidate count that
+ * names what is missing. The racing spec is the one that fails quietly — its money
+ * assertions still pass, because the deposit really did come back exactly once —
+ * and quiet is why it was the one that reached a gate as a mystery rather than as
+ * a diagnosis.
+ *
+ * WHY THIS AND NOT ISOLATION. A private member or a private booking fixes nothing:
+ * the worker's scan is `status = 'deposit_held' AND no_show_return_due_at <= now()`
+ * across the WHOLE database, so it finds any due booking belonging to anyone.
+ * `fileParallelism: false` does not help either — the interference is not between
+ * two test files, it is between the suite and the server the suite booted. Turning
+ * the loop off is the only thing that removes it.
+ *
+ * WHY NOTHING IS LOST BY TURNING IT OFF. No spec in this directory waits for the
+ * timer. Every `no_show_returned` assertion in the suite follows an explicit
+ * `runNoShowJob()`, which runs `api/src/jobs/no-show-once.ts` — the one-shot script
+ * lane A wrote for exactly this, whose own docstring says "a claim about a
+ * background loop that can only be exercised by waiting for a timer is a claim
+ * nobody checks". The behaviour stays covered; only the unscheduled copy goes away.
+ *
+ * `noShowWorker.ts` already states the principle and this restores it: "NOT STARTED
+ * BY `buildApp()`. A background loop attached to the app factory would return
+ * deposits inside every test run, at a moment no test chose." Booting `server.ts`
+ * put that loop back into every test run through the other door.
+ *
+ * Overridable, so an operator can prove the timer end to end on purpose:
+ *
+ *     NO_SHOW_WORKER_ENABLED=1 NO_SHOW_POLL_MS=1000 ../node_modules/.bin/vitest run deposit
+ *
+ * which is also how the failure above was reproduced on demand.
+ */
+export const NO_SHOW_WORKER_ENABLED = (process.env.NO_SHOW_WORKER_ENABLED ?? '0') === '1';
+
 /**
  * The attempt budget the API under test runs with, PINNED HERE rather than left to
  * `env.ts`'s default of 6.
@@ -1769,6 +1840,13 @@ async function bootApiOnce(): Promise<boolean> {
       RECEIPT_POLL_MS: String(RECEIPT_POLL_MS),
       // Pinned, not defaulted — see RECEIPT_MAX_ATTEMPTS above.
       RECEIPT_MAX_ATTEMPTS: String(RECEIPT_MAX_ATTEMPTS),
+
+      // ----------------------------------------------------- the no-show --
+      // OFF, and unlike the receipt worker that is not a preference. See the
+      // long note beside NO_SHOW_WORKER_ENABLED above: this loop returns
+      // deposits on a 30s timer that no spec chose, which is what made
+      // deposit.test.ts's racing spec fail once in two identical gate runs.
+      NO_SHOW_WORKER_ENABLED: NO_SHOW_WORKER_ENABLED ? '1' : '0',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
