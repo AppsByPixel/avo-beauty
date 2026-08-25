@@ -1,15 +1,20 @@
 /**
  * The top-up sheet: choose → redirect → result.
  *
- * Three things in here are rules rather than layout, and each is commented at
+ * Four things in here are rules rather than layout, and each is commented at
  * the point it is enforced:
  *
  *   · the calculation card renders the intent's numbers and never its own
  *   · the redirect stage has no dismissal control of any kind
  *   · the four outcomes are four screens, and only two of them offer a retry
+ *   · a page that would not open is not a payment that was refused, and the two
+ *     have separate screens, separate words and separate primary controls
  *
- * `feeFils` is on every intent this file receives and is never read. See
- * domain/topup.ts for why.
+ * `feeFils` IS NOT ON THE INTENTS THIS FILE RECEIVES, and the sentence that said
+ * it was is what broke top-ups. The customer endpoints serialise
+ * `TopUpIntentPublicSchema`, which omits it; the wallet parsed with the merchant
+ * schema, which requires it, and every 200 died at the parse. See
+ * `api/topups.ts` for the whole account.
  */
 
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -19,7 +24,7 @@ import {
   moneyAriaLabel,
   type Fils,
   type TierName,
-  type TopUpIntent,
+  type TopUpIntentPublic,
 } from '@avo/types';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text, WHITE } from '../theme';
 import { useCopy, useLanguage } from '../i18n/language';
@@ -68,8 +73,10 @@ export function TopUpSheet({ stage, controller, newBalanceFils, tier }: Props) {
           newBalanceFils={newBalanceFils}
           controller={controller}
         />
+      ) : stage.name === 'gatewayFailed' ? (
+        <GatewayFailedStage stage={stage} controller={controller} />
       ) : stage.name === 'quoteFailed' ? (
-        <QuoteFailedStage controller={controller} />
+        <QuoteFailedStage stage={stage} controller={controller} />
       ) : stage.name === 'closed' ? null : (
         <ChooseStage stage={stage} controller={controller} tier={tier} />
       )}
@@ -107,7 +114,7 @@ function ChooseStage({
       <Text style={[text('displayS', lang), styles.sheetTitle]}>{copy.payTitle}</Text>
 
       {/*
-        THE CALCULATION CARD. Every figure below comes off the TopUpIntent the
+        THE CALCULATION CARD. Every figure below comes off the TopUpIntentPublic the
         server just issued — `amountFils`, `bonusFils`, `creditFils`. Nothing is
         multiplied by a tier percentage here, and while the quote is in flight the
         rows are bars rather than zeroes.
@@ -262,7 +269,7 @@ function CalcRow({
  * payment at the bank would carry on, and the customer would be looking at a
  * wallet that has forgotten about it.
  */
-function RedirectStage({ intent }: { intent: TopUpIntent }) {
+function RedirectStage({ intent }: { intent: TopUpIntentPublic }) {
   const { lang, copy } = useLanguage();
   return (
     <View style={styles.centred} testID="topup-redirect">
@@ -319,7 +326,7 @@ function ResultStage({
   newBalanceFils,
   controller,
 }: {
-  intent: TopUpIntent;
+  intent: TopUpIntentPublic;
   outcome: TopUpOutcome;
   newBalanceFils: Fils | null;
   controller: TopUpController;
@@ -484,21 +491,126 @@ function ResultRow({
  * The POST that asks for an intent failed. No intent exists, so nothing has been
  * charged and nothing can be — this is a plain "we failed", and it retries with
  * the SAME idempotency key in case the request did reach the server.
+ *
+ * THE OFFLINE BRANCH IS NOT DECORATION. interaction-spec.md §4 asks a screen to
+ * tell "we failed" from "no connection", and this one used to say
+ * "Try again in a moment" to a phone in a lift — our fault, stated confidently,
+ * for a problem that is not ours and that a retry in a moment will not fix. The
+ * kind was already on the stage and simply unread. `offlineColdTitle` /
+ * `offlineColdBody` are the authorised sentences for exactly this: a failure
+ * with no data behind it and no last update to fall back on.
  */
-function QuoteFailedStage({ controller }: { controller: TopUpController }) {
+function QuoteFailedStage({
+  stage,
+  controller,
+}: {
+  stage: Extract<TopUpStage, { name: 'quoteFailed' }>;
+  controller: TopUpController;
+}) {
   const { lang, copy } = useLanguage();
+  const offline = stage.failure.kind === 'offline';
   return (
-    <View style={styles.centred} testID="topup-quote-failed">
-      <View style={[styles.resultMark, styles.resultMarkBad]}>
-        <Text style={styles.resultGlyph}>✕</Text>
+    <View style={styles.centred} testID={offline ? 'topup-quote-offline' : 'topup-quote-failed'}>
+      <View style={[styles.resultMark, offline ? styles.resultMarkWait : styles.resultMarkBad]}>
+        <Text style={styles.resultGlyph}>{offline ? '⚠' : '✕'}</Text>
       </View>
-      <Text style={[text('displayM', lang), styles.resultTitle]}>{copy.quoteFailedTitle}</Text>
-      <Text style={[text('body', lang), styles.resultBody]}>{copy.quoteFailedBody}</Text>
+      <Text style={[text('displayM', lang), styles.resultTitle]} accessibilityRole="header">
+        {offline ? copy.offlineColdTitle : copy.quoteFailedTitle}
+      </Text>
+      <Text style={[text('body', lang), styles.resultBody]}>
+        {offline ? copy.offlineColdBody : copy.quoteFailedBody}
+      </Text>
+      {/*
+        The support reference, on the failure the customer is most likely to ring
+        about. It is already on the stage; it was being thrown away.
+      */}
+      {offline ? null : (
+        <Text style={[text('bodyS', lang), styles.failureRef]}>
+          {copy.referencePrefix}
+          {stage.failure.reference}
+        </Text>
+      )}
       <View style={styles.resultActions}>
         <PrimaryButton
           label={copy.tryAgain}
           onPress={controller.retryQuote}
           testID="topup-retry-quote"
+        />
+        <SecondaryButton label={copy.txClose} onPress={controller.close} testID="topup-cancel" />
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------- gateway failed --
+
+/**
+ * The payment page would not open.
+ *
+ * A SEPARATE SCREEN FROM BOTH ITS NEIGHBOURS, and the separation is the fix. It
+ * used to be reported as `quoteFailed` — "We couldn't start that top-up. Nothing
+ * was charged. Try again in a moment." — which is the wording for a request that
+ * never reached the server, and it is wrong in the one way that costs something:
+ * an intent DOES exist, so "try again" reads as "start another one".
+ *
+ * Three differences from `QuoteFailedStage`, each deliberate:
+ *
+ *   the words     say the page did not open and that the top-up is still
+ *                 waiting, rather than that nothing happened
+ *   the primary   re-opens the SAME intent (`retryOpen`), so a customer holding
+ *                 the button on a phone that will not open a browser does not
+ *                 mint a row per tap
+ *   the reference is shown, because this is the failure where support will be
+ *                 asked to find an intent nobody ever saw a page for
+ */
+function GatewayFailedStage({
+  stage,
+  controller,
+}: {
+  stage: Extract<TopUpStage, { name: 'gatewayFailed' }>;
+  controller: TopUpController;
+}) {
+  const { lang, copy } = useLanguage();
+  const paid = fils(stage.intent.amountFils);
+  return (
+    <View style={styles.centred} testID="topup-gateway-failed">
+      <View style={[styles.resultMark, styles.resultMarkBad]}>
+        <Text style={styles.resultGlyph}>✕</Text>
+      </View>
+      <Text style={[text('displayM', lang), styles.resultTitle]} accessibilityRole="header">
+        {copy.gatewayFailedTitle}
+      </Text>
+      <Text style={[text('body', lang), styles.resultBody]}>{copy.gatewayFailedBody}</Text>
+
+      <View style={styles.rowsCard}>
+        <ResultRow
+          label={copy.rAmount}
+          value={formatMoney(paid, lang)}
+          valueLabel={moneyAriaLabel(paid, lang)}
+          strong
+        />
+        <ResultRow label={copy.rMethod} value={copy.payMethod[stage.intent.method]} />
+        <ResultRow label={copy.rCharged} value={copy.vNothing} tone="good" />
+        {/* The intent support will be asked to find. */}
+        <ResultRow label={copy.rRef} value={stage.intent.reference} mono last />
+      </View>
+
+      <View style={styles.resultActions}>
+        <PrimaryButton
+          label={copy.gatewayFailedRetry}
+          onPress={controller.retryOpen}
+          testID="topup-retry-open"
+        />
+        {/*
+          The escape hatch, and the reason it is here: if the rail she picked is
+          itself the thing whose page will not open, opening it again is not a
+          remedy. This mints a NEW attempt and a new intent, which is why it is
+          the secondary and not the primary.
+        */}
+        <SecondaryButton
+          label={copy.otherMethod}
+          onPress={() => controller.tryAgain()}
+          testID="topup-gateway-other-method"
         />
         <SecondaryButton label={copy.txClose} onPress={controller.close} testID="topup-cancel" />
       </View>
@@ -660,5 +772,6 @@ const styles = StyleSheet.create({
   resultRowValueAr: { fontFamily: 'IBMPlexSansArabic_600SemiBold' },
   reference: { fontFamily: 'Fraunces_500Medium', letterSpacing: 0.4 },
 
+  failureRef: { color: color.textMutedLabel, marginTop: 10, letterSpacing: 0.3 },
   resultActions: { alignSelf: 'stretch', marginTop: 20, gap: 9 },
 });

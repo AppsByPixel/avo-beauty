@@ -27,7 +27,6 @@
  */
 
 import {
-  add,
   fils,
   formatFils,
   formatMoney,
@@ -99,10 +98,41 @@ export function buildReceipt(
   const found = branches.find((b) => b.id === tx.branchId);
   const branch = found ? branchName(found, lang) : null;
   const bonus = fils(tx.bonusFils);
-  const paid = fils(tx.amountFils);
-  // Same rule as the activity row: for a top-up the headline is what LANDED,
-  // which is what the customer's balance moved by.
-  const headline = tx.kind === 'topup' && bonus !== 0 ? add(paid, bonus) : paid;
+  /**
+   * What the transaction moved. For a top-up that is the CREDIT — `amountFils`
+   * is written as `intent.creditFils` by `services/topup.ts`, bonuses already
+   * inside it.
+   *
+   * ═════════════════════════════════════════════════════════════════════════
+   * THIS WAS `add(paid, bonus)` AND IT OVERSTATED EVERY TOP-UP BY ITS BONUS.
+   * Driven on avo_lane_b: a 10.000 top-up on Silver moved the balance from
+   * 24.500 to 35.500 — eleven thousand fils — and this sheet's headline said
+   * 12.000, with a "Landed in wallet" row saying 12.000 underneath it. See
+   * `domain/activity.ts` § creditedAmount for the whole account; the list row
+   * and this sheet held the same wrong identity and agreed with each other,
+   * which is why neither looked wrong next to the other.
+   * ═════════════════════════════════════════════════════════════════════════
+   */
+  const credited = fils(tx.amountFils);
+  /**
+   * What she handed the gateway: the credit less the tier bonus the salon
+   * funded.
+   *
+   * ⚠️ REPORTED, NOT SOLVED — TRUNK OWNS THE FIX. This is exact only while the
+   * tier bonus is the ONLY bonus. A branch top-up boost lands in
+   * `promoBonusFils`, which is a column on the transaction and is NOT emitted by
+   * `serialiseTransactionForCustomer` (it emits twelve keys and that is not one
+   * of them). So on a boosted top-up this row reads high by the promo amount.
+   *
+   * The two honest options are both outside this lane's column: put
+   * `promoBonusFils` on the customer `Transaction`, or put a `paidFils` there so
+   * no client subtracts anything. Deriving it here is the least-wrong reading of
+   * the data the entity actually carries, and the three rows below at least sum:
+   * paid + bonus = landed = the balance movement. The previous arithmetic did
+   * not sum to anything.
+   */
+  const paid = fils(credited - bonus);
+  const headline = credited;
   const positive = headline > 0;
   const abs = fils(Math.abs(headline));
   /**
@@ -154,7 +184,7 @@ export function buildReceipt(
         emphasis: true,
       });
     }
-    rows.push({ label: copy.txLanded, ...money(add(paid, bonus), lang), emphasis: true });
+    rows.push({ label: copy.txLanded, ...money(credited, lang), emphasis: true });
     rows.push({ label: copy.txBranch, value: branch ?? copy.txBranchOnline });
   } else if (tx.kind === 'adjustment') {
     /*

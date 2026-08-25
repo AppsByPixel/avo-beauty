@@ -141,6 +141,30 @@ export interface Copy {
   payRedirectSub: string;
   payDontClose: string;
 
+  /**
+   * top-up sheet — the payment page would not open.
+   *
+   * INVENTED, and marked. The bundle has no sentence for this because the
+   * prototype's gateway always opens; the three it does have would each be a
+   * lie here. `quoteFailedBody` says "Nothing was charged. Try again in a
+   * moment." — true about the money, false about the state, because a real
+   * `TI-…` intent exists and a customer told "try again" reasonably starts a
+   * second one. `failMsg` blames her bank for a decline that never happened.
+   * `errorBody` says it is on our side, which it may not be — a popup blocker
+   * and a phone with no browser are hers.
+   *
+   * So the words have to do the one job the existing set cannot: say the page
+   * did not open, say the top-up is still waiting rather than gone, and point at
+   * opening it again rather than at starting another.
+   *
+   * See DECISIONS.md § "The offline cold-load sentence" for the precedent, and
+   * `AR_GAPS` for where the Arabic goes to be written.
+   */
+  gatewayFailedTitle: string;
+  gatewayFailedBody: string;
+  /** The primary control: the SAME intent, opened again. Not a new top-up. */
+  gatewayFailedRetry: string;
+
   // top-up sheet — the four outcomes. Four sets of words, deliberately.
   doneTitle: string;
   doneMsg: string;

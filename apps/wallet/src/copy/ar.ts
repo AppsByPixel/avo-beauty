@@ -253,6 +253,18 @@ export const ar: Copy = {
   payRedirectSub: 'أكملي الدفع في صفحة البنك — ستعودين إلى هنا تلقائياً.', // design:1371
   payDontClose: 'أبقي هذه الشاشة مفتوحة حتى يعيدكِ البنك.', // design:1372
 
+  /*
+    INVENTED in English and NOT translated here — the three keys go to the
+    native-speaker worksheet via AR_GAPS, like `quoteFailedTitle` and
+    `quoteFailedBody` immediately above them. Machine Arabic on a money screen is
+    the exact thing that list exists to prevent, and this one has to carry a
+    distinction ("still waiting", not "nothing happened") that a translation
+    which loses it would make actively harmful.
+  */
+  gatewayFailedTitle: en.gatewayFailedTitle, // AR GAP
+  gatewayFailedBody: en.gatewayFailedBody, // AR GAP
+  gatewayFailedRetry: en.gatewayFailedRetry, // AR GAP
+
   // ------------------------------------------ top-up sheet: the four outcomes --
   doneTitle: 'تم الشحن', // design:1376
   doneMsg: 'محفظتكِ جاهزة للاستخدام في كل الفروع.', // design:1376
@@ -731,6 +743,9 @@ export const AR_GAPS = [
   'loadingAria',
   'quoteFailedTitle',
   'quoteFailedBody',
+  'gatewayFailedTitle',
+  'gatewayFailedBody',
+  'gatewayFailedRetry',
   'emptyActivityTitle',
   'emptyActivityBody',
   'emptyActivityAction',
