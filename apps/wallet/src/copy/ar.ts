@@ -467,6 +467,7 @@ export const ar: Copy = {
   navHome: 'الرئيسية', // design:1340
   navBook: 'احجزي', // design:1340
   navShop: 'المتجر', // design:1340
+  navPay: 'ادفعي', // design:1340 — feminine imperative
 
   // ------------------------------------------------------------ shop & cart --
   /*

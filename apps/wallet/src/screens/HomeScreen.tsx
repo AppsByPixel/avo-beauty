@@ -10,7 +10,7 @@
  * treatments from design/AVO States.dc.html.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native';
 import { fils, formatMoney, type Fils } from '@avo/types';
@@ -22,7 +22,6 @@ import { useUpcoming } from '../state/useBooking';
 import { useBookingLabels } from '../state/useBookingLabels';
 import { nextAppointment } from '../domain/booking';
 import type { BookingView } from '../api/booking';
-import { useWalletToken } from '../state/useWalletToken';
 import { useTopUp } from '../state/useTopUp';
 import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
 import { relativeTime, toActivityRow } from '../domain/activity';
@@ -30,8 +29,7 @@ import { salonName } from '../domain/names';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { WalletCard } from '../components/WalletCard';
 import { PaymentCode } from '../components/PaymentCode';
-import { QrOverlay } from '../components/QrOverlay';
-import { paymentCodeView } from '../domain/paymentCode';
+import type { PaymentCodeView } from '../domain/paymentCode';
 import { ActivityFeed } from '../components/ActivityFeed';
 import { BranchEarning } from '../components/BranchEarning';
 import { HappyHourBanner } from '../components/HappyHourBanner';
@@ -66,9 +64,42 @@ interface HomeProps {
   onReschedule: (booking: BookingView) => void;
   /** Fired with the cancellation toast, so it survives this screen re-rendering. */
   onToast: (message: string) => void;
+  /**
+   * THE PAYMENT CODE IS DECIDED IN THE SHELL NOW, NOT HERE, and the reason is
+   * design:627 — the Pay tab.
+   *
+   * The design binds that tab to `openQr` (design:1905), the SAME handler as the
+   * wallet card's panel (design:254), and it does not change screen: the enlarged
+   * code opens over Shop and Book too. So the token, the `PaymentCodeView` and
+   * the overlay all had to move up to `App.tsx`, which is the only place that
+   * outlives a tab switch.
+   *
+   * That move is also what makes the §4 suppression hold for the tab. There is
+   * ONE `paymentCodeView` for the whole app; this panel and the Pay tab read it,
+   * and `domain/payTab.ts` asserts the tab can never enlarge what this rule has
+   * hidden. Two computations would have been two opinions about when a QR may be
+   * on a screen, and the one that mattered would be whichever ran offline.
+   */
+  codeView: PaymentCodeView;
+  /** The countdown to the SERVER's expiry. Cosmetic; see useWalletToken. */
+  codeSecondsRemaining: number;
+  /** Reached only from the `ready` panel — App decides, per domain/payTab.ts. */
+  onEnlargeCode: () => void;
+  /** Reached only from the `failed` panel, whose copy asks for it. */
+  onRetryCode: () => void;
 }
 
-export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast }: HomeProps) {
+export function HomeScreen({
+  home,
+  onOpenAccount,
+  onBook,
+  onReschedule,
+  onToast,
+  codeView,
+  codeSecondsRemaining,
+  onEnlargeCode,
+  onRetryCode,
+}: HomeProps) {
   const { lang, copy } = useLanguage();
   const { status, snapshot, fetchedAt, failure } = home;
 
@@ -89,36 +120,6 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
   }, [retry]);
 
   const topUp = useTopUp({ onSucceeded });
-
-  // Offline hides the payment code entirely — interaction-spec.md §4. A stale
-  // token fails at the counter and that failure looks like the salon's fault.
-  const codeEnabled = status === 'ready' || status === 'stale';
-  const walletToken = useWalletToken(codeEnabled && snapshot !== null);
-
-  /**
-   * WHICH PAYMENT-CODE RENDERING IS ON, DECIDED ONCE.
-   *
-   * Both the panel inside the wallet card and the enlarged overlay read this,
-   * and they have to agree — the overlay cannot live inside the panel, because
-   * `Shell` renders overlays as siblings of the ScrollView (a `position:
-   * absolute` layer inside the card is clipped by the card). So the decision
-   * comes out of `domain/paymentCode.ts` here, above both.
-   *
-   * `canEnlarge` is false for every state with no scannable code, and this
-   * effect closes an overlay that is already open when that becomes true —
-   * `interaction-spec.md` §4 takes the QR off the screen when the wallet goes
-   * offline, and an enlarged one left standing would be the same stale code, at
-   * 246pt, in front of a cashier.
-   */
-  const codeView = paymentCodeView({
-    token: walletToken.token,
-    unavailable: status === 'offline' ? 'offline' : walletToken.failed ? 'failed' : null,
-  });
-  const canEnlarge = codeView.canEnlarge;
-  const [enlarged, setEnlarged] = useState(false);
-  useEffect(() => {
-    if (!canEnlarge) setEnlarged(false);
-  }, [canEnlarge]);
 
   const rows = useMemo(
     () =>
@@ -214,21 +215,13 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
             onReport={onOpenAccount}
           />
           {/*
-            design:641-643. Here rather than inside `PaymentCode` because this
-            slot is a sibling of the ScrollView — see `Shell`. `codeView.kind`
-            gates it, so there is no render path that produces an overlay
-            without a server-issued token to put in it, and offline never has one.
+            design:641-643 USED TO BE RENDERED HERE and is now a sibling of the
+            whole shell, in `App.tsx`. design:627's Pay tab opens the same
+            overlay from Shop and Book, and an overlay owned by Home could not be
+            opened from a screen Home is not on. Nothing about WHEN it may open
+            changed: `codeView` is still the gate, it is just computed one level
+            up and handed to both. See `domain/payTab.ts`.
           */}
-          {codeView.kind === 'ready' ? (
-            <QrOverlay
-              open={enlarged}
-              token={codeView.token}
-              memberId={member.id}
-              secondsRemaining={walletToken.secondsRemaining}
-              salonLabel={salonName(salon, lang)}
-              onClose={() => setEnlarged(false)}
-            />
-          ) : null}
         </>
       }
     >
@@ -289,13 +282,13 @@ export function HomeScreen({ home, onOpenAccount, onBook, onReschedule, onToast 
         <PaymentCode
           memberId={member.id}
           view={codeView}
-          secondsRemaining={walletToken.secondsRemaining}
+          secondsRemaining={codeSecondsRemaining}
           // Two handlers where there was one `onPress` bound to `refresh`. The
           // tap on a LIVE code enlarges, which is what its hint has always
           // claimed; refresh is reachable only from the failed panel, whose copy
           // asks for it. See PaymentCode's header.
-          onEnlarge={() => setEnlarged(true)}
-          onRetry={walletToken.refresh}
+          onEnlarge={onEnlargeCode}
+          onRetry={onRetryCode}
         />
       </WalletCard>
 
