@@ -130,6 +130,22 @@ beforeAll(async () => {
       ('${PROBE_CAMPAIGN_B}', '${SALON_B}', 'Tenancy probe B', 'probe', 'push', 'all',
        NULL, 'now', 'pending', 'Tenancy')
     ON CONFLICT (id) DO UPDATE SET status = 'pending', salon_id = EXCLUDED.salon_id;
+
+    -- SALON B'S SOCIAL LINKS. Salon A is not touched here and must not be: its four
+    -- seeded handles are what \`contract.test.ts\` asserts \`salon.social\` is non-empty
+    -- against, and they are also the fixture the ledger row probes across the boundary.
+    --
+    -- SET, not merged, and reset on every run. The per-link endpoint APPENDS a channel
+    -- the salon does not have yet, so the ledger's control call adds a TikTok row to
+    -- whatever is already there; without this reset the array would grow a little each
+    -- run and the pair below would eventually be asserting about a link some earlier
+    -- run had left behind. Writing the whole array is safe precisely because nothing
+    -- outside this file reads salon B's — it exists only in this harness.
+    UPDATE salon SET social = '[
+      {"id":"${PROBE_SOCIAL_UNTOUCHED}","label":"Instagram","handle":"${B_SOCIAL_HANDLE}","on":true},
+      {"id":"${PROBE_SOCIAL_TABLE}","label":"TikTok","handle":"","on":false}
+    ]'::jsonb
+    WHERE id = '${SALON_B}';
   `);
 }, 120_000);
 
@@ -297,6 +313,40 @@ const PROBE_PRODUCT_B_PATCH = 'PR-TEN-B-PATCH';
 const PROBE_PRODUCT_B_DELETE = 'PR-TEN-B-DEL';
 const PROBE_CAMPAIGN_A = 'CMP-TEN-A';
 const PROBE_CAMPAIGN_B = 'CMP-TEN-B';
+
+/**
+ * SALON B'S SOCIAL LINKS, and why two channels rather than one.
+ *
+ * `seedSalonB()` writes `social: '[]'::jsonb` and leaves it alone on conflict, so
+ * without the fixture in `beforeAll` salon B has no links at all — and an
+ * "unchanged" assertion about a link that does not exist is the vacuous green this
+ * whole file exists to refuse.
+ *
+ *   `PROBE_SOCIAL_TABLE`     the channel the ledger row below addresses. Its control
+ *                            half really writes to salon B, so it is seeded with an
+ *                            empty handle and `on: false` — the row's `{ on: false }`
+ *                            is then the smallest true edit available and renders
+ *                            nothing in anybody's wallet.
+ *   `PROBE_SOCIAL_UNTOUCHED` the channel the pair below probes. Seeded WITH a handle
+ *                            and switched ON, because that pair's claim is that salon
+ *                            A's manager cannot change either, and neither half of
+ *                            that claim can be tested against a blank.
+ *
+ * They are deliberately different channels: the ledger's control writes to one and
+ * the pair below reads the other, so neither can make the other pass or fail by the
+ * order the two happen to run in — the shared-fixture trap `productFor` documents.
+ */
+const PROBE_SOCIAL_TABLE = 'tiktok';
+const PROBE_SOCIAL_UNTOUCHED = 'instagram';
+const B_SOCIAL_HANDLE = '@lumiere.kw';
+
+/**
+ * The handle salon A tries to repoint salon B's Instagram at, and the same one salon
+ * B's own manager then writes successfully. One string for both on purpose: the two
+ * specs below are the SAME request differing only in who sends it, which is what
+ * makes the 403 attributable to the principal rather than to the body.
+ */
+const SOCIAL_ATTACK_HANDLE = '@stolen.by.another.salon';
 
 /**
  * Every route that carries a salon id in the path, as registered in
@@ -520,6 +570,41 @@ const SALON_ROUTES: SalonRoute[] = [
     method: 'GET',
     template: '/salons/{id}/branches/{bid}/closure-preview',
   },
+
+  /**
+   * LANE A'S PER-LINK SOCIAL WRITE — the endpoint api-contract.md named for weeks
+   * without it existing, and the reason this table is hand-written as well as
+   * discovered.
+   *
+   * The ledger fired on it in the first end-to-end `pnpm check` after the merge, by
+   * name, and nothing else in that run had an opinion: trunk merged the route after
+   * running api's unit and integration suites and not `e2e/`. The auto-discovering
+   * sibling at the foot of this file had already passed against it — `requireSameSalon`
+   * runs BEFORE the channel vocabulary check, so even a literal `:linkId` is refused
+   * at the boundary — so tenancy was proven the moment the route landed. Only this
+   * half was stale, which is the same story the artists and branch rows above already
+   * carry and is worth writing down once more: the ledger's job is the LIST, not the
+   * enforcement.
+   *
+   * `{linkId}` NEEDS NO PER-SALON RESOLUTION, and it is the second placeholder in this
+   * table that does not. `{kind}` is the first, for the same reason: the four channel
+   * ids are a closed vocabulary from the contract rather than row ids, so `tiktok`
+   * addresses a link at every salon by definition, and `applySocialPatch` creates one
+   * for a salon that has none. It still has to be a REAL member of that vocabulary —
+   * an unknown channel is a 400 naming the four, and a 400 in place of a 403 would
+   * mean the probe never reached the boundary it exists to test.
+   *
+   * `{ on: false }` AND NOT A HANDLE, because the control half really writes to salon
+   * B. `beforeAll` seeds this channel with an empty handle, so hiding an icon that
+   * renders nothing is the smallest true edit available and it is idempotent across
+   * runs. Salon B's Instagram is deliberately left for the pair below, whose entire
+   * claim is that it is still there afterwards.
+   */
+  {
+    method: 'PATCH',
+    template: '/v1/salons/{id}/social/{linkId}',
+    body: { on: false },
+  },
 ];
 
 /**
@@ -583,7 +668,15 @@ const url = (r: SalonRoute, salonId: string) =>
      * permission (the permission is selected BY the kind), so a placeholder kind is
      * refused at 400 and the probe never reaches the tenant boundary it exists to test.
      */
-    .replace('{kind}', 'sales');
+    .replace('{kind}', 'sales')
+    /**
+     * `{linkId}` is a closed vocabulary too, so it resolves the way `{kind}` does and
+     * not the way `{hid}` and `{pid}` do — see the table row that uses it. It must be
+     * a real channel all the same: `PATCH …/social/{linkId}` answers 400
+     * `unknown_social_link` for anything outside the four, and this substitution is
+     * what keeps the control half addressing a link rather than a typo.
+     */
+    .replace('{linkId}', PROBE_SOCIAL_TABLE);
 
 describe("salon-scoped routes — salon B's manager calling salon A's URL", () => {
   for (const route of SALON_ROUTES) {
@@ -616,6 +709,179 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
       );
     });
   }
+});
+
+/**
+ * PATCH /v1/salons/{id}/social/{linkId} — THE LEDGER ROW ABOVE, PROVED PROPERLY.
+ *
+ * The table's pair is the right shape for thirty routes and the wrong shape for this
+ * one question. It asserts a status and asserts the control succeeds; it never looks
+ * at salon B's data afterwards. Two different broken products pass it:
+ *
+ *   - a route that answers 403 and writes anyway, and
+ *   - a route that answers 403 because it is not registered at all.
+ *
+ * So this pair asserts three things the table cannot.
+ *
+ * THE CODE, NOT THE STATUS. A 404 from a missing route and a 403 from
+ * `requireSameSalon` are different facts about the product and only one of them is
+ * enforcement, so `forbidden` / "That salon is not yours." is asserted by value. That
+ * is the string `requireSameSalon` throws, and nothing else in this handler produces
+ * it: every other refusal it can give — `unknown_social_link`, `invalid_field`,
+ * `invalid_handle`, `handle_is_a_url`, `invalid_request`, `unknown_salon` — lives
+ * BELOW the guard and none of them is a 403.
+ *
+ * THE DATA. Salon B's Instagram is read through salon B's own credential before and
+ * after, and the handle and the switch are asserted INDIVIDUALLY as well as by
+ * equality — an `after` that deep-equals a `before` which had already been clobbered
+ * would be green, and the seeded values are asserted up front so "unchanged" is a
+ * claim about a real handle rather than about a blank. The stored column is read too,
+ * because a read path that filtered something would hide a write that landed.
+ *
+ * THE DIRECTION. Everything above this line runs B → A, because Layla is the
+ * principal this file signs in. The hole runs both ways, and salon A's Noura holds
+ * every permission, so her 403 can only be the salon boundary and never a missing
+ * one. She is the `token: null` principal — the tripwire at the top of this file
+ * asserts, rather than assumes, that `AVO_TEST_PRINCIPALS` resolves an
+ * unauthenticated request to a staff member at salon A.
+ *
+ * WHAT WOULD STILL PASS IF THE GUARD WERE GONE? Asked, and then answered by really
+ * commenting `requireSameSalon` out of this handler and running the file. Both halves
+ * of the pair go red — the table row above at 200, and this spec at 200 — and the 200
+ * this spec reports carries
+ *
+ *     "handle":"@stolen.by.another.salon" … "on":false
+ *
+ * in salon B's own `links` array. So the write landed: the refusal and the data are
+ * two separate facts and the mutation moved both. Recorded precisely because the
+ * assertion ORDER hides half of it — vitest stops this spec at the status line, so
+ * the handle and column assertions below never ran; the clobbering is visible in the
+ * failure message rather than named by an assertion of its own. They are the half
+ * that catches the OTHER shape of defect, a handler that refuses and writes anyway,
+ * which no mutation of this guard can produce.
+ *
+ * The same run reddened two specs this file already had — the `existence is not
+ * disclosed` sweep and the auto-discovering `EVERY discovered route` sweep — so four
+ * failures in total, from one commented line. Restored, re-run, 104 green. The
+ * mutation was not committed; `api/` is not lane D's column.
+ */
+interface SocialProbe {
+  id: string;
+  label: string;
+  handle: string;
+  on: boolean;
+}
+
+describe('PATCH /v1/salons/{id}/social/{linkId} — the refusal, and salon B untouched', () => {
+  /**
+   * Salon B's Instagram as salon B itself sees it, through the product's own read.
+   * `GET /salons/{id}` serves `social` to any principal at that salon, and `bDashboard`
+   * is one, so this is the merchant's own view of her own row rather than a fixture
+   * this file is holding a copy of.
+   */
+  async function readBInstagram(): Promise<SocialProbe> {
+    const res = await treq<{ social: SocialProbe[] }>('GET', `/salons/${SALON_B}`, {
+      token: bDashboard,
+    });
+    expect(res.status, `could not read salon B's own salon row: ${res.raw}`).toBe(200);
+    const link = (res.body.social ?? []).find((l) => l.id === PROBE_SOCIAL_UNTOUCHED);
+    // Not a soft skip. If the fixture did not land, every assertion below is about
+    // nothing and the honest outcome is a failure naming the seed.
+    expect(
+      link,
+      `salon B has no ${PROBE_SOCIAL_UNTOUCHED} link, so there is nothing to leave ` +
+        `unchanged — the social UPDATE in beforeAll did not land: ${res.raw}`,
+    ).toBeDefined();
+    return link as SocialProbe;
+  }
+
+  it("salon A's manager cannot repoint salon B's Instagram, and salon B's link is unchanged", async () => {
+    const before = await readBInstagram();
+    // NON-VACUOUS. "Unchanged" said of an empty handle and a false switch is a
+    // sentence about nothing; these two lines are what make the pair at the end of
+    // this spec an assertion.
+    expect(before.handle).toBe(B_SOCIAL_HANDLE);
+    expect(before.on).toBe(true);
+
+    const attack = await treq<{ error: string; message: string }>(
+      'PATCH',
+      `/v1/salons/${SALON_B}/social/${PROBE_SOCIAL_UNTOUCHED}`,
+      {
+        // Salon A's Noura, holding every permission. See the tripwires.
+        token: null,
+        // Deliberately VALID and deliberately meaningful: a body the handler would
+        // accept, so a 400 cannot stand in for the refusal, and a handle whose
+        // arrival in salon B's row would be visible in every one of her customers'
+        // wallets.
+        body: { handle: SOCIAL_ATTACK_HANDLE, on: false },
+      },
+    );
+
+    expect(
+      attack.status,
+      `the cross-salon PATCH answered ${attack.status}, not 403: ${attack.raw}`,
+    ).toBe(403);
+    expect(attack.body.error).toBe('forbidden');
+    expect(attack.body.message).toBe('That salon is not yours.');
+    // Two keys, no third — the refusal must not also describe the link it refused.
+    expect(Object.keys(attack.body).sort()).toEqual(['error', 'message']);
+
+    const after = await readBInstagram();
+    expect(after.handle, "salon A's PATCH repointed salon B's Instagram").toBe(B_SOCIAL_HANDLE);
+    expect(after.on, "salon A's PATCH flipped salon B's Instagram off").toBe(true);
+    expect(after).toEqual(before);
+
+    /**
+     * AND THE COLUMN ITSELF. The three assertions above go through the read path; if
+     * that path ever filtered or reshaped what it serves, a write that really landed
+     * could still read back as the old value. This asks Postgres.
+     */
+    const stored = scalar(`select social::text from salon where id='${SALON_B}'`);
+    expect(stored).toContain(B_SOCIAL_HANDLE);
+    expect(stored, "the attacker's handle is in salon B's stored social array").not.toContain(
+      SOCIAL_ATTACK_HANDLE,
+    );
+  });
+
+  it("and the identical PATCH from salon B's own manager writes — so the 403 was the boundary, not a broken route", async () => {
+    /**
+     * THE CONTROL, and it is not the same control the table row runs. That one
+     * addresses TikTok with `{ on: false }`; this one sends the EXACT request salon A
+     * was refused, to the EXACT link, differing in nothing but the credential. That
+     * is what makes the 403 above attributable to who was calling rather than to the
+     * channel, the body, or the route being absent.
+     */
+    const before = await readBInstagram();
+
+    const own = await treq<{ id: string; handle: string; on: boolean; url: string | null }>(
+      'PATCH',
+      `/v1/salons/${SALON_B}/social/${PROBE_SOCIAL_UNTOUCHED}`,
+      { token: bDashboard, body: { handle: SOCIAL_ATTACK_HANDLE, on: false } },
+    );
+    expect(own.status, `salon B's own manager was refused her own link: ${own.raw}`).toBe(200);
+    expect(own.body.handle).toBe(SOCIAL_ATTACK_HANDLE);
+    expect(own.body.on).toBe(false);
+    // Read back rather than trusting the response body: the endpoint returns what it
+    // says it wrote, and the question is what is in the row.
+    expect((await readBInstagram()).handle).toBe(SOCIAL_ATTACK_HANDLE);
+
+    /**
+     * PUT BACK. `beforeAll` re-seeds the array every run, so a crash between here and
+     * the line above heals itself on the next one — but within a single run, leaving
+     * salon B holding the attacker's handle would let a re-ordered or repeated spec
+     * above pass while asserting the wrong string.
+     */
+    const restore = await treq(
+      'PATCH',
+      `/v1/salons/${SALON_B}/social/${PROBE_SOCIAL_UNTOUCHED}`,
+      { token: bDashboard, body: { handle: before.handle, on: before.on } },
+    );
+    expect(
+      restore.status,
+      `could not restore salon B's ${PROBE_SOCIAL_UNTOUCHED}: ${restore.raw}`,
+    ).toBe(200);
+    expect(await readBInstagram()).toEqual(before);
+  });
 });
 
 // ------------------------------------------- PATCH /staff — the escalation route --
