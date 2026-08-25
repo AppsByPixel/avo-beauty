@@ -60,7 +60,7 @@ import type { Language } from '@avo/types';
 import type { Copy } from '../copy/types';
 import { en } from '../copy/en';
 import { ar } from '../copy/ar';
-import { directionOutcome, isRtl } from './direction';
+import { directionEffect, isRtl } from './direction';
 import { storeLanguage } from './languagePreference';
 import { reloadApp } from '../platform/appReload';
 
@@ -143,16 +143,17 @@ export function LanguageProvider({
    * same notice the switch itself raises, not silence.
    */
   useEffect(() => {
-    const outcome = directionOutcome({
+    const effect = directionEffect({
       platform: Platform.OS,
       currentIsRtl: I18nManager.isRTL,
       next: lang,
     });
-    if (outcome === 'restart-required') {
+    if (effect.flag !== null) {
+      // allowRTL must be on before forceRTL means anything.
       I18nManager.allowRTL(true);
-      I18nManager.forceRTL(isRtl(lang));
-      setPendingRestart(true);
+      I18nManager.forceRTL(effect.flag);
     }
+    if (effect.pendingRestart) setPendingRestart(true);
     // Deliberately not an `else`: a switch made during this session already set
     // the flag, and clearing `pendingRestart` here would erase its notice on the
     // very next render.
@@ -169,26 +170,34 @@ export function LanguageProvider({
     */
     void storeLanguage(next);
 
-    // The three-way decision lives in `./direction` so the web guard is testable
-    // — this workspace has no renderer, and "web never asks for a restart" is a
-    // guard rather than a preference.
-    const outcome = directionOutcome({
+    // The decision lives in `./direction` so the web guard is testable — this
+    // workspace has no renderer, and "web never asks for a restart" is a guard
+    // rather than a preference.
+    //
+    // TWO ANSWERS, NOT ONE, AND CONFLATING THEM WAS A DEFECT. What to persist
+    // and whether a restart is owed are different facts about the same tap: the
+    // flag follows the language chosen, always, while the notice follows the
+    // comparison against the layout already in force. `direction.ts §
+    // directionEffect` carries the driven trace of what conflating them cost —
+    // an Arabic screen with no notice on it whose next launch came back LTR.
+    const effect = directionEffect({
       platform: Platform.OS,
       currentIsRtl: I18nManager.isRTL,
       next,
     });
 
-    if (outcome === 'restart-required') {
-      // allowRTL must be on before forceRTL means anything.
+    if (effect.flag !== null) {
+      // allowRTL must be on before forceRTL means anything. Written on EVERY
+      // native switch, not only a direction-changing one: it is an idempotent
+      // NSUserDefaults write, and skipping it is what left a stale `false`
+      // behind when she switched away and straight back.
       I18nManager.allowRTL(true);
-      I18nManager.forceRTL(isRtl(next));
-      // The flag is written; Yoga will not read it until the next launch.
-      setPendingRestart(true);
-      return;
+      I18nManager.forceRTL(effect.flag);
     }
-    // 'live' (web, already re-laid out by the effect above) and 'unchanged'
-    // (native, already facing the right way) both leave nothing pending.
-    setPendingRestart(false);
+    // The flag is written; Yoga will not read it until the next launch. The
+    // notice is owed only while the layout on screen still faces the wrong way —
+    // so web ('live') and an already-correct native layout both clear it.
+    setPendingRestart(effect.pendingRestart);
   }, []);
 
   /**
