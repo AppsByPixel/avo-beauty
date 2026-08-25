@@ -472,6 +472,13 @@ export interface Copy {
   navHome: string;
   navBook: string;
   navShop: string;
+  /**
+   * design:627 — the fourth button, and the only one that is not a destination.
+   * It opens the enlarged payment code over whatever screen she is on
+   * (design:1905 `openQr`), which is why design:1897 renders it inactive
+   * unconditionally. See `domain/payTab.ts`.
+   */
+  navPay: string;
 
   /**
    * Shop and cart — `design/AVO Wallet Home.dc.html:478-518` and :940-978.

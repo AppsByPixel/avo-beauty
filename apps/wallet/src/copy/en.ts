@@ -411,6 +411,7 @@ export const en: Copy = {
   navHome: 'Home', // design:1233
   navBook: 'Book', // design:1233
   navShop: 'Shop', // design:1233
+  navPay: 'Pay', // design:1233
 
   // ------------------------------------------------------------ shop & cart --
   shopTitle: 'Shop', // design:1234

@@ -48,6 +48,11 @@ import { installFocusRing } from './src/theme/focus';
 import { SNAPSHOT_KEY } from './src/state/cache';
 import { PREFERENCES_KEY } from './src/state/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
+import { QrOverlay } from './src/components/QrOverlay';
+import { paymentCodeView, type PaymentCodeView } from './src/domain/paymentCode';
+import { payTabAction } from './src/domain/payTab';
+import { salonName } from './src/domain/names';
+import { useWalletToken } from './src/state/useWalletToken';
 import { AccountScreen } from './src/screens/AccountScreen';
 import { BookScreen } from './src/screens/BookScreen';
 import { ShopScreen } from './src/screens/ShopScreen';
@@ -61,6 +66,7 @@ import { bootDestination } from './src/domain/bootGate';
 import { LanguageProvider, useCopy, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
 import { useWalletHome } from './src/state/useWalletHome';
+import type { WalletSnapshot } from './src/state/cache';
 import { useShop } from './src/state/useShop';
 import { Toast, useToast } from './src/components/Toast';
 import { focusable } from './src/theme/focus';
@@ -72,11 +78,16 @@ import type { RescheduleTarget } from './src/state/useBooking';
  *
  * STILL NO ROUTER, and the prediction held. This said "when Shop and the auth
  * screens land, this union becomes a navigator and none of the screens' props
- * change" — both have now landed and none of them did. The design's wallet has
- * five destinations (home, book, shop, pay, account); Pay is the QR overlay on the
- * wallet card and already has its tap target there, so this union is the whole nav
- * and a navigation container would still be machinery ahead of a need: no deep
- * links, no back stack.
+ * change" — both have now landed and none of them did. No deep links, no back
+ * stack; a navigation container would still be machinery ahead of a need.
+ *
+ * PAY IS NOT IN THIS UNION, AND THAT IS THE DESIGN'S CALL RATHER THAN A GAP.
+ * The note here used to read "the design's wallet has five destinations (home,
+ * book, shop, pay, account)". It has four. design:627 binds the Pay button to
+ * `openQr` (design:1905), which sets one flag and never touches `screen` — which
+ * is exactly why design:1897 writes `navPayStyle: this.navStyle(false)` and the
+ * tab can never render active. Pay is a layer over whichever screen she is on,
+ * not a place to be. See `domain/payTab.ts`.
  */
 type Screen = 'home' | 'book' | 'shop' | 'account';
 
@@ -276,10 +287,67 @@ function Wallet({
    */
   const shop = useShop(snapshotBalance(home.snapshot), home.retry);
 
+  /**
+   * THE PAYMENT CODE LIVES IN THE SHELL, FOR THE SAME REASON THE CART DOES.
+   *
+   * It used to live in `HomeScreen`, which was right while Home was the only way
+   * to reach it. design:627's Pay tab is the second way, and the design opens it
+   * WITHOUT navigating — `openQr` (design:1905) sets `qrOpen` and leaves `screen`
+   * alone, so the enlarged code comes up over Shop and over Book. A token owned
+   * by Home is unmounted on both of those tabs; an overlay owned by Home cannot
+   * be opened from a screen Home is not on.
+   *
+   * So one token, one `PaymentCodeView`, one `enlarged`, here. Two of anything
+   * would be two answers to "may a QR be on the screen right now", and the one
+   * that decided it would be whichever component happened to be mounted.
+   *
+   * Non-negotiable #2 is untouched by the move: nothing here mints, extends or
+   * re-derives a token. `useWalletToken` asks the server and counts down to the
+   * expiry the SERVER set, exactly as it did one level down.
+   */
+  const codeEnabled = home.status === 'ready' || home.status === 'stale';
+  const walletToken = useWalletToken(codeEnabled && home.snapshot !== null);
+  const codeView = paymentCodeView({
+    token: walletToken.token,
+    unavailable:
+      home.status === 'offline' ? 'offline' : walletToken.failed ? 'failed' : null,
+  });
+  /*
+    `interaction-spec.md` §4 takes the QR off the screen when the wallet goes
+    offline. An enlarged one left standing would be the same stale code, at
+    246pt, in front of a cashier — so a code that stops being enlargeable closes
+    the overlay that is already up, rather than waiting for her to notice.
+  */
+  const canEnlarge = codeView.canEnlarge;
+  const [enlarged, setEnlarged] = useState(false);
+  useEffect(() => {
+    if (!canEnlarge) setEnlarged(false);
+  }, [canEnlarge]);
+
   const goHome = useCallback(() => {
     setScreen('home');
     setReschedule(null);
   }, []);
+
+  /**
+   * design:627 — the Pay tab. ONE decision, taken in `domain/payTab.ts` from the
+   * same `codeView` the panel on Home reads, so the tab cannot acquire its own
+   * opinion about when a QR may be shown.
+   *
+   * `home` is the fallback rather than a dead tap or a disabled tab: §4 says the
+   * QR is hidden and says nothing about what a Pay affordance does while it is,
+   * and the design's prototype has no offline state to copy. Home is where the
+   * app already explains itself — `qrOfflineTitle` / `qrFailedTitle` sit on the
+   * payment-code panel in the design's own words. Flagged for DECISIONS.md; this
+   * is the minimum honest answer, not a settled one.
+   */
+  const onPay = () => {
+    if (payTabAction(codeView) === 'enlarge') {
+      setEnlarged(true);
+      return;
+    }
+    goHome();
+  };
 
   const startReschedule = useCallback((booking: BookingView) => {
     setReschedule({ booking, artistId: booking.artistId, serviceId: booking.serviceId });
@@ -288,21 +356,36 @@ function Wallet({
 
   const snapshot = home.snapshot;
 
+  /**
+   * Home, as ONE element rather than three near-copies.
+   *
+   * It is rendered in three places — as the Home tab, and as what stands in for
+   * Book and for Shop until the snapshot they need arrives — and the three had
+   * already drifted (two of them forgot to clear `reschedule`). Four more props
+   * for the payment code would have been four more chances to drift, so they are
+   * written once.
+   */
+  const homeScreen = (
+    <HomeScreen
+      home={home}
+      onOpenAccount={() => setScreen('account')}
+      onBook={() => {
+        setReschedule(null);
+        setScreen('book');
+      }}
+      onReschedule={startReschedule}
+      onToast={toast.show}
+      codeView={codeView}
+      codeSecondsRemaining={walletToken.secondsRemaining}
+      onEnlargeCode={() => setEnlarged(true)}
+      onRetryCode={walletToken.refresh}
+    />
+  );
+
   return (
     <View style={styles.root}>
       <View style={styles.body}>
-        {screen === 'home' && (
-          <HomeScreen
-            home={home}
-            onOpenAccount={() => setScreen('account')}
-            onBook={() => {
-              setReschedule(null);
-              setScreen('book');
-            }}
-            onReschedule={startReschedule}
-            onToast={toast.show}
-          />
-        )}
+        {screen === 'home' && homeScreen}
 
         {/*
           Book needs the salon (its timezone, its deposit, its booking module)
@@ -322,13 +405,7 @@ function Wallet({
               onToast={toast.show}
             />
           ) : (
-            <HomeScreen
-              home={home}
-              onOpenAccount={() => setScreen('account')}
-              onBook={() => setScreen('book')}
-              onReschedule={startReschedule}
-              onToast={toast.show}
-            />
+            homeScreen
           ))}
 
         {/*
@@ -351,13 +428,7 @@ function Wallet({
               onTopUp={goHome}
             />
           ) : (
-            <HomeScreen
-              home={home}
-              onOpenAccount={() => setScreen('account')}
-              onBook={() => setScreen('book')}
-              onReschedule={startReschedule}
-              onToast={toast.show}
-            />
+            homeScreen
           ))}
 
         {screen === 'account' && (
@@ -421,18 +492,27 @@ function Wallet({
       {/*
         design:622-628 — the bottom navigation.
 
-        THREE TABS, NOT FOUR, AND THE PREDICTION HELD. This read "TWO TABS …
-        Shop is not built (design/README.md § Known gaps)". Shop is built, and it
-        dropped in without a layout change exactly as the note said it would,
-        because the nav is a list rather than a fixed four-up.
-
-        Pay is still not a tab, and that is unchanged rather than pending: it
-        opens the QR overlay, which lives on the wallet card and already has a
+        FOUR BUTTONS NOW, WHICH IS WHAT THE DESIGN DRAWS, AND THE NOTE THAT USED
+        TO STAND HERE WAS WRONG ON ITS FACTS. It read: "Pay is still not a tab …
+        it opens the QR overlay, which lives on the wallet card and already has a
         tap target there. A tab that duplicates a control one screen up is
-        clutter, not a destination.
+        clutter, not a destination."
+
+        Two things were wrong with that. design:627 draws the button, and
+        design:1233/1340 name it in both languages — so it was drift, not a
+        decision, and no DECISIONS.md entry ever covered it. And "one screen up"
+        is the whole point: the wallet card's tap target is on HOME. From the
+        Shop tab, at a counter, there was no way to the payment code at all
+        without navigating away first. The design's own handler says as much —
+        `openQr` opens the overlay and never touches `screen`.
+
+        It is correct that Pay is not a DESTINATION, and that half survives: it
+        renders inactive always (design:1897) and `Screen` has no 'pay' member.
 
         Hidden on Account, which the design pushes as a full screen with its own
-        back control rather than as a tab.
+        back control rather than as a tab. The design does show the nav there;
+        this is a deliberate, pre-existing deviation, and its one new consequence
+        is that Pay is unreachable from Account. Reported, not changed here.
       */}
       {screen !== 'account' ? (
         <BottomNav
@@ -447,10 +527,85 @@ function Wallet({
             setReschedule(null);
             setScreen('shop');
           }}
+          onPay={onPay}
         />
       ) : null}
 
+      {/*
+        design:641-643 — the enlarged payment code, a sibling of the whole shell
+        rather than of Home's ScrollView, because design:627 opens it from Shop
+        and Book too. The design puts it at the same level: its `qrOpen` block
+        sits outside every screen's `sc-if`, so the scrim covers the nav as well.
+
+        `codeView.kind` is the only gate, exactly as it was inside Home. There is
+        no render path that produces an overlay without a server-issued token to
+        put in it, and offline never has one — interaction-spec.md §4.
+      */}
+      <PaymentCodeLayer
+        codeView={codeView}
+        snapshot={snapshot}
+        open={enlarged}
+        secondsRemaining={walletToken.secondsRemaining}
+        onClose={() => setEnlarged(false)}
+      />
+
       <Toast message={toast.message} />
+    </View>
+  );
+}
+
+/**
+ * The enlarged payment code, at the shell's level — design:641-643.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * WHY IT IS A COMPONENT AND NOT SIX LINES OF JSX IN `Wallet`.
+ *
+ * It needs the reading language, to name the salon with `salonName()`. Calling
+ * `useLanguage()` in `Wallet` would subscribe the entire shell — every screen,
+ * the nav, the cart — to a context it only needs for one string, and a hook
+ * cannot be called inside the `codeView.kind === 'ready'` branch that guards the
+ * overlay. So the read happens here, below the guard's own component boundary.
+ *
+ * THE FRAME IS LOAD-BEARING, AND GETTING IT WRONG COST THE SCRIM. `QrOverlay`
+ * positions itself absolutely against its parent, and `styles.root` is the whole
+ * window: on a desktop browser the scrim would span the viewport while the wallet
+ * sits in a 402pt column, which is not what design:641 draws — its overlay is
+ * inside the phone. The first attempt at that constraint measured zero pixels
+ * high and took the backdrop with it; `styles.overlayLayer` carries the whole
+ * account. Both wrappers are `box-none` so they capture nothing when the overlay
+ * is closed and `QrOverlay` has returned null.
+ *
+ * `codeView.kind` is the ONLY gate, and it is the same value the panel on Home
+ * renders from — see `domain/payTab.ts` for why that sharing is the point.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+function PaymentCodeLayer({
+  codeView,
+  snapshot,
+  open,
+  secondsRemaining,
+  onClose,
+}: {
+  codeView: PaymentCodeView;
+  snapshot: WalletSnapshot | null;
+  open: boolean;
+  secondsRemaining: number;
+  onClose: () => void;
+}) {
+  const { lang } = useLanguage();
+  if (codeView.kind !== 'ready' || !snapshot) return null;
+  return (
+    <View style={styles.overlayLayer} pointerEvents="box-none">
+      <View style={styles.overlayFrame} pointerEvents="box-none">
+        <QrOverlay
+          open={open}
+          token={codeView.token}
+          memberId={snapshot.member.id}
+          secondsRemaining={secondsRemaining}
+          salonLabel={salonName(snapshot.salon, lang)}
+          onClose={onClose}
+        />
+      </View>
     </View>
   );
 }
@@ -466,13 +621,14 @@ function snapshotBalance(snapshot: { member: { balanceFils: number } } | null): 
   return snapshot?.member.balanceFils ?? 0;
 }
 
-/** design:623-626 — the three built destinations, with the design's own glyphs. */
+/** design:623-627 — the four buttons, with the design's own glyphs. */
 function BottomNav({
   screen,
   cartCount,
   onHome,
   onBook,
   onShop,
+  onPay,
 }: {
   screen: Screen;
   /** design:626 — the count on the Shop tab. 0 renders no badge. */
@@ -480,6 +636,8 @@ function BottomNav({
   onHome: () => void;
   onBook: () => void;
   onShop: () => void;
+  /** design:627 — opens the payment code. Not a destination; see `onPay`. */
+  onPay: () => void;
 }) {
   const { lang, copy } = useLanguage();
   return (
@@ -532,6 +690,43 @@ function BottomNav({
           </>
         }
       />
+      {/*
+        design:627 — the QR glyph, traced rect for rect from the design's own svg.
+
+        `active` IS A LITERAL false, not `screen === 'pay'`, and that is the
+        design's rule rather than a placeholder: design:1897 writes
+        `navPayStyle: this.navStyle(false)` where the other three are computed
+        from `s.screen`. It opens a layer; there is no screen for it to be on, so
+        it never lights up.
+
+        And it is announced as a BUTTON, not a tab. The other three are tabs and
+        one of them is always selected; this one opens the enlarged payment code
+        over whatever is already there. "Pay, tab, not selected", forever, would
+        describe a broken tab rather than a working button. The design's markup
+        is a `<button>` for all four; here the platform draws the distinction the
+        design's HTML could not.
+      */}
+      <NavItem
+        label={copy.navPay}
+        active={false}
+        role="button"
+        onPress={onPay}
+        testID="nav-pay"
+        lang={lang}
+        icon={
+          <>
+            <Rect x={4} y={4} width={7} height={7} rx={1.5} stroke="currentColor" strokeWidth={1.7} />
+            <Rect x={4} y={14} width={7} height={6} rx={1.5} stroke="currentColor" strokeWidth={1.7} />
+            <Rect x={14} y={4} width={6} height={7} rx={1.5} stroke="currentColor" strokeWidth={1.7} />
+            <Path
+              d="M14 15h3v5M20 15v5"
+              stroke="currentColor"
+              strokeWidth={1.7}
+              strokeLinecap="round"
+            />
+          </>
+        }
+      />
     </View>
   );
 }
@@ -544,6 +739,7 @@ function NavItem({
   testID,
   lang,
   badge,
+  role = 'tab',
 }: {
   label: string;
   active: boolean;
@@ -553,6 +749,12 @@ function NavItem({
   lang: 'en' | 'ar';
   /** design:626 — a count over the glyph. Absent or 0 renders nothing. */
   badge?: number;
+  /**
+   * design:627's Pay button is the one entry that is not a destination — it
+   * opens the payment code over the current screen. `selected` is meaningless
+   * for it and would announce as permanently unselected, so it is a button.
+   */
+  role?: 'tab' | 'button';
 }) {
   // Brand text and brand glyphs on a light surface are `brandDeep`, never
   // `brand` — non-negotiable #9.
@@ -561,8 +763,8 @@ function NavItem({
   return (
     <Pressable
       onPress={onPress}
-      accessibilityRole="tab"
-      accessibilityState={{ selected: active }}
+      accessibilityRole={role}
+      accessibilityState={role === 'tab' ? { selected: active } : undefined}
       accessibilityLabel={label}
       dataSet={focusable}
       testID={testID}
@@ -614,8 +816,15 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 402,
     alignSelf: 'center',
+    // Already a LOGICAL direction: Yoga reverses a `row` under I18nManager.isRTL
+    // and CSS lays one along the inline axis, so the four buttons run right to
+    // left in Arabic with no conditional. See src/i18n/rtl.ts.
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    // design:623 — `justify-content:space-between`. This was `space-around`
+    // while the nav held two, then three, buttons; with the design's own four it
+    // is the design's own value, which anchors Home and Pay to the 22pt padding
+    // edges instead of floating everything inward.
+    justifyContent: 'space-between',
     paddingTop: 9,
     paddingBottom: 20,
     paddingHorizontal: 22,
@@ -623,6 +832,37 @@ const styles = StyleSheet.create({
     borderTopColor: color.hairline,
     backgroundColor: color.surface,
   },
+  /*
+    The layer the enlarged payment code is positioned against — see
+    `PaymentCodeLayer`. TWO views, and the first draft was one.
+
+    That draft was `position:absolute; top:0; bottom:0; width:'100%';
+    maxWidth:402; alignSelf:'center'` — reasoning that leaving the inline insets
+    alone would let `alignSelf` centre the column. It measured 402pt wide and
+    ZERO HIGH, sitting at the vertical midpoint, so the scrim vanished: the card
+    still drew (it is centred by its own parent) but the design's
+    `rgba(20,21,17,0.55)` backdrop painted nothing, and an enlarged payment code
+    appeared over the Shop screen with the products still legible around it.
+
+    An absolutely-positioned child of a flex container gets its position from
+    both the insets and the alignment properties, and the two do not compose the
+    way "top and bottom are 0 so it stretches" assumes. So the stretch and the
+    width limit are separated: the outer layer is a plain inset-0 fill, and the
+    inner one is an ordinary flex child that `alignItems` centres in the same
+    402pt column the nav and the screens use.
+
+    `box-none` on both: with the overlay closed `QrOverlay` returns null and
+    these two must not sit over the app swallowing taps.
+  */
+  overlayLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+  },
+  overlayFrame: { flex: 1, width: '100%', maxWidth: 402 },
   navBadge: {
     position: 'absolute',
     top: -5,
