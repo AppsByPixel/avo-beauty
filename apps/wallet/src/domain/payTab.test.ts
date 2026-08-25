@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WalletToken } from '@avo/types';
 import { paymentCodeView } from './paymentCode';
-import { payTabAction } from './payTab';
+import { enlargedCodeIsOpen, payTabAction } from './payTab';
 
 /** The shape `GET /members/me/wallet-token` actually answers with. */
 const TOKEN: WalletToken = {
@@ -74,6 +74,79 @@ describe('payTabAction', () => {
     // design draws as always available.
     for (const unavailable of ['offline', 'failed'] as const) {
       expect(payTabAction(paymentCodeView({ token: null, unavailable }))).toBe('home');
+    }
+  });
+});
+
+/**
+ * The gate that does not depend on anyone remembering to ask.
+ *
+ * Trunk mutated the Pay handler's `if (payTabAction(codeView) === 'enlarge')` to
+ * `if (true)` and every test above stayed green — the rule was proven and the
+ * link to the button was not. `enlargedCodeIsOpen` is the answer to that: it is
+ * the value `QrOverlay`'s `open` prop is given, so §4's suppression is applied
+ * at the moment of rendering rather than trusted to a handler.
+ *
+ * `payTabWiring.test.ts` asserts the prop really is this call. These assert what
+ * the call is worth once it is there.
+ */
+describe('enlargedCodeIsOpen', () => {
+  it('opens only when she asked AND there is a code', () => {
+    expect(enlargedCodeIsOpen(true, paymentCodeView({ token: TOKEN, unavailable: null }))).toBe(true);
+  });
+
+  it('stays shut when she has not asked', () => {
+    expect(enlargedCodeIsOpen(false, paymentCodeView({ token: TOKEN, unavailable: null }))).toBe(false);
+  });
+
+  it('stays shut with the request set but the code suppressed', () => {
+    // THE MUTATION CASE. This is what a handler that skipped `payTabAction`
+    // produces: the request flag is true and nothing may be shown. No QR.
+    for (const unavailable of ['offline', 'failed'] as const) {
+      expect(
+        enlargedCodeIsOpen(true, paymentCodeView({ token: null, unavailable })),
+        `requested while ${unavailable}`,
+      ).toBe(false);
+    }
+    // And with a token still in memory from before the drop, which is the shape
+    // `paymentCode.test.ts` guards for the same reason.
+    expect(enlargedCodeIsOpen(true, paymentCodeView({ token: TOKEN, unavailable: 'offline' }))).toBe(false);
+  });
+
+  it('stays shut while the token is still in flight', () => {
+    expect(enlargedCodeIsOpen(true, paymentCodeView({ token: null, unavailable: null }))).toBe(false);
+  });
+
+  it('closes a live overlay in the SAME render the code goes stale', () => {
+    /*
+      BE PRECISE ABOUT WHAT THIS BUYS, because the driven number invites a
+      bigger claim than it supports. A code enlarged over the Shop tab was
+      observed closing 13s after the mint started failing; those 13s are the
+      wait for the SERVER's expiry to lapse and the retry to fail, and nothing
+      here shortens them. What changes is what happens once the app knows: the
+      old `useEffect(() => { if (!canEnlarge) setEnlarged(false) })` closed the
+      overlay one render LATER, so there was a frame in which a code the app had
+      already judged dead was still 246pt on the screen. Derivation removes that
+      frame. A frame is not 13 seconds, and it is also exactly the window a
+      cashier's scanner samples in.
+    */
+    const requested = true;
+    const live = paymentCodeView({ token: TOKEN, unavailable: null });
+    const gone = paymentCodeView({ token: null, unavailable: 'failed' });
+    expect(enlargedCodeIsOpen(requested, live)).toBe(true);
+    expect(enlargedCodeIsOpen(requested, gone)).toBe(false);
+  });
+
+  it('never opens where payTabAction would have refused', () => {
+    // The two are the same rule seen from two places; they must not diverge.
+    for (const token of [TOKEN, null]) {
+      for (const unavailable of ['offline', 'failed', null] as const) {
+        const view = paymentCodeView({ token, unavailable });
+        expect(
+          enlargedCodeIsOpen(true, view),
+          `token=${token ? 'held' : 'none'} unavailable=${String(unavailable)}`,
+        ).toBe(payTabAction(view) === 'enlarge');
+      }
     }
   });
 });
