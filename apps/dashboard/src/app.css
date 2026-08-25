@@ -5249,3 +5249,253 @@ a:hover {
   text-transform: uppercase;
   color: var(--avo-warn-text);
 }
+
+/* ============================================== console · activity feed === */
+
+/*
+ * `AVO Owner Console.dc.html:137` § ACTIVITY. One card, rows separated by a
+ * hairline, a dot on the left and a salon pill on the right.
+ *
+ * `max-width: 860px` is the design's own wrapper width for this section — a feed
+ * of one-line sentences reads badly at full console width.
+ */
+.activity {
+  max-width: 860px;
+}
+
+.activity__card {
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+.activity__feed {
+  list-style: none;
+  margin: 0;
+  padding: 0 20px;
+}
+
+.activity__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.activity__row:first-child {
+  border-top: none;
+}
+
+/*
+ * DECORATION ONLY. Every row's meaning is carried by its sentence, which is
+ * composed server-side — nothing here is legible by colour alone, which is why
+ * the element is `aria-hidden`.
+ */
+.activity__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 9px;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: var(--avo-toggle-off);
+}
+
+.activity__dot[data-tone='brand'] {
+  background: var(--avo-brand-deep);
+}
+
+.activity__dot[data-tone='warn'] {
+  background: var(--avo-warn-text);
+}
+
+.activity__dot[data-tone='danger'] {
+  background: var(--avo-danger-text);
+}
+
+.activity__dot[data-tone='neutral'] {
+  background: var(--avo-text-muted-soft);
+}
+
+.activity__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.activity__text {
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.activity__text b {
+  font-weight: 600;
+}
+
+.activity__when {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+/*
+ * The salon pill. Not an `@avo/ui` `Pill`: that component is the audit log's
+ * KIND column and carries a tone vocabulary this is not part of — this names a
+ * tenant, and giving it a tone would imply a status it does not have.
+ */
+.activity__salon {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 4px 11px;
+  border-radius: var(--avo-radius-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/*
+ * A row belonging to no salon — an AVO platform action. Quieter than a tenant's
+ * pill because it is the console's own housekeeping, and distinguished by its
+ * LABEL ("AVO") rather than by this colour alone.
+ */
+.activity__salon[data-platform] {
+  color: var(--avo-text-muted-strong);
+  background: var(--avo-surface-alt2);
+}
+
+.activity__state {
+  padding: 8px 0;
+}
+
+.activity__more {
+  margin-top: 14px;
+}
+
+/* ================================================== console · accounts === */
+
+/*
+ * `AVO Owner Console.dc.html:431` § ACCOUNTS, list view. The design's own
+ * wrapper is 960px.
+ */
+.accounts-console {
+  max-width: 960px;
+}
+
+.accounts-console__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 14px;
+  flex-wrap: wrap;
+}
+
+.accounts-console__search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+  border-radius: 11px;
+  padding: 11px 14px;
+}
+
+.accounts-console__count {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+/* Pushes the role filter to the far edge, as the design lays it out. */
+.accounts-console__controls > :last-child {
+  margin-left: auto;
+}
+
+.accounts-console__card {
+  overflow: hidden;
+}
+
+/*
+ * interaction-spec.md §1: "Data tables never drop columns responsively… Scroll
+ * the table, keep the header row sticky." Five columns, so the min-width is the
+ * audit log's less one column's worth.
+ */
+.accounts-console__scroll {
+  overflow-x: auto;
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.accounts-console__table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.accounts-console__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface-alt);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 22px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.accounts-console__table tbody td {
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: middle;
+}
+
+.accounts-console__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.accounts-console__name {
+  font-weight: 600;
+}
+
+/*
+ * The staff member's real login handle. Rendered only where the wire carries one
+ * — `member` has no handle column, and the design's `@latifa.a` for a customer
+ * is data that does not exist. See `api/platformAccounts.ts`.
+ */
+.accounts-console__handle {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  margin-top: 1px;
+}
+
+.accounts-console__salon {
+  color: var(--avo-text-muted-strong);
+}
+
+.accounts-console__reset {
+  padding: 8px 14px;
+  font-size: 12.5px;
+}
+
+/*
+ * Staff only: an invite nobody has redeemed, or a leaver whose credentials were
+ * nulled. Never a hash and never a token — non-negotiable #6; the wire carries
+ * one boolean, computed in SQL.
+ */
+.accounts-console__nopassword {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  margin-top: 5px;
+}
+
+.accounts-console__empty {
+  padding: 34px 22px;
+  text-align: center;
+}
+
+.accounts-console__more {
+  margin-top: 14px;
+}

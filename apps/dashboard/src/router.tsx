@@ -8,6 +8,8 @@ import {
 import type { AuthState } from './auth/AuthProvider.js';
 import { SCOPES, type AuthScope } from './auth/scopes.js';
 import { Accounts } from './routes/Accounts.js';
+import { ConsoleAccounts } from './routes/console/Accounts.js';
+import { Activity } from './routes/console/Activity.js';
 import { Admins } from './routes/console/Admins.js';
 import { Analytics } from './routes/console/Analytics.js';
 import { Audit } from './routes/console/Audit.js';
@@ -148,6 +150,17 @@ const consoleIndexRoute = createRoute({
  *  reason the merchant ones are: a section that is built and a sidebar that says
  *  so cannot drift apart. */
 const CONSOLE_SECTIONS = [
+  /*
+   * `ConsoleAccounts`, not `Accounts` — `routes/Accounts.tsx` is the MERCHANT's
+   * team screen and is already imported above under that name. Two different
+   * screens on two different surfaces, reading two different endpoints behind two
+   * different guards (`perms.team` on her own salon vs `requirePlatform(req,
+   * 'accounts')` across every tenant), which happen to share the design's word.
+   * The import is renamed at its source rather than aliased here, so the console
+   * component cannot be pulled into the merchant tree by autocomplete.
+   */
+  { path: '/console/accounts', component: ConsoleAccounts },
+  { path: '/console/activity', component: Activity },
   { path: '/console/admins', component: Admins },
   { path: '/console/analytics', component: Analytics },
   { path: '/console/audit', component: Audit },

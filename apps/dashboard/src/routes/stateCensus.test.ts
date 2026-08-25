@@ -49,6 +49,18 @@ const SECTION_SCREENS = [
   'Accounts.tsx',
   'AuditLog.tsx',
   'Reports.tsx',
+  /**
+   * The console's Accounts list and the platform feed. Both own their own read
+   * (`GET /v1/platform/accounts`, `GET /v1/platform/activity`) behind their own
+   * section gate, so both answer for their own four states.
+   *
+   * `console/Accounts.tsx` exports `ConsoleAccounts`, not `Accounts` — the
+   * merchant's `Accounts.tsx` above is a different screen on a different endpoint
+   * behind a different guard. The router test below matches on the mounted
+   * component NAME, so the two are distinguishable there rather than colliding.
+   */
+  'console/Accounts.tsx',
+  'console/Activity.tsx',
   'console/Admins.tsx',
   'console/Analytics.tsx',
   'console/Audit.tsx',
@@ -189,9 +201,26 @@ describe('the screen census stays honest', () => {
 
     /** The two shells. Layout routes, not screens — they own no read of their own. */
     const FRAMES = ['MerchantShell', 'ConsoleShell'];
-    const censusNames = [...SECTION_SCREENS, HOST, ...DOORS].map((f) =>
-      f.replace(/^(console|marketing)\//, '').replace('.tsx', ''),
-    );
+    /*
+     * A FILE MAY EXPORT ITS BASENAME, OR — UNDER `console/` — THAT BASENAME
+     * PREFIXED `Console`.
+     *
+     * `console/Accounts.tsx` exports `ConsoleAccounts`, because `Accounts.tsx`
+     * beside it is the MERCHANT's team screen and the router imports both. Two
+     * screens genuinely named the same thing by the design, on two surfaces,
+     * reading two endpoints behind two different guards — so one of them has to
+     * carry the surface in its symbol, and the console is the one that does.
+     *
+     * THIS DOES NOT WIDEN THE GUARD. Both candidates are derived from a censused
+     * filename, so a mounted component still has to correspond to a file in a
+     * list; what it stops is a naming collision being resolvable only by moving a
+     * file out of the directory it belongs in. A component named after nothing on
+     * disk still fails, which is the property this assertion is for.
+     */
+    const censusNames = [...SECTION_SCREENS, HOST, ...DOORS].flatMap((f) => {
+      const base = f.replace(/^(console|marketing)\//, '').replace('.tsx', '');
+      return f.startsWith('console/') ? [base, `Console${base}`] : [base];
+    });
     for (const name of mounted) {
       expect(
         [...censusNames, ...FRAMES],
