@@ -16,6 +16,7 @@ import { Controls } from './routes/console/Controls.js';
 import { ConsoleSignIn } from './routes/ConsoleSignIn.js';
 import { Policies } from './routes/console/Policies.js';
 import { Salons } from './routes/console/Salons.js';
+import { SalonEditor } from './routes/console/SalonEditor.js';
 import { Appointments } from './routes/Appointments.js';
 import { AuditLog } from './routes/AuditLog.js';
 import { Loyalty } from './routes/Loyalty.js';
@@ -107,7 +108,7 @@ const placeholderRoutes = NAV_ITEMS.filter((item) => !item.built).map((item) =>
   createRoute({
     getParentRoute: () => merchantRoute,
     path: item.to,
-    component: () => <NotBuiltYet section={item.title} />,
+    component: () => <NotBuiltYet section={item.title} scope="merchant" />,
   }),
 );
 
@@ -160,12 +161,41 @@ const consoleSectionRoutes = CONSOLE_SECTIONS.map(({ path, component }) =>
   createRoute({ getParentRoute: () => consoleRoute, path, component }),
 );
 
+/**
+ * The per-salon editor. `AVO Owner Console.dc.html:400` § "salon editor" — the
+ * second half of a section the design describes as "list → per-salon editor".
+ *
+ * DECLARED ON ITS OWN RATHER THAN ADDED TO `CONSOLE_SECTIONS`, AND NOT BY
+ * PREFERENCE. It was in that table first. `.map()` over a mixed tuple gives every
+ * route it builds the UNION of the tuple's path types, and a union containing one
+ * parameterised path makes `params` REQUIRED on all of them — so
+ * `<Link to="/console/salons">` in the editor's own back button stopped compiling,
+ * asking for an `id` the salons LIST does not take. The table stays homogeneous
+ * and the one param route is built beside it.
+ *
+ * IT IS STILL AUDITED. `routes/stateCensus.test.ts` no longer reads the two
+ * `SECTIONS` tables — it scans this whole file for every `component:` a route
+ * mounts, precisely so a route declared outside a table cannot skip the
+ * four-states classification. That change was made with this route, because this
+ * route is the first one that would have slipped through.
+ *
+ * No sidebar item is needed: `consoleNavItemFor` matches on
+ * `startsWith(`${item.to}/`)`, so the console header keeps saying Salons while the
+ * editor is open. The design does the same — its editor is a sub-view of the
+ * section, not a tenth destination.
+ */
+const consoleSalonEditorRoute = createRoute({
+  getParentRoute: () => consoleRoute,
+  path: '/console/salons/$id',
+  component: SalonEditor,
+});
+
 /** Every other console nav item resolves, so the sidebar never dead-ends. */
 const consolePlaceholderRoutes = CONSOLE_NAV_ITEMS.filter((item) => !item.built).map((item) =>
   createRoute({
     getParentRoute: () => consoleRoute,
     path: item.to,
-    component: () => <NotBuiltYet section={item.title} />,
+    component: () => <NotBuiltYet section={item.title} scope="owner" />,
   }),
 );
 
@@ -176,6 +206,7 @@ const routeTree = rootRoute.addChildren([
   consoleRoute.addChildren([
     consoleIndexRoute,
     ...consoleSectionRoutes,
+    consoleSalonEditorRoute,
     ...consolePlaceholderRoutes,
   ]),
 ]);

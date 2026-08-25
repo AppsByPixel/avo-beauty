@@ -1,7 +1,12 @@
-import { fils, type Transaction } from '@avo/types';
+import { fils } from '@avo/types';
 import { Card, EmptyState, ErrorState, Money, Skeleton, StatCard, StaleBanner } from '@avo/ui';
 import { ApiError } from '../api/client.js';
-import { useRecentActivity, useSalonMetrics, type SalonMetrics } from '../api/salon.js';
+import {
+  useRecentActivity,
+  useSalonMetrics,
+  type ActivityItem,
+  type SalonMetrics,
+} from '../api/salon.js';
 
 /**
  * Merchant → Overview.
@@ -12,10 +17,20 @@ import { useRecentActivity, useSalonMetrics, type SalonMetrics } from '../api/sa
  * server and drift from it. The ledger in sectionState.tsx records why — on
  * Settings the same absence WAS an oversight, and nothing distinguished the two.
  *
- * `GET /charges` behind the activity feed is `requireScannerPerm(req, 'charges')`
- * — a SCANNER-scope guard, not a dashboard one. No web principal satisfies it
- * whatever permissions she holds, so that refusal is the contract rather than a
- * permission anyone can grant.
+ * THE ACTIVITY PANEL USED TO READ `GET /charges`, WHICH THIS SCREEN CAN NEVER
+ * REACH. The paragraph that stood here said so and treated it as the contract:
+ * "`requireScannerPerm(req, 'charges')` — a SCANNER-scope guard, not a dashboard
+ * one. No web principal satisfies it whatever permissions she holds." Every word
+ * of that is true, and it described a bug. An endpoint this screen cannot reach
+ * is not an endpoint this screen should call. The panel now reads
+ * `GET /salons/{id}/activity`, which is `requireDashboardPerm(req, 'dashboard')`
+ * — the same gate as the metrics beside it, and the endpoint built for this
+ * panel. See `api/salon.ts § useRecentActivity`.
+ *
+ * SO BOTH HOOKS NOW SHARE ONE GATE, which is why the feed has no permission
+ * state of its own: a staff member without `perms.dashboard` is refused the
+ * metrics too and never gets past `MetricsError`. The 403 branch below survives
+ * for the one refusal that can still reach it alone — `requireSameSalon`.
  */
 export function Overview() {
   // No salon id here at all. Both hooks read it from the session.
@@ -159,7 +174,7 @@ function nextAtLabel(iso: string): string {
 /* ------------------------------------------------------------- activity feed */
 
 interface ActivityListProps {
-  items: Transaction[] | undefined;
+  items: ActivityItem[] | undefined;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
@@ -183,21 +198,69 @@ function ActivityList({ items, loading, error, onRetry, retrying }: ActivityList
     );
   }
 
-  if (error) {
+  /** Held as the narrowed type, so the branches below can read the server's copy. */
+  const apiError = error instanceof ApiError ? error : null;
+  const forbidden = apiError?.isForbidden ?? false;
+
+  /*
+   * STALE-NOT-BLANK, AND IT ONLY BECAME REACHABLE WITH THE FIX.
+   *
+   * §4: "Network failure keeps the last-known data visible with a stale banner
+   * rather than blanking." This panel checked `error` before `items` and so
+   * would blank a list it was still holding — which never showed, because while
+   * the hook read `GET /charges` it was refused on every load and there was
+   * never a cached row to lose. Making the request succeed made the hazard real
+   * in the same change, so it is fixed in the same change.
+   *
+   * A REFUSAL IS EXCLUDED, exactly as it is for the metrics above: a 403 means
+   * this staff member may not see these lines, and holding them on screen behind
+   * a retry shows her precisely what she is not allowed to see. `forbidden`
+   * therefore falls through to the explain state even with rows in hand.
+   *
+   * The banner §4 asks for is the one `Overview` already renders above the KPI
+   * row — the whole screen is stale together, so the feed does not draw a second.
+   */
+  const keepStale = Boolean(error) && !forbidden && items !== undefined && items.length > 0;
+
+  if (error && !keepStale) {
     // 401 — the session is gone and the shell is already redirecting to
     // sign-in. Rendering a refusal here would flash for one frame and tell the
     // merchant she lacks a permission she actually holds.
-    if (error instanceof ApiError && error.isUnauthenticated) return null;
+    if (apiError?.isUnauthenticated) return null;
+
+    const offline = apiError?.isConnectivity ?? false;
 
     return (
       <div className="overview__feed-state">
-        {error instanceof ApiError && error.isForbidden ? (
+        {forbidden ? (
           /*
-           * 403 — explain, no retry (interaction-spec.md §4). `perms.charges` is
-           * the senior permission that gates this feed; the API's message names
-           * who can grant it, so it is rendered rather than paraphrased.
+           * 403 — explain, no retry (interaction-spec.md §4).
+           *
+           * THIS BRANCH USED TO BE THE NORMAL PATH. It rendered the scanner's
+           * refusal of `GET /charges` on every load, which is the bug this file
+           * was fixed for. Now that the feed shares `perms.dashboard` with the
+           * metrics, the only refusal that reaches here without `MetricsError`
+           * taking the whole screen first is `requireSameSalon` — "That salon is
+           * not yours." Kept, because a state that is unreachable today is not a
+           * state that may be absent; the server's own copy is rendered rather
+           * than paraphrased, exactly as `MetricsError` does below.
            */
-          <ErrorState title="You don't have access to this" body={error.message} />
+          <ErrorState title="You don't have access to this" body={apiError?.message ?? ''} />
+        ) : offline ? (
+          /*
+           * OFFLINE IS ITS OWN STATE, not "something went wrong" (§4). The
+           * metrics beside this panel distinguish the two and this one did not —
+           * a merchant on a dropped salon wifi was told the workspace answered
+           * badly, which sends her looking for a fault that is not there. The
+           * figures above stay on screen behind their stale banner, so the
+           * sentence says so.
+           */
+          <ErrorState
+            title="No connection"
+            body="We can't reach the workspace. Your figures above are the last we loaded."
+            onRetry={onRetry}
+            retrying={retrying}
+          />
         ) : (
           <ErrorState
             title="Couldn't load activity"
@@ -211,16 +274,42 @@ function ActivityList({ items, loading, error, onRetry, retrying }: ActivityList
   }
 
   if (!items || items.length === 0) {
+    /*
+     * EMPTY, AND IT NOW MEANS WHAT IT SAYS. §4: "every empty state names the
+     * thing and offers the one action that fills it."
+     *
+     * This state was previously unreachable — the request was refused before it
+     * could return zero rows, so the panel showed a permission error on a quiet
+     * morning exactly as it did on a busy one. The list it names is the list the
+     * endpoint actually merges (`FEED_KINDS` plus the loyalty stream), not the
+     * charges-only stream the old hook read, so a merchant who reads this and
+     * then tops a customer up will see the line she was promised.
+     *
+     * The action is the scanner, because that is genuinely the only thing that
+     * starts a line: nothing on this dashboard writes to the feed.
+     */
     return (
       <div className="overview__feed-state">
         <EmptyState
-          title="No activity yet"
-          body="Charges, top-ups and deposit returns appear here as your team serves customers today."
+          title="Nothing today yet"
+          body="Charges, top-ups, deposit returns and tier changes land here as your team serves customers. The first one appears when someone scans a customer's QR on the salon phone."
         />
       </div>
     );
   }
 
+  /*
+   * `who` then `what`, which is the design's own row —
+   * `AVO Merchant Dashboard.dc.html` § Overview draws `{{ f.who }} {{ f.what }}
+   * {{ f.when }}`.
+   *
+   * THE AMOUNT IS INSIDE `what` AND IS NOT RENDERED SEPARATELY. It is composed
+   * server-side, and `services/activityFeed.ts` explains why in terms of a bug
+   * it already fixed once: a top-up's `amountFils` is what LANDED, bonus
+   * included, so "topped up" beside that column reads five dinars higher than
+   * the customer paid. `amountFils` is carried on the item for a caller that
+   * needs to total or colour by it; this row is prose and prints the prose.
+   */
   return (
     <ul className="overview__feed">
       {items.map((item) => (
@@ -228,35 +317,14 @@ function ActivityList({ items, loading, error, onRetry, retrying }: ActivityList
           <span className="overview__feed-dot" aria-hidden="true" />
           <span className="overview__feed-body">
             <span className="overview__feed-text">
-              <b>{describeKind(item.kind)}</b> <Money amount={fils(Math.abs(item.amountFils))} withUnit />
-              {' · '}
-              {item.reference}
+              <b>{item.who}</b> {item.what}
             </span>
-            <span className="overview__feed-when">{timeLabel(item.createdAt)}</span>
+            <span className="overview__feed-when">{timeLabel(item.at)}</span>
           </span>
         </li>
       ))}
     </ul>
   );
-}
-
-function describeKind(kind: Transaction['kind']): string {
-  switch (kind) {
-    case 'topup':
-      return 'Topped up';
-    case 'charge':
-      return 'Paid';
-    case 'deposit_hold':
-      return 'Deposit held';
-    case 'deposit_return':
-      return 'Deposit returned';
-    case 'shop':
-      return 'Bought';
-    case 'adjustment':
-      return 'Adjusted';
-    default:
-      return 'Activity';
-  }
 }
 
 function timeLabel(iso: string): string {

@@ -1375,20 +1375,15 @@ a:hover {
 }
 
 /*
- * The "this is real, and it is not editable yet" strip.
+ * `.settings__notice` LIVED HERE AND IS GONE.
  *
- * Warn, not danger: nothing has failed and nothing is wrong with the salon. It
- * is a limit of the workspace, and the merchant's next step is to ask AVO.
+ * It styled one strip: "Booking and Shop can't be switched on from here yet —
+ * the workspace has no endpoint for it." That sentence was false — `modules` is
+ * merchant-editable and the toggles are wired — so the strip went, and a rule
+ * whose only caller was a corrected lie goes with it rather than waiting to be
+ * reused by something that does not mean it. `Settings.tsx § ModulesPanel` has
+ * the transcript. `.saloned__notice` below is the surviving warn strip.
  */
-.settings__notice {
-  background: var(--avo-warn-bg);
-  color: var(--avo-warn-text);
-  border-radius: 11px;
-  padding: 10px 13px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  margin: 10px 0 4px;
-}
 
 .settings__row {
   display: flex;
@@ -4136,6 +4131,451 @@ a:hover {
   color: var(--avo-text-muted-soft);
   line-height: 1.5;
   max-width: 680px;
+}
+
+/*
+ * The Manage cell. `AVO Owner Console.dc.html:232` — brand-deep ink on a
+ * brand-tint fill, which is the design's own pairing and the one non-negotiable
+ * #9 asks for: `--avo-brand` is never behind text here, it is not used at all.
+ */
+.salons__manage {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.salons__managebtn {
+  display: inline-block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  border: none;
+  padding: 8px 13px;
+  border-radius: 10px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/*
+ * The design draws no hover on this control, and a link that gives none is worse
+ * than one that invents a plausible tint — so the feedback is the BRAND at a
+ * mixed strength rather than a second tint token nobody defined. `color-mix` over
+ * `--avo-brand` is the construction already used for the console's own overlays.
+ */
+.salons__managebtn:hover {
+  background: color-mix(in srgb, var(--avo-brand) 26%, transparent);
+}
+
+/* ------------------------------------------------------------ salon editor -- */
+/*
+ * `AVO Owner Console.dc.html:400` § "salon editor". Max 860px — the design's own
+ * width, narrower than the 960px list it opens from, because the editor is a form
+ * and the list is a table.
+ *
+ * Every colour resolves through an `--avo-*` custom property, so the console's
+ * `.avo-dark` ground recolours all of it and a white-label build changes the
+ * brand five variables up. No hex is retyped from the design file.
+ */
+
+.saloned {
+  max-width: 860px;
+}
+
+.saloned__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  text-decoration: none;
+  margin-bottom: 16px;
+}
+
+.saloned__back:hover {
+  text-decoration: underline;
+}
+
+.saloned__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+.saloned__initial {
+  width: 52px;
+  height: 52px;
+  border-radius: 15px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 22px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.saloned__headtext {
+  flex: 1;
+  min-width: 0;
+}
+
+.saloned__name {
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.saloned__sub {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+  margin: 2px 0 0;
+}
+
+/*
+ * Modules and deposit side by side, as the design pairs them. interaction-spec.md
+ * §1: two-up collapses to one at `narrow` rather than squeezing — a stepper and a
+ * pair of switches both stop being usable before they stop fitting.
+ */
+.saloned__two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+[data-bp='narrow'] .saloned__two {
+  grid-template-columns: 1fr;
+}
+
+.saloned__card {
+  margin-bottom: 18px;
+}
+
+.saloned__two .saloned__card {
+  margin-bottom: 0;
+}
+
+.saloned__cardtitle {
+  font-size: 17px;
+  font-weight: 500;
+  margin: 0;
+}
+
+.saloned__cardsub {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.saloned__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.saloned__card--rows .saloned__row:first-of-type {
+  margin-top: 4px;
+}
+
+.saloned__rowname {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.saloned__rowbody {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin-top: 2px;
+}
+
+.saloned__depositrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.saloned__depositnum {
+  font-size: 30px;
+  font-weight: 500;
+}
+
+.saloned__depositunit {
+  font-size: 14px;
+  color: var(--avo-text-muted);
+}
+
+.saloned__depositrange {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  white-space: nowrap;
+}
+
+.saloned__loyaltyhead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+/*
+ * A stated boundary, not a failure — the warn tint rather than the danger one.
+ *
+ * This comment used to cite `.settings__notice` as the sibling precedent for the
+ * distinction. That rule is gone: the boundary it stated had expired. This one
+ * has not, so the tint choice stands on its own reasoning rather than on a
+ * neighbour's.
+ */
+.saloned__notice {
+  background: var(--avo-warn-bg);
+  color: var(--avo-warn-text);
+  border-radius: 11px;
+  padding: 10px 13px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 12px 0 0;
+}
+
+/* interaction-spec.md §1: data tables scroll, they never drop columns. */
+.saloned__scroll {
+  overflow-x: auto;
+}
+
+.saloned__tiers {
+  width: 100%;
+  min-width: 460px;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.saloned__tiers thead th {
+  padding: 0 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.saloned__tiers tbody td,
+.saloned__tiers tbody th {
+  padding: 11px 4px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  vertical-align: middle;
+  font-weight: 400;
+}
+
+.saloned__tiername {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+}
+
+.saloned__tiername .avo-display {
+  font-weight: 500;
+}
+
+/*
+ * The rung dots, on the `--avo-tier-*-dot` tokens. Those tokens carry exactly the
+ * four hexes the design's `tierDots` array lists, in the same order, so this is
+ * the token and not a retyped copy of it.
+ */
+.saloned__tierdot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.saloned__tierdot[data-tier='bronze'] {
+  background: var(--avo-tier-bronze-dot);
+}
+
+.saloned__tierdot[data-tier='silver'] {
+  background: var(--avo-tier-silver-dot);
+}
+
+.saloned__tierdot[data-tier='gold'] {
+  background: var(--avo-tier-gold-dot);
+}
+
+.saloned__tierdot[data-tier='black'] {
+  background: var(--avo-tier-black-dot);
+}
+
+.saloned__tierlocked {
+  font-size: 12.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.saloned__bonus {
+  color: var(--avo-brand-deep);
+}
+
+.saloned__tierwarn {
+  font-size: 12px;
+  color: var(--avo-danger-text);
+  margin-top: 7px;
+}
+
+.saloned__example {
+  margin: 14px 0 0;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  background: var(--avo-surface-alt);
+  border-radius: 12px;
+  padding: 12px 14px;
+  line-height: 1.5;
+}
+
+.saloned__stamps {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding-top: 6px;
+  flex-wrap: wrap;
+}
+
+.saloned__stampnum {
+  font-size: 30px;
+  font-weight: 500;
+}
+
+.saloned__dots {
+  flex: 1;
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  align-content: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 180px;
+}
+
+.saloned__dot {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  /* The design's `rgba(110,127,108,0.4)` is `--avo-brand` at 40%, derived not retyped. */
+  border: 2px solid color-mix(in srgb, var(--avo-brand) 40%, transparent);
+  background: transparent;
+}
+
+.saloned__example--stamps {
+  flex-basis: 100%;
+}
+
+.saloned__branches {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.saloned__branch {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.saloned__branchdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+}
+
+.saloned__branchname {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.saloned__branchid {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+.saloned__branchempty {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--avo-text-muted-soft);
+}
+
+.saloned__save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.saloned__status {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+/* Unsaved or invalid — the sentence carries the meaning, not the colour. */
+.saloned__status[data-dirty] {
+  color: var(--avo-warn-text);
+  font-weight: 600;
+}
+
+/*
+ * A stored ladder AVO can see and not edit — the pre-four-rung legacy rows. Listed
+ * rather than tabled: a table with the editable one's headers would promise the
+ * same controls.
+ */
+.saloned__stored {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.saloned__storedrung {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 4px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 15px;
+}
+
+.saloned__storedvalue {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+.saloned__tierskel {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 11px 4px;
+  border-top: 1px solid var(--avo-hairline-inner);
 }
 
 /* ========================================== console · onboarding wizard == */

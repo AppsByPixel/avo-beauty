@@ -23,44 +23,97 @@ import { staffKeys } from './staff.js';
  *
  * WHAT THIS ENDPOINT WILL NOT ACCEPT
  * ----------------------------------
- * `EDITABLE` on the API side does not include `modules` (nor `moduleBooking` /
- * `moduleShop`), and does not include `branches`.
+ * `MERCHANT_EDITABLE` on the API side does not include `branches`, and does not
+ * include the two module COLUMN spellings, `moduleBooking` and `moduleShop`.
  *
- * THE SECOND HALF OF THAT SENTENCE USED TO SAY "neither can be written by any
- * endpoint in the API", AND IT WAS WRONG ABOUT BRANCHES — the sixth stale
- * "not built" claim found in this dashboard, and the second one about these exact
- * routes. `PATCH /salons/{id}` genuinely refuses a `branches` key, but branches
- * have their own routes and always did:
+ * THIS PARAGRAPH HAS NOW BEEN WRONG TWICE, IN THE SAME DIRECTION BOTH TIMES, AND
+ * THE CORRECTIONS ARE KEPT RATHER THAN TIDIED AWAY BECAUSE THE PATTERN IS THE
+ * POINT — a refusal observed once, generalised into "the API cannot do this",
+ * then believed long after the API grew the door.
  *
- *   POST   /salons/{id}/branches            perms.loyalty   (salons.ts:420)
- *   PATCH  /salons/{id}/branches/{bid}      perms.loyalty
- *   DELETE /salons/{id}/branches/{bid}      perms.loyalty   — a CLOSE, not a delete
+ * (1) It used to say branches "cannot be written by any endpoint in the API" —
+ *     the sixth stale "not built" claim found in this dashboard. `PATCH
+ *     /salons/{id}` genuinely refuses a `branches` key, but branches have their
+ *     own routes and always did:
  *
- * `useAddBranch` and `useCloseBranch` below use them. `modules` remains genuinely
- * unwritable, so the module toggles stay disabled with their sentence.
+ *       POST   /salons/{id}/branches            perms.loyalty   (salons.ts:420)
+ *       PATCH  /salons/{id}/branches/{bid}      perms.loyalty
+ *       DELETE /salons/{id}/branches/{bid}      perms.loyalty   — a CLOSE, not a delete
+ *
+ *     `useAddBranch` and `useCloseBranch` below use them.
+ *
+ * (2) It used to say `modules` "remains genuinely unwritable", and that this
+ *     endpoint refuses `modules`, `moduleBooking` and `moduleShop` alike. Only
+ *     the last two are true. `modules` is in `MERCHANT_EDITABLE`
+ *     (salons.ts:57) and has been since e883330 — "feat(api): a salon's
+ *     structure is configurable". The COLUMN spellings are refused deliberately
+ *     and permanently, by that set's own comment: `modules` is the WIRE shape,
+ *     `applyModules` splits it into the two boolean columns, and "two doors into
+ *     one field is how the tier ladder acquired an unvalidated second entrance".
+ *     So the original verification almost certainly hit `moduleBooking` /
+ *     `moduleShop`, got `not_editable`, and the note generalised one true
+ *     refusal into a false one about a third field.
+ *
+ *     Driven against the running API on `avo_lane_c`, as ST-001 (a manager
+ *     holding `perms.loyalty`), and confirmed in SQL rather than in the reply:
+ *
+ *       PATCH /salons/SAL-AMARA {"modules":{"booking":true,"shop":false}}
+ *         → 200,  module_booking=t module_shop=f
+ *       PATCH … {"modules":{"shop":true}}              → 200, booking untouched
+ *       PATCH … {"moduleBooking":false}                → 400 not_editable
+ *       PATCH … {"moduleShop":false}                   → 400 not_editable
+ *       PATCH … {"modules":{"loyalty":true}}           → 400 unknown_module
+ *       PATCH … as ST-002 (perms.loyalty OFF), called directly
+ *                                                      → 403, columns unchanged
+ *
+ *     The module toggles in `Settings.tsx § ModulesPanel` are wired to the first
+ *     of those and their notice is gone.
  */
 export type SalonPatch = Partial<
   Pick<
     Salon,
     'name' | 'nameAr' | 'brandColor' | 'depositFils' | 'businessHours' | 'whatsappEnabled' | 'timezone'
   >
->;
+> & {
+  /**
+   * `Partial<>` and NOT `Salon['modules']`, which requires both keys.
+   *
+   * A partial object is a partial update on the server's side and that is
+   * designed, not tolerated — `applyModules` (salons.ts:240) only touches a
+   * column whose key is present, "because the Settings screen has two
+   * independent switches and sending the pair on every flip would let a stale
+   * render turn the other one off". Sending `{ booking }` alone is therefore the
+   * correct write for one switch, and the type says so.
+   */
+  modules?: Partial<Salon['modules']>;
+};
 
 /**
- * The PATCH response is NOT a `Salon`, so it is deliberately typed as unknown.
+ * The PATCH response is typed `unknown` and is not written into the cache.
  *
- * FOUND BY DRIVING IT, AND IT CRASHED THE SHELL.
+ * IT USED TO SAY "the PATCH response is NOT a `Salon`". THAT WAS TRUE AND IS NOT
+ * ANY MORE — found while driving `modules` above, in the same session, which is
+ * the argument for driving rather than re-reading.
  *
- * `GET /salons/{id}` runs a serialiser; `PATCH /salons/{id}` ends with
- * `reply.send(after)` on the raw Drizzle row. Verified against the running API:
- *
- *   GET   … branches, modules, … (18 keys, the documented Salon)
- *   PATCH … no branches, no modules; instead moduleBooking, moduleShop,
- *           createdAt, updatedAt
- *
+ * What was true: `GET /salons/{id}` ran a serialiser and `PATCH /salons/{id}`
+ * ended on `reply.send(after)` with the raw Drizzle row — no `branches`, no
+ * `modules`, instead `moduleBooking`, `moduleShop`, `createdAt`, `updatedAt`.
  * Writing that into the cache the shell reads made `salon.branches[0]` throw and
- * took the entire dashboard to its error boundary on every settings change.
- * Reported to Lane A — the PATCH should return the same serialiser as the GET.
+ * took the whole dashboard to its error boundary on every settings change. It
+ * was reported to Lane A, and Lane A fixed it: `serialiseSalon` was lifted out of
+ * the GET handler and both routes now end on it (salons.ts:621, with the comment
+ * "The SAME shape `GET` answers"). Observed on the wire:
+ *
+ *   PATCH /salons/SAL-AMARA → 19 keys, `branches` and `modules` present,
+ *                             `moduleBooking` absent — the documented Salon.
+ *
+ * SO WHY STILL `unknown`, AND STILL A REFETCH? Because nothing here parses that
+ * body, and a cast is not a check — `authedRequest<Salon>` would compile whatever
+ * arrives, which is exactly how the crash above got in. `platformSalons.ts` may
+ * trust its PATCH response because it owns `parsePlatformSalonDetail` and runs it;
+ * this file has no parser, and adding one is the slice that would also let this
+ * hook `setQueryData`. Until then the cheap round trip stays: it costs one request
+ * and cannot put a shape the shell does not expect into the cache.
  */
 export function useUpdateSalon(): UseMutationResult<unknown, unknown, SalonPatch> {
   const salonId = useSalonId();

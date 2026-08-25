@@ -96,7 +96,7 @@ export function Settings() {
 
   return (
     <div className="settings">
-      <ModulesPanel salon={salon} />
+      <ModulesPanel salon={salon} update={update} />
       <div className="settings__pair">
         <DepositPanel salon={salon} update={update} />
         <BusinessHoursPanel salon={salon} />
@@ -120,39 +120,71 @@ type Updater = ReturnType<typeof useUpdateSalon>;
 
 /* ------------------------------------------------------------------ modules */
 
-function ModulesPanel({ salon }: { salon: Salon | undefined }) {
+/**
+ * THESE TOGGLES WERE DISABLED BEHIND A NOTICE, AND THE REASON HAD EXPIRED.
+ *
+ * The notice read "Booking and Shop can't be switched on from here yet — the
+ * workspace has no endpoint for it", above a comment claiming `PATCH
+ * /salons/{id}` refuses "`modules`, `moduleBooking` and `moduleShop` alike".
+ *
+ * ONE THIRD OF THAT WAS RIGHT, AND IT IS WHY THE OTHER TWO THIRDS WERE BELIEVED.
+ * The two COLUMN spellings are refused — deliberately and permanently, so that
+ * one field does not have two doors — and a verification that reached for
+ * `moduleBooking` would have got a real `not_editable` 400. But `modules`, the
+ * WIRE shape this screen already READS off the salon, is in `MERCHANT_EDITABLE`
+ * (api/src/routes/salons.ts:57) and has been since e883330. Driven against the
+ * running API before this change, and asserted in SQL rather than in the reply —
+ * the full transcript, including the 403 for a staff member without the
+ * permission, is in `api/settings.ts § WHAT THIS ENDPOINT WILL NOT ACCEPT`.
+ *
+ * ONE SWITCH SENDS ONE KEY. `{ modules: { booking } }`, not the pair: the server
+ * only touches a column whose key is present, precisely so that flipping Booking
+ * from a render made before someone else changed Shop cannot silently take Shop
+ * with it.
+ *
+ * THE GATE IS `perms.loyalty`, WHICH IS THE GATE THIS WHOLE SCREEN ALREADY HAS.
+ * `PATCH /salons/{id}` is one route with one guard, so the courtesy check at the
+ * top of `Settings` covers these writes exactly as it covers the deposit and the
+ * WhatsApp switch — nothing extra to add here. Non-negotiable #7 unchanged: with
+ * that check deleted the server still answers 403 and the columns still do not
+ * move, which is the state the transcript above records.
+ */
+function ModulesPanel({ salon, update }: { salon: Salon | undefined; update: Updater }) {
   return (
     <Card className="settings__card settings__card--rows">
       <h2 className="settings__title avo-display">Optional modules</h2>
-
-      {/*
-        THE API CANNOT WRITE THESE. `PATCH /salons/{id}` refuses `modules`,
-        `moduleBooking` and `moduleShop` alike — verified against the running
-        API, which answers `not_editable`. There is no other endpoint. So the
-        toggles render in their designed place showing the salon's real state,
-        and they are disabled with the reason stated, rather than being wired to
-        a request that is guaranteed to fail.
-      */}
-      <div className="settings__notice" role="note">
-        Booking and Shop can&rsquo;t be switched on from here yet — the workspace has no endpoint
-        for it. Ask AVO to enable a module for your salon.
-      </div>
 
       <ModuleRow
         name="Booking"
         body="Service → artist → slot, with a wallet deposit. Default off."
         on={salon?.modules.booking}
+        busy={update.isPending}
+        onChange={(next) => update.mutate({ modules: { booking: next } })}
       />
       <ModuleRow
         name="Shop"
         body="Flat catalog, pay from wallet, pickup at salon. Default off."
         on={salon?.modules.shop}
+        busy={update.isPending}
+        onChange={(next) => update.mutate({ modules: { shop: next } })}
       />
     </Card>
   );
 }
 
-function ModuleRow({ name, body, on }: { name: string; body: string; on: boolean | undefined }) {
+function ModuleRow({
+  name,
+  body,
+  on,
+  busy,
+  onChange,
+}: {
+  name: string;
+  body: string;
+  on: boolean | undefined;
+  busy: boolean;
+  onChange: (next: boolean) => void;
+}) {
   return (
     <div className="settings__row">
       <div>
@@ -163,9 +195,17 @@ function ModuleRow({ name, body, on }: { name: string; body: string; on: boolean
         <Skeleton width={40} height={24} radius={999} />
       ) : (
         <div className="settings__row-right">
-          {/* The state as a word, not only as a switch position. */}
+          {/*
+            The state as a word, not only as a switch position — and it follows
+            the SERVER's value, never a local one. No optimistic flip: a module
+            decides whether a whole surface exists in the customer's wallet, and
+            a switch that reads On while the salon is still Off is the same class
+            of lie as a stepper showing a deposit nobody accepted. The refusal
+            path is `WriteError` at the foot of the screen; the switch simply
+            never moved.
+          */}
           <Pill tone={on ? 'brand' : 'quiet'}>{on ? 'On' : 'Off'}</Pill>
-          <Toggle checked={on} disabled onChange={() => {}} label={`${name} module`} />
+          <Toggle checked={on} disabled={busy} onChange={onChange} label={`${name} module`} />
         </div>
       )}
     </div>

@@ -116,21 +116,23 @@ export const CONSOLE_NAV_ITEMS: ConsoleNavItem[] = [
     section: 'salons',
     title: 'Salons',
     /*
-     * The design's own subtitle is "Open a salon to edit its setup and loyalty"
-     * (`AVO Owner Console.dc.html:1144`). This comment used to justify dropping it
-     * with "there is no endpoint a console admin can use to open one" — THAT IS NO
-     * LONGER TRUE either, and it went stale on the same commit as the gate above:
-     * 4cc03c5 added `GET /v1/platform/salons/:id` (platformConsole.ts:339) and
-     * `PATCH /v1/platform/salons/:id` (:350), both gated `salons`.
+     * The design's own subtitle, `AVO Owner Console.dc.html:1144` § titles:
      *
-     * The subtitle still carries the design's other sentence, but for a DIFFERENT
-     * and much narrower reason: the endpoints exist, the SCREEN does not draw an
-     * editor yet (`routes/console/Salons.tsx` is the list only). A header that
-     * offers an editor above a screen that has none is still a false claim. This is
-     * now a lane-C build gap with the server ready and waiting, not an API absence
-     * — reported to trunk as such, because those are different queues.
+     *     salons: ['Salons', 'Open a salon to edit its setup and loyalty'],
+     *
+     * IT WAS DROPPED TWICE AND BOTH REASONS ARE NOW SPENT. The first was "there is
+     * no endpoint a console admin can use to open one", which 4cc03c5 falsified. The
+     * second was narrower and survived it — the endpoints exist but the SCREEN drew
+     * no editor, and a header that offers one above a screen that has none is still
+     * a false claim. `routes/console/SalonEditor.tsx` closes that, and the row action
+     * on the list opens it, so the sentence is true and it is taken back verbatim.
+     *
+     * It reads correctly over BOTH views. `consoleNavItemFor` matches
+     * `/console/salons/$id` through its `startsWith` branch, so this subtitle also
+     * sits above the editor itself — where "open a salon to edit its setup and
+     * loyalty" describes what the admin is already looking at.
      */
-    subtitle: 'Every salon on AVO',
+    subtitle: 'Open a salon to edit its setup and loyalty',
     icon: (
       <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
         <path d="M3 17V8l7-4 7 4v9" {...stroke} strokeLinejoin="round" />

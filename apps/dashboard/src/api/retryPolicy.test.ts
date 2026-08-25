@@ -66,14 +66,31 @@ describe('retryPolicy — the budget, at its edges', () => {
 });
 
 /**
- * Not widened to every 4xx on purpose, and pinned so the decision is visible
- * rather than implicit. A 400/404/409 is equally unretryable in principle, but
- * nothing in this dashboard reaches one on a READ today, and changing behaviour
- * for statuses nobody has driven would be inventing policy. If a read starts
- * returning one of these, this test is the place the choice gets revisited.
+ * The scope limit, and the one status that has since left it.
+ *
+ * THIS BLOCK SAID "IF A READ STARTS RETURNING ONE OF THESE, THIS TEST IS THE PLACE
+ * THE CHOICE GETS REVISITED", AND ONE DID. `GET /v1/platform/salons/:id` — the
+ * owner console's per-salon editor — is the first read in this dashboard that can
+ * 404, on the ordinary path of a bookmarked URL or an id pasted from a support
+ * ticket. Driven: `404 {"error":"unknown_salon","message":"No such salon."}`.
+ *
+ * So 404 moved to the refusal side and the rest stayed, which is the outcome this
+ * pin was designed to produce: the limit held until there was a real case, and it
+ * moved for that case and no further. The test failed on the same commit that gave
+ * it one, by name, which is the whole reason it was written as an assertion instead
+ * of a paragraph.
  */
 describe('retryPolicy — the deliberate scope limit', () => {
-  it.each([400, 404, 409, 422])('still spends the budget on a %i', (status) => {
+  it('does not spend the budget on a 404, now that a read can produce one', () => {
+    // The editor holds a full-page skeleton for every attempt, so the budget buys
+    // a slow load and then the same answer.
+    expect(retryPolicy(0, api(404))).toBe(false);
+  });
+
+  it.each([400, 409, 422])('still spends the budget on a %i', (status) => {
+    // Unretryable in principle and still undriven on a READ in this dashboard.
+    // `namedStateAnswer` already treats a served 409 as an answer where one
+    // appears. Widening on principle is what this pin exists to prevent.
     expect(retryPolicy(0, api(status))).toBe(true);
   });
 });

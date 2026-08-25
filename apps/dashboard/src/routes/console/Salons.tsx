@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link } from '@tanstack/react-router';
 import { fils } from '@avo/types';
 import { deriveBrandSet } from '@avo/tokens';
 import {
@@ -39,34 +40,34 @@ import { SectionError, WriteError } from '../sectionState.js';
  * `AVO Owner Console.dc.html:202` § SALONS — the list half.
  *
  * =========================================================================
- * WHAT THIS SCREEN DELIBERATELY DOES NOT DRAW
+ * THE SECTION IS "LIST → PER-SALON EDITOR", AND BOTH HALVES NOW EXIST
  * =========================================================================
- * The design's section is "list → per-salon editor", and this is the list only.
+ * This screen is the list. `SalonEditor.tsx` is the editor, on
+ * `/console/salons/$id`, and the `Manage` action on every row opens it.
  *
- * THE REASON CHANGED AND THE CONCLUSION DID NOT, WHICH IS WHY THIS IS REWRITTEN
- * RATHER THAN DELETED. This block used to read "THERE IS NO ENDPOINT A CONSOLE
- * ADMIN CAN USE TO READ OR WRITE ONE SALON", evidenced by a driven 404 on
- * `GET /v1/platform/salons/SAL-AMARA`, and it closed by naming the two endpoints
- * that would fix it. Commit 4cc03c5 BUILT EXACTLY THOSE TWO:
+ * THIS BLOCK ARGUED THE OPPOSITE TWICE AND BOTH ARGUMENTS ARE SPENT. The first
+ * read "THERE IS NO ENDPOINT A CONSOLE ADMIN CAN USE TO READ OR WRITE ONE SALON",
+ * evidenced by a driven 404 on `GET /v1/platform/salons/SAL-AMARA`; commit 4cc03c5
+ * built exactly the two routes it named. The second conceded that and still
+ * withheld the row action — "a control that opens a screen which does not exist is
+ * worse than a column that is not there" — which was correct for as long as the
+ * screen did not exist. It does now:
  *
- *   GET   /v1/platform/salons/:id   gated `salons`   platformConsole.ts:339
- *   PATCH /v1/platform/salons/:id   gated `salons`   platformConsole.ts:350
+ *   GET   /v1/platform/salons/:id   gated `salons`   platformConsole.ts:340
+ *   PATCH /v1/platform/salons/:id   gated `salons`   platformConsole.ts:351
  *
- * So the old 404 evidence is spent, and the sentence it supported is false. The
- * editor is still not drawn here — but that is now a LANE C BUILD GAP with the
- * server ready, not an API absence. Different queue, different owner, and worth
- * the distinction: the first is "we have not got to it", the second was "we are
- * blocked". Reported to trunk as unblocked work rather than a missing dependency.
+ * Worth keeping the shape of the failure rather than only the fix. Neither claim
+ * was ever wrong when written, both named their own expiry conditions, and both
+ * outlived them anyway — in three files at once, while `api/src/auth/principal.ts`
+ * had already corrected its own half. A comment cannot fail a build. That is why
+ * `shell/consoleNavGates.test.ts` derives the gate rather than restating it, and it
+ * is the standing argument for deriving any claim about another lane's code.
  *
- * `api/src/auth/principal.ts:532` already corrected its own half of this — the
- * paragraph that used to end "not built yet" now begins "THOSE ROUTES NOW EXIST".
- * Lane A updated its comment and this lane's copy of the same fact sat stale, in
- * three files. That is the argument for deriving a claim instead of restating it.
- *
- * Until the editor is drawn there is still no `Manage` button on a row: a control
- * that opens a screen which does not exist is worse than a column that is not
- * there. The Live toggle stays absent for the ORIGINAL reason, which has NOT
- * expired — `salon` has no live/suspended column, so there is nothing to write.
+ * THE LIVE TOGGLE STAYS ABSENT, and its reason has NOT expired: `salon` has no
+ * live/suspended column, so there is nothing to read and nothing to write. That is
+ * a schema change, not a lane C one. The editor's header drops the same switch for
+ * the same reason — see `SalonEditor.tsx` § WHAT THE DESIGN DRAWS THAT THIS
+ * DOES NOT.
  *
  * THE WIZARD IS HERE — `POST /v1/platform/salons` landed. See `OnboardWizard`
  * below, and `api/platformSalons.ts` for the gate and the idempotency rule it
@@ -81,17 +82,31 @@ import { SectionError, WriteError } from '../sectionState.js';
  * own endpoint's section costs nothing and stays correct through that.
  *
  * =========================================================================
- * THE BANNER COPY IS THE DESIGN'S FIRST SENTENCE AND NOT ITS SECOND
+ * THE BANNER TAKES THE DESIGN'S SECOND SENTENCE NOW, AND STILL NOT ITS THIRD
  * =========================================================================
- * The design writes: "Every salon on AVO. Open one to edit its modules, deposit
- * and loyalty structure — or flip it off to instantly suspend it. Customers keep
- * their balance."
+ * The design writes, in one breath: "Every salon on AVO. Open one to edit its
+ * modules, deposit and loyalty structure — or flip it off to instantly suspend it.
+ * Customers keep their balance."
  *
- * Only the first sentence is true of what ships. The rest describes an editor
- * this screen does not draw and a suspend that has no column, so it is dropped
- * rather than paraphrased into something vaguer — copy is verbatim or absent,
- * never softened. (The editor's ENDPOINTS now exist; see above. When the screen
- * draws them, the second sentence becomes true and this banner should take it.)
+ * It is punctuated as two sentences and it makes three claims. They are true at
+ * different times, so they are taken one at a time:
+ *
+ *   "Every salon on AVO."                      always true. Shipped from the start.
+ *   "Open one to edit its modules, deposit
+ *    and loyalty structure"                    TRUE NOW. `SalonEditor.tsx` draws
+ *                                              exactly those three, and the row
+ *                                              action opens it. Taken.
+ *   "— or flip it off to instantly suspend
+ *    it. Customers keep their balance."        STILL FALSE. No live/suspended
+ *                                              column, so there is no switch to
+ *                                              flip and no promise to keep about
+ *                                              what happens after.
+ *
+ * The dropped clause is dropped whole, not softened into something vaguer: copy is
+ * verbatim or absent. The previous note here named its own trigger — "when the
+ * screen draws them, the second sentence becomes true and this banner should take
+ * it" — and this is that trigger firing, by hand, because nothing makes it fire on
+ * its own.
  *
  * NO COURTESY GATE ON THE READ. It is `requirePlatform(req, 'salons')`, so an
  * admin without it gets a 403 on load and `SectionError` renders the server's own
@@ -185,7 +200,9 @@ export function Salons() {
 
   return (
     <div className="salons">
-      <InfoBanner icon={<StorefrontGlyph />}>Every salon on AVO.</InfoBanner>
+      <InfoBanner icon={<StorefrontGlyph />}>
+        Every salon on AVO. Open one to edit its modules, deposit and loyalty structure.
+      </InfoBanner>
 
       <div className="salons__controls">
         <input
@@ -234,13 +251,22 @@ export function Salons() {
                 <th scope="col">Branches</th>
                 <th scope="col">Members</th>
                 <th scope="col">Loyalty</th>
+                {/*
+                  The design's seventh column has an empty header cell. A `<th>` with
+                  no accessible name leaves every Manage link in an unnamed column, so
+                  the name is present and only visually absent — the same treatment the
+                  sr-only <caption> above gets.
+                */}
+                <th scope="col">
+                  <span className="avo-sr-only">Open the salon editor</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {list.isPending ? (
                 [0, 1, 2, 3, 4].map((n) => (
                   <tr key={n}>
-                    {[0, 1, 2, 3, 4, 5].map((c) => (
+                    {[0, 1, 2, 3, 4, 5, 6].map((c) => (
                       <td key={c}>
                         <Skeleton width={`${80 - c * 8}%`} height={13} />
                       </td>
@@ -249,7 +275,7 @@ export function Salons() {
                 ))
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="salons__empty">
+                  <td colSpan={7} className="salons__empty">
                     {query !== '' ? (
                       /*
                        * NAMES WHAT IT FILTERED. "No salons" under an invisible
@@ -304,8 +330,10 @@ export function Salons() {
 }
 
 /**
- * One row. Six columns — the design's seven minus the Live toggle, which has no
- * column to read and no endpoint to write. See the screen header.
+ * One row. Seven columns — the design's seven, minus the Live toggle (no column to
+ * read, no endpoint to write) and plus the salon id under its name. See the screen
+ * header for the toggle; the id is there because a console admin scanning for the
+ * salon a support ticket names has the id and not the display name.
  */
 function SalonRow({ salon }: { salon: PlatformSalon }) {
   return (
@@ -354,6 +382,35 @@ function SalonRow({ salon }: { salon: PlatformSalon }) {
       <td className="salons__num">{salon.branchCount}</td>
       <td className="salons__num">{salon.memberCount.toLocaleString('en-US')}</td>
       <td className="salons__loyalty">{LOYALTY_LABEL[salon.loyaltyMode]}</td>
+      <td className="salons__manage">
+        {/*
+          "Manage", verbatim — and a LINK where the design draws a `<button>`.
+
+          The design's prototype flips a `editSalon` field in component state, so a
+          button is all it can be. This one changes the URL, and a control that
+          navigates has to be an anchor: middle-click and ⌘-click open the editor in
+          a tab, the status bar shows where it goes, and the browser's own history
+          takes the admin back. A button wired to `navigate()` silently loses all
+          three, and the design's visual treatment survives either way.
+
+          NO COURTESY GATE. Opening the editor needs `salons`, which is the same
+          section this list's read is gated on — an admin who can see this row can
+          open it by construction. Adding a check would be a second, driftable copy
+          of a fact the row's own existence already proves (#7).
+
+          `aria-label` extends rather than replaces the visible word: six identical
+          "Manage" links in a column tell a screen-reader user nothing about which
+          salon each one opens.
+        */}
+        <Link
+          to="/console/salons/$id"
+          params={{ id: salon.id }}
+          className="salons__managebtn"
+          aria-label={`Manage ${salon.name}`}
+        >
+          Manage
+        </Link>
+      </td>
     </tr>
   );
 }
