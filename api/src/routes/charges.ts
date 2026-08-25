@@ -47,6 +47,7 @@ import {
   violatedConstraint,
 } from '../services/idempotency';
 import { performCharge, VOID_WINDOW_MINUTES } from '../services/charge';
+import { chargeScannerBudget } from '../services/scannerLimit';
 import { writeAudit } from '../services/audit';
 import type { StaffPrincipal } from '../auth/principal';
 
@@ -114,6 +115,14 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
 
     // Then the key — a money-moving POST without one is refused before any work.
     const key = readIdempotencyKey(req);
+
+    /**
+     * The till's budget — BEFORE any transaction is opened. See
+     * services/scannerLimit.ts § WHERE THE CHECK SITS for why this line is here
+     * and not four frames down inside `performCharge`, which is where it was until
+     * a concurrency probe proved that version deadlocks the connection pool.
+     */
+    await chargeScannerBudget(db, p, 'charge');
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const memberId = resolveMemberId(req, requireString(body.memberId, 'memberId', 100));
@@ -301,6 +310,14 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
   app.post('/voids', async (req, reply) => {
     const p = requireScannerPerm(req, 'void');
     const key = readIdempotencyKey(req);
+
+    /**
+     * A void draws on the SAME budget as a scan and a charge —
+     * services/scannerLimit.ts § ONE BUDGET FOR ALL THREE argues why: the thing
+     * being protected is the till, so three separate budgets would be three doors
+     * into it. Before the transaction, for the reason the charge above is.
+     */
+    await chargeScannerBudget(db, p, 'void');
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const transactionId = requireString(body.transactionId, 'transactionId', 100);

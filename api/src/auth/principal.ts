@@ -33,7 +33,7 @@ import {
 import { staffUser } from '../db/schema/staff';
 import { env } from '../env';
 import { forbidden, unauthorized } from '../http/errors';
-import { sessionIsLive } from './sessions';
+import { liveSession } from './sessions';
 import { verifyAccessToken, type PrincipalKind, type SessionScope } from './tokens';
 
 /** The nine permissions of api-contract.md § StaffUser. */
@@ -102,6 +102,24 @@ export interface StaffPrincipal {
   salonId: string;
   scope: 'scanner' | 'dashboard';
   sessionId: string;
+  /**
+   * The till this session was minted for, read off the session row and never off
+   * a header.
+   *
+   * IT IS THE RATE-LIMIT KEY for `POST /scans`, `POST /charges` and `POST /voids`
+   * — see services/scannerLimit.ts — which is why it is on the principal at all
+   * rather than being fetched where it is used: fetching it separately would be a
+   * second read of a row `resolvePrincipal` has already read, and a second place
+   * that could disagree about which device is calling.
+   *
+   * `string | null` rather than `string`, and the null is not a shrug.
+   * `session_scanner_is_device_scoped` makes it non-null for every SCANNER
+   * session, which is every principal that can reach the three limited endpoints;
+   * a DASHBOARD session may legitimately have none, and an `AVO_TEST_PRINCIPALS`
+   * build has no session row to read at all. The limiter counts the null bucket
+   * rather than exempting it.
+   */
+  deviceId: string | null;
   name: string;
   role: string;
   perms: StaffPerms;
@@ -179,6 +197,14 @@ async function loadStaffPrincipal(
   staffId: string,
   scope: 'scanner' | 'dashboard',
   sessionId: string,
+  /**
+   * Passed IN rather than looked up here, because the caller has already read the
+   * session row — `resolvePrincipal` reads it to answer "is it live" and the test
+   * shim has no row to read. A second query for a column already in hand would be
+   * a second answer to "which device is calling", on the request path of every
+   * charge.
+   */
+  deviceId: string | null,
 ): Promise<StaffPrincipal | null> {
   const rows = await db.select().from(staffUser).where(eq(staffUser.id, staffId)).limit(1);
   const row = rows[0];
@@ -190,6 +216,7 @@ async function loadStaffPrincipal(
     salonId: row.salonId,
     scope,
     sessionId,
+    deviceId,
     name: row.name,
     role: row.role,
     perms: permsOf(row),
@@ -294,6 +321,62 @@ const TEST_PLATFORM_LIMITED = 'PLT-002';
  */
 const TEST_MEMBER_LOWBAL = '8843';
 
+/**
+ * The session ids the shim stamps on a fabricated principal, and the ONLY way to
+ * tell one from a real caller after `resolvePrincipal` has returned.
+ *
+ * They are named rather than left as three inline literals because something
+ * downstream now has to ASK the question — see `isFabricatedPrincipal` below — and
+ * a copy of the string at the asking site is a copy that stops matching the moment
+ * one of these is edited. That is the defect `routes/salons.ts` records against the
+ * tier ladder, in a smaller form.
+ *
+ * They cannot collide with a real session id: `session.id` is a `uuid` primary key
+ * and none of these three parses as one. That is what makes the check below exact
+ * rather than approximate.
+ */
+export const TEST_SESSION_MEMBER = 'test-session-member';
+export const TEST_SESSION_STAFF = 'test-session-staff';
+export const TEST_SESSION_PLATFORM = 'test-session-platform';
+
+/**
+ * Is this principal the `AVO_TEST_PRINCIPALS` shim's invention rather than a
+ * caller who presented a credential?
+ *
+ * WHY ANYTHING NEEDS TO ASK. The two rate limiters — services/scannerLimit.ts and
+ * services/topupLimit.ts — key on an identity: a till, or a customer. The shim
+ * resolves EVERY anonymous request to the same seeded staff member and the same
+ * seeded customer, so under it those keys stop naming anybody. Every request in a
+ * test run becomes one tablet and one shopper, and a suite that drives a thousand
+ * specs in nine minutes exhausts a budget sized for a salon counter. Measured, not
+ * predicted: 79 e2e failures across five files, every one a 429 where a 200 was
+ * expected.
+ *
+ * BOTH HALVES ARE REQUIRED, and each closes a different door.
+ *
+ *   `env.testPrincipals` — which `env.ts` refuses outright in production. A build
+ *   with it on already answers "who is calling?" with "Noura, with every
+ *   permission", to anyone at all; a rate limit on top of that protects nothing
+ *   that has not already been given away.
+ *
+ *   THE SESSION ID — so this exempts the SHIM and not "a test build". A real
+ *   bearer token in a test build carries a uuid and is limited normally, which
+ *   matters because `e2e/support/tenancy-harness.ts` mints real device-bound PIN
+ *   sessions and real member sessions and drives money through them. Those stay
+ *   under the limiter, and they are the e2e coverage of it.
+ *
+ * The alternative was to raise the thresholds until CI fit underneath them, which
+ * is how a production control ends up at a number chosen by a test suite.
+ */
+export function isFabricatedPrincipal(principal: { sessionId: string }): boolean {
+  if (!env.testPrincipals) return false;
+  return (
+    principal.sessionId === TEST_SESSION_MEMBER ||
+    principal.sessionId === TEST_SESSION_STAFF ||
+    principal.sessionId === TEST_SESSION_PLATFORM
+  );
+}
+
 export function scenariosOf(req: FastifyRequest): Set<string> {
   const header = req.headers['x-avo-scenario'];
   const query = (req.query as Record<string, string> | undefined)?.scenario;
@@ -327,7 +410,7 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     return loadPlatformPrincipal(
       db,
       hasScenario(req, 'noplatformperms') ? TEST_PLATFORM_LIMITED : TEST_PLATFORM_OWNER,
-      'test-session-platform',
+      TEST_SESSION_PLATFORM,
     );
   }
 
@@ -357,7 +440,7 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     return loadPlatformPrincipal(
       db,
       hasScenario(req, 'noplatformperms') ? TEST_PLATFORM_LIMITED : TEST_PLATFORM_OWNER,
-      'test-session-platform',
+      TEST_SESSION_PLATFORM,
     );
   }
 
@@ -419,7 +502,7 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     req.url.startsWith('/orders?')
   ) {
     const memberId = hasScenario(req, 'lowbal') ? TEST_MEMBER_LOWBAL : TEST_MEMBER;
-    return loadMemberPrincipal(db, memberId, 'test-session-member');
+    return loadMemberPrincipal(db, memberId, TEST_SESSION_MEMBER);
   }
 
   // The scope has to match the surface the route belongs to, or every dashboard
@@ -451,7 +534,15 @@ async function testPrincipalFor(db: Db, req: FastifyRequest): Promise<Principal 
     db,
     staffId,
     scannerSurface ? 'scanner' : 'dashboard',
-    'test-session-staff',
+    TEST_SESSION_STAFF,
+    /**
+     * NO DEVICE, because there is no session row to read one from — this shim
+     * exists precisely to skip the session. The scanner limiter counts the null
+     * bucket rather than exempting it, so a test build is rate limited too; what
+     * it does not get is one budget PER DEVICE, since every test principal shares
+     * that single bucket. See services/scannerLimit.ts.
+     */
+    null,
   );
 }
 
@@ -477,7 +568,12 @@ export async function resolvePrincipal(db: Db, req: FastifyRequest): Promise<Pri
   // A revoked session must stop working immediately, so the signature alone is
   // not enough — the session row is checked on every request. This is what makes
   // "revokes every other session" true at the moment the password changes.
-  if (!(await sessionIsLive(db, claims.sid))) return null;
+  //
+  // The ROW rather than the predicate, because the same read carries the device
+  // the scanner limiter keys on. One query, two facts — see sessions.ts
+  // § `liveSession`.
+  const live = await liveSession(db, claims.sid);
+  if (!live) return null;
 
   if (claims.kind === 'platform_admin') {
     return loadPlatformPrincipal(db, claims.sub, claims.sid);
@@ -493,7 +589,7 @@ export async function resolvePrincipal(db: Db, req: FastifyRequest): Promise<Pri
    * makes that parameter provably one of the two surfaces rather than a cast.
    */
   if (claims.scope !== 'scanner' && claims.scope !== 'dashboard') return null;
-  return loadStaffPrincipal(db, claims.sub, claims.scope, claims.sid);
+  return loadStaffPrincipal(db, claims.sub, claims.scope, claims.sid, live.deviceId);
 }
 
 // -------------------------------------------------------------------- guards --
