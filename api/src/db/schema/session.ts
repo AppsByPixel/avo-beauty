@@ -277,3 +277,78 @@ export const scannerAttempt = pgTable(
     check('scanner_attempt_action_known', sql`${t.action} IN ('scan', 'charge', 'void')`),
   ],
 );
+
+/**
+ * The password sign-in budget — one row per attempt at `POST /auth/member/session`,
+ * `POST /auth/web/session` or `POST /auth/platform/session`.
+ *
+ * FOURTH SIBLING OF `pin_attempt`, `signup_attempt` AND `scanner_attempt`, and the
+ * gap it fills is the one the family made easy to miss. `pin_attempt` bounds the
+ * four-digit PIN; `signup_attempt` bounds an unauthenticated argon2 endpoint;
+ * `scanner_attempt` bounds the till. The three PASSWORD front doors — the wallet,
+ * the dashboard and the owner console — were bounded by nothing at all, and none
+ * of the existing tables could stand in: `pin_attempt` is keyed on a device that
+ * only the scanner has, `signup_attempt` on the address (see below), and
+ * `audit_log` gets a sign-in row only when one SUCCEEDS, which is silent about
+ * exactly the traffic worth counting.
+ *
+ * KEYED ON THE CLAIMED IDENTITY, NOT ON THE ACCOUNT AND NOT ON `req.ip`.
+ *
+ *   NOT THE ACCOUNT, because the limiter must behave identically whether the
+ *   account exists or not. This file's route header — routes/auth.ts § ENUMERATION
+ *   — is built on every failure path being indistinguishable; a limiter that
+ *   engaged only for real accounts would rebuild that oracle with a louder signal
+ *   than the timing channel `burnVerifyTime` exists to remove. The key is computed
+ *   from the request's own fields before any table is read, so the limiter never
+ *   learns whether there is an account behind them.
+ *
+ *   NOT `req.ip`, which 0038 argued for the till and which is stronger here: a
+ *   salon is one NAT, so an address-keyed sign-in budget refuses the fourth
+ *   customer on the salon's wifi, and with `trustProxy` OFF (`app.ts`, until
+ *   `TRUST_PROXY` names the real proxy) every caller behind a load balancer shares
+ *   one bucket — a platform-wide sign-in outage. An attacker rotates addresses; a
+ *   customer cannot.
+ *
+ * A ROLLING WINDOW, NOT A LATCH, and nothing is written to the account row. There
+ * is deliberately no `sign_in_locked_until` beside `staff_user.pin_locked_until`:
+ * a PIN lock is fine when a manager is standing in the salon, and nobody is
+ * standing next to Dana's phone. A latch anyone could set by guessing five times
+ * would make a customer wallet lockable at will by a stranger who knows a phone
+ * number. Migration 0039 has the full argument.
+ *
+ * NO `succeeded` COLUMN, for `signup_attempt`'s and `scanner_attempt`'s mechanical
+ * reason: the row is written BEFORE the lookup and before argon2, or a burst all
+ * reads a count of zero and all pays for a hash. 0039 revokes the UPDATE that
+ * would let the outcome be filled in afterwards.
+ */
+export const signInAttempt = pgTable(
+  'sign_in_attempt',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** 'member' | 'web' | 'platform'. A CHECK, not an enum — migration 0039 says why. */
+    surface: text('surface').notNull(),
+    /**
+     * HMAC-SHA256 over `surface | salon | identifier`, keyed with the deployment's
+     * `JWT_SECRET`. NEVER the phone number or the handle in the clear: this column
+     * is a list of identities somebody TRIED, which includes people who hold no
+     * account here, and a Kuwaiti mobile is eight digits behind a fixed prefix — a
+     * plain digest of one is a lookup table away from the number.
+     * services/signInLimit.ts carries the construction.
+     */
+    identityKey: text('identity_key').notNull(),
+    /**
+     * In the clear (a salon id is not personal) and NOT a reference, for
+     * `signup_attempt.salonId`'s reason: an attempt naming a salon that does not
+     * exist is exactly the traffic worth counting, and a foreign key would make
+     * that insert fail before the count happened. NULL for the owner console,
+     * which has no salon by design.
+     */
+    salonId: text('salon_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    index('sign_in_attempt_identity_idx').on(t.identityKey, t.createdAt.desc()),
+    index('sign_in_attempt_salon_idx').on(t.salonId, t.createdAt.desc()),
+    check('sign_in_attempt_surface_known', sql`${t.surface} IN ('member', 'web', 'platform')`),
+  ],
+);
