@@ -51,8 +51,10 @@ import {
   SALON_B,
   psql,
   scalar,
+  forgetSession,
   signInDashboard,
   signInMember,
+  signInMemberFresh,
   signInScanner,
   startTenancyApi,
   stopTenancyApi,
@@ -341,8 +343,19 @@ describe('change password — the sentence on the screen is true only if the ser
   });
 
   it('a real change signs the OTHER devices out and keeps this one in — the design\'s own promise', async () => {
-    // Two devices, both real sessions.
-    const otherDevice = await signInMember(SALON_B, MEMBER_PHONE);
+    /**
+     * TWO devices, two DISTINCT sessions — `signInMemberFresh`, deliberately, and
+     * this call is the reason that helper exists.
+     *
+     * `signInMember` holds one session per number per run so the suite fits under
+     * `signInLimit.ts`'s per-identity budget. Handed the cached token twice, this
+     * spec would compare a session against ITSELF: the assertion below that the
+     * other device drops would be looking at the calling device, find it still
+     * signed in — correctly, that is the promise — and report that lane A's
+     * password change does not revoke. A green handler, named as broken, by the
+     * harness.
+     */
+    const otherDevice = await signInMemberFresh(SALON_B, MEMBER_PHONE);
     const otherAlive = await treq('GET', '/members/me', { token: otherDevice });
     precondition(otherAlive.status === 200, 'the second device was never signed in');
 
@@ -379,8 +392,16 @@ describe('change password — the sentence on the screen is true only if the ser
     });
     expect(oldPassword.status, 'the old password still signs in').toBe(401);
 
-    // Back to the seeded hash, and a fresh token for anything after this.
+    /**
+     * Back to the seeded hash, and a fresh token for anything after this.
+     *
+     * `forgetSession` FIRST, because the cache is keyed on the identity and not on
+     * the credential: this spec has just changed her password twice and revoked a
+     * session, so whatever is cached for her is no longer something a later caller
+     * should be handed.
+     */
     reseedMember();
+    forgetSession('member', SALON_B, MEMBER_PHONE);
     member = await signInMember(SALON_B, MEMBER_PHONE);
   });
 
@@ -413,6 +434,7 @@ describe('change password — the sentence on the screen is true only if the ser
     expect(detail, 'the audit row recorded the password').not.toContain('another-new-password-2');
 
     reseedMember();
+    forgetSession('member', SALON_B, MEMBER_PHONE);
     member = await signInMember(SALON_B, MEMBER_PHONE);
   });
 });
