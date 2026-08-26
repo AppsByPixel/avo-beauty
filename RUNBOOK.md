@@ -325,9 +325,37 @@ entirely: seven years, and append-only against the owner too.
     avo_app DELETE FROM sign_in_attempt  -> permission denied
 
 `pin_attempt` was created in migration 0002; the `REVOKE UPDATE, DELETE` pattern starts at
-0026 and it was never retrofitted. So the application role can erase the device rate-limit
+0026 and it was never retrofitted. So the application role could erase the device rate-limit
 evidence behind non-negotiable #6 — the one counter of the four guarding a credential a
-person types at a counter. Queued for lane A.
+person types at a counter.
+
+**FIXED by migration 0040.** Re-measured on the same database after applying it, which is the
+only way to know the migration rather than a hand-typed REVOKE is what changed the answer:
+
+    before   pin_attempt   UPDATE=t DELETE=t
+    after    all four      UPDATE=f DELETE=f TRUNCATE=f   INSERT=t
+
+`INSERT=t` is the half that matters as much as the revokes: the limiters still have to be able
+to count. `api/src/db/counterPrivileges.int.test.ts` asserts all four tables, so a fifth
+counter that forgets the revoke fails on the day it is added.
+
+**UPDATE was the sharper privilege here and it nearly went unnoticed.** The first measurement
+was DELETE only. `pin_attempt` is the one sibling with an outcome column, and `routes/auth.ts`
+counts its window with `succeeded = false` — so
+
+    UPDATE pin_attempt SET succeeded = true WHERE device_id = '…';
+
+empties a device's rate-limit window while deleting NOTHING. Row count unchanged, table still
+looks full, budget fresh. A DELETE at least leaves a hole. Measure every privilege a table
+grants, not the one that comes to mind.
+
+**TWO TRAPS WHEN VERIFYING THIS KIND OF FIX.** First, drizzle's `__drizzle_migrations.id` is a
+1-based offset rather than the journal index (row 41 is journal idx 40) and the migrator
+compares only `MAX(created_at)` — so deleting the wrong row re-applies nothing while
+`db:migrate` still prints "migrations applied". Key on `created_at`. Second, the privilege
+specs SKIP unless `AVO_INT_DATABASE_URL` names the **`avo_app`** role, because every assertion
+in them is vacuous as the owner; pointed at `avo` they report 18 skipped and read like a pass.
+The config's own header carries the correct example — use it.
 
 ### `pnpm-lock.yaml` — expect this on the first merge
 
