@@ -48,6 +48,7 @@ import { ApiError } from '../api/client.js';
  *                                                                                none needed
  *   Audit log     /audit              → perms.dashboard      (none, ever)        none needed
  *   Accounts      /staff              → perms.team           staff/* → team      none needed
+ *   Shop          /products           → perms.shop          products/* → shop   none needed
  *   Marketing     /promotions         → requirePrincipal     boosts, happy-hours,
  *                                       NO PERMISSION        campaigns → marketing
  *                                                                                perms.marketing
@@ -56,8 +57,21 @@ import { ApiError } from '../api/client.js';
  *                                                                                perms.loyalty
  *
  * Only the last two have the ungated-read/gated-write shape, and both now carry a
- * gate naming the permission the server actually checks. The other six are
+ * gate naming the permission the server actually checks. The other seven are
  * deliberately ungated on the client, and that is a decision rather than a gap.
+ *
+ * SHOP IS THE ROW THAT LOOKS LIKE AN EXCEPTION AND IS NOT. `GET
+ * /salons/{id}/products` is `requirePrincipal` for a MEMBER and
+ * `requireDashboardPerm(req, 'shop')` for staff — `productReadGate` in
+ * `api/src/routes/salons.ts` branches on `p.kind`. Every principal the dashboard
+ * can hold is staff, so on this surface the read is permission-gated and the 403
+ * arrives on it. No courtesy gate.
+ *
+ * What Shop does carry, and what this table cannot express, is a SECOND axis:
+ * `modules.shop`. It is not a permission and it is not a refusal for staff at all
+ * — `assertShopReadable` returns early for any non-member — so it belongs to the
+ * screen as a notice rather than to this vocabulary as an error. `routes/Shop.tsx`
+ * § the two refusals.
  *
  * TWO THINGS THE TABLE MAKES VISIBLE that reading one file does not:
  *

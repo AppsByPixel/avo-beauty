@@ -1,0 +1,540 @@
+import { useEffect, useRef, useState } from 'react';
+import { fils, type Fils, type Product } from '@avo/types';
+import { Button, Card, InfoBanner, Money, Skeleton } from '@avo/ui';
+import {
+  priceInputValue,
+  readPriceInput,
+  useCreateProduct,
+  useProducts,
+  useRetireProduct,
+  useUpdateProduct,
+  type ProductPatch,
+} from '../api/products.js';
+import { useSalon } from '../api/salon.js';
+import { SectionError, WriteError } from './sectionState.js';
+
+/**
+ * Merchant → Shop. `AVO Merchant Dashboard.dc.html:296` § SHOP.
+ *
+ * `perms.shop` on every route this screen touches — the read included — so there
+ * is NO courtesy permission gate here and that is a decision rather than an
+ * omission: the 403 arrives on `GET /salons/{id}/products` and `SectionError`
+ * renders the server's own sentence. Ledger row in `sectionState.tsx`.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TWO REFUSALS THIS SCREEN HAS TO TELL APART, AND THEY ARE NOT THE SAME SHAPE
+ *
+ * `modules.shop` defaults OFF (design:1044 — "Flat catalog, pay from wallet,
+ * pickup at salon. Default off."), so "the shop is off" and "you may not see the
+ * shop" are both reachable and mean opposite things about what the merchant
+ * should do next. Rendering one message for both would tell a manager she lacks
+ * a permission she holds, or tell her to ask a manager about a switch she owns.
+ *
+ * WHAT THE SERVER ACTUALLY DISTINGUISHES, read off `services/moduleAccess.ts`
+ * rather than guessed from the flag's existence:
+ *
+ *   perms.shop missing   403, `requireDashboardPerm(req, 'shop')`. A refusal.
+ *                        Nothing loads. Explained, never retried.
+ *   modules.shop off     NOT A REFUSAL ON THIS SURFACE. `assertShopReadable`
+ *                        returns early for any principal whose `kind` is not
+ *                        `member`, so a staff read answers 200 with the full
+ *                        catalog whether the module is on or off. The three
+ *                        writes have no module check at all.
+ *
+ * That asymmetry is deliberate and it is the reason this screen renders the
+ * module state as a NOTICE over a working editor rather than as a wall. Lane A's
+ * words for it: "the gate is on the SHOPFRONT, not on the workshop" — a salon
+ * builds its catalog before it opens the shop, which is why the column defaults
+ * off, and gating her own read would be "an editor that forgets what it just
+ * saved". So: she can add, rename, reprice and retire products with the module
+ * off; what she cannot do is sell them, and only the notice says so.
+ *
+ * The customer's half of the same fact is a 409 `shop_not_enabled` with the
+ * wallet's own copy ("The shop is closed"), which is a different surface, a
+ * different principal and a different sentence. Nothing here shares copy with it.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ✕ SAYS "REMOVE", NOT "DELETE", AND THE DESIGN SAYS "DELETE"
+ *
+ * `AVO Merchant Dashboard.dc.html:310` gives the ✕ `title="Delete product"`, and
+ * the prototype's handler does delete — locally, from an array. The endpoint does
+ * not: `DELETE /salons/{id}/products/{pid}` sets `active = false`, because
+ * `shop_order_line.product_id` is `ON DELETE restrict` and a real delete would
+ * either fail with a foreign key error (reaching the merchant as a 500 for
+ * pressing a drawn button) or leave a sold order line naming a product that no
+ * longer exists.
+ *
+ * A UI that says "Delete" over a server that retires diverges the first time
+ * somebody asks why a two-year-old receipt still names the product — so the word
+ * is corrected here and the confirmation states both halves: it stops being for
+ * sale, and past orders keep their line. Reported to trunk as a design/API copy
+ * conflict rather than papered over in either direction.
+ *
+ * AND IT IS ONE-WAY, WHICH IS THE PART A MERCHANT CANNOT GUESS. `GET` lists only
+ * `active = true` rows and `PATCH` carries `active = true` in its WHERE, and
+ * there is no un-retire endpoint anywhere — so a retired product cannot be
+ * brought back from this screen at all. The confirmation says so instead of
+ * implying an undo.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE DEPARTURE ON CREATION, AND WHY "SAVES AS YOU TYPE" STILL READS TRUE
+ *
+ * The prototype's "+ Add product" appends a blank row and nothing is ever sent
+ * anywhere. `POST /salons/{id}/products` requires a name AND a price, and
+ * `product_price_positive` refuses zero — so a blank row is not a product and
+ * cannot be one. Committing a draft on a debounce would create a product at
+ * whatever half-typed number the pause landed on (`1` on the way to `12.000`),
+ * with an audit line saying that was the price.
+ *
+ * So a NEW row is a draft with an explicit Add, and every row that exists saves
+ * as you type. The design's footer sentence is kept verbatim because it is still
+ * true of the catalog it describes: a draft is not yet one of its rows.
+ */
+
+/**
+ * Long enough that a price is typed rather than transcribed digit by digit,
+ * short enough that a merchant who looks away has already saved. Every
+ * keystroke restarts it, so a settled field costs one PATCH.
+ */
+const SAVE_DELAY_MS = 700;
+
+export function Shop() {
+  const products = useProducts();
+  const salon = useSalon();
+  const create = useCreateProduct();
+  const update = useUpdateProduct();
+  const retire = useRetireProduct();
+  const [drafting, setDrafting] = useState(false);
+
+  if (products.isError) {
+    return (
+      <SectionError
+        error={products.error}
+        forbiddenTitle="You don't have access to the shop"
+        failedTitle="Couldn't load the product catalog"
+        onRetry={() => void products.refetch()}
+        retrying={products.isFetching}
+      />
+    );
+  }
+
+  const items = products.data?.items;
+  /*
+   * Only ever from a LOADED salon. `undefined` is "not known yet" and must not
+   * render as "off" — a notice saying the shop is closed, shown for a beat on
+   * every load of a salon that is open, is the premature-zero class in words.
+   */
+  const shopOn = salon.data?.modules.shop;
+
+  return (
+    <div className="shop">
+      {shopOn === false ? <ShopModuleOffNotice /> : null}
+
+      <div className="shop__head">
+        <span className="shop__hint">
+          Catalog only — no stock counts, no delivery <span className="shop__hint-aside">(phase 2)</span>.
+          Buyers pick up at the salon.
+        </span>
+        {products.isPending || drafting ? null : (
+          <Button onClick={() => setDrafting(true)}>+ Add product</Button>
+        )}
+      </div>
+
+      <Card className="shop__card">
+        {products.isPending ? (
+          /* Five rows because the loaded card is a list of rows this shape —
+             interaction-spec.md §4 wants the pending layout to be the loaded
+             one, not a spinner in the middle of a card. */
+          [0, 1, 2, 3, 4].map((n) => (
+            <div className="shop__row" key={n}>
+              <Skeleton width="100%" height={40} radius={10} />
+              <Skeleton width={130} height={40} radius={10} />
+              <Skeleton width={32} height={32} radius={8} />
+            </div>
+          ))
+        ) : (
+          <>
+            {(items ?? []).map((product) => (
+              <ProductRow
+                key={product.id}
+                product={product}
+                saving={update.isPending && update.variables?.productId === product.id}
+                retiring={retire.isPending && retire.variables?.productId === product.id}
+                onSave={(patch) =>
+                  update.mutateAsync({ productId: product.id, patch }).then(
+                    () => true,
+                    () => false,
+                  )
+                }
+                onRetire={() => retire.mutate({ productId: product.id })}
+              />
+            ))}
+
+            {drafting ? (
+              <DraftRow
+                busy={create.isPending}
+                onCancel={() => {
+                  create.reset();
+                  setDrafting(false);
+                }}
+                onCreate={(input) => {
+                  create.mutate(input, { onSuccess: () => setDrafting(false) });
+                }}
+              />
+            ) : null}
+
+            {(items ?? []).length === 0 && !drafting ? (
+              /*
+                The design's own empty line, inside the card where it draws it —
+                and the action that fills it is the "+ Add product" button
+                directly above, which is why this is the design's sentence rather
+                than an `EmptyState` block that would repeat the button.
+              */
+              <p className="shop__empty">No products yet — add your first one.</p>
+            ) : null}
+          </>
+        )}
+      </Card>
+
+      <div className="shop__foot">
+        {/*
+          The count is withheld while pending rather than rendered as a zero: "0
+          products" announced over a card of skeletons is a claim about an empty
+          catalog that nobody has looked at yet.
+        */}
+        <span className="shop__count">
+          {products.isPending
+            ? 'changes save as you type.'
+            : `${countLabel(items?.length ?? 0)} · changes save as you type.`}
+        </span>
+        {update.isPending || create.isPending || retire.isPending ? (
+          <span className="shop__saving" role="status">
+            Saving…
+          </span>
+        ) : null}
+      </div>
+
+      {/*
+        One banner per write, each with its own reassurance — the wrong one is
+        worse than none. A merchant whose retire failed needs to know the product
+        is still for sale; one whose edit failed needs to know the salon is still
+        charging the old price for it.
+      */}
+      {update.isError ? (
+        <WriteError error={update.error} reassurance="That product is unchanged." />
+      ) : null}
+      {create.isError ? (
+        <WriteError error={create.error} reassurance="No product was added." />
+      ) : null}
+      {retire.isError ? (
+        <WriteError
+          error={retire.error}
+          reassurance="Nothing was removed — that product is still for sale."
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** The design's `productCount`: "5 products", "1 product". */
+export function countLabel(count: number): string {
+  return `${count} product${count === 1 ? '' : 's'}`;
+}
+
+/* ------------------------------------------------------------ the module state
+ *
+ * COPY THE DESIGN DOES NOT CONTAIN, written rather than omitted, and named as
+ * such. `AVO Merchant Dashboard.dc.html` draws no module-off state on the Shop
+ * section — the prototype has no modules at all beyond two switches in Settings.
+ * Omitting it was the other option and it is worse: a merchant would build a
+ * catalog nobody can see and get no hint of why, on the one screen where the
+ * flag matters.
+ *
+ * It reuses the design's own words for the module ("Flat catalog, pay from
+ * wallet, pickup at salon") and names the switch by its drawn location, so the
+ * sentence points at a control that exists rather than at a support call.
+ */
+export function ShopModuleOffNotice() {
+  return (
+    <InfoBanner
+      icon={
+        <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            d="M5 6.5h10l-.8 10.5H5.8z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            fill="none"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M7.5 7V5a2.5 2.5 0 0 1 5 0v2"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            fill="none"
+            strokeLinecap="round"
+          />
+        </svg>
+      }
+    >
+      <b>The Shop module is off, so customers can&rsquo;t buy any of this yet.</b> Build the catalog
+      here, then turn Shop on in Settings → Optional modules — flat catalog, pay from wallet, pickup
+      at salon.
+    </InfoBanner>
+  );
+}
+
+/* ------------------------------------------------------------------- one row */
+
+interface ProductRowProps {
+  product: Product;
+  saving: boolean;
+  retiring: boolean;
+  /** Resolves true when the server stored it, false when it refused. */
+  onSave: (patch: ProductPatch) => Promise<boolean>;
+  onRetire: () => void;
+}
+
+export function ProductRow({ product, saving, retiring, onSave, onRetire }: ProductRowProps) {
+  /*
+   * `null` means "follow the server". A string means the merchant is editing,
+   * and her text wins until it is stored — including across a failed save, so a
+   * refused PATCH never silently throws away what she typed. `WriteError` at the
+   * foot of the screen says what happened; this keeps the thing it happened to.
+   */
+  const [nameText, setNameText] = useState<string | null>(null);
+  const [priceText, setPriceText] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const savedName = product.name;
+  /*
+   * `fils()` AT THE ROW, and it is not ceremony. `ProductSchema.priceFils` is
+   * `FilsSchema.positive()` and `FilsSchema` is `z.number().int()` — the wire type
+   * is a plain `number`, so the brand has to be re-applied where the value enters
+   * the display boundary or `Money` and `priceInputValue` would both accept any
+   * number at all. Same call the Overview, Reports and Analytics make for the
+   * same reason.
+   */
+  const priceFils = fils(product.priceFils);
+  const savedPrice = priceInputValue(priceFils);
+  const nameValue = nameText ?? savedName;
+  const priceValue = priceText ?? savedPrice;
+
+  const price = readPriceInput(priceValue);
+  const trimmedName = nameValue.trim();
+
+  /*
+   * What differs from the stored row AND is legal to send. A blank name is not a
+   * patch — `product_name_not_blank` refuses it and `requireString` 400s — so
+   * clearing the field to retype is not an error and not a request either.
+   */
+  const nextName = trimmedName !== '' && trimmedName !== savedName ? trimmedName : undefined;
+  const nextPrice =
+    price.kind === 'ok' && price.priceFils !== priceFils ? price.priceFils : undefined;
+  const unsaved = nextName !== undefined || nextPrice !== undefined;
+
+  /*
+   * THE DEBOUNCE, AND WHY IT IS KEYED ON THE VALUES RATHER THAN ON A TIMESTAMP.
+   * Every render with a different pending value restarts the timer through the
+   * cleanup, so a settled field costs exactly one PATCH and a field still being
+   * typed costs none. `onSave` is not in the dependency list on purpose: it is a
+   * fresh closure every render and would restart the timer forever.
+   */
+  const save = useRef(onSave);
+  save.current = onSave;
+  useEffect(() => {
+    if (!unsaved) return;
+    const timer = setTimeout(() => {
+      const patch: ProductPatch = {};
+      if (nextName !== undefined) patch.name = nextName;
+      if (nextPrice !== undefined) patch.priceFils = nextPrice;
+      void save.current(patch).then((stored) => {
+        // Only on success, and only for what was actually sent: dropping the
+        // override is what lets the cell settle on the SERVER's value.
+        if (!stored) return;
+        if (patch.name !== undefined) setNameText(null);
+        if (patch.priceFils !== undefined) setPriceText(null);
+      });
+    }, SAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [unsaved, nextName, nextPrice]);
+
+  return (
+    <>
+      <div className="shop__row" data-unsaved={unsaved || undefined}>
+        <input
+          className="avo-input shop__name"
+          aria-label={`Product name — ${savedName}`}
+          placeholder="Product name"
+          value={nameValue}
+          disabled={retiring}
+          onChange={(event) => setNameText(event.target.value)}
+          /* On blur the cell goes back to following the server, so a stored
+             name shows as stored (trimmed) rather than as typed. A name still
+             on its way to the server keeps the override. */
+          onBlur={() => {
+            if (trimmedName === savedName) setNameText(null);
+          }}
+        />
+
+        <div className="shop__price" data-invalid={price.kind === 'invalid' || undefined}>
+          <input
+            className="shop__price-input"
+            aria-label={`Price in KD — ${savedName}`}
+            placeholder="0.000"
+            inputMode="decimal"
+            value={priceValue}
+            disabled={retiring}
+            onChange={(event) => setPriceText(event.target.value)}
+            /* Snaps to the canonical three decimals when nobody is typing in
+               it: `8.5` and `8.500` are the same number and different amounts
+               of money, and the second one is what the salon charges. */
+            onBlur={() => {
+              if (price.kind === 'ok' && price.priceFils === priceFils) setPriceText(null);
+            }}
+          />
+          <span className="shop__price-unit" aria-hidden="true">
+            KD
+          </span>
+        </div>
+
+        {/*
+          "Remove", not "Delete" — see the header. `title` and `aria-label` both,
+          because the design's affordance is a bare ✕ and the glyph is hidden
+          from assistive tech.
+        */}
+        <button
+          type="button"
+          className="shop__remove"
+          aria-label={`Remove ${savedName} from the catalog`}
+          title={`Remove ${savedName} from the catalog`}
+          disabled={retiring || saving}
+          onClick={() => setConfirming(true)}
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+
+      {price.kind === 'invalid' ? (
+        <p className="shop__row-note" role="alert">
+          {price.message}
+        </p>
+      ) : null}
+
+      {confirming ? (
+        <div className="shop__confirm" role="group" aria-label={`Remove ${savedName}?`}>
+          <p className="shop__confirm-text">
+            Remove{' '}
+            <b>
+              {savedName} · <Money amount={priceFils} withUnit />
+            </b>{' '}
+            from the catalog? It stops being for sale straight away and leaves this list. Past orders
+            keep their line, so old receipts still name it — and it cannot be brought back here.
+          </p>
+          <div className="shop__confirm-actions">
+            <Button
+              variant="secondary"
+              disabled={retiring}
+              onClick={() => {
+                setConfirming(false);
+                onRetire();
+              }}
+            >
+              {retiring ? 'Removing…' : 'Remove from catalog'}
+            </Button>
+            <Button variant="quiet" onClick={() => setConfirming(false)}>
+              Keep selling it
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/* ----------------------------------------------------------------- the draft */
+
+interface DraftRowProps {
+  busy: boolean;
+  onCancel: () => void;
+  onCreate: (input: { name: string; priceFils: Fils }) => void;
+}
+
+export function DraftRow({ busy, onCancel, onCreate }: DraftRowProps) {
+  const [name, setName] = useState('');
+  const [priceRaw, setPriceRaw] = useState('');
+  const price = readPriceInput(priceRaw);
+  const trimmed = name.trim();
+
+  /*
+   * Both halves, before the request rather than instead of it. The server
+   * refuses each of these by name — `requireString`, `parseAmountFils`,
+   * `product_price_positive` — and the round trip adds nothing a merchant can
+   * act on that this does not.
+   */
+  const ready = trimmed !== '' && price.kind === 'ok';
+
+  return (
+    <>
+      <div className="shop__row shop__row--draft">
+        <input
+          className="avo-input shop__name"
+          aria-label="New product name"
+          placeholder="Product name"
+          value={name}
+          disabled={busy}
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+        />
+        <div className="shop__price" data-invalid={price.kind === 'invalid' || undefined}>
+          <input
+            className="shop__price-input"
+            aria-label="New product price in KD"
+            placeholder="0.000"
+            inputMode="decimal"
+            value={priceRaw}
+            disabled={busy}
+            onChange={(event) => setPriceRaw(event.target.value)}
+          />
+          <span className="shop__price-unit" aria-hidden="true">
+            KD
+          </span>
+        </div>
+        <Button
+          disabled={busy || !ready}
+          onClick={() => {
+            if (price.kind !== 'ok' || trimmed === '') return;
+            onCreate({ name: trimmed, priceFils: price.priceFils });
+          }}
+        >
+          {busy ? 'Adding…' : 'Add'}
+        </Button>
+        <button
+          type="button"
+          className="shop__remove"
+          aria-label="Discard this new product"
+          title="Discard this new product"
+          disabled={busy}
+          onClick={onCancel}
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+
+      {price.kind === 'invalid' ? (
+        <p className="shop__row-note" role="alert">
+          {price.message}
+        </p>
+      ) : (
+        /*
+          Why there is an Add button here and nowhere else on the screen. Said
+          once, next to the control, rather than left as a difference from the
+          drawn behaviour that nobody can account for.
+        */
+        <p className="shop__row-note shop__row-note--quiet">
+          A product needs a name and a price above zero before it can be saved. Existing rows save
+          as you type.
+        </p>
+      )}
+    </>
+  );
+}

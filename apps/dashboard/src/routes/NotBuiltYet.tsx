@@ -17,10 +17,22 @@ import type { AuthScope } from '../auth/scopes.js';
  * all three of her unbuilt sections at once (`/console/activity`,
  * `/console/accounts`, `/console/billing`).
  *
- * ONLY `/console/billing` REACHES THIS COMPONENT ON THE CONSOLE NOW. The other
- * two were built once it was established that their endpoints already existed.
- * The `owner` sentence below is unaffected and still has to be right: Billing is
- * the section a platform owner is most likely to go looking for on day one.
+ * ONLY `/console/billing` REACHES THIS COMPONENT ANYWHERE NOW. The other two
+ * console sections were built once it was established that their endpoints already
+ * existed. The `owner` sentence below is unaffected and still has to be right:
+ * Billing is the section a platform owner is most likely to go looking for on day
+ * one.
+ *
+ * AND THE MERCHANT SENTENCE IS NOW UNREACHABLE, WHICH IS WORTH SAYING RATHER THAN
+ * LEAVING TO BE DISCOVERED. Shop was the last `built: false` row in
+ * `shell/navItems.tsx`; with it built, `router.tsx`'s merchant `placeholderRoutes`
+ * derives an EMPTY list and no merchant path mounts this component. The `merchant`
+ * entry below stays because `LANDMARK` is a `Record<AuthScope, string>` and the
+ * exhaustiveness is the point — a third surface must not inherit a sentence by
+ * default — and because `navLandmarks.test.ts` still holds it to naming a section
+ * that exists and is built. It is a live invariant over dead copy, not dead code.
+ * If the merchant sidebar ever grows an unbuilt section again, the sentence is
+ * already correct.
  *
  * THE SURFACE IS A REQUIRED PROP, NOT A ROUTE SNIFF. Two reasons, and the second
  * is the one that matters. Reading the current path inside this component would

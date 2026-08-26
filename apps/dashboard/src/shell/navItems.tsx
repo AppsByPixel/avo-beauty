@@ -70,7 +70,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: 'shop',
     label: 'Shop',
     to: '/shop',
-    built: false,
+    built: true,
     title: 'Shop',
     subtitle: 'Flat product catalog',
     icon: (

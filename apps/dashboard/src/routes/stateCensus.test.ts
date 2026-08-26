@@ -30,6 +30,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { NAV_ITEMS } from '../shell/navItems.js';
 
 const here = __dirname;
 const read = (name: string) => readFileSync(join(here, name), 'utf8');
@@ -49,6 +50,21 @@ const SECTION_SCREENS = [
   'Accounts.tsx',
   'AuditLog.tsx',
   'Reports.tsx',
+  /**
+   * Merchant → Shop. Owns its own read (`GET /salons/{id}/products`, `perms.shop`)
+   * and three writes behind the same permission, so it answers for its own four
+   * states.
+   *
+   * IT ALSO CARRIES A FIFTH THING THAT IS NOT ONE OF THE FOUR, and the distinction
+   * is the reason this comment exists: `modules.shop` being off is neither an error
+   * nor an empty list. `services/moduleAccess.ts` § `assertShopReadable` returns
+   * early for a staff principal, so the read answers 200 with the full catalog
+   * whether the module is on or off — the module state reaches this screen from
+   * `GET /salons/{id}` and renders as a NOTICE over a working editor, never through
+   * `SectionError`. A test that folded the two together would be asserting that the
+   * screen refuses something the server serves.
+   */
+  'Shop.tsx',
   /**
    * The console's Accounts list and the platform feed. Both own their own read
    * (`GET /v1/platform/accounts`, `GET /v1/platform/activity`) behind their own
@@ -153,9 +169,27 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
  */
 const NON_SCREENS = ['NotBuiltYet.tsx', 'sectionState.tsx'] as const;
 
+/**
+ * Every route component in a directory — and NOT the tests beside them.
+ *
+ * `.test.tsx` IS EXCLUDED, AND IT HAD TO BE. Until Shop there was no render test
+ * anywhere in this tree, so every `.tsx` under `routes/` was a screen and the
+ * simple extension check was exact. `routes/shopRender.test.tsx` is the first
+ * file that is a `.tsx`, is not a screen, and belongs next to its subject rather
+ * than in another directory — and without this filter it would have been demanded
+ * as a census entry, i.e. a test file required to declare its own four states.
+ *
+ * The guard does not weaken: `sectionState.tsx` is still a NON_SCREENS entry
+ * because it is production source, and anything that is not a test still has to
+ * be classified by name. What changes is only that a file whose name says it is a
+ * test is not mistaken for a screen.
+ */
 function tsxOnDisk(dir: string, prefix = ''): string[] {
   return readdirSync(join(here, dir === '.' ? '' : dir), { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.tsx'))
+    .filter(
+      (entry) =>
+        entry.isFile() && entry.name.endsWith('.tsx') && !entry.name.endsWith('.test.tsx'),
+    )
     .map((entry) => `${prefix}${entry.name}`);
 }
 
@@ -231,6 +265,40 @@ describe('the screen census stays honest', () => {
     // The editor is the route the widened scan exists for; pin it by name so a
     // regression to a table-only scan fails here rather than going quiet.
     expect(mounted).toContain('SalonEditor');
+  });
+
+  /**
+   * A SIDEBAR ITEM THAT SAYS `built: true` HAS SOMEWHERE TO GO.
+   *
+   * `router.tsx` derives the placeholder routes from `!item.built`, so the two
+   * halves are already paired in one direction: a section that is NOT built gets
+   * `NotBuiltYet` and cannot dead-end. The other direction is unguarded — flipping
+   * `built: true` without adding a `SECTIONS` row leaves the nav item with no route
+   * at all, which is a 404 on a link the sidebar renders as live.
+   *
+   * Shop is the section that made this worth pinning: it is the LAST merchant item
+   * to flip, so `placeholderRoutes` is now empty and the fallback that used to
+   * catch a mistake here catches nothing. Discovered while flipping it, added with
+   * it.
+   */
+  it('every built merchant nav item has a real route, not a dead sidebar link', () => {
+    const router = readFileSync(join(here, '..', 'router.tsx'), 'utf8');
+    const routed = new Set(
+      [...router.matchAll(/\{ path: '([^']+)', component: \w+ \}/g)].map((m) => m[1]!),
+    );
+    // A zero result is a claim about the regex, not about the router.
+    expect(routed.size).toBeGreaterThanOrEqual(9);
+
+    const built = NAV_ITEMS.filter((item) => item.built);
+    expect(built.length).toBeGreaterThan(0);
+    for (const item of built) {
+      expect(
+        routed,
+        `the sidebar says ${item.title} is built, but router.tsx mounts nothing at ` +
+          `${item.to}. With every merchant item built there is no placeholder route ` +
+          `left to catch this — the link 404s.`,
+      ).toContain(item.to);
+    }
   });
 });
 

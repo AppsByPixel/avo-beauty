@@ -27,6 +27,7 @@ import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
 import { Reports } from './routes/Reports.js';
 import { Settings } from './routes/Settings.js';
+import { Shop } from './routes/Shop.js';
 import { SignIn } from './routes/SignIn.js';
 import { Team } from './routes/Team.js';
 import { ConsoleShell } from './shell/ConsoleShell.js';
@@ -97,6 +98,7 @@ const SECTIONS = [
   { path: '/marketing', component: Marketing },
   { path: '/settings', component: Settings },
   { path: '/accounts', component: Accounts },
+  { path: '/shop', component: Shop },
   { path: '/audit', component: AuditLog },
   { path: '/reports', component: Reports },
 ] as const;
@@ -105,7 +107,15 @@ const sectionRoutes = SECTIONS.map(({ path, component }) =>
   createRoute({ getParentRoute: () => merchantRoute, path, component }),
 );
 
-/** Every other nav item resolves to a route, so the sidebar never dead-ends. */
+/**
+ * Every other nav item resolves to a route, so the sidebar never dead-ends.
+ *
+ * THIS LIST IS EMPTY TODAY, and it is kept rather than deleted. Shop was the last
+ * `built: false` row in `shell/navItems.tsx`, so every merchant nav item now has a
+ * component of its own — the derivation is what guarantees that stays true, and
+ * deleting it would mean the next unbuilt section 404s instead of explaining
+ * itself. The console's equivalent below is still non-empty (`/console/billing`).
+ */
 const placeholderRoutes = NAV_ITEMS.filter((item) => !item.built).map((item) =>
   createRoute({
     getParentRoute: () => merchantRoute,

@@ -5499,3 +5499,219 @@ a:hover {
 .accounts-console__more {
   margin-top: 14px;
 }
+
+/* =================================================================== shop == */
+
+/*
+ * AVO Merchant Dashboard.dc.html:296 § SHOP. `max-width:720px` on the column,
+ * one card of rows, a 130px price cell with a KD suffix, a 32px ✕ per row.
+ *
+ * Every colour resolves through a token. The design's literals — `#5A6B58` on
+ * the button, `rgba(28,27,25,0.55)` on the hint, `#F5EDEB`/`#A0503F` on the ✕
+ * hover — are the same values the brand and danger tokens carry, and a hex
+ * written here is the one that survives a white-label change and then disagrees
+ * with the token it claims to document.
+ */
+.shop {
+  max-width: 720px;
+}
+
+.shop__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.shop__hint {
+  font-size: 13px;
+  color: var(--avo-text-muted);
+}
+
+/* The design greys "(phase 2)" one step further than the sentence around it. */
+.shop__hint-aside {
+  color: var(--avo-text-muted-soft);
+}
+
+.shop__card {
+  padding: 8px 18px;
+}
+
+/*
+ * One product. The name flexes, the price cell is fixed so the KD suffixes line
+ * up down the column, and the ✕ never shrinks.
+ */
+.shop__row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+}
+
+.shop__row:last-child {
+  border-bottom: none;
+}
+
+/* A row with a keystroke still on its way to the server. The hairline is the
+   whole signal — the footer's "Saving…" is the words. */
+.shop__row[data-unsaved] .shop__name,
+.shop__row[data-unsaved] .shop__price {
+  border-color: var(--avo-brand);
+}
+
+.shop__row--draft {
+  border-bottom: none;
+}
+
+.shop__name {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 13px;
+  border-radius: var(--avo-radius-input);
+}
+
+/*
+ * The price cell is a bordered box containing a borderless input and the unit,
+ * so the KD sits inside the field rather than beside it — the design draws the
+ * border on the wrapper for exactly that reason.
+ */
+.shop__price {
+  width: 130px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--avo-ui-ink-14);
+  background: var(--avo-white);
+  border-radius: var(--avo-radius-input);
+  padding: 10px 13px;
+  transition: border-color var(--avo-motion-fast) ease;
+}
+
+.shop__price:focus-within {
+  border-color: var(--avo-brand);
+}
+
+/* An amount that cannot be sent. The sentence under the row carries the meaning;
+   this only points at which row it is about. */
+.shop__price[data-invalid] {
+  border-color: var(--avo-danger-text);
+}
+
+/*
+ * The display face for money, as the design sets it — a price is read as an
+ * amount, not as body copy.
+ */
+.shop__price-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--avo-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--avo-ink);
+}
+
+.shop__price-unit {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  flex-shrink: 0;
+}
+
+/* Same treatment as the ✕ on a team card, and for the same reason: one glyph
+   whose hover state is the only thing that says it is destructive. */
+.shop__remove {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--avo-ui-ink-38);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  flex-shrink: 0;
+  transition:
+    background var(--avo-motion-fast) ease,
+    color var(--avo-motion-fast) ease;
+}
+
+.shop__remove:hover:not(:disabled) {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+}
+
+.shop__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* The design's own empty line, inside the card. */
+.shop__empty {
+  margin: 0;
+  padding: 26px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--avo-text-muted-soft);
+}
+
+.shop__foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.shop__count {
+  font-size: 12.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.shop__saving {
+  font-size: 12.5px;
+  color: var(--avo-brand-deep);
+}
+
+/* Why a price was not sent, or why a draft has an Add button. Sits under the row
+   it belongs to rather than at the foot of the screen, where a per-row problem
+   would be unattributable. */
+.shop__row-note {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-danger-text);
+}
+
+.shop__row-note--quiet {
+  color: var(--avo-text-muted-soft);
+}
+
+/* Retiring a product. Warning surface, not danger — a consequence to read, the
+   same call `.account__confirm` makes. */
+.shop__confirm {
+  margin: 0 0 14px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+}
+
+.shop__confirm-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-warn-text);
+}
+
+.shop__confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
