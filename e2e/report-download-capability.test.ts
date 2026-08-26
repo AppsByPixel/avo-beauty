@@ -74,6 +74,7 @@ import {
   repoRoot,
   scalar,
   signInDashboard,
+  signInDashboardFresh,
   startTenancyApi,
   stopTenancyApi,
   tenancyBaseUrl,
@@ -413,8 +414,13 @@ describe('The four properties that make an unauthenticated link safe', () => {
         'the leaver fixture was not created',
       );
 
-      // She mints her own capability while still employed.
-      const leaverToken = await signInDashboard(SALON_B, LEAVER_HANDLE);
+      /**
+       * She mints her own capability while still employed. `Fresh`, because this
+       * row is created two statements above and DELETEd in the `finally` — an
+       * identity that exists only inside this test has no business in a cache
+       * whose lifetime is the run.
+       */
+      const leaverToken = await signInDashboardFresh(SALON_B, LEAVER_HANDLE);
       const minted = await treq<Minted>(
         'POST',
         `/salons/${SALON_B}/reports/${KIND}/download-url`,

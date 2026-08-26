@@ -56,8 +56,9 @@
 import { execFileSync } from 'node:child_process';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -280,7 +281,12 @@ export const B_STAFF_PIN = '2468';
 export const B_WRONG_PIN = '1111';
 
 /** From `api/src/db/seed.ts`. Copied hashes mean salon B shares them. */
-const STAFF_PASSWORD = 'noura-dev-password';
+/**
+ * EXPORTED, because `sign-in-limit.test.ts` is about the sign-in endpoint itself
+ * rather than about getting a session out of it, so it posts its own bodies and
+ * needs the credential that is supposed to work.
+ */
+export const STAFF_PASSWORD = 'noura-dev-password';
 const STAFF_PIN = '2468';
 
 /** A salon id that has never existed. The control for the existence-oracle specs. */
@@ -1754,6 +1760,23 @@ async function freePort(): Promise<number> {
 const API_BOOT_ATTEMPTS = 4;
 
 /**
+ * The signing key every file's API boots with.
+ *
+ * ONE CONSTANT FOR THE WHOLE RUN, which is what makes the session cache above sound
+ * across files: a token minted by one file's API verifies against the next file's.
+ *
+ * EXPORTED because it is also the key `signInLimit.ts` derives its rate-limit
+ * bucket from — HMAC-SHA256 over `surface|salon|identifier` — so
+ * `sign-in-limit.test.ts` can recompute a bucket's name and count the rows in it.
+ * Recomputed there rather than imported from `api/src`, which is
+ * `console-reset.test.ts`'s rule about the reset token's sha256: a spec that
+ * imported the production derivation would agree with it even if it changed to
+ * something that stored the phone number.
+ */
+export const BOOT_JWT_SECRET =
+  process.env.JWT_SECRET ?? 'tenancy-suite-signing-key-not-a-secret-0123456789';
+
+/**
  * Start lane A's API, retrying if the port was taken between choosing it and
  * binding it.
  *
@@ -1855,7 +1878,7 @@ async function bootApiOnce(): Promise<boolean> {
       DATABASE_URL: `postgres://avo:avo_dev_password@127.0.0.1:5433/${pgDb()}`,
       APP_DATABASE_URL: `postgres://avo_app:avo_app_dev_password@127.0.0.1:5433/${pgDb()}`,
       // Fixed so a restart inside one run does not invalidate a token mid-suite.
-      JWT_SECRET: process.env.JWT_SECRET ?? 'tenancy-suite-signing-key-not-a-secret-0123456789',
+      JWT_SECRET: BOOT_JWT_SECRET,
       // Only so salon A's member can mint a wallet token without her password.
       // See the file header — every salon B request is a real session.
       AVO_TEST_PRINCIPALS: '1',
@@ -2142,8 +2165,218 @@ export interface SessionResponse {
   message?: string;
 }
 
-/** `POST /auth/web/session` — username + password, `dashboard` scope. */
-export async function signInDashboard(salonId: string, handle: string): Promise<string> {
+/**
+ * =========================================================================
+ * ONE SESSION PER IDENTITY PER RUN — AND WHY A CACHE, NOT A HIGHER THRESHOLD
+ * =========================================================================
+ * `api/src/services/signInLimit.ts` rations the three PASSWORD front doors at 10
+ * per 15 minutes and 20 per hour, PER CLAIMED IDENTITY. This suite used to mint a
+ * brand-new session at every call site, and that is what put it over:
+ *
+ *     signInDashboard(SALON_B, 'layla')      15 static call sites
+ *     signInPlatform(PLATFORM_OWNER_HANDLE)   9 static call sites
+ *
+ * Fifteen sign-ins as one salon manager, inside a run whose measured duration is
+ * 821 seconds, is a single 15-minute window with five attempts too many in it. The
+ * suite went red at the eleventh — six files failed — and NOT ONE of those
+ * failures was about rate limiting. They were files whose `beforeAll` could no
+ * longer get a token.
+ *
+ * THE FIX IS NOT A BIGGER THRESHOLD, and `scannerLimit.ts` already wrote down why:
+ * "Tuning a production control until a test suite fits under it is how a limiter
+ * ends up at a value nobody can justify." A dashboard manager signing in fifteen
+ * times in fourteen minutes is not a human pattern that a threshold should be
+ * asked to accommodate. It is a HARNESS pattern, and the harness is what was
+ * wrong: no real client re-authenticates for every screen it opens. It signs in
+ * once and holds the session. So does this file now.
+ *
+ * WHY THE CACHE IS ON DISK AND NOT A MODULE-LEVEL `Map`
+ * ----------------------------------------------------
+ * A `Map` would have been the obvious shape and would have fixed almost nothing.
+ * Vitest runs each test file in its OWN FORKED WORKER with its own module
+ * registry — `bootApiOnce`'s header says so, and it is why fourteen files boot
+ * fourteen APIs. A module-level cache is therefore per-FILE, and the 15 layla
+ * sign-ins are spread across 15 different files: collapsing within-file repeats
+ * would have taken 15 down to 15.
+ *
+ * What makes cross-file reuse sound is that the two things a session depends on
+ * are already shared across the whole run:
+ *
+ *   THE DATABASE. `session` rows live in the run's database (`pgDb()`), which is
+ *   minted once per run in `global-setup.ts` and dropped in its teardown. Nothing
+ *   in this suite deletes `session` rows mid-run — lane A's seed does, which is
+ *   the entire reason this suite stopped sharing a database with other lanes.
+ *
+ *   THE SIGNING KEY. `bootApiOnce` boots every file's API with the same constant
+ *   `JWT_SECRET`, so a token minted by one file's API verifies against the next
+ *   file's.
+ *
+ * So the cache is a JSON file named after the run's database — unguessable by any
+ * other run, on the same lifecycle as the fixtures the sessions refer to.
+ *
+ * EXPIRY IS READ FROM THE TOKEN, NOT ASSUMED
+ * ------------------------------------------
+ * `ACCESS_TOKEN_TTL_MINUTES` defaults to 15 and a full run measures 13.7 minutes.
+ * A token minted by the first file would therefore still be valid when the last
+ * one finishes — by about eighty seconds, on a suite whose duration nobody
+ * controls. That is not a margin, it is a coin toss, and it would fail as a 401
+ * in whichever file happened to be last.
+ *
+ * So the entry is re-minted when less than `SESSION_MIN_REMAINING_MS` of its own
+ * `exp` is left, decoded from the JWT itself rather than compared against a
+ * hardcoded TTL — if lane A changes the TTL, this follows it. Re-minting costs one
+ * attempt per identity per five minutes, so the worst case for a 14-minute run is
+ * three, against a burst budget of ten.
+ *
+ * WHAT MUST NOT USE THE CACHE — READ THIS BEFORE ADDING A CALL SITE
+ * ----------------------------------------------------------------
+ * A cache that silently hands a shared session to a spec that needed a DISTINCT
+ * one does not fail loudly; it fails as a product bug that isn't there. The
+ * failure mode is specific and worth stating, because it is the one this change
+ * could have introduced:
+ *
+ *   `account.test.ts` proves that changing a password signs the OTHER devices out
+ *   and keeps THIS one in. It needs two sessions for one member. Handed the same
+ *   token twice, the spec would assert that the other device is signed out, look
+ *   at the calling device, find it signed IN, and report that lane A's password
+ *   change fails to revoke — a defect in a handler that is working correctly.
+ *
+ * So the fresh variants exist, they are named, and the specs that need them say so
+ * at the call site:
+ *
+ *   `signInMemberFresh` / `signInDashboardFresh` / `signInPlatformFresh`
+ *        An ADDITIONAL, independent session for an identity. Never reads the
+ *        cache and — this is the half that is easy to miss — never WRITES it
+ *        either. A second device that replaced the cached entry would hand the
+ *        next caller a token that the spec is about to have revoked.
+ *
+ *   `forgetSession`
+ *        Drop an entry because something has invalidated it — a password change,
+ *        a deactivation — so the next cached call mints instead of returning a
+ *        token that is about to answer 401.
+ *
+ * `signInScanner` IS DELIBERATELY NOT CACHED. `POST /staff/session` is the PIN
+ * door, not a password door: it is rationed per DEVICE via `pin_attempt` and per
+ * account via `staff_user.pin_locked_until`, neither of which `signInLimit.ts`
+ * touches. And half of `scanner.test.ts` is ABOUT those two limiters — device
+ * scoping, the burst counter, the lockout — so a cache there would be handing a
+ * shared session to the specs least able to tolerate one, to solve a budget
+ * problem that does not exist.
+ */
+const SESSION_MIN_REMAINING_MS = 5 * 60_000;
+
+interface CachedSession {
+  token: string;
+  mintedAt: number;
+}
+
+/**
+ * Named after the RUN's database, for the reason `newRunDatabaseName()` gives
+ * about the database itself: a name another run cannot guess is a name another run
+ * cannot corrupt. `global-setup.ts` removes it in teardown.
+ */
+export function sessionCachePath(): string {
+  return join(tmpdir(), `avo-qa-sessions-${pgDb()}.json`);
+}
+
+function readSessionCache(): Record<string, CachedSession> {
+  try {
+    return JSON.parse(readFileSync(sessionCachePath(), 'utf8')) as Record<string, CachedSession>;
+  } catch {
+    // Absent, half-written or corrupt are the same thing to a cache: mint again.
+    return {};
+  }
+}
+
+/**
+ * WRITTEN THROUGH A RENAME, so a reader never sees half a file.
+ *
+ * `fileParallelism: false` means one file's worker at a time, so this is not
+ * guarding against a concurrent writer today. It is guarding against a run that is
+ * interrupted mid-write leaving a truncated JSON that every later file would parse
+ * as empty — which would silently turn the cache off and put the suite back over
+ * the limit, reported as the same six unrelated files failing.
+ */
+function writeSessionCache(all: Record<string, CachedSession>): void {
+  const path = sessionCachePath();
+  const scratch = `${path}.${process.pid}.tmp`;
+  writeFileSync(scratch, JSON.stringify(all));
+  renameSync(scratch, path);
+}
+
+/**
+ * Milliseconds until the access token's own `exp`, or `undefined` if it cannot be
+ * read.
+ *
+ * THE PAYLOAD IS DECODED, NOT VERIFIED, and that is correct here: this is not an
+ * authorisation decision, it is "will the server still accept this in a minute".
+ * A token whose signature this file cannot check is a token the API will refuse,
+ * which is a 401 the spec should see rather than something the harness hides.
+ */
+function msUntilExpiry(token: string): number | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8')) as {
+      exp?: number;
+    };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 - Date.now() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `surface|salonId|identifier` — the same three fields `signInIdentityKey` uses. */
+function sessionKey(surface: string, salonId: string | null, identifier: string): string {
+  return `${surface}|${salonId ?? ''}|${identifier}`;
+}
+
+/**
+ * Drop a cached session because something has invalidated it.
+ *
+ * Call this when a spec has REVOKED a session it is holding — a password change, a
+ * deactivation, a delete — so the next cached call mints a live token instead of
+ * returning one that is about to answer 401 in a file that has no idea why.
+ */
+export function forgetSession(
+  surface: 'member' | 'web' | 'platform',
+  salonId: string | null,
+  identifier: string,
+): void {
+  const all = readSessionCache();
+  delete all[sessionKey(surface, salonId, identifier)];
+  writeSessionCache(all);
+}
+
+async function cachedSession(
+  surface: 'member' | 'web' | 'platform',
+  salonId: string | null,
+  identifier: string,
+  mint: () => Promise<string>,
+): Promise<string> {
+  const key = sessionKey(surface, salonId, identifier);
+  const all = readSessionCache();
+  const hit = all[key];
+
+  if (hit) {
+    const remaining = msUntilExpiry(hit.token);
+    const usable =
+      remaining === undefined
+        ? Date.now() - hit.mintedAt < SESSION_MIN_REMAINING_MS
+        : remaining > SESSION_MIN_REMAINING_MS;
+    if (usable) return hit.token;
+  }
+
+  const token = await mint();
+  // Re-read rather than reusing `all`: cheap, and it keeps a concurrent writer's
+  // entry rather than overwriting the whole map with a stale copy of it.
+  const latest = readSessionCache();
+  latest[key] = { token, mintedAt: Date.now() };
+  writeSessionCache(latest);
+  return token;
+}
+
+async function mintDashboardSession(salonId: string, handle: string): Promise<string> {
   const res = await treq<SessionResponse>('POST', '/auth/web/session', {
     token: null,
     body: { salonId, username: handle, password: STAFF_PASSWORD },
@@ -2151,12 +2384,36 @@ export async function signInDashboard(salonId: string, handle: string): Promise<
   if (res.status !== 200 || !res.body.accessToken) {
     throw new Error(
       `Web sign-in failed for ${handle}@${salonId}: ${res.status} ${res.raw}\n` +
-        'Salon B copies salon A\'s password hash, so this means the seed password in ' +
-        'api/src/db/seed.ts changed. Update STAFF_PASSWORD in this file, or re-run ' +
-        'pnpm --dir ./api run db:seed.',
+        (res.body?.error === 'sign_in_rate_limited' || res.body?.error === 'sign_in_hourly_limit'
+          ? 'THAT IS THE SIGN-IN LIMITER, not a credential problem. This identity has spent ' +
+            'its budget for the window. Something is minting sessions per call site instead ' +
+            'of reusing the cached one — see the note above `SESSION_MIN_REMAINING_MS`.'
+          : 'Salon B copies salon A\'s password hash, so this means the seed password in ' +
+            'api/src/db/seed.ts changed. Update STAFF_PASSWORD in this file, or re-run ' +
+            'pnpm --dir ./api run db:seed.'),
     );
   }
   return res.body.accessToken;
+}
+
+/**
+ * `POST /auth/web/session` — username + password, `dashboard` scope.
+ *
+ * ONE SESSION PER HANDLE PER RUN. See the note above `SESSION_MIN_REMAINING_MS`,
+ * and use `signInDashboardFresh` if this spec needs a SECOND, independent session.
+ */
+export async function signInDashboard(salonId: string, handle: string): Promise<string> {
+  return cachedSession('web', salonId, handle, () => mintDashboardSession(salonId, handle));
+}
+
+/**
+ * A brand-new dashboard session, bypassing the cache and not entering it.
+ *
+ * For an identity that this spec CREATES AND DESTROYS — the leaver fixture — or
+ * where two distinct sessions for one handle are the thing being measured.
+ */
+export async function signInDashboardFresh(salonId: string, handle: string): Promise<string> {
+  return mintDashboardSession(salonId, handle);
 }
 
 /**
@@ -2172,7 +2429,7 @@ export async function signInDashboard(salonId: string, handle: string): Promise<
  * here: `PLT-001`, `PLT-002` and `PLT-003` are lane A's own seeded rows and all three
  * carry `hashSecret(PLATFORM_PASSWORD)`. If this throws, the seed's constant moved.
  */
-export async function signInPlatform(handle: string): Promise<string> {
+async function mintPlatformSession(handle: string): Promise<string> {
   const res = await treq<SessionResponse>('POST', '/auth/platform/session', {
     token: null,
     body: { username: handle, password: PLATFORM_PASSWORD },
@@ -2180,11 +2437,27 @@ export async function signInPlatform(handle: string): Promise<string> {
   if (res.status !== 200 || !res.body.accessToken) {
     throw new Error(
       `Console sign-in failed for ${handle}: ${res.status} ${res.raw}\n` +
-        'PLATFORM_PASSWORD in this file must match PLATFORM_PASSWORD in ' +
-        'api/src/db/seed.ts. Re-run pnpm --dir ./api run db:seed if the seed moved.',
+        (res.body?.error === 'sign_in_rate_limited' || res.body?.error === 'sign_in_hourly_limit'
+          ? 'THAT IS THE SIGN-IN LIMITER — this handle has spent its budget for the window. ' +
+            'See the note above `SESSION_MIN_REMAINING_MS`.'
+          : 'PLATFORM_PASSWORD in this file must match PLATFORM_PASSWORD in ' +
+            'api/src/db/seed.ts. Re-run pnpm --dir ./api run db:seed if the seed moved.'),
     );
   }
   return res.body.accessToken;
+}
+
+/** One console session per handle per run — see `signInDashboard`. */
+export async function signInPlatform(handle: string): Promise<string> {
+  return cachedSession('platform', null, handle, () => mintPlatformSession(handle));
+}
+
+/**
+ * A brand-new console session, bypassing the cache and not entering it. For an
+ * admin a spec invites and then removes inside one test.
+ */
+export async function signInPlatformFresh(handle: string): Promise<string> {
+  return mintPlatformSession(handle);
 }
 
 /** `POST /staff/session` — device-scoped PIN, `scanner` scope. */
@@ -2232,16 +2505,39 @@ export async function attemptScannerSignIn(params: {
   });
 }
 
-/** `POST /auth/member/session` — salon + phone + password, `wallet` scope. */
-export async function signInMember(salonId: string, phone: string): Promise<string> {
+async function mintMemberSession(salonId: string, phone: string): Promise<string> {
   const res = await treq<SessionResponse>('POST', '/auth/member/session', {
     token: null,
     body: { salonId, phone, password: STAFF_PASSWORD },
   });
   if (res.status !== 200 || !res.body.accessToken) {
-    throw new Error(`Member sign-in failed for ${phone}@${salonId}: ${res.status} ${res.raw}`);
+    throw new Error(
+      `Member sign-in failed for ${phone}@${salonId}: ${res.status} ${res.raw}` +
+        (res.body?.error === 'sign_in_rate_limited' || res.body?.error === 'sign_in_hourly_limit'
+          ? '\nTHAT IS THE SIGN-IN LIMITER — this number has spent its budget for the window. ' +
+            'See the note above `SESSION_MIN_REMAINING_MS`.'
+          : ''),
+    );
   }
   return res.body.accessToken;
+}
+
+/** One wallet session per number per run — see `signInDashboard`. */
+export async function signInMember(salonId: string, phone: string): Promise<string> {
+  return cachedSession('member', salonId, phone, () => mintMemberSession(salonId, phone));
+}
+
+/**
+ * A SECOND, INDEPENDENT wallet session for a number that already has one.
+ *
+ * This is the "other device" in `account.test.ts`'s password-change spec, and the
+ * reason the fresh variants exist at all: that spec proves the change signs the
+ * other device out and keeps the calling one in, which is unaskable if both hold
+ * the same token. It deliberately does not enter the cache — the session it
+ * returns is one the caller is about to have revoked.
+ */
+export async function signInMemberFresh(salonId: string, phone: string): Promise<string> {
+  return mintMemberSession(salonId, phone);
 }
 
 /**

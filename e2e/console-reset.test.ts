@@ -45,7 +45,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   PLATFORM_OWNER_HANDLE,
@@ -69,9 +69,46 @@ const sha256Hex = (raw: string): string => createHash('sha256').update(raw).dige
 const mintToken = (): string => `rst_${randomBytes(32).toString('base64url')}`;
 
 const NEW_PASSWORD = 'lane-d-console-pw-1';
-const INVITE_HANDLE = 'qa.reset.subject';
+
+/**
+ * =========================================================================
+ * A FRESH SUBJECT PER TEST — AND THE BUDGET THAT MADE IT NECESSARY
+ * =========================================================================
+ * This file used to invite ONE admin, `qa.reset.subject`, and drive every case
+ * against her. Counting the sign-ins that produced: 1 for the NULL-hash refusal,
+ * 3 across the two sequential-redemption cases, 5 per race round × 3 rounds, and 1
+ * for the deactivation guard — TWENTY attempts on one console handle.
+ *
+ * `api/src/services/signInLimit.ts` allows 10 per 15 minutes and 20 per hour per
+ * claimed identity, so this file asserted 401 and got 429 from the eleventh
+ * onwards. It was the loudest of the six files that went red when the limiter was
+ * enforced.
+ *
+ * AND THE FIX IS NOT A SHARED SESSION, which is what the rest of the suite got.
+ * Every one of those sign-ins is an ASSERTION — "the loser's password does not
+ * authenticate", "she cannot sign in while her hash is NULL" — so a cached token
+ * would not reduce them; it would delete the thing being measured. What this file
+ * needed was the opposite reading of the same problem: these twenty attempts are
+ * about TWENTY DIFFERENT PASSWORDS AND ONE LINK, and nothing about any of them is
+ * about one identity's budget. The identity was incidental, and sharing it was the
+ * accident.
+ *
+ * So each test invites its own admin. The most any single identity now spends is
+ * five — one race round — against a budget of ten, and every case became
+ * independent of the order the others ran in as a side effect.
+ *
+ * THE HANDLE CARRIES THE COUNTER EARLY, WHICH IS NOT COSMETIC. `platformAdmins.ts`
+ * derives the primary key as `PA-` + the handle stripped of punctuation, TRUNCATED
+ * TO 12, upper-cased. `qa.reset.subject.1` and `qa.reset.subject.2` both truncate
+ * to `PA-QARESETSUBJE` — two handles, one id, and the second invite collides on a
+ * key nothing in this file prints. `qa.r1.reset.subject` puts the digit inside the
+ * first twelve characters, so the ids differ.
+ */
+let subjectSeq = 0;
 
 let owner = '';
+/** The handle of the admin THIS test owns. Re-minted in `beforeEach`. */
+let inviteHandle = '';
 /**
  * READ OUT OF THE INVITE RESPONSE, never re-derived. `platformAdmins.ts` builds it as
  * `PA-` + the handle stripped of punctuation, truncated to 12 and upper-cased, and a
@@ -143,31 +180,45 @@ const redeem = (token: string, password = NEW_PASSWORD) =>
 const signInWith = (password: string) =>
   treq<any>('POST', '/auth/platform/session', {
     token: null,
-    body: { username: INVITE_HANDLE, password },
+    body: { username: inviteHandle, password },
   });
 
+/**
+ * ONE console session for the INVITER, and it is the only cached one in this file.
+ *
+ * `signInPlatform` holds one session per handle per run, so the owner is signed in
+ * once here and once for the whole suite. Every other sign-in below is an
+ * assertion about a password, so none of them can be shared — which is why each
+ * test gets its own SUBJECT instead. See § A FRESH SUBJECT PER TEST.
+ */
 beforeAll(async () => {
   await startTenancyApi();
   owner = await signInPlatform(PLATFORM_OWNER_HANDLE);
+}, 120_000);
 
-  /**
-   * INVITED THROUGH THE REAL ENDPOINT, not inserted. The `password_hash IS NULL` state
-   * this whole file turns on is something the invite produces; a hand-written row would
-   * be this spec asserting its own SQL.
-   */
+/**
+ * The admin this test owns — invited through the REAL endpoint, not inserted.
+ *
+ * The `password_hash IS NULL` state this whole file turns on is something the invite
+ * PRODUCES; a hand-written row would be this spec asserting its own SQL.
+ */
+async function inviteFreshSubject(): Promise<void> {
+  subjectSeq += 1;
+  inviteHandle = `qa.r${subjectSeq}.reset.subject`;
+
   /**
    * Cleaned BY HANDLE, because the id is not known until the invite answers. `handle` is
    * globally unique on `platform_admin` — there is one platform, so there is one of her.
    */
   psql(`
     DELETE FROM platform_admin_password_reset
-     WHERE platform_admin_id IN (SELECT id FROM platform_admin WHERE handle = '${INVITE_HANDLE}');
+     WHERE platform_admin_id IN (SELECT id FROM platform_admin WHERE handle = '${inviteHandle}');
   `);
-  psql(`DELETE FROM platform_admin WHERE handle = '${INVITE_HANDLE}';`);
+  psql(`DELETE FROM platform_admin WHERE handle = '${inviteHandle}';`);
 
   const invited = await treq<any>('POST', '/v1/platform/admins', {
     token: owner,
-    body: { name: 'QA Reset Subject', username: INVITE_HANDLE, role: 'analyst' },
+    body: { name: `QA Reset Subject ${subjectSeq}`, username: inviteHandle, role: 'analyst' },
   });
   precondition(
     invited.status === 201,
@@ -182,7 +233,24 @@ beforeAll(async () => {
     scalar(`select count(*) from platform_admin where id='${inviteId}'`).trim() === '1',
     `${inviteId} came back from the invite but is not in platform_admin`,
   );
-}, 120_000);
+  /**
+   * AND THE ID IS THIS TEST'S, not the last one's. The 12-character truncation in
+   * `platformAdmins.ts` is silent when it collides, so a handle scheme that stopped
+   * producing distinct ids would quietly hand every test the same admin again and
+   * put this file straight back over the sign-in budget it exists to stay under.
+   */
+  precondition(
+    !usedIds.has(inviteId),
+    `${inviteId} was already used by an earlier test in this file — the handle scheme ` +
+      'is colliding under `PA-` + first-12-alphanumerics, so these tests are sharing ' +
+      'an identity and its sign-in budget.',
+  );
+  usedIds.add(inviteId);
+}
+
+const usedIds = new Set<string>();
+
+beforeEach(inviteFreshSubject);
 
 afterAll(async () => {
   await stopTenancyApi();
@@ -512,9 +580,14 @@ describe('deactivation spends her links, and the redeem guard holds on its own',
 // ===========================================================================
 
 describe('the rest of the refusals, each with the link left where it should be', () => {
-  beforeAll(() => {
-    psql(`UPDATE platform_admin SET active = true WHERE id = '${inviteId}';`);
-  });
+  /**
+   * The `beforeAll` that used to re-activate the shared subject here is GONE, and its
+   * absence is the point: it existed to undo the deactivation two describes above,
+   * which is a dependency on the order the tests ran in. `beforeEach` now invites a
+   * fresh, active admin for each of these cases, so there is nothing to undo — and a
+   * `beforeAll` here would have read the PREVIOUS test's `inviteId` anyway, because
+   * a suite-level `beforeAll` runs before the `beforeEach` that mints the new one.
+   */
 
   it('an unknown token is refused, and is indistinguishable from a spent one', async () => {
     const res = await redeem(mintToken());
@@ -632,7 +705,7 @@ describe('and the raw token is nowhere it could be read', () => {
 
     /** The control on the query: the same sweep MUST find a string that is there. */
     const control = scalar(
-      `select count(*) from audit_log where strpos(coalesce(detail,''), '${INVITE_HANDLE}') > 0`,
+      `select count(*) from audit_log where strpos(coalesce(detail,''), '${inviteHandle}') > 0`,
     ).trim();
     expect(
       Number(control),
@@ -641,7 +714,25 @@ describe('and the raw token is nowhere it could be read', () => {
     ).toBeGreaterThan(0);
   }, 60_000);
 
-  it('and only its sha256 is stored, never the value', () => {
+  /**
+   * ISSUES ITS OWN LINK, and it did not used to.
+   *
+   * It read `order by created_at desc limit 1` for the shared subject, which meant the
+   * row it inspected was the one the PREVIOUS test happened to leave — and that row's
+   * `token_hash` had been overwritten by `issueAndDeliver`'s delivery step, so the
+   * digest being checked was this file's own sha256 rather than the one
+   * `auth/tokens.ts` wrote. Now that each test invites its own admin there is no
+   * previous row to inherit, and the fix and the improvement are the same edit: issue
+   * through the REAL endpoint and DO NOT deliver, so the value under inspection is the
+   * one the production code stored.
+   */
+  it('and only its sha256 is stored, never the value', async () => {
+    const issued = await treq<any>('POST', `/v1/platform/admins/${inviteId}/password-reset`, {
+      token: owner,
+      body: {},
+    });
+    precondition(issued.status === 202, `the issue endpoint answered ${issued.status}: ${issued.raw}`);
+
     const stored = scalar(
       `select token_hash from platform_admin_password_reset
         where platform_admin_id='${inviteId}' order by created_at desc limit 1`,

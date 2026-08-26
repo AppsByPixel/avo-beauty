@@ -35,7 +35,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -239,6 +239,7 @@ export async function setup(): Promise<void> {
 
 export async function teardown(): Promise<void> {
   await dropRunDatabaseIfOurs();
+  await removeSessionCache();
 
   if (!child) return;
   child.kill('SIGTERM');
@@ -255,6 +256,28 @@ export async function teardown(): Promise<void> {
  * red run would be reporting a housekeeping problem as a test result, which is
  * the habit this whole change is about breaking.
  */
+/**
+ * Remove the run's cached sign-in sessions.
+ *
+ * `tenancy-harness.ts` holds one access token per identity per run in a JSON file
+ * named after the run's database, so the three password endpoints are not signed
+ * into once per call site — see the note above `SESSION_MIN_REMAINING_MS`. The
+ * file is on the same lifecycle as the database whose `session` rows those tokens
+ * refer to, so it is given back in the same breath.
+ *
+ * Never throws, for `dropRunDatabaseIfOurs`'s reason: a stray file in the temp
+ * directory is not a test result.
+ */
+async function removeSessionCache(): Promise<void> {
+  if (!process.env.AVO_QA_DB) return;
+  try {
+    const { sessionCachePath } = await import('./tenancy-harness.js');
+    rmSync(sessionCachePath(), { force: true });
+  } catch {
+    /* nothing here is worth failing a run over */
+  }
+}
+
 async function dropRunDatabaseIfOurs(): Promise<void> {
   if (!process.env.AVO_QA_DB) return;
   try {

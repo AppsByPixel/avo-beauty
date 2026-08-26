@@ -90,6 +90,7 @@ import {
   signInDashboard,
   signInMember,
   signInPlatform,
+  signInPlatformFresh,
   startTenancyApi,
   stopTenancyApi,
   treq,
@@ -289,7 +290,11 @@ describe('The console gates, and the presets are the argument for which one', ()
         'the support fixture was not created',
       );
 
-      const support = await signInPlatform(SUPPORT_HANDLE);
+      /**
+       * `Fresh`: this admin is upserted four statements above and DELETEd in the
+       * `finally`, so she must not outlive the test in the run's session cache.
+       */
+      const support = await signInPlatformFresh(SUPPORT_HANDLE);
 
       // THE LIST: yes. Under the old gating this preset could NOT read it — holding
       // `salons` bought the create and not the roster it creates into.
