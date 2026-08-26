@@ -116,6 +116,25 @@ pnpm build
 #    a database that already exists, and nothing blocks that. `avo_ci` is
 #    created once by trunk and never dropped.
 #
+#    TWO MORE PATH TRAPS, BOTH FOUND THE HARD WAY (2026-08-26).
+#
+#    `lane-db.sh` resolves `pnpm` but NOT `node`, which is the same class of
+#    half-resolution its own comment warns about. `~/miniconda3/bin/node` is
+#    v20.17 and lacks `--env-file-if-exists`, which `api`'s `dev` and `start`
+#    scripts both use — so a PATH with miniconda ahead of nvm fails the API at
+#    startup with an error about the flag, not about node. The working order is
+#    NVM FOR NODE, MINICONDA FOR PNPM:
+#
+#      export PATH="$HOME/.nvm/versions/node/v25.7.0/bin:$HOME/miniconda3/bin:$PATH"
+#
+#    Lane C lost time to this and first mis-diagnosed it as a missing `api/.env`
+#    (it created one, then deleted it once the real cause was found — do not add
+#    that file).
+#
+#    And `pnpm run dev -- --port 5183` DOES NOT FORWARD the flag under pnpm 9;
+#    vite binds its default 5173 and then fails on `--strictPort` if another
+#    lane already holds it. Use `pnpm exec vite --port 5183 --strictPort`.
+#
 #    `scripts/lane-db.sh` NO LONGER NEEDS THE PATH EXPORT ABOVE — it resolves its
 #    own toolchain (2026-08-26). Three things it now gets right, each of which had
 #    already cost someone time:
