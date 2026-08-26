@@ -1,0 +1,96 @@
+-- ===========================================================================
+-- 0040 — the FIRST counter never got the REVOKE its three siblings have
+--
+-- `pin_attempt` is the per-device rate limit behind non-negotiable #6 — "Staff
+-- PINs are hashed, rate limited, device-scoped, locked after N failures" — and
+-- `avo_app`, the role the API serves every request as, could UPDATE and DELETE it.
+-- Measured against a lane database rather than read off the migrations:
+--
+--     avo_app DELETE FROM pin_attempt      -> DELETE 0        (permitted)
+--     avo_app UPDATE pin_attempt SET …     -> UPDATE 0        (permitted)
+--     avo_app DELETE FROM signup_attempt   -> permission denied
+--     avo_app DELETE FROM scanner_attempt  -> permission denied
+--     avo_app DELETE FROM sign_in_attempt  -> permission denied
+--
+-- Of the four counters this is the one guarding a credential a person types at a
+-- counter, on a device three staff members share, in front of customers.
+--
+-- WHERE THE HOLE CAME FROM, WHICH IS NOT AN OVERSIGHT IN 0002
+-- ----------------------------------------------------------
+-- Migration 0001 grants the baseline and says what a later table owes:
+--
+--     ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--       GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO avo_app;
+--
+--     -- Tables added by later migrations inherit the same baseline. An
+--     -- append-only table added later must repeat the explicit REVOKE below;
+--     -- that is deliberate, because "append-only" should be a decision someone
+--     -- writes down.
+--
+-- `pin_attempt` arrived in 0002 and never wrote that decision down. The pattern
+-- starts at 0026 (`signup_attempt`), was repeated at 0038 (`scanner_attempt`) and
+-- 0039 (`sign_in_attempt`), and never reached back. So the table is not
+-- append-only because nobody decided it should be, and the default privilege
+-- quietly decided the opposite.
+--
+-- THE FIFTH INSTANCE OF THIS SHAPE. Defence in depth applied to the later
+-- siblings and never backfilled to the first one is now a pattern this project has
+-- found five times, not a one-off. The other four are recorded in DECISIONS.md; the
+-- reason it keeps happening is that each new sibling is written by reading the most
+-- recent one, and the most recent one is never the oldest one.
+--
+-- WHY UPDATE MATTERS MORE HERE THAN ON THE OTHER THREE
+-- ---------------------------------------------------
+-- `pin_attempt` is the ONLY sibling with an outcome column. 0026 explains why the
+-- others have none: "`pin_attempt` knows its outcome at insert time; this row has
+-- to be written BEFORE the argon2 hash… Recording the outcome would therefore need
+-- an UPDATE, and the privileges below refuse one."
+--
+-- That difference is exactly what makes the missing UPDATE revoke worse than the
+-- missing DELETE one. `routes/auth.ts` counts the window with
+-- `eq(pinAttempt.succeeded, false)` — so
+--
+--     UPDATE pin_attempt SET succeeded = true WHERE device_id = '…';
+--
+-- empties the rate-limit window while DELETING NOTHING. The row count is
+-- unchanged, the table still looks full, and the device's budget is fresh. A
+-- DELETE at least leaves a hole somebody could notice.
+--
+-- WHAT STILL DELETES, AND IT IS NOT THE APPLICATION
+-- ------------------------------------------------
+-- Checked before revoking, because a revoke that breaks a cleanup path fails at
+-- runtime and not at typecheck. There are exactly two, and both run as the OWNER:
+--
+--   `api/src/db/seed.ts:1139` — `DELETE FROM pin_attempt` behind `RESET_SESSIONS`.
+--   It connects with `postgres(env.databaseUrl)`, the `avo` role, and the file says
+--   so a few lines up: "the seed runs as the owner".
+--
+--   `e2e/support/tenancy-harness.ts` — `resetPinState()` and the salon-B sweep.
+--   Both go through `psql()`, which is `docker exec … psql -U ${PG_USER}` with
+--   `PG_USER` defaulting to `avo`.
+--
+-- The API is the only thing connecting as `avo_app` (`db/client.ts` uses
+-- `APP_DATABASE_URL`), and the API has no reason to remove a counter row. Retention
+-- stays an operator's job, with the owner role, as it is for the other three.
+--
+-- TRUNCATE was never granted to `avo_app` — 0001's default privileges do not
+-- include it and `has_table_privilege('avo_app', 'pin_attempt', 'TRUNCATE')` is
+-- false on all four counters — so there is nothing to revoke there. Stated because
+-- its absence from the statements below would otherwise look like a fourth
+-- omission.
+--
+-- NO DATA CHANGES. This migration moves privileges only; every existing row stays
+-- exactly where it is.
+--
+-- Idempotent and safe to re-run.
+-- ===========================================================================
+
+-- The two the limiter actually needs, stated rather than assumed, so the end state
+-- is legible from this file alone. Both are already held; GRANT is idempotent.
+GRANT SELECT, INSERT ON pin_attempt TO avo_app;
+
+-- The control. 0026's sentence, which applies unchanged to the sibling that never
+-- got it: "a row that can be UPDATEd or DELETEd is a counter that can be reset by
+-- whatever gets compromised next, and a limiter whose own rows the application can
+-- remove is not a limit."
+REVOKE UPDATE, DELETE ON pin_attempt FROM avo_app;

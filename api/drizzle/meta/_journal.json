@@ -281,6 +281,13 @@
       "when": 1788410000000,
       "tag": "0039_sign_in_attempt",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1788496400000,
+      "tag": "0040_pin_attempt_is_append_only",
+      "breakpoints": true
     }
   ]
 }
