@@ -302,6 +302,33 @@ check stay honest; checking everything makes you the bottleneck you were trying 
 
 ## Conflicts you will actually hit
 
+### The four attempt counters need an operator retention job — nothing prunes them
+
+`pin_attempt`, `signup_attempt`, `scanner_attempt` and `sign_in_attempt` are append-only
+rate-limit evidence. `avo_app` cannot DELETE from three of them BY DESIGN, which also means
+the API cannot prune them: they grow forever until an operator running as `avo` trims them.
+No such job exists. Each limiter only ever reads a recent window, so old rows are pure
+storage — but `sign_in_attempt` in particular holds one row per sign-in ATTEMPT across every
+surface, which is the highest-volume of the four.
+
+Retention length is client-owned (CLAUDE.md § Escalate — the retention schedule sits with
+data residency), so this is deliberately not a number here. Whatever is chosen, the job runs
+as `avo`, not `avo_app`, and must not touch `audit_log`, which is a different promise
+entirely: seven years, and append-only against the owner too.
+
+**`pin_attempt` is the odd one out and it is a defect, not a style difference.** Measured
+2026-08-26 against `avo_lane_a`:
+
+    avo_app DELETE FROM pin_attempt      -> DELETE 0        (permitted)
+    avo_app DELETE FROM signup_attempt   -> permission denied
+    avo_app DELETE FROM scanner_attempt  -> permission denied
+    avo_app DELETE FROM sign_in_attempt  -> permission denied
+
+`pin_attempt` was created in migration 0002; the `REVOKE UPDATE, DELETE` pattern starts at
+0026 and it was never retrofitted. So the application role can erase the device rate-limit
+evidence behind non-negotiable #6 — the one counter of the four guarding a credential a
+person types at a counter. Queued for lane A.
+
 ### `pnpm-lock.yaml` — expect this on the first merge
 
 Three lanes adding dependencies to the same lockfile. Do not hand-edit it. Take either
