@@ -1763,6 +1763,42 @@ survives so the next reader knows what was decided rather than assumed.
 
 ---
 
+### #38 — this project can now render a component in a test, on two surfaces of three — PARTLY RESOLVED
+
+Acted on rather than queued, because #38 was the one open item marked trunk's call: adding a
+renderer is a root-lockfile change touching every surface, so no lane could do it.
+
+**What exists now.** `jsdom` + `@testing-library/react` on the dashboard and the wallet. Tests opt
+in per file with a `// @vitest-environment jsdom` docblock; the other ~700 tests keep running under
+`node` and pay nothing. The wallet additionally aliases `react-native` → `react-native-web` — the
+same surface Expo web already runs — and now collects `.test.tsx`, which it previously did not, so a
+render test there would not have failed, it would not have been COLLECTED and the run would have
+reported success.
+
+**Three render tests, each proving something no source-text guard could reach.**
+`Money` — the drawn glyphs are `aria-hidden` and the accessible name is computed by a different
+function, so what a screen reader announces is a different string from what the eye reads; grepping
+proves both calls exist, only rendering proves the DOM got the right one on the right node. Red
+when `aria-hidden` is removed. `HappyHourBanner` — same props, two system clocks, two renderings,
+which is CLAUDE.md's "the happy-hour predicate, never a `live` flag" asserted at the component
+rather than at the pure function. Red on a frozen clock, which is exactly what a stored flag would
+look like.
+
+**What is still blocked, so nobody rediscovers it.** Anything importing `react-native-qrcode-svg` —
+`QrOverlay`, `PaymentCode` — will not load: that package ships JSX inside `.js`, which vite refuses,
+and transforming it gets one step further before hitting untranspiled Flow in React Native's own
+source via `react-native-svg`. Plain `react-native-web` components render fine, which is how we know
+the wall is that dependency chain and not the approach. **So the §4 "no stale payment code on
+screen" property still rests on `payTabWiring.test.ts` reading the source** — the single most
+valuable render test in this app is the one still not possible. Lane D, with a real budget.
+
+**The scanner has no renderer.** Same argument applies to it; not done, not blocked, just not done.
+
+**One thing I got wrong while doing this**, recorded because the test would otherwise have frozen my
+guess into a requirement: I asserted the happy-hour banner renders nothing on a day it does not run.
+It renders the NEXT occurrence — a branch plainly present in the component. The test now asserts
+that, with the mistake noted in it.
+
 ### The wallet outgrew Expo Go, and trunk picked the dependency for the wrong reason
 
 **Decided in trunk, 2026-08-25, with Aftab's standing authorisation to complete both mobile apps.**
