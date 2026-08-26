@@ -152,6 +152,21 @@ export const session = pgTable(
  * This table is the other half: it makes "N attempts from this device in the
  * last minute" answerable, so an attacker cannot walk the four-digit space by
  * rotating which staff id they guess against.
+ *
+ * APPEND-ONLY FOR `avo_app` SINCE MIGRATION 0040, AND NOT BEFORE IT. This is the
+ * oldest of the four counters and the last to get the REVOKE its three younger
+ * siblings were born with: 0001's `ALTER DEFAULT PRIVILEGES` grants
+ * SELECT/INSERT/UPDATE/DELETE to every table added later and says in as many words
+ * that "an append-only table added later must repeat the explicit REVOKE… because
+ * 'append-only' should be a decision someone writes down". 0002 created this table
+ * and never wrote it down; the pattern began at 0026 and never reached back.
+ *
+ * `succeeded` IS WHY THE UPDATE REVOKE MATTERS MORE HERE THAN ON THE SIBLINGS.
+ * They have no outcome column (0026 says why). `routes/auth.ts` counts this window
+ * with `eq(pinAttempt.succeeded, false)`, so `SET succeeded = true` frees a
+ * device's budget while deleting nothing — the row count does not move. Proved as
+ * `avo_app` in `db/counterPrivileges.int.test.ts`, which asserts the invariant
+ * across all four counters so a fifth one cannot repeat this.
  */
 export const pinAttempt = pgTable(
   'pin_attempt',
