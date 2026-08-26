@@ -502,6 +502,69 @@ export const RECEIPT_WORKER_ENABLED = (process.env.RECEIPT_WORKER_ENABLED ?? '1'
 export const NO_SHOW_WORKER_ENABLED = (process.env.NO_SHOW_WORKER_ENABLED ?? '0') === '1';
 
 /**
+ * ...AND ONE FILE TURNS IT BACK ON, DELIBERATELY. This is the other half of the
+ * pin above, and it exists so that "off by default" does not quietly become
+ * "never exercised".
+ *
+ * WHAT THE PIN LEFT UNTESTED. Every `no_show_returned` assertion in this suite
+ * now follows an explicit `api/src/jobs/no-show-once.ts`, which calls
+ * `runNoShowReturnsOnce` — the LOGIC. Nothing calls `startNoShowWorker`, which is
+ * the PLUMBING around it: the self-rescheduling `setTimeout`, the reschedule that
+ * happens after a pass rather than on a fixed interval, and `stop()` awaiting an
+ * in-flight pass before the server closes. That plumbing was untested before the
+ * pin too — the loop ran in every file and no file ever asserted anything about
+ * it, which is exactly how it managed to break the racing spec unnoticed. The pin
+ * did not create the gap, it made it visible.
+ *
+ * WHY AN EXPLICIT CALL AND NOT AN ENVIRONMENT VARIABLE. `startTenancyApi()` boots
+ * one API per file, and the module-level const above is read once when the worker
+ * process loads the harness — before any `beforeAll` runs. A file that set
+ * `process.env.NO_SHOW_WORKER_ENABLED` in its own `beforeAll` would get an API
+ * with the worker on while the exported const still read `false`, so the racing
+ * spec's precondition would be asking one thing and the server doing another. The
+ * override is therefore state this harness holds, read at BOOT time, and the const
+ * keeps meaning what it has always meant.
+ *
+ * WHY IT IS SAFE FOR THE REST OF THE SUITE. `vitest.config.ts` sets
+ * `fileParallelism: false`, so only one file's API is alive at a time and
+ * `stopTenancyApi()` kills the process group on the way out. The worker opted in
+ * here therefore cannot reach a deposit belonging to a file that is not running.
+ * Nothing about the default changes: every other file still boots with `'0'`.
+ *
+ * Call it BEFORE `startTenancyApi()` — see the guard.
+ */
+let noShowWorkerOverride: { pollMs: number } | undefined;
+
+/**
+ * Boot THIS FILE'S API with the no-show worker running, polling every `pollMs`.
+ *
+ * `pollMs` is the whole reason this takes an argument: `api/src/env.ts` defaults
+ * `NO_SHOW_POLL_MS` to 30_000, and a spec that waited half a minute for a timer is
+ * a spec somebody deletes. A few hundred milliseconds turns the same proof into a
+ * one-second wait.
+ */
+export function bootWithNoShowWorker(pollMs: number): void {
+  if (base !== '') {
+    throw new Error(
+      'bootWithNoShowWorker() must be called BEFORE startTenancyApi(). The boot env is read ' +
+        'once, when the API process is spawned, so an override set afterwards would leave this ' +
+        'file asserting against a server that never got it.',
+    );
+  }
+  noShowWorkerOverride = { pollMs };
+}
+
+/**
+ * Whether the API this file booted is running its own no-show worker.
+ *
+ * The const above answers "did the operator ask for one"; this answers "is there
+ * one", which is what a precondition about interference actually wants to know.
+ */
+export function noShowWorkerIsRunning(): boolean {
+  return noShowWorkerOverride !== undefined || NO_SHOW_WORKER_ENABLED;
+}
+
+/**
  * The attempt budget the API under test runs with, PINNED HERE rather than left to
  * `env.ts`'s default of 6.
  *
@@ -1846,7 +1909,24 @@ async function bootApiOnce(): Promise<boolean> {
       // long note beside NO_SHOW_WORKER_ENABLED above: this loop returns
       // deposits on a 30s timer that no spec chose, which is what made
       // deposit.test.ts's racing spec fail once in two identical gate runs.
-      NO_SHOW_WORKER_ENABLED: NO_SHOW_WORKER_ENABLED ? '1' : '0',
+      //
+      // READ HERE, AT BOOT, rather than baked into the module-level const, so
+      // that `bootWithNoShowWorker()` can turn it on for ONE file — see the note
+      // beside it. Every file that does not call it still boots with '0'.
+      NO_SHOW_WORKER_ENABLED: noShowWorkerIsRunning() ? '1' : '0',
+      /**
+       * The poll interval, pinned for the same reason as RECEIPT_POLL_MS: env.ts
+       * defaults it to 30_000, and a spec that proves the timer has to wait for
+       * one. Inert while the worker is off.
+       *
+       * An ambient `NO_SHOW_POLL_MS` still wins over the default, because the note
+       * above documents `NO_SHOW_WORKER_ENABLED=1 NO_SHOW_POLL_MS=1000 vitest run
+       * deposit` as the way the original failure is reproduced on demand, and a
+       * recipe the harness overrides is a recipe that stops working.
+       */
+      NO_SHOW_POLL_MS: String(
+        noShowWorkerOverride?.pollMs ?? process.env.NO_SHOW_POLL_MS ?? 30_000,
+      ),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
