@@ -43,6 +43,33 @@
  * Every failure path answers with the same body and burns the same argon2 time,
  * whether the account exists or not. "Wrong password" and "no such phone number"
  * being distinguishable turns a login form into a customer-list oracle.
+ *
+ * AND THE THREE PASSWORD DOORS ARE NOW RATIONED, WHICH THEY WERE NOT
+ * ------------------------------------------------------------------
+ * `POST /auth/member/session`, `POST /auth/web/session` and
+ * `POST /auth/platform/session` used to verify a password, answer
+ * `invalid_credentials`, and count nothing at all — no rate limit, no lockout, no
+ * attempt row, and no global limiter behind them (`app.ts` registers no rate-limit
+ * plugin). Everything ELSE was limited, including the PIN twice over, which is
+ * what made the hole hard to see: non-negotiable #6 attaches "rate limited,
+ * device-scoped, locked after N failures" to the PIN, and the PIN got all three.
+ * Four digits needs them more than a password does; not instead of it.
+ *
+ * `services/signInLimit.ts` bounds them, and the two things it had to avoid are
+ * the reason it is keyed the way it is. A limiter that engaged only for accounts
+ * that EXIST would hand the paragraph above straight back in a louder form, so the
+ * bucket is derived from what the request CLAIMS, before any table is read. And a
+ * LATCH on the account row — `staff_user.pin_locked_until`'s shape — would let
+ * anyone who knows a customer's phone number bar her from her own money, so it is a
+ * rolling window that writes nothing to `member`, `staff_user` or `platform_admin`.
+ *
+ * NOT UNDER `AVO_TEST_PRINCIPALS`, said here rather than only at the limiter,
+ * because a reader of these three handlers would otherwise take the line above as
+ * unconditional. That build is a harness shim `env.ts` refuses in production, and
+ * `e2e/` boots the API with it on; enforcing the budget there turned six e2e files
+ * red on specs that sign one handle in five times to prove a reset link is spent.
+ * `services/signInLimit.ts § THE ONE EXEMPTION` has the measurement, why raising
+ * the threshold to fit CI was refused, and what the exemption costs in coverage.
  */
 
 import { and, eq, gte, isNull, sql } from 'drizzle-orm';
@@ -79,6 +106,7 @@ import { isUniqueViolation, violatedConstraint } from '../services/idempotency';
 import { tierForVisits } from '../services/loyalty';
 import { recordPolicyAcceptance, requireCurrentPolicyVersion } from '../services/policy';
 import { enforceSignupLimits, recordSignupAttempt } from '../services/signupLimit';
+import { chargeSignInBudget } from '../services/signInLimit';
 import {
   enforceResetRequestLimits,
   recordResetRequestAttempt,
@@ -446,6 +474,28 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const phone = requireString(body.phone, 'phone', 20);
     const password = typeof body.password === 'string' ? body.password : '';
 
+    /**
+     * THE BUDGET, BEFORE THE LOOKUP AND BEFORE ANY HASHING.
+     *
+     * This endpoint had no rate limit, no lockout and no attempt record, so a
+     * caller holding a phone number and a salon id could guess without bound and
+     * without trace. `services/signInLimit.ts` carries the whole argument; the two
+     * parts that decide the placement of this line are:
+     *
+     *   IT IS KEYED ON WHAT THE REQUEST CLAIMS, not on a row. A limiter that
+     *   engaged only for accounts that exist would rebuild the enumeration oracle
+     *   this file's header is built around, with a bigger signal than the timing
+     *   channel `burnVerifyTime` exists to remove. Because the key is derived from
+     *   these two fields alone, a spent bucket for Dana and a spent bucket for a
+     *   number nobody has registered are the same code path.
+     *
+     *   IT IS NOT A LATCH ON HER ACCOUNT. A rolling window, nothing written to
+     *   `member`, so a stranger who knows her number cannot bar her from her own
+     *   money — the shape this file already reasoned about for the deletion grace
+     *   window.
+     */
+    await chargeSignInBudget(db, 'member', salonId, phone);
+
     const rows = await db
       .select()
       .from(member)
@@ -493,6 +543,17 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const salonId = requireString(body.salonId, 'salonId', 100);
     const username = requireString(body.username, 'username', 100).toLowerCase();
     const password = typeof body.password === 'string' ? body.password : '';
+
+    /**
+     * The same budget as the wallet and the console, keyed on `(salon, username)`
+     * — the pair `staff_user_salon_handle_uq` makes unique and the same pair the
+     * WHERE clause below uses, so a variant that dodges the bucket also fails to
+     * match a row. services/signInLimit.ts § WHERE THE CHECK SITS.
+     *
+     * The lower-casing is above this line on purpose: `NOURA` and `noura` are one
+     * account, so they must be one bucket.
+     */
+    await chargeSignInBudget(db, 'web', salonId, username);
 
     const rows = await db
       .select()
@@ -588,6 +649,20 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       .toLowerCase()
       .replace(/^@/, '');
     const password = typeof body.password === 'string' ? body.password : '';
+
+    /**
+     * `salonId: null`, because there is exactly one platform and
+     * `platform_admin_handle_uq` is global — the same reason the session this mints
+     * carries no salon. The normalisation above is inside the bucket for the reason
+     * it is inside the WHERE clause: `@yousef` and `yousef` are one person, so they
+     * are one budget.
+     *
+     * The console is the most valuable credential in the product and its admin list
+     * is short and made of named people, which is why the header above insists a
+     * distinguishable "no such user" would be a list of AVO's staff. A limiter that
+     * fired only for real handles would be that list, so this one never asks.
+     */
+    await chargeSignInBudget(db, 'platform', null, handle);
 
     const rows = await db
       .select()
