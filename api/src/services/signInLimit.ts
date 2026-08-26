@@ -201,55 +201,54 @@ export type SignInSurface = 'member' | 'web' | 'platform';
 
 /**
  * =========================================================================
- * THE ONE EXEMPTION, WHAT IT COSTS, AND WHY IT IS BROADER THAN ITS SIBLINGS
+ * THERE IS NO EXEMPTION, AND THIS BLOCK RECORDS THE ONE THERE USED TO BE
  * =========================================================================
- * `AVO_TEST_PRINCIPALS` is a harness shim that `env.ts` REFUSES IN PRODUCTION
- * ("It is a test harness shim and must never be set in production"), and
- * `e2e/support/tenancy-harness.ts` boots the API with it on. Under that build this
- * limiter does nothing.
+ * This limiter shipped exempt under `AVO_TEST_PRINCIPALS` — the harness shim
+ * `env.ts` refuses in production — because enforcing it turned `e2e/` red:
  *
- * MEASURED, NOT ANTICIPATED, and the numbers are the whole argument. `e2e/` on this
- * branch with the limiter enforced under the shim:
+ *     baseline (no limiter)    29 files, 1066 passed,   0 skipped,  0 failed
+ *     enforced under the shim   6 FILES FAILED,  978 passed, 84 skipped, 4 failed
  *
- *     baseline (no limiter)   29 files, 1066 passed,   0 skipped,  0 failed
- *     enforced under the shim  6 FILES FAILED,  978 passed, 84 skipped, 4 failed
+ * None of those failures was about rate limiting. They were files whose `beforeAll`
+ * could no longer get a token, because the harness minted a fresh session at every
+ * call site: `signInDashboard(SALON_B, 'layla')` had 15 static ones, and
+ * `console-reset.test.ts` signed one console handle in twenty times to prove that a
+ * redeemed reset link is spent.
  *
- * The failures are not about rate limiting. `console-reset.test.ts` signs the same
- * console handle in four or five times in a row to prove that a redeemed reset link
- * is spent and that a deactivated admin is refused — it asserts 401 and got 429 —
- * and `salon-onboarding.test.ts` died inside `signInDashboard`, whose 15 static call
- * sites all use one salon-B handle inside a six-minute run.
+ * RAISING THE THRESHOLD TO FIT CI WAS REFUSED, on `scannerLimit.ts`'s own rule, and
+ * that was right: a manager signing in fifteen times in fourteen minutes is not a
+ * human pattern a production control should be tuned around. But the exemption cost
+ * something exact, and it was disclosed rather than discovered — `pnpm check` proved
+ * NOTHING about the wiring of this limiter into the three handlers. Trunk measured
+ * it: with the `chargeSignInBudget` call deleted from the member handler, the gate
+ * stayed 235 green. DECISIONS.md #40.
  *
- * WHY NOT RAISE THE THRESHOLD INSTEAD. `scannerLimit.ts` had this exact choice and
- * wrote down the rule: "Tuning a production control until a test suite fits under it
- * is how a limiter ends up at a value nobody can justify, and § THRESHOLDS would then
- * be arguing for a number chosen by CI." That applies with more force here, because a
- * dashboard user signing in fifteen times in six minutes is not a human pattern the
- * way 105 charges from one till is a plausible client pattern. There is nothing to
- * learn from these numbers about what a real sign-in rate looks like.
+ * LANE D REMOVED THE REASON. `e2e/support/tenancy-harness.ts` now holds ONE session
+ * per identity per run, and `console-reset.test.ts` invites a fresh admin per test
+ * because its twenty sign-ins were about twenty passwords and one link, never about
+ * one identity's budget. With this limiter fully enforced under the shim:
  *
- * AND IT IS BROADER THAN `scannerLimit`'s AND `topupLimit`'s, WHICH IS A REAL COST.
- * Those exempt `isFabricatedPrincipal` — the shim's INVENTED principal — so a REAL
- * bearer token in a test build is still limited, and their int suites mint exactly
- * that. There is no equivalent here: these three endpoints are anonymous by
- * definition, so the only signal available is the build flag, and exempting on it
- * exempts every sign-in in that build including the real ones. What that costs,
- * stated rather than discovered: `pnpm check` proves NOTHING about the wiring of this
- * limiter into the three handlers. `signInLimit.test.ts` covers the key derivation,
- * the tier order and the check-then-record pairing and does run in the gate;
- * `signInLimit.int.test.ts` covers the handlers and runs with `AVO_TEST_PRINCIPALS`
- * off, and is not in the gate for `vitest.int.config.ts`'s reasons.
+ *     30 files, 1092 passed, 0 failed, twice in a row
  *
- * THE DURABLE FIX IS LANE D'S AND IS ESCALATED RATHER THAN REACHED FOR. If
- * `signInDashboard`/`signInPlatform`/`signInMember` cached one session per identity
- * per run — which is what every real client does — and `console-reset.test.ts` used a
- * fresh handle per round, the suite would fit under a production threshold with room
- * to spare and this exemption could be narrowed or deleted. `e2e/` is Lane D's column
- * (CLAUDE.md § Lanes), so that is a request and not a diff.
+ * The most any single identity now spends in a run is five, against a burst budget
+ * of ten. So the exemption had no remaining consumer — `vitest.int.config.ts` sets
+ * `AVO_TEST_PRINCIPALS: '0'` and the e2e harness was the only build that set it on —
+ * and it is deleted rather than narrowed.
+ *
+ * AND THE GATE NOW COVERS THE WIRING, which is the whole point of having removed it.
+ * `e2e/sign-in-limit.test.ts` drives all three endpoints from outside and is in
+ * `pnpm check`. Deleting any one of the three `chargeSignInBudget` calls turns it
+ * red — verified one call site at a time: member 8 specs, web 1, platform 1.
+ *
+ * THE ROWS A TEST BUILD NOW WRITES, stated because the deleted block was right that
+ * this is a cost. `recordSignInAttempt` no longer skips under the shim, so a test
+ * build inserts into a real counter and `avo_app` cannot DELETE what it inserts
+ * (migration 0039). For `e2e/` that is free: `global-setup.ts` mints a database per
+ * run and drops it in teardown. For a long-lived development database it means
+ * `sign_in_attempt` accumulates rows naming buckets only a harness ever touched,
+ * which the operator's retention job removes. That is the price of the limiter being
+ * in the gate at all, and it is the cheaper side of the trade.
  */
-function exemptBuild(): boolean {
-  return env.testPrincipals;
-}
 
 /**
  * =========================================================================
@@ -367,8 +366,6 @@ export function signInIdentityKey(
  * identity exists, not whether the password was close.
  */
 export async function enforceSignInLimits(db: Db, identityKey: string): Promise<void> {
-  if (exemptBuild()) return;
-
   const hourSince = new Date(Date.now() - SIGN_IN_HOUR_WINDOW_MINUTES * 60_000);
   const burstSince = new Date(Date.now() - SIGN_IN_WINDOW_MINUTES * 60_000);
 
@@ -417,16 +414,6 @@ export async function recordSignInAttempt(
   db: Db,
   params: { surface: SignInSurface; identityKey: string; salonId: string | null },
 ): Promise<void> {
-  /**
-   * Not recorded either, and that is deliberate rather than symmetry for its own
-   * sake — `scannerLimit.ts § recordScannerAttempt` takes the same position. A row
-   * written under the shim is a row in a real counter naming a bucket that only a
-   * harness ever touched, and `avo_app` cannot DELETE it (migration 0039). A test
-   * build would slowly fill the table with fiction that the operator's retention job
-   * is the only thing able to remove.
-   */
-  if (exemptBuild()) return;
-
   await db.insert(signInAttempt).values({
     surface: params.surface,
     identityKey: params.identityKey,

@@ -63,13 +63,15 @@
  * anyone who knows a customer's phone number bar her from her own money, so it is a
  * rolling window that writes nothing to `member`, `staff_user` or `platform_admin`.
  *
- * NOT UNDER `AVO_TEST_PRINCIPALS`, said here rather than only at the limiter,
- * because a reader of these three handlers would otherwise take the line above as
- * unconditional. That build is a harness shim `env.ts` refuses in production, and
- * `e2e/` boots the API with it on; enforcing the budget there turned six e2e files
- * red on specs that sign one handle in five times to prove a reset link is spent.
- * `services/signInLimit.ts § THE ONE EXEMPTION` has the measurement, why raising
- * the threshold to fit CI was refused, and what the exemption costs in coverage.
+ * ON EVERY BUILD, INCLUDING `AVO_TEST_PRINCIPALS`, and this paragraph used to say
+ * the opposite. The budget was exempt under that shim because enforcing it turned
+ * six `e2e/` files red — on specs that signed one handle in twenty times to prove a
+ * reset link is spent, none of them about rate limiting. Lane D removed the reason
+ * (one cached session per identity per run, a fresh admin per reset test) and the
+ * exemption is gone with it, so these three lines are now unconditional and the
+ * default gate covers them: `e2e/sign-in-limit.test.ts` drives all three endpoints
+ * from outside, and deleting any one of the three calls below turns it red.
+ * `services/signInLimit.ts § THERE IS NO EXEMPTION` keeps the measurement.
  */
 
 import { and, eq, gte, isNull, sql } from 'drizzle-orm';
