@@ -73,6 +73,8 @@
  * lesson applied before the bug.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
@@ -91,6 +93,7 @@ import {
   SALON_B,
   pgDb,
   psql,
+  repoRoot,
   runApiDbScriptResult,
   scalar,
   signInDashboard,
@@ -145,6 +148,53 @@ const key = (label: string) => `cmp-${label}-${Date.now()}-${n++}`;
  */
 const AUD = ['QA-CMP-0001', 'QA-CMP-0002', 'QA-CMP-0003'] as const;
 
+/**
+ * A FOURTH CONSENTING CUSTOMER, AND THE ONLY REASON SHE EXISTS IS `lowbal`.
+ *
+ * The three `AUD` members above are gold with 50.000 KD each, and `LOW_BALANCE_FILS` is
+ * 5000 — so before this row the `lowbal` audience at salon B was EMPTY, and a derived
+ * spec that submitted it would have been held with "Nobody is in this audience right
+ * now" rather than releasing anything. A hold is not a send, and the half of this bug
+ * that only a real release can reach is the send.
+ *
+ * AND THE FIRST DRAFT OF THE SPEC BELOW ASSERTED SHE WAS THE ONLY ONE, WHICH WAS WRONG.
+ * It read `expect(c.reach).toBe(1)` on the reasoning that `B_MEMBER` holds
+ * `B_MEMBER_BALANCE_FILS` (500.000 KD) and the `AUD` trio 50.000 KD each, so nothing else
+ * at salon B could be under 5.000 KD. That passed when this file was run alone and FAILED
+ * on the full suite with `expected 2 to be 1`: earlier files create their own consenting
+ * customers at salon B and spend balances down, and one of them was under the threshold by
+ * the time this file ran. Salon B's member list is not a fact this file owns.
+ *
+ * Which is the file header's own warning — "an audience whose size depends on what another
+ * file did is an assertion that passes or fails on file order" — arriving from the other
+ * direction, and it is recorded rather than quietly patched because the fix is the
+ * interesting part: the spec no longer counts. It asserts that the recipient set CONTAINS
+ * this row, contains NONE of the gold trio, and that every member it reached really is
+ * under the threshold, read back off `member.balance_fils`. Those are claims about the
+ * PREDICATE rather than about the population, so they are true whatever else has run — and
+ * they are strictly stronger than the count they replaced, which a predicate returning
+ * every member of a one-customer salon would also have satisfied.
+ *
+ * BRONZE AND BACK-DATED ON PURPOSE. `bronze` keeps her out of `gold`, so every assertion
+ * above that counts `AUD.length` is untouched by her arrival — checked call site by call
+ * site. `joined_at` a year back keeps her out of `new`, which makes `new` and `gold` the
+ * same three rows and `lowbal` the one row: the audiences DISCRIMINATE against this
+ * fixture rather than all resolving to the same set, and a predicate that quietly
+ * returned every member of the salon would fail the exact spec instead of passing it.
+ */
+const LOWBAL = 'QA-CMP-0004';
+
+/**
+ * `LOW_BALANCE_FILS` from `api/src/services/campaign.ts`, mirrored because it is private
+ * to that module. Mirroring a constant is only acceptable where a divergence FAILS rather
+ * than passes quietly, which is the case here: the exact spec below reads recipients'
+ * balances against this number, so a threshold that moved in the service turns it red.
+ */
+const LOW_BALANCE_FILS_MIRROR = 5_000;
+
+/** Under `LOW_BALANCE_FILS_MIRROR` by a wide margin, so no rounding argument can reach it. */
+const LOWBAL_BALANCE_FILS = 1_000;
+
 function seedAudience(): void {
   psql(`
     INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
@@ -159,10 +209,22 @@ function seedAudience(): void {
      WHERE s.id = 'ST-001'
     ON CONFLICT (id) DO UPDATE SET tier = 'gold', visits = 12, balance_fils = 50000;
 
+    INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                        balance_fils, visits, tier, stamps, policy_version, joined_at)
+    SELECT '${LOWBAL}', '${SALON_B}', 'Campaign Low Balance', '+96599778004', NULL, false,
+           s.password_hash, ${LOWBAL_BALANCE_FILS}, 1, 'bronze', NULL, 3,
+           now() - interval '400 days'
+      FROM staff_user s
+     WHERE s.id = 'ST-001'
+    ON CONFLICT (id) DO UPDATE SET tier = 'bronze',
+                                   visits = 1,
+                                   balance_fils = ${LOWBAL_BALANCE_FILS},
+                                   joined_at = now() - interval '400 days';
+
     INSERT INTO member_consent_event (member_id, salon_id, kind, granted, source, policy_version)
     SELECT m.id, '${SALON_B}', 'marketing_offers', true, 'signup', 3
       FROM member m
-     WHERE m.id IN ('${AUD[0]}', '${AUD[1]}', '${AUD[2]}')
+     WHERE m.id IN ('${AUD[0]}', '${AUD[1]}', '${AUD[2]}', '${LOWBAL}')
        AND NOT EXISTS (
              SELECT 1 FROM member_consent_event e
               WHERE e.member_id = m.id AND e.kind = 'marketing_offers');
@@ -282,27 +344,51 @@ interface CampaignBody {
   };
 }
 
-/** A `pending` campaign at salon B, submitted by the merchant, audience `gold`. */
-async function submit(label: string, when = 'now'): Promise<CampaignBody['campaign']> {
-  /**
-   * `POST /v1/salons/:id/campaigns` answers with the campaign UNWRAPPED — `reply.code(201)
-   * .send(serialiseCampaign(row, ...))` — while `POST /v1/platform/campaigns/:cid/decision`
-   * answers `{ campaign, delivery }`. Two shapes for the same entity on two endpoints,
-   * which is worth naming here because the first draft of this file assumed the wrapper on
-   * both and read `undefined.status`. Reported to lane A as an inconsistency, not a defect.
-   */
-  const res = await treq<CampaignBody['campaign']>('POST', `/v1/salons/${SALON_B}/campaigns`, {
+/**
+ * The RAW `POST /v1/salons/:id/campaigns`, status included.
+ *
+ * SEPARATED FROM `submit()` BECAUSE OF THE BUG § THE AUDIENCE DIMENSION IS ABOUT.
+ * `submit()` preconditions on a 2xx, which is right for every spec whose subject is
+ * further down the flow — but it means a 500 arrives as "precondition failed" from
+ * inside a helper, and the audience specs' whole subject IS the status code. So the
+ * request is here and the precondition is one level up.
+ *
+ * `POST /v1/salons/:id/campaigns` answers with the campaign UNWRAPPED — `reply.code(201)
+ * .send(serialiseCampaign(row, ...))` — while `POST /v1/platform/campaigns/:cid/decision`
+ * answers `{ campaign, delivery }`. Two shapes for the same entity on two endpoints,
+ * which is worth naming here because the first draft of this file assumed the wrapper on
+ * both and read `undefined.status`. Reported to lane A as an inconsistency, not a defect.
+ */
+async function postCampaign(
+  label: string,
+  opts: { audience?: string; when?: string } = {},
+): Promise<{ status: number; body: CampaignBody['campaign']; raw: string }> {
+  const when = opts.when ?? 'now';
+  return treq<CampaignBody['campaign']>('POST', `/v1/salons/${SALON_B}/campaigns`, {
     token: merchant,
     idempotencyKey: key(label),
     body: {
       title: `QA ${label}`,
       body: 'Twenty percent off blow-dries this week.',
       channel: 'push',
-      audience: 'gold',
+      audience: opts.audience ?? 'gold',
       when,
       ...(when === 'later' ? { scheduledAt: new Date(Date.now() + 86_400_000).toISOString() } : {}),
     },
   });
+}
+
+/**
+ * A `pending` campaign at salon B, submitted by the merchant. Audience `gold` by
+ * DEFAULT rather than by hardcoding — see § THE AUDIENCE DIMENSION for why that
+ * distinction is the whole point of this section.
+ */
+async function submit(
+  label: string,
+  when = 'now',
+  audience = 'gold',
+): Promise<CampaignBody['campaign']> {
+  const res = await postCampaign(label, { when, audience });
   precondition(res.status === 201 || res.status === 200, `POST /campaigns: ${res.status} ${res.raw}`);
   return res.body;
 }
@@ -1120,5 +1206,521 @@ describe('the platform decision endpoint', () => {
       'a scheduled campaign was marked held, which tells the merchant something is wrong when ' +
         'nothing is',
     ).toBeNull();
+  });
+});
+
+// ===========================================================================
+// THE AUDIENCE DIMENSION — DERIVED FROM THE CONSTANT, NOT ENUMERATED HERE
+// ===========================================================================
+
+/**
+ * THIS SECTION IS THIS FILE'S OWN COVERAGE HOLE, AND THE HOLE SHIPPED A 500.
+ *
+ * `POST /v1/salons/{id}/campaigns` with `audience: "lapsed"` answered 500 `server_error`
+ * for the entire life of the endpoint, and so did releasing an already-approved `lapsed`
+ * campaign. Everything above this line proves submission, approval, the weekly cap, the
+ * monthly cap, quiet hours and double-release idempotency — thoroughly enough that the
+ * money paths are trustworthy — and every one of those specs pinned `audience: 'gold'`
+ * at its call site. Five audiences exist in `CAMPAIGN_AUDIENCES`. The suite exercised
+ * the one that happened to work.
+ *
+ * The depth was never the problem. `lapsed` is "Not seen in 60 days", the campaign a
+ * salon asks for FIRST, and non-negotiable #8 routes every campaign through the platform
+ * — so a merchant met a 500 at the moment she asked for something she is entitled to
+ * ask for, and this suite could not have told her.
+ *
+ * `services/campaign.ts` § BUILT WITH THE HELPERS carries the mechanism in full. The
+ * short version: the `lapsed` branch alone interpolated a JS `Date` into a raw `sql`
+ * template, `drizzle()` REPLACES postgres.js's date serializer with an identity function
+ * on construction, and a parameter Drizzle did not encode against a column therefore
+ * reaches `Bind` as a live `Date` and dies in `Buffer.byteLength`. The other four
+ * branches were built from `lt` / `inArray` / `gte`, which carry the column's own
+ * encoder. That was the whole difference — which is precisely why a suite pinned to one
+ * value could not see it, and why the fix worth having is a COVERAGE SHAPE rather than a
+ * sixth spec about `lapsed`.
+ *
+ * =========================================================================
+ * WHAT IS HERE, AND WHAT IS DELIBERATELY LEFT TO LANE A
+ * =========================================================================
+ * Lane A already covers the audience dimension twice, derived from the same constant,
+ * and this section repeats neither:
+ *
+ *   `api/src/services/campaignAudience.test.ts` (7 specs, inside `pnpm check`) — for
+ *   every audience, the COMPILED PREDICATE binds no parameter the driver cannot encode.
+ *   A property of the SQL: no database, no connection, no HTTP.
+ *
+ *   `api/src/services/campaignAudience.int.test.ts` (16 specs, real driver) — every
+ *   audience through `computeReach`, through `resolveAudience`, and through
+ *   `deliverCampaign` on an approved campaign, the releases inside rolled-back
+ *   transactions.
+ *
+ * So the bindability of the predicate, the reach arithmetic per audience, and the shape
+ * of the resolved id list are NOT asserted here. They are asserted closer to the code,
+ * more cheaply, and one of them runs in the gate — duplicating them would buy a slower
+ * suite and no new information.
+ *
+ * WHAT ONLY THIS SUITE CAN SAY is the round trip, and it is the half the merchant
+ * actually met:
+ *
+ *   1. THE STATUS CODE ON THE WIRE. Lane A's int specs call `computeReach` as a
+ *      function. A function that returns a number says nothing about whether
+ *      `POST /campaigns` answers 201 — the route also validates the audience against
+ *      `CAMPAIGN_AUDIENCES`, writes an idempotency record, inserts a row against a CHECK
+ *      constraint and serialises a reply, and the reported symptom was a status code.
+ *
+ *   2. THE PLATFORM'S DECISION ENDPOINT, over HTTP, as the owner. `deliverCampaign` is
+ *      called by a route behind `requirePlatform`; the int suite calls the service.
+ *
+ *   3. SENDS THAT COMMIT. Lane A's release specs roll back on purpose and say so — they
+ *      make no claim about the state of the database afterwards. Whether a
+ *      `campaign_send` row SURVIVES for an audience other than `gold` is a claim only a
+ *      committed round trip can make, and `campaign_send` is what the weekly cap counts.
+ *
+ *   4. THE TWO CALL SITES AGREEING. `resolveAudience` runs twice in a campaign's life —
+ *      `computeReach` at submission and `deliverCampaign` step 3 at release. Nothing
+ *      before this section checks that the number the reviewer approved against is the
+ *      number that went out, because that needs both endpoints and a real commit
+ *      between them. `sent + cappedOut === reach` is asserted for every audience below.
+ *
+ * =========================================================================
+ * DERIVED FROM THE CONSTANT, AND CROSS-CHECKED AGAINST THE CHECK CONSTRAINT
+ * =========================================================================
+ * There is no list of five audiences typed in this file. `campaignAudiencesFromSource()`
+ * reads `CAMPAIGN_AUDIENCES` out of `api/src/db/schema/campaign.ts` — the same `as const`
+ * the route's 400 message is built from — so a sixth audience is covered on the day it is
+ * added to the constant rather than on the day somebody remembers this file. That is the
+ * technique `support/perm-census.ts` and `apps/dashboard/src/shell/consoleNavGates.test.ts`
+ * already use, and Lane A's two audience suites use it too.
+ *
+ * READ FROM SOURCE TEXT RATHER THAN IMPORTED, which is a convention this package holds
+ * deliberately: nothing in `e2e/` imports from `api/src` — `console-reset.test.ts` says so
+ * in as many words — because the suite is meant to drive the API from outside it. The
+ * cases have to exist at COLLECTION time, before `beforeAll` has provisioned a database,
+ * so they cannot come from a query either.
+ *
+ * COMMENTS ARE NOT STRIPPED BEFORE PARSING, WHICH IS A DEPARTURE FROM
+ * `perm-census.ts` AND IS SAFE HERE FOR A REASON RATHER THAN BY LUCK. That module strips
+ * them because prose naming `requireDashboardPerm` outnumbers the real calls two to one,
+ * and a false match invents a gate nothing checks. Here the declaration is a single line
+ * of literals and, more to the point, a mis-read list does not survive: the CHECK
+ * cross-check below compares whatever was read against the constraint the database
+ * actually enforces, so a stray literal picked up from prose fails that spec by name
+ * instead of quietly widening or narrowing the loops. If the constant is ever reformatted
+ * across lines with a comment inside it, strip comments then.
+ *
+ * A ZERO RESULT IS A CLAIM ABOUT THE PARSER, so `campaignAudiencesFromSource()` THROWS
+ * rather than returning `[]`. A parse that silently found nothing would delete every
+ * derived spec below and report the file green with the audience dimension untested —
+ * which is the exact failure this section exists to end, reintroduced one level down.
+ * The known positives are asserted too, in § "the derivation itself".
+ *
+ * AND THE DATABASE IS CROSS-CHECKED, because the constant is not the only gate. The
+ * route validates against `CAMPAIGN_AUDIENCES` in TypeScript; the row is admitted by a
+ * SEPARATE CHECK constraint, `campaign_audience_is_known`, written out by a migration.
+ * A sixth audience added to the constant WITHOUT the migration passes the route's 400 and
+ * then violates the CHECK — a 500 on `POST /campaigns`, the same family of bug as the one
+ * above and reached by the same door. So one spec below reads
+ * `pg_get_constraintdef()` and requires the two lists to agree.
+ */
+
+const AUDIENCE_CONSTANT_FILE = join(repoRoot, 'api', 'src', 'db', 'schema', 'campaign.ts');
+
+/**
+ * Every single-quoted literal in a fragment of text, in order.
+ *
+ * Used against BOTH the `as const` in lane A's schema module and the
+ * `pg_get_constraintdef()` rendering of the CHECK, because the two say the same thing in
+ * two syntaxes — `['all', 'lapsed', …] as const` and
+ * `audience = ANY (ARRAY['all'::text, …])` — and the literals are the part that matters
+ * in each. Matching the syntax instead would need two readers and would break the first
+ * time Postgres renders the constraint differently.
+ */
+const quotedStrings = (text: string): string[] =>
+  [...text.matchAll(/'([^']*)'/g)].flatMap((m) => (m[1] ? [m[1]] : []));
+
+/**
+ * `CAMPAIGN_AUDIENCES`, read out of lane A's schema module as text.
+ *
+ * Throws rather than returning empty — see the section header. The message names the
+ * file and both plausible causes, because the reader of this failure is somebody who
+ * just renamed or moved a constant and has no reason to expect a QA suite to care.
+ */
+function campaignAudiencesFromSource(): string[] {
+  const src = readFileSync(AUDIENCE_CONSTANT_FILE, 'utf8');
+  const decl = /export const CAMPAIGN_AUDIENCES\s*=\s*\[([^\]]*)\]\s*as const/.exec(src);
+  if (!decl) {
+    throw new Error(
+      `CAMPAIGN_AUDIENCES could not be found in ${AUDIENCE_CONSTANT_FILE}.\n` +
+        'Every audience spec in e2e/campaigns.test.ts is derived from that constant, so a ' +
+        'failed parse would silently delete them all — hence this throw rather than an ' +
+        'empty list.\nIf the constant was renamed, moved, or reformatted across lines, ' +
+        'update this reader. Do NOT replace it with a list typed here: a hardcoded list is ' +
+        'what let `audience: "lapsed"` answer 500 for the life of the endpoint.',
+    );
+  }
+  const found = quotedStrings(decl[1] ?? '');
+  if (found.length === 0) {
+    throw new Error(
+      `CAMPAIGN_AUDIENCES was found in ${AUDIENCE_CONSTANT_FILE} but no audience was read ` +
+        `out of it. The declaration matched as: ${decl[0]}`,
+    );
+  }
+  return found;
+}
+
+const AUDIENCES = campaignAudiencesFromSource();
+
+/**
+ * The consenting members of salon B with NO settled charge — so, `lapsed`, by the
+ * predicate's own definition. Sorted, because `sentTo()` reads `ORDER BY member_id`.
+ *
+ * A SUPERSET ASSERTION AND NOT AN EQUALITY, deliberately: Fatima (`9001`) has no settled
+ * charge at salon B either, so she joins this audience the moment any other file grants
+ * her marketing consent. The file header explains why every spec above chose `gold` for
+ * exactly this reason. Where an EXACT recipient set is needed, § "the full round trip"
+ * uses `lowbal`, which her balance keeps her out of whatever else runs.
+ */
+const LAPSED_COHORT = [...AUD, LOWBAL].sort();
+
+describe('the audience dimension — every member of CAMPAIGN_AUDIENCES, derived', () => {
+  // -------------------------------------------------- the derivation itself --
+  it("the constant was read out of lane A's schema, and it contains the known positives", () => {
+    /**
+     * THE PARSER IS LOAD-BEARING, so it is proved against known positives before
+     * anything is concluded from it. A regex that matched the declaration but read no
+     * strings out of it would make every loop below iterate zero times and report green.
+     *
+     * THE COUNT IS NOT PINNED AT 5 HERE, AND THAT IS A CONSIDERED DIFFERENCE FROM LANE
+     * A'S TWO SUITES, both of which assert `toHaveLength(5)`. Their reason is sound —
+     * an emptied constant must not make a derived spec vanish — and it is already met
+     * twice, plus by the two throws in `campaignAudiencesFromSource()`, which is the
+     * failure mode a third `toHaveLength(5)` would guard. What pinning the count WOULD
+     * add is a third suite turning red on the day somebody deliberately adds a sixth
+     * audience, when this suite's entire purpose is that the sixth is COVERED rather
+     * than that it does not exist.
+     */
+    expect(
+      AUDIENCES.length,
+      `only ${AUDIENCES.length} audience(s) were read out of ${AUDIENCE_CONSTANT_FILE}. ` +
+        'The reader matched the declaration but is mis-reading its contents.',
+    ).toBeGreaterThanOrEqual(2);
+
+    for (const known of ['gold', 'lapsed'] as const) {
+      expect(
+        AUDIENCES,
+        `"${known}" is not among the audiences read from source (${AUDIENCES.join(', ')}). ` +
+          'Either the constant genuinely lost it, or the reader is wrong — and if the ' +
+          'reader is wrong, every derived spec below is testing the wrong set.',
+      ).toContain(known);
+    }
+  });
+
+  it('the database CHECK admits exactly the audiences the route validates against', () => {
+    /**
+     * TWO INDEPENDENT GATES ON ONE FIELD, and a divergence between them is a 500.
+     *
+     * `routes/campaigns.ts` answers 400 for anything not in `CAMPAIGN_AUDIENCES`;
+     * `campaign_audience_is_known` is a CHECK written out by a migration. A sixth
+     * audience added to the constant and not to the migration passes the 400 and then
+     * violates the CHECK on INSERT — `server_error`, on the endpoint this whole section
+     * is about, reached by a different door.
+     *
+     * Read with `pg_get_constraintdef()` rather than from the migration file, because
+     * what matters is the constraint that is actually deployed in front of this run.
+     * Postgres normalises the `IN (...)` list to `= ANY (ARRAY[...])`, so the quoted
+     * literals are extracted rather than the syntax being matched.
+     */
+    const def = scalar(
+      "select pg_get_constraintdef(oid) from pg_constraint where conname='campaign_audience_is_known'",
+    );
+    expect(
+      def,
+      'the CHECK constraint `campaign_audience_is_known` is not on this database. Either the ' +
+        'migration that adds it was dropped, or it was renamed — in which case this spec is ' +
+        'reading nothing and proving nothing.',
+    ).not.toBe('');
+
+    const admitted = quotedStrings(def);
+    expect(
+      [...admitted].sort(),
+      'the audiences the DATABASE admits and the audiences the ROUTE validates against ' +
+        `disagree.\n  CHECK constraint: ${admitted.join(', ')}\n  CAMPAIGN_AUDIENCES: ` +
+        `${AUDIENCES.join(', ')}\nAn audience in the constant but not in the CHECK passes the ` +
+        "route's 400 and then answers 500 on INSERT. An audience in the CHECK but not in the " +
+        'constant is unreachable and untested.',
+    ).toEqual([...AUDIENCES].sort());
+  });
+
+  // ------------------------------------------------------ 1. the create path --
+  /**
+   * THE MERCHANT'S REQUEST, one spec per audience, and the whole subject is the status
+   * code. This is the spec that was missing: with `audience: 'lapsed'` it answers 500,
+   * and with any other audience it answers 201.
+   */
+  for (const audience of AUDIENCES) {
+    it(`POST /campaigns accepts audience "${audience}" and creates it pending`, async () => {
+      clearCampaigns();
+      policy(quietWindowAvoiding());
+
+      const res = await postCampaign(`aud-create-${audience}`, { audience });
+
+      expect(
+        [200, 201],
+        `POST /v1/salons/${SALON_B}/campaigns with audience "${audience}" answered ` +
+          `${res.status}.\n${res.raw}\n\nA 500 here is the bug this section exists for: a ` +
+          'bound parameter the driver cannot encode, thrown at BIND time. See ' +
+          '`api/src/services/campaign.ts` § BUILT WITH THE HELPERS. A 400 means the route ' +
+          'validates against a narrower list than `CAMPAIGN_AUDIENCES`.',
+      ).toContain(res.status);
+
+      const c = res.body;
+      expect(c.status, `a "${audience}" campaign was not created pending`).toBe('pending');
+
+      /**
+       * REACH IS ASSERTED AS A SHAPE, NOT AS A NUMBER. The per-audience arithmetic is
+       * Lane A's `campaignAudience.int.test.ts`; what matters here is that the server
+       * computed one at all, because `computeReach` is the database work `POST /campaigns`
+       * does before the insert and it is where the 500 came from.
+       */
+      expect(
+        Number.isInteger(c.reach),
+        `reach for "${audience}" came back as ${JSON.stringify(c.reach)}`,
+      ).toBe(true);
+      expect(c.reach).toBeGreaterThanOrEqual(0);
+
+      // #8's first half still holds for every audience, not only for `gold`.
+      expect(
+        sendsFor(c.id),
+        `a merchant-submitted "${audience}" campaign wrote delivery rows`,
+      ).toBe(0);
+    });
+  }
+
+  // ----------------------------------------------------- 2. the release path --
+  /**
+   * THE PLATFORM RELEASES IT AND THE SENDS COMMIT, one spec per audience.
+   *
+   * This is the SECOND 500, and it is the one a merchant could not have worked around:
+   * `resolveAudience` runs again at `deliverCampaign` step 3 — #8's "caps and quiet hours
+   * are enforced again at send time", which cannot be enforced against an audience
+   * without resolving one — so an already-approved `lapsed` campaign could not be
+   * released either.
+   *
+   * STEP 3 IS AFTER THE QUIET-HOURS AND MONTHLY-CAP HOLDS, which is why `policy()` sets
+   * a window that avoids this instant and restores the default cap first: a campaign held
+   * at step 1 or step 2 never resolves an audience at all, and would be a green run that
+   * proved nothing. `policy()` sets the whole policy absolutely for the reason its own
+   * docstring gives.
+   */
+  for (const audience of AUDIENCES) {
+    it(`the platform releases an approved "${audience}" campaign and the sends commit`, async () => {
+      clearCampaigns();
+      policy(quietWindowAvoiding());
+
+      const c = await submit(`aud-release-${audience}`, 'now', audience);
+
+      /**
+       * THE FIXTURE, NOT THE CODE, IS WHAT THIS PRECONDITION IS ABOUT. `seedAudience()`
+       * puts somebody in all five audiences at salon B — three gold members for `gold`,
+       * `new` and `all`, and `QA-CMP-0004` for `lowbal` — so an empty one here means the
+       * fixture stopped covering this audience, not that delivery is broken. Reported as
+       * a precondition so the two cannot be confused.
+       *
+       * The one way this fires without a fixture change: a run that crosses a UTC month
+       * boundary mid-file empties `new`, because `joined_at` lands in the previous month
+       * while the predicate's month start has moved on. Sub-second per month, named here
+       * rather than engineered around.
+       */
+      precondition(
+        c.reach > 0,
+        `no consenting member of salon B is in the "${audience}" audience, so this spec ` +
+          'cannot prove a send. `seedAudience()` is meant to populate all five — check it ' +
+          'before reading this as a delivery defect.',
+      );
+
+      const decision = await decide(c.id, 'approved');
+      expect(
+        decision.status,
+        `the platform decision on a "${audience}" campaign answered ${decision.status}.\n` +
+          `${decision.raw}\n\nA 500 here is the RELEASE half of the same bug: ` +
+          '`deliverCampaign` step 3 resolves the audience again, so a predicate that cannot ' +
+          'bind fails on the platform endpoint as well as on the merchant one.',
+      ).toBe(200);
+
+      const delivery = decision.body.delivery;
+      expect(
+        delivery,
+        `a "${audience}" campaign approved for immediate send reported no delivery outcome`,
+      ).not.toBeNull();
+      expect(
+        delivery?.heldReason,
+        `the "${audience}" campaign was HELD rather than sent: ${delivery?.heldReason}. ` +
+          'The policy was set to avoid quiet hours and to the default monthly cap, and the ' +
+          'audience is non-empty, so none of the three holds should be reachable.',
+      ).toBeNull();
+      expect(decision.body.campaign.status).toBe('sent');
+
+      /**
+       * THE ROWS, AFTER THE TRANSACTION COMMITTED — which is the claim Lane A's int suite
+       * deliberately does not make, because its releases run inside a rolled-back
+       * transaction. `campaign_send` is what the weekly cap counts, so its survival is
+       * not a detail.
+       */
+      const sent = delivery?.sent ?? 0;
+      expect(sent, `the "${audience}" campaign reported ${sent} recipients`).toBeGreaterThan(0);
+      expect(
+        sendsFor(c.id),
+        `the "${audience}" release reported ${sent} sends and the database holds ` +
+          `${sendsFor(c.id)}. The reply is not evidence about the rows it wrote.`,
+      ).toBe(sent);
+
+      /**
+       * AND THE TWO CALL SITES AGREE. `reach` was computed by `computeReach` at
+       * SUBMISSION and the recipients by `resolveAudience` at RELEASE — the same
+       * predicate, two endpoints, a commit in between. A predicate that resolved
+       * differently on the two paths would show up here and nowhere else, because
+       * nothing else in the product holds both numbers at once.
+       */
+      expect(
+        sent + (delivery?.cappedOut ?? 0),
+        `the "${audience}" audience was ${c.reach} people when the reviewer approved it and ` +
+          `${sent} + ${delivery?.cappedOut ?? 0} when it went out. The number a platform ` +
+          'reviewer decides against must be the number that is reached.',
+      ).toBe(c.reach);
+    });
+  }
+
+  // ------------------------------------------------- 3. the exact round trip --
+  it('the full round trip for a NON-GOLD audience: lowbal reaches the low-balance customer and no gold one', async () => {
+    /**
+     * WHO ACTUALLY RECEIVED IT, which is the claim the loops above cannot make: they
+     * assert shapes and an invariant across five audiences of unknown size, and that is
+     * all a derived spec can honestly say.
+     *
+     * ASSERTED AS PROPERTIES OF THE PREDICATE, NOT AS A COUNT. § LOWBAL records the
+     * first draft of this spec, which counted, and why counting was wrong. The three
+     * claims here are:
+     *
+     *   1. the low-balance fixture IS reached — the audience is not empty
+     *   2. NO gold fixture is reached — and this is the one a `gold`-pinned suite could
+     *      never make. All three are members of salon B, all three have marketing
+     *      consent, and all three must be excluded. A predicate that quietly returned
+     *      every member of the salon — the shape a mislaid `and()` produces — passes a
+     *      count assertion with a bigger number and fails this one by name.
+     *   3. every recipient really is under the threshold, checked against
+     *      `member.balance_fils` itself rather than against a list of expected ids.
+     *
+     * (3) IS THE ONE NOTHING ELSE IN THE PRODUCT ASSERTS at any layer. Lane A's
+     * `campaignAudience.int.test.ts` requires `resolveAudience` to return an array of
+     * strings and `computeReach` a non-negative integer — deliberately, because its
+     * subject is that the query RUNS. Whether the rows that came back are the rows the
+     * audience means is checked here, against the column the predicate claims to filter
+     * on.
+     */
+    clearCampaigns();
+    policy(quietWindowAvoiding());
+
+    const c = await submit('aud-exact-lowbal', 'now', 'lowbal');
+    const decision = await decide(c.id, 'approved');
+    expect(decision.status, decision.raw).toBe(200);
+    expect(decision.body.campaign.status, 'the lowbal campaign did not send').toBe('sent');
+    expect(decision.body.campaign.heldReason).toBeNull();
+
+    const reached = sentTo(c.id);
+    expect(
+      reached,
+      `${LOWBAL} holds ${LOWBAL_BALANCE_FILS} fils, which is under LOW_BALANCE_FILS, and did ` +
+        `not receive the lowbal campaign. Reached: ${reached.join(', ') || '(nobody)'}`,
+    ).toContain(LOWBAL);
+
+    for (const gold of AUD) {
+      expect(
+        reached,
+        `${gold} holds 50000 fils — ten times LOW_BALANCE_FILS — and received a "lowbal" ` +
+          'campaign. A non-gold audience delivering to the gold fixtures means the predicate ' +
+          'is not filtering at all.',
+      ).not.toContain(gold);
+    }
+
+    /**
+     * THE PREDICATE AGAINST THE COLUMN. `LOW_BALANCE_FILS` is private to
+     * `services/campaign.ts`, so the threshold is mirrored here — and a divergence
+     * between the two shows up as this spec going red rather than as silence, which is
+     * the only reason a mirrored constant is acceptable.
+     */
+    const overThreshold = scalar(
+      `select coalesce(string_agg(m.id || ' = ' || m.balance_fils, ', ' order by m.id), '')
+         from campaign_send s join member m on m.id = s.member_id
+        where s.campaign_id = '${c.id}' and m.balance_fils >= ${LOW_BALANCE_FILS_MIRROR}`,
+    );
+    expect(
+      overThreshold,
+      'the lowbal campaign reached customers who are NOT low on balance: ' +
+        `${overThreshold}. Either the predicate is wrong or LOW_BALANCE_FILS moved away ` +
+        `from the ${LOW_BALANCE_FILS_MIRROR} mirrored in this file.`,
+    ).toBe('');
+
+    expect(
+      reached.length,
+      `the reviewer approved a reach of ${c.reach} and ${reached.length} customers were ` +
+        'reached. `computeReach` and `resolveAudience` disagreed across the two endpoints.',
+    ).toBe(c.reach);
+
+    /**
+     * THE MERCHANT'S OWN VIEW, because the decision reply is the PLATFORM's view of the
+     * same row and the merchant is who reads `result`. `services/campaign.ts`: "the
+     * design's Decided list renders it verbatim".
+     */
+    const wire = await fromWire(c.id);
+    expect(wire?.status, 'the merchant does not see her non-gold campaign as sent').toBe('sent');
+    expect(wire?.result, 'the merchant reads no delivery result for a non-gold audience').toBe(
+      `${reached.length} reached`,
+    );
+    expect(
+      auditRows(c.id, 'Campaign released'),
+      'the platform kept no record of releasing a non-gold campaign',
+    ).toBe(1);
+  });
+
+  it('the lapsed branch — the one that answered 500 — submits, releases, and commits its sends', async () => {
+    /**
+     * NAMED ON ITS OWN, THOUGH THE LOOPS ABOVE COVER IT. Lane A's
+     * `campaignAudience.test.ts` gives the reason and it holds here too: the loop would
+     * catch a regression, but a named spec is what a bisect run reads, and this is the
+     * branch that has to keep working.
+     *
+     * WHAT IT ADDS OVER THE LOOP is the membership claim. `lapsed` is "no settled charge
+     * in 60 days", and all four campaign fixtures have no transactions at all — the
+     * deliberate inclusion `services/campaign.ts` argues for at length, since "a customer
+     * who signed up and never came is the strongest case in a 'we miss you' audience".
+     * A superset rather than an equality, for the reason § LAPSED_COHORT gives.
+     */
+    clearCampaigns();
+    policy(quietWindowAvoiding());
+
+    const c = await submit('aud-lapsed', 'now', 'lapsed');
+    expect(
+      c.reach,
+      `the lapsed audience is ${c.reach} people; the four consenting fixtures at salon B ` +
+        'have no settled charge at all, so it cannot be fewer than four.',
+    ).toBeGreaterThanOrEqual(LAPSED_COHORT.length);
+
+    const decision = await decide(c.id, 'approved');
+    expect(
+      decision.status,
+      `releasing an approved lapsed campaign answered ${decision.status}: ${decision.raw}`,
+    ).toBe(200);
+    expect(decision.body.campaign.status).toBe('sent');
+    expect(decision.body.campaign.heldReason).toBeNull();
+
+    const reached = sentTo(c.id);
+    for (const id of LAPSED_COHORT) {
+      expect(
+        reached,
+        `${id} has never been charged and did not receive the "we miss you" campaign. ` +
+          `Reached: ${reached.join(', ') || '(nobody)'}`,
+      ).toContain(id);
+    }
+    expect(heldNotifications(c.id), 'a campaign that sent left a hold on the merchant bell').toBe(0);
   });
 });
