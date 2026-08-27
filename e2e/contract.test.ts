@@ -862,7 +862,9 @@ const UNMODELLED: Record<string, string> = {
     'packages/types and not MemberSchema-shaped. Its gate is driven in ' +
     'permission-census.test.ts; that an ERASED member never reads as having a password ' +
     'is driven in support-routing.test.ts, because #6 makes that the one field on this ' +
-    'read that must never be wrong.',
+    'read that must never be wrong. Its `?role=` filter — four values behind a ' +
+    'validated `as const`, three of which no spec had ever sent — is driven in ' +
+    'platform-accounts-roles.test.ts, derived from the constant rather than enumerated.',
   'GET /v1/platform/metrics':
     'the console\'s Analytics figures, behind requirePlatform(analytics). Computed by ' +
     '`services/platformMetrics.ts`; no schema in packages/types. Worth one, because these are ' +
