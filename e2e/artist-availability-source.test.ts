@@ -1112,3 +1112,483 @@ describe('`availabilityLive` on the bookable roster, per source', () => {
     ).toEqual(['availabilityLive', 'id', 'name', 'nameAr', 'salonId']);
   });
 });
+
+// ===========================================================================
+// 5. THE TWO DOORS THAT SET `google_connected` — routes/artists.ts:738 AND :790
+// ===========================================================================
+
+/**
+ * WHY THIS SECTION IS IN THIS FILE RATHER THAN ITS OWN.
+ *
+ * `POST /artists/{id}/calendar/connect` and `DELETE /artists/{id}/calendar` are the
+ * only two paths in the product that can change `google_connected`, which is the
+ * column `artist_google_source_requires_connection` makes a precondition of
+ * `availability_source = 'google'`. Everything above this line tests what happens
+ * once an artist is on one side of that CHECK or the other; these two endpoints are
+ * how she gets there. Same subject, same fixtures, one API boot.
+ *
+ * AND THEY WERE AS UNCOVERED AS THE REST OF THE GOOGLE SIDE. Both appear in
+ * `permission-census.test.ts`'s generated sweep, which proves each answers 403
+ * without `perms.team` and nothing else — no spec anywhere had ever driven either
+ * one with the permission ON. `grep -rn 'calendar/connect'` over every `*.test.ts`
+ * in the repository returned nothing before this section.
+ *
+ * THE CONNECT IS A REFUSAL TODAY, AND THE REFUSAL IS THE FEATURE. There is no
+ * Google Cloud project — the route's own docstring lists what the client has to
+ * issue and why a developer's personal project would be worse than nothing — so
+ * the honest answer is a 409 naming the missing step. That is a merchant-facing
+ * sentence on the Team screen's Connect button, and it was untested.
+ *
+ * THREE PLACES DESCRIBE WHAT THIS ENDPOINT ANSWERS AND TWO OF THEM ARE STALE,
+ * WHICH IS THE REASON THE STATUS CODE GETS A SPEC OF ITS OWN. Reported to lane A
+ * rather than fixed here; `api/` is not this lane's column:
+ *
+ *   routes/artists.ts, the handler's own comment, ARGUING FOR 409 and against 503:
+ *   "a calendar driver that has not been configured is exactly that: no retry makes
+ *   it work, and 503 is what puts a refusal in a client's offline bucket, so a
+ *   merchant pressing Connect was told her network was down about a server that had
+ *   just answered." The code agrees — `throw conflict('calendar_not_configured', …)`.
+ *
+ *   routes/artists.ts, the SAME docstring, twenty lines higher: "TODAY THIS ANSWERS
+ *   503, AND THAT IS THE HONEST ANSWER." Stale. It survived the change the
+ *   paragraph below it describes.
+ *
+ *   http/errors.ts, on `serviceUnavailable`: "The Google Calendar connect is the
+ *   first user." It is not a user any more, and grepping `api/src` for
+ *   `serviceUnavailable` outside its own declaration returns NOTHING — the helper
+ *   has no callers at all.
+ *
+ * So a reader who wants to know what Connect answers can find 409 or 503 depending
+ * on which comment they open, and the fix for 503 has nothing holding it. That is
+ * the same shape as `- row.bonusFils` in `services/activityFeed.ts`: a defect found
+ * and fixed once, with the argument written down and no assertion behind it. The
+ * spec below is the assertion, and its failure message carries the argument.
+ */
+
+interface ConnectRefusal {
+  error?: string;
+  message?: string;
+  driver?: string;
+  artistId?: string;
+}
+
+/**
+ * The distinct `kind`s filed against one artist under one `action`, sorted.
+ *
+ * SCOPED BY ACTION, AND THE FIRST DRAFT OF THIS HELPER WAS NOT — it counted every
+ * `rules` row on the artist and failed, correctly, because `PUT …/availability`
+ * writes `rules` / "Availability changed" and § 3's specs drive that endpoint four
+ * times on the same row. `audit_log` refuses DELETE by trigger, so those rows are
+ * still there and always will be: any assertion about what the DISCONNECT filed has
+ * to name the disconnect's own action rather than counting the artist's history.
+ */
+const auditKindsFor = (artistId: string, action: string): string[] => {
+  const raw = scalar(
+    `select coalesce(string_agg(distinct kind::text, ',' order by kind::text), '')
+       from audit_log
+      where salon_id='${SALON_B}' and subject_id='${artistId}' and action='${action}'`,
+  );
+  return raw === '' ? [] : raw.split(',');
+};
+
+describe('POST /artists/{id}/calendar/connect — the refusal a merchant actually meets', () => {
+  it('is refused 409 `calendar_not_configured`, names the driver, and connects nothing', async () => {
+    /**
+     * THE WHOLE OF WHAT THE CONNECT BUTTON DOES TODAY. The refusal is asserted with
+     * its `details` — `driver` and `artistId` — because those are what an operator
+     * reading a support ticket has to work from, and `ApiError.toBody()` spreads
+     * them into the envelope rather than nesting them, so a client that renders
+     * `message` alone still leaves them on the wire.
+     *
+     * AND THE COLUMN IS READ BACK. A connect that refused and flipped
+     * `google_connected` anyway would be the worst outcome available: the CHECK
+     * would then permit `availability_source = 'google'` on an artist whose calendar
+     * nothing can read, which is precisely the state § 2's fallback exists to
+     * apologise for.
+     */
+    precondition(
+      scalar(`select google_connected from artist where id='${ARTIST_MANUAL_TARGET}'`) === 'f',
+      `${ARTIST_MANUAL_TARGET} must start unconnected for this spec to mean anything`,
+    );
+
+    const res = await treq<ConnectRefusal>(
+      'POST',
+      `/artists/${ARTIST_MANUAL_TARGET}/calendar/connect`,
+      { token: dashboard },
+    );
+
+    expect(res.status, `POST …/calendar/connect answered ${res.status}.\n${res.raw}`).toBe(409);
+    expect(res.body.error).toBe('calendar_not_configured');
+    expect(
+      res.body.driver,
+      'the refusal does not name the driver it was refused by. An operator reading this in a ' +
+        'support ticket has nothing to distinguish "AVO has not built it" from "this ' +
+        "deployment's credentials are wrong\".",
+    ).toBe('stub');
+    expect(res.body.artistId).toBe(ARTIST_MANUAL_TARGET);
+
+    /**
+     * THE SENTENCE NAMES WHAT THE CLIENT MUST PROVIDE, which is the stub's entire
+     * argument for refusing out loud rather than returning a fabricated success. Not
+     * pinned verbatim — it is a paragraph in `calendar/stub.ts` and this file is not
+     * the place that owns its wording — but a refusal that stopped telling a merchant
+     * whose problem this is would be a different product decision, so the phrase that
+     * carries that is checked.
+     */
+    expect(
+      res.body.message,
+      'the refusal no longer tells the merchant she is waiting on AVO rather than on ' +
+        'herself. That is the whole reason it is a sentence instead of a code.',
+    ).toContain('not connected for this deployment');
+
+    expect(
+      scalar(`select google_connected from artist where id='${ARTIST_MANUAL_TARGET}'`),
+      'a REFUSED connect flipped `google_connected`. The CHECK would then permit ' +
+        '`availability_source = "google"` on an artist whose calendar nothing can read.',
+    ).toBe('f');
+    expect(
+      Number(
+        scalar(
+          `select count(*) from artist_calendar_connection where artist_id='${ARTIST_MANUAL_TARGET}'`,
+        ),
+      ),
+      'a refused connect wrote a connection row',
+    ).toBe(0);
+  });
+
+  it('and it is 409 rather than 503 — the correction, pinned, because nothing else holds it', async () => {
+    /**
+     * THE SPEC THIS SECTION'S HEADER IS ABOUT. Two comments in `api/` still say 503
+     * and the code says 409; the argument for 409 is written beside the code and had
+     * nothing behind it.
+     *
+     * WHY THE DIFFERENCE MATTERS ENOUGH FOR ITS OWN SPEC, in the handler's own words:
+     * "503 is what puts a refusal in a client's offline bucket, so a merchant pressing
+     * Connect was told her network was down about a server that had just answered."
+     * `design/interaction-spec.md` §4 and `design/AVO States.dc.html` make offline a
+     * distinct state with distinct copy and a retry affordance — so a 503 here does
+     * not merely mis-label the failure, it routes the merchant to a screen that
+     * invites her to try again at something no retry can fix.
+     *
+     * ASSERTED AS "NOT 503" AS WELL AS "IS 409", deliberately. The two are the same
+     * claim today and they fail differently: a future refactor that answered 502 or
+     * 500 fails the first assertion with a bare number, and the second is where the
+     * reasoning is.
+     */
+    const res = await treq<ConnectRefusal>(
+      'POST',
+      `/artists/${ARTIST_MANUAL_TARGET}/calendar/connect`,
+      { token: dashboard },
+    );
+
+    expect(
+      res.status,
+      `POST …/calendar/connect answered ${res.status}.\n\nIf this is 503, the change ` +
+        'documented in `routes/artists.ts` has been reverted — probably by a reader who ' +
+        'found the STALE line in the same docstring ("TODAY THIS ANSWERS 503") or the ' +
+        'stale claim on `serviceUnavailable` in `http/errors.ts` ("The Google Calendar ' +
+        'connect is the first user"), both of which describe the old behaviour. A ' +
+        'configuration state is not a transient unavailability: `services/policy.ts` ' +
+        'settled that, and 503 puts this refusal in the client\'s OFFLINE bucket, which ' +
+        'tells a merchant her network is down about a server that just answered her and ' +
+        'offers a retry for something no retry can fix.',
+    ).not.toBe(503);
+    expect(res.status).toBe(409);
+  });
+
+  it('another salon\'s artist answers the same 404 as an invented id', async () => {
+    /**
+     * The tenancy half, and the shape `routes/staff.ts` § PATCH sets: "Same 404 for
+     * 'no such artist' and 'not in your salon' — another salon's roster is not
+     * something this caller gets to probe."
+     *
+     * `AR-001` is REAL, at salon A, and google-sourced with a live connection flag —
+     * so it is the id most worth probing and the one where a 409 instead of a 404
+     * would confirm both that she exists and what state she is in. The two responses
+     * are compared to each other rather than each to a literal, because the property
+     * is that they are INDISTINGUISHABLE.
+     */
+    const real = await treq<ConnectRefusal>('POST', '/artists/AR-001/calendar/connect', {
+      token: dashboard,
+    });
+    const invented = await treq<ConnectRefusal>(
+      'POST',
+      '/artists/AR-DOES-NOT-EXIST/calendar/connect',
+      { token: dashboard },
+    );
+
+    expect(
+      real.status,
+      `salon B's manager reached salon A's ${'AR-001'} and got ${real.status}.\n${real.raw}`,
+    ).toBe(404);
+    expect(real.body.error).toBe('unknown_artist');
+    expect(
+      [real.status, real.body.error, real.body.message],
+      "a real artist at another salon answers differently from an invented one, so the pair " +
+        'is a membership oracle for another salon\'s roster',
+    ).toEqual([invented.status, invented.body.error, invented.body.message]);
+  });
+});
+
+describe('DELETE /artists/{id}/calendar — the disconnect, which is also a source change', () => {
+  it('an artist with no connected calendar is refused 409, and nothing changes', async () => {
+    const before = windowsOf(ARTIST_MANUAL_TARGET);
+    const res = await treq<{ error?: string }>(
+      'DELETE',
+      `/artists/${ARTIST_MANUAL_TARGET}/calendar`,
+      { token: dashboard },
+    );
+
+    expect(res.status, res.raw).toBe(409);
+    expect(res.body.error).toBe('calendar_not_connected');
+    expect(sourceOf(ARTIST_MANUAL_TARGET)).toBe('manual');
+    expect(windowsOf(ARTIST_MANUAL_TARGET), 'a refused disconnect rewrote the week').toBe(before);
+  });
+
+  it('disconnecting a synced artist switches her to manual in the SAME request', async () => {
+    /**
+     * THE TWO COLUMNS THAT CANNOT MOVE SEPARATELY, and the route says why: the CHECK
+     * `artist_google_source_requires_connection` "refuses a row that claims its hours
+     * come from a calendar it is not connected to, so an artist left on `google` with
+     * `google_connected = false` is not a state the database will store. Doing it in
+     * one UPDATE is what stops a disconnect from being half applied."
+     *
+     * A half-applied disconnect is not a hypothetical shape here — it is the only
+     * shape the CHECK leaves available if the two writes are ever separated, because
+     * clearing the flag first would violate the constraint and the transaction would
+     * roll back the whole disconnect. So the assertion is on BOTH columns after ONE
+     * request, which is the only observation that distinguishes "one update" from
+     * "two that happened to both succeed".
+     *
+     * READ BACK THROUGH THE DATABASE AND THROUGH THE REPLY. `serialiseArtist` is what
+     * the Team screen re-renders from, and a reply that said manual over a row that
+     * said google would leave the merchant editing a week the next request refuses.
+     */
+    precondition(
+      sourceOf(ARTIST_GOOGLE_TARGET) === 'google' &&
+        scalar(`select google_connected from artist where id='${ARTIST_GOOGLE_TARGET}'`) === 't',
+      `${ARTIST_GOOGLE_TARGET} must start google-sourced and connected`,
+    );
+
+    const res = await treq<ArtistRow>('DELETE', `/artists/${ARTIST_GOOGLE_TARGET}/calendar`, {
+      token: dashboard,
+    });
+
+    expect(res.status, res.raw).toBe(200);
+    expect(res.body.availabilitySource, 'the reply still claims google-sourced hours').toBe(
+      'manual',
+    );
+    expect(res.body.googleConnected).toBe(false);
+
+    expect(
+      sourceOf(ARTIST_GOOGLE_TARGET),
+      'the row was left on `google` with the flag cleared — a combination ' +
+        '`artist_google_source_requires_connection` does not permit, so if this ever ' +
+        'passes the CHECK has been dropped as well',
+    ).toBe('manual');
+    expect(scalar(`select google_connected from artist where id='${ARTIST_GOOGLE_TARGET}'`)).toBe(
+      'f',
+    );
+  });
+
+  it('her week is KEPT and the connection row is revoked rather than deleted', async () => {
+    /**
+     * TWO DELIBERATE NON-DELETIONS, each with a reason the route states.
+     *
+     * The WINDOWS: "They are the last thing the sync wrote and are the only hours
+     * anyone has for her; blanking them would leave the merchant re-typing a week she
+     * never chose to lose. They are now editable, which is exactly what 'switch to
+     * Manual to set them here' means." A disconnect that cleared them would look
+     * correct in a unit test of the source columns and would cost a salon its
+     * schedule.
+     *
+     * The CONNECTION ROW: `revoked`, not gone. `artist_calendar_connection.artist_id`
+     * is UNIQUE, so a deleted row and a revoked one differ in what a RECONNECT can
+     * do — and the row carries `account_email`, which is the only record of WHICH
+     * Google account a salon had authorised. Deleting it makes "who could read this
+     * artist's calendar last month" unanswerable.
+     */
+    const before = windowsOf(ARTIST_UNAVAILABLE);
+    precondition(
+      scalar(
+        `select status from artist_calendar_connection where artist_id='${ARTIST_UNAVAILABLE}'`,
+      ) === 'connected',
+      `${ARTIST_UNAVAILABLE} needs a connected calendar row for this spec`,
+    );
+
+    const res = await treq<ArtistRow>('DELETE', `/artists/${ARTIST_UNAVAILABLE}/calendar`, {
+      token: dashboard,
+    });
+    expect(res.status, res.raw).toBe(200);
+
+    expect(
+      windowsOf(ARTIST_UNAVAILABLE),
+      'the disconnect blanked her week. Those are the only hours anyone has for her, and ' +
+        'the merchant now re-types a week she never chose to lose.',
+    ).toBe(before);
+
+    expect(
+      scalar(
+        `select status from artist_calendar_connection where artist_id='${ARTIST_UNAVAILABLE}'`,
+      ),
+      'the connection row was deleted rather than revoked, taking `account_email` with it — ' +
+        "so which Google account a salon had authorised is no longer answerable",
+    ).toBe('revoked');
+  });
+
+  it('the audit line is `access`, not `rules` — it is an authority change', async () => {
+    /**
+     * The route's own distinction: "Revoking a third party's read access to a calendar
+     * is an authority change; the hours change that comes with it is a consequence,
+     * and the detail says so."
+     *
+     * WORTH A SPEC BECAUSE THE CONSOLE FILTERS ON IT. `GET /v1/platform/activity`
+     * admits only `['rules', 'access', 'risk']` audit kinds into the platform feed,
+     * and `services/auditRead.ts` exists so the merchant's log and the console's log
+     * cannot mean different things by one chip. A disconnect filed as `rules` would
+     * still appear — both are admitted — under the heading a merchant scans for
+     * pricing and loyalty changes, and the one place a revoked third-party read
+     * should be findable is the authority list.
+     */
+    const res = await treq('DELETE', `/artists/${ARTIST_GOOGLE_TARGET}/calendar`, {
+      token: dashboard,
+    });
+    precondition(res.status === 200, `the disconnect did not succeed: ${res.status} ${res.raw}`);
+
+    expect(
+      auditKindsFor(ARTIST_GOOGLE_TARGET, 'Calendar disconnected'),
+      'the disconnect wrote no audit row under the action "Calendar disconnected", or wrote ' +
+        'it under a kind other than `access`.\n\nA `rules` row here would be the interesting ' +
+        'failure rather than a missing one: `rules` is the heading a merchant scans for ' +
+        'pricing and loyalty edits, the console admits BOTH kinds into ' +
+        '`GET /v1/platform/activity`, so the row would be visible and in the wrong list — ' +
+        'which is worse than absent. Revoking a third party\'s read access to a ' +
+        "customer-facing calendar belongs in the authority list.",
+    ).toEqual(['access']);
+
+    expect(
+      scalar(
+        `select detail from audit_log where salon_id='${SALON_B}'
+          and subject_id='${ARTIST_GOOGLE_TARGET}' and kind='access'
+          order by seq desc limit 1`,
+      ),
+      'the audit detail does not say that the hours moved. The source change is a ' +
+        'consequence of the disconnect and the log line is the only place the two are ' +
+        'recorded together.',
+    ).toContain('switched to manual');
+  });
+
+  it('the disconnect RESOLVES the open calendar warning, and the bell can ring again after', async () => {
+    /**
+     * THE HALF THAT NEEDS BOTH FEATURES IN ONE FILE, and the only spec here that can
+     * make the argument the route gives for resolving rather than leaving the row:
+     * "leaving a stale warning open would suppress the real one if her calendar is
+     * ever reconnected and then breaks."
+     *
+     * SUPPRESS is exact, not loose. `merchant_notification_open_uq` is UNIQUE on
+     * `(salon_id, kind, subject_type, subject_id) WHERE resolved_at IS NULL`, so a
+     * stale open row does not merely sit there looking untidy — it is the row that
+     * makes the NEXT `raiseMerchantNotification` a no-op. A merchant whose calendar
+     * later broke for real would get nothing.
+     *
+     * So this drives all three steps rather than asserting the resolve alone:
+     *
+     *   1. an availability read on a google-sourced artist raises the warning (§ 2)
+     *   2. the disconnect resolves it
+     *   3. put her back on google and read again — a NEW open row appears
+     *
+     * Step 3 is what separates "resolved" from "cleared and now permanently deaf",
+     * and it is not observable from either feature on its own.
+     */
+    clearCalendarNotifications();
+    const artistId = artistFor('google');
+
+    expect((await availability(artistId)).status).toBe(200);
+    precondition(
+      openCalendarNotifications(artistId) === 1,
+      'the availability read did not raise the warning, so this spec cannot show it being ' +
+        'resolved. § 2 owns that claim.',
+    );
+
+    const res = await treq('DELETE', `/artists/${artistId}/calendar`, { token: dashboard });
+    expect(res.status, res.raw).toBe(200);
+
+    expect(
+      openCalendarNotifications(artistId),
+      'the disconnect left the calendar warning OPEN. She is on manual hours now, ' +
+        'deliberately, so there is nothing to warn about — and because ' +
+        '`merchant_notification_open_uq` is unique over unresolved rows, that stale row is ' +
+        'what will swallow the next real one.',
+    ).toBe(0);
+
+    // Deliberately re-googled through SQL rather than through the API: the connect
+    // endpoint cannot do it (§ POST …/calendar/connect is a 409 today), and this
+    // step is a FIXTURE for the third claim rather than a product path under test.
+    psql(
+      `UPDATE artist SET google_connected = true, availability_source = 'google'
+        WHERE id = '${artistId}';`,
+    );
+    expect((await availability(artistId)).status).toBe(200);
+    expect(
+      openCalendarNotifications(artistId),
+      'after a resolve, a fresh problem raised NOTHING. The resolve did not restore the ' +
+        'bell — it silenced it, which is the failure the route says resolving exists to ' +
+        'prevent, arriving by the other door.',
+    ).toBe(1);
+  });
+
+  it('and after the disconnect the week is editable — the merchant\'s actual escape hatch', async () => {
+    /**
+     * THE TWO FEATURES COMPOSED, WHICH IS THE ONLY THING A MERCHANT CARES ABOUT.
+     *
+     * § 3 proves a synced artist's week cannot be edited: 409
+     * `availability_is_synced`, whose copy says "Switch to Manual hours to set them
+     * here." That sentence is an instruction, and until this spec nothing checked
+     * that following it works.
+     *
+     * Three requests, in the order a receptionist makes them: the edit is refused,
+     * the calendar is disconnected, the SAME edit is accepted. A regression in either
+     * feature alone leaves this red — which is the point of asserting the sequence
+     * rather than the two halves.
+     */
+    const refused = await treq<{ error?: string }>(
+      'PUT',
+      `/artists/${ARTIST_GOOGLE_TARGET}/availability`,
+      {
+        token: dashboard,
+        body: { windows: week({ '4': { open: true, from: '09:00', to: '15:00' } }) },
+      },
+    );
+    precondition(
+      refused.status === 409 && refused.body.error === 'availability_is_synced',
+      `the synced refusal did not happen, so this spec is not testing the escape from it: ` +
+        `${refused.status} ${refused.raw}`,
+    );
+
+    const disconnected = await treq('DELETE', `/artists/${ARTIST_GOOGLE_TARGET}/calendar`, {
+      token: dashboard,
+    });
+    expect(disconnected.status, disconnected.raw).toBe(200);
+
+    const accepted = await treq<ArtistRow>(
+      'PUT',
+      `/artists/${ARTIST_GOOGLE_TARGET}/availability`,
+      {
+        token: dashboard,
+        body: { windows: week({ '4': { open: true, from: '09:00', to: '15:00' } }) },
+      },
+    );
+    expect(
+      accepted.status,
+      `after disconnecting the calendar the same edit answered ${accepted.status}.\n` +
+        `${accepted.raw}\n\nThe 409 the merchant met says "Switch to Manual hours to set them ` +
+        'here." If this is not a 200, that sentence is an instruction that does not work and ' +
+        'there is no way for her to set the week at all.',
+    ).toBe(200);
+
+    expect(
+      scalar(`select windows -> '4' ->> 'from' from artist where id='${ARTIST_GOOGLE_TARGET}'`),
+      'the accepted edit did not persist',
+    ).toBe('09:00');
+  });
+});
