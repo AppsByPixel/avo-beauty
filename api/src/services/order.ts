@@ -86,6 +86,7 @@ import { salon } from '../db/schema/salon';
 import { shopOrderLine } from '../db/schema/shopOrder';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
+import { walletSpendPosting } from '../money/ledger';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { MemberPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
@@ -406,28 +407,19 @@ export async function performOrder(
     // ------------------------------------------------------------- 7. ledger --
     // Double entry, balanced per transaction. The DEFERRABLE constraint trigger
     // from migration 0001 checks the pair at COMMIT.
-    await tx.insert(ledgerEntry).values([
-      {
+    // "Value delivered by the salon: services rendered, PRODUCTS SOLD" —
+    // db/schema/ledger.ts already names this case on the account it belongs to,
+    // and it is the same posting the counter charge makes, so it is the same
+    // function: `walletSpendPosting`.
+    await tx.insert(ledgerEntry).values(
+      walletSpendPosting({
         transactionId: txId,
         salonId: m.salonId,
         memberId: m.id,
-        account: 'member_wallet',
-        direction: 'debit',
         amountFils: total,
         balanceAfterFils: balanceAfter,
-      },
-      {
-        transactionId: txId,
-        salonId: m.salonId,
-        memberId: null,
-        // "Value delivered by the salon: services rendered, PRODUCTS SOLD" —
-        // db/schema/ledger.ts already names this case on the account it belongs
-        // to.
-        account: 'salon_revenue',
-        direction: 'credit',
-        amountFils: total,
-      },
-    ]);
+      }),
+    );
 
     // -------------------------------------------------------- 7a. the lines --
     await tx.insert(shopOrderLine).values(

@@ -31,6 +31,7 @@ import { db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { ledgerEntry } from '../db/schema/ledger';
+import { chargeReversedPosting } from '../money/ledger';
 import { transaction } from '../db/schema/transaction';
 import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
@@ -499,25 +500,15 @@ async function performVoid(
       settledAt: now,
     });
 
-    await tx.insert(ledgerEntry).values([
-      {
+    await tx.insert(ledgerEntry).values(
+      chargeReversedPosting({
         transactionId: voidId,
         salonId: principal.salonId,
         memberId: m.id,
-        account: 'member_wallet',
-        direction: 'credit',
         amountFils: refund,
         balanceAfterFils: balanceAfter,
-      },
-      {
-        transactionId: voidId,
-        salonId: principal.salonId,
-        memberId: null,
-        account: 'salon_revenue',
-        direction: 'debit',
-        amountFils: refund,
-      },
-    ]);
+      }),
+    );
 
     /**
      * The whole refund comes out of `salon_revenue`, INCLUDING the deposit

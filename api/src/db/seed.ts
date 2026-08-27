@@ -48,6 +48,7 @@ import { branch, salon } from './schema/salon';
 import { artist, type ArtistWindows } from './schema/artist';
 import { auditLog } from './schema/audit';
 import { ledgerEntry } from './schema/ledger';
+import { walletAdjustedPosting, walletSpendPosting } from '../money/ledger';
 import { member, memberConsentEvent } from './schema/member';
 import { platformAdmin } from './schema/platformAdmin';
 import { product } from './schema/product';
@@ -1232,27 +1233,21 @@ async function seed(): Promise<void> {
       createdAt: openedAt,
       settledAt: openedAt,
     });
-    await db.insert(ledgerEntry).values([
-      {
+    // THROUGH THE BUILDER, not hand-written, so the fixture cannot drift from
+    // what the API actually posts. This is the console-adjustment pair —
+    // `member_wallet` credit against `gateway_clearing` — which is why the
+    // comment above can say it "reads the same way a real top-up does".
+    // `balanceAfterFils` is her balance at this point in the story: for 8842
+    // that is the pre-charge 32.500, and TX-9021 below takes her to 24.500.
+    await db.insert(ledgerEntry).values(
+      walletAdjustedPosting({
         transactionId: openingTxId,
         salonId: SALON_ID,
         memberId,
-        account: 'member_wallet',
-        direction: 'credit',
-        amountFils: fils(openingFils),
-        // Her balance at this point in the story. For 8842 that is the
-        // pre-charge 32.500; TX-9021 below takes her to 24.500.
+        deltaFils: openingFils,
         balanceAfterFils: fils(openingFils),
-      },
-      {
-        transactionId: openingTxId,
-        salonId: SALON_ID,
-        memberId: null,
-        account: 'gateway_clearing',
-        direction: 'debit',
-        amountFils: fils(openingFils),
-      },
-    ]);
+      }),
+    );
   }
 
   // ------------------------------------------------------------ TX-9021 ----
@@ -1305,25 +1300,17 @@ async function seed(): Promise<void> {
       createdAt: chargedAt,
       settledAt: chargedAt,
     });
-    await db.insert(ledgerEntry).values([
-      {
+    // The same builder services/charge.ts § 7 uses, so "seeded the way the API
+    // would have written it" is enforced rather than asserted in prose.
+    await db.insert(ledgerEntry).values(
+      walletSpendPosting({
         transactionId: 'TX-9021',
         salonId: SALON_ID,
         memberId: '8842',
-        account: 'member_wallet',
-        direction: 'debit',
         amountFils: fils(8000),
         balanceAfterFils: fils(24500),
-      },
-      {
-        transactionId: 'TX-9021',
-        salonId: SALON_ID,
-        memberId: null,
-        account: 'salon_revenue',
-        direction: 'credit',
-        amountFils: fils(8000),
-      },
-    ]);
+      }),
+    );
     // The charge lands her on the fixture balance and visit count. Guarded by
     // the same condition: without it, a `SEED_RESET=0` run would reach past the
     // untouched ledger and rewrite the balance anyway.
