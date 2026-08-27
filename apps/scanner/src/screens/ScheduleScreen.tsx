@@ -25,8 +25,10 @@
  * Now: `fetchMyArtist()` on mount, and the design's own layout — the week already
  * on screen when she arrives — is finally what renders. Which also means this
  * screen has a real LOADING state for the first time, and therefore a real
- * failure taxonomy on the read: `not_an_artist` explains, `offline` is her
- * connection, anything else is ours.
+ * failure taxonomy on the read: `not_an_artist` explains IN THE API'S OWN
+ * SENTENCE — it used to explain in the bookings screen's, which talked about
+ * appointments on a screen about hours — `offline` is her connection, anything
+ * else is ours.
  *
  * Still true, and still checked: `GET /artists/me/availability` falls through to
  * the `:id` route and 404s, and `GET /salons/{id}/artists` needs `perms.team`
@@ -105,6 +107,24 @@ interface Props {
 
 type Refusal409 = { title: string; body: string } | null;
 
+/**
+ * The server's sentence for `404 not_an_artist`, or ours if it sent none.
+ *
+ * The 409s on this screen already pass `err.message` straight through, and this
+ * is the same move for the 404 — the API's text is schedule-specific and correct
+ * ("…so it has no hours to set"), and the screen was throwing it away in favour
+ * of the bookings copy.
+ *
+ * Trimmed and checked rather than used raw: a whitespace-only message is falsy
+ * nowhere in JS, so `err.message || fallback` would have passed `'   '` through
+ * and drawn a title over blank space. That is the one outcome a refusal must not
+ * have — a reader who sees no sentence concludes the app is broken, which is the
+ * opposite of what this state is for.
+ */
+function refusalBody(message: string | undefined): string {
+  return message?.trim() || copy.scheduleNotArtistBody;
+}
+
 export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandle }: Props) {
   /**
    * `null` until a source has been chosen and the server has answered with the
@@ -139,7 +159,13 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
    */
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
-  const [notArtist, setNotArtist] = useState(false);
+  /**
+   * The `404 not_an_artist` refusal, holding the SERVER's sentence rather than a
+   * boolean. It was a boolean, and a boolean is what forced this screen to reach
+   * for `copy.notArtistBody` — the bookings wording — because a flag carries no
+   * text of its own. See `copy.scheduleNotArtistTitle` for what that cost.
+   */
+  const [notArtist, setNotArtist] = useState<string | null>(null);
 
   const manual = artist?.availabilitySource === 'manual';
   const week: Week | null = draftWeek ?? (artist?.windows as Week | undefined) ?? null;
@@ -174,7 +200,7 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
         if (reportFailure(err)) return;
         if (err instanceof ApiError) {
           if (err.code === 'not_an_artist') {
-            setNotArtist(true);
+            setNotArtist(refusalBody(err.message));
             return;
           }
           if (err.kind === 'offline') {
@@ -224,7 +250,7 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
           return;
         }
         if (err.code === 'not_an_artist') {
-          setNotArtist(true);
+          setNotArtist(refusalBody(err.message));
           return;
         }
         /**
@@ -295,10 +321,10 @@ export function ScheduleScreen({ accessToken, onHome, staffFirstName, staffHandl
 
   const dirty = draftWeek !== null || draftSlot !== null;
 
-  if (notArtist) {
+  if (notArtist !== null) {
     return (
       <Shell onHome={onHome} staffFirstName={staffFirstName} staffHandle={staffHandle}>
-        <Refusal title={copy.notArtistTitle} body={copy.notArtistBody} />
+        <Refusal title={copy.scheduleNotArtistTitle} body={notArtist} />
       </Shell>
     );
   }

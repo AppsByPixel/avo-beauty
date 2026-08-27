@@ -173,3 +173,120 @@ describe('her connection is told apart from our failure', () => {
     expect(copy.offlineColdBody).not.toContain('take a charge');
   });
 });
+
+/**
+ * ═════════════════════════════════════════════════════════════════════════════
+ * A REFUSAL SAYS THE RIGHT THING, OR IT IS WORSE THAN NO SCREEN
+ * ═════════════════════════════════════════════════════════════════════════════
+ * `GET /artists/me` and `GET /artists/me/bookings` both answer `404
+ * not_an_artist` through the same `requireOwnArtist`, so for a long time both
+ * screens rendered the same two strings. Those strings were written for
+ * bookings: "This account has no calendar" / "…no appointments of its own. A
+ * manager can add you to the team in the merchant dashboard."
+ *
+ * On the schedule screen every clause of that was wrong. Wrong noun twice —
+ * this screen is about HOURS, and the reader arrived from a tile that says "Set
+ * the hours you're available to book". And the remedy misfires on exactly the
+ * account most likely to see it: the refusal is what a MANAGER gets, because a
+ * manager is who taps that tile out of curiosity, and she is already on the
+ * team. Confidently-worded dead end, and it survived because nothing asserted
+ * the wording — only that the state existed.
+ *
+ * Which is the same class as `offline` reading truthfully-by-accident above.
+ * Presence tests do not catch it, so these assert the WORDS.
+ *
+ * DECISIONS 53 is why this matters more than it looks: the padlock on this tile
+ * was rejected, so the refusal one tap later IS the whole courtesy. There is no
+ * pre-tap signal behind which a bad sentence could hide.
+ */
+describe('the schedule refusal is about hours, not somebody else\'s screen', () => {
+  const src = read('ScheduleScreen.tsx');
+  const code = codeOf(src);
+
+  /**
+   * Asserted against the CODE, not the file. The first version of this checked
+   * the whole source and failed immediately — on the comment three lines above
+   * `setNotArtist` that explains which wording this screen used to render. A test
+   * that cannot survive a screen naming its own history is the wrong test in a
+   * codebase whose headers are mostly history, and rewording the comment to
+   * dodge a string match would have been the tail wagging the dog.
+   */
+  it('does not reach for the bookings pair', () => {
+    expect(code).not.toContain('copy.notArtistTitle');
+    expect(code).not.toContain('copy.notArtistBody');
+    // The guard on the guard: stripping comments must not strip everything.
+    expect(code).toContain('copy.scheduleNotArtistTitle');
+  });
+
+  it('shows the server sentence as the body, the way the 409s beside it do', () => {
+    // `Refusal body={notArtist}` — the state holds the message, not a boolean.
+    expect(src).toMatch(/body=\{notArtist\}/);
+    expect(src).toContain('setNotArtist(refusalBody(err.message))');
+    // Both catch sites, the read and the save — not just the one being edited.
+    expect(src.match(/setNotArtist\(refusalBody\(err\.message\)\)/g)).toHaveLength(2);
+  });
+
+  it('never draws a title over a blank body', () => {
+    /*
+      The mirror at the bottom of this file is only evidence while it IS the
+      screen's expression, so pin it. Without this line the comment down there
+      claiming the two sides are asserted equal would be the same kind of
+      confident-but-false note this whole slice is about.
+    */
+    expect(src).toContain('return message?.trim() || copy.scheduleNotArtistBody;');
+    // A whitespace-only message is truthy, so `||` alone would pass '   ' through.
+    expect(refusalBodyOf('')).toBe(copy.scheduleNotArtistBody);
+    expect(refusalBodyOf('   ')).toBe(copy.scheduleNotArtistBody);
+    expect(refusalBodyOf(undefined)).toBe(copy.scheduleNotArtistBody);
+    expect(copy.scheduleNotArtistBody.trim()).not.toBe('');
+    // And the server's sentence wins whenever there is one.
+    expect(refusalBodyOf('It has no hours to set.')).toBe('It has no hours to set.');
+  });
+
+  /**
+   * THE ASSERTION THIS SLICE EXISTS FOR. Both halves failed before the fix:
+   * "appointments" came from `notArtistBody`, and so did the team advice.
+   */
+  it('says hours, not appointments, and sends nobody to join a team', () => {
+    const shown = [copy.scheduleNotArtistTitle, copy.scheduleNotArtistBody].join(' ');
+    expect(shown).not.toMatch(/appointment/i);
+    expect(shown).not.toMatch(/calendar/i);
+    expect(shown).not.toMatch(/\bteam\b/i);
+    expect(shown).toMatch(/hours/i);
+  });
+
+  /**
+   * The pair it replaced is still correct on the screen it was written for, so
+   * this fix must not have "tidied" it away — BookingsScreen would render
+   * `undefined` at a counter.
+   */
+  it('leaves the bookings pair intact for the screen that owns it', () => {
+    expect(read('BookingsScreen.tsx')).toContain('copy.notArtistTitle');
+    expect(copy.notArtistTitle).toBe('This account has no calendar');
+    expect(copy.notArtistBody).toMatch(/appointments of its own/);
+  });
+});
+
+/**
+ * Comments out, code in. Block comments and comment-only lines, which is every
+ * form this directory actually uses — deliberately not a parser: the day a
+ * screen puts `//` inside a string literal, this is a `grep` away from being
+ * understood, whereas a hand-rolled tokeniser would not be.
+ */
+function codeOf(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('//'))
+    .join('\n');
+}
+
+/**
+ * `refusalBody` is module-private in ScheduleScreen — exporting it to be tested
+ * would widen the screen's surface for the test's convenience, and the rule it
+ * encodes is one line. Mirrored here, with the source asserted above to be the
+ * same expression, so a change to either side without the other fails.
+ */
+function refusalBodyOf(message: string | undefined): string {
+  return message?.trim() || copy.scheduleNotArtistBody;
+}
