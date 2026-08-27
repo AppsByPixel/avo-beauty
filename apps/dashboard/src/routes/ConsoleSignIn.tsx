@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Button, InlineError, TextField } from '@avo/ui';
 import { ApiError } from '../api/client.js';
@@ -25,7 +25,7 @@ import { SCOPES } from '../auth/scopes.js';
  * would reject.
  */
 export function ConsoleSignIn() {
-  const { signInToConsole } = useAuth();
+  const { signInToConsole, sessionFor } = useAuth();
   const navigate = useNavigate();
 
   const [username, setUsername] = useState('');
@@ -35,6 +35,56 @@ export function ConsoleSignIn() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const errorId = useId();
+
+  /*
+   * THE REDIRECT IS AN EFFECT, NOT A LINE IN THE SUBMIT HANDLER, AND THAT IS THE
+   * WHOLE OF A BUG THAT SHIPPED.
+   *
+   * It used to be `await navigate({ to: SCOPES.owner.home })` on the line after
+   * `await signInToConsole(...)`. The POST returned 200, the session was written,
+   * and the admin stayed on this form — clicking Sign in a second time was
+   * impossible, because the success path clears the password and the button
+   * disables itself on an empty one.
+   *
+   * The mechanism, observed rather than guessed (console instrumentation, lane C
+   * repro against a real API on 2026-08-27):
+   *
+   *   [DIAG] pre-navigate  href= /console/signin
+   *   [DIAG] requireScope owner sessionFor= false keys= Array(0)
+   *   [DIAG] requireScope BOUNCE -> /console/signin
+   *   [DIAG] post-navigate href= /console/signin
+   *
+   * `signInToConsole` calls `setSessions` in AuthProvider. The router reads auth
+   * from `RouterProvider context={{ auth }}` in main.tsx, so the guard sees the
+   * new session only after React has COMMITTED that state update and re-rendered
+   * `RoutedApp`. Navigating on the next line runs inside the same continuation,
+   * before that commit: `requireScope('owner')` in router.tsx therefore reads the
+   * PREVIOUS context — an empty session map, `keys= Array(0)`, not merely a
+   * missing owner key — throws `redirect({ to: SCOPES.owner.signIn })`, and the
+   * router lands back on this screen. The session is real; the guard was asked
+   * about it one commit too early.
+   *
+   * NOT A RACE, though it looks like one. There is no interleaving and no jitter:
+   * the ordering is React's commit boundary and it is the same every time, which
+   * is why this reproduced twice in two sessions rather than intermittently. A
+   * `setTimeout(0)` or a second `await` would appear to fix it by letting the
+   * commit land first, and would be a coincidence dressed as a fix.
+   *
+   * An effect keyed on the session cannot be early by construction: it runs after
+   * the commit that carries the session, which is the same commit that gives
+   * `RouterProvider` its new context. `SignIn.tsx` navigates from an effect too
+   * and was never affected — the difference between the two screens WAS the bug,
+   * and the two are now the same shape.
+   *
+   * It also closes a second gap this screen had and the merchant one did not: an
+   * admin who already holds an owner session and opens `/console/signin` used to
+   * be shown the form. Same effect, no extra branch — a session is a session
+   * whether it arrived a second ago or a week ago.
+   */
+  const signedIn = sessionFor('owner') !== null;
+  useEffect(() => {
+    if (signedIn) void navigate({ to: SCOPES.owner.home });
+  }, [signedIn, navigate]);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -46,7 +96,7 @@ export function ConsoleSignIn() {
       // #6: the password leaves memory the moment the request resolves, whichever
       // way it resolved.
       setPassword('');
-      await navigate({ to: SCOPES.owner.home });
+      // The redirect is the effect above. See the comment on it.
     } catch (cause) {
       setPassword('');
       /*
