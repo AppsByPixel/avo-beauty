@@ -489,12 +489,14 @@ export async function performCharge(
     }
     if (heldDeposit > 0) {
       await tx.insert(ledgerEntry).values(
+        // NO `memberId` — the escrow leg names nobody, like every other
+        // non-wallet leg. This call passed `m.id` until DECISIONS.md #64; it
+        // double-counted the deposit against her in any per-member ledger net,
+        // because her balance moved when the deposit was HELD, not here. The
+        // builder no longer accepts the field, so this cannot regress silently.
         depositAppliedPosting({
           transactionId: txId,
           salonId: ctx.principal.salonId,
-          // `m.id`, not null — the one `deposit_held` leg in the build that names
-          // a member. Preserved, and reported: see `depositAppliedPosting`.
-          memberId: m.id,
           amountFils: heldDeposit,
         }),
       );

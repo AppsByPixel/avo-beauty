@@ -255,35 +255,66 @@ export function walletSpendPosting(refs: WalletRefs & { amountFils: Fils }): Led
  * every completed booking.
  *
  * -------------------------------------------------------------------------
- * `memberId` IS TAKEN AS AN ARGUMENT, AND THAT IS A REPORTED INCONSISTENCY
+ * `memberId` IS NOT AN ARGUMENT — THE ESCROW LEG NAMES NOBODY (DECISIONS.md #64)
  * -------------------------------------------------------------------------
- * This is the ONLY `deposit_held` leg in the build that names a member.
- * `depositHeldPosting` and `depositReleasedPosting` both pass `null`, and
- * `e2e/deposit.test.ts` § "How much is currently HELD" documents `member_id:
- * NULL` on this account as the invariant its query is built around — "only the
- * `member_wallet` leg names her… so 'how much is held for this customer' is not
- * answerable from `ledger_entry` alone; it needs the join through
- * `transaction`."
+ * It used to be. services/charge.ts § 7 passed `m.id` from the day it was
+ * written, making this the only `deposit_held` leg in the build that named a
+ * member while `depositHeldPosting` and `depositReleasedPosting` both passed
+ * `null`. The previous revision of this module preserved that deviation and
+ * reported it rather than deciding it. This is the decision.
  *
- * services/charge.ts § 7 has been passing `m.id` here since it was written, so
- * one of three sites disagrees with the other two and with Lane D's stated
- * invariant. Lane D's own query is unaffected — it joins through
- * `transaction.member_id` rather than filtering the ledger's — which is why
- * nothing has caught it.
+ * `member_id` on a ledger row means "this row moved this member's own spendable
+ * balance". Read that way the module is completely regular: across all nine
+ * builders, `refs.memberId` appears on `member_wallet` legs and on nothing else.
+ * A deposit in escrow is not her balance — the row that names her is the wallet
+ * debit beside it in `depositHeldPosting`. The competing reading, "this row is
+ * ABOUT this member", would demand a `member_id` on the `gateway_clearing` leg
+ * of her top-up and on the `salon_revenue` leg of her charge too, which the
+ * build has never done. So the old behaviour was not a second convention; it
+ * was one site out of step with itself.
  *
- * PRESERVED EXACTLY RATHER THAN NORMALISED HERE. Changing it would alter what a
- * money path writes, and this module's job was to make the account choice
- * assertable, not to change it. `ledger.test.ts` pins the current behaviour and
- * names the disagreement so the decision is visible rather than lost.
+ * THE ARITHMETIC IS WHAT MADE IT URGENT, and it is worse than a cosmetic
+ * disagreement. `e2e/adjustments.test.ts`'s `ledgerNet()` sums credits minus
+ * debits filtered on `ledger_entry.member_id` — the property that the ledger's
+ * per-member net equals what actually happened to her balance. Hold, then apply:
+ *
+ *   hold    member_wallet debit (her)  + deposit_held credit (NULL) → net −5.000
+ *           and her balance really did fall 5.000. Correct.
+ *   apply   deposit_held debit (`m.id`) + salon_revenue credit (NULL) → net −5.000
+ *           and her balance did not move at all. WRONG, by the whole deposit.
+ *
+ * The deposit was counted against her twice — once when it left her wallet and
+ * again when the salon earned it — so any per-member reconciliation drifted by
+ * the deposit on every completed booking. With `null` the apply step nets to
+ * zero for her, which is the truth: applying a deposit moves money between two
+ * accounts that are neither of them hers.
+ *
+ * NOTHING READS WHAT THIS CHANGES. The only production query that touches this
+ * account — the void path in routes/charges.ts, which recovers the deposit a
+ * charge consumed — filters `transaction_id` + `account` + `direction` and never
+ * `member_id`. `e2e/deposit.test.ts` § "How much is currently HELD" joins
+ * through `transaction.member_id`, and documents `member_id: NULL` on this
+ * account as the invariant it is built around; this change makes that documented
+ * invariant true rather than breaking it.
+ *
+ * The counter-argument was that naming her here would answer "how much is held
+ * for this customer" without the join. It would not, and could not: the HOLD leg
+ * passes `null`, so filtering `member_id` on this account summed the applies
+ * alone and never the open position. Buying that convenience meant putting
+ * `m.id` on all three sites, which is the larger change AND the one that breaks
+ * the net above permanently.
  */
 export function depositAppliedPosting(
-  refs: PostingRefs & { memberId: string | null; amountFils: Fils },
+  refs: PostingRefs & { amountFils: Fils },
 ): LedgerPosting[] {
   return [
     {
       transactionId: refs.transactionId,
       salonId: refs.salonId,
-      memberId: refs.memberId,
+      // NULL, like every other non-wallet leg in this module. Not a parameter:
+      // the caller cannot reintroduce `m.id` without a type error, which is the
+      // guard, because the database will not raise one. See the block above.
+      memberId: null,
       account: 'deposit_held',
       direction: 'debit',
       amountFils: refs.amountFils,
