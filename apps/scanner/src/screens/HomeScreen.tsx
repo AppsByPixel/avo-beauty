@@ -11,8 +11,54 @@
  * screen behind it still calls `GET /charges`, and the server's 403 is the
  * actual control. See ChargesScreen.
  *
- * `My bookings` and `My schedule` are drawn and deliberately inert — see the
- * note on `comingSoon` below.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ALL FOUR TILES ARE WIRED. THIS COMMENT SAID TWO OF THEM WERE NOT.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * It read: "`My bookings` and `My schedule` are drawn and deliberately inert —
+ * see the note on `comingSoon` below." Every part of that was false. Both tiles
+ * call `onNavigate` below, `ScannerFlow` routes both (ScannerFlow.tsx:186-190),
+ * and `comingSoon` existed nowhere in the repo except inside that sentence — the
+ * note it forwarded the reader to had been deleted, so it pointed at nothing.
+ *
+ * What the two tiles actually reach:
+ *   `My bookings` → BookingsScreen, `GET /artists/me/bookings`
+ *   `My schedule` → ScheduleScreen, `GET /artists/me` on mount, then
+ *                   `PUT /artists/me/availability` per edit
+ *
+ * Driven as a linked artist the schedule editor is complete — Google-vs-manual
+ * source, slot length, a window per day, and a live open-days / hours-per-week /
+ * slots-per-week footer recomputed from the server's row after every save.
+ * Anyone who believed the old sentence would have gone looking for an unbuilt
+ * feature instead of the bug in front of them.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A MANAGER TAPS `My schedule` AND IS REFUSED. THAT IS THE FEATURE WORKING.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `artist.staff_user_id` links a staff login to a bookable artist row, and only
+ * some logins have one — a manager, a receptionist and a shared counter terminal
+ * deliberately do not. `requireOwnArtist` (api/src/routes/artists.ts:418-432)
+ * answers `404 not_an_artist` for those, and both artist screens render a
+ * refusal rather than an error: nothing was denied on authority, there is simply
+ * no calendar on this login.
+ *
+ * This is NOT the padlock case above, and the difference is where the answer
+ * lives. `perms.charges` is authority the salon grants, and the client already
+ * holds it in `staff.perms` — so the padlock can be drawn before the tap for
+ * free. Whether this login has an artist row is a fact only the server holds.
+ * This screen does not ask, so the schedule tile promises what it may not be
+ * able to deliver, and the refusal arrives one tap later. Whether that trade is
+ * right is queued as a decision — see the note on the `schedule` tile.
+ *
+ * TWO THINGS REPORTED FROM HERE, NEITHER CHANGED HERE — both are user-visible:
+ *  · Both artist screens render `copy.notArtistTitle` / `notArtistBody`, which
+ *    were written for the BOOKINGS 404: "no appointments of its own … a manager
+ *    can add you to the team". On the schedule screen that is the wrong noun
+ *    (hours, not appointments) and, read by a manager, the wrong advice — she is
+ *    on the team. The API sends the right sentence for this route ("…so it has
+ *    no hours to set", artists.ts:428) and ScheduleScreen discards it.
+ *  · The design puts a NEW-count badge on the `My bookings` tile (design:112,
+ *    "{n} new"). It is not drawn, for the same reason the schedule tile is not
+ *    dimmed: the count exists only inside `GET /artists/me/bookings`.
  */
 
 import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
@@ -129,6 +175,19 @@ export function HomeScreen({
           }
         />
 
+        {/*
+          NO PADLOCK HERE, AND THAT IS AN OPEN DECISION RATHER THAN A SETTLED ONE.
+          This tile offers "Set the hours you're available to book" to every
+          signed-in staff account, including the ones `GET /artists/me` will
+          refuse with `404 not_an_artist`. The charges tile avoids that by
+          drawing a padlock from `staff.perms`, which the session already has.
+          There is no equivalent free answer for "is this login a bookable
+          artist": the only source is the server, so dimming this tile means
+          `GET /artists/me` on every home render just to decide a tile's opacity
+          — a request on the hub screen, and a loading state on the tiles, to
+          save one tap that already ends in a clear sentence. Left undecided
+          deliberately; see the header and DECISIONS.md.
+        */}
         <Tile
           title={copy.schedule}
           subtitle={copy.scheduleSub}
