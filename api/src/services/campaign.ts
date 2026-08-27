@@ -66,8 +66,9 @@
  * the database rather than in the worker's intentions.
  */
 
-import { and, count, eq, gte, inArray, lt, sql } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, lt, notExists, sql } from 'drizzle-orm';
 import { fils, isInQuietHours } from '@avo/types';
+import { QueryBuilder } from 'drizzle-orm/pg-core';
 import type { Db } from '../db/client';
 import {
   campaign,
@@ -77,6 +78,7 @@ import {
 } from '../db/schema/campaign';
 import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
+import { transaction } from '../db/schema/transaction';
 import { offsetFor } from '../time/zone';
 import { conflict, notFound } from '../http/errors';
 import { grantedMarketingConsent } from './consent';
@@ -170,8 +172,15 @@ export async function readMessagingPolicy(exec: Executor): Promise<MessagingPoli
  * IT IS APPLIED IN THE AUDIENCE, NOT IN THE DELIVERY LOOP. `reach` is the number a
  * reviewer approves a campaign against, so a reach counting people who can never
  * receive it is a number that lies to her.
+ *
+ * EXPORTED FOR ONE REASON, and it is worth the widened surface: the `lapsed` 500
+ * below was a BOUND PARAMETER the driver could not encode, and that is a property
+ * of the compiled predicate — renderable with `toSQL()`, no database, no
+ * connection. So `campaignAudience.test.ts` can assert it for every member of
+ * `CAMPAIGN_AUDIENCES` inside `pnpm check`, which the `.int` suite is not run by.
+ * Nothing outside this file and that spec calls it.
  */
-function audiencePredicate(salonId: string, audience: CampaignRow['audience'], now: Date) {
+export function audiencePredicate(salonId: string, audience: CampaignRow['audience'], now: Date) {
   const base = eq(member.salonId, salonId);
 
   switch (audience) {
@@ -188,16 +197,62 @@ function audiencePredicate(salonId: string, audience: CampaignRow['audience'], n
        * who signed up and never came is the strongest case in a "we miss you"
        * audience, not an edge to exclude — so the NOT EXISTS is over the window
        * rather than a comparison against a max that would be NULL.
+       *
+       * ---------------------------------------------------------------------
+       * BUILT WITH THE HELPERS, NOT AS A RAW `sql` TEMPLATE, AND THAT IS THE FIX
+       * FOR A 500 THIS BRANCH SERVED FOR ITS WHOLE LIFE.
+       *
+       * The reasoning above was right and the query never ran. It was written as
+       * a raw `sql` template ending `AND t.created_at >= ${cutoff}` with `cutoff`
+       * a `Date`, and every `audience: "lapsed"` campaign — the first one a salon
+       * asks for — answered 500 `server_error`, at create AND on release, while the
+       * other four audiences worked. The other four were built from `lt` /
+       * `inArray` / `gte`. That was the whole difference.
+       *
+       * WHY A BARE `Date` IN A RAW TEMPLATE CANNOT BIND HERE, precisely, because
+       * "postgres.js cannot take a Date" is the wrong lesson and would send the
+       * next person looking in the driver:
+       *
+       *   `drizzle()` REPLACES the driver's own date serializer on construction.
+       *   `drizzle-orm/postgres-js/driver.js` sets
+       *   `client.options.serializers[1184] = (val) => val` (also 1082/1083/1114),
+       *   because Drizzle intends to encode dates itself from the column type.
+       *   Verified on this branch: the same raw `unsafe(q, [id, new Date()])`
+       *   succeeds before `drizzle(client)` and throws after it.
+       *
+       *   So a parameter Drizzle did NOT encode arrives at `Bind` as a live `Date`,
+       *   the identity serializer hands it straight to `Buffer.byteLength`, and the
+       *   driver throws `ERR_INVALID_ARG_TYPE: … Received an instance of Date`.
+       *   A raw template gives Drizzle no column to encode against, so it does not.
+       *
+       * `services/metrics.ts` and `services/platformMetrics.ts` hit the same wall
+       * and answered it with `at()` — an ISO string plus an explicit `::timestamptz`
+       * cast. That is the right answer THERE: those are raw aggregates with no
+       * Drizzle column on either side. Here there IS a column,
+       * `transaction.created_at`, so the better answer is to let Drizzle encode
+       * against it: `gte(transaction.createdAt, cutoff)` cannot be written wrong the
+       * way an interpolation can, which is what stops the sixth person
+       * reintroducing this.
+       *
+       * `QueryBuilder` and not `exec.select(…)`: the subquery must never execute,
+       * only render, and it is correlated on the OUTER `member.id` — a builder with
+       * no connection makes both facts structural rather than intended.
        */
       return and(
         base,
-        sql`NOT EXISTS (
-              SELECT 1 FROM transaction t
-               WHERE t.member_id = ${member.id}
-                 AND t.kind IN ('charge', 'shop')
-                 AND t.status = 'settled'
-                 AND t.created_at >= ${cutoff}
-            )`,
+        notExists(
+          new QueryBuilder()
+            .select({ one: sql`1` })
+            .from(transaction)
+            .where(
+              and(
+                eq(transaction.memberId, member.id),
+                inArray(transaction.kind, ['charge', 'shop']),
+                eq(transaction.status, 'settled'),
+                gte(transaction.createdAt, cutoff),
+              ),
+            ),
+        ),
       );
     }
     case 'lowbal':
