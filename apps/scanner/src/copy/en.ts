@@ -406,6 +406,43 @@ export const copy = {
 
   // ------------------------------------------------------- my schedule ----
   /**
+   * `GET /artists/me` and `PUT /artists/me/availability` both answer
+   * `404 not_an_artist` through the same `requireOwnArtist`
+   * (api/src/routes/artists.ts:418-432) — same situation as the bookings 404,
+   * DIFFERENT SENTENCE, which is why this pair exists.
+   *
+   * `notArtistTitle`/`notArtistBody` above are written for BOOKINGS and are
+   * correct there: "no calendar", "no appointments of its own", "a manager can
+   * add you to the team". ScheduleScreen rendered them too, and on a screen
+   * about hours all three were wrong — the wrong noun twice, and advice that
+   * misfires on the account most likely to see it. The refusal reaches a manager
+   * far more often than a receptionist, because a manager is exactly who taps
+   * "Set the hours you're available to book" out of curiosity; telling her to
+   * get herself added to a team she manages is a dead end delivered confidently.
+   *
+   * So the screen now shows the SERVER's sentence as the body, the way the two
+   * 409s on that screen already do. Only the title is written here: the API
+   * sends one sentence, and `Refusal` needs a title and a body.
+   */
+  scheduleNotArtistTitle: 'This account has no hours to set',
+  /**
+   * THE FALLBACK, and it should never render.
+   *
+   * It exists because a refusal with an empty body is worse than a wrong one: a
+   * title over blank space reads as a broken screen, and the reader learns
+   * nothing at all. `ApiError.message` is a required string, so this needs a
+   * 404 that carried no message or an all-whitespace one to appear.
+   *
+   * It is deliberately the API's own sentence as of artists.ts:428 rather than a
+   * second, friendlier explanation. Drift is the usual objection to copying a
+   * server string into the client, and it does not apply here: this text renders
+   * only when the server sent nothing to drift from. Offering no remedy is also
+   * on purpose — how a login gets linked to an artist row is the API's business
+   * and this screen must not invent an answer it cannot verify.
+   */
+  scheduleNotArtistBody:
+    'This account is not set up as a bookable artist, so it has no hours to set.',
+  /**
    * :405, verbatim — the SCREEN's subtitle. Not `scheduleSub` above, which is
    * :116, the home tile's one-liner. The design writes two different sentences
    * and collapsing them loses the one that explains "no fixed slots".

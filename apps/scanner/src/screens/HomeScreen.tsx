@@ -49,16 +49,19 @@
  * able to deliver, and the refusal arrives one tap later. Whether that trade is
  * right is queued as a decision — see the note on the `schedule` tile.
  *
- * TWO THINGS REPORTED FROM HERE, NEITHER CHANGED HERE — both are user-visible:
- *  · Both artist screens render `copy.notArtistTitle` / `notArtistBody`, which
- *    were written for the BOOKINGS 404: "no appointments of its own … a manager
- *    can add you to the team". On the schedule screen that is the wrong noun
- *    (hours, not appointments) and, read by a manager, the wrong advice — she is
- *    on the team. The API sends the right sentence for this route ("…so it has
- *    no hours to set", artists.ts:428) and ScheduleScreen discards it.
- *  · The design puts a NEW-count badge on the `My bookings` tile (design:112,
- *    "{n} new"). It is not drawn, for the same reason the schedule tile is not
- *    dimmed: the count exists only inside `GET /artists/me/bookings`.
+ * ONE THING STILL OPEN, ONE FIXED SINCE:
+ *  · FIXED. Both artist screens used to render `copy.notArtistTitle` /
+ *    `notArtistBody`, written for the BOOKINGS 404: "no appointments of its own
+ *    … a manager can add you to the team". On a screen about hours that was the
+ *    wrong noun twice, and read by a manager the wrong advice — she is on the
+ *    team. ScheduleScreen now passes the server's own sentence through, as the
+ *    two 409s beside it already did. `BookingsScreen` keeps the original pair,
+ *    where it is accurate.
+ *  · OPEN, HELD. The design puts a NEW-count badge on the `My bookings` tile
+ *    (design:112, "{n} new"). It is not drawn, and it is blocked on the same
+ *    question DECISIONS 53 just answered with a no: the count exists only inside
+ *    `GET /artists/me/bookings`, so drawing it means a request from this screen.
+ *    Queued as its own item rather than folded into the refusal fix.
  */
 
 import { ScrollView, StyleSheet, Text, View, Pressable } from 'react-native';
@@ -176,17 +179,27 @@ export function HomeScreen({
         />
 
         {/*
-          NO PADLOCK HERE, AND THAT IS AN OPEN DECISION RATHER THAN A SETTLED ONE.
+          NO PADLOCK HERE, AND THAT IS DECIDED — DECISIONS 53, trunk, 2026-08-27.
+
           This tile offers "Set the hours you're available to book" to every
           signed-in staff account, including the ones `GET /artists/me` will
           refuse with `404 not_an_artist`. The charges tile avoids that by
           drawing a padlock from `staff.perms`, which the session already has.
           There is no equivalent free answer for "is this login a bookable
           artist": the only source is the server, so dimming this tile means
-          `GET /artists/me` on every home render just to decide a tile's opacity
-          — a request on the hub screen, and a loading state on the tiles, to
-          save one tap that already ends in a clear sentence. Left undecided
-          deliberately; see the header and DECISIONS.md.
+          `GET /artists/me` on every home render just to decide a tile's opacity.
+          That buys the hub screen a request, a tile-level loading state, and a
+          decision about what to draw when the request FAILS — and dimming on a
+          dropped signal locks a real artist out of her own hours, on a salon
+          phone, where dropped signals are ordinary. The `staff.role` shortcut was
+          rejected in the same breath: role and artist-linkage are separate
+          columns that can diverge, and a courtesy drawn from a proxy rather than
+          the fact would be the first of its kind in this app.
+
+          The refusal one tap later is the accepted answer, which is what makes
+          the sentence it shows load-bearing rather than cosmetic — see
+          `copy.scheduleNotArtistTitle`. Do not add a gate here without moving
+          DECISIONS 53 first.
         */}
         <Tile
           title={copy.schedule}
