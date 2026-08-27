@@ -84,6 +84,7 @@ import { formatMoney, fils } from '@avo/types';
 import { db } from '../db/client';
 import { member } from '../db/schema/member';
 import { ledgerEntry } from '../db/schema/ledger';
+import { walletAdjustedPosting } from '../money/ledger';
 import { transaction } from '../db/schema/transaction';
 import { requirePlatform } from '../auth/principal';
 import { conflict, notFound } from '../http/errors';
@@ -204,25 +205,19 @@ export async function registerAdjustmentRoutes(app: FastifyInstance): Promise<vo
           .set({ balanceFils: fils(balanceAfter), updatedAt: now })
           .where(and(eq(member.id, m.id), isNull(member.erasedAt)));
 
-        await tx.insert(ledgerEntry).values([
-          {
+        // Signed. Magnitude and both directions are derived together inside
+        // `walletAdjustedPosting`, rather than from four independent
+        // `amountFils > 0` ternaries here — two of those disagreeing is how a
+        // credit gets written with a debit's sign.
+        await tx.insert(ledgerEntry).values(
+          walletAdjustedPosting({
             transactionId: adjId,
             salonId: m.salonId,
             memberId: m.id,
-            account: 'member_wallet',
-            direction: amountFils > 0 ? 'credit' : 'debit',
-            amountFils: fils(Math.abs(amountFils)),
+            deltaFils: amountFils,
             balanceAfterFils: fils(balanceAfter),
-          },
-          {
-            transactionId: adjId,
-            salonId: m.salonId,
-            memberId: null,
-            account: 'gateway_clearing',
-            direction: amountFils > 0 ? 'debit' : 'credit',
-            amountFils: fils(Math.abs(amountFils)),
-          },
-        ]);
+          }),
+        );
 
         await writeAudit(tx, p, {
           salonId: m.salonId,

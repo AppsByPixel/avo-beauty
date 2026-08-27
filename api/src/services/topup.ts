@@ -62,6 +62,7 @@ import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
+import { topUpSettledPosting } from '../money/ledger';
 import { gatewayEvent, topUpIntent } from '../db/schema/topup';
 import { queueReceipts } from './receipts';
 import type { MemberPrincipal } from '../auth/principal';
@@ -826,67 +827,24 @@ async function creditWallet(
 
   // ------------------------------------------------------------- ledger ---
   // Balanced, and checked at COMMIT by the constraint trigger from migration
-  // 0001. Reading down the debits: the money the PSP is holding for us, the
-  // merchant's own funding of the bonus it advertised, and the merchant's
-  // commission to AVO. Credits: the customer's wallet, and AVO's income.
-  const entries: Array<typeof ledgerEntry.$inferInsert> = [
-    {
-      transactionId: txId,
-      salonId: intent.salonId,
-      memberId: null,
-      account: 'gateway_clearing',
-      direction: 'debit',
-      amountFils: intent.amountFils,
-    },
-    {
+  // 0001. WHICH ACCOUNT EACH LEG NAMES lives in money/ledger.ts, as a pure
+  // function, because it was decidable without a database and therefore not
+  // worth proving only under the `.int` suite that `pnpm check` does not run.
+  // `topUpSettledPosting` carries the reasoning for the commission pair and for
+  // both merchant-funded bonuses landing on one debit.
+  await tx.insert(ledgerEntry).values(
+    topUpSettledPosting({
       transactionId: txId,
       salonId: intent.salonId,
       memberId: m.id,
-      account: 'member_wallet',
-      direction: 'credit',
-      amountFils: intent.creditFils,
+      amountFils: intent.amountFils,
+      creditFils: intent.creditFils,
+      bonusFils: intent.bonusFils,
+      promoBonusFils: intent.promoBonusFils,
+      feeFils: intent.feeFils,
       balanceAfterFils: balanceAfter,
-    },
-  ];
-
-  // One debit for both merchant-funded bonuses: they come out of the same
-  // pocket, and `promotion_id` on the transaction is what separates a campaign's
-  // cost from a tier's in a report. Splitting the LEDGER too would add an
-  // account nobody reconciles against.
-  const merchantFunded = add(intent.bonusFils, intent.promoBonusFils);
-  if (merchantFunded > 0) {
-    entries.push({
-      transactionId: txId,
-      salonId: intent.salonId,
-      memberId: null,
-      account: 'merchant_bonus_funding',
-      direction: 'debit',
-      amountFils: merchantFunded,
-    });
-  }
-
-  if (intent.feeFils > 0) {
-    entries.push(
-      {
-        transactionId: txId,
-        salonId: intent.salonId,
-        memberId: null,
-        account: 'salon_revenue',
-        direction: 'debit',
-        amountFils: intent.feeFils,
-      },
-      {
-        transactionId: txId,
-        salonId: intent.salonId,
-        memberId: null,
-        account: 'avo_commission',
-        direction: 'credit',
-        amountFils: intent.feeFils,
-      },
-    );
-  }
-
-  await tx.insert(ledgerEntry).values(entries);
+    }),
+  );
 
   // ----------------------------------------------------------- receipts ---
   // Rows, not network calls — the transactional outbox, same as the charge

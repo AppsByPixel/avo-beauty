@@ -49,6 +49,7 @@ import type { Db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
 import { ledgerEntry } from '../db/schema/ledger';
+import { depositHeldPosting, depositReleasedPosting } from '../money/ledger';
 import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
@@ -461,25 +462,15 @@ export async function createBooking(
      * return path unwinds it back into the wallet. The DEFERRABLE trigger from
      * migration 0001 checks the pair at COMMIT.
      */
-    await tx.insert(ledgerEntry).values([
-      {
+    await tx.insert(ledgerEntry).values(
+      depositHeldPosting({
         transactionId: txId,
         salonId: m.salonId,
         memberId: m.id,
-        account: 'member_wallet',
-        direction: 'debit',
         amountFils: deposit,
         balanceAfterFils: balanceAfter,
-      },
-      {
-        transactionId: txId,
-        salonId: m.salonId,
-        memberId: null,
-        account: 'deposit_held',
-        direction: 'credit',
-        amountFils: deposit,
-      },
-    ]);
+      }),
+    );
 
     /**
      * The no-show deadline, STAMPED. `salon.no_show_return_minutes` is editable
@@ -663,25 +654,15 @@ export async function returnDeposit(
   });
 
   // The mirror of the hold: the liability is discharged back into the wallet.
-  await tx.insert(ledgerEntry).values([
-    {
-      transactionId: txId,
-      salonId: memberRow.salonId,
-      memberId: null,
-      account: 'deposit_held',
-      direction: 'debit',
-      amountFils: amount,
-    },
-    {
+  await tx.insert(ledgerEntry).values(
+    depositReleasedPosting({
       transactionId: txId,
       salonId: memberRow.salonId,
       memberId: memberRow.id,
-      account: 'member_wallet',
-      direction: 'credit',
       amountFils: amount,
       balanceAfterFils: balanceAfter,
-    },
-  ]);
+    }),
+  );
 
   /**
    * THE TRANSITION IS THE WHERE CLAUSE, and the row count decides.

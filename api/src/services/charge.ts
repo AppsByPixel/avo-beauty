@@ -47,6 +47,12 @@ import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
+import {
+  depositAppliedPosting,
+  depositReleasedPosting,
+  merchantFundedCreditPosting,
+  walletSpendPosting,
+} from '../money/ledger';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
@@ -471,45 +477,27 @@ export async function performCharge(
     // from migration 0001 checks the pair at COMMIT, so a debit without its
     // matching credit does not commit.
     if (due > 0) {
-      await tx.insert(ledgerEntry).values([
-        {
+      await tx.insert(ledgerEntry).values(
+        walletSpendPosting({
           transactionId: txId,
           salonId: ctx.principal.salonId,
           memberId: m.id,
-          account: 'member_wallet',
-          direction: 'debit',
           amountFils: due,
           balanceAfterFils: balanceAfter,
-        },
-        {
-          transactionId: txId,
-          salonId: ctx.principal.salonId,
-          memberId: null,
-          account: 'salon_revenue',
-          direction: 'credit',
-          amountFils: due,
-        },
-      ]);
+        }),
+      );
     }
     if (heldDeposit > 0) {
-      await tx.insert(ledgerEntry).values([
-        {
+      await tx.insert(ledgerEntry).values(
+        depositAppliedPosting({
           transactionId: txId,
           salonId: ctx.principal.salonId,
+          // `m.id`, not null — the one `deposit_held` leg in the build that names
+          // a member. Preserved, and reported: see `depositAppliedPosting`.
           memberId: m.id,
-          account: 'deposit_held',
-          direction: 'debit',
           amountFils: heldDeposit,
-        },
-        {
-          transactionId: txId,
-          salonId: ctx.principal.salonId,
-          memberId: null,
-          account: 'salon_revenue',
-          direction: 'credit',
-          amountFils: heldDeposit,
-        },
-      ]);
+        }),
+      );
     }
 
     /**
@@ -577,25 +565,15 @@ export async function performCharge(
           settledAt: now,
         });
 
-        await tx.insert(ledgerEntry).values([
-          {
-            transactionId: returnId,
-            salonId: ctx.principal.salonId,
-            memberId: null,
-            account: 'deposit_held',
-            direction: 'debit',
-            amountFils: depositRemainder,
-          },
-          {
+        await tx.insert(ledgerEntry).values(
+          depositReleasedPosting({
             transactionId: returnId,
             salonId: ctx.principal.salonId,
             memberId: m.id,
-            account: 'member_wallet',
-            direction: 'credit',
             amountFils: depositRemainder,
             balanceAfterFils: balanceWithRemainder,
-          },
-        ]);
+          }),
+        );
       }
     }
 
@@ -787,28 +765,19 @@ export async function performCharge(
         settledAt: now,
       });
 
-      await tx.insert(ledgerEntry).values([
-        {
-          transactionId: creditId,
-          salonId: ctx.principal.salonId,
-          memberId: null,
-          // The merchant funds her own promotion, exactly as she funds a tier
-          // bonus on a top-up. Same account, so the two are one budget line in
-          // a report and `promotion_id` is what separates them.
-          account: 'merchant_bonus_funding',
-          direction: 'debit',
-          amountFils: fils(earning.creditFils),
-        },
-        {
+      // The merchant funds her own promotion, exactly as she funds a tier bonus
+      // on a top-up — `merchantFundedCreditPosting` is the same account both
+      // times, so the two are one budget line in a report and `promotion_id` is
+      // what separates them.
+      await tx.insert(ledgerEntry).values(
+        merchantFundedCreditPosting({
           transactionId: creditId,
           salonId: ctx.principal.salonId,
           memberId: m.id,
-          account: 'member_wallet',
-          direction: 'credit',
           amountFils: fils(earning.creditFils),
           balanceAfterFils: balanceFinal,
-        },
-      ]);
+        }),
+      );
     }
 
     // ----------------------------------------------- 10. queue the receipts --
