@@ -179,7 +179,6 @@ const POSTINGS: Record<string, LedgerPosting[]> = {
   'deposit applied to a completed visit': depositAppliedPosting({
     transactionId: TX,
     salonId: SALON,
-    memberId: MEMBER,
     amountFils: fils(5_000),
   }),
   'deposit held out of the wallet': depositHeldPosting(wallet(fils(5_000), fils(19_500))),
@@ -419,7 +418,6 @@ describe('spend, deposits and reversals — by account', () => {
     const p = depositAppliedPosting({
       transactionId: TX,
       salonId: SALON,
-      memberId: MEMBER,
       amountFils: fils(5_000),
     });
     expect(legs(p)).toEqual([
@@ -430,6 +428,36 @@ describe('spend, deposits and reversals — by account', () => {
     // and a swap here is invisible to the database. This is the sharpest example
     // of the class of misposting this file exists to catch.
     expect(p.every((e) => e.balanceAfterFils === undefined)).toBe(true);
+  });
+
+  it('applying a deposit names NOBODY — and nets to zero for her, which is true', () => {
+    /**
+     * DECISIONS.md #64. This builder took a `memberId` and services/charge.ts § 7
+     * passed `m.id`, making it the one `deposit_held` leg in the build that named
+     * a member. The field is gone from the signature, so the call site cannot
+     * reintroduce it without a type error — see § no non-wallet leg names a
+     * member below for the assertion that covers the builders as a class.
+     *
+     * The consequence is arithmetic, not cosmetic. Her balance moved when the
+     * deposit was HELD; applying it moves money between two accounts that are
+     * neither of them hers. A per-member net over `ledger_entry.member_id` —
+     * which is what `e2e/adjustments.test.ts` asserts the ledger against — must
+     * therefore be ZERO across this posting. With `m.id` it was −5.000, counting
+     * the deposit against her a second time on every completed booking.
+     */
+    const p = depositAppliedPosting({
+      transactionId: TX,
+      salonId: SALON,
+      amountFils: fils(5_000),
+    });
+    expect(
+      p.filter((e) => e.memberId !== null),
+      'a deposit_held leg named a member; escrow is not her spendable balance',
+    ).toEqual([]);
+    expect(
+      net(p.filter((e) => e.memberId === MEMBER)),
+      'applying a deposit moved her per-member ledger net, but not her balance',
+    ).toBe(0);
   });
 
   it('releasing a deposit returns WALLET CREDIT — non-negotiable #5', () => {
@@ -540,6 +568,45 @@ describe('the wallet leg is the only one the schema pins — so the rest are che
           e.balanceAfterFils ?? null,
           `\`${e.account}\` carries balance_after_fils, which ` +
             '`ledger_entry_balance_after_is_wallet_only` refuses.',
+        ).toBeNull();
+      }
+    });
+
+    /**
+     * THE THIRD DIRECTION, AND THE ONLY ONE THE DATABASE LEAVES OPEN.
+     *
+     * The two specs above restate CHECK constraints — the INSERT fails without
+     * them, so they document rather than defend. This one defends. Read the
+     * constraint as written:
+     *
+     *   ledger_entry_wallet_requires_member
+     *     account <> 'member_wallet' OR member_id IS NOT NULL
+     *
+     * That is wallet ⟹ member, and NOTHING ELSE. A `deposit_held`,
+     * `salon_revenue`, `avo_commission`, `gateway_clearing` or
+     * `merchant_bonus_funding` row carrying a `member_id` is perfectly legal to
+     * Postgres. Compare `ledger_entry_balance_after_is_wallet_only`, which the
+     * schema DOES state in the non-wallet direction — so the asymmetry is real,
+     * and this is the half of it nothing was checking.
+     *
+     * It went unchecked for the life of `POST /charges` (DECISIONS.md #64), and
+     * the cost was a per-member ledger net that drifted by the deposit on every
+     * completed booking. Asserted over every posting rather than at the one call
+     * site that had it wrong, because the site that has it wrong next will be a
+     * different one — the lesson of `campaignAudience`'s `lapsed` audience.
+     */
+    it(`${name}: no non-wallet leg names a member`, () => {
+      for (const e of postings.filter((p) => p.account !== 'member_wallet')) {
+        expect(
+          e.memberId,
+          `\`${e.account}\` names a member. \`member_id\` means "this row moved ` +
+            'this member\'s own spendable balance", and a non-wallet leg by ' +
+            'definition did not — the wallet leg beside it is the row that names ' +
+            'her. Postgres will NOT refuse this row: ' +
+            '`ledger_entry_wallet_requires_member` only constrains the wallet ' +
+            'direction. Nothing else catches it either, so a per-member net over ' +
+            '`ledger_entry.member_id` silently stops equalling her balance ' +
+            'movement. See DECISIONS.md #64.',
         ).toBeNull();
       }
     });
