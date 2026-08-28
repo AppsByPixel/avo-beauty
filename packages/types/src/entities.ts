@@ -504,9 +504,46 @@ export const SalonMetricsSchema = z.object({
   activeMembers: z.number().int().nonnegative(),
   /** Change over the previous period. Signed; the delta line hides when 0. */
   activeMembersDelta: z.number().int(),
-  loadedTodayFils: FilsSchema.nonnegative(),
-  /** Share of today's top-ups taken via KNET, 0–100. */
-  knetSharePercent: z.number().min(0).max(100),
+  /**
+   * NULL WHEN A BRANCH FILTER IS APPLIED, AND THAT IS A CATEGORY ERROR MADE
+   * VISIBLE RATHER THAN A MISSING FEATURE. `services/topup.ts` writes every
+   * top-up row `branch_assumed = true` unconditionally, because — in its own
+   * words — a top-up HAS no branch to establish: it happens on a phone. No
+   * device-enrolment work will ever close that gap.
+   *
+   * So the metrics service SKIPS this query when a branch is selected rather
+   * than filtering it and discarding the result. Filtering would hand a
+   * two-branch salon its whole day's takings under whichever branch sorts
+   * first and `0.000 KD` under the other, and a false zero reads as a real
+   * number — the failure mode this whole field exists to avoid.
+   *
+   * Invariant: `loadedTodayFils === null` if and only if `branchId !== null`.
+   */
+  loadedTodayFils: FilsSchema.nonnegative().nullable(),
+  /** Share of today's top-ups taken via KNET, 0–100. `null` with a branch — see above. */
+  knetSharePercent: z.number().min(0).max(100).nullable(),
+  /** The branch this answer was scoped to, echoed back. `null` = every branch. */
+  branchId: z.string().nullable(),
+  branchName: z.string().nullable(),
+  /**
+   * HOW MUCH OF THE PER-BRANCH ANSWER RESTS ON AN ASSUMED BRANCH. `null` when
+   * `branchId` is null, because a salon-wide total is exact however many rows
+   * are assumed — a misattributed row is still inside the salon.
+   *
+   * It carries the SIZE of the doubt, not a boolean, so the UI can say "based
+   * entirely on assumed branches" (`visits === visitsTotal`) or nothing at all
+   * (`0`) instead of a permanent unfalsifiable asterisk. When branch-bound
+   * scanner sessions land, these fall to zero on their own and the caveat
+   * leaves the UI with no code change.
+   */
+  branchAssumed: z
+    .object({
+      activeMembers: z.number().int().nonnegative(),
+      visits: z.number().int().nonnegative(),
+      visitsTotal: z.number().int().nonnegative(),
+      upcomingAppointments: z.number().int().nonnegative(),
+    })
+    .nullable(),
   repeatRatePercent: z.number().min(0).max(100),
   upcomingAppointments: z.number().int().nonnegative(),
   /**
