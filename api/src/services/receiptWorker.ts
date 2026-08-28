@@ -121,6 +121,43 @@ export interface ClaimedJob {
  * Claimable is:
  *   - `queued` or `failed`, with attempts left, whose backoff has elapsed; or
  *   - `sending` whose lease has expired — a worker that died mid-send.
+ *
+ * THE `ORDER BY` PICKS WHICH ROWS. IT DOES NOT ORDER THE BATCH, AND NOTHING HERE
+ * SHOULD PRETEND OTHERWISE.
+ *
+ * `ORDER BY available_at` exists so the `LIMIT` takes the oldest-due rows rather
+ * than an arbitrary `limit` of them. That is all it does. `RETURNING` emits rows
+ * in the outer UPDATE's own scan order, which SQL does not specify and which is
+ * not the subquery's order — measured on this project's Postgres with eight rows
+ * of DISTINCT `available_at`: the subquery selected ids 8,7,6,5 by due order and
+ * `RETURNING` handed back 5,6,7,8, the exact reverse. `runOnce` iterates
+ * `RETURNING` order, so the order jobs are PROCESSED in is undefined regardless
+ * of what this clause says.
+ *
+ * There is deliberately NO TIE-BREAK (`, id`, `, created_at`), and the reason is
+ * not that ties are rare. `queueReceipts` inserts a transaction's channels as ONE
+ * multi-row INSERT, so both rows take the same `now()` default and tie by
+ * construction — checked against this lane's seeded data, every transaction with
+ * two receipt rows has one distinct `created_at`. The reason is that a tie-break
+ * would buy nothing anybody can use:
+ *
+ *   - It cannot make processing order deterministic, because `RETURNING` is what
+ *     decides that and the subquery's ordering does not reach it. A test that
+ *     depends on batch order is not fixed by adding one — see
+ *     receiptWorker.int.test.ts, where exactly that route was tried and measured
+ *     failing.
+ *   - It cannot make claiming FAIR under concurrency either. `SKIP LOCKED` means
+ *     two workers take different sets whatever this clause says, which is the
+ *     deployment `RECEIPT_WORKER_ENABLED` defaulting to `'1'` actually produces.
+ *   - `id` is `uuid defaultRandom()`, so ordering by it is not FIFO — it is a
+ *     second arbitrary order wearing the costume of a guarantee. If fairness
+ *     among equally-due rows were ever wanted, `created_at` is the column that
+ *     means it, and it is not in `receipt_job_claim_idx`.
+ *
+ * Among equally-due jobs the order is genuinely indifferent to this worker: each
+ * is claimed exclusively, each is processed independently, and no outcome depends
+ * on a neighbour. Leave it indifferent rather than adding a promise production
+ * cannot rely on to settle a question that belongs in a spec.
  */
 export async function claimJobs(db: Db, limit: number): Promise<ClaimedJob[]> {
   const rows = await db.execute(sql`
@@ -203,7 +240,17 @@ function stillOurs(job: ClaimedJob) {
   );
 }
 
-/** True when the write landed. False means somebody else owns this row now. */
+/**
+ * True when the write landed. False means somebody else owns this row now.
+ *
+ * `providerReference` IS NOT PERSISTED. There is no column for it on
+ * `receipt_job`, and this function does not write one — decision 74. The
+ * parameter stays because the driver seam returns it and whether support needs to
+ * follow a receipt into the provider's logs is an open product question; adding a
+ * column on this file's judgement would answer it by accident. Until it is
+ * answered, the only honest thing is that the value is received and dropped, and
+ * `receipts/types.ts` now says so at the field rather than claiming it is stored.
+ */
 async function markSent(db: Db, job: ClaimedJob, providerReference: string): Promise<boolean> {
   const now = new Date();
   const rows = await db

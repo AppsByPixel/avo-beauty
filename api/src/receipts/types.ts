@@ -55,7 +55,20 @@ export interface ReceiptDelivery {
 }
 
 export interface ReceiptResult {
-  /** The provider's id for this message, stored for support to trace. */
+  /**
+   * The provider's id for this message.
+   *
+   * NOT STORED — decision 74. This said "stored for support to trace", and that
+   * was never true: `receipt_job` has no column for it and `markSent` receives
+   * the value and drops it. The sentence is corrected rather than the schema
+   * because whether support genuinely needs to follow a receipt into the
+   * provider's logs is an open product question, and adding a column to make a
+   * comment true is answering it the wrong way round.
+   *
+   * Drivers should keep returning it. It is in the driver's own log line today
+   * (`logging.ts`), which is where a trace currently has to start, and the seam
+   * should not have to change shape on the day the answer arrives.
+   */
   providerReference: string;
 }
 
@@ -86,7 +99,15 @@ export class ReceiptPermanentError extends Error {
 }
 
 export interface ReceiptSender {
-  /** Matches `RECEIPT_DRIVER`, and is stored on the job for forensics. */
+  /**
+   * Matches `RECEIPT_DRIVER`.
+   *
+   * NOT stored on the job — same correction as `providerReference` above, found
+   * while making that one. `receipt_job` has no `provider` column; the only
+   * reader of this field is the driver's own log line (`logging.ts`, as
+   * `driver`). Which driver sent a given receipt is therefore recoverable from
+   * logs and not from the row.
+   */
   readonly provider: string;
 
   /** Which channels this driver can actually deliver. */

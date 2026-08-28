@@ -74,6 +74,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReceiptDelivery } from '../receipts';
 
 const INT_URL = process.env.AVO_INT_DATABASE_URL;
 const suite = INT_URL ? describe : describe.skip;
@@ -90,7 +91,13 @@ const SALON = 'SAL-AMARA';
  */
 const driver = vi.hoisted(() => ({
   handles: (_channel: string): boolean => true,
-  send: async (_delivery: unknown): Promise<{ providerReference: string }> => ({
+  /**
+   * `delivery` is TYPED, not `unknown`, because one spec below has to know WHICH
+   * job it is being asked to send — see the tie in `soleClaimable`. `import
+   * type` is erased, so naming `ReceiptDelivery` here is safe under the hoist
+   * that lifts this above the imports.
+   */
+  send: async (_delivery: ReceiptDelivery): Promise<{ providerReference: string }> => ({
     providerReference: 'int-spec-ref',
   }),
 }));
@@ -102,7 +109,7 @@ vi.mock('../receipts', async () => {
     receiptSender: {
       provider: 'int-spec',
       handles: (channel: string) => driver.handles(channel),
-      send: (delivery: unknown) => driver.send(delivery),
+      send: (delivery: ReceiptDelivery) => driver.send(delivery),
     },
   };
 });
@@ -215,6 +222,26 @@ suite('the receipt worker re-asserts its claim before it writes', () => {
    * Delays, never deletes: every other claimable row in this lane's database
    * moves an hour out, which is inside no other suite's window and outside this
    * one's.
+   *
+   * IT MAKES THEM DUE AT THE SAME INSTANT, AND ANY SPEC PASSING MORE THAN ONE ID
+   * HAS TO KNOW THAT. The second statement is ONE statement, so `now()` is
+   * evaluated once and every row in `ids` gets a BYTE-IDENTICAL `available_at` —
+   * measured, `count(distinct available_at)` over a pair updated this way is 1.
+   *
+   * BUT THE TIE IS NOT WHY BATCH ORDER IS UNDEFINED, AND THAT MATTERS MORE.
+   * `claimJobs` is `UPDATE … WHERE id IN (SELECT … ORDER BY available_at LIMIT n
+   * FOR UPDATE SKIP LOCKED) RETURNING …`. The inner `ORDER BY` decides WHICH
+   * rows the `LIMIT` takes — that is its entire job. It does **not** order
+   * `RETURNING`, which emits rows in the outer UPDATE's own scan order, and
+   * `runOnce` iterates exactly that. Measured on this lane's Postgres with eight
+   * rows whose `available_at` were all DISTINCT: the subquery selected ids
+   * 8,7,6,5 by due order and `RETURNING` handed back 5,6,7,8 — the exact
+   * reverse.
+   *
+   * So making the rows' timestamps distinct does NOT define the order a batch is
+   * processed in. It only makes one order more likely. A multi-row spec here must
+   * be INDIFFERENT to processing order — keyed on the row's identity, never on
+   * which call to the driver comes first, and never on a tie-break in the claim.
    */
   async function soleClaimable(ids: string[]): Promise<void> {
     await db.execute(orm.sql`
@@ -316,11 +343,44 @@ suite('the receipt worker re-asserts its claim before it writes', () => {
      * `sent_at` is set, `receipt_job_sent_at_matches_status` refuses the
      * statement, and the exception escapes `processJob` and `runOnce` — taking
      * `bystander` with it, still `sending`, for a whole lease.
+     *
+     * KEYED ON `jobId`, NOT ON CALL ORDER — decision 75, and this is the whole
+     * of that fix. This driver used to switch on `let first = true`, which
+     * asserts the batch reaches racer-then-bystander. Nothing promises that.
+     * When the bystander came first the driver threw for the BYSTANDER, so the
+     * bystander landed in `failed` and the assertion below read
+     * `expected 'failed' to be 'sent'`. Measured on `avo_lane_a` before this
+     * change: **6 of 10 runs failed**, always that same assertion.
+     *
+     * AND THE ORDER IS UNDEFINED FOR A STRONGER REASON THAN THE TIE.
+     * `soleClaimable`'s note carries the measurement: the inner `ORDER BY
+     * available_at` picks which rows the `LIMIT` takes, but `RETURNING` emits
+     * them in the outer UPDATE's scan order, which SQL does not specify — with
+     * eight DISTINCT timestamps the subquery chose 8,7,6,5 and `RETURNING` gave
+     * back 5,6,7,8. So the other candidate fix for this flake — give the two
+     * rows different `available_at` and rely on the resulting order — does not
+     * work. It lowers the failure rate and looks like a fix. Verified here:
+     * forcing the bystander five seconds earlier still produced racer-first, and
+     * the old driver under that forced order still passed 1 of 3.
+     *
+     * Keying on the id makes the spec indifferent to processing order instead of
+     * betting on a different guess about it, and it says out loud which row is
+     * which. Both orders produce the same four assertions — the racer is always
+     * the row the other worker steals and always the row this send throws for,
+     * whether the batch reaches it first or second.
+     *
+     * WHAT WAS ACTUALLY MEASURED, since "indifferent to order" is the kind of
+     * claim this file exists to distrust. The driver was temporarily instrumented
+     * to print which job it was handed first and run 14 times: 13 racer-first, 1
+     * bystander-first, 14 green. So both orders were observed passing, though the
+     * bystander-first sample is one run — the coin is heavily weighted on this
+     * machine, which is also why the old spec's failure rate swung between lanes.
+     * Then 12 clean runs, 12 green. The order-dependence is gone by construction
+     * rather than by rate: `delivery.jobId` is the only thing this driver branches
+     * on, and it is fixed before `runOnce` is called.
      */
-    let first = true;
-    driver.send = async () => {
-      if (!first) return { providerReference: 'bystander-ok' };
-      first = false;
+    driver.send = async (delivery) => {
+      if (delivery.jobId !== racer.jobId) return { providerReference: 'bystander-ok' };
       await anotherWorkerSendsIt(racer.jobId);
       throw new Error('provider timed out');
     };
