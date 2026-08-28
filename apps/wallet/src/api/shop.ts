@@ -19,11 +19,23 @@
  *
  * WHAT THE SCHEMAS DELIBERATELY DO NOT DECLARE
  * -------------------------------------------
- * `ProductSchema` is exactly four fields and `active` is NOT one of them. The
- * route filters `active = true` server-side and emits the four; declaring a fifth
- * would be a field the contract strips in transit. `ServiceSchema` declares
- * `active` and its route emits it — the asymmetry is real and is the route's own
- * documented decision, so the client follows each rather than unifying them.
+ * `active` is NOT one of `ProductSchema`'s fields. The route filters
+ * `active = true` server-side and does not emit it; declaring it would be a field
+ * the contract strips in transit. `ServiceSchema` declares `active` and its route
+ * emits it — the asymmetry is real and is the route's own documented decision, so
+ * the client follows each rather than unifying them.
+ *
+ * The schema is five fields as of `7c403ba`: `image` landed on both Product and
+ * Service as `ImageRef | null`, REQUIRED-BUT-NULLABLE so a client never has to
+ * tell "no image" from "field not sent". This paragraph used to say "exactly four
+ * fields", which is the kind of count that goes stale the moment the contract
+ * grows — the rule it was describing is about `active`, not about arithmetic.
+ *
+ * THE IMAGE READ IS AUTHENTICATED AND IT IS NOT THIS FILE'S JOB. `image.url` is
+ * absolute (the API builds it from `PUBLIC_BASE_URL`) and `GET /v1/images/{id}`
+ * requires the session, so the bytes cannot be fetched by dropping the URL into
+ * an `<img>`. `components/authedImage.*` is where that lives, and it is a
+ * PLATFORM SPLIT — read its header before touching anything that renders one.
  *
  * AND WHAT THEY DO DECLARE THAT IS EASY TO MISS: `voidable: false`. It is a
  * positive statement, not an omission — there is no reversal path for an order

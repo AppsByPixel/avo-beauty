@@ -19,14 +19,22 @@
  *
  * WHAT THE DESIGN DRAWS THAT THE API CANNOT FILL: a per-product description
  * ("For split ends", "Shine & hydration", design:1424-1428). `ProductSchema` is
- * `{id, salonId, name, priceFils}` and the route emits exactly those four — so
- * the row renders name and price, and the description is REPORTED rather than
- * invented. It is a column, a contract field and a merchant editor input, not a
- * string a client can supply.
+ * `{id, salonId, name, priceFils, image}` and the route emits exactly those five
+ * — so the row renders name and price, and the description is REPORTED rather
+ * than invented. It is a column, a contract field and a merchant editor input,
+ * not a string a client can supply.
  *
  * The swatch and letter the design also draws are presentation and ARE derived —
  * see `domain/cart.ts` § `swatchFor`, which cycles the design's own five hexes by
  * a stable hash of the product id so a product keeps its colour without a field.
+ *
+ * `image` IS NOW A FIELD, AND THE SWATCH DID NOT MOVE. `ProductImage` paints the
+ * swatch for every row and fades a photograph in over it when the row has one and
+ * the session can fetch it — which is a minority of rows today. Read that file's
+ * header before changing anything about this square: the loading, failed and
+ * offline treatments are all "the swatch, still", on purpose, and the read is
+ * AUTHENTICATED, which is not something an `<Image>` handles by itself on every
+ * platform.
  *
  * THE BALANCE IS A PROP, NOT A FETCH. One `useWalletHome` for the app, read in
  * App.tsx — two would be two balances and the one on screen would be whichever
@@ -41,8 +49,8 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { formatMoney, moneyAriaLabel, fils } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import type { ShopController } from '../state/useShop';
-import { initialFor, swatchFor } from '../domain/cart';
 import { CartSheet } from '../components/CartSheet';
+import { ProductImage } from '../components/ProductImage';
 import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
@@ -196,11 +204,15 @@ export function ShopScreen({
                 const qty = shop.cart[p.id] ?? 0;
                 return (
                   <View key={p.id} style={styles.row} testID={`shop-row-${p.id}`}>
-                    <View style={[styles.swatch, { backgroundColor: swatchFor(p.id) }]}>
-                      <Text style={[text('displayS', lang), styles.swatchLetter]}>
-                        {initialFor(p.name)}
-                      </Text>
-                    </View>
+                    <ProductImage
+                      productId={p.id}
+                      name={p.name}
+                      image={p.image}
+                      size={52}
+                      radius={14}
+                      letterSize={20}
+                      testID={`shop-swatch-${p.id}`}
+                    />
                     <View style={styles.rowText}>
                       <Text style={[text('bodyL', lang), styles.rowName]} numberOfLines={2}>
                         {p.name}
@@ -349,8 +361,9 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     paddingHorizontal: 14,
   },
-  swatch: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  swatchLetter: { color: color.textMutedSoft, fontSize: 20 },
+  // The SKELETON's square only. A real row's square is `ProductImage`, which owns
+  // the swatch, the letter and the photograph that may cover them.
+  swatch: { width: 52, height: 52, borderRadius: 14, flexShrink: 0 },
   rowText: { flex: 1, minWidth: 0, gap: 4 },
   rowName: { color: color.ink, fontWeight: '600' },
   rowPrice: { color: color.ink, fontWeight: '600' },

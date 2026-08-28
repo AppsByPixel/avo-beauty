@@ -29,8 +29,9 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { fils, formatMoney, moneyAriaLabel, type Fils } from '@avo/types';
 import { useLanguage } from '../i18n/language';
-import { initialFor, swatchFor, type PricedLine } from '../domain/cart';
+import { type PricedLine } from '../domain/cart';
 import type { CheckoutRefusal } from '../state/useShop';
+import { ProductImage } from './ProductImage';
 import { Sheet } from './Sheet';
 import { PrimaryButton } from './Buttons';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
@@ -109,11 +110,21 @@ export function CartSheet({
           <ScrollView style={styles.lines} showsVerticalScrollIndicator={false}>
             {lines.map((line) => (
               <View key={line.product.id} style={styles.line} testID={`cart-line-${line.product.id}`}>
-                <View style={[styles.swatch, { backgroundColor: swatchFor(line.product.id) }]}>
-                  <Text style={[text('displayS', lang), styles.swatchLetter]}>
-                    {initialFor(line.product.name)}
-                  </Text>
-                </View>
+                {/*
+                  The same square as the Shop row, 42 instead of 52. She saw a
+                  photograph a tap ago; a cart that dropped back to a letter would
+                  read as a different product. `ProductImage` § THE SWATCH IS THE
+                  FLOOR — the states are identical here because the component is.
+                */}
+                <ProductImage
+                  productId={line.product.id}
+                  name={line.product.name}
+                  image={line.product.image}
+                  size={42}
+                  radius={12}
+                  letterSize={16}
+                  testID={`cart-swatch-${line.product.id}`}
+                />
                 <View style={styles.lineText}>
                   <Text style={[text('bodyL', lang), styles.lineName]} numberOfLines={1}>
                     {line.product.name}
@@ -357,15 +368,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: color.hairline,
   },
-  swatch: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  swatchLetter: { color: color.textMutedSoft, fontSize: 16 },
   lineText: { flex: 1, minWidth: 0 },
   lineName: { color: color.ink, fontWeight: '600' },
   lineTotal: { color: color.textMuted, marginTop: 1 },
