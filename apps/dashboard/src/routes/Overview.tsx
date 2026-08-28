@@ -6,7 +6,6 @@ import {
   useSalonMetrics,
   type ActivityItem,
   type SalonMetrics,
-  type ScopedSalonMetrics,
 } from '../api/salon.js';
 import { useBranchScope } from '../shell/BranchScope.js';
 
@@ -75,8 +74,11 @@ export function Overview() {
    * selector was built to remove; reintroducing it one layer down, silently,
    * would be worse than the label it replaced, because it would look deliberate.
    *
-   * `applied === undefined` (no echo at all) collapses to "salon-wide", which is
-   * what such a server in fact returned.
+   * The `branchId`/`branchName` fields are now REQUIRED-but-nullable on
+   * `SalonMetricsSchema` (trunk, 74ffacf), so a server that omits them fails at
+   * the parse rather than reaching this line. What survives here is the
+   * comparison itself, which is the property that makes the screen structurally
+   * unable to claim a scope it was not given.
    */
   const appliedBranchId = appliedBranchOf(metrics.data);
   const scopeIgnored = scopeWasIgnored(selected, metrics.data);
@@ -94,12 +96,18 @@ export function Overview() {
       {scopeIgnored ? (
         <ScopeNotice
           requestedName={selectedName}
-          appliedName={metrics.data?.applied?.branchName ?? null}
+          appliedName={metrics.data?.branchName ?? null}
           appliedBranchId={appliedBranchId}
         />
       ) : null}
 
-      <KpiRow metrics={metrics.data?.metrics} loading={metrics.isPending} />
+      <KpiRow metrics={metrics.data} loading={metrics.isPending} />
+
+      {/*
+        HOW MUCH OF THE PER-BRANCH ANSWER IS A GUESS — proportionally, or not at
+        all. See `AssumedNote`.
+      */}
+      <AssumedNote metrics={metrics.data} />
 
       <div className="overview__grid">
         <Card className="overview__activity" flush>
@@ -132,12 +140,12 @@ export function Overview() {
 }
 
 /**
- * The applied scope as a plain `branchId | null`, folding "the response carried
- * no echo" into "salon-wide" — which is what such a response in fact contained.
- * Named and exported so the fold happens exactly once and can be asserted.
+ * The applied scope, straight off the echo. A one-line accessor rather than an
+ * inline read, so every claim on this screen goes through one named place and
+ * `scopeWasIgnored` below cannot drift from what the tiles are drawn against.
  */
-export function appliedBranchOf(data: ScopedSalonMetrics | undefined): string | null {
-  return data?.applied?.branchId ?? null;
+export function appliedBranchOf(data: SalonMetrics | undefined): string | null {
+  return data?.branchId ?? null;
 }
 
 /**
@@ -149,7 +157,7 @@ export function appliedBranchOf(data: ScopedSalonMetrics | undefined): string | 
  * back is not that branch. `undefined` data is not a mismatch — nothing is on
  * screen to be wrong about yet.
  */
-export function scopeWasIgnored(selected: string, data: ScopedSalonMetrics | undefined): boolean {
+export function scopeWasIgnored(selected: string, data: SalonMetrics | undefined): boolean {
   if (data === undefined) return false;
   const requested = selected === 'all' ? null : selected;
   if (requested === null) return false;
@@ -200,9 +208,93 @@ export function ScopeNotice({
   );
 }
 
+/* ------------------------------------------------- how much of it is a guess */
+
+/**
+ * One clause of the caveat — "2 of 2 members". Returned only when the doubt is
+ * real, so a zero contributes nothing rather than contributing "0 of 5", which
+ * is noise dressed as precision.
+ */
+function assumedClause(assumed: number, total: number, noun: string): string | null {
+  if (assumed <= 0 || total <= 0) return null;
+  return `${assumed} of ${total} ${noun}`;
+}
+
+/** "a", "a and b", "a, b and c" — an Oxford-comma-free list, as the copy elsewhere sets. */
+function joinClauses(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * THE SIZE OF THE DOUBT BEHIND A PER-BRANCH FIGURE — proportionally, or not at
+ * all.
+ *
+ * ===========================================================================
+ * WHY THIS IS A COUNT AND NOT AN ASTERISK
+ * ===========================================================================
+ * `activeMembers`, `repeatRatePercent` and `upcomingAppointments` CAN be scoped
+ * to a branch, but not exactly: a charge and a booking happen somewhere, and
+ * whether the row RECORDS where is what `transaction.branch_assumed` says.
+ * Today, at a multi-branch salon, the server cannot tell which branch a staff
+ * member is standing in until branch-bound scanner sessions ship, so it includes
+ * the inferred rows in the figure and reports how many they were —
+ * `services/metrics.ts` § "REPORT SEPARATELY".
+ *
+ * The client half of that decision is this component, and its whole value is
+ * that it **disappears on its own**. `branchAssumed` is a count, so when those
+ * sessions land the counts fall to zero, every clause below returns `null`, and
+ * the caveat leaves the UI with no code change and no one remembering to remove
+ * it. A boolean — or a fixed "figures may be approximate" line — would have to be
+ * deleted by hand on the day the world improves, and a rule that must be
+ * revisited to stay true is one this project has already shipped stale twice.
+ *
+ * SO: nothing at `branch=all` (`branchAssumed` is null there — a row attributed
+ * to the wrong branch is still inside the salon, so a salon-wide total is exact
+ * however many rows are assumed), nothing when every count is zero, and
+ * otherwise the ratios, which say "2 of 2" where the figure is entirely a guess
+ * and "1 of 9" where it is barely one. The reader does not need prose to tell
+ * those apart.
+ *
+ * "Branch assumed" is not new wording. `routes/Appointments.tsx` already marks a
+ * booking row with it and `routes/Settings.tsx` already says "has an assumed
+ * branch, so treat the count as approximate" in the branch-closure warning. Same
+ * concept, same words, third place.
+ */
+export function AssumedNote({ metrics }: { metrics: SalonMetrics | undefined }) {
+  const doubt = metrics?.branchAssumed;
+  if (!metrics || !doubt) return null;
+
+  const parts = [
+    assumedClause(doubt.activeMembers, metrics.activeMembers, 'members'),
+    assumedClause(doubt.visits, doubt.visitsTotal, 'visits'),
+    assumedClause(doubt.upcomingAppointments, metrics.upcomingAppointments, 'appointments'),
+  ].filter((part): part is string => part !== null);
+
+  // Every figure behind this branch was recorded, not inferred. Say nothing.
+  if (parts.length === 0) return null;
+
+  return (
+    <p className="overview__kpi-note" role="status">
+      Branch assumed on {joinClauses(parts)} — treat these branch figures as approximate.
+    </p>
+  );
+}
+
 /* ------------------------------------------------------------------ KPI row */
 
-function KpiRow({ metrics, loading }: { metrics: SalonMetrics | undefined; loading: boolean }) {
+/**
+ * Exported for `shell/branchScope.test.tsx`, which renders it directly. The four
+ * tiles are where a null figure would become a false zero, and only rendering
+ * can prove it does not — a source scan sees the branch, not the pixels.
+ */
+export function KpiRow({
+  metrics,
+  loading,
+}: {
+  metrics: SalonMetrics | undefined;
+  loading: boolean;
+}) {
   /*
    * interaction-spec.md §4: money fields skeleton as a bar. Never render
    * `0.000` before data arrives — a zero that turns out to be a loading state
@@ -218,7 +310,44 @@ function KpiRow({ metrics, loading }: { metrics: SalonMetrics | undefined; loadi
     );
   }
 
-  const loadedToday = fils(metrics.loadedTodayFils);
+  /*
+   * =========================================================================
+   * "LOADED TODAY" HAS NO PER-BRANCH ANSWER, AND `?? 0` WOULD BE A LIE
+   * =========================================================================
+   * `loadedTodayFils` and `knetSharePercent` are `null` whenever a branch is
+   * applied — the invariant is `loadedTodayFils === null` iff `branchId !== null`
+   * — because a top-up happens in the customer's app and has no branch to
+   * attribute. Not an unknown branch: NO branch. `services/topup.ts` writes every
+   * such row `branch_assumed = true` unconditionally and nothing on the roadmap
+   * changes that, so the metrics service skips the query under a filter instead
+   * of running it and handing a two-branch salon its whole day's takings under
+   * one branch and 0.000 KD under the other.
+   *
+   * The tempting fix at this line is `fils(metrics.loadedTodayFils ?? 0)`. It
+   * typechecks, it renders, and it puts **0.000 KD** under "Loaded today" for a
+   * merchant who selected Salmiya — reinstating, at the very last layer, the
+   * precise false zero the API was restructured to prevent, and adding a
+   * fifteenth confident-number-that-is-not-true to this project's ledger. The
+   * null is the answer. It gets a rendering, not a default.
+   *
+   * WHAT IT RENDERS: an em dash in the value slot and the reason in the note
+   * slot beneath it. The dash rather than a sentence because the slot is a 32px
+   * display numeral and a sentence there breaks the KPI grid; the note rather
+   * than a `delta` because the delta line is `--avo-positive` green, which is
+   * the register of "+48 this week" and reads as good news about an absence
+   * (`@avo/ui` StatCard § `note`). The tile is NOT hidden: a tile that vanishes
+   * when a branch is picked reads as "this figure does not exist", which is the
+   * argument `Reports.tsx` already makes about a refused card.
+   */
+  /*
+   * Held as locals so the null check below narrows the VALUE rather than a
+   * boolean alias — and so no `?? 0` is needed anywhere to satisfy the
+   * compiler. There is deliberately not one in this file: a reader who finds a
+   * `?? 0` next to money should treat it as a bug, and leaving a dead one here
+   * to appease narrowing would teach the opposite.
+   */
+  const loaded = metrics.loadedTodayFils;
+  const knetShare = metrics.knetSharePercent;
 
   return (
     <div className="overview__kpis">
@@ -229,15 +358,23 @@ function KpiRow({ metrics, loading }: { metrics: SalonMetrics | undefined; loadi
           ? { delta: `+${metrics.activeMembersDelta} this week` }
           : {})}
       />
-      <StatCard
-        label="Loaded today"
-        // formatMoney/formatFils from @avo/types is the only money formatter.
-        value={<Money amount={loadedToday} />}
-        unit="KD"
-        {...(metrics.knetSharePercent > 0
-          ? { delta: `${metrics.knetSharePercent}% via KNET` }
-          : {})}
-      />
+      {loaded === null ? (
+        <StatCard
+          label="Loaded today"
+          value="—"
+          note="Top-ups happen in the app, not at a branch"
+        />
+      ) : (
+        <StatCard
+          label="Loaded today"
+          // formatMoney/formatFils from @avo/types is the only money formatter.
+          value={<Money amount={fils(loaded)} />}
+          unit="KD"
+          {...(knetShare !== null && knetShare > 0
+            ? { delta: `${knetShare}% via KNET` }
+            : {})}
+        />
+      )}
       {/*
         The design shows "+4 pts vs last month" under Repeat rate; that figure
         still does not exist on GET /salons/{id}/metrics, so it is still not

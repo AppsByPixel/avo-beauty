@@ -333,6 +333,21 @@
   min-height: 15px;
 }
 
+/*
+ * The same line, in the neutral register — see StatCard.tsx § `note`. It is
+ * given the muted body colour rather than the positive one because it explains
+ * an ABSENT figure, and "Top-ups happen in the app, not at a branch" set in the
+ * green reserved for "+48 this week" reads as good news about nothing.
+ *
+ * `line-height` is set because this line can wrap where a delta never does: a
+ * delta is three or four words and a note is a reason. The KPI row is a grid, so
+ * the tiles stay level with each other when one of them grows.
+ */
+.avo-stat__delta--note {
+  color: var(--avo-text-muted);
+  line-height: 1.35;
+}
+
 /* ---------------------------------------------------------------- skeleton */
 
 .avo-skeleton {

@@ -669,6 +669,20 @@ a:hover {
  * the header's own sub-line already uses, so it reads as a caption on the
  * heading rather than as a second heading. See routes/Overview.tsx.
  */
+/*
+ * "Branch assumed on 2 of 2 members …" — sits directly under the KPI grid and
+ * only when a branch filter is applied AND something behind those figures was
+ * inferred. The caption register, not a banner: the numbers are usable, they are
+ * simply not exact, and a warn strip would overstate that. See
+ * routes/Overview.tsx § AssumedNote.
+ */
+.overview__kpi-note {
+  margin: -6px 0 16px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
 .overview__card-scope {
   margin-left: 9px;
   font-family: var(--avo-font-ui);

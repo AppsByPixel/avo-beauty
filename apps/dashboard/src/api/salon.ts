@@ -96,92 +96,37 @@ export function useSalon(enabled = true): UseQueryResult<Salon> {
  * salon-wide answer; a string is the branch it applied, and `branchName` is the
  * name to print for it.
  */
-export interface AppliedBranch {
-  branchId: string | null;
-  branchName: string | null;
-}
-
-export interface ScopedSalonMetrics {
-  metrics: SalonMetrics;
-  /**
-   * `undefined` WHEN THE RESPONSE CARRIED NO ECHO AT ALL — an API that predates
-   * `?branch=`. Deliberately a third value rather than being folded into
-   * `{ branchId: null }`: "the server says these are salon-wide" and "the server
-   * did not answer the question" are different facts, and only the second one
-   * means a branch we ASKED for was silently ignored. Overview renders them
-   * differently for that reason.
-   */
-  applied: AppliedBranch | undefined;
-}
-
-function echoField(r: Record<string, unknown>, key: 'branchId' | 'branchName'): string | null {
-  const v = r[key];
-  if (v === null) return null;
-  if (typeof v !== 'string') {
-    throw new Error(`GET /salons/{id}/metrics: ${key} was neither a string nor null.`);
-  }
-  return v;
-}
-
 /**
- * THE ECHO IS READ HERE AND NOT THROUGH `SalonMetricsSchema`, ON PURPOSE.
+ * `GET /salons/{id}/metrics`, PARSED WITH THE SHARED SCHEMA AND NOTHING ELSE.
  *
- * `packages/types` is trunk-owned (CLAUDE.md § Shared packages) and lane C does
- * not widen it. That is not merely a rule to obey here, it is load-bearing:
- * **Zod strips undeclared keys**, so `SalonMetricsSchema.parse(raw)` returns an
- * object with no `branchId` on it whether the server sent one or not. A client
- * that read the echo off the parsed value could never tell an API that ignored
- * `?branch=` from one that honoured it — it would see `undefined` in both cases
- * and would therefore have to guess, which is the whole failure this feature is
- * about. So the echo is read off the RAW body, beside the schema parse rather
- * than through it.
+ * ===========================================================================
+ * THIS USED TO READ THE BRANCH ECHO OFF THE RAW BODY, AND THE REASON EXPIRED
+ * ===========================================================================
+ * When the selector was built, `branchId`/`branchName` were not on
+ * `SalonMetricsSchema` — `packages/types` is trunk-owned and lane C does not
+ * widen it — and **Zod strips undeclared keys**. So a client reading the echo
+ * through the schema would have got `undefined` whether the server sent the
+ * fields or not, and could not have told an API that IGNORED `?branch=` from one
+ * that honoured it. A hand-written read of the raw body sat beside the parse for
+ * exactly that window, with a third `applied: undefined` state for "no echo at
+ * all".
  *
- * Widening `SalonMetricsSchema` with `branchId`/`branchName` is the right
- * long-term home and is a trunk operation; when it lands this helper can go and
- * `applied` can come off the parsed object. Until then the two live side by
- * side and neither is a cast.
+ * Trunk landed the widening at `74ffacf`, REQUIRED-but-nullable, because both
+ * halves are now on `dev` and there is no deploy window in which a conforming
+ * server omits them. That deletes the reason and therefore the code: a server
+ * that forgets the keys now fails loudly at the schema, which is what
+ * required-not-optional is FOR, and is a better answer than the fold it
+ * replaces. Keeping a bespoke second parser next to a schema that declares the
+ * same fields is how two definitions of one shape start disagreeing — the thing
+ * this file's own header is about.
+ *
+ * So there is no `ScopedSalonMetrics` wrapper any more either. The echo is two
+ * fields on `SalonMetrics`, where the contract puts them.
  */
-export function parseMetricsResponse(raw: unknown): ScopedSalonMetrics {
-  const metrics = SalonMetricsSchema.parse(raw);
-  if (typeof raw !== 'object' || raw === null) {
-    // Unreachable — the parse above would have thrown. Narrowing, not a check.
-    throw new Error('GET /salons/{id}/metrics did not answer an object.');
-  }
-  const r = raw as Record<string, unknown>;
-
-  const hasId = 'branchId' in r;
-  const hasName = 'branchName' in r;
-  if (!hasId && !hasName) return { metrics, applied: undefined };
-  if (hasId !== hasName) {
-    /*
-     * HALF AN ECHO IS WORSE THAN NONE. `branchName` alone gives us a name with
-     * nothing to compare the request against; `branchId` alone gives us a scope
-     * we cannot print. Either way the screen would be deciding what to claim
-     * from an incomplete answer, so this fails loudly instead.
-     */
-    throw new Error(
-      'GET /salons/{id}/metrics answered with only one of branchId/branchName. ' +
-        'The contract sends both or neither.',
-    );
-  }
-
-  return {
-    metrics,
-    applied: { branchId: echoField(r, 'branchId'), branchName: echoField(r, 'branchName') },
-  };
+export function parseMetricsResponse(raw: unknown): SalonMetrics {
+  return SalonMetricsSchema.parse(raw);
 }
 
-/**
- * Overview's four KPI tiles, scoped to `branch`.
- *
- * `branch` is `'all'` or a branch id — `BranchScope.tsx`'s vocabulary, which is
- * `routes/Reports.tsx`' vocabulary, which is `?branch=`'s vocabulary. `'all'`
- * OMITS the parameter rather than sending the sentinel: the contract accepts
- * omitted, `''` and `'all'` identically, and omitting is byte-for-byte the
- * request this hook made before branch scoping existed. An API that has not
- * shipped the parameter yet therefore sees no change at all on the default
- * path, which is the degradation this lane was asked to guarantee.
- */
 /**
  * The `?branch=` suffix for one selection — `''` for salon-wide.
  *
@@ -213,7 +158,25 @@ export function branchQuery(branch: string): string {
   return branch === 'all' ? '' : `?branch=${encodeURIComponent(branch)}`;
 }
 
-export function useSalonMetrics(branch: string): UseQueryResult<ScopedSalonMetrics> {
+/**
+ * Overview's four KPI tiles, scoped to `branch`.
+ *
+ * `branch` is `'all'` or a branch id — `BranchScope.tsx`'s vocabulary, which is
+ * `routes/Reports.tsx`' vocabulary, which is `?branch=`'s vocabulary. `'all'`
+ * OMITS the parameter rather than sending the sentinel: the contract accepts
+ * omitted, `''` and `'all'` identically, and omitting is byte-for-byte the
+ * request this hook made before branch scoping existed.
+ *
+ * WHAT COMES BACK IS NOT THE SAME SHAPE PER BRANCH, and the caller must not
+ * treat it as one. `loadedTodayFils` and `knetSharePercent` are **null whenever
+ * `branchId` is non-null** — a top-up happens on a phone and has no branch to
+ * attribute, so the server SKIPS those queries under a filter rather than
+ * running them and handing a two-branch salon its whole day's takings under one
+ * branch and 0.000 KD under the other. `services/metrics.ts` § "A TOP-UP HAS NO
+ * BRANCH" is the argument. `??  0` at the render site would reinstate exactly
+ * the false zero the API was restructured to prevent.
+ */
+export function useSalonMetrics(branch: string): UseQueryResult<SalonMetrics> {
   const salonId = useSalonId();
   return useQuery({
     queryKey: salonKeys.metrics(salonId, branch),
