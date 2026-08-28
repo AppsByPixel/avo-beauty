@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fils, type Fils, type Product } from '@avo/types';
-import { Button, Card, InfoBanner, Money, Skeleton } from '@avo/ui';
+import { Button, Card, ImageSlot, InfoBanner, Money, Skeleton } from '@avo/ui';
 import {
   priceInputValue,
   readPriceInput,
@@ -10,6 +10,12 @@ import {
   useUpdateProduct,
   type ProductPatch,
 } from '../api/products.js';
+import {
+  imageRejection,
+  useProductImage,
+  useRemoveProductImage,
+  useUploadProductImage,
+} from '../api/productImage.js';
 import { useSalon } from '../api/salon.js';
 import { SectionError, WriteError } from './sectionState.js';
 
@@ -134,6 +140,19 @@ export function Shop() {
         <span className="shop__hint">
           Catalog only — no stock counts, no delivery <span className="shop__hint-aside">(phase 2)</span>.
           Buyers pick up at the salon.
+          {/*
+            COPY THE DESIGN DOES NOT CONTAIN, and the constraint is stated ONCE
+            here rather than under every square. Brand kit can afford a caption
+            beside its single slot (design:973, "Drop a square SVG or PNG, at
+            least 1024px"); a catalog cannot repeat one forty times. The size
+            limit is deliberately NOT a number in this sentence — the API owns it
+            (`IMAGE_MAX_BYTES`) and puts it in the 413 body, and a hard-coded
+            "2 MB" here would be a second copy of a rule that is one env var away
+            from being wrong.
+          */}
+          <span className="shop__hint-photo">
+            Drop a photo on a product&rsquo;s square, or click it to browse — PNG, JPEG or WebP.
+          </span>
         </span>
         {products.isPending || drafting ? null : (
           <Button onClick={() => setDrafting(true)}>+ Add product</Button>
@@ -147,6 +166,11 @@ export function Shop() {
              one, not a spinner in the middle of a card. */
           [0, 1, 2, 3, 4].map((n) => (
             <div className="shop__row" key={n}>
+              {/* The square is part of the loaded row's shape, so it is part of
+                  the pending one — interaction-spec.md §4 wants the pending
+                  layout to BE the loaded layout, and a list that grows 52px
+                  taller the moment it resolves is the thing that rule forbids. */}
+              <Skeleton width={52} height={52} radius={14} />
               <Skeleton width="100%" height={40} radius={10} />
               <Skeleton width={130} height={40} radius={10} />
               <Skeleton width={32} height={32} radius={8} />
@@ -158,6 +182,7 @@ export function Shop() {
               <ProductRow
                 key={product.id}
                 product={product}
+                image={<ProductImageCell product={product} />}
                 saving={update.isPending && update.variables?.productId === product.id}
                 retiring={retire.isPending && retire.variables?.productId === product.id}
                 onSave={(patch) =>
@@ -287,6 +312,20 @@ export function ShopModuleOffNotice() {
 
 interface ProductRowProps {
   product: Product;
+  /**
+   * The picture cell, INJECTED RATHER THAN MOUNTED HERE, and the reason is the
+   * one `Shop` already follows for its three mutations: this component is a pure
+   * function of its props and is rendered bare in `shopRender.test.tsx` with no
+   * QueryClient and no session behind it. `ProductImageCell` reads both. Passing
+   * it in keeps the row's price/copy guarantees testable without standing up
+   * half the app to assert that 8500 fils reads as 8.500.
+   *
+   * It is a FRAGMENT of two grid-less flex children — the square and, when there
+   * is something to say, the sentence under the row. See `.shop__image-note`,
+   * which uses `order` to fall to its own line rather than sit in the middle of
+   * the row.
+   */
+  image?: ReactNode;
   saving: boolean;
   retiring: boolean;
   /** Resolves true when the server stored it, false when it refused. */
@@ -294,7 +333,14 @@ interface ProductRowProps {
   onRetire: () => void;
 }
 
-export function ProductRow({ product, saving, retiring, onSave, onRetire }: ProductRowProps) {
+export function ProductRow({
+  product,
+  image = null,
+  saving,
+  retiring,
+  onSave,
+  onRetire,
+}: ProductRowProps) {
   /*
    * `null` means "follow the server". A string means the merchant is editing,
    * and her text wins until it is stored — including across a failed save, so a
@@ -361,6 +407,7 @@ export function ProductRow({ product, saving, retiring, onSave, onRetire }: Prod
   return (
     <>
       <div className="shop__row" data-unsaved={unsaved || undefined}>
+        {image}
         <input
           className="avo-input shop__name"
           aria-label={`Product name — ${savedName}`}
@@ -538,3 +585,195 @@ export function DraftRow({ busy, onCancel, onCreate }: DraftRowProps) {
     </>
   );
 }
+
+/* --------------------------------------------------------------- the picture */
+
+/**
+ * One product's photo: the square, and the sentence under the row when there is
+ * something to say about it.
+ *
+ * A FRAGMENT, ON PURPOSE. Both nodes are direct children of `.shop__row`'s flex
+ * box — a React fragment creates no box — so the square sits at the head of the
+ * row and the note falls to its own line beneath it through `order` and a
+ * full-width basis. A wrapper around the pair would put the sentence inside the
+ * row's 52px column.
+ *
+ * ============================================================================
+ * TWO OBJECT URLS, AND THE COMPONENT OWNS BOTH
+ * ============================================================================
+ * `useProductImage` holds the one for the SERVER's bytes and revokes it in its
+ * own cleanup. This component holds the second: a local preview of the file the
+ * merchant just picked, created from the `File` itself so she watches HER photo
+ * go up rather than a spinner.
+ *
+ * THE PREVIEW OUTLIVES THE UPLOAD ON PURPOSE. Clearing it the instant the 201
+ * lands would drop the row back to `loading` while the authenticated read fetches
+ * the identical bytes it just sent — a picture that appears, vanishes and
+ * reappears, which reads as a failed save. So it is held until the server's own
+ * copy reports `ready`, and revoked then. Same bytes either side of the swap, so
+ * nothing flickers.
+ */
+export function ProductImageCell({ product }: { product: Product }) {
+  const upload = useUploadProductImage();
+  const remove = useRemoveProductImage();
+  const load = useProductImage(product.image);
+
+  /** The file going up, or just gone up and not yet readable from the server. */
+  const [picked, setPicked] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  /**
+   * A src that arrived and would not paint. Keyed on the src itself so a
+   * REPLACEMENT is not tarred with the broken one's verdict — `brokenSrc === src`
+   * is the test, never a bare boolean.
+   */
+  const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
+  /** 201 or 200, in words. Cleared the moment she does anything else. */
+  const [outcome, setOutcome] = useState<'added' | 'changed' | 'removed' | null>(null);
+
+  useEffect(() => {
+    if (!picked) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(picked);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [picked]);
+
+  /*
+   * The handover. `upload.isSuccess` alone would fire on the PREVIOUS upload's
+   * result the moment a second file is picked, so `onPick` resets the mutation
+   * before it starts the next one and this stays a statement about the file
+   * currently in `picked`.
+   */
+  useEffect(() => {
+    if (picked && upload.isSuccess && load.status === 'ready') setPicked(null);
+  }, [picked, upload.isSuccess, load.status]);
+
+  const paintedSrc = previewUrl ?? load.objectUrl;
+  const broken = paintedSrc !== null && brokenSrc === paintedSrc;
+
+  const state = broken
+    ? 'error'
+    : upload.isPending
+      ? 'uploading'
+      : paintedSrc !== null
+        ? 'ready'
+        : load.status === 'loading'
+          ? 'loading'
+          : load.status === 'error'
+            ? 'error'
+            : 'empty';
+
+  const rejection = upload.isError ? imageRejection(upload.error) : null;
+  const removeFailed = remove.isError ? imageRejection(remove.error) : null;
+
+  return (
+    <>
+      <div className="shop__image">
+        <ImageSlot
+          state={state}
+          src={paintedSrc}
+          /*
+           * The product's name, because that is what the picture is OF. `alt` on
+           * a catalog thumbnail beside a field already carrying the same name is
+           * a repetition for a screen reader, but the alternative — `alt=""` — is
+           * worse the moment the row is read out of context.
+           */
+          alt={`${product.name}`}
+          label={
+            state === 'empty'
+              ? `Add a photo to ${product.name}`
+              : `Replace the photo on ${product.name}`
+          }
+          placeholder="Photo"
+          size={52}
+          radius={14}
+          disabled={remove.isPending}
+          removeLabel={`Remove the photo from ${product.name}`}
+          onRemove={
+            /* No ✕ until there is something to take off — and never over a
+               preview that has not landed yet, which would offer to delete an
+               image the server does not have. */
+            product.image && !upload.isPending
+              ? () => {
+                  setOutcome(null);
+                  upload.reset();
+                  remove.mutate(
+                    { productId: product.id },
+                    { onSuccess: () => setOutcome('removed') },
+                  );
+                }
+              : undefined
+          }
+          onImageError={() => setBrokenSrc(paintedSrc)}
+          onPick={(file) => {
+            setOutcome(null);
+            setBrokenSrc(null);
+            remove.reset();
+            upload.reset();
+            setPicked(file);
+            upload.mutate(
+              { productId: product.id, file },
+              {
+                onSuccess: ({ created }) => setOutcome(created ? 'added' : 'changed'),
+                // The preview goes with the failure. Leaving her rejected file on
+                // screen would say the catalog now shows it, and it does not.
+                onError: () => setPicked(null),
+              },
+            );
+          }}
+        />
+      </div>
+
+      {/*
+        ONE LINE PER ROW, AND THE PRIORITY IS DELIBERATE: a refusal outranks a
+        confirmation, and both outrank a read that failed. A merchant whose upload
+        was just refused must not be reading "Photo added" from the attempt before
+        it.
+      */}
+      {rejection ? (
+        <p className="shop__image-note shop__image-note--bad" role="alert">
+          {rejection.message}
+          {rejection.aside ? <span className="shop__image-aside">{rejection.aside}</span> : null}
+        </p>
+      ) : removeFailed ? (
+        <p className="shop__image-note shop__image-note--bad" role="alert">
+          {removeFailed.message}
+          <span className="shop__image-aside">That photo is still on the product.</span>
+        </p>
+      ) : upload.isPending ? (
+        <p className="shop__image-note" role="status">
+          Uploading {picked?.name ?? 'photo'}…
+        </p>
+      ) : remove.isPending ? (
+        <p className="shop__image-note" role="status">
+          Removing the photo…
+        </p>
+      ) : outcome ? (
+        <p className="shop__image-note" role="status">
+          {OUTCOME_COPY[outcome]}
+        </p>
+      ) : load.status === 'error' ? (
+        <p className="shop__image-note shop__image-note--bad" role="alert">
+          {load.message}
+        </p>
+      ) : broken ? (
+        <p className="shop__image-note shop__image-note--bad" role="alert">
+          That photo will not open. Drop a new one on the square to replace it.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * "Added" and "changed" are the 201 and the 200, and they are different things to
+ * say. A replacement is the case where the new picture may look much like the old
+ * one, so the confirmation is the only evidence the write took at all.
+ */
+const OUTCOME_COPY: Record<'added' | 'changed' | 'removed', string> = {
+  added: 'Photo added.',
+  changed: 'Photo changed.',
+  removed: 'Photo removed.',
+};

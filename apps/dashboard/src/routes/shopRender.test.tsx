@@ -29,6 +29,7 @@
  */
 
 import { fils } from '@avo/types';
+import { ImageSlot } from '@avo/ui';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client.js';
@@ -221,5 +222,143 @@ describe('the count line', () => {
     expect(countLabel(0)).toBe('0 products');
     expect(countLabel(1)).toBe('1 product');
     expect(countLabel(5)).toBe('5 products');
+  });
+});
+
+
+/* ------------------------------------------------------------ the picture */
+
+/**
+ * The square, and the four things about it a merchant can see.
+ *
+ * `ProductImageCell` is not rendered here — it reads a QueryClient and a session,
+ * and `Shop.tsx` injects it into `ProductRow` precisely so this file can keep
+ * asserting the row's price and copy guarantees without standing up half the app.
+ * What IS rendered is the leaf it wraps, where every one of these properties
+ * lives.
+ *
+ * THE DESIGN BUNDLE DRAWS NO PRODUCT IMAGE UI. The vocabulary is borrowed from
+ * the Brand kit slot at `AVO Merchant Dashboard.dc.html:972` — square, rounded,
+ * a placeholder word, drop-or-click. `ImageSlot.tsx` carries the whole argument
+ * and the two forced departures.
+ */
+describe('a product with no photo is the common case, and must not look broken', () => {
+  const noop = () => {};
+
+  it('offers to add one, and says nothing about failure', () => {
+    const { container } = render(
+      <ImageSlot state="empty" label="Add a photo to Argan hair oil 100ml" onPick={noop} />,
+    );
+    expect(screen.getByLabelText('Add a photo to Argan hair oil 100ml')).not.toBeNull();
+    // The design's own idiom: a quiet word inside the square, not an icon of a
+    // torn page. An empty slot is an invitation, not an error.
+    expect(container.textContent ?? '').toContain('Photo');
+    expect(screen.queryByRole('alert')).toBeNull();
+    // Nothing to take off a product that has nothing on it.
+    expect(container.querySelector('.avo-slot__remove')).toBeNull();
+  });
+
+  it('draws a broken photo as broken, never as empty', () => {
+    /*
+     * THE DISTINCTION THAT MATTERS. An image that will not load rendered as an
+     * empty slot tells a merchant her product has no photo when it has one —
+     * so she uploads it again to fix a problem that was never hers.
+     */
+    const { container } = render(
+      <ImageSlot state="error" label="Replace the photo on Argan hair oil 100ml" onPick={noop} />,
+    );
+    expect(container.querySelector('.avo-slot__broken')).not.toBeNull();
+    expect(container.querySelector('.avo-slot__placeholder')).toBeNull();
+  });
+
+  it('shows her own picture while the bytes go up, and claims no percentage', () => {
+    const { container } = render(
+      <ImageSlot state="uploading" src="blob:local/1" label="x" onPick={noop} />,
+    );
+    // Her file, painted from a local object URL — not a spinner over a grey box.
+    expect(container.querySelector<HTMLImageElement>('.avo-slot__img')?.src).toBe('blob:local/1');
+    expect(container.querySelector('.avo-slot__busy')).not.toBeNull();
+    // `fetch` reports no upload progress, so nothing here may look determinate.
+    expect(container.querySelector('progress')).toBeNull();
+    expect(container.textContent ?? '').not.toMatch(/\d+\s*%/);
+    // And it cannot be clicked into a second upload while the first is in flight.
+    expect(container.querySelector<HTMLButtonElement>('.avo-slot__hit')?.disabled).toBe(true);
+  });
+
+  it('offers the ✕ only over a photo the server actually has', () => {
+    const withPhoto = render(
+      <ImageSlot state="ready" src="blob:x" label="x" onRemove={noop} onPick={noop} />,
+    );
+    expect(withPhoto.container.querySelector('.avo-slot__remove')).not.toBeNull();
+    cleanup();
+
+    // Mid-upload the row is painting a LOCAL preview; a ✕ there would offer to
+    // delete an image the server does not have yet.
+    const uploading = render(
+      <ImageSlot state="uploading" src="blob:x" label="x" onRemove={noop} onPick={noop} />,
+    );
+    expect(uploading.container.querySelector('.avo-slot__remove')).toBeNull();
+  });
+});
+
+describe('the SVG a merchant drags off her desktop reaches the server', () => {
+  /**
+   * `accept` FILTERS THE FILE DIALOG AND DOES NOTHING TO A DROP — non-negotiable
+   * #7's sentence, literally true of this attribute. The likeliest first failure
+   * on this screen is a logo dragged straight in, and it must reach the API's 415,
+   * because the API's refusal names SVG and says why it is refused. A silent local
+   * reject would read as a drop target that randomly ignores files.
+   */
+  it('names the three types it takes and never offers SVG', () => {
+    const { container } = render(<ImageSlot state="empty" label="x" onPick={() => {}} />);
+    const accept = container.querySelector<HTMLInputElement>('.avo-slot__input')?.accept ?? '';
+    expect(accept).toBe('image/png,image/jpeg,image/webp');
+    // The Brand kit caption says "Drop a square SVG or PNG"; this API refuses SVG
+    // outright. The conflict is flagged in ImageSlot.tsx, not papered over here.
+    expect(accept).not.toContain('svg');
+  });
+
+  it('hands a dropped SVG straight to the caller rather than swallowing it', () => {
+    const onPick = vi.fn();
+    const { container } = render(<ImageSlot state="empty" label="x" onPick={onPick} />);
+    const svg = new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' });
+
+    fireEvent.drop(container.querySelector('.avo-slot')!, {
+      dataTransfer: { files: [svg] },
+    });
+
+    expect(onPick).toHaveBeenCalledTimes(1);
+    expect(onPick.mock.calls[0]![0].name).toBe('logo.svg');
+  });
+
+  it('re-fires for the same file picked twice, so a fixed file is not ignored', () => {
+    /*
+     * A merchant who is told her file is wrong, fixes it in place, and picks it
+     * again by the same name gets NO change event unless the input is cleared —
+     * and a slot that does nothing reads as broken.
+     */
+    const onPick = vi.fn();
+    const { container } = render(<ImageSlot state="empty" label="x" onPick={onPick} />);
+    const input = container.querySelector<HTMLInputElement>('.avo-slot__input')!;
+    const file = new File(['x'], 'oil.jpg', { type: 'image/jpeg' });
+
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(input.value).toBe('');
+    expect(onPick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the row makes room for the square', () => {
+  it('places the injected picture cell at the head of the row', () => {
+    const { container } = renderRow({ image: <i data-testid="cell" /> });
+    const row = container.querySelector('.shop__row')!;
+    expect(row.firstElementChild?.tagName.toLowerCase()).toBe('i');
+  });
+
+  it('renders nothing at all when no cell is injected, so the bare row still works', () => {
+    const { container } = renderRow();
+    expect(container.querySelector('.shop__row')?.firstElementChild?.tagName.toLowerCase()).toBe(
+      'input',
+    );
   });
 });

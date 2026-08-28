@@ -161,8 +161,31 @@ const TEMPLATE = String.raw`(?:[^\x60$\\]|\\.|\$(?!\{)|\$\{(?:[^{}\x60]|\x60[^\x
 /** One `${…}` interpolation, nesting-aware, for reducing a path literal. */
 const INTERP = new RegExp(String.raw`\$\{(?:[^{}\x60]|\x60[^\x60]*\x60)*\}`, 'g');
 
+/**
+ * `authedRequest` AND `authedRequestDetailed`, AND THE SECOND NAME IS WHY THIS
+ * COMMENT EXISTS.
+ *
+ * `\b` after `authedRequest` does not match `authedRequestDetailed` — `D` is a word
+ * character, so the boundary is not there. When the image upload was written against
+ * the new wrapper, `POST /v1/salons/{id}/products/{pid}/image` became invisible to
+ * this sweep and the suite went GREEN, one test heavier, having quietly stopped
+ * covering a route it should cover.
+ *
+ * That is precisely the failure this file's header describes — "a zero result is a
+ * claim about the parser" — arriving through a new function name rather than a new
+ * regex. A scan anchored on an identifier has to be widened every time the identifier
+ * is, and nothing but a pin makes that visible. There is one below.
+ *
+ * ONE CALL REMAINS OUT OF REACH BY CONSTRUCTION, and it is named rather than left to
+ * be discovered: `useProductImage` in `productImage.ts` requests `ImageRef.url`, a
+ * server-minted ABSOLUTE url held in a variable. There is no path literal at the call
+ * site for `normalisePath` to reduce, so it matches nothing here. It resolves to
+ * `GET /v1/images/:imageId`, which `routes/images.ts` gates with `requireSalonScoped`
+ * — a dashboard session satisfies it, so the property this file checks holds. It just
+ * holds by reading, not by this parse.
+ */
 const CALL = new RegExp(
-  String.raw`authedRequest\b[\s\S]{0,160}?\(\s*'(merchant|owner)'\s*,\s*` +
+  String.raw`authedRequest(?:Detailed)?\b[\s\S]{0,160}?\(\s*'(merchant|owner)'\s*,\s*` +
     `(${BT}${TEMPLATE}${BT}|'[^']*')` +
     String.raw`\s*(?:,\s*\{([\s\S]{0,240}?)\})?`,
   'g',
@@ -314,6 +337,24 @@ describe('the parsers', () => {
     expect(m).toHaveLength(1);
     expect(routeFor({ scope: 'merchant', name: `GET ${normalisePath(m[0]![2]!)}`, where: 'x' })?.name)
       .toBe('GET /salons/:id/audit');
+  });
+
+  /**
+   * THE NAME THAT DEFEATED THE ANCHOR. `authedRequestDetailed` is the same call with
+   * the response status attached — the image upload needs it, because 201 and 200 mean
+   * "added" and "changed". It carries a merchant session and reaches a gated route
+   * exactly as `authedRequest` does, so it belongs in this sweep, and for one commit it
+   * was not in it.
+   */
+  it('reads a call made through the status-carrying wrapper', () => {
+    const src =
+      "authedRequestDetailed<ImageRef>('merchant', `/v1/salons/${salonId}/products/${id}/image`, { method: 'POST' })";
+    const m = [...src.matchAll(CALL)];
+    expect(m).toHaveLength(1);
+    expect(normalisePath(m[0]![2]!)).toBe(`/v1/salons/${WILDCARD}/products/${WILDCARD}/image`);
+    expect(
+      routeFor({ scope: 'merchant', name: `POST ${normalisePath(m[0]![2]!)}`, where: 'x' })?.name,
+    ).toBe('POST /v1/salons/:id/products/:oid/image');
   });
 
   it('picks the method out of the options object, defaulting to GET', () => {

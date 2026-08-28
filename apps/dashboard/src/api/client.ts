@@ -9,13 +9,38 @@ export class ApiError extends Error {
   readonly code: string;
   /** No response at all: DNS, CORS, the laptop's wifi. Distinct from a 5xx. */
   readonly offline: boolean;
+  /**
+   * WHATEVER ELSE THE ERROR BODY CARRIED, kept rather than thrown away.
+   *
+   * Most refusals in this API are a `{ error, message }` pair and the message is
+   * the whole of what a user needs. The image endpoints are the first that
+   * attach machine-readable facts to a refusal — `image_too_large` carries
+   * `maxBytes`, `unsupported_image_type` carries `accepted`,
+   * `content_type_mismatch` carries `declared` and `actual` — and
+   * `api/src/routes/images.ts` puts them there so a client can act on the limit
+   * "with a number it did not hard-code". Dropping them here made that
+   * impossible and nothing noticed, because nothing had asked yet.
+   *
+   * READ IT, NEVER RENDER IT RAW. The sentence a merchant sees is still
+   * `message`, server-authored. These are for decisions.
+   */
+  readonly details: Readonly<Record<string, unknown>>;
 
-  constructor(message: string, opts: { status: number; code: string; offline?: boolean }) {
+  constructor(
+    message: string,
+    opts: {
+      status: number;
+      code: string;
+      offline?: boolean;
+      details?: Record<string, unknown>;
+    },
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = opts.status;
     this.code = opts.code;
     this.offline = opts.offline ?? false;
+    this.details = opts.details ?? {};
   }
 
   /**
@@ -78,25 +103,103 @@ export interface RequestOptions {
    * future charge/top-up/void call cannot be written without one.
    */
   idempotencyKey?: string;
+  /**
+   * A FILE, SENT AS ITSELF. `POST /v1/salons/{id}/products/{pid}/image` takes the
+   * raw bytes as the body with the file's own media type in `Content-Type` —
+   * not multipart, not base64. `api/src/routes/images.ts` states the reasons; the
+   * one that lands here is that the dashboard sends the `File` straight from the
+   * input and builds no form.
+   *
+   * MUTUALLY EXCLUSIVE WITH `body`, which JSON-encodes. Passing both is a
+   * programming error and the two branches below cannot both apply.
+   */
+  raw?: { body: BodyInit; contentType: string };
+  /**
+   * What the SUCCESS body is. `json` (the default) parses; `blob` hands back the
+   * bytes, which is how an authenticated image is read — see `productImage.ts`.
+   * An ERROR body is always read as JSON regardless: this API's refusals are
+   * `{ error, message }` on every route including the byte ones.
+   */
+  expect?: 'json' | 'blob';
+}
+
+/**
+ * A response with the status still attached.
+ *
+ * `POST … /image` answers **201 when the slot was empty and 200 when it replaced
+ * an existing image**, and `api/src/routes/images.ts` says why in as many words:
+ * "the dashboard needs it to choose between 'added' and 'changed' in its own
+ * toast." `request` returns only the parsed body, so that distinction died at
+ * this boundary until there was something here to carry it.
+ */
+export interface Detailed<T> {
+  status: number;
+  body: T;
+}
+
+/**
+ * ABSOLUTE URLS, AND THE BEARER IS NOT SENT TO STRANGERS.
+ *
+ * Every other call in this client is a path against `API_BASE_URL`. `ImageRef.url`
+ * is different: it is absolute, minted server-side from `PUBLIC_BASE_URL`
+ * (`api/src/services/imageAttachment.ts` § imageUrl), and it is what the product
+ * row holds. So this function accepts either.
+ *
+ * That opens a door and it is closed here rather than trusted shut. A URL that
+ * arrives in a response body is data, and attaching the session's bearer to an
+ * arbitrary origin because a server asked us to would hand the token to whoever
+ * that origin belongs to. So a cross-origin absolute URL is REFUSED before the
+ * fetch — not silently downgraded to an anonymous request, which would answer 401
+ * and read as an expired session.
+ */
+function resolveUrl(path: string, token: string | null | undefined): string {
+  if (!/^https?:\/\//i.test(path)) return `${API_BASE_URL}${path}`;
+  if (!token) return path;
+
+  let target: URL;
+  let base: URL;
+  try {
+    target = new URL(path);
+    base = new URL(API_BASE_URL, globalThis.location?.href ?? 'http://localhost');
+  } catch {
+    throw new ApiError('That link could not be read.', { status: 0, code: 'bad_url' });
+  }
+  if (target.origin !== base.origin) {
+    throw new ApiError('That link points somewhere we will not send your session.', {
+      status: 0,
+      code: 'foreign_origin',
+    });
+  }
+  return target.toString();
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, signal, token, idempotencyKey } = options;
+  return (await requestDetailed<T>(path, options)).body;
+}
+
+export async function requestDetailed<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<Detailed<T>> {
+  const { method = 'GET', body, raw, signal, token, idempotencyKey, expect = 'json' } = options;
 
   const headers: Record<string, string> = {
-    Accept: 'application/json',
+    Accept: expect === 'blob' ? 'image/*' : 'application/json',
     ...scenarioHeader(),
   };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (raw) headers['Content-Type'] = raw.contentType;
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
+  const url = resolveUrl(path, token);
+
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(url, {
       method,
       headers,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(raw ? { body: raw.body } : body === undefined ? {} : { body: JSON.stringify(body) }),
       ...(signal ? { signal } : {}),
     });
   } catch (cause) {
@@ -112,13 +215,17 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     const payload = (await response.json().catch(() => null)) as {
       error?: string;
       message?: string;
+      [key: string]: unknown;
     } | null;
-    throw new ApiError(payload?.message ?? response.statusText, {
+    const { error, message, ...details } = payload ?? {};
+    throw new ApiError(message ?? response.statusText, {
       status: response.status,
-      code: payload?.error ?? 'http_error',
+      code: error ?? 'http_error',
+      details,
     });
   }
 
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  if (response.status === 204) return { status: response.status, body: undefined as T };
+  if (expect === 'blob') return { status: response.status, body: (await response.blob()) as T };
+  return { status: response.status, body: (await response.json()) as T };
 }
