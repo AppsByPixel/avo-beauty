@@ -376,8 +376,23 @@ export async function createBooking(
     // at 22:00 Kuwait time on the 19th is the 19th, whatever UTC calls it.
     const localDate = salonWallClock(startsAt, s.timezone).date;
 
+    /**
+     * ON `tx`. See `charge.ts` § "ON `tx`, NOT ON `db`" for the mechanism — a
+     * query on the base handle inside a transaction asks the ten-connection pool
+     * for a second connection while holding one, and twelve concurrent bookings
+     * wedge the API process with no Postgres deadlock ever being raised.
+     *
+     * SAFE HERE FOR A REASON WORTH STATING, because `computeAvailability` is not
+     * purely a read. On the google-sourced path it writes: `resolveWorkingWindow`
+     * raises or resolves a `calendar_disconnected` merchant notification. Folding
+     * those into this transaction means a booking that then fails rolls the
+     * notification back. Accepted — the raise is `onConflictDoNothing` against a
+     * partial index, and the SAME call on the READ path
+     * (`GET /artists/{id}/availability`, routes/artists.ts, no transaction) has
+     * already raised it before any customer can pick a slot from that grid.
+     */
     const availability = await computeAvailability(
-      db,
+      tx,
       a.id,
       m.salonId,
       parseDate(localDate, 'startsAt'),
@@ -899,8 +914,11 @@ export async function rescheduleBooking(
     if (!s) throw notFound('unknown_salon', 'No such salon.');
 
     const localDate = salonWallClock(startsAt, s.timezone).date;
+    // On `tx`, for the reason `createBooking` above gives. Nothing has been
+    // written in this transaction yet — the booking row is still locked, not
+    // updated — so the grid this reads is the same one `db` would have returned.
     const availability = await computeAvailability(
-      db,
+      tx,
       row.artistId,
       row.salonId,
       parseDate(localDate, 'startsAt'),

@@ -46,7 +46,6 @@
  */
 
 import { and, eq, gte, inArray, lt } from 'drizzle-orm';
-import type { Db } from '../db/client';
 import { artist as artistTable, type ArtistWindows } from '../db/schema/artist';
 import { artistCalendarConnection, booking } from '../db/schema/booking';
 import { salon as salonTable } from '../db/schema/salon';
@@ -164,7 +163,7 @@ interface WorkingWindow {
  * never read anything, which is the failure this whole function exists to avoid.
  */
 async function resolveWorkingWindow(
-  db: Db,
+  db: Executor,
   a: typeof artistTable.$inferSelect,
   s: typeof salonTable.$inferSelect,
   weekday: number,
@@ -275,8 +274,17 @@ export interface AvailabilityOptions {
   now?: Date;
 }
 
+/**
+ * `Executor`, not `Db`. `booking.ts` calls this on its own `tx` — on the base
+ * handle it asks the pool for a second connection while the booking transaction
+ * holds one, and twelve concurrent bookings wedge the process. See `charge.ts`
+ * § "ON `tx`, NOT ON `db`". Note this function WRITES on the google path
+ * (`resolveWorkingWindow` raises a `calendar_disconnected` notification), so the
+ * handle it is given decides whether that write is part of the caller's
+ * transaction.
+ */
 export async function computeAvailability(
-  db: Db,
+  db: Executor,
   artistId: string,
   salonId: string,
   date: CalendarDate,

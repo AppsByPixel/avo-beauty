@@ -208,9 +208,34 @@ export async function performCharge(
       // handler has already established that `m` is a real member of the
       // caller's own salon, so "no such member" would be false, and the artist
       // needs to be told the CODE is wrong, not the customer.
+      /**
+       * ON `tx`, NOT ON `db`, AND THAT IS NOT A TIDY-UP.
+       *
+       * `db/client.ts` opens `postgres(url, { max: 10 })` and a `db.transaction()`
+       * RESERVES one of those ten for its whole life. `peekToken(db, …)` here asked
+       * the SAME pool for a SECOND connection while holding one, so ten concurrent
+       * charges held all ten and each waited for an eleventh that cannot exist.
+       * Postgres never sees the cycle — it runs through a JavaScript pool, which is
+       * invisible to it — so `deadlock_timeout` never fires and nothing times out.
+       * It wedged the PROCESS, not the endpoint: a plain
+       * `GET /members/me/wallet-token` was measured hanging twelve seconds after
+       * the burst was over.
+       *
+       * `scannerLimit.ts` § "WHERE THE CHECK SITS" is the long version of the same
+       * mechanism, and the limiter was moved OUT of this transaction for it. The
+       * limiter had to move because its counter row must survive a rollback. A peek
+       * is a plain SELECT that must not, so it moves the other way: onto `tx`.
+       *
+       * DO NOT "FIX" A RECURRENCE BY RAISING `max`. With `max: N`, N concurrent
+       * requests still deadlock — it moves the cliff, it does not remove it.
+       *
+       * `e2e/connection-pool.test.ts` fires twelve charges each carrying its own
+       * token and fails if any goes unanswered. `scannerLimit.int.test.ts`'s burst
+       * CANNOT see this: it sends no `token`, so it never enters this branch.
+       */
       let peeked;
       try {
-        peeked = await peekToken(db, input.token, { salonId: ctx.principal.salonId });
+        peeked = await peekToken(tx, input.token, { salonId: ctx.principal.salonId });
       } catch (err) {
         if (err instanceof TokenOutsideSalonError) {
           throw conflict(
