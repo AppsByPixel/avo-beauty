@@ -175,3 +175,44 @@ export function registerErrorHandler(app: FastifyInstance): void {
     reply.code(404).send({ error: 'not_found', message: 'No such endpoint.' }),
   );
 }
+
+/**
+ * 403 — LOYALTY AUTHORITY MOVED TO AVO. A REVERSAL, NOT A GAP.
+ *
+ * `design/README.md:136` says of the merchant loyalty editor: "(This closes the
+ * phase-2 open item — merchants now edit their own tier rules.)", and line 283
+ * lists "merchant-editable tier rules" among the decisions CLOSED in a previous
+ * revision. Aftab has since reversed it: *"Owner console will control the loyalty
+ * part not the merchant (it will be read only for merchant)."* So this is a
+ * deliberate change of mind about a settled decision, and the code should read
+ * that way — the merchant editor was built correctly and is now withdrawn.
+ *
+ * ------------------------------------------------------------------
+ * WHY THIS IS NOT THE GENERIC `forbidden()`, WHICH WAS THE DEFAULT.
+ * ------------------------------------------------------------------
+ * The generic 403 for this endpoint carried `PERMISSION_COPY.loyalty`: "You
+ * don't have permission to change loyalty settings. A manager can grant it."
+ *
+ * That sentence is now FALSE, and falsely actionable. A manager cannot grant it.
+ * Nobody at the salon can grant it, because the authority no longer lives at the
+ * salon — a merchant who reads that copy goes to her owner, who turns every chip
+ * on, and the button still fails. The generic refusal would send her to the one
+ * person guaranteed not to be able to help.
+ *
+ * The distinct `error` code is what lets the CLIENT say something true, which is
+ * the second half of the same problem: a merchant mid-edit when this deploys is
+ * holding a draft and a Publish button, and the dashboard has to be able to tell
+ * a withdrawn capability from a missing permission. `error` is the contract that
+ * clients switch on (see this file's header); `forbidden` is switched on by
+ * every permission gate in the API, so it cannot carry this meaning.
+ *
+ * The copy names AVO because that is who can act now. Arabic is owed — this is
+ * new product copy, and #12 makes Arabic a first-class layout rather than a
+ * translation pass. Reported to trunk rather than invented here.
+ */
+export const loyaltyReadOnly = () =>
+  new ApiError(
+    403,
+    'loyalty_read_only',
+    'Loyalty rules are set by AVO and cannot be changed here. Contact AVO to request a change.',
+  );

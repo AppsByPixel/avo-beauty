@@ -44,7 +44,7 @@ import {
   requireSalonScoped,
   requireSameSalon,
 } from '../auth/principal';
-import { badRequest, conflict, notFound } from '../http/errors';
+import { badRequest, conflict, loyaltyReadOnly, notFound } from '../http/errors';
 import { parseBusinessHours, parseE164 } from '../http/fields';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
@@ -71,7 +71,19 @@ import { loyaltyConfigOf } from './loyalty';
 const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
-const MERCHANT_EDITABLE = new Set([
+/**
+ * EXPORTED so `salons.test.ts` can assert against the REAL set.
+ *
+ * It used to recover this set by difference — `PLATFORM_EDITABLE` minus `city`
+ * and `ownerPhone` — with the comment "the merchant set is module-private". That
+ * held only while those two were the ONLY difference, and the loyalty reversal
+ * ended it: the reconstruction silently kept the five loyalty fields in its idea
+ * of the merchant set, so the suite went on passing while testing a set the
+ * product no longer has. A test that derives its expectation from the thing it is
+ * testing cannot fail when the thing changes, which is the failure mode this
+ * whole file exists to prevent one layer down.
+ */
+export const MERCHANT_EDITABLE = new Set([
   'name',
   /**
    * `{ booking, shop }` — the shape `GET /salons/{id}` serves and the shape
@@ -103,11 +115,13 @@ const MERCHANT_EDITABLE = new Set([
    * on one of two doors into one column is the hole the tier ladder had.
    */
   'brandColor',
-  'loyaltyMode',
-  'tiers',
-  'stampTarget',
-  'stampReward',
-  'stampRewardAr',
+  /**
+   * `loyaltyMode`, `tiers`, `stampTarget`, `stampReward` and `stampRewardAr`
+   * WERE HERE, AND ARE NOW CONSOLE-ONLY. See `LOYALTY_FIELDS` below: loyalty
+   * authority moved from the merchant to AVO, and this was the OTHER door into
+   * it. Removing them from this set is the half of that change that is easy to
+   * forget, because the endpoint everyone thinks of is `PUT /salons/{id}/loyalty`.
+   */
   'depositFils',
   'noShowReturnMinutes',
   /**
@@ -145,7 +159,35 @@ const MERCHANT_EDITABLE = new Set([
  * at all. Adding a plan write here would be inventing the cheap half of a
  * subscription model. Reported, not built.
  */
-const PLATFORM_ONLY_EDITABLE = new Set(['city', 'ownerPhone']);
+const PLATFORM_ONLY_EDITABLE = new Set([
+  'city',
+  'ownerPhone',
+  /**
+   * THE FIVE LOYALTY FIELDS, MOVED HERE FROM `MERCHANT_EDITABLE`.
+   *
+   * A REVERSAL, NOT A GAP — routes/loyalty.ts carries the argument in full, and
+   * `design/README.md:136` records the decision being reversed ("merchants now
+   * edit their own tier rules"). They are console-only for the same reason
+   * `PUT /salons/{id}/loyalty` is: Aftab moved the authority to AVO.
+   *
+   * They belong in the console set rather than in neither set, because the
+   * console's salon editor genuinely draws them — "loyalty structure with tier
+   * thresholds/bonuses or stamp target", per `PLATFORM_EDITABLE`'s own note —
+   * and `PATCH /v1/platform/salons/{id}` is gated on `sections.salons`, which is
+   * exactly the gate the loyalty PUT now takes. Same authority, same fields, two
+   * routes that were already a superset pair. Nothing widens.
+   *
+   * `city` and `ownerPhone` are here because they are ACCOUNT FACTS. These five
+   * are here for a different reason — a withdrawn capability — and the
+   * distinction is worth keeping in view: if the loyalty decision is ever
+   * reversed back, these five move and those two do not.
+   */
+  'loyaltyMode',
+  'tiers',
+  'stampTarget',
+  'stampReward',
+  'stampRewardAr',
+]);
 
 /**
  * What `PATCH /v1/platform/salons/{id}` accepts: everything a merchant may edit,
@@ -179,6 +221,12 @@ const NULLABLE_ARABIC = new Set(['nameAr', 'stampRewardAr']);
  * The fields that describe what a visit and a top-up are worth. Touching any of
  * them sends the whole loyalty configuration through the publish validator —
  * see the block comment in the PATCH handler.
+ *
+ * SINCE THE AUTHORITY REVERSAL, this set does a second job: it is what
+ * `buildSalonPatch` matches on to refuse a MERCHANT these fields with the true
+ * reason rather than a generic `not_editable`. Both jobs are the same list, and
+ * it is one list on purpose — a second copy is the defect this file records
+ * against the tier ladder twice already.
  */
 const LOYALTY_FIELDS = new Set([
   'loyaltyMode',
@@ -495,6 +543,32 @@ export function buildSalonPatch(
   const keys = Object.keys(body);
   if (keys.length === 0) throw badRequest('invalid_request', 'Nothing to change.');
 
+  /**
+   * THE LOYALTY FIELDS ARE REFUSED FIRST, AND WITH THEIR OWN ERROR.
+   *
+   * They would already be refused one line down — they are no longer in
+   * `MERCHANT_EDITABLE` — but as `400 not_editable`, "These fields cannot be
+   * edited here: tiers." That message is the one this route's own comment warns
+   * against: it "sends somebody looking for a bug in the wrong place". `tiers`
+   * IS editable here, by AVO, through this very function with the console's set;
+   * what changed is who may. A merchant told the field is not editable here goes
+   * looking for the route where it is, finds `PUT /salons/{id}/loyalty`, and is
+   * refused there too, for a reason the first refusal never gave her.
+   *
+   * `403 loyalty_read_only` is the same answer both doors give, which is the
+   * property worth having: one withdrawn capability, one code, wherever a client
+   * knocks. See `http/errors.ts § loyaltyReadOnly`.
+   *
+   * KEYED ON THE `editable` SET, NOT ON THE PRINCIPAL. This function takes no
+   * principal — deliberately, see its header — and `editable.has('tiers')` is
+   * exactly the question "is this the console's set?" asked in the vocabulary
+   * the function already has. A caller cannot get the merchant refusal and the
+   * console's fields at the same time, because they are the same fact.
+   */
+  if (!editable.has('tiers') && keys.some((k) => LOYALTY_FIELDS.has(k))) {
+    throw loyaltyReadOnly();
+  }
+
   const rejected = keys.filter((k) => !editable.has(k));
   if (rejected.length > 0) {
     /**
@@ -622,7 +696,17 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(serialiseSalon(s, await openBranchesOf(s.id)));
   });
 
-  /** perms.loyalty — the loyalty editor writes through here. */
+  /**
+   * perms.loyalty — the Settings screen writes through here.
+   *
+   * IT USED TO SAY "the loyalty editor writes through here", AND THAT IS NO
+   * LONGER TRUE. The five loyalty fields left `MERCHANT_EDITABLE` when loyalty
+   * authority moved to AVO; this route now carries brand colour, deposit,
+   * modules, timezone, business hours, social and the Arabic name — settings,
+   * not rules. `perms.loyalty` survives as the gate on that screen, which is a
+   * narrower meaning than the name suggests. routes/loyalty.ts and the
+   * `perms.settings` escalation below both record it.
+   */
   app.patch<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
     const p = requireDashboardPerm(req, 'loyalty');
     requireSameSalon(p, req.params.id);
