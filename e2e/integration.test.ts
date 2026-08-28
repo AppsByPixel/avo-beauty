@@ -393,76 +393,120 @@ const claimableChannels = (txId: string, asOf = 'now()'): string[] => {
  * Leaving it out is what made these two specs fail with a constraint violation
  * rather than an assertion.
  *
- * AND ONE UPDATE IS NOT ENOUGH, WHICH IS A LOST UPDATE AND NOT A TIMING OPINION.
- * -----------------------------------------------------------------------------
- * The park puts the rows outside the CLAIM predicate. It does nothing about a send
- * the worker had ALREADY CLAIMED before the park ran, and that send finishes into
- * `markSent`:
+ * ONE UPDATE IS NOW ENOUGH, AND IT WAS NOT ALWAYS — THE HISTORY IS THE POINT.
+ * ---------------------------------------------------------------------------
+ * The park puts the rows outside the CLAIM predicate. It used to do nothing about
+ * a send the worker had ALREADY CLAIMED before the park ran, because that send
+ * finished into a `markSent` that read:
  *
  *     UPDATE receipt_job SET status='sent', sent_at=now(), available_at=now()
  *      WHERE id = $1
  *
- * — keyed on `id`, with no guard on status. So the sequence is:
+ * — keyed on `id`, with no guard on status. So the sequence WAS:
  *
  *     worker      claims the email row      status='sending'
  *     parkOutbox  parks both rows           status='queued', available_at +1h
  *     worker      the send lands            status='sent',   available_at = now()
  *
- * and the park is silently gone from that row. `claimableChannels` filters on
- * `status IN ('queued','failed')`, so the email channel simply vanishes from the
- * answer and the spec reports `[ 'whatsapp' ]` against `[ 'email', 'whatsapp' ]` —
- * a message that names neither the worker nor the race.
+ * and the park was silently gone from that row. `claimableChannels` filters on
+ * `status IN ('queued','failed')`, so the email channel simply vanished from the
+ * answer and the spec reported `[ 'whatsapp' ]` against `[ 'email', 'whatsapp' ]` —
+ * a message that named neither the worker nor the race.
  *
  * SEEN ONCE IN A FULL-SUITE RUN AND NOT IN THREE STANDALONE RE-RUNS, which is the
- * signature of a window this narrow: the logging driver returns almost instantly,
- * so the worker is only mid-send for a moment, and the park has to land inside it.
+ * signature of a window this narrow, and the reason this paragraph is still here
+ * after the fix: the logging driver returns almost instantly, so the worker is
+ * only mid-send for a moment, and the park has to land inside that moment. A
+ * standalone re-run of one file barely has a worker running; a full suite has
+ * dozens of transactions settling while the worker polls, so the moment comes up.
+ * If this helper ever misbehaves again, that asymmetry is the first thing to
+ * recognise and the last thing to conclude anything from — a green standalone run
+ * is not evidence about this helper.
  *
- * THE FIX IS TO CONFIRM THE PARK RATHER THAN TO ASSUME IT. Re-parking converges,
- * because a claimed row can only be overwritten by the one send already in flight
- * on it — an hour out, the claim predicate cannot select it again. Two consecutive
- * clean reads before returning, so the check cannot pass in the same gap the park
- * did.
+ * FIXED IN `da442bc` (decision 72), AND THE PARK IS NOW SELF-ENFORCING.
+ * --------------------------------------------------------------------
+ * Every write in `receiptWorker.ts` that follows a claim — `markSent`,
+ * `markFailed`, and the give-back on an unhandled channel — now carries the claim
+ * in its `WHERE` via `stillOurs`:
  *
- * IT THROWS RATHER THAN RETURNING QUIETLY IF THE PARK NEVER HOLDS. A helper that
- * gives up and lets the assertion fail is how this cost an afternoon in the first
- * place: the failure has to name the outbox, not the channel list.
+ *     id = $1 AND status = 'sending' AND attempts = <the claim's attempts>
+ *
+ * and reports whether it landed, which `processJob` turns into `'lost'`. So the
+ * late send in the sequence above is REFUSED rather than applied.
+ *
+ * WHICH MEANS THIS PARK FENCES ITS OWN ROWS, ON TWO INDEPENDENT TERMS.
+ * `attempts = 0` is the interesting one, and it is not incidental. `claimJobs` is
+ * the only place `attempts` is INCREMENTED — the give-back on an unhandled channel
+ * decrements it back, and nothing else writes the column at all — and the claim
+ * increments by `attempts + 1` off a column `receipt_job_attempts_non_negative`
+ * floors at 0, with Postgres `RETURNING` handing back the NEW value. So the
+ * `attempts` a claim CARRIES, which is the value `stillOurs` compares against, is
+ * always at least 1 (`RECEIPT_MAX_ATTEMPTS` is a positive int, so the claim
+ * predicate's `attempts < max` cannot empty that range). It can never be 0.
+ * Setting `attempts = 0` therefore refuses every in-flight claim on the
+ * `attempts` term ALONE, whatever the status says — and the `status = 'queued'`
+ * this park also writes is a second, separately sufficient fence. A lease-steal is
+ * refused the same way, which is why `attempts` and not just `status` is the term
+ * that carries the weight.
+ *
+ * AND `claimJobs` ITSELF — the one write that does NOT carry `stillOurs` — cannot
+ * reach a parked row either: it selects `available_at <= now()`, and the park sets
+ * `available_at` an hour out. Both clocks are the DATABASE's, so there is no skew
+ * to argue about. Every interleaving converges. If the claim's `SELECT ... FOR
+ * UPDATE SKIP LOCKED` reaches the row first, the park overwrites it and the
+ * in-flight write is refused; if the park holds the lock first, `SKIP LOCKED`
+ * means the claim passes the row by.
+ *
+ * AND NO OTHER WRITER IN THE REPO CAN MOVE A PARKED ROW, which was worth checking
+ * rather than assuming, because a guarded `markSent` buys nothing if something else
+ * still writes keyed on `id`. The full census of `receipt_job` writes outside this
+ * file: `services/receipts.ts` INSERTs, once per transaction, inside the money
+ * transaction that created it — so it cannot add a row to a `txId` that already has
+ * its pair; `services/erasure.ts` and `db/seed.ts` and `support/tenancy-harness.ts`
+ * DELETE, which cannot resurrect a park (and would fail this helper's count check
+ * loudly if one ever ran mid-spec); and the three guarded writes above. There is no
+ * admin retry or resend endpoint yet. If one lands, it is the first thing to suspect
+ * when this throws.
+ *
+ * SO THE RE-PARKING LOOP IS GONE — deliberately, not by tidying. It existed to
+ * converge against a writer that could not be fenced. Now that the writer is
+ * fenced, a loop would only convert the appearance of a NEW concurrent writer
+ * into a silent success, and a new writer on this table is exactly the thing a
+ * QA helper should be shouting about.
+ *
+ * IT STILL VERIFIES, AND IT STILL THROWS. A helper that returns quietly on a
+ * state it did not create is how this cost an afternoon in the first place: the
+ * failure has to name the outbox, not the channel list. One park, one read back.
  */
 function parkOutbox(txId: string): void {
-  /** Rows that are NOT parked: the worker can still see them, or has sent them. */
-  const strays = (): number =>
-    Number(
-      scalar(
-        `select count(*) from receipt_job
-          where transaction_id='${txId}'
-            and (status <> 'queued' or sent_at is not null or available_at <= now())`,
-      ),
-    );
+  psql(`
+    UPDATE receipt_job
+       SET status = 'queued', attempts = 0, last_error = NULL, sent_at = NULL,
+           available_at = now() + interval '1 hour'
+     WHERE transaction_id = '${txId}';
+  `);
 
-  let clean = 0;
-  for (let attempt = 1; attempt <= 12; attempt++) {
-    if (clean === 0) {
-      psql(`
-        UPDATE receipt_job
-           SET status = 'queued', attempts = 0, last_error = NULL, sent_at = NULL,
-               available_at = now() + interval '1 hour'
-         WHERE transaction_id = '${txId}';
-      `);
-    }
-    // Each read is its own `docker exec psql`, so consecutive reads are naturally
-    // tens of milliseconds apart — the settle this needs, without a sleep that
-    // would have to be justified with a number nobody can defend.
-    if (strays() === 0) {
-      if (++clean === 2) return;
-    } else {
-      clean = 0;
-    }
-  }
+  /** Rows that are NOT parked: the worker can still see them, or has sent them. */
+  const strays = Number(
+    scalar(
+      `select count(*) from receipt_job
+        where transaction_id='${txId}'
+          and (status <> 'queued' or sent_at is not null or available_at <= now())`,
+    ),
+  );
+  if (strays === 0) return;
 
   throw new Error(
-    `parkOutbox could not hold ${txId}'s receipt rows still. Something keeps moving them ` +
-      'out of `queued` or pulling `available_at` back to now — the receipt worker finishing ' +
-      'a send it claimed before the park is the known cause, and `markSent` keying on `id` ' +
-      'with no status guard is why it can. The outbox now reads: ' +
+    `parkOutbox could not hold ${txId}'s receipt rows still — ${strays} row(s) are out of ` +
+      '`queued`, carry a `sent_at`, or have `available_at` back at now(). TREAT THIS AS A NEW ' +
+      'CAUSE. The race this helper used to retry around — a claimed send landing after the ' +
+      'park, via a `markSent` keyed on `id` alone — was fixed in `da442bc` (decision 72): ' +
+      'every post-claim write in `receiptWorker.ts` now carries `status=\'sending\' AND ' +
+      'attempts=<the claim\'s>`, and this park\'s `attempts = 0` refuses all of them on its ' +
+      'own. So do not go looking for that missing guard; it is there. Look for a writer this ' +
+      'helper does not know about — a new endpoint or job updating `receipt_job` keyed on ' +
+      '`id`, a claim predicate that stopped respecting `available_at`, or a second suite ' +
+      'sharing this database. The outbox now reads: ' +
       scalar(
         `select coalesce(string_agg(channel::text || ':' || status::text || ':' ||
                   coalesce(sent_at::text,'-'), ' ' order by channel::text), '(no rows)')
@@ -599,6 +643,111 @@ describe('one settled payment queues two independent receipts', () => {
     // immediate. Without this the spec above would pass on a predicate that
     // ignored `available_at` altogether.
     expect(claimableChannels(txId, "now() + interval '5 minutes'")).toEqual([]);
+  });
+
+  /**
+   * `parkOutbox` PARKS AGAINST A CLAIM THAT IS STILL IN FLIGHT — the race itself,
+   * staged rather than waited for.
+   *
+   * The helper above no longer re-parks, and "the suite went green" is not the
+   * evidence for that, because the window it used to lose was narrow enough to
+   * show up once in a full-suite run and never in a standalone one. Absence of a
+   * flake proves nothing on this timescale. So this stages the interleaving
+   * directly and asserts the outcome.
+   *
+   * The claim is reproduced here in SQL rather than by racing the live worker,
+   * because the point is not "can we hit the window" — it is "when the window is
+   * hit, what happens". A hand-written claim is the same row state the worker's
+   * own claim produces (`status='sending'`, `attempts` incremented, `available_at`
+   * pushed out by the lease), which is all `stillOurs` looks at.
+   *
+   * Lane A stages the same race from inside `send()` in
+   * `api/src/services/receiptWorker.int.test.ts` — "does not resurrect a receipt
+   * another writer parked while the send was in flight", whose `park()` helper is
+   * commented as this function's effect, verbatim. This is the e2e-level mirror:
+   * same race, real HTTP-settled transaction, real database, real SQL.
+   */
+  it('parks a row out from under a claim already in flight, and the late send cannot take it back', async () => {
+    const txId = await settleATopUp('receipts-park-race');
+    precondition(
+      channelsFor(txId).length === 2,
+      'this case needs both channels queued to say anything',
+    );
+    parkOutbox(txId);
+
+    // A worker claims the email row, exactly as `claimJobs` would, and is now
+    // "mid-send": the row is `sending` with the claim's generation on it.
+    psql(`
+      UPDATE receipt_job
+         SET status = 'sending', attempts = attempts + 1,
+             available_at = now() + interval '2 minutes'
+       WHERE transaction_id = '${txId}' AND channel = 'email';
+    `);
+    const claimedAttempts = Number(
+      scalar(
+        `select attempts from receipt_job where transaction_id='${txId}' and channel='email'`,
+      ),
+    );
+    // The generation counter is never 0 on a claimed row, which is the fact the
+    // park leans on. If this ever reads 0, the reasoning in `parkOutbox` is void.
+    expect(claimedAttempts, 'a claimed row must carry a non-zero generation').toBeGreaterThan(0);
+
+    // ONE park, no retry. This is the call under test.
+    parkOutbox(txId);
+
+    /**
+     * Now the send lands, late, with the CURRENT guarded predicate — `stillOurs`
+     * spelled out in SQL. It must match zero rows.
+     */
+    const landed = Number(
+      scalar(
+        `with done as (
+           UPDATE receipt_job
+              SET status = 'sent', sent_at = now(), last_error = NULL, available_at = now()
+            WHERE transaction_id = '${txId}' AND channel = 'email'
+              AND status = 'sending' AND attempts = ${claimedAttempts}
+          RETURNING id
+         ) select count(*) from done`,
+      ),
+    );
+    expect(
+      landed,
+      'the guarded markSent landed on a parked row — `stillOurs` is not fencing the claim',
+    ).toBe(0);
+
+    // And the park is intact: both rows still queued, unsent, an hour out.
+    expect(outboxOf(txId)).toBe('email:queued:0 whatsapp:queued:0');
+    expect(claimableChannels(txId)).toEqual([]);
+    expect(
+      claimableChannels(txId, "now() + interval '90 minutes'"),
+      'the parked rows did not come back at all — the park overshot, which breaks the specs above',
+    ).toEqual(['email', 'whatsapp']);
+
+    /**
+     * THE COUNTERFACTUAL, so this spec fails for the right reason if the guard is
+     * ever removed: the OLD unguarded statement — `WHERE id = $1` — does land on
+     * the same parked row. That is the lost update the retry loop existed to
+     * paper over, demonstrated rather than asserted from memory.
+     *
+     * It runs last and is left in place; the spec owns this transaction, and the
+     * park it just destroyed is not needed again.
+     */
+    const wouldHaveLanded = Number(
+      scalar(
+        `with done as (
+           UPDATE receipt_job
+              SET status = 'sent', sent_at = now(), last_error = NULL, available_at = now()
+            WHERE transaction_id = '${txId}' AND channel = 'email'
+          RETURNING id
+         ) select count(*) from done`,
+      ),
+    );
+    expect(
+      wouldHaveLanded,
+      'the unguarded write no longer reaches the row either — this spec is no longer ' +
+        'demonstrating the race it claims to, and the docblock needs re-checking',
+    ).toBe(1);
+    expect(claimableChannels(txId, "now() + interval '90 minutes'")).toEqual(['whatsapp']);
   });
 
   /**
