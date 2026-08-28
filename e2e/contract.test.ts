@@ -980,6 +980,56 @@ const UNMODELLED: Record<string, string> = {
     'confirmation from the write, so a key on one and not the other is a screen that contradicts ' +
     'the tap that produced it. WORTH A SCHEMA — see the note to trunk in the lane report; ' +
     'packages/types is trunk-owned, so this lane pins rather than adds one.',
+  /**
+   * THE IMAGE BYTES, arriving with lane A's `images.ts` in the merge of dev `b4e5cf3` —
+   * the fifth new surface this census has named on arrival, and the first one where
+   * "there is no schema" is FALSE and the entry is still correct.
+   *
+   * `ImageRefSchema` EXISTS. Trunk landed it in `packages/types` (`7c403ba`) in the same
+   * merge, and `ProductSchema.image` / `ServiceSchema.image` are `ImageRefSchema.nullable()`
+   * — so this file's probes for `GET /salons/:id/products` and `GET /salons/:id/services`
+   * ALREADY drive it, through the rows that carry a picture. Writing "no schema in
+   * packages/types" here would be false in the exact direction the § note above
+   * `NEEDS_PLATFORM_CREDENTIAL` warns about: a route recorded as having no schema when it
+   * has one is a drift nobody looks for.
+   *
+   * WHAT IS TRUE IS NARROWER AND IS WHY THIS IS UNMODELLED ANYWAY: `ImageRef` describes the
+   * REFERENCE, not this route's response. The reference is what `POST …/{products,services}/
+   * {oid}/image` returns and what a catalog row embeds — id, url, contentType, width,
+   * height, byteSize, all JSON. THIS route returns the FILE: a PNG/JPEG/WebP body under the
+   * stored `content-type`. There is no object to `safeParse` and `contract-drift.ts`'s
+   * deep pre/post comparison — the entire mechanism of this file — has nothing to compare.
+   * That is a genuinely unmodellable response, not a missing schema, and the two are
+   * different facts about the product.
+   *
+   * SO I AGREE WITH LANE A'S REASON AND HAVE SHARPENED IT RATHER THAN PASTED IT. "It serves
+   * raw octets and has no response schema to probe" is right about the octets; on the day it
+   * was written `ImageRefSchema` had not landed and "no response schema" was unambiguous.
+   * It is not any more, and an entry in this map that reads as "packages/types is silent
+   * about images" would send the next person to add the schema that is already there.
+   *
+   * AND IT IS NOT UNASSERTED. This route's contract is its HEADERS — the stored
+   * `content-type` rather than the uploader's claim, `nosniff`, `default-src 'none'; sandbox`,
+   * `inline` disposition, a year of `immutable` private cache, and an ETag that is the
+   * stored checksum. Every one of those is pinned in `api/src/routes/images.int.test.ts`
+   * (:248-255) against bytes that test uploaded itself, which is lane A's column and the
+   * right file for them: they are a property of the handler, not of a shared type.
+   *
+   * A PROBE HERE WOULD ALSO BE VACUOUS TODAY, by this file's own rule 2. `api/src/db/seed.ts`
+   * creates no image row at all, so there is no id to fetch — a probe would have to perform
+   * an upload first, which is `tenancy.test.ts`'s job in this suite and is done there.
+   */
+  'GET /v1/images/:imageId':
+    'the image BYTES — a PNG, JPEG or WebP body under the stored content-type, not JSON, ' +
+    'so there is no object for a schema to describe and no pre/post comparison to make. ' +
+    'NOT "packages/types is silent about images": ImageRefSchema exists and this file ' +
+    'already drives it through ProductSchema.image and ServiceSchema.image on the two ' +
+    'catalog probes. It describes the REFERENCE that POST …/image returns and a catalog ' +
+    'row embeds; this route serves the file the reference points at. Its real contract is ' +
+    'its headers (stored content-type, nosniff, sandbox CSP, immutable private cache, ' +
+    'checksum ETag), pinned in api/src/routes/images.int.test.ts. Its tenancy gate — ' +
+    'requireSalonScoped plus the image\'s own salon, deliberately no permission — is ' +
+    'pinned in permission-census.test.ts\'s classification ledger.',
   'GET /_gateway/:ref':
     'the sandbox PSP\'s hosted page. Serves HTML to a browser, not JSON to a client, ' +
     'and exists only under the test driver.',

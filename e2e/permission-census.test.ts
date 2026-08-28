@@ -63,9 +63,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
+  ambiguousRegistrations,
+  censusLedger,
   censusOfRoutes,
   nameOf,
   pairOf,
+  singleArgumentCallSites,
   stripComments,
   type GatedRoute,
 } from './support/perm-census.js';
@@ -521,6 +524,367 @@ describe('the census reads the route table, and the reading is itself checked', 
 });
 
 // ===========================================================================
+
+
+// ===========================================================================
+// THE COVERAGE PIN — a census that covers less than it did must SAY SO
+// ===========================================================================
+
+/**
+ * EVERY ROUTE THIS CENSUS COULD READ, AND WHAT IT DECIDED ABOUT IT.
+ *
+ * ------------------------------------------------------------------------
+ * WHY THIS EXISTS, WHEN THE FILE ALREADY HAS FOUR SELF-CHECKS
+ * ------------------------------------------------------------------------
+ * Everything above this line polices the census's READING. Nothing above it polices
+ * the census's REACH, and those are different failures:
+ *
+ *   a misread gate produces a probe that fails BY NAME — that is the whole design
+ *   an unread ROUTE produces no probe at all, and no failure, and no name
+ *
+ * The guards that look like they cover the second do not, and the slack in each of them
+ * is measurable rather than arguable:
+ *
+ *   `totalRoutes > 80` against 129 registrations. FORTY-EIGHT routes can vanish inside
+ *   that floor.
+ *
+ *   `registrations.size === census.totalRoutes` reconciles the scan against ITSELF. A
+ *   route that leaves the scan leaves both sides of the equation, so it still balances —
+ *   this catches a route counted twice or classified twice, never one that was not read.
+ *
+ *   `merchantGates >= 38` against 57 today, and `platformGates >= 19` against 33. That is
+ *   NINETEEN merchant gates and FOURTEEN console gates of headroom, and the headroom grows
+ *   every time lane A ships an endpoint, because a floor on a SUM lets a new gate PAY FOR
+ *   a lost one. The four image gates that arrived this week widened it by four.
+ *
+ * Every one of those is a real check and none of them is this one.
+ *
+ * ------------------------------------------------------------------------
+ * MEASURED, ON THIS TREE, BEFORE ANY OF IT WAS WRITTEN
+ * ------------------------------------------------------------------------
+ * `api/src/routes/staff.ts` registers the scanner's member resolve as
+ * `app.post('/scans', handler)`. Extracting that path — `const SCANS_ROUTE = '/scans'`,
+ * then `app.post(SCANS_ROUTE, handler)` — is a refactor nobody would stop at review. It
+ * takes this census from 129 routes to 128, and THIS FILE FROM 183 SPECS TO 181, GREEN.
+ * The two specs that stopped existing are the permission-off probe and the grant-back
+ * probe on `POST /scans → scanner`. Nothing anywhere reported that the API's most
+ * security-sensitive scanner write had stopped being probed.
+ *
+ * That is not hypothetical drift; it is the same defect twice on this project already.
+ * `api/src/routes/images.ts` carries lane A's own account of losing four merchant writes
+ * to a curried handler factory, and lane C lost an endpoint out of
+ * `merchantScopeGates.test.ts` — 44 cases to 43 — by extracting a path into a helper.
+ * Both were found by a human noticing, which is the mechanism this suite exists to replace.
+ *
+ * ------------------------------------------------------------------------
+ * WHY A PINNED SET AND NOT A TIGHTER NUMBER
+ * ------------------------------------------------------------------------
+ * A tighter number was the obvious answer and it is the wrong one. `expect(gates).toBe(90)`
+ * goes red every time lane A ships an endpoint, which trains whoever is holding the merge
+ * to move the number without reading why it moved — the exact habit the floor above was
+ * written to avoid, and how "29 call sites" in one brief became 31 in a census and 35 in
+ * this file. A number also cannot say WHICH gate went; a set can, and the name is the only
+ * part of the failure that is actionable.
+ *
+ * So: one line per decision, and TWO specs, because a pin with one is a pin that rots.
+ *
+ *   NOTHING DISAPPEARS. A pinned line the census no longer produces is a route or a gate
+ *   that stopped being readable. It may still be enforced perfectly at runtime — lane A's
+ *   four were — and that is precisely the point: it is now UNPROBED, and unprobed is what
+ *   #7 forbids.
+ *
+ *   NOTHING ARRIVES UNPINNED. Without this the pin under-covers a little more with every
+ *   merge and ends up policing the 2026 API for ever. It also puts a DELIBERATE ACT in
+ *   front of every coverage change: a helper extraction that hides a route can no longer
+ *   land quietly, because making this file green again means DELETING a line from a
+ *   ledger, in another lane's column, in a diff a reviewer can see.
+ *
+ * The failure messages print paste-ready blocks, because a ledger that is annoying to
+ * amend is a ledger someone will delete.
+ *
+ * ------------------------------------------------------------------------
+ * WHAT THIS STILL DOES NOT CATCH, SAID PLAINLY
+ * ------------------------------------------------------------------------
+ * A route BORN unreadable was never pinned, so its absence proves nothing.
+ * `ambiguousRegistrations()` is the answer to that half and has its own spec below. What
+ * neither catches is a NEW route whose registration is readable, whose scope guard is
+ * readable, and whose permission gate is two levels of helper down — it would arrive
+ * classified as `[requireSalonScoped]`, which is a legitimate shape (`GET /v1/images/:imageId`
+ * genuinely is one). It is pinned as such the day it lands, so it can never SILENTLY
+ * become that later; whether it should have carried a permission is a judgement this
+ * scanner cannot make and a reviewer reading the new ledger line can.
+ *
+ * ------------------------------------------------------------------------
+ * FORMAT
+ * ------------------------------------------------------------------------
+ *   `POST /scans → scanner`                 gated, and on which permission
+ *   `GET /members/me [requireMember]`       authenticated, no permission applies
+ *   `POST /webhooks/:provider [ANONYMOUS]`  authenticates nobody; ANONYMOUS above says why
+ *
+ * A gated route contributes one line PER GATE PATH, not per registration — a disjunctive
+ * wrapper contributes two, an indexed permission table one per key. The probe set is the
+ * thing that must not shrink, and it stopped equalling the route count the day
+ * `REPORT_PERMISSION` was expanded.
+ */
+const PINNED_COVERAGE: string[] = [
+  'DELETE /artists/:id/calendar → team',
+  'DELETE /bookings/:id [requireMember]',
+  'DELETE /members/me/deletion [requireMember]',
+  'DELETE /salons/:id/branches/:bid → loyalty',
+  'DELETE /salons/:id/products/:pid → shop',
+  'DELETE /staff/:id → team',
+  'DELETE /v1/platform/admins/:id → admins',
+  'DELETE /v1/platform/policies/draft/:docId → policies',
+  'DELETE /v1/platform/support/topics/:id → policies',
+  'DELETE /v1/salons/:id/campaigns/:cid → marketing',
+  'DELETE /v1/salons/:id/products/:oid/image → shop',
+  'DELETE /v1/salons/:id/promotions/happy-hours/:hid → marketing',
+  'DELETE /v1/salons/:id/services/:oid/image → appointments',
+  'GET /_gateway/:ref [ANONYMOUS]',
+  'GET /artists/:id/availability [requireSalonScoped]',
+  'GET /artists/me [requireScannerScope]',
+  'GET /artists/me/bookings [requireScannerScope]',
+  'GET /bookings [requireMember]',
+  'GET /bookings/:id [requireMember]',
+  'GET /charges → charges',
+  'GET /members → scanner',
+  'GET /members/:id → scanner',
+  'GET /members/me [requireMember]',
+  'GET /members/me/deletion [requireMember]',
+  'GET /members/me/notifications [requireMember]',
+  'GET /members/me/policy-acceptance [requireMember]',
+  'GET /members/me/transactions [requireMember]',
+  'GET /members/me/wallet-token [requireMember]',
+  'GET /report-downloads/:token [ANONYMOUS]',
+  'GET /salons/:id [requireSalonScoped]',
+  'GET /salons/:id/activity → dashboard',
+  'GET /salons/:id/artists → team',
+  'GET /salons/:id/artists/bookable [requireSalonScoped]',
+  'GET /salons/:id/audit → dashboard',
+  'GET /salons/:id/bookings → appointments',
+  'GET /salons/:id/branches/:bid/closure-preview → loyalty',
+  'GET /salons/:id/loyalty → loyalty',
+  'GET /salons/:id/metrics → dashboard',
+  'GET /salons/:id/products → shop',
+  'GET /salons/:id/reports/best-selling-services → appointments',
+  'GET /salons/:id/reports/best-selling-services.csv → appointments',
+  'GET /salons/:id/reports/customers → team',
+  'GET /salons/:id/reports/customers.csv → team',
+  'GET /salons/:id/reports/products-sold → shop',
+  'GET /salons/:id/reports/products-sold.csv → shop',
+  'GET /salons/:id/reports/sales → dashboard',
+  'GET /salons/:id/reports/sales.csv → dashboard',
+  'GET /salons/:id/services [requireSalonScoped]',
+  'GET /staff → team',
+  'GET /staff/me [requireStaff]',
+  'GET /topups/:id [requireMember]',
+  'GET /v1/images/:imageId [requireSalonScoped]',
+  'GET /v1/platform/accounts → accounts',
+  'GET /v1/platform/activity → activity',
+  'GET /v1/platform/admins → admins',
+  'GET /v1/platform/audit → audit',
+  'GET /v1/platform/campaigns → approvals',
+  'GET /v1/platform/messaging-policy → approvals',
+  'GET /v1/platform/metrics → analytics',
+  'GET /v1/platform/policies [ANONYMOUS]',
+  'GET /v1/platform/policies/draft → policies',
+  'GET /v1/platform/salons → salons',
+  'GET /v1/platform/salons/:id → salons',
+  'GET /v1/platform/settings → controls',
+  'GET /v1/platform/support [requirePrincipal]',
+  'GET /v1/salons/:id/campaigns → marketing',
+  'GET /v1/salons/:id/messaging-policy → marketing',
+  'GET /v1/salons/:id/promotions [requireSalonScoped]',
+  'GET /v1/support/tickets → dashboard',
+  'GET /v1/support/tickets → policies',
+  'PATCH /members/me [requireMember]',
+  'PATCH /members/me/notifications [requireMember]',
+  'PATCH /salons/:id → loyalty',
+  'PATCH /salons/:id/branches/:bid → loyalty',
+  'PATCH /salons/:id/products/:pid → shop',
+  'PATCH /staff/:id → team',
+  'PATCH /v1/platform/admins/:id → admins',
+  'PATCH /v1/platform/messaging-policy → approvals',
+  'PATCH /v1/platform/policies/draft/:docId → policies',
+  'PATCH /v1/platform/salons/:id → salons',
+  'PATCH /v1/platform/settings → controls',
+  'PATCH /v1/platform/support/channels → policies',
+  'PATCH /v1/platform/support/topics/:id → policies',
+  'PATCH /v1/salons/:id/promotions/happy-hours/:hid → marketing',
+  'PATCH /v1/salons/:id/social/:linkId → loyalty',
+  'PATCH /v1/support/tickets/:id → dashboard',
+  'PATCH /v1/support/tickets/:id → policies',
+  'POST /_gateway/:ref [ANONYMOUS]',
+  'POST /accounts/:id/reset-link → accounts',
+  'POST /artists/:id/calendar/connect → team',
+  'POST /auth/member/password-reset [ANONYMOUS]',
+  'POST /auth/member/password-reset/request [ANONYMOUS]',
+  'POST /auth/member/session [ANONYMOUS]',
+  'POST /auth/member/signup [ANONYMOUS]',
+  'POST /auth/platform/password-reset [ANONYMOUS]',
+  'POST /auth/platform/session [ANONYMOUS]',
+  'POST /auth/refresh [ANONYMOUS]',
+  'POST /auth/sign-out [requirePrincipal]',
+  'POST /auth/staff/password-reset [ANONYMOUS]',
+  'POST /auth/web/session [ANONYMOUS]',
+  'POST /bookings [requireMember]',
+  'POST /bookings/:id/reschedule [requireMember]',
+  'POST /charges → scanner',
+  'POST /members/:id/adjustments → accounts',
+  'POST /members/me/deletion [requireMember]',
+  'POST /members/me/password [requirePrincipal]',
+  'POST /members/me/phone-change [requireMember]',
+  'POST /members/me/phone-change/:id/verify [requireMember]',
+  'POST /members/me/policy-acceptance [requireMember]',
+  'POST /orders [requireMember]',
+  'POST /salons/:id/branches → loyalty',
+  'POST /salons/:id/products → shop',
+  'POST /salons/:id/reports/best-selling-services/download-url → appointments',
+  'POST /salons/:id/reports/customers/download-url → team',
+  'POST /salons/:id/reports/products-sold/download-url → shop',
+  'POST /salons/:id/reports/sales/download-url → dashboard',
+  'POST /scans → scanner',
+  'POST /staff → team',
+  'POST /staff/:id/password-reset → team',
+  'POST /staff/session [ANONYMOUS]',
+  'POST /topups [requireMember]',
+  'POST /v1/platform/admins → admins',
+  'POST /v1/platform/admins/:id/password-reset → admins',
+  'POST /v1/platform/campaigns/:cid/decision → approvals',
+  'POST /v1/platform/policies/discard → policies',
+  'POST /v1/platform/policies/draft → policies',
+  'POST /v1/platform/policies/publish → policies',
+  'POST /v1/platform/salons → salons',
+  'POST /v1/platform/support/topics → policies',
+  'POST /v1/salons/:id/campaigns → marketing',
+  'POST /v1/salons/:id/products/:oid/image → shop',
+  'POST /v1/salons/:id/promotions/happy-hours → marketing',
+  'POST /v1/salons/:id/services/:oid/image → appointments',
+  'POST /v1/support/tickets [requireMember]',
+  'POST /voids → void',
+  'POST /webhooks/:provider [ANONYMOUS]',
+  'PUT /artists/:id/availability → team',
+  'PUT /artists/me/availability [requireScannerScope]',
+  'PUT /salons/:id/loyalty → loyalty',
+  'PUT /v1/salons/:id/promotions/boosts → marketing',
+];
+
+describe('the census still reaches every route it reached when this was pinned', () => {
+  const live = new Set(censusLedger(census));
+  const pinned = new Set(PINNED_COVERAGE);
+
+  it('the pin is not vacuous — it is the size of the API, not a stub', () => {
+    // If PINNED_COVERAGE were ever emptied to make a merge green, the two specs
+    // below would both pass and this file would silently stop pinning anything.
+    expect(PINNED_COVERAGE.length).toBeGreaterThan(120);
+    expect(
+      new Set(PINNED_COVERAGE).size,
+      'PINNED_COVERAGE has duplicate lines, so its length is not a coverage figure',
+    ).toBe(PINNED_COVERAGE.length);
+  });
+
+  it('every pinned route and gate is still one the census can read', () => {
+    const lost = PINNED_COVERAGE.filter((l) => !live.has(l));
+    const blind = ambiguousRegistrations();
+    expect(
+      lost,
+      'THE CENSUS NOW COVERS LESS THAN IT DID. These routes or gates were readable when ' +
+        'this ledger was pinned and are not any more, so the probes generated from them ' +
+        'have stopped being generated — silently, because a probe that is not generated ' +
+        'cannot fail:\n  ' +
+        lost.join('\n  ') +
+        '\n\nThis is NOT evidence that the endpoint is unguarded at runtime. Lane A\'s four ' +
+        'image writes were enforced correctly the whole time they were invisible here. It ' +
+        'is evidence that non-negotiable #7\'s second half — "a test that calls it directly ' +
+        'with the permission off" — no longer holds for them.\n\n' +
+        'THREE THINGS IT CAN BE, in the order worth checking:\n' +
+        '  1. the route was DELETED. Delete its line here too, in the same commit.\n' +
+        '  2. the route was RENAMED or its gate changed permission. Replace the line.\n' +
+        '  3. the registration or the guard stopped being a LITERAL — a path moved into a ' +
+        'const, a handler moved into a factory, a guard moved into a helper. Move it back, ' +
+        'or resolve it in support/perm-census.ts. Do not delete the line.\n\n' +
+        (blind.length > 0
+          ? 'AND THE SCANNER IS ALREADY REPORTING UNREADABLE REGISTRATION SITES, which ' +
+            'makes (3) the likely answer:\n  ' +
+            blind.map((b) => `${b.method} at ${b.file}:${b.line} — first argument \`${b.first}\``).join('\n  ')
+          : 'No registration site is unreadable, so (3) would have to be a guard rather ' +
+            'than a path — check for a helper introduced between the registration and the ' +
+            'gate.'),
+    ).toEqual([]);
+  });
+
+  it('every route and gate the census reads is pinned', () => {
+    const unpinned = [...live].filter((l) => !pinned.has(l)).sort();
+    expect(
+      unpinned,
+      'The census reads routes or gates this ledger does not list. That is the normal ' +
+        'outcome of lane A shipping an endpoint, and the amendment is deliberate on ' +
+        'purpose: it is what stops a coverage DROP from being hidden by an unrelated ' +
+        'coverage GAIN, which is the failure mode the aggregate floors above cannot see.\n\n' +
+        'Read each line before pasting it. A `→ permission` line means a probe now drives ' +
+        'that gate. A `[scopeGuard]` line means the route authenticates somebody and ' +
+        'carries NO permission — legitimate for a customer\'s own record or a shared ' +
+        'catalog read, and a bug for a merchant write. A `[ANONYMOUS]` line means the ' +
+        'route authenticates nobody and also needs an entry in ANONYMOUS above.\n\n' +
+        'Paste into PINNED_COVERAGE:\n' +
+        unpinned.map((l) => `  '${l.replace(/'/g, "\\'")}',`).join('\n'),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * THE OTHER HALF: a route BORN unreadable.
+ *
+ * The pin above compares today against a recorded yesterday, so it cannot see a route
+ * that was never readable — it was never pinned, and its absence looks exactly like a
+ * route that does not exist. That is not a corner case: it is lane A's images slice as
+ * originally written, and it is what a developer produces the first time they factor two
+ * near-identical registrations into a shared constant.
+ *
+ * So the scanner is made to fail on a call site it CAN see and CANNOT resolve, which is
+ * the honest thing for a tool that reads text to say. `ambiguousRegistrations()` carries
+ * the discriminator and why the receiver's NAME could not be it.
+ */
+describe('no route registration is written in a way this census cannot read', () => {
+  it('the ambiguity scan is not vacuous — it still sees the calls that are NOT routes', () => {
+    /**
+     * NON-VACUOUS, and this is the assertion that keeps the one below honest. The scan
+     * separates routes from Map reads and Drizzle deletes by ARITY, so if it ever stopped
+     * seeing the one-argument calls entirely — a regex that matched nothing, a walker that
+     * threw and was caught — the spec below would pass over an empty list for ever.
+     *
+     * Fifteen today: `names.get`, `labels.get`, `images.get`, `imageStore.get`, `db.delete`
+     * and `tx.delete` across six route files, plus the colocated int tests that live in
+     * this directory. A floor rather than an equality, for the reason the gate floors give.
+     */
+    expect(
+      singleArgumentCallSites(),
+      'the ambiguity scan no longer finds the one-argument .get/.delete calls it is ' +
+        'supposed to be distinguishing routes FROM, so it is not reading the files at all',
+    ).toBeGreaterThanOrEqual(10);
+  });
+
+  it('every registration-shaped call site resolves to a path literal', () => {
+    const blind = ambiguousRegistrations();
+    expect(
+      blind.map((b) => `${b.method} at ${b.file}:${b.line} — first argument \`${b.first}\``),
+      'A call site takes two or more arguments — the shape of a Fastify route ' +
+        'registration, never the shape of a Map read — and its first argument is not a ' +
+        'path literal. This census reads route paths as literals at the registration ' +
+        'site, so it cannot see this route: no permission-off probe, no tenancy sweep, ' +
+        'no GET census entry, and no failure anywhere saying so. `routes/images.ts` and ' +
+        '`routes/reports.ts` both record this lesson from lane A\'s side and reach the ' +
+        'same conclusion — "splitting it makes the security shape visible to the tool ' +
+        'built to see it, instead of hiding a capability behind a conditional".\n\n' +
+        'PUT THE PATH BACK AT THE REGISTRATION SITE. Two registrations that share a path ' +
+        'cost one duplicated string; a route the census cannot see costs every automated ' +
+        'guard this suite has. If the indirection is genuinely worth keeping, teach ' +
+        '`support/perm-census.ts` to resolve it and delete this exemption-free spec\'s ' +
+        'reason for firing — do not add an exemption list, which is the mechanism this ' +
+        'whole module was written to replace.',
+    ).toEqual([]);
+  });
+});
 
 describe('every route with no gate is either scope-guarded or a named exemption', () => {
   /**
