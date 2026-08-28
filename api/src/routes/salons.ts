@@ -48,6 +48,7 @@ import { writeAudit } from '../services/audit';
 import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
 import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
+import { resolveBranchFilter } from '../services/branchFilter';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
 import {
   applySocialPatch,
@@ -1239,7 +1240,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * is a merchant deciding on a number that means something other than what she
    * thinks, so the definitions sit where they cannot drift from the SQL.
    */
-  app.get<{ Params: { id: string }; Querystring: { period?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { period?: string; branch?: unknown } }>(
     '/salons/:id/metrics',
     async (req, reply) => {
       const p = requireDashboardPerm(req, 'dashboard');
@@ -1255,10 +1256,32 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const s = rows[0];
       if (!s) throw notFound('unknown_salon', 'No such salon.');
 
+      /**
+       * `?branch=` — THE SAME PARAMETER REPORTS TAKES, THROUGH THE SAME RESOLVER.
+       *
+       * Absent, empty or `all` is every branch and is exactly what this route
+       * returned before the parameter existed. Not a string is 400
+       * `invalid_branch`; a branch that does not exist OR belongs to another
+       * salon is 404 `unknown_branch`, indistinguishable from each other on
+       * purpose — `services/branchFilter.ts` carries that argument.
+       *
+       * AFTER `requireSameSalon`, not before. The tenancy assertion on the PATH
+       * has to land first, or a caller who is not this salon's staff would learn
+       * from a 404-vs-200 whether a branch id exists here — the permission check
+       * turned into an oracle by an input validated too early. `reports.ts` §
+       * build orders the same three calls the same way, and says why.
+       *
+       * The RESOLVED branch is handed to `computeMetrics`, never the raw string:
+       * the salon-scoping in that lookup is the load-bearing half of this
+       * parameter, and a service that took a string would be a second place to
+       * forget it.
+       */
+      const br = await resolveBranchFilter(db, s.id, req.query?.branch);
+
       // The salon's zone, not the process zone: "loaded today" has to roll over
       // at the salon's midnight, or the last three hours of every evening's
       // takings land on yesterday's tile. See services/metrics.ts.
-      return reply.send(await computeMetrics(db, s, period));
+      return reply.send(await computeMetrics(db, s, period, new Date(), br));
     },
   );
 
