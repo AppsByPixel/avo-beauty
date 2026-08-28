@@ -5591,6 +5591,9 @@ a:hover {
   gap: 14px;
   padding: 13px 0;
   border-bottom: 1px solid var(--avo-hairline-inner);
+  /* Only `.shop__image-note` ever wraps, and it wraps because it asks to. Every
+     other child keeps its natural basis and stays on line one. */
+  flex-wrap: wrap;
 }
 
 .shop__row:last-child {
@@ -5693,6 +5696,54 @@ a:hover {
 .shop__remove:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+/*
+ * The picture cell. Borrowed from the brand-kit slot's vocabulary at
+ * `AVO Merchant Dashboard.dc.html:972` — see ImageSlot.tsx, which carries the
+ * whole argument for why this screen has no drawn design of its own to follow.
+ */
+.shop__image {
+  flex-shrink: 0;
+  display: flex;
+}
+
+/*
+ * WHY `order` AND NOT A GRID. `ProductImageCell` renders a fragment, so the
+ * square and this sentence are both direct children of `.shop__row` — the square
+ * at the head, this one second in DOM order and therefore in the middle of the
+ * row unless it is told otherwise. A high `order` puts it last and a full basis
+ * gives it its own line, which is the only place a sentence of this length can go
+ * in a row of fixed-width fields.
+ */
+.shop__image-note {
+  order: 9;
+  flex: 0 0 100%;
+  margin: 8px 0 0;
+  /* Aligned under the fields rather than under the square: 52px of slot plus the
+     row's 14px gap. */
+  padding-left: 66px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-soft);
+}
+
+.shop__image-note--bad {
+  color: var(--avo-danger-text);
+}
+
+/* The second sentence — what to actually do — one step quieter than the refusal
+   it follows, and on its own line so a two-clause message is readable. */
+.shop__image-aside {
+  display: block;
+  color: var(--avo-text-muted);
+}
+
+/* The photo constraint, under the design's own catalog hint rather than beside
+   it: two sentences on one line pushed the "+ Add product" button off the head. */
+.shop__hint-photo {
+  display: block;
+  margin-top: 3px;
 }
 
 /* The design's own empty line, inside the card. */

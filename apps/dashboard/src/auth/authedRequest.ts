@@ -1,4 +1,10 @@
-import { ApiError, request, type RequestOptions } from '../api/client.js';
+import {
+  ApiError,
+  request,
+  requestDetailed,
+  type Detailed,
+  type RequestOptions,
+} from '../api/client.js';
 import { refreshSession } from './refresh.js';
 import type { AuthScope } from './scopes.js';
 import { clearSession, readSession } from './session.js';
@@ -31,6 +37,34 @@ export async function authedRequest<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
+  return withSession(scope, (token) => request<T>(path, { ...options, token }));
+}
+
+/**
+ * The same call, with the response status still attached.
+ *
+ * ONE CALLER AND ONE REASON: `POST … /image` answers 201 for a new image and 200
+ * for a replacement, and "Photo added" and "Photo changed" are different things
+ * to tell a merchant. Everything else in this client wants the body and nothing
+ * else, which is why `authedRequest` above stays the shape it was.
+ *
+ * IT SHARES THE ROTATION RATHER THAN REPEATING IT. The 401-rotate-retry-once
+ * dance below used to be inline in `authedRequest`; a second copy of it is a
+ * second place for the "retry exactly once" rule to drift, and the one that
+ * drifts is the one nobody is reading.
+ */
+export async function authedRequestDetailed<T>(
+  scope: AuthScope,
+  path: string,
+  options: RequestOptions = {},
+): Promise<Detailed<T>> {
+  return withSession(scope, (token) => requestDetailed<T>(path, { ...options, token }));
+}
+
+async function withSession<R>(
+  scope: AuthScope,
+  call: (token: string) => Promise<R>,
+): Promise<R> {
   const session = readSession(scope);
   if (!session) {
     // Same shape as the server's own 401, so callers have one thing to handle.
@@ -38,7 +72,7 @@ export async function authedRequest<T>(
   }
 
   try {
-    return await request<T>(path, { ...options, token: session.accessToken });
+    return await call(session.accessToken);
   } catch (error) {
     if (!(error instanceof ApiError) || !error.isUnauthenticated) throw error;
 
@@ -49,7 +83,7 @@ export async function authedRequest<T>(
     }
 
     try {
-      return await request<T>(path, { ...options, token: refreshed.accessToken });
+      return await call(refreshed.accessToken);
     } catch (retryError) {
       if (retryError instanceof ApiError && retryError.isUnauthenticated) clearSession(scope);
       throw retryError;

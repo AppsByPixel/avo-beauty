@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ApiError } from './client.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, request } from './client.js';
 
 /**
  * `ApiError`'s three classifications, pinned.
@@ -152,5 +152,98 @@ describe('ApiError — the classifications never overlap', () => {
   it('is an Error, so `instanceof` narrowing in sectionState.tsx holds', () => {
     expect(api(403)).toBeInstanceOf(Error);
     expect(api(403).name).toBe('ApiError');
+  });
+});
+
+
+/* ------------------------------------------------- the bearer and the URL */
+
+/**
+ * `request` NOW ACCEPTS AN ABSOLUTE URL, AND THAT IS A DOOR THAT HAS TO STAY SHUT.
+ *
+ * Every other call in this client is a path against `API_BASE_URL`. `ImageRef.url`
+ * is not: it is absolute, minted server-side from `PUBLIC_BASE_URL`, and it arrives
+ * in a RESPONSE BODY — which makes it data, and this codebase already has a rule
+ * about acting on data. Attaching the merchant's bearer to whatever origin a
+ * response names would hand her session to whoever owns that origin, and the only
+ * thing standing between those two facts is the check pinned here.
+ *
+ * IT REFUSES RATHER THAN DOWNGRADING. Dropping the header and fetching anyway
+ * would answer 401, `authedRequest` would rotate the session, the retry would 401
+ * again, and the merchant would be signed out — a token-exfiltration attempt
+ * reaching a user as "your session expired".
+ */
+describe('an absolute URL never carries the session to another origin', () => {
+  const fetchMock = vi.fn();
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchMock.mockReset();
+  });
+
+  it('refuses a cross-origin absolute URL before the request is made', async () => {
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      request('https://evil.example/v1/images/IM-1', { token: 'secret-bearer' }),
+    ).rejects.toMatchObject({ code: 'foreign_origin' });
+    // The point: no request happened at all, so the token went nowhere.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('allows the API\'s own absolute URL, which is what an ImageRef carries', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(new Blob(['bytes']), { status: 200, headers: { 'content-type': 'image/png' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await request('http://localhost:4000/v1/images/IM-1', { token: 'tok', expect: 'blob' });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe('http://localhost:4000/v1/images/IM-1');
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer tok' });
+  });
+
+  it('sends a raw body with the file\'s own type and no JSON content type', async () => {
+    fetchMock.mockResolvedValue(new Response('{"id":"IM-1"}', { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = new File(['bytes'], 'oil.jpg', { type: 'image/jpeg' });
+    const { status } = await (await import('./client.js')).requestDetailed('/v1/x/image', {
+      method: 'POST',
+      raw: { body: file, contentType: file.type },
+      token: 'tok',
+    });
+
+    // The status survives the boundary — 201 "added" versus 200 "changed".
+    expect(status).toBe(201);
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('image/jpeg');
+    expect(init.body).toBe(file);
+  });
+
+  it('keeps the machine-readable half of a refusal instead of dropping it', async () => {
+    /*
+     * `image_too_large` carries `maxBytes`, and `routes/images.ts` puts it there so
+     * a client can act on the limit "with a number it did not hard-code". Before
+     * `details`, everything but `error` and `message` was discarded here and
+     * nothing noticed, because nothing had asked yet.
+     */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: 'image_too_large',
+          message: 'That image is 3.4 MB. The limit is 2 MB.',
+          maxBytes: 2097152,
+          byteSize: 3565158,
+        }),
+        { status: 413 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await request('/v1/x/image', { method: 'POST' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).details).toEqual({ maxBytes: 2097152, byteSize: 3565158 });
+    // …and the two named fields do NOT leak into it.
+    expect((error as ApiError).details['message']).toBeUndefined();
   });
 });
