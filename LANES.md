@@ -477,6 +477,24 @@ knowingly-red suite and asking another lane to fix it.
 The test that decides it: **could the other lane land its change without touching this file?** If
 no, the file is theirs. If the suite spans packages or lives in `e2e/`, it is Lane D's.
 
+**Waiting for the next Lane D dispatch (added 2026-08-28, from the `da442bc` merge).**
+`parkOutbox` in `e2e/integration.test.ts` (~line 430) was written to work around decision 72,
+and 72 is now fixed. Its twelve-attempt converge-and-verify existed because `markSent` keyed on
+`id` alone, so a send already in flight could overwrite the park. The write is now guarded on
+`id AND status='sending' AND attempts = <claimed>`, so a single park holds and the loop can
+collapse to one statement.
+
+**The comment matters more than the loop.** Its docblock quotes the old statement — `WHERE id =
+$1`, "with no guard on status" — in the present tense, as the standing explanation for why the
+helper is shaped the way it is. That sentence is now false, and the throw message at the bottom
+repeats it. This is the eleven-times-over pattern in this repo (a confident sentence where a
+reader looks first, unbacked by the code beneath it), except this time **the merge that fixed
+the bug is what made the comment wrong** — the only kind of stale comment that is nobody's
+oversight and everybody's problem. Fix the prose even if the loop is left alone; a future
+reader debugging a park will otherwise go looking for a guard that is already there.
+
+Not touched from trunk: `e2e/` is Lane D's column.
+
 
 ---
 
