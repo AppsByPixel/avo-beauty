@@ -97,17 +97,28 @@ beforeAll(async () => {
   bMember = await signInMember(SALON_B, B_MEMBER_PHONE);
 
   /**
-   * THE SUBJECTS THE SIX NEW ROUTES ADDRESS, at BOTH salons.
+   * THE SUBJECTS THE LEDGER'S WRITE ROUTES ADDRESS.
+   *
+   * SIX WHEN THIS WAS WRITTEN — lane A's shop and campaign routes — and TEN now that the
+   * four image writes have landed. The count is deliberately no longer in this sentence:
+   * it was, it went stale within one merge, and a number in a docblock that nobody has to
+   * update is the stale-confident-sentence pattern this repository keeps paying for.
    *
    * Written with `psql` rather than through the endpoints on purpose: these rows are
    * the ledger's fixture, and creating them through the very routes the ledger is
-   * about would make the fixture depend on the thing under test. `POST` is the only
-   * one of the six whose control genuinely creates, and it does so through the
-   * endpoint as it should.
+   * about would make the fixture depend on the thing under test. The `POST` controls are
+   * the only ones that genuinely create, and they do so through the endpoint as they
+   * should — including the image upload, whose DELETE counterpart is therefore given a
+   * blob seeded here rather than one the POST spec happened to leave behind.
    *
    * `ON CONFLICT DO UPDATE` so a run interrupted after the DELETE control has its rows
    * back on the next one. The disposable products are restored to their probe price as
-   * well as re-created, because the PATCH control really writes.
+   * well as re-created, because the PATCH control really writes; the image owners are
+   * restored to `active` for the same reason, because `requireOwnerInSalon` filters on it.
+   *
+   * SALON A IS BARELY TOUCHED, and the image rows do not touch it at all. See
+   * `imageOwnerFor`: an extra active service at salon A would change a list three other
+   * files read, and the cross-salon probe never resolves `{oid}` anyway.
    */
   psql(`
     INSERT INTO product (id, salon_id, name, price_fils) VALUES
@@ -130,6 +141,57 @@ beforeAll(async () => {
       ('${PROBE_CAMPAIGN_B}', '${SALON_B}', 'Tenancy probe B', 'probe', 'push', 'all',
        NULL, 'now', 'pending', 'Tenancy')
     ON CONFLICT (id) DO UPDATE SET status = 'pending', salon_id = EXCLUDED.salon_id;
+
+    -- ---------------------------------------------------------------------
+    -- THE FOUR IMAGE SUBJECTS AT SALON B, and the two blobs the DELETEs detach.
+    --
+    -- Nothing is inserted at salon A: the probes there address PROBE_PRODUCT_A and
+    -- the seed's SV-01, both of which already exist. See imageOwnerFor.
+    --
+    -- active = true is the default and is what requireOwnerInSalon filters on,
+    -- so an inactive row would 404 the control and read as a tenancy hole.
+    INSERT INTO product (id, salon_id, name, price_fils) VALUES
+      ('${PROBE_PRODUCT_B_IMAGE_POST}',   '${SALON_B}', 'Tenancy probe B image post',   1000),
+      ('${PROBE_PRODUCT_B_IMAGE_DELETE}', '${SALON_B}', 'Tenancy probe B image delete', 1000)
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, active = true;
+
+    INSERT INTO service (id, salon_id, name, price_fils) VALUES
+      ('${PROBE_SERVICE_B_IMAGE_POST}',   '${SALON_B}', 'Tenancy probe B image post',   1000),
+      ('${PROBE_SERVICE_B_IMAGE_DELETE}', '${SALON_B}', 'Tenancy probe B image delete', 1000)
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, active = true;
+
+    -- THE POST CONTROL'S SLOT IS EMPTIED, not assumed empty. It really uploads and
+    -- really attaches, so without this a second run against one database would find
+    -- last run's picture there and get 200-replaced where the row pins 201-created.
+    -- The image row it made is left behind deliberately: markDetachedIfUnreferenced
+    -- is the API's job and the reaper's, and a fixture that deleted blobs would be
+    -- reaching past the boundary this file is about.
+    DELETE FROM image_attachment
+     WHERE salon_id = '${SALON_B}'
+       AND ((owner_type = 'product' AND owner_id = '${PROBE_PRODUCT_B_IMAGE_POST}')
+         OR (owner_type = 'service' AND owner_id = '${PROBE_SERVICE_B_IMAGE_POST}'));
+
+    -- THE DELETE CONTROL'S SLOT IS FILLED, in SQL. See PROBE_IMAGE_PRODUCT: a detach
+    -- never reads the store, so these rows need no bytes anywhere — and having none
+    -- is what stops the fixture from being an upload through the route under test.
+    INSERT INTO image (id, salon_id, storage_key, driver, content_type, byte_size,
+                       width, height, checksum_sha256)
+    VALUES
+      ('${PROBE_IMAGE_PRODUCT}', '${SALON_B}', 'tenancy-probe/product', 'fixture',
+       'image/png', 33, 1, 1,
+       '1111111111111111111111111111111111111111111111111111111111111111'),
+      ('${PROBE_IMAGE_SERVICE}', '${SALON_B}', 'tenancy-probe/service', 'fixture',
+       'image/png', 33, 1, 1,
+       '2222222222222222222222222222222222222222222222222222222222222222')
+    ON CONFLICT (id) DO UPDATE SET detached_at = NULL, salon_id = EXCLUDED.salon_id;
+
+    INSERT INTO image_attachment (id, image_id, salon_id, owner_type, owner_id, role)
+    VALUES
+      ('IA-TENPROBEPR', '${PROBE_IMAGE_PRODUCT}', '${SALON_B}', 'product',
+       '${PROBE_PRODUCT_B_IMAGE_DELETE}', 'primary'),
+      ('IA-TENPROBESV', '${PROBE_IMAGE_SERVICE}', '${SALON_B}', 'service',
+       '${PROBE_SERVICE_B_IMAGE_DELETE}', 'primary')
+    ON CONFLICT (id) DO NOTHING;
 
     -- SALON B'S SOCIAL LINKS. Salon A is not touched here and must not be: its four
     -- seeded handles are what \`contract.test.ts\` asserts \`salon.social\` is non-empty
@@ -277,6 +339,17 @@ interface SalonRoute {
    * correctly implemented route into a red ledger entry.
    */
   controlStatus?: number;
+  /**
+   * BYTES for the control half, for a route whose body is a FILE rather than JSON.
+   *
+   * Only the control needs it. The cross-salon probe deliberately sends NO body at
+   * all — `requireDashboardPerm` and `requireSameSalon` are the first two statements
+   * in every image handler, so the refusal happens before a byte is looked at, and
+   * sending a valid upload to a salon that is not yours would only prove the same
+   * thing more slowly. It would also make the `existence is not disclosed` sweep
+   * below post a file to an invented salon on every run.
+   */
+  controlUpload?: { bytes: Uint8Array; contentType: string };
 }
 
 /**
@@ -336,6 +409,86 @@ const PROBE_CAMPAIGN_B = 'CMP-TEN-B';
  * the pair below reads the other, so neither can make the other pass or fail by the
  * order the two happen to run in — the shared-fixture trap `productFor` documents.
  */
+/**
+ * LANE A'S FOUR IMAGE WRITES — the subjects, and why there are four of them.
+ *
+ * The `{oid}` in `/v1/salons/{id}/{products,services}/{oid}/image` is a PRODUCT or a
+ * SERVICE id, so it needs its own substitution: `{pid}` already means "a product for
+ * the shop-catalog rows" and those are on their own price/delete lifecycle. Two owner
+ * kinds times two verbs is four disposable rows at salon B, and they cannot be shared:
+ *
+ *   POST's control REALLY UPLOADS, so its owner must start with an empty slot or the
+ *   handler answers 200-replaced instead of 201-created — which the table would read as
+ *   a failed control (see the `POST …/campaigns` note above, the same trap one field
+ *   over).
+ *
+ *   DELETE's control REALLY DETACHES, and `detachImage` answers 404 `no_image` when
+ *   there is nothing on the slot. So its owner must start WITH an image, and it must
+ *   not be POST's owner — otherwise the two specs pass or fail by table order, which is
+ *   the shared-fixture trap `productFor` documents.
+ *
+ * AT SALON A THE PROBE USES ROWS THAT ALREADY EXIST — `PROBE_PRODUCT_A`, which this
+ * file owns, and `A_SERVICE`, which the stock seed owns. Nothing new is inserted at
+ * salon A on purpose: an extra active service there changes what
+ * `GET /salons/{A}/services` serves and three other files read that list. The ids still
+ * have to be REAL, for the reason `happyHourFor` gives: `requireSameSalon` runs before
+ * `requireOwnerInSalon`, so a 404 here would mean the tenancy check ran too late, and
+ * an id that exists nowhere could not tell that apart from a bad fixture.
+ */
+const PROBE_PRODUCT_B_IMAGE_POST = 'PR-TEN-B-IMG-POST';
+const PROBE_PRODUCT_B_IMAGE_DELETE = 'PR-TEN-B-IMG-DEL';
+const PROBE_SERVICE_B_IMAGE_POST = 'SV-TEN-B-IMG-POST';
+const PROBE_SERVICE_B_IMAGE_DELETE = 'SV-TEN-B-IMG-DEL';
+
+/**
+ * The two blobs the DELETE controls detach, SEEDED IN SQL AND NOT THROUGH THE ENDPOINT.
+ *
+ * The rule this file already states for the shop and campaign fixtures — "creating them
+ * through the very routes the ledger is about would make the fixture depend on the thing
+ * under test" — applies hardest here, because the natural way to arrange an image to
+ * delete is to POST one first, and that is the route in the row above.
+ *
+ * It works because a DETACH never reads the store: `detachImage` deletes the
+ * `image_attachment` row and marks `image.detached_at`, both in Postgres, and the bytes
+ * are the reaper's problem (`services/imageAttachment.ts` § RULE 5). So an `image` row
+ * with a `storage_key` pointing at nothing is a perfectly good subject for a DELETE and
+ * would be a 404 for a GET — which is correct, and which is why these ids are never
+ * fetched.
+ *
+ * The checksums are literal because `image_checksum_is_sha256` demands 64 lowercase hex
+ * and `image_salon_checksum_key` demands they differ from each other. They are
+ * deliberately NOT the checksum of `PROBE_PNG`: if they collided, the POST control's
+ * upload would DEDUPE onto one of these rows (`imageAttachment.ts` § RULE 3) and the two
+ * fixtures would stop being independent.
+ */
+const PROBE_IMAGE_PRODUCT = 'IM-TENPROBEPR';
+const PROBE_IMAGE_SERVICE = 'IM-TENPROBESV';
+
+/**
+ * A REAL PNG, and it is exactly as much PNG as the endpoint reads.
+ *
+ * `api/src/images/inspect.ts` § PNG walks the signature, asserts the first chunk length
+ * is 13 and its type is `IHDR`, and reads the two dimensions out of the header. It
+ * decodes nothing — that is the whole design (§ rule 2: "NOTHING HERE DECODES AN
+ * IMAGE"). So a 1×1 header is a file this endpoint accepts, stores and re-serves, and
+ * building a real compressed PNG here would be testing zlib.
+ *
+ * NOT a `rawBody` string. See `treq`'s `bytes` option: `fetch` would UTF-8 encode
+ * `\x89PNG` into `\xC2\x89PNG` and the handler would refuse it as `not_an_image` — the
+ * probe would go green for a reason that has nothing to do with tenancy.
+ */
+const PROBE_PNG = ((): Uint8Array => {
+  const b = Buffer.alloc(33);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  b.writeUInt32BE(13, 8);
+  b.write('IHDR', 12, 'ascii');
+  b.writeUInt32BE(1, 16); // width
+  b.writeUInt32BE(1, 20); // height
+  b[24] = 8; // bit depth
+  b[25] = 6; // colour type: RGBA
+  return b;
+})();
+
 const PROBE_SOCIAL_TABLE = 'tiktok';
 const PROBE_SOCIAL_UNTOUCHED = 'instagram';
 const B_SOCIAL_HANDLE = '@lumiere.kw';
@@ -605,6 +758,58 @@ const SALON_ROUTES: SalonRoute[] = [
     template: '/v1/salons/{id}/social/{linkId}',
     body: { on: false },
   },
+
+  /**
+   * LANE A'S FOUR IMAGE WRITES, arriving with dev `b4e5cf3`. The ledger fired on all
+   * four by name in the first run after the merge, and its auto-discovering sibling —
+   * `EVERY discovered route refuses salon B with 403` — was already GREEN against them,
+   * so tenancy was proved the hour they landed and only this hand-written half was
+   * stale. That is now the sixth time that has been the story, and it is worth saying
+   * once more in the place a reader meets it: THE LEDGER'S JOB IS THE LIST, NOT THE
+   * ENFORCEMENT.
+   *
+   * These are the first rows in this table whose control half sends something that is
+   * not JSON, and the first whose subject has to be arranged in two different states
+   * per verb. Both are covered above `PROBE_PRODUCT_B_IMAGE_POST`.
+   *
+   * NO BODY ON THE PROBE, deliberately — see `controlUpload` on the interface. A POST
+   * with no `Content-Type` and no body reaches the handler and is refused by
+   * `requireSameSalon` before `performUpload` is ever called, which is exactly the
+   * ordering `routes/images.ts` argues for at its registration sites ("AUTHORITY FIRST,
+   * BEFORE THE OWNER IS LOOKED UP AND BEFORE A SINGLE BYTE IS INSPECTED") and would
+   * catch a future refactor that validated the file first: an unauthorised caller who
+   * gets `unsupported_image_type` back has been handed a free image-format oracle.
+   *
+   * 201 ON THE POST CONTROLS, because the slot starts empty. `performUpload` answers
+   * 201 when it created and 200 when it replaced, and the distinction is the dashboard's
+   * "added" versus "changed" toast — so pinning 201 here also pins that the disposable
+   * owner really did start with nothing on it, which is what keeps this row and the
+   * DELETE row independent.
+   *
+   * 204 ON THE DELETE CONTROLS, from `performDetach`.
+   */
+  {
+    method: 'POST',
+    template: '/v1/salons/{id}/products/{oid}/image',
+    controlUpload: { bytes: PROBE_PNG, contentType: 'image/png' },
+    controlStatus: 201,
+  },
+  {
+    method: 'DELETE',
+    template: '/v1/salons/{id}/products/{oid}/image',
+    controlStatus: 204,
+  },
+  {
+    method: 'POST',
+    template: '/v1/salons/{id}/services/{oid}/image',
+    controlUpload: { bytes: PROBE_PNG, contentType: 'image/png' },
+    controlStatus: 201,
+  },
+  {
+    method: 'DELETE',
+    template: '/v1/salons/{id}/services/{oid}/image',
+    controlStatus: 204,
+  },
 ];
 
 /**
@@ -650,6 +855,31 @@ function productFor(route: SalonRoute, salonId: string): string {
   return route.method === 'DELETE' ? PROBE_PRODUCT_B_DELETE : PROBE_PRODUCT_B_PATCH;
 }
 
+/**
+ * The product or service an image route hangs a picture on.
+ *
+ * FOUR DISPOSABLE ROWS AT SALON B, one per (owner kind, verb) — see the note above
+ * `PROBE_PRODUCT_B_IMAGE_POST`. At salon A it is a row that already exists, because
+ * the cross-salon probe is refused before `{oid}` is ever resolved and inserting a
+ * fifth active service at salon A would change a list three other files read.
+ *
+ * The owner KIND is read off the template rather than passed in, because the template
+ * is the only place it is stated and a second parameter saying the same thing is a
+ * second thing that can disagree with it.
+ */
+function imageOwnerFor(route: SalonRoute, salonId: string): string {
+  const isProduct = route.template.includes('/products/');
+  if (salonId !== SALON_B) return isProduct ? PROBE_PRODUCT_A : A_SERVICE;
+  if (isProduct) {
+    return route.method === 'DELETE'
+      ? PROBE_PRODUCT_B_IMAGE_DELETE
+      : PROBE_PRODUCT_B_IMAGE_POST;
+  }
+  return route.method === 'DELETE'
+    ? PROBE_SERVICE_B_IMAGE_DELETE
+    : PROBE_SERVICE_B_IMAGE_POST;
+}
+
 /** A campaign belonging to the salon being addressed. Only DELETE uses it. */
 const campaignFor = (salonId: string): string =>
   salonId === SALON_B ? PROBE_CAMPAIGN_B : PROBE_CAMPAIGN_A;
@@ -661,6 +891,11 @@ const url = (r: SalonRoute, salonId: string) =>
     .replace('{bid}', branchFor(salonId))
     .replace('{pid}', productFor(r, salonId))
     .replace('{cid}', campaignFor(salonId))
+    /**
+     * `{oid}` is the image routes' owner — a product or a service, chosen by the
+     * template and the verb. See `imageOwnerFor`.
+     */
+    .replace('{oid}', imageOwnerFor(r, salonId))
     /**
      * `{kind}` is a closed vocabulary, not a row id, so it needs no per-salon
      * resolution — `sales` exists at every salon by definition. It DOES need to be a
@@ -700,9 +935,16 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
 
     it(`${label} against salon B's own id succeeds — the 403 was tenancy, not a broken route`, async () => {
       const body = route.controlBody ?? route.body;
+      const upload = route.controlUpload;
       const res = await treq(route.method, url(route, SALON_B), {
         token: bDashboard,
-        ...(body === undefined ? {} : { body }),
+        // A file body and a JSON body are mutually exclusive, and `treq` refuses
+        // both together rather than picking one silently.
+        ...(upload
+          ? { bytes: upload.bytes, headers: { 'content-type': upload.contentType } }
+          : body === undefined
+            ? {}
+            : { body }),
       });
       expect(res.status, `the control call answered ${res.status}: ${res.raw}`).toBe(
         route.controlStatus ?? 200,
@@ -1600,6 +1842,15 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'POST /salons/:id/branches',
       'PATCH /salons/:id/branches/:bid',
       'DELETE /salons/:id/branches/:bid',
+      // Lane A's four image writes. They belong in this tripwire more than any row
+      // above it, because they carry BOTH awkward shapes at once — a second path
+      // parameter AND an explicit generic between the method and the paren — which
+      // is the pair the comment above says a naive regex loses first. When they
+      // landed, the ledger fired on all four; that is what this list keeps possible.
+      'POST /v1/salons/:id/products/:oid/image',
+      'DELETE /v1/salons/:id/products/:oid/image',
+      'POST /v1/salons/:id/services/:oid/image',
+      'DELETE /v1/salons/:id/services/:oid/image',
     ]) {
       expect(paths, `the route scan lost ${known}`).toContain(known);
     }

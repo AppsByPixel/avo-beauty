@@ -56,7 +56,15 @@
 import { execFileSync } from 'node:child_process';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -1826,6 +1834,43 @@ export async function startTenancyApi(): Promise<void> {
 }
 
 /**
+ * THIS RUN'S IMAGE STORE, AND IT IS THE TENTH SHARED MUTABLE RESOURCE.
+ *
+ * `env.ts` defaults `IMAGE_STORE_PATH` to `.image-store`, resolved against the API's
+ * cwd — so an unpinned run writes real uploaded bytes into `<worktree>/api/.image-store`
+ * and leaves them there. Two reasons that is wrong for this suite, and only the second
+ * is about correctness:
+ *
+ *   IT LEAKS, UNBOUNDED. Every run mints and drops its own DATABASE, so the `image`
+ *   rows go; the blobs do not, and `services/imageReaper.ts` runs from a one-shot job
+ *   nothing here invokes. A suite that uploads on every run and never collects is a
+ *   suite that grows a directory for ever.
+ *
+ *   IT IS SHARED. LANES.md § "Every lane isolates its own resources" is about a
+ *   filesystem path exactly as it is about a database — `api/src/routes/images.int.test.ts`
+ *   reached the same conclusion from lane A's side and redirects the store for the same
+ *   reason. Two checkouts of this repository resolve `.image-store` to two different
+ *   directories, but one worktree running this suite twice does not, and the second run's
+ *   reaper (or a developer's `rm`) would be deleting bytes the first is serving.
+ *
+ * Named per boot, removed by `stopTenancyApi`, and swept on the way in for whatever an
+ * interrupted run left behind — the same lifecycle `global-setup.ts` gives the run
+ * database, for the same reason.
+ */
+let imageStorePath: string | undefined;
+
+/** Remove this run's image store. Never throws — see `dropRunDatabaseIfOurs`. */
+function removeImageStore(): void {
+  if (!imageStorePath) return;
+  try {
+    rmSync(imageStorePath, { recursive: true, force: true });
+  } catch {
+    /* a few kilobytes in tmp is not worth failing a run over */
+  }
+  imageStorePath = undefined;
+}
+
+/**
  * One boot attempt. `true` if the API came up healthy, `false` if — and ONLY if —
  * it died because the port was already taken.
  *
@@ -1833,6 +1878,8 @@ export async function startTenancyApi(): Promise<void> {
  */
 async function bootApiOnce(): Promise<boolean> {
   const port = await freePort();
+  removeImageStore();
+  imageStorePath = mkdtempSync(join(tmpdir(), 'avo-e2e-imagestore-'));
   base = `http://127.0.0.1:${port}`;
   apiOutput = '';
   apiExit = undefined;
@@ -1890,6 +1937,12 @@ async function bootApiOnce(): Promise<boolean> {
       // inside the API process. Pinned to the ephemeral port this boot chose,
       // rather than left to env.ts's `http://localhost:${PORT}` default.
       PUBLIC_BASE_URL: base,
+
+      /**
+       * THIS BOOT'S IMAGE STORE. See `removeImageStore` above for why it is not
+       * left at env.ts's `.image-store` default.
+       */
+      IMAGE_STORE_PATH: imageStorePath,
 
       // --------------------------------------------------------- the PIN --
       // Pinned for the same reason as GATEWAY_WEBHOOK_SECRET above: the scanner
@@ -2099,6 +2152,7 @@ export async function stopTenancyApi(): Promise<void> {
 
   dying.removeAllListeners('exit');
   child = undefined;
+  removeImageStore();
 }
 
 // ------------------------------------------------------------- the HTTP call --
@@ -2129,6 +2183,19 @@ export interface TenancyRequest {
    * tampering spec below could then pass for the wrong reason.
    */
   rawBody?: string;
+  /**
+   * Send these EXACT BYTES as the request body, with `headers['content-type']`
+   * saying what they are.
+   *
+   * `rawBody` cannot do this job and the difference is not cosmetic: `fetch`
+   * encodes a string as UTF-8, so every byte above 0x7F becomes two or three —
+   * a PNG signature `\x89PNG` arrives as `\xC2\x89PNG` and
+   * `api/src/images/inspect.ts` correctly refuses it as not a readable PNG. The
+   * only endpoints that take a body which is not text are the four image
+   * uploads, whose whole point is that the bytes go in untouched
+   * (`routes/images.ts` § THE BODY IS RAW BYTES).
+   */
+  bytes?: Uint8Array;
   /**
    * This request is SUPPOSED to answer 5xx, so do not print the server's log for
    * it. See `reportUnexpectedServerError` below.
@@ -2188,8 +2255,23 @@ export async function treq<T = any>(
     );
   }
 
-  if (options.body !== undefined && options.rawBody !== undefined) {
-    throw new Error(`treq(${method} ${path}) was given both body and rawBody. Pick one.`);
+  const bodyKinds = [options.body, options.rawBody, options.bytes].filter(
+    (v) => v !== undefined,
+  ).length;
+  if (bodyKinds > 1) {
+    throw new Error(
+      `treq(${method} ${path}) was given more than one of body, rawBody and bytes. Pick one.`,
+    );
+  }
+  if (options.bytes !== undefined && !options.headers?.['content-type']) {
+    // A file body with no media type is the one shape `routes/images.ts` cannot answer
+    // usefully — Fastify refuses it before the handler runs, so the spec would be
+    // asserting on the parser rather than on the endpoint.
+    throw new Error(
+      `treq(${method} ${path}) was given bytes with no headers['content-type']. The image ` +
+        'endpoints read the declared type and compare it to the magic bytes; sending the ' +
+        'file without saying what it is tests Fastify, not the handler.',
+    );
   }
 
   const headers: Record<string, string> = { accept: 'application/json' };
@@ -2201,12 +2283,14 @@ export async function treq<T = any>(
   }
   Object.assign(headers, options.headers ?? {});
 
-  const payload =
-    options.rawBody !== undefined
-      ? options.rawBody
-      : options.body === undefined
-        ? undefined
-        : JSON.stringify(options.body);
+  const payload: string | Uint8Array | undefined =
+    options.bytes !== undefined
+      ? options.bytes
+      : options.rawBody !== undefined
+        ? options.rawBody
+        : options.body === undefined
+          ? undefined
+          : JSON.stringify(options.body);
 
   let res: Response;
   try {

@@ -705,3 +705,231 @@ export const nameOf = (r: { method: string; path: string }): string => `${r.meth
 
 /** `GET /salons/:id/audit [dashboard]` — pair identity, for a per-permission probe. */
 export const pairOf = (r: GatedRoute): string => `${nameOf(r)} → ${r.permission}`;
+
+// ===========================================================================
+// WHAT THE SCANNER CANNOT SEE — and how it is made to say so
+// ===========================================================================
+
+/**
+ * THE FAILURE MODE THIS SECTION EXISTS FOR, STATED BEFORE THE CODE.
+ *
+ * Everything above reads SOURCE TEXT and produces a proposal. The module header names
+ * three ways that reading can be wrong about a GATE. There is a fourth, it is about the
+ * ROUTE, and it is worse than all three because it is SILENT IN BOTH DIRECTIONS:
+ *
+ *   a route this scanner cannot see is not reported as ungated, or as unresolved, or as
+ *   anything. It leaves `totalRoutes`, it leaves `gated`, it leaves `ungated`, and every
+ *   probe generated from it stops being generated. The suite then reports success with
+ *   less coverage than it had, and the number that would have said so — `totalRoutes` —
+ *   went down by exactly the same amount, so the reconciliation still balances.
+ *
+ * This has now happened twice on this project, from opposite directions:
+ *
+ *   LANE A, images. The four write routes were registered through a curried handler
+ *   factory, so the guard was not a literal at the registration site and the permission
+ *   was read out of a table keyed on the owner kind. Four merchant writes, zero
+ *   permission-off probes. `routes/images.ts` carries lane A's own account of it and the
+ *   fix was to move the guard to a literal — which fixes the FILE and not the SCANNER.
+ *
+ *   LANE C, `merchantScopeGates.test.ts`. Extracting a path into a helper dropped an
+ *   endpoint from a generated sweep: 44 cases became 43 and nothing turned red.
+ *
+ * MEASURED, NOT ARGUED. Extracting `POST /scans`'s path into a `const` in
+ * `api/src/routes/staff.ts` — a refactor no reviewer would stop — takes this census from
+ * 129 routes to 128 and `permission-census.test.ts` from 183 specs to 181, ALL GREEN. The
+ * two that vanished are the permission-off probe and the grant-back probe on the scanner's
+ * member-resolve endpoint.
+ *
+ * Two things answer it, and they answer different halves:
+ *
+ *   `ambiguousRegistrations()` below catches a route BORN unreadable — a registration
+ *   site this scanner can see is there but cannot resolve to a path. Nothing else can
+ *   catch that, because there is no earlier state to compare against.
+ *
+ *   `censusLedger()` below is the pinnable classification of every route the scanner CAN
+ *   read. `permission-census.test.ts` pins it line by line, so a route or a gate that
+ *   stops being readable fails BY NAME rather than by a count that was never tight
+ *   enough to notice.
+ */
+
+/** A `.get(`/`.post(`/… call site, resolved past its type arguments. */
+interface CallSite {
+  file: string;
+  line: number;
+  method: HttpMethod;
+}
+
+/**
+ * Skip a balanced `<…>` type-argument list starting at `i`, or return `i` unchanged.
+ *
+ * HAND-WRITTEN RATHER THAN A REGEX, and the reason is a real defect rather than taste.
+ * `REGISTRATION` matches the generic as `<[\s\S]*?>`, which is lazy and crosses
+ * newlines — so when the following registration's path is NOT a literal, the match
+ * happily runs the generic on until it finds the NEXT literal in the file. Measured on a
+ * mutated `routes/images.ts`: with `DELETE /v1/salons/:id/services/:oid/image`'s path
+ * extracted into a const, the scanner produced `DELETE /v1/images/:imageId` — a route
+ * that does not exist, with the wrong method, while the GET that does exist vanished.
+ * A scanner that INVENTS a route under an unreadable one is worse than one that merely
+ * loses it, so the ambiguity pass must not share that weakness.
+ */
+function skipTypeArgs(src: string, i: number): number {
+  if (src[i] !== '<') return i;
+  let depth = 0;
+  let quote: string | null = null;
+  for (let k = i; k < src.length; k++) {
+    const c = src[k]!;
+    if (quote) {
+      if (c === '\\') { k++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '<') depth++;
+    else if (c === '>') {
+      depth--;
+      if (depth === 0) return k + 1;
+    }
+  }
+  return i;
+}
+
+/** The top-level arguments of the call whose `(` is at `open`, as raw text. */
+function argumentsAt(src: string, open: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = open + 1;
+  for (let k = open; k < src.length; k++) {
+    const c = src[k]!;
+    if (quote) {
+      if (c === '\\') { k++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) {
+        const last = src.slice(start, k).trim();
+        if (last !== '' || args.length > 0) args.push(last);
+        return args;
+      }
+    } else if (c === ',' && depth === 1) {
+      args.push(src.slice(start, k).trim());
+      start = k + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Every `<identifier>.(get|post|put|patch|delete)(…)` call in `api/src/routes/`, with its
+ * type arguments resolved properly.
+ */
+function callSites(): { site: CallSite; args: string[] | null }[] {
+  const out: { site: CallSite; args: string[] | null }[] = [];
+  const METHOD_CALL = /\b[A-Za-z_$][\w$]*\.(get|post|put|patch|delete)\s*/g;
+
+  for (const file of readdirSync(ROUTES_DIR).filter((f) => f.endsWith('.ts')).sort()) {
+    const src = stripComments(readFileSync(join(ROUTES_DIR, file), 'utf8'));
+    for (const m of src.matchAll(METHOD_CALL)) {
+      const at = m.index!;
+      const site = {
+        file,
+        line: lineOf(src, at),
+        method: m[1]!.toUpperCase() as HttpMethod,
+      };
+      let i = skipTypeArgs(src, at + m[0].length);
+      /**
+       * `skipTypeArgs` returned its input, so there IS a `<` here and it does not
+       * balance — a generic this walker cannot read. `args: null` rather than a skip,
+       * because "I found a registration and could not find its arguments" is exactly
+       * the thing that must be loud. A `.get`/`.post` that is not a call at all
+       * (`const g = map.get;`) is dropped below, where the next character says so.
+       */
+      if (src[i] === '<') {
+        out.push({ site, args: null });
+        continue;
+      }
+      while (i < src.length && /\s/.test(src[i]!)) i++;
+      if (src[i] !== '(') continue;
+      const args = argumentsAt(src, i);
+      out.push({ site, args });
+    }
+  }
+  return out;
+}
+
+export interface AmbiguousRegistration {
+  file: string;
+  line: number;
+  method: HttpMethod;
+  /** The first argument, verbatim — the thing that should have been a path literal. */
+  first: string;
+}
+
+/**
+ * Call sites that LOOK like route registrations and whose path this census cannot read.
+ *
+ * THE DISCRIMINATOR IS ARITY, NOT THE RECEIVER'S NAME. `REGISTRATION`'s own comment
+ * settles why an allowlist of receivers is the wrong shape — `POST /webhooks/:provider`
+ * is registered on `scoped`, and the next encapsulated context would be invisible again.
+ * But its discriminator ("the first argument is a string literal beginning with `/`") is
+ * the thing being defeated here, so it cannot also be the thing that decides whether a
+ * call site was SUPPOSED to be a route.
+ *
+ * Arity can. A Fastify registration is `(path, handler)` or `(path, opts, handler)` —
+ * never fewer than two arguments. Every non-route call of these names in
+ * `api/src/routes/` takes exactly ONE: `names.get(t.memberId)`, `labels.get(row.topicId)`,
+ * `images.get(r.id)`, `imageStore.get(row.storageKey)`, `db.delete(campaign)`,
+ * `tx.delete(happyHour)`. Drizzle chains its predicates (`.where(…)`) rather than passing
+ * them, which is what makes the split clean rather than lucky — checked across all
+ * thirty route files, and the spec that consumes this asserts the one-argument calls are
+ * still there so a future two-argument Map API cannot quietly become a false positive.
+ *
+ * WHAT THIS BUYS. `app.post(SCANS_ROUTE, handler)` is two arguments with a first that is
+ * not a path literal, and is reported here by file and line. That is the shape that took
+ * this census from 129 routes to 128 with every spec green.
+ */
+export function ambiguousRegistrations(): AmbiguousRegistration[] {
+  return callSites()
+    .filter(({ args }) => args === null || (args.length >= 2 && !/^(['"])\//.test(args[0] ?? '')))
+    .map(({ site, args }) => ({
+      file: site.file,
+      line: site.line,
+      method: site.method,
+      first:
+        args === null
+          ? '(unreadable — the type arguments or the argument list do not balance)'
+          : (args[0] ?? '').replace(/\s+/g, ' ').slice(0, 80),
+    }));
+}
+
+/** Call sites with a single argument — a Map read, a Drizzle delete. Not routes. */
+export function singleArgumentCallSites(): number {
+  return callSites().filter(({ args }) => args?.length === 1).length;
+}
+
+/**
+ * THE PINNABLE CLASSIFICATION — one line per (route, decision) this census reached.
+ *
+ *   `POST /scans → scanner`                     a gate, and which permission
+ *   `GET /members/me [requireMember]`           authenticated, no permission applies
+ *   `POST /webhooks/:provider [ANONYMOUS]`      authenticates nobody
+ *
+ * A GATED ROUTE CONTRIBUTES ONE LINE PER GATE PATH, which is the identity of a generated
+ * probe rather than of a registration: a disjunctive wrapper yields two, and an indexed
+ * permission table yields one per key. That is deliberate — the thing that must not
+ * silently shrink is the PROBE SET, not the route count, and those two came apart the day
+ * `REPORT_PERMISSION` was expanded.
+ *
+ * SORTED, so a pin is a stable text block and a diff of it is readable.
+ */
+export function censusLedger(census: Census): string[] {
+  const lines = [
+    ...census.gated.map(pairOf),
+    ...census.ungated.map((u) => `${nameOf(u)} [${u.scope ?? 'ANONYMOUS'}]`),
+  ];
+  return [...new Set(lines)].sort();
+}
