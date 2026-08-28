@@ -25,11 +25,19 @@ import {
 } from './cart';
 import type { Product } from '../api/shop';
 
-/** The real catalogue from avo_lane_b, ordered by id as the route returns it. */
+/**
+ * The real catalogue from avo_lane_b, ordered by id as the route returns it.
+ *
+ * `image: null` on all three because nothing here prices a photograph — the
+ * fidelity this fixture owes the wire is about `priceFils` and about the field
+ * NAMES the cart reads. The image branch that does matter is exercised where it
+ * belongs: `api/shop.test.ts` carries a real `ImageRef` alongside a null one, and
+ * `components/productImageRender.test.tsx` renders both.
+ */
 const CATALOGUE: Product[] = [
-  { id: 'PR-01', salonId: 'SAL-AMARA', name: 'Argan hair oil 100ml', priceFils: 8500 , image: null },
-  { id: 'PR-02', salonId: 'SAL-AMARA', name: 'Repair mask', priceFils: 12000 , image: null },
-  { id: 'PR-03', salonId: 'SAL-AMARA', name: 'Heat protect spray', priceFils: 6750 , image: null },
+  { id: 'PR-01', salonId: 'SAL-AMARA', name: 'Argan hair oil 100ml', priceFils: 8500, image: null },
+  { id: 'PR-02', salonId: 'SAL-AMARA', name: 'Repair mask', priceFils: 12000, image: null },
+  { id: 'PR-03', salonId: 'SAL-AMARA', name: 'Heat protect spray', priceFils: 6750, image: null },
 ];
 
 // ------------------------------------------------------------- the map shape ----

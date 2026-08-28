@@ -70,10 +70,47 @@ const ORDER_201 = {
   voidable: false,
 };
 
+/**
+ * CAPTURED FROM `GET /salons/SAL-AMARA/products` ON avo_lane_b, WITH A REAL
+ * UPLOADED IMAGE — not hand-written, and not the mock's fixture.
+ *
+ * `image` arrived with `ImageRefSchema` (packages/types) and it is why this
+ * fixture had to be recaptured rather than patched: `ProductSchema` used to be
+ * four fields and is now five, and a fixture that carried four PARSED FINE while
+ * asserting the wrong shape — zod strips unknown keys but cannot invent a
+ * required one, so the four-field fixture failed the parse outright. That is the
+ * good direction for this file's guard to fail in, and it caught the widening
+ * within a day of it landing.
+ *
+ * BOTH BRANCHES OF `image` ARE HERE ON PURPOSE. PR-01 carries the real ref for a
+ * 600×600 PNG uploaded through `POST /v1/salons/{id}/products/{pid}/image`;
+ * PR-02 carries `null`, which is what almost every row carries today. The API
+ * sends the KEY either way — required-but-nullable, never optional — precisely so
+ * that a client never has to tell "no image" from "field not sent", and a fixture
+ * with only one of the two branches would let that distinction rot unnoticed.
+ *
+ * `url` IS ABSOLUTE AND THAT IS ALSO THE WIRE'S DOING. The API builds it from
+ * `PUBLIC_BASE_URL` server-side because a phone cannot resolve a path against an
+ * origin nobody told it. Written out in full here rather than composed, so that a
+ * server that started sending a relative path fails this parse.
+ */
 const PRODUCTS_200 = {
   items: [
-    { id: 'PR-01', salonId: 'SAL-AMARA', name: 'Argan hair oil 100ml', priceFils: 8500 },
-    { id: 'PR-02', salonId: 'SAL-AMARA', name: 'Repair mask', priceFils: 12000 },
+    {
+      id: 'PR-01',
+      salonId: 'SAL-AMARA',
+      name: 'Argan hair oil 100ml',
+      priceFils: 8500,
+      image: {
+        id: 'IM-XFD4ATS22Z',
+        url: 'http://localhost:4600/v1/images/IM-XFD4ATS22Z',
+        contentType: 'image/png',
+        width: 600,
+        height: 600,
+        byteSize: 10119,
+      },
+    },
+    { id: 'PR-02', salonId: 'SAL-AMARA', name: 'Repair mask', priceFils: 12000, image: null },
   ],
   nextCursor: null,
 };
@@ -161,14 +198,29 @@ describe('the real responses parse with nothing lost', () => {
     const parsed = ProductPageSchema.safeParse(PRODUCTS_200);
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
-    expect(Object.keys(parsed.data.items[0]!).sort()).toEqual(['id', 'name', 'priceFils', 'salonId']);
+    expect(Object.keys(parsed.data.items[0]!).sort()).toEqual([
+      'id',
+      'image',
+      'name',
+      'priceFils',
+      'salonId',
+    ]);
+    // The nullable half, asserted as a KEY and not just as a falsy value — the
+    // whole point of required-but-nullable is that `'image' in row` is true.
+    expect('image' in parsed.data.items[1]!).toBe(true);
+    expect(parsed.data.items[1]!.image).toBeNull();
+    // And the ref itself survives the parse intact, dimensions included: they are
+    // in the payload so a tile can reserve its space before the bytes arrive.
+    expect(parsed.data.items[0]!.image).toEqual(PRODUCTS_200.items[0]!.image);
   });
 
   /**
    * `active` is filtered server-side and NOT emitted — the route says so
-   * explicitly, because `ProductSchema` is four fields and zod strips a fifth.
+   * explicitly, and zod strips anything `ProductSchema` does not declare.
    * Declaring it would make the contract delete a key in transit; asserting its
-   * absence keeps that decision visible.
+   * absence keeps that decision visible. (`image` joining the schema does not
+   * touch this: a field being ADDED deliberately is not the same event as a field
+   * arriving on the wire that nobody declared.)
    */
   it('does not expect an `active` flag the route never sends', () => {
     const parsed = ProductPageSchema.parse(PRODUCTS_200);
