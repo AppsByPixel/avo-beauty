@@ -1,10 +1,27 @@
+import type { ReactNode } from 'react';
 import { Button } from '@avo/ui';
 
 export interface HeaderProps {
   title: string;
   subtitle: string;
   salonName: string;
-  branchLabel: string;
+  /**
+   * THE BRANCH SCOPE, AS A NODE RATHER THAN A STRING — and the type change is
+   * the point of the change.
+   *
+   * This was `branchLabel: string`, filled by `MerchantShell` with
+   * `salon?.branches?.[0]?.name ?? '—'` and rendered as `{salonName} · {label}`.
+   * A multi-branch merchant read the first branch's name over salon-wide
+   * figures: a specific, confident, permanently wrong claim. A `string` prop is
+   * a promise that this slot is a LABEL, and no value of that string is correct
+   * for a salon with two branches — the honest thing here is a control, which
+   * is `BranchSelector`. `ReactNode` is what lets this component stop knowing.
+   *
+   * `null` is a real value and means "make no claim": the branch list is
+   * unavailable or empty, and the header renders the salon alone rather than
+   * inventing a scope. See `BranchSelector.tsx` § the four states.
+   */
+  branch: ReactNode;
   /** Rendered only at the `tablet` breakpoint, where the sidebar is a drawer. */
   onOpenMenu?: () => void;
   menuOpen?: boolean;
@@ -23,7 +40,7 @@ export function Header({
   title,
   subtitle,
   salonName,
-  branchLabel,
+  branch,
   onOpenMenu,
   menuOpen = false,
   onSignOut,
@@ -59,9 +76,15 @@ export function Header({
       <div className="dash-header__right">
         <span className="dash-header__date">{todayLabel()}</span>
         <span className="dash-header__rule" aria-hidden="true" />
-        <span className="dash-header__branch">
-          {salonName} · {branchLabel}
-        </span>
+        {/*
+          Two nodes where there was one interpolated span. The salon is a fact
+          and stays a pill; the branch is a choice and is whatever
+          `BranchSelector` decided it can honestly be — a segment, a name, a
+          skeleton, or nothing. A `<div role="radiogroup">` also cannot live
+          inside a `<span>`, so the split is required as well as right.
+        */}
+        <span className="dash-header__branch">{salonName}</span>
+        {branch}
         <Button variant="quiet" onClick={onSignOut} className="dash-header__signout">
           Sign out
         </Button>

@@ -575,6 +575,19 @@ a:hover {
   flex-shrink: 0;
 }
 
+/*
+ * THE BRANCH SEGMENT LIVES IN THE RIGHT RAIL and is the one element there that
+ * can grow with the data — a salon with six branches renders six options. It is
+ * allowed to shrink and scroll rather than push `Sign out` off the edge; the
+ * date already gives way first (below), and the segment gives way second. The
+ * pills and the button keep `flex-shrink: 0` and are unaffected.
+ */
+.dash-header__right .avo-segmented {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
 .dash-header__date {
   font-size: 13px;
   color: var(--avo-ui-ink-55);
@@ -647,6 +660,21 @@ a:hover {
   font-size: 17px;
   font-weight: 500;
   padding: 14px 0 4px;
+}
+
+/*
+ * "Recent activity  All branches" — the qualifier that appears ONLY when a
+ * branch is applied to the tiles above and this feed is therefore wider than
+ * they are. Not a new component and not a new colour: the muted body treatment
+ * the header's own sub-line already uses, so it reads as a caption on the
+ * heading rather than as a second heading. See routes/Overview.tsx.
+ */
+.overview__card-scope {
+  margin-left: 9px;
+  font-family: var(--avo-font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--avo-text-muted);
 }
 
 .overview__feed-item {

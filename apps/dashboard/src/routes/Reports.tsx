@@ -16,6 +16,7 @@ import {
 } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
 import { useSalonId } from '../auth/AuthProvider.js';
+import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
 import { ApiError } from '../api/client.js';
 import { isForbidden, SectionError } from './sectionState.js';
 
@@ -51,7 +52,29 @@ export function Reports() {
   const salonId = useSalonId();
   const salon = useSalon();
 
-  const [branch, setBranch] = useState('all');
+  /*
+   * ===========================================================================
+   * THE BRANCH FILTER IS NO LONGER THIS SCREEN'S OWN STATE — IT IS THE SHELL'S
+   * ===========================================================================
+   * This was `useState('all')`, and it was the only branch selection in the
+   * product. The header now carries one too (`shell/BranchSelector.tsx`), and
+   * two independent selections rendered on the same page is a worse bug than
+   * the one the header fix removed: the header would say "All branches" while
+   * the card beside it said "Salmiya", and neither would be wrong about itself.
+   *
+   * WHY BIND RATHER THAN DELETE THE SEGMENT BELOW. The design bundle draws this
+   * control on this screen (`AVO Merchant Dashboard.dc.html` § REPORTS) and does
+   * not draw the header's; deleting a drawn control to make room for an
+   * undrawn one would be the restyle CLAUDE.md forbids, and it would also take
+   * the branch filter away from the screen where filtering is the entire point.
+   * So both render and both are views of ONE value: change either and the other
+   * moves. One selection, two places to reach it, no way for them to disagree.
+   *
+   * The state moved; nothing else here did. `?branch=` still takes the id,
+   * `'all'` is still the sentinel, and the options are still built from the
+   * salon's own branch list below.
+   */
+  const { selected: branch, select: setBranch } = useBranchScope();
   const [period, setPeriod] = useState<ReportPeriod>('30d');
 
   /*
@@ -91,7 +114,7 @@ export function Reports() {
             value={branch}
             onChange={setBranch}
             options={[
-              { value: 'all', label: 'All branches' },
+              { value: ALL_BRANCHES, label: 'All branches' },
               /* The segment renders the name; the value it sends is the id. */
               ...branches.map((b) => ({ value: b.id, label: b.name })),
             ]}
