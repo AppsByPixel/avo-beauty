@@ -40,11 +40,17 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Branch } from '@avo/types';
+import type { Branch, SalonMetrics } from '@avo/types';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { branchQuery, parseMetricsResponse, type ScopedSalonMetrics } from '../api/salon.js';
-import { ScopeNotice, appliedBranchOf, scopeWasIgnored } from '../routes/Overview.js';
+import { branchQuery, parseMetricsResponse } from '../api/salon.js';
+import {
+  AssumedNote,
+  KpiRow,
+  ScopeNotice,
+  appliedBranchOf,
+  scopeWasIgnored,
+} from '../routes/Overview.js';
 import { stripComments } from '../testing/stripComments.js';
 import { ALL_BRANCHES, selectionIsStale } from './BranchScope.js';
 import { BranchSelectorView } from './BranchSelector.js';
@@ -233,7 +239,11 @@ describe('the request says what was chosen', () => {
 
 /* ---------------------------------------------- and the claim says what came -- */
 
-const FIGURES = {
+/**
+ * A salon-wide answer. `branchId`/`branchAssumed` null, money present — the
+ * shape the endpoint has always had, plus the echo.
+ */
+const SALON_WIDE = {
   activeMembers: 412,
   activeMembersDelta: 6,
   loadedTodayFils: 184500,
@@ -241,67 +251,72 @@ const FIGURES = {
   repeatRatePercent: 48,
   upcomingAppointments: 3,
   nextAppointmentAt: '2026-08-29T13:30:00.000Z',
+  branchId: null,
+  branchName: null,
+  branchAssumed: null,
 };
+
+/**
+ * The same endpoint under `?branch=`. THE MONEY FIELDS ARE NULL, and that is the
+ * contract rather than a gap: a top-up happens in the customer's app and has no
+ * branch, so the server skips those queries instead of attributing a salon's
+ * whole day to whichever branch sorts first.
+ */
+const BY_BRANCH = {
+  ...SALON_WIDE,
+  activeMembers: 41,
+  activeMembersDelta: 0,
+  loadedTodayFils: null,
+  knetSharePercent: null,
+  branchId: 'BR-KWC',
+  branchName: 'Kuwait City',
+  branchAssumed: { activeMembers: 2, visits: 5, visitsTotal: 5, upcomingAppointments: 0 },
+};
+
+const wide = (): SalonMetrics => parseMetricsResponse(SALON_WIDE);
+const byBranch = (over: Record<string, unknown> = {}): SalonMetrics =>
+  parseMetricsResponse({ ...BY_BRANCH, ...over });
 
 describe('what the screen claims comes off the echo, never off the request', () => {
   it('reads the branch the server says it applied', () => {
-    const scoped = parseMetricsResponse({
-      ...FIGURES,
-      branchId: 'BR-KWC',
-      branchName: 'Kuwait City',
-    });
-    expect(scoped.applied).toEqual({ branchId: 'BR-KWC', branchName: 'Kuwait City' });
-    expect(scoped.metrics.activeMembers).toBe(412);
-  });
-
-  it('tells a salon-wide answer apart from no answer at all', () => {
-    const wide = parseMetricsResponse({ ...FIGURES, branchId: null, branchName: null });
-    expect(wide.applied).toEqual({ branchId: null, branchName: null });
-
-    /*
-     * AN API WITHOUT THE PARAMETER — lane A's endpoint may not be merged when
-     * this ships, and this is the shape its answer has. `undefined`, not
-     * `{ branchId: null }`: "the server says salon-wide" and "the server did not
-     * answer the question" are different facts, and only the second one means a
-     * branch we ASKED for was silently dropped.
-     */
-    expect(parseMetricsResponse(FIGURES).applied).toBeUndefined();
-  });
-
-  it('refuses half an echo rather than claiming a scope from it', () => {
-    expect(() => parseMetricsResponse({ ...FIGURES, branchId: 'BR-KWC' })).toThrow(
-      /branchId\/branchName/,
-    );
-    expect(() => parseMetricsResponse({ ...FIGURES, branchId: 7, branchName: 'x' })).toThrow(
-      /neither a string nor null/,
-    );
-  });
-
-  const scoped = (applied: ScopedSalonMetrics['applied']): ScopedSalonMetrics => ({
-    metrics: parseMetricsResponse(FIGURES).metrics,
-    applied,
-  });
-
-  it('is not a mismatch when the server applied what was asked', () => {
-    expect(scopeWasIgnored('BR-KWC', scoped({ branchId: 'BR-KWC', branchName: 'Kuwait City' })))
-      .toBe(false);
-  });
-
-  it('is not a mismatch on the salon-wide default', () => {
-    expect(scopeWasIgnored('all', scoped({ branchId: null, branchName: null }))).toBe(false);
-    expect(scopeWasIgnored('all', scoped(undefined))).toBe(false);
+    const m = byBranch();
+    expect(m.branchId).toBe('BR-KWC');
+    expect(m.branchName).toBe('Kuwait City');
+    expect(m.activeMembers).toBe(41);
   });
 
   /**
-   * THE CASE THIS WHOLE MECHANISM EXISTS FOR. An older API ignores `?branch=`
-   * and answers 200 with salon-wide figures. Believing our own request here
-   * would put "Kuwait City" over both branches' numbers — the defect the
-   * selector replaced, one layer down and harder to see.
+   * REQUIRED-BUT-NULLABLE, NOT OPTIONAL. Both halves of this feature are on
+   * `dev`, so there is no deploy window in which a conforming server omits the
+   * echo — and a server that omits it anyway must fail loudly rather than have
+   * the client quietly decide the figures are salon-wide. This is the assertion
+   * that replaced the old `applied: undefined` fold when trunk widened the
+   * schema at 74ffacf.
+   */
+  it('refuses a response that omits the echo rather than guessing salon-wide', () => {
+    const { branchId, branchName, ...noEcho } = SALON_WIDE;
+    expect(() => parseMetricsResponse(noEcho)).toThrow();
+    expect(() => parseMetricsResponse({ ...SALON_WIDE, branchId: 7 })).toThrow();
+  });
+
+  it('is not a mismatch when the server applied what was asked', () => {
+    expect(scopeWasIgnored('BR-KWC', byBranch())).toBe(false);
+  });
+
+  it('is not a mismatch on the salon-wide default', () => {
+    expect(scopeWasIgnored('all', wide())).toBe(false);
+  });
+
+  /**
+   * THE CASE THIS MECHANISM EXISTS FOR. Unreachable against a conforming server
+   * — an unknown branch is a 404 and a valid one is echoed — and kept precisely
+   * because that is an argument about the server, not about this screen. The
+   * comparison is what makes the screen structurally unable to claim a scope it
+   * was not given.
    */
   it('is a mismatch when a branch was asked for and the workspace ignored it', () => {
-    expect(scopeWasIgnored('BR-KWC', scoped(undefined))).toBe(true);
-    expect(scopeWasIgnored('BR-KWC', scoped({ branchId: null, branchName: null }))).toBe(true);
-    expect(scopeWasIgnored('BR-KWC', scoped({ branchId: 'BR-SAL', branchName: 'Salmiya' }))).toBe(
+    expect(scopeWasIgnored('BR-KWC', wide())).toBe(true);
+    expect(scopeWasIgnored('BR-KWC', byBranch({ branchId: 'BR-SAL', branchName: 'Salmiya' }))).toBe(
       true,
     );
   });
@@ -309,6 +324,128 @@ describe('what the screen claims comes off the echo, never off the request', () 
   it('claims nothing before figures arrive', () => {
     expect(scopeWasIgnored('BR-KWC', undefined)).toBe(false);
     expect(appliedBranchOf(undefined)).toBeNull();
+  });
+});
+
+/* ------------------------------------------- the tile with no per-branch answer */
+
+describe('"Loaded today" under a branch is an absence, not a zero', () => {
+  /**
+   * THE ASSERTION THAT MATTERS MOST IN THIS FILE.
+   *
+   * `loadedTodayFils` is null under a branch. The one-character fix at the
+   * render site is `?? 0`, which typechecks, renders, and puts **0.000 KD**
+   * under "Loaded today" for a merchant who selected Kuwait City — reinstating
+   * at the last layer the exact false zero `services/metrics.ts` was
+   * restructured to prevent. Nothing upstream can catch that: the API is
+   * correct, the schema is correct, the types are correct, and the glass lies.
+   */
+  it('never paints 0.000 for a figure the workspace did not answer', () => {
+    const { container } = render(<KpiRow metrics={byBranch()} loading={false} />);
+    expect(container.textContent).not.toContain('0.000');
+    // Nor the unit, which would frame the dash as an amount.
+    expect(container.textContent).not.toContain('KD');
+  });
+
+  it('says why the value is a dash, in the tile', () => {
+    render(<KpiRow metrics={byBranch()} loading={false} />);
+    expect(screen.getByText('Top-ups happen in the app, not at a branch')).toBeTruthy();
+  });
+
+  /**
+   * The tile STAYS. A tile that vanishes when a branch is picked reads as "this
+   * figure does not exist" rather than "this figure has no per-branch answer" —
+   * `Reports.tsx` makes the same argument about a refused card, and the KPI row
+   * is a four-column grid that a missing tile would visibly break.
+   */
+  it('keeps all four tiles, so nothing reads as "this figure does not exist"', () => {
+    render(<KpiRow metrics={byBranch()} loading={false} />);
+    for (const label of ['Active members', 'Loaded today', 'Repeat rate', 'Upcoming today']) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+  });
+
+  /** The KNET delta hangs off the same null and simply has nothing to say. */
+  it('drops the KNET share rather than rendering 0% via KNET', () => {
+    const { container } = render(<KpiRow metrics={byBranch()} loading={false} />);
+    expect(container.textContent).not.toContain('via KNET');
+  });
+
+  it('still renders the money and the KNET share at all branches', () => {
+    const { container } = render(<KpiRow metrics={wide()} loading={false} />);
+    expect(container.textContent).toContain('184.500');
+    expect(container.textContent).toContain('KD');
+    expect(container.textContent).toContain('62% via KNET');
+    expect(container.textContent).not.toContain('Top-ups happen in the app');
+  });
+
+  it('skeletons before data, never a zero and never the dash', () => {
+    const { container } = render(<KpiRow metrics={undefined} loading />);
+    expect(container.querySelectorAll('.avo-skeleton').length).toBeGreaterThan(0);
+    expect(container.textContent).not.toContain('0.000');
+    expect(container.textContent).not.toContain('Top-ups happen');
+  });
+});
+
+/* --------------------------------------------- how much of the answer is a guess */
+
+describe('the assumed-branch caveat is a size, and disappears on its own', () => {
+  it('says nothing at all branches, where every figure is exact', () => {
+    const { container } = render(<AssumedNote metrics={wide()} />);
+    expect(container.innerHTML).toBe('');
+  });
+
+  /**
+   * THE PROPERTY THE COUNT WAS CHOSEN FOR. When branch-bound scanner sessions
+   * ship, these counts fall to zero and the caveat leaves the UI with no code
+   * change and nobody remembering to remove it. A boolean, or a fixed "may be
+   * approximate" line, would have to be deleted by hand on that day.
+   */
+  it('says nothing when a branch is applied but nothing was inferred', () => {
+    const exact = byBranch({
+      branchAssumed: { activeMembers: 0, visits: 0, visitsTotal: 12, upcomingAppointments: 0 },
+    });
+    const { container } = render(<AssumedNote metrics={exact} />);
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('reports the ratio for each figure that has doubt, and only those', () => {
+    render(<AssumedNote metrics={byBranch()} />);
+    const text = screen.getByRole('status').textContent ?? '';
+    expect(text).toContain('2 of 41 members');
+    expect(text).toContain('5 of 5 visits');
+    // upcomingAppointments is 0 here — a "0 of 3" clause would be noise.
+    expect(text).not.toContain('appointments');
+    expect(text).toContain('treat these branch figures as approximate');
+  });
+
+  it('distinguishes a figure that is entirely a guess from one that is barely', () => {
+    const total = byBranch({
+      activeMembers: 9,
+      branchAssumed: { activeMembers: 9, visits: 0, visitsTotal: 40, upcomingAppointments: 0 },
+    });
+    expect(render(<AssumedNote metrics={total} />).container.textContent).toContain('9 of 9 members');
+    cleanup();
+    const barely = byBranch({
+      activeMembers: 9,
+      branchAssumed: { activeMembers: 1, visits: 0, visitsTotal: 40, upcomingAppointments: 0 },
+    });
+    expect(render(<AssumedNote metrics={barely} />).container.textContent).toContain('1 of 9 members');
+  });
+
+  it('joins three clauses without an Oxford comma, as the copy elsewhere sets', () => {
+    const all = byBranch({
+      activeMembers: 41,
+      upcomingAppointments: 3,
+      branchAssumed: { activeMembers: 2, visits: 5, visitsTotal: 5, upcomingAppointments: 1 },
+    });
+    expect(render(<AssumedNote metrics={all} />).container.textContent).toContain(
+      'Branch assumed on 2 of 41 members, 5 of 5 visits and 1 of 3 appointments',
+    );
+  });
+
+  it('renders nothing before figures arrive', () => {
+    expect(render(<AssumedNote metrics={undefined} />).container.innerHTML).toBe('');
   });
 });
 
