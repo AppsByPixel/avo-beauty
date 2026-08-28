@@ -45,7 +45,20 @@ export type { SalonMetrics } from '@avo/types';
 export const salonKeys = {
   all: ['salon'] as const,
   detail: (salonId: string) => [...salonKeys.all, salonId] as const,
-  metrics: (salonId: string) => [...salonKeys.detail(salonId), 'metrics'] as const,
+  /*
+   * THE BRANCH IS IN THE KEY, and leaving it out would be a cache bug with the
+   * exact shape of the label bug this change exists to fix: pick Salmiya, get
+   * the salon-wide figures back out of the cache, and read them under a control
+   * that says Salmiya. `'all'` is a key segment like any other, so the
+   * unfiltered read is one entry rather than the absence of one.
+   *
+   * Still built on `detail(salonId)`, so `settings.ts`' and `loyalty.ts`'
+   * `invalidateQueries({ queryKey: salonKeys.detail(salonId) })` prefix-match
+   * every branch's entry — a renamed branch does not leave one stale variant
+   * behind.
+   */
+  metrics: (salonId: string, branch: string) =>
+    [...salonKeys.detail(salonId), 'metrics', branch] as const,
   /*
    * `activity`, not `charges`. The key is renamed with the endpoint rather than
    * left behind: a cache key that names the wrong resource is how the next
@@ -78,10 +91,132 @@ export function useSalon(enabled = true): UseQueryResult<Salon> {
   });
 }
 
-export function useSalonMetrics(): UseQueryResult<SalonMetrics> {
+/**
+ * What the SERVER says it scoped the figures to. `branchId: null` is the
+ * salon-wide answer; a string is the branch it applied, and `branchName` is the
+ * name to print for it.
+ */
+export interface AppliedBranch {
+  branchId: string | null;
+  branchName: string | null;
+}
+
+export interface ScopedSalonMetrics {
+  metrics: SalonMetrics;
+  /**
+   * `undefined` WHEN THE RESPONSE CARRIED NO ECHO AT ALL — an API that predates
+   * `?branch=`. Deliberately a third value rather than being folded into
+   * `{ branchId: null }`: "the server says these are salon-wide" and "the server
+   * did not answer the question" are different facts, and only the second one
+   * means a branch we ASKED for was silently ignored. Overview renders them
+   * differently for that reason.
+   */
+  applied: AppliedBranch | undefined;
+}
+
+function echoField(r: Record<string, unknown>, key: 'branchId' | 'branchName'): string | null {
+  const v = r[key];
+  if (v === null) return null;
+  if (typeof v !== 'string') {
+    throw new Error(`GET /salons/{id}/metrics: ${key} was neither a string nor null.`);
+  }
+  return v;
+}
+
+/**
+ * THE ECHO IS READ HERE AND NOT THROUGH `SalonMetricsSchema`, ON PURPOSE.
+ *
+ * `packages/types` is trunk-owned (CLAUDE.md § Shared packages) and lane C does
+ * not widen it. That is not merely a rule to obey here, it is load-bearing:
+ * **Zod strips undeclared keys**, so `SalonMetricsSchema.parse(raw)` returns an
+ * object with no `branchId` on it whether the server sent one or not. A client
+ * that read the echo off the parsed value could never tell an API that ignored
+ * `?branch=` from one that honoured it — it would see `undefined` in both cases
+ * and would therefore have to guess, which is the whole failure this feature is
+ * about. So the echo is read off the RAW body, beside the schema parse rather
+ * than through it.
+ *
+ * Widening `SalonMetricsSchema` with `branchId`/`branchName` is the right
+ * long-term home and is a trunk operation; when it lands this helper can go and
+ * `applied` can come off the parsed object. Until then the two live side by
+ * side and neither is a cast.
+ */
+export function parseMetricsResponse(raw: unknown): ScopedSalonMetrics {
+  const metrics = SalonMetricsSchema.parse(raw);
+  if (typeof raw !== 'object' || raw === null) {
+    // Unreachable — the parse above would have thrown. Narrowing, not a check.
+    throw new Error('GET /salons/{id}/metrics did not answer an object.');
+  }
+  const r = raw as Record<string, unknown>;
+
+  const hasId = 'branchId' in r;
+  const hasName = 'branchName' in r;
+  if (!hasId && !hasName) return { metrics, applied: undefined };
+  if (hasId !== hasName) {
+    /*
+     * HALF AN ECHO IS WORSE THAN NONE. `branchName` alone gives us a name with
+     * nothing to compare the request against; `branchId` alone gives us a scope
+     * we cannot print. Either way the screen would be deciding what to claim
+     * from an incomplete answer, so this fails loudly instead.
+     */
+    throw new Error(
+      'GET /salons/{id}/metrics answered with only one of branchId/branchName. ' +
+        'The contract sends both or neither.',
+    );
+  }
+
+  return {
+    metrics,
+    applied: { branchId: echoField(r, 'branchId'), branchName: echoField(r, 'branchName') },
+  };
+}
+
+/**
+ * Overview's four KPI tiles, scoped to `branch`.
+ *
+ * `branch` is `'all'` or a branch id — `BranchScope.tsx`'s vocabulary, which is
+ * `routes/Reports.tsx`' vocabulary, which is `?branch=`'s vocabulary. `'all'`
+ * OMITS the parameter rather than sending the sentinel: the contract accepts
+ * omitted, `''` and `'all'` identically, and omitting is byte-for-byte the
+ * request this hook made before branch scoping existed. An API that has not
+ * shipped the parameter yet therefore sees no change at all on the default
+ * path, which is the degradation this lane was asked to guarantee.
+ */
+/**
+ * The `?branch=` suffix for one selection — `''` for salon-wide.
+ *
+ * =========================================================================
+ * THE SUFFIX IS EXTRACTED AND THE PATH IS NOT, AND THAT IS NOT A STYLE CHOICE
+ * =========================================================================
+ * The obvious refactor is a `metricsPath(salonId, branch)` helper returning the
+ * whole path, so a test can assert the URL without a session, a query client and
+ * a server. It was written that way first, and it silently removed
+ * `GET /salons/{id}/metrics` from `merchantScopeGates.test.ts`'s sweep: that
+ * scan reads PATH LITERALS out of `authedRequest(…)` call sites, so a path built
+ * behind a function call is a call the sweep cannot see. The suite went from 44
+ * merchant-call cases to 43 and nothing turned red — the file's own stated
+ * failure mode ("a parser returning nothing reports a clean sweep") arriving
+ * through a client refactor rather than through a regex.
+ *
+ * So the path literal stays AT the call site where the scanner can read it, and
+ * only the query suffix — which `normalisePath` drops anyway, because `?…` is
+ * not part of a registered route — moves into a function. That keeps both
+ * properties: the endpoint is covered by the surface sweep, and "what does
+ * `'all'` put on the wire" is answerable by a unit test.
+ *
+ * The contract accepts omitted, `''` and `'all'` identically; this sends
+ * OMITTED, which is byte-for-byte the request that existed before branch scoping
+ * — so the default path cannot regress against an API that has not shipped the
+ * parameter yet.
+ */
+export function branchQuery(branch: string): string {
+  return branch === 'all' ? '' : `?branch=${encodeURIComponent(branch)}`;
+}
+
+export function useSalonMetrics(branch: string): UseQueryResult<ScopedSalonMetrics> {
   const salonId = useSalonId();
   return useQuery({
-    queryKey: salonKeys.metrics(salonId),
+    queryKey: salonKeys.metrics(salonId, branch),
     /*
      * PARSED with the shared schema, not cast. The blind `authedRequest<SalonMetrics>`
      * this replaces asserted a shape the wire never proved — the `PATCH /v1/salons/{id}`
@@ -89,8 +224,12 @@ export function useSalonMetrics(): UseQueryResult<SalonMetrics> {
      * as a promised number renders "NaN" under a KD unit.
      */
     queryFn: async ({ signal }) =>
-      SalonMetricsSchema.parse(
-        await authedRequest<unknown>('merchant', `/salons/${salonId}/metrics`, { signal }),
+      parseMetricsResponse(
+        await authedRequest<unknown>(
+          'merchant',
+          `/salons/${salonId}/metrics${branchQuery(branch)}`,
+          { signal },
+        ),
       ),
     /*
      * Stale-not-blank (interaction-spec.md §4). A failed refresh must keep the

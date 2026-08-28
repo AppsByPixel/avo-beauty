@@ -6,7 +6,9 @@ import {
   useSalonMetrics,
   type ActivityItem,
   type SalonMetrics,
+  type ScopedSalonMetrics,
 } from '../api/salon.js';
+import { useBranchScope } from '../shell/BranchScope.js';
 
 /**
  * Merchant → Overview.
@@ -34,7 +36,8 @@ import {
  */
 export function Overview() {
   // No salon id here at all. Both hooks read it from the session.
-  const metrics = useSalonMetrics();
+  const { selected, selectedName } = useBranchScope();
+  const metrics = useSalonMetrics(selected);
   const activity = useRecentActivity();
 
   /*
@@ -58,6 +61,26 @@ export function Overview() {
     return <MetricsError error={metrics.error} onRetry={() => void metrics.refetch()} retrying={metrics.isFetching} />;
   }
 
+  /*
+   * ===========================================================================
+   * WHAT THE FIGURES ACTUALLY COVER — read off the SERVER'S ECHO, never off the
+   * request.
+   * ===========================================================================
+   * The branch selector sends `?branch=`; `GET /salons/{id}/metrics` answers
+   * with `branchId`/`branchName` saying what it applied. Those are two different
+   * facts and this screen must render the second one, because the first is only
+   * a hope. An API that predates the parameter ignores it and answers 200 with
+   * salon-wide figures — and if this screen believed its own request, it would
+   * put "Salmiya" over both-branch numbers. That is the EXACT defect the branch
+   * selector was built to remove; reintroducing it one layer down, silently,
+   * would be worse than the label it replaced, because it would look deliberate.
+   *
+   * `applied === undefined` (no echo at all) collapses to "salon-wide", which is
+   * what such a server in fact returned.
+   */
+  const appliedBranchId = appliedBranchOf(metrics.data);
+  const scopeIgnored = scopeWasIgnored(selected, metrics.data);
+
   return (
     <>
       {showStale ? (
@@ -68,11 +91,33 @@ export function Overview() {
         />
       ) : null}
 
-      <KpiRow metrics={metrics.data} loading={metrics.isPending} />
+      {scopeIgnored ? (
+        <ScopeNotice
+          requestedName={selectedName}
+          appliedName={metrics.data?.applied?.branchName ?? null}
+          appliedBranchId={appliedBranchId}
+        />
+      ) : null}
+
+      <KpiRow metrics={metrics.data?.metrics} loading={metrics.isPending} />
 
       <div className="overview__grid">
         <Card className="overview__activity" flush>
-          <h2 className="overview__card-title">Recent activity</h2>
+          {/*
+            THE FEED IS SALON-WIDE AND SAYS SO WHEN THAT MATTERS.
+            `GET /salons/{id}/activity` takes no branch parameter — the contract
+            this lane was given scopes `metrics` and nothing else — so with a
+            branch applied above, these five lines cover more than the tiles do.
+            Leaving that unsaid would rebuild the original defect inside the fix:
+            a branch named in the chrome, salon-wide rows underneath it. The
+            qualifier appears only when the two genuinely differ.
+          */}
+          <h2 className="overview__card-title">
+            Recent activity
+            {appliedBranchId !== null ? (
+              <span className="overview__card-scope">All branches</span>
+            ) : null}
+          </h2>
           <ActivityList
             items={activity.data?.items}
             loading={activity.isPending}
@@ -83,6 +128,75 @@ export function Overview() {
         </Card>
       </div>
     </>
+  );
+}
+
+/**
+ * The applied scope as a plain `branchId | null`, folding "the response carried
+ * no echo" into "salon-wide" — which is what such a response in fact contained.
+ * Named and exported so the fold happens exactly once and can be asserted.
+ */
+export function appliedBranchOf(data: ScopedSalonMetrics | undefined): string | null {
+  return data?.applied?.branchId ?? null;
+}
+
+/**
+ * DID THE WORKSPACE IGNORE THE BRANCH WE ASKED FOR?
+ *
+ * The single question this screen's honesty rests on, so it is one exported
+ * function rather than a conjunction inlined in JSX. Three things have to be
+ * true: figures have arrived, a specific branch was requested, and what came
+ * back is not that branch. `undefined` data is not a mismatch — nothing is on
+ * screen to be wrong about yet.
+ */
+export function scopeWasIgnored(selected: string, data: ScopedSalonMetrics | undefined): boolean {
+  if (data === undefined) return false;
+  const requested = selected === 'all' ? null : selected;
+  if (requested === null) return false;
+  return appliedBranchOf(data) !== requested;
+}
+
+/**
+ * THE FIGURES ARE NOT THE ONES THAT WERE ASKED FOR, AND THE SCREEN SAYS SO.
+ *
+ * Reached when the server's echo disagrees with the selection: an API that has
+ * not shipped `?branch=` yet (lane A is building it in parallel, and this screen
+ * has to be honest before it lands), or one that applied a different branch.
+ *
+ * IT DOES NOT MOVE THE SELECTOR BACK. A control that silently undoes a click is
+ * a second lie — the merchant chose Salmiya and the header should keep showing
+ * that she did. What is wrong is not her choice, it is the answer, so the
+ * correction sits on the answer.
+ *
+ * `role="status"`, and the `.avo-stale` treatment reused verbatim rather than a
+ * new one invented: the design bundle has no branch switcher and therefore no
+ * strip for this, and `@avo/ui`'s stale banner is already this product's way of
+ * saying "the numbers under this are not what you think" — same warn tint, same
+ * dot, same type. `InfoBanner` was the other candidate and is explicitly wrong
+ * here: its own header says it is standing prose that "never changes and is not
+ * the result of anything the merchant did", and this is nothing but that.
+ */
+export function ScopeNotice({
+  requestedName,
+  appliedName,
+  appliedBranchId,
+}: {
+  requestedName: string | null;
+  appliedName: string | null;
+  appliedBranchId: string | null;
+}) {
+  /* The branch she picked, by name where we have one — an id would mean nothing. */
+  const asked = requestedName ?? 'the selected branch';
+
+  return (
+    <div className="avo-stale" role="status">
+      <span className="avo-stale__dot" aria-hidden="true" />
+      <span className="avo-stale__text">
+        {appliedBranchId === null
+          ? `Showing all branches. This workspace didn\u2019t narrow these figures to ${asked}, so everything below covers the whole salon.`
+          : `Showing ${appliedName ?? 'another branch'}. This workspace answered with a different branch from the one selected, so these figures are not ${asked}.`}
+      </span>
+    </div>
   );
 }
 

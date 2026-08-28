@@ -3,6 +3,8 @@ import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useSalon } from '../api/salon.js';
 import { useAuth, useSession } from '../auth/AuthProvider.js';
 import { SCOPES } from '../auth/scopes.js';
+import { BranchScopeProvider } from './BranchScope.js';
+import { BranchSelector } from './BranchSelector.js';
 import { Header } from './Header.js';
 import { Sidebar } from './Sidebar.js';
 import { UnsupportedWidth } from './UnsupportedWidth.js';
@@ -54,16 +56,26 @@ function SignedInShell() {
   const salon = salonQuery.data;
   const salonName = salon?.name ?? '—';
   /*
-   * `?.` on `branches` too, not only on `salon`.
+   * THE SHELL NO LONGER COMPUTES A BRANCH LABEL, AND MUST NOT AGAIN.
    *
-   * `Salon.branches` is required by the type, so this read looked safe. It is
-   * not: `PATCH /salons/{id}` returns the raw row with no `branches` key, and a
-   * response that is typed as a Salon but is not one put `undefined` here and
-   * took the whole shell to its error boundary — from a settings toggle three
-   * components away. The client no longer caches that response (api/settings.ts),
-   * and the shell no longer trusts a required field to be present either.
+   * What stood here was `salon?.branches?.[0]?.name ?? '—'`, handed to the
+   * header and drawn as `{salonName} · {branchLabel}`. For any salon with more
+   * than one branch that named ONE branch above figures covering ALL of them —
+   * the label and the numbers underneath answering different questions, which
+   * is this project's signature defect and the fourteenth logged instance of it.
+   *
+   * The scope is now a selection rather than a derivation: `BranchScopeProvider`
+   * holds it, `BranchSelector` renders the control in the space the span
+   * occupied, and `routes/Overview.tsx` and `routes/Reports.tsx` read the same
+   * value. There is deliberately nothing left in this file to get wrong —
+   * `branchScope.test.tsx` asserts that this component never reads `branches[0]`
+   * again.
+   *
+   * (The old comment here warned that `?.` on `branches` was load-bearing,
+   * because `PATCH /salons/{id}` answers with a raw row carrying no `branches`
+   * key. That hazard has not gone away, it has MOVED: `BranchScope.tsx` reads
+   * `salon.data?.branches ?? []` for the same reason.)
    */
-  const branchLabel = salon?.branches?.[0]?.name ?? '—';
   useBrandTheme(salon?.brandColor);
 
   const item = navItemFor(pathname);
@@ -170,71 +182,81 @@ function SignedInShell() {
     void signOut('merchant');
   }
 
+  /*
+   * THE PROVIDER WRAPS THE HEADER AND THE OUTLET TOGETHER, and that is the whole
+   * reason it is here rather than inside a screen. The control lives in the
+   * chrome and the figures it scopes live in the route below it; a provider
+   * mounted in either one alone would put them back on two selections. It sits
+   * under the `!session` early return with everything else that reads the
+   * session, so a signed-out shell still mounts nothing.
+   */
   return (
-    <div className="dash" data-bp={breakpoint}>
-      {breakpoint === 'tablet' ? null : (
-        <aside className="dash__rail" aria-label="Workspace navigation">
-          <Sidebar
-            salonName={salonName}
-            brandHex={salon?.brandColor ?? null}
-            userName={session.displayName || session.username}
-            userRole="Owner"
-            collapsed={collapsed}
-          />
-        </aside>
-      )}
-
-      <div className="dash__main">
-        <div ref={menuButtonRef}>
-          <Header
-            title={title}
-            subtitle={subtitle}
-            salonName={salonName}
-            branchLabel={branchLabel}
-            menuOpen={drawerOpen}
-            onSignOut={onSignOut}
-            {...(breakpoint === 'tablet'
-              ? { onOpenMenu: () => setDrawerOpen((open) => !open) }
-              : {})}
-          />
-        </div>
-
-        <main className="dash__content">
-          <div className="dash__column">
-            <Outlet />
-          </div>
-        </main>
-      </div>
-
-      {breakpoint === 'tablet' && drawerOpen ? (
-        <>
-          {/*
-            Presentational. The dismiss it offers is a convenience for a pointer;
-            the keyboard route out is Esc, which §2 names and the trap above
-            handles, so this is not a second tab stop pretending to be a button.
-          */}
-          <div className="dash__scrim" aria-hidden="true" onClick={closeDrawer} />
-          <div
-            id="dash-drawer"
-            ref={drawerRef}
-            className="dash__drawer"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Sections"
-            // Focusable only as the trap's fallback landing spot, never by Tab.
-            tabIndex={-1}
-          >
+    <BranchScopeProvider>
+      <div className="dash" data-bp={breakpoint}>
+        {breakpoint === 'tablet' ? null : (
+          <aside className="dash__rail" aria-label="Workspace navigation">
             <Sidebar
               salonName={salonName}
               brandHex={salon?.brandColor ?? null}
               userName={session.displayName || session.username}
               userRole="Owner"
-              collapsed={false}
-              onNavigate={closeDrawer}
+              collapsed={collapsed}
+            />
+          </aside>
+        )}
+
+        <div className="dash__main">
+          <div ref={menuButtonRef}>
+            <Header
+              title={title}
+              subtitle={subtitle}
+              salonName={salonName}
+              branch={<BranchSelector />}
+              menuOpen={drawerOpen}
+              onSignOut={onSignOut}
+              {...(breakpoint === 'tablet'
+                ? { onOpenMenu: () => setDrawerOpen((open) => !open) }
+                : {})}
             />
           </div>
-        </>
-      ) : null}
-    </div>
+
+          <main className="dash__content">
+            <div className="dash__column">
+              <Outlet />
+            </div>
+          </main>
+        </div>
+
+        {breakpoint === 'tablet' && drawerOpen ? (
+          <>
+            {/*
+              Presentational. The dismiss it offers is a convenience for a pointer;
+              the keyboard route out is Esc, which §2 names and the trap above
+              handles, so this is not a second tab stop pretending to be a button.
+            */}
+            <div className="dash__scrim" aria-hidden="true" onClick={closeDrawer} />
+            <div
+              id="dash-drawer"
+              ref={drawerRef}
+              className="dash__drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Sections"
+              // Focusable only as the trap's fallback landing spot, never by Tab.
+              tabIndex={-1}
+            >
+              <Sidebar
+                salonName={salonName}
+                brandHex={salon?.brandColor ?? null}
+                userName={session.displayName || session.username}
+                userRole="Owner"
+                collapsed={false}
+                onNavigate={closeDrawer}
+              />
+            </div>
+          </>
+        ) : null}
+      </div>
+    </BranchScopeProvider>
   );
 }
