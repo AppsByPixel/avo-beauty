@@ -1,5 +1,10 @@
 # Running four lanes — the daily operating manual
 
+> **Looking for how to operate the deployed product?** That is `OPERATIONS.md`. This
+> file is about four build sessions sharing one machine. The two were conflated once,
+> when a receipt-worker observability note was drafted for this document and had
+> nowhere here to sit.
+
 You are no longer the person writing most of the code. You are the person who decides what
 gets built, whether it is actually done, and how four branches become one. That is a real
 job and it is the one that fails if nobody does it.
