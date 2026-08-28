@@ -64,33 +64,32 @@ first.**
 
 ---
 
-## 3 · Verified state as of 2026-08-25 (re-measure before believing)
+## 3 · Where the build is — run this, do not read a number
 
-```
-dev = main = origin/dev = origin/main = 1ee49a0     482 commits, everything level
-all four lane worktrees clean and 0 ahead of dev
-last gate: twice green, 9m44 and 9m40, from a clean tree
+```bash
+./scripts/state.sh
 ```
 
-| | |
-|---|---|
-| e2e | 29 files, ~642 `it()`/`test()` calls (grep count, not a run) |
-| API | 26 route files, 122 route registrations, 38 migrations |
-| Owner console | **7 of 10 nav sections built** |
-| go-live checklist | **15 ticked / 53 total** |
-| `DECISIONS.md` | 54 entries, **15 queued for the client** |
+Read-only. Prints git position, every lane worktree's ahead/behind **and anything uncommitted
+in it**, what is built, and the specification counters.
 
-**Owner console, precisely** — built: Analytics, Salons, Admins, Approvals, Policies, Audit log,
-Controls. Not built: **Activity** and **Accounts** (their API endpoints exist —
-`GET /v1/platform/activity`, `GET /v1/platform/accounts` — but no screens; they are unblocked
-work), and **Billing** (blocked: no trial/subscription/invoice column exists anywhere, and the
-design's figures are prototype fixtures — queued as #15). **Console Reports** is in the design's
-section list but has no usable endpoint (`requireDashboardPerm` demands a `dashboard` scope, so a
-platform admin cannot call it) and no `reports` entry in `PLATFORM_SECTIONS` to gate one on.
+**This section used to be a table.** It was written on 2026-08-25 and stated `dev = 1ee49a0,
+482 commits`. Before anyone read it, 110 commits landed. Its own first instruction was
+"re-measure before believing" — correct, and useless, because a reader given a stale number and
+no way to refresh it will use the stale number.
 
-All twelve non-negotiables are satisfied and held by tests.
+Then, while replacing the table with the script, the state moved **again between two
+measurements minutes apart**: 592 → 600 commits, e2e 35 → 36 files, the console 7 → 9 sections.
+**Other sessions work in this repo concurrently.** Check `./scripts/state.sh` and `git log` before
+assuming you are alone, and before assuming a thing you remember is still true.
 
----
+Two things the script deliberately does not tell you:
+
+- **Whether the suite passes.** It greps. A real answer is `RUNBOOK.md`'s gate, run twice.
+- **Whether the console's unbuilt sections are blocked or merely unbuilt.** As of this writing
+  Billing was blocked on a client decision (no trial/subscription/invoice column exists and the
+  design's figures are prototype fixtures) while others were simply not built yet. Check
+  `DECISIONS.md` before treating an empty section as work.
 
 ## 4 · How this project is run: four lanes, four worktrees
 
