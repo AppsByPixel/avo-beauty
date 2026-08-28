@@ -2040,12 +2040,64 @@ function signalApiGroup(signal: NodeJS.Signals): void {
   }
 }
 
+/**
+ * Stop the API this run started.
+ *
+ * =========================================================================
+ * IT WAITS FOR THE DEATH IT ORDERED, AND IT USED NOT TO
+ * =========================================================================
+ * The previous version sent SIGKILL and returned in the same breath. A process
+ * does not exit synchronously when you signal it, so the child's `exit` event
+ * arrived AFTER this function had already handed control back — and the handler
+ * that event runs is `apiExit = { code, signal }`, module state that
+ * `bootApiOnce` uses to decide whether the API it JUST SPAWNED has died.
+ *
+ * So a stop immediately followed by a start read like this:
+ *
+ *     stopTenancyApi()        SIGTERM, 3s, SIGKILL, return
+ *     bootApiOnce()           apiExit = undefined; spawn a healthy new server
+ *     (the old child exits)   apiExit = { code: null, signal: 'SIGKILL' }
+ *     bootApiOnce()'s loop    "the child is already dead" → SIGKILLs the NEW
+ *                             server and throws "exited before becoming healthy
+ *                             (code null, signal SIGKILL)" with no output,
+ *                             because the server it killed had never done
+ *                             anything wrong
+ *
+ * NOTHING IN THIS DIRECTORY RESTARTED THE API MID-RUN UNTIL `connection-pool.
+ * test.ts` DID, which is the whole reason a bug this deterministic survived: it
+ * is not flaky, it fails every single time, and until today no caller existed to
+ * fail. The first spec to need a second server got a message accusing that server
+ * of a crash it had not had — the same shape as the ECONNREFUSED failures
+ * `apiPostMortem` was written for, one level up.
+ *
+ * Two changes, and the second is the one that closes it. The kill is now WAITED
+ * ON, so the port and the ten pooled connections are genuinely released before
+ * the next boot asks for them. And the dying child's `exit` listeners are
+ * REMOVED, so that even a late reaping cannot write to `apiExit` on behalf of a
+ * server that is no longer the one under test.
+ */
 export async function stopTenancyApi(): Promise<void> {
   if (!child) return;
+  const dying = child;
+  const exited = new Promise<void>((r) => dying.once('exit', () => r()));
+
   signalApiGroup('SIGTERM');
-  const exited = new Promise<void>((r) => child?.once('exit', () => r()));
   await Promise.race([exited, new Promise((r) => setTimeout(r, 3_000))]);
-  if (child.exitCode === null) signalApiGroup('SIGKILL');
+
+  if (dying.exitCode === null && dying.signalCode === null) {
+    /**
+     * A WEDGED API IS THE NORMAL CASE HERE, NOT AN EXCEPTIONAL ONE.
+     * `server.ts` answers SIGTERM by closing the server, and closing waits for
+     * in-flight requests — of which a deadlocked process has ten that will never
+     * finish. So SIGTERM is ignored in exactly the situation `connection-pool.
+     * test.ts` creates, and the second wait is what makes the SIGKILL mean
+     * something rather than being fired into the dark.
+     */
+    signalApiGroup('SIGKILL');
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 3_000))]);
+  }
+
+  dying.removeAllListeners('exit');
   child = undefined;
 }
 
@@ -2077,6 +2129,48 @@ export interface TenancyRequest {
    * tampering spec below could then pass for the wrong reason.
    */
   rawBody?: string;
+  /**
+   * This request is SUPPOSED to answer 5xx, so do not print the server's log for
+   * it. See `reportUnexpectedServerError` below.
+   *
+   * Two call sites, both in `gateway.test.ts`, both driving
+   * `scenario: 'gateway_create_error'` to prove that a payment provider outage
+   * answers 502 and rolls back. Everything else that answers 5xx in this
+   * directory is a defect, and the point of the flag is that saying so is a
+   * deliberate act rather than a silence that spreads.
+   */
+  expectServerError?: boolean;
+}
+
+/**
+ * PRINT THE SERVER'S OWN ACCOUNT OF A 5xx, BECAUSE DECISIONS.md #65 IS WHAT
+ * HAPPENS WITHOUT IT.
+ *
+ * Eight specs failed on `POST /charges` → 500 during one `pnpm check`, and what
+ * every one of them reported was `expected 500 to be 200`. The API had logged the
+ * stack — `http/errors.ts` ends `req.log.error({ err }, 'unhandled error')` for
+ * exactly this case, and `apiLogTail()` has been sitting four lines away since the
+ * promotions specs needed it — but nothing joined the two, so a burst of 500s on
+ * the money path could not be diagnosed after the fact and has not reproduced
+ * since. A flake you cannot read is a flake you get to have twice.
+ *
+ * DELIBERATELY ADVISORY, which is `global-setup.ts`'s rule for its uninstalled-
+ * package warning and is right for the same reason: this prints, it never fails,
+ * and it never touches `status`, `body` or `raw`. A spec asserting on a 5xx keeps
+ * asserting on exactly what it did before. The only thing that changes is that the
+ * next time this happens, the reason is in the run output beside the failure
+ * instead of in a process that has since been killed.
+ */
+function reportUnexpectedServerError(method: string, path: string, status: number, raw: string) {
+  // eslint-disable-next-line no-console
+  console.error(
+    `\n[lane D] ${method} ${path} answered ${status}. That is a server-side fault, not a ` +
+      'refusal, so the API\'s own log follows. If you are reading this in a flaky run, THIS IS ' +
+      'THE EVIDENCE — copy it before the process is gone.\n' +
+      `--- the response ---\n${raw.slice(0, 500)}\n` +
+      `--- the API's last output ---\n${apiLogTail(40) || '(nothing on stdout/stderr)'}\n` +
+      '--------------------------------',
+  );
 }
 
 export async function treq<T = any>(
@@ -2153,6 +2247,9 @@ export async function treq<T = any>(
     body = raw === '' ? null : JSON.parse(raw);
   } catch {
     body = raw;
+  }
+  if (res.status >= 500 && options.expectServerError !== true) {
+    reportUnexpectedServerError(method, path, res.status, raw);
   }
   return { status: res.status, body: body as T, raw };
 }

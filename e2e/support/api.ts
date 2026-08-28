@@ -9,6 +9,61 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+/**
+ * The tail of the MOCK's own stdout and stderr this run.
+ *
+ * `packages/mock` registers no error handler, so any throw inside a handler is
+ * turned into a bare `500 {"error":"server_error"}` by Fastify's default — and
+ * until `support/global-setup.ts` started keeping this file, that string was
+ * everything a spec could ever learn about it. `tenancy-harness.ts` closed the
+ * identical hole on the real API and its note is the argument: "the stack existed,
+ * four lines away, and no spec could reach it."
+ *
+ * Empty when `E2E_BASE_URL` was set from outside — the suite did not boot that
+ * server and does not own its output. Says so rather than pretending the server
+ * printed nothing.
+ */
+export function mockLogTail(lines = 40): string {
+  const path = process.env.E2E_MOCK_LOG;
+  if (!path) {
+    return '(no log retained — E2E_BASE_URL pointed this run at an API it did not start, ' +
+      'so its output belongs to whoever did)';
+  }
+  try {
+    const all = readFileSync(path, 'utf8').split('\n');
+    return all.slice(Math.max(0, all.length - lines)).join('\n');
+  } catch {
+    return '(the mock has written nothing yet)';
+  }
+}
+
+/**
+ * PRINT THE MOCK'S OWN ACCOUNT OF A 5xx. See DECISIONS.md #65.
+ *
+ * Eight specs failed on `POST /charges` → 500 in one `pnpm check` and every one of
+ * them reported `expected 500 to be 200` and nothing else, which is why nobody has
+ * been able to say afterwards whether it was the API or the harness. Three of the
+ * files that hammer that endpoint — `money.test.ts`, `concurrency.test.ts`,
+ * `permissions.test.ts` — drive the MOCK, so half of that question could not even
+ * be asked without this.
+ *
+ * Advisory: it prints, it never fails, and it does not touch `status`, `body` or
+ * `headers`. No spec in the three mock-driven files expects a 5xx today, so on a
+ * green run this is silent.
+ */
+function reportUnexpectedServerError(method: string, path: string, status: number, text: string) {
+  // eslint-disable-next-line no-console
+  console.error(
+    `\n[lane D] ${method} ${path} answered ${status} from packages/mock. That is a fault in ` +
+      'the mock, not a refusal, so its own log follows. If you are reading this in a flaky ' +
+      'run, THIS IS THE EVIDENCE — copy it before the process is gone.\n' +
+      `--- the response ---\n${text.slice(0, 500)}\n` +
+      `--- the mock's last output ---\n${mockLogTail(40) || '(nothing on stdout/stderr)'}\n` +
+      '--------------------------------',
+  );
+}
 
 export function baseUrl(): string {
   const url = process.env.E2E_BASE_URL;
@@ -60,6 +115,7 @@ export async function api<T = any>(
   } catch {
     body = text; // an HTML error page or a gateway stub; the test can assert on it
   }
+  if (res.status >= 500) reportUnexpectedServerError(method, path, res.status, text);
   return { status: res.status, body: body as T, headers: res.headers };
 }
 

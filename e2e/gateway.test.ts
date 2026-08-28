@@ -1075,6 +1075,9 @@ describe('a failed gateway leg does not burn its idempotency key', () => {
       token: member,
       idempotencyKey: k,
       scenario: 'gateway_create_error',
+      // A 502 is the POINT of this spec, so the harness must not print the API's
+      // log for it. See `expectServerError` in support/tenancy-harness.ts.
+      expectServerError: true,
       body: { amountFils: AMOUNT_FILS, method: 'knet' },
     });
 
@@ -1107,6 +1110,9 @@ describe('a failed gateway leg does not burn its idempotency key', () => {
       token: member,
       idempotencyKey: k,
       scenario: 'gateway_create_error',
+      // A 502 is the POINT of this spec, so the harness must not print the API's
+      // log for it. See `expectServerError` in support/tenancy-harness.ts.
+      expectServerError: true,
       body: { amountFils: AMOUNT_FILS, method: 'knet' },
     });
     expect(failed.status).toBe(502);

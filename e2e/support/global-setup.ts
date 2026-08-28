@@ -35,7 +35,8 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -159,6 +160,37 @@ function uninstalledPackagesNote(): string {
 let child: ChildProcess | undefined;
 
 /**
+ * WHERE THE MOCK'S OUTPUT IS KEPT, AND WHY IT IS A FILE RATHER THAN A VARIABLE.
+ *
+ * `support/tenancy-harness.ts` learned this lesson already and wrote it down:
+ * "A suite that boots its own server owns that server's output." Its
+ * `apiLogTail()` exists because a 500 mid-run "surfaced as `{"error":"server_error"}`
+ * and nothing else — the stack existed, four lines away, and no spec could reach
+ * it. Seven promotions specs were diagnosed by adding this; it should have been
+ * here from the start".
+ *
+ * The mock had exactly the same hole and it was never closed. `output` below is a
+ * local, read once for the "never became healthy" message and then dropped, so a
+ * 500 from `packages/mock` — which has no error handler of its own, so any throw
+ * in a handler becomes one — was unreadable to `money.test.ts`,
+ * `concurrency.test.ts` and `permissions.test.ts`, the three files that drive the
+ * charge path hardest. DECISIONS.md #65 is a burst of eight of those, still
+ * undiagnosed.
+ *
+ * A FILE AND NOT A MODULE VARIABLE, because this module runs in the vitest MAIN
+ * process and the specs run in forked workers with their own module registry —
+ * `tenancy-harness.ts` § "WHY THE CACHE IS ON DISK" makes the same argument about
+ * sign-in sessions. The path travels to the workers in the environment, the way
+ * `AVO_QA_DB` and `E2E_BASE_URL` already do.
+ *
+ * Named after the port, so two runs on one machine cannot write to one file — the
+ * same reasoning that names the run database. Removed in `teardown`.
+ */
+function mockLogPath(port: number): string {
+  return join(tmpdir(), `avo-e2e-mock-${port}.log`);
+}
+
+/**
  * Name this run's database and tell the workers about it.
  *
  * Deliberately does NOT create it. Provisioning needs Docker and Postgres, and
@@ -220,8 +252,20 @@ export async function setup(): Promise<void> {
     env: { ...process.env, PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  child.stdout?.on('data', (c: Buffer) => (output += c.toString()));
-  child.stderr?.on('data', (c: Buffer) => (output += c.toString()));
+  const logPath = mockLogPath(port);
+  rmSync(logPath, { force: true });
+  const keep = (c: Buffer) => {
+    const text = c.toString();
+    output += text;
+    // Never fail a run over a log file. See `removeSessionCache`.
+    try {
+      appendFileSync(logPath, text);
+    } catch {
+      /* nothing here is worth failing a run over */
+    }
+  };
+  child.stdout?.on('data', keep);
+  child.stderr?.on('data', keep);
   child.on('exit', (code) => {
     if (code !== 0 && code !== null) output += `\n[mock exited with code ${code}]`;
   });
@@ -233,13 +277,23 @@ export async function setup(): Promise<void> {
     throw err;
   }
 
-  // globalSetup runs before the test workers are forked, so they inherit this.
+  // globalSetup runs before the test workers are forked, so they inherit these.
   process.env.E2E_BASE_URL = baseUrl;
+  process.env.E2E_MOCK_LOG = logPath;
 }
 
 export async function teardown(): Promise<void> {
   await dropRunDatabaseIfOurs();
   await removeSessionCache();
+  // On the same lifecycle as the process whose output it holds. Never throws,
+  // for `dropRunDatabaseIfOurs`'s reason.
+  if (process.env.E2E_MOCK_LOG) {
+    try {
+      rmSync(process.env.E2E_MOCK_LOG, { force: true });
+    } catch {
+      /* nothing here is worth failing a run over */
+    }
+  }
 
   if (!child) return;
   child.kill('SIGTERM');
