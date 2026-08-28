@@ -10,6 +10,7 @@
     "job:campaign-release": "tsx --env-file-if-exists=.env src/jobs/campaign-release-once.ts",
     "job:erasure": "tsx --env-file-if-exists=.env src/jobs/erasure-once.ts",
     "job:topup-reap": "tsx --env-file-if-exists=.env src/jobs/topup-reap-once.ts",
+    "job:image-reap": "tsx --env-file-if-exists=.env src/jobs/image-reap-once.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/db/seed.ts",

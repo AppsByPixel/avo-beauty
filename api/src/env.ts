@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 
 const EnvSchema = z.object({
@@ -270,6 +271,81 @@ const EnvSchema = z.object({
   // receipts send from AVO's domain or per-salon subdomains" as an open client
   // decision — which is what decides the sending domain's SPF/DKIM records. So
   // the only driver is `logging`, behind the same seam as the gateway.
+  // -------------------------------------------------------------- images --
+  //
+  // The FIRST image capability in this product. Where the bytes live is a client
+  // decision that has not been made — CLAUDE.md § Escalate lists data residency
+  // ("leaning Kuwait, undecided") and the retention schedule — so the provider
+  // sits behind a seam, exactly as the PSP does. See src/images/types.ts.
+  //
+  // `disk` is the only driver and it BOOTS ANYWHERE, unlike GATEWAY_DRIVER=sandbox.
+  // What it refuses is a WRITE in production, from inside the driver, with a 503
+  // naming the missing decision. The argument for that split is in images/disk.ts:
+  // a sandbox gateway fabricates a payment, a local disk fabricates nothing and
+  // simply cannot KEEP what it was given — so refusing to boot the whole API,
+  // including charges and sign-in, over a product-photo capability would be the
+  // wrong trade, and letting it accept uploads it will silently lose would be the
+  // other wrong trade.
+  IMAGE_DRIVER: z.enum(['disk']).default('disk'),
+
+  /**
+   * Where `disk` keeps them. Relative paths resolve against the api/ package, so
+   * a developer's store is `api/.image-store` and is gitignored.
+   */
+  IMAGE_STORE_PATH: z.string().default('.image-store'),
+
+  /**
+   * The size ceiling, in bytes. 2 MiB.
+   *
+   * A shop tile and a service row are at most a few hundred pixels on a phone;
+   * 2 MiB is a generous 2000px JPEG and still a bounded thing to hold in memory
+   * per concurrent upload. The route ALSO sets a Fastify body limit at twice
+   * this — that one is the DoS backstop and produces a blunt 413; this one is
+   * the product rule and produces a named error with the limit in it.
+   */
+  IMAGE_MAX_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+
+  /**
+   * The longest side, in pixels. Read out of the container header, never by
+   * decoding — see images/inspect.ts.
+   */
+  IMAGE_MAX_DIMENSION: z.coerce.number().int().positive().default(4096),
+
+  /**
+   * The pixel ceiling, and it is the decompression-bomb control.
+   *
+   * Bytes and dimensions do not bound each other: a 30 KB PNG can legally
+   * declare 30000x30000 and expand to 3.6 GB in whatever decodes it. THIS API
+   * NEVER DECODES, so the bomb is harmless here — but the wallet on a customer's
+   * phone does decode, and a merchant must not be able to upload a picture that
+   * kills the app of everyone who opens her shop.
+   *
+   * TWELVE MEGAPIXELS, AND THE NUMBER WAS WRONG BEFORE IT WAS THIS ONE.
+   * It was `16 * 1024 * 1024` — 16,777,216 — which is EXACTLY 4096 x 4096, and
+   * `IMAGE_MAX_DIMENSION` is 4096. So the largest shape the dimension ceiling
+   * admitted was the largest shape this ceiling admitted, the `>` could never be
+   * true, and the check was unreachable code wearing the costume of a control.
+   * Found by writing the test for it and watching a 201 come back, not by
+   * reading the two lines — which is the argument for driving a limit rather
+   * than declaring one.
+   *
+   * 12,000,000 is one photo straight off a phone's main camera and no more. It
+   * leaves both ceilings live and independently meaningful: 4096x2929 is a wide
+   * banner and passes, 4096x4096 is 16.8 MP and does not, 30000x30000 fails the
+   * dimension check first.
+   */
+  IMAGE_MAX_PIXELS: z.coerce.number().int().positive().default(12_000_000),
+
+  /**
+   * Hours a detached image keeps its bytes before the reaper removes them.
+   *
+   * Not zero, and not because deleting is hard. A replacement is a mis-click
+   * away, and 24 hours of "the old one is still there" is the difference between
+   * an undo and a re-shoot. It is also what makes the reaper safe to re-run: a
+   * row detached and re-attached inside the window never loses anything.
+   */
+  IMAGE_DETACHED_GRACE_HOURS: z.coerce.number().int().nonnegative().default(24),
+
   RECEIPT_DRIVER: z.enum(['logging']).default('logging'),
 
   /**
@@ -536,6 +612,21 @@ export const env = {
   topupReaperEnabled: raw.TOPUP_REAPER_ENABLED,
   topupReaperPollMs: raw.TOPUP_REAPER_POLL_MS,
   bookingChangeWindowMinutes: raw.BOOKING_CHANGE_WINDOW_MINUTES,
+  imageDriver: raw.IMAGE_DRIVER,
+  /**
+   * Absolute, resolved once. A relative default that each caller resolved
+   * against its own cwd would put a lane's bytes wherever the process happened
+   * to start — the ninth shared-resource vector in LANES.md, wearing a
+   * filesystem costume.
+   */
+  imageStorePath: resolve(
+    new URL('..', import.meta.url).pathname,
+    raw.IMAGE_STORE_PATH,
+  ),
+  imageMaxBytes: raw.IMAGE_MAX_BYTES,
+  imageMaxDimension: raw.IMAGE_MAX_DIMENSION,
+  imageMaxPixels: raw.IMAGE_MAX_PIXELS,
+  imageDetachedGraceHours: raw.IMAGE_DETACHED_GRACE_HOURS,
   receiptDriver: raw.RECEIPT_DRIVER,
   receiptWorkerEnabled: raw.RECEIPT_WORKER_ENABLED,
   receiptPollMs: raw.RECEIPT_POLL_MS,

@@ -1,0 +1,9 @@
+# The `disk` image driver's store. Real bytes uploaded by a real merchant during
+# development — never committed, and NOT a fixture: src/images/disk.ts refuses to
+# write at all when NODE_ENV=production, so anything in here is local by
+# definition.
+#
+# In api/ rather than the root .gitignore because the root file is trunk-owned and
+# `api/` is this lane's column (CLAUDE.md § Lanes). The default IMAGE_STORE_PATH
+# resolves against api/, so this is also where the directory actually lands.
+.image-store/
