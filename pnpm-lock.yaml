@@ -267,6 +267,9 @@ importers:
 
   e2e:
     devDependencies:
+      '@avo/api':
+        specifier: workspace:*
+        version: link:../api
       '@avo/mock':
         specifier: workspace:*
         version: link:../packages/mock
