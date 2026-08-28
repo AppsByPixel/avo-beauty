@@ -11,6 +11,7 @@
  *          │          └─ happy_hour (branch_id NULL = every branch)
  *          ├─ service
  *          ├─ product
+ *          ├─ image ──── image_attachment (→ product | service, by id, no FK)
  *          ├─ artist (→ staff_user, optionally: an artist needs no login)
  *          ├─ member ──── wallet_token
  *          ├─ staff_user
@@ -44,6 +45,7 @@ export * from './salon';
 export * from './promotion';
 export * from './service';
 export * from './product';
+export * from './image';
 export * from './artist';
 export * from './member';
 export * from './phoneChange';

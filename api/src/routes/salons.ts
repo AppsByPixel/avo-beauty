@@ -3,6 +3,9 @@
  *
  *   GET    /salons/{id}/metrics         perms.dashboard
  *   GET    /salons/{id}/products        perms.shop for staff, open to her own members
+ *                                       — and it now emits `image`, which
+ *                                       ProductSchema does not declare yet. See
+ *                                       the route, and routes/images.ts.
  *   POST   /salons/{id}/products        perms.shop
  *   PATCH  /salons/{id}/products/{pid}  perms.shop
  *   DELETE /salons/{id}/products/{pid}  perms.shop — retires, does not delete
@@ -49,6 +52,7 @@ import { assertBookingReadable, assertShopReadable } from '../services/moduleAcc
 import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
 import { resolveBranchFilter } from '../services/branchFilter';
+import { primaryImagesFor } from '../services/imageAttachment';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
 import {
   applySocialPatch,
@@ -1362,7 +1366,32 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       .from(product)
       .where(and(eq(product.salonId, req.params.id), eq(product.active, true)))
       .orderBy(product.id);
-    return reply.send({ items: rows, nextCursor: null });
+
+    /**
+     * `image` — the fifth field, and it is a CONTRACT ADDITION THAT HAS NOT
+     * LANDED YET.
+     *
+     * `ProductSchema` in `packages/types` declares four fields and Zod STRIPS an
+     * undeclared key, so a client validating this response today silently drops
+     * `image` rather than failing. That is the safe direction — additive both
+     * ways — and it is precisely why the dashboard and wallet lanes must not be
+     * dispatched against this until trunk lands `ImageRefSchema` and the field.
+     * The header of db/schema/product.ts records the same trap for `active`.
+     *
+     * ONE QUERY FOR THE PAGE, not one per row. See services/imageAttachment.ts
+     * § primaryImagesFor — a forty-product shop must not be forty-one round
+     * trips.
+     */
+    const images = await primaryImagesFor(
+      db,
+      req.params.id,
+      'product',
+      rows.map((r) => r.id),
+    );
+    return reply.send({
+      items: rows.map((r) => ({ ...r, image: images.get(r.id) ?? null })),
+      nextCursor: null,
+    });
   });
 
   /**
@@ -1696,6 +1725,17 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       })
       .from(service)
       .where(and(eq(service.salonId, req.params.id), eq(service.active, true)));
-    return reply.send({ items: rows, nextCursor: null });
+
+    /** The same contract addition as the products route above. Same caveat. */
+    const images = await primaryImagesFor(
+      db,
+      req.params.id,
+      'service',
+      rows.map((r) => r.id),
+    );
+    return reply.send({
+      items: rows.map((r) => ({ ...r, image: images.get(r.id) ?? null })),
+      nextCursor: null,
+    });
   });
 }

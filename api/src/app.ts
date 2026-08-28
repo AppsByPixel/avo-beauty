@@ -47,6 +47,7 @@ import { registerReportRoutes } from './routes/reports';
 import { registerAdjustmentRoutes } from './routes/adjustments';
 import { registerAccountResetRoutes } from './routes/accountResets';
 import { registerAccountRoutes } from './routes/accounts';
+import { registerImageRoutes } from './routes/images';
 import { registerWebhookRoutes } from './routes/webhooks';
 import { registerSandboxGatewayRoutes } from './routes/sandboxGateway';
 
@@ -151,6 +152,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerAdjustmentRoutes(app);
   await registerAccountResetRoutes(app);
   await registerAccountRoutes(app);
+  await registerImageRoutes(app);
 
   // The gateway callback. Unauthenticated in the ordinary sense and verified by
   // signature instead — see routes/webhooks.ts.
