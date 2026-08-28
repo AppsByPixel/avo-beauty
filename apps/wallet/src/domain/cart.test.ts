@@ -27,9 +27,9 @@ import type { Product } from '../api/shop';
 
 /** The real catalogue from avo_lane_b, ordered by id as the route returns it. */
 const CATALOGUE: Product[] = [
-  { id: 'PR-01', salonId: 'SAL-AMARA', name: 'Argan hair oil 100ml', priceFils: 8500 },
-  { id: 'PR-02', salonId: 'SAL-AMARA', name: 'Repair mask', priceFils: 12000 },
-  { id: 'PR-03', salonId: 'SAL-AMARA', name: 'Heat protect spray', priceFils: 6750 },
+  { id: 'PR-01', salonId: 'SAL-AMARA', name: 'Argan hair oil 100ml', priceFils: 8500 , image: null },
+  { id: 'PR-02', salonId: 'SAL-AMARA', name: 'Repair mask', priceFils: 12000 , image: null },
+  { id: 'PR-03', salonId: 'SAL-AMARA', name: 'Heat protect spray', priceFils: 6750 , image: null },
 ];
 
 // ------------------------------------------------------------- the map shape ----
@@ -108,7 +108,7 @@ describe('the totals a customer is shown', () => {
   });
 
   it('throws rather than rendering a float total — money is integer fils', () => {
-    const bad: Product[] = [{ id: 'X', salonId: 'S', name: 'X', priceFils: 8500.5 }];
+    const bad: Product[] = [{ id: 'X', salonId: 'S', name: 'X', priceFils: 8500.5, image: null }];
     expect(() => pricedLines({ X: 1 }, bad)).toThrow();
   });
 });

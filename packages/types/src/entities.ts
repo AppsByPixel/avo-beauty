@@ -468,6 +468,34 @@ export const BookableArtistSchema = z.object({
   availabilityLive: z.boolean(),
 });
 
+/**
+ * A stored image, as every endpoint that carries one reports it.
+ *
+ * `url` IS ABSOLUTE, and that is not a style choice: the wallet runs on a phone
+ * and cannot resolve a path against an origin nobody told it. It is built from
+ * `PUBLIC_BASE_URL` server-side.
+ *
+ * THE READ IS AUTHENTICATED. Not because a product photo is a secret — because
+ * the catalogue it belongs to is not public either. `GET /salons/{id}/products`
+ * already refuses another salon's member, so a public image URL would make that
+ * gate decorative for every product carrying a photo. Callers send the session:
+ * the dashboard fetches and `createObjectURL`s, React Native passes `headers`
+ * on the `Image` source. There is no token in a query string.
+ *
+ * `contentType` is the enum the API will ACCEPT and re-serve, read back from the
+ * row rather than from whatever the uploader claimed. SVG is deliberately absent
+ * — it is an XML document with a script host in it, served from the origin the
+ * wallet trusts, and no sanitiser for it is known-complete.
+ */
+export const ImageRefSchema = z.object({
+  id: IdSchema,
+  url: z.string().url(),
+  contentType: z.enum(['image/png', 'image/jpeg', 'image/webp']),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  byteSize: z.number().int().positive(),
+});
+
 export const ServiceSchema = z.object({
   id: IdSchema,
   salonId: IdSchema,
@@ -482,6 +510,8 @@ export const ServiceSchema = z.object({
   priceFils: FilsSchema.positive(),
   /** A retired service would build a basket the charge handler refuses. */
   active: z.boolean(),
+  /** Explicit `null`, never absent — a client must not have to tell "no image" from "field not sent". */
+  image: ImageRefSchema.nullable(),
 });
 
 export const ProductSchema = z.object({
@@ -489,6 +519,8 @@ export const ProductSchema = z.object({
   salonId: IdSchema,
   name: z.string().min(1),
   priceFils: FilsSchema.positive(),
+  /** Explicit `null`, never absent — see ServiceSchema.image. */
+  image: ImageRefSchema.nullable(),
 });
 
 // --------------------------------------------------------------- metrics ---
@@ -837,6 +869,7 @@ export type Booking = z.infer<typeof BookingSchema>;
 export type AvailabilityDay = z.infer<typeof AvailabilityDaySchema>;
 export type SubtractedBlock = z.infer<typeof SubtractedBlockSchema>;
 export type BookableArtist = z.infer<typeof BookableArtistSchema>;
+export type ImageRef = z.infer<typeof ImageRefSchema>;
 export type Service = z.infer<typeof ServiceSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;

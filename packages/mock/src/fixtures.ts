@@ -268,10 +268,24 @@ export const artists: Artist[] = [
   },
 ];
 
+/*
+ * `image: null` ON EVERY ROW, DELIBERATELY, AND NOT BECAUSE IT IS EASIER.
+ *
+ * The API reports this field as an explicit `null` rather than omitting it, so a
+ * client never has to tell "no image" from "field not sent". A fixture that left
+ * it out would be the one place in the system where that distinction blurs — and
+ * the mock exists precisely so the wallet and dashboard can build against
+ * something shaped like the real thing.
+ *
+ * When an image fixture is wanted here, it needs a `url` that actually resolves
+ * under the mock, not a plausible-looking string: the read is authenticated
+ * against the real API, and a fixture URL that 404s would teach a lane's empty
+ * state to look like a broken one.
+ */
 export const products: Product[] = [
-  { id: 'PR-01', salonId: SALON_ID, name: 'Argan hair oil 100ml', priceFils: 8500 },
-  { id: 'PR-02', salonId: SALON_ID, name: 'Repair mask', priceFils: 12000 },
-  { id: 'PR-03', salonId: SALON_ID, name: 'Heat protect spray', priceFils: 6750 },
+  { id: 'PR-01', salonId: SALON_ID, name: 'Argan hair oil 100ml', priceFils: 8500, image: null },
+  { id: 'PR-02', salonId: SALON_ID, name: 'Repair mask', priceFils: 12000, image: null },
+  { id: 'PR-03', salonId: SALON_ID, name: 'Heat protect spray', priceFils: 6750, image: null },
 ];
 
 export const services = [

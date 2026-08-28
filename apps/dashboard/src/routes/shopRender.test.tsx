@@ -50,6 +50,10 @@ const PRODUCT = {
   salonId: 'SAL-AMARA',
   name: 'Argan hair oil 100ml',
   priceFils: fils(8500),
+  // Explicit null: the API sends the key even when there is no image, so a
+  // fixture that omitted it would be the one product in the codebase whose
+  // "no image" is indistinguishable from "field not sent".
+  image: null,
 };
 
 function renderRow(overrides: Partial<Parameters<typeof ProductRow>[0]> = {}) {
