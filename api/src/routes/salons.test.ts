@@ -17,7 +17,7 @@ import { fils } from '@avo/types';
 import { ApiError } from '../http/errors';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildSalonPatch, PLATFORM_EDITABLE } from './salons';
+import { buildSalonPatch, MERCHANT_EDITABLE, PLATFORM_EDITABLE } from './salons';
 import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
 import { salon } from '../db/schema/salon';
 
@@ -54,11 +54,6 @@ const BEFORE: SalonRow = {
   updatedAt: new Date('2026-01-01T00:00:00Z'),
 };
 
-/** The merchant set is module-private; recover it by difference. */
-const MERCHANT_EDITABLE: ReadonlySet<string> = new Set(
-  [...PLATFORM_EDITABLE].filter((k) => k !== 'city' && k !== 'ownerPhone'),
-);
-
 function refusal(fn: () => unknown): ApiError {
   try {
     fn();
@@ -70,9 +65,38 @@ function refusal(fn: () => unknown): ApiError {
 }
 
 describe('the two allow-lists', () => {
-  it('differ by exactly city and ownerPhone', () => {
+  /**
+   * THE ASSERTION THAT USED TO BE `['city', 'ownerPhone']`, AND THE REASON IT
+   * COULD NOT HAVE CAUGHT THE LOYALTY REVERSAL.
+   *
+   * `MERCHANT_EDITABLE` was reconstructed here as `PLATFORM_EDITABLE` minus those
+   * two names, so this spec compared a set with the derivation that produced it
+   * and could only ever pass. Both sets are now imported from the module, and the
+   * difference is the honest one: the two account facts AVO owns, plus the five
+   * loyalty fields AVO took back.
+   *
+   * This is the spec that goes red if anything puts `tiers` back in the merchant
+   * set — the regression `PUT /salons/{id}/loyalty`'s own gate cannot detect,
+   * because that second door is a different route.
+   */
+  it('differ by city, ownerPhone, and the five console-only loyalty fields', () => {
     const extra = [...PLATFORM_EDITABLE].filter((k) => !MERCHANT_EDITABLE.has(k));
-    expect(extra.sort()).toEqual(['city', 'ownerPhone']);
+    expect(extra.sort()).toEqual([
+      'city',
+      'loyaltyMode',
+      'ownerPhone',
+      'stampReward',
+      'stampRewardAr',
+      'stampTarget',
+      'tiers',
+    ]);
+  });
+
+  it('keeps the loyalty fields OUT of the merchant set and IN the console set', () => {
+    for (const f of ['loyaltyMode', 'tiers', 'stampTarget', 'stampReward', 'stampRewardAr']) {
+      expect(MERCHANT_EDITABLE.has(f), `${f} must not be merchant-editable`).toBe(false);
+      expect(PLATFORM_EDITABLE.has(f), `${f} must stay console-editable`).toBe(true);
+    }
   });
 
   it('neither of them carries plan — Billing has no API', () => {
@@ -84,6 +108,61 @@ describe('the two allow-lists', () => {
     for (const drawn of ['active', 'live', 'suspended', 'trialEndsAt']) {
       expect(PLATFORM_EDITABLE.has(drawn), `${drawn} must not be editable`).toBe(false);
     }
+  });
+});
+
+/**
+ * THE SECOND DOOR INTO THE TIER LADDER, NOW CLOSED — and closed with the RIGHT
+ * ERROR, which is the half worth a spec.
+ *
+ * `PUT /salons/{id}/loyalty` is the endpoint everyone thinks of when they hear
+ * "merchants can no longer publish a ladder". This route is the one they forget:
+ * `tiers`, `loyaltyMode`, `stampTarget` and the stamp reward copy were in
+ * `MERCHANT_EDITABLE` from the day it was written, so a refusal on the PUT alone
+ * would have been decorative — the dashboard could publish the same ladder one
+ * route over with the same session. This file's own header records that exact
+ * defect happening once already, on validation rather than authority.
+ */
+describe('the loyalty fields are console-only — the reversal, at the second door', () => {
+  const LOYALTY = ['loyaltyMode', 'tiers', 'stampTarget', 'stampReward', 'stampRewardAr'];
+
+  it('refuses every one of them to the merchant, as loyalty_read_only not not_editable', () => {
+    for (const field of LOYALTY) {
+      const err = refusal(() => buildSalonPatch({ [field]: 1 }, BEFORE, MERCHANT_EDITABLE));
+      // NOT `not_editable`. A merchant told "cannot be edited here" goes looking
+      // for the route where it can be, and there is no longer one for her.
+      expect(err.code, `${field} must refuse as loyalty_read_only`).toBe('loyalty_read_only');
+      expect(err.statusCode).toBe(403);
+      // The copy must not send her to a manager: nobody at the salon can grant it.
+      expect(err.message).not.toContain('manager');
+      expect(err.message).toContain('AVO');
+    }
+  });
+
+  it('refuses a loyalty field smuggled in beside a legitimate settings field', () => {
+    // The realistic shape of the bug: a dashboard that batches the whole Settings
+    // form into one PATCH. One loyalty key poisons the request rather than being
+    // quietly dropped — silently ignoring it would tell the merchant her ladder
+    // published when it did not.
+    const err = refusal(() =>
+      buildSalonPatch({ brandColor: '#8A7CB0', tiers: [] }, BEFORE, MERCHANT_EDITABLE),
+    );
+    expect(err.code).toBe('loyalty_read_only');
+  });
+
+  it('still lets the console write them through the same translator', () => {
+    const { patch } = buildSalonPatch({ stampTarget: 8 }, BEFORE, PLATFORM_EDITABLE);
+    // Routed through the publish validator, which returns a COMPLETE config —
+    // so the mode and the ladder travel together, as the CHECK requires.
+    expect(patch.stampTarget).toBe(8);
+    expect(patch.loyaltyMode).toBe(BEFORE.loyaltyMode);
+  });
+
+  it('leaves the ordinary settings fields alone for the merchant', () => {
+    // The permission survives, narrowed. Proving what it still carries is as much
+    // the point as proving what it lost.
+    const { patch } = buildSalonPatch({ brandColor: '#8A7CB0' }, BEFORE, MERCHANT_EDITABLE);
+    expect(patch.brandColor).toBe('#8A7CB0');
   });
 });
 
@@ -122,7 +201,22 @@ describe('buildSalonPatch, merchant set', () => {
     ).toBe('invalid_business_hours');
   });
 
-  it('validates the tier ladder through the publish validator', () => {
+  /**
+   * THIS SPEC MOVED FROM THE MERCHANT SET TO THE CONSOLE SET, AND THE MOVE IS
+   * THE REVERSAL.
+   *
+   * It read `MERCHANT_EDITABLE` and asserted `threshold_not_above_tier_below` —
+   * that a merchant sending a ladder with Gold below Silver was refused by the
+   * publish validator rather than storing it. That was the correct assertion
+   * while a merchant could send a ladder at all. She cannot: the request is now
+   * refused by AUTHORITY before it is ever refused by VALIDITY, and the
+   * loyalty_read_only spec above owns that half.
+   *
+   * The validator's own behaviour is unchanged and still worth proving, so the
+   * spec is kept and re-pointed at the caller that can still reach it. Deleting
+   * it would have quietly retired the guarantee along with the permission.
+   */
+  it('validates the tier ladder through the publish validator, for the console', () => {
     const err = refusal(() =>
       buildSalonPatch(
         {
@@ -134,7 +228,7 @@ describe('buildSalonPatch, merchant set', () => {
           ],
         },
         BEFORE,
-        MERCHANT_EDITABLE,
+        PLATFORM_EDITABLE,
       ),
     );
     expect(err.code).toBe('threshold_not_above_tier_below');

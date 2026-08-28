@@ -41,6 +41,47 @@ export interface StaffPerms {
   dashboard: boolean;
   appointments: boolean;
   shop: boolean;
+  /**
+   * ==========================================================================
+   * `loyalty` NO LONGER GRANTS AUTHORITY OVER LOYALTY. IT SURVIVES, NARROWED.
+   * ==========================================================================
+   * Aftab, verbatim: *"Owner console will control the loyalty part not the
+   * merchant (it will be read only for merchant)."* That REVERSES a decision
+   * `design/README.md:136` records as closed — "merchants now edit their own
+   * tier rules" — so this is a change of mind, not a gap.
+   *
+   * IT IS NOT MEANINGLESS, AND DELETING IT WOULD HAVE BEEN THE WRONG READING.
+   * The permission was already carrying most of the merchant Settings screen,
+   * which has nothing to do with the tier ladder. It still gates, unchanged:
+   *
+   *   PATCH  /salons/{id}                       brand colour, deposit, modules,
+   *                                             timezone, business hours, social,
+   *                                             nameAr, no-show return window
+   *   POST   /salons/{id}/branches              open a branch
+   *   PATCH  /salons/{id}/branches/{bid}        rename / close a branch
+   *   DELETE /salons/{id}/branches/{bid}        and its closure preview
+   *   PATCH  /v1/salons/{id}/social/{linkId}    the salon's public handles
+   *   GET    /salons/{id}/loyalty               SEE the ladder — read-only
+   *
+   * WHAT IT LOST is the write: `PUT /salons/{id}/loyalty` now takes the
+   * console's `sections.salons`, and the five loyalty fields left
+   * `MERCHANT_EDITABLE` so `PATCH /salons/{id}` cannot carry them either.
+   * routes/loyalty.ts holds the full argument.
+   *
+   * SO THE NAME IS NOW WRONG, AND IT WAS ALREADY WRONG. `routes/salons.ts §
+   * PATCH /v1/salons/{id}/social/{linkId}` escalated this to trunk before this
+   * slice existed: "the honest name for this gate is `perms.settings`, and
+   * adding it is a four-way break — `PERMISSION_NAMES`, `PERM_COLUMN`, the
+   * `staff_user` columns, the Accounts → Team chips and the permission census
+   * all move together." This change strengthens that escalation to the point of
+   * being its whole case: the gate is now named after the ONE thing it no longer
+   * controls. Still not renamed here — `packages/types` is trunk-owned and a
+   * lane may not make a four-way break. Reported.
+   *
+   * `PERMISSION_COPY.loyalty` is stale for the same reason and is deliberately
+   * NOT edited: it is design copy that four surfaces assert on verbatim. See the
+   * note there.
+   */
   loyalty: boolean;
   team: boolean;
   scanner: boolean;
@@ -718,6 +759,22 @@ const PERMISSION_COPY: Record<PermissionName, string> = {
   dashboard: "You don't have permission to see the dashboard. A manager can grant it.",
   appointments: "You don't have permission to see appointments. A manager can grant it.",
   shop: "You don't have permission to see the shop. A manager can grant it.",
+  /**
+   * STALE SINCE THE LOYALTY AUTHORITY REVERSAL, AND LEFT ALONE ON PURPOSE.
+   *
+   * A merchant without this permission can no longer "change loyalty settings"
+   * WITH it either, so the sentence now describes a capability that does not
+   * exist. The accurate refusal for a withdrawn capability is
+   * `loyaltyReadOnly()` — a different code, on the endpoints that withdrew it.
+   * This string is what remains: the refusal for someone who may not SEE the
+   * Loyalty screen, plus the Settings writes listed on `StaffPerms.loyalty`.
+   *
+   * NOT REWRITTEN HERE because it is verbatim design copy asserted in four
+   * places — `e2e/authority.test.ts:112`, `e2e/permission-census.test.ts:102`,
+   * `apps/dashboard/src/routes/Settings.tsx:80` and `http/errors.ts` — three of
+   * which are outside this lane's column. Rewording it is a trunk change that
+   * lands with the `perms.settings` rename it belongs to. Reported.
+   */
   loyalty: "You don't have permission to change loyalty settings. A manager can grant it.",
   team: "You don't have permission to manage the team. A manager can grant it.",
   scanner: "You don't have permission to scan and charge. A manager can grant it.",
