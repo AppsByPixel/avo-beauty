@@ -138,7 +138,11 @@ already ported into `packages/types/src/rules.ts` — use those.
 ```bash
 pnpm install
 pnpm tokens        # regenerate design tokens after editing avo-tokens.json
-pnpm check         # typecheck + lint + test across the workspace
+pnpm check         # typecheck + test across the workspace. NOT lint: there is no
+                   # eslint config in this repo and eight of ten packages have no
+                   # lint script, so `turbo run lint` is a no-op that reports
+                   # success. The two that define one run `tsc --noEmit`. See
+                   # decision 76 — do not cite a green `check` as a lint pass.
 pnpm mock          # the mock API the wallet and dashboard lanes build against
 pnpm db:migrate
 ```
