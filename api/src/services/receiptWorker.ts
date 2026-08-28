@@ -35,6 +35,20 @@
  *     already incremented, so a crash-looping send still exhausts its budget
  *     rather than retrying without limit.
  *
+ * AND THE CLAIM IS RE-ASSERTED BY EVERY WRITE THAT FOLLOWS IT
+ * ----------------------------------------------------------
+ * The three properties above make the claim exclusive at the moment it is taken.
+ * They say nothing about the moment the provider answers, which is where every
+ * subsequent write happens. So each of those writes carries the claim in its
+ * `WHERE` — `status = 'sending' AND attempts = <the claim's>` — and reports
+ * whether it landed. `stillOurs` below is that predicate and carries the
+ * reasoning; `processJob` returns `'lost'` when it is refused.
+ *
+ * Without it the worker was exactly the check-then-act it was built to avoid,
+ * one level down: a careful claim followed by a write keyed on `id` alone, which
+ * lands on whatever the row has become. That is a lost update, and on two of the
+ * three paths it is a CHECK violation that abandons the rest of the batch.
+ *
  * WHAT COUNTS AS DONE, AND WHAT COUNTS AS GIVING UP
  * -------------------------------------------------
  * A permanent failure (`ReceiptPermanentError`) stops immediately — the row is
@@ -60,7 +74,7 @@
  * handlers leaves it still. See env.ts for the history of that default.
  */
 
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { receiptJob } from '../db/schema/receipt';
 import { transaction } from '../db/schema/transaction';
@@ -143,9 +157,56 @@ export async function claimJobs(db: Db, limit: number): Promise<ClaimedJob[]> {
   }));
 }
 
-async function markSent(db: Db, job: ClaimedJob, providerReference: string): Promise<void> {
+/**
+ * THE CLAIM, RESTATED AS A WHERE CLAUSE.
+ *
+ * Every write below happens after an `await` on a third party, which is to say
+ * long after the claim was taken. `WHERE id = $1` alone asserts nothing about
+ * that gap: it says "this row", where the worker means "the row I claimed, in
+ * the state I left it". Those are the same row only when nobody else has moved
+ * it, and the whole point of the claim is that somebody else might.
+ *
+ * TWO TERMS, AND THE SECOND IS THE ONE THAT DOES THE WORK.
+ *
+ *   status = 'sending'   what the claim wrote. Catches every writer that moved
+ *                        the row somewhere else — a QA helper parking the
+ *                        outbox, a future admin retry, an operator's UPDATE.
+ *
+ *   attempts = $n        what the claim RETURNED, and the only thing that
+ *                        distinguishes one claim from the next. `attempts` is
+ *                        incremented in exactly one place — `claimJobs` — so it
+ *                        is the claim's generation counter whether or not it was
+ *                        designed as one. Without it a lease expiry is invisible
+ *                        here: instance A's lease runs out, instance B re-claims
+ *                        and leaves the row in `sending` again, and A's write
+ *                        still sees `sending` and still lands on a row that is
+ *                        no longer its own.
+ *
+ * WHY THIS IS NOT DEFENCE IN DEPTH AGAINST A THING THAT CANNOT HAPPEN.
+ * `RECEIPT_WORKER_ENABLED` defaults to `'1'`, so every API process runs this
+ * loop, and `available_at` is a LEASE precisely so a second process can take
+ * over a row the first is still sending. Two writers on one job is the design,
+ * not the accident. What was accidental was writing as if it were not.
+ *
+ * AND THE FAILURE IS NOT QUIET. `receipt_job_sent_at_matches_status` is
+ * `(status = 'sent') = (sent_at IS NOT NULL)`, so a late `markFailed` or a late
+ * give-back over a row another worker has already sent does not lose a race —
+ * it RAISES, out of `processJob`, out of `runOnce`, abandoning every job the
+ * batch had not reached yet in `sending` for a whole lease. See
+ * receiptWorker.int.test.ts, which stages it.
+ */
+function stillOurs(job: ClaimedJob) {
+  return and(
+    eq(receiptJob.id, job.id),
+    eq(receiptJob.status, 'sending'),
+    eq(receiptJob.attempts, job.attempts),
+  );
+}
+
+/** True when the write landed. False means somebody else owns this row now. */
+async function markSent(db: Db, job: ClaimedJob, providerReference: string): Promise<boolean> {
   const now = new Date();
-  await db
+  const rows = await db
     .update(receiptJob)
     .set({
       status: 'sent',
@@ -155,7 +216,9 @@ async function markSent(db: Db, job: ClaimedJob, providerReference: string): Pro
       lastError: null,
       availableAt: now,
     })
-    .where(eq(receiptJob.id, job.id));
+    .where(stillOurs(job))
+    .returning({ id: receiptJob.id });
+  return rows.length === 1;
 }
 
 /**
@@ -170,17 +233,19 @@ async function markFailed(
   job: ClaimedJob,
   message: string,
   park: boolean,
-): Promise<void> {
-  await db
+): Promise<boolean> {
+  const rows = await db
     .update(receiptJob)
     .set({
       status: 'failed',
       lastError: message.slice(0, 1000),
       availableAt: new Date(Date.now() + (park ? PARK_MS : backoffMs(job.attempts))),
     })
-    .where(eq(receiptJob.id, job.id));
+    .where(stillOurs(job))
+    .returning({ id: receiptJob.id });
+  if (rows.length !== 1) return false;
 
-  if (!park) return;
+  if (!park) return true;
 
   /**
    * The customer paid and will not be told. That belongs in the salon's audit
@@ -197,7 +262,7 @@ async function markFailed(
     .from(transaction)
     .where(eq(transaction.id, job.transactionId))
     .limit(1);
-  if (!tx) return;
+  if (!tx) return true;
 
   await writeAudit(db, null, {
     salonId: tx.salonId,
@@ -212,26 +277,47 @@ async function markFailed(
     subjectId: job.id,
     metadata: { channel: job.channel, transactionId: job.transactionId, attempts: job.attempts },
   });
+  return true;
 }
 
-/** Send one claimed job. Never throws — a bad job must not stop the batch. */
-export async function processJob(db: Db, job: ClaimedJob): Promise<'sent' | 'retry' | 'gave_up'> {
+/**
+ * Send one claimed job. Never throws — a bad job must not stop the batch.
+ *
+ * `'lost'` is the fourth outcome and it is not a failure: it means the write was
+ * REFUSED because the row is no longer the one this worker claimed, so whatever
+ * took it owns the outcome now. Reporting it as `sent` or `retry` would be the
+ * same lie the unguarded write told — a count of sends that did not happen — and
+ * the reason it took a phantom flake in another lane to find this at all.
+ */
+export async function processJob(
+  db: Db,
+  job: ClaimedJob,
+): Promise<'sent' | 'retry' | 'gave_up' | 'lost'> {
   /**
    * A driver that does not handle this channel is NOT a failure. Running a
    * WhatsApp-only driver should leave email rows queued for the driver that
    * does, not burn their attempts. The attempt increment from the claim is given
    * back, because nothing was attempted.
+   *
+   * GUARDED LIKE THE OTHER TWO, and this is the one path where the two-worker
+   * case is not hypothetical at all: a deployment that runs a WhatsApp-only
+   * driver beside an email-capable one is the deployment this branch exists for,
+   * and it is exactly a deployment where one instance may give back a row the
+   * other has already sent. Unguarded that write is `queued` over a row with
+   * `sent_at` set, which the CHECK refuses — and this branch is not inside the
+   * `try`, so the raise would leave `processJob` unconditionally.
    */
   if (!receiptSender.handles(job.channel)) {
-    await db
+    const rows = await db
       .update(receiptJob)
       .set({
         status: 'queued',
         attempts: Math.max(0, job.attempts - 1),
         availableAt: new Date(Date.now() + env.receiptPollMs),
       })
-      .where(eq(receiptJob.id, job.id));
-    return 'retry';
+      .where(stillOurs(job))
+      .returning({ id: receiptJob.id });
+    return rows.length === 1 ? 'retry' : 'lost';
   }
 
   try {
@@ -243,20 +329,20 @@ export async function processJob(db: Db, job: ClaimedJob): Promise<'sent' | 'ret
       payload: job.payload,
       attempt: job.attempts,
     });
-    await markSent(db, job, result.providerReference);
-    return 'sent';
+    return (await markSent(db, job, result.providerReference)) ? 'sent' : 'lost';
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const permanent = err instanceof ReceiptPermanentError;
     const exhausted = job.attempts >= env.receiptMaxAttempts;
     const park = permanent || exhausted;
 
-    await markFailed(
+    const landed = await markFailed(
       db,
       job,
       permanent ? `permanent: ${message}` : message,
       park,
     );
+    if (!landed) return 'lost';
     return park ? 'gave_up' : 'retry';
   }
 }
@@ -266,12 +352,20 @@ export interface TickResult {
   sent: number;
   retry: number;
   gaveUp: number;
+  /**
+   * Jobs whose write was refused because the row had moved on. Not an error and
+   * not a send: another writer owns the outcome, and this pass says so instead
+   * of counting it as its own. A number that is persistently non-zero means two
+   * workers are contending for the same rows faster than the lease intends, and
+   * `RECEIPT_LEASE_MS` is the thing to look at.
+   */
+  lost: number;
 }
 
 /** One pass. Exported so a test can drive the worker without a timer. */
 export async function runOnce(db: Db, limit = env.receiptBatchSize): Promise<TickResult> {
   const jobs = await claimJobs(db, limit);
-  const out: TickResult = { claimed: jobs.length, sent: 0, retry: 0, gaveUp: 0 };
+  const out: TickResult = { claimed: jobs.length, sent: 0, retry: 0, gaveUp: 0, lost: 0 };
 
   // Sequential, not Promise.all. The batch size is the concurrency control, and
   // a provider's rate limit is the reason to keep it that way.
@@ -279,6 +373,7 @@ export async function runOnce(db: Db, limit = env.receiptBatchSize): Promise<Tic
     const outcome = await processJob(db, job);
     if (outcome === 'sent') out.sent += 1;
     else if (outcome === 'gave_up') out.gaveUp += 1;
+    else if (outcome === 'lost') out.lost += 1;
     else out.retry += 1;
   }
   return out;
