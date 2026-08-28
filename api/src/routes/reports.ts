@@ -46,7 +46,8 @@ import { branch, reportDownload, salon } from '../db/schema/salon';
 import { staffUser } from '../db/schema/staff';
 import { requireDashboardPerm, requireDashboardScope, requireSameSalon } from '../auth/principal';
 import { hashWalletToken, mintWalletTokenValue } from '../auth/tokens';
-import { badRequest, notFound, unauthorized } from '../http/errors';
+import { notFound, unauthorized } from '../http/errors';
+import { resolveBranchFilter } from '../services/branchFilter';
 import { parsePeriod, type Period } from '../services/metrics';
 import {
   computeReport,
@@ -64,38 +65,13 @@ interface ReportQuery {
 }
 
 /**
- * `?branch=` is a BRANCH ID, or absent, or the literal `all`.
- *
- * An id rather than the name the design's segment renders, because a name is not a
- * key: `branch_salon_name_uq` is unique per SALON, so two salons may each have a
- * "Salmiya" and a name would have to be resolved against the caller's salon anyway.
- * `GET /salons/{id}/branches` already hands the dashboard the ids. `all` is accepted
- * as an explicit spelling of "every branch" because routes/campaigns.ts established
- * that sentinel on the wire.
- *
- * AN UNKNOWN OR FOREIGN BRANCH IS A 404, NOT AN EMPTY REPORT. Filtering on another
- * salon's branch id would return zero rows, and zero rows reads as "no sales at that
- * branch" — a confident false answer about a branch that is not hers. The lookup is
- * scoped to the caller's salon in ONE query, so a branch that does not exist and a
- * branch belonging to somebody else are indistinguishable from the outside, which is
- * the property that stops this being a branch-enumeration oracle.
+ * `?branch=` USED TO BE PARSED HERE, in a private `resolveBranch` this file owned.
+ * It now lives in `services/branchFilter.ts` because `GET /salons/{id}/metrics`
+ * takes the same parameter, and the tenancy scope in that lookup is the kind of
+ * thing that gets dropped by the second copy rather than the first. Same
+ * behaviour, same two error codes — that module's header carries the argument for
+ * each of them, including why a CLOSED branch still resolves here.
  */
-async function resolveBranch(
-  salonId: string,
-  raw: unknown,
-): Promise<{ id: string; name: string } | null> {
-  if (raw === undefined || raw === null || raw === '' || raw === 'all') return null;
-  if (typeof raw !== 'string') throw badRequest('invalid_branch', 'branch must be a branch id.');
-
-  const rows = await db
-    .select({ id: branch.id, name: branch.name })
-    .from(branch)
-    .where(and(eq(branch.id, raw), eq(branch.salonId, salonId)))
-    .limit(1);
-  const found = rows[0];
-  if (!found) throw notFound('unknown_branch', 'No such branch.');
-  return found;
-}
 
 interface Built {
   shape: ReportShape;
@@ -145,7 +121,7 @@ async function build(req: FastifyRequest, kindRaw: string, salonId: string): Pro
   const s = rows[0];
   if (!s) throw notFound('unknown_salon', 'No such salon.');
 
-  const br = await resolveBranch(s.id, query.branch);
+  const br = await resolveBranchFilter(db, s.id, query.branch);
 
   const shape = await computeReport(db, {
     kind,
@@ -196,7 +172,7 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
 
       const query = (req.query ?? {}) as ReportQuery;
       const period = parsePeriod(query.period);
-      const br = await resolveBranch(req.params.id, query.branch);
+      const br = await resolveBranchFilter(db, req.params.id, query.branch);
 
       // The wallet token's mint and hash, reused: same entropy class (an opaque
       // bearer capability with a sub-minute life), same storage discipline.
