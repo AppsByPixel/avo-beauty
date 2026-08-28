@@ -79,7 +79,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   B_MEMBER,
   B_MEMBER_PHONE,
@@ -151,14 +151,20 @@ const balanceOf = (id: string) => Number(scalar(`select balance_fils from member
  * Fire `n` charges at once, each presenting its OWN live wallet token, and report
  * what came back.
  *
- * A HANG IS REPORTED AS A STATUS, NOT RE-THROWN, and that is what makes the
- * `knownBug()` below legal rather than a lie. `treq` turns a twelve-second silence
- * into a thrown Error — the right behaviour for every other caller — and
- * `knownBug()` deliberately re-throws anything that is not an assertion failure,
- * so an uncaught hang would fail this spec instead of recording it. Catching it
- * here turns "the server never answered" into a value the assertion can be written
- * about, which is the whole point: the contract-correct sentence is `nothing
- * hung`, and that sentence is what must go green the day this is fixed.
+ * A HANG IS REPORTED AS A STATUS, NOT RE-THROWN. `treq` turns a twelve-second
+ * silence into a thrown Error, which is the right behaviour for every other caller
+ * in this directory and the wrong one here for two reasons.
+ *
+ * `Promise.all` REJECTS ON THE FIRST THROW. Twelve hung requests would surface as
+ * one error and eleven discarded results, so the failure would say "a request
+ * hung" when what a reader needs is HOW MANY of the twelve did — the difference
+ * between a wedged process and one slow call. The count is the diagnosis.
+ *
+ * AND A HANG HAS TO BE COMPARABLE WITH A STATUS CODE. The assertion this feeds is
+ * about liveness, so `410` and `HUNG` have to sit in one list and be counted
+ * together. That was also what made this legal as a `knownBug()` while it was one:
+ * the helper re-throws anything that is not an assertion failure. It is a plain
+ * `it()` since `bed3fbb` and the two reasons above are why the catch stays.
  */
 async function burstWithTokens(n: number): Promise<Array<number | 'HUNG'>> {
   const tokens = await Promise.all(
@@ -222,9 +228,10 @@ describe('a burst of charges wider than the connection pool', () => {
    * this a test about `FOR UPDATE`. It is a test about whether the process is
    * alive.
    *
-   * MEASURED, both ways, on 2026-08-28 against `dev` at 14ff01e:
+   * MEASURED, BOTH WAYS, AND THE NUMBERS ARE KEPT BECAUSE THEY ARE THE ARGUMENT.
+   * On 2026-08-28 against `dev` at 14ff01e, before `bed3fbb`:
    *
-   *   as it stands            twelve requests, twelve twelve-second aborts, zero
+   *   as it was then          twelve requests, twelve twelve-second aborts, zero
    *                           answers, and `pg_stat_activity` five seconds after
    *                           the last client gave up still showing ten backends —
    *                           nine on `Lock/tuple` behind the member row, one
@@ -232,17 +239,26 @@ describe('a burst of charges wider than the connection pool', () => {
    *                           that will never be free
    *   with `peekToken(tx, …)` twelve 200s in 150ms of wall clock
    *
+   * This spec was a `knownBug()` for as long as that was the tree's behaviour and
+   * is a plain `it()` since `bed3fbb`, which is the promotion `known-bug.ts` asks
+   * for by name: "the assertion is the contract, it fails today, and the hour the
+   * divergence closes the assertion passes and the spec goes RED asking to be
+   * rewritten." It went red on cue. The title is the contract now, not a defect
+   * report, and the sentence that made it diagnosable is kept verbatim below —
+   * "each request holds one pooled connection and waits for a second" is the whole
+   * mechanism, and a reader hitting this red in six months needs it in one pass.
+   *
    * THE MONEY WAS NEVER AT RISK IN EITHER DIRECTION, which is worth writing down
    * beside a defect this severe. Against the bug the wedged transactions had
    * claimed an idempotency key and taken a row lock and nothing else: balance,
    * `transaction`, `ledger_entry` and `idempotency_key` were all byte-identical
-   * before and after, and the rollback on process death was clean. It hangs the
-   * till, it does not half-move a charge.
+   * before and after, and the rollback on process death was clean. It hung the
+   * till, it did not half-move a charge.
    */
-  knownBug(
-    `${OVER_THE_POOL} at once, each with its own token, DEADLOCK the API — ` +
-      'api/src/services/charge.ts peeks the token on `db` inside `db.transaction`, ' +
-      'so each request holds one pooled connection and waits for a second',
+  it(
+    `${OVER_THE_POOL} at once, each with its own token, all answer — a burst wider than the ` +
+      'pool must not wedge the API, because each request would hold one pooled connection ' +
+      'and wait for a second',
     async () => {
       const before = balanceOf(B_MEMBER);
       const statuses = await burstWithTokens(OVER_THE_POOL);
@@ -250,17 +266,32 @@ describe('a burst of charges wider than the connection pool', () => {
 
       /**
        * A HUNG BURST THAT MOVED MONEY IS A DIFFERENT AND WORSE DEFECT than a hung
-       * burst that moved none, so it is checked before the hang is, and as a
-       * precondition rather than an assertion: `knownBug()` reports an assertion
-       * failure as "still broken, as expected", and a half-moved charge must never
-       * be able to hide inside that. A plain Error is re-thrown and goes red.
+       * burst that moved none, so it is checked before the hang is.
+       *
+       * IT OUTLIVED THE `knownBug()` IT WAS WRITTEN FOR, deliberately. Its first
+       * job was to stop a half-moved charge hiding inside "still broken, as
+       * expected" — `knownBug()` reads an assertion failure as the bug still being
+       * there, and a plain Error as a real failure, so this had to be the second
+       * kind. That job is gone. The one that remains is better:
+       *
+       * `expect(hung).toBe(0)` is a sentence about LIVENESS and it is silent about
+       * money. If this endpoint ever hangs again AND leaves the wallet half-debited,
+       * the assertion below fails with a message about twelve requests not
+       * answering, a reader diagnoses a repeat of `bed3fbb`, and the far worse fact
+       * — that the charge transaction stopped failing safely — is never printed at
+       * all. A precondition makes the worse failure announce itself in its own
+       * words instead of being reported as the milder one.
+       *
+       * Inert on a green run, which is the point: it speaks only when the thing it
+       * guards has actually gone wrong.
        */
       precondition(
         balanceOf(B_MEMBER) === before || hung === 0,
         'a burst wider than the pool hung AND moved money — the charge transaction is no ' +
           `longer failing safely. Balance went ${before} → ${balanceOf(B_MEMBER)} with ` +
-          `${hung} of ${OVER_THE_POOL} requests unanswered. This is worse than the deadlock ` +
-          'and is not the bug this spec is recording.',
+          `${hung} of ${OVER_THE_POOL} requests unanswered. That is worse than the deadlock ` +
+          '`bed3fbb` fixed, and it is a different defect from the one this spec is named ' +
+          'after. Read this line, not the assertion under it.',
       );
 
       expect(
@@ -275,17 +306,29 @@ describe('a burst of charges wider than the connection pool', () => {
 });
 
 /**
- * THE SAME DEFECT ON A SECOND ENDPOINT, AND THE CLEANER OF THE TWO.
+ * THE SAME PROPERTY ON A SECOND ENDPOINT, AND THE CLEANER STATEMENT OF THE TWO.
  *
- * `services/booking.ts` calls `computeAvailability(db, …)` inside its transaction,
- * twice — once on create and once on reschedule. Create is the one exercised here.
+ * `services/booking.ts` called `computeAvailability(db, …)` inside its transaction,
+ * twice — once on create and once on reschedule. Create is the one exercised here;
+ * reschedule is the same call in the same file and was fixed with it in `bed3fbb`.
  *
  * WHY THIS IS THE BETTER DEMONSTRATION. The twelve requests take twelve DIFFERENT
  * slots, so they write twelve different rows and contend on nothing in Postgres at
  * all: there is no member row under `FOR UPDATE` funnelling them, no exclusion
  * constraint they collide on. Whatever wedges them is not database contention, and
  * that leaves only the pool. Measured on 2026-08-28 against `dev` at 14ff01e:
- * twelve requests, twelve twelve-second aborts, zero answers.
+ * twelve requests, twelve twelve-second aborts, zero answers. After `bed3fbb`,
+ * twelve answers in 1,763ms.
+ *
+ * WHAT THIS SPEC DOES NOT COVER, SAID HERE BECAUSE THE GAP IS EASY TO MISS.
+ * `computeAvailability` is not a pure read. On the google-sourced path
+ * `resolveWorkingWindow` raises or resolves a `calendar_disconnected` merchant
+ * notification, so moving it onto `tx` moved those writes INTO the booking
+ * transaction — the one genuine semantic change in `bed3fbb`. AR-004 is
+ * `availabilitySource: 'manual'` and returns before either write, so nothing below
+ * touches it. That path is covered in `artist-availability-source.test.ts`, which
+ * owns the google fixtures and the notification helpers; this file stays about the
+ * pool.
  */
 describe('a burst of bookings wider than the connection pool', () => {
   /**
@@ -308,10 +351,10 @@ describe('a burst of bookings wider than the connection pool', () => {
     return found;
   }
 
-  knownBug(
-    `${OVER_THE_POOL} bookings at once, on ${OVER_THE_POOL} DIFFERENT slots, DEADLOCK the API — ` +
-      'api/src/services/booking.ts computes availability on `db` inside `db.transaction`, ' +
-      'so each request holds one pooled connection and waits for a second',
+  it(
+    `${OVER_THE_POOL} bookings at once, on ${OVER_THE_POOL} DIFFERENT slots, all answer — ` +
+      'availability must not be computed on `db` inside `db.transaction`, because each ' +
+      'request would hold one pooled connection and wait for a second',
     async () => {
       // Never inherit the charge burst's wedged server; see `freshApi`.
       await freshApi();

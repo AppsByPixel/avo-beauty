@@ -392,14 +392,83 @@ const claimableChannels = (txId: string, asOf = 'now()'): string[] => {
  * already sent cannot be moved back to `queued` or `failed` without clearing it.
  * Leaving it out is what made these two specs fail with a constraint violation
  * rather than an assertion.
+ *
+ * AND ONE UPDATE IS NOT ENOUGH, WHICH IS A LOST UPDATE AND NOT A TIMING OPINION.
+ * -----------------------------------------------------------------------------
+ * The park puts the rows outside the CLAIM predicate. It does nothing about a send
+ * the worker had ALREADY CLAIMED before the park ran, and that send finishes into
+ * `markSent`:
+ *
+ *     UPDATE receipt_job SET status='sent', sent_at=now(), available_at=now()
+ *      WHERE id = $1
+ *
+ * — keyed on `id`, with no guard on status. So the sequence is:
+ *
+ *     worker      claims the email row      status='sending'
+ *     parkOutbox  parks both rows           status='queued', available_at +1h
+ *     worker      the send lands            status='sent',   available_at = now()
+ *
+ * and the park is silently gone from that row. `claimableChannels` filters on
+ * `status IN ('queued','failed')`, so the email channel simply vanishes from the
+ * answer and the spec reports `[ 'whatsapp' ]` against `[ 'email', 'whatsapp' ]` —
+ * a message that names neither the worker nor the race.
+ *
+ * SEEN ONCE IN A FULL-SUITE RUN AND NOT IN THREE STANDALONE RE-RUNS, which is the
+ * signature of a window this narrow: the logging driver returns almost instantly,
+ * so the worker is only mid-send for a moment, and the park has to land inside it.
+ *
+ * THE FIX IS TO CONFIRM THE PARK RATHER THAN TO ASSUME IT. Re-parking converges,
+ * because a claimed row can only be overwritten by the one send already in flight
+ * on it — an hour out, the claim predicate cannot select it again. Two consecutive
+ * clean reads before returning, so the check cannot pass in the same gap the park
+ * did.
+ *
+ * IT THROWS RATHER THAN RETURNING QUIETLY IF THE PARK NEVER HOLDS. A helper that
+ * gives up and lets the assertion fail is how this cost an afternoon in the first
+ * place: the failure has to name the outbox, not the channel list.
  */
 function parkOutbox(txId: string): void {
-  psql(`
-    UPDATE receipt_job
-       SET status = 'queued', attempts = 0, last_error = NULL, sent_at = NULL,
-           available_at = now() + interval '1 hour'
-     WHERE transaction_id = '${txId}';
-  `);
+  /** Rows that are NOT parked: the worker can still see them, or has sent them. */
+  const strays = (): number =>
+    Number(
+      scalar(
+        `select count(*) from receipt_job
+          where transaction_id='${txId}'
+            and (status <> 'queued' or sent_at is not null or available_at <= now())`,
+      ),
+    );
+
+  let clean = 0;
+  for (let attempt = 1; attempt <= 12; attempt++) {
+    if (clean === 0) {
+      psql(`
+        UPDATE receipt_job
+           SET status = 'queued', attempts = 0, last_error = NULL, sent_at = NULL,
+               available_at = now() + interval '1 hour'
+         WHERE transaction_id = '${txId}';
+      `);
+    }
+    // Each read is its own `docker exec psql`, so consecutive reads are naturally
+    // tens of milliseconds apart — the settle this needs, without a sleep that
+    // would have to be justified with a number nobody can defend.
+    if (strays() === 0) {
+      if (++clean === 2) return;
+    } else {
+      clean = 0;
+    }
+  }
+
+  throw new Error(
+    `parkOutbox could not hold ${txId}'s receipt rows still. Something keeps moving them ` +
+      'out of `queued` or pulling `available_at` back to now — the receipt worker finishing ' +
+      'a send it claimed before the park is the known cause, and `markSent` keying on `id` ' +
+      'with no status guard is why it can. The outbox now reads: ' +
+      scalar(
+        `select coalesce(string_agg(channel::text || ':' || status::text || ':' ||
+                  coalesce(sent_at::text,'-'), ' ' order by channel::text), '(no rows)')
+           from receipt_job where transaction_id='${txId}'`,
+      ),
+  );
 }
 
 /** `channel:status:attempts` for every row, ordered — the whole outbox at a glance. */
