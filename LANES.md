@@ -477,7 +477,7 @@ knowingly-red suite and asking another lane to fix it.
 The test that decides it: **could the other lane land its change without touching this file?** If
 no, the file is theirs. If the suite spans packages or lives in `e2e/`, it is Lane D's.
 
-**Waiting for the next Lane D dispatch (added 2026-08-28, from the `da442bc` merge).**
+**DONE 2026-08-28 in `a321eea` — left here only as the record, not as work.**
 `parkOutbox` in `e2e/integration.test.ts` (~line 430) was written to work around decision 72,
 and 72 is now fixed. Its twelve-attempt converge-and-verify existed because `markSent` keyed on
 `id` alone, so a send already in flight could overwrite the park. The write is now guarded on
@@ -493,7 +493,11 @@ the bug is what made the comment wrong** — the only kind of stale comment that
 oversight and everybody's problem. Fix the prose even if the loop is left alone; a future
 reader debugging a park will otherwise go looking for a guard that is already there.
 
-Not touched from trunk: `e2e/` is Lane D's column.
+Outcome: the prose is past-tense and attributed, and the loop **did** collapse to a single
+park — but on a better argument than the one above. `parkOutbox` sets `attempts = 0`, and a
+claimed row's `attempts` is always at least 1, so the park refuses an in-flight claim on
+that term alone, independently of status. My reasoning from `markSent`'s status guard was
+the weaker half. **Do not re-open this.**
 
 
 ---
