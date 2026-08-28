@@ -146,8 +146,14 @@ export interface PeekedToken {
  * The unknown / consumed / expired 410s are unchanged: "already used" and
  * "expired" send the customer to different actions in the scanner copy.
  */
+/**
+ * `Executor`, not `Db`, so this can be called on a transaction handle. `POST
+ * /charges` MUST call it on its own `tx`: on the base handle it asks the pool for
+ * a second connection while the charge transaction holds one, which deadlocks the
+ * API process under a burst. See `charge.ts` § "ON `tx`, NOT ON `db`".
+ */
 export async function peekToken(
-  db: Db,
+  db: Executor,
   rawToken: string,
   scope: TokenScope,
 ): Promise<PeekedToken> {

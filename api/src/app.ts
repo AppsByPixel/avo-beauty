@@ -54,9 +54,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
+    /**
+     * IN TEST, ERRORS ONLY — NOT SILENCE.
+     *
+     * This was `false`, and that made `http/errors.ts`'s
+     * `req.log.error({ err }, 'unhandled error')` — written so that a 5xx is "an
+     * incident logged like one" — write NOTHING in the one configuration where
+     * 5xxs are actually seen. The e2e harness boots this API with
+     * `NODE_ENV=test` and captures its stdout/stderr for `apiLogTail()`, so
+     * every "--- the API's own log ---" in a failure message printed
+     * "(nothing on stdout/stderr)" and a 500 had to be re-diagnosed by hand.
+     *
+     * `level: 'error'` and no pino-pretty transport: Fastify's own
+     * request/response lines are `info`, so a green run stays exactly as quiet
+     * as it was, and the raw JSON goes straight to the harness's capture.
+     */
     logger:
       env.nodeEnv === 'test'
-        ? false
+        ? { level: 'error', redact: ['req.headers.authorization'] }
         : { transport: { target: 'pino-pretty' }, redact: ['req.headers.authorization'] },
     // Money bodies are small. A generous limit is just a DoS surface.
     bodyLimit: 256 * 1024,
