@@ -1147,6 +1147,29 @@ a:hover {
 
 /* ================================================================ loyalty == */
 
+/*
+ * THE EDITOR'S RULES ARE GONE, AND THE LADDER'S ARE NOT.
+ *
+ * The merchant's Loyalty screen is read-only since loyalty authority moved to
+ * AVO (routes/Loyalty.tsx), so the per-rung inputs, the locked-Bronze filler,
+ * the dirty/invalid status row, the invalid-rung border and the publish toast
+ * have no element to style. Deleted rather than left: an unreferenced rule is
+ * dead machinery that reads as live, and the next person to open this file
+ * would reasonably infer the screen still has a Publish button.
+ *
+ * `.tier-card[data-bad]`'s TOKEN NOTE went with it, and nothing inherited it —
+ * which is worth one line because the note was the record of a gap. The design
+ * paints an invalid rung's border #C2705C, a value with no token; the nearest
+ * named colours are `--avo-danger-dot` (#B0736F) and `--avo-danger-text`
+ * (#8f5a56, now #7A6034 for the warn pair). That substitution is no longer made
+ * ANYWHERE: the console's editable ladder is a TABLE, and the design's console
+ * prototype clamps its steppers per-rung and validates nothing, so it draws no
+ * invalid state for a row at all. The console marks an invalid rung with the
+ * sentence under the bonus stepper (`.saloned__tierwarn`) and nothing else.
+ * Reported: still no token for the design's invalid-rung colour, and the console
+ * table has no drawn invalid treatment to apply one to.
+ */
+
 .loyalty__head {
   display: flex;
   align-items: center;
@@ -1160,25 +1183,6 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
-.loyalty__status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
-}
-
-.loyalty__status {
-  font-size: 13px;
-  color: var(--avo-text-muted);
-}
-
-/* Unsaved or invalid — the sentence itself carries the meaning, not the colour. */
-.loyalty__status[data-dirty] {
-  color: var(--avo-warn-text);
-  font-weight: 600;
-}
 
 .loyalty__grid {
   display: grid;
@@ -1203,18 +1207,6 @@ a:hover {
   padding: 18px;
 }
 
-/*
- * The invalid rung's border.
- *
- * TOKEN NOTE. The design paints it #C2705C, which is in no token — the nearest
- * named colours are `--avo-danger-dot` (#B0736F) and `--avo-danger-text`
- * (#8f5a56). `--avo-danger-dot` is used: it is the token whose job is "the
- * visible mark on a failure", and the warning sentence below it already carries
- * `--avo-danger-text`. Reported to trunk; not invented here.
- */
-.tier-card[data-bad] {
-  border-color: var(--avo-danger-dot);
-}
 
 .tier-card__name {
   font-size: 19px;
@@ -1227,40 +1219,23 @@ a:hover {
   min-height: 32px;
 }
 
-.tier-card__fields {
-  display: flex;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.tier-card__field {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-
-.tier-card__input {
-  font-family: var(--avo-font-display);
-  font-size: 15px;
-  font-weight: 600;
-  padding: 9px 11px;
-  border-radius: 10px;
-}
-
-.tier-card__locked {
-  margin-top: 14px;
-  font-size: 12px;
-  color: var(--avo-ui-ink-38);
-  /* Holds the same height as the two inputs so the four cards stay aligned. */
-  min-height: 62px;
-}
 
 .tier-card__foot {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--avo-hairline);
+}
+
+/*
+ * The same footer on a card that has no inputs above it.
+ *
+ * The editable card's rule line reserved 32px and the two inputs another 62px, so
+ * the four cards lined up on their footers. With the inputs withdrawn there is
+ * nothing to line up against and the reserved space reads as a gap somebody
+ * forgot to fill — so the footer sits directly under the rule instead.
+ */
+.tier-card__foot--flat {
+  margin-top: 14px;
 }
 
 .tier-card__example {
@@ -1276,11 +1251,6 @@ a:hover {
   margin-top: 3px;
 }
 
-.tier-card__warn {
-  font-size: 12px;
-  color: var(--avo-danger-text);
-  margin-top: 7px;
-}
 
 .loyalty__footnote {
   margin-top: 14px;
@@ -1290,26 +1260,6 @@ a:hover {
   line-height: 1.5;
 }
 
-.loyalty__toast {
-  margin-top: 14px;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  background: var(--avo-brand-tint);
-  color: var(--avo-brand-deeper);
-  border-radius: 12px;
-  padding: 11px 16px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.loyalty__toast-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 9px;
-  background: var(--avo-brand);
-  flex-shrink: 0;
-}
 
 /* ------------------------------------------------------------------ stamps */
 
@@ -1350,14 +1300,6 @@ a:hover {
   font-size: 15px;
 }
 
-.stamps__switching {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--avo-hairline);
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--avo-warn-text);
-}
 
 /* =============================================================== settings == */
 
@@ -4618,6 +4560,51 @@ a:hover {
   gap: 16px;
   padding: 11px 4px;
   border-top: 1px solid var(--avo-hairline-inner);
+}
+
+/*
+ * The mechanic switch, on its own row.
+ *
+ * It used to sit in `.saloned__loyaltyhead`, opposite the card's title, because
+ * the card had no button of its own — every control on the screen shared one Save
+ * at the bottom of the page. The loyalty card now publishes through its own
+ * endpoint and carries its own button, so the switch belongs with the controls it
+ * governs rather than in the heading, where it read as part of the title.
+ */
+.saloned__loyaltymode {
+  margin-bottom: 4px;
+}
+
+/*
+ * ===================== THE PUBLISH RECEIPT =====================
+ * The brand tint, matching the merchant dashboard's own publish toast — the same
+ * event, reported on the other surface, so it reads as the same kind of thing.
+ *
+ * `--avo-brand-deeper` on `--avo-brand-tint`, never anything on `--avo-brand`:
+ * non-negotiable #9. `--avo-brand` appears here only as the 7px dot, which is a
+ * surface and carries no text.
+ */
+.saloned__receipt {
+  margin-top: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deeper);
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.saloned__receiptdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9px;
+  background: var(--avo-brand);
+  flex-shrink: 0;
+  /* Optically centred on the first line rather than on the block. */
+  margin-top: 7px;
 }
 
 /* ========================================== console · onboarding wizard == */

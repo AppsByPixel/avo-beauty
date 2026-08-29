@@ -93,6 +93,23 @@ const SECTION_SCREENS = [
    */
   'console/SalonEditor.tsx',
   /**
+   * The loyalty publisher, rendered as a card INSIDE `SalonEditor` — and in this
+   * list rather than in HOST_SUBVIEWS, for `SupportQueue`'s exact reason.
+   *
+   * Its host owns `GET /v1/platform/salons/:id`; this owns `GET
+   * /salons/{id}/loyalty`, a different route with a different guard resolved from
+   * the principal (`sections.salons` for the console, `perms.loyalty` +
+   * `requireSameSalon` for a merchant). Two reads fail independently, so a
+   * `SectionError` here is its own answer and not a drifting copy of its host's —
+   * and nothing hands it a pending state, because its host's read landing says
+   * nothing about whether its own has.
+   *
+   * It is also this build's second write surface on one screen: the host's Save
+   * and this card's Publish go to different endpoints and leave different audit
+   * rows, so each owns its own `WriteError` too.
+   */
+  'console/SalonLoyalty.tsx',
+  /**
    * IN THIS LIST, NOT THE SUBVIEW ONE, and the census itself made the point: the
    * first run of this file classed Campaigns as a pure subview and FAILED — it
    * owns a second fetch (the submitted-campaigns queue) with its own

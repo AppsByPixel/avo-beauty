@@ -12,6 +12,15 @@ import {
 import type { Branch, Tier } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { TIER_LADDER } from './loyalty.js';
+/*
+ * MOVED OUT, AND RE-EXPORTED SO EVERY EXISTING IMPORT STILL RESOLVES HERE.
+ * `platformSalonKeys.ts` says why it is its own file: `loyalty.ts` has to
+ * invalidate these rows after a console publish, and this module already imports
+ * `loyalty.ts`.
+ */
+import { platformSalonDetailKey, platformSalonKeys } from './platformSalonKeys.js';
+
+export { platformSalonDetailKey, platformSalonKeys };
 
 /**
  * The owner console's Salons section: `GET /v1/platform/salons` (the list) and
@@ -221,9 +230,6 @@ export function parsePlatformSalonPage(raw: unknown): PlatformSalonPage {
   };
 }
 
-export const platformSalonKeys = {
-  list: ['platform', 'salons'] as const,
-};
 
 /**
  * Cursor-paginated, like the audit reads. Two salons on a dev seed and a list
@@ -565,8 +571,9 @@ function bool(v: unknown, where: string): boolean {
  * "A ladder has all four tiers … Got 2" to a request that never mentioned tiers —
  * "not a guard, a salon locked out of editing anything until it republishes a
  * ladder it did not ask to change". Reading is not putting into effect, so reading
- * is permissive here too. `SalonEditor.tsx` holds the other half: a short ladder is
- * shown and is not sent.
+ * is permissive here too. `SalonLoyalty.tsx` holds the other half: a short ladder
+ * is shown and is not sent — and after the loyalty authority reversal it cannot be
+ * repaired from anywhere, which that file escalates rather than papers over.
  *
  * WHAT IS STILL REFUSED is a ladder this screen could not RENDER: an unknown rung
  * name, or rungs out of ladder order. The editor maps them positionally against
@@ -726,10 +733,6 @@ export function parsePlatformSalonDetail(raw: unknown): PlatformSalonDetail {
   };
 }
 
-/** Keyed under the list, so a salon's row and its editor invalidate together. */
-export function platformSalonDetailKey(id: string) {
-  return [...platformSalonKeys.list, 'detail', id] as const;
-}
 
 export function usePlatformSalon(id: string): UseQueryResult<PlatformSalonDetail> {
   return useQuery({
@@ -752,12 +755,39 @@ export function usePlatformSalon(id: string): UseQueryResult<PlatformSalonDetail
  * it matters — the control formats through `fils()` at the display boundary. No
  * arithmetic happens on this value in this file.
  */
+/**
+ * THE THREE LOYALTY FIELDS LEFT THIS PATCH, AND THE ROUTE STILL ACCEPTS THEM.
+ *
+ * `PATCH /v1/platform/salons/{id}` takes `loyaltyMode`, `tiers`, `stampTarget`
+ * and the two stamp-reward strings — they moved from `MERCHANT_EDITABLE` into
+ * `PLATFORM_ONLY_EDITABLE` when loyalty authority moved to AVO, so the console
+ * genuinely may write them here. Driven, on this lane's own database:
+ *
+ *     PATCH /v1/platform/salons/SAL-AMARA {"tiers":[…4 rungs…]}   →  200
+ *
+ * They are gone from this type anyway, because the console now has `PUT
+ * /salons/{id}/loyalty` and two doors into `salon.tiers` is the defect that
+ * endpoint's own header spends a paragraph on — "the console's copy is the one
+ * nobody would be watching". The difference is not cosmetic:
+ *
+ *   PATCH writes the audit row `Changed by AVO: tiers`. PUT writes
+ *   `Tier rules published`, which is the string a MERCHANT's audit log renders
+ *   and the one `routes/audit.ts` promises her ("AVO platform staff actions on
+ *   your salon appear here too, marked Owner console"). Publishing through PATCH
+ *   would file the ladder change under a different sentence in the log the salon
+ *   reads to find out why Gold moved.
+ *
+ *   PATCH answers with the salon row. PUT answers with `publishedBy`,
+ *   `publishedAt`, `appliesAt: 'next_visit'` and the server's own confirmation
+ *   sentence — the difference between a save that returned 200 and a publish that
+ *   can be shown to have taken effect. On someone else's live commercial terms
+ *   that is the whole point.
+ *
+ * So this patch is modules and deposit. `api/loyalty.ts` owns the rest.
+ */
 export interface PlatformSalonPatch {
   modules?: { booking: boolean; shop: boolean };
   depositFils?: number;
-  loyaltyMode?: LoyaltyMode;
-  tiers?: Tier[];
-  stampTarget?: number;
 }
 
 /**
