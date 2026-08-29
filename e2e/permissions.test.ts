@@ -327,12 +327,29 @@ const PROBES: Probe[] = [
   },
   {
     perm: 'loyalty',
-    what: 'PATCH /salons/{id} — the loyalty editor writes through here',
+    /**
+     * `noShowReturnMinutes`, AND THE LABEL USED TO SAY "the loyalty editor writes
+     * through here".
+     *
+     * Both were true until decision 79 moved loyalty authority to AVO. `perms.loyalty`
+     * SURVIVES and still gates this route — it was never only the ladder; it is the
+     * whole merchant Settings screen — but the five loyalty fields left
+     * `MERCHANT_EDITABLE`, so `{ stampTarget: 9 }` is now refused by
+     * `403 loyalty_read_only` BEFORE the permission is consulted at all.
+     *
+     * This file drives `packages/mock`, which echoes any body it is handed, so the old
+     * body went on reporting green — which is the reason to change it rather than a
+     * reason not to. A row whose body could no longer reach the guard it names is a row
+     * that has stopped testing what its label claims, and the label is what the next
+     * reader believes. Pointed at lane A's API — the direction this suite has been
+     * moving — it would have passed on the wrong 403.
+     */
+    what: 'PATCH /salons/{id} — the merchant Settings screen writes through here',
     run: async () =>
       (
         await api('PATCH', `/salons/${SALON_ID}`, {
           scenario: NOPERMS,
-          body: { stampTarget: 9 },
+          body: { noShowReturnMinutes: 61 },
         })
       ).status,
   },

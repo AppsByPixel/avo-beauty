@@ -519,8 +519,33 @@ const SALON_ROUTES: SalonRoute[] = [
   {
     method: 'PATCH',
     template: '/salons/{id}',
-    body: { stampTarget: 99 },
-    controlBody: { stampTarget: 8 },
+    /**
+     * `noShowReturnMinutes`, AND IT WAS `stampTarget` UNTIL THE LOYALTY REVERSAL.
+     *
+     * This row asks one question — does `requireSameSalon` fire on the merchant's
+     * general-purpose settings write — and it can only ask it with a field that is
+     * still MERCHANT-EDITABLE. `stampTarget` left `MERCHANT_EDITABLE` for
+     * `PLATFORM_ONLY_EDITABLE` when loyalty authority moved to AVO (decision 79), so
+     * both halves of the pair broke, and they broke in OPPOSITE directions:
+     *
+     *   the attack half still answered 403 — but `loyalty_read_only`, thrown by
+     *   `buildSalonPatch` BEFORE the tenancy guard is reached. Green on the status,
+     *   red on the copy, and had the copy not been asserted this row would have gone
+     *   on "passing" while testing nothing about tenancy at all.
+     *
+     *   the control half answered 403 where it wants 200, which is the failure that
+     *   actually surfaced it. That asymmetry is the argument for `controlStatus` and
+     *   for asserting the refusal COPY rather than the status alone: a probe whose
+     *   body has stopped being reachable looks exactly like a probe that passed.
+     *
+     * `60` is what `seedSalonB()` sets, so the control call restores the seeded value
+     * rather than leaving salon B on a number nothing chose. `999` is a legal window
+     * (`parseNoShowReturnMinutes` wants a whole number above zero), so the attack half
+     * cannot be refused by validation instead of by tenancy — which is the property the
+     * table header asks of every body here.
+     */
+    body: { noShowReturnMinutes: 999 },
+    controlBody: { noShowReturnMinutes: 60 },
   },
   {
     method: 'POST',
@@ -598,19 +623,12 @@ const SALON_ROUTES: SalonRoute[] = [
   { method: 'GET', template: '/salons/{id}/artists/bookable' },
   { method: 'GET', template: '/salons/{id}/audit' },
   { method: 'GET', template: '/salons/{id}/activity' },
+  /**
+   * The loyalty READ is still a merchant door and stays here. The loyalty WRITE
+   * used to sit directly below it and is gone — see the block comment on
+   * `PUT /salons/{id}/loyalty` after this table.
+   */
   { method: 'GET', template: '/salons/{id}/loyalty' },
-  {
-    method: 'PUT',
-    template: '/salons/{id}/loyalty',
-    body: {
-      tiers: [
-        { name: 'bronze', minVisits: 0, bonusPercent: 0 },
-        { name: 'silver', minVisits: 4, bonusPercent: 10 },
-        { name: 'gold', minVisits: 10, bonusPercent: 20 },
-        { name: 'black', minVisits: 20, bonusPercent: 30 },
-      ],
-    },
-  },
 
   /**
    * LANE A'S FOUR PROMOTION WRITES.
@@ -951,6 +969,146 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
       );
     });
   }
+});
+
+/**
+ * ===========================================================================
+ * PUT /salons/{id}/loyalty — THE ROW THAT LEFT THE TABLE, AND WHAT REPLACES IT.
+ * ===========================================================================
+ * It was a `SALON_ROUTES` entry until decision 79 moved loyalty authority from the
+ * merchant to AVO. It is now a CONSOLE door — `sections.salons`, merchant refused —
+ * so the table's claim no longer describes it in either half:
+ *
+ *   the attack half asserted `forbidden` / "That salon is not yours.". The merchant
+ *   is now refused one guard EARLIER, on principal kind, with `loyalty_read_only`.
+ *   Same status, different fact.
+ *
+ *   the control half asserted 200 against salon B's own id. There is no longer any
+ *   merchant call to this endpoint that answers 200, so the row could not be
+ *   repaired — only moved.
+ *
+ * COVERAGE IS NOT DELETED WITH IT. Three things the table row used to hold are held
+ * here instead, and a fourth that it never held at all:
+ *
+ *   1. the merchant is refused her OWN salon's ladder — the withdrawal itself, which
+ *      is the assertion Aftab's reversal actually rests on. It is in
+ *      `configuration.test.ts` with the rest of the loyalty editor, driven with
+ *      `perms.loyalty` verified ON, per non-negotiable #7.
+ *   2. the merchant is refused ANOTHER salon's ladder, and learns nothing about it.
+ *      Below.
+ *   3. the console reaches BOTH salons, which is the inverse claim and the one that
+ *      proves the 403 above is about authority rather than a dead route. Below.
+ *   4. the refusal ORDER — kind before tenancy — which the table row could not have
+ *      asserted, because a table row that expects one 403 cannot tell two apart.
+ *
+ * The auto-discovering sweep at the bottom of this file still drives this route as
+ * well: it is still `/salons/:id`-shaped, so `discoverSalonScopedRoutes()` finds it
+ * and requires a 403 with no salon A data in it. That half never needed the table.
+ */
+describe('PUT /salons/{id}/loyalty — withdrawn from the merchant, and withdrawn the same way at every salon', () => {
+  let platform = '';
+
+  const LADDER = {
+    mode: 'tiers',
+    tiers: [
+      { name: 'bronze', minVisits: 0, bonusPercent: 0 },
+      { name: 'silver', minVisits: 4, bonusPercent: 10 },
+      { name: 'gold', minVisits: 10, bonusPercent: 20 },
+      { name: 'black', minVisits: 20, bonusPercent: 30 },
+    ],
+  };
+
+  beforeAll(async () => {
+    platform = await signInPlatform(PLATFORM_OWNER_HANDLE);
+  }, 60_000);
+
+  /**
+   * THE REFUSAL IS BY PRINCIPAL KIND, SO IT IS THE SAME AT EVERY SALON — and that
+   * sameness is the tenancy property, not an accident of ordering.
+   *
+   * `requireLoyaltyPublisher` refuses a staff principal before it has looked at the
+   * salon id, the salon row, or the body. So salon B's Layla aiming at salon A gets
+   * exactly the answer she gets aiming at her own salon: `403 loyalty_read_only`, no
+   * mention of SAL-AMARA, and no signal about whether SAL-AMARA exists or whether she
+   * is inside it. Had the guard been written the natural-looking way round —
+   * `requireSameSalon` first — this call would have answered "That salon is not
+   * yours." and told her both.
+   *
+   * Asserted as a PAIR, byte for byte, because either half alone is satisfiable by a
+   * broken product: the foreign call alone cannot distinguish a kind refusal from a
+   * tenancy refusal, and the own-salon call alone says nothing about disclosure.
+   */
+  it('a merchant is refused another salon\'s ladder in exactly the words she is refused her own', async () => {
+    const foreign = await treq<{ error: string; message: string }>(
+      'PUT',
+      `/salons/${SALON_A}/loyalty`,
+      { token: bDashboard, body: LADDER },
+    );
+    const own = await treq<{ error: string; message: string }>(
+      'PUT',
+      `/salons/${SALON_B}/loyalty`,
+      { token: bDashboard, body: LADDER },
+    );
+
+    expect(foreign.status, `salon A answered ${foreign.status}: ${foreign.raw}`).toBe(403);
+    expect(own.status, `salon B answered ${own.status}: ${own.raw}`).toBe(403);
+
+    expect(foreign.body.error).toBe('loyalty_read_only');
+    expect(own.body.error).toBe('loyalty_read_only');
+    // The whole body, not just the code. A message that named the salon — or that
+    // differed between the two — would be the existence oracle this file exists to
+    // refuse, arriving through the copy rather than through the status.
+    expect(foreign.body).toEqual(own.body);
+    expect(Object.keys(foreign.body).sort()).toEqual(['error', 'message']);
+    expectNoSalonALeak(foreign.raw, 'PUT /salons/{id}/loyalty as a foreign merchant');
+  });
+
+  /**
+   * AND THE REFUSAL WROTE NOTHING AT EITHER SALON.
+   *
+   * `PATCH …/social/{linkId}`'s note above is the argument in full: a handler that
+   * answers 403 and writes anyway passes any spec that only reads the response. The
+   * ladder is one jsonb column, so "unchanged" is a single exact comparison, and it is
+   * made at BOTH salons because the guard is claimed to fire before the salon id is
+   * even read — if that were false, the foreign call is the one that would land.
+   */
+  it('and neither refusal moved a rung — at her salon or at the other one', async () => {
+    const beforeA = scalar(`select tiers::text from salon where id='${SALON_A}'`);
+    const beforeB = scalar(`select tiers::text from salon where id='${SALON_B}'`);
+
+    await treq('PUT', `/salons/${SALON_A}/loyalty`, { token: bDashboard, body: LADDER });
+    await treq('PUT', `/salons/${SALON_B}/loyalty`, { token: bDashboard, body: LADDER });
+
+    expect(
+      scalar(`select tiers::text from salon where id='${SALON_A}'`),
+      'a refused merchant publish rewrote ANOTHER salon\'s ladder',
+    ).toBe(beforeA);
+    expect(
+      scalar(`select tiers::text from salon where id='${SALON_B}'`),
+      'a refused merchant publish rewrote her own salon\'s ladder',
+    ).toBe(beforeB);
+  });
+
+  /**
+   * THE INVERSE CLAIM, and without it the two specs above are satisfied by a route
+   * that is broken or unregistered rather than by a route that is enforcing.
+   *
+   * One console credential is admitted at BOTH salons — cross-salon is the feature
+   * here, exactly as it is at `GET|PATCH /v1/platform/salons/{id}`. Nothing is
+   * published: `PUT` is not the assertion, ADMISSION is, so this drives the GET,
+   * which takes the same `sections.salons` gate through `requireLoyaltyReader` and
+   * writes nothing at all. The publish itself is proved in `configuration.test.ts`,
+   * against salon B, where a written ladder is that file's own business.
+   */
+  it('and one console credential reads the ladder at BOTH salons — cross-salon is the feature here', async () => {
+    for (const salonId of [SALON_A, SALON_B]) {
+      const res = await treq<{ loyaltyMode: string }>('GET', `/salons/${salonId}/loyalty`, {
+        token: platform,
+      });
+      expect(res.status, `the console was refused ${salonId}: ${res.raw}`).toBe(200);
+      expect(res.body.loyaltyMode, `${salonId} served no loyalty mode`).toBeTruthy();
+    }
+  });
 });
 
 /**
@@ -1873,13 +2031,49 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
    * console route, and the day someone added a third one the ledger would fire on it
    * and the tempting fix would be another line. Instead the classification is read
    * from source through the permission census — a discovered route is a console door
-   * IFF its handler is gated by `requirePlatform`. A merchant door can never satisfy
-   * that, and a fourth console route classifies itself.
+   * IFF EVERY gate path on it is `requirePlatform`. A fourth console route classifies
+   * itself.
+   *
+   * ---------------------------------------------------------------------------
+   * `every`, AND IT WAS `some` UNTIL DECISION 79. THE SENTENCE ABOVE USED TO END
+   * "A merchant door can never satisfy that", AND THAT IS NO LONGER TRUE.
+   * ---------------------------------------------------------------------------
+   * The census contributes ONE ROW PER GATE PATH, not one per route — its own
+   * `PINNED_COVERAGE` header says so — so a DISJUNCTIVE door, one that admits either
+   * principal kind by asking a different question of each, contributes two rows and
+   * one of them is `requirePlatform`.
+   *
+   * `GET /salons/{id}/loyalty` became exactly that: `requireLoyaltyReader` takes
+   * `sections.salons` from the console and `perms.loyalty` + `requireSameSalon` from
+   * the merchant. Under `some` it classified as a console door — and then the
+   * exemption did the precise thing the assertion below was written to catch. It
+   * SWALLOWED A MERCHANT DOOR: a route that still has a real tenancy boundary, still
+   * has a spec in `SALON_ROUTES` asserting it, and would have been dropped from the
+   * "add it to SALON_ROUTES" ledger for ever.
+   *
+   * That is why the swallow assertion is not decoration. It is the half of this
+   * mechanism that fired, on the first change that could make it fire, three days
+   * after the mechanism was written — and the failure named the route rather than
+   * leaving a silent hole.
+   *
+   * `every` is the honest reading of "this door is not a merchant door": a route is
+   * exempt from a tenancy spec only when there is no merchant way in AT ALL.
+   * `PUT /salons/{id}/loyalty` satisfies it — `requireLoyaltyPublisher` refuses a
+   * staff principal outright rather than gating her, so its only gate path is the
+   * console's. The GET does not, and stays probed.
    */
+  const gateCounts = new Map<string, { total: number; platform: number }>();
+  for (const g of censusOfRoutes().gated) {
+    const key = `${g.method} ${g.route}`;
+    const seen = gateCounts.get(key) ?? { total: 0, platform: 0 };
+    seen.total += 1;
+    if (g.guard === 'requirePlatform') seen.platform += 1;
+    gateCounts.set(key, seen);
+  }
   const consoleDoors = new Set(
-    censusOfRoutes()
-      .gated.filter((g) => g.guard === 'requirePlatform')
-      .map((g) => `${g.method} ${g.route}`),
+    [...gateCounts.entries()]
+      .filter(([, c]) => c.platform > 0 && c.platform === c.total)
+      .map(([route]) => route),
   );
 
   it('the console doors classified themselves, and did not swallow a merchant door', () => {
@@ -1899,6 +2093,29 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
         'doing nothing and the census has stopped reading requirePlatform',
     ).toContain('GET /v1/platform/salons/:id');
     expect(discoveredConsole).toContain('PATCH /v1/platform/salons/:id');
+
+    /*
+     * AND THE `every` READING IS PINNED BY THE ROUTE THAT BROKE THE `some` ONE.
+     *
+     * `PUT /salons/:id/loyalty` is console-only and must be exempt; `GET
+     * /salons/:id/loyalty` is disjunctive — the console reads it under
+     * `sections.salons` and the merchant reads her own under `perms.loyalty` — and
+     * must NOT be. Reverting this classification to `some` makes the GET exempt and
+     * this assertion is the one that says so BY NAME, before the swallow check below
+     * has to infer it from `SALON_ROUTES`.
+     */
+    expect(
+      discoveredConsole,
+      'PUT /salons/:id/loyalty is gated only by requirePlatform and is not classified ' +
+        'as a console door — the exemption has stopped reading the loyalty publisher',
+    ).toContain('PUT /salons/:id/loyalty');
+    expect(
+      discoveredConsole,
+      'GET /salons/:id/loyalty is classified as a console door, but a merchant reads ' +
+        'her own salon through it under perms.loyalty. The classification has gone ' +
+        'back to `some`, and a merchant door with a live tenancy boundary is now exempt ' +
+        'from the ledger below.',
+    ).not.toContain('GET /salons/:id/loyalty');
 
     /*
      * AND THE EXEMPTION CANNOT EAT A MERCHANT DOOR. If `requirePlatform` ever appeared

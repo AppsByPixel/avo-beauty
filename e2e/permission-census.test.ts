@@ -270,7 +270,11 @@ const ANONYMOUS: Record<string, string> = {
 const MIRROR_WOULD_WRITE: Record<string, string> = {
   'PUT /salons/:id/loyalty': 'publishes a tier ladder — a half-published ladder is a money bug',
   'PUT /v1/salons/:id/promotions/boosts': 'overwrites the salon\'s boost set',
-  'PATCH /salons/:id': 'writes salon settings, including the loyalty mode',
+  'PATCH /salons/:id':
+    'writes salon settings — brand colour, deposit, modules, timezone, hours, social. '  +
+    'It said "including the loyalty mode" until decision 79 moved the five loyalty ' +
+    'fields out of MERCHANT_EDITABLE; this door no longer writes any of them, and a ' +
+    'merchant who sends one gets 403 loyalty_read_only rather than a write.',
   'PATCH /v1/platform/settings': 'moves the commission that prices every top-up',
   'PATCH /v1/platform/messaging-policy': 'rewrites the caps and quiet hours #8 enforces',
   'POST /v1/platform/policies/publish': 'publishes the legal set and stamps a version',
@@ -663,7 +667,20 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/audit → dashboard',
   'GET /salons/:id/bookings → appointments',
   'GET /salons/:id/branches/:bid/closure-preview → loyalty',
+  /**
+   * TWO LINES FOR ONE ROUTE, and it is the disjunctive-wrapper case the header
+   * describes — "a disjunctive wrapper contributes two". `requireLoyaltyReader`
+   * asks a different question of each principal kind: `sections.salons` of the
+   * console, `perms.loyalty` + `requireSameSalon` of the merchant. Both gate paths
+   * are probed, which is the whole reason the census resolves wrappers rather than
+   * reading the first guard it finds.
+   *
+   * The `→ loyalty` line is UNCHANGED by decision 79. Read-only is the point of the
+   * reversal, so the merchant's door here stays exactly where it was; what she lost
+   * is the PUT below.
+   */
   'GET /salons/:id/loyalty → loyalty',
+  'GET /salons/:id/loyalty → salons',
   'GET /salons/:id/metrics → dashboard',
   'GET /salons/:id/products → shop',
   'GET /salons/:id/reports/best-selling-services → appointments',
@@ -765,7 +782,20 @@ const PINNED_COVERAGE: string[] = [
   'POST /webhooks/:provider [ANONYMOUS]',
   'PUT /artists/:id/availability → team',
   'PUT /artists/me/availability [requireScannerScope]',
-  'PUT /salons/:id/loyalty → loyalty',
+  /**
+   * `→ salons`, AND IT WAS `→ loyalty` UNTIL DECISION 79 — a line that MOVED rather
+   * than one that arrived, which is the amendment this ledger is least able to
+   * distinguish on its own and the reason both halves of the pin exist. Dropped from
+   * the "still readable" half and added to the "reads unpinned" half in the same
+   * edit; either alone would have been green.
+   *
+   * ONE LINE, NOT TWO, and that is the difference from the GET above.
+   * `requireLoyaltyPublisher` does not GATE a merchant on a permission — it refuses
+   * her outright with `403 loyalty_read_only` — so there is no merchant gate path to
+   * probe and the census correctly reports none. If a `PUT … → loyalty` line ever
+   * comes back here, the merchant has a permission that opens this endpoint again.
+   */
+  'PUT /salons/:id/loyalty → salons',
   'PUT /v1/salons/:id/promotions/boosts → marketing',
 ];
 

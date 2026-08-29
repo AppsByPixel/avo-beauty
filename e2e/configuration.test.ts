@@ -49,10 +49,12 @@ import {
   B_STAFF_BRANCH_SURVIVOR,
   B_STAFF,
   B_STAFF_HANDLE,
+  PLATFORM_OWNER_HANDLE,
   SALON_B,
   psql,
   scalar,
   signInDashboard,
+  signInPlatform,
   startTenancyApi,
   stopTenancyApi,
   treq,
@@ -60,6 +62,18 @@ import {
 
 /** Layla, salon B's manager, holding all nine permissions. */
 let dashboard = '';
+
+/**
+ * Yousef, the AVO owner console, holding every section.
+ *
+ * NEW IN THIS FILE, AND IT IS A CHANGE OF SUBJECT RATHER THAN AN EXTRA FIXTURE.
+ * The question in the title — "can an owner configure a salon without an engineer"
+ * — was answered entirely through a merchant credential until decision 79 moved the
+ * tier ladder to AVO. The Loyalty section below is now the one part of the answer
+ * that requires the CONSOLE, so the file needs both principals to say anything true
+ * about it: one that publishes, and one that is refused.
+ */
+let platform = '';
 
 /**
  * An artist this file creates and nothing else touches.
@@ -124,6 +138,7 @@ let salonSnapshot: Record<string, string> | undefined;
 beforeAll(async () => {
   await startTenancyApi();
   dashboard = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+  platform = await signInPlatform(PLATFORM_OWNER_HANDLE);
 
   /**
    * `quote_literal` and `pg_typeof` do the work, so the restore below is a plain
@@ -747,8 +762,46 @@ describe('GAP: what configuring a salon still cannot do', () => {
 // Loyalty — the tier ladder editor.
 // ===========================================================================
 
-describe('Loyalty — the ladder publishes atomically and is refused whole', () => {
-  it('the editor can read the ladder it is about to edit, with the server\'s own preview', async () => {
+describe('Loyalty — AVO publishes the ladder, and the merchant reads it', () => {
+  /**
+   * ========================================================================
+   * THE LADDER MOVED TO AVO. THIS BLOCK IS THE WITHDRAWAL, NOT A GAP.
+   * ========================================================================
+   * Decision 79, Aftab verbatim: *"Owner console will control the loyalty part not
+   * the merchant (it will be read only for merchant)."* It REVERSES
+   * `design/README.md:136`, which records the merchant editor shipping — "merchants
+   * now edit their own tier rules" — so the three specs that used to publish a ladder
+   * through `dashboard` were not wrong when they were written. They were right about
+   * a product that has changed.
+   *
+   * THEY ARE REWRITTEN RATHER THAN DELETED, and the direction of each is worth stating
+   * because "update the test" is exactly how a reversal loses its coverage:
+   *
+   *   publish → still asserted, through the CONSOLE. The atomicity requirement in
+   *   build-plan.md phase 4 did not move with the authority.
+   *
+   *   refuse-an-invalid-ladder → still asserted, through the CONSOLE. A validator
+   *   nobody can reach is not a validator that has been proved.
+   *
+   *   the second door → NOW TWO SPECS INSTEAD OF ONE. The old one proved
+   *   `PATCH /salons/{id}` shares the publish validator. That question is still live
+   *   for AVO (`PATCH /v1/platform/salons/{id}`), and a SECOND one appeared underneath
+   *   it that did not exist before: the merchant's own `PATCH /salons/{id}` is gated on
+   *   the same `perms.loyalty` that still opens her Settings screen, so refusing only
+   *   `PUT …/loyalty` would have left the ladder editable by exactly the principal the
+   *   reversal withdraws it from. Lane A closed that door in the same commit. Nothing
+   *   in this suite would have noticed if it had not.
+   */
+
+  /** The four rungs every publish below sends. Ordered, Bronze locked at 0/0. */
+  const LADDER = [
+    { name: 'bronze', minVisits: 0, bonusPercent: 0 },
+    { name: 'silver', minVisits: 4, bonusPercent: 10 },
+    { name: 'gold', minVisits: 12, bonusPercent: 20 },
+    { name: 'black', minVisits: 24, bonusPercent: 30 },
+  ];
+
+  it('the merchant can still read the ladder she can no longer edit, with the server\'s own preview', async () => {
     const res = await treq<{
       loyaltyMode: string;
       tiers?: Array<{ name: string; minVisits: number; bonusPercent: number }>;
@@ -766,51 +819,209 @@ describe('Loyalty — the ladder publishes atomically and is refused whole', () 
     }
   });
 
-  it('publishing a ladder persists it and writes the "Tier rules published" line', async () => {
-    const auditBefore = Number(
-      scalar(
-        `select count(*) from audit_log where salon_id='${SALON_B}' and action like '%rules published%'`,
-      ),
+  /**
+   * NON-NEGOTIABLE #7, THE SECOND HALF: "Every gated endpoint needs a test that calls
+   * it directly with the permission ON" — inverted here, because what is being proved
+   * is a WITHDRAWAL rather than a gate.
+   *
+   * `perms.loyalty` is read out of the database first rather than assumed from the
+   * seed comment. If it were off, this spec would pass on a `403 forbidden` that had
+   * nothing to do with decision 79 — the single most likely way for this assertion to
+   * rot into a tautology, since `perm_loyalty` is a column six other suites write.
+   *
+   * The ERROR CODE is the assertion, not the status. `403 forbidden` is what a missing
+   * permission produces and it is a different fact about the product: it would mean a
+   * manager could grant the ladder back, which is exactly what nobody at the salon can
+   * now do. `routes/loyalty.ts` says so at `requireLoyaltyPublisher` and
+   * `http/errors.ts § loyaltyReadOnly` carries the copy.
+   */
+  it('a merchant holding perms.loyalty is refused the publish — the capability is withdrawn, not ungranted', async () => {
+    precondition(
+      scalar(`select perm_loyalty from staff_user where id='${B_STAFF}'`).trim() === 't',
+      'Layla does not hold perms.loyalty, so a 403 here would prove nothing about the reversal',
+    );
+    const before = scalar(`select tiers::text from salon where id='${SALON_B}'`);
+
+    const res = await treq<{ error: string; message: string }>(
+      'PUT',
+      `/salons/${SALON_B}/loyalty`,
+      { token: dashboard, body: { mode: 'tiers', tiers: LADDER } },
     );
 
-    const published = await treq('PUT', `/salons/${SALON_B}/loyalty`, {
-      token: dashboard,
-      body: {
-        mode: 'tiers',
-        tiers: [
-          { name: 'bronze', minVisits: 0, bonusPercent: 0 },
-          { name: 'silver', minVisits: 4, bonusPercent: 10 },
-          { name: 'gold', minVisits: 12, bonusPercent: 20 },
-          { name: 'black', minVisits: 24, bonusPercent: 30 },
-        ],
-      },
-    });
-    expect(published.status, published.raw).toBe(200);
+    expect(res.status, `the merchant publish answered ${res.status}: ${res.raw}`).toBe(403);
+    expect(
+      res.body.error,
+      'the merchant was refused, but as a missing permission rather than a withdrawn ' +
+        `capability — "${res.body.message}". A manager can grant a permission; nobody at ` +
+        'the salon can grant this one back.',
+    ).toBe('loyalty_read_only');
+    expect(
+      scalar(`select tiers::text from salon where id='${SALON_B}'`),
+      'a refused merchant publish wrote the ladder anyway',
+    ).toBe(before);
+  });
 
-    // Read back through the customer-facing route, which is where the ladder
-    // actually has to arrive — the wallet renders it, not the editor.
-    const salonView = await readSalon();
-    expect(salonView).toBeTruthy();
+  /**
+   * =======================================================================
+   * THE SECOND DOOR — `PATCH /salons/{id}`, THE ONE THAT IS EASY TO FORGET.
+   * =======================================================================
+   * THIS SPEC IS THE POINT OF THE SLICE, and it is a coverage GAP being filled rather
+   * than a red test being repaired: nothing here would have failed if lane A had
+   * refused the `PUT` and left the `PATCH` open.
+   *
+   * `PATCH /salons/{id}` is gated on `requireDashboardPerm(req, 'loyalty')` — the SAME
+   * permission — because there is no `perms.settings` among the nine in
+   * api-contract.md. So the principal refused at `PUT …/loyalty` above holds, by
+   * construction, the exact permission that opens the general-purpose salon write, and
+   * every one of the five loyalty columns was in `MERCHANT_EDITABLE` until this
+   * reversal. Refusing the front door while that stood open would have withdrawn
+   * nothing: the same session could publish the same ladder one route over, unaudited
+   * as a publish, and the Loyalty screen would simply have had to send a different
+   * request.
+   *
+   * FIVE FIELDS, FIVE CASES, ONE AT A TIME. Sent together, one refusal covers all five
+   * and a field quietly returning to `MERCHANT_EDITABLE` would be invisible — the
+   * remaining four would still trip the guard. Individually, the failure names the
+   * field that reopened.
+   *
+   * AND `loyalty_read_only` RATHER THAN `not_editable` IS ASSERTED, because the two are
+   * different products. `400 not_editable` says "these fields cannot be edited here",
+   * which sends a merchant looking for the route where they can — and there is none.
+   * Lane A ordered the guard above the allow-list for that reason; this is the spec that
+   * keeps it there.
+   */
+  const LOYALTY_FIELD_PATCHES: Array<[string, unknown]> = [
+    ['loyaltyMode', 'stamps'],
+    ['tiers', LADDER],
+    ['stampTarget', 6],
+    ['stampReward', 'Free blow-dry'],
+    ['stampRewardAr', 'تصفيف شعر مجاني'],
+  ];
+
+  for (const [field, value] of LOYALTY_FIELD_PATCHES) {
+    it(`and the second door is shut too — PATCH /salons/{id} refuses ${field}`, async () => {
+      const before = scalar(
+        `select row(loyalty_mode, tiers, stamp_target, stamp_reward, stamp_reward_ar)::text from salon where id='${SALON_B}'`,
+      );
+
+      const res = await treq<{ error: string; message: string }>('PATCH', `/salons/${SALON_B}`, {
+        token: dashboard,
+        body: { [field]: value },
+      });
+
+      expect(
+        res.status,
+        `PATCH /salons/{id} answered ${res.status} to a merchant sending ${field}: ${res.raw}`,
+      ).toBe(403);
+      expect(
+        res.body.error,
+        `${field} is refused through PATCH /salons/{id}, but not as a withdrawn ` +
+          `capability — "${res.body.message}". A merchant told a loyalty field is ` +
+          '"not editable here" goes looking for the route where it is.',
+      ).toBe('loyalty_read_only');
+      expect(
+        scalar(
+          `select row(loyalty_mode, tiers, stamp_target, stamp_reward, stamp_reward_ar)::text from salon where id='${SALON_B}'`,
+        ),
+        `a refused PATCH wrote ${field} anyway`,
+      ).toBe(before);
+    });
+  }
+
+  /**
+   * THE CONTROL FOR THE FIVE ABOVE, and without it they are satisfiable by a route that
+   * refuses this merchant everything.
+   *
+   * `perms.loyalty` still gates `PATCH /salons/{id}` and the screen behind it is still
+   * hers — brand colour, deposit, modules, timezone, hours, social, the Arabic name.
+   * That is what "narrowed, not revoked" means, and it is the half of decision 79 a
+   * future reader is most likely to over-apply. If this goes red alongside the five,
+   * the permission was revoked rather than the ladder withdrawn.
+   */
+  it('and the rest of her Settings screen still writes — perms.loyalty was narrowed, not revoked', async () => {
+    const before = Number(scalar(`select no_show_return_minutes from salon where id='${SALON_B}'`));
+    const next = before === 61 ? 62 : 61;
+
+    const res = await treq('PATCH', `/salons/${SALON_B}`, {
+      token: dashboard,
+      body: { noShowReturnMinutes: next },
+    });
+    expect(res.status, `a merchant-editable field was refused: ${res.raw}`).toBe(200);
+    expect(Number(scalar(`select no_show_return_minutes from salon where id='${SALON_B}'`))).toBe(
+      next,
+    );
+
+    // Put it back. The snapshot in `afterAll` covers the loyalty columns, not this one.
+    await treq('PATCH', `/salons/${SALON_B}`, {
+      token: dashboard,
+      body: { noShowReturnMinutes: before },
+    });
+  });
+
+  /**
+   * THE PUBLISH ITSELF, now driven by the console.
+   *
+   * The read-back is deliberately through the SALON row and the customer-facing view
+   * rather than through the response: a handler that echoes its own body satisfies any
+   * spec that only inspects what came back, which is this file's founding complaint.
+   *
+   * THE AUDIT ROW IS READ FROM THE MERCHANT'S OWN LOG, and that is the assertion that
+   * would have caught the defect lane A reported against itself. The row is written with
+   * `salonId: <target>`; the natural-looking repair for a platform principal —
+   * `salonId: null` — compiles, and `routes/audit.ts` filters the merchant's log on
+   * `salon_id`, so a null would put an AVO ladder change in AVO's log and nowhere else.
+   * A merchant opening her Loyalty screen to find Gold moved from 4 visits to 12 would
+   * have had no row to read. Counting through `/salons/{id}/audit` rather than through
+   * `psql` is what makes this spec see that; a raw count on `audit_log` would not.
+   */
+  it('AVO publishes a ladder, it persists, and the "Tier rules published" line reaches the SALON\'s log', async () => {
+    const before = await treq<{ items: Array<{ action: string; source?: string }> }>(
+      'GET',
+      `/salons/${SALON_B}/audit?q=published&limit=50`,
+      { token: dashboard },
+    );
+    precondition(before.status === 200, `the merchant audit read answered ${before.status}`);
+    const publishedBefore = before.body.items.length;
+
+    const published = await treq<{ message: string; appliesAt: string; publishedBy: string }>(
+      'PUT',
+      `/salons/${SALON_B}/loyalty`,
+      { token: platform, body: { mode: 'tiers', tiers: LADDER } },
+    );
+    expect(published.status, published.raw).toBe(200);
+    // Stated on the wire rather than hardcoded in the client: nobody is promoted or
+    // demoted at publish time, and one place decides what the product says happened.
+    expect(published.body.appliesAt).toBe('next_visit');
+
     const gold = Number(
-      scalar(
-        `select (tiers -> 2 ->> 'minVisits') from salon where id='${SALON_B}'`,
-      ),
+      scalar(`select (tiers -> 2 ->> 'minVisits') from salon where id='${SALON_B}'`),
     );
     expect(gold, 'the published ladder did not persist').toBe(12);
 
-    const auditAfter = Number(
-      scalar(
-        `select count(*) from audit_log where salon_id='${SALON_B}' and action like '%rules published%'`,
-      ),
+    const after = await treq<{ items: Array<{ action: string; source?: string }> }>(
+      'GET',
+      `/salons/${SALON_B}/audit?q=published&limit=50`,
+      { token: dashboard },
     );
-    expect(auditAfter, 'a ladder was published with no audit line').toBe(auditBefore + 1);
+    expect(after.status, after.raw).toBe(200);
+    expect(
+      after.body.items.length,
+      'AVO published a ladder and the salon\'s own audit log has no line for it. The row ' +
+        'was written against no salon, or against the actor\'s — a platform admin has ' +
+        'neither.',
+    ).toBe(publishedBefore + 1);
+    expect(
+      after.body.items.some((r) => r.action === 'Tier rules published'),
+      'the publish landed under a different action string, so a merchant scanning the ' +
+        'log for "who changed the tier rules" sees two things where there is one act',
+    ).toBe(true);
   });
 
   it('an out-of-order ladder is refused and writes NOTHING — not even the valid rungs', async () => {
     const before = scalar(`select tiers::text from salon where id='${SALON_B}'`);
 
     const res = await treq('PUT', `/salons/${SALON_B}/loyalty`, {
-      token: dashboard,
+      token: platform,
       body: {
         mode: 'tiers',
         tiers: [
@@ -827,11 +1038,19 @@ describe('Loyalty — the ladder publishes atomically and is refused whole', () 
     expect(after, 'a refused publish wrote part of the ladder').toBe(before);
   });
 
-  it('and the same fields sent through PATCH /salons/{id} obey the same rules', async () => {
-    // The second door. A validator that only guards one route is decorative.
+  /**
+   * AND THE CONSOLE'S OWN SECOND DOOR OBEYS THE SAME RULES.
+   *
+   * This is the spec the merchant version became. `PATCH /v1/platform/salons/{id}`
+   * takes `PLATFORM_EDITABLE` — `MERCHANT_EDITABLE` plus `city`, `ownerPhone` and the
+   * five loyalty fields — so it is now the only general-purpose route that can write a
+   * ladder at all. A validator that guards one of two open doors is decorative, and the
+   * pair of doors is the same pair as before with one of them re-labelled.
+   */
+  it('and the same fields sent through PATCH /v1/platform/salons/{id} obey the same rules', async () => {
     const before = scalar(`select tiers::text from salon where id='${SALON_B}'`);
-    const res = await treq('PATCH', `/salons/${SALON_B}`, {
-      token: dashboard,
+    const res = await treq('PATCH', `/v1/platform/salons/${SALON_B}`, {
+      token: platform,
       body: {
         tiers: [
           { name: 'bronze', minVisits: 0, bonusPercent: 0 },
