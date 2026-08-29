@@ -1,21 +1,19 @@
 import { useState } from 'react';
 import { Link, useParams } from '@tanstack/react-router';
-import { fils, formatFils, moneyAriaLabel, percentOf, type Tier } from '@avo/types';
-import { Button, Card, ErrorState, Money, Segmented, Skeleton, Stepper, Toggle } from '@avo/ui';
+import { fils, moneyAriaLabel } from '@avo/types';
+import { Button, Card, ErrorState, Money, Skeleton, Stepper, Toggle } from '@avo/ui';
 import {
-  isCompleteLadder,
-  LOYALTY_LABEL,
   PLAN_LABEL,
   useAllPlatformSalons,
   usePlatformSalon,
   useUpdatePlatformSalon,
-  type LoyaltyMode,
   type PlatformSalonPatch,
   type PlatformSalonRecord,
 } from '../../api/platformSalons.js';
 import { DEPOSIT_MAX_FILS, DEPOSIT_MIN_FILS, DEPOSIT_STEP_FILS } from '../../api/platformConsole.js';
-import { TIER_LABEL, TIER_LADDER, type LadderTierName } from '../../api/loyalty.js';
+import { TIER_LADDER } from '../../api/loyalty.js';
 import { ApiError } from '../../api/client.js';
+import { SalonLoyalty } from './SalonLoyalty.js';
 import { SectionError, WriteError } from '../sectionState.js';
 
 /**
@@ -84,11 +82,28 @@ import { SectionError, WriteError } from '../sectionState.js';
  * produces three rows that have to be reassembled by timestamp, and it does it on
  * a route with no idempotency key.
  *
- * The tier ladder settles it on its own. `Loyalty.tsx` established the rule for
- * this exact data — "the draft lives in component state and is never written to
- * the cache" — because stepping Gold from 10 to 14 visits would otherwise fire
- * four writes and leave the salon on three ladders nobody chose along the way.
- * The console's editor steps the same ladder through the same validator.
+ * =========================================================================
+ * LOYALTY LEFT THIS SCREEN'S DRAFT ENTIRELY, AND NOT THIS SCREEN
+ * =========================================================================
+ * The mechanic, the tier ladder and the stamp target used to be three more fields
+ * in the batch above. They now belong to `<SalonLoyalty>`, rendered as the next
+ * card down, publishing through `PUT /salons/{id}/loyalty` on its own button.
+ *
+ * `PATCH` still ACCEPTS all three — they moved from `MERCHANT_EDITABLE` into
+ * `PLATFORM_ONLY_EDITABLE` when loyalty authority moved to AVO, not out of both,
+ * and this screen's batched save would still work. `SalonLoyalty.tsx` § WHY IT
+ * PUBLISHES THROUGH `PUT` carries the argument: two doors into `salon.tiers`, a
+ * different audit sentence in the log the MERCHANT now depends on, and a publish
+ * that can be shown to have taken effect rather than merely returning 200.
+ *
+ * The batching reason above is unaffected by that. It is a claim about fields
+ * travelling through ONE endpoint, and modules and deposit still do.
+ *
+ * THE BRANCHES CARD ALSO MOVED OUT OF THE FORM — up one level, beside the loyalty
+ * card. It is read-only, so it was never part of a draft; sitting inside
+ * `<EditorForm>` only meant it remounted whenever the modules/deposit draft was
+ * rebuilt, and it put a read-only card ABOVE the Save button that does not save
+ * it. Each button on this page now sits directly under the controls it writes.
  *
  * THE DRAFT IS REBUILT WHENEVER THE SERVER'S ROW CHANGES UNDERNEATH IT — the
  * `key` on `<EditorForm>`, which is `Controls`' pattern. That is the answer to the
@@ -221,6 +236,16 @@ export function SalonEditor() {
             busy={update.isPending}
             onSave={(patch) => update.mutate(patch)}
           />
+          {/*
+            NOT KEYED, AND NOT INSIDE `<EditorForm>`. It owns its own read, its own
+            draft and its own publish; mounting it inside the form would remount it
+            — and discard a ladder somebody was halfway through setting — every
+            time a modules or deposit save came back. Its `salonId` is the route
+            param rather than `record.id` for the same reason it fetches
+            separately: it does not depend on this screen's read having landed.
+          */}
+          <SalonLoyalty salonId={id} />
+          <BranchesCard record={record} />
         </>
       )}
 
@@ -305,19 +330,6 @@ interface Draft {
   shop: boolean;
   /** Integer fils. Never a KD float — non-negotiable #1. */
   depositFils: number;
-  mode: LoyaltyMode;
-  /**
-   * NULL MEANS THE SALON HAS NO STORED LADDER, and it is never replaced with an
-   * invented one. `DEFAULT_LOYALTY` lives in `api/src/services/salonOnboarding.ts`
-   * and every salon the wizard creates gets a full ladder from it whichever
-   * mechanic it starts on — so this is the legacy-row case, not the normal one.
-   * Copying those four rungs into the client would put a server default in a
-   * second place, and the console would then quietly publish a ladder AVO's
-   * onboarding defaults happened to hold on the day this file was written.
-   */
-  tiers: Tier[] | null;
-  /** Same, for the stamp card. Kept across a spell in tiers mode by the server. */
-  stampTarget: number | null;
 }
 
 function toDraft(r: PlatformSalonRecord): Draft {
@@ -325,38 +337,12 @@ function toDraft(r: PlatformSalonRecord): Draft {
     booking: r.modules.booking,
     shop: r.modules.shop,
     depositFils: r.depositFils,
-    mode: r.loyaltyMode,
-    tiers: r.tiers === null ? null : r.tiers.map((t) => ({ ...t })),
-    stampTarget: r.stampTarget,
   };
 }
 
 /** The remount key. Only the fields this screen can change are in it. */
 function serverDigest(r: PlatformSalonRecord): string {
   return JSON.stringify(toDraft(r));
-}
-
-/**
- * The rung's problem in the server's own terms, or null.
- *
- * MIRRORS `services/loyaltyRules.ts` RATHER THAN REPLACING IT. The server is the
- * control and refuses an invalid ladder with `threshold_not_above_tier_below`
- * whatever this says; this exists so an admin sees the problem beside the rung she
- * moved instead of as a banner after a round trip. The copy is the design's own
- * warning string, which the API's comment also quotes verbatim.
- *
- * BRONZE IS NOT CHECKED because Bronze is not editable — see `TierRow`. The server
- * locks it at 0 visits and 0 bonus (`bronze_is_locked`) and the draft is seeded
- * from a ladder that already satisfies that.
- */
-function tierProblem(tiers: Tier[], index: number): string | null {
-  const rung = tiers[index];
-  if (!rung || index === 0) return null;
-  const below = tiers[index - 1];
-  if (below && rung.minVisits <= below.minVisits) {
-    return `Must be more visits than ${TIER_LABEL[below.name as LadderTierName]}`;
-  }
-  return null;
 }
 
 /* --------------------------------------------------------------------- form */
@@ -374,69 +360,41 @@ function EditorForm({
   const server = toDraft(record);
 
   /*
-   * A LADDER IS EDITABLE ONLY IF THE API WOULD TAKE IT BACK — see
-   * `isCompleteLadder`, and § A SHORT LADDER below. `SAL-LUMIERE` ships from a
-   * plain seed with two rungs, so this is a real row and not a hypothetical.
+   * NOTHING BLOCKS THIS SAVE ANY MORE, AND THAT IS THE INTERESTING PART OF THE
+   * DIFF RATHER THAN A SIMPLIFICATION.
+   *
+   * This form used to carry three guards, all of them about loyalty: a per-rung
+   * "must be more visits than the rung below", and two switch guards for a
+   * mechanic being moved onto a side with nothing behind it. They went with the
+   * fields, to `SalonLoyalty.tsx`, which is the only place that can now publish
+   * them.
+   *
+   * What is left is two module toggles and a stepper the server's own range and
+   * the design's agree on (`parseDepositFils` refuses outside 1000–10000 fils;
+   * the design writes "1–10 KD"), so the controls cannot express a value the
+   * endpoint would reject. There is no invalid state to block on, and inventing
+   * one would be a guard with nothing behind it.
+   *
+   * THE OVER-BLOCK THIS REMOVES FOR GOOD IS WORTH ONE LINE. The first version of
+   * the old guard disabled Save whenever the active mechanic had nothing behind
+   * it, so `SAL-LUMIERE` — tiers mode, a two-rung legacy ladder — could not have
+   * its DEPOSIT changed: a disabled Save above two perfectly editable controls,
+   * found by opening the real screen. Separating the two writes makes that class
+   * of mistake unreachable rather than merely fixed.
    */
-  const editableLadder = isCompleteLadder(draft.tiers) ? draft.tiers : null;
-  const problems = (editableLadder ?? []).map((_, i) => tierProblem(editableLadder!, i));
-  const tiersInvalid = problems.some((p) => p !== null);
-
-  /*
-   * ==================== WHAT ACTUALLY BLOCKS A SAVE ====================
-   * Only a change the server would refuse — and that is NARROWER than "this salon's
-   * loyalty configuration is unusable", which is what this guard said first.
-   *
-   * THE OVER-BLOCK, AND HOW IT WAS FOUND. The first version disabled Save whenever
-   * the active mechanic had nothing behind it, so `SAL-LUMIERE` — tiers mode, a
-   * two-rung legacy ladder — could not have its DEPOSIT changed. Opening the real
-   * screen showed a disabled Save above two perfectly editable controls. Driven
-   * against the endpoint, both halves:
-   *
-   *   PATCH {"depositFils":6000}        on the 2-rung salon   →  200
-   *   PATCH {"loyaltyMode":"tiers"}     on the 2-rung salon   →  200   (already tiers)
-   *
-   * `services/loyaltyRules.ts` says exactly why, and this guard is now its mirror:
-   * a stored ladder is revalidated only when a request PUTS IT INTO EFFECT —
-   * `activatesStoredTiers = !suppliesTiers && current.mode !== 'tiers'`. A request
-   * that leaves the mechanic alone passes the ladder through untouched, whatever
-   * shape it is in. That narrowing exists on the server because the strict version
-   * locked such a salon out of editing anything at all; copying the strict version
-   * into the client would have reintroduced the same lockout one layer up.
-   *
-   * So: the tier CONTROLS are read-only whenever the ladder is not four rungs
-   * (`editableLadder === null`, above), and the SAVE is blocked only when the draft
-   * would switch the mechanic ONTO a side that has nothing behind it.
-   */
-  const activatesLadder = draft.mode === 'tiers' && server.mode !== 'tiers';
-  const unusableLadder = activatesLadder && editableLadder === null;
-  /*
-   * The mirror for stamps. It can only fire on a switch: `salon_loyalty_config_complete`
-   * guarantees a salon already in stamps mode has a target, so a null one here means
-   * the draft is moving onto the empty side.
-   */
-  const missingCard = draft.mode === 'stamps' && draft.stampTarget === null;
-  const invalid = tiersInvalid || unusableLadder || missingCard;
-
   const dirty = JSON.stringify(draft) !== JSON.stringify(server);
 
   /**
    * ONLY THE CHANGED FIELDS, which is `Controls`' rule and for its second reason
    * as well as its first: it narrows the lost-update window. An admin who only
-   * turned Shop on does not also overwrite another admin's tier edit with the
-   * ladder her screen happened to load.
+   * turned Shop on does not also overwrite another admin's deposit change with the
+   * value her screen happened to load.
    *
    * `modules` is sent as the PAIR because that is the wire shape the API defines
    * and `applyModules` splits it into two columns. The COLUMN spellings
    * (`moduleBooking` / `moduleShop`) are deliberately refused by the server — two
    * doors into one field is how the tier ladder acquired an unvalidated second
    * entrance, and the console's copy would be the one nobody was watching.
-   *
-   * THE LOYALTY FIELDS GO TOGETHER OR NOT AT ALL. `parseLoyaltyConfig` validates
-   * the WHOLE configuration whenever any loyalty key is present, filling what the
-   * request omits from the stored row — so sending `tiers` without `loyaltyMode`
-   * is safe, and sending a mode switch without the side it activates is the 400
-   * the guards above prevent.
    */
   function save() {
     const patch: PlatformSalonPatch = {};
@@ -444,40 +402,19 @@ function EditorForm({
       patch.modules = { booking: draft.booking, shop: draft.shop };
     }
     if (draft.depositFils !== server.depositFils) patch.depositFils = draft.depositFils;
-    if (draft.mode !== server.mode) patch.loyaltyMode = draft.mode;
-    /*
-     * A SHORT LADDER IS NEVER SENT. `parseTiers` refuses anything but four rungs
-     * ("Got 2."), so forwarding a stored two-rung ladder unchanged would turn a
-     * deposit edit into a 400 about tiers the admin never touched — which is the
-     * precise failure `services/loyaltyRules.ts` narrowed its own rule to avoid.
-     * It cannot be edited either, so it cannot have changed.
-     */
-    if (editableLadder !== null && JSON.stringify(editableLadder) !== JSON.stringify(server.tiers)) {
-      patch.tiers = editableLadder;
-    }
-    if (draft.stampTarget !== null && draft.stampTarget !== server.stampTarget) {
-      patch.stampTarget = draft.stampTarget;
-    }
     if (Object.keys(patch).length === 0) return;
     onSave(patch);
   }
 
   /*
-   * Each sentence names the change that cannot be made, not the salon's general
-   * condition — a short ladder is not a reason to tell somebody editing the deposit
-   * that nothing can be saved.
+   * "this salon is still running its saved setup" rather than "unsaved changes",
+   * because there are now TWO pending-change states on this page and they are
+   * different things: this one, and a loyalty ladder drafted but not published.
+   * Each status line names its own scope.
    */
-  const status = invalid
-    ? unusableLadder
-      ? draft.tiers === null
-        ? 'Switching to Tiers needs a ladder, and this salon has none on record.'
-        : `Switching to Tiers needs all ${TIER_LADDER.length} rungs, and this salon's ladder has ${draft.tiers.length}.`
-      : missingCard
-        ? 'Switching to Stamps needs a stamp card, and this salon has none on record.'
-        : 'Fix the highlighted tier before saving.'
-    : dirty
-      ? 'Unsaved changes — this salon is still running its saved setup.'
-      : 'No unsaved changes.';
+  const status = dirty
+    ? 'Unsaved changes — this salon is still running its saved modules and deposit.'
+    : 'No unsaved changes.';
 
   return (
     <>
@@ -546,102 +483,11 @@ function EditorForm({
         </Card>
       </div>
 
-      <Card className="saloned__card">
-        <div className="saloned__loyaltyhead">
-          <div>
-            <h3 className="saloned__cardtitle avo-display">Loyalty structure</h3>
-            <p className="saloned__cardsub">
-              Set this salon&rsquo;s reward mechanic and tune every threshold.
-            </p>
-          </div>
-          <Segmented
-            label="Loyalty mechanic"
-            value={draft.mode}
-            onChange={(mode) => setDraft((d) => ({ ...d, mode }))}
-            options={[
-              { value: 'tiers', label: LOYALTY_LABEL.tiers },
-              { value: 'stamps', label: LOYALTY_LABEL.stamps },
-            ]}
-          />
-        </div>
-
-        {draft.mode === 'tiers' ? (
-          editableLadder === null ? (
-            /*
-             * ======================= A SHORT LADDER =======================
-             * Two dead ends that look alike on screen and are different underneath,
-             * so they get different sentences.
-             *
-             * NO LADDER AT ALL — nothing to draw. The client does not invent one:
-             * `DEFAULT_LOYALTY` is a SERVER default (`services/salonOnboarding.ts`),
-             * and copying its four rungs here would let the console publish whatever
-             * AVO's onboarding happened to default to on the day this was written.
-             *
-             * A LADDER WITH FEWER THAN FOUR RUNGS — real, seeded, and live. It is
-             * SHOWN, read-only, because the salon is running it and hiding it would
-             * be the worse lie; and it is not editable, because `parseTiers` refuses
-             * to take back anything but four rungs. Repairing it belongs to
-             * `PUT /salons/{id}/loyalty`, the endpoint that owns publishing, on the
-             * salon's own dashboard.
-             */
-            <>
-              <p className="saloned__notice" role="note">
-                {draft.tiers === null
-                  ? 'This salon has no tier ladder on record, so there is nothing to tune here. Its own dashboard publishes one from Loyalty.'
-                  : `This salon is running a ${draft.tiers.length}-rung ladder from before the ladder was fixed at ${TIER_LADDER.length}. AVO can see it but not edit it — its own dashboard republishes it from Loyalty.`}
-              </p>
-              {draft.tiers !== null && draft.tiers.length > 0 ? (
-                <ul className="saloned__stored">
-                  {draft.tiers.map((tier) => (
-                    <li key={tier.name} className="saloned__storedrung">
-                      <span
-                        className="saloned__tierdot"
-                        data-tier={tier.name}
-                        aria-hidden="true"
-                      />
-                      <span className="avo-display">{TIER_LABEL[tier.name as LadderTierName]}</span>
-                      <span className="saloned__storedvalue">
-                        {tier.minVisits} visits · +{tier.bonusPercent}%
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </>
-          ) : (
-            <TierTable
-              tiers={editableLadder}
-              problems={problems}
-              busy={busy}
-              onChange={(index, patch) =>
-                setDraft((d) => ({
-                  ...d,
-                  tiers: (d.tiers ?? []).map((t, i) => (i === index ? { ...t, ...patch } : t)),
-                }))
-              }
-            />
-          )
-        ) : draft.stampTarget === null ? (
-          <p className="saloned__notice" role="note">
-            This salon has no stamp card on record, so it cannot be switched to Stamps here.
-            Its own dashboard publishes one from Loyalty.
-          </p>
-        ) : (
-          <StampPanel
-            target={draft.stampTarget}
-            busy={busy}
-            onChange={(stampTarget) => setDraft((d) => ({ ...d, stampTarget }))}
-          />
-        )}
-      </Card>
-
-      <BranchesCard record={record} />
-
       <div className="saloned__save">
-        <span className="saloned__status" role="status" data-dirty={dirty || invalid ? '' : undefined}>
+        <span className="saloned__status" role="status" data-dirty={dirty ? '' : undefined}>
           {status}
         </span>
-        <Button disabled={busy || invalid || !dirty} onClick={save}>
+        <Button disabled={busy || !dirty} onClick={save}>
           {busy ? 'Saving…' : 'Save changes'}
         </Button>
       </div>
@@ -681,215 +527,6 @@ function ModuleRow({
         edited from this slice.
       */}
       <Toggle checked={on} disabled={busy} onChange={onChange} label={`${name} module`} labelHidden />
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------- tiers */
-
-function TierTable({
-  tiers,
-  problems,
-  busy,
-  onChange,
-}: {
-  tiers: Tier[];
-  problems: Array<string | null>;
-  busy: boolean;
-  onChange: (index: number, patch: Partial<Tier>) => void;
-}) {
-  /*
-   * "Example — a Silver member topping up 10.000 KD gets 11.000 KD (+10%)."
-   *
-   * The design's sentence and the design's own choice of rung — the first with a
-   * bonus, falling back to the second. What is NOT the design's is the arithmetic:
-   * it computes `(10 + bonus / 10).toFixed(1)` in floating point and prints "11.0".
-   * `percentOf` is the function `services/topup.ts` uses to price a real top-up and
-   * `formatFils` is the one money formatter, so the figure here is the figure that
-   * would actually be credited, to three decimals. `Loyalty.tsx` settled this the
-   * same way for the merchant's own ladder.
-   */
-  const example = tiers.find((t) => t.bonusPercent > 0) ?? tiers[1];
-  const topUp = fils(10_000);
-
-  return (
-    <>
-      <div className="saloned__scroll">
-        <table className="saloned__tiers">
-          <caption className="avo-sr-only">
-            The four tier rungs, their visit thresholds and their top-up bonuses.
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Tier</th>
-              <th scope="col">Visits required</th>
-              <th scope="col">Top-up bonus</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tiers.map((tier, index) => (
-              <TierRow
-                key={tier.name}
-                tier={tier}
-                index={index}
-                problem={problems[index] ?? null}
-                busy={busy}
-                onChange={(patch) => onChange(index, patch)}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {example ? (
-        <p className="saloned__example">
-          Example — a {TIER_LABEL[example.name as LadderTierName]} member topping up{' '}
-          {formatFils(topUp)} KD gets{' '}
-          {formatFils(fils(topUp + percentOf(topUp, example.bonusPercent)))} KD (+
-          {example.bonusPercent}%).
-        </p>
-      ) : null}
-    </>
-  );
-}
-
-/** The design's clamps for the two steppers. `AVO Owner Console.dc.html:1327`. */
-const VISITS_MAX = 60;
-const BONUS_MAX = 50;
-
-function TierRow({
-  tier,
-  index,
-  problem,
-  busy,
-  onChange,
-}: {
-  tier: Tier;
-  index: number;
-  problem: string | null;
-  busy: boolean;
-  onChange: (patch: Partial<Tier>) => void;
-}) {
-  const locked = index === 0;
-  const label = TIER_LABEL[tier.name as LadderTierName];
-
-  return (
-    <tr data-bad={problem ? '' : undefined}>
-      <th scope="row" className="saloned__tiername">
-        <span className="saloned__tierdot" data-tier={tier.name} aria-hidden="true" />
-        <span className="avo-display">{label}</span>
-      </th>
-      {locked ? (
-        /*
-         * BRONZE IS THE FLOOR: 0 visits, 0 bonus, and the API refuses anything else
-         * with `bronze_is_locked` ("Bronze carries no bonus. Set the bonus on Silver
-         * and above."). The design draws live steppers on it; they cannot be wired
-         * to anything the server would accept.
-         *
-         * Rendered as words rather than as disabled steppers, which is the ruling
-         * `Loyalty.tsx` already made for the same rung: "a disabled input invites a
-         * merchant to wonder what unlocks it."
-         */
-        <td colSpan={2} className="saloned__tierlocked">
-          Everyone starts here · no bonus · not editable
-        </td>
-      ) : (
-        <>
-          <td>
-            <Stepper
-              size="sm"
-              label={`${label} visits required`}
-              value={tier.minVisits}
-              min={0}
-              max={VISITS_MAX}
-              step={1}
-              disabled={busy}
-              onChange={(minVisits) => onChange({ minVisits })}
-              format={(v) => <span className="avo-display">{v}</span>}
-              valueText={`${tier.minVisits} visits`}
-            />
-          </td>
-          <td>
-            <Stepper
-              size="sm"
-              label={`${label} top-up bonus`}
-              value={tier.bonusPercent}
-              min={0}
-              /*
-               * The design clamps at 50 and `TierSchema` allows up to 100. The
-               * DESIGN'S clamp is used, because it is the drawn control and a
-               * console that can hand a salon a 90% top-up bonus in two dozen
-               * clicks is a money control with no ceiling anybody chose. The
-               * server's 100 remains the enforcement.
-               */
-              max={BONUS_MAX}
-              step={1}
-              disabled={busy}
-              onChange={(bonusPercent) => onChange({ bonusPercent })}
-              format={(v) => <span className="saloned__bonus avo-display">+{v}%</span>}
-              valueText={`plus ${tier.bonusPercent} percent`}
-            />
-            {problem ? <div className="saloned__tierwarn">{problem}</div> : null}
-          </td>
-        </>
-      )}
-    </tr>
-  );
-}
-
-/* ------------------------------------------------------------------- stamps */
-
-function StampPanel({
-  target,
-  busy,
-  onChange,
-}: {
-  target: number;
-  busy: boolean;
-  onChange: (next: number) => void;
-}) {
-  /*
-   * THE DESIGN CLAMPS 4–12 AND THE SERVER ACCEPTS 1–50, so a stored target can sit
-   * outside the drawn control's range — `seed.ts` and the wizard both use 8, but a
-   * salon set to 3 through the merchant's own Loyalty screen is a real row.
-   *
-   * The bounds WIDEN to include whatever is stored rather than clamping it. A
-   * stepper rendered with `value` below its `min` would pull the number into range
-   * on the first press and save a change the admin did not ask for — a silent edit,
-   * which is worse than a control that stretches.
-   */
-  const min = Math.min(4, target);
-  const max = Math.max(12, target);
-
-  return (
-    <div className="saloned__stamps">
-      <div>
-        <p className="saloned__cardsub">Stamps to earn a free service</p>
-        <Stepper
-          label="Stamps to earn a free service"
-          value={target}
-          min={min}
-          max={max}
-          step={1}
-          disabled={busy}
-          onChange={onChange}
-          format={(v) => <span className="saloned__stampnum avo-display">{v}</span>}
-          valueText={`${target} stamps`}
-        />
-      </div>
-      {/*
-        The design's card of dots, drawn EMPTY. Its prototype fills the first three
-        ("i < 3 ? '#6E7F6C' : 'transparent'") because it is showing a specimen
-        customer; this is a salon-wide setting and there is no member in view. Three
-        filled dots here would be a stamp count belonging to nobody.
-      */}
-      <ul className="saloned__dots" aria-hidden="true">
-        {Array.from({ length: target }, (_, i) => (
-          <li key={i} className="saloned__dot" />
-        ))}
-      </ul>
-      <p className="saloned__example saloned__example--stamps">
-        One stamp per visit or shop purchase · no top-up bonus in stamps mode.
-      </p>
     </div>
   );
 }
