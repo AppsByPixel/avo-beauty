@@ -87,10 +87,17 @@ export const A_SERVICE = 'SV-01';
 /**
  * A branch at salon A. `api/src/db/seed.ts` — `BR-SAL`, Salmiya.
  *
- * Only ever used as the `{bid}` in a cross-salon probe, where the point is that
+ * Mostly used as the `{bid}` in a cross-salon probe, where the point is that
  * `requireSameSalon` refuses BEFORE the branch is looked up. A made-up id would
  * make a 404-instead-of-403 indistinguishable from the tenancy check running too
  * late, which is the thing those specs are for.
+ *
+ * "Only ever" until `reports-applied-deposit.test.ts`, which also uses it as a
+ * REAL branch — the `branch_id` on its member's opening-balance `adjustment`,
+ * matching `api/src/db/seed.ts` § "the opening balances", whose own opening
+ * entries carry `BRANCH_SALMIYA`. Corrected rather than left standing: an "only
+ * ever" that has stopped being true is the pattern LANES.md § the parkOutbox
+ * entry is about.
  */
 export const A_BRANCH = 'BR-SAL';
 /** Salon A's seeded happy hour — `api/src/db/seed.ts`. All branches, x2visit, ON. */

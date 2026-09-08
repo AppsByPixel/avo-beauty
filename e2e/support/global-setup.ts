@@ -283,6 +283,7 @@ export async function setup(): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
+  await reportWalletDrift();
   await dropRunDatabaseIfOurs();
   await removeSessionCache();
   // On the same lifecycle as the process whose output it holds. Never throws,
@@ -329,6 +330,109 @@ async function removeSessionCache(): Promise<void> {
     rmSync(sessionCachePath(), { force: true });
   } catch {
     /* nothing here is worth failing a run over */
+  }
+}
+
+/**
+ * THE WALLET RECONCILIATION CENSUS — `db:verify` invariant 5, measured over
+ * everything this run left behind, and PRINTED EVERY TIME.
+ *
+ * The invariant is `member.balance_fils = sum(member_wallet credits − debits)`.
+ * `api/src/db/seed.ts` § "the opening balances" is where it was first found to be
+ * false and made true: an opening fixture balance is a real credit and gets a
+ * real ledger pair, because "a balance with no originating entry is a hole in
+ * that record, not a fixture convenience".
+ *
+ * WHY IT IS HERE AND NOT IN A SPEC. It is a property of the WHOLE run, and a
+ * spec can only ever see the files that happened to run before it — vitest does
+ * not order files alphabetically. `globalSetup`'s teardown is the one hook
+ * guaranteed to run after every file and before the database is given back, so
+ * this is the only place the question can be asked once about everything.
+ *
+ * WHY IT IS A CENSUS AND NOT AN ASSERTION, WHICH IS THE WHOLE DESIGN DECISION.
+ * Drift here is not always a defect. `adjustments.test.ts` § `fund()` sets
+ * `balance_fils` with SQL on purpose, because a shortfall spec needs a specific
+ * balance and there is no endpoint that produces one; that member will always
+ * drift and should. A throw would therefore be permanently red for a legitimate
+ * technique, and — worse — it would fail in a run teardown, which cannot name
+ * the file that wrote the row and cannot be reproduced by re-running that file
+ * alone. It would also turn one lane's fixture debt into every lane's red gate.
+ *
+ * A WARNING THAT FIRES EVERY RUN IS NOISE PEOPLE LEARN TO READ PAST — this
+ * repository has written that sentence about a stale comment, a cached green and
+ * a skipped int spec. So this does not warn. It prints a COUNT and the drifting
+ * ids, unconditionally, as a measurement: the number is the signal, and a number
+ * that grows names the fixture that grew it. No hand-kept list of expected
+ * drifters, because a hand-kept ledger of exceptions is the thing that rotted
+ * `DYNAMIC_PERMISSION` in `permission-census.test.ts` within a day.
+ *
+ * WHAT IT MEASURED WHEN IT LANDED, over the full 38-file suite:
+ *
+ *     7 of 24 members reconcile to their wallet ledger
+ *
+ * which is the number this line exists to make visible, because nobody knew it.
+ * Every drifter is a fixture member whose balance was INSERTed or UPDATEd by
+ * SQL, and the SIGN tells you which kind:
+ *
+ *   POSITIVE — the balance is ahead of the ledger. An opening balance with no
+ *       originating entry: the harness's own `9001`, and one per file that
+ *       clones a member with a balance (`QA-RPT-0001` 200.000, `QA-RES-000{1,2}`
+ *       200.000 each, `QA-DEP-0001`, `QA-NSW-0001`, `QA-ORD-0001`, the four
+ *       `QA-CMP-000n`). The standing convention in this directory, and a real
+ *       gap: `api/src/db/seed.ts` § "the opening balances" settled that an
+ *       opening balance is a real credit and gets a real pair, and the
+ *       convention here never caught up.
+ *   NEGATIVE — the LEDGER is ahead of the balance, and this is the shape worth
+ *       looking at twice. `QA-ACC-0001` by −8.000 and `QA-GW-0001` by −239.000
+ *       when this landed. It means wallet legs exist that the balance does not
+ *       reflect, which is either a fixture that reset `balance_fils` after the
+ *       API had moved it, or a real cached-aggregate defect. On these two it is
+ *       the former, and each has a named cause: `account.test.ts` § `setBalance`
+ *       UPDATEs hers on purpose, and `QA-GW-0001`'s is reset by this harness's
+ *       own `seedQaMember()` — which runs once per FILE, so every charge an
+ *       earlier file drove through her is still in the ledger with the balance
+ *       wound back. A negative drift on a member NOBODY re-fixtures would be the
+ *       other thing, and is what this census is for.
+ *   `adjustments.test.ts`'s two, whatever it last funded. LEGITIMATE, per above.
+ *
+ * `reports-applied-deposit.test.ts` is the one file here whose member does NOT
+ * drift, because it posts her opening balance the way the seed does. That is the
+ * pattern the rest of this directory could adopt one file at a time, and this
+ * count is how anyone would know it was working.
+ */
+async function reportWalletDrift(): Promise<void> {
+  if (!process.env.AVO_QA_DB) return;
+  try {
+    const { psql } = await import('./tenancy-harness.js');
+    const out = psql(`
+      WITH d AS (
+        SELECT m.id,
+               m.balance_fils - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                                               ELSE -le.amount_fils END), 0) AS diff
+          FROM member m
+          LEFT JOIN ledger_entry le
+                 ON le.member_id = m.id AND le.account = 'member_wallet'
+         GROUP BY m.id, m.balance_fils)
+      SELECT format('%s of %s members reconcile to their wallet ledger%s',
+                    count(*) FILTER (WHERE diff = 0),
+                    count(*),
+                    CASE WHEN count(*) FILTER (WHERE diff <> 0) = 0 THEN ''
+                         ELSE '; drifting: ' || (
+                           SELECT string_agg(format('%s by %s fils', id, diff), ', ' ORDER BY id)
+                             FROM d WHERE diff <> 0)
+                    END) AS census
+        FROM d;
+    `);
+    // The `format()` result is the only interesting line psql prints.
+    const line = out
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.includes('reconcile to their wallet ledger'));
+    if (!line) return;
+    // eslint-disable-next-line no-console
+    console.log(`[lane D] wallet census (db:verify invariant 5) — ${line}`);
+  } catch {
+    /* nothing here is worth failing a run over — see dropRunDatabaseIfOurs */
   }
 }
 
