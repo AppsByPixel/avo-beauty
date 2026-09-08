@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_COMMISSION, fils, formatFils, type Salon } from '@avo/types';
+import { fils, formatFils, type Salon } from '@avo/types';
 import { Button, Card, ErrorState, Pill, Skeleton, Stepper, TextField, Toggle } from '@avo/ui';
 import { useSalonBookings } from '../api/bookings.js';
 import { useSalon } from '../api/salon.js';
@@ -16,8 +16,8 @@ import { SectionError, WriteError } from './sectionState.js';
 /**
  * Merchant → Settings.
  *
- * Six panels, in the design's order: optional modules, booking deposit,
- * business hours, branches, WhatsApp, and AVO's commission.
+ * Five panels, in the design's order: optional modules, booking deposit,
+ * business hours, branches, and WhatsApp.
  *
  * NOT BUILT HERE, DELIBERATELY: the brand kit (logo upload, palette,
  * typography), social links, and Your plan & invoices. The first two are a
@@ -27,12 +27,41 @@ import { SectionError, WriteError } from './sectionState.js';
  * prototype fixtures. Rendering them would put invented money on a merchant's
  * billing screen.
  *
- * COMMISSION IS SHOWN HERE, AND ONLY HERE.
- * api-contract.md: commission is "merchant-visible, customer-never". This is the
- * merchant surface, so it appears. The rates come from `DEFAULT_COMMISSION` in
- * @avo/types — the same constant `commissionFor()` prices a real top-up with —
- * rather than from the design's typed strings, so the panel cannot drift from
- * what a merchant is actually charged.
+ * COMMISSION IS NOT SHOWN HERE, AND IT USED TO BE — DECISION 84.
+ *
+ * A sixth panel, "AVO commission on top-ups", rendered the KNET and card rates on
+ * this screen. It is gone. Aftab: "Hide commissions from the settings (Merchants
+ * will not see anything related to commissions)." That REVERSES
+ * api-contract.md's "merchant-visible, customer-never" — the contract makes the
+ * merchant the one surface that MAY see a fee — so this is a capability being
+ * WITHDRAWN by the client, not a defect being fixed, and that contract line is now
+ * wrong rather than unimplemented. Trunk owns the contract; this column owns the
+ * screen.
+ *
+ * DO NOT RE-ADD IT FROM THE DESIGN BUNDLE. `AVO Merchant Dashboard.dc.html` still
+ * draws the panel, and CLAUDE.md says build the design faithfully — so the next
+ * session to diff this screen against the artboard will find a card missing, be
+ * right about the difference, and be wrong about the fix. The design predates the
+ * instruction.
+ *
+ * REMOVING IT ALSO CLOSES A DEFECT, which is the useful half of the change. The
+ * panel read the COMPILED LAUNCH DEFAULT out of @avo/types, while the rate a
+ * top-up is actually priced at is a `platform_settings` row the owner console
+ * edits under `controls`. This lane proved the divergence on a real payment: one
+ * 20.000 KD card top-up recorded fee 550 at the compiled default and 650 after a
+ * PATCH, with the compiled constant unchanged. So the panel showed a merchant a
+ * figure that was correct until the owner first moved a stepper and stale
+ * afterwards, and it could not do better from this column: the live row is
+ * `GET /v1/platform/settings`, gated `controls`, a platform permission no merchant
+ * holds. The api/ fix it asked for — serve a salon its own current rates — is no
+ * longer owed to this screen, because this screen no longer asks.
+ *
+ * NOTHING ON THE SERVER NEEDED TO CHANGE. `feeFils` is already withheld from every
+ * merchant-facing response and no report carries a fee column
+ * (`api/src/routes/activity.ts`, `routes/members.ts` and `routes/topups.ts` each
+ * say so in their own words), so this panel was the whole merchant-visible
+ * surface. The rate leaving the SHIPPED JAVASCRIPT is a separate question from the
+ * card leaving the screen — see the commit for the bundle check.
  */
 
 const DEPOSIT_MIN = 1_000; // 1 KD, and the API's own floor
@@ -101,12 +130,17 @@ export function Settings() {
         <DepositPanel salon={salon} update={update} />
         <BusinessHoursPanel salon={salon} />
       </div>
+      {/*
+        * `settings__stack` IS GONE WITH THE SECOND CARD IT EXISTED TO SPACE. It
+        * was a flex column with an 18px gap holding WhatsApp above Commission;
+        * with one child it renders identically to the card sitting in the grid
+        * cell directly, so keeping it would leave a wrapper whose only reason is
+        * a sibling that no longer exists. Its rule is out of app.css too — this
+        * was its only user.
+        */}
       <div className="settings__pair">
         <BranchesPanel salon={salon} />
-        <div className="settings__stack">
-          <WhatsAppPanel salon={salon} update={update} />
-          <CommissionPanel />
-        </div>
+        <WhatsAppPanel salon={salon} update={update} />
       </div>
 
       {update.isError ? (
@@ -616,54 +650,6 @@ function WhatsAppPanel({ salon, update }: { salon: Salon | undefined; update: Up
           label="WhatsApp notifications"
         />
       )}
-    </Card>
-  );
-}
-
-/* --------------------------------------------------------------- commission */
-
-function CommissionPanel() {
-  /*
-   * THE PREMISE THIS PANEL WAS BUILT ON EXPIRED, and this comment is corrected in
-   * the session that noticed rather than left to be believed. It read:
-   * "`commissionFor` prices a real top-up from exactly these numbers, so a rate
-   * change is one edit in @avo/types and this panel follows it." That was true
-   * until `services/topup.ts` began reading `platform_settings` inside the top-up
-   * transaction — the live rate is now a database row the owner console EDITS
-   * (Controls), and this lane proved the divergence on a real payment: the same
-   * 20.000 KD card top-up recorded fee 550 at the compiled default and 650 after
-   * a PATCH, with `DEFAULT_COMMISSION` unchanged.
-   *
-   * So what this panel shows is the LAUNCH DEFAULT, correct until the owner first
-   * moves a stepper and stale after. It cannot do better from this column: the
-   * live row is `GET /v1/platform/settings`, gated `controls` — a platform
-   * permission no merchant holds, correctly. The fix is an api/ change (serve a
-   * salon its current rates on its own read), reported to trunk in the row-365
-   * lane report. Faking it with a hardcoded copy of today's live value would be
-   * the same defect with extra steps.
-   */
-  const { knetFlatFils, cardPercent, cardFlatFils } = DEFAULT_COMMISSION;
-
-  return (
-    <Card className="settings__card">
-      <h2 className="settings__title avo-display">AVO commission on top-ups</h2>
-      <div className="settings__hours-row">
-        <span className="settings__hours-label">KNET</span>
-        <span className="settings__hours-value">{knetFlatFils} fils flat</span>
-      </div>
-      <div className="settings__hours-row settings__hours-row--divided">
-        <span className="settings__hours-label">Card · Apple Pay</span>
-        <span className="settings__hours-value">
-          {cardPercent}% + {cardFlatFils} fils
-        </span>
-      </div>
-      {/*
-        The design's panel is these two rows and nothing else. No explanatory
-        line is added: the customer-facing half of this question is the one open
-        conflict in the bundle (the wallet design shows a fee, the contract and
-        the live AvoRewards app say it never reaches a customer), and product
-        copy about commission is not a thing to invent on a merchant's screen.
-      */}
     </Card>
   );
 }
