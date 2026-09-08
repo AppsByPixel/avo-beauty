@@ -3953,6 +3953,132 @@ a:hover {
   background: var(--avo-surface-alt);
 }
 
+/* ---- the fifth card: artist performance ---- */
+/*
+ * `Reports.tsx` § data-wide carries the argument. Eight columns and every row,
+ * because the two unattributed rows are what account for the headline and a
+ * three-row preview would cut them off. The grid is 1fr 1fr, so this spans both.
+ */
+.reports__card[data-wide] {
+  grid-column: 1 / -1;
+}
+
+/*
+ * The section max-width is 1000px and eight columns of money do not fit it
+ * comfortably on a laptop, so the TABLE scrolls sideways inside the card rather
+ * than the page scrolling or the cells ellipsising. A money figure clipped to
+ * "15.0…" is not a smaller version of the number; it is a different one.
+ */
+.reports__card[data-wide] .reports__table {
+  overflow-x: auto;
+}
+
+.reports__card[data-wide] .reports__cols,
+.reports__card[data-wide] .reports__row {
+  /*
+   * WIDE ENOUGH THAT NO HEADER ELLIPSISES. `Deposit applied KD` is the longest
+   * and it is the SERVER's header, verbatim — this client does not get to shorten
+   * it, and "Deposit appli…" beside a money figure invites the reader to guess
+   * which of two deposit columns she is looking at. Measured against the eight
+   * headers at 10px/0.05em, not rounded to a nice number.
+   */
+  min-width: 860px;
+}
+
+/*
+ * The name column earns twice the width of a figure. Every other cell is a count,
+ * a short enum or three decimals, and `flex: 1` across eight of them left
+ * "Rana Al-Sabah" ellipsised beside oceans of space under "Customers".
+ */
+.reports__card[data-wide] .reports__col:first-child,
+.reports__card[data-wide] .reports__cell:first-child {
+  flex: 2;
+}
+
+/*
+ * HEADERS WRAP HERE INSTEAD OF ELLIPSISING, and the alternative was worse.
+ *
+ * Every row on this screen is its own flex container with `flex: 1` cells, which
+ * is what keeps the header row and the data rows in the same columns. Eight
+ * columns of that gives `Deposit applied KD` — the SERVER's header, verbatim,
+ * which this client does not get to shorten — about 96px, and it rendered as
+ * "Deposit appli…". A truncated header over a money column asks the reader to
+ * guess which of two deposit figures she is looking at.
+ *
+ * Sizing the columns individually would have meant either hardcoding eight
+ * nth-child weights (brittle the moment the server adds a column) or content-based
+ * widths (which cannot work: each row is a separate flex context, so the header
+ * row and the data rows would resolve DIFFERENT widths and stop lining up). Two
+ * lines of header costs nine pixels of card height and cannot be wrong for any
+ * column set.
+ */
+.reports__card[data-wide] .reports__col {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  align-self: flex-end;
+}
+
+/* Money and counts read right-aligned so the decimal points line up down the
+   column — the only way the rows can be added up by eye at all. Keyed off the
+   column TYPE on both the header and the cell (`Reports.tsx` § data-numeric), not
+   off a position, so an added or reordered column cannot leave a left-aligned
+   header over a right-aligned column of money. */
+.reports__card[data-wide] .reports__cell[data-numeric],
+.reports__card[data-wide] .reports__col[data-numeric] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * A GROUP HEADING, NOT A ROW. `Reports.tsx` § AttributedRows: the two
+ * unattributed rows must not read as positions five and six of the ranking, and
+ * the heading is what stops that at a glance rather than after the merchant has
+ * noticed 8.000 sitting below two zeros.
+ */
+.reports__group {
+  margin: 14px 0 2px;
+  padding: 0 12px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--avo-text-muted-label);
+}
+
+/*
+ * The unattributed rows are QUIETED, never hidden and never dropped when zero.
+ * Quieter says "a different kind of row"; absent would say "no such money", and
+ * the difference between "this artist earned nothing" and "this money has no
+ * artist" is the whole reason both rows exist.
+ */
+.reports__row[data-unattributed] {
+  color: var(--avo-text-muted);
+}
+
+.reports__note {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--avo-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.reports__note p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
+/* The true-zero period, named. Not a substitute for the table — see the note's
+   own comment for why the roster still renders. */
+.reports__note-empty {
+  color: var(--avo-ink) !important;
+  font-weight: 500;
+}
+
 /* ================================================== console · salons list == */
 
 .salons {

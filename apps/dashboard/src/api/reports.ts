@@ -13,16 +13,26 @@ import { ApiError } from './client.js';
  * formatting all arrive decided, and money arrives as INTEGER FILS in the JSON
  * (the CSV is where the server formats it, once).
  *
- * EACH KIND IS ITS OWN QUERY, not one query for four cards, because each kind is
+ * EACH KIND IS ITS OWN QUERY, not one query for five cards, because each kind is
  * gated on the permission of the section it EXPORTS:
  *
  *   customers → team          sales → dashboard
  *   best-selling-services → appointments        products-sold → shop
+ *   artist-performance → team
  *
  * A front-desk manager may hold `dashboard` and not `team`, so Sales loads while
  * Customers answers 403 ON THE SAME SCREEN. That is not an error state — it is
  * the permission ledger rendering — and it is why a single combined query would
- * be wrong twice: one 403 would take down three cards someone is allowed to see.
+ * be wrong twice: one 403 would take down four cards someone is allowed to see.
+ *
+ * `artist-performance` IS `team` AND NOT `dashboard`, and the difference is not
+ * cosmetic. Its rows name individuals and what each of them earned, which is
+ * personnel data; the seeded `frontdesk` account holds `appointments` and NOT
+ * `team`, so a `dashboard` gate — or an `appointments` one, which the appointment
+ * counts would have suggested — would put every artist's takings on the front-desk
+ * tablet. The client asserts nothing about this: the gate is the server's
+ * (`api/src/services/reports.ts` § REPORT_PERMISSION), and this comment exists so
+ * that a future edit here does not "tidy" the mapping toward the obvious answer.
  *
  * Reports deliberately has NO permission chip of its own; "who may export
  * customer PII" is queued for the client (DECISIONS.md #9). If the mapping
@@ -35,8 +45,42 @@ export const REPORT_KINDS = [
   'sales',
   'best-selling-services',
   'products-sold',
+  'artist-performance',
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
+
+/**
+ * The kinds whose rows are not a three-row preview of a file but a TABLE the
+ * merchant reads on the card. See `Reports.tsx` for why artist-performance is the
+ * only one, and why a preview slice would be wrong there specifically.
+ */
+export const REPORT_FULL_TABLE: ReadonlySet<ReportKind> = new Set<ReportKind>([
+  'artist-performance',
+]);
+
+/**
+ * The shape of the SKELETON, per kind — how many column and row bars to draw
+ * before the wire has answered.
+ *
+ * A HINT, NOT A CONTRACT, and it is here rather than inferred because at skeleton
+ * time there is nothing to infer FROM: `columns` arrives with the data. The four
+ * original kinds all have four columns and show three rows, which is why the
+ * numbers were literals in the renderer; artist-performance has eight columns and
+ * shows every row, so those literals drew a four-column, three-row placeholder
+ * that then jumped to an eight-column, six-row table. A skeleton whose shape does
+ * not match what replaces it is a worse loading state than none: it promises a
+ * layout and then reflows the screen out from under the reader.
+ *
+ * If the server's column count changes, the placeholder is one bar out for one
+ * frame. Nothing reads these numbers as truth about the data.
+ */
+export const REPORT_SKELETON: Record<ReportKind, { columns: number; rows: number }> = {
+  customers: { columns: 4, rows: 3 },
+  sales: { columns: 4, rows: 3 },
+  'best-selling-services': { columns: 4, rows: 3 },
+  'products-sold': { columns: 4, rows: 3 },
+  'artist-performance': { columns: 8, rows: 6 },
+};
 
 /** The design's card descriptions, verbatim. Titles arrive on the wire. */
 export const REPORT_DESC: Record<ReportKind, string> = {
@@ -44,6 +88,26 @@ export const REPORT_DESC: Record<ReportKind, string> = {
   sales: 'Transactions and gross by day',
   'best-selling-services': 'Ranked by bookings',
   'products-sold': 'Units and revenue by product',
+  /**
+   * "SERVICE AND SHOP REVENUE" IS THE DENOMINATOR, AND IT IS THE POINT OF THE
+   * SENTENCE - owed to this lane by lane A deliberately, rather than left to be
+   * inferred from the rows.
+   *
+   * A TOP-UP GETS NO ROW HERE AT ALL. That is not an omission: money loaded into a
+   * wallet is not revenue in any period, and it becomes revenue on the CHARGE this
+   * report already attributes to an artist. A card that said "revenue" plainly
+   * would invite a merchant to reconcile this headline against her top-up total and
+   * conclude the report has lost money, when what it has avoided is a double count.
+   * Naming the two things that DO produce a row is the only way the denominator
+   * reads correctly from the card alone.
+   *
+   * "Attributed to the artist who performed it" is the second half, and it is the
+   * answer Aftab gave when asked WHOSE earnings: the person who did the service,
+   * not whoever rang the charge up at the desk. A front-desk manager who takes
+   * payment for four artists' clients all afternoon tops a report built on the
+   * wrong end of that question.
+   */
+  'artist-performance': 'Service and shop revenue, attributed to the artist who performed it',
 };
 
 /** `GET /salons/{id}/metrics`' vocabulary, reused by the addendum on purpose. */
