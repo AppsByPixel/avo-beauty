@@ -94,6 +94,7 @@ import { fils, formatFils } from '@avo/types';
 import type { Db } from '../db/client';
 import { badRequest } from '../http/errors';
 import { at, int, PERIOD_DAYS, type Period } from './metrics';
+import { revenueJoin, revenueLeftJoin } from '../money/revenue';
 import type { PermissionName } from '../auth/principal';
 
 /**
@@ -371,14 +372,31 @@ export interface ReportScope {
  * and the CHECK constraint is what exposed it — the aggregate was only ever run
  * against real rows afterwards, which is why it did not ship.
  *
- * Every revenue sum below is therefore `sum(-x)`, written with the negation VISIBLE
- * at the call site rather than hidden in an `abs()`. `abs()` would also mask a row
- * whose sign was wrong for some other reason, and a wrong sign is exactly the kind
- * of thing a report should surface rather than launder.
+ * THE NEGATION IS NO LONGER WRITTEN HERE, AND NOR IS THE REST OF THE SUM. Every
+ * revenue figure below reads `transaction_revenue` (migration 0042, money/revenue.ts)
+ * — one relation, one expression, shared with the void handler that has to hand the
+ * same number back. Three call sites used to write the arithmetic out and one of
+ * them was right; see § THE FIX and DECISIONS.md #81. The negation is still VISIBLE
+ * rather than an `abs()`, one layer down in the view, for the reason it always was:
+ * `abs()` would mask a row whose sign was wrong for some other reason, and a wrong
+ * sign is exactly the kind of thing a report should surface rather than launder.
  *
  * `shop_order_line.line_total_fils` is the exception: it is a PRICE, not a wallet
  * movement, and `shop_order_line_unit_price_positive` keeps it positive. It is summed
  * as-is, and the difference is stated here so the inconsistency reads as deliberate.
+ *
+ * THE FIX
+ * -------
+ * `transaction.amount_fils` on a BOOKED appointment is `-(gross - applied deposit)`:
+ * the part that came out of her spendable balance at the counter. The deposit half
+ * left her wallet earlier and became salon revenue at charge time, as a
+ * `deposit_held` debit on the charge's own ledger entries. `sales` and
+ * `best-selling-services` summed the wallet movement alone and therefore understated
+ * every booked appointment by its deposit — a 6.000 service against a 5.000 deposit
+ * exported as 1.000, an appointment a deposit covered outright as 0.000, under a
+ * column headed `Gross KD`. Measured on a driven window: 23.5% of takings missing.
+ * `earned_fils` on the view is the whole visit, and it is the same expression the
+ * void's refund is computed from.
  */
 const NOT_VOIDED = sql`AND NOT EXISTS (
       SELECT 1 FROM "transaction" r
@@ -470,8 +488,22 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
      * wallet, which is a liability the salon now owes her, not a sale; counting it
      * would make gross rise when nothing had been sold. NOT `deposit_hold`, which is
      * money moved into escrow and settles later as part of the charge, so counting
-     * it too would bill the same service twice. NOT `adjustment`, which is the void
-     * mechanism itself.
+     * it too would bill the same service twice. NOT `deposit_return`, which is money
+     * going back to her. NOT `adjustment`, which is the void mechanism itself.
+     *
+     * AND GROSS IS THE WHOLE VISIT, WHICH IT WAS NOT UNTIL DECISIONS.md #81. This
+     * query summed `-t.amount_fils` — the WALLET movement — so a booked appointment
+     * arrived net of the deposit that had already been earned against it. It reads
+     * `rev.earned_fils` now: the same `transaction_revenue` expression the void
+     * refunds from and `artist-performance` reports as `Earned KD`, which is what
+     * makes those two figures reconcile for a period rather than merely look
+     * similar. `count(*)` is unchanged — a visit is still one transaction, however
+     * it was paid for.
+     *
+     * `revenueJoin` is INNER, and safely so: this WHERE clause already restricts to
+     * settled `charge`/`shop` rows, which is exactly the view's own restriction. A
+     * row that failed to match would take its `Transactions` count with it rather
+     * than quietly contributing zero money.
      *
      * VOIDS ARE NETTED OUT by excluding the reversed row entirely — see NOT_VOIDED.
      * Excluding rather than subtracting is what keeps `Transactions` honest too: a
@@ -486,8 +518,9 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
       SELECT to_char((t.created_at AT TIME ZONE ${scope.timezone})::date, 'YYYY-MM-DD') AS day,
              br.name AS branch,
              count(*) AS txns,
-             coalesce(sum(-t.amount_fils), 0)::bigint AS gross
+             coalesce(sum(rev.earned_fils), 0)::bigint AS gross
         FROM "transaction" t
+        ${revenueJoin('t')}
         JOIN branch br ON br.id = t.branch_id
        WHERE t.salon_id = ${scope.salonId}
          AND t.kind IN ('charge', 'shop')
@@ -539,13 +572,38 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
      * CANCELLED BOOKINGS ARE EXCLUDED. A cancellation is not a sale, and counting it
      * would rank a service highly for being abandoned. `no_show_returned` is KEPT: a
      * no-show whose deposit went back is still a booking the salon held a slot for,
-     * and its revenue contribution falls out naturally as zero because nothing
-     * settled.
+     * and its revenue contribution is zero.
      *
-     * REVENUE IS THE SETTLED TRANSACTION, joined through `settled_transaction_id`.
-     * A booking still in `deposit_held` has settled nothing, so it contributes 0 —
-     * a LEFT JOIN plus a FILTER rather than an inner join, because dropping those
-     * rows would also drop them from the booking COUNT, which is the ranking.
+     * REVENUE IS WHAT THE VISIT WAS WORTH, read from `transaction_revenue` through
+     * `settled_transaction_id`. A LEFT JOIN rather than an inner one, because
+     * dropping the unsettled rows would also drop them from the booking COUNT, which
+     * is the ranking.
+     *
+     * TWO DEFECTS FIXED HERE, AND THE SECOND WAS NOT IN DECISIONS.md #81.
+     *
+     * (a) THE UNDERSTATEMENT. This column summed `-st.amount_fils` — the wallet
+     *     movement — so a booked appointment arrived net of the deposit already
+     *     earned against it, which on this card is EVERY row: every row here is a
+     *     booking, and a booking is the only thing that takes a deposit. The
+     *     understatement was therefore total rather than partial, and larger in
+     *     proportion than on `sales`, which at least mixes in walk-ins and shop
+     *     orders that have no deposit to lose. It reads `rev.earned_fils` now.
+     *
+     * (b) THE NEGATIVE ROW. The comment above used to claim a no-show's revenue
+     *     "falls out naturally as zero because nothing settled". It does not: a
+     *     `no_show_returned` booking HAS a `settled_transaction_id`, pointing at the
+     *     `deposit_return` that gave the money back, and `booking_settlement_matches_
+     *     status` guarantees it — only `deposit_held` may have a NULL there. A
+     *     `deposit_return`'s `amount_fils` is POSITIVE (it credits her), so
+     *     `sum(-amount_fils)` scored that booking NEGATIVE: a 5.000 no-show subtracted
+     *     5.000 from its service's revenue, and could drive a popular service's
+     *     Revenue KD below zero. It is zero now, and zero because the view has no
+     *     row for a `deposit_return` at all — the boundary is a property of the
+     *     definition rather than a filter this aggregate has to remember, which is
+     *     what the old FILTER on `st.status` was doing and why it looked sufficient.
+     *
+     * The `status = 'settled'` FILTER is gone with the `transaction` join, because
+     * both live in the view.
      *
      * THE WINDOW IS ON `starts_at`, not `created_at`: "best-selling this month"
      * means services performed this month, not services booked this month for
@@ -555,11 +613,11 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
       SELECT sv.name AS service,
              br.name AS branch,
              count(*) AS bookings,
-             coalesce(sum(-st.amount_fils) FILTER (WHERE st.status = 'settled'), 0)::bigint AS revenue
+             coalesce(sum(rev.earned_fils), 0)::bigint AS revenue
         FROM booking bk
         JOIN service sv ON sv.id = bk.service_id
         JOIN branch br ON br.id = bk.branch_id
-        LEFT JOIN "transaction" st ON st.id = bk.settled_transaction_id
+        ${revenueLeftJoin(sql`bk.settled_transaction_id`)}
        WHERE bk.salon_id = ${scope.salonId}
          AND bk.status <> 'cancelled'
          AND bk.starts_at >= ${at(from)}
@@ -636,16 +694,21 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
      * number the bonus is decided on.
      *
      * THE APPLIED DEPOSIT IS A RECORDED FACT, NOT A DERIVATION. It is the
-     * `deposit_held`/`debit` leg of the charge's own ledger entries, and reading it
-     * from there is not an invention of this file: `routes/charges.ts` already does
-     * exactly this, with the same three predicates, to decide what a void must
-     * refund —
+     * `deposit_held`/`debit` leg of the charge's own ledger entries.
      *
-     *     refund = |charge.amount_fils| + <deposit_held debit on that charge>
+     * WHEN THIS KIND LANDED, IT READ THAT LEG WITH ITS OWN COPY OF THE THREE
+     * PREDICATES, and said in this comment that it was "one definition rather than a
+     * second that happens to agree" because `routes/charges.ts` already computed a
+     * void's refund the same way. That was two implementations of one expression
+     * being described as one. It is now genuinely one: `transaction_revenue`
+     * (migration 0042, money/revenue.ts), read here as `rev.charged_fils` and
+     * `rev.deposit_applied_fils`, and read by the void handler as `earned_fils` to
+     * decide what to hand back —
+     *
+     *     refund = earned_fils = charged_fils + deposit_applied_fils
      *
      * "what the salon must give back if this is voided" and "what the salon earned"
-     * are one quantity, so this file uses one definition of it rather than a second
-     * that happens to agree.
+     * are one quantity, and now one relation.
      *
      * BOTH HALVES ARE ON THE FACE OF THE REPORT, as `Charged KD` and
      * `Deposit applied KD`, with `Earned KD` their sum. Three columns rather than
@@ -654,11 +717,21 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
      * `Earned KD` is the one that is true. Folding them would have hidden a
      * disagreement between two reports inside a single number.
      *
-     * REPORTED, NOT FIXED HERE: `sales` and `best-selling-services` both sum
-     * `-amount_fils` and therefore both understate a booked appointment by its
-     * deposit. That is a defect in two shipped figures a merchant already reads, and
-     * correcting it changes numbers on a card Lane C has built. It belongs in a
-     * decision of its own rather than as a side effect of adding a fifth kind.
+     * FIXED, AND THE RECONCILIATION IS NOW ASSERTED. `sales` and
+     * `best-selling-services` both summed `-amount_fils` and therefore both
+     * understated a booked appointment by its deposit — reported when this kind
+     * landed, decided as DECISIONS.md #81, corrected in the same commit as this
+     * paragraph. Both read the view now.
+     *
+     * The consequence worth keeping in front of the next reader: `sales`' gross for
+     * a window and branch and this report's `KD earned` headline for the same window
+     * and branch are now TWO INDEPENDENT AGGREGATES OVER THE SAME MONEY — one
+     * grouped by day over transactions, one grouped by artist through bookings with
+     * two named unattributed buckets — and they must be EQUAL. That is the strongest
+     * check available over these figures, and `services/reportsReconciliation.int.
+     * test.ts` asserts it rather than leaving it as a property somebody once
+     * observed. It is also why the walk-in and shop buckets exist at all: without
+     * them there would be nothing for `sales` to reconcile against.
      *
      * =========================================================================
      * THE COVERAGE GAP, NAMED IN THE TABLE RATHER THAN IN THIS COMMENT
@@ -767,14 +840,11 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
       SELECT bk.artist_id,
              bk.member_id,
              bk.id AS booking_id,
-             (-t.amount_fils) AS charged,
-             coalesce(dep.amount_fils, 0) AS deposit_applied
+             rev.charged_fils AS charged,
+             rev.deposit_applied_fils AS deposit_applied
         FROM booking bk
         JOIN "transaction" t ON t.id = bk.settled_transaction_id
-        LEFT JOIN ledger_entry dep
-               ON dep.transaction_id = t.id
-              AND dep.account = 'deposit_held'
-              AND dep.direction = 'debit'
+        ${revenueJoin('t')}
        WHERE bk.salon_id = ${scope.salonId}
          AND t.salon_id = ${scope.salonId}
          AND t.kind = 'charge'
@@ -820,22 +890,21 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
      *
      * A walk-in is "a settled charge that is not any booking's settling
      * transaction" — the definition is the ABSENCE of the join above, so it cannot
-     * drift from it. `deposit_applied` is summed here too rather than written as a
+     * drift from it. `deposit_applied` is read here too rather than written as a
      * literal zero: a walk-in should have no applied deposit by construction, and a
      * report that hardcodes what it believes cannot tell anybody when the belief
      * stops being true. The specs assert it is zero; this query would say so if it
-     * were not.
+     * were not — and because it reads the same view column the artist rows do, a
+     * walk-in that somehow carried a deposit leg would appear in the total rather
+     * than vanish from it.
      */
     const bucketRows = (await db.execute(sql`
       SELECT CASE WHEN t.kind = 'shop' THEN 'shop' ELSE 'walkin' END AS bucket,
              count(DISTINCT t.member_id) AS customers,
-             coalesce(sum(-t.amount_fils), 0)::bigint AS charged,
-             coalesce(sum(dep.amount_fils), 0)::bigint AS deposit_applied
+             coalesce(sum(rev.charged_fils), 0)::bigint AS charged,
+             coalesce(sum(rev.deposit_applied_fils), 0)::bigint AS deposit_applied
         FROM "transaction" t
-        LEFT JOIN ledger_entry dep
-               ON dep.transaction_id = t.id
-              AND dep.account = 'deposit_held'
-              AND dep.direction = 'debit'
+        ${revenueJoin('t')}
        WHERE t.salon_id = ${scope.salonId}
          AND t.kind IN ('charge', 'shop')
          AND t.status = 'settled'

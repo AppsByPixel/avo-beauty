@@ -32,6 +32,7 @@ import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { ledgerEntry } from '../db/schema/ledger';
 import { chargeReversedPosting } from '../money/ledger';
+import { readTransactionRevenue } from '../money/revenue';
 import { transaction } from '../db/schema/transaction';
 import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
@@ -416,7 +417,7 @@ async function performVoid(
     if (!m) throw notFound('unknown_member', 'No such member.');
 
     /**
-     * THE REFUND INCLUDES THE HELD DEPOSIT THIS CHARGE CONSUMED.
+     * THE REFUND IS WHAT THE VISIT WAS WORTH, AND THAT IS NOW ONE DEFINITION.
      *
      * `abs(target.amountFils)` alone was right while deposits did not exist and
      * became a silent under-refund the moment they did. The charge row records
@@ -426,26 +427,39 @@ async function performVoid(
      * with the salon for a visit that has just been declared not to have
      * happened.
      *
-     * Read from the LEDGER rather than from the booking, and that is deliberate:
-     * the `deposit_held` debit on this transaction is exactly what was applied,
-     * already net of any remainder that was handed straight back at charge time
-     * (services/charge.ts § 7a). Reading `booking.deposit_fils` instead would
-     * refund a remainder she has already received.
+     * This file used to compute that here, from the ledger, with three predicates
+     * written out inline — and it was the ONLY place in the build that had the
+     * arithmetic right. `sales` and `best-selling-services` both summed
+     * `-amount_fils` and understated every booked appointment by its deposit for
+     * their whole life (DECISIONS.md #81). So the expression moved to
+     * `money/revenue.ts` and the `transaction_revenue` view behind it, and this
+     * handler now reads the same relation the reports do.
+     *
+     * `earnedFils` IS the refund, and it is the reports' revenue column too. That
+     * is not a coincidence to be tidied away: "what the salon must give back if
+     * this is voided" and "what the salon earned" are one quantity, which is the
+     * whole argument for there being one definition of it.
+     *
+     * The view reads the applied deposit from the LEDGER rather than from the
+     * booking, and that is deliberate: the `deposit_held` debit on this
+     * transaction is exactly what was applied, already net of any remainder that
+     * was handed straight back at charge time (services/charge.ts § 7a). Reading
+     * `booking.deposit_fils` instead would refund a remainder she has already
+     * received.
+     *
+     * A NULL HERE IS NOT ZERO. The view covers settled `charge` and `shop` rows,
+     * and `target` is one by the query above — so null means the row moved
+     * underneath us, and the throw rolls the whole void back rather than
+     * refunding nothing and reporting success.
      */
-    const [applied] = await tx
-      .select({ amountFils: ledgerEntry.amountFils })
-      .from(ledgerEntry)
-      .where(
-        and(
-          eq(ledgerEntry.transactionId, target.id),
-          eq(ledgerEntry.account, 'deposit_held'),
-          eq(ledgerEntry.direction, 'debit'),
-        ),
-      )
-      .limit(1);
-    const depositApplied = fils(applied?.amountFils ?? 0);
-
-    const refund = fils(Math.abs(target.amountFils) + depositApplied);
+    const worth = await readTransactionRevenue(tx, target.id);
+    if (!worth) {
+      throw conflict('charge_not_voidable', 'That charge is no longer a settled charge.', {
+        chargeId: target.id,
+      });
+    }
+    const depositApplied = worth.depositAppliedFils;
+    const refund = worth.earnedFils;
     const balanceAfter = fils(m.balanceFils + refund);
     const now = new Date();
     const voidId = `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
