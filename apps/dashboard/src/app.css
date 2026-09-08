@@ -1322,12 +1322,6 @@ a:hover {
   grid-template-columns: 1fr;
 }
 
-.settings__stack {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
 .settings__card {
   padding: 20px;
 }
