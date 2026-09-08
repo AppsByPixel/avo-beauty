@@ -81,6 +81,19 @@ export async function signIn(scope: 'merchant', credentials: Credentials): Promi
     username: staff.handle,
     displayName: staff.name,
     salonId: staff.salonId,
+    /*
+     * `staff.role`, off the parse rather than off `credentials` — there is
+     * nothing in the sign-in form that could have supplied it, which is the
+     * point. The sidebar used to print a hardcoded "Owner" because this line
+     * was missing and the session had nowhere to put the value.
+     *
+     * NOT DEFENDED WITH A `??`. `StaffUserSchema` has already refused a response
+     * whose `role` is absent or outside the enum, so by here it is one of the
+     * five. The nullable half of `MerchantSession['role']` is for sessions read
+     * back out of storage, not for this path — a sign-in that reached this line
+     * knows the role.
+     */
+    role: staff.role,
     perms: staff.perms,
   };
 }

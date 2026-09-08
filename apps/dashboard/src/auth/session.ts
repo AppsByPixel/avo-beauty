@@ -1,4 +1,4 @@
-import type { StaffPerms } from '@avo/types';
+import { StaffUserSchema, type StaffPerms, type StaffUser } from '@avo/types';
 import type { PlatformRole, PlatformSections } from './platformAdmin.js';
 import { SCOPES, isAuthScope, type AuthScope } from './scopes.js';
 
@@ -45,6 +45,25 @@ interface SessionBase {
 }
 
 /**
+ * `staff_user.role` — the vocabulary of `staffRole` in api/src/db/schema/staff.ts.
+ *
+ * DERIVED FROM THE CONTRACT, NOT RESTATED. The five words are already written
+ * down in `StaffUserSchema`, and `auth/platformAdmin.ts` is the standing example
+ * of what a hand-kept second copy costs: it said `founder` where the API's enum
+ * said `owner`, and only a boundary parse caught it. There is no reason for this
+ * file to hold another copy when the trunk schema is right there.
+ *
+ * NOTE THAT THIS IS NOT `PlatformRole`. The two vocabularies share the word
+ * `owner` and agree on nothing else, which is precisely why the merchant rail
+ * cannot borrow the console's `ROLE_LABEL` — see MerchantShell.tsx.
+ */
+export type StaffRole = StaffUser['role'];
+
+function isStaffRole(value: unknown): value is StaffRole {
+  return StaffUserSchema.shape.role.safeParse(value).success;
+}
+
+/**
  * `salonId` IS REQUIRED AND IT COMES FROM THE SERVER. It is `staff.salonId` off
  * the `POST /auth/web/session` response, which the API reads from the staff row
  * rather than echoing the `salonId` the sign-in form sent. A merchant session
@@ -54,6 +73,31 @@ export interface MerchantSession extends SessionBase {
   scope: 'merchant';
   staffId: string;
   salonId: string;
+  /**
+   * `staff.role` off the same sign-in response, and the authority the sidebar
+   * prints. It was missing from this shape entirely, so `MerchantShell` printed
+   * the literal "Owner" for everybody — a seeded front-desk account was labelled
+   * "Owner" on the same screen where four of the five Reports cards refused her
+   * for lacking an owner's permissions. The value was on the wire the whole time
+   * and was being dropped here at sign-in.
+   *
+   * NULL, NOT OPTIONAL, AND NEVER DEFAULTED TO A ROLE. Three separate reasons:
+   *
+   *   - A DEFAULT IS THE BUG AGAIN. `role ?? 'owner'` is the hardcoded literal
+   *     with extra steps, and `?? 'frontdesk'` is the same lie pointing the other
+   *     way. There is no safe guess — the point of the field is that the server
+   *     knows the answer and the client does not.
+   *   - `| null` RATHER THAN `?`, per this file's header. An optional field lets
+   *     every existing reader keep compiling while reading `undefined` at
+   *     runtime, which is the failure the `salonId` split exists to prevent. A
+   *     nullable required field makes each reader say what it does when the role
+   *     is unknown, and there is currently one such reader.
+   *   - NULL IS REACHABLE, so it is not a formality. A session minted before this
+   *     field existed is sitting in `localStorage` with no `role` key and a
+   *     refresh expiry up to thirty days out, and `refresh.ts` rebuilds the
+   *     session with `...current`, so it never gains one. See `isStoredSession`.
+   */
+  role: StaffRole | null;
   perms: StaffPerms;
 }
 
@@ -100,6 +144,44 @@ function stores(): Storage[] {
   return [window.localStorage, window.sessionStorage];
 }
 
+/**
+ * A MISSING `role` IS TOLERATED AND DOES NOT SIGN ANYBODY OUT. This is the
+ * decision the field forces, and it goes the other way from every other rule in
+ * `isStoredSession`.
+ *
+ * The alternative — requiring `role` in the validator — is a silent mass
+ * sign-out on deploy. `readSession` drops and `removeItem`s anything that fails
+ * validation, so every merchant currently holding a "Keep me signed in" session
+ * would be bounced to the sign-in screen the first time they loaded the new
+ * build, with no explanation and no error, because the shell would simply see no
+ * session. That is a worse outcome than a rail that is briefly honest about not
+ * knowing: the session's tokens are still valid, its `salonId` and `perms` are
+ * still correct, and every gate that matters is server-side anyway (#7). The
+ * only thing missing is one line of chrome.
+ *
+ * So the field is filled in on the way out of storage instead. An old session
+ * reads `role: null` and keeps working; the role arrives on its own at the next
+ * sign-in, which is also the only moment it could be re-read, since `refresh.ts`
+ * carries the stored session forward with `...current` rather than re-fetching
+ * the staff row.
+ *
+ * A ROLE OUTSIDE THE ENUM IS ALSO NULLED rather than passed through. This runs
+ * over `localStorage`, which a front-desk user can edit; `"Regional Director"`
+ * would otherwise print itself straight into the sidebar. Authority in this app
+ * is `perms`, checked server-side — but the label should not be forgeable
+ * either, and the vocabulary is closed, so anything outside it is not a role.
+ *
+ * Takes and returns `unknown`: it runs BEFORE validation, so it has no session
+ * to speak of yet, and typing it otherwise would need a cast to the very shape
+ * the guard below exists to establish.
+ */
+function withKnownRole(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value;
+  const v = value as Record<string, unknown>;
+  if (v['scope'] !== 'merchant') return value;
+  return { ...v, role: isStaffRole(v['role']) ? v['role'] : null };
+}
+
 function isStoredSession(value: unknown): value is StoredSession {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -120,7 +202,17 @@ function isStoredSession(value: unknown): value is StoredSession {
    * No salon, no merchant session — the original rule, unchanged.
    */
   if (v['scope'] === 'merchant') {
-    return typeof v['salonId'] === 'string' && v['salonId'].length > 0;
+    /*
+     * `role` IS CHECKED BUT NOT REQUIRED TO BE PRESENT, because `withKnownRole`
+     * ran first and has already turned "absent" and "not one of the five" into
+     * `null`. What is left to assert is that this object now satisfies
+     * `StaffRole | null`, which is what makes the cast below sound.
+     */
+    return (
+      typeof v['salonId'] === 'string' &&
+      v['salonId'].length > 0 &&
+      (v['role'] === null || isStaffRole(v['role']))
+    );
   }
   return (
     typeof v['adminId'] === 'string' &&
@@ -136,7 +228,10 @@ export function readSession(scope: AuthScope): Session | null {
     const raw = store.getItem(key);
     if (!raw) continue;
     try {
-      const parsed: unknown = JSON.parse(raw);
+      // Normalise, THEN validate. `withKnownRole` settles what a stored session
+      // with no `role` key means before the guard is asked whether the shape is
+      // legal — see its header for why that direction is the tolerant one.
+      const parsed: unknown = withKnownRole(JSON.parse(raw));
       // A refresh token past its expiry cannot mint anything. Drop the whole
       // session here rather than letting the first request discover it.
       if (isStoredSession(parsed) && Date.parse(parsed.refreshExpiresAt) > Date.now()) {
