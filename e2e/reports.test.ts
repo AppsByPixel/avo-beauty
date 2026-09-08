@@ -32,6 +32,44 @@
  *      "loaded" (metrics counts topups). Money left the salon's liability ledger and no
  *      report shows it. Probably correct for "gross"; a gap if anyone reconciles
  *      wallet-liability from these exports. Trunk's call.
+ *
+ * WHAT THIS FILE IS BLIND TO, AND IT COST 34.6% OF A MERCHANT'S TAKINGS
+ * --------------------------------------------------------------------
+ * Recorded here, at the top, because the header above is where a reader looks to
+ * decide whether the reports are covered — and for two defects the answer was no
+ * while every line of it stayed true.
+ *
+ * DECISIONS.md #81 and #83: `sales` and `best-selling-services` summed
+ * `-amount_fils` under a column labelled `gross`, and `charge.ts` § 4 writes
+ * `-(gross − applied deposit)`, so every BOOKED appointment was understated by the
+ * deposit it had already earned — 34.6% of a driven window — and a
+ * `no_show_returned` booking scored NEGATIVE. Both shipped. This file was green
+ * throughout, and MEASURED SO: with both defects reintroduced in a working tree,
+ * all 22 specs below still pass, to the fils.
+ *
+ * The reason is one line of the fixture, not one missing assertion. The ledger
+ * above holds a `deposit_hold` and a `deposit_return` but has NEVER held an
+ * APPLIED deposit — a charge whose `deposit_held`/`debit` leg makes
+ * `-amount_fils` and "what the salon earned" two DIFFERENT numbers. Without such
+ * a row the broken aggregate and the correct one return the same figure, so
+ * `GROSS_7D` and `GROSS_30D` agreed with the wrong implementation and would have
+ * agreed with the right one. No oracle style rescues that: a hand constant, a
+ * first-principles recomputation and a derived cross-check are all equally green
+ * over rows the two definitions agree about.
+ *
+ * The paragraph above — "its fixture held one of each excluded shape, so the
+ * shapes it did not hold are where the bugs would be" — was therefore exactly
+ * right, and this was the shape it did not hold.
+ *
+ * IT IS NOT FIXED HERE, DELIBERATELY. This file's method is EXPLICIT CLOCKS: it
+ * needs a charge at exactly `D5 21:30Z` to separate Kuwait-day grouping from UTC
+ * and from the host zone, and a real `POST /charges` cannot be made to happen at
+ * a chosen instant. Hand-written rows are the only way to ask its questions, and
+ * hand-writing an applied deposit means hand-writing the arithmetic under test.
+ * The shape lives in `e2e/reports-applied-deposit.test.ts` instead, where the
+ * whole fixture is DRIVEN through `POST /bookings`, `POST /charges` and the
+ * no-show job, and where the first spec asserts the fixture DISCRIMINATES before
+ * any spec asserts a figure. Do not "unify" the two files.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
