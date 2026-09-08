@@ -75,6 +75,12 @@
  *   sales                   → `dashboard`     Overview's revenue figures
  *   best-selling-services   → `appointments`  bookings are the Appointments section
  *   products-sold           → `shop`          the Shop section
+ *   artist-performance      → `team`          an artist's earnings is personnel
+ *                                             data, and `team` is the STRICTEST of
+ *                                             the three sections this one joins —
+ *                                             see the map for why a join must
+ *                                             resolve to the strictest and not the
+ *                                             most obvious
  *
  * A blanket `dashboard` would have been the obvious choice and is the wrong one: the
  * `frontdesk` role preset holds `dashboard` and not `team`, so it would have handed
@@ -101,6 +107,7 @@ export const REPORT_KINDS = [
   'sales',
   'best-selling-services',
   'products-sold',
+  'artist-performance',
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
@@ -117,6 +124,27 @@ export const REPORT_PERMISSION: Record<ReportKind, PermissionName> = {
   sales: 'dashboard',
   'best-selling-services': 'appointments',
   'products-sold': 'shop',
+  /**
+   * `team`, AND IT IS THE MOST RESTRICTIVE OF THE THREE SECTIONS THIS ROW JOINS —
+   * which is the rule, not a coincidence.
+   *
+   * This report is a join of three sections' data: the appointment book
+   * (`appointments`), money (`dashboard`), and a named person's earnings, which is
+   * personnel data (`team`). The header's rule — a report inherits the permission of
+   * the section whose data it exports — has to resolve to ONE permission, and for a
+   * join the only safe resolution is the STRICTEST of them. The `frontdesk` preset
+   * that db/seed.ts writes holds `appointments` and NOT `team`, so gating on
+   * `appointments` would put every artist's earnings on the front-desk tablet: the
+   * same mistake a blanket `dashboard` would have made with the customer book, one
+   * section over.
+   *
+   * It is also the answer the request itself points at. Aftab asked for "staff
+   * statistics"; a per-person earnings figure is what a bonus is decided on, and the
+   * chip labelled "Team & accounts" is where a salon already decides who may see
+   * what about its people. Nobody can export an artist's takings who could not
+   * already open Accounts and read her row.
+   */
+  'artist-performance': 'team',
 };
 
 /** The design's card titles, verbatim, so the JSON can name what it returned. */
@@ -125,6 +153,15 @@ export const REPORT_TITLE: Record<ReportKind, string> = {
   sales: 'Sales summary',
   'best-selling-services': 'Best-selling services',
   'products-sold': 'Products sold',
+  /**
+   * "Artist performance", NOT "Staff performance", and the difference is the whole
+   * argument of this kind — see the aggregate below. The request said "staff
+   * statistics"; the attribution the request ALSO chose is by artist, and those are
+   * overlapping sets rather than the same set (db/schema/artist.ts). A card titled
+   * "Staff" whose rows are artists would be the label-is-not-a-definition failure
+   * this file's header exists to prevent, on the title line.
+   */
+  'artist-performance': 'Artist performance',
 };
 
 /**
@@ -178,6 +215,13 @@ const STAT: Record<ReportKind, Omit<ReportStat, 'value'>> = {
   sales: { key: 'grossFils', label: 'KD gross', type: 'money' },
   'best-selling-services': { key: 'bookings', label: 'bookings', type: 'int' },
   'products-sold': { key: 'units', label: 'units', type: 'int' },
+  /**
+   * Summed over EVERY row, artist rows and unattributed rows alike, so the headline
+   * is the salon's whole service-and-shop take for the period and the table under it
+   * accounts for all of it. A stat over the artist rows only would print a smaller
+   * number than the file sums to, which is the one arithmetic a merchant WILL check.
+   */
+  'artist-performance': { key: 'earnedFils', label: 'KD earned', type: 'money' },
 };
 
 /**
@@ -540,6 +584,346 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
         revenueFils: int(r.revenue),
         branch: String(r.branch ?? ''),
       })),
+    };
+  }
+
+  if (scope.kind === 'artist-performance') {
+    /**
+     * ==================================================================
+     * ARTIST PERFORMANCE — "how many customers dealt, most earning, etc"
+     * ==================================================================
+     *
+     * The request was for "staff statistics"; the reading chosen when it was put
+     * back to the client is EARNINGS BY THE PERSON WHO PERFORMED THE SERVICE — the
+     * artist — not by whoever rang the charge up. So the attribution runs through
+     * the appointment, and `transaction.created_by_staff_id` is deliberately NOT
+     * consulted. It would be easier and it would cover more rows, and it answers a
+     * different question: "who was standing at the till". A receptionist who takes
+     * payment for four artists' clients all afternoon would top a report built on
+     * it, which is the exact figure a merchant must not hand a bonus on.
+     *
+     * THE JOIN
+     * --------
+     * `services/charge.ts` § 7a sets `booking.settled_transaction_id` to the CHARGE
+     * that consumed a held deposit, and `booking.artist_id` is NOT NULL. So
+     *
+     *     booking JOIN transaction ON booking.settled_transaction_id = transaction.id
+     *
+     * with `kind = 'charge'` reaches the real service charge for a booked
+     * appointment — not merely the deposit, and not a `deposit_return`. The kind
+     * filter is what excludes the other two ends of the state machine: a cancelled
+     * or no-showed booking is settled by a `deposit_return`, and a VOIDED charge's
+     * booking is rewritten by `routes/charges.ts` to `cancelled` settled by the
+     * void's `adjustment`. `NOT_VOIDED` is kept on top of that as a belt on a brace:
+     * it is redundant today only because of that rewrite, and a report should not
+     * depend on a rewrite in another file to avoid counting money that went back.
+     *
+     * =========================================================================
+     * WHAT AN ARTIST EARNED IS NOT `-transaction.amount_fils`, AND THIS IS THE
+     * FINDING OF THIS SLICE
+     * =========================================================================
+     * `charge.ts` § 4 caps the held deposit at the basket and writes the charge as
+     * `amount_fils = -(gross - applied)`. The charge row therefore carries only the
+     * part of the visit that came out of her SPENDABLE balance at the counter; the
+     * deposit portion was debited earlier, as a `deposit_hold`, and became revenue
+     * at charge time via `depositAppliedPosting`.
+     *
+     * So a 5.000 service against a 5.000 deposit produces a charge of EXACTLY ZERO.
+     * A report summing `-amount_fils` would print `0.000 KD` next to an artist who
+     * performed the appointment and a salon that was paid in full for it — a false
+     * zero of precisely the kind `loadedTodayFils` returns null rather than emit.
+     * That is not acceptable, and it cannot be fixed by a caveat: the column is the
+     * number the bonus is decided on.
+     *
+     * THE APPLIED DEPOSIT IS A RECORDED FACT, NOT A DERIVATION. It is the
+     * `deposit_held`/`debit` leg of the charge's own ledger entries, and reading it
+     * from there is not an invention of this file: `routes/charges.ts` already does
+     * exactly this, with the same three predicates, to decide what a void must
+     * refund —
+     *
+     *     refund = |charge.amount_fils| + <deposit_held debit on that charge>
+     *
+     * "what the salon must give back if this is voided" and "what the salon earned"
+     * are one quantity, so this file uses one definition of it rather than a second
+     * that happens to agree.
+     *
+     * BOTH HALVES ARE ON THE FACE OF THE REPORT, as `Charged KD` and
+     * `Deposit applied KD`, with `Earned KD` their sum. Three columns rather than
+     * one, because they answer three different questions a merchant actually asks,
+     * and because `Charged KD` is the column that ties to the Sales card while
+     * `Earned KD` is the one that is true. Folding them would have hidden a
+     * disagreement between two reports inside a single number.
+     *
+     * REPORTED, NOT FIXED HERE: `sales` and `best-selling-services` both sum
+     * `-amount_fils` and therefore both understate a booked appointment by its
+     * deposit. That is a defect in two shipped figures a merchant already reads, and
+     * correcting it changes numbers on a card Lane C has built. It belongs in a
+     * decision of its own rather than as a side effect of adding a fifth kind.
+     *
+     * =========================================================================
+     * THE COVERAGE GAP, NAMED IN THE TABLE RATHER THAN IN THIS COMMENT
+     * =========================================================================
+     * Artist attribution reaches booked appointments that were charged. It cannot
+     * reach:
+     *
+     *   A WALK-IN CHARGE. `charge.ts` touches a booking only when one is held, so a
+     *       walk-in has no booking and therefore no artist. `basket_hash` is a
+     *       sha256 and cannot be un-hashed, so there is no second route to one
+     *       either — the same wall `best-selling-services` hits one column over.
+     *
+     *   A SHOP ORDER. Nobody performed a service; a bottle was sold.
+     *
+     * Both get a ROW, named, in the same table with the same money columns. That is
+     * the whole reason the rows are shaped the way they are: the artist rows sum to
+     * LESS than the headline, and the reader can see the two rows that make up the
+     * difference without being told to. A merchant deciding a bonus can tell "this
+     * artist earned nothing" — an artist row of zeros, which is a true statement —
+     * from "this money has no artist", which is a named row of its own.
+     *
+     * A TOP-UP GETS NO ROW, and that is the one gap answered by exclusion rather
+     * than by a row. A top-up is not revenue in any period — `sales` argues this at
+     * length: it is the customer loading her own wallet, a liability the salon now
+     * owes her, and it becomes revenue when she spends it, on the charge that this
+     * report has already attributed. A zero row for it would claim the report had
+     * accounted for money it deliberately leaves out, and a non-zero one would
+     * count the same dinar twice. The report's denominator is SERVICE AND SHOP
+     * REVENUE, and the card copy has to say so — Lane C's column, reported.
+     *
+     * EVERY ARTIST OF THE SALON GETS A ROW — `FROM artist LEFT JOIN`, not
+     * `FROM booking`. An artist with no charged appointment in the window is a row
+     * of zeros, which is the answer to a question a merchant is really asking, and
+     * she cannot be silently absent. Retired artists (`active = false`) are included
+     * for the same reason: one who worked in the window MUST appear, and dropping
+     * her would move her takings into an unattributed row where they do not belong.
+     *
+     * `artist.staff_user_id` IS NULLABLE, so the `Staff account` column is either a
+     * handle or the words `no staff account`. Not blank: blank reads as "unknown",
+     * and this is a definite fact about her — the contract's own default is that
+     * "artists do not need an AVO login". The staff join is scoped to THIS SALON, so
+     * an artist row mislinked across tenants renders as no handle rather than
+     * leaking another salon's staff handle into an export.
+     *
+     * =========================================================================
+     * `?branch=` FILTERS ON THE TRANSACTION'S BRANCH, NOT THE BOOKING'S
+     * =========================================================================
+     * A booking has its own `branch_id`, and `best-selling-services` filters on it —
+     * correctly, because its unit is a BOOKING COUNT. This report's unit is MONEY,
+     * and the two columns can disagree: nothing constrains the branch a charge is
+     * recorded at to equal the branch the appointment was booked at, and both are
+     * frequently `branch_assumed` at a multi-branch salon (services/branch.ts).
+     *
+     * If the artist rows filtered on the booking's branch while the unattributed
+     * rows filtered on the transaction's — they have no booking to filter on — then
+     * the reconciliation this table's whole shape promises would only be
+     * ACCIDENTALLY true, and would break on the first appointment paid for at the
+     * other branch. So every row here filters on `transaction.branch_id`: the branch
+     * the money was recorded at, which is also the branch the Sales card uses. Under
+     * a branch, `Appointments` therefore means "appointments whose charge was taken
+     * at this branch". Stated, because it is a real difference from the card next to
+     * it.
+     *
+     * A LIVE DEMONSTRATION THAT THE TWO COLUMNS DO DISAGREE, not a hypothetical:
+     * driving a real `POST /bookings` and a real `POST /charges` against seeded data
+     * produced a booking and a charge that agreed on `BR-KWC` — and BOTH carried
+     * `branch_assumed`, because `services/branch.ts` cannot tell where a staff
+     * member is standing until device enrolment lands. So at a multi-branch salon
+     * most of these rows are attributed to a branch the server GUESSED, exactly as
+     * `sales`, `best-selling-services` and `products-sold` already are. This kind
+     * inherits that limitation rather than inventing an exception to it, and
+     * `services/metrics.ts` § 2 carries the argument for why it is filterable
+     * anyway; it is called out here because a per-artist, per-branch earnings figure
+     * is more tempting to act on than a per-branch transaction count.
+     *
+     * =========================================================================
+     * NO `Branch` COLUMN, AND THE OTHER FOUR KINDS ALL HAVE ONE
+     * =========================================================================
+     * `sales`, `best-selling-services` and `products-sold` each carry `Branch` and
+     * group by it, so an "All branches" export still breaks down per branch. This
+     * one deliberately does not, and there are two reasons rather than one.
+     *
+     * The question is "who earned the most". An artist who works Salmiya on Tuesdays
+     * and Kuwait City on Thursdays would arrive as TWO rows that the merchant has to
+     * add up by eye before she can rank anybody — the ranking is the product, and
+     * splitting it defeats it. `?branch=` is how the per-branch question gets asked.
+     *
+     * And `Customers` is a DISTINCT count, which does not add up. A customer seen at
+     * both branches is 1 in each row and 1 in the salon, so per-branch rows would
+     * present a column that looks summable and is not — the trap
+     * `services/metrics.ts` pins for `activeMembers`. The money columns ARE additive
+     * and would have been fine; one non-additive column is enough to make the split
+     * table misleading, and there is no reading of these two rows that is both
+     * per-branch and honest about the customer count.
+     */
+    const branchOnTx = b === null ? sql`` : sql`AND t.branch_id = ${b}`;
+
+    /**
+     * The (booking, charge) pairs this window attributes, and the applied deposit
+     * on each. A CTE rather than a chain of LEFT JOINs off `artist`, because the
+     * `Appointments` count has to be a count of QUALIFYING pairs: with the window
+     * and the kind pushed into a LEFT JOIN condition, `count(booking.id)` would
+     * happily count an appointment whose charge fell outside the period.
+     */
+    const attributed = sql`
+      SELECT bk.artist_id,
+             bk.member_id,
+             bk.id AS booking_id,
+             (-t.amount_fils) AS charged,
+             coalesce(dep.amount_fils, 0) AS deposit_applied
+        FROM booking bk
+        JOIN "transaction" t ON t.id = bk.settled_transaction_id
+        LEFT JOIN ledger_entry dep
+               ON dep.transaction_id = t.id
+              AND dep.account = 'deposit_held'
+              AND dep.direction = 'debit'
+       WHERE bk.salon_id = ${scope.salonId}
+         AND t.salon_id = ${scope.salonId}
+         AND t.kind = 'charge'
+         AND t.status = 'settled'
+         AND t.created_at >= ${at(from)}
+         AND t.created_at < ${at(now)}
+         ${branchOnTx}
+         ${NOT_VOIDED}`;
+
+    /**
+     * Every artist of the salon, with whatever the CTE attributed to her.
+     *
+     * THE `staff_user` JOIN CARRIES `su.salon_id = <this salon>` AS WELL AS THE ID.
+     * `artist.staff_user_id` is a plain FK to `staff_user` with no same-salon
+     * constraint behind it, so without that second equality a row mislinked across
+     * tenants would print another salon's staff handle into this salon's export. A
+     * null handle therefore means "no staff account" OR "a link pointing outside
+     * this salon", and both render as the former — which is the safe direction, and
+     * is reported rather than left as a property of a missing constraint.
+     */
+    const artistRows = (await db.execute(sql`
+      WITH attributed AS (${attributed})
+      SELECT ar.name,
+             su.handle,
+             count(a.booking_id) AS appointments,
+             count(DISTINCT a.member_id) AS customers,
+             coalesce(sum(a.charged), 0)::bigint AS charged,
+             coalesce(sum(a.deposit_applied), 0)::bigint AS deposit_applied
+        FROM artist ar
+        LEFT JOIN attributed a ON a.artist_id = ar.id
+        LEFT JOIN staff_user su
+               ON su.id = ar.staff_user_id
+              AND su.salon_id = ${scope.salonId}
+       WHERE ar.salon_id = ${scope.salonId}
+       GROUP BY ar.id, ar.name, su.handle
+       ORDER BY (coalesce(sum(a.charged), 0) + coalesce(sum(a.deposit_applied), 0)) DESC,
+                count(a.booking_id) DESC,
+                ar.name ASC
+    `)) as unknown as Array<Record<string, unknown>>;
+
+    /**
+     * The two unattributed buckets, in one pass.
+     *
+     * A walk-in is "a settled charge that is not any booking's settling
+     * transaction" — the definition is the ABSENCE of the join above, so it cannot
+     * drift from it. `deposit_applied` is summed here too rather than written as a
+     * literal zero: a walk-in should have no applied deposit by construction, and a
+     * report that hardcodes what it believes cannot tell anybody when the belief
+     * stops being true. The specs assert it is zero; this query would say so if it
+     * were not.
+     */
+    const bucketRows = (await db.execute(sql`
+      SELECT CASE WHEN t.kind = 'shop' THEN 'shop' ELSE 'walkin' END AS bucket,
+             count(DISTINCT t.member_id) AS customers,
+             coalesce(sum(-t.amount_fils), 0)::bigint AS charged,
+             coalesce(sum(dep.amount_fils), 0)::bigint AS deposit_applied
+        FROM "transaction" t
+        LEFT JOIN ledger_entry dep
+               ON dep.transaction_id = t.id
+              AND dep.account = 'deposit_held'
+              AND dep.direction = 'debit'
+       WHERE t.salon_id = ${scope.salonId}
+         AND t.kind IN ('charge', 'shop')
+         AND t.status = 'settled'
+         AND t.created_at >= ${at(from)}
+         AND t.created_at < ${at(now)}
+         ${branchOnTx}
+         ${NOT_VOIDED}
+         AND (
+           t.kind = 'shop'
+           OR NOT EXISTS (
+             SELECT 1 FROM booking bk WHERE bk.settled_transaction_id = t.id
+           )
+         )
+       GROUP BY 1
+    `)) as unknown as Array<Record<string, unknown>>;
+
+    const row = (
+      attributedTo: string,
+      attribution: string,
+      staffAccount: string,
+      source: Record<string, unknown> | undefined,
+    ): Record<string, string | number | null> => {
+      const charged = int(source?.charged);
+      const depositApplied = int(source?.deposit_applied);
+      return {
+        attributedTo,
+        attribution,
+        staffAccount,
+        customers: int(source?.customers),
+        appointments: int(source?.appointments),
+        chargedFils: charged,
+        depositAppliedFils: depositApplied,
+        /**
+         * Added from two integers, both already through `int()`. Not computed in
+         * SQL, so `statFor`'s sum of this column and the arithmetic of the row it
+         * sits in are the same addition — non-negotiable #1 does not stop at the
+         * edge of a derived column.
+         */
+        earnedFils: charged + depositApplied,
+      };
+    };
+
+    const byBucket = new Map(bucketRows.map((r) => [String(r.bucket), r]));
+
+    return {
+      kind: scope.kind,
+      title: REPORT_TITLE[scope.kind],
+      columns: [
+        /**
+         * `Attributed to`, not `Artist`. Two of these rows are not an artist, and a
+         * cell reading "Walk-in charges" under a column headed "Artist" would be a
+         * category error printed in the merchant's own spreadsheet. The `Attribution`
+         * column next to it is the machine-readable half, so the card can style or
+         * the merchant can filter the artist rows without parsing a name.
+         */
+        { header: 'Attributed to', key: 'attributedTo', type: 'text' },
+        { header: 'Attribution', key: 'attribution', type: 'text' },
+        { header: 'Staff account', key: 'staffAccount', type: 'text' },
+        /**
+         * DISTINCT MEMBERS, AND THE COLUMN DOES NOT ADD DOWN. A customer seen by
+         * two artists is 1 in each row, and a customer who also bought a bottle is
+         * 1 in the shop row as well — the same arithmetic `services/metrics.ts`
+         * pins for `activeMembers`. The three MONEY columns are additive and the
+         * headline is a sum of one of them; this one is a per-row figure only.
+         */
+        { header: 'Customers', key: 'customers', type: 'int' },
+        { header: 'Appointments', key: 'appointments', type: 'int' },
+        { header: 'Charged KD', key: 'chargedFils', type: 'money' },
+        { header: 'Deposit applied KD', key: 'depositAppliedFils', type: 'money' },
+        { header: 'Earned KD', key: 'earnedFils', type: 'money' },
+      ],
+      rows: [
+        ...artistRows.map((r) =>
+          row(
+            String(r.name ?? ''),
+            'artist',
+            r.handle ? String(r.handle) : 'no staff account',
+            r,
+          ),
+        ),
+        /**
+         * ALWAYS BOTH, even at zero. An absent bucket cannot be told apart from a
+         * bucket that was never computed, and "no walk-in revenue this month" is a
+         * real and useful statement — it says every dinar had an artist behind it.
+         */
+        row('Walk-in charges', 'no artist', '', byBucket.get('walkin')),
+        row('Shop orders', 'no artist', '', byBucket.get('shop')),
+      ],
     };
   }
 

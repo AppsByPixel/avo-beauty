@@ -291,6 +291,7 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       sales: (x) => x.permDashboard,
       'best-selling-services': (x) => x.permAppointments,
       'products-sold': (x) => x.permShop,
+      'artist-performance': (x) => x.permTeam,
     };
     if (
       !staff ||
