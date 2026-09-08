@@ -390,7 +390,7 @@ describe('the census reads the route table, and the reading is itself checked', 
     ).toBeGreaterThan(80);
     /**
      * COUNTED BY REGISTRATION, not by probe. One registration whose permission is chosen
-     * through a lookup table expands into one PROBE per key — the four reports kinds — so
+     * through a lookup table expands into one PROBE per key — the five reports kinds — so
      * `gated.length` legitimately exceeds the number of routes. `route` carries the path
      * as registered, which is what has to reconcile with the scan.
      *
@@ -452,20 +452,41 @@ describe('the census reads the route table, and the reading is itself checked', 
     ).toBeDefined();
 
     /**
-     * The mapping itself, pinned. This is the one place the four pairs are written down in
+     * The mapping itself, pinned. This is the one place the five pairs are written down in
      * this suite, and it is an ASSERTION against the source rather than a copy used to
      * build probes: the probes come from the parsed map, so if this disagrees with lane
      * A's file the spec fails instead of quietly probing the wrong permission.
      *
-     * The pairs matter beyond bookkeeping — they are the FRONTDESK property. `frontdesk`
-     * holds `dashboard` and not `team`, so a blanket `dashboard` gate on reports would
-     * hand every front-desk tablet the customer book with phones and balances.
+     * The pairs matter beyond bookkeeping — they are the FRONTDESK property, and it is
+     * stated here against the SEED rather than against a preset table, because there is
+     * no preset table: `staff_user.role` is a bare enum label and the nine permissions
+     * are nine independent booleans per row (db/schema/staff.ts), so "the frontdesk
+     * preset holds X" is only ever a claim about what `db/seed.ts` writes. What it
+     * writes for ST-002 Hessa, `role: 'frontdesk'`, is `perm_appointments: true` with
+     * `perm_dashboard: false` and `perm_team: false`.
+     *
+     * So the property that bites is per-kind, not one sentence:
+     *
+     *   - `customers → team` matters because a salon that grants its front desk
+     *     `dashboard` — which several will, it is the tablet's own overview — must not
+     *     thereby hand it every customer's name, phone and wallet balance.
+     *   - `artist-performance → team` matters against the seed as written: Hessa HOLDS
+     *     `appointments`, so gating this kind on the section its rows come FROM would
+     *     put every artist's earnings on the front-desk tablet today, with no
+     *     permission change by anybody.
+     *
+     * `team` is also the permission that already gates reading a person's row at all —
+     * `GET /staff`, `GET /salons/:id/artists` and `PATCH /staff/:id` are all `→ team`
+     * in the ledger below — so nobody can export an artist's takings who could not
+     * already open Accounts and read her. That consistency, not an ordering over
+     * permissions, is why `team` is the right answer for a row that names a person.
      */
     expect(Object.fromEntries(map!.entries)).toEqual({
       customers: 'team',
       sales: 'dashboard',
       'best-selling-services': 'appointments',
       'products-sold': 'shop',
+      'artist-performance': 'team',
     });
 
     // And every kind really became its own probe, with `:kind` substituted.
@@ -683,6 +704,8 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/loyalty → salons',
   'GET /salons/:id/metrics → dashboard',
   'GET /salons/:id/products → shop',
+  'GET /salons/:id/reports/artist-performance → team',
+  'GET /salons/:id/reports/artist-performance.csv → team',
   'GET /salons/:id/reports/best-selling-services → appointments',
   'GET /salons/:id/reports/best-selling-services.csv → appointments',
   'GET /salons/:id/reports/customers → team',
@@ -756,6 +779,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /orders [requireMember]',
   'POST /salons/:id/branches → loyalty',
   'POST /salons/:id/products → shop',
+  'POST /salons/:id/reports/artist-performance/download-url → team',
   'POST /salons/:id/reports/best-selling-services/download-url → appointments',
   'POST /salons/:id/reports/customers/download-url → team',
   'POST /salons/:id/reports/products-sold/download-url → shop',
