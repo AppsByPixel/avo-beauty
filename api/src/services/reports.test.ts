@@ -163,4 +163,21 @@ describe('the permission map — #7, and the one that must not be `dashboard`', 
     expect(REPORT_PERMISSION['best-selling-services']).toBe('appointments');
     expect(REPORT_PERMISSION['products-sold']).toBe('shop');
   });
+
+  /**
+   * A report that JOINS sections resolves to the STRICTEST of them, not to the
+   * most obvious one. `artist-performance` is the appointment book, money, and a
+   * named person's earnings in one row; the `frontdesk` preset db/seed.ts writes
+   * holds `appointments` and NOT `team`, so gating it on the section its rows
+   * come FROM would have put every artist's takings on the front-desk tablet.
+   * Same mistake a blanket `dashboard` would have made with the customer book.
+   */
+  it('gates artist performance on `team` — not on `appointments`, not on `dashboard`', () => {
+    expect(REPORT_PERMISSION['artist-performance']).toBe('team');
+    expect(REPORT_PERMISSION['artist-performance']).not.toBe('appointments');
+    expect(REPORT_PERMISSION['artist-performance']).not.toBe('dashboard');
+    // And it is the same gate as the customer book, which is the other export
+    // whose sensitivity is about PEOPLE rather than about takings.
+    expect(REPORT_PERMISSION['artist-performance']).toBe(REPORT_PERMISSION.customers);
+  });
 });
