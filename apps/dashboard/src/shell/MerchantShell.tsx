@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useSalon } from '../api/salon.js';
+import { ROLE_LABEL } from '../api/staff.js';
 import { useAuth, useSession } from '../auth/AuthProvider.js';
+import type { StaffRole } from '../auth/session.js';
 import { SCOPES } from '../auth/scopes.js';
 import { BranchScopeProvider } from './BranchScope.js';
 import { BranchSelector } from './BranchSelector.js';
@@ -11,6 +13,21 @@ import { UnsupportedWidth } from './UnsupportedWidth.js';
 import { navItemFor } from './navItems.js';
 import { useBrandTheme } from './useBrandTheme.js';
 import { useBreakpoint } from './useBreakpoint.js';
+
+/**
+ * A merchant's own authority, as the rail prints it — the line that used to be
+ * the literal "Owner" for everybody.
+ *
+ * EXPORTED FOR THE TEST, and the reason is the same one `appliedBranchOf` in
+ * routes/Overview.tsx is exported for: the interesting behaviour is a mapping
+ * with three cases, and a rendering test that has to mount a router to reach it
+ * proves less about the mapping than a call does. `sidebarAuthority.test.tsx`
+ * covers all five roles, the null, and the word off the end of the enum.
+ */
+export function authorityLabel(role: StaffRole | null): string | null {
+  if (role === null) return null;
+  return ROLE_LABEL[role] ?? role;
+}
 
 /**
  * The guard half of the shell.
@@ -183,6 +200,31 @@ function SignedInShell() {
   }
 
   /*
+   * THE AUTHORITY LABEL, WHICH USED TO BE THE LITERAL "Owner" ON BOTH SIDEBARS.
+   *
+   * It printed "Owner" for a manager and for a front-desk account alike, on the
+   * same screen where the Reports section refuses most of its cards to anyone
+   * without an owner's permissions. The label contradicted the refusals sitting
+   * next to it, and the refusals were the honest half.
+   *
+   * `ROLE_LABEL` FROM `api/staff.js`, NOT the console's map of the same name in
+   * `api/platformAdmins.js`. `ConsoleShell` does the equivalent line one
+   * component over and the shape here is deliberately the same, but the two maps
+   * key off different enums: this one is `staff_user.role` — owner, manager,
+   * frontdesk, artist, scanner, labelled the way the design's Team chips label
+   * them, so `artist` reads "Stylist" — and `PlatformRole` is the four AVO staff
+   * roles. They share only the word `owner`. Indexing one with the other would
+   * type-check on that single value and render `undefined` for every other.
+   *
+   * `?? session.role` for a role the map has not heard of. `roleOptionsFor` in
+   * the same module makes the same call for the same reason: showing a staff
+   * member the raw enum word for her own authority is poor, but showing her
+   * somebody else's authority is a defect. `null` stays `null` and draws nothing
+   * — see `MerchantSession.role` for when that happens and why it is tolerated.
+   */
+  const userRole = authorityLabel(session.role);
+
+  /*
    * THE PROVIDER WRAPS THE HEADER AND THE OUTLET TOGETHER, and that is the whole
    * reason it is here rather than inside a screen. The control lives in the
    * chrome and the figures it scopes live in the route below it; a provider
@@ -199,7 +241,7 @@ function SignedInShell() {
               salonName={salonName}
               brandHex={salon?.brandColor ?? null}
               userName={session.displayName || session.username}
-              userRole="Owner"
+              userRole={userRole}
               collapsed={collapsed}
             />
           </aside>
@@ -249,7 +291,7 @@ function SignedInShell() {
                 salonName={salonName}
                 brandHex={salon?.brandColor ?? null}
                 userName={session.displayName || session.username}
-                userRole="Owner"
+                userRole={userRole}
                 collapsed={false}
                 onNavigate={closeDrawer}
               />

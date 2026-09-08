@@ -12,7 +12,13 @@ export interface SidebarProps {
   brandHex: string | null;
   /** Signed-in user, shown at the foot of the rail. */
   userName: string;
-  userRole: string;
+  /**
+   * Her authority, already labelled — `ROLE_LABEL['frontdesk']` is "Front desk",
+   * not the wire value. NULL MEANS UNKNOWN AND DRAWS NOTHING, which is a state a
+   * session read out of storage can genuinely be in; see `MerchantSession.role`.
+   * A placeholder here would be the hardcoded "Owner" all over again.
+   */
+  userRole: string | null;
   /** narrow: icons only. tablet: rendered inside the drawer, always expanded. */
   collapsed: boolean;
   onNavigate?: () => void;
@@ -165,7 +171,12 @@ export function Sidebar({
           </span>
           <span className="dash-sidebar__user-text">
             <span className="dash-sidebar__user-name">{userName}</span>
-            <span className="dash-sidebar__user-role">{userRole}</span>
+            {/* Omitted rather than emptied: an empty span is a blank line of
+                chrome under her name, and the foot is a flex column that closes
+                up without it. */}
+            {userRole === null ? null : (
+              <span className="dash-sidebar__user-role">{userRole}</span>
+            )}
           </span>
         </div>
       </div>
