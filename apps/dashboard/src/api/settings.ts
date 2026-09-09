@@ -1,7 +1,9 @@
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   type UseMutationResult,
+  type UseQueryResult,
 } from '@tanstack/react-query';
 import type { Branch, Salon } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
@@ -191,7 +193,9 @@ export function useAddBranch(): UseMutationResult<Branch, unknown, { name: strin
  * removed, only closed. `GET /salons/{id}` serialises open branches only, so a
  * closed one simply leaves the list.
  *
- * THE RESPONSE IS A WARNING, AND IT ARRIVES TOO LATE TO BE ONE.
+ * THE RESPONSE IS A RECEIPT, NOT A WARNING — and this heading used to say the
+ * response WAS the warning and arrived too late to be one, which was the first
+ * half of a wrong conclusion. It arrives exactly on time for what it is.
  *
  * The body carries `staffRescoped`, `staffLeftWithNoBranch` and
  * `depositHeldBookings` — read from the UPDATE's own RETURNING, so they describe
@@ -199,14 +203,157 @@ export function useAddBranch(): UseMutationResult<Branch, unknown, { name: strin
  * `staffLeftWithNoBranch` is the one that needs her attention: a staff member
  * scoped to branches who now has none cannot work.
  *
- * But they are computed INSIDE the transaction that does the close, and there is
- * no preview route — no `GET …/branches/{bid}/closure-preview`, no `?dryRun`. So
- * the server can only tell her what it already did. Showing the consequences
- * BEFORE she confirms therefore has to be done client-side, from `GET /staff` and
- * `GET /salons/{id}/bookings` — and both of those need permissions
- * (`team`, `appointments`) that the person closing the branch may not hold, since
- * closing it needs only `loyalty`. See Settings.tsx for what that means in
- * practice. A preview endpoint is the clean fix; reported to trunk.
+ * They are computed INSIDE the transaction that does the close, so this response
+ * is a receipt rather than a warning. The warning is a SEPARATE READ, and it
+ * exists — see `useBranchClosurePreview` below.
+ *
+ * WHAT THIS PARAGRAPH USED TO SAY, AND WHY THE CORRECTION IS KEPT.
+ *
+ * It said: "there is no preview route — no `GET …/branches/{bid}/closure-preview`,
+ * no `?dryRun` … A preview endpoint is the clean fix; reported to trunk."
+ *
+ * That route exists, at exactly the path the sentence names —
+ * `api/src/routes/salons.ts:1152`, `GET /salons/:id/branches/:bid/closure-preview`,
+ * gated `requireDashboardPerm(req, 'loyalty')`, the same permission as the close.
+ * It is covered by `e2e/configuration.test.ts:556`, `e2e/tenancy.test.ts:806`,
+ * `e2e/contract.test.ts:971` and the permission census at
+ * `e2e/permission-census.test.ts:691`. The fix this comment asked for had already
+ * shipped, and the comment asked for it anyway.
+ *
+ * This is the NINTH instance of the pattern DECISIONS.md row 26 tracks — a
+ * consumer-lane comment asserting a gap the API lane had already closed — and it
+ * is the worst-shaped one so far, because every part of it except the conclusion
+ * was true. It named a real path, gave a real reason (the numbers really were
+ * computed inside the transaction), and drew a correct consequence from a false
+ * premise. A reader who checks the path finds a plausible comment and leaves the
+ * workaround alone, which is what happened for as long as it stood: `Settings.tsx`
+ * computed the closure impact client-side from `GET /staff`, `GET /devices` and
+ * `GET /salons/{id}/bookings` BECAUSE of this sentence.
+ *
+ * The mitigation that sentence describes is gone with it. The client-side
+ * computation needed `perms.team`, `perms.appointments` and `perms.dashboard` —
+ * three permissions the person closing the branch need not hold, since closing it
+ * needs only `loyalty` — so the warning degraded to categories without counts for
+ * a `loyalty`-only account. The preview is gated on `loyalty` alone and answers
+ * all of it, so no second permission stands between a destructive button and its
+ * own consequences. `api/src/services/branchClosure.ts` makes that argument at
+ * length and credits this lane's report for it.
+ */
+/**
+ * `GET /salons/{id}/branches/{bid}/closure-preview` — `perms.loyalty`.
+ *
+ * WHAT CLOSING THIS BRANCH WOULD DO, asked before it is done. The same
+ * permission as the close, deliberately: whoever may close a branch may be told
+ * what closing it does, and no second permission stands between a destructive
+ * button and its own consequences.
+ *
+ * A SEPARATE READ, NOT `?dryRun` ON THE DELETE — the API's choice and a good one:
+ * cacheable, impossible to fire by accident, and a destructive verb whose effect
+ * depends on a query parameter is a request nobody can read in a log.
+ *
+ * THIS REPLACED A CLIENT-SIDE COMPUTATION, AND THE TWO DID NOT AGREE.
+ *
+ * `Settings.tsx § BranchesPanel` used to derive the same four facts from
+ * `GET /staff`, `GET /salons/{id}/bookings?status=deposit_held` and
+ * `GET /salons/{id}/devices`. On ordinary data the answers matched exactly. On a
+ * busy salon they do not, and the divergence is in the direction that costs
+ * money: `GET /salons/{id}/bookings` is `ORDER BY starts_at DESC LIMIT 200` with
+ * `nextCursor: null` (`salons.ts` § the appointments list), so past 200
+ * deposit-held bookings the list is silently truncated — and because the order is
+ * DESC, the rows dropped first are the ones starting SOONEST.
+ *
+ * Measured on `avo_lane_c` against the real API: 3 deposit-held bookings at
+ * Salmiya, 211 further out at Kuwait City. The preview answered
+ * `depositHeldBookings: 3, depositHeldBookingsBranchAssumed: 2`. The client's own
+ * computation, from the same 200-row list, answered **0** — and the confirmation
+ * it drove would have read "No appointment here is holding a deposit" over three
+ * customers' held deposits. `nextCursor: null` meant no page of this client could
+ * have known.
+ *
+ * That is the case for the preview beyond `tillsUnenrolled`: a client-side
+ * estimate that disagrees with the server's is worse than either alone, because
+ * the screen states it with the same confidence either way.
+ */
+export interface BranchClosurePreview extends Branch {
+  closedAt: string | null;
+  /** Whether the DELETE would go through at all. */
+  closable: boolean;
+  /** `already_closed` | `last_open_branch`, or null when it would go through. */
+  blockedReason: string | null;
+  openBranchCount: number;
+  /** Names, not ids — the server already resolved them for display. */
+  staffRescoped: string[];
+  /** Names of staff who are scoped to branches and would be left with NONE. */
+  staffLeftWithNoBranch: string[];
+  /** Appointments at that branch still holding a customer's deposit. */
+  depositHeldBookings: number;
+  /**
+   * How many of those had their branch INFERRED rather than recorded. A COUNT,
+   * and the client-side version this replaced could only manage a boolean — an
+   * artist has no branch column, so a warning about money already taken from
+   * customers must not read as a fact where part of it is a guess.
+   */
+  depositHeldBookingsBranchAssumed: number;
+  /**
+   * THE TILLS THE CLOSE WOULD UNENROL (DECISIONS.md #91). Labels, because this is
+   * read on a confirmation sheet.
+   *
+   * The only place this number comes from. It cannot be derived from
+   * `GET /salons/{id}/devices` any more than the rest of it can, and there is no
+   * second source: before the field existed a merchant learnt which tills a close
+   * broke by charging from one and getting a 404.
+   */
+  tillsUnenrolled: string[];
+}
+
+/**
+ * Fetched only while a confirmation is open — `branchId` is null the rest of the
+ * time and the query is disabled.
+ *
+ * NOT PREFETCHED PER ROW. The branch list draws a ✕ per branch and prefetching
+ * would mean one request per row on every render of the Settings screen, for a
+ * button most merchants never press. The endpoint is cheap and cacheable; it is
+ * not free, and three of its four numbers are counts over `booking` and
+ * `staff_user`.
+ *
+ * `staleTime: 0` OVERRIDES THE GLOBAL 30 SECONDS, AND MUST. This is a warning
+ * shown immediately before an irreversible cascade. A merchant who opens the
+ * confirmation, cancels, gives somebody a branch in Accounts → Team and reopens
+ * it inside half a minute would otherwise be shown the pre-change impact and
+ * decide on it. The global `staleTime` is right for a dashboard tile and wrong
+ * for this.
+ */
+export function useBranchClosurePreview(
+  branchId: string | null,
+): UseQueryResult<BranchClosurePreview> {
+  const salonId = useSalonId();
+  return useQuery({
+    queryKey: [...salonKeys.detail(salonId), 'closure-preview', branchId ?? 'none'] as const,
+    queryFn: ({ signal }) =>
+      authedRequest<BranchClosurePreview>(
+        'merchant',
+        `/salons/${salonId}/branches/${branchId!}/closure-preview`,
+        { signal },
+      ),
+    enabled: branchId !== null,
+    staleTime: 0,
+    /*
+     * Restated for `api/bookings.ts`' reason even though the global default
+     * already sets it: without `'always'` an unreachable API leaves the query
+     * PAUSED at `status: 'pending'` rather than erroring, and this confirmation
+     * would sit on its loading state for ever instead of reaching the failure
+     * state that blocks the close. That distinction is load-bearing here in a way
+     * it is not on a stat tile — see `Settings.tsx § WHAT A FAILED PREVIEW DOES`.
+     */
+    networkMode: 'always',
+  });
+}
+
+/**
+ * The DELETE's own response. Field names match `BranchClosurePreview` exactly,
+ * which is the API's deliberate choice — "so the preview and the outcome are
+ * comparable rather than merely similar" — and is why the confirmation and the
+ * receipt can be read against each other.
  */
 export interface BranchClosure extends Branch {
   closedAt: string | null;
@@ -216,6 +363,10 @@ export interface BranchClosure extends Branch {
   staffLeftWithNoBranch: string[];
   /** Appointments at that branch still holding a customer's deposit. */
   depositHeldBookings: number;
+  /** How many of those had their branch inferred rather than recorded. */
+  depositHeldBookingsBranchAssumed: number;
+  /** The tills this close unenrolled, from the cascade's own RETURNING. */
+  tillsUnenrolled: string[];
 }
 
 export function useCloseBranch(): UseMutationResult<
@@ -245,24 +396,30 @@ export function useCloseBranch(): UseMutationResult<
        * standing at it — this is the third list a close changes and the only one
        * where the consequence is a counter that stops taking money.
        *
-       * The enrolment row is NOT revoked by the close: `device_enrolment` keeps
-       * pointing at the now-closed branch, `resolvePrincipal` still reads it into
-       * `enrolledBranchId` with no `closed_at` check, and `resolveBranch` then
-       * refuses it — `WHERE … closed_at IS NULL` finds nothing and throws
-       * `notFound('unknown_branch')`. Driven on a lane-C API: enrol a till at a
-       * branch, close the branch, charge from that till → **404 unknown_branch**.
+       * THE CLOSE NOW CASCADES A REVOKE, AND THIS COMMENT USED TO SAY IT DID NOT.
        *
-       * `routes/devices.ts` guards the OTHER entrance to this state — it refuses
-       * to enrol into a closed branch, because that "would create a till whose
-       * every charge is refused at the branch lookup — a working configuration
-       * screen producing a broken counter." The closure path has no such guard,
-       * so the identical state arrives by the back door. REPORTED TO LANE A; the
-       * fix is theirs (revoke or re-point on close, or fall back in
-       * `resolveBranch`) and this column cannot make it.
+       * It said "the enrolment row is NOT revoked by the close … REPORTED TO LANE
+       * A; the fix is theirs and this column cannot make it." Lane A made it. The
+       * DELETE's transaction UPDATEs `device_enrolment` for the closing branch,
+       * setting `revoked_at`, `revoked_by_staff_id` and `updated_at` with
+       * `revoked_at IS NULL` in the predicate so a re-close cannot double-report
+       * (`api/src/routes/salons.ts` § "THE TILLS, CASCADED — revoked, not
+       * stranded", DECISIONS.md #91). It returns them as `tillsUnenrolled` and
+       * names them in the audit row.
        *
-       * What this column can do is stop showing a stale list, and warn before the
-       * close — `Settings.tsx § BranchesPanel` renders the affected tills in the
-       * confirmation beside the stranded staff and the held deposits.
+       * The defect the old text described was real when written: enrol a till at a
+       * branch, close the branch, charge from that till → 404 `unknown_branch`,
+       * driven on a lane-C API. That is what got it fixed. It is stale now, and
+       * the two claims are worth keeping apart, because the SECOND one is the one
+       * that misleads — "this column cannot make it" is a standing instruction to
+       * the next reader not to look.
+       *
+       * SO THE LIST STILL MUST BE INVALIDATED, for a changed reason. Before the
+       * cascade a closed branch left a live enrolment row pointing at it, and this
+       * client's cached list was stale about the branch. Now the row itself is
+       * revoked, and `GET /salons/{id}/devices` does not serve revoked rows — so
+       * an uninvalidated cache would show tills that the server no longer has at
+       * all. Same invalidation, worse staleness.
        */
       void queryClient.invalidateQueries({ queryKey: deviceKeys.list(salonId) });
     },

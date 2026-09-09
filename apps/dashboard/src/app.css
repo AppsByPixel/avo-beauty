@@ -1555,6 +1555,36 @@ a:hover {
   color: var(--avo-danger-text);
 }
 
+/* LOADING. Skeleton lines stand where the consequences will be, so the sheet does
+   not resize under her when the preview lands. No bullet against a grey bar — a
+   marker beside a placeholder reads as a real item with its text missing. */
+.settings__consequences[aria-busy='true'] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.settings__consequences[aria-busy='true'] li + li {
+  margin-top: 7px;
+}
+
+/* FAILURE. The preview could not be fetched, so the close is withheld. The
+   ErrorState inside carries its own surface; this only spaces it and drops the
+   warning padding, because the block is no longer a warning about a close — it is
+   the reason there is no Close button. */
+.settings__confirm-failed {
+  margin-top: 10px;
+}
+
+/* Why the primary action is absent — under the failure state, and under the
+   server's `closable: false`. Not `--danger`: nothing has gone wrong in her
+   salon, and nothing has changed in it. */
+.settings__confirm-blocked {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-warn-text);
+}
+
 .settings__confirm-actions {
   display: flex;
   gap: 10px;
