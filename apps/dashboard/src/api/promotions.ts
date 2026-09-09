@@ -68,6 +68,37 @@ export const BOOST_BOUNDS = {
 } as const;
 
 /**
+ * What a branch's boost row MEANS, in the design's own plain language.
+ *
+ * IT LIVED IN `routes/marketing/Boosts.tsx` AND NOW LIVES HERE, because a second
+ * screen needed the same sentence. `routes/Tills.tsx` shows the earning
+ * consequence of the branch a till stands at — that is the whole reason that
+ * panel is not a device-management screen — and the honest way to say "this till
+ * pays double visits" is the sentence the merchant already read on the Boosts
+ * screen when she set the rate.
+ *
+ * MOVED RATHER THAN COPIED, deliberately. `PromotionSetSchema`'s own header says
+ * "ONE source of truth. The wallet and the dashboard read this same object —
+ * never duplicate boost or happy-hour values in a client", and a second
+ * `summarise` beside this one is how two screens start describing one boost row
+ * differently. This module already owns `BoostValues`, `NEUTRAL_BOOST` and
+ * `BOOST_BOUNDS`, so it is where the vocabulary belongs.
+ *
+ * The caller passes the branch name because the two screens frame it
+ * differently — Boosts says "A visit at Salmiya…", the till panel says "A visit
+ * on this till…" — and the subject is the only part that differs.
+ */
+export function summariseBoost(subject: string, v: BoostValues): string {
+  const parts: string[] = [];
+  if (v.visit > 1) parts.push(`counts as ${v.visit} visits`);
+  if (v.topup > 0) parts.push(`adds ${v.topup}% to every top-up`);
+  if (v.stamp > 1) parts.push(`earns ${v.stamp} stamps`);
+  if (parts.length === 0) return `A visit at ${subject} earns the salon's base rate.`;
+  const last = parts.pop() as string;
+  return `A visit at ${subject} ${parts.length ? `${parts.join(', ')} and ${last}` : last}.`;
+}
+
+/**
  * Publish the whole grid.
  *
  * A PUT of the SET, not a PATCH of a branch, because the screen is the whole

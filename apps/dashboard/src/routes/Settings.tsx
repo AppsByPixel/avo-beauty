@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { fils, formatFils, type Salon } from '@avo/types';
 import { Button, Card, ErrorState, Pill, Skeleton, Stepper, TextField, Toggle } from '@avo/ui';
 import { useSalonBookings } from '../api/bookings.js';
+import { useDevices } from '../api/devices.js';
 import { useSalon } from '../api/salon.js';
 import {
   useAddBranch,
@@ -12,6 +13,7 @@ import {
 import { useStaff } from '../api/staff.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
+import { Tills } from './Tills.js';
 
 /**
  * Merchant → Settings.
@@ -74,43 +76,6 @@ export function Settings() {
   const update = useUpdateSalon();
   const salon = salonQuery.data;
 
-  /*
-   * THE COURTESY GATE MARKETING ALREADY HAD AND THIS SCREEN DID NOT.
-   *
-   * `GET /salons/{id}` is guarded by `requirePrincipal` and `requireSameSalon`
-   * and NO permission — deliberately, because the customer wallet reads the same
-   * object for `timezone`, `businessHours` and the loyalty shape. So the read
-   * succeeds for any staff member in the salon, and this screen rendered a
-   * complete, editable Settings editor to a front-desk account with
-   * `perms.dashboard` and `perms.loyalty` both off. Every write from it then
-   * refuses.
-   *
-   * That is the inverse of the failure `sectionState.tsx` guards against. Not a
-   * 403 wearing a Retry button, but NO refusal at all until she has set a deposit,
-   * toggled WhatsApp and pressed save — at which point the screen tells her the
-   * change never happened. Verified with the seeded front-desk account: six
-   * sections explained themselves, Settings handed her the editor.
-   *
-   * `perms.loyalty` and not `perms.dashboard`, because that is what the server
-   * actually enforces: every salon write — `PATCH /salons/{id}` and all three
-   * branch routes — is `requireDashboardPerm(req, 'loyalty')`. Gating the courtesy
-   * on `dashboard` would hide the screen from somebody the API would let save,
-   * which is a worse error than the one being fixed.
-   *
-   * Non-negotiable #7 is unchanged: the server refuses these writes whether or
-   * not this check exists. This is the courtesy, not the control. The copy is the
-   * API's own sentence for `loyalty`, so a merchant who reaches the refusal by
-   * another route reads the same words.
-   */
-  if (!session.perms.loyalty) {
-    return (
-      <ErrorState
-        title="You don't have access to settings"
-        body="You don't have permission to change loyalty settings. A manager can grant it."
-      />
-    );
-  }
-
   if (salonQuery.isError) {
     return (
       <SectionError
@@ -123,25 +88,92 @@ export function Settings() {
     );
   }
 
+  /*
+   * ==========================================================================
+   * THE GATE MOVED FROM THE SCREEN TO THE PANELS, AND A SECOND PERMISSION IS WHY
+   * ==========================================================================
+   * THE ORIGINAL GATE AND ITS ARGUMENT, KEPT, because it is still exactly right
+   * about the five panels it was written for:
+   *
+   *   `GET /salons/{id}` is guarded by `requirePrincipal` and `requireSameSalon`
+   *   and NO permission — deliberately, because the customer wallet reads the
+   *   same object for `timezone`, `businessHours` and the loyalty shape. So the
+   *   read succeeds for any staff member in the salon, and this screen rendered a
+   *   complete, editable Settings editor to a front-desk account with
+   *   `perms.dashboard` and `perms.loyalty` both off. Every write from it then
+   *   refuses. That is the inverse of the failure `sectionState.tsx` guards
+   *   against: not a 403 wearing a Retry button, but NO refusal at all until she
+   *   has set a deposit, toggled WhatsApp and pressed save — at which point the
+   *   screen tells her the change never happened. Verified with the seeded
+   *   front-desk account.
+   *
+   * WHAT CHANGED IS THAT THE SCREEN NOW HOLDS TWO DIFFERENT AUTHORITIES. Every
+   * write the gate was written for — `PATCH /salons/{id}` and all three branch
+   * routes — is `requireDashboardPerm(req, 'loyalty')`. The Tills panel's three
+   * endpoints are `requirePerm(req, 'either', 'dashboard')`, argued as such in
+   * `routes/devices.ts` ("`perms.dashboard` is already the authority over
+   * per-branch money truth… a till is not a person").
+   *
+   * `loyalty` and `dashboard` are orthogonal — nothing implies either from the
+   * other — so ONE screen-level gate is now wrong in both directions at once:
+   *
+   *   a `dashboard`-holding manager without `loyalty` was shown a refusal for the
+   *   whole screen, hiding a tills editor the API would have let her use. That is
+   *   precisely the error the original comment warned against ("hide the screen
+   *   from somebody the API would let save"), arriving through a panel added
+   *   later.
+   *
+   *   a `loyalty`-only account would have been handed the tills editor, whose
+   *   every read 403s — the original defect, one panel over.
+   *
+   * So the gate is per-panel. `Tills` carries its own `perms.dashboard` check and
+   * its own refusal; the five `loyalty` panels are gated here, together, because
+   * they genuinely share one permission and one endpoint. Non-negotiable #7 is
+   * unchanged either way: both servers refuse with both checks deleted. These are
+   * courtesies.
+   *
+   * The copy is still the API's own sentence for `loyalty`, verbatim from
+   * `PERMISSION_COPY` — and it is now scoped to the panels it describes, which it
+   * was not before: it said "You don't have access to settings" over a screen
+   * that also holds tills.
+   */
+  const canEditSalon = session.perms.loyalty;
+
   return (
     <div className="settings">
-      <ModulesPanel salon={salon} update={update} />
-      <div className="settings__pair">
-        <DepositPanel salon={salon} update={update} />
-        <BusinessHoursPanel salon={salon} />
-      </div>
+      {canEditSalon ? (
+        <>
+          <ModulesPanel salon={salon} update={update} />
+          <div className="settings__pair">
+            <DepositPanel salon={salon} update={update} />
+            <BusinessHoursPanel salon={salon} />
+          </div>
+          {/*
+            * `settings__stack` IS GONE WITH THE SECOND CARD IT EXISTED TO SPACE. It
+            * was a flex column with an 18px gap holding WhatsApp above Commission;
+            * with one child it renders identically to the card sitting in the grid
+            * cell directly, so keeping it would leave a wrapper whose only reason is
+            * a sibling that no longer exists. Its rule is out of app.css too — this
+            * was its only user.
+            */}
+          <div className="settings__pair">
+            <BranchesPanel salon={salon} />
+            <WhatsAppPanel salon={salon} update={update} />
+          </div>
+        </>
+      ) : (
+        <ErrorState
+          title="You don't have access to salon settings"
+          body="You don't have permission to change loyalty settings. A manager can grant it."
+        />
+      )}
+
       {/*
-        * `settings__stack` IS GONE WITH THE SECOND CARD IT EXISTED TO SPACE. It
-        * was a flex column with an 18px gap holding WhatsApp above Commission;
-        * with one child it renders identically to the card sitting in the grid
-        * cell directly, so keeping it would leave a wrapper whose only reason is
-        * a sibling that no longer exists. Its rule is out of app.css too — this
-        * was its only user.
-        */}
-      <div className="settings__pair">
-        <BranchesPanel salon={salon} />
-        <WhatsAppPanel salon={salon} update={update} />
-      </div>
+        THE TILLS PANEL SITS BELOW THE SALON PANELS AND OUTSIDE THEIR GATE.
+        Its own `perms.dashboard` courtesy check is inside it — see
+        `routes/Tills.tsx`, and the argument for both above.
+      */}
+      <Tills salon={salon} />
 
       {update.isError ? (
         <WriteError error={update.error} reassurance="That setting is unchanged." />
@@ -394,6 +426,24 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
   // Only fetched when the permission allows it — see the note above.
   const staff = useStaff(session.perms.team);
   const bookings = useSalonBookings('deposit_held', session.perms.appointments);
+  /*
+   * THE THIRD CONSEQUENCE, AND THE ONLY ONE THAT STOPS A COUNTER TAKING MONEY.
+   *
+   * A till enrolled at this branch is NOT revoked when the branch closes, and
+   * every charge through it is then refused — `resolveBranch` requires
+   * `closed_at IS NULL` on a supplied branch and throws `unknown_branch`
+   * otherwise. Driven on a lane-C API: enrol, close, charge → 404. See
+   * `api/settings.ts § useCloseBranch` for the full trail and the report to
+   * lane A.
+   *
+   * On `perms.dashboard` and so `enabled` on it, exactly as the roster and the
+   * appointment list are on theirs: the person closing a branch needs only
+   * `perms.loyalty`, so she may not be allowed to see the tills. Where she is
+   * not, the warning degrades to the category without the names rather than
+   * implying no till is affected — `staffRescoped`'s pattern, one consequence
+   * over.
+   */
+  const devices = useDevices(session.perms.dashboard);
 
   const branches = salon?.branches ?? [];
   const onlyOpenBranch = branches.length <= 1;
@@ -417,6 +467,8 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
       rescoped: scoped.map((s) => s.name),
       stranded: scoped.filter((s) => s.branchAccess !== 'all' && s.branchAccess.length === 1),
       deposits: held.length,
+      /** Tills that would be left pointing at a closed branch — see `devices` above. */
+      tills: (devices.data ?? []).filter((d) => d.branchId === branchId),
       /*
        * `branchAssumed` is on `MerchantBooking` precisely so a per-branch count
        * that rests on a guess is distinguishable from one that does not. Ignoring
@@ -478,7 +530,9 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         ? (() => {
             const branch = branches.find((b) => b.id === confirming);
             if (!branch) return null;
-            const { rescoped, stranded, deposits, depositsAssumed } = impactOf(branch.id);
+            const { rescoped, stranded, deposits, depositsAssumed, tills } = impactOf(
+              branch.id,
+            );
             const busy = closeBranch.isPending;
             return (
               <div
@@ -547,6 +601,35 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
                     <li>
                       Appointments here may still hold a customer&rsquo;s deposit. You don&rsquo;t
                       have permission to see appointments, so this can&rsquo;t be counted here.
+                    </li>
+                  )}
+
+                  {/*
+                    THE TILLS. The one consequence on this list that stops money
+                    being taken at all, so it is the one that says so loudest.
+                  */}
+                  {session.perms.dashboard ? (
+                    tills.length > 0 ? (
+                      <li className="settings__consequence--warn">
+                        <b>
+                          {tills.length === 1
+                            ? `${tills[0]!.label} would stop taking payments`
+                            : `${tills.length} tills would stop taking payments: ${tills
+                                .map((t) => t.label)
+                                .join(', ')}`}
+                        </b>{' '}
+                        — a till pointed at a closed branch has every charge refused. Move{' '}
+                        {tills.length === 1 ? 'it' : 'them'} to another branch under Tills
+                        below, before or right after you close this one.
+                      </li>
+                    ) : (
+                      <li>No till stands at this branch.</li>
+                    )
+                  ) : (
+                    <li>
+                      A till standing at this branch would stop taking payments. You
+                      don&rsquo;t have permission to see the tills, so this can&rsquo;t be
+                      checked here.
                     </li>
                   )}
                 </ul>
