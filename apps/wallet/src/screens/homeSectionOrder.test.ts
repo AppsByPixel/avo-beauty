@@ -65,10 +65,18 @@ const BUILT: ReadonlyArray<{ marker: string; anchors: readonly string[] }> = [
     anchors: ['<UpcomingSkeleton', '<UpcomingFailedCard', '<UpcomingCard', '<NoUpcomingCard'],
   },
   { marker: 'ACTIVITY', anchors: ['<ActivityFeed'] },
+  { marker: 'MEMBERSHIP', anchors: ['<MembershipSection'] },
 ];
 
-/** Recorded, not forgotten. Item 9 moves this into `BUILT`. */
-const UNBUILT: readonly string[] = ['MEMBERSHIP'];
+/**
+ * Recorded, not forgotten.
+ *
+ * Empty since MEMBERSHIP was built. The list stays, and so does the test below
+ * it, because the next section this design grows will want the same treatment —
+ * and because an empty list is a claim ("every section of this design is built")
+ * that the `BUILT` map above is now asserted against.
+ */
+const UNBUILT: readonly string[] = [];
 
 const design = readFileSync(DESIGN, 'utf8');
 const screen = readFileSync(SCREEN, 'utf8');
@@ -131,5 +139,48 @@ describe("Home's sections sit in the design's order", () => {
         `${marker} is built now — move it from UNBUILT into BUILT so its position is asserted`,
       ).toBe(false);
     }
+  });
+
+  /**
+   * The half that stops `UNBUILT: []` from being a free pass.
+   *
+   * With the list empty, the loop above iterates nothing and says nothing. This
+   * reads the design's own section markers instead and requires every one of
+   * them to be accounted for — asserted in `BUILT` or declared in `UNBUILT` —
+   * so a section ADDED to the design cannot go unnoticed by this file.
+   *
+   * SCOPED TO THE HOME BLOCK, which is what this file is about. The design
+   * bundle is one document holding every screen, delimited by
+   * `<!-- ===== NAME ===== -->` dividers, and the first attempt at this test
+   * swept up `TOAST`, `CART SHEET` and eight others from further down the file.
+   * So the window is the `HOME` divider to the next divider of that form.
+   *
+   * `HAPPY HOUR LIVE` and `HAPPY HOUR NEXT` are the one banner the `HAPPY HOUR`
+   * prefix already covers, and the markers are matched by prefix for that
+   * reason; both therefore resolve to a mapped section rather than a missing one.
+   */
+  it('accounts for every section marker in the design\'s HOME block', () => {
+    const lines = design.split('\n');
+    const divider = /^<!-- =+ (.+?) =+ -->$/;
+    const start = lines.findIndex((l) => divider.exec(l.trim())?.[1] === 'HOME');
+    expect(start, "the design's HOME divider moved or was renamed").toBeGreaterThan(-1);
+
+    const after = lines.slice(start + 1);
+    const end = after.findIndex((l) => divider.test(l.trim()));
+    const block = end === -1 ? after : after.slice(0, end);
+
+    const markers = block
+      .map((l) => /^<!-- (.+?) -->$/.exec(l.trim())?.[1])
+      .filter((m): m is string => Boolean(m) && !divider.test(`<!-- ${m} -->`));
+
+    const known = [...BUILT.map((s) => s.marker), ...UNBUILT];
+    const unaccounted = [...new Set(markers)].filter(
+      (m) => !known.some((k) => m === k || m.startsWith(`${k} `)),
+    );
+
+    expect(
+      unaccounted,
+      'these design sections are neither asserted in BUILT nor declared in UNBUILT',
+    ).toEqual([]);
   });
 });

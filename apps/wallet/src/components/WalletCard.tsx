@@ -96,9 +96,13 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
             {copy.stampsHint(progress.have, progress.target)}
           </Text>
           {/*
-            The reward comes off Salon.stampReward, which the contract carries in
-            one language only. CONTRACT GAP, reported: an Arabic wallet renders
-            the salon's English reward text here. See the lane report.
+            GAP CLOSED, AND THE NOTE HERE HAD OUTLIVED IT. This said the contract
+            carried the reward "in one language only" and that an Arabic wallet
+            therefore rendered English. `SalonSchema` has carried `stampRewardAr`
+            alongside `stampReward` for as long as the seed has set it, so the
+            Arabic was on the wire and being dropped. `loyaltyProgress` now
+            resolves it through `domain/names.ts#stampRewardName`, whose header
+            carries the full account.
           */}
           {progress.reward ? (
             <Text style={[text('bodyS', lang), styles.legendText]}>{progress.reward}</Text>

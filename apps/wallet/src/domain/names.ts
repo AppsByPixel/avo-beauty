@@ -70,3 +70,53 @@ export function branchName(branch: Named, lang: Language): string {
 export function salonName(salon: Named, lang: Language): string {
   return lang === 'ar' ? (salon.nameAr ?? salon.name) : salon.name;
 }
+
+/**
+ * The salon's stamp reward in the reading language.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE THIRD "CONTRACT GAP" COMMENT THAT OUTLIVED ITS GAP, and the second in this
+ * module's own subject area.
+ *
+ * `WalletCard.tsx` carried, right above the render site:
+ *
+ *     The reward comes off Salon.stampReward, which the contract carries in
+ *     one language only. CONTRACT GAP, reported: an Arabic wallet renders
+ *     the salon's English reward text here.
+ *
+ * The contract carries BOTH. `SalonSchema` has `stampReward` and
+ * `stampRewardAr`, the second with the note "the reward is customer-facing copy,
+ * so it needs both"; `api/src/db/seed.ts` sets `stampRewardAr: 'تصفيف شعر مجاني'`
+ * for Amara and the mock serves it at `fixtures.ts:49`. So the Arabic string was
+ * on the wire and `loyaltyProgress` read `salon.stampReward` unconditionally —
+ * an Arabic wallet showed "Free blow-dry" on the card while every other string
+ * around it was Arabic.
+ *
+ * This is the SAME defect as the `nameAr` one at the top of this file, in the
+ * same shape: a note asserting a gap, the gap closed on trunk, nothing
+ * recompiling the note, and the language that loses being the one nobody on the
+ * build reads. That is now three instances in this module's subject area alone.
+ *
+ * It is fixed here rather than inline for the reason the header already gives:
+ * a ternary at a render site is a branch no test can reach.
+ * ═════════════════════════════════════════════════════════════════════════════
+ *
+ * Structural, and BOTH fields optional-and-nullable, because that is exactly how
+ * `SalonSchema` declares them — `stampReward` is absent on a tiers salon and
+ * explicitly NULL on SAL-LUMIERE, which is seeded that way so the fallback has a
+ * real null path. Returns null when the salon has no reward at all, which is a
+ * salon with no stamp card rather than a missing translation.
+ */
+export interface RewardNamed {
+  // `| undefined` is spelled out because the workspace runs
+  // `exactOptionalPropertyTypes`, under which `?:` alone does NOT admit an
+  // explicit undefined — and `SalonSchema`'s `.optional()` produces exactly
+  // that. Without it a real `Salon` does not satisfy this interface.
+  stampReward?: string | null | undefined;
+  stampRewardAr?: string | null | undefined;
+}
+
+export function stampRewardName(salon: RewardNamed, lang: Language): string | null {
+  const base = salon.stampReward ?? null;
+  return lang === 'ar' ? (salon.stampRewardAr ?? base) : base;
+}

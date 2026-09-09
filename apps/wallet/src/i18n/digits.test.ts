@@ -201,6 +201,15 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   shopPaidToast: [MONEY_SAMPLE],
   // A product NAME, resolved from the API. An identifier, not a number we own.
   cartStaleBody: ['Repair mask'],
+
+  // --- membership. The salon's name, a rung's two numbers, the illustration
+  // pair (already formatted, hence strings), a stamp count and the reward.
+  tierFine: ['Amara'],
+  tierRequirement: [4, 10],
+  tierBonusIllustration: ['10', '11'],
+  stampCountOf: [4, 8],
+  stampsGoal: [4, 'Free blow-dry'],
+  stampRule3: ['Free blow-dry'],
 };
 
 /**
@@ -252,6 +261,19 @@ const MONEY_ARG_KEYS = new Set([
   'cancelledToast',
   'bookShortBy',
   'upDeposit',
+  /*
+    The membership illustration column — "10 → 11", and "10 ← 11" in Arabic,
+    which is how the designer wrote it at design:1723.
+
+    THE ONE KEY IN THIS SET THAT TAKES TWO ARGUMENTS, so the "exactly one money
+    argument" property above no longer holds for the set as a whole. What it is
+    replaced by is narrower than it sounds: both arguments are money, there is no
+    other number in the sentence, and neither is formatted here — `tierRequirement`
+    carries this rung's COUNT and its percentage, in Eastern digits, as a separate
+    key. A future key that mixed a count with an amount would still fail the
+    mixed-script test below, which nothing in this set is exempt from.
+  */
+  'tierBonusIllustration',
 ]);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */

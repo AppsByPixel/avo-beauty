@@ -36,6 +36,7 @@ import { HappyHourBanner } from '../components/HappyHourBanner';
 import { HomeSkeleton } from '../components/HomeSkeleton';
 import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
+import { MembershipSection } from '../components/MembershipSection';
 import { TopUpCard } from '../components/TopUpCard';
 import {
   NoUpcomingCard,
@@ -184,7 +185,7 @@ export function HomeScreen({
   }
 
   const { member, salon, promotions } = snapshot;
-  const progress = loyaltyProgress(member, salon);
+  const progress = loyaltyProgress(member, salon, lang);
   const firstName = member.name.split(' ')[0] ?? member.name;
   const offline = status === 'offline';
 
@@ -354,6 +355,14 @@ export function HomeScreen({
         onTopUp={() => topUp.open(amount)}
         onOpen={setOpenTxId}
       />
+
+      {/*
+        design:343-384 — Membership, the last section on Home. The tier ladder
+        or the stamp card, on `Salon.loyaltyMode`, and nothing at all for a salon
+        that has configured neither. Its row count is the salon's own; see
+        domain/membership.ts for why that is not a detail.
+      */}
+      <MembershipSection member={member} salon={salon} />
 
       {offline ? (
         <Pressable onPress={home.retry} accessibilityRole="button" style={styles.offlineRetry}>

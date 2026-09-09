@@ -197,6 +197,79 @@ export interface Copy {
   rowFailed: string;
 
   /**
+   * Membership — design:343-384 (markup), :1173/:1232/:1258-1263 (en) and
+   * :1280/:1339/:1365-1370 (ar). The last section on Home.
+   *
+   * EVERY STRING HERE THAT NAMES A THING TAKES IT AS AN ARGUMENT, because the
+   * design bundle was drawn around one salon and hardcoded three facts that the
+   * contract makes per-salon: the salon's own name, its stamp reward, and how
+   * many rungs its ladder has. `SalonSchema` carries `stampReward` AND
+   * `stampRewardAr` ("the reward is customer-facing copy, so it needs both"),
+   * and SAL-LUMIERE runs a live TWO-rung ladder, so a four-row table with a
+   * blow-dry in it is wrong for a real tenant that exists today.
+   */
+
+  membersLabel: string;
+  /** The pill on the member's own rung. */
+  current: string;
+  /**
+   * The fine print under the tier list.
+   *
+   * CORRECTED AGAINST THE DESIGN — see DECISIONS.md #86. design:1173 reads "The
+   * salon can change its tiers at any time", which decision 79 made false: a
+   * merchant now gets `403 loyalty_read_only` and the `PATCH /salons/{id}` side
+   * door is shut, so the salon cannot change them at all. Aftab's ruling is that
+   * the authority clause names AVO while the funding clause stays exactly as
+   * true as it was — the salon does fund the rewards, and that is what stops
+   * AVO being read as the guarantor of a salon's promise.
+   *
+   * Takes the salon's name in the reading language, so pass `salonName()` and
+   * not `salon.name`: SAL-LUMIERE's `nameAr` is NULL on purpose.
+   */
+  tierFine(salon: string): string;
+  /**
+   * One rung's requirement line — "4+ visits · +10%", "0 visits · no bonus".
+   *
+   * Derived from the rung's own `minVisits` and `bonusPercent` rather than
+   * copied from design:1716-1719, which hand-wrote four rows for one salon. The
+   * derivation reproduces three of those four verbatim in both languages; see
+   * `domain/membership.ts` for the fourth and why it is not reproduced.
+   */
+  tierRequirement(minVisits: number, bonusPercent: number): string;
+  /**
+   * The illustration column — "10 → 11", and "10 ← 11" in Arabic because the
+   * arrow points the way the language reads, exactly as `tierLadder` does.
+   *
+   * Both figures are MONEY and therefore Western in both languages, which is
+   * what the designer's own Arabic does at design:1723. It takes them already
+   * formatted so that no arithmetic happens in a copy file.
+   */
+  tierBonusIllustration(base: string, credited: string): string;
+
+  // stamps variant — design:361-383
+  stampCardTitle: string;
+  /**
+   * "4 of 8" — design:1657. A count, so Eastern in Arabic.
+   *
+   * Deliberately NOT `stampsHint`, which renders "4 of 8 stamps" for the wallet
+   * card. The two strings differ in English and the design writes them
+   * separately; one key serving both would settle that difference by accident.
+   */
+  stampCountOf(have: number, target: number): string;
+  /** "4 more visits and your blow-dry is on us." The reward is the salon's. */
+  stampsGoal(remaining: number, reward: string): string;
+  stampRule1: string;
+  /**
+   * "A shop purchase counts as a visit too."
+   *
+   * Rendered only when `salon.modules.shop` is on — see `MembershipSection`. A
+   * salon without the shop module has no way for this to be true.
+   */
+  stampRule2: string;
+  /** "Your card resets after you claim your {reward}." */
+  stampRule3(reward: string): string;
+
+  /**
    * Sign-in. `design/AVO Wallet Home.dc.html:89-109`.
    *
    * The two FIELD labels are not here: they are `rowPhone` and `rowPassword`,

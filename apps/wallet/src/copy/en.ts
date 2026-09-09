@@ -213,6 +213,37 @@ export const en: Copy = {
   rowPending: 'Pending',
   rowFailed: 'Failed',
 
+  // membership — design:343-384. Strings at :1173, :1232 and :1258-1263.
+  membersLabel: 'Membership', // design:1232
+  current: 'Current', // design:1232
+  // design:1173, authority clause corrected per DECISIONS.md #86. The design
+  // appends "Salon" to the name ("Amara Salon"); interpolating that would build
+  // part of a proper noun the salon did not choose, and would read "Amara Salon
+  // Salon" for a salon already named that way. The name goes in bare.
+  tierFine: (salon) =>
+    `Bonus credit and tier rewards are funded by ${salon}, not AVO. ` +
+    'AVO can change these tiers at any time; your existing balance is never affected.',
+  // design:1716-1719. "0 visits · no bonus" for a rung that earns nothing;
+  // "4+ visits · +10%" for one that does.
+  tierRequirement: (minVisits, bonusPercent) =>
+    bonusPercent <= 0
+      ? `${minVisits} visits · no bonus`
+      : `${minVisits}+ visits · +${bonusPercent}%`,
+  tierBonusIllustration: (base, credited) => `${base} → ${credited}`,
+
+  stampCardTitle: 'Your stamp card', // design:1258
+  stampCountOf: (have, target) => `${have} of ${target}`, // design:1657
+  // design:1258 writes "your blow-dry", the salon's reward in a shortened form
+  // the prototype could hardcode. The salon's own string goes in unaltered —
+  // lowercasing it would corrupt a proper noun like "Moroccan Hammam".
+  stampsGoal: (remaining, reward) => `${remaining} more visits and your ${reward} is on us.`,
+  stampRule1: 'One stamp per salon visit, whatever you spend.', // design:1261
+  stampRule2: 'A shop purchase counts as a visit too.', // design:1262
+  // design:1263 is "…claim the free blow-dry." With the reward interpolated,
+  // "the" collides with a title-cased reward ("claim the Free blow-dry"), so it
+  // takes the same possessive `stampsGoal` uses one line above.
+  stampRule3: (reward) => `Your card resets after you claim your ${reward}.`,
+
   // sign-in — design:1168, :1246, :1248
   salonName: 'Amara',
   walletWord: 'Wallet',

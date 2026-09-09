@@ -104,6 +104,23 @@ const TIER_NAME: Record<TierName, string> = {
 const tierTo = (tier: TierName) => `لل${TIER_NAME[tier]}`;
 
 /**
+ * زيارة / زيارات — the counted noun for a number of visits.
+ *
+ * Arabic agreement is not a plural switch at 2. The noun takes the PLURAL for
+ * 3-10 and returns to the SINGULAR from 11 up, which is why `+٢٠ زيارة` is
+ * right and `+٢٠ زيارات` is not. design:1722-1724 confirms both ends of that
+ * rule — `٠ زيارة` and `+٤ زيارات`/`+١٠ زيارات` — and sidesteps the 20 case by
+ * dropping the noun, so the 11+ branch here is the regular derivation rather
+ * than design-sourced.
+ *
+ * The DUAL (exactly 2, `زيارتين`) is deliberately not implemented: it needs a
+ * different construction after a numeral, no design string supplies it, and no
+ * tier ladder or stamp target in the contract uses 2 today. If one ever does,
+ * this is the function that has to learn it.
+ */
+const visitsNoun = (n: number) => (n >= 3 && n <= 10 ? 'زيارات' : 'زيارة');
+
+/**
  * The adjective form, for design:1282 `'مستواكِ الفضي يضيف ١٠٪ …'` — مستوى is
  * masculine, so the tier agrees as a masculine adjective rather than appearing
  * as the feminine noun above.
@@ -294,6 +311,52 @@ export const ar: Copy = {
   emptyActivityAction: en.emptyActivityAction, // AR GAP
   rowPending: en.rowPending, // AR GAP
   rowFailed: en.rowFailed, // AR GAP
+
+  // ------------------------------------------------------------ membership --
+  membersLabel: 'مستويات العضوية', // design:1339
+  current: 'الحالية', // design:1339
+  /*
+    design:1280, with TWO changes, both recorded rather than invented.
+
+    1. The authority clause's subject moves from `الصالون` to AVO — DECISIONS.md
+       #86. The construction (`يمكن لـ` + subject) is the designer's own and is
+       untouched, which is why this is a substitution and not a new sentence.
+    2. The funding clause interpolates the salon's name where the design wrote
+       `صالون أمارة` literally. Note the design's own two spellings of the name:
+       `أمارة` here and `أمارا` at design:1275, which is what the API serves and
+       therefore what this renders.
+
+    In AR_UNVERIFIED, not AR_GAPS: it renders Arabic, and a native speaker still
+    needs to confirm the substituted subject reads correctly.
+  */
+  tierFine: (salon) =>
+    `المكافآت ومزايا المستويات ممولة من ${salon} وليس من AVO. ` +
+    'يمكن لـAVO تغيير المستويات في أي وقت، ولا يتأثر رصيدك الحالي.',
+  /*
+    design:1722-1724 supplies three counted forms — `٠ زيارة`, `+٤ زيارات`,
+    `+١٠ زيارات` — and drops the noun entirely for 20. Those three fix the rule
+    rather than merely sampling it: Arabic takes the plural for 3–10 and the
+    SINGULAR from 11 up, so `+٢٠ زيارة` is correct and a uniform `زيارات` would
+    not be. The dual (2) has no design sample and no ladder uses it today.
+  */
+  tierRequirement: (minVisits, bonusPercent) =>
+    bonusPercent <= 0
+      ? `${ea(minVisits)} ${visitsNoun(minVisits)} · بدون مكافأة`
+      : `+${ea(minVisits)} ${visitsNoun(minVisits)} · +${ea(bonusPercent)}${PC}`,
+  // The arrow points the way the language reads — design:1722 writes `10 ← 11`.
+  // Western digits: both figures are money. Non-negotiable #12.
+  tierBonusIllustration: (base, credited) => `${base} ← ${credited}`,
+
+  stampCardTitle: 'بطاقة الأختام', // design:1365
+  stampCountOf: (have, target) => `${ea(have)} من ${ea(target)}`, // design:1657
+  // design:1365 writes `وتصفيف الشعر`, a fitted form of the one reward the
+  // prototype had. The salon's own `stampRewardAr` goes in instead.
+  stampsGoal: (remaining, reward) =>
+    `${ea(remaining)} ${visitsNoun(remaining)} و${reward} على حسابنا.`,
+  stampRule1: 'ختم واحد لكل زيارة، مهما كان المبلغ.', // design:1368
+  stampRule2: 'مشتريات المتجر تُحتسب كزيارة أيضاً.', // design:1369
+  // design:1370, with `التصفيف المجاني` replaced by the salon's reward.
+  stampRule3: (reward) => `تبدأ البطاقة من جديد بعد استلام ${reward}.`,
 
   // --------------------------------------------------------------- sign-in --
   // The happy path IS in the bundle's `ar` block, so these three are lifted.
@@ -851,4 +914,11 @@ export const AR_UNVERIFIED = [
   'tierBonusExplain(bronze)',
   'tierBonusExplain(gold)',
   'tierBonusExplain(black)',
+  // Membership. The subject substitution decision 86 ruled on, plus the three
+  // strings where a per-salon value replaced a phrase the design had fitted to
+  // one hardcoded reward.
+  'tierFine',
+  'tierRequirement(11+)',
+  'stampsGoal',
+  'stampRule3',
 ] as const;
