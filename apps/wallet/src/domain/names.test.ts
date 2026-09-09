@@ -20,7 +20,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { branchName, salonName } from './names';
+import { branchName, salonName, stampRewardName } from './names';
 
 /** The seed's real values — api/src/db/seed.ts, and driven off GET /salons. */
 const SALMIYA = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية' };
@@ -85,6 +85,59 @@ describe('a null nameAr falls back to Latin, and never to blank', () => {
       for (const lang of ['en', 'ar'] as const) {
         expect(branchName(entity, lang).trim()).not.toBe('');
       }
+    }
+  });
+});
+
+/**
+ * THE SAME DEFECT, A THIRD TIME, IN THE SAME SUBJECT AREA.
+ *
+ * `WalletCard.tsx` carried a note saying the contract held the stamp reward "in
+ * one language only" and that an Arabic wallet therefore rendered English.
+ * `SalonSchema` has held `stampRewardAr` alongside `stampReward` for as long as
+ * `seed.ts` has set it to `تصفيف شعر مجاني`, and `packages/mock` serves it too —
+ * so the Arabic was on the wire and `loyaltyProgress` dropped it.
+ *
+ * The fixtures below carry BOTH strings for the same reason the ones above do: a
+ * fixture that omits `stampRewardAr` passes whether or not the code reads it.
+ */
+describe('stampRewardName', () => {
+  const REWARDED = { stampReward: 'Free blow-dry', stampRewardAr: 'تصفيف شعر مجاني' };
+
+  it('reads the reward in the reading language', () => {
+    expect(stampRewardName(REWARDED, 'en')).toBe('Free blow-dry');
+    expect(stampRewardName(REWARDED, 'ar')).toBe('تصفيف شعر مجاني');
+  });
+
+  /** SAL-LUMIERE is seeded with `stampRewardAr` NULL so this path is real. */
+  it('falls back to the base string on a genuine NULL', () => {
+    expect(stampRewardName({ stampReward: 'Free blow-dry', stampRewardAr: null }, 'ar')).toBe(
+      'Free blow-dry',
+    );
+  });
+
+  /**
+   * `undefined ?? x` and `null ?? x` agree, so an ABSENT key proves nothing
+   * about a NULL one. Both are asserted, as the header of this file argues.
+   */
+  it('falls back when the Arabic key is absent rather than null', () => {
+    expect(stampRewardName({ stampReward: 'Free blow-dry' }, 'ar')).toBe('Free blow-dry');
+  });
+
+  it('is null when the salon has configured no reward, in either language', () => {
+    for (const lang of ['en', 'ar'] as const) {
+      expect(stampRewardName({}, lang)).toBeNull();
+      expect(stampRewardName({ stampReward: null, stampRewardAr: null }, lang)).toBeNull();
+    }
+  });
+
+  /**
+   * The failure this guards is silent: a reward that renders as the empty string
+   * would leave "4 more visits and your  is on us." on the card.
+   */
+  it('never returns an empty string when a reward exists', () => {
+    for (const lang of ['en', 'ar'] as const) {
+      expect(stampRewardName(REWARDED, lang)!.trim()).not.toBe('');
     }
   });
 });

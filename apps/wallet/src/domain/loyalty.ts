@@ -6,8 +6,9 @@
  * runs; there is no third "no loyalty" mode in the contract.
  */
 
-import type { Member, Salon, TierName } from '@avo/types';
+import type { Language, Member, Salon, TierName } from '@avo/types';
 import type { Copy } from '../copy/types';
+import { stampRewardName } from './names';
 
 export interface TierProgress {
   mode: 'tiers';
@@ -41,7 +42,17 @@ export function tierLabel(tier: TierName, copy: Copy): string {
   return copy.tierName[tier];
 }
 
-export function loyaltyProgress(member: Member, salon: Salon): LoyaltyProgress | null {
+/**
+ * `lang` is here only for the stamp reward, which is the one field on this
+ * shape that is customer-facing COPY rather than a number. It resolves through
+ * `stampRewardName` so the branch is testable; see that function's header for
+ * the Arabic bug this closes.
+ */
+export function loyaltyProgress(
+  member: Member,
+  salon: Salon,
+  lang: Language,
+): LoyaltyProgress | null {
   if (salon.loyaltyMode === 'stamps') {
     const target = salon.stampTarget ?? 0;
     const have = member.stamps ?? 0;
@@ -50,7 +61,7 @@ export function loyaltyProgress(member: Member, salon: Salon): LoyaltyProgress |
       mode: 'stamps',
       have,
       target,
-      reward: salon.stampReward ?? null,
+      reward: stampRewardName(salon, lang),
       fraction: Math.min(1, have / target),
     };
   }
