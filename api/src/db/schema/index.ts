@@ -16,6 +16,7 @@
  *          ├─ member ──── wallet_token
  *          ├─ staff_user
  *          ├─ session ──── pin_attempt
+ *          ├─ device_enrolment (a till → a branch — DECISIONS #82)
  *          ├─ booking ──── artist_calendar_connection (per artist)
  *          ├─ merchant_notification
  *          ├─ campaign ──── campaign_send (→ member)
@@ -51,6 +52,7 @@ export * from './member';
 export * from './phoneChange';
 export * from './staff';
 export * from './session';
+export * from './deviceEnrolment';
 export * from './transaction';
 export * from './ledger';
 export * from './shopOrder';
