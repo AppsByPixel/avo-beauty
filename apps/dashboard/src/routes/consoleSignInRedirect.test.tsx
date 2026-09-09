@@ -68,6 +68,24 @@ const { AuthProvider, useAuth } = await import('../auth/AuthProvider.js');
 const { router } = await import('../router.js');
 const { SCOPES } = await import('../auth/scopes.js');
 
+/*
+ * A GENEROUS `waitFor` BUDGET, AND WHY IT WEAKENS NOTHING.
+ *
+ * @testing-library's `waitFor` defaults to 1000ms. Every wait in this file is on
+ * a real React mount plus a real TanStack Router navigation — the seam described
+ * above is exactly what makes stubbing either one pointless, and it is also what
+ * makes these waits the slowest in the dashboard suite. On 2026-09-08, verifying
+ * the lane C merge into dev (aa9eadc), this file failed the gate twice while the
+ * host sat at a load average of 324-465 and the full run took 194s against its
+ * normal ~2s. Run in isolation it passed 3/3, and the full suite passed 383/383
+ * once load eased. The 1s budget was the failure; the redirect was not.
+ *
+ * This raises only how long the assertions are willing to WAIT. It does not
+ * relax one of them: a redirect that never fires still fails this file, five
+ * seconds later instead of one.
+ */
+const LOADED_HOST = { timeout: 5000 } as const;
+
 /** A seeded owner, every section — the `yousef` row, minus anything secret. */
 const OWNER: OwnerSession = {
   scope: 'owner',
@@ -170,8 +188,9 @@ describe('the owner console sign-in leaves the sign-in screen', () => {
     signInToConsoleMock.mockResolvedValue(OWNER);
     mount();
 
-    await waitFor(() =>
-      expect(router.state.location.pathname).toBe(SCOPES.owner.signIn),
+    await waitFor(
+      () => expect(router.state.location.pathname).toBe(SCOPES.owner.signIn),
+      LOADED_HOST,
     );
 
     /*
@@ -209,7 +228,7 @@ describe('the owner console sign-in leaves the sign-in screen', () => {
      */
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    await waitFor(() => expect(signInToConsoleMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(signInToConsoleMock).toHaveBeenCalledTimes(1), LOADED_HOST);
 
     /*
      * THE ASSERTION THE BUG FAILED. `signInToConsole` resolving is not the
@@ -223,7 +242,7 @@ describe('the owner console sign-in leaves the sign-in screen', () => {
      */
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(SCOPES.owner.home);
-    });
+    }, LOADED_HOST);
     expect(router.state.location.pathname).not.toBe(SCOPES.owner.signIn);
   });
 
@@ -248,7 +267,7 @@ describe('the owner console sign-in leaves the sign-in screen', () => {
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe(SCOPES.owner.home);
-    });
+    }, LOADED_HOST);
     expect(signInToConsoleMock).not.toHaveBeenCalled();
   });
 });
