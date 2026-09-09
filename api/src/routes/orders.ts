@@ -20,11 +20,57 @@
  * somebody else's wallet.
  */
 
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
-import { requireMember } from '../auth/principal';
-import { badRequest, conflict } from '../http/errors';
+import { requireDashboardPerm, requireMember, requireSameSalon } from '../auth/principal';
+import { badRequest, conflict, notFound } from '../http/errors';
+import { requireString } from '../money/validate';
 import { MAX_LINE_QTY } from '../db/schema/shopOrder';
+import {
+  ORDER_STATUS_FLOW,
+  shopOrder,
+  type OrderStatus,
+} from '../db/schema/delivery';
+import { member } from '../db/schema/member';
+import { writeAudit } from '../services/audit';
+
+/**
+ * One page of the merchant's fulfilment board. A cap, reported as one — see the
+ * `truncated` field on the list, and `GET /salons/{id}/bookings` for why a
+ * hardcoded `nextCursor: null` on a capped list is not acceptable here.
+ */
+const ORDERS_PAGE = 200;
+
+/** The fulfilment, as both surfaces read it. Delivery fields are null for pickup. */
+function serialiseShopOrder(row: typeof shopOrder.$inferSelect) {
+  return {
+    transactionId: row.transactionId,
+    fulfilment: row.fulfilment,
+    status: row.status,
+    /** The SNAPSHOT — what she typed when she ordered, not what her book says now. */
+    address:
+      row.fulfilment === 'delivery'
+        ? {
+            id: row.addressId,
+            label: row.addressLabel,
+            block: row.block,
+            street: row.street,
+            building: row.building,
+            floor: row.floor,
+            apartment: row.apartment,
+            area: row.area,
+            governorate: row.governorate,
+            instructions: row.instructions,
+            latitude: row.latitude,
+            longitude: row.longitude,
+          }
+        : null,
+    createdAt: row.createdAt.toISOString(),
+    readyAt: row.readyAt?.toISOString() ?? null,
+    closedAt: row.closedAt?.toISOString() ?? null,
+  };
+}
 import {
   awaitCommittedKey,
   hashRequestBody,
@@ -97,6 +143,200 @@ function parseItems(raw: unknown): OrderLineInput[] {
 }
 
 export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * `GET /members/me/orders` — HER side of the three statuses.
+   *
+   * Without this the lifecycle is invisible to the person waiting for the
+   * bottle, which would make `preparing → ready → closed` a merchant's private
+   * bookkeeping rather than the thing it is for. `requireMember`, scoped to her
+   * own id from the principal — no member id is read from the path or the query,
+   * so one customer cannot read another's order or the address on it.
+   *
+   * Her OWN address snapshot is on the row, which is correct rather than a leak:
+   * it is where she asked her own order to be sent.
+   */
+  app.get('/members/me/orders', async (req, reply) => {
+    const p = requireMember(req);
+    const rows = await db
+      .select()
+      .from(shopOrder)
+      .where(eq(shopOrder.memberId, p.id))
+      .orderBy(desc(shopOrder.createdAt))
+      .limit(ORDERS_PAGE);
+    return reply.send({
+      items: rows.map(serialiseShopOrder),
+      truncated: rows.length === ORDERS_PAGE,
+      nextCursor: null,
+    });
+  });
+
+  // ------------------------------------ the merchant's fulfilment board --
+  /**
+   * `GET /v1/salons/{id}/orders` — what is preparing, ready and closed.
+   *
+   * `perms.shop`, the same gate as the catalogue and `products-sold`: this is the
+   * Shop section's own screen, and it carries a customer's DELIVERY ADDRESS,
+   * which is the most sensitive field the shop touches. It is deliberately not
+   * `appointments` (a different section) and not `dashboard` (which would put a
+   * customer's home address behind the Overview permission).
+   *
+   * `?status=` takes the three, comma-separated. Unknown values refused by name
+   * rather than ignored, for `GET /salons/{id}/bookings`'s reason: a board
+   * filtered on a typo renders empty and the merchant reads that as "no orders".
+   */
+  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+    '/v1/salons/:id/orders',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'shop');
+      requireSameSalon(p, req.params.id);
+
+      const raw = req.query?.status;
+      const wanted =
+        typeof raw === 'string' && raw.trim() !== ''
+          ? raw.split(',').map((x) => x.trim()).filter(Boolean)
+          : null;
+      if (wanted) {
+        const unknown = wanted.filter(
+          (x) => !(ORDER_STATUS_FLOW as readonly string[]).includes(x),
+        );
+        if (unknown.length > 0) {
+          throw badRequest(
+            'invalid_order_status',
+            `Unknown order status: ${unknown.join(', ')}. One of ${ORDER_STATUS_FLOW.join(', ')}.`,
+          );
+        }
+      }
+
+      const rows = await db
+        .select({ o: shopOrder, memberName: member.name, memberPhone: member.phone })
+        .from(shopOrder)
+        .innerJoin(member, eq(member.id, shopOrder.memberId))
+        .where(
+          and(
+            eq(shopOrder.salonId, p.salonId),
+            wanted ? inArray(shopOrder.status, wanted as OrderStatus[]) : undefined,
+          ),
+        )
+        .orderBy(desc(shopOrder.createdAt))
+        .limit(ORDERS_PAGE);
+
+      return reply.send({
+        items: rows.map((r) => ({
+          ...serialiseShopOrder(r.o),
+          memberName: r.memberName,
+          memberPhone: r.memberPhone,
+        })),
+        /**
+         * A CAP WITH AN HONEST CURSOR IS NOT WHAT THIS IS — it is a cap, said out
+         * loud. `nextCursor: null` on a capped list is the lie
+         * `GET /salons/{id}/bookings` was just fixed for, so this does not repeat
+         * it: `truncated` is true when the cap was reached, and a client that sees
+         * it knows the board is incomplete. A real cursor is the better answer and
+         * is owed the day a salon has more than `ORDERS_PAGE` live orders; saying
+         * so here is what stops the field being believed in the meantime.
+         */
+        truncated: rows.length === ORDERS_PAGE,
+        nextCursor: null,
+      });
+    },
+  );
+
+  /**
+   * `PATCH /v1/salons/{id}/orders/{transactionId}` — move it along.
+   *
+   * THREE STATUSES AND FORWARD ONLY: `preparing → ready → closed`. Lean's whole
+   * lifecycle after years across ten tenants, and anything richer would be us
+   * inventing rather than following.
+   *
+   * MONOTONIC, and the row count decides. The `WHERE` names the status the caller
+   * believes it is leaving, so two managers tapping "Ready" produce one
+   * transition and one 409 — the pattern `services/booking.ts § returnDeposit`
+   * had to learn, where a caller's `if` was the only thing between one deposit
+   * and two refunds. Going backwards is refused rather than silently accepted:
+   * "closed → preparing" would tell a customer her delivered order is being
+   * prepared.
+   *
+   * NO MONEY. Closing an order does not settle, refund or charge anything — the
+   * wallet was debited when she ordered. That is what the absent delivery fee
+   * buys, and it is why this is a plain UPDATE with an audit row rather than a
+   * money transaction.
+   */
+  app.patch<{ Params: { id: string; tid: string } }>(
+    '/v1/salons/:id/orders/:tid',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'shop');
+      requireSameSalon(p, req.params.id);
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const next = body.status;
+      if (next !== 'ready' && next !== 'closed') {
+        throw badRequest(
+          'invalid_order_status',
+          'status must be "ready" or "closed". An order starts at "preparing".',
+        );
+      }
+      /** The one status each is reachable from. Forward only, one step at a time. */
+      const from: OrderStatus = next === 'ready' ? 'preparing' : 'ready';
+
+      const now = new Date();
+      const updated = await db
+        .update(shopOrder)
+        .set(
+          next === 'ready'
+            ? { status: 'ready', readyAt: now, updatedAt: now }
+            : { status: 'closed', closedAt: now, updatedAt: now },
+        )
+        .where(
+          and(
+            eq(shopOrder.transactionId, req.params.tid),
+            eq(shopOrder.salonId, p.salonId),
+            eq(shopOrder.status, from),
+          ),
+        )
+        .returning();
+
+      const row = updated[0];
+      if (!row) {
+        /**
+         * ONE READ TO TELL "not hers" FROM "wrong status", because those need
+         * different answers and a single 404 for both would have a merchant
+         * hunting for an order she is looking at. Scoped to her salon, so a
+         * missing row stays a 404 rather than leaking that it exists elsewhere.
+         */
+        const [current] = await db
+          .select({ status: shopOrder.status })
+          .from(shopOrder)
+          .where(
+            and(
+              eq(shopOrder.transactionId, req.params.tid),
+              eq(shopOrder.salonId, p.salonId),
+            ),
+          )
+          .limit(1);
+        if (!current) throw notFound('unknown_order', 'No such order.');
+        throw conflict(
+          'order_status_not_reachable',
+          `That order is ${current.status}. ${next === 'ready' ? '"Ready" follows "preparing"' : '"Closed" follows "ready"'}, and an order never goes backwards.`,
+          { status: current.status, attempted: next },
+        );
+      }
+
+      await writeAudit(db, p, {
+        salonId: p.salonId,
+        kind: 'rules',
+        action: next === 'ready' ? 'Order ready' : 'Order closed',
+        detail: `${row.fulfilment === 'delivery' ? 'Delivery' : 'Pickup'} order ${row.transactionId} → ${next}`,
+        source: 'merchant',
+        subjectType: 'order',
+        subjectId: row.transactionId,
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
+
+      return reply.send({ order: serialiseShopOrder(row) });
+    },
+  );
+
   app.post('/orders', async (req, reply) => {
     // FIRST, before the body is read. Money leaves a wallet here.
     const p = requireMember(req);
@@ -133,6 +373,47 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
 
     const items = parseItems(body.items);
 
+    /**
+     * THE FORK (PRIOR-ART.md § Lean's shop). Lean keeps pickup and delivery both
+     * live, so this is a choice and not a migration off collection.
+     *
+     * OMITTED IS PICKUP — the behaviour that shipped before the field existed.
+     * An unknown value is REFUSED BY NAME rather than falling back to pickup: a
+     * client that sent `"DELIVERY"` believed it had chosen delivery, and quietly
+     * collecting instead is the shape of wrong answer that reads as working.
+     *
+     * NO FEE, so this changes no amount and adds no money path. `POST /orders`
+     * keeps its idempotency key because it debits a wallet for the GOODS, which
+     * it already did.
+     */
+    const rawFulfilment = body.fulfilment;
+    if (rawFulfilment !== undefined && rawFulfilment !== 'pickup' && rawFulfilment !== 'delivery') {
+      throw badRequest(
+        'invalid_fulfilment',
+        'fulfilment must be "pickup" or "delivery", or omitted for pickup.',
+      );
+    }
+    const fulfilment = (rawFulfilment ?? 'pickup') as 'pickup' | 'delivery';
+    const addressId =
+      body.addressId === undefined || body.addressId === null
+        ? undefined
+        : requireString(body.addressId, 'addressId', 100);
+
+    /**
+     * THE ADDRESS IS AN ID, NEVER THE FIELDS. A client posting `block`/`street`
+     * here would be writing an address into an order that never entered her book
+     * — unreviewable, unreusable, and the door through which Lean's four-fields-
+     * from-one-input arrives. Refused by name, like a price and a branch.
+     */
+    for (const field of ['block', 'street', 'building', 'address'] as const) {
+      if (field in body) {
+        throw badRequest(
+          'address_not_client_supplied',
+          `A delivery address comes from your saved addresses as addressId, not from ${field}.`,
+        );
+      }
+    }
+
     const idem = {
       scope: principalScope(p),
       endpoint: 'POST /orders',
@@ -142,11 +423,17 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
        * a 422 from `readCommittedKey`, not a replay of the first — the client bug
        * that would otherwise hide a lost order.
        */
-      requestHash: hashRequestBody({ items }),
+      /**
+       * FULFILMENT IS IN THE HASH. Two different destinations under one key is a
+       * 422 rather than a replay of the first — a client that retried a pickup
+       * as a delivery meant something different, and replaying the pickup would
+       * hand her a "delivered" order that is sitting on a counter.
+       */
+      requestHash: hashRequestBody({ items, fulfilment, addressId: addressId ?? null }),
     };
 
     try {
-      const result = await performOrder(db, { items }, {
+      const result = await performOrder(db, { items, fulfilment, addressId }, {
         principal: p,
         idempotency: idem,
         ipAddress: req.ip ?? null,

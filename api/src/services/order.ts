@@ -77,7 +77,7 @@
  * reported as a gap between the design and the contract rather than half-built.
  */
 
-import { and, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { add, fils, subtract, type Fils, type Transaction } from '@avo/types';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
@@ -92,6 +92,7 @@ import type { MemberPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { serialiseTransactionForCustomer } from '../http/serialise';
 import { resolveBranch } from './branch';
+import { memberAddress, shopOrder } from '../db/schema/delivery';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
@@ -105,6 +106,19 @@ export interface OrderLineInput {
 
 export interface OrderInput {
   items: OrderLineInput[];
+  /**
+   * PICKUP IS A FORK, NOT A CASUALTY (PRIOR-ART.md § Lean's shop). Lean keeps
+   * both paths live, so "delivery-based" means delivery is available and chosen.
+   *
+   * OMITTED MEANS PICKUP, which is exactly the behaviour that shipped before
+   * this field existed — every order was collected because there was nothing
+   * else. So an old client is not broken and is not silently opted into
+   * delivery, which is the direction that would send a bottle to an address
+   * nobody chose.
+   */
+  fulfilment?: 'pickup' | 'delivery' | undefined;
+  /** Required for delivery, refused for pickup. One of HER OWN addresses. */
+  addressId?: string | undefined;
 }
 
 export interface OrderContext {
@@ -378,6 +392,46 @@ export async function performOrder(
       );
     }
 
+    /**
+     * ------------------------------------------------ 5b. the fulfilment --
+     *
+     * Resolved BEFORE the transaction row is written, so a delivery to an
+     * address that is not hers refuses before any money moves. The lookup is
+     * scoped to `member_id`, so another customer's address id is a 404 rather
+     * than a 403 — a 403 would confirm it exists.
+     *
+     * NOTHING HERE TOUCHES AN AMOUNT. There is no delivery fee (PRIOR-ART.md
+     * § Lean: no `deliveryCharge`, `deliveryFee` or `shippingFee` anywhere), so
+     * choosing delivery cannot change `total`, and this whole feature stays off
+     * the money path. If a fee is ever added, that is a separate decision and
+     * this comment is the thing it has to argue with.
+     */
+    const fulfilment = input.fulfilment ?? 'pickup';
+    let address: typeof memberAddress.$inferSelect | null = null;
+    if (fulfilment === 'delivery') {
+      if (!input.addressId) {
+        throw badRequest('address_required', 'A delivery needs one of your saved addresses.');
+      }
+      const [row] = await tx
+        .select()
+        .from(memberAddress)
+        .where(
+          and(
+            eq(memberAddress.id, input.addressId),
+            eq(memberAddress.memberId, m.id),
+            isNull(memberAddress.deletedAt),
+          ),
+        )
+        .limit(1);
+      if (!row) throw notFound('unknown_address', 'No such address.');
+      address = row;
+    } else if (input.addressId) {
+      throw badRequest(
+        'address_not_for_pickup',
+        'A pickup order takes no address. Choose delivery, or omit the address.',
+      );
+    }
+
     // ------------------------------------------------- 6. transaction record --
     await tx.insert(transaction).values({
       id: txId,
@@ -487,6 +541,43 @@ export async function performOrder(
     // ------------------------------------------------ 9. queue the receipts --
     // Rows, not network calls, inside this transaction — so the receipts are
     // queued if and only if the money moved. services/receipts.ts.
+    /**
+     * ------------------------------------------------ 7b. the fulfilment row --
+     *
+     * IN THE SAME TRANSACTION as the order, so an order with no fulfilment is
+     * not a state that exists — nobody can be handed a paid order they cannot
+     * find out where to send. `transaction_id` is `shop_order`'s primary key, so
+     * a second fulfilment for one order is refused by the schema rather than by
+     * this handler remembering.
+     *
+     * The address is SNAPSHOTTED, not only referenced. `shop_order_line` already
+     * snapshots the product name and unit price for the reason its header gives,
+     * and an address is worse: she can edit or delete it after ordering, and the
+     * driver needs what she typed when she ordered. `address_id` rides along for
+     * provenance and may later point at a soft-deleted row.
+     */
+    await tx.insert(shopOrder).values({
+      transactionId: txId,
+      salonId: m.salonId,
+      memberId: m.id,
+      fulfilment,
+      // `preparing` is the column default; named here so the lifecycle's start
+      // is legible at the only place that creates one.
+      status: 'preparing',
+      addressId: address?.id ?? null,
+      addressLabel: address?.label ?? null,
+      block: address?.block ?? null,
+      street: address?.street ?? null,
+      building: address?.building ?? null,
+      floor: address?.floor ?? null,
+      apartment: address?.apartment ?? null,
+      area: address?.area ?? null,
+      governorate: address?.governorate ?? null,
+      instructions: address?.instructions ?? null,
+      latitude: address?.latitude ?? null,
+      longitude: address?.longitude ?? null,
+    });
+
     await queueReceipts(tx, m, txId, {
       kind: 'shop',
       transactionId: txId,

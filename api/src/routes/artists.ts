@@ -977,7 +977,27 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
       throw conflict('calendar_not_connected', 'That artist has no connected calendar.');
     }
 
-    return db.transaction(async (tx) => {
+    /**
+     * SENT AFTER THE COMMIT, not from inside the transaction.
+     *
+     * This handler called `reply.send()` from within `db.transaction()` — twelve
+     * lines below the paragraph on `PUT /artists/{id}/branch` explaining why that
+     * is wrong, which is the honest record: the fix was understood there and not
+     * generalised. Lane D's `e2e/commit-order.test.ts` scan found it on its first
+     * run (DECISIONS.md #93).
+     *
+     * `reply.send()` dispatches the response before drizzle's COMMIT round trip
+     * finishes, so a client that acts on the 200 and immediately re-reads can see
+     * the PRE-disconnect row: `googleConnected: true`, `availabilitySource:
+     * 'google'`. Lane D measured the window with a control — 4 of 40 write-then-
+     * reread attempts on the broken shape, 0 of 40 on the fixed one — so roughly
+     * one attempt in ten, which is why three ordinary runs would probably not
+     * have noticed.
+     *
+     * The shape is: do the work in the transaction, RETURN the row, and let
+     * fastify send once the handler's promise (commit included) resolves.
+     */
+    const updatedRow = await db.transaction(async (tx) => {
       const [updated] = await tx
         .update(artist)
         .set({
@@ -1026,8 +1046,10 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
         subjectId: target.id,
       });
 
-      return reply.send(serialiseArtist(updated));
+      return updated;
     });
+
+    return reply.send(serialiseArtist(updatedRow));
   });
 
   // ------------------------------------------ PUT /artists/{id}/availability --

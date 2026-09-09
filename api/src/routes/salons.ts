@@ -29,7 +29,7 @@
  */
 
 import { socialUrl, type Fils } from '@avo/types';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist } from '../db/schema/artist';
@@ -51,6 +51,12 @@ import { writeAudit } from '../services/audit';
 import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
 import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
+import {
+  afterCursor,
+  cursorInstant,
+  encodeCursor,
+  parseCursor,
+} from '../services/streamCursor';
 import { deviceEnrolment } from '../db/schema/deviceEnrolment';
 import { resolveBranchFilter } from '../services/branchFilter';
 import { primaryImagesFor } from '../services/imageAttachment';
@@ -687,6 +693,13 @@ export function buildSalonPatch(
 
   return { patch, keys };
 }
+
+/**
+ * One page of `GET /salons/{id}/bookings`. The cap the route already had, kept at
+ * the same number so no client's first page changes shape — what changed is that
+ * `nextCursor` now tells the truth about there being a second one.
+ */
+const BOOKINGS_PAGE = 200;
 
 export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
@@ -1758,8 +1771,39 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * too, for the reason it does on a transaction: a per-branch appointment count
    * that rests on a guess should be filterable rather than indistinguishable from
    * one that does not.
+   *
+   * =======================================================================
+   * IT PAGES NOW, AND IT USED TO CLAIM IT DID NOT NEED TO
+   * =======================================================================
+   * This was `LIMIT 200` with `nextCursor: null` hardcoded — a capped list
+   * reporting "no more pages". Lane C found the consequence by loading 211
+   * further-out bookings: the list truncated, and because the order is
+   * `starts_at DESC` THE ROWS DROPPED FIRST ARE THE ONES STARTING SOONEST. Its
+   * client-side closure impact read 0 deposit-held appointments where
+   * `closure-preview` correctly reported 3.
+   *
+   * A cursor rather than a bigger cap or a documented one, and the reason is the
+   * shape of the lie rather than the size of the number: `nextCursor: null` is a
+   * confident answer with nothing behind it, which any future consumer will
+   * believe exactly as lane C's screen did. Raising the cap moves the cliff;
+   * documenting it leaves a field that says something false. Neither is worth
+   * the ten lines this costs.
+   *
+   * `services/streamCursor.ts` IS THE IMPLEMENTATION, not a fourth copy of
+   * keyset logic — its own header records that this API already had two copies
+   * before a third arrived, and that a drifting cursor "does not throw: it
+   * silently skips rows, and the reader sees a shorter list rather than an
+   * error", which is the same failure mode as the bug being fixed here. ONE
+   * stream, so the rank is the constant 0 and the key is `(starts_at, id)`.
+   *
+   * THE ORDER IS UNCHANGED — `starts_at DESC` is what the design's Appointments
+   * screen draws, and lane C reads it. Worth saying plainly that a cursor fixes
+   * TRUNCATION and not the default view: the first page is still the furthest-
+   * future appointments, and a merchant who wants today's has to page or filter.
+   * Whether an appointments list should be newest-first at all is a product
+   * question about a drawn screen, so it is reported rather than changed here.
    */
-  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { status?: string; cursor?: string } }>(
     '/salons/:id/bookings',
     async (req, reply) => {
       const p = requireDashboardPerm(req, 'appointments');
@@ -1780,9 +1824,23 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      /**
+       * `[0]` is this endpoint's whole rank set, so a cursor minted by one of the
+       * multi-stream reads cannot address a stream here — `parseCursor` refuses
+       * it by name rather than walking a rank that means nothing.
+       */
+      const cursor = parseCursor(req.query?.cursor, [0]);
+
       const rows = await db
         .select({
           b: booking,
+          /**
+           * MICROSECOND-EXACT, as text. `timestamptz` stores microseconds and
+           * `toISOString()` emits milliseconds, so a cursor built from the
+           * serialised `startsAt` would truncate and END THE WALK — the defect
+           * streamCursor.ts records against `GET /v1/support/tickets`.
+           */
+          at: cursorInstant(booking.startsAt),
           memberName: member.name,
           memberPhone: member.phone,
           memberTier: member.tier,
@@ -1794,18 +1852,33 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         .innerJoin(artist, eq(artist.id, booking.artistId))
         .innerJoin(service, eq(service.id, booking.serviceId))
         .where(
-          wanted
-            ? and(
-                eq(booking.salonId, req.params.id),
-                inArray(booking.status, wanted as Array<BookingRow['status']>),
-              )
-            : eq(booking.salonId, req.params.id),
+          and(
+            eq(booking.salonId, req.params.id),
+            wanted
+              ? inArray(booking.status, wanted as Array<BookingRow['status']>)
+              : undefined,
+            afterCursor(cursor, 0, booking.startsAt, booking.id),
+          ),
         )
-        .orderBy(desc(booking.startsAt))
-        .limit(200);
+        /**
+         * `starts_at DESC, id ASC` — the tiebreak direction is not arbitrary. It
+         * has to match `afterCursor`'s own comparison, which at an equal instant
+         * asks for `id > cursorId`. Two bookings can share a `starts_at` to the
+         * microsecond (two artists, one 10:00 slot), and without a matching total
+         * order a page boundary inside that group repeats a row or loses one.
+         */
+        .orderBy(desc(booking.startsAt), asc(booking.id))
+        /**
+         * `+ 1` is how "is there another page" is answered without a second
+         * COUNT that could see a different world. The extra row is never sent.
+         */
+        .limit(BOOKINGS_PAGE + 1);
+
+      const page = rows.slice(0, BOOKINGS_PAGE);
+      const last = page[page.length - 1];
 
       return reply.send({
-        items: rows.map((r) => ({
+        items: page.map((r) => ({
           ...serialiseBooking(r.b as BookingRow),
           branchAssumed: r.b.branchAssumed,
           memberName: r.memberName,
@@ -1814,7 +1887,14 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           artistName: r.artistName,
           serviceName: r.serviceName,
         })),
-        nextCursor: null,
+        /**
+         * NULL ONLY WHEN IT IS TRUE. `rows.length > BOOKINGS_PAGE` means the
+         * `+ 1` row came back, so there is provably at least one more.
+         */
+        nextCursor:
+          rows.length > BOOKINGS_PAGE && last
+            ? encodeCursor({ at: last.at, rank: 0, id: last.b.id })
+            : null,
       });
     },
   );
