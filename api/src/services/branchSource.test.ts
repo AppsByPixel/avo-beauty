@@ -90,6 +90,7 @@ describe('a branch is never read from a request body', () => {
    *   campaigns.ts  which branch a campaign TARGETS
    *   platform.ts   which branch a boost or happy hour APPLIES TO
    *   devices.ts    which branch a till STANDS IN
+   *   artists.ts    which branch an ARTIST WORKS AT (migration 0044)
    *
    * Each verifies the id against the caller's own salon, and none of them
    * reaches `resolveBranch` — which is the assertion that actually matters and
@@ -100,12 +101,13 @@ describe('a branch is never read from a request body', () => {
    * Two of these three predate that sentence, so it was false when written; it
    * now states the rule this file enforces instead.
    */
-  it('only the three configuration endpoints read a branchId from a body', () => {
+  it('only the four configuration endpoints read a branchId from a body', () => {
     const readers = ROUTES.filter((f) => {
       const c = code(f);
       return c.includes('body.branchId') || c.includes("body['branchId']");
     });
     expect(readers.map(rel).sort()).toEqual([
+      'routes/artists.ts',
       'routes/campaigns.ts',
       'routes/devices.ts',
       'routes/platform.ts',
@@ -123,13 +125,30 @@ describe('a branch is never read from a request body', () => {
   });
 
   /**
-   * And every service call site passes either nothing or the principal's
-   * enrolled branch. `services/order.ts` is the `undefined` one deliberately: a
-   * shop order runs under a MEMBER principal — a customer on her own phone —
-   * where there is no till and nothing to establish.
+   * EVERY `supplied` BRANCH COMES FROM A ROW THE SERVER HOLDS. Three sources are
+   * allowed and each is a different question:
+   *
+   *   ctx.principal.enrolledBranchId   where the TILL stands — a `device_enrolment`
+   *                                    row, keyed on the session's device id. The
+   *                                    branch a CHARGE happened at (DECISIONS #82).
+   *   a.branchId                       where the ARTIST works — the `artist` row
+   *                                    `createBooking` already loaded and checked
+   *                                    against the salon. The branch an
+   *                                    APPOINTMENT is at (migration 0044).
+   *   undefined                        nothing to establish. `services/order.ts`
+   *                                    runs under a MEMBER principal — a customer
+   *                                    on her own phone, no till.
+   *
+   * THE TWO NON-UNDEFINED SOURCES ARE NOT INTERCHANGEABLE and are deliberately
+   * never reconciled: a customer books at Salmiya and pays at Kuwait City, and
+   * both rows are right. The money's branch is the transaction's, which is why
+   * `services/reports.ts` filters every money figure on `transaction.branch_id`.
+   *
+   * What is NOT allowed is anything derived from a request body. The list is
+   * short and explicit so a fifth source is a failing test and a decision.
    */
-  it('every resolveBranch call site passes nothing or the principal enrolment', () => {
-    const allowed = new Set(['undefined', 'ctx.principal.enrolledBranchId']);
+  it('every resolveBranch call site passes nothing or a server-held row', () => {
+    const allowed = new Set(['undefined', 'ctx.principal.enrolledBranchId', 'a.branchId']);
     const sites: string[] = [];
     for (const f of SERVICES) {
       // `await resolveBranch(` — the CALL sites. A bare `resolveBranch\(` also

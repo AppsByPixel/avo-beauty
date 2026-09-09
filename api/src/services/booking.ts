@@ -443,7 +443,23 @@ export async function createBooking(
      * choosing its own reporting bucket, and — once branch-scoped promotions
      * touch bookings — its own multiplier. services/branch.ts.
      */
-    const branch = await resolveBranch(tx, m.salonId, undefined);
+    /**
+     * THE BOOKING'S BRANCH COMES FROM THE ARTIST.  (migration 0044)
+     *
+     * `a` is the artist row loaded above, already checked to be this salon's. One
+     * artist belongs to one branch, so where the appointment is is a fact about
+     * who is performing it — not a client assertion and not `ORDER BY id LIMIT 1`.
+     *
+     * `a.branchId` is NULL for an artist nobody has assigned yet, which passes no
+     * `supplied` at all and leaves this exactly as it was before the column
+     * existed. See db/schema/artist.ts for why NULL is not "unbookable".
+     *
+     * DELIBERATELY NOT THE TILL'S BRANCH. A charge takes its branch from the
+     * enrolled device (DECISIONS.md #82); this takes it from the artist. The two
+     * answer different questions and may differ for one visit — she books at
+     * Salmiya and pays at Kuwait City — and neither is reconciled into the other.
+     */
+    const branch = await resolveBranch(tx, m.salonId, a.branchId);
 
     const txId = transactionId();
     const bkId = bookingId();

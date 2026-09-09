@@ -282,10 +282,23 @@ async function loadStaffPrincipal(
    *
    * The comment on `deviceId` above resists a second read of a column already in
    * hand, and this is not that: `device_enrolment` is a different row that
-   * nothing on this path has read. It is skipped entirely when `deviceId` is
-   * null, which is every dashboard session and every test principal, so the
-   * extra round trip lands only on the surface that needs it — a scanner, where
-   * `session_scanner_is_device_scoped` makes the device non-null.
+   * nothing on this path has read.
+   *
+   * NARROWED TO SCANNER SESSIONS, so `device_enrolment` is NOT on the hot path
+   * for all authenticated traffic. Trunk raised the concern in the general form —
+   * "revoking SELECT on it would 500 the entire API rather than only the device
+   * routes" — and the narrowing is the answer rather than a caveat. The only
+   * reader of `enrolledBranchId` anywhere is `services/charge.ts`, and
+   * `POST /charges` is `requireScannerPerm(req, 'scanner')`, so a dashboard
+   * session has no use for the value even when its session row happens to carry
+   * a `device_id`. `session_scanner_is_device_scoped` makes the device non-null
+   * for every scanner session, so the `deviceId` half of this condition is a
+   * belt: it cannot be false here, and a null would mean the CHECK had gone.
+   *
+   * WHAT THAT LEAVES: one extra SELECT on the scanner surface only — where the
+   * device routes and the charge live — and none on the member, platform or
+   * dashboard surfaces. Revoking SELECT on the table would break charges and the
+   * device routes, which is a blast radius proportional to the feature.
    *
    * SCOPED BY SALON AS WELL AS DEVICE, because `device_id` is a client-chosen
    * string that two salons may share, and because a lookup keyed on the device
@@ -296,7 +309,7 @@ async function loadStaffPrincipal(
    * guarantees there is at most one, so this cannot silently pick between two.
    */
   let enrolledBranchId: string | null = null;
-  if (deviceId) {
+  if (scope === 'scanner' && deviceId) {
     const enrolled = await db
       .select({ branchId: deviceEnrolment.branchId })
       .from(deviceEnrolment)

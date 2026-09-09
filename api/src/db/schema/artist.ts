@@ -90,6 +90,32 @@ export const artist = pgTable(
       onDelete: 'restrict',
     }),
 
+    /**
+     * WHERE SHE WORKS. One artist, one branch — Aftab's ruling when the question
+     * was put to him, because artists had no branch at all (migration 0044).
+     *
+     * NULLABLE, AND NULL MEANS "NOT ASSIGNED" RATHER THAN "UNBOOKABLE". Every
+     * artist predates this column; a single-branch salon was backfilled because
+     * there was nothing to guess, and a multi-branch salon's artists were left
+     * NULL rather than pointed at whichever branch sorts first. Decisions 80 and
+     * 82 are both about not writing a guess into live data.
+     *
+     * A booking's branch is DERIVED from this — `services/booking.ts` passes it
+     * to `resolveBranch` as `supplied`, so an assigned artist makes the booking
+     * `established` and an unassigned one leaves it exactly as it was before:
+     * assumed at a multi-branch salon, established at a single-branch one.
+     *
+     * NOT THE SAME QUESTION AS A TILL'S BRANCH. This decides where an
+     * APPOINTMENT is; `device_enrolment` decides where a CHARGE is. They can
+     * legitimately disagree — a customer books at Salmiya and pays at Kuwait
+     * City — and the money's branch is the transaction's. See
+     * `services/reports.ts` § `?branch=` FILTERS ON THE TRANSACTION'S BRANCH.
+     *
+     * The same-salon guarantee is the composite FK in migration 0044; drizzle
+     * cannot express it, so it is not restated as a `.references()` here.
+     */
+    branchId: text('branch_id'),
+
     name: text('name').notNull(),
     /** Nullable for the reason `salon.name_ar` is — absent is not the same as blank. */
     nameAr: text('name_ar'),
@@ -114,6 +140,7 @@ export const artist = pgTable(
   },
   (t) => [
     index('artist_salon_idx').on(t.salonId),
+    index('artist_salon_branch_idx').on(t.salonId, t.branchId),
     /**
      * One artist per staff login. Without this, two artist rows could point at
      * the same PIN account and `PUT /artists/me/availability` would have to pick

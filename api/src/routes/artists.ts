@@ -81,12 +81,12 @@
  * ===========================================================================
  */
 
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, type SQL } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist, SLOT_MINUTES, type ArtistWindows } from '../db/schema/artist';
 import { artistCalendarConnection } from '../db/schema/booking';
-import { salon } from '../db/schema/salon';
+import { branch, salon } from '../db/schema/salon';
 import { calendar, CalendarNotConfiguredError } from '../calendar';
 import { env } from '../env';
 import {
@@ -124,6 +124,32 @@ function minutesOf(hhmm: string): number {
 }
 
 /** The wire shape — exactly `ArtistSchema` from @avo/types. */
+/**
+ * `?branch=` on the two artist lists, resolved once so the merchant roster and
+ * the customer's bookable list cannot disagree about what the parameter means.
+ *
+ * THREE VALUES, and `unassigned` is the one that exists because of migration
+ * 0044's ruling: artists at a multi-branch salon were deliberately left NULL,
+ * so "who still has no branch" is the merchant's actual working query and a
+ * caller cannot express it with a branch id.
+ *
+ * An unrecognised value is REFUSED rather than ignored. A filter that quietly
+ * does nothing returns the whole roster, which reads as "all of these are at
+ * that branch" — a wrong answer presented as a filtered one.
+ */
+function artistBranchFilter(value: string | undefined): SQL | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'unassigned') return isNull(artist.branchId);
+  if (value === 'all') return undefined;
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(value)) {
+    throw badRequest(
+      'invalid_branch_filter',
+      "branch must be a branch id, 'unassigned', or 'all'.",
+    );
+  }
+  return eq(artist.branchId, value);
+}
+
 function serialiseArtist(row: typeof artist.$inferSelect) {
   return {
     id: row.id,
@@ -133,6 +159,18 @@ function serialiseArtist(row: typeof artist.$inferSelect) {
     availabilitySource: row.availabilitySource,
     googleConnected: row.googleConnected,
     slotMinutes: row.slotMinutes,
+    /**
+     * WHERE SHE WORKS, or null when nobody has assigned her (migration 0044).
+     *
+     * SERVED EVEN WHEN NULL, and that is the point rather than an oversight. A
+     * multi-branch salon's artists were deliberately not backfilled — pointing
+     * them at whichever branch sorts first would be the guess decisions 80 and
+     * 82 forbid — so null is a real and common state, and it is what lets the
+     * dashboard say "3 artists have no branch" instead of the merchant
+     * discovering it from a diary that quietly attributes appointments to the
+     * wrong location.
+     */
+    branchId: row.branchId,
     windows: row.windows,
     /**
      * Not in `ArtistSchema`, and useful to the dashboard rather than decorative:
@@ -520,18 +558,33 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
    * is booked, with whom, for how much deposit. This is who works here, which is
    * the same authority `GET /staff` sits behind.
    */
-  app.get<{ Params: { id: string } }>('/salons/:id/artists', async (req, reply) => {
-    const p = requireDashboardPerm(req, 'team');
-    requireSameSalon(p, req.params.id);
+  /**
+   * `?branch=<id>` filters to one branch; `?branch=unassigned` is the query a
+   * merchant actually needs after migration 0044, because that is the set she
+   * has to act on. Anything else is refused by name rather than ignored — a
+   * filter that silently does nothing shows a full roster and reads as "every
+   * artist is at this branch", which is the opposite of the truth.
+   *
+   * NO SALON CHECK ON THE BRANCH ID, and none is needed: the `WHERE` is already
+   * `salon_id = <hers>`, so another salon's branch id simply matches no row and
+   * returns an empty list. It cannot be used to probe, because an id that is not
+   * hers and an id that is hers with no artists are the same answer.
+   */
+  app.get<{ Params: { id: string }; Querystring: { branch?: string } }>(
+    '/salons/:id/artists',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'team');
+      requireSameSalon(p, req.params.id);
 
-    const rows = await db
-      .select()
-      .from(artist)
-      .where(eq(artist.salonId, req.params.id))
-      .orderBy(asc(artist.name));
+      const rows = await db
+        .select()
+        .from(artist)
+        .where(and(eq(artist.salonId, req.params.id), artistBranchFilter(req.query.branch)))
+        .orderBy(asc(artist.name));
 
-    return reply.send({ items: rows.map(serialiseArtist), nextCursor: null });
-  });
+      return reply.send({ items: rows.map(serialiseArtist), nextCursor: null });
+    },
+  );
 
   // -------------------------------------- GET /salons/{id}/artists/bookable --
   /**
@@ -603,7 +656,124 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
    * Raising it here would put a write inside a customer's list read for a
    * fallback that has not happened yet.
    */
-  app.get<{ Params: { id: string } }>(
+  /**
+   * `?branch=` HERE IS THE CUSTOMER'S BRANCH SWITCH — the request Aftab made.
+   * She picks a location, and the artist list narrows to the artists who work
+   * there. She never names a branch on `POST /bookings`; the booking's branch is
+   * derived from whichever artist she then chooses (migration 0044), so choosing
+   * a branch is a FILTER and never an assertion. Non-negotiable #2 untouched.
+   *
+   * UNASSIGNED ARTISTS ARE INCLUDED WHEN NO FILTER IS GIVEN and excluded by any
+   * branch filter, which falls out of `branch_id = <id>` and is the honest
+   * answer: an artist with no branch cannot be claimed to work at one. A salon
+   * that has not assigned its artists therefore sees no change to the unfiltered
+   * flow, and a branch filter that returns nothing is telling the customer
+   * something true.
+   */
+  // ------------------------------------------- PUT /artists/{id}/branch --
+  /**
+   * ASSIGN AN ARTIST TO A BRANCH.  (migration 0044)
+   *
+   * `perms.team`, AND THAT IS THE DELIBERATE CONTRAST WITH A TILL. Enrolling a
+   * device is gated `perms.dashboard` because a till's branch decides which
+   * branch's EARNING RATES apply to money (DECISIONS.md #82). An artist's branch
+   * decides where an APPOINTMENT is and which diary it lands in — it pays no
+   * multiplier, because the charge that settles a booking takes its branch from
+   * the enrolled device and not from the booking. So this is roster
+   * administration, and `perms.team` is the authority over who works here.
+   *
+   * `branchId: null` UNASSIGNS, and is accepted rather than refused: a merchant
+   * who assigned an artist to the wrong branch must be able to undo it without
+   * inventing a third state, and null is the state every artist started in.
+   *
+   * OPEN BRANCHES ONLY, matching `POST /salons/{id}/devices`. Assigning to a
+   * closed branch would produce bookings attributed to a location that takes no
+   * money — `resolveBranch` refuses a closed `supplied` branch — so the booking
+   * would fail at the deposit hold. Caught here, where it can be a message.
+   *
+   * IDEMPOTENT AND QUIET WHEN NOTHING CHANGES: re-assigning the same branch
+   * writes no audit row, the pattern the availability PUT above already uses.
+   */
+  app.put<{ Params: { id: string } }>('/artists/:id/branch', async (req, reply) => {
+    const p = requireDashboardPerm(req, 'team');
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!('branchId' in body)) {
+      throw badRequest('branch_required', 'branchId is required; send null to unassign.');
+    }
+    const raw = body.branchId;
+    if (raw !== null && typeof raw !== 'string') {
+      throw badRequest('invalid_branch', 'branchId must be a branch id or null.');
+    }
+    const wanted = raw === null ? null : raw.trim();
+    if (wanted === '') {
+      throw badRequest('invalid_branch', 'branchId must be a branch id or null.');
+    }
+
+    const [target] = await db
+      .select()
+      .from(artist)
+      .where(and(eq(artist.id, req.params.id), eq(artist.salonId, p.salonId)))
+      .limit(1);
+    // Same 404 for "no such artist" and "not in your salon" — another salon's
+    // roster is not something this caller gets to probe (the reasoning
+    // `createBooking` and `computeAvailability` both already use).
+    if (!target) throw notFound('unknown_artist', 'No such artist.');
+
+    if (wanted !== null) {
+      const [b] = await db
+        .select({ id: branch.id })
+        .from(branch)
+        .where(
+          and(eq(branch.id, wanted), eq(branch.salonId, p.salonId), isNull(branch.closedAt)),
+        )
+        .limit(1);
+      // 404 and not 403: a 403 would confirm the id names a real branch
+      // somewhere else, which is `resolveBranch`'s own argument.
+      if (!b) throw notFound('unknown_branch', 'No such open branch.');
+    }
+
+    if (target.branchId === wanted) return reply.send(serialiseArtist(target));
+
+    /**
+     * THE RESPONSE IS BUILT INSIDE THE TRANSACTION AND SENT AFTER IT COMMITS.
+     *
+     * The first version called `reply.send(...)` from INSIDE the transaction
+     * callback, which dispatches the response before drizzle's COMMIT round trip
+     * has finished — so a client that PUT and immediately re-read could see the
+     * OLD branch. It showed up as an intermittently red spec on the third
+     * consecutive int run (decision 75), not on the first two, and the residue
+     * is still visible in the lane database: one run's artist left unassigned
+     * because its own assertion read a pre-commit snapshot.
+     *
+     * Returning the serialised row and letting fastify send it once the handler's
+     * promise resolves is the shape `PUT /artists/{id}/availability` above already
+     * uses, and `POST /salons/{id}/devices` uses the same ordering.
+     */
+    const updatedRow = await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(artist)
+        .set({ branchId: wanted, updatedAt: new Date() })
+        .where(eq(artist.id, target.id))
+        .returning();
+
+      await writeAudit(tx, p, {
+        salonId: p.salonId,
+        kind: 'rules',
+        action: wanted === null ? 'artist_branch_cleared' : 'artist_branch_set',
+        detail: `${target.name} → ${wanted ?? 'no branch'}`,
+        source: 'merchant',
+        subjectType: 'artist',
+        subjectId: target.id,
+      });
+
+      return updated!;
+    });
+
+    return reply.send(serialiseArtist(updatedRow));
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { branch?: string } }>(
     '/salons/:id/artists/bookable',
     async (req, reply) => {
       // Any authenticated principal of this salon — the same gate
@@ -622,7 +792,13 @@ export async function registerArtistRoutes(app: FastifyInstance): Promise<void> 
           availabilitySource: artist.availabilitySource,
         })
         .from(artist)
-        .where(and(eq(artist.salonId, req.params.id), eq(artist.active, true)))
+        .where(
+          and(
+            eq(artist.salonId, req.params.id),
+            eq(artist.active, true),
+            artistBranchFilter(req.query.branch),
+          ),
+        )
         .orderBy(asc(artist.name));
 
       const syncedIds = rows
