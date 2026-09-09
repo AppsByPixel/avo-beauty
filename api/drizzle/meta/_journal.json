@@ -316,6 +316,13 @@
       "when": 1788842000000,
       "tag": "0044_an_artist_belongs_to_one_branch",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1788928400000,
+      "tag": "0045_delivery_and_the_address_book",
+      "breakpoints": true
     }
   ]
 }

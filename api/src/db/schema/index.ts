@@ -24,6 +24,7 @@
  *                          ├─ idempotency_key
  *                          ├─ receipt_job
  *                          ├─ shop_order_line (→ product)
+ *                          ├─ shop_order (fulfilment; member_address snapshot)
  *                          └─ topup_intent ──── gateway_event
  *          audit_log (soft references only — see audit.ts)
  *          sandbox_gateway_payment (the sandbox PSP's own store — not product)
@@ -56,6 +57,7 @@ export * from './deviceEnrolment';
 export * from './transaction';
 export * from './ledger';
 export * from './shopOrder';
+export * from './delivery';
 export * from './audit';
 export * from './loyaltyEvent';
 export * from './idempotency';
