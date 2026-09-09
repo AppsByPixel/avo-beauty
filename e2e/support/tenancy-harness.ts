@@ -2819,3 +2819,92 @@ export function discoverSalonScopedRoutes(): DiscoveredRoute[] {
   }
   return found.sort((a, b) => `${a.path} ${a.method}`.localeCompare(`${b.path} ${b.method}`));
 }
+
+/**
+ * MAKE A FIXTURE MEMBER RECONCILE TO HER OWN WALLET LEDGER — `db:verify`
+ * invariant 5, `member.balance_fils = sum(member_wallet credits − debits)`.
+ *
+ * WHAT IT IS FOR. `support/global-setup.ts` § the wallet census measures this
+ * invariant across every member a run leaves behind and PRINTS the count. When
+ * it landed, 7 of 24 reconciled: every drifter was a fixture whose
+ * `balance_fils` was written by SQL, which is a balance with no originating
+ * entry — "a hole in that record, not a fixture convenience", per
+ * `api/src/db/seed.ts` § "the opening balances". This function is how a file
+ * pays the ledger what its fixture owes it, so the census count can go up.
+ *
+ * WHY A DELTA AND NOT AN OPENING CREDIT. `reports-applied-deposit.test.ts` posts
+ * a fixed opening pair once, which is right for a member whose balance is only
+ * ever seeded. It is NOT enough for a member the API then moves: `account.test.ts`
+ * drives real charges and re-seeds `balance_fils` afterwards, so her ledger runs
+ * AHEAD of her balance and she drifts NEGATIVE. A fixed credit cannot express
+ * that. This reads both sides at call time and posts whatever pair closes the
+ * gap, in either direction, so it is correct whether the fixture over- or
+ * under-states the ledger.
+ *
+ * CALL IT FROM `afterAll`, NOT `beforeAll`. The census runs in the e2e
+ * `globalSetup` teardown, so what it measures is the FINAL state of the
+ * database. Reconciling last means a file may still use `setBalance()`-style SQL
+ * mid-run for a shortfall spec — the legitimate technique the census doc
+ * defends — and still leave the member whole. Reconciling first would be undone
+ * by the first such write.
+ *
+ * `adjustment` AND `gateway_clearing`, for the seed's reasons, unchanged: a
+ * seeded `topup` would inflate a salon's top-up volume and its commission with
+ * money nobody paid, and `transaction.kind` is what the merchant reports filter
+ * on. An `adjustment` reversing nothing is counted by no tile and no report.
+ * Double entry needs a source, and the story is that she loaded her wallet
+ * before the dataset begins — the pair a settled top-up posts.
+ *
+ * A NO-OP WHEN SHE ALREADY RECONCILES. `WHERE d.diff <> 0` means calling it on a
+ * member who balances writes nothing at all, so it is safe to call
+ * unconditionally and safe to call from a file that later stops drifting.
+ * `ledger_entry` is append-only by trigger and has no natural key to conflict
+ * on, which is why this must not post a zero pair "for tidiness".
+ *
+ * REPEATED RUNS AGAINST A LONG-LIVED DATABASE CONVERGE rather than compound. A
+ * run normally mints its own database, but `POSTGRES_DB` is a documented opt-out
+ * onto a persistent one; there the second run reads a ledger that already
+ * carries the first run's correction, computes a diff of zero, and writes
+ * nothing. The transaction id carries `clock_timestamp()` so the rows that DO
+ * get written never collide.
+ */
+export function reconcileWalletLedger(memberId: string, branchId: string, tag: string): void {
+  psql(`
+WITH d AS (
+  SELECT m.id,
+         m.salon_id,
+         m.balance_fils,
+         m.balance_fils - coalesce(sum(CASE le.direction WHEN 'credit' THEN le.amount_fils
+                                                         ELSE -le.amount_fils END), 0) AS diff
+    FROM member m
+    LEFT JOIN ledger_entry le
+           ON le.member_id = m.id AND le.account = 'member_wallet'
+   WHERE m.id = '${memberId}'
+   GROUP BY m.id, m.salon_id, m.balance_fils
+),
+tx AS (
+  INSERT INTO "transaction"
+    (id, member_id, salon_id, branch_id, kind, amount_fils, status, reference, note,
+     created_at, settled_at)
+  SELECT 'TX-${tag}-REC-' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS'),
+         d.id, d.salon_id, '${branchId}', 'adjustment', d.diff, 'settled',
+         'AVO-RECONCILE-' || d.id, 'Fixture ledger reconciliation', now(), now()
+    FROM d
+   WHERE d.diff <> 0
+  RETURNING id, member_id, salon_id
+)
+INSERT INTO ledger_entry
+  (transaction_id, salon_id, member_id, account, direction, amount_fils, balance_after_fils)
+SELECT tx.id, tx.salon_id, tx.member_id,
+       'member_wallet'::ledger_account,
+       (CASE WHEN d.diff > 0 THEN 'credit' ELSE 'debit' END)::ledger_direction,
+       abs(d.diff)::bigint, d.balance_fils::bigint
+  FROM tx CROSS JOIN d
+UNION ALL
+SELECT tx.id, tx.salon_id, NULL::text,
+       'gateway_clearing'::ledger_account,
+       (CASE WHEN d.diff > 0 THEN 'debit' ELSE 'credit' END)::ledger_direction,
+       abs(d.diff)::bigint, NULL::bigint
+  FROM tx CROSS JOIN d;
+`);
+}

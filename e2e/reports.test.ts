@@ -79,6 +79,7 @@ import {
   SALON_A,
   SALON_B,
   psql,
+  reconcileWalletLedger,
   scalar,
   signInDashboard,
   signInMember,
@@ -282,6 +283,28 @@ afterAll(async () => {
                           perm_appointments = true, perm_shop = true
      WHERE id = '${A_STAFF_FULL}';
   `);
+
+  /*
+   * AND PAY THE LEDGER WHAT THIS FILE'S FIXTURE OWES IT.
+   *
+   * The header above says this file writes no `ledger_entry` rows, and that is
+   * still true of everything it asserts: the transaction rows below exist to be
+   * COUNTED by the reports, and a report reads `transaction`, never the ledger.
+   * But the two members are cloned with a `balance_fils` — 200.000 and 3.000 —
+   * that nothing accounts for, so both drift in the wallet census
+   * (`support/global-setup.ts`) by exactly their opening balance.
+   *
+   * Posted in `afterAll` so it cannot reach a single figure this file asserts:
+   * every spec has run by now. The reconciling row is an `adjustment` on this
+   * file's own `BR_RPT`, which is the branch every figure here is closed over —
+   * and an adjustment reversing nothing is counted by no tile and no report,
+   * which is the same reasoning `reports-applied-deposit.test.ts` records for
+   * its opening pair, and which finding 2 below documents as a gap in its own
+   * right.
+   */
+  reconcileWalletLedger(MEMBER, BR_RPT, 'QARPT');
+  reconcileWalletLedger(MEMBER_RETURN_ONLY, BR_RPT, 'QARPTR');
+
   await stopTenancyApi();
 });
 
