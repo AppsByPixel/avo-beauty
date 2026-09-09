@@ -6,6 +6,7 @@ import {
 import type { Branch, Salon } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
+import { deviceKeys } from './devices.js';
 import { salonKeys } from './salon.js';
 import { staffKeys } from './staff.js';
 
@@ -239,6 +240,31 @@ export function useCloseBranch(): UseMutationResult<
        */
       void queryClient.invalidateQueries({ queryKey: salonKeys.detail(salonId) });
       void queryClient.invalidateQueries({ queryKey: staffKeys.list(salonId) });
+      /*
+       * AND THE TILL LIST, because closing a branch silently breaks every till
+       * standing at it — this is the third list a close changes and the only one
+       * where the consequence is a counter that stops taking money.
+       *
+       * The enrolment row is NOT revoked by the close: `device_enrolment` keeps
+       * pointing at the now-closed branch, `resolvePrincipal` still reads it into
+       * `enrolledBranchId` with no `closed_at` check, and `resolveBranch` then
+       * refuses it — `WHERE … closed_at IS NULL` finds nothing and throws
+       * `notFound('unknown_branch')`. Driven on a lane-C API: enrol a till at a
+       * branch, close the branch, charge from that till → **404 unknown_branch**.
+       *
+       * `routes/devices.ts` guards the OTHER entrance to this state — it refuses
+       * to enrol into a closed branch, because that "would create a till whose
+       * every charge is refused at the branch lookup — a working configuration
+       * screen producing a broken counter." The closure path has no such guard,
+       * so the identical state arrives by the back door. REPORTED TO LANE A; the
+       * fix is theirs (revoke or re-point on close, or fall back in
+       * `resolveBranch`) and this column cannot make it.
+       *
+       * What this column can do is stop showing a stale list, and warn before the
+       * close — `Settings.tsx § BranchesPanel` renders the affected tills in the
+       * confirmation beside the stranded staff and the held deposits.
+       */
+      void queryClient.invalidateQueries({ queryKey: deviceKeys.list(salonId) });
     },
   });
 }

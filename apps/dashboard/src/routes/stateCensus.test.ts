@@ -47,6 +47,29 @@ const SECTION_SCREENS = [
   'Team.tsx',
   'Loyalty.tsx',
   'Settings.tsx',
+  /**
+   * Merchant → Settings → Tills. A PANEL INSIDE A SCREEN, here for
+   * `console/SupportPanel.tsx`'s exact reason: it owns its own fetch against a
+   * DIFFERENT guard from its host's.
+   *
+   * `Settings.tsx` reads `GET /salons/{id}`, which is `requirePrincipal` and no
+   * permission at all. This reads `GET /salons/{id}/devices`, which is
+   * `requirePerm(req, 'either', 'dashboard')`. Two independent guards means two
+   * independent failures, so a `SectionError` here is its own answer rather than
+   * a drifting copy of its host's — and nothing hands it a pending state,
+   * because its host's read landing says nothing about whether its own has.
+   *
+   * It is also the reason its host stopped early-returning over the whole
+   * screen: Settings' courtesy gate is `perms.loyalty` and this panel's is
+   * `perms.dashboard`, and one screen-level check for two orthogonal permissions
+   * is wrong in both directions at once. `Settings.tsx § THE GATE MOVED FROM THE
+   * SCREEN TO THE PANELS` has the argument.
+   *
+   * The census's own distinction, restated because this entry is the third to
+   * turn on it: not "is it routed" but "does it own a read". The router never
+   * mounts this, so the routed-component assertion below will not see it.
+   */
+  'Tills.tsx',
   'Accounts.tsx',
   'AuditLog.tsx',
   'Reports.tsx',

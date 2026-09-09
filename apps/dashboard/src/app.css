@@ -1573,6 +1573,170 @@ a:hover {
   color: var(--avo-brand-deeper);
 }
 
+/* ================================================================== tills == */
+
+/* Settings → Tills. A till's branch decides what a charge on it earns, so the
+   row is taller than the branch row above it: it carries the branch AND the
+   earning sentence, not just a name. Same hairline-separated list idiom as
+   `.settings__branches` so the two panels read as siblings. */
+
+.tills__list {
+  margin-top: 6px;
+  list-style: none;
+  padding: 0;
+}
+
+.tills__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+/* A till pointed at a closed or missing branch. Danger, not warning: this one is
+   not a consequence to consider, it is a counter that is already refusing every
+   charge. The tint is the whole row's, because the row is the broken thing. */
+.tills__row--broken {
+  background: var(--avo-danger-bg);
+  border-radius: 10px;
+  padding: 13px 12px;
+  margin-top: 8px;
+  border-top-color: transparent;
+}
+
+.tills__rowmain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.tills__rowhead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.tills__label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Same treatment as `.settings__branch-id` — a machine-readable id the merchant
+   compares against what the scanner shows her, so it is monospaced-by-display-font
+   and tinted rather than sitting in the prose. */
+.tills__id {
+  font-family: var(--avo-font-display);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  background: var(--avo-brand-tint);
+  padding: 3px 9px;
+  border-radius: 8px;
+}
+
+.tills__branch {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.tills__branchid {
+  font-family: var(--avo-font-display);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-ui-ink-38);
+}
+
+/* The earning consequence. The point of the panel, so it is prose at body size
+   rather than a caption. */
+.tills__earning {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-brand-deeper);
+}
+
+.tills__earning--unknown {
+  color: var(--avo-ui-ink-38);
+}
+
+.tills__earning--broken {
+  color: var(--avo-danger-text);
+}
+
+.tills__rowactions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* The no-tills state. NOT `.avo-state` (the shared EmptyState), deliberately:
+   at a multi-branch salon this is not an empty list, it is a live money defect
+   being reported — decision 82 — so it carries the warning surface the closure
+   confirmation uses rather than the neutral one a genuinely empty list gets. */
+.tills__empty {
+  margin-top: 12px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+}
+
+.tills__emptytitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--avo-warn-text);
+}
+
+.tills__emptybody {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--avo-warn-text);
+}
+
+.tills__add {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.tills__addtitle {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+/* Three fields across on the wide breakpoints, stacking below — the device id and
+   the label are both free text and both need room, so they do not share a row
+   with the picker at narrow widths. */
+.tills__addgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 1100px) {
+  .tills__addgrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tills__addactions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.tills__addnote {
+  font-size: 12px;
+  color: var(--avo-ui-ink-38);
+}
+
 /* =============================================================== accounts == */
 
 .accounts__head {

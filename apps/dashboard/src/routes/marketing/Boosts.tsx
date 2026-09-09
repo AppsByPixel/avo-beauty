@@ -4,6 +4,7 @@ import { Button, Card, InfoBanner, Pill, Skeleton, Stepper } from '@avo/ui';
 import {
   BOOST_BOUNDS,
   NEUTRAL_BOOST,
+  summariseBoost,
   usePublishBoosts,
   type BoostValues,
 } from '../../api/promotions.js';
@@ -139,7 +140,7 @@ export function Boosts({ branches, promotions, loading }: BoostsProps) {
               </div>
 
               {/* The plain-language summary the design puts under each branch. */}
-              <p className="mk__boostsummary">{summarise(branch.name, values)}</p>
+              <p className="mk__boostsummary">{summariseBoost(branch.name, values)}</p>
             </div>
           );
         })
@@ -171,16 +172,6 @@ export function Boosts({ branches, promotions, loading }: BoostsProps) {
 }
 
 /** "A visit at Salmiya is worth 2 visits, tops up 10% richer and earns 2 stamps." */
-function summarise(name: string, v: BoostValues): string {
-  const parts: string[] = [];
-  if (v.visit > 1) parts.push(`counts as ${v.visit} visits`);
-  if (v.topup > 0) parts.push(`adds ${v.topup}% to every top-up`);
-  if (v.stamp > 1) parts.push(`earns ${v.stamp} stamps`);
-  if (parts.length === 0) return `A visit at ${name} earns the salon's base rate.`;
-  const last = parts.pop() as string;
-  return `A visit at ${name} ${parts.length ? `${parts.join(', ')} and ${last}` : last}.`;
-}
-
 function publishedNote(promotions: PromotionSet | undefined): string {
   if (!promotions?.boostsPublishedAt) return 'Live for all staff and scanners.';
   const at = new Date(promotions.boostsPublishedAt);
