@@ -82,11 +82,22 @@
  *                                             resolve to the strictest and not the
  *                                             most obvious
  *
- * A blanket `dashboard` would have been the obvious choice and is the wrong one: the
- * `frontdesk` role preset holds `dashboard` and not `team`, so it would have handed
- * every front-desk tablet an export of every customer's name, phone and wallet
- * balance. services/memberSearch.ts spends four controls stopping a staff search box
- * from becoming exactly that file; it would be strange to then serve the file.
+ * A blanket `dashboard` would have been the obvious choice and is the wrong one —
+ * but NOT for the reason this paragraph used to give. It said "the `frontdesk` role
+ * preset holds `dashboard` and not `team`", and that is inverted: the seeded
+ * frontdesk (`ST-002`) holds NEITHER — `perm_dashboard` and `perm_team` are both
+ * false, `perm_appointments` and `perm_scanner` are the two it has. So the seed was
+ * never the evidence, and citing it made a correct conclusion rest on a false fact.
+ *
+ * THE ARGUMENT IS THE RULE, NOT THE FIXTURE. `dashboard` is the wider grant: it is
+ * the permission that opens the Overview, so it is the one a salon hands out to
+ * anybody who needs to see how the business is doing, while `team` is the authority
+ * over its people. A customer's name, phone and wallet balance is the second kind of
+ * data. services/memberSearch.ts spends four controls stopping a staff search box
+ * from becoming exactly that file; it would be strange to then serve the file to a
+ * wider audience than the roster itself.
+ *
+ * And "preset" was wrong twice over — see § REPORT_PERMISSION below.
  */
 
 import { sql } from 'drizzle-orm';
@@ -133,11 +144,20 @@ export const REPORT_PERMISSION: Record<ReportKind, PermissionName> = {
    * (`appointments`), money (`dashboard`), and a named person's earnings, which is
    * personnel data (`team`). The header's rule — a report inherits the permission of
    * the section whose data it exports — has to resolve to ONE permission, and for a
-   * join the only safe resolution is the STRICTEST of them. The `frontdesk` preset
-   * that db/seed.ts writes holds `appointments` and NOT `team`, so gating on
-   * `appointments` would put every artist's earnings on the front-desk tablet: the
-   * same mistake a blanket `dashboard` would have made with the customer book, one
-   * section over.
+   * join the only safe resolution is the STRICTEST of them. The seeded frontdesk
+   * (`ST-002`) holds `appointments` and NOT `team` — checked against the row, not
+   * assumed — so gating on `appointments` would put every artist's earnings on the
+   * front-desk tablet: the same mistake a blanket `dashboard` would have made with
+   * the customer book, one section over.
+   *
+   * NOT A "PRESET", AND THE WORD WAS WORSE THAN LOOSE. Three comments in this file
+   * and its spec called `frontdesk` a "role preset that db/seed.ts writes". There is
+   * no preset for salon staff: `db/seed.ts` writes ST-002's nine permission booleans
+   * out one at a time, and a salon's roster is edited per staff row. `PLATFORM_ROLE_
+   * PRESETS` (db/schema/platformAdmin.ts) DOES exist and is a different thing
+   * entirely — the owner console's admin roles — so the word sent a reader to a real
+   * table to look up a role that is not in it. `seed.ts` itself says it spells
+   * permissions out "rather than derived from PLATFORM_ROLE_PRESETS".
    *
    * It is also the answer the request itself points at. Aftab asked for "staff
    * statistics"; a per-person earnings figure is what a bonus is decided on, and the
