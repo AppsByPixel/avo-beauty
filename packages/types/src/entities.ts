@@ -361,6 +361,28 @@ export const ArtistSchema = z.object({
   hasOwnLogin: z.boolean(),
   /** Soft-deleted artists keep their bookings and stop taking new ones. */
   active: z.boolean(),
+  /**
+   * The branch she works at, or `null` when nobody has assigned her yet.
+   *
+   * NULL MEANS "NOT ASSIGNED", NOT "UNBOOKABLE" — migration 0044 backfilled only
+   * salons with exactly one *open* branch, reusing `resolveBranch`'s own "one
+   * branch is not a guess" rule, and deliberately left every multi-branch
+   * salon's artists null rather than guessing. Treating null as unbookable would
+   * have taken the booking flow offline at every multi-branch salon the moment
+   * the migration ran, to fix an attribution defect with no money impact.
+   *
+   * WHAT IT IS FOR: a booking's branch is derived from her, so it is
+   * *established* rather than guessed — the customer never asserts a branch, she
+   * picks an artist. Assigning her is `perms.team` roster administration and
+   * pays no multiplier, which is the deliberate contrast with a till's branch
+   * (`perms.dashboard`): the charge that settles a booking takes its branch from
+   * the enrolled device, not from her.
+   *
+   * So a booking's branch and its charge's branch CAN legitimately disagree — she
+   * is seen at Salmiya and pays at Kuwait City — and they are never reconciled.
+   * Every money figure filters on `transaction.branch_id`.
+   */
+  branchId: IdSchema.nullable(),
   availabilitySource: z.enum(['google', 'manual']),
   googleConnected: z.boolean(),
   slotMinutes: z.union([

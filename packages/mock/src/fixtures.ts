@@ -20,6 +20,12 @@ import type {
 } from '@avo/types';
 
 export const SALON_ID = 'SAL-AMARA';
+/*
+ * The two mock artists sit at DIFFERENT branches on purpose (see `artists`
+ * below). A branch filter whose fixtures all share one branch is a filter no
+ * client can be seen to apply — the wallet's branch picker would look correct
+ * while returning the same roster for every choice.
+ */
 export const BRANCH_SALMIYA = 'BR-SAL';
 export const BRANCH_KUWAIT_CITY = 'BR-KWC';
 
@@ -228,6 +234,7 @@ export const staff: StaffUser[] = [
 export const artists: Artist[] = [
   {
     id: 'AR-001',
+    branchId: BRANCH_SALMIYA,
     salonId: SALON_ID,
     name: 'Maryam',
     nameAr: 'مريم',
@@ -248,6 +255,7 @@ export const artists: Artist[] = [
   },
   {
     id: 'AR-002',
+    branchId: BRANCH_KUWAIT_CITY,
     salonId: SALON_ID,
     name: 'Fatima',
     nameAr: 'فاطمة',
