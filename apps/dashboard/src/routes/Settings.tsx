@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { fils, formatFils, type Salon } from '@avo/types';
 import { Button, Card, ErrorState, Pill, Skeleton, Stepper, TextField, Toggle } from '@avo/ui';
-import { useSalonBookings } from '../api/bookings.js';
-import { useDevices } from '../api/devices.js';
 import { useSalon } from '../api/salon.js';
 import {
   useAddBranch,
+  useBranchClosurePreview,
   useCloseBranch,
   useUpdateSalon,
   type BranchClosure,
 } from '../api/settings.js';
-import { useStaff } from '../api/staff.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
 import { Tills } from './Tills.js';
@@ -397,23 +395,36 @@ function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
  * `booking.branch_id` and `transaction` reference it. The design's ✕ carries only
  * `title="Remove"`, which would be a lie about what the button does.
  *
- * THE CONSEQUENCES ARE SHOWN BEFORE THE CONFIRMATION, WHICH THE API CANNOT DO.
- * The DELETE answers with `staffRescoped`, `staffLeftWithNoBranch` and
- * `depositHeldBookings`, but computes them inside the transaction that performs
- * the close — there is no preview route. Those three facts are what a merchant
- * needs *before* she decides, so they are derived here from the roster and the
- * appointment list, and the server's own numbers are shown afterwards as
- * confirmation of what actually happened.
+ * THE CONSEQUENCES ARE SHOWN BEFORE THE CONFIRMATION, AND THE SERVER COMPUTES
+ * THEM. `GET /salons/{id}/branches/{bid}/closure-preview` on `perms.loyalty` —
+ * the same permission as the close — answers who gets re-scoped, who is left with
+ * no branch at all, how many appointments still hold a deposit (and how many of
+ * those had their branch inferred), which tills would be unenrolled, and whether
+ * the close would be refused outright. The DELETE's own response is then shown
+ * afterwards as a receipt of what actually happened, in the same field names.
  *
- * AND THE WARNING IS PERMISSION-BOUND, WHICH IS WORTH SAYING OUT LOUD.
- * Closing a branch needs `perms.loyalty`. Knowing who it strands needs
- * `perms.team` (`GET /staff`), and knowing whose deposit is held needs
- * `perms.appointments` (`GET /salons/{id}/bookings`). A `loyalty`-only account can
- * therefore close a branch it cannot be warned about. Rather than fetch and 403,
- * the reads are `enabled` on the permission and the warning degrades to the
- * categories of consequence without counts — true either way, and never an
- * invented number. A closure-preview endpoint on `perms.loyalty` is the real fix;
- * reported to trunk.
+ * THIS PANEL USED TO COMPUTE ALL OF THAT ITSELF, and the note that told it to is
+ * corrected in `api/settings.ts § useCloseBranch` — the preview route existed at
+ * the exact path that note said was missing. Two things came of the replacement,
+ * and both are reasons the client-side version could not have stayed:
+ *
+ * 1. THE WARNING IS NO LONGER PERMISSION-BOUND. Deriving it needed `perms.team`
+ *    (`GET /staff`), `perms.appointments` (`GET /salons/{id}/bookings`) and
+ *    `perms.dashboard` (`GET /salons/{id}/devices`) — three permissions the person
+ *    closing the branch need not hold, since closing it needs only `loyalty`. A
+ *    `loyalty`-only account was shown categories of consequence without counts:
+ *    honest, and a mitigation rather than a fix. One permission, one answer now.
+ *
+ * 2. THE TWO ANSWERS DISAGREED, on data a real salon reaches. `GET
+ *    /salons/{id}/bookings` is capped at 200 rows ordered `starts_at DESC` and
+ *    reports `nextCursor: null`, so past 200 deposit-held bookings this panel's
+ *    count silently dropped the ones starting SOONEST. Driven on `avo_lane_c`: the
+ *    server said 3 deposits held at Salmiya, this panel computed 0, and the
+ *    confirmation read "No appointment here is holding a deposit" over three
+ *    customers' money. `api/settings.ts § BranchClosurePreview` carries the
+ *    measurement.
+ *
+ * WHAT A FAILED PREVIEW DOES: IT BLOCKS THE CLOSE. Argued at the render below.
  */
 function BranchesPanel({ salon }: { salon: Salon | undefined }) {
   const session = useSession('merchant');
@@ -423,61 +434,17 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [closed, setClosed] = useState<BranchClosure | null>(null);
 
-  // Only fetched when the permission allows it — see the note above.
-  const staff = useStaff(session.perms.team);
-  const bookings = useSalonBookings('deposit_held', session.perms.appointments);
   /*
-   * THE THIRD CONSEQUENCE, AND THE ONLY ONE THAT STOPS A COUNTER TAKING MONEY.
-   *
-   * A till enrolled at this branch is NOT revoked when the branch closes, and
-   * every charge through it is then refused — `resolveBranch` requires
-   * `closed_at IS NULL` on a supplied branch and throws `unknown_branch`
-   * otherwise. Driven on a lane-C API: enrol, close, charge → 404. See
-   * `api/settings.ts § useCloseBranch` for the full trail and the report to
-   * lane A.
-   *
-   * On `perms.dashboard` and so `enabled` on it, exactly as the roster and the
-   * appointment list are on theirs: the person closing a branch needs only
-   * `perms.loyalty`, so she may not be allowed to see the tills. Where she is
-   * not, the warning degrades to the category without the names rather than
-   * implying no till is affected — `staffRescoped`'s pattern, one consequence
-   * over.
+   * ONE READ, ON THE SAME PERMISSION AS THE ACT, and only while a confirmation is
+   * open — `confirming` is the branch id or null, and the query is disabled on
+   * null. Three hooks went with the client-side computation this replaced:
+   * `useStaff`, `useSalonBookings('deposit_held')` and `useDevices`, each fetched
+   * on a permission the closer might not hold.
    */
-  const devices = useDevices(session.perms.dashboard);
+  const preview = useBranchClosurePreview(confirming);
 
   const branches = salon?.branches ?? [];
   const onlyOpenBranch = branches.length <= 1;
-
-  /**
-   * What closing this branch would touch, derived the way the server derives it.
-   *
-   * `stranded` mirrors the API's `staffLeftWithNoBranch`: `array_remove` strips
-   * the id, and a member is stranded when that leaves the list empty — so
-   * exactly the branch-scoped staff whose only branch is this one.
-   * `branchAccess === 'all'` staff are untouched by the server's UPDATE (the
-   * `staff_user_branch_access_exclusive` CHECK keeps their id list empty), so
-   * they are filtered out here too rather than counted and then explained away.
-   */
-  function impactOf(branchId: string) {
-    const scoped = (staff.data?.items ?? []).filter(
-      (s) => s.branchAccess !== 'all' && s.branchAccess.includes(branchId),
-    );
-    const held = (bookings.data?.items ?? []).filter((b) => b.branchId === branchId);
-    return {
-      rescoped: scoped.map((s) => s.name),
-      stranded: scoped.filter((s) => s.branchAccess !== 'all' && s.branchAccess.length === 1),
-      deposits: held.length,
-      /** Tills that would be left pointing at a closed branch — see `devices` above. */
-      tills: (devices.data ?? []).filter((d) => d.branchId === branchId),
-      /*
-       * `branchAssumed` is on `MerchantBooking` precisely so a per-branch count
-       * that rests on a guess is distinguishable from one that does not. Ignoring
-       * it here would turn an inferred branch into a stated fact in a warning
-       * about money already taken from customers.
-       */
-      depositsAssumed: held.some((b) => b.branchAssumed),
-    };
-  }
 
   return (
     <Card className="settings__card">
@@ -491,7 +458,6 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
       ) : (
         <ul className="settings__branches">
           {branches.map((branch) => {
-            const impact = impactOf(branch.id);
             return (
               <li key={branch.id} className="settings__branch">
                 <span className="settings__branch-dot" aria-hidden="true" />
@@ -530,10 +496,31 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         ? (() => {
             const branch = branches.find((b) => b.id === confirming);
             if (!branch) return null;
-            const { rescoped, stranded, deposits, depositsAssumed, tills } = impactOf(
-              branch.id,
-            );
             const busy = closeBranch.isPending;
+            /*
+             * `preview.isError ? undefined : preview.data` — AND NOT JUST
+             * `preview.data`, WHICH IS THE BUG THIS LINE EXISTS FOR.
+             *
+             * TanStack KEEPS the last successful `data` when a refetch fails, so
+             * a query can be `isError` and hold `data` at the same time. Driven
+             * in a browser against a 500 on the preview: the failure state
+             * rendered, the previous answer's consequence list rendered UNDER it,
+             * and `impact.closable` was still true — so the Close button was
+             * still there, under a heading saying we could not check what closing
+             * it would do. Every argument for blocking, defeated by a cache.
+             *
+             * STALE-NOT-BLANK DOES NOT APPLY HERE, and that is the distinction.
+             * `StateBlocks.tsx § StaleBanner` keeps figures visible on a failed
+             * refresh because "a merchant who sees the figures vanish assumes the
+             * money did too" — true of a balance she is reading. This is not a
+             * reading; it is the impact statement for an irreversible cascade she
+             * is about to authorise, and the whole reason `staleTime` is 0 on this
+             * query is that a 30-second-old answer may already describe a
+             * different salon. Showing it beside a failure, with a live button,
+             * is worse than showing nothing.
+             */
+            const impact = preview.isError ? undefined : preview.data;
+
             return (
               <div
                 className="settings__confirm"
@@ -545,113 +532,213 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
                   Past charges keep its name — it is closed, not deleted.
                 </p>
 
-                <ul className="settings__consequences">
-                  {session.perms.team ? (
-                    <>
+                {/*
+                  LOADING. Skeleton lines where the consequences will be, not an
+                  empty list and not a spinner replacing the whole sheet: the
+                  question is already legible above and the merchant can read it
+                  while the impact arrives. What she cannot do is CONFIRM — the
+                  Close button is absent until the answer is in, because a
+                  confirmation dialog whose consequences are still loading is a
+                  dialog that can be dismissed with the primary action before it
+                  has said anything. `AVO States.dc.html` § Loading: skeletons in
+                  the shape of the content, never a blocking overlay.
+                */}
+                {preview.isPending ? (
+                  <ul className="settings__consequences" aria-busy="true">
+                    <li>
+                      <Skeleton width="82%" height={14} />
+                    </li>
+                    <li>
+                      <Skeleton width="68%" height={14} />
+                    </li>
+                    <li>
+                      <Skeleton width="74%" height={14} />
+                    </li>
+                  </ul>
+                ) : null}
+
+                {/*
+                  FAILURE. THE CLOSE IS BLOCKED, NOT WARNED ABOUT, and this is the
+                  one state on this screen worth arguing for at length.
+
+                  Degrading to "we couldn't check — close anyway?" was the other
+                  option and it is wrong here, for four reasons that stack:
+
+                  1. THE CLOSE IS ONE-WAY FROM EVERY SURFACE. There is no reopen
+                     endpoint — `grep -rn reopen api/src` finds nothing, and
+                     `PATCH /salons/{id}/branches/{bid}` accepts `name` and
+                     `nameAr` and answers `not_editable` to anything else. So a
+                     close decided on unknown impact cannot be undone by the
+                     person who decided it.
+
+                  2. IT CASCADES INTO THREE PLACES, one of which takes money.
+                     Staff are `array_remove`d, deposits are reported, and tills
+                     are REVOKED (DECISIONS.md #91) — a revoked till is a counter
+                     that stops charging, and the merchant only learns which ones
+                     from this sheet.
+
+                  3. THE PERMISSION ARGUMENT FOR DEGRADING IS GONE. The old
+                     client-side warning degraded because it needed `perms.team`,
+                     `perms.appointments` and `perms.dashboard`, and a
+                     `loyalty`-only closer legitimately lacked them — so "cannot
+                     see it" was a normal, permanent state and refusing the close
+                     over it would have barred her from her own settings. The
+                     preview is on `loyalty` alone. A failure here is no longer
+                     "you may not know", it is "we could not find out", which is
+                     transient and retryable.
+
+                  4. THIS PANEL'S OWN PRECEDENT. The ✕ on the last open branch is
+                     disabled with the reason in its `title` rather than pressed
+                     and refused. Saying no before the act is what this file
+                     already does.
+
+                  It is a block, not a dead end: `SectionError` renders Try again,
+                  and Keep it open stays. The classification is `SectionError`'s
+                  rather than ours so that a served 403 or a named state answer
+                  reaches the merchant in the server's own words — the 403 branch
+                  should be unreachable, since she just passed the same
+                  permission to load this screen, and rendering it honestly costs
+                  nothing and is not a claim that it cannot happen.
+                */}
+                {preview.isError ? (
+                  <div className="settings__confirm-failed">
+                    <SectionError
+                      error={preview.error}
+                      forbiddenTitle={`You can't check what closing ${branch.name} would do`}
+                      failedTitle={`Couldn't check what closing ${branch.name} would do`}
+                      onRetry={() => void preview.refetch()}
+                      retrying={preview.isFetching}
+                    />
+                    <p className="settings__confirm-blocked">
+                      Closing a branch re-scopes staff, unenrols tills and cannot be undone.
+                      It stays available once we can tell you what it would affect.
+                    </p>
+                  </div>
+                ) : null}
+
+                {impact !== undefined ? (
+                  <>
+                    <ul className="settings__consequences">
                       <li>
-                        {rescoped.length === 0
+                        {impact.staffRescoped.length === 0
                           ? 'No staff are scoped to this branch.'
-                          : rescoped.length === 1
-                            ? `${rescoped[0]} loses it from her branch access.`
-                            : `${rescoped.length} staff lose it from their branch access: ${rescoped.join(', ')}.`}
+                          : impact.staffRescoped.length === 1
+                            ? `${impact.staffRescoped[0]} loses it from her branch access.`
+                            : `${impact.staffRescoped.length} staff lose it from their branch access: ${impact.staffRescoped.join(', ')}.`}
                       </li>
-                      {stranded.length > 0 ? (
-                        /*
-                          `staffLeftWithNoBranch` is the one that needs her
-                          attention — a staff member scoped to branches with none
-                          left cannot work — so it gets its own line and the
-                          warning tone rather than being folded into the count.
-                        */
+
+                      {/*
+                        `staffLeftWithNoBranch` is the one that needs her
+                        attention — a staff member scoped to branches with none
+                        left cannot work — so it gets its own line and the warning
+                        tone rather than being folded into the count.
+                      */}
+                      {impact.staffLeftWithNoBranch.length > 0 ? (
                         <li className="settings__consequence--warn">
                           <b>
-                            {stranded.map((s) => s.name).join(', ')} would be left with no branch
-                            at all
+                            {impact.staffLeftWithNoBranch.join(', ')} would be left with no
+                            branch at all
                           </b>{' '}
-                          and cannot work until you give {stranded.length === 1 ? 'her' : 'them'}{' '}
-                          another one in Accounts → Team.
+                          and cannot work until you give{' '}
+                          {impact.staffLeftWithNoBranch.length === 1 ? 'her' : 'them'} another
+                          one in Accounts → Team.
                         </li>
                       ) : null}
-                    </>
-                  ) : (
-                    // No `perms.team`, so no roster to count. Say what is unknown
-                    // rather than implying nothing is affected.
-                    <li>
-                      Staff scoped to this branch will lose it from their branch access. You
-                      don&rsquo;t have permission to see the team, so this can&rsquo;t be counted
-                      here.
-                    </li>
-                  )}
 
-                  {session.perms.appointments ? (
-                    deposits > 0 ? (
-                      <li className="settings__consequence--warn">
-                        <b>
-                          {deposits} appointment{deposits === 1 ? '' : 's'} here still hold
-                          {deposits === 1 ? 's' : ''} a customer&rsquo;s deposit
-                        </b>{' '}
-                        — that money is already taken and stays held against the booking.
-                        {depositsAssumed
-                          ? ' At least one of those bookings has an assumed branch, so treat the count as approximate.'
-                          : ''}
-                      </li>
-                    ) : (
-                      <li>No appointment here is holding a deposit.</li>
-                    )
-                  ) : (
-                    <li>
-                      Appointments here may still hold a customer&rsquo;s deposit. You don&rsquo;t
-                      have permission to see appointments, so this can&rsquo;t be counted here.
-                    </li>
-                  )}
+                      {impact.depositHeldBookings > 0 ? (
+                        <li className="settings__consequence--warn">
+                          <b>
+                            {impact.depositHeldBookings} appointment
+                            {impact.depositHeldBookings === 1 ? '' : 's'} here still hold
+                            {impact.depositHeldBookings === 1 ? 's' : ''} a customer&rsquo;s
+                            deposit
+                          </b>{' '}
+                          — that money is already taken and stays held against the booking.
+                          {/*
+                            A COUNT, WHERE THIS USED TO BE A BOOLEAN. The client-side
+                            version could only say "at least one of those has an
+                            assumed branch"; the server reports how many. An artist
+                            has no branch column, so part of this total is resolved
+                            rather than recorded, and a warning about money already
+                            taken from customers must not state a guess as a fact.
+                          */}
+                          {impact.depositHeldBookingsBranchAssumed > 0
+                            ? ` ${impact.depositHeldBookingsBranchAssumed} of those had ${impact.depositHeldBookingsBranchAssumed === 1 ? 'its' : 'their'} branch inferred rather than recorded, so treat the count as approximate.`
+                            : ''}
+                        </li>
+                      ) : (
+                        <li>No appointment here is holding a deposit.</li>
+                      )}
 
-                  {/*
-                    THE TILLS. The one consequence on this list that stops money
-                    being taken at all, so it is the one that says so loudest.
-                  */}
-                  {session.perms.dashboard ? (
-                    tills.length > 0 ? (
-                      <li className="settings__consequence--warn">
-                        <b>
-                          {tills.length === 1
-                            ? `${tills[0]!.label} would stop taking payments`
-                            : `${tills.length} tills would stop taking payments: ${tills
-                                .map((t) => t.label)
-                                .join(', ')}`}
-                        </b>{' '}
-                        — a till pointed at a closed branch has every charge refused. Move{' '}
-                        {tills.length === 1 ? 'it' : 'them'} to another branch under Tills
-                        below, before or right after you close this one.
-                      </li>
-                    ) : (
-                      <li>No till stands at this branch.</li>
-                    )
-                  ) : (
-                    <li>
-                      A till standing at this branch would stop taking payments. You
-                      don&rsquo;t have permission to see the tills, so this can&rsquo;t be
-                      checked here.
-                    </li>
-                  )}
-                </ul>
+                      {/*
+                        THE TILLS. The one consequence on this list that stops
+                        money being taken at all, so it is the one that says so
+                        loudest — and `tillsUnenrolled` is the ONLY place the
+                        answer comes from. The close revokes these rows; before
+                        the field existed a merchant found out which tills a close
+                        broke by charging from one and getting a 404.
+                      */}
+                      {impact.tillsUnenrolled.length > 0 ? (
+                        <li className="settings__consequence--warn">
+                          <b>
+                            {impact.tillsUnenrolled.length === 1
+                              ? `${impact.tillsUnenrolled[0]} would be unenrolled and stop taking payments`
+                              : `${impact.tillsUnenrolled.length} tills would be unenrolled and stop taking payments: ${impact.tillsUnenrolled.join(', ')}`}
+                          </b>{' '}
+                          — closing the branch revokes{' '}
+                          {impact.tillsUnenrolled.length === 1 ? 'its' : 'their'} enrolment.
+                          Set {impact.tillsUnenrolled.length === 1 ? 'it' : 'them'} up again at
+                          another branch under Tills below.
+                        </li>
+                      ) : (
+                        <li>No till stands at this branch.</li>
+                      )}
+                    </ul>
+
+                    {/*
+                      THE SERVER'S OWN REFUSAL, IN ITS OWN WORDS. `closable` is
+                      false for `last_open_branch` and `already_closed`. The ✕
+                      above is already disabled on the first of those from the
+                      branch count, but this is the authoritative answer — the
+                      client's count is of the list it happens to be holding, and
+                      another manager may have closed the other branch a second
+                      ago. Where the server says no, no Close button is drawn.
+                    */}
+                    {impact.closable ? null : (
+                      <p className="settings__confirm-blocked" role="alert">
+                        {impact.blockedReason === 'already_closed'
+                          ? `${branch.name} is already closed.`
+                          : "This is the salon's only open branch. A salon with no open branch cannot take a payment, a top-up or a booking — open the new location first, then close this one."}
+                      </p>
+                    )}
+                  </>
+                ) : null}
 
                 <div className="settings__confirm-actions">
-                  <Button
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      closeBranch.mutate(
-                        { branchId: branch.id },
-                        {
-                          onSuccess: (result) => {
-                            setConfirming(null);
-                            setClosed(result);
+                  {/*
+                    The primary action exists only where the preview answered AND
+                    the server says the close would go through. Loading and
+                    failure both render Keep it open alone.
+                  */}
+                  {impact !== undefined && impact.closable ? (
+                    <Button
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        closeBranch.mutate(
+                          { branchId: branch.id },
+                          {
+                            onSuccess: (result) => {
+                              setConfirming(null);
+                              setClosed(result);
+                            },
                           },
-                        },
-                      );
-                    }}
-                  >
-                    {busy ? 'Closing…' : `Close ${branch.name}`}
-                  </Button>
+                        );
+                      }}
+                    >
+                      {busy ? 'Closing…' : `Close ${branch.name}`}
+                    </Button>
+                  ) : null}
                   <Button variant="quiet" disabled={busy} onClick={() => setConfirming(null)}>
                     Keep it open
                   </Button>
@@ -662,10 +749,21 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         : null}
 
       {/*
-        The server's OWN numbers, after the fact. Not a duplicate of the warning:
-        the warning is this client's estimate from two lists it may not be allowed
-        to read, and this is what the close actually touched, straight from the
-        UPDATE's RETURNING.
+        WHAT THE CLOSE ACTUALLY TOUCHED, read from the UPDATE's own RETURNING.
+
+        STILL NOT A DUPLICATE OF THE WARNING, for a changed reason. It used to be
+        the server's numbers against this client's estimate — two sources that
+        could disagree, and did. Both now come from the same
+        `branchClosureImpact`, in the same field names, which the API chose
+        deliberately "so the preview and the outcome are comparable rather than
+        merely similar". So this is a receipt: the same four facts, stated in the
+        past tense, after the transaction that made them true. A merchant who
+        confirmed on a preview and reads something different here has found a real
+        race — somebody granted branch access, or enrolled a till, between the two
+        calls — and that is worth being able to see rather than smoothing over.
+
+        `tillsUnenrolled` IS ON THE RECEIPT because it is the consequence she has
+        to act on: those counters are dead until somebody enrols them somewhere.
       */}
       {closed !== null ? (
         <div className="settings__closed" role="status">
@@ -675,6 +773,9 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
             : 'No staff needed re-scoping. '}
           {closed.staffLeftWithNoBranch.length > 0
             ? `${closed.staffLeftWithNoBranch.join(', ')} now ${closed.staffLeftWithNoBranch.length === 1 ? 'has' : 'have'} no branch access — fix that in Accounts → Team. `
+            : ''}
+          {closed.tillsUnenrolled.length > 0
+            ? `Unenrolled ${closed.tillsUnenrolled.join(', ')} — set ${closed.tillsUnenrolled.length === 1 ? 'it' : 'them'} up again at another branch under Tills. `
             : ''}
           {closed.depositHeldBookings > 0
             ? `${closed.depositHeldBookings} appointment${closed.depositHeldBookings === 1 ? '' : 's'} still hold a deposit here.`
