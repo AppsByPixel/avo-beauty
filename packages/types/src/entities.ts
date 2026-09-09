@@ -579,6 +579,74 @@ export const DeviceEnrolmentSchema = z.object({
   enrolledAt: DateTimeSchema,
 });
 
+/**
+ * A delivery address in the member's own address book.
+ *
+ * THE THREE REQUIRED FIELDS ARE `block`, `street`, `building`, AND THAT IS WHAT A
+ * KUWAITI ADDRESS IS. Everything else is nullable with no default, and nothing
+ * substitutes for anything: an omitted `floor` is `null`, not the building
+ * number, and not the literal text `'string'`. That is a direct response to
+ * `PRIOR-ART.md` — AvoRewards' live app sends one input as four separate address
+ * fields and ships `'string'` in two more, so a driver receives a house number in
+ * the block field and a landmark where the street should be.
+ *
+ * `area` and `governorate` are free text rather than ids, because the id tables
+ * Lean hardcodes to `1` do not exist here and inventing them would be inventing a
+ * gazetteer.
+ *
+ * COORDINATES ARE STRINGS, not numbers. The column is `numeric` — the database's
+ * blanket ban on the float family covers it, and nothing does arithmetic on a
+ * coordinate — so it arrives as a string and is sent as one. Both or neither;
+ * `member_address_coordinates_are_a_pair` is the control.
+ */
+export const MemberAddressSchema = z.object({
+  id: IdSchema,
+  label: z.string(),
+  block: z.string(),
+  street: z.string(),
+  building: z.string(),
+  floor: z.string().nullable(),
+  apartment: z.string().nullable(),
+  area: z.string().nullable(),
+  governorate: z.string().nullable(),
+  instructions: z.string().nullable(),
+  latitude: z.string().nullable(),
+  longitude: z.string().nullable(),
+  createdAt: DateTimeSchema,
+});
+
+/** `preparing → ready → closed`. Lean's whole lifecycle, after years and ten tenants. */
+export const OrderStatusSchema = z.enum(['preparing', 'ready', 'closed']);
+
+/**
+ * A shop order, as the customer and the merchant board both read it.
+ *
+ * `fulfilment` IS A FORK, NOT A REPLACEMENT — Lean keeps both `pickup` and
+ * delivery live, so "the shop is delivery-based" means delivery is available and
+ * chosen, not that collection was removed.
+ *
+ * `address` IS A SNAPSHOT and this is the field most likely to be misread: it is
+ * what she typed when she ordered, not what her address book says now. Editing or
+ * deleting an address does not change a past order, deliberately — a delivered
+ * order has to stay answerable. So the same address exists in two places with two
+ * different lifetimes.
+ *
+ * There is NO FEE anywhere in this shape, and its absence is asserted rather than
+ * assumed: the same cart costs the same collected or delivered, and an order
+ * touches only `member_wallet` and `salon_revenue` — a fee would have to invent a
+ * third account.
+ */
+export const ShopOrderSchema = z.object({
+  transactionId: IdSchema,
+  fulfilment: z.enum(['pickup', 'delivery']),
+  status: OrderStatusSchema,
+  /** Null for pickup. The snapshot for delivery — see above. */
+  address: MemberAddressSchema.omit({ createdAt: true }).nullable(),
+  createdAt: DateTimeSchema,
+  readyAt: DateTimeSchema.nullable(),
+  closedAt: DateTimeSchema.nullable(),
+});
+
 export const SalonMetricsSchema = z.object({
   activeMembers: z.number().int().nonnegative(),
   /** Change over the previous period. Signed; the delta line hides when 0. */
@@ -921,6 +989,9 @@ export type Service = z.infer<typeof ServiceSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;
 export type Product = z.infer<typeof ProductSchema>;
+export type MemberAddress = z.infer<typeof MemberAddressSchema>;
+export type OrderStatus = z.infer<typeof OrderStatusSchema>;
+export type ShopOrder = z.infer<typeof ShopOrderSchema>;
 export type DeviceEnrolment = z.infer<typeof DeviceEnrolmentSchema>;
 export type SalonMetrics = z.infer<typeof SalonMetricsSchema>;
 export type StaffPerms = z.infer<typeof StaffPermsSchema>;
