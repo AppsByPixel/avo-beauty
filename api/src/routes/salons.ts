@@ -51,6 +51,7 @@ import { writeAudit } from '../services/audit';
 import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
 import { parseBrandColor } from '../services/brandColor';
 import { branchClosureImpact } from '../services/branchClosure';
+import { deviceEnrolment } from '../db/schema/deviceEnrolment';
 import { resolveBranchFilter } from '../services/branchFilter';
 import { primaryImagesFor } from '../services/imageAttachment';
 import { parseLoyaltyConfig } from '../services/loyaltyRules';
@@ -1178,6 +1179,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           .map((x) => x.name),
         depositHeldBookings: impact.depositHeldBookings,
         depositHeldBookingsBranchAssumed: impact.depositHeldBookingsBranchAssumed,
+        /**
+         * The tills the close would UNENROL (DECISIONS.md #91). Labels, because
+         * this is a confirmation sheet. Before this field the merchant could
+         * only learn it by charging from the till and getting a 404.
+         */
+        tillsUnenrolled: impact.tillsUnenrolled.map((t) => t.label),
       });
     },
   );
@@ -1213,7 +1220,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const heldAssumed = impact.depositHeldBookingsBranchAssumed;
 
       const closedAt = new Date();
-      const { row, rescoped, stranded } = await db.transaction(async (tx) => {
+      const { row, rescoped, stranded, tillsRevoked } = await db.transaction(async (tx) => {
         const updated = await tx
           .update(branch)
           .set({ closedAt, updatedAt: closedAt })
@@ -1255,6 +1262,47 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         // mean a member who was scoped to branches and now has none.
         const strandedRows = affected.filter((s) => s.branchAccessIds.length === 0);
 
+        /**
+         * THE TILLS, CASCADED — revoked, not stranded.  (DECISIONS.md #91)
+         *
+         * A till enrolled here becomes a DEAD COUNTER the moment this UPDATE
+         * commits: `resolveBranch` requires `closed_at IS NULL` on a supplied
+         * branch and throws `unknown_branch` otherwise, so the next charge from
+         * that device is refused outright. `routes/devices.ts` already refuses to
+         * ENROL into a closed branch for exactly that reason; this is the same
+         * guard on the other door.
+         *
+         * WHY CASCADE RATHER THAN REFUSE THE CLOSE, which was the safest of the
+         * three options: because this file's own precedent is cascade-and-report.
+         * Staff scoped to this branch are `array_remove`d rather than blocking
+         * the close, and appointments still holding a deposit are reported rather
+         * than blocking it. A close is refused for exactly one reason — it would
+         * leave the salon with no open branch — and inventing a second class of
+         * blocker would mean a merchant mid-day cannot close a location until she
+         * has hunted down an iPad.
+         *
+         * WHAT IT COSTS, AND WHERE IT IS VISIBLE: those tills keep charging and
+         * silently stop earning their branch's boost, which is decision 82's
+         * original defect arriving through the back door. So it is named in three
+         * places rather than none — `closure-preview` before she confirms, the
+         * DELETE's own response, and the audit metadata below — and the revoked
+         * rows persist with `revoked_at` so the history survives.
+         *
+         * `revoked_at IS NULL` in the predicate, so a re-close cannot re-revoke a
+         * row and the count cannot double-report.
+         */
+        const tillsRevoked = await tx
+          .update(deviceEnrolment)
+          .set({ revokedAt: closedAt, revokedByStaffId: p.id, updatedAt: closedAt })
+          .where(
+            and(
+              eq(deviceEnrolment.salonId, req.params.id),
+              eq(deviceEnrolment.branchId, current.id),
+              isNull(deviceEnrolment.revokedAt),
+            ),
+          )
+          .returning({ deviceId: deviceEnrolment.deviceId, label: deviceEnrolment.label });
+
         await writeAudit(tx, p, {
           salonId: p.salonId,
           kind: 'rules',
@@ -1265,7 +1313,10 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             (strandedRows.length
               ? ` · ${strandedRows.map((s) => s.name).join(', ')} ${strandedRows.length === 1 ? 'now has' : 'now have'} no branch access`
               : '') +
-            (heldCount ? ` · ${heldCount} appointment(s) still hold a deposit here` : ''),
+            (heldCount ? ` · ${heldCount} appointment(s) still hold a deposit here` : '') +
+            (tillsRevoked.length
+              ? ` · ${tillsRevoked.length} till(s) unenrolled: ${tillsRevoked.map((t) => t.label).join(', ')}`
+              : ''),
           source: 'merchant',
           subjectType: 'branch',
           subjectId: current.id,
@@ -1279,11 +1330,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             staffLeftWithNoBranch: strandedRows.map((s) => s.id),
             depositHeldBookings: heldCount,
             depositHeldBookingsBranchAssumed: heldAssumed,
+            tillsUnenrolled: tillsRevoked,
           },
           ...clientMeta(req),
         });
 
-        return { row: updated[0], rescoped: affected, stranded: strandedRows };
+        return { row: updated[0], rescoped: affected, stranded: strandedRows, tillsRevoked };
       });
 
       if (!row) throw notFound('unknown_branch', 'No such branch.');
@@ -1307,6 +1359,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
          */
         staffRescoped: rescoped.map((s) => s.name),
         staffLeftWithNoBranch: stranded.map((s) => s.name),
+        /**
+         * The tills this close unenrolled, from the cascade's own RETURNING —
+         * the same shape and the same field name the preview serves, so the
+         * confirmation and the outcome are comparable rather than similar.
+         */
+        tillsUnenrolled: tillsRevoked.map((t) => t.label),
         depositHeldBookings: heldCount,
         /**
          * How many of those had their branch INFERRED rather than recorded. Lane C's

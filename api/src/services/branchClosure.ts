@@ -27,9 +27,10 @@
  * predicate below is character-for-character the `WHERE` the close's `UPDATE` uses.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
+import { deviceEnrolment } from '../db/schema/deviceEnrolment';
 import { staffUser } from '../db/schema/staff';
 import type { Executor } from './audit';
 
@@ -53,6 +54,27 @@ export interface BranchClosureImpact {
    * say "3 appointments, 2 of them inferred" and neither number needs a footnote.
    */
   depositHeldBookingsBranchAssumed: number;
+  /**
+   * TILLS THAT WOULD BE UNENROLLED BY THE CLOSE.  (DECISIONS.md #91)
+   *
+   * A till enrolled to a branch that then closes is a DEAD COUNTER, not a
+   * degraded one: `enrolledBranchId` is read live per request with no
+   * `closed_at` check, flows into `resolveBranch` as `supplied`, and that lookup
+   * requires `closed_at IS NULL` and otherwise throws. Lane C drove it — enrol,
+   * close, charge → `404 unknown_branch` — and `routes/devices.ts` already
+   * refuses to ENROL into a closed branch on exactly that reasoning, so the same
+   * state was reachable through the other door.
+   *
+   * The close CASCADES a revoke, so this list is what will be unenrolled rather
+   * than what is broken. Reported here because the cascade costs the merchant
+   * something real: those tills keep charging, and silently stop earning their
+   * branch's boost, which is decision 82's original defect arriving through the
+   * back door. Naming them before she confirms is what makes it not silent.
+   *
+   * LABELS, NOT DEVICE IDS. Same choice `staffRescoped` makes one field up: this
+   * is read on a confirmation sheet, and `label` is what the merchant typed.
+   */
+  tillsUnenrolled: Array<{ deviceId: string; label: string }>;
 }
 
 export async function branchClosureImpact(
@@ -100,8 +122,25 @@ export async function branchClosureImpact(
     .from(booking)
     .where(and(eq(booking.branchId, branchId), eq(booking.status, 'deposit_held')));
 
+  /**
+   * LIVE ENROLMENTS ONLY — `revoked_at IS NULL`. A previously revoked row
+   * pointing at this branch is history and would be a phantom warning.
+   */
+  const tills = await (exec as Db)
+    .select({ deviceId: deviceEnrolment.deviceId, label: deviceEnrolment.label })
+    .from(deviceEnrolment)
+    .where(
+      and(
+        eq(deviceEnrolment.salonId, salonId),
+        eq(deviceEnrolment.branchId, branchId),
+        isNull(deviceEnrolment.revokedAt),
+      ),
+    )
+    .orderBy(deviceEnrolment.deviceId);
+
   return {
     staffRescoped,
+    tillsUnenrolled: tills,
     staffLeftWithNoBranch: staffRescoped.filter((s) => s.remaining === 0).map((s) => s.id),
     depositHeldBookings: counts?.total ?? 0,
     depositHeldBookingsBranchAssumed: counts?.assumed ?? 0,
