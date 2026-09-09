@@ -110,3 +110,59 @@ contract rather than copied, and it agrees with a system already in production.
   holds accounts on both platforms.
 - Money is floats (`parseFloat(n).toFixed(d)`). Any integration boundary between their
   system and ours has to convert at the edge, and that conversion is a place to put a test.
+
+---
+
+## The shop is delivery-based, and Lean already settled how
+
+Added 2026-09-09, when Aftab asked for AVO Beauty's shop to be delivery-based and said to
+follow Lean's flow. Read out of `~/Desktop/AvoMobileApps-Lean` (branch `Lean`) rather than
+from memory. Four decisions come free, and one thing must not be copied.
+
+**Pickup is not replaced. It is a fork.** `src/components/Modals/deliveryOption.js` sets
+`deliveryOption` to `"pickup"` or `"address"`, and both paths are live. So "delivery-based"
+means delivery is *available and chosen*, not that collection is removed — which also
+answers whether to drop the design bundle's Pickup copy. Keep it.
+
+**Three order statuses, not a workflow engine.** `PREPARING → READY → CLOSED`. That is the
+whole lifecycle in an app that has served ten tenants for years. Anything richer than this
+is a thing we would be inventing, not following.
+
+**A saved address book, with coordinates.** Google Places autocomplete fills the
+structured parts, the customer types the rest, `longitude`/`latitude` ride along, and the
+address is named (`saveAs`) so it can be reused. Addresses belong to a `userId`, not to an
+order.
+
+**There is no delivery fee anywhere.** No `deliveryCharge`, no `deliveryFee`, no
+`shippingFee` in the source. This is the most consequential finding for us: following Lean
+keeps the shop **entirely off the money path**, so no idempotency key, no atomic
+multi-table write, and no refund-as-wallet-credit case to design. If a fee is ever wanted
+it is its own slice with its own decision, not part of making delivery work.
+
+### The one thing not to follow
+
+`src/components/address/addressDetail.js:110-140` builds its payload like this:
+
+```js
+block:          data.houseNo,
+street:         data.landMark,
+buildingNumber: data.houseNo,
+floor:          data.houseNo,
+apartment:      data.houseNo,
+areaId: 1,  regionId: 1,
+jadda: 'string',  instructions: 'string',
+```
+
+**The customer fills two inputs — `houseNo` and `landMark` — and one of them is sent as
+four different address fields.** A landmark is written where the street belongs, `areaId`
+and `regionId` are hardcoded to 1, and two fields ship the literal text `'string'`.
+
+Kuwaiti addresses are genuinely block, street, building — so a driver receives a house
+number in the block field and a landmark in the street field. This is the same shape as
+the contrast bug above: a real thing, in production, that costs somebody real time on the
+day it matters.
+
+**What we do differently:** collect the fields we actually intend to store, store exactly
+those, and let a field be empty rather than filling it with a copy of another field or a
+placeholder. If Places cannot resolve a component, that component is `null` — not
+`'string'`, and not the house number.
