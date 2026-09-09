@@ -532,6 +532,31 @@ export const ProductSchema = z.object({
  * shape and a hand-written mirror in one client is how two surfaces start
  * disagreeing about what "repeat rate" means.
  */
+/**
+ * One enrolled till, as `GET /salons/{id}/devices` reports it.
+ *
+ * WHAT AN ENROLMENT IS FOR, in one sentence: it is how the SERVER establishes
+ * which branch a charge happened at, so a multi-branch salon's earning rates can
+ * be applied at all. Before it existed those rates were stored, served to both
+ * clients, and applied by neither — decision 82.
+ *
+ * `branchId` IS NOT A CLIENT INPUT ANYWHERE. `POST /charges` has no branch in its
+ * body and must never gain one: a client naming its own branch is a client
+ * choosing its own multiplier, non-negotiable #2 with extra steps. This shape is
+ * for *administering* tills, not for asserting one during a charge.
+ *
+ * `branchName` is nullable because it is a join, not a stored field — a branch
+ * closed after enrolment still has a row here, deliberately, so a till that was
+ * pointed somewhere while money went through it stays answerable.
+ */
+export const DeviceEnrolmentSchema = z.object({
+  deviceId: z.string(),
+  branchId: z.string(),
+  branchName: z.string().nullable(),
+  label: z.string(),
+  enrolledAt: DateTimeSchema,
+});
+
 export const SalonMetricsSchema = z.object({
   activeMembers: z.number().int().nonnegative(),
   /** Change over the previous period. Signed; the delta line hides when 0. */
@@ -874,6 +899,7 @@ export type Service = z.infer<typeof ServiceSchema>;
 export type Artist = z.infer<typeof ArtistSchema>;
 export type AvailabilitySlot = z.infer<typeof AvailabilitySlotSchema>;
 export type Product = z.infer<typeof ProductSchema>;
+export type DeviceEnrolment = z.infer<typeof DeviceEnrolmentSchema>;
 export type SalonMetrics = z.infer<typeof SalonMetricsSchema>;
 export type StaffPerms = z.infer<typeof StaffPermsSchema>;
 export type StaffUser = z.infer<typeof StaffUserSchema>;
