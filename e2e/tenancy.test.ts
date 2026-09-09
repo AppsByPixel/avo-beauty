@@ -193,6 +193,35 @@ beforeAll(async () => {
        '${PROBE_SERVICE_B_IMAGE_DELETE}', 'primary')
     ON CONFLICT (id) DO NOTHING;
 
+    -- ---------------------------------------------------------------------
+    -- THE THREE TILLS THE DEVICE LEDGER ADDRESSES. See PROBE_DEVICE_A.
+    --
+    -- \`enrolled_by_staff_id\` is nullable and left NULL: these rows were seeded, not
+    -- enrolled by anyone, and naming a staff member would be a fiction the audit trail
+    -- does not contain. \`revoked_by_staff_id\` must stay NULL with it —
+    -- \`device_enrolment_revocation_is_whole\` makes revoked one fact with two columns.
+    --
+    -- THE DELETE CONTROL'S SLOT IS RE-FILLED BY UN-REVOKING, not by re-inserting. The
+    -- revoke is an UPDATE and \`device_enrolment_live_uq\` is partial on
+    -- \`revoked_at IS NULL\`, so a plain re-insert would collide with last run's live row
+    -- and an ON CONFLICT (id) that only touched \`salon_id\` would leave it revoked — the
+    -- control would then 404 and read as a tenancy hole.
+    INSERT INTO device_enrolment (id, salon_id, device_id, branch_id, label)
+    VALUES
+      ('ENR-TEN-A',      '${SALON_A}', '${PROBE_DEVICE_A}',        '${A_BRANCH}', 'Tenancy probe till A'),
+      ('ENR-TEN-B-DEL',  '${SALON_B}', '${PROBE_DEVICE_B_DELETE}', '${B_BRANCH}', 'Tenancy probe till B')
+    ON CONFLICT (id) DO UPDATE SET
+      revoked_at = NULL, revoked_by_staff_id = NULL,
+      salon_id = EXCLUDED.salon_id, branch_id = EXCLUDED.branch_id;
+
+    -- THE POST CONTROL'S SLOT IS EMPTIED, not assumed empty — the image POST's rule, and
+    -- here it decides a status code rather than a row: re-posting an enrolment that
+    -- already names the same branch AND label returns the existing row with 200, and the
+    -- table pins 201. DELETEd outright rather than revoked, because a revoked row is
+    -- history the live unique index ignores and the handler would insert alongside it.
+    DELETE FROM device_enrolment
+     WHERE salon_id = '${SALON_B}' AND device_id = '${PROBE_DEVICE_B_POST}';
+
     -- SALON B'S SOCIAL LINKS. Salon A is not touched here and must not be: its four
     -- seeded handles are what \`contract.test.ts\` asserts \`salon.social\` is non-empty
     -- against, and they are also the fixture the ledger row probes across the boundary.
@@ -386,6 +415,41 @@ const PROBE_PRODUCT_B_PATCH = 'PR-TEN-B-PATCH';
 const PROBE_PRODUCT_B_DELETE = 'PR-TEN-B-DEL';
 const PROBE_CAMPAIGN_A = 'CMP-TEN-A';
 const PROBE_CAMPAIGN_B = 'CMP-TEN-B';
+
+/**
+ * THE TILLS THE DEVICE LEDGER ADDRESSES — decision 82, lane A's `devices.ts`.
+ *
+ * THREE IDS, ONE PER JOB, and the reason is the one `productFor` gives: the DELETE
+ * control really revokes, so it cannot share a subject with anything.
+ *
+ *   `PROBE_DEVICE_A`         salon A's till, so the cross-salon DELETE addresses an id
+ *                            the handler WOULD recognise. `requirePerm` and
+ *                            `requireSameSalon` are the first two statements in the
+ *                            revoke handler, so it is refused before the lookup today —
+ *                            and `happyHourFor`'s reasoning is why the fixture exists
+ *                            anyway: a 404 standing in for a 403 is exactly how a
+ *                            tenancy check that has drifted later hides.
+ *
+ *   `PROBE_DEVICE_B_DELETE`  the row the control half revokes for real. Seeded in SQL
+ *                            and NOT through `POST …/devices`, which is the row above
+ *                            it in this table — the rule the image fixtures state.
+ *
+ *   `PROBE_DEVICE_B_POST`    the enrolment the POST control creates through the
+ *                            endpoint, as a POST control should. Its slot is EMPTIED in
+ *                            `beforeAll` rather than assumed empty, because a repeat
+ *                            naming the same branch and label answers 200 where the row
+ *                            pins 201.
+ *
+ * A LIVE ENROLMENT CHANGES WHAT `resolveBranch` ANSWERS, which is why these ids are
+ * deliberately unlike any other device string in this suite. `session.device_id` is what
+ * the lookup keys on, so an enrolment is inert for every charge made with a different
+ * device — `B_SCANNER_DEVICE` included. Reusing a scanner device id here would silently
+ * flip that session's charges from `branch_assumed` to established, which is the
+ * shared-fixture trap one table over.
+ */
+const PROBE_DEVICE_A = 'DEV-TEN-A';
+const PROBE_DEVICE_B_DELETE = 'DEV-TEN-B-DEL';
+const PROBE_DEVICE_B_POST = 'DEV-TEN-B-POST';
 
 /**
  * SALON B'S SOCIAL LINKS, and why two channels rather than one.
@@ -743,6 +807,71 @@ const SALON_ROUTES: SalonRoute[] = [
   },
 
   /**
+   * LANE A'S THREE DEVICE-ENROLMENT DOORS — dev `45a60a1`, closing decision 82.
+   *
+   * The ledger fired on all three, and the AUTO-DISCOVERING SIBLING at the foot of this
+   * file was ALREADY GREEN on them — "EVERY discovered route refuses salon B with 403 and
+   * no salon A data" passed on the same run these three rows were missing. So tenancy was
+   * never in doubt here either; only this hand-written half was behind. That is the fourth
+   * time this pair has split that way, and it is the ledger's job working as intended: the
+   * LIST is what goes stale, not the enforcement.
+   *
+   * WHAT MAKES THESE WORTH A SPEC EACH ANYWAY. A till is bound to a BRANCH, and the branch
+   * is what decides whose earning rates apply to the money taken at it (`services/branch.ts`
+   * § resolveBranch). A cross-salon read here would name another salon's branches; a
+   * cross-salon POST would point her till at them. The composite foreign key
+   * `device_enrolment_branch_same_salon_fk` means such a row cannot COMMIT — that is the
+   * control — but the 403 is what stops the attempt being informative, and
+   * `unknown_branch` is deliberately a 404 rather than a 403 for `resolveBranch`'s own
+   * reason: a 403 would confirm the id names a real branch somewhere.
+   *
+   * `{bid}` IS NOT USED HERE, DELIBERATELY, and it is the one trap in this group. The POST
+   * enrols into an OPEN branch — the handler filters `closedAt IS NULL` and answers
+   * `unknown_branch` otherwise — and `branchFor(SALON_B)` resolves to
+   * `B_BRANCH_DISPOSABLE`, which the `DELETE …/branches/{bid}` control four rows above
+   * has already CLOSED by the time these run. So the control body names `B_BRANCH`, a
+   * stable open branch, and this group is immune to its position in the table rather than
+   * merely lucky in it.
+   */
+  {
+    method: 'GET',
+    template: '/salons/{id}/devices',
+  },
+  {
+    method: 'POST',
+    template: '/salons/{id}/devices',
+    /**
+     * The attack half names SALON A'S OWN BRANCH — the body a real cross-tenant attempt
+     * would carry, and the table header's rule is why: a body that could be rejected on
+     * its own merits would mask whether the tenancy gate ran. It is never resolved
+     * (`requireSameSalon` precedes the branch lookup), which is the point.
+     */
+    body: { deviceId: PROBE_DEVICE_B_POST, branchId: A_BRANCH, label: 'Tenancy probe till' },
+    /**
+     * 201, not the default 200: a genuine enrolment answers `created`, and a REPEAT
+     * naming the same branch and label answers 200 with nothing written. `beforeAll`
+     * empties this device's slot for exactly that reason, so this row pins the create
+     * path rather than passing on the idempotent one.
+     */
+    controlBody: { deviceId: PROBE_DEVICE_B_POST, branchId: B_BRANCH, label: 'Tenancy probe till' },
+    controlStatus: 201,
+  },
+  {
+    method: 'DELETE',
+    template: '/salons/{id}/devices/{deviceId}',
+    /**
+     * 200 carrying `{ deviceId, enrolled: false }`, not 204 — the same call the branch
+     * close makes and for the same reason: a revocation is a state the merchant is shown,
+     * not a disappearance. So the default `controlStatus` is right, and saying so is the
+     * point of this comment.
+     *
+     * The control really revokes, and `revoked_at IS NULL` is in the UPDATE's own WHERE
+     * clause, so a second run against one database would find the row already revoked and
+     * answer 404. `beforeAll` un-revokes it rather than re-inserting it.
+     */
+  },
+
+  /**
    * LANE A'S PER-LINK SOCIAL WRITE — the endpoint api-contract.md named for weeks
    * without it existing, and the reason this table is hand-written as well as
    * discovered.
@@ -902,6 +1031,15 @@ function imageOwnerFor(route: SalonRoute, salonId: string): string {
 const campaignFor = (salonId: string): string =>
   salonId === SALON_B ? PROBE_CAMPAIGN_B : PROBE_CAMPAIGN_A;
 
+/**
+ * An ENROLLED device belonging to the salon being addressed. Only DELETE uses it.
+ *
+ * No per-verb split, unlike `productFor`: the DELETE is the only verb carrying `{deviceId}`,
+ * because `POST …/devices` names its device in the BODY rather than the path.
+ */
+const deviceFor = (salonId: string): string =>
+  salonId === SALON_B ? PROBE_DEVICE_B_DELETE : PROBE_DEVICE_A;
+
 const url = (r: SalonRoute, salonId: string) =>
   r.template
     .replace('{id}', salonId)
@@ -909,6 +1047,20 @@ const url = (r: SalonRoute, salonId: string) =>
     .replace('{bid}', branchFor(salonId))
     .replace('{pid}', productFor(r, salonId))
     .replace('{cid}', campaignFor(salonId))
+    /**
+     * `{deviceId}` is an enrolled device at the salon being addressed, resolved the way
+     * `{cid}` is and for the same reason: the control half really revokes, so the id has
+     * to be a live enrolment at THAT salon or the control 404s and the ledger reports a
+     * tenancy hole that is really a missing fixture.
+     *
+     * AND THE BRACE NAME IS `{deviceId}` RATHER THAN `{did}` BECAUSE IT HAS TO BE. The
+     * gap-ledger normaliser is the generic `\{(\w+)\}` → `:$1`, so the placeholder's
+     * name IS the fastify parameter's name after substitution. `{did}` normalises to
+     * `:did`, the route registers `:deviceId`, and the entry then reads as missing from a
+     * table it is sitting in — the confusing hour that comment predicts, which this row
+     * duly spent. Every future placeholder must match the registered parameter exactly.
+     */
+    .replace('{deviceId}', deviceFor(salonId))
     /**
      * `{oid}` is the image routes' owner — a product or a service, chosen by the
      * template and the verb. See `imageOwnerFor`.

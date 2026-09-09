@@ -656,6 +656,7 @@ const PINNED_COVERAGE: string[] = [
   'DELETE /bookings/:id [requireMember]',
   'DELETE /members/me/deletion [requireMember]',
   'DELETE /salons/:id/branches/:bid → loyalty',
+  'DELETE /salons/:id/devices/:deviceId → dashboard',
   'DELETE /salons/:id/products/:pid → shop',
   'DELETE /staff/:id → team',
   'DELETE /v1/platform/admins/:id → admins',
@@ -688,6 +689,33 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/audit → dashboard',
   'GET /salons/:id/bookings → appointments',
   'GET /salons/:id/branches/:bid/closure-preview → loyalty',
+  /**
+   * THE THREE DEVICE-ENROLMENT DOORS, on dev `45a60a1`, closing decision 82.
+   *
+   * `→ dashboard` IS CONFIRMED, AND NOT BY THIS LINE. Lane A reports the census
+   * derived `dashboard` independently; it did not, and the distinction is worth
+   * keeping. `surfaceOf`/`censusOfRoutes` read the LAST QUOTED ARGUMENT of
+   * `requirePerm(req, 'either', 'dashboard')` — the same token a reader reads. A pin
+   * agreeing with the source there is a tautology, not a second opinion.
+   *
+   * What DOES confirm it is behavioural and already green: the generated probes below
+   * revoke `dashboard` and require a 403 carrying `dashboard`'s OWN copy, then grant
+   * `dashboard` alone and require the refusal to stop. A gate on `team`, `marketing` or
+   * `scanner` fails both halves by name. So the permission half of the classification is
+   * driven by the request, exactly as this file's header promises — and the agreement
+   * between this ledger and the source is a separate, weaker fact.
+   *
+   * THE SURFACE HALF IS CONFIRMED BY NOTHING HERE, AND IT IS THE UNUSUAL HALF.
+   * `requirePerm(req, 'either', …)` is the only `'either'` gate in this API, and
+   * `GatedRoute['surface']` has no `'either'` member to record it with, so `surfaceOf`
+   * collapses it to `'dashboard'` and `tokenFor` hands every probe a WEB session. The
+   * scanner door — decision 82's 'Set up this device' flow, and per `routes/devices.ts`
+   * the PRIMARY one — is driven by the pair of specs at the bottom of this file rather
+   * than by the generated sweep, because the sweep structurally cannot see it. Neither
+   * can this ledger line: `→ dashboard` is byte-identical whether the guard says
+   * `'either'` or `'dashboard'`.
+   */
+  'GET /salons/:id/devices → dashboard',
   /**
    * TWO LINES FOR ONE ROUTE, and it is the disjunctive-wrapper case the header
    * describes — "a disjunctive wrapper contributes two". `requireLoyaltyReader`
@@ -778,6 +806,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /members/me/policy-acceptance [requireMember]',
   'POST /orders [requireMember]',
   'POST /salons/:id/branches → loyalty',
+  'POST /salons/:id/devices → dashboard',
   'POST /salons/:id/products → shop',
   'POST /salons/:id/reports/artist-performance/download-url → team',
   'POST /salons/:id/reports/best-selling-services/download-url → appointments',
@@ -1112,4 +1141,159 @@ describe('and each console endpoint stops refusing with the section restored', (
       }
     }, 60_000);
   }
+});
+
+// ===========================================================================
+
+/**
+ * THE `'either'` SURFACE, WHICH THE GENERATED SWEEP ABOVE STRUCTURALLY CANNOT SEE.
+ *
+ * WHY THESE ARE HAND-WRITTEN IN A FILE WHOSE WHOLE POINT IS THAT NOTHING IS.
+ * `requirePerm(req, surface, permission)` takes three surface values —
+ * `'scanner' | 'dashboard' | 'either'` (`auth/principal.ts` § StaffSurface) — and
+ * `GatedRoute['surface']` in `support/perm-census.ts` takes two plus `'platform'`. There
+ * is no `'either'` member to record it with, so `surfaceOf` collapses it:
+ *
+ *     const named = args[1];
+ *     return named === 'scanner' ? 'scanner' : 'dashboard';
+ *
+ * `'either'` is not `'scanner'`, so it reads `'dashboard'`, `tokenFor` hands the probe the
+ * WEB session, and the scanner door is never knocked on. Nothing reports this — the
+ * collapse is silent, and the ledger line `GET /salons/:id/devices → dashboard` is
+ * byte-identical whether the guard says `'either'` or `'dashboard'`.
+ *
+ * SO A REAL REGRESSION IS INVISIBLE TO EVERY OTHER SPEC IN THIS SUITE. Narrow
+ * `'either'` to `'dashboard'` and: the census still reads `dashboard`, the pin does not
+ * move, both generated probes stay green on the web token, `tenancy.test.ts` stays green
+ * because its ledger drives the dashboard session too — and the scanner's 'Set up this
+ * device' flow, which `routes/devices.ts` calls "the PRIMARY flow" and decision 82 assigns
+ * to lane B, answers 403 for ever with the wrong-credential copy.
+ *
+ * `perms.dashboard` on `'either'` is the ONLY gate of its kind in this API, and it is the
+ * half of the classification lane A argued hardest for. It should not rest on the half of
+ * the census that cannot represent it.
+ *
+ * THE FIX IS NOT HERE, DELIBERATELY. Teaching `surfaceOf` to return `'either'` and
+ * `tokenFor` to yield both tokens belongs in `support/perm-census.ts`, which another lane D
+ * session is holding uncommitted; a two-value union widening under it would be a
+ * conflict for the sake of tidiness. These specs are the interim, and they are written to
+ * become REDUNDANT rather than to last — see the guard below, which goes red the hour the
+ * census learns the third value, so "interim" cannot quietly become "permanent".
+ */
+const SURFACE_COPY_DASHBOARD =
+  'A scanner PIN cannot reach the dashboard. Sign in on the web with a username and password.';
+
+/**
+ * The three doors, written out rather than filtered from the census — the census's view of
+ * their surface is the thing under test, so deriving the list from it would be circular.
+ */
+const EITHER_SURFACE_ROUTES: { method: 'GET' | 'POST' | 'DELETE'; path: string }[] = [
+  { method: 'GET', path: `/salons/${SALON_B}/devices` },
+  { method: 'POST', path: `/salons/${SALON_B}/devices` },
+  { method: 'DELETE', path: `/salons/${SALON_B}/devices/${MISSING}` },
+];
+
+describe("the device doors accept a SCANNER credential — perms.dashboard on 'either'", () => {
+  for (const route of EITHER_SURFACE_ROUTES) {
+    it(`${route.method} ${route.path.replace(SALON_B, ':id')} — a PIN session is not refused for its SURFACE`, async () => {
+      revokeAllMerchant();
+      try {
+        grantMerchant(B_STAFF_AUTH_PIN, 'dashboard');
+        const res = await treq<any>(route.method, route.path, {
+          token: pin,
+          body: route.method === 'POST' ? {} : undefined,
+        });
+
+        /**
+         * NOT asserted to be 200, for the reason the generated mirror gives: the DELETE
+         * addresses a device id nothing resolves to and the POST sends an empty body, so a
+         * 404 and a 400 both mean the gate opened. What must not happen is the SURFACE
+         * refusal — that is `requireStaff` rejecting the KIND of credential, and it is the
+         * exact answer a narrowing of `'either'` to `'dashboard'` would produce.
+         */
+        const refusedForSurface =
+          res.status === 403 && res.body?.message === SURFACE_COPY_DASHBOARD;
+        expect(
+          refusedForSurface,
+          `${route.method} ${route.path} refused a scanner PIN holding perms.dashboard for ` +
+            'its SURFACE. `requirePerm(req, \'either\', \'dashboard\')` has been narrowed to ' +
+            "`'dashboard'`, and decision 82's 'Set up this device' flow on the scanner is now " +
+            'unreachable. Nothing else in this suite can see this: the census collapses ' +
+            "`'either'` to `'dashboard'`, so the ledger line and both generated probes stay " +
+            `green on the web token.\n${res.raw}`,
+        ).toBe(false);
+      } finally {
+        revokeAllMerchant();
+      }
+    }, 60_000);
+  }
+});
+
+// ===========================================================================
+
+describe('and the scanner door is the PERMISSION, not the surface', () => {
+  for (const route of EITHER_SURFACE_ROUTES) {
+    it(`${route.method} ${route.path.replace(SALON_B, ':id')} — a PIN session without perms.dashboard → 403 dashboard`, async () => {
+      revokeAllMerchant();
+      const res = await treq<any>(route.method, route.path, {
+        token: pin,
+        body: route.method === 'POST' ? {} : undefined,
+      });
+
+      expect(res.status, `answered ${res.status}: ${res.raw}`).toBe(403);
+      /**
+       * THE DISCRIMINATOR, and it is doing more work here than in the generated sweep.
+       * There a wrong-surface 403 and a permission 403 are told apart to prove the gate
+       * exists; here the SAME distinction proves the gate is the one lane A argued for. If
+       * this answered `SURFACE_COPY_DASHBOARD` the pair above would be green — the door is
+       * shut either way — and the reason would be the credential rather than the authority.
+       * Gating this family on the scanner surface at all is `services/branch.ts` § THE FIX
+       * THAT MUST NOT BE TAKEN arriving through a side door.
+       */
+      expect(
+        res.body.message,
+        `${route.method} ${route.path} refused a scanner PIN, but for the wrong reason — it ` +
+          `answered "${res.body.message}". A scanner session with perms.dashboard is a ` +
+          'legitimate caller here by design; what must refuse it is the missing permission.',
+      ).toBe(PERMISSION_COPY.dashboard);
+    }, 60_000);
+  }
+});
+
+// ===========================================================================
+
+/**
+ * THE SELF-EXPIRY, so the four specs above cannot outlive their reason.
+ *
+ * They exist ONLY because `surfaceOf` cannot say `'either'`. The hour it can — a third
+ * member on `GatedRoute['surface']` and a `tokenFor` that yields both credentials — the
+ * generated sweep covers this family on both surfaces and the hand-written pairs become
+ * duplicated coverage nobody is maintaining. This goes red then, by name, and says so.
+ *
+ * The same idiom as `NEEDS_PLATFORM_CREDENTIAL` and `AWAITING_MERGE` above: an excuse in
+ * this file has to assert that its own excuse still holds.
+ */
+describe("the census still cannot represent the 'either' surface", () => {
+  it('reads the device doors as `dashboard`, which is why the pairs above are hand-written', () => {
+    const deviceGates = census.gated.filter((g) => g.path.includes('/devices'));
+
+    expect(
+      deviceGates.map(pairOf).sort(),
+      'the census no longer reads all three device doors as gated. If they moved, the ' +
+        'hand-written pairs above address paths that are gone.',
+    ).toEqual([
+      'DELETE /salons/:id/devices/:deviceId → dashboard',
+      'GET /salons/:id/devices → dashboard',
+      'POST /salons/:id/devices → dashboard',
+    ]);
+
+    const surfaces = [...new Set(deviceGates.map((g) => g.surface))];
+    expect(
+      surfaces,
+      "`surfaceOf` now distinguishes the 'either' surface, so the generated sweep can probe " +
+        'these three on the scanner credential itself. DELETE the two hand-written describe ' +
+        'blocks above and this spec with them — they are duplicated coverage now, and this ' +
+        'assertion exists to say so rather than let them rot.',
+    ).toEqual(['dashboard']);
+  });
 });
