@@ -60,6 +60,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
+import { withRowLockHeld } from './support/race.js';
 import {
   A_STAFF_FULL,
   NO_SHOW_WORKER_ENABLED,
@@ -1428,24 +1429,57 @@ describe('two no-show passes racing on one deposit still return it once', () => 
       'there is no held deposit for the two passes to contend over',
     );
 
-    const [a, b] = await runNoShowJobTwiceAtOnce();
+    /**
+     * THE RACE IS ARRANGED, NOT HOPED FOR — and this replaced a bare
+     * `runNoShowJobTwiceAtOnce()` that was intermittently not a race at all.
+     *
+     * `support/race.ts` § withRowLockHeld carries the full argument. The short
+     * version: this spec used to launch two `tsx` one-shot passes under
+     * `Promise.all` and then check they had overlapped by WALL CLOCK, which they
+     * always did — 100% on every run, one process's whole lifetime inside the
+     * other's. But each pass is ~570ms of cold start wrapped around a scan and a
+     * commit a few milliseconds apart, so total process overlap says almost
+     * nothing about whether the CRITICAL SECTIONS met. In a full-suite run the
+     * loser came back `candidates: 0` — its scan had run after the winner
+     * committed — and the spec went red having tested nothing. Three isolated
+     * re-runs were green, which is precisely why re-running until green was the
+     * wrong response: the flake needs the load of a full suite to show up.
+     *
+     * Holding the MEMBER row makes it deterministic. `noShowWorker.ts` locks the
+     * member first (its documented lock order), so with that lock held both
+     * passes complete their UNLOCKED candidate scan — a row lock does not block a
+     * reader — and then both block before either can commit. `withRowLockHeld`
+     * does not proceed until it has OBSERVED both of them blocked, which is a
+     * receipt that each one scanned while the booking was still `deposit_held`.
+     * The lock then releases and exactly one wins.
+     *
+     * So `candidates: 1` on both passes and `alreadySettled: 1` on the loser are
+     * now guaranteed by construction rather than by scheduling luck.
+     */
+    const [a, b] = await withRowLockHeld({ table: 'member', id: MEMBER }, 2, () =>
+      runNoShowJobTwiceAtOnce(),
+    );
     precondition(a !== undefined && b !== undefined, 'a racing pass produced no result');
     const ticks = [a.tick, b.tick];
 
     /**
-     * DID THE TWO PASSES ACTUALLY OVERLAP, and the answer has to come out of the
-     * data rather than out of `Promise.all` looking like it should.
+     * WALL CLOCK IS REPORTED AND IS NO LONGER THE EVIDENCE — that is the whole
+     * point of the change above, and this paragraph used to claim the opposite.
      *
-     * Wall clock is the coarse half: each pass is a `tsx` cold start of around half
-     * a second, so `overlapMs` being a large fraction of the shorter one says they
-     * were alive together. Measured across twelve consecutive runs it is 100% every
-     * time — 451-529ms of a 451-529ms pass, one process's whole lifetime inside the
-     * other's — and the winner alternates, 7 runs to 5, which is what a coin-flip
-     * race looks like rather than a fixed order.
+     * It read: "Measured across twelve consecutive runs it is 100% every time —
+     * one process's whole lifetime inside the other's", and treated that as the
+     * coarse half of a two-part argument. The measurement was true and the
+     * inference was wrong. `overlapMs` was 100% on the full-suite run where the
+     * loser reported `candidates: 0`, so a figure that is 100% both when the race
+     * happens and when it does not cannot be evidence of anything. Twelve green
+     * runs said the same thing decision 75's first two int runs said.
      *
-     * The sharp half is `candidates` on the LOSER — see the assertion further down.
-     * Wall clock can only say the processes overlapped; only the loser's own numbers
-     * say their CRITICAL SECTIONS did.
+     * What guarantees the overlap now is `withRowLockHeld` refusing to continue
+     * until it has seen both passes BLOCKED on the member row. These two numbers
+     * are kept because they are still worth printing — a pass that suddenly takes
+     * ten seconds is worth seeing — but nothing below asserts on them, and
+     * `assertRaced` is deliberately not used here: it would re-assert the metric
+     * that already fooled this spec once.
      */
     const overlapMs = Math.min(a.finishedAt, b.finishedAt) - Math.max(a.startedAt, b.startedAt);
     const shorterMs = Math.min(a.finishedAt - a.startedAt, b.finishedAt - b.startedAt);
@@ -1501,6 +1535,13 @@ describe('two no-show passes racing on one deposit still return it once', () => 
 
     /**
      * THE RACE STILL RACES, and this is the assertion that says so.
+     *
+     * NOW DETERMINISTIC RATHER THAN LIKELY. `withRowLockHeld` above has already
+     * observed both passes blocked on the member row, so neither could have
+     * committed before the other scanned. This assertion therefore stopped being
+     * a probabilistic one — its failures used to mean "the race did not happen
+     * this time" and now mean "the guard under test is gone", which is the only
+     * reading worth acting on.
      *
      * The loser must report `candidates: 1` and `alreadySettled: 1`. Both halves
      * are load-bearing:
