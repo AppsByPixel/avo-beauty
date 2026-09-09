@@ -834,6 +834,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /voids → void',
   'POST /webhooks/:provider [ANONYMOUS]',
   'PUT /artists/:id/availability → team',
+  'PUT /artists/:id/branch → team',
   'PUT /artists/me/availability [requireScannerScope]',
   /**
    * `→ salons`, AND IT WAS `→ loyalty` UNTIL DECISION 79 — a line that MOVED rather

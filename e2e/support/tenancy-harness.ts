@@ -833,6 +833,170 @@ export function psql(sql: string): string {
 }
 
 /**
+ * `psql` that does NOT block the caller — so its transaction can still be OPEN
+ * while the specs do something else.
+ *
+ * WHY THIS EXISTS, AND IT IS NOT A CONVENIENCE. `psql()` above is
+ * `execFileSync`: it returns only once the process has exited, which means the
+ * transaction it ran has already committed. That makes it impossible to express
+ * "hold this row's lock while two other things contend for it" — and holding a
+ * lock is the only way to ARRANGE a race deterministically rather than launch
+ * two processes and hope their critical sections overlap.
+ *
+ * `support/race.ts` § `withRowLockHeld` is the intended consumer and carries the
+ * argument for why an arranged race beats a hoped-for one. This function is only
+ * the plumbing: a detached `docker exec psql` whose stdin is closed after the SQL
+ * is written, so the session lives exactly as long as the SQL takes.
+ *
+ * NO TIMEOUT, deliberately, unlike `psql()`. The whole point is a session that
+ * outlives the call, so a deadline here would kill the thing being arranged. The
+ * SQL itself is what must be bounded — `withRowLockHeld` bounds it with
+ * `pg_sleep` — and the spec's own vitest timeout is the backstop.
+ */
+export interface DetachedPsql {
+  /** Resolves when the session has exited cleanly; rejects with psql's stderr. */
+  done: Promise<void>;
+  /**
+   * The session's Postgres backend pid, for `pg_terminate_backend`.
+   *
+   * The SQL must ask for it — `SELECT pg_backend_pid();` as its FIRST statement,
+   * before anything that blocks — because this resolves off the first integer psql
+   * writes to stdout. A caller that needs to end the session early needs the pid,
+   * and the pid has to come out before the session parks on a lock or a sleep.
+   */
+  pid: Promise<number>;
+}
+
+export function psqlDetached(sql: string): DetachedPsql {
+  const child = spawn(
+    'docker',
+    ['exec', '-i', PG_CONTAINER, 'psql', '-U', PG_USER, '-d', pgDb(), '-v', 'ON_ERROR_STOP=1', '-A', '-t'],
+    { stdio: ['pipe', 'pipe', 'pipe'] },
+  );
+  let stderr = '';
+  let stdout = '';
+  child.stderr?.on('data', (c: Buffer) => (stderr += c.toString()));
+
+  let resolvePid: (n: number) => void = () => undefined;
+  let rejectPid: (e: Error) => void = () => undefined;
+  const pid = new Promise<number>((resolve, reject) => {
+    resolvePid = resolve;
+    rejectPid = reject;
+  });
+  let sawPid = false;
+  child.stdout?.on('data', (c: Buffer) => {
+    stdout += c.toString();
+    if (sawPid) return;
+    const m = /^\s*(\d+)\s*$/m.exec(stdout);
+    if (m) {
+      sawPid = true;
+      resolvePid(Number(m[1]));
+    }
+  });
+
+  const done = new Promise<void>((resolve, reject) => {
+    child.on('close', (code) => {
+      if (!sawPid) {
+        rejectPid(
+          new Error(
+            `a detached psql session exited before printing a backend pid. Its SQL must start ` +
+              `with \`SELECT pg_backend_pid();\`.\n--- sql ---\n${sql.trim()}\n` +
+              `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+          ),
+        );
+      }
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `a detached psql session exited ${code}.\n--- sql ---\n${sql.trim()}\n` +
+              `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+          ),
+        );
+    });
+    child.on('error', (err) => {
+      rejectPid(err as Error);
+      reject(err);
+    });
+  });
+  child.stdin?.end(sql);
+  return { done, pid };
+}
+
+/**
+ * End a backend by pid, so a detached session holding a lock can be released the
+ * moment it is no longer needed rather than after a fixed sleep.
+ *
+ * Returns false when the pid was already gone, which is not an error: the session
+ * may have finished on its own between the decision and the call.
+ */
+export function terminateBackend(pid: number): boolean {
+  return (
+    scalar(
+      `select pg_terminate_backend(${pid}) from pg_stat_activity ` +
+        `where pid = ${pid} and datname = current_database()`,
+    ).trim() === 't'
+  );
+}
+
+/**
+ * How many backends are blocked BY `pid` specifically — `pg_blocking_pids`, not
+ * a count of everything that happens to be waiting.
+ *
+ * THE DISTINCTION IS NOT PEDANTIC; THE LOOSE VERSION WAS WRONG AND WAS MEASURED
+ * WRONG. This started as "count backends with `wait_event_type = 'Lock'`", which
+ * reads as the same thing and is not: contenders queue behind EACH OTHER as well
+ * as behind the holder, and any unrelated backend in the same database counts
+ * too. `withRowLockHeld` used it as its receipt that every contender had reached
+ * the holder's lock, and the mutation test that should have caught a bad receipt
+ * did not — pointing the arrangement at a `salon` row the code under test never
+ * locks still satisfied "2 backends are waiting" and the spec passed green. The
+ * proxy was true while the thing it stood for was false, which is this
+ * repository's oldest bug shape wearing a system view.
+ *
+ * `pg_blocking_pids(pid)` returns the pids actually blocking that backend, so
+ * requiring the holder to appear in it asserts the specific edge the arrangement
+ * depends on.
+ *
+ * Scoped to `current_database()` because the container holds every lane's
+ * database and a count across all of them would see another checkout's
+ * contention — the cross-lane read LANES.md warns about, arriving through a
+ * system view.
+ */
+export function waitersBlockedBy(pid: number): number {
+  /**
+   * TRANSITIVELY, and that correction is the whole reason this function has a
+   * recursive CTE rather than one `any(pg_blocking_pids(...))`.
+   *
+   * MEASURED, because the direct form looked obviously right and was
+   * unsatisfiable. Postgres does not queue N row-lock waiters against the
+   * HOLDER; only the first waits on the holder's `transactionid`, and every
+   * later one waits on the `tuple` lock held by the waiter in front of it:
+   *
+   *   pid   wait_event      pg_blocking_pids
+   *   ----  --------------  ----------------
+   *   8158  transactionid   {holder}
+   *   8159  tuple           {8158}          ← blocked by the WAITER, not the holder
+   *
+   * So `holder = any(pg_blocking_pids(pid))` counts exactly one, forever, no
+   * matter how many contenders pile up — a receipt that can never be issued.
+   * Following the chain counts both, and counting the chain is also the honest
+   * assertion: a contender queued behind a contender queued behind the holder
+   * still cannot have committed, which is the only property the caller needs.
+   */
+  return Number(
+    scalar(
+      `with recursive chain(waiter, blocker) as (` +
+        `select a.pid, b.pid from pg_stat_activity a, unnest(pg_blocking_pids(a.pid)) as b(pid) ` +
+        `where a.datname = current_database() ` +
+        `union ` +
+        `select c.waiter, b2.pid from chain c, unnest(pg_blocking_pids(c.blocker)) as b2(pid)` +
+        `) select count(distinct waiter) from chain where blocker = ${pid}`,
+    ),
+  );
+}
+
+/**
  * One scalar. Empty string when the query returns no row.
  *
  * ATTEMPTED TWICE, AND ONLY EVER ON A STALL. A SQL error, a bad column, a
