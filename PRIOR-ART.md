@@ -166,3 +166,35 @@ day it matters.
 those, and let a field be empty rather than filling it with a copy of another field or a
 placeholder. If Places cannot resolve a component, that component is `null` — not
 `'string'`, and not the house number.
+
+---
+
+## Lean's coupon shape is right and its enforcement is in the wrong place
+
+Added 2026-09-09, scoping AVO-issued vouchers. `src/screens/redeemPoints/index.js:211`.
+
+**The shape is worth taking.** A coupon is `couponText` (the code), an optional
+`minimumAmountIsCart` (minimum spend), and an `optionType`/`optionList` pair restricting
+it to named products. Three fields, and they cover most of what a voucher needs.
+
+**The enforcement is entirely client-side, and we must not copy that.** `applyDiscount`
+fetches a list of promos, finds the code in it **in the app**, compares the cart total to
+the minimum **in the app**, and filters ineligible products **in the app**. So the client
+decides whether a discount applies and what it is worth.
+
+That is non-negotiable #2 with a different subject: *the server owns the balance, and
+clients never decide what a thing costs.* A coupon that reduces what a customer pays is a
+price decision, and a price decision made in an app is one a modified app makes
+differently.
+
+**What we do differently:** the code is resolved server-side, the eligibility rules are
+evaluated server-side, and the client submits a code rather than a discount. The app may
+*preview* what it expects — it may not *assert* it. Same rule the wallet's top-up card
+already follows: `TopUpCard` deliberately shows no client-computed bonus figure because
+`bonusFils` is the server's to decide.
+
+**Second instance of the same lesson in this file.** Lean's address payload (above) has the
+right fields and fans one input across four of them; its coupon has the right fields and
+enforces them in the wrong process. The pattern worth naming: *take Lean's vocabulary,
+never Lean's trust boundary.*
+

@@ -252,9 +252,12 @@ export function HomeScreen({
             greeted her in Arabic and then named her salon in Latin.
 
             The choice is `salonName()` rather than the ternary that first fixed
-            it, because a ternary HERE is a branch no test can reach — this
-            workspace has no renderer, and an untested render site is exactly how
-            this shipped. domain/names.ts carries the rule and the spec.
+            it, because the rule wants to live somewhere a test can reach
+            directly. This note used to justify that by saying the workspace has
+            no renderer — it has one now (see happyHourBannerRender.test.tsx),
+            so that clause was retired rather than left to be believed. The
+            conclusion stands on its own: domain/names.ts carries the rule and
+            the spec, and a pure function is the better home for it either way.
           */}
           <Text style={[text('displayM', lang), styles.salon]}>{salonName(salon, lang)}</Text>
         </View>
@@ -295,8 +298,28 @@ export function HomeScreen({
       <BranchEarning salon={salon} promotions={promotions} />
 
       {/*
-        design:312-322 — the Upcoming card, between the branch note and the
-        top-up card. Four renderings, and the empty one is a card rather than
+        design:283-310 — top up, directly under the branch note and ABOVE
+        Upcoming. This order is the design's, and it was inverted here until
+        2026-09-09; the note that used to sit on the Upcoming block asserted the
+        opposite while citing the very lines that disprove it.
+
+        Both cards carry the design's own `margin-top:22px` (design:284 and
+        design:313), so the order is the only thing the swap changes — the gap
+        is 22 either way. The `margin-top:15px` in this section belongs to the
+        you-pay/you-get panel at design:300, which we deliberately do not
+        render; TopUpCard's header is that decision and is load-bearing.
+      */}
+      <TopUpCard
+        member={member}
+        salon={salon}
+        selected={amount}
+        onSelect={setAmount}
+        onContinue={() => topUp.open(amount)}
+      />
+
+      {/*
+        design:312-322 — the Upcoming card, between the TOP-UP card above and
+        Activity below. Four renderings, and the empty one is a card rather than
         nothing: a section that vanishes reads as a screen that half-loaded.
       */}
       {bookingOn ? (
@@ -325,14 +348,6 @@ export function HomeScreen({
           <NoUpcomingCard onBook={onBook} />
         )
       ) : null}
-
-      <TopUpCard
-        member={member}
-        salon={salon}
-        selected={amount}
-        onSelect={setAmount}
-        onContinue={() => topUp.open(amount)}
-      />
 
       <ActivityFeed
         rows={rows}

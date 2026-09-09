@@ -20,7 +20,7 @@
  * `void` without `charges`.
  */
 
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyRequest } from 'fastify';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
@@ -31,6 +31,7 @@ import {
   type PlatformSection,
 } from '../db/schema/platformAdmin';
 import { staffUser } from '../db/schema/staff';
+import { deviceEnrolment } from '../db/schema/deviceEnrolment';
 import { env } from '../env';
 import { forbidden, unauthorized } from '../http/errors';
 import { liveSession } from './sessions';
@@ -161,6 +162,31 @@ export interface StaffPrincipal {
    * rather than exempting it.
    */
   deviceId: string | null;
+  /**
+   * WHERE THIS TILL IS STANDING — the branch `device_enrolment` binds
+   * `deviceId` to, or null.  (DECISIONS.md #82, migration 0043)
+   *
+   * NOT the same question as `branchAccessAll`/`branchAccessIds` below, and the
+   * distinction is the whole reason this field exists. Those are a PERMISSION —
+   * which branches this person may look at — and `services/branch.ts` spent its
+   * header explaining that a permission cannot tell the server where somebody is
+   * standing. This is a LOCATION, established from a row the server holds rather
+   * than inferred from authority or read off a request.
+   *
+   * A charge passes it to `resolveBranch` as `supplied`, which makes the branch
+   * `established` and therefore makes that branch's boost apply. So a wrong value
+   * here pays the wrong multiplier: it is read from the enrolment keyed on
+   * `(salon_id, device_id)` in the same query that reads the staff row, never
+   * from a header and never from a body.
+   *
+   * NULL means "no live enrolment for this device at this salon", which is the
+   * normal state for a dashboard session, for an `AVO_TEST_PRINCIPALS` build with
+   * no session row, and for any till nobody has set up yet. Null flows into
+   * `resolveBranch` as no `supplied` at all, so behaviour is exactly what it was
+   * before this table existed — a single-branch salon stays established, a
+   * multi-branch salon stays assumed.
+   */
+  enrolledBranchId: string | null;
   name: string;
   role: string;
   perms: StaffPerms;
@@ -251,6 +277,40 @@ async function loadStaffPrincipal(
   const row = rows[0];
   if (!row) return null;
 
+  /**
+   * THE TILL'S BRANCH, IN A SECOND QUERY, AND ONLY WHEN THERE IS A DEVICE.
+   *
+   * The comment on `deviceId` above resists a second read of a column already in
+   * hand, and this is not that: `device_enrolment` is a different row that
+   * nothing on this path has read. It is skipped entirely when `deviceId` is
+   * null, which is every dashboard session and every test principal, so the
+   * extra round trip lands only on the surface that needs it — a scanner, where
+   * `session_scanner_is_device_scoped` makes the device non-null.
+   *
+   * SCOPED BY SALON AS WELL AS DEVICE, because `device_id` is a client-chosen
+   * string that two salons may share, and because a lookup keyed on the device
+   * alone would let one salon's enrolment answer for another's till. The salon
+   * comes from the staff row just read, never from the request.
+   *
+   * `revoked_at IS NULL` selects the live row — `device_enrolment_live_uq`
+   * guarantees there is at most one, so this cannot silently pick between two.
+   */
+  let enrolledBranchId: string | null = null;
+  if (deviceId) {
+    const enrolled = await db
+      .select({ branchId: deviceEnrolment.branchId })
+      .from(deviceEnrolment)
+      .where(
+        and(
+          eq(deviceEnrolment.salonId, row.salonId),
+          eq(deviceEnrolment.deviceId, deviceId),
+          isNull(deviceEnrolment.revokedAt),
+        ),
+      )
+      .limit(1);
+    enrolledBranchId = enrolled[0]?.branchId ?? null;
+  }
+
   return {
     kind: 'staff',
     id: row.id,
@@ -258,6 +318,7 @@ async function loadStaffPrincipal(
     scope,
     sessionId,
     deviceId,
+    enrolledBranchId,
     name: row.name,
     role: row.role,
     perms: permsOf(row),

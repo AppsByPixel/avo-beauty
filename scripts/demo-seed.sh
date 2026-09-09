@@ -351,16 +351,50 @@ echo "3 · The diary — so Appointments, My bookings and the wallet's UPCOMING 
 echo "   Dated forward from the artists' real open windows: AR-003 works Sun-Thu"
 echo "   10:00-21:00 in 30m slots, AR-004 opens at 16:00, AR-002 runs 45m."
 
-# suffix | artist | service | startsAt (Kuwait, +03:00) — all inside a real window
+# DATES ARE COMPUTED, NOT WRITTEN DOWN, AND THAT IS THE WHOLE POINT.
+#
+# This block used to hold eight literal dates in August 2026. By 9 September every
+# one of them was in the past, so `POST /bookings` refused all eight and the script
+# cheerfully reported "bookings 0" — the diary empty, the wallet's UPCOMING card
+# empty, and the artist-performance report showing every artist at zero with the
+# salon's whole revenue sitting in the unattributed bucket.
+#
+# Nothing failed loudly. `book()` treats a non-201 as "not a script failure" on
+# purpose, because a taken slot answers 409 and that is genuinely fine — which is
+# exactly what let an expired diary look like an ordinary conflict for ten days.
+#
+# The artists' real windows still constrain the hours: AR-003 works Sun-Thu
+# 10:00-21:00 in 30m slots, AR-004 opens at 16:00, AR-002 runs 45m. So the OFFSETS
+# below are chosen to land inside those windows, and the DAY is relative.
+#
+# `next_weekday` returns the next date whose weekday is in Sun-Thu, at least N days
+# out, so a run on a Friday does not aim the whole diary at a closed salon.
+next_open_day() {
+  python3 - "$1" <<'PYDAY'
+import sys, datetime
+ahead = int(sys.argv[1])
+d = datetime.date.today() + datetime.timedelta(days=ahead)
+# Kuwait working week: Sunday(6) through Thursday(3) in Python's Mon=0 numbering.
+while d.weekday() in (4, 5):   # Friday, Saturday
+    d += datetime.timedelta(days=1)
+print(d.isoformat())
+PYDAY
+}
+
+D1="$(next_open_day 1)"
+D2="$(next_open_day 2)"
+D4="$(next_open_day 4)"
+
+# suffix | artist | service | startsAt (Kuwait, +03:00) — inside a real window
 DIARY=(
-  "0100101|AR-003|SV-02|2026-08-30T12:00:00+03:00"
-  "0100102|AR-003|SV-01|2026-08-30T13:30:00+03:00"
-  "0100103|AR-001|SV-03|2026-08-30T14:00:00+03:00"
-  "0100105|AR-003|SV-05|2026-08-31T10:30:00+03:00"
-  "0100108|AR-004|SV-02|2026-08-30T17:00:00+03:00"
-  "0100106|AR-002|SV-01|2026-08-30T11:00:00+03:00"
-  "0100104|AR-003|SV-04|2026-09-01T15:00:00+03:00"
-  "0100101|AR-003|SV-01|2026-09-02T16:00:00+03:00"
+  "0100101|AR-003|SV-02|${D1}T12:00:00+03:00"
+  "0100102|AR-003|SV-01|${D1}T13:30:00+03:00"
+  "0100103|AR-001|SV-03|${D1}T14:00:00+03:00"
+  "0100105|AR-003|SV-05|${D2}T10:30:00+03:00"
+  "0100108|AR-004|SV-02|${D1}T17:00:00+03:00"
+  "0100106|AR-002|SV-01|${D1}T11:00:00+03:00"
+  "0100104|AR-003|SV-04|${D2}T15:00:00+03:00"
+  "0100101|AR-003|SV-01|${D4}T16:00:00+03:00"
 )
 
 for row in "${DIARY[@]}"; do
@@ -369,6 +403,57 @@ for row in "${DIARY[@]}"; do
   [[ -n "$tok" ]] || { echo "    ~ no session for +9659$suffix" >&2; continue; }
   book "$tok" "$artist" "$svc" "$at" "$suffix-$artist-${at:0:10}" || true
 done
+
+echo
+echo "3b · One appointment carried through to a charge — the only shape that attributes"
+echo "   Everything above is FUTURE. A booking only attributes revenue to its artist"
+echo "   once it has started and been charged, so without this step the"
+echo "   artist-performance report shows every artist at zero and the whole salon's"
+echo "   takings sitting in the unattributed bucket."
+
+# WHY THIS IS CONDITIONAL AND SAYS SO.
+#
+# `findApplicableHold` matches a booking whose `starts_at <= now + noShowReturnMinutes`
+# and whose no-show window has not closed. So the booking has to start about now — which
+# means the salon has to be OPEN about now. AR-003 works 10:00-21:00 Kuwait, Sun-Thu.
+#
+# A seeder that silently produced nothing outside those hours is what this whole
+# commit is fixing, so this one reports which branch it took instead.
+KW_NOW="$(TZ=Asia/Kuwait date +%H%M)"
+KW_DOW="$(TZ=Asia/Kuwait date +%u)"   # 1=Mon .. 7=Sun
+# NO `zoneinfo` HERE, DELIBERATELY. The `python3` first on PATH is miniconda's and
+# predates the module, so `import zoneinfo` is a ModuleNotFoundError on this machine —
+# the same PATH trap LANES.md records for node. `date` knows about TZ and is enough.
+read -r _kd _kh _km < <(TZ=Asia/Kuwait date -v+10M '+%Y-%m-%d %H %M')
+if (( 10#$_km < 30 )); then _sh="$_kh"; _sm=30; else _sh=$(( 10#$_kh + 1 )); _sm=00; fi
+SLOT="$(printf '%sT%02d:%02d:00+03:00' "$_kd" "$_sh" "$_sm")"
+
+if [[ "$KW_DOW" == "5" || "$KW_DOW" == "6" ]]; then
+  echo "    ~ skipped: it is Friday/Saturday in Kuwait and AR-003's window is Sun-Thu."
+  echo "      Re-run on a working day to produce an attributed appointment."
+elif (( 10#$KW_NOW < 1000 || 10#$KW_NOW > 2000 )); then
+  echo "    ~ skipped: Kuwait local time is ${KW_NOW:0:2}:${KW_NOW:2:2}, outside AR-003's"
+  echo "      10:00-21:00 window. Re-run during salon hours for an attributed appointment."
+else
+  # `get_or_make_member` echoes "id token" — the same contract the loops above use,
+  # so this reuses an existing member rather than minting a twelfth.
+  read -r ATT_MID ATT_TOK < <(get_or_make_member SAL-AMARA "Farah Al-Otaibi" 0100107) || true
+  if [[ -z "${ATT_TOK:-}" ]]; then
+    echo "    ~ skipped: no session for +96590100107." >&2
+  else
+    if book "$ATT_TOK" AR-003 SV-04 "$SLOT" "attributed-$RUN_TAG"; then
+      echo "    booked  AR-003 · SV-04 · $SLOT"
+      # The charge settles the hold, completes the booking, and is the row the
+      # artist-performance report attributes. Needs a scanner session, like any charge.
+      if [[ -n "$STAFF_TOKEN" ]]; then
+        charge "$STAFF_TOKEN" "$ATT_MID" '["SV-04"]' attributed || true
+        echo "    charged — this appointment now attributes to AR-003 in Reports"
+      else
+        echo "    ~ booked but not charged: no scanner session, so it stays unattributed." >&2
+      fi
+    fi
+  fi
+fi
 
 echo
 echo "4 · The console's queues — Support and Approvals are otherwise empty screens"

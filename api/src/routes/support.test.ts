@@ -48,6 +48,18 @@ const MERCHANT: StaffPrincipal = {
   salonId: 'SAL-AMARA',
   scope: 'dashboard',
   sessionId: 'sess-staff',
+  /**
+   * BOTH OF THESE WERE MISSING, and `tsconfig.json` excludes every spec file
+   * from typecheck — so this literal has not conformed to `StaffPrincipal`
+   * since `deviceId` was added to it, and nothing said so. Neither field is read by the specs below;
+   * they are here because a fixture typed `StaffPrincipal` that is not one is a
+   * lie the next reader will build on.
+   *
+   * `enrolledBranchId` is a dashboard session's honest value: null. A web
+   * session is not standing at a till (DECISIONS.md #82).
+   */
+  deviceId: null,
+  enrolledBranchId: null,
   name: 'Noura F.',
   role: 'manager',
   perms: {
