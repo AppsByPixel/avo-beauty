@@ -98,7 +98,20 @@ export interface ChargeInput {
   memberId: string;
   serviceIds: string[];
   token?: string | undefined;
-  branchId?: string | undefined;
+  /**
+   * NO `branchId`, AND THE FIELD IS GONE RATHER THAN LEFT UNSET.
+   *
+   * It was here, optional, and no caller has ever set it — `routes/charges.ts`
+   * builds this object from `{ memberId, serviceIds, token, confirmDuplicate }`
+   * and deliberately reads no branch from the body. So it was a door that was
+   * closed only by everybody remembering not to open it, on the one field that
+   * decides a customer's earning multiplier (services/branch.ts § THE FIX THAT
+   * MUST NOT BE TAKEN).
+   *
+   * The branch now comes from `ctx.principal.enrolledBranchId` — a
+   * `device_enrolment` row the server holds, keyed on the till's device id. See
+   * § 5 below. There is no longer a field for a caller to fill.
+   */
   /**
    * "Yes, charge her again for the same thing" — the explicit confirm the
    * near-duplicate guard requires. See `NEAR_DUPLICATE_WINDOW_SECONDS`.
@@ -466,8 +479,21 @@ export async function performCharge(
      * fallback, and it is what every earning decision below is gated on. See
      * services/branch.ts for the charge that doubled a customer's visits because
      * these two used to be the same answer.
+     *
+     * THE TILL NOW ANSWERS THE SECOND QUESTION.  (DECISIONS.md #82)
+     *
+     * `enrolledBranchId` is the branch `device_enrolment` binds this scanner's
+     * device to, resolved in `auth/principal.ts` from a row the SERVER holds. It
+     * arrives as `resolveBranch`'s `supplied`, which verifies it against the
+     * salon anyway and returns `established: true`. That is what finally makes
+     * this file's own long-standing caveat below — "a multi-branch salon's
+     * boosts are stored, served to both clients, applied by neither" — untrue.
+     *
+     * A null (dashboard session, unenrolled till, test principal) passes no
+     * `supplied` at all, so the fallback is exactly the behaviour that shipped
+     * before: one open branch is established, several are assumed.
      */
-    const branch = await resolveBranch(tx, ctx.principal.salonId, input.branchId);
+    const branch = await resolveBranch(tx, ctx.principal.salonId, ctx.principal.enrolledBranchId);
     const branchId = branch.branchId;
     const now = new Date();
 
@@ -662,16 +688,27 @@ export async function performCharge(
      * its boost applies — where before, every salon's branch was treated as
      * unknown and a one-branch salon's boost never paid either.
      *
-     * A MULTI-BRANCH SALON IS STILL UNKNOWN, and that is not fixable from here.
-     * `POST /charges` takes `{ memberId, serviceIds[], token }` — the contract's
-     * body, which has no branch in it — and routes/charges.ts does not read one.
-     * It must not start: a client naming its own branch is a client choosing its
-     * own multiplier, non-negotiable #2 with extra steps. The branch has to
-     * arrive from something the SERVER established, and `StaffPrincipal` carries
-     * branch ACCESS rather than a current location, so that is a branch-bound
-     * scanner session — flagged, not guessed at. Until then a multi-branch
-     * salon's boosts are stored, served to both clients, applied by neither, and
-     * every row they could have touched carries `branch_assumed = true`.
+     * A MULTI-BRANCH SALON IS ESTABLISHED WHEN THE TILL IS ENROLLED, AND ONLY
+     * THEN.  (DECISIONS.md #82, migration 0043)
+     *
+     * This paragraph used to end "until then a multi-branch salon's boosts are
+     * stored, served to both clients, applied by neither, and every row they
+     * could have touched carries `branch_assumed = true`." That was true for the
+     * life of the file and is now the state of an UNENROLLED till only.
+     *
+     * `POST /charges` still takes `{ memberId, serviceIds[], token }` and still
+     * reads no branch from the body — that has not changed and must not: a client
+     * naming its own branch is a client choosing its own multiplier,
+     * non-negotiable #2 with extra steps. What changed is that the branch now
+     * arrives from something the SERVER established. `StaffPrincipal` still
+     * carries branch ACCESS, which is a permission and not a location; alongside
+     * it, `enrolledBranchId` is the location, read from `device_enrolment` on the
+     * scanner's own device id.
+     *
+     * SO A MULTI-BRANCH SALON HAS TWO STATES NOW, and the merchant can tell them
+     * apart: an enrolled till earns its branch's boost and writes
+     * `branch_assumed = false`; a till nobody has set up still earns nothing and
+     * still says so on the row.
      */
     const promoInputs = await loadPromotionInputs(
       tx,

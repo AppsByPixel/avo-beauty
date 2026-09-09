@@ -302,6 +302,13 @@
       "when": 1788669200000,
       "tag": "0042_what_a_visit_was_worth",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1788755600000,
+      "tag": "0043_device_enrolment",
+      "breakpoints": true
     }
   ]
 }

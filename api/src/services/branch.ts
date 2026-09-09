@@ -48,16 +48,33 @@
  * itself whether its branch was known, so "which of these figures can I trust
  * per branch" is a query rather than an assumption.
  *
- * THE REAL FIX, still owed: a branch-bound scanner session. `StaffPrincipal`
+ * THE REAL FIX, DELIVERED: a branch-bound scanner session. `StaffPrincipal`
  * carries branch ACCESS (`branchAccessAll` / `branchAccessIds`), which is a
- * permission and not a location, so the server cannot infer where a staff member
- * is standing. That waits on the device-enrolment decision.
+ * permission and not a location — so alongside it there is now
+ * `enrolledBranchId`, a LOCATION, read from `device_enrolment` on the session's
+ * own device id (migration 0043, DECISIONS.md #82). `services/charge.ts` passes
+ * it as `supplied`, so an enrolled till at a multi-branch salon is established
+ * and earns its branch's boost. A till nobody has enrolled falls through to the
+ * guess below and still says so on the row.
  *
- * THE FIX THAT MUST NOT BE TAKEN is letting the client name its branch. A client
- * choosing its branch is a client choosing its own multiplier — non-negotiable
- * #2 with extra steps. `supplied` below exists for a branch the SERVER
- * established from an enrolled device, and is checked against the salon even
- * then; no route reads a branch from a request body, and none may start.
+ * THE FIX THAT MUST NOT BE TAKEN is letting the client name the branch A CHARGE
+ * HAPPENED AT. A client choosing that is a client choosing its own multiplier —
+ * non-negotiable #2 with extra steps. `supplied` below exists for a branch the
+ * SERVER established from an enrolled device, and is checked against the salon
+ * even then.
+ *
+ * THE PRECISE RULE, because this paragraph used to end "no route reads a branch
+ * from a request body, and none may start" — and that was not true when it was
+ * written. THREE routes read one: `POST /v1/salons/{id}/campaigns` takes the
+ * branch a campaign TARGETS, the promotions routes take the branch a boost or
+ * happy hour APPLIES TO, and `POST /salons/{id}/devices` takes the branch a till
+ * STANDS IN. All three are configuration scope, all three verify the id against
+ * the caller's own salon, and none of them reaches this function.
+ *
+ * What must never happen is a body-supplied branch flowing into `supplied`.
+ * `services/branchSource.test.ts` enforces exactly that, by grep: no route calls
+ * `resolveBranch` at all, and every service call site passes either nothing or
+ * `ctx.principal.enrolledBranchId`.
  */
 
 import { sql } from 'drizzle-orm';
