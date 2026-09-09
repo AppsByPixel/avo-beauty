@@ -38,6 +38,22 @@ export const ledgerAccount = pgEnum('ledger_account', [
   'deposit_held',
   /** The merchant-funded portion of a tier bonus. */
   'merchant_bonus_funding',
+  /**
+   * AVO's own money, funding a voucher it issued (item 10, migration 0046).
+   *
+   * ITS OWN ACCOUNT RATHER THAN `gateway_clearing`, and that is the whole
+   * provenance mechanism: a voucher credit would otherwise be indistinguishable
+   * from any console adjustment, and "which credit in this salon's wallet came
+   * from an AVO voucher" would have to be reconstructed from audit rows. With
+   * this it is `sum(amount_fils) WHERE account = 'avo_voucher_funding' AND
+   * salon_id = $1`, off the index this table already has.
+   *
+   * NOT `merchant_bonus_funding`: that is the SALON's money funding a bonus the
+   * salon advertised. This is AVO's money funding an apology AVO made, and
+   * folding them would make a merchant's bonus budget include compensation she
+   * did not offer.
+   */
+  'avo_voucher_funding',
 ]);
 
 export const ledgerDirection = pgEnum('ledger_direction', ['debit', 'credit']);
