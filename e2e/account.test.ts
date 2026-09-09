@@ -46,10 +46,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
+  B_BRANCH,
   B_SCANNER_DEVICE,
   B_STAFF_HANDLE,
   SALON_B,
   psql,
+  reconcileWalletLedger,
   scalar,
   forgetSession,
   signInDashboard,
@@ -254,6 +256,24 @@ afterAll(async () => {
   // password specs got that far.
   reseedMember();
   reseedVictim();
+
+  /*
+   * AND LEAVE BOTH MEMBERS RECONCILING TO THEIR OWN WALLET LEDGERS.
+   *
+   * These two reseeds are exactly what made this file's members drift in the
+   * wallet census (`support/global-setup.ts`): `reseedMember()` puts
+   * `balance_fils` back to 12.000 by SQL AFTER the specs above have driven real
+   * charges through her, so her ledger is left ahead of her balance and she
+   * drifts NEGATIVE — −8.000 when the census landed. `reseedVictim()` writes an
+   * opening 3.000 that no entry accounts for, which drifts the other way.
+   *
+   * Both are the same defect wearing two signs: a balance nothing explains. So
+   * the last thing this file does is post the pair that closes each gap. It runs
+   * after the reseeds, because the reseeds are the writes being answered for.
+   */
+  reconcileWalletLedger(MEMBER, B_BRANCH, 'QAACC');
+  reconcileWalletLedger(VICTIM, B_BRANCH, 'QAACCV');
+
   await stopTenancyApi();
 });
 

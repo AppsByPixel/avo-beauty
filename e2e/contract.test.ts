@@ -937,6 +937,37 @@ const UNMODELLED: Record<string, string> = {
     'delete the count. A view.',
   'GET /salons/:id/activity':
     'the merchant activity feed, a union of transaction and booking streams. A view.',
+  /**
+   * THE SALON'S LIVE TILLS, arriving with lane A's `devices.ts` on dev `45a60a1` — the
+   * sixth new surface this census has named on arrival, and the fourth consecutive slice
+   * where it did.
+   *
+   * UNMODELLED because `packages/types` declares nothing for it: there is no
+   * `DeviceEnrolmentSchema` and no wrapper for the list. Grepped rather than assumed —
+   * `devices`, `DeviceEnrolment` and `deviceEnrolment` appear nowhere under
+   * `packages/types/src`. It is REACHABLE, and its gate is driven by the generated sweep
+   * in `permission-census.test.ts`, which discovered all three verbs with no edit here.
+   *
+   * It is also not an entity list wearing a wrapper. A row is a JOIN — the enrolment plus
+   * `branch.name` resolved through a `leftJoin`, so `branchName` is nullable for a reason
+   * that lives in the query rather than in the data — and the route serves LIVE rows only,
+   * filtered on `revoked_at IS NULL`, while the table keeps revoked rows as history. So the
+   * response is a view over a slice of the table, not the table.
+   *
+   * WORTH A SCHEMA, and a trunk/types decision rather than lane D's — with one thing for
+   * whoever writes it: it is `paginated()`-shaped and really does serve
+   * `{ items, nextCursor }`, but `nextCursor` is the literal `null` on every response
+   * because the handler does not page at all. A schema would make that hardcoded null look
+   * like a cursor contract this route honours, which it does not.
+   */
+  'GET /salons/:id/devices':
+    'the salon\'s live tills — one row per enrolled device, each carrying the branch whose ' +
+    'earning rates its charges fall under (decision 82). No schema in packages/types. A ' +
+    'view, not an entity list: each row is a leftJoin onto `branch` for the name, and the ' +
+    'read is filtered to `revoked_at IS NULL` while revoked enrolments stay in the table as ' +
+    'history. Its gate — `perms.dashboard` on EITHER surface — is driven in ' +
+    'permission-census.test.ts, and its tenancy boundary in tenancy.test.ts. `nextCursor` ' +
+    'is a hardcoded null rather than a cursor this route implements.',
   'GET /salons/:id/branches/:bid/closure-preview':
     'what closing a branch WOULD do — the branch row plus `closable`, `blockedReason`, ' +
     '`openBranchCount`, the two staff name lists, and the two held-deposit counts. A view over ' +
