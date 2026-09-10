@@ -260,9 +260,76 @@ const lineOf = (src: string, index: number): number =>
  * wrong shape: it is that a route registration's first argument is a STRING LITERAL
  * BEGINNING WITH `/`. Map keys and Drizzle table objects are neither. That is held by the
  * route COUNT the spec pins, which would move the moment this let a Map lookup in.
+ *
+ * THE FOURTH FAILURE MODE: A ROUTE THIS SCANNER INVENTED.
+ *
+ * The type arguments used to be matched as `(?:<[\s\S]*?>)?` — lazy, and crossing
+ * newlines. That is fine while every path is a literal, and wrong the moment one is not.
+ * With `DELETE /v1/salons/:id/services/:oid/image`'s path extracted into a const in
+ * `routes/images.ts`, the `<` of the DELETE's own generic matched on past the end of that
+ * registration and closed on a `>` further down the file, so the pattern read the DELETE's
+ * METHOD against the NEXT registration's PATH and reported `DELETE /v1/images/:imageId` —
+ * a route that does not exist, with the wrong method — while the GET that does exist
+ * vanished from the scan.
+ *
+ * Losing an unreadable route is bad. INVENTING one under it is worse, and the corrected
+ * account of WHICH spec then lies is worth having, because the first draft of this comment
+ * named the wrong one. `contract.test.ts` does NOT read this module — it has its own,
+ * third reading of a registration in `support/contract-drift.ts`'s `discoverGetRoutes`,
+ * anchored on `app.get` and GETs only. The spec that fires on a ghost is
+ * `permission-census.test.ts` § "every route and gate the census reads is pinned", whose
+ * message invites the reader to PASTE the invented line into `PINNED_COVERAGE` — so the
+ * failure mode is not merely a confusing message, it is an instruction to pin a route
+ * nobody wrote. Meanwhile the two real routes appear under "every pinned route and gate is
+ * still one the census can read", which is loud and correct: one of them is
+ * `DELETE … → appointments`, a permission gate whose generated probe has stopped being
+ * generated. Three red specs, one of which is wrong about the world.
+ *
+ * So the type arguments are WALKED, by the same `skipTypeArgs` the ambiguity pass has used
+ * for exactly this reason since it was written. There is now ONE reading of "what is a
+ * route registration" in this module rather than two that can disagree about the same
+ * file — a registration whose generic does not balance, or whose first argument is not a
+ * path literal, is not silently re-attached to a later path here; it is left for
+ * `ambiguousRegistrations()` to report by file and line.
  */
-const REGISTRATION =
-  /\b[A-Za-z_$][\w$]*\.(get|post|put|patch|delete)\s*(?:<[\s\S]*?>)?\s*\(\s*(['"])(\/[^'"]*)\2/g;
+const METHOD_CALL = /\b[A-Za-z_$][\w$]*\.(get|post|put|patch|delete)\s*/g;
+
+/** A path literal, matched exactly where the argument list starts — never searched for. */
+const PATH_LITERAL = /(['"])(\/[^'"]*)\1/y;
+
+/**
+ * The route registrations in one file, in source order, each with the index of its
+ * receiver — the anchor a guard window is measured from.
+ *
+ * EXPORTED FOR ONE REASON: the ghost above is a property of the SCANNER, not of any file
+ * in `api/src/routes/`, and every path in that directory is an inline literal today. So
+ * there is no fixture in the tree that reproduces it and no census number that moves when
+ * it is fixed. `permission-census.test.ts` § "a registration's path is read from its own
+ * argument list" drives this function on source text it writes itself, which is the only
+ * place the const-lifted shape can be asserted before an ordinary refactor produces it.
+ */
+export function registrationsIn(src: string): { index: number; method: HttpMethod; path: string }[] {
+  const out: { index: number; method: HttpMethod; path: string }[] = [];
+
+  for (const m of src.matchAll(METHOD_CALL)) {
+    const at = m.index!;
+    let i = skipTypeArgs(src, at + m[0].length);
+    // `skipTypeArgs` returned its input: a generic that does not balance, so unreadable.
+    if (src[i] === '<') continue;
+    while (i < src.length && /\s/.test(src[i]!)) i++;
+    if (src[i] !== '(') continue;
+    i++;
+    while (i < src.length && /\s/.test(src[i]!)) i++;
+
+    PATH_LITERAL.lastIndex = i;
+    const lit = PATH_LITERAL.exec(src);
+    if (!lit) continue;
+
+    out.push({ index: at, method: m[1]!.toUpperCase() as HttpMethod, path: lit[2]! });
+  }
+
+  return out;
+}
 
 /**
  * A permission gate, with its argument list captured up to the closing paren.
@@ -362,7 +429,7 @@ export function discoverWrappers(): Wrapper[] {
        * `registerXRoutes` contains dozens of guards and would make every call to it look
        * like a gate. With an accurately-matched body this now excludes exactly those.
        *
-       * SAME RECEIVER WIDENING AS `REGISTRATION`, AND FOR THE SAME REASON. Anchored on
+       * SAME RECEIVER WIDENING AS `registrationsIn`, AND FOR THE SAME REASON. Anchored on
        * `app.` this missed `registerWebhookRoutes`, whose body registers on `scoped` —
        * so that registrar was eligible to be recorded as a WRAPPER, and every call to it
        * would have looked like a gate. The two patterns have to agree about what a route
@@ -546,14 +613,7 @@ export function censusOfRoutes(): Census {
     const raw = readFileSync(join(ROUTES_DIR, file), 'utf8');
     const src = stripComments(raw);
 
-    const registrations: { index: number; method: HttpMethod; path: string }[] = [];
-    for (const m of src.matchAll(REGISTRATION)) {
-      registrations.push({
-        index: m.index!,
-        method: m[1]!.toUpperCase() as HttpMethod,
-        path: m[3]!,
-      });
-    }
+    const registrations = registrationsIn(src);
 
     const guards: {
       index: number;
@@ -763,14 +823,18 @@ interface CallSite {
  * Skip a balanced `<…>` type-argument list starting at `i`, or return `i` unchanged.
  *
  * HAND-WRITTEN RATHER THAN A REGEX, and the reason is a real defect rather than taste.
- * `REGISTRATION` matches the generic as `<[\s\S]*?>`, which is lazy and crosses
- * newlines — so when the following registration's path is NOT a literal, the match
- * happily runs the generic on until it finds the NEXT literal in the file. Measured on a
- * mutated `routes/images.ts`: with `DELETE /v1/salons/:id/services/:oid/image`'s path
- * extracted into a const, the scanner produced `DELETE /v1/images/:imageId` — a route
- * that does not exist, with the wrong method, while the GET that does exist vanished.
- * A scanner that INVENTS a route under an unreadable one is worse than one that merely
- * loses it, so the ambiguity pass must not share that weakness.
+ * The registration scan used to match the generic as `<[\s\S]*?>`, which is lazy and
+ * crosses newlines — so when a registration's path is NOT a literal, the match happily
+ * runs the generic on until it finds the NEXT literal in the file. Measured on a mutated
+ * `routes/images.ts`: with `DELETE /v1/salons/:id/services/:oid/image`'s path extracted
+ * into a const, the scanner produced `DELETE /v1/images/:imageId` — a route that does not
+ * exist, with the wrong method, while the GET that does exist vanished. A scanner that
+ * INVENTS a route under an unreadable one is worse than one that merely loses it.
+ *
+ * That is why this was written for the ambiguity pass, and it is now what the CENSUS
+ * reads registrations with too (`registrationsIn`). The two passes have to agree about
+ * where a registration ends, or the module reports a ghost with one and the site that
+ * caused it with the other.
  */
 function skipTypeArgs(src: string, i: number): number {
   if (src[i] !== '<') return i;
@@ -784,6 +848,24 @@ function skipTypeArgs(src: string, i: number): number {
       continue;
     }
     if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    /**
+     * `=>` IS NOT A CLOSING ANGLE BRACKET, and treating it as one made this walker
+     * NARROWER than the regex it replaced — the one direction this change was not
+     * allowed to go.
+     *
+     * `app.get<{ Params: { id: string }; Reply: { render: () => string } }>('/p', h)` is
+     * one registration with one balanced generic. Counting the `>` of the arrow closed
+     * the list early, so the next character was `s` rather than `(`, and BOTH passes
+     * dropped the call: no census entry, and no ambiguity report either, because
+     * `callSites` reads "not followed by `(`" as "not a call at all". A silently lost
+     * route is the exact failure this module exists to prevent, and it would have been
+     * lost by the fix for the ghost rather than by the bug.
+     *
+     * Skipping the arrow also gets the nested case right for the same reason it gets the
+     * flat one right: in `<{ f: () => Map<string, number> }>` the `Map<…>` still opens
+     * and closes at the depth it is written at.
+     */
+    if (c === '>' && src[k - 1] === '=') continue;
     if (c === '<') depth++;
     else if (c === '>') {
       depth--;
@@ -829,7 +911,6 @@ function argumentsAt(src: string, open: number): string[] | null {
  */
 function callSites(): { site: CallSite; args: string[] | null }[] {
   const out: { site: CallSite; args: string[] | null }[] = [];
-  const METHOD_CALL = /\b[A-Za-z_$][\w$]*\.(get|post|put|patch|delete)\s*/g;
 
   for (const file of readdirSync(ROUTES_DIR).filter((f) => f.endsWith('.ts')).sort()) {
     const src = stripComments(readFileSync(join(ROUTES_DIR, file), 'utf8'));
@@ -872,7 +953,7 @@ export interface AmbiguousRegistration {
 /**
  * Call sites that LOOK like route registrations and whose path this census cannot read.
  *
- * THE DISCRIMINATOR IS ARITY, NOT THE RECEIVER'S NAME. `REGISTRATION`'s own comment
+ * THE DISCRIMINATOR IS ARITY, NOT THE RECEIVER'S NAME. `registrationsIn`'s own comment
  * settles why an allowlist of receivers is the wrong shape — `POST /webhooks/:provider`
  * is registered on `scoped`, and the next encapsulated context would be invisible again.
  * But its discriminator ("the first argument is a string literal beginning with `/`") is
