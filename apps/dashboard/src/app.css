@@ -6109,3 +6109,268 @@ a:hover {
   margin-top: 12px;
   flex-wrap: wrap;
 }
+
+/* ====================================================== shop: the section == */
+
+/*
+ * The Shop section frame — the tab picker over the catalogue and the fulfilment
+ * board. `.shop` itself is the CATALOGUE's width (720px, a list of narrow rows);
+ * the board is a six-column table and sets its own. So the frame constrains
+ * nothing and each tab keeps the width its content wants.
+ */
+.shop-section__tabs {
+  display: inline-flex;
+  margin-bottom: 18px;
+}
+
+/*
+ * The module notice used to sit inside the catalogue and now sits in the frame,
+ * where `.shop`'s own top spacing no longer reaches it.
+ */
+.shop-section > .avo-info {
+  margin-bottom: 18px;
+}
+
+/* ======================================================= shop: the orders == */
+
+/*
+ * The fulfilment board. NEW UI — the design bundle has no delivery screen at all
+ * (`routes/ShopOrders.tsx` § the design bundle), so this deliberately borrows the
+ * Appointments board's measurements rather than inventing a second table style:
+ * the same 13.5px body, the same 11px uppercase sticky header, the same 15px/20px
+ * cell padding, the same hairlines. A merchant moving between the two sections
+ * should not notice she changed table.
+ *
+ * WIDER THAN `.appts`, and only because it has more to say per row: an address is
+ * four lines of prose where a service name is one word. 1120px against 1000, and
+ * the min-width below is what makes it scroll instead of crushing the address.
+ */
+.orders {
+  max-width: 1120px;
+}
+
+.orders__filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.orders__chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/*
+ * THE TRUNCATION NOTICE. `--avo-warn-*`, the same pair `StaleBanner` uses, and
+ * for the same class of fact: what is on screen is not the whole truth. It is
+ * NOT `--avo-danger-*` — nothing has failed and nothing is at risk; the board is
+ * simply incomplete, and a red banner over a working screen trains a merchant to
+ * ignore red.
+ *
+ * Not `StaleBanner` itself, which says "Couldn't refresh, showing figures from
+ * 14:32" — a different sentence about a different problem, and reusing it would
+ * report a fresh-but-capped board as a stale one.
+ */
+.orders__truncated {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  background: var(--avo-warn-bg);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-top: 14px;
+}
+
+.orders__truncated-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  background: var(--avo-warn-text);
+  flex-shrink: 0;
+  /* Optically centred on the first line of a 1.5 line-height 12.5px text. */
+  margin-top: 5px;
+}
+
+.orders__truncated-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-warn-text);
+  flex: 1;
+}
+
+.orders__card {
+  margin-top: 14px;
+  overflow: hidden;
+}
+
+/* interaction-spec.md §1: a data table scrolls, it never drops a column. */
+.orders__scroll {
+  overflow-x: auto;
+  max-height: 640px;
+  overflow-y: auto;
+}
+
+.orders__table {
+  width: 100%;
+  min-width: 960px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.orders__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.orders__table tbody td {
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: top;
+}
+
+.orders__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/*
+ * The transaction id, as an id: tabular figures so a column of them scans, and
+ * no wrap, because half of `TX-3233428` on the next line is unmatchable against
+ * the reference a customer reads off her phone.
+ */
+.orders__ref {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--avo-text-muted-strong);
+}
+
+.orders__customer {
+  font-weight: 500;
+}
+
+/*
+ * The `tel:` link. Underlined on hover only — a permanently underlined phone
+ * number in every row turns the column into noise — but it is a real link and
+ * keeps the focus ring the shell gives every anchor.
+ */
+.orders__phone {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--avo-text-muted-soft);
+  text-decoration: none;
+}
+
+.orders__phone:hover {
+  text-decoration: underline;
+}
+
+.orders__where {
+  min-width: 240px;
+}
+
+/*
+ * PICKUP, WHICH IS DATA AND NOT AN ABSENCE. Italic and muted so it reads as a
+ * statement about the order rather than as a value in the same register as an
+ * address — but present, in words, never an em dash.
+ */
+.orders__pickup {
+  font-style: italic;
+  color: var(--avo-text-muted-strong);
+}
+
+.orders__address {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.45;
+}
+
+/* Her own name for the address — "Home", "Mum's". Hers, so it leads. */
+.orders__address-label {
+  font-weight: 500;
+}
+
+.orders__address-line {
+  font-size: 12.5px;
+  color: var(--avo-text-muted-strong);
+}
+
+.orders__address-area {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+}
+
+/* Her delivery instructions, quoted, so it is visibly her words. */
+.orders__address-note {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  font-style: italic;
+  max-width: 34ch;
+}
+
+/*
+ * Coordinates. Monospaced figures because they are a machine value somebody may
+ * copy, and deliberately NOT a link — `ShopOrders.tsx` § coordinates are
+ * rendered and not linked.
+ */
+.orders__address-pin {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--avo-text-muted-soft);
+  margin-top: 2px;
+}
+
+.orders__when {
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+/* `readyAt` / `closedAt` — the server's stamps, under the placed time. */
+.orders__stamp {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+  line-height: 1.4;
+  margin-top: 3px;
+}
+
+.orders__status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.orders__empty {
+  padding: 26px 20px;
+  text-align: center;
+}
+
+/*
+ * Centred, matching `.appts`, and for the reason recorded there: both
+ * Appointments empties are centred in `AVO States.dc.html` where the shared
+ * `.avo-state` is left-aligned. This board is drawn nowhere, so it follows the
+ * nearest analogue rather than the shared default.
+ */
+.orders .avo-state {
+  align-items: center;
+  text-align: center;
+}
+
+.orders .avo-state__body {
+  max-width: 46ch;
+}

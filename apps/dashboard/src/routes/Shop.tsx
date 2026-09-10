@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fils, type Fils, type Product } from '@avo/types';
-import { Button, Card, ImageSlot, InfoBanner, Money, Skeleton } from '@avo/ui';
+import { Button, Card, ImageSlot, InfoBanner, Money, Segmented, Skeleton } from '@avo/ui';
 import {
   priceInputValue,
   readPriceInput,
@@ -18,6 +18,7 @@ import {
 } from '../api/productImage.js';
 import { useSalon } from '../api/salon.js';
 import { SectionError, WriteError } from './sectionState.js';
+import { ShopOrders } from './ShopOrders.js';
 
 /**
  * Merchant → Shop. `AVO Merchant Dashboard.dc.html:296` § SHOP.
@@ -95,6 +96,45 @@ import { SectionError, WriteError } from './sectionState.js';
  * So a NEW row is a draft with an explicit Add, and every row that exists saves
  * as you type. The design's footer sentence is kept verbatim because it is still
  * true of the catalog it describes: a draft is not yet one of its rows.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO TABS NOW, AND THE SECOND ONE IS NOT IN THE DESIGN BUNDLE
+ *
+ * The shop became delivery-based (item 7, `PRIOR-ART.md` § "The shop is
+ * delivery-based"), which gave the merchant a second thing to do here: prepare,
+ * hand over and close the orders that arrive. `routes/ShopOrders.tsx` is that
+ * board, and this file is now its host.
+ *
+ * WHY A TAB AND NOT AN ELEVENTH NAV ITEM. Three reasons, in the order they
+ * decided it:
+ *
+ *   `perms.shop` GATES BOTH. `GET /v1/salons/{id}/orders` and `PATCH …/orders/…`
+ *   are `requireDashboardPerm(req, 'shop')` — the same gate as this catalogue —
+ *   and `api/src/routes/orders.ts` says so in those words: "this is the Shop
+ *   section's own screen". A section boundary that does not follow a permission
+ *   boundary is how a sidebar ends up implying two different authorities over one.
+ *
+ *   THE SIDEBAR IS THE DESIGN'S. `shell/navItems.tsx` transcribes ten items from
+ *   `AVO Merchant Dashboard.dc.html`; an eleventh would be this lane inventing a
+ *   section, which is the one thing `CLAUDE.md` § "Do not add features" is about.
+ *
+ *   THE IDIOM EXISTS. `Marketing.tsx` is one gate, one section, three
+ *   `Segmented` tabs. Borrowing that is cheaper than a second visual language,
+ *   and it is what the states census already understands.
+ *
+ * WHAT MOVED, AND WHAT DELIBERATELY DID NOT. The module notice moved UP here,
+ * because `modules.shop` is a fact about the SECTION and not about either tab —
+ * a catalogue you can build but not sell from, and a board that can still
+ * receive nothing new. The catalogue's own body is untouched below as
+ * `ShopCatalogue`; its four states, its debounce and its ✕ confirmation are the
+ * same code they were.
+ *
+ * THE TWO TABS OWN THEIR OWN READS AND THEIR OWN FOUR STATES. This is NOT
+ * Marketing's shape, where a host owns one fetch and hands `loading` down: the
+ * catalogue reads `GET /salons/{id}/products` and the board reads `GET
+ * /v1/salons/{id}/orders`, and either can fail while the other answers. So each
+ * renders its own `SectionError` rather than a drifting copy of a shared one, and
+ * `stateCensus.test.ts` lists them separately.
  */
 
 /**
@@ -104,9 +144,60 @@ import { SectionError, WriteError } from './sectionState.js';
  */
 const SAVE_DELAY_MS = 700;
 
+type Tab = 'catalogue' | 'orders';
+
+/**
+ * "Catalog" carries the design's spelling — `AVO Merchant Dashboard.dc.html:299`
+ * writes "Catalog only", American, and the hint below still says it. "Orders" is
+ * new copy for a screen the bundle does not contain.
+ */
+const TABS: Array<{ value: Tab; label: string }> = [
+  { value: 'catalogue', label: 'Catalog' },
+  { value: 'orders', label: 'Orders' },
+];
+
+/**
+ * The section frame: the tab picker, the module notice, and whichever tab is up.
+ *
+ * `useSalon()` LIVES HERE AND NOT IN EITHER TAB, so the module state is read once
+ * for the section that owns it. Its failure is deliberately NOT a section error:
+ * `GET /salons/{id}` is `requirePrincipal` with no permission, and a screen that
+ * refused to draw a working catalogue because a notice could not be resolved
+ * would be worse than a missing notice. `shopOn` stays `undefined`, both tabs
+ * carry on, and the notice does not render — which is the same treatment
+ * `undefined` gets while the read is in flight.
+ */
 export function Shop() {
-  const products = useProducts();
+  const [tab, setTab] = useState<Tab>('catalogue');
   const salon = useSalon();
+  /*
+   * Only ever from a LOADED salon. `undefined` is "not known yet" and must not
+   * render as "off" — a notice saying the shop is closed, shown for a beat on
+   * every load of a salon that is open, is the premature-zero class in words.
+   */
+  const shopOn = salon.data?.modules.shop;
+
+  return (
+    <div className="shop-section">
+      <div className="shop-section__tabs">
+        <Segmented options={TABS} value={tab} onChange={setTab} label="Shop section" />
+      </div>
+
+      {/*
+        ABOVE THE TABS' CONTENT AND BELOW THE PICKER, because it is true of both:
+        the catalogue can be built but not sold from, and the board can receive
+        nothing new. It used to sit inside the catalogue, which is where it was
+        written and where it no longer belongs.
+      */}
+      {shopOn === false ? <ShopModuleOffNotice /> : null}
+
+      {tab === 'catalogue' ? <ShopCatalogue /> : <ShopOrders shopOn={shopOn} />}
+    </div>
+  );
+}
+
+export function ShopCatalogue() {
+  const products = useProducts();
   const create = useCreateProduct();
   const update = useUpdateProduct();
   const retire = useRetireProduct();
@@ -125,21 +216,41 @@ export function Shop() {
   }
 
   const items = products.data?.items;
-  /*
-   * Only ever from a LOADED salon. `undefined` is "not known yet" and must not
-   * render as "off" — a notice saying the shop is closed, shown for a beat on
-   * every load of a salon that is open, is the premature-zero class in words.
-   */
-  const shopOn = salon.data?.modules.shop;
 
   return (
     <div className="shop">
-      {shopOn === false ? <ShopModuleOffNotice /> : null}
-
       <div className="shop__head">
+        {/*
+          =====================================================================
+          THE DESIGN'S SENTENCE, WITH HALF OF IT CORRECTED, AND THE HALF IS NAMED
+          =====================================================================
+          `AVO Merchant Dashboard.dc.html:299` reads, verbatim:
+
+            "Catalog only — no stock counts, no delivery (phase 2). Buyers pick
+             up at the salon."
+
+          "no delivery (phase 2)" IS NOW FALSE. Delivery shipped — `POST /orders`
+          takes `fulfilment: 'delivery'` with an address from her book, and the
+          Orders tab beside this one is the board that fulfils them. "Buyers pick
+          up at the salon" is no longer the whole story either; pickup is one fork
+          of two (`PRIOR-ART.md`: "Pickup is not replaced. It is a fork.").
+
+          So the false clause is replaced and the true one is kept word for word.
+          This is the treatment the ✕ already gets in this file — the design says
+          "Delete", the server retires, and the word is corrected on this surface
+          because the server does something else. A screen that tells a merchant
+          her shop cannot deliver, on the same screen as the board where her
+          delivery orders are waiting, is worse than a diverged caption.
+
+          `.shop__hint-aside` — the greyed "(phase 2)" — has no text left to
+          carry. Its rule stays in `app.css`, unused for now rather than deleted,
+          because the design still draws that treatment and something else will
+          want it. Reported to trunk as a design/product copy conflict rather than
+          resolved in either direction on my own.
+        */}
         <span className="shop__hint">
-          Catalog only — no stock counts, no delivery <span className="shop__hint-aside">(phase 2)</span>.
-          Buyers pick up at the salon.
+          Catalog only — no stock counts. Buyers pay from their wallet and choose pickup or
+          delivery.
           {/*
             COPY THE DESIGN DOES NOT CONTAIN, and the constraint is stated ONCE
             here rather than under every square. Brand kit can afford a caption
