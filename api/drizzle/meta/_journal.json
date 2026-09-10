@@ -337,6 +337,13 @@
       "when": 1789101200000,
       "tag": "0047_receipt_channel_by_merchant",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1789187600000,
+      "tag": "0048_erasure_reaches_the_address",
+      "breakpoints": true
     }
   ]
 }

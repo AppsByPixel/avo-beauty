@@ -63,6 +63,50 @@
  *                           salon-routed ticket has operational value to the
  *                           salon, and if trunk rules the other way the delete
  *                           narrows to platform-routed rows.
+ *   member_address          DELETED — HER ADDRESS BOOK, and the one table here
+ *                           with a STREET in it. (DECISIONS.md #97, migration
+ *                           0048.) Nothing but her own orders references these
+ *                           rows, an address is not a financial record, so the
+ *                           seven-year books argument does not reach it and
+ *                           § 5's "the rest of your account data" covers it with
+ *                           no ambiguity. Deleted whole, soft-deleted rows
+ *                           included, so `latitude`/`longitude` go with the
+ *                           street rather than surviving it — a coordinate pair
+ *                           locates the address exactly on its own.
+ *   shop_order              KEPT, address columns SCRUBBED and STAMPED. The row
+ *                           carries a settled `transaction` and its lines;
+ *                           `ledger_entry.transaction_id` is `ON DELETE
+ *                           restrict` and a money row does not disappear because
+ *                           a customer left. But the address is SEPARABLE from
+ *                           the order, so every component goes —
+ *                           address_id/label, block/street/building,
+ *                           floor/apartment, area/governorate, instructions AND
+ *                           the coordinate pair — and `address_erased_at` is
+ *                           stamped so the state is REPRESENTABLE rather than
+ *                           merely permitted. Migration 0048 carries why that is
+ *                           a third CHECK arm rather than a relaxed one, and why
+ *                           this resolves differently from the audit_log tension
+ *                           below on a stated difference: THIS JOB REACHES
+ *                           EXACTLY THE TABLES THE APP ROLE MAY WRITE.
+ *                           `shop_order` is one of them — 0027 revoked
+ *                           UPDATE/DELETE on `shop_order_LINE` and deliberately
+ *                           not on this table, because the status transitions
+ *                           need UPDATE. The three rows below marked CANNOT be
+ *                           touched are not.
+ *
+ *                           THE ORDER OF THE TWO WRITES IS FORCED, not chosen:
+ *                           `shop_order.address_id` references the book with
+ *                           `ON DELETE restrict`, so the snapshot is nulled
+ *                           first and the book deleted second, in one
+ *                           transaction.
+ *
+ *                           WHAT THE MERCHANT SEES is
+ *                           `fulfilment: 'delivery'` with `address: null` — a
+ *                           state that cannot arise any other way, because a
+ *                           LIVE delivery is CHECKed to have block, street and
+ *                           building. Not a new wire field: the date would tell
+ *                           a salon WHEN a named customer was erased, which is a
+ *                           fact about her rather than about the order.
  *   booking                 KEPT, deliberately. § 2 lists "appointment history"
  *                           apart from "transaction and reward history", so a
  *                           strict reading calls it "the rest" — but booking
@@ -140,6 +184,7 @@ import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/client';
 import { member, memberPasswordReset } from '../db/schema/member';
 import { booking } from '../db/schema/booking';
+import { memberAddress, shopOrder } from '../db/schema/delivery';
 import { merchantNotification } from '../db/schema/notification';
 import { phoneChangeChallenge } from '../db/schema/phoneChange';
 import { receiptJob } from '../db/schema/receipt';
@@ -315,6 +360,73 @@ export async function runErasureOnce(
             .delete(supportTicket)
             .where(eq(supportTicket.memberId, m.id))
             .returning({ id: supportTicket.id }),
+        );
+
+        /**
+         * ---------------------------------------------------------------
+         * WHERE SHE LIVES. Two copies, and THE ORDER OF THESE TWO WRITES IS
+         * FORCED rather than chosen. (DECISIONS.md #97, migration 0048.)
+         *
+         * `shop_order.address_id` references `member_address` with
+         * `ON DELETE restrict` — which is why the addresses route
+         * SOFT-deletes — so the book cannot be deleted while an order still
+         * points into it. Snapshot first, book second, one transaction.
+         * ---------------------------------------------------------------
+         */
+
+        /**
+         * THE SNAPSHOT. Every component, and `latitude`/`longitude` are the
+         * sharp case: a coordinate pair with the street removed still locates
+         * the address exactly. `address_erased_at` is what makes this state
+         * storable at all — the CHECK's live-delivery arm requires the three
+         * parts, and its erased arm requires this stamp, so nulling without
+         * stamping is still refused. `updated_at` moves because the row
+         * changed.
+         *
+         * SCOPED TO DELIVERY. A pickup row is already all-null and the CHECK's
+         * pickup arm requires the stamp to be NULL — a pickup had no address to
+         * erase, and stamping one would be a lie the database refuses.
+         */
+        counts['orderAddressSnapshots'] = (
+          await tx
+            .update(shopOrder)
+            .set({
+              addressId: null,
+              addressLabel: null,
+              block: null,
+              street: null,
+              building: null,
+              floor: null,
+              apartment: null,
+              area: null,
+              governorate: null,
+              instructions: null,
+              latitude: null,
+              longitude: null,
+              addressErasedAt: now,
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(shopOrder.memberId, m.id),
+                eq(shopOrder.fulfilment, 'delivery'),
+                isNull(shopOrder.addressErasedAt),
+              ),
+            )
+            .returning({ id: shopOrder.transactionId })
+        ).length;
+
+        /**
+         * HER BOOK, WHOLE. Soft-deleted rows included: `deleted_at` hides an
+         * address from her own list, it does not make the street stop naming a
+         * household. Nothing references these rows now that the snapshots
+         * above let go of them.
+         */
+        await del('addressBook', () =>
+          tx
+            .delete(memberAddress)
+            .where(eq(memberAddress.memberId, m.id))
+            .returning({ id: memberAddress.id }),
         );
 
         await tx
