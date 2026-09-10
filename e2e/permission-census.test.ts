@@ -68,6 +68,7 @@ import {
   censusOfRoutes,
   nameOf,
   pairOf,
+  registrationsIn,
   singleArgumentCallSites,
   stripComments,
   type GatedRoute,
@@ -1157,6 +1158,163 @@ describe('no route registration is written in a way this census cannot read', ()
         '`support/perm-census.ts` to resolve it and delete this exemption-free spec\'s ' +
         'reason for firing — do not add an exemption list, which is the mechanism this ' +
         'whole module was written to replace.',
+    ).toEqual([]);
+  });
+});
+
+/**
+ * THE THIRD HALF: a registration read against SOMEBODY ELSE'S PATH.
+ *
+ * The two describes above cover a route that is LOST — pinned yesterday and unreadable
+ * today, or born unreadable and reported by file and line. Neither can see the worse
+ * outcome, which is a scanner that loses a route and INVENTS one in its place.
+ *
+ * WHY THERE IS NO FIXTURE FOR THIS IN `api/src/routes/`. Every path in that directory is
+ * an inline string literal today, so the census is correct on this tree and stays correct
+ * whichever reader it uses — measured, not assumed: `censusOfRoutes()` returns the same
+ * 144 routes, the same 103 gates and the same 159 ledger lines before and after the fix
+ * this spec pins. The trigger is not a defect anywhere in lane A's code. It is an
+ * ORDINARY REFACTOR: lifting one path into a `const`, which `routes/images.ts` is
+ * precisely the file someone would do it to, since two of its registrations share a
+ * prefix. So the bug is a property of the SCANNER and the only honest place to assert it
+ * is on source text this file writes.
+ *
+ * WHAT IT DID. The registration scan matched the type arguments as `(?:<[\s\S]*?>)?` —
+ * lazy, and crossing newlines. Given
+ *
+ *     const SERVICE_IMAGE = '/v1/salons/:id/services/:oid/image';
+ *     app.delete<{ Params: … }>(SERVICE_IMAGE, handler);
+ *     app.get<{ Params: … }>('/v1/images/:imageId', handler);
+ *
+ * the DELETE's generic could not be followed by a path literal, so it grew: past the end
+ * of its own registration, through the `>` of an arrow function, and closed on the `}>`
+ * of the GET below — whose literal then satisfied the pattern. The scan reported ONE
+ * route, `DELETE /v1/images/:imageId`, which nobody wrote and which no router serves, and
+ * BOTH real routes vanished with it.
+ *
+ * WHY IT IS WORSE THAN A MISCOUNT, in the terms this file already uses. The DELETE
+ * disappearing is the `PINNED_COVERAGE` failure above, which is loud and says the right
+ * thing. The GET disappearing with it is a second pinned line lost for a reason nothing
+ * explains. And the ghost is reported by the third spec as a route that "reads unpinned",
+ * pointing a reader at a source line that says something else entirely — the shape of
+ * decision 90, where a permission turned out to be asserted by nothing while every
+ * aggregate stayed green.
+ *
+ * THE FIX IS ONE READER, NOT A BETTER REGEX. `registrationsIn` now walks the type
+ * arguments with the same `skipTypeArgs` the ambiguity pass has used since it was
+ * written, so this module has ONE definition of where a registration ends rather than two
+ * that can disagree about the same file — which matters because the two are consumed
+ * together: the census names the route, the ambiguity pass names the site that defeated
+ * it. A registration this reader cannot resolve is left for `ambiguousRegistrations()` to
+ * report, never re-attached to a later path.
+ */
+describe("a registration's path is read from its own argument list", () => {
+  /** The shape every path in `api/src/routes/` has today. Both routes must be read. */
+  const INLINE = `
+    app.delete<{ Params: { id: string; oid: string } }>(
+      '/v1/salons/:id/services/:oid/image',
+      async (req, reply) => { return performDetach(req, reply, p, 'service'); },
+    );
+
+    app.get<{ Params: { imageId: string } }>('/v1/images/:imageId', async (req, reply) => {
+      return serve(req, reply);
+    });
+  `;
+
+  /** The same file after one ordinary refactor. Nothing else changed. */
+  const CONST_PATH = `
+    const SERVICE_IMAGE = '/v1/salons/:id/services/:oid/image';
+
+    app.delete<{ Params: { id: string; oid: string } }>(
+      SERVICE_IMAGE,
+      async (req, reply) => { return performDetach(req, reply, p, 'service'); },
+    );
+
+    app.get<{ Params: { imageId: string } }>('/v1/images/:imageId', async (req, reply) => {
+      return serve(req, reply);
+    });
+  `;
+
+  const namesIn = (src: string): string[] =>
+    registrationsIn(src).map((r) => `${r.method} ${r.path}`);
+
+  it('reads both registrations when both paths are literals — the tree as it stands', () => {
+    expect(namesIn(INLINE)).toEqual([
+      'DELETE /v1/salons/:id/services/:oid/image',
+      'GET /v1/images/:imageId',
+    ]);
+  });
+
+  /**
+   * THE SPEC THAT FAILS ON THE OLD REGEX. Verified in both directions rather than
+   * asserted: with `REGISTRATION`'s lazy `(?:<[\s\S]*?>)?` restored, this returns
+   * `['DELETE /v1/images/:imageId']` and the equality below goes red naming the ghost;
+   * with the walked reader it returns the GET alone and passes.
+   */
+  it('never welds one registration’s method to the next one’s path', () => {
+    expect(
+      namesIn(CONST_PATH),
+      'the scanner read a path that does not belong to the registration it was reading. ' +
+        'An UNREADABLE registration must be dropped here and reported by ' +
+        '`ambiguousRegistrations()`, never re-attached to a later literal: a census that ' +
+        'invents a route sends whoever reads the failure to a line that says something ' +
+        'else, and takes the real route down with it.',
+    ).toEqual(['GET /v1/images/:imageId']);
+  });
+
+  it('invents no route with a method and a path that were never written together', () => {
+    const read = registrationsIn(CONST_PATH);
+    expect(
+      read.filter((r) => r.method === 'DELETE'),
+      'the const-lifted DELETE is unreadable at its registration site, so it must be ' +
+        'absent — not present under some other path',
+    ).toEqual([]);
+    // And the route that IS still readable did not vanish under the one that is not.
+    expect(read.map((r) => r.path)).toContain('/v1/images/:imageId');
+  });
+
+  /**
+   * THE WALKED READER MUST NOT BE NARROWER THAN THE REGEX IT REPLACED, and it was, in
+   * one shape, until `skipTypeArgs` stopped counting the `>` of an arrow. That closed the
+   * type-argument list early, so the next character was not `(`, and BOTH passes dropped
+   * the call — no census entry, and no ambiguity report either, because `callSites` reads
+   * "not followed by `(`" as "not a call at all". A route lost by the fix for the ghost
+   * would have been a strictly worse trade than the ghost.
+   */
+  it('reads a registration whose type arguments contain an arrow type', () => {
+    expect(
+      namesIn(`
+        app.get<{ Params: { id: string }; Reply: { render: () => Map<string, number> } }>(
+          '/v1/salons/:id/report',
+          handler,
+        );
+      `),
+    ).toEqual(['GET /v1/salons/:id/report']);
+  });
+
+  /**
+   * The division of labour, stated as a spec. A generic that does not balance is not
+   * guessed at here — it is dropped, and `ambiguousRegistrations()` is what says so by
+   * file and line. That is why the census going quiet about a route can never be the
+   * whole story this suite tells.
+   */
+  it('drops a registration whose type arguments do not balance, rather than guessing', () => {
+    expect(
+      namesIn(`
+        app.post<{ Body: Partial<Thing }>('/v1/things', handler);
+        app.get('/v1/things', handler);
+      `),
+    ).toEqual(['GET /v1/things']);
+  });
+
+  /** A Map read and a Drizzle delete are not registrations, whatever they are called. */
+  it('reads no route out of a one-argument call on the same method names', () => {
+    expect(
+      namesIn(`
+        const row = names.get(t.memberId);
+        await db.delete(campaign);
+        const blob = await imageStore.get(row.storageKey);
+      `),
     ).toEqual([]);
   });
 });
