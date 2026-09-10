@@ -84,6 +84,7 @@ import {
   merchantFundedCreditPosting,
   topUpSettledPosting,
   walletAdjustedPosting,
+  voucherRedeemedPosting,
   walletSpendPosting,
 } from './ledger';
 
@@ -188,6 +189,14 @@ const POSTINGS: Record<string, LedgerPosting[]> = {
   'merchant-funded happy-hour credit': merchantFundedCreditPosting(
     wallet(fils(3_000), fils(27_500)),
   ),
+  /**
+   * The funder is the whole difference between this and the happy-hour credit
+   * above: AVO's money rather than the salon's. `POSTINGS` is what makes the
+   * account coverage loop exhaustive, so a voucher builder that stopped posting
+   * to `avo_voucher_funding` is a red test rather than a silent misposting into
+   * the merchant's bonus budget.
+   */
+  'AVO voucher redeemed': voucherRedeemedPosting(wallet(fils(5_000), fils(29_500))),
   'charge voided': chargeReversedPosting(wallet(fils(8_000), fils(32_500))),
   'owner console credit': walletAdjustedPosting({
     transactionId: TX,
@@ -207,12 +216,13 @@ const POSTINGS: Record<string, LedgerPosting[]> = {
 
 // ============================================================================
 describe('LEDGER_ACCOUNTS — coverage is derived from the schema enum', () => {
-  it('has the six accounts the schema declares', () => {
+  it('has the seven accounts the schema declares', () => {
     // Not redundant with the loop below: an emptied enum would make every
     // derived spec vanish and this file would report green with nothing run.
-    expect(LEDGER_ACCOUNTS).toHaveLength(6);
+    expect(LEDGER_ACCOUNTS).toHaveLength(7);
     expect([...LEDGER_ACCOUNTS].sort()).toEqual([
       'avo_commission',
+      'avo_voucher_funding',
       'deposit_held',
       'gateway_clearing',
       'member_wallet',

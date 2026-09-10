@@ -47,6 +47,7 @@ import { registerPolicyRoutes } from './routes/policies';
 import { registerSupportRoutes } from './routes/support';
 import { registerReportRoutes } from './routes/reports';
 import { registerAdjustmentRoutes } from './routes/adjustments';
+import { registerVoucherRoutes } from './routes/vouchers';
 import { registerAccountResetRoutes } from './routes/accountResets';
 import { registerAccountRoutes } from './routes/accounts';
 import { registerImageRoutes } from './routes/images';
@@ -154,6 +155,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerSupportRoutes(app);
   await registerReportRoutes(app);
   await registerAdjustmentRoutes(app);
+  await registerVoucherRoutes(app);
   await registerAccountResetRoutes(app);
   await registerAccountRoutes(app);
   await registerImageRoutes(app);

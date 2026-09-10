@@ -13,7 +13,8 @@
  *          ├─ product
  *          ├─ image ──── image_attachment (→ product | service, by id, no FK)
  *          ├─ artist (→ staff_user, optionally: an artist needs no login)
- *          ├─ member ──── wallet_token
+ *          ├─ member ─┬── wallet_token
+ *          │           └── voucher (AVO-issued; → platform_admin)
  *          ├─ staff_user
  *          ├─ session ──── pin_attempt
  *          ├─ device_enrolment (a till → a branch — DECISIONS #82)
@@ -58,6 +59,7 @@ export * from './transaction';
 export * from './ledger';
 export * from './shopOrder';
 export * from './delivery';
+export * from './voucher';
 export * from './audit';
 export * from './loyaltyEvent';
 export * from './idempotency';

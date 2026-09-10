@@ -148,10 +148,17 @@ describe('the permission map — #7, and the one that must not be `dashboard`', 
   });
 
   /**
-   * The `frontdesk` role preset holds `dashboard` and not `team`. If the customer
-   * export were gated on `dashboard`, every front-desk tablet could download every
-   * customer's name, phone and wallet balance — the file services/memberSearch.ts
-   * spends four controls preventing a search box from becoming.
+   * `dashboard` IS THE WIDER GRANT, and that is the argument — it opens the
+   * Overview, so it is what a salon gives anybody who needs to see how the business
+   * is doing, while `team` is the authority over its people. A customer's name,
+   * phone and wallet balance is the second kind of data, and services/memberSearch.ts
+   * spends four controls stopping a staff search box from becoming that file.
+   *
+   * THIS COMMENT USED TO SAY "the `frontdesk` role preset holds `dashboard` and not
+   * `team`", WHICH IS INVERTED: the seeded frontdesk holds neither —
+   * `perm_dashboard` and `perm_team` are both false on `ST-002`. The conclusion was
+   * right and the fact under it was not, which is the worse of the two ways to be
+   * wrong. There is no staff "preset" either; see reports.ts § REPORT_PERMISSION.
    */
   it('gates the customer book on `team`, NOT on `dashboard`', () => {
     expect(REPORT_PERMISSION.customers).toBe('team');
@@ -167,9 +174,10 @@ describe('the permission map — #7, and the one that must not be `dashboard`', 
   /**
    * A report that JOINS sections resolves to the STRICTEST of them, not to the
    * most obvious one. `artist-performance` is the appointment book, money, and a
-   * named person's earnings in one row; the `frontdesk` preset db/seed.ts writes
-   * holds `appointments` and NOT `team`, so gating it on the section its rows
-   * come FROM would have put every artist's takings on the front-desk tablet.
+   * named person's earnings in one row; the seeded frontdesk (`ST-002`) holds
+   * `appointments` and NOT `team` — that half is true, checked against the row — so
+   * gating it on the section its rows come FROM would have put every artist's
+   * takings on the front-desk tablet.
    * Same mistake a blanket `dashboard` would have made with the customer book.
    */
   it('gates artist performance on `team` — not on `appointments`, not on `dashboard`', () => {

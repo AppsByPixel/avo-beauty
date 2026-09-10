@@ -462,6 +462,55 @@ export function chargeReversedPosting(refs: WalletRefs & { amountFils: Fils }): 
 }
 
 /**
+ * AN AVO-ISSUED VOUCHER IS REDEEMED: AVO's money into her wallet.
+ *
+ * `avo_voucher_funding` DEBIT → `member_wallet` CREDIT, which is the same shape
+ * `merchantFundedCreditPosting` has for a happy-hour credit, with the funder
+ * swapped. That swap is the point rather than a detail:
+ *
+ *   `merchant_bonus_funding`  the SALON's money, funding a bonus the salon
+ *                             advertised. Folding a voucher in here would make a
+ *                             merchant's bonus budget include an apology AVO made.
+ *   `gateway_clearing`        where `walletAdjustedPosting` puts a console
+ *                             adjustment, because that is discretionary money
+ *                             entering outside a PSP settlement. Correct there and
+ *                             wrong here: it would make a voucher credit
+ *                             indistinguishable from every other adjustment, which
+ *                             is exactly the provenance this account exists for.
+ *   `salon_revenue`           would book an apology as a service delivered.
+ *
+ * WHAT THIS ACCOUNT ANSWERS, and it is deliberately only one of the two
+ * questions: how much AVO-voucher credit entered a salon's wallets, exactly, from
+ * one indexed read. It does NOT say how much of it she has since spent — a wallet
+ * is one number and a charge debits `member_wallet` with no notion of which
+ * credit it consumed. That needs lots on the wallet, which is a change to the
+ * balance model rather than to this file.
+ */
+export function voucherRedeemedPosting(refs: WalletRefs & { amountFils: Fils }): LedgerPosting[] {
+  return [
+    {
+      transactionId: refs.transactionId,
+      salonId: refs.salonId,
+      // NULL, like every other non-wallet leg — see depositAppliedPosting on why
+      // `member_id` means "this row moved her own spendable balance".
+      memberId: null,
+      account: 'avo_voucher_funding',
+      direction: 'debit',
+      amountFils: refs.amountFils,
+    },
+    {
+      transactionId: refs.transactionId,
+      salonId: refs.salonId,
+      memberId: refs.memberId,
+      account: 'member_wallet',
+      direction: 'credit',
+      amountFils: refs.amountFils,
+      balanceAfterFils: refs.balanceAfterFils,
+    },
+  ];
+}
+
+/**
  * An owner-console wallet adjustment, in either direction.
  *
  * `deltaFils` is SIGNED — positive credits her, negative debits her — and this
