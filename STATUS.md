@@ -194,6 +194,27 @@ guarantees that matter most. The mock's entire permission model is
 asserted against a scenario header. Suites using `e2e/support/tenancy-harness.ts` spawn the real
 API against real Postgres, which is the other 411.
 
+**STILL TRUE ON 2026-09-11, AND SHARPENED — because the paragraph above reads worse than the
+truth and that is its own defect.** Re-verified rather than re-read: all three files still import
+`./support/api.js`, and `packages/mock/src/server.ts:451,457` still resolves a principal from a
+header instead of from permissions. **But non-negotiable #7 is NOT resting on that.** It is
+proved against the real server in two other places: `permission-census.test.ts`, which imports
+`tenancy-harness.js` and so drives the real API on real Postgres, and the `api/` integration
+specs that call a gated endpoint directly with the permission off — a dozen files assert a real
+403 that way. So the honest statement is narrower and less frightening than "#7 is asserted
+against a mock": **the file NAMED for the guarantee tests the mock; the guarantee itself is
+tested elsewhere.**
+
+**The part that is worth being uncomfortable about is the dates, not the mock.** Half of that
+real coverage — every `.int.test.ts` 403 — **ran nowhere in CI until 2026-09-10** (decision 101).
+So for most of this project's life #7's real-server proof was the census alone, and the suites
+that back it up were green by never executing. Both halves run now.
+
+**And the counts above are historical, not current.** 74 / 485 / 411 were measured once; they
+have moved every week since and nothing checks them, which is row 26's defect in the file row 26
+is about. Do not quote them as present tense — measure with `pnpm --dir=api run test`,
+`test:int`, and `pnpm --dir=e2e test`, which report their own totals.
+
 **What settles that it mattered:** with both concurrency guards removed, five simultaneous
 charges all settled and every one reported `balanceAfterFils: 493000` — a lost update in its
 purest form — while **all seven sequential specs in the `POST /charges` describe still passed**,
@@ -248,8 +269,12 @@ member's stored consent.
 least a session, and both halves read as confident. A status file is prose about code, and
 prose does not recompile. Re-measure before quoting any line of this document.
 
-Roughly 400 specs. `pnpm check` runs them; **test caching is off** because turbo was
-replaying a green run in 14ms and calling it a pass.
+`pnpm check` runs them; **test caching is off** because turbo was replaying a green run in
+14ms and calling it a pass. **No total is quoted here on purpose** — "roughly 400" stood in
+this line while `e2e` alone was past a thousand, and a number nothing checks is row 26's
+defect. Each suite reports its own count: `pnpm --dir=api run test`, `pnpm --dir=api run
+test:int` (needs `AVO_INT_DATABASE_URL`), `pnpm --dir=e2e test`. Note that `pnpm check` does
+NOT include `test:int`; CI runs that in a step of its own (decision 101).
 
 ## What does not work yet
 
