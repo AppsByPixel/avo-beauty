@@ -457,7 +457,7 @@ function AccountCard({
       <div className="account__perms">
         <div className="avo-label">Access &amp; authority</div>
         <div className="account__chips">
-          {PERMISSIONS.map(({ key, label }) => {
+          {PERMISSIONS.map(({ key, label, note }) => {
             const on = perms[key] === true;
             /*
              * The one refusal the server will make that the merchant cannot
@@ -466,6 +466,23 @@ function AccountCard({
              * it rather than clickable into a 409.
              */
             const lastTeamAdmin = key === 'team' && on && isSoleTeamAdmin;
+            /*
+             * WHAT THE GRANT ACTUALLY REACHES, where the label understates it.
+             * One permission has a `note` today and it is `shop`, because the
+             * fulfilment board put a customer's home address behind a chip that
+             * says "Shop" — `api/staff.ts § PERMISSIONS` has the argument and the
+             * escalation.
+             *
+             * The refusal wins the `title` where both apply: a disabled chip's
+             * reason is about the click that just failed, which is more urgent
+             * than the scope of a grant that is not happening. They cannot
+             * collide today — `team` has no note and `shop` cannot be a last
+             * team admin — and the ordering is written down so that stays true
+             * rather than accidental.
+             */
+            const title = lastTeamAdmin
+              ? 'Someone must be able to manage the team. Grant it to another account first.'
+              : note;
             return (
               <Chip
                 key={key}
@@ -473,10 +490,16 @@ function AccountCard({
                 dot
                 label={label}
                 disabled={busy || leaver || lastTeamAdmin}
-                aria-label={`${label} — ${account.name}`}
-                {...(lastTeamAdmin
-                  ? { title: 'Someone must be able to manage the team. Grant it to another account first.' }
-                  : {})}
+                /*
+                 * The note joins the ACCESSIBLE name too. A `title` is a hover
+                 * affordance and a mouse is not how everyone reads this card —
+                 * interaction-spec.md §2 is emphatic that meaning must not live
+                 * in a hover. Without this the scope of the grant is sighted-
+                 * mouse-only, which for a privacy consequence is the wrong half
+                 * of the audience.
+                 */
+                aria-label={`${label} — ${account.name}${note ? `. ${note}` : ''}`}
+                {...(title ? { title } : {})}
                 onClick={() => {
                   // Revoking `scanner` kills a live session on a phone in the
                   // salon. Say it before, not after.

@@ -42,11 +42,66 @@ export type PermissionName =
   | 'void'
   | 'marketing';
 
-/** The nine chips, in the design's order, with the design's labels. */
-export const PERMISSIONS: ReadonlyArray<{ key: PermissionName; label: string }> = [
+/**
+ * The nine chips, in the design's order, with the design's labels.
+ *
+ * `note` IS NEW, AND ONE PERMISSION HAS ONE. It is not a description of every
+ * chip — nine tooltips is nine things nobody reads. It exists because `shop`
+ * stopped meaning what its label says.
+ *
+ * ===========================================================================
+ * WHY `shop` CARRIES A NOTE AND THE OTHER EIGHT DO NOT
+ * ===========================================================================
+ * Until the fulfilment board landed, everything behind `perms.shop` was a
+ * product catalogue: names, prices, photos, and a units-sold report with no
+ * customer anywhere in it. `GET /v1/salons/{id}/orders` changed that — the row
+ * carries the customer's NAME, her PHONE, her BLOCK/STREET/BUILDING and her
+ * COORDINATES. So a chip labelled "Shop", granted to a front-desk account so it
+ * can price the shelf, now also hands over every customer's home address.
+ *
+ * THIS IS THE SECOND INSTANCE OF A GAP THE BUILD HAS ALREADY NAMED, and that is
+ * the reason it is worth escalating rather than shrugging at. `DECISIONS.md` §
+ * the reports permission mapping refused a blanket `dashboard` gate because it
+ * "would have handed every front-desk tablet every customer's name, phone number
+ * and wallet balance", and drew the rule: "customer PII must not ride on the
+ * weakest gate a screen happens to sit behind."
+ *
+ * The same row then admits what makes this recur: it checked all nine and found
+ * "NONE OF THE NINE IS A CUSTOMER-DATA PERMISSION", so `customers`→`team` "is not
+ * a semantic fit" — an interim mapping, not a solution. `shop` is the same shape
+ * one turn later: a PRODUCT-CATALOGUE permission now gating customer PII, except
+ * the data is a home address and a pair of coordinates rather than a phone number.
+ *
+ * LATENT, NOT LIVE, AND SAID AS PLAINLY AS THAT ROW SAID IT. The seeded front
+ * desk (Hessa, `ST-002`) holds `shop: false` — verified against `avo_lane_c`, and
+ * both the board's GET and its PATCH answer her 403. So this is a constructed
+ * case rather than a shipped leak, exactly as the reports row was. What matters is
+ * the direction: the day a manager grants `shop` so somebody can reprice a shelf,
+ * she also grants every customer's address, and nothing on that chip said so.
+ *
+ * MOVING THE GATE IS NOT THIS LANE'S TO DO. `perms.shop` is enforced in
+ * `api/src/routes/orders.ts` and lane A's reasoning for it is on the route; a
+ * client-side relabelling cannot change who the server lets in, and non-
+ * negotiable #7 means it must not pretend to. So this is the honest half that IS
+ * available here: the person granting it is told what she is granting, at the
+ * moment she grants it, instead of the reach being a side effect nobody sees.
+ * Escalated in the lane report as a decision that wants making.
+ */
+export const PERMISSIONS: ReadonlyArray<{
+  key: PermissionName;
+  label: string;
+  /** Rendered as the chip's `title` — what this grant reaches beyond its label. */
+  note?: string;
+}> = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'appointments', label: 'Appointments' },
-  { key: 'shop', label: 'Shop' },
+  {
+    key: 'shop',
+    label: 'Shop',
+    note:
+      'The product catalog, and the orders board — which shows each delivery ' +
+      "customer's name, phone number and home address.",
+  },
   { key: 'loyalty', label: 'Loyalty' },
   { key: 'team', label: 'Team & accounts' },
   { key: 'scanner', label: 'Scan & charge' },

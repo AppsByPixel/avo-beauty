@@ -31,6 +31,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { NAV_ITEMS } from '../shell/navItems.js';
+/*
+ * Comments in this codebase discuss the identifiers these scans search for, at a
+ * ratio that makes a naive `includes()` wrong in the direction that reads as
+ * passing — `ShopOrders.tsx` says the word "truncated" nine times in prose about
+ * why it is rendered. See `testing/stripComments.ts` for the argument.
+ */
+import { stripComments } from '../testing/stripComments.js';
 
 const here = __dirname;
 const read = (name: string) => readFileSync(join(here, name), 'utf8');
@@ -88,6 +95,34 @@ const SECTION_SCREENS = [
    * screen refuses something the server serves.
    */
   'Shop.tsx',
+  /**
+   * Merchant → Shop → Orders. The fulfilment board.
+   *
+   * A TAB INSIDE A SECTION, and it is in THIS list rather than in a host/subview
+   * pair for the reason `marketing/Campaigns.tsx` is: it owns its own fetch. The
+   * catalogue reads `GET /salons/{id}/products` and this reads
+   * `GET /v1/salons/{id}/orders` — two routes, two independent failures, so a
+   * `SectionError` here is its own answer and not a drifting copy of its host's.
+   * Nothing hands it a pending state either; `Shop.tsx` landing its salon read
+   * says nothing about whether this one has.
+   *
+   * SAME GATE, WHICH IS NOT THE SAME THING AS ONE READ. Both routes are
+   * `perms.shop`, so unlike `Tills.tsx` this tab does not have a second guard to
+   * point at — and it still owns four states, because a shared permission does
+   * not make two endpoints fail together. That distinction is worth writing down
+   * because it is the one this entry could be argued out of.
+   *
+   * IT CARRIES A FIFTH THING, again not one of the four: `truncated`. A cap of
+   * 200 reported honestly by the API and rendered rather than hidden — see
+   * `ShopOrders.tsx § the truncation`. Not an error and not an empty; the board
+   * loaded, it is simply incomplete, and the notice below pins that it is drawn.
+   *
+   * AND IT HAS THREE EMPTIES, NOT ONE. Nothing ordered with the shop on, nothing
+   * ordered with `modules.shop` off, and nothing at the filtered status. The
+   * middle one is the reason `shopOn` is a prop: "orders land here as soon as
+   * they're placed" is a false promise to a salon where nobody can place one.
+   */
+  'ShopOrders.tsx',
   /**
    * The console's Accounts list and the platform feed. Both own their own read
    * (`GET /v1/platform/accounts`, `GET /v1/platform/activity`) behind their own
@@ -437,5 +472,47 @@ describe('a pending screen does not announce a zero it is not painting', () => {
      * label instead distinguishes the two, and still fails if the guard is deleted.
      */
     expect(src.match(/`Topics·\$\{/g) ?? []).toHaveLength(1);
+  });
+});
+
+/**
+ * A CAPPED LIST SAYS SO. The sibling of the premature-zero class above, and the
+ * one this lane has already paid for once.
+ *
+ * `GET /salons/{id}/bookings` was `LIMIT 200` with a hardcoded
+ * `nextCursor: null`, and this lane's `BranchesPanel` believed it: on 211
+ * further-out bookings the client-side closure impact reported 0 deposit-held
+ * appointments where the server's preview correctly reported 3 — because the
+ * order is DESC, so the rows dropped first were the ones starting soonest. The
+ * screen stated its answer with the same confidence either way.
+ *
+ * `GET /v1/salons/{id}/orders` is the same cap, and lane A made it honest instead
+ * of hiding it: `truncated: true` when the 200-row cap was reached, named in the
+ * code as "a cap, said out loud". Honest on the wire is worth nothing if the
+ * client drops it, which is exactly the shape the earlier defect took — so this
+ * pins that the field reaches the paint.
+ *
+ * WHY A SOURCE SCAN AND NOT A RENDER TEST: this file's own reason, unchanged —
+ * there is no renderer in this workspace for the census, and the guarantee is
+ * "the field is consulted and drawn", not "a component draws a value correctly".
+ * `shopRender.test.tsx` renders the notice itself and asserts its words.
+ */
+describe('a capped list does not report itself as complete', () => {
+  it('ShopOrders.tsx reads `truncated` and renders a notice from it', () => {
+    const src = read('ShopOrders.tsx');
+    // The field is actually consulted — not just present in a comment.
+    expect(stripComments(src)).toContain('truncated');
+    // …and it drives something drawn, rather than being read and dropped.
+    expect(stripComments(src)).toMatch(/truncated\s*\?\s*<TruncatedNotice/);
+  });
+
+  /**
+   * `nextCursor` IS NOT A CURSOR HERE and must not be wired to paging. The API
+   * sends it always-null beside the honest `truncated`, and a client that grew a
+   * "load more" off it would reintroduce the believed-null defect from the other
+   * side. The type declares it `null`; this pins that nothing pages on it.
+   */
+  it('ShopOrders.tsx does not page on the always-null nextCursor', () => {
+    expect(stripComments(read('ShopOrders.tsx'))).not.toContain('nextCursor');
   });
 });
