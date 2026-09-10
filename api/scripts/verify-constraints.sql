@@ -1027,6 +1027,167 @@ SELECT pg_temp.probe('14', 'a second settings row is refused', 'refused',
   'platform_settings_is_singleton');
 
 -- =========================================================================
+-- 15. erasure reaches the address, and cannot be faked — migration 0048
+-- =========================================================================
+-- DECISIONS.md #97. Item 7 put the first STREET in this product and
+-- `services/erasure.ts` was written before that data existed, so neither
+-- `member_address` nor `shop_order` was in its census. The job now DELETEs her
+-- book and SCRUBS the snapshot on her past orders.
+--
+-- WHY THAT NEEDED A SCHEMA CHANGE AT ALL, and why it is the interesting kind.
+-- `shop_order_delivery_has_an_address` refused the null-out, correctly: a
+-- delivery order with no street cannot be driven to. Erasure legitimately creates
+-- exactly that state, so it had to be admitted — and the two ways of admitting it
+-- are NOT equivalent. Relaxing the constraint would let `services/order.ts` commit
+-- a delivery whose snapshot it simply forgot to copy. A third arm gated on
+-- `address_erased_at` admits the deliberate state and keeps refusing the bug.
+--
+-- SO THESE FIVE PROBES ARE ABOUT THAT DISTINCTION, not about the null-out. Any
+-- one of them passing on its own proves nothing; 15a with 15b is the pair that
+-- says the constraint was NARROWED rather than WEAKENED.
+--
+-- The three `assert`s after them run over whatever the database actually holds,
+-- which is the half a CHECK cannot cover: a member erased by an older build, or
+-- by a path that missed one of the two copies.
+
+-- MUST SUCCEED. The state the erasure job needs, written the way the job writes
+-- it. If this is ever refused, erasure silently starts failing per-member into
+-- `result.failed` and her address survives — which is the defect #97 records,
+-- returning through the door that was built to close it.
+SELECT pg_temp.probe('15', 'an erased delivery snapshot is storable', 'allowed',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-ERASED-OK','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-8500,'settled',now());
+      INSERT INTO shop_order (transaction_id,salon_id,member_id,fulfilment,status,address_erased_at)
+      VALUES ('TX-ERASED-OK','SL-VERIFY','MB-VERIFY','delivery','preparing',now());
+    END $i$ $probe$);
+
+-- AND ON A CLOSED ORDER, which is the row that actually gets erased: a member is
+-- 30 days past a deletion request, so her deliveries have long since been handed
+-- over. Separate rather than folded into 15a because `closed` also has to satisfy
+-- `shop_order_ready_at_matches_status`, and one fixture tripping a DIFFERENT
+-- constraint is how an `allowed` probe fails for a reason nobody reads.
+SELECT pg_temp.probe('15', 'an erased snapshot on a closed order is storable', 'allowed',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-ERASED-CL','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-8500,'settled',now());
+      INSERT INTO shop_order (transaction_id,salon_id,member_id,fulfilment,status,
+                              ready_at,closed_at,address_erased_at)
+      VALUES ('TX-ERASED-CL','SL-VERIFY','MB-VERIFY','delivery','closed',now(),now(),now());
+    END $i$ $probe$);
+
+-- THE ONE THAT MATTERS. A delivery with no address and NO STAMP — which is what a
+-- handler that forgot the snapshot writes, and what a relaxed constraint would
+-- have let through. Still refused, so the guarantee 0045 bought is intact.
+SELECT pg_temp.probe('15', 'a delivery with no address and no stamp is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-NOADDR','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-8500,'settled',now());
+      INSERT INTO shop_order (transaction_id,salon_id,member_id,fulfilment,status)
+      VALUES ('TX-NOADDR','SL-VERIFY','MB-VERIFY','delivery','preparing');
+    END $i$ $probe$,
+  'shop_order_delivery_has_an_address');
+
+-- THE STAMP CANNOT BE A LABEL OVER LIVE DATA. "Erased" while the street is still
+-- on the row would be the worst possible outcome: a compliance report that says
+-- the address is gone, and an address.
+SELECT pg_temp.probe('15', 'a stamp beside a surviving street is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-BOTH','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-8500,'settled',now());
+      INSERT INTO shop_order (transaction_id,salon_id,member_id,fulfilment,status,
+                              block,street,building,address_erased_at)
+      VALUES ('TX-BOTH','SL-VERIFY','MB-VERIFY','delivery','preparing',
+              '4','Street 12','House 7',now());
+    END $i$ $probe$,
+  'shop_order_delivery_has_an_address');
+
+-- THE COORDINATES GO WITH THE STREET, and this is the probe that says so. A
+-- latitude/longitude pair with the street removed still locates the household
+-- exactly — about 0.1m at this latitude — so a "scrub" that kept them would be no
+-- scrub at all. The erased arm requires every component null, coordinates
+-- included.
+SELECT pg_temp.probe('15', 'an erased snapshot keeping its coordinates is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-COORD','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-8500,'settled',now());
+      INSERT INTO shop_order (transaction_id,salon_id,member_id,fulfilment,status,
+                              latitude,longitude,address_erased_at)
+      VALUES ('TX-COORD','SL-VERIFY','MB-VERIFY','delivery','preparing',
+              '29.336700','48.075300',now());
+    END $i$ $probe$,
+  'shop_order_delivery_has_an_address');
+
+-- A PICKUP HAS NO ADDRESS TO ERASE, so a stamped pickup is a bug rather than a
+-- privacy outcome — and left storable it would be the obvious place for a future
+-- job to record "nothing to do here", which is a fact about the job and not about
+-- the row.
+SELECT pg_temp.probe('15', 'a stamped pickup is refused', 'refused',
+  $probe$DO $i$ BEGIN
+      INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+      VALUES ('TX-PICKSTAMP','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-8500,'settled',now());
+      INSERT INTO shop_order (transaction_id,salon_id,member_id,fulfilment,status,address_erased_at)
+      VALUES ('TX-PICKSTAMP','SL-VERIFY','MB-VERIFY','pickup','preparing',now());
+    END $i$ $probe$,
+  'shop_order_delivery_has_an_address');
+
+-- ------------------------------------------------------------------------
+-- AND THE PART NO CHECK CAN COVER: WHAT THIS DATABASE ACTUALLY HOLDS.
+--
+-- The CHECK governs one row at a time and knows nothing about `member.erased_at`.
+-- These three cross the tables, so a member erased by a build that predates
+-- migration 0048 — or by a future path that reaches one copy and not the other —
+-- shows up as a FAIL naming her rather than as nothing at all. All three read
+-- clean on a database with no erasures, and say so.
+-- ------------------------------------------------------------------------
+SELECT pg_temp.assert('15', 'no erased member still has an address book',
+  NOT EXISTS (
+    SELECT 1 FROM member_address a
+      JOIN member m ON m.id = a.member_id
+     WHERE m.erased_at IS NOT NULL
+  ),
+  (SELECT CASE
+     WHEN count(*) FILTER (WHERE erased_at IS NOT NULL) = 0
+       THEN 'no erased members in this database yet'
+     ELSE count(*) FILTER (WHERE erased_at IS NOT NULL) || ' erased member(s) checked' END
+     FROM member));
+
+SELECT pg_temp.assert('15', 'no erased member''s order still carries her address',
+  NOT EXISTS (
+    SELECT 1 FROM shop_order o
+      JOIN member m ON m.id = o.member_id
+     WHERE m.erased_at IS NOT NULL
+       AND (o.address_id IS NOT NULL OR o.address_label IS NOT NULL
+         OR o.block IS NOT NULL OR o.street IS NOT NULL OR o.building IS NOT NULL
+         OR o.floor IS NOT NULL OR o.apartment IS NOT NULL
+         OR o.area IS NOT NULL OR o.governorate IS NOT NULL
+         OR o.instructions IS NOT NULL
+         OR o.latitude IS NOT NULL OR o.longitude IS NOT NULL)
+  ),
+  (SELECT CASE
+     WHEN count(*) = 0 THEN 'no orders for erased members in this database yet'
+     ELSE count(*) || ' order(s) of erased members checked' END
+     FROM shop_order o JOIN member m ON m.id = o.member_id
+    WHERE m.erased_at IS NOT NULL));
+
+-- The order and its money SURVIVE the erasure, and that is asserted rather than
+-- assumed: `ledger_entry.transaction_id` is `ON DELETE restrict` and a money row
+-- does not disappear because a customer left. An erased snapshot with no
+-- transaction behind it would mean somebody solved #97 by deleting the order.
+SELECT pg_temp.assert('15', 'every erased snapshot still has its settled transaction',
+  NOT EXISTS (
+    SELECT 1 FROM shop_order o
+     WHERE o.address_erased_at IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM transaction t
+          WHERE t.id = o.transaction_id AND t.kind = 'shop' AND t.status = 'settled')
+  ),
+  (SELECT CASE
+     WHEN count(*) = 0 THEN 'no erased snapshots in this database yet'
+     ELSE count(*) || ' erased snapshot(s) checked' END
+     FROM shop_order WHERE address_erased_at IS NOT NULL));
+
+-- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST
 -- =========================================================================
 \pset format aligned

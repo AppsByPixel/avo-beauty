@@ -144,6 +144,23 @@ export const shopOrder = pgTable(
     latitude: coordinate('latitude'),
     longitude: coordinate('longitude'),
 
+    /**
+     * SET ONLY BY `services/erasure.ts`, and the reason it is a column rather
+     * than a relaxed CHECK. (DECISIONS.md #97, migration 0048.)
+     *
+     * Erasure legitimately creates the one state
+     * `shop_order_delivery_has_an_address` forbids: a delivery order with no
+     * address. Dropping the three `IS NOT NULL`s to admit it would also admit
+     * the BUG the constraint exists for — an order path that forgot to copy the
+     * snapshot. This stamp makes the erased state REPRESENTABLE instead: the
+     * live-delivery arm now requires it to be NULL, the erased arm requires it
+     * to be set, and `services/order.ts` never writes it. So a forgotten
+     * snapshot is refused exactly as before.
+     *
+     * A pickup can never carry it — there was no address to erase.
+     */
+    addressErasedAt: timestamptz('address_erased_at'),
+
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     readyAt: timestamptz('ready_at'),
@@ -153,18 +170,35 @@ export const shopOrder = pgTable(
     index('shop_order_salon_status_idx').on(t.salonId, t.status, t.createdAt.desc()),
     index('shop_order_member_idx').on(t.memberId, t.createdAt.desc()),
     /**
-     * A delivery HAS the three required parts; a pickup has NONE of them. One
-     * CHECK rather than three, so "pickup with a street" is not a storable state
+     * A LIVE delivery HAS the three required parts; a pickup has NONE of them;
+     * an ERASED delivery has none of them and says so. One CHECK rather than
+     * three columns' worth, so "pickup with a street" is not a storable state
      * — pickup is a fork, not a delivery with empty fields.
      *
-     * Restated from migration 0045 so it is legible from the schema too; the
-     * migration is the authority.
+     * THE THIRD ARM IS MIGRATION 0048 AND DECISIONS.md #97. Erasure has to reach
+     * the snapshot — a street beside a member row reading "Deleted account" is
+     * the worst of the two outcomes — and this is the version of admitting it
+     * that does not also admit a forgotten snapshot. `address_erased_at IS NULL`
+     * on the live arm is the half that keeps the original guarantee: a row
+     * cannot carry a street and an erasure stamp at once.
+     *
+     * Restated from migration 0048 so it is legible from the schema too; the
+     * migration is the authority and carries the full argument.
      */
     check(
       'shop_order_delivery_has_an_address',
       sql`(${t.fulfilment} = 'delivery'
+             AND ${t.addressErasedAt} IS NULL
              AND ${t.block} IS NOT NULL AND ${t.street} IS NOT NULL AND ${t.building} IS NOT NULL)
+          OR (${t.fulfilment} = 'delivery'
+             AND ${t.addressErasedAt} IS NOT NULL
+             AND ${t.addressId} IS NULL AND ${t.addressLabel} IS NULL
+             AND ${t.block} IS NULL AND ${t.street} IS NULL AND ${t.building} IS NULL
+             AND ${t.floor} IS NULL AND ${t.apartment} IS NULL AND ${t.area} IS NULL
+             AND ${t.governorate} IS NULL AND ${t.instructions} IS NULL
+             AND ${t.latitude} IS NULL AND ${t.longitude} IS NULL)
           OR (${t.fulfilment} = 'pickup'
+             AND ${t.addressErasedAt} IS NULL
              AND ${t.addressId} IS NULL AND ${t.addressLabel} IS NULL
              AND ${t.block} IS NULL AND ${t.street} IS NULL AND ${t.building} IS NULL
              AND ${t.floor} IS NULL AND ${t.apartment} IS NULL AND ${t.area} IS NULL

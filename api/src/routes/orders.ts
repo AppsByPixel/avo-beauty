@@ -42,7 +42,41 @@ import { writeAudit } from '../services/audit';
  */
 const ORDERS_PAGE = 200;
 
-/** The fulfilment, as both surfaces read it. Delivery fields are null for pickup. */
+/**
+ * The fulfilment, as both surfaces read it. Delivery fields are null for pickup.
+ *
+ * AND `address: null` FOR A DELIVERY WHOSE SNAPSHOT WAS ERASED, which is a THIRD
+ * state and is the one a merchant will actually meet. (DECISIONS.md #97,
+ * migration 0048.) `services/erasure.ts` nulls every address column on her past
+ * orders and stamps `address_erased_at`; this is what that looks like on the
+ * wire.
+ *
+ * WHY THE PAIR IS ENOUGH, AND WHY THERE IS NO NEW FIELD. A merchant board reading
+ * `fulfilment: 'delivery'` with `address: null` has an unambiguous fact: a LIVE
+ * delivery is CHECKed to carry block, street and building, so this pair cannot
+ * arise any other way — not from a pickup (`fulfilment` says so), not from a
+ * forgotten snapshot (the database refuses one). A client can render "Address
+ * removed" from it today, with no schema change, and `ShopOrderSchema.address` is
+ * already `.nullable()`, so `contract.test.ts` needs nothing either.
+ *
+ * WHAT WAS DELIBERATELY NOT SERVED: the DATE. `address_erased_at` would tell a
+ * salon WHEN a customer it can still name asked to be erased — a fact about her,
+ * not about the order she placed — and saying too much here re-identifies by
+ * implication. The column exists for the job and for SQL, not for the board.
+ *
+ * SILENCE WAS THE OTHER WRONG ANSWER. Serving the row with the address object
+ * present and its fields blank would read as a broken screen and invite a
+ * merchant to go looking for the street; `null` says the field is gone rather
+ * than missing.
+ *
+ * ONE CONSEQUENCE IS OUTSIDE THIS LANE AND IS FLAGGED RATHER THAN FIXED.
+ * `apps/dashboard/src/routes/ShopOrders.tsx` renders its null-address branch as
+ * "Collecting at the salon" — correct while `address === null` meant pickup, and
+ * a FALSE SENTENCE about an erased delivery, which the row's own Delivery pill
+ * contradicts in the next cell. The fix is one condition keyed on `fulfilment`
+ * rather than on the address, and `apps/dashboard/` is lane C's column
+ * (CLAUDE.md § Lanes). Reported in the lane handoff.
+ */
 function serialiseShopOrder(row: typeof shopOrder.$inferSelect) {
   return {
     transactionId: row.transactionId,
@@ -50,7 +84,7 @@ function serialiseShopOrder(row: typeof shopOrder.$inferSelect) {
     status: row.status,
     /** The SNAPSHOT — what she typed when she ordered, not what her book says now. */
     address:
-      row.fulfilment === 'delivery'
+      row.fulfilment === 'delivery' && row.addressErasedAt === null
         ? {
             id: row.addressId,
             label: row.addressLabel,
