@@ -296,11 +296,27 @@ export async function teardown(): Promise<void> {
     }
   }
 
-  if (!child) return;
-  child.kill('SIGTERM');
-  const exited = new Promise<void>((r) => child?.once('exit', () => r()));
-  await Promise.race([exited, new Promise((r) => setTimeout(r, 3000))]);
-  if (child.exitCode === null) child.kill('SIGKILL');
+  /*
+   * WAS `if (!child) return`, AND THE EARLY RETURN IS WHY IT IS NOT ANY MORE.
+   * The census verdict is raised at the very bottom of this function, so any
+   * path that leaves early is a path where a real regression is silently
+   * dropped — and `!child` is the ordinary shape of an `E2E_BASE_URL` run
+   * against an API this file did not boot, not an exotic one.
+   */
+  if (child) {
+    child.kill('SIGTERM');
+    const exited = new Promise<void>((r) => child?.once('exit', () => r()));
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 3000))]);
+    if (child.exitCode === null) child.kill('SIGKILL');
+  }
+
+  /*
+   * LAST, AFTER EVERY CLEANUP STEP ABOVE HAS RUN. The database is given back,
+   * the session cache and log are gone and the mock is down before this throws,
+   * so a red census cannot leak a minted database or leave a process behind.
+   * See `censusVerdict`.
+   */
+  if (censusVerdict) throw new Error(censusVerdict);
 }
 
 /**
@@ -334,6 +350,34 @@ async function removeSessionCache(): Promise<void> {
 }
 
 /**
+ * The most members a FULL run may leave drifting from their wallet ledger.
+ *
+ * 13 on 2026-09-11, measured twice: `9001`, both `QA-ADJ-000n`, the four
+ * `QA-CMP-000n`, `QA-DEP-0001`, `QA-GW-0001`, `QA-NSW-0001`, `QA-ORD-0001` and
+ * both `QA-RES-000n`. Every one has a named cause in the block below.
+ *
+ * THIS NUMBER ONLY EVER GOES DOWN, one file at a time, as fixtures adopt
+ * `reconcileWalletLedger` — `reports.test.ts` and `account.test.ts` are the two
+ * that already did, and they are why it is 13 and not 15. Raising it is not
+ * forbidden and is sometimes right, but it is a decision that needs a sentence
+ * saying which member was added and why its balance cannot come from a real
+ * ledger pair. Lowering it when a file adopts the pattern is the whole point.
+ */
+const MAX_DRIFTING_MEMBERS = 13;
+
+/**
+ * Set by `reportWalletDrift` when the cap is exceeded, raised by `teardown` only
+ * AFTER every cleanup step has run.
+ *
+ * NOT THROWN WHERE IT IS DETECTED, AND THE ORDER IS THE REASON. `teardown` calls
+ * `reportWalletDrift` FIRST, before `dropRunDatabaseIfOurs`. A throw at the
+ * detection site would skip the drop and leak this run's minted database — the
+ * exact failure `dropRunDatabaseIfOurs`'s "nothing here is worth failing a run
+ * over" exists to prevent, reintroduced by the gate meant to improve things.
+ */
+let censusVerdict: string | null = null;
+
+/**
  * THE WALLET RECONCILIATION CENSUS — `db:verify` invariant 5, measured over
  * everything this run left behind, and PRINTED EVERY TIME.
  *
@@ -349,7 +393,9 @@ async function removeSessionCache(): Promise<void> {
  * guaranteed to run after every file and before the database is given back, so
  * this is the only place the question can be asked once about everything.
  *
- * WHY IT IS A CENSUS AND NOT AN ASSERTION, WHICH IS THE WHOLE DESIGN DECISION.
+ * WHY IT WAS A CENSUS AND NOT AN ASSERTION, AND WHY IT IS NOW A CAPPED CENSUS.
+ *
+ * THE ORIGINAL DECISION, KEPT VERBATIM BECAUSE IT IS STILL THREE-QUARTERS RIGHT.
  * Drift here is not always a defect. `adjustments.test.ts` § `fund()` sets
  * `balance_fils` with SQL on purpose, because a shortfall spec needs a specific
  * balance and there is no endpoint that produces one; that member will always
@@ -357,6 +403,41 @@ async function removeSessionCache(): Promise<void> {
  * technique, and — worse — it would fail in a run teardown, which cannot name
  * the file that wrote the row and cannot be reproduced by re-running that file
  * alone. It would also turn one lane's fixture debt into every lane's red gate.
+ *
+ * WHAT CHANGED, AND IT IS EVIDENCE RATHER THAN AN OPINION. That decision rests
+ * on "the number is the signal, and a number that grows names the fixture that
+ * grew it", which presupposes somebody reads the number. Nobody did. The count
+ * moved 7 → 11 and this comment sat four members out of date across every run in
+ * between, still naming as broken two members that had been fixed. A signal no
+ * one reads is not a signal, and that is the one premise the original decision
+ * could not check about itself.
+ *
+ * SO IT IS A CAP, NOT AN ASSERTION, AND THE DIFFERENCE ANSWERS THE FIRST TWO
+ * OBJECTIONS EXACTLY. `MAX_DRIFTING_MEMBERS` bounds HOW MANY members may drift;
+ * it says nothing about WHICH. `fund()`'s member keeps drifting and the cap does
+ * not care. Nothing is permanently red for a legitimate technique, and there is
+ * no hand-kept list of expected drifters to rot the way `DYNAMIC_PERMISSION`
+ * did — one integer, changed deliberately, with the reason in the commit.
+ *
+ * A PARTIAL RUN CANNOT FALSELY TRIP IT, which is why the bound is on DRIFTERS
+ * and not on reconcilers. `vitest run one-file.test.ts` leaves a SUBSET of the
+ * members a full run leaves, so its drifter count is a subset count and can
+ * never exceed the full-run cap. A floor on reconcilers would have gone red on
+ * every single-file run, which is the shape that teaches people to disable a
+ * gate.
+ *
+ * THE OTHER TWO OBJECTIONS SURVIVE AND ARE THE PRICE. A teardown failure still
+ * cannot be reproduced by re-running one file, and it still lands in the run of
+ * whoever comes next rather than whoever wrote the row. The message does what
+ * can be done about the first — it names every drifting member and the amount,
+ * and member ids map to files by convention (`QA-RPT-…` → `reports.test.ts`) —
+ * but the second is real and is accepted knowingly, because the alternative is
+ * the state this instrument was actually in: correct, ignored, and stale.
+ *
+ * THIS OVERRIDES A WRITTEN DECISION AND SAYS SO ON PURPOSE. It was made on
+ * Aftab's instruction after the tension above was put to him. If the red gate in
+ * other lanes' runs turns out to cost more than the staleness did, the honest
+ * revert is to delete the cap and keep this paragraph.
  *
  * A WARNING THAT FIRES EVERY RUN IS NOISE PEOPLE LEARN TO READ PAST — this
  * repository has written that sentence about a stale comment, a cached green and
@@ -370,35 +451,50 @@ async function removeSessionCache(): Promise<void> {
  *
  *     7 of 24 members reconcile to their wallet ledger
  *
- * which is the number this line exists to make visible, because nobody knew it.
+ * WHAT IT MEASURES NOW, over the full 41-file suite, twice on 2026-09-11:
+ *
+ *     11 of 24 members reconcile to their wallet ledger
+ *
+ * THE COUNT WENT UP BY FOUR AND THIS BLOCK WENT STALE BEHIND IT, which is worth
+ * recording as plainly as the number: the paragraphs below described the drift
+ * set as it was the day the census landed and named two members as drifting that
+ * had since been fixed BY THE VERY MECHANISM those paragraphs recommend. Nobody
+ * noticed, because a printed line with nothing asserting it is read once — see
+ * the cap at the bottom of this block, which is the answer to that.
+ *
  * Every drifter is a fixture member whose balance was INSERTed or UPDATEd by
  * SQL, and the SIGN tells you which kind:
  *
  *   POSITIVE — the balance is ahead of the ledger. An opening balance with no
  *       originating entry: the harness's own `9001`, and one per file that
- *       clones a member with a balance (`QA-RPT-0001` 200.000, `QA-RES-000{1,2}`
- *       200.000 each, `QA-DEP-0001`, `QA-NSW-0001`, `QA-ORD-0001`, the four
- *       `QA-CMP-000n`). The standing convention in this directory, and a real
- *       gap: `api/src/db/seed.ts` § "the opening balances" settled that an
- *       opening balance is a real credit and gets a real pair, and the
- *       convention here never caught up.
+ *       clones a member with a balance (`QA-RES-000{1,2}` 200.000 each,
+ *       `QA-DEP-0001`, `QA-NSW-0001`, `QA-ORD-0001`, the four `QA-CMP-000n`).
+ *       The standing convention in this directory, and a real gap:
+ *       `api/src/db/seed.ts` § "the opening balances" settled that an opening
+ *       balance is a real credit and gets a real pair, and the convention here
+ *       never caught up.
  *   NEGATIVE — the LEDGER is ahead of the balance, and this is the shape worth
- *       looking at twice. `QA-ACC-0001` by −8.000 and `QA-GW-0001` by −239.000
- *       when this landed. It means wallet legs exist that the balance does not
+ *       looking at twice. It means wallet legs exist that the balance does not
  *       reflect, which is either a fixture that reset `balance_fils` after the
- *       API had moved it, or a real cached-aggregate defect. On these two it is
- *       the former, and each has a named cause: `account.test.ts` § `setBalance`
- *       UPDATEs hers on purpose, and `QA-GW-0001`'s is reset by this harness's
- *       own `seedQaMember()` — which runs once per FILE, so every charge an
- *       earlier file drove through her is still in the ledger with the balance
- *       wound back. A negative drift on a member NOBODY re-fixtures would be the
- *       other thing, and is what this census is for.
+ *       API had moved it, or a real cached-aggregate defect. Exactly ONE member
+ *       is negative today — `QA-GW-0001` by −239.000 — and it has a named cause:
+ *       she is `QA_MEMBER`, reset by this harness's own `seedQaMember()`, which
+ *       runs once per FILE, so every charge an earlier file drove through her is
+ *       still in the ledger with the balance wound back. A negative drift on a
+ *       member NOBODY re-fixtures would be the other thing, and is what this
+ *       census is for. There is no such member today.
  *   `adjustments.test.ts`'s two, whatever it last funded. LEGITIMATE, per above.
  *
- * `reports-applied-deposit.test.ts` is the one file here whose member does NOT
- * drift, because it posts her opening balance the way the seed does. That is the
- * pattern the rest of this directory could adopt one file at a time, and this
- * count is how anyone would know it was working.
+ * TWO MEMBERS LEFT THIS LIST AND THE CORRECTION IS THE POINT OF THE INSTRUMENT.
+ * `QA-RPT-0001` was listed above as a positive drifter and `QA-ACC-0001` as a
+ * negative one, and this block used to end "`reports-applied-deposit.test.ts` is
+ * the one file here whose member does NOT drift". All three statements are false
+ * now. `reports.test.ts` § `afterAll` calls `reconcileWalletLedger` for both its
+ * members (and `account.test.ts` § `afterAll` for both of its own, for the
+ * `setBalance` reason the NEGATIVE note used to carry) — so the pattern this
+ * block recommends is being adopted one file at a time, exactly as predicted,
+ * and the count is how anyone would know it was working. It worked; nothing
+ * said so for four members.
  */
 async function reportWalletDrift(): Promise<void> {
   if (!process.env.AVO_QA_DB) return;
@@ -431,6 +527,27 @@ async function reportWalletDrift(): Promise<void> {
     if (!line) return;
     // eslint-disable-next-line no-console
     console.log(`[lane D] wallet census (db:verify invariant 5) — ${line}`);
+
+    /*
+     * `11 of 24 members reconcile …; drifting: a by N fils, b by M fils`.
+     * The drifters are the comma-separated list after the colon; no colon means
+     * none drifted. Counted off the printed line rather than re-queried, so the
+     * number the gate acts on is provably the number a reader was just shown.
+     */
+    const listed = line.split('; drifting: ')[1];
+    const drifting = listed ? listed.split(', ').length : 0;
+    if (drifting > MAX_DRIFTING_MEMBERS) {
+      censusVerdict =
+        `wallet census: ${drifting} members drift from their wallet ledger, and the cap is ` +
+        `${MAX_DRIFTING_MEMBERS}.\n  ${listed}\n\n` +
+        'A fixture wrote `balance_fils` by SQL without the ledger pair that accounts for it — ' +
+        'a balance with no originating entry, per api/src/db/seed.ts § "the opening balances". ' +
+        'Member ids map to files by convention (QA-RPT-… → reports.test.ts), and the fix is a ' +
+        '`reconcileWalletLedger(member, branch, tag)` in that file\'s afterAll, the way ' +
+        'reports.test.ts and account.test.ts do it. If the new drifter is deliberate and its ' +
+        'balance genuinely cannot come from a real ledger pair, raise MAX_DRIFTING_MEMBERS in ' +
+        'support/global-setup.ts and say which member and why.';
+    }
   } catch {
     /* nothing here is worth failing a run over — see dropRunDatabaseIfOurs */
   }
