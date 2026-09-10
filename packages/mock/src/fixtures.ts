@@ -67,7 +67,19 @@ export const salon: Salon = {
     { id: 'snapchat', label: 'Snapchat', handle: '', on: false },
     { id: 'whatsapp', label: 'WhatsApp', handle: '+96522334455', on: true },
   ],
+  /*
+   * BOTH TRUE, which is the migration's own backfill and the behaviour that
+   * shipped — email was already queued whenever there was a verified address.
+   *
+   * The mock has ONE salon, so it cannot also carry the interesting cases: a
+   * salon with WhatsApp off (the seed's SAL-LUMIERE, which is what decision 88's
+   * defect was queueing WhatsApp receipts for) or email off. Those live in
+   * `api/src/routes/receiptChannel.int.test.ts` against the real database, where
+   * the `salon_receipt_channel_floor` CHECK can actually refuse the both-off
+   * state. Recorded so nobody reads one fixture as the whole matrix.
+   */
   whatsappEnabled: true,
+  emailEnabled: true,
 };
 
 export const member: Member = {

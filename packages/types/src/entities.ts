@@ -186,7 +186,26 @@ export const SalonSchema = z.object({
   businessHours: BusinessHoursSchema,
   branches: z.array(BranchSchema),
   social: z.array(SocialLinkSchema),
+  /**
+   * Which channels a receipt may go out on. **A salon cannot have both off** —
+   * `salon_receipt_channel_floor` is a database CHECK, not a handler's memory,
+   * because a receipt is a record-keeping obligation rather than marketing
+   * (`design/README.md` § Known gaps 7) and a merchant's channel preference must
+   * not be able to produce silence.
+   *
+   * `whatsappEnabled` EXISTED AND WAS NEVER CONSULTED — stored, merchant-editable,
+   * served to every client, and absent from the receipt path, so a salon that had
+   * turned WhatsApp off still had WhatsApp receipts queued for every charge
+   * (decision 88). `emailEnabled` arrives alongside the fix.
+   *
+   * WhatsApp is the floor, and the schema decides that rather than a preference:
+   * `member.phone` is NOT NULL while `member.email` is nullable and needs
+   * verifying, so exactly one combination is dangerous — email-only for a
+   * customer with no verified address. A merchant chooses a *preference*; she does
+   * not override the rule about where a customer's balance may be sent.
+   */
   whatsappEnabled: z.boolean(),
+  emailEnabled: z.boolean(),
 });
 
 // ----------------------------------------------------------------- member --
