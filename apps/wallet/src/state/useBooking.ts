@@ -46,6 +46,14 @@ import {
   type BookingView,
 } from '../api/booking';
 import { dayStrip, salonDate, type StripDay } from '../domain/booking';
+import {
+  ALL_BRANCHES,
+  branchChoices,
+  branchQuery,
+  sameChoice,
+  type BranchChoice,
+  type RosterSplit,
+} from '../domain/branchPicker';
 
 export type StepName = 'service' | 'artist' | 'day' | 'review' | 'confirmed';
 
@@ -88,6 +96,26 @@ export interface BookingController {
   services: LoadState<BookableService[]>;
   artists: LoadState<BookableArtist[]>;
   availability: LoadState<Availability>;
+
+  /**
+   * THE BRANCH SWITCH -- step 2's filter strip, not a fifth step.
+   *
+   * `branchOptions` is EMPTY when there should be no strip at all, which is the
+   * common case: a single-branch salon, or a salon whose artists are all
+   * unassigned. `domain/branchPicker.ts` owns that rule and argues it at
+   * length. The one thing to know here is that a branch is never sent to
+   * `POST /bookings` -- it filters the roster, and the booking's branch is
+   * derived server-side from the artist she picks.
+   */
+  branchOptions: BranchChoice[];
+  branchChoice: BranchChoice;
+  /**
+   * The unfiltered roster's split, or null while it is unknown. Read from the
+   * UNFILTERED mount read and never from a filtered one, so tapping a branch
+   * with no artists cannot make the strip she needs disappear.
+   */
+  rosterSplit: RosterSplit | null;
+  pickBranch: (choice: BranchChoice) => void;
 
   strip: StripDay[];
   selectedDate: string | null;
@@ -154,6 +182,25 @@ export function useBooking(options: {
   const [reloadToken, setReloadToken] = useState(0);
 
   /**
+   * The selected filter, and the unfiltered roster's split.
+   *
+   * `ALL_BRANCHES` is the default, and `branchQuery` maps it to no parameter at
+   * all -- so a salon with no strip issues exactly the request this app issued
+   * before the picker existed.
+   */
+  const [branchChoice, setBranchChoice] = useState<BranchChoice>(ALL_BRANCHES);
+  const [rosterSplit, setRosterSplit] = useState<RosterSplit | null>(null);
+
+  /**
+   * MORE THAN ONE OPEN BRANCH IS THE ONLY REASON TO ASK THE SECOND QUESTION.
+   *
+   * `salon.branches` carries only OPEN branches. Below two there is no strip
+   * whatever the roster looks like, so the `?branch=unassigned` read below is
+   * not made at all and a single-branch salon's network traffic is unchanged.
+   */
+  const multiBranch = salon.branches.length >= 2;
+
+  /**
    * The strip is computed ONCE per mount from one instant.
    *
    * Recomputing it on every render would let the strip shift under the
@@ -180,10 +227,23 @@ export function useBooking(options: {
     return () => controller.abort();
   }, [salon.id, reloadToken]);
 
+  /**
+   * The roster she is looking at -- re-read when the branch filter changes.
+   *
+   * ONE EFFECT FOR BOTH the unfiltered mount read and every filtered re-read,
+   * because they are the same question asked with a different parameter. Two
+   * effects would be two loading states and two ways to leave one of them set.
+   *
+   * The 400 an unrecognised `?branch=` earns (`invalid_branch_filter`) arrives
+   * here as an ordinary failure and renders the failure screen. That is right:
+   * the strip cannot produce such a value, so one appearing is a bug in this
+   * app, and the API refusing it by name rather than ignoring it is what makes
+   * the bug visible instead of silently showing the whole roster.
+   */
   useEffect(() => {
     const controller = new AbortController();
     setArtists({ status: 'loading' });
-    getArtists(salon.id, controller.signal)
+    getArtists(salon.id, branchQuery(branchChoice), controller.signal)
       // NO CLIENT-SIDE `active` FILTER, AND ITS ABSENCE IS THE POINT.
       //
       // This used to be `data.filter((a) => a.active)` against the merchant
@@ -202,7 +262,51 @@ export function useBooking(options: {
         setArtists({ status: 'failed', failure: toFailure(err) });
       });
     return () => controller.abort();
-  }, [salon.id, reloadToken]);
+  }, [salon.id, reloadToken, branchChoice]);
+
+  /**
+   * HOW MANY ARTISTS HAVE NO BRANCH -- the strip's whole visibility rule.
+   *
+   * A separate read, and it has to be one: `GET /artists/bookable` serves five
+   * fields and `branchId` is not among them, so the split is not derivable from
+   * the roster this screen already holds. `?branch=unassigned` is the API's own
+   * first-class filter value for exactly this question.
+   *
+   * KEYED ON `[salon.id, reloadToken]` AND NOT ON THE FILTER, deliberately.
+   * This is the UNFILTERED split; recomputing it per selection would let a
+   * branch chip with no artists report `total: 0`, conclude nothing is
+   * assigned, and remove the strip the customer is standing in.
+   *
+   * `total` COMES FROM ITS OWN UNFILTERED READ rather than from `artists`
+   * above, which by then may hold a filtered list. Two reads, one instant, no
+   * ordering assumption between them.
+   *
+   * A FAILURE HERE IS NOT A FAILED SCREEN. If the split cannot be read, the
+   * strip stays absent and step 2 renders exactly as it does today -- the
+   * roster is what she needs, and losing a filter is not worth losing the
+   * booking flow over. The failure of the read that matters is already surfaced
+   * by the effect above.
+   */
+  useEffect(() => {
+    if (!multiBranch) {
+      setRosterSplit(null);
+      return;
+    }
+    const controller = new AbortController();
+    setRosterSplit(null);
+    Promise.all([
+      getArtists(salon.id, undefined, controller.signal),
+      getArtists(salon.id, 'unassigned', controller.signal),
+    ])
+      .then(([all, unassigned]) =>
+        setRosterSplit({ total: all.length, unassigned: unassigned.length }),
+      )
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setRosterSplit(null);
+      });
+    return () => controller.abort();
+  }, [salon.id, reloadToken, multiBranch]);
 
   /**
    * The grid, re-read whenever the artist or the day changes.
@@ -250,6 +354,27 @@ export function useBooking(options: {
 
   const pickService = useCallback((service: BookableService) => {
     setServiceId(service.id);
+    setConfirmFailure(null);
+  }, []);
+
+  /**
+   * Narrow the roster to a location -- or to the artists who have none.
+   *
+   * IT CLEARS THE ARTIST AND THE SLOT, for the same reason `pickArtist` clears
+   * the slot: the artist she had picked may not be in the list she is about to
+   * see, and a selection that survives out of view is a Continue button that
+   * looks enabled for a row nobody can point at. `selectedArtist` is derived
+   * from the visible list, so it would already read null -- clearing `artistId`
+   * as well means there is no hidden second answer to "who is booked" waiting
+   * to reappear if she taps back to All.
+   *
+   * The strip does NOT re-render itself out of existence on a filter change:
+   * `rosterSplit` is keyed off the unfiltered read, so it does not move here.
+   */
+  const pickBranch = useCallback((choice: BranchChoice) => {
+    setBranchChoice((current) => (sameChoice(current, choice) ? current : choice));
+    setArtistId(null);
+    setSelectedSlot(null);
     setConfirmFailure(null);
   }, []);
 
@@ -343,6 +468,17 @@ export function useBooking(options: {
   const retryLoad = useCallback(() => setReloadToken((t) => t + 1), []);
   const clearShortfall = useCallback(() => setShortfallFils(null), []);
 
+  /**
+   * The chips, or an empty array meaning "no strip". `branches` is passed
+   * straight through -- the salons route serves only OPEN branches, which is
+   * the same reading `resolveBranch` takes when it decides whether a branch was
+   * established.
+   */
+  const branchOptions = useMemo(
+    () => branchChoices({ branches: salon.branches, split: rosterSplit }),
+    [salon.branches, rosterSplit],
+  );
+
   const stepIndex = step === 'service' ? 1 : step === 'artist' ? 2 : step === 'day' ? 3 : 4;
 
   return {
@@ -351,6 +487,9 @@ export function useBooking(options: {
     services,
     artists,
     availability,
+    branchOptions,
+    branchChoice,
+    rosterSplit,
     strip,
     selectedDate,
     selectedService,
@@ -361,6 +500,7 @@ export function useBooking(options: {
     submitting,
     result,
     rescheduling,
+    pickBranch,
     pickService,
     pickArtist,
     pickDay,

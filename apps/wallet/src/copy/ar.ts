@@ -575,6 +575,19 @@ export const ar: Copy = {
   chooseService: 'اختاري الخدمة', // design:1347
   chooseArtist: 'اختاري المصففة', // design:1347
   chooseDay: 'اختاري اليوم', // design:1348
+
+  // The branch strip. NOT IN THE BUNDLE, and owed in Arabic just as much as in
+  // English -- non-negotiable #12, Arabic is a first-class layout and not a
+  // translation pass. Feminine address forms throughout, matching
+  // `اختاري المصففة` above: `مصففات أخريات` is feminine plural, and
+  // `جرّبي` is the feminine imperative.
+  branchFilterAll: 'كل الفروع',
+  branchFilterOther: 'مصففات أخريات',
+  branchFilterOtherNote: 'لم يحدّد الصالون فرعاً لهؤلاء المصففات بعد.',
+  branchEmptyTitle: 'لا مصففات في هذا الفرع',
+  branchEmptyBody: 'جرّبي فرعاً آخر، أو اختاري كل الفروع لرؤية الجميع.',
+  artistsEmptyTitle: 'لا مصففات متاحة للحجز',
+  artistsEmptyBody: 'لم يُضِف هذا الصالون أي مصففة للحجز بعد.',
   morning: 'صباحاً', // design:1348
   evening: 'مساءً', // design:1348
   review: 'المراجعة', // design:1348

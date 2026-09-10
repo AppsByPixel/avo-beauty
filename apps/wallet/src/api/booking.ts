@@ -221,9 +221,42 @@ export function getServices(salonId: string, signal?: AbortSignal): Promise<Book
  * when; `slotMinutes` arrives pre-sliced in the grid; `active` is the filter, so
  * emitting it would say `true` on every row.
  */
-export function getArtists(salonId: string, signal?: AbortSignal): Promise<BookableArtist[]> {
+/**
+ * `?branch=` IS THE CUSTOMER'S BRANCH SWITCH, and it is a FILTER, not an
+ * assertion. Migration 0044: an artist belongs to one branch, so a booking's
+ * branch is derived from the artist she picks. `createBooking` below still sends
+ * only `{artistId, serviceId, startsAt}` and the API refuses a `branchId` by
+ * name -- a client naming its own branch is a client choosing its own
+ * multiplier.
+ *
+ * Three legal values, and `domain/branchPicker.ts § branchQuery` is what maps a
+ * chip to one: a branch id, `unassigned`, or omitted. ANYTHING ELSE IS A 400
+ * `invalid_branch_filter` RATHER THAN AN IGNORED PARAMETER, deliberately -- a
+ * filter that silently does nothing returns the whole roster, which reads as
+ * "all of these are at that branch". So this passes the value through untouched
+ * rather than sanitising it into silence; a bad value is a bug in this app and
+ * should arrive as one.
+ *
+ * `undefined` omits the parameter entirely, which is byte-identical to the
+ * request this app made before the picker existed. See § branchQuery for why
+ * that matters more than sending `?branch=all`.
+ *
+ * NOTE THE RESPONSE DOES NOT CARRY `branchId`. `BookableArtist` is five fields
+ * and where she works is not one of them -- so "which of these artists has no
+ * branch" is NOT derivable from an unfiltered read, and the picker gets the
+ * count by asking for `unassigned` explicitly. That is a second request rather
+ * than a widened response: widening a customer-facing payload to carry a field
+ * only the strip's visibility rule reads would put the salon's staffing layout
+ * on the wire for every roster read.
+ */
+export function getArtists(
+  salonId: string,
+  branch?: string | undefined,
+  signal?: AbortSignal,
+): Promise<BookableArtist[]> {
+  const query = branch === undefined ? '' : `?branch=${encodeURIComponent(branch)}`;
   return getJson(
-    `/salons/${encodeURIComponent(salonId)}/artists/bookable`,
+    `/salons/${encodeURIComponent(salonId)}/artists/bookable${query}`,
     BookableArtistPageSchema,
     signal,
   ).then((page) => page.items);

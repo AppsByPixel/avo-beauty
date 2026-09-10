@@ -645,6 +645,33 @@ export interface Copy {
   evening: string;
   review: string;
 
+  /**
+   * book -- step 2's branch filter strip. (migration 0044)
+   *
+   * NOT IN THE DESIGN BUNDLE. `AVO Wallet Home.dc.html` draws three booking
+   * steps and no branch step, so every string below is new rather than
+   * transcribed, and all seven are OWED TO THE COPYWRITER in both languages.
+   * They are written to the vocabulary of the steps that exist -- the uppercase
+   * micro label of :534/:547/:565 and the day strip's chips -- rather than to a
+   * fourth visual language.
+   *
+   * `branchFilterOther` is the one to argue about. It names the artists whose
+   * `branch_id` is NULL, which is most artists today and is NOT an error.
+   * "Unassigned" is the API's word and staff vocabulary; "Any branch" would be
+   * a lie, since nobody has said she works at all of them. "Other artists" is
+   * true relative to the branch chips beside it and claims no location.
+   */
+  branchFilterAll: string;
+  branchFilterOther: string;
+  /** Shown under the strip while the Other artists group is selected. */
+  branchFilterOtherNote: string;
+  /** A branch chip whose roster came back empty. */
+  branchEmptyTitle: string;
+  branchEmptyBody: string;
+  /** The salon has no bookable artists at all -- step 2 had no empty state. */
+  artistsEmptyTitle: string;
+  artistsEmptyBody: string;
+
   // book — the artist rows' availability badge, design:1491-1492
   availLive: string;
   availSalon: string;
