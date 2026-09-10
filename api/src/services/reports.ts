@@ -168,6 +168,133 @@ export const REPORT_PERMISSION: Record<ReportKind, PermissionName> = {
   'artist-performance': 'team',
 };
 
+/**
+ * =========================================================================
+ * WHICH EXPORTS ARE AUDITED, AND WHERE THE LINE FALLS   (the report-export ruling)
+ * =========================================================================
+ * `routes/reports.ts` wrote no `audit_log` row at all, so a manager could
+ * download every artist's earnings or every customer's phone number and wallet
+ * balance and leave no trace of it. "All five kinds" and "only
+ * artist-performance" were both defensible from a standing start. Two lines get
+ * drawn here rather than one, because they answer different questions.
+ *
+ * -------------------------------------------------------------------------
+ * LINE 1 — WHICH KINDS: THE EXPORTS WHOSE ROWS NAME IDENTIFIABLE PEOPLE
+ * -------------------------------------------------------------------------
+ * `customers` and `artist-performance`. NOT only `artist-performance`, and that
+ * was the tempting answer: it is the one whose rows are named individuals and
+ * what they earned. But `customers` is every active customer's NAME, PHONE and
+ * WALLET BALANCE, and `services/memberSearch.ts` already spends four controls
+ * stopping a staff search box from becoming exactly that file. It would be
+ * strange to audit the personnel file and not the one the codebase already
+ * treats as its most sensitive read. Same argument, so same answer.
+ *
+ * `sales`, `best-selling-services` and `products-sold` name DAYS, SERVICES and
+ * PRODUCTS. No individual appears in a row, and an aggregate of a salon's own
+ * takings is the thing the merchant is entitled to look at all day.
+ *
+ * THE CODEBASE HAD ALREADY DRAWN THIS LINE, which is the strongest evidence it
+ * is not arbitrary: `customers` and `artist-performance` are the only two kinds
+ * gated `team`, and this file's own § REPORT_PERMISSION rule is that a report
+ * inherits the permission of the section whose data it exports. The two `team`
+ * reports are exactly the two that are about identifiable people.
+ *
+ * IT IS STILL AN EXPLICIT MAP RATHER THAN `REPORT_PERMISSION[kind] === 'team'`,
+ * deliberately. Deriving it would mean a future re-gate silently changed what is
+ * audited — two decisions welded together. So the map is written out, and
+ * `reports.test.ts` asserts the invariant that actually matters instead: every
+ * AUDITED kind is gated on `team`. Re-gate one to something weaker and the spec
+ * fails rather than the audit quietly following it.
+ */
+export const REPORT_AUDITED: Record<ReportKind, boolean> = {
+  /** Name, phone and wallet balance, for every active customer. */
+  customers: true,
+  /** Named artists and what each one earned — what a bonus is decided on. */
+  'artist-performance': true,
+  /** Days. */
+  sales: false,
+  /** Services. */
+  'best-selling-services': false,
+  /** Products. */
+  'products-sold': false,
+};
+
+/** How the file actually left. Both are audited; the card render is not. */
+export type ReportExportVia = 'csv' | 'download-link';
+
+/**
+ * THE AUDIT ROW FOR AN EXPORT, and its whole design constraint is that it must
+ * not become a second copy of the thing being protected.
+ *
+ * THE CONSTRAINT IS NOT A PRINCIPLE, IT IS A PRIVILEGE DOWNGRADE.
+ * `GET /salons/{id}/audit` is `requireDashboardPerm(req, 'dashboard')`, while
+ * both audited reports are gated `team`. So ANY figure copied into this row —
+ * an artist's earnings, a customer's balance, even the headline total — becomes
+ * readable at a WEAKER permission than the report it came from. Auditing the
+ * personnel export by putting the personnel figures in the audit log would hand
+ * them to everyone the export was gated away from.
+ *
+ * So the row records the ACT and its SHAPE, never its content:
+ *
+ *   who        the actor, from `writeAudit`
+ *   when       the row's own timestamp
+ *   which      the report kind
+ *   how much   `rowCount` — a count is not the data, and "1,284 rows" is the
+ *              difference between a spot check and a full extraction
+ *   how wide   branch filter and period; "all branches, 90d" and "one branch,
+ *              7d" are materially different acts
+ *   how        `via`, because a CSV and a one-time link are different exposures
+ *
+ * AND `amountFils` IS DELIBERATELY NULL. That column exists for money that
+ * MOVED; a report moves none, and putting the headline total there is precisely
+ * the copy this paragraph exists to prevent. No names, no per-row figures, no
+ * totals.
+ *
+ * ONE BUILDER, TWO CALL SITES — the `.csv` handler and the download redemption.
+ * A second hand-written row is how the two drift into recording different things
+ * about the same act.
+ */
+export function reportExportAudit(input: {
+  salonId: string;
+  kind: ReportKind;
+  branchId: string | null;
+  period: Period;
+  rowCount: number;
+  via: ReportExportVia;
+}): {
+  salonId: string;
+  kind: 'access';
+  action: string;
+  detail: string;
+  source: 'merchant';
+  subjectType: string;
+  subjectId: string;
+  metadata: Record<string, unknown>;
+} {
+  return {
+    salonId: input.salonId,
+    /**
+     * `access`, not `money` and not `rules`. Nothing moved and nothing changed;
+     * somebody read personnel or customer data and took a copy of it away.
+     */
+    kind: 'access',
+    action: 'Report exported',
+    detail:
+      `${REPORT_TITLE[input.kind]} · ${input.branchId ?? 'all branches'} · ` +
+      `${input.period} · ${input.rowCount} row${input.rowCount === 1 ? '' : 's'} · ${input.via}`,
+    source: 'merchant',
+    subjectType: 'report',
+    subjectId: input.kind,
+    metadata: {
+      kind: input.kind,
+      branchId: input.branchId,
+      period: input.period,
+      rowCount: input.rowCount,
+      via: input.via,
+    },
+  };
+}
+
 /** The design's card titles, verbatim, so the JSON can name what it returned. */
 export const REPORT_TITLE: Record<ReportKind, string> = {
   customers: 'Customer information',

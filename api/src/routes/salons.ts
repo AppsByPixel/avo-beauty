@@ -143,6 +143,12 @@ export const MERCHANT_EDITABLE = new Set([
   'businessHours',
   'social',
   'whatsappEnabled',
+  /**
+   * The other half of the receipt channel choice (DECISIONS.md #88). Both are
+   * editable; `salon_receipt_channel_floor` is what stops her choosing neither,
+   * and `receipt_channels_required` below is the message rather than a 500.
+   */
+  'emailEnabled',
 ]);
 
 /**
@@ -391,6 +397,7 @@ export interface SalonView {
   branches: BranchView[];
   social: SalonRow['social'];
   whatsappEnabled: boolean;
+  emailEnabled: boolean;
 }
 
 export interface BranchView {
@@ -454,6 +461,8 @@ export function serialiseSalon(
     branches: branches.map(serialiseBranch),
     social: s.social,
     whatsappEnabled: s.whatsappEnabled,
+    /** Served alongside its twin, so a client can render the real three states. */
+    emailEnabled: s.emailEnabled,
   };
 }
 
@@ -731,6 +740,32 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       before,
       MERCHANT_EDITABLE,
     );
+
+    /**
+     * SHE MAY CHOOSE A CHANNEL; SHE MAY NOT CHOOSE SILENCE.
+     * (DECISIONS.md #88, migration 0047)
+     *
+     * `salon_receipt_channel_floor` is the control — both-off does not commit —
+     * but a raw check violation surfaces as a 500, and non-negotiable #7's
+     * "the UI hiding a button is a courtesy, not a control" cuts the other way
+     * too: the API has to be the one that says no, in words a client can render.
+     *
+     * Computed from the PATCH MERGED OVER THE CURRENT ROW rather than from the
+     * body, because a request that sends only `whatsappEnabled: false` is
+     * exactly the one that can turn the last channel off.
+     *
+     * A receipt is "a record-keeping obligation, not marketing"
+     * (design/README.md § Known gaps 7), which is why this is not a preference
+     * she can express.
+     */
+    const nextWhatsapp = patch.whatsappEnabled ?? before.whatsappEnabled;
+    const nextEmail = patch.emailEnabled ?? before.emailEnabled;
+    if (!nextWhatsapp && !nextEmail) {
+      throw conflict(
+        'receipt_channels_required',
+        'A receipt has to reach the customer somehow. Keep WhatsApp or email switched on.',
+      );
+    }
 
     const [after] = await db
       .update(salon)

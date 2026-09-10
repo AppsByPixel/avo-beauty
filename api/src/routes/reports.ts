@@ -44,7 +44,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { branch, reportDownload, salon } from '../db/schema/salon';
 import { staffUser } from '../db/schema/staff';
-import { requireDashboardPerm, requireDashboardScope, requireSameSalon } from '../auth/principal';
+import {
+  requireDashboardPerm,
+  requireDashboardScope,
+  requireSameSalon,
+  type StaffPrincipal,
+} from '../auth/principal';
 import { hashWalletToken, mintWalletTokenValue } from '../auth/tokens';
 import { notFound, unauthorized } from '../http/errors';
 import { resolveBranchFilter } from '../services/branchFilter';
@@ -52,12 +57,15 @@ import { parsePeriod, type Period } from '../services/metrics';
 import {
   computeReport,
   parseReportKind,
+  reportExportAudit,
   reportFilename,
   toCsv,
+  REPORT_AUDITED,
   REPORT_PERMISSION,
   type ReportKind,
   type ReportShape,
 } from '../services/reports';
+import { writeAudit } from '../services/audit';
 
 interface ReportQuery {
   branch?: unknown;
@@ -78,6 +86,9 @@ interface Built {
   branchId: string | null;
   branchName: string | null;
   period: Period;
+  /** The caller `build` already resolved and gated — so the audit row names an
+   *  actor without a second `requireDashboardPerm` that could disagree. */
+  principal: StaffPrincipal;
 }
 
 /**
@@ -133,7 +144,7 @@ async function build(req: FastifyRequest, kindRaw: string, salonId: string): Pro
     timezone: s.timezone,
   });
 
-  return { shape, branchId: br?.id ?? null, branchName: br?.name ?? null, period };
+  return { shape, branchId: br?.id ?? null, branchName: br?.name ?? null, period, principal: p };
 }
 
 export async function registerReportRoutes(app: FastifyInstance): Promise<void> {
@@ -332,6 +343,36 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       'report download redeemed',
     );
 
+    /**
+     * AND THE DURABLE HALF OF THAT LINE. `app.log.info` is a process log — it
+     * rotates, it is not queryable, and it is gone with the container. "Who
+     * downloaded every artist's earnings, and when" is a question somebody asks
+     * months later, which is what `audit_log` is for.
+     *
+     * THE ACTOR COMES FROM THE STORED ROW, not from the request, because this
+     * route is deliberately token-authenticated and carries no principal — see
+     * the header. `staff` was already loaded and its live permission re-checked
+     * above, so the row names the person whose authority actually held at the
+     * moment the file left, rather than whoever minted the link a minute ago.
+     *
+     * AWAITED BEFORE THE SEND, for the reason the `.csv` handler gives: an
+     * untraced export must not be a reachable outcome.
+     */
+    if (REPORT_AUDITED[kind]) {
+      await writeAudit(
+        db,
+        { kind: 'staff', id: staff.id, name: staff.name, role: staff.role },
+        reportExportAudit({
+          salonId: row.salonId,
+          kind,
+          branchId: row.branchId,
+          period: row.period as Period,
+          rowCount: shape.rows.length,
+          via: 'download-link',
+        }),
+      );
+    }
+
     return reply
       .header('content-type', 'text/csv; charset=utf-8')
       .header(
@@ -352,8 +393,40 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
   app.get<{ Params: { id: string; kind: string }; Querystring: ReportQuery }>(
     '/salons/:id/reports/:kind.csv',
     async (req, reply) => {
-      const { shape, branchName, period } = await build(req, req.params.kind, req.params.id);
+      const { shape, branchId, branchName, period, principal } = await build(
+        req,
+        req.params.kind,
+        req.params.id,
+      );
       const filename = reportFilename(shape.kind, branchName, period);
+
+      /**
+       * AUDITED BEFORE THE BYTES LEAVE, and awaited rather than fired off.
+       *
+       * If the audit write fails the export fails, which is the deliberate
+       * direction: an untraced download of every artist's earnings is the exact
+       * failure this ruling exists to remove, so "the file went out and nothing
+       * recorded it" must not be a reachable outcome. `audit_log` is a local
+       * append-only table — if it cannot be written, the API has larger problems
+       * than a refused CSV.
+       *
+       * `REPORT_AUDITED` decides WHICH kinds; see services/reports.ts for where
+       * that line falls and why the three aggregate exports are not on it.
+       */
+      if (REPORT_AUDITED[shape.kind]) {
+        await writeAudit(
+          db,
+          principal,
+          reportExportAudit({
+            salonId: req.params.id,
+            kind: shape.kind,
+            branchId,
+            period,
+            rowCount: shape.rows.length,
+            via: 'csv',
+          }),
+        );
+      }
 
       /**
        * `attachment` with a filename, so the browser saves rather than renders.
