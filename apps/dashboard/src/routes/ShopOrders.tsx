@@ -80,16 +80,82 @@ import { whenLabel } from './AuditLog.js';
  * about a data processor, not a layout. Printed as text, copyable, going nowhere.
  *
  * ---------------------------------------------------------------------------
- * PICKUP HAS NO ADDRESS AND THAT IS NORMAL
+ * WHERE AN ORDER IS GOING — THREE STATES, AND `address` DECIDES NONE OF THEM
  *
- * `PRIOR-ART.md` § "Pickup is not replaced. It is a fork." Both paths are live in
- * the app this model is taken from, and delivery-based means delivery is
- * available and chosen — not that collection was removed. A null address is
- * therefore ORDINARY DATA, and the cell says what is happening ("Collecting at
- * the salon") rather than reporting an absence with an em dash or "No address".
- * Rendering live data as missing data is the premature-zero class with the sign
- * flipped: the screen would be telling a merchant something is wrong with a row
- * that is perfectly fine.
+ * A NULL ADDRESS IS ORDINARY DATA IN BOTH OF THE TWO WAYS IT ARRIVES, and the
+ * cell reads `fulfilment` to tell them apart. Reading `address` was correct for
+ * exactly as long as it had one meaning.
+ *
+ *   delivery, address present   the snapshot. `AddressSnapshot` below.
+ *   pickup, address null        she is collecting. `PRIOR-ART.md` § "Pickup is
+ *                               not replaced. It is a fork." Both paths are live
+ *                               in the app this model is taken from, and
+ *                               delivery-based means delivery is available and
+ *                               chosen — not that collection was removed. So the
+ *                               cell says what is happening ("Collecting at the
+ *                               salon") rather than reporting an absence with an
+ *                               em dash or "No address". Rendering live data as
+ *                               missing data is the premature-zero class with
+ *                               the sign flipped.
+ *   delivery, address null      THE ERASED DELIVERY — new, and the one below.
+ *
+ * THE PAIR IS UNAMBIGUOUS AND THE DATABASE IS WHY, which is the only reason this
+ * cell can state a fact rather than hedge. Migration 0048's CHECK has three arms:
+ * a live delivery MUST carry block, street and building AND MUST NOT carry the
+ * erasure stamp; the erased arm requires the stamp and refuses every address
+ * column; a pickup carries neither. So `fulfilment: 'delivery'` with
+ * `address: null` cannot come from a forgotten snapshot or from a pickup
+ * mislabelled — both are unstorable. There is no fourth reading to guard against.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ERASED DELIVERY, AND WHY THE COPY IS FOUR WORDS AND NOT SIX
+ *
+ * `services/erasure.ts` nulls every address column on her past delivery orders
+ * and stamps `address_erased_at` (DECISIONS.md #97). The order stays — it is a
+ * financial record — and the household it named is gone.
+ *
+ * WHAT THIS CELL USED TO SAY WAS FALSE, not merely thin: "Collecting at the
+ * salon" on a row whose own Fulfilment pill says Delivery, one cell to the left.
+ * Lane A found it while landing the erasure and flagged it in
+ * `api/src/routes/orders.ts` rather than reaching into this column.
+ *
+ * "Address no longer held" — and the four constraints it is the answer to:
+ *
+ *   NOT THE DATE, AND THE API DOES NOT EVEN SERVE ONE. `address_erased_at` is
+ *       deliberately absent from the wire (`api/src/routes/orders.ts` §
+ *       serialiseShopOrder): it would tell a salon WHEN a customer asked to be
+ *       erased, which is a fact about her rather than about the order she placed.
+ *       So there is nothing to render even if this cell wanted it, which is the
+ *       right way round.
+ *
+ *   NOT NOTHING, EITHER. A blank cell reads as a broken screen and sends a
+ *       merchant looking for the street — in her inbox, in a WhatsApp thread,
+ *       anywhere the scrub could not reach. The sentence exists to END that
+ *       search, which is the privacy outcome and not a courtesy.
+ *
+ *   NOT A REASON, AND NOT A STATUS. It does not say who asked, or why, and it
+ *       says nothing about the ORDER: an erased row keeps whatever status it had
+ *       and the Status column still owns that. "Cancelled", "Undeliverable" or
+ *       anything in that register would be this cell inventing a fact about the
+ *       purchase out of a fact about the data.
+ *
+ *   NOT "DELETED", AND NOT "ERASED". Both are true and both are about a person
+ *       when the plainer sentence is about a record. "No longer held" says the
+ *       field is GONE rather than missing — which is exactly the distinction Lane
+ *       A's `null` was chosen to carry — and it is the salon that no longer holds
+ *       it, so the sentence never has a subject who is her. (The Customer cell
+ *       beside it may well read "Deleted account": that is the API's tombstone,
+ *       not this screen's word, and it is one more reason for this cell not to
+ *       say it a second time.)
+ *
+ * IT LOOKS EXACTLY LIKE THE PICKUP LINE — `.orders__erased` in `app.css`, italic
+ * and `--avo-text-muted-strong`, the same as `.orders__pickup`. I first styled it
+ * one step quieter, on the reasoning that pickup is an instruction a merchant
+ * acts on and this is a record with nothing behind it. `--avo-text-muted-soft`
+ * measures 2.83:1 composited on `--avo-surface` against a 4.5:1 floor, so the
+ * distinction cost legibility for a difference the WORDS already make — the same
+ * argument `STATUS_PILL` makes for `dot: false`. The rule in `app.css` carries
+ * the measurements.
  */
 
 /**
@@ -474,13 +540,26 @@ export function OrderRow({
         <Pill tone={delivery ? 'neutral' : 'quiet'}>{delivery ? 'Delivery' : 'Pickup'}</Pill>
       </td>
       <td className="orders__where">
+        {/*
+          THREE STATES, AND THE FORK IS `fulfilment` RATHER THAN `address`.
+          `address === null` used to mean pickup and now means one of two things
+          — see the header § where an order is going. Reading the address to
+          decide which is how "Collecting at the salon" ended up printed beside
+          the Delivery pill two cells to the left.
+        */}
         {order.address ? (
           <AddressSnapshot address={order.address} />
+        ) : delivery ? (
+          /*
+            AN ERASED DELIVERY. Four words, and every one of them was a choice —
+            the header § the erased delivery has the argument for each.
+          */
+          <span className="orders__erased">Address no longer held</span>
         ) : (
           /*
             NOT AN EM DASH AND NOT "No address". Pickup is a live fork, so this
             cell describes what is happening rather than reporting a field that
-            is missing. See the header § pickup has no address.
+            is missing. See the header § where an order is going.
           */
           <span className="orders__pickup">Collecting at the salon</span>
         )}

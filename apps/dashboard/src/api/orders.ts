@@ -43,10 +43,27 @@ import { useSalonId } from '../auth/AuthProvider.js';
  *    address book, and nothing may imply the merchant is looking at live data.
  *    `routes/ShopOrders.tsx` § the snapshot carries how that reads.
  *
- * 2. `address` IS NULL FOR PICKUP, AND PICKUP IS A LIVE PATH. Not a legacy
- *    state, not a migration leftover: `PRIOR-ART.md` § "Pickup is not replaced.
- *    It is a fork." So an order with no address is NORMAL, and rendering it as
- *    an em dash or "No address" would report ordinary data as missing.
+ * 2. `address` IS NULL IN TWO DIFFERENT SITUATIONS, AND `fulfilment` IS WHAT
+ *    TELLS THEM APART. Neither is a legacy state or a migration leftover, so an
+ *    order with no address is NORMAL either way and rendering it as an em dash
+ *    or "No address" would report ordinary data as missing.
+ *
+ *      `fulfilment: 'pickup'`    she is collecting. `PRIOR-ART.md` § "Pickup is
+ *                                not replaced. It is a fork."
+ *      `fulfilment: 'delivery'`  the snapshot was ERASED (DECISIONS.md #97,
+ *                                migration 0048). The order remains; the
+ *                                household it named does not.
+ *
+ *    THE PAIR CANNOT MEAN ANYTHING ELSE, and that is a database guarantee rather
+ *    than an assumption this client is making: migration 0048's CHECK requires a
+ *    live delivery to carry block, street and building, so a delivery with a null
+ *    address cannot arise from a forgotten snapshot.
+ *
+ *    THERE IS NO ERASURE DATE ON THE WIRE AND THERE MUST NOT BE ONE. Lane A left
+ *    `address_erased_at` out of `serialiseShopOrder` deliberately — it would tell
+ *    a salon when a customer asked to be erased, a fact about her rather than
+ *    about her order. If a field like it ever appears, this screen still must not
+ *    print it. `routes/ShopOrders.tsx` § the erased delivery carries the copy.
  *
  * 3. STATUS MOVES ARE MONOTONIC — `preparing → ready → closed`, forward only,
  *    one step at a time, enforced server-side with the ROW COUNT deciding. Two

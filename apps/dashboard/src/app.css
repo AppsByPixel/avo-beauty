@@ -6293,6 +6293,39 @@ a:hover {
   color: var(--avo-text-muted-strong);
 }
 
+/*
+ * AN ERASED DELIVERY'S ADDRESS. Byte-identical to `.orders__pickup` above, and
+ * both halves of that are deliberate.
+ *
+ * ITALIC, for pickup's reason: this is a statement about the order and not a
+ * value in the same register as an address.
+ *
+ * AND THE SAME COLOUR, WHICH IS A CORRECTION. This rule shipped for review as
+ * `--avo-text-muted-soft` on the idea that an erased address should read one step
+ * quieter than a pickup — "Collecting at the salon" is something a merchant does
+ * and "Address no longer held" is something she cannot. The idea was fine and the
+ * token was wrong. MEASURED with `packages/tokens`' own `contrastRatio`:
+ * `--avo-text-muted-soft` (rgba(28,27,25,0.45)) composites to 2.83:1 on
+ * `--avo-surface` and 2.75:1 on canvas, against a 4.5:1 floor —
+ * `avo-tokens.json § mutedLabel` says so in as many words ("0.45 measures ~3.3:1
+ * and fails at that size"). `--avo-text-muted-strong` measures 6.21:1 and 5.73:1.
+ *
+ * The tonal step is not worth buying with legibility, and it was never load-
+ * bearing: this cell's two states differ by their WORDS, which is the same reason
+ * `STATUS_PILL` carries `dot: false` (interaction-spec.md §2 — meaning as text,
+ * not colour alone). Kept as its own selector rather than folded into
+ * `.orders__pickup` because the two are different facts and will not necessarily
+ * stay identical.
+ *
+ * NOT A WARNING TONE EITHER. `--avo-warn` would read as a problem with the row,
+ * and the row is fine — an order that has been paid for and, in almost every
+ * case, already handed over. A privacy outcome is not an error state.
+ */
+.orders__erased {
+  font-style: italic;
+  color: var(--avo-text-muted-strong);
+}
+
 .orders__address {
   display: flex;
   flex-direction: column;
