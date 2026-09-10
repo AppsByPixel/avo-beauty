@@ -113,6 +113,84 @@ jobs:
           AVO_VERIFY_DB: avo_migrate_check
         run: pnpm run db:verify
 
+      # THE INTEGRATION SUITES, WHICH RAN NOWHERE UNTIL 2026-09-10.
+      #
+      # `pnpm check` is `turbo run typecheck lint test`, and `api`'s `test` is a
+      # bare `vitest run` against a config that EXCLUDES `**/*.int.test.ts` — on
+      # purpose, and `vitest.config.ts:85` argues why: an int spec needs a real
+      # database and must not run in a unit sweep. But nothing ever ran the other
+      # half. Twenty-one files, every one green by never executing, and among them
+      # the only proofs that a charge is atomic, a wallet token is single-use, a
+      # deposit applies once, a voucher claims once, and an erasure reaches a
+      # customer's address. Decision 101, and the third of its family after 76
+      # (`check` reports a lint pass it never ran) and 89 (the typecheck does not
+      # read the specs).
+      #
+      # ITS OWN DATABASE, NOT `avo_migrate_check`. The verify step above runs 93
+      # invariants against that one, and several int fixtures leave rows behind by
+      # design — so sharing would make the STEP ORDER load-bearing and undocumented,
+      # and a future reorder would produce an invariant failure with no visible
+      # cause. A second throwaway costs one `CREATE DATABASE`.
+      #
+      # CONNECTED AS `avo_app`, NOT THE OWNER, and that is the whole point of these
+      # suites: `vitest.int.config.ts` sets both URLs from this one variable
+      # because, in its words, "a limiter proved under the owner role is a limiter
+      # proved against privileges production does not have". The REVOKEs are what
+      # several of these specs assert.
+      #
+      # `AVO_INT_DATABASE_URL` unset is a SKIP rather than a failure — every spec
+      # checks the variable itself and never imports the app. So the step that
+      # proves this step works is the run where the count is non-zero: if this
+      # ever reports "no tests", the variable stopped reaching them and the
+      # suites are silently green again, which is exactly the state it exists to
+      # end.
+      - name: Integration suites against a real database as the app role
+        working-directory: api
+        env:
+          AVO_INT_DATABASE_URL: postgres://avo_app:avo_app_dev_password@localhost:5433/avo_int_check
+        run: |
+          docker exec -i avo-postgres psql -U avo -d postgres \
+            -c "CREATE DATABASE avo_int_check OWNER avo;"
+          DATABASE_URL=postgres://avo:avo_dev_password@localhost:5433/avo_int_check \
+          APP_DATABASE_URL=postgres://avo_app:avo_app_dev_password@localhost:5433/avo_int_check \
+            pnpm run db:migrate
+          DATABASE_URL=postgres://avo:avo_dev_password@localhost:5433/avo_int_check \
+          APP_DATABASE_URL=postgres://avo_app:avo_app_dev_password@localhost:5433/avo_int_check \
+            pnpm run db:seed
+          pnpm run test:int 2>&1 | tee /tmp/int.log
+
+          # THE GUARD, because this step can otherwise pass having run nothing.
+          #
+          # `test:int` carries `--passWithNoTests`, and an unset or unreachable
+          # `AVO_INT_DATABASE_URL` makes the specs SKIP rather than fail — by
+          # design, so a developer without a database is not blocked. Both paths
+          # exit 0. So a typo in the variable above, or a rename of the include
+          # glob, would return this step to precisely the silent green decision
+          # 101 records.
+          #
+          # IT ASSERTS A PROPERTY, NOT A COUNT, and the difference was measured
+          # rather than reasoned. The first version of this guard required at
+          # least one passing spec — useless, because with the variable unset
+          # FOURTEEN still pass (they need no database) while 332 skip. A floor of
+          # 1 never fires; a floor of 346 goes stale on the next slice, which is
+          # the defect DECISIONS.md row 26 is about.
+          #
+          # What actually separates the two states is that a properly configured
+          # run skips NOTHING:
+          #
+          #   reachable:    Tests  346 passed (346)
+          #   unreachable:  Tests  14 passed | 332 skipped (346)
+          #
+          # So: any skip here means the database did not reach the suites. That
+          # holds whatever the count grows to, and it fails in both directions —
+          # it catches the suites vanishing as well as breaking.
+          if grep -qE '^ +(Tests|Test Files) .*skipped' /tmp/int.log; then
+            grep -E '^ +(Tests|Test Files) ' /tmp/int.log >&2
+            echo "::error::Integration specs SKIPPED. AVO_INT_DATABASE_URL is not reaching them, so these suites are green without running — see DECISIONS.md 101." >&2
+            exit 1
+          fi
+          grep -E '^ +Tests ' /tmp/int.log
+
       # The suites mint their own per-run database in global-setup and drop it in
       # teardown. Do NOT set POSTGRES_DB here: global-setup.ts skips the minting
       # when it sees one, which silently puts every concurrent checkout back on
