@@ -27,6 +27,73 @@
  *     deleted — so the ledger cannot quietly accumulate accepted defects
  *
  * The pin is a defect register with an expiry date, not an exemption list.
+ *
+ * ==========================================================================
+ * THE LEDGER IS EMPTY NOW, AND THAT IS THE EXPIRY DATE ARRIVING
+ * ==========================================================================
+ * `DELETE /artists/:id/calendar` was the single pinned instance. Lane A fixed it
+ * in dev `e4b411a` — the send is outside the transaction, the row is returned
+ * from the callback, and the paragraph at `artists.ts:980` now carries lane A's
+ * own account of it. The scan reads zero hits, so the line is gone rather than
+ * MOVED, and the ledger is empty.
+ *
+ * DO NOT READ THE EMPTY ARRAY AS THE SHAPE COLLAPSING BACK TO
+ * `expect(hits).toEqual([])`, WHICH THE PARAGRAPH ABOVE ARGUED AGAINST. It
+ * argued against that assertion *while a live instance existed*, because it would
+ * have gone red and stayed red on a defect lane D cannot fix. With no live
+ * instance there is nothing for it to be permanently red about, and both halves
+ * still do their jobs: `appeared` fails on a new instance by name, `fixed`
+ * iterates nothing. An empty register is the state this file was built to reach,
+ * not evidence it has stopped working. The `transactionCount()` floor above is
+ * what keeps the emptiness meaningful — see its own note.
+ *
+ * ==========================================================================
+ * WHO DELETES A LINE FROM THE LEDGER — AND IT IS NOT THE LANE THAT FIXED IT
+ * ==========================================================================
+ * This message used to end "in the same commit as the fix", which told lane A to
+ * edit this file. `e2e/` is lane D's column (LANES.md § "Lane D — QA"), so the
+ * message was instructing another lane to breach the one rule that keeps four
+ * worktrees mergeable. Lane A read the brief instead of the test and flagged the
+ * conflict, correctly noting that the next person will read the TEST rather than
+ * the brief — which is why the message is what changed.
+ *
+ * THREE REASONS THE COLUMN RULE WINS HERE, and none of them is deference:
+ *
+ *   1. LANES.md's own resolution test already carves this out. Its clarification
+ *      — "could the other lane land its change without touching this file?" —
+ *      was written for a test COLOCATED with the code it covers, and ends "if
+ *      the suite spans packages or lives in `e2e/`, it is Lane D's". This suite
+ *      lives in `e2e/` and reads all of `api/src`. Lane A landed `e4b411a`
+ *      without touching this file, which is the test answering itself.
+ *
+ *   2. A LANE RETIRING ITS OWN PIN ENTRY IS A SELF-CERTIFICATION, and the
+ *      both-directions property is what it destroys. The `fixed` half exists to
+ *      make somebody who did not write the fix confirm the instance is gone. If
+ *      the owning lane deletes the line in the same commit, the confirmation and
+ *      the claim are the same act, and the reviewer sees a deletion that reads as
+ *      a consequence of the diff rather than a finding about it. That is the
+ *      precise mechanism by which a defect register becomes an exemption list —
+ *      the thing the paragraph above says this shape exists to prevent.
+ *
+ *   3. GONE VERSUS MOVED IS NOT A MECHANICAL CALL. The message below distinguishes
+ *      them and the distinction needs the scan's output, not the diff's: a hit
+ *      whose line number shifted is a line to REPLACE, and a lane reading its own
+ *      change is the worst-placed reader to tell the two apart. Lane D ran the
+ *      scan against the merged tree and read zero hits before deleting this one.
+ *
+ * AND THE RED WINDOW IS THE FEATURE, NOT THE COST. The obvious objection to
+ * non-atomic is that `dev` carries a red suite between the fix landing and lane D
+ * updating the ledger. It does — for one integration cycle — and that red is how
+ * lane D LEARNED the fix had landed. Deleting the line atomically would remove the
+ * only signal that reaches the QA lane through the suite rather than through
+ * somebody remembering to mention it. A ledger that goes quiet when a defect is
+ * fixed is a ledger nobody has to read.
+ *
+ * SO THE PROTOCOL, and the message below now says it: the fixing lane REPORTS to
+ * trunk and leaves this file alone. Trunk dispatches lane D, which re-runs the
+ * scan and deletes or replaces the line. If a slice ever genuinely needs the
+ * coupling atomic, that is trunk carving an explicit exception — not a lane
+ * reading a failure message as authority over another lane's column.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -44,21 +111,29 @@ import {
  * EVERY response-before-commit in `api/src` TODAY, with the reason it is still
  * here. One line per hit, in the scan's own sorted output format.
  *
- * `DELETE /artists/:id/calendar` — `api/src/routes/artists.ts:966`. Lane A shipped
- * this shape on `PUT /artists/{id}/branch` in item 6, caught it on the third int
- * run, fixed that route, and wrote the reason into this same file at line 736.
- * This transaction is twelve lines below that paragraph and still sends inside
- * itself. Confirmed behaviourally, not inferred: 40 write-then-immediately-reread
- * attempts through a second connection saw the pre-commit value 4 times, and the
- * identical probe against the FIXED sibling saw it 0 times out of 40.
+ * EMPTY, as of dev `e4b411a`. See the header's § "THE LEDGER IS EMPTY NOW".
  *
- * Lane A's column. The fix is the one already applied twelve lines up — return
- * the serialised row from the callback and let fastify send it when the
- * handler's promise resolves.
+ * WHAT WAS HERE, kept as the record rather than as an entry — because the next
+ * person to add a line needs the format and the standard of evidence, and both
+ * are easier to copy than to reconstruct:
+ *
+ *   'api/src/routes/artists.ts:1029 reply.send inside transaction opened at 980'
+ *
+ * `DELETE /artists/:id/calendar`. Lane A shipped the shape on
+ * `PUT /artists/{id}/branch` in item 6, caught it on the third int run, fixed
+ * that route, and wrote the reason into the same file — and the transaction
+ * twelve lines below that paragraph still sent inside itself. Confirmed
+ * BEHAVIOURALLY, not inferred: 40 write-then-immediately-reread attempts through
+ * a second connection saw the pre-commit value 4 times, and the identical probe
+ * against the FIXED sibling saw it 0 times out of 40. That control is what made
+ * it a defect report rather than a static-scan opinion, and a new line here is
+ * owed the same.
+ *
+ * Fixed in `e4b411a` by the shape lane A had already applied to the sibling:
+ * do the work in the transaction, RETURN the row, let fastify send once the
+ * handler's promise — commit included — resolves.
  */
-const PINNED_COMMIT_ORDER: string[] = [
-  'api/src/routes/artists.ts:1029 reply.send inside transaction opened at 980',
-];
+const PINNED_COMMIT_ORDER: string[] = [];
 
 describe('no response is dispatched from inside a transaction', () => {
   const hits = commitOrderHits();
@@ -107,15 +182,31 @@ describe('no response is dispatched from inside a transaction', () => {
         'a defect register that keeps entries after they are fixed becomes an exemption ' +
         'list:\n  ' +
         fixed.join('\n  ') +
-        '\n\nDelete the line from PINNED_COMMIT_ORDER, in the same commit as the fix. If the ' +
-        'line MOVED rather than went away — a hit whose line number shifted — replace it ' +
-        'rather than deleting it, and check the "appeared" half above named the new number.',
+        '\n\nWHO EDITS THIS LEDGER. If you are LANE D: re-run the scan against the merged ' +
+        'tree, then delete the line — or REPLACE it if the hit MOVED rather than went away, ' +
+        'a line number that shifted, in which case the "appeared" half above named the new ' +
+        'number and both edits belong in one commit.\n\n' +
+        'IF YOU ARE ANY OTHER LANE: do not edit this file. `e2e/` is lane D\'s column ' +
+        '(LANES.md § "Lane D — QA"), and this message told you otherwise until 2026-09-09 — ' +
+        'it said "in the same commit as the fix", which is an instruction to breach the one ' +
+        'rule that keeps four worktrees mergeable. Land your fix and REPORT this failure to ' +
+        'trunk; the red is how lane D learns the fix arrived, and a lane retiring its own ' +
+        'pin entry is a self-certification rather than the independent confirmation this ' +
+        'half exists to be. The header\'s § "WHO DELETES A LINE FROM THE LEDGER" carries ' +
+        'the full argument and the protocol.',
     ).toEqual([]);
   });
 
   it('every pinned line names a real file and line, not a stale string', () => {
     // A pin whose format drifted from the scan's output would report both halves
     // above forever, which reads as two defects rather than one typo.
+    //
+    // VACUOUS WHILE THE LEDGER IS EMPTY, and deliberately left that way. The
+    // alternative — a floor on `PINNED_COMMIT_ORDER.length`, which is what
+    // `permission-census.test.ts` puts under `PINNED_COVERAGE` — would be exactly
+    // backwards here: that ledger is a COVERAGE figure and must not shrink, this
+    // one is a DEFECT register and empty is the goal. A spec demanding at least
+    // one pinned defect would go red the moment the API had none.
     for (const line of PINNED_COMMIT_ORDER) {
       expect(line, `"${line}" is not in the scan's own output format`).toMatch(
         /^api\/src\/[\w/.-]+\.ts:\d+ reply\.(send|hijack) inside transaction opened at \d+$/,

@@ -107,6 +107,7 @@ import {
   BookableArtistSchema,
   BookingSchema,
   LegalDocumentSetSchema,
+  MemberAddressSchema,
   MemberSchema,
   CampaignSchema,
   PlatformMessagingPolicySchema,
@@ -115,6 +116,7 @@ import {
   SalonMetricsSchema,
   SalonSchema,
   ServiceSchema,
+  ShopOrderSchema,
   StaffUserSchema,
   SupportConfigSchema,
   SupportTicketSchema,
@@ -133,6 +135,7 @@ import {
   wireShape,
 } from './support/contract-drift.js';
 import {
+  A_BRANCH,
   A_SERVICE,
   A_STAFF_FULL,
   QA_MEMBER,
@@ -196,6 +199,13 @@ let platform = '';
  * `seedSalonB()` does it: `hashSecret()` is one function for staff and members, so
  * the hash is portable and cannot drift out of step with lane A's seed.
  */
+/**
+ * Item 7's read fixtures. `QA_MEMBER`'s own address and one delivery order, so the
+ * three probes below have a row to bite on — see the `psql` block in `beforeAll`.
+ */
+const CT_ADDRESS = 'ADR-CT-0001';
+const CT_ORDER = 'TX-CT-ORDER';
+
 const PIN_MEMBER = 'QA-CT-0001';
 const PIN_MEMBER_PHONE = '+96599777401';
 const PIN_MEMBER_PASSWORD = 'noura-dev-password';
@@ -742,6 +752,100 @@ function probes(): Probe[] {
       schema: countedPage(SupportTicketSchema),
       requireNonEmpty: ['items'],
     },
+    /**
+     * =====================================================================
+     * ITEM 7 — HER ADDRESS BOOK, HER ORDERS, AND THE MERCHANT'S BOARD.
+     * =====================================================================
+     * THESE WERE THREE `UNMODELLED` ENTRIES FOR ABOUT AN HOUR, AND THE ENTRIES
+     * WERE WRONG BEFORE THEY WERE COMMITTED. Written when `packages/types`
+     * genuinely declared no address and no order shape, each carried the reason
+     * "there is no schema" — and trunk landed `MemberAddressSchema`,
+     * `OrderStatusSchema` and `ShopOrderSchema` in `65ab72e` while this file was
+     * still being edited. Three confident sentences, in the place a reader looks
+     * first, falsified by a commit that arrived between writing them and running
+     * them.
+     *
+     * That is this repository's oldest recurring defect and the entries would have
+     * been the newest instance, so it is worth saying what caught it: NOT a spec.
+     * The unclassified census cannot tell a well-reasoned `UNMODELLED` line from a
+     * false one — both are just a key in a map — and every assertion in this file
+     * would have stayed green. It was caught by re-reading `dev` before committing.
+     * The census's blind spot is real and it is the argument for the rule the
+     * support-ticket probe above states: PROBE WHEN A SCHEMA EXISTS, because an
+     * `UNMODELLED` entry is a claim nothing executes.
+     *
+     * WHY `paginated` AND NOT `countedPage` FOR EITHER ORDER LIST, and it is a
+     * third envelope rather than one of the two: both serve
+     * `{ items, truncated, nextCursor }`. `truncated` is NOT `total` — it is a
+     * boolean saying the 200-row cap was hit, and `nextCursor` beside it is
+     * hardcoded `null`. So `paginated` is the honest wrapper and `truncated` is
+     * annotated `wireOnly`, which is exactly the escape that field is for: a key
+     * the wire carries on purpose that no schema models. Checked in both
+     * directions, so the day a real cursor lands and `truncated` goes away, the
+     * stale-annotation half of the drift spec fails and says so.
+     */
+    {
+      route: 'GET /members/me/addresses',
+      label: 'GET /members/me/addresses',
+      schemaName: 'paginated(MemberAddressSchema)',
+      schema: paginated(MemberAddressSchema),
+      /**
+       * NON-EMPTY OR THIS PROVES NOTHING, and the seed creates no address at all —
+       * `beforeAll` writes one. `MemberAddressSchema` is thirteen fields of which
+       * nine are `.nullable()`, so a zero-row page would satisfy it perfectly while
+       * exercising none of them.
+       */
+      requireNonEmpty: ['items'],
+    },
+    {
+      route: 'GET /members/me/orders',
+      label: 'GET /members/me/orders',
+      schemaName: 'paginated(ShopOrderSchema)',
+      schema: paginated(ShopOrderSchema),
+      requireNonEmpty: ['items'],
+      wireOnly: {
+        '$.truncated':
+          'the 200-row cap, said out loud. `routes/orders.ts` serves this INSTEAD of a ' +
+          'cursor and hardcodes `nextCursor: null` beside it, deliberately — the lie ' +
+          '`GET /salons/{id}/bookings` was just fixed for was a capped list reporting ' +
+          '`nextCursor: null` with nothing behind it. It belongs to no schema because it ' +
+          'describes a limitation of this endpoint rather than a property of an order. ' +
+          'The day a real cursor lands, delete this note and the other one below.',
+      },
+    },
+    /**
+     * THE MERCHANT BOARD IS `ShopOrder` PLUS TWO JOINED COLUMNS, which is the same
+     * situation as the two booking lists in `UNMODELLED` — and it is PROBED rather
+     * than filed there, because `wireOnly` did not exist when those entries were
+     * written and it does now. An `UNMODELLED` line would assert "this is not the
+     * entity" and stop; this probe validates every field of `ShopOrderSchema`
+     * INCLUDING the whole nested address on the one surface where a merchant reads
+     * a customer's home address, and names the two extra keys with reasons.
+     *
+     * That difference is not cosmetic. `MemberAddressSchema` is what says the
+     * coordinates are STRINGS, and this board is where a float would do damage.
+     */
+    {
+      route: 'GET /v1/salons/:id/orders',
+      label: 'GET /v1/salons/:id/orders',
+      schemaName: 'paginated(ShopOrderSchema)',
+      schema: paginated(ShopOrderSchema),
+      requireNonEmpty: ['items'],
+      wireOnly: {
+        '$.truncated': 'the same cap as the member list above, for the same reason.',
+        '$.items[].memberName':
+          'joined from `member`, so the board can say whose order it is. Not on ' +
+          '`ShopOrderSchema` because an order does not have a name — the MEMBER does, and ' +
+          'the row the customer reads through `GET /members/me/orders` carries neither. ' +
+          'One schema with two optional display columns would tolerate a server that ' +
+          'forgot them on the board, which is the trap `countedPage` exists to avoid.',
+        '$.items[].memberPhone':
+          'joined the same way, and the reason it is worth naming rather than adding to a ' +
+          'schema: it is the field that makes this response personal data about a customer ' +
+          'rather than a fulfilment record. It belongs to the BOARD, gated on `perms.shop`, ' +
+          'and it must never appear on the customer-facing list that shares this schema.',
+      },
+    },
   ];
 }
 
@@ -1244,6 +1348,74 @@ beforeAll(async () => {
   // grew on one and not the other is drift the screen cannot see.
   seedPinMember();
   pinMember = await signInMember(SALON_B, PIN_MEMBER_PHONE);
+
+  /**
+   * ---- item 7: an address in her book and a delivery order pointing at it ----
+   *
+   * SEEDED, NOT ORDERED THROUGH THE API, and the reason is rule 2 rather than
+   * convenience: `api/src/db/seed.ts` creates no `member_address` and no
+   * `shop_order` at all, so all three of these probes would run against
+   * `items: []` and an item schema exercised against zero items is a spec that
+   * cannot fail. Driving `POST /orders` instead would work and would put a real
+   * money path — a wallet debit, an idempotency key, a `shop` transaction — inside
+   * the fixture for three probes that are about a READ shape. `psql` is the
+   * narrower tool.
+   *
+   * `address_id` POINTS AT THE ADDRESS ROW. It is nullable in the column and
+   * `ShopOrderSchema.address.id` is `IdSchema`, so a null here would fail these
+   * probes for a state no API path produces — see `tenancy.test.ts`'s
+   * `PROBE_ORDER_A` note, which learned this the same way.
+   *
+   * COORDINATES ARE SET, BOTH OF THEM. They are the pair the schema calls
+   * `.nullable()` and the column CHECKs as all-or-nothing, and a fixture that left
+   * them null would leave the one assertion most likely to catch real drift —
+   * `latitude` arriving as a number rather than a string — untested.
+   */
+  psql(`
+    INSERT INTO member_address (id, member_id, label, block, street, building,
+                                floor, apartment, area, governorate, instructions,
+                                latitude, longitude)
+    VALUES ('${CT_ADDRESS}', '${QA_MEMBER}', 'Contract probe', 'Block 4',
+            'Street 12', 'Building 7', '3', '12', 'Salmiya', 'Hawalli',
+            'Ring twice', '29.336670', '48.077500')
+    ON CONFLICT (id) DO UPDATE SET member_id = EXCLUDED.member_id, deleted_at = NULL;
+
+    INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils,
+                             method, status, settled_at)
+    VALUES ('${CT_ORDER}', '${QA_MEMBER}', '${SALON_A}', '${A_BRANCH}', 'shop',
+            -1000, 'wallet', 'settled', now())
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id;
+
+    INSERT INTO shop_order (transaction_id, salon_id, member_id, fulfilment, status,
+                            address_id, address_label, block, street, building,
+                            floor, apartment, area, governorate, instructions,
+                            latitude, longitude)
+    VALUES ('${CT_ORDER}', '${SALON_A}', '${QA_MEMBER}', 'delivery', 'preparing',
+            '${CT_ADDRESS}', 'Contract probe', 'Block 4', 'Street 12', 'Building 7',
+            '3', '12', 'Salmiya', 'Hawalli', 'Ring twice',
+            '29.336670', '48.077500')
+    ON CONFLICT (transaction_id) DO UPDATE SET
+      status = 'preparing', ready_at = NULL, closed_at = NULL,
+      address_id = EXCLUDED.address_id;
+  `);
+
+  const addresses = await treq<any>('GET', '/members/me/addresses', { token: member });
+  if (addresses.status !== 200) {
+    throw new Error(`GET /members/me/addresses: ${addresses.status} ${addresses.raw}`);
+  }
+  captured.set('GET /members/me/addresses', addresses);
+
+  const myOrders = await treq<any>('GET', '/members/me/orders', { token: member });
+  if (myOrders.status !== 200) {
+    throw new Error(`GET /members/me/orders: ${myOrders.status} ${myOrders.raw}`);
+  }
+  captured.set('GET /members/me/orders', myOrders);
+
+  const board = await treq<any>('GET', `/v1/salons/${SALON_A}/orders`, { token: dashboard });
+  if (board.status !== 200) {
+    throw new Error(`GET /v1/salons/:id/orders: ${board.status} ${board.raw}`);
+  }
+  captured.set('GET /v1/salons/:id/orders', board);
 
   const notifications = await treq<any>('GET', '/members/me/notifications', { token: pinMember });
   if (notifications.status !== 200) {
