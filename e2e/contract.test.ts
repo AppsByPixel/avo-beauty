@@ -843,7 +843,31 @@ function probes(): Probe[] {
           'joined the same way, and the reason it is worth naming rather than adding to a ' +
           'schema: it is the field that makes this response personal data about a customer ' +
           'rather than a fulfilment record. It belongs to the BOARD, gated on `perms.shop`, ' +
-          'and it must never appear on the customer-facing list that shares this schema.',
+          'and it must never appear on the customer-facing list that shares this schema. ' +
+          'ALL OF THAT IS STILL TRUE, AND IT NOW HAS A NULL STATE THAT IS NOT AN OMISSION: ' +
+          '`null` here means the member is erased and there is no number to serve, which is ' +
+          'a DECISION the server took, not a column the join forgot. That is exactly why it ' +
+          'stays a named wire key rather than becoming an optional field on ' +
+          '`ShopOrderSchema` — an optional `memberPhone` cannot tell "erased, deliberately ' +
+          'no number" from "the board forgot to send it", and `countedPage`\'s whole history ' +
+          'is what a client\'s defensive default does with that ambiguity. Read it WITH ' +
+          '`memberErased` below, never on its own: the pair is the contract, and a client ' +
+          'that branches on `memberPhone == null` alone is one server bug away from ' +
+          'offering a blank `tel:`. See DECISIONS.md #100.',
+        '$.items[].memberErased':
+          'the signal DECISIONS.md #100 says the board needed and did not have. `member.name` ' +
+          'and `member.phone` survive erasure as a TOMBSTONE — "Deleted account" and a ' +
+          'synthetic `+990…` on an unassigned country code — because the member row has to ' +
+          'stay resolvable for seven years of books (`services/erasure.ts` § SCRUB, NOT ' +
+          'ROW-DELETE). Serving that tombstone in a field the wire calls a phone number is ' +
+          'how the dashboard came to render a working `tel:` link, and the scanner a `tel:` ' +
+          'AND a `wa.me`, beside a row reading "Deleted account". It is named here rather ' +
+          'than added to `ShopOrderSchema` for `memberName`\'s reason ONE STEP FURTHER: an ' +
+          'order does not have a name, does not have a phone, and is not erased — the MEMBER ' +
+          'is, and this row is a join across the two lifetimes. It is `boolean`, never ' +
+          'optional: the only client-side alternative is string-matching `+990`, which is a ' +
+          'client guessing at a server constant, and the prefix changing is a silent ' +
+          'regression that puts the link straight back.',
       },
     },
   ];
@@ -1024,14 +1048,42 @@ const UNMODELLED: Record<string, string> = {
     'phoneLast4 rather than phone is the disclosure decision. Parsing it as Member ' +
     'would fail, correctly. It has no schema of its own; a MemberSearchRow would be ' +
     'worth having.',
+  /**
+   * THE OTHER TWO DOORS OF DECISIONS.md #100, and the reason their entries carry the
+   * same three-field paragraph the orders probe's `wireOnly` does.
+   *
+   * These two are UNMODELLED rather than probed, so nothing here can go red when the
+   * shape moves — which is precisely why the fields are written out. A schema-less
+   * shape does not stop drifting, it drifts against the client instead, and the
+   * client for these two rows is a `tel:` link on the dashboard and a `tel:` AND a
+   * `wa.me` link in the scanner. The assertions live in
+   * `erased-member-merchant-surfaces.test.ts`, driven against a real erased member on
+   * all three endpoints at once; these entries are the naming, not the check.
+   */
   'GET /salons/:id/bookings':
     'the merchant Appointments row — BookingSchema plus `branchAssumed`, `memberName`, ' +
-    '`memberPhone`, `memberTier`, `artistName`, `serviceName`. A dashboard typing this ' +
-    'as `Booking` loses the customer\'s name and phone, which is most of the screen. ' +
-    'Needs a MerchantBookingRow schema.',
+    '`memberPhone`, `memberErased`, `memberTier`, `artistName`, `serviceName`. A dashboard ' +
+    'typing this as `Booking` loses the customer\'s name and phone, which is most of the ' +
+    'screen. `memberErased` is a boolean and `memberPhone` is NULLABLE for its sake ' +
+    '(DECISIONS.md #100): after erasure `member.name` and `member.phone` survive as a ' +
+    'tombstone — "Deleted account" and a synthetic `+990…` — because the row must stay ' +
+    'resolvable for seven years of books, and serving that tombstone in a field the wire ' +
+    'calls a phone number is how this row came to offer a working `tel:` to nobody. `null` ' +
+    'here is a decision, not an omission, and the two fields are read together: a client ' +
+    'branching on the null alone cannot tell "erased" from "the join forgot". `memberName` ' +
+    'stays the tombstone deliberately — the row still has to say WHOSE appointment it was. ' +
+    'Needs a MerchantBookingRow schema, and whoever writes it must carry all three: an ' +
+    'optional `memberPhone` would tolerate exactly the server that forgot to send it.',
   'GET /artists/me/bookings':
     'the artist\'s own day — BookingSchema plus `memberName`, `memberPhone`, ' +
-    '`memberTier`, `serviceName`. Same family as the merchant row above.',
+    '`memberErased`, `memberTier`, `serviceName`. Same family as the merchant row above ' +
+    'and the SHARPEST of the three for #100, because this is the row the design gives ' +
+    '"one-tap Call and WhatsApp" (README § My bookings): one tombstone reaches two ' +
+    'dialable affordances, and a `wa.me` on an unassigned country code is a message sent ' +
+    'nowhere with no error. Same contract — `memberErased: boolean`, `memberPhone: string ' +
+    '| null` and null exactly when erased, `memberName` still the tombstone. Scanner ' +
+    'scope, no permission, self-scoped by the URL, so the gate is not what bounds this ' +
+    'disclosure; the erased flag is.',
   'GET /salons/:id/loyalty':
     'the Loyalty screen\'s read model — the salon\'s tier ladder plus a computed ' +
     '`preview` of what a 10.000 KD top-up credits at each tier. A view, not an entity.',

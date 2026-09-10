@@ -148,6 +148,16 @@ import { whenLabel } from './AuditLog.js';
  *       not this screen's word, and it is one more reason for this cell not to
  *       say it a second time.)
  *
+ * THE CUSTOMER CELL IS THE SAME STATE, ONE CELL TO THE LEFT, and it took a
+ * separate fix (DECISIONS.md #100). Erasure tombstones the phone as well as the
+ * name — `+990` plus twelve random digits, an unassigned country code — and this
+ * board joined it straight through into a working `tel:` link. It now renders
+ * "Phone no longer held" and NO DIGITS: unlinked tombstone digits are barely
+ * better than linked ones, because they can be copied into a handset. The two
+ * cells now say the same kind of thing about the same event in the same words,
+ * which is the point — a merchant reading the row learns once that the contact
+ * for it is gone, and stops looking.
+ *
  * IT LOOKS EXACTLY LIKE THE PICKUP LINE — `.orders__erased` in `app.css`, italic
  * and `--avo-text-muted-strong`, the same as `.orders__pickup`. I first styled it
  * one step quieter, on the reasoning that pickup is an instruction a merchant
@@ -493,6 +503,39 @@ export function OrderRow({
       <td>
         <div className="orders__customer">{order.memberName}</div>
         {/*
+          ERASED MEMBERS GET NO DIALABLE AFFORDANCE AND NO DIGITS AT ALL, and the
+          server says so rather than this client guessing. DECISIONS.md #100.
+
+          `services/erasure.ts` sets the member's name to "Deleted account" and
+          her phone to `+990` + 12 random digits — an UNASSIGNED country code, so
+          the number is a tombstone by construction and reaches nobody. The
+          fulfilment board joins `member` live, so this cell shipped a working
+          `tel:` link to it: a merchant chasing a delivery taps a number that
+          looks like a contact, hears nothing, and learns nothing about why.
+
+          THE FIX IS THE FLAG AND NOT A PREFIX MATCH. String-matching `+990`
+          here would be this screen reimplementing a server constant, and the day
+          the sentinel changes the link comes back silently. So the payload
+          carries `memberErased` and nulls `memberPhone`, and this cell reads the
+          flag. Contract decided at trunk, served by
+          `GET /v1/salons/{id}/orders` and `.../bookings`.
+
+          AND NOT PLAIN TEXT EITHER, which is the part worth stating: printing
+          `+990224285141169` unlinked is barely better than linking it, because a
+          merchant can copy fabricated digits into a handset just as easily. The
+          digits do not appear. The line says the contact is gone, in the same
+          register as `.orders__where`'s "Address no longer held" one cell over,
+          which likewise offers nothing clickable.
+
+          `=== null` AND NOT `== null`, deliberately. The contract pairs a null
+          phone with `memberErased: true`, so either arm alone is sufficient and
+          both are read for belt and braces. But a phone that is `undefined` is a
+          MISSING JOIN — an upstream bug — and that degrades to the shape
+          `shopOrdersRender.test.tsx § does not render an empty customer cell`
+          already pins, rather than being reported to a merchant as an erasure
+          that did not happen.
+        */}
+        {/*
           A `tel:` link and not plain text. It is the one affordance a fulfilment
           row genuinely needs — the building number is wrong, the intercom is
           broken, nobody is answering the door — and it dials rather than sending
@@ -532,9 +575,13 @@ export function OrderRow({
           is Arabic content, which is the only reason this screen needs no more
           than these two attributes.
         */}
-        <a className="orders__phone" href={`tel:${order.memberPhone}`} dir="ltr">
-          {order.memberPhone}
-        </a>
+        {order.memberErased || order.memberPhone === null ? (
+          <div className="orders__contact-erased">Phone no longer held</div>
+        ) : (
+          <a className="orders__phone" href={`tel:${order.memberPhone}`} dir="ltr">
+            {order.memberPhone}
+          </a>
+        )}
       </td>
       <td>
         <Pill tone={delivery ? 'neutral' : 'quiet'}>{delivery ? 'Delivery' : 'Pickup'}</Pill>

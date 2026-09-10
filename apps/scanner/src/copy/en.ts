@@ -379,6 +379,36 @@ export const copy = {
   /** :169-170 */
   bookingsCall: 'Call',
   bookingsWhatsApp: 'WhatsApp',
+  /**
+   * Where the number was, once the customer has been erased. NEW COPY — the
+   * bundle draws no erased state on this card, because erasure postdates it.
+   *
+   * It is deliberately the same sentence shape lane C settled on for the
+   * delivery address ("Address no longer held", `ShopOrders.tsx:557`), and for
+   * the same four reasons, which hold identically here:
+   *
+   *   NOT NOTHING. A blank line under the name reads as a screen that failed to
+   *       load, and it sends an artist looking for the number somewhere the
+   *       scrub could not reach — her own call log, an old WhatsApp thread. The
+   *       sentence exists to END that search. That is the privacy outcome, not
+   *       a politeness.
+   *
+   *   NOT "DELETED" AND NOT "ERASED". Both are true and both are about a
+   *       person. "No longer held" is about a RECORD, and it is the salon that
+   *       no longer holds it — so the sentence never has a subject who is her.
+   *       (The name line beside it may already read "Deleted account"; that is
+   *       the API's tombstone, not this screen's word, and one more reason not
+   *       to say it twice.)
+   *
+   *   NOT A REASON. It does not say who asked or why, and it says nothing about
+   *       the APPOINTMENT: an erased booking keeps its time, its service and
+   *       its deposit, and those cells still own them.
+   *
+   *   NOT AN APOLOGY, and not an instruction. There is no remedy to offer. An
+   *       artist who needed to reach this customer cannot, and a "contact the
+   *       salon" would be inventing a route that does not exist.
+   */
+  bookingsPhoneErased: 'Phone no longer held',
   /** :693 — the group headings. Dates, so they are formatted rather than fixed. */
   bookingsToday: 'Today',
   bookingsTomorrow: 'Tomorrow',

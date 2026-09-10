@@ -46,6 +46,7 @@ import {
 } from '../auth/principal';
 import { badRequest, conflict, loyaltyReadOnly, notFound } from '../http/errors';
 import { parseBusinessHours, parseE164 } from '../http/fields';
+import { serialiseMemberContact } from '../http/serialise';
 import { parseAmountFils, requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { assertBookingReadable, assertShopReadable } from '../services/moduleAccess';
@@ -1878,6 +1879,14 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           at: cursorInstant(booking.startsAt),
           memberName: member.name,
           memberPhone: member.phone,
+          /**
+           * WITH THE PHONE, ALWAYS. This join is live, so an erased member
+           * appears here as the `+990` tombstone `services/erasure.ts` minted —
+           * `http/serialise.ts § serialiseMemberContact` is why that cannot be
+           * served as `memberPhone`, and this column is what lets the answer be
+           * derived from `erased_at` rather than from the digits.
+           */
+          memberErasedAt: member.erasedAt,
           memberTier: member.tier,
           artistName: artist.name,
           serviceName: service.name,
@@ -1916,8 +1925,14 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         items: page.map((r) => ({
           ...serialiseBooking(r.b as BookingRow),
           branchAssumed: r.b.branchAssumed,
+          /**
+           * The tombstone NAME survives untouched — "Deleted account" is what
+           * this board should say. The phone does not: same contract as
+           * `GET /v1/salons/{id}/orders` and `GET /artists/me/bookings`, applied
+           * through the same function so the three cannot drift apart.
+           */
           memberName: r.memberName,
-          memberPhone: r.memberPhone,
+          ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
           memberTier: r.memberTier,
           artistName: r.artistName,
           serviceName: r.serviceName,

@@ -46,6 +46,7 @@ import { member } from '../db/schema/member';
 import { service } from '../db/schema/service';
 import { requireMember, requireScannerScope } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
+import { serialiseMemberContact } from '../http/serialise';
 import { requireString } from '../money/validate';
 import {
   cancelBooking,
@@ -249,6 +250,12 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
    * explicitly — README § My bookings, "the client's name/tier/phone, one-tap Call
    * and WhatsApp". That is a real disclosure and it is bounded to her own
    * bookings by construction: there is no id in this URL either.
+   *
+   * EXCEPT WHEN THE CUSTOMER HAS BEEN ERASED, and this is the surface where that
+   * mattered most. "One-tap Call and WhatsApp" over a `+990` tombstone is an
+   * outbound message to a number that exists only because `member.phone` is
+   * `NOT NULL`. `memberPhone` is null and `memberErased` is true for that row —
+   * DECISIONS.md #100, argued in full at `http/serialise.ts § serialiseMemberContact`.
    */
   app.get('/artists/me/bookings', async (req, reply) => {
     const p = requireScannerScope(req);
@@ -276,7 +283,21 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     const rows = await db
-      .select({ b: booking, memberName: member.name, memberPhone: member.phone, memberTier: member.tier, serviceName: service.name })
+      /**
+       * `erasedAt` IS SELECTED HERE FOR A SHARPER REASON THAN ON THE OTHER TWO
+       * BOARDS. The scanner renders this list's `memberPhone` as a `tel:` AND a
+       * `https://wa.me/<digits>` button, so on an erased member this surface did
+       * not merely display an unreachable number — it offered to message it.
+       * `http/serialise.ts § serialiseMemberContact` carries the argument.
+       */
+      .select({
+        b: booking,
+        memberName: member.name,
+        memberPhone: member.phone,
+        memberErasedAt: member.erasedAt,
+        memberTier: member.tier,
+        serviceName: service.name,
+      })
       .from(booking)
       .innerJoin(member, eq(member.id, booking.memberId))
       .innerJoin(service, eq(service.id, booking.serviceId))
@@ -293,8 +314,15 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
     return reply.send({
       items: rows.map((r) => ({
         ...serialiseBooking(r.b as BookingRow),
+        /**
+         * The NAME stays the tombstone — an artist seeing "Deleted account" in
+         * her day is the honest rendering, and it is the string the design's
+         * My bookings row already draws. Only the two contact buttons lose
+         * their target, and `memberErased` is what tells the client to draw
+         * something truthful in their place instead of a dead `tel:`.
+         */
         memberName: r.memberName,
-        memberPhone: r.memberPhone,
+        ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
         memberTier: r.memberTier,
         serviceName: r.serviceName,
       })),

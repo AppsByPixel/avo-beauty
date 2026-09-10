@@ -115,3 +115,74 @@ export function serialiseTransactionForMerchant(
 ): Transaction & { feeFils: number } {
   return { ...serialiseTransactionForCustomer(row, reversal), feeFils: row.feeFils };
 }
+
+/**
+ * ==========================================================================
+ * THE ERASED MEMBER'S CONTACT — a tombstone is not a phone number.
+ * ==========================================================================
+ * (DECISIONS.md #100. `services/erasure.ts` § `tombstonePhone` mints the value
+ * this exists to keep off the wire.)
+ *
+ * `member.phone` is `NOT NULL`, `CHECK`ed E.164 and unique per salon, so erasure
+ * cannot clear it — it overwrites it with `+990` and twelve random digits, an
+ * unassigned country code chosen precisely because it can never reach anybody.
+ * That is the right thing to STORE and the wrong thing to SERVE: three merchant
+ * reads joined `member` live and handed the tombstone out in a field the wire
+ * calls `memberPhone`, so lane C's fulfilment board rendered
+ * `href="tel:+990224285141169"` next to a row reading "Deleted account", and the
+ * scanner's My Bookings turned the same digits into a `tel:` AND a
+ * `https://wa.me/` button. That surface does not merely display the fake number,
+ * it messages it.
+ *
+ * WHY NULL RATHER THAN THE DIGITS AS PLAIN TEXT. There is no dialable fallback
+ * to degrade to — the number reaches nobody by construction — and un-linking it
+ * is barely better than linking it, because a merchant can still copy twelve
+ * digits into a handset. Nothing is lost that the erasure did not already take:
+ * `erasure.ts` nulls the delivery snapshot on EVERY order regardless of status,
+ * so a `preparing` order for an erased member is already unfulfillable and the
+ * number was never going to complete it.
+ *
+ * WHY THE BOOLEAN IS NOT REDUNDANT. `memberPhone: null` alone is ambiguous the
+ * moment a member without a number on file is possible — "erased" and "never
+ * gave us one" would render identically, and a client cannot write honest copy
+ * from a hole. Without the flag the only client-side detection left is
+ * string-matching `+990` or the literal `'Deleted account'`, which is a client
+ * reimplementing an erasure predicate off two constants it does not own; both
+ * rot silently the day either changes. The server knows `erased_at`, so the
+ * server says so.
+ *
+ * WHY `memberName` IS NOT IN HERE. It stays the tombstone, unchanged, and it is
+ * deliberately NOT this function's business: `TOMBSTONE_NAME` is already a
+ * display-safe string every consuming surface renders as-is, and both surfaces
+ * are English-only by decision (design/README.md § Known gaps 1). Routing it
+ * through here would invite a future "translate the tombstone" change into the
+ * one place that must keep answering the same thing for all three endpoints.
+ *
+ * ONE FUNCTION, THREE CALLERS, FOR `serialiseTransactionForCustomer`'S REASON.
+ * The rule at the top of this file — "customer-never is a place in the code
+ * rather than a habit spread across handlers" — is exactly the rule here, and
+ * this defect is what it looks like when the habit is spread: the same join,
+ * written three times, leaked three times. A fourth merchant read that joins
+ * `member` for a phone calls this or repeats the bug.
+ */
+export interface MemberContactRow {
+  /** `member.phone` — never null in the database, tombstone or not. */
+  phone: string;
+  /** `member.erased_at`. Non-null is the erasure, and it is the only tell. */
+  erasedAt: Date | null;
+}
+
+export interface MemberContactWire {
+  memberErased: boolean;
+  memberPhone: string | null;
+}
+
+/**
+ * DERIVED FROM `erased_at`, NOT FROM THE SHAPE OF THE NUMBER. A `phone.startsWith('+990')`
+ * test here would be the same string-match coupling this field exists to spare
+ * clients, moved one process to the left.
+ */
+export function serialiseMemberContact(row: MemberContactRow): MemberContactWire {
+  const memberErased = row.erasedAt !== null;
+  return { memberErased, memberPhone: memberErased ? null : row.phone };
+}
