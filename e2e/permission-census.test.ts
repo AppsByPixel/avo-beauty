@@ -855,9 +855,18 @@ const PINNED_COVERAGE: string[] = [
    * board has no time horizon. `closed` is in `ORDER_STATUS_FLOW` and the query
    * applies no date floor, so `perms.shop` reads the home address of every
    * delivery customer the salon has ever had, indefinitely — see
-   * `delivery-address-privacy.test.ts` § "the board has no horizon". A permission
-   * decides WHO; retention decides FOR HOW LONG, and nothing in this feature
-   * decides the second.
+   * `delivery-address-privacy.test.ts` § 4, "the board serves the erased order
+   * without an address and a live member's closed order in full", which pins both
+   * sides of it. A permission decides WHO; retention decides FOR HOW LONG, and
+   * nothing in this feature decides the second.
+   *
+   * ERASURE IS NOT THE HORIZON AND DOES NOT BECOME ONE. Lane A closed
+   * DECISIONS.md #97 in `1f6bfb3`, so an order belonging to a member who ASKED to
+   * be erased is now served with `address: null`. That narrows the exposure to
+   * members who have asked for nothing, which is the whole population minus a
+   * handful — so the sentence above is still true and is still nobody's to answer
+   * here. `shop_order.address_erased_at` is the column a retention job would set,
+   * and today only erasure sets it.
    */
   'PATCH /v1/salons/:id/orders/:tid → shop',
   'PATCH /v1/salons/:id/promotions/happy-hours/:hid → marketing',
