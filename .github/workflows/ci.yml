@@ -123,8 +123,11 @@ jobs:
       # the only proofs that a charge is atomic, a wallet token is single-use, a
       # deposit applies once, a voucher claims once, and an erasure reaches a
       # customer's address. Decision 101, and the third of its family after 76
-      # (`check` reports a lint pass it never ran) and 89 (the typecheck does not
-      # read the specs).
+      # (`check` reports a lint pass it never ran) and 89 (the typecheck did not
+      # read the specs — RESOLVED the same day this step landed: `api/` was the
+      # last package excluding them, and the two drifts it was hiding were a
+      # fixture missing a NOT NULL column and one asserting a platform role the
+      # database's own CHECK refuses to store. 76 is the last one still open).
       #
       # ITS OWN DATABASE, NOT `avo_migrate_check`. The verify step above runs 93
       # invariants against that one, and several int fixtures leave rows behind by
@@ -170,16 +173,19 @@ jobs:
           #
           # IT ASSERTS A PROPERTY, NOT A COUNT, and the difference was measured
           # rather than reasoned. The first version of this guard required at
-          # least one passing spec — useless, because with the variable unset
-          # FOURTEEN still pass (they need no database) while 332 skip. A floor of
-          # 1 never fires; a floor of 346 goes stale on the next slice, which is
-          # the defect DECISIONS.md row 26 is about.
+          # least one passing spec — useless, because with the variable unset a
+          # DOZEN-ODD still pass (they need no database) while the rest skip. A
+          # floor of one never fires; a floor of the current total goes stale on
+          # the next slice, which is the defect DECISIONS.md row 26 is about —
+          # and it went stale immediately, the same day: 346 became 350 when
+          # `erasedMemberContact.int.test.ts` landed. That is why no count
+          # appears in this comment either.
           #
           # What actually separates the two states is that a properly configured
           # run skips NOTHING:
           #
-          #   reachable:    Tests  346 passed (346)
-          #   unreachable:  Tests  14 passed | 332 skipped (346)
+          #   reachable:    Tests  <all> passed (<all>)
+          #   unreachable:  Tests  <a few> passed | <the rest> skipped (<all>)
           #
           # So: any skip here means the database did not reach the suites. That
           # holds whatever the count grows to, and it fails in both directions —

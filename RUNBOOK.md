@@ -177,6 +177,21 @@ pnpm --dir=/Users/koraspond_developer/dev/avo/api run db:seed
 pnpm check && pnpm check
 ```
 
+**`db:verify` BEFORE `test:int`, never after, and never on the same database in the
+other order.** `pnpm check` does not run the integration suites (that is decision 101, and
+CI now runs them in a step of their own), so this only bites when you run `test:int` by
+hand — and when it does, it bites without naming a cause. Several int fixtures set
+`member.balance_fils` directly with no `member_wallet` legs, which is deliberate and
+documented where it is done (`routes/devices.int.test.ts` names the other two files that
+share the pattern), but it leaves `db:verify`'s **invariant 5**
+(`member.balance_fils = sum(member_wallet entries)`) red for those members afterwards. A
+second verify on the same database then fails on rows a *test* left behind, reads exactly
+like a money bug in the schema, and points at nothing you changed. The order that always
+works is **reset → migrate → seed → `db:verify` → `test:int`**. CI sidesteps it structurally
+instead: `avo_migrate_check` is verified, `avo_int_check` runs the suites, and the two never
+meet. The e2e harness prints the same census for its own `QA-*` members at the end of a run
+— that line is the same known gap, not a new one.
+
 **Do not set `POSTGRES_DB`.** `e2e/support/global-setup.ts` skips minting its per-run
 database when it sees one, which silently puts every concurrent checkout back on shared
 fixtures — the bug that produced four different failure counts on one unchanged tree.
