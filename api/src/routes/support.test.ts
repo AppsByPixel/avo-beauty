@@ -83,7 +83,27 @@ const CONSOLE: PlatformPrincipal = {
   scope: 'platform',
   sessionId: 'sess-platform',
   name: 'Yousef',
-  role: 'founder',
+  /**
+   * `owner`, NOT `founder`, AND THIS FIXTURE SAID FOUNDER.
+   *
+   * The word is the stale one from `design/api-contract.md:616`
+   * (`role: "founder" | "admin" | "analyst"`), which `db/schema/platformAdmin.ts`
+   * settles against the drawn console in a long comment: the enum is
+   * `owner | admin | analyst | support`, the design wins, and `api-contract.md`
+   * needs two corrections. Lane C wrote `founder` at its own boundary parse and
+   * corrected it twice (`apps/dashboard/src/auth/platformAdmin.ts`,
+   * `auth/session.ts`). This was the third copy, and the only one that survived -
+   * because it is in a spec, and specs were not typechecked.
+   *
+   * WHAT IT WAS ASSERTING: nothing. `queueScope` branches on
+   * `principal.kind === 'staff'` and reads no role, so the value was inert - the
+   * console cases below are about the ABSENCE of a predicate and about the three
+   * query filters. Worse than inert, though: `role: 'founder'` beside
+   * `owner: true` is a pair the CHECK `platform_admin_owner_flag_matches_role`
+   * (`owner = (role = 'owner')`) refuses to store, so the fixture described a
+   * console admin the database cannot contain.
+   */
+  role: 'owner',
   owner: true,
   sections: {
     analytics: true,

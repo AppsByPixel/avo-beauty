@@ -35,6 +35,14 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+/**
+ * TYPE-ONLY, so the skip guarantee in the note below still holds: `import type`
+ * is erased and imports nothing at runtime. The VALUES from this module are still
+ * taken through the dynamic `limits` binding in `beforeAll`; only the type comes
+ * statically, because `limits.SignInSurface` was never a type expression -
+ * `limits` is a value, and a value has no namespace to reach into.
+ */
+import type { SignInSurface } from './signInLimit';
 
 const INT_URL = process.env.AVO_INT_DATABASE_URL;
 
@@ -148,7 +156,7 @@ suite('the password sign-in budget', () => {
 
   /** Fill one claimed identity's window to exactly `n`. */
   async function preload(
-    surface: limits.SignInSurface,
+    surface: SignInSurface,
     salonId: string | null,
     identifier: string,
     n: number,
@@ -161,7 +169,7 @@ suite('the password sign-in budget', () => {
   }
 
   async function countAttempts(
-    surface: limits.SignInSurface,
+    surface: SignInSurface,
     salonId: string | null,
     identifier: string,
   ): Promise<number> {

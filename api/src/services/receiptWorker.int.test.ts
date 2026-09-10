@@ -411,7 +411,13 @@ suite('the receipt worker re-asserts its claim before it writes', () => {
      * exported separately from `claimJobs` lets a spec express.
      */
     const [claimed] = await worker.claimJobs(db, 1);
-    expect(claimed?.id).toBe(jobId);
+    /**
+     * `expect` does not narrow, and `processJob` below takes a `ClaimedJob` and
+     * not an optional one. Throwing on the empty claim keeps the assertion above
+     * (the claim is THIS job) while giving the compiler the same fact.
+     */
+    if (claimed === undefined) throw new Error('claimJobs returned nothing to claim');
+    expect(claimed.id).toBe(jobId);
 
     await anotherWorkerSendsIt(jobId);
 

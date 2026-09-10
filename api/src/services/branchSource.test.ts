@@ -156,11 +156,20 @@ describe('a branch is never read from a request body', () => {
       // parameter is `supplied?: string | null` and would fail this as though a
       // caller had passed it.
       for (const m of code(f).matchAll(/await resolveBranch\(([^)]*)\)/g)) {
-        const args = m[1].split(',').map((a) => a.trim());
-        sites.push(`${rel(f)}: ${args[2] ?? '<none>'}`);
+        /**
+         * The group is not optional in the pattern, so it always participates -
+         * but `RegExpMatchArray` is indexed access and the compiler cannot know
+         * that. Read it once and fail on the impossible case rather than assert
+         * it away: if this ever throws, the pattern above changed.
+         */
+        const captured = m[1];
+        if (captured === undefined) throw new Error(`no argument list captured in ${rel(f)}`);
+        const args = captured.split(',').map((a) => a.trim());
+        const supplied = args.length < 3 ? undefined : args[2];
+        sites.push(`${rel(f)}: ${supplied ?? '<none>'}`);
         expect(
-          args.length < 3 || allowed.has(args[2] as string),
-          `${rel(f)} passes ${args[2]} as resolveBranch's supplied branch`,
+          supplied === undefined || allowed.has(supplied),
+          `${rel(f)} passes ${supplied} as resolveBranch's supplied branch`,
         ).toBe(true);
       }
     }
