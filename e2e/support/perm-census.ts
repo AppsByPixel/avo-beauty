@@ -274,9 +274,26 @@ const lineOf = (src: string, index: number): number =>
  *
  * Losing an unreadable route is bad. INVENTING one under it is worse, and the corrected
  * account of WHICH spec then lies is worth having, because the first draft of this comment
- * named the wrong one. `contract.test.ts` does NOT read this module — it has its own,
- * third reading of a registration in `support/contract-drift.ts`'s `discoverGetRoutes`,
- * anchored on `app.get` and GETs only. The spec that fires on a ghost is
+ * named the wrong one — and the corrected version has since gone stale in its turn, which
+ * is why it is restated here rather than left standing.
+ *
+ * WHAT THIS PARAGRAPH USED TO SAY, AND WHY IT NO LONGER HOLDS. It read: "`contract.test.ts`
+ * does NOT read this module — it has its own, third reading of a registration in
+ * `support/contract-drift.ts`'s `discoverGetRoutes`, anchored on `app.get` and GETs only."
+ * That was true when the ghost was found and is FALSE NOW. `discoverGetRoutes` was the
+ * third of `e2e`'s three definitions of a registration; it has been collapsed onto this
+ * one, so `contract.test.ts` reads this module today — through `getRoutesIn`, which is
+ * `registrationsIn` over `stripComments`. The GET census and the permission census see
+ * `api/src/routes/` through one reader, and the 55-path GET set was measured identical
+ * across that change.
+ *
+ * SO A GHOST WOULD NOW REACH FOUR SPECS, NOT THREE. The three below still fire; the fourth
+ * is `contract.test.ts` § "the GET reader is the census's reader, not a fourth regex",
+ * which drives this function on source it writes itself. That is a gain and it is also the
+ * reason this paragraph must stay accurate: a shared reader means a defect here is a
+ * defect in both censuses at once.
+ *
+ * The spec that fires on a ghost is
  * `permission-census.test.ts` § "every route and gate the census reads is pinned", whose
  * message invites the reader to PASTE the invented line into `PINNED_COVERAGE` — so the
  * failure mode is not merely a confusing message, it is an instruction to pin a route

@@ -41,12 +41,9 @@
  */
 
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
-const here = dirname(fileURLToPath(import.meta.url));
-/** e2e/support → e2e → repo root */
-const repoRoot = join(here, '..', '..');
+import { ROUTES_DIR, registrationsIn, stripComments } from './perm-census.js';
 
 /**
  * What this file needs of a schema, written structurally rather than as
@@ -231,17 +228,84 @@ export interface DiscoveredGetRoute {
  * tenancy gap ledger uses, and every GET has to be classified as either probed
  * against a schema or explicitly unmodelled with a reason.
  */
-export function discoverGetRoutes(): DiscoveredGetRoute[] {
-  const dir = join(repoRoot, 'api', 'src', 'routes');
-  const found: DiscoveredGetRoute[] = [];
-  // `app.get<{ Params: { id: string } }>('/salons/:id', …)` — the generic sits
-  // between the method and the paren, and never contains a `(`.
-  const re = /app\.get[^(]*\(\s*'([^']+)'/g;
+/**
+ * The GET registrations in ONE file's source, in path order.
+ *
+ * THIS IS NO LONGER ITS OWN READING OF "WHAT IS A ROUTE REGISTRATION", AND THAT
+ * IS THE WHOLE POINT OF THE FUNCTION.
+ *
+ * It used to be. `e2e` carried three independent definitions — `registrationsIn`
+ * in `perm-census.ts`, the ambiguity pass's `callSites` beside it, and a regex
+ * here:
+ *
+ *     const re = /app\.get[^(]*\(\s*'([^']+)'/g;
+ *
+ * Three readings of the same thirty files that were free to disagree about them,
+ * and the two in `perm-census.ts` have since been collapsed into one for exactly
+ * that reason. This was the third. It had three weaknesses, none of which bit on
+ * the tree as it stood — measured 2026-09-11, both readers returned the same 55
+ * GET paths, set-identical — which is the condition under which a defect is
+ * cheapest to remove and least likely to be believed.
+ *
+ * 1. ANCHORED ON THE LITERAL RECEIVER `app.get`. This is verbatim the defect
+ *    `registrationsIn` documents under "THE THIRD FAILURE MODE, AND IT HID THE
+ *    PAYMENT WEBHOOK": `POST /webhooks/:provider` registers on `scoped`, an
+ *    encapsulated Fastify context, and was invisible to every `app.`-anchored
+ *    sweep on the platform. That route is a POST, so this census never wanted it
+ *    — but the class does not care about the method. A GET on an encapsulated
+ *    context was invisible here, and nothing anywhere reported it, because a
+ *    census cannot report a hole in a route it never enumerated. Encapsulation is
+ *    what a route reaches for when it needs its own parser or its own error
+ *    handler, which is not a rare shape and not a low-stakes one.
+ *
+ * 2. A PATH LIFTED INTO A CONST WAS SILENTLY LOST. `[^(]*` cannot cross a `(`, so
+ *    unlike the pattern that produced the `DELETE /v1/images/:imageId` ghost this
+ *    one could not INVENT a route — `app.get<…>(SOME_CONST, handler)` simply
+ *    produced no match. It left `discovered` and both consumers went QUIET rather
+ *    than red: "every GET is classified as probed or UNMODELLED" cannot fail on a
+ *    route it cannot see, and the UNMODELLED ghost spec asks the opposite
+ *    question. Losing a route without inventing one is the better half of that
+ *    pair and it is still a loss.
+ *
+ *    THAT HOLE IS NOW FLOORED BY SOMEONE ELSE, WHICH IS THE SECOND THING SHARING
+ *    THE READER BUYS. An unreadable registration is dropped here exactly as
+ *    before — but it is dropped by `registrationsIn`, and `ambiguousRegistrations()`
+ *    reports every call site that reader could see and could not resolve, by file
+ *    and line, across all five methods. `permission-census.test.ts` is what turns
+ *    that into a red spec. This module still has no ambiguity pass of its own and
+ *    now does not need one.
+ *
+ * 3. SINGLE QUOTES ONLY. `'([^']+)'` could not see a double-quoted path.
+ *
+ * And a fourth that was not on the list and is the one that would have fired
+ * first: IT DID NOT STRIP COMMENTS. `censusOfRoutes` reads `stripComments(raw)`
+ * and this read `raw`, so a commented-out or merely quoted `app.get('/…')` in
+ * `api/src/routes/` was a GET route as far as this census was concerned — a ghost
+ * demanding a probe or an `UNMODELLED` reason for an endpoint nobody serves. That
+ * difference between the two readers was never decided, only never exercised; it
+ * is decided now, in favour of stripping, by using the same pipeline as the
+ * census.
+ *
+ * EXPORTED SO THE SPEC CAN DRIVE IT ON SOURCE IT WRITES ITSELF, for the same
+ * reason `registrationsIn` is exported: every path in `api/src/routes/` is an
+ * inline single-quoted literal on an `app` receiver today, so not one of the four
+ * has a reproduction in the tree and not one moves a census number when it is
+ * fixed. `contract.test.ts` § "the GET reader is the census's reader" is the only
+ * place these shapes can be asserted before an ordinary refactor produces them.
+ */
+export function getRoutesIn(source: string): string[] {
+  return registrationsIn(stripComments(source))
+    .filter((r) => r.method === 'GET')
+    .map((r) => r.path);
+}
 
-  for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
-    const source = readFileSync(join(dir, file), 'utf8');
-    for (const m of source.matchAll(re)) {
-      found.push({ path: m[1]!, file: `api/src/routes/${file}` });
+export function discoverGetRoutes(): DiscoveredGetRoute[] {
+  const found: DiscoveredGetRoute[] = [];
+
+  for (const file of readdirSync(ROUTES_DIR).filter((f) => f.endsWith('.ts'))) {
+    const source = readFileSync(join(ROUTES_DIR, file), 'utf8');
+    for (const path of getRoutesIn(source)) {
+      found.push({ path, file: `api/src/routes/${file}` });
     }
   }
   return found.sort((a, b) => a.path.localeCompare(b.path));
