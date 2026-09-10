@@ -33,7 +33,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   makeJpeg,
   makePng,
@@ -60,6 +60,40 @@ const suite = INT_URL ? describe : describe.skip;
  */
 const STORE_ROOT = mkdtempSync(join(tmpdir(), 'avo-lane-a-imagestore-'));
 process.env.IMAGE_STORE_PATH = STORE_ROOT;
+
+/**
+ * ONE INJECTED FAULT, FOR THE ONE CLAIM NOTHING ELSE IN THIS FILE CAN SUPPORT:
+ * that the detach and the RECORD of the detach commit together or not at all.
+ *
+ * Every other spec here observes a successful path, and a successful path looks
+ * identical whether the two writes share a transaction or run as two. The only
+ * way to tell them apart is to make the SECOND one fail and then ask what the
+ * first one left behind — so `writeAudit` is wrapped, not replaced: the real
+ * implementation runs for every call in this file except the one this flag arms,
+ * which is `action: 'Image removed'` while `.on` is true. Nothing else in the
+ * suite changes behaviour.
+ *
+ * `vi.hoisted` because `vi.mock`'s factory is hoisted above every declaration in
+ * this file; a plain `let` would still be in its temporal dead zone.
+ */
+const AUDIT_FAULT = vi.hoisted(() => ({ on: false }));
+
+vi.mock('../services/audit', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../services/audit')>();
+  return {
+    ...real,
+    writeAudit: async (
+      exec: Parameters<typeof real.writeAudit>[0],
+      principal: Parameters<typeof real.writeAudit>[1],
+      input: Parameters<typeof real.writeAudit>[2],
+    ) => {
+      if (AUDIT_FAULT.on && input.action === 'Image removed') {
+        throw new Error('injected: the audit write failed');
+      }
+      return real.writeAudit(exec, principal, input);
+    },
+  };
+});
 
 const SALON = 'SAL-AMARA';
 const OTHER_SALON = 'SAL-LUMIERE';
@@ -628,6 +662,76 @@ suite('images on products and services', () => {
       const second = await del();
       expect(second.statusCode).toBe(404);
       expect(JSON.parse(second.body).error).toBe('no_image');
+    });
+
+    /**
+     * THE DETACH AND THE RECORD OF IT ARE ONE TRANSACTION.
+     *
+     * `performDetach` used to call `detachImage(db, …)` — which opens and COMMITS
+     * a transaction of its own — and then `writeAudit(db, …)` as a second,
+     * separate statement. So an audit insert that failed left the image detached
+     * with nothing in the log saying who did it or when: the deed without the
+     * record, which for a merchant asking "why did my photo disappear" is
+     * indistinguishable from the reaper or from a bug.
+     *
+     * BEFORE THE FIX THIS SPEC FAILS ON ITS FIRST ASSERTION — the attachment is
+     * already gone, because the detach committed before the audit was ever
+     * attempted. After it, the whole thing rolls back and the merchant's image is
+     * exactly where she left it. Same shape as `services/order.ts`'s "if the
+     * debit fails, nothing else happened" (CLAUDE.md non-negotiable #3), applied
+     * to a row that is evidence rather than money.
+     */
+    it('rolls the detach back when the audit write fails — no deed without a record', async () => {
+      const ref = JSON.parse(
+        (await upload('products', PRODUCT, makePng(96, 96), 'image/png')).body,
+      );
+      const since = new Date();
+
+      AUDIT_FAULT.on = true;
+      let status = 0;
+      try {
+        status = (
+          await app.inject({
+            method: 'DELETE',
+            url: `/v1/salons/${SALON}/products/${PRODUCT}/image`,
+            headers: { authorization: `Bearer ${manager}` },
+          })
+        ).statusCode;
+      } finally {
+        AUDIT_FAULT.on = false;
+      }
+      // An unhandled failure, not a swallowed one. The caller is told nothing
+      // happened, which is now true.
+      expect(status).toBeGreaterThanOrEqual(500);
+
+      // THE ASSERTION THAT FAILS BEFORE THE FIX: her image is still attached.
+      const links = await db
+        .select()
+        .from(imageAttachment)
+        .where(
+          orm.and(
+            orm.eq(imageAttachment.ownerId, PRODUCT),
+            orm.eq(imageAttachment.role, 'primary'),
+          ),
+        );
+      expect(links.length).toBe(1);
+      expect(links[0]?.imageId).toBe(ref.id);
+
+      // And it was not marked for the reaper, which is the half that would have
+      // deleted the bytes some hours later.
+      const [row] = await db.select().from(image).where(orm.eq(image.id, ref.id));
+      expect(row?.detachedAt).toBeNull();
+
+      // Nothing in the log claims a removal that did not happen. Scoped by time,
+      // because an earlier spec in this file detaches successfully.
+      const claimed = await db
+        .select()
+        .from(auditLog)
+        .where(orm.and(orm.eq(auditLog.subjectId, PRODUCT), orm.gt(auditLog.createdAt, since)));
+      expect(claimed.filter((a) => a.action === 'Image removed')).toEqual([]);
+
+      // And the bytes still serve, so she never sees a broken tile.
+      expect((await fetchImage(ref.id)).statusCode).toBe(200);
     });
 
     it('deduplicates the same bytes inside one salon, and never across two', async () => {

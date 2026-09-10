@@ -342,7 +342,7 @@ export async function attachImage(db: Db, input: AttachInput): Promise<AttachRes
 }
 
 /** Anything with `.update()` — the pool, or an open transaction. Audit's shape. */
-type Executor = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
+export type Executor = Db | Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
  * Mark an image detached IF nothing points at it any more.
@@ -378,32 +378,52 @@ export interface DetachResult {
  * statement, and the same reasoning `DELETE .../products/{pid}` records: "a
  * second DELETE finds no active row and answers 404… rather than a 204 implying
  * it removed something."
+ *
+ * IT TAKES AN EXECUTOR AND NO LONGER OPENS A TRANSACTION OF ITS OWN, WHICH IS
+ * THE POINT. It used to be `db.transaction(…)`, which made the delete and the
+ * mark atomic with each other and atomic with NOTHING ELSE — so its caller in
+ * `routes/images.ts` committed the detach and only then tried to write the audit
+ * row, and an audit insert that failed left a merchant's photo gone with nothing
+ * in the log saying who removed it. The deed without the record.
+ *
+ * So the TRANSACTION IS THE CALLER'S NOW: pass it an open `tx` and the detach,
+ * the mark and the audit row commit together or not at all. The two statements
+ * in here are still atomic with each other — they are simply atomic with
+ * whatever else the caller is doing as well, which is strictly stronger.
+ *
+ * PASSING THE POOL IS TYPE-LEGAL AND WOULD BE WRONG. `Executor` admits `Db`
+ * because that is the shape `writeAudit` and `markDetachedIfUnreferenced` share,
+ * and there is no type that says "a transaction, definitely". There is exactly
+ * one caller and it wraps; a second one must wrap too.
  */
 export async function detachImage(
-  db: Db,
+  tx: Executor,
   salonId: string,
   ownerType: ImageOwnerType,
   ownerId: string,
 ): Promise<DetachResult> {
-  return db.transaction(async (tx) => {
-    const removed = await tx
-      .delete(imageAttachment)
-      .where(
-        and(
-          eq(imageAttachment.salonId, salonId),
-          eq(imageAttachment.ownerType, ownerType),
-          eq(imageAttachment.ownerId, ownerId),
-          eq(imageAttachment.role, 'primary'),
-        ),
-      )
-      .returning({ imageId: imageAttachment.imageId });
+  const removed = await tx
+    .delete(imageAttachment)
+    .where(
+      and(
+        eq(imageAttachment.salonId, salonId),
+        eq(imageAttachment.ownerType, ownerType),
+        eq(imageAttachment.ownerId, ownerId),
+        eq(imageAttachment.role, 'primary'),
+      ),
+    )
+    .returning({ imageId: imageAttachment.imageId });
 
-    const removedId = removed[0]?.imageId;
-    if (!removedId) throw notFound('no_image', 'There is no image on that yet.');
+  const removedId = removed[0]?.imageId;
+  /**
+   * Thrown out of the caller's transaction callback, which rolls it back — the
+   * same mechanism every refusal in `services/order.ts` relies on. A 404 here
+   * must not commit a partial detach either.
+   */
+  if (!removedId) throw notFound('no_image', 'There is no image on that yet.');
 
-    await markDetachedIfUnreferenced(tx, removedId);
-    return { imageId: removedId };
-  });
+  await markDetachedIfUnreferenced(tx, removedId);
+  return { imageId: removedId };
 }
 
 /**

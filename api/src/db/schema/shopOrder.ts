@@ -1,16 +1,38 @@
 /**
  * The lines of a shop order.
  *
- * WHY THERE IS NO `shop_order` TABLE
- * ---------------------------------
- * The `shop` transaction IS the order. It already carries the member, the salon,
- * the branch and whether that branch was established, the total (signed,
- * negative), the method, the status, the reference (`AVO-SH-…`) and the instant.
- * An `order` table beside it would restate every one of those, and a second
- * money column that can disagree with `transaction.amount_fils` is the defect
- * `member.balance_fils` needs a whole ledger to defend. So the order's identity
- * is its transaction id, and this table holds the one thing the transaction
- * cannot: WHAT was bought, and how many.
+ * WHY AN ORDER'S MONEY LIVES NOWHERE BUT ITS TRANSACTION
+ * ------------------------------------------------------
+ * THIS SECTION USED TO BE TITLED "WHY THERE IS NO `shop_order` TABLE", and there
+ * is one — `db/schema/delivery.ts`, migration 0045, item 7. The argument was not
+ * wrong when it was written and most of it is not wrong now; it was an argument
+ * ABOUT MONEY, and a fulfilment row arrived for reasons money never covered. The
+ * distinction is the load-bearing part, so it is stated rather than deleted.
+ *
+ * WHAT IS STILL TRUE. The `shop` transaction IS the order's money. It already
+ * carries the member, the salon, the branch and whether that branch was
+ * established, the total (signed, negative), the method, the status, the
+ * reference (`AVO-SH-…`) and the instant. Restating any of that beside it would
+ * create a second money column that can DISAGREE with `transaction.amount_fils`,
+ * which is the defect `member.balance_fils` needs a whole ledger to defend. So
+ * an order's identity is its transaction id, and there is still no order total,
+ * no order amount and no separate record of whether it was paid.
+ *
+ * WHY `shop_order` DOES NOT BREAK THAT. It is keyed ON `transaction_id`, holds no
+ * amount, and touches neither `transaction` nor `ledger_entry` — it hangs off a
+ * transaction that has already settled, and deciding where a bottle goes cannot
+ * change what it cost. `db/schema/delivery.ts` is the authority on it and carries
+ * the full reasoning, including why there is no delivery fee; this file does not
+ * restate it, so the two cannot drift into two accounts of one design.
+ *
+ * SO TWO TABLES HANG OFF ONE SETTLED TRANSACTION AND NEITHER HOLDS A FILS. This
+ * one holds WHAT was bought and how many; `shop_order` holds WHERE IT IS GOING
+ * and how far along the salon is. Both are facts the money row cannot express.
+ *
+ * THE RULE THAT SURVIVES, for whoever extends this: a new fact about an order
+ * goes in a table beside the transaction, never in a column that restates one of
+ * the transaction's. A delivery fee would be the first thing to break it, which
+ * is exactly why `delivery.ts` names it as a decision of its own.
  *
  * WHY LINES ARE STORED AT ALL, when a charge does not store its services
  * ---------------------------------------------------------------------

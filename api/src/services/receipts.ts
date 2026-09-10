@@ -125,11 +125,118 @@ export function decideReceiptChannels(
   return { channels: ['whatsapp'], fallbackReason: 'email_unavailable' };
 }
 
+/**
+ * =========================================================================
+ * WHAT A RECEIPT OWES THE CUSTOMER, AS A TYPE RATHER THAN A HOPE
+ * =========================================================================
+ * This parameter was `Record<string, unknown>`, and that is exactly how the shop
+ * receipt came to say `pickup: true` on a delivery order and stay that way for a
+ * whole slice: `services/order.ts` resolves the fulfilment three lines above the
+ * queue call, the queue call hardcoded the opposite, and nothing in between was
+ * able to object. AN UNTYPED PAYLOAD IS NOT A LOOSE SCHEMA, IT IS THE ABSENCE OF
+ * ONE — `Record<string, unknown>` accepts a misspelled field, a dropped field and
+ * a field that contradicts the row written beside it, all silently. The
+ * discriminated union below is what makes the next such drift a compile error
+ * rather than a persisted lie.
+ *
+ * WHY IT LIVES HERE AND NOT IN `packages/types`. Nothing outside `api/` reads
+ * `receipt_job.payload`: the worker claims the row (`services/receiptWorker.ts`),
+ * hands it to a driver (`receipts/types.ts`), and the driver renders it. No
+ * client, no dashboard, no shared rule and no wire schema consults it — so
+ * hoisting this into a trunk-owned package would turn a field only this directory
+ * writes and reads into a four-way rebase (CLAUDE.md § Shared packages).
+ *
+ * IT STAYS `Record<string, unknown>` AT THE DRIVER BOUNDARY, deliberately. A
+ * driver's job is to render what it was handed, and narrowing `ReceiptDelivery`
+ * would make every driver exhaustive over five kinds it has no reason to
+ * distinguish. This type constrains the WRITE, which is the side that drifted.
+ *
+ * THE FIELDS ARE NOT INVENTED HERE. They are what the five money paths already
+ * pass; `design/whatsapp-templates.md` § 3 is the document a renderer will have
+ * to satisfy, and it is deliberately not yet satisfied by anything.
+ */
+interface ReceiptPayloadCommon {
+  transactionId: string;
+  amountFils: number;
+  balanceAfterFils: number;
+}
+
+/** `POST /charges` — services rendered at the counter. `services/charge.ts`. */
+export interface ChargeReceiptPayload extends ReceiptPayloadCommon {
+  kind: 'charge';
+  services: Array<{ id: string; name: string; priceFils: number }>;
+}
+
+/**
+ * `POST /orders` — a wallet purchase from the shop. `services/order.ts`.
+ *
+ * `fulfilment` RATHER THAN A `pickup` BOOLEAN, and rather than nothing. The
+ * column is an enum (`db/schema/delivery.ts` § orderFulfilment), the wire field
+ * the merchant board reads is an enum (`routes/orders.ts` § serialiseShopOrder),
+ * and a boolean beside two enums is a third vocabulary for one fact — which is
+ * how a hardcoded `true` survived review. One word, spelled the same in the row,
+ * on the wire, and here.
+ *
+ * WHAT THIS FIELD DOES NOT DO IS PROMISE A SENTENCE. The design bundle has no
+ * delivery receipt copy — `whatsapp-templates.md` § 3's payment receipt has no
+ * pickup or delivery variable at all, and `AVO Merchant Dashboard.dc.html:299`
+ * still reads "no delivery (phase 2)" — so this carries the FACT truthfully and
+ * leaves what a receipt says about it to whoever writes that copy. Inventing a
+ * customer-facing delivery line here would be adding a feature (CLAUDE.md § How
+ * to work, and § Keep the copy verbatim).
+ */
+export interface ShopReceiptPayload extends ReceiptPayloadCommon {
+  kind: 'shop';
+  /** With quantities — a total that came from a multiplication is not reconcilable without them. */
+  items: Array<{
+    productId: string;
+    name: string;
+    qty: number;
+    unitPriceFils: number;
+    lineTotalFils: number;
+  }>;
+  fulfilment: 'pickup' | 'delivery';
+}
+
+/** `POST /bookings` — a deposit taken. `services/booking.ts`. */
+export interface DepositHoldReceiptPayload extends ReceiptPayloadCommon {
+  kind: 'deposit_hold';
+  bookingId: string;
+  artistName: string;
+  serviceName: string;
+  /** ISO 8601. */
+  startsAt: string;
+}
+
+/** A deposit given back — cancelled by her, or returned by the no-show job. */
+export interface DepositReturnReceiptPayload extends ReceiptPayloadCommon {
+  kind: 'deposit_return';
+  bookingId: string;
+  reason: 'cancelled' | 'no_show';
+}
+
+/** A settled top-up. `services/topup.ts`. */
+export interface TopupReceiptPayload extends ReceiptPayloadCommon {
+  kind: 'topup';
+  intentId: string;
+  bonusFils: number;
+  creditFils: number;
+  method: 'knet' | 'card' | 'applepay' | 'wallet';
+  reference: string;
+}
+
+export type ReceiptPayload =
+  | ChargeReceiptPayload
+  | ShopReceiptPayload
+  | DepositHoldReceiptPayload
+  | DepositReturnReceiptPayload
+  | TopupReceiptPayload;
+
 export async function queueReceipts(
   tx: Executor,
   recipient: ReceiptRecipient,
   transactionId: string,
-  payload: Record<string, unknown>,
+  payload: ReceiptPayload,
 ): Promise<void> {
   /**
    * The preference, read in the CALLER'S TRANSACTION so a merchant who flips a
