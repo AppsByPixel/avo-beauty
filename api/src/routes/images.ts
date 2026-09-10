@@ -389,6 +389,28 @@ export async function registerImageRoutes(app: FastifyInstance): Promise<void> {
       throw storeError(err);
     }
 
+    /**
+     * NOT IN A TRANSACTION WITH THE ATTACH ABOVE, AND THAT IS A RECORDED GAP
+     * RATHER THAN AN OVERSIGHT. `performDetach` was the same shape and was fixed;
+     * this one cannot be fixed the same way, and the reason is worth writing down
+     * so the next reader does not "just" wrap it.
+     *
+     * `attachImage` writes THE BYTES TO THE STORE BEFORE it opens its transaction
+     * — RULE 2, `services/imageAttachment.ts`, and the order is what makes an
+     * upload idempotent across retries and racers. Handing it a caller-owned `tx`
+     * would put an S3 `put` inside an open database transaction, which trades a
+     * missing audit row for a database connection held across a network call on
+     * the one route that is hit once per tile per scroll. Doing it properly means
+     * splitting the put out of `attachImage` so the route can do
+     * put-then-transaction, and that is a slice of its own with the RULE 2
+     * argument to re-examine.
+     *
+     * WHAT IT COSTS MEANWHILE, stated plainly: an audit insert that fails after a
+     * successful attach leaves the image attached with no log line naming who
+     * uploaded it. That is a missing record of an addition the merchant can see
+     * on her own screen — strictly less dangerous than the detach case, where the
+     * unlogged act also schedules the bytes for deletion.
+     */
     await writeAudit(db, p, {
       salonId: p.salonId,
       /**
@@ -432,23 +454,52 @@ export async function registerImageRoutes(app: FastifyInstance): Promise<void> {
     ownerType: ImageOwnerType,
   ) {
     const { subject } = OWNER[ownerType];
+    /**
+     * OUTSIDE THE TRANSACTION, deliberately: it is a read, and its 404 is about
+     * the URL rather than about anything this request would change.
+     */
     const owner = await requireOwnerInSalon(db, ownerType, req.params.oid, p.salonId);
-    const removed = await detachImage(db, p.salonId, ownerType, owner.id);
 
-    await writeAudit(db, p, {
-      salonId: p.salonId,
-      kind: 'rules',
-      action: 'Image removed',
-      // "Detached", because that is what happened. The bytes survive the grace
-      // window (services/imageReaper.ts) and a merchant asking why the old one
-      // came back after an undo deserves the true word in the log.
-      detail: `${owner.name} · image detached`,
-      source: 'merchant',
-      subjectType: subject,
-      subjectId: owner.id,
-      metadata: { imageId: removed.imageId, detached: true },
-      ipAddress: req.ip ?? null,
-      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+    /**
+     * ONE TRANSACTION AROUND THE DETACH AND THE RECORD OF THE DETACH.
+     *
+     * These were two separate statements on the pool — `detachImage` committed a
+     * transaction of its own and `writeAudit` then ran as a second, independent
+     * write. So the two could disagree: an audit insert that failed for any
+     * reason left the image detached, the row marked for the reaper, and NOTHING
+     * in the log saying who removed it or when. To a merchant asking why her
+     * photo vanished that is indistinguishable from the reaper misfiring or from
+     * a bug, and it is the one question an audit log exists to answer.
+     *
+     * The audit row is not money, so this is not non-negotiable #3 — but it is
+     * #3's reasoning ("if the debit fails, nothing else happened") applied to a
+     * row that is EVIDENCE. `services/imageReaper.ts` is what makes it matter
+     * beyond tidiness: the mark is what schedules the bytes for deletion, so an
+     * unlogged detach becomes an unlogged permanent loss some hours later.
+     *
+     * The bytes are untouched either way — a detach never reads or writes the
+     * store — so there is no store-side effect stranded by a rollback. That is
+     * exactly why THIS half could be fixed and the upload half could not: see the
+     * note on `performUpload`.
+     */
+    await db.transaction(async (tx) => {
+      const removed = await detachImage(tx, p.salonId, ownerType, owner.id);
+
+      await writeAudit(tx, p, {
+        salonId: p.salonId,
+        kind: 'rules',
+        action: 'Image removed',
+        // "Detached", because that is what happened. The bytes survive the grace
+        // window (services/imageReaper.ts) and a merchant asking why the old one
+        // came back after an undo deserves the true word in the log.
+        detail: `${owner.name} · image detached`,
+        source: 'merchant',
+        subjectType: subject,
+        subjectId: owner.id,
+        metadata: { imageId: removed.imageId, detached: true },
+        ipAddress: req.ip ?? null,
+        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+      });
     });
 
     return reply.code(204).send();

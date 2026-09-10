@@ -590,10 +590,28 @@ export async function performOrder(
       items: lines,
       balanceAfterFils: balanceAfter,
       /**
-       * The design's own promise on the shop screen — "pick up at the salon" —
-       * and the sentence the receipt owes her, since nothing is being delivered.
+       * THE FULFILMENT SHE ACTUALLY CHOSE, not the one the shop had when it was
+       * drawn. This read `pickup: true`, hardcoded, with a comment explaining
+       * that nothing was being delivered — true of every order until item 7's
+       * delivery half landed, and false for half of them afterwards. The value
+       * is resolved in step 5b and written to `shop_order` in step 7b; taking it
+       * from anywhere else was the whole defect.
+       *
+       * IT WAS LATENT, WHICH IS WHY NOTHING CAUGHT IT. Nothing in `api/src`
+       * reads this field and `RECEIPT_DRIVER=logging` sends nothing, so the wrong
+       * value was persisted into `receipt_job.payload` and consulted by nobody —
+       * the exact shape of DECISIONS.md #88 (`whatsapp_enabled`: stored, served,
+       * consulted by nothing) and #82. Stored-and-wrong is still wrong: the row
+       * is the frozen evidence of what she bought (db/schema/receipt.ts), and a
+       * renderer written next month would have read it and believed it.
+       *
+       * AND IT CARRIES NO SENTENCE. The design bundle has no delivery receipt
+       * copy — `whatsapp-templates.md` § 3 has no pickup or delivery variable at
+       * all — so this is the fact, truthfully, and what a receipt SAYS about a
+       * delivery is left open rather than invented here. See
+       * `services/receipts.ts` § ShopReceiptPayload.
        */
-      pickup: true,
+      fulfilment,
     });
 
     // ------------------------------------------------------------ 10. audit --
@@ -601,9 +619,24 @@ export async function performOrder(
       salonId: m.salonId,
       kind: 'money',
       action: 'Shop order paid',
+      /**
+       * `· to collect` USED TO BE UNCONDITIONAL, which put a false sentence in
+       * the salon's own audit log for every delivery order — and unlike the
+       * receipt payload above, this one is NOT latent: the dashboard renders the
+       * audit log today, so a merchant reading a delivery order's money row was
+       * told to hand the bag over the counter.
+       *
+       * The two words are the dashboard's own vocabulary rather than a new
+       * coinage: `ShopOrders.tsx` renders the fulfilment as a `Pickup` /
+       * `Delivery` pill, and the design's shop copy is "pick up at the salon"
+       * (`AVO Wallet Home.dc.html:1234`, `AVO Merchant Dashboard.dc.html:299`).
+       * The design bundle specifies no shape for an audit detail — this whole
+       * sentence is merchant-facing operational text this file already authors,
+       * not product copy, so making it true is a data fix and not a copy change.
+       */
       detail: `${(total / 1000).toFixed(3)} KD from ${m.name}'s wallet · ${lines
         .map((l) => `${l.qty}× ${l.name}`)
-        .join(', ')} · to collect`,
+        .join(', ')} · ${fulfilment === 'delivery' ? 'for delivery' : 'to collect'}`,
       /**
        * `wallet`, not `merchant` or `scanner`. The customer took this action from
        * her own app; no staff member was involved, and attributing it to the

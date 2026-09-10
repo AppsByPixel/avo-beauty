@@ -1305,6 +1305,34 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             branchAccessIds: staffUser.branchAccessIds,
           });
 
+        /**
+         * SORTED BY ID, TO MATCH THE PREVIEW — the one thing about these two
+         * lists that could differ.
+         *
+         * WHAT WAS CHECKED AND FOUND NOT TO BE A DEFECT: the SET. It was put to
+         * this lane that "a merchant may confirm one list and have another acted
+         * on", and she cannot. `branchClosureImpact` runs the SAME predicate as
+         * the UPDATE above — `salon_id = … AND :branchId = ANY(branch_access_ids)`
+         * — so membership is identical by construction, and `branch_access_all`
+         * staff are unmatchable by both for the reason below. Nobody is re-scoped
+         * who was not previewed.
+         *
+         * WHAT DID DIFFER IS ORDER, AND IT IS OBSERVABLE. The preview ends
+         * `.orderBy(staffUser.id)`; `UPDATE … RETURNING` has no ORDER BY in
+         * Postgres and hands rows back in whatever order it touched them. That
+         * order reaches the merchant twice — the audit `detail` joins the stranded
+         * NAMES into a sentence, and this handler's own response returns
+         * `staffRescoped` and `staffLeftWithNoBranch` as name arrays that the
+         * Settings screen renders beside the list she just confirmed. So two
+         * lists of the same people in two orders, which reads as a discrepancy
+         * for a merchant checking one against the other.
+         *
+         * Cosmetic, then, not a correctness bug — and one line to remove, which
+         * is a better trade than a comment explaining why the two disagree.
+         * Sorted here rather than in the SQL because RETURNING cannot be ordered.
+         */
+        affected.sort((a, b) => a.id.localeCompare(b.id));
+
         // `branch_access_all` staff are untouched by the UPDATE above — their id
         // list is empty by the `staff_user_branch_access_exclusive` CHECK, so
         // `= ANY(…)` never matches them. An empty list here can therefore only
