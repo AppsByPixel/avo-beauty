@@ -19,10 +19,14 @@
  *      `[requireMember]` and a `[requireMember]` line is byte-identical whether
  *      the WHERE clause carries `member_id` or not. See § one member cannot reach.
  *
- *   2. DOES THE 30-DAY ERASURE PROMISE REACH THE ADDRESS? It does not, in either
- *      of the two places the address lives. See § the erasure job has never heard
- *      of either table. That is the finding this file exists for and it is lane
- *      A's to fix.
+ *   2. DOES THE 30-DAY ERASURE PROMISE REACH THE ADDRESS? It did not, in either
+ *      of the two places the address lives — the finding this file was written
+ *      for. Lane A fixed both halves in `1f6bfb3` (DECISIONS.md #97, migration
+ *      0048) and § 4 now pins the SHAPE of that fix rather than the gap: the book
+ *      goes whole, the snapshot is nulled and stamped, the money stays, and the
+ *      two writes happen in the only order the schema permits. What is still open
+ *      is a retention HORIZON for the members who never asked, which is
+ *      client-owned and which § 4's last spec keeps visible without inventing.
  *
  *   3. THE TWO PLACES THE SHAPE IS NOT THE WHOLE CONTRACT. `contract.test.ts`
  *      probes all three reads against `MemberAddressSchema` and `ShopOrderSchema`
@@ -41,7 +45,9 @@
  *                            both her order list and the merchant's board.
  *
  * A deletion story that covers one and not the other is not a partial fix, it is
- * no fix: the snapshot is the copy a salon reads.
+ * no fix: the snapshot is the copy a salon reads. Two lifetimes also means two
+ * ERASURE outcomes — the book is deleted and the snapshot is scrubbed in place —
+ * and § 4 asserts them apart for that reason.
  *
  * ---------------------------------------------------------------------------
  * FIXTURES ARE AT SALON A, WHICH IS UNUSUAL IN THIS DIRECTORY AND FORCED.
@@ -73,13 +79,23 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+/**
+ * `knownBug` IS NO LONGER IMPORTED, AND THAT IS THE STATE THIS FILE WANTED. Both
+ * of its `knownBug()`s were promoted to plain `it()`s when lane A closed #97 —
+ * the helper went red asking for exactly that, which is the whole point of it
+ * over a comment. `precondition` stays, and is still the reason a dead server
+ * cannot be mistaken for a passing assertion.
+ */
+import { precondition } from './support/known-bug.js';
 import {
   A_BRANCH,
   A_STAFF_FULL,
   SALON_A,
   pgDb,
   psql,
+  repoRoot,
   runApiDbScriptResult,
   scalar,
   signInMember,
@@ -123,9 +139,38 @@ const HER_ADDRESS = 'ADR-QAADR-HERS';
 const HER_DELETED_ADDRESS = 'ADR-QAADR-HERS-GONE';
 const NEIGHBOUR_ADDRESS = 'ADR-QAADR-NEIGHBOUR';
 const ERASED_ADDRESS = 'ADR-QAADR-ERASED';
+/**
+ * A SECOND ADDRESS FOR THE ERASURE SUBJECT, SOFT-DELETED AND REFERENCED BY
+ * NOTHING — and it is the half of her book that a `deleted_at`-aware DELETE would
+ * have left behind.
+ *
+ * `ERASED_ADDRESS` is the *used* one: `ERASED_ORDER` points at it, so the
+ * `ON DELETE restrict` FK forces the snapshot null-out to happen first. This one
+ * is the opposite case and needs the fixture precisely because the two failure
+ * modes are opposite. A job that scoped its delete `AND deleted_at IS NULL` —
+ * mirroring the addresses route, which is where that clause is correct — would
+ * pass every assertion about the used row and silently keep this one, which still
+ * carries a block, a street, a building and a coordinate pair.
+ */
+const ERASED_DELETED_ADDRESS = 'ADR-QAADR-ERASED-GONE';
 
 const HER_ORDER = 'TX-QAADR-HERS';
 const ERASED_ORDER = 'TX-QAADR-ERASED';
+
+/**
+ * `api/src/db/seed.ts`: PR-01 Argan hair oil, salon A. `orders.test.ts` uses the
+ * same row for the same reason — it is the only shop product at this salon that
+ * every seed has.
+ *
+ * THE PRICE HERE IS A SNAPSHOT AND IS DELIBERATELY NOT LOOKED UP.
+ * `shop_order_line.unit_price_fils` is what the product cost at the moment of
+ * sale, so a fixture that read `product.price_fils` today would couple itself to
+ * a seed value that is free to change — and would be asserting the wrong thing
+ * anyway. 8500 is a price this line was sold at, full stop.
+ */
+const ORDER_PRODUCT = 'PR-01';
+const ORDER_PRODUCT_NAME = 'Argan hair oil 100ml';
+const ORDER_PRICE_FILS = 8500;
 
 /**
  * THE SNAPSHOT VALUES ARE SENTINELS, NOT PLAUSIBLE ADDRESSES, and that is a
@@ -139,8 +184,19 @@ const NEIGHBOUR_STREET = 'QAADR-NEIGHBOUR-STREET-SENTINEL';
 const NEIGHBOUR_BLOCK = 'QAADR-NEIGHBOUR-BLOCK-SENTINEL';
 const NEIGHBOUR_INSTRUCTIONS = 'QAADR-NEIGHBOUR-GATECODE-SENTINEL';
 const HER_STREET = 'QAADR-HER-STREET-SENTINEL';
+const HER_GONE_STREET = 'QAADR-HER-GONE-STREET-SENTINEL';
+/**
+ * A GATE CODE ON *HER* ORDER, WHICH SHE HAS NEVER ASKED TO BE ERASED FROM, and
+ * the fixture exists to carry the horizon question after the erasure gap closed.
+ * The § 4 spec that pins the board's exposure used to read the ERASED member's
+ * order; that row is now `address: null` by design, so the concern needs a
+ * subject the scrub does not reach — which is also the far larger population the
+ * question is actually about.
+ */
+const HER_INSTRUCTIONS = 'QAADR-HER-GATECODE-SENTINEL';
 const ERASED_STREET = 'QAADR-ERASED-STREET-SENTINEL';
 const ERASED_INSTRUCTIONS = 'QAADR-ERASED-GATECODE-SENTINEL';
+const ERASED_GONE_STREET = 'QAADR-ERASED-GONE-STREET-SENTINEL';
 
 let her = '';
 let neighbour = '';
@@ -228,6 +284,40 @@ function seedAddress(
  * below turn on the FK being present while the row it points at is soft-deleted —
  * the exact state `routes/addresses.ts` § SOFT DELETE says the `ON DELETE
  * restrict` exists to make representable.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE `shop_order_line`, AND THE ORDER'S AMOUNT IS DERIVED FROM IT.
+ * ---------------------------------------------------------------------------
+ * The line is what makes "the money survived the erasure" a real assertion
+ * rather than a statement about one row. `shop_order_line` has UPDATE and DELETE
+ * revoked from `avo_app` (migration 0027) exactly as `ledger_entry` does, so a
+ * scrub that reached it would be reaching into append-only purchase evidence —
+ * and nothing but this fixture would have noticed, because before this the
+ * fixture orders had no lines at all.
+ *
+ * The transaction amount is `-(qty × unit_price)` rather than a round number, so
+ * `transaction_amount_sign_matches_kind` and
+ * `shop_order_line_total_matches_qty` are both satisfied by the same figure and
+ * the fixture cannot drift into a shape the product cannot produce.
+ *
+ * ---------------------------------------------------------------------------
+ * NO `ledger_entry` ROWS, AND THIS IS A LIMIT RATHER THAN AN OVERSIGHT.
+ * ---------------------------------------------------------------------------
+ * `ledger_entry` is append-only by TRIGGER (`ledger_entry_is_immutable`,
+ * migration 0001), not by grant — so a fixture row can never be removed, by any
+ * role, including the one `psql()` connects as. `ledger_entry.transaction_id` is
+ * `ON DELETE restrict`, so a single seeded ledger row would make
+ * `dropFixtures()`'s `DELETE FROM transaction` fail for ever, and this file's
+ * teardown is what keeps `reports.test.ts` and `platform-salons.test.ts` honest.
+ * `reports-applied-deposit.test.ts` hit the same wall and guards its insert on
+ * presence because it cannot clean up either.
+ *
+ * So the ledger half of "the money survived" is asserted STRUCTURALLY below
+ * instead — from the grants and the trigger, which is a statement about every
+ * transaction rather than about one fixture pair. Lane A's
+ * `services/erasureAddress.int.test.ts` asserts it behaviourally, to the fils, on
+ * a member whose money arrives and leaves through the real paths; that suite is
+ * the right place for it and cannot be replaced here.
  */
 function seedOrder(
   transactionId: string,
@@ -239,8 +329,9 @@ function seedOrder(
     INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils,
                              method, status, settled_at)
     VALUES ('${transactionId}', '${memberId}', '${SALON_A}', '${A_BRANCH}', 'shop',
-            -1000, 'wallet', 'settled', now())
-    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id;
+            ${-ORDER_PRICE_FILS}, 'wallet', 'settled', now())
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id,
+                                   amount_fils = EXCLUDED.amount_fils;
 
     INSERT INTO shop_order (transaction_id, salon_id, member_id, fulfilment, status,
                             address_id, address_label, block, street, building,
@@ -253,13 +344,34 @@ function seedOrder(
             '29.336670', '48.077500')
     ON CONFLICT (transaction_id) DO UPDATE SET
       status = 'preparing', ready_at = NULL, closed_at = NULL,
-      block = EXCLUDED.block, street = EXCLUDED.street;
+      address_id = EXCLUDED.address_id, address_label = EXCLUDED.address_label,
+      block = EXCLUDED.block, street = EXCLUDED.street,
+      building = EXCLUDED.building, floor = EXCLUDED.floor,
+      apartment = EXCLUDED.apartment, area = EXCLUDED.area,
+      governorate = EXCLUDED.governorate, instructions = EXCLUDED.instructions,
+      latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
+      address_erased_at = NULL;
+
+    INSERT INTO shop_order_line (transaction_id, product_id, name, qty,
+                                 unit_price_fils, line_total_fils)
+    VALUES ('${transactionId}', '${ORDER_PRODUCT}', '${ORDER_PRODUCT_NAME}', 1,
+            ${ORDER_PRICE_FILS}, ${ORDER_PRICE_FILS})
+    ON CONFLICT (transaction_id, product_id) DO UPDATE SET
+      qty = EXCLUDED.qty, line_total_fils = EXCLUDED.line_total_fils;
   `);
 }
 
 /**
  * FK ORDER, AND EVERY LINE OF IT IS LOAD-BEARING.
  *
+ *   `shop_order_line.transaction_id` → `transaction`, restrict. Lines first, and
+ *                                  they CAN be deleted here: 0027 revokes UPDATE
+ *                                  and DELETE from `avo_app` by GRANT, not by
+ *                                  trigger, and `psql()` is not `avo_app`. That
+ *                                  asymmetry with `ledger_entry` is deliberate
+ *                                  and 0027's header states it, which is the only
+ *                                  reason the line fixture above is possible at
+ *                                  all.
  *   `shop_order.transaction_id`  → `transaction`, restrict. Orders first.
  *   `shop_order.address_id`      → `member_address`, restrict. Orders before
  *                                  addresses, which is the FK that makes the soft
@@ -269,6 +381,10 @@ function seedOrder(
  *                                  — and this is why erasure is a SCRUB rather
  *                                  than a DELETE in the first place.
  *
+ * DELETED BY TRANSACTION ID AND NOT BY MEMBER, for the lines only: after erasure
+ * `shop_order_line` has no member column to scope by and never did. The ids are
+ * this file's own two.
+ *
  * `audit_log` IS LEFT ALONE. `audit_log_no_delete` refuses a DELETE outright and
  * that is the table working; the erasure job's own row accumulates across runs
  * and names nobody, by design (`services/erasure.ts` § THE JOB'S OWN AUDIT ROW).
@@ -276,6 +392,7 @@ function seedOrder(
 function dropFixtures(): void {
   const ids = `'${HER}', '${NEIGHBOUR}', '${ERASED}'`;
   psql(`
+    DELETE FROM shop_order_line WHERE transaction_id IN ('${HER_ORDER}', '${ERASED_ORDER}');
     DELETE FROM shop_order  WHERE member_id IN (${ids});
     DELETE FROM transaction WHERE member_id IN (${ids});
     DELETE FROM member_address WHERE member_id IN (${ids});
@@ -293,7 +410,7 @@ function seedEverything(): void {
   seedAddress(HER_ADDRESS, HER, { block: 'QAADR-HER-BLOCK', street: HER_STREET });
   seedAddress(HER_DELETED_ADDRESS, HER, {
     block: 'QAADR-HER-GONE-BLOCK',
-    street: 'QAADR-HER-GONE-STREET-SENTINEL',
+    street: HER_GONE_STREET,
     deleted: true,
   });
   seedAddress(NEIGHBOUR_ADDRESS, NEIGHBOUR, {
@@ -301,19 +418,35 @@ function seedEverything(): void {
     street: NEIGHBOUR_STREET,
     instructions: NEIGHBOUR_INSTRUCTIONS,
   });
+  /**
+   * TWO ADDRESSES FOR THE ERASURE SUBJECT, ONE USED AND ONE SOFT-DELETED, because
+   * the two halves of her book fail differently and a job can get one right while
+   * getting the other wrong. The used one forces the ordered pair of writes; the
+   * soft-deleted one is the row `deleted_at` would hide from a naive scope.
+   */
   seedAddress(ERASED_ADDRESS, ERASED, {
     block: 'QAADR-ERASED-BLOCK',
     street: ERASED_STREET,
     instructions: ERASED_INSTRUCTIONS,
   });
+  seedAddress(ERASED_DELETED_ADDRESS, ERASED, {
+    block: 'QAADR-ERASED-GONE-BLOCK',
+    street: ERASED_GONE_STREET,
+    deleted: true,
+  });
 
   /**
    * HER order points at the SOFT-DELETED address, which is the interesting pair:
    * the row is gone from her book and the snapshot on the order is not.
+   *
+   * IT CARRIES A GATE CODE, which the § 4 horizon spec reads. She has asked for
+   * nothing, so the scrub never reaches this row — which is the whole point of
+   * putting the concern on her rather than on the erased member.
    */
   seedOrder(HER_ORDER, HER, HER_DELETED_ADDRESS, {
     block: 'QAADR-HER-GONE-BLOCK',
-    street: 'QAADR-HER-GONE-STREET-SENTINEL',
+    street: HER_GONE_STREET,
+    instructions: HER_INSTRUCTIONS,
   });
   seedOrder(ERASED_ORDER, ERASED, ERASED_ADDRESS, {
     block: 'QAADR-ERASED-BLOCK',
@@ -730,7 +863,7 @@ describe('the snapshot outlives the book, and the book\'s DELETE does not reach 
     expect(
       row!.address!.street,
       'the snapshot no longer carries the street she typed',
-    ).toBe('QAADR-HER-GONE-STREET-SENTINEL');
+    ).toBe(HER_GONE_STREET);
     expect(
       row!.address!.id,
       'address_id was cleared, so the provenance link to her book is gone',
@@ -739,99 +872,184 @@ describe('the snapshot outlives the book, and the book\'s DELETE does not reach 
 });
 
 // ===========================================================================
-// 4. THE FINDING — the erasure job has never heard of either table
+// 4. WHAT THE FIX DOES — erasure reaches both copies of where she lives
 // ===========================================================================
 /**
  * ===========================================================================
- * THE 30-DAY ERASURE PROMISE DOES NOT REACH A CUSTOMER'S HOME ADDRESS.
- * NEITHER COPY OF IT. LANE A'S TO FIX.
+ * THE 30-DAY ERASURE PROMISE NOW REACHES A CUSTOMER'S HOME ADDRESS, IN BOTH
+ * PLACES IT LIVES — AND THE SHAPE IS SPECIFIC ENOUGH TO BE WORTH PINNING.
  * ===========================================================================
- * `services/erasure.ts` executes the published privacy policy's § 5, quoted
- * verbatim in its own header: "The rest of your account data is deleted within 30
- * days of a deletion request." Its header is then a table, table by table, of
- * what the scrub does and why — `session`, `wallet_token`,
- * `member_password_reset`, `phone_change_challenge`, `merchant_notification`,
- * `receipt_job`, `support_ticket`, `booking`, `loyalty_event`, `campaign_send`,
- * `member_consent_event`, `audit_log`. Twelve tables, each with a decision
- * attached, and three of them FLAGGED to trunk rather than silently decided,
- * which is the standard this file is measuring against.
+ * THIS SECTION WAS A FINDING AND IS NOW A GUARD. It was two `knownBug()` specs
+ * establishing behaviourally that `services/erasure.ts` had never heard of
+ * `member_address` or `shop_order`: after the job ran, her address book survived
+ * intact and the snapshot survived with it, served to a `perms.shop` holder
+ * beside a member row reading "Deleted account". Lane A closed both halves in
+ * `1f6bfb3` — migration 0048 and the job's two new writes — so both specs went
+ * RED asking to be promoted, which is exactly what `knownBug()` is for. They are
+ * plain `it()`s below.
  *
- * `member_address` AND `shop_order` ARE NOT IN THAT TABLE AND NOT IN THE CODE.
- * Not deleted, not scrubbed, not KEPT-with-a-reason, not deferred, not flagged.
- * `git log` on `services/erasure.ts` ends at `94eeb90`; migration 0045 landed
- * item 7 afterwards, and nothing brought the job forward with it. The two tables
- * are absent in the way a table nobody has thought about is absent, which is
- * different from `booking` and `loyalty_event` being absent from the DELETE list
- * — those are KEPT, on an argument, in writing.
+ * WHY THIS ASSERTS THE FIX AND NOT MERELY THE ABSENCE OF THE GAP. "No address
+ * columns survive" would pass against a job that deleted the whole order, and
+ * against one that deleted the book but left the coordinates on the snapshot, and
+ * against one that scoped its delete `AND deleted_at IS NULL`. Three different
+ * wrong answers, all of them green. So each spec below names the outcome:
  *
- * WHY THE JOB'S OWN STANDING ARGUMENT CANNOT BE STRETCHED TO COVER THIS, and this
- * is the part worth reading before deciding it is a small fix. Erasure keeps
- * `booking`, `loyalty_event`, `campaign_send` and the member's own aggregates on
- * one reasoning, stated three times in its header: "a booking pointing at a
- * tombstone identifies nobody", "reward history de-identified rather than
- * destroyed". That is TRUE of a visit count, a stamp total and a campaign send
- * row. It is FALSE of a street address. A block, a street, a building, a floor and
- * an apartment identify a household directly and without help; they are not
- * de-identified by the name beside them turning into 'Deleted account', because
- * the address IS the identifier. So the scrub's central justification inverts here
- * rather than extending, and that is why this needs a decision rather than a line
- * of SQL.
+ *   member_address              DELETED WHOLE, soft-deleted rows included.
+ *                               `deleted_at` hides an address from her own list;
+ *                               it does not stop the street naming a household,
+ *                               and the addresses route's own soft delete is what
+ *                               makes the wrong scope a plausible mistake.
+ *   shop_order.<address cols>   NULLED AND STAMPED — every component, the
+ *                               coordinate pair included, plus a new
+ *                               `shop_order.address_erased_at`. Stamped, not
+ *                               merely blank: the CHECK's erased arm requires the
+ *                               stamp, so nulling without it is still refused, and
+ *                               the live-delivery arm requires the stamp to be
+ *                               ABSENT, so "erased" cannot become a label somebody
+ *                               sets while the street is still there.
+ *   the order, its lines,       ALL SURVIVE. A money row does not disappear
+ *   its transaction, the        because a customer left (non-negotiables #1/#3),
+ *   ledger                      and `ledger_entry.transaction_id` is `ON DELETE
+ *                               restrict` precisely so nobody can resolve a
+ *                               privacy finding by deleting the evidence.
+ *   THE ORDER OF THE TWO        FORCED, NOT CHOSEN — and this is the one worth a
+ *   WRITES                      spec of its own. See below.
  *
- * TWO PLACES, TWO DIFFERENT DECISIONS, and a fix that treats them as one thing
- * will get one of them wrong:
+ * ---------------------------------------------------------------------------
+ * THE ORDERED PAIR IS THE CASE A NAIVE FIX BREAKS, AND IT BREAKS SILENTLY.
+ * ---------------------------------------------------------------------------
+ * `shop_order.address_id` references `member_address` with `ON DELETE restrict` —
+ * which is why `routes/addresses.ts` soft-deletes rather than deleting — so the
+ * book cannot be deleted while an order still points into it. The job therefore
+ * nulls the snapshot FIRST and deletes the book SECOND, in one transaction.
  *
- *   `member_address`   HER BOOK. Nothing references these rows except her own
- *                      orders, and the policy's "rest of your account data" covers
- *                      them with no ambiguity at all — there is no seven-year
- *                      books argument here, because an address is not a financial
- *                      record. This one looks like a straight DELETE, in the same
- *                      list as `wallet_token`.
+ * DECISIONS.md #97 records that trunk's own first reading, "the address book is a
+ * plain DELETE", was wrong on exactly this point. And the failure mode is the
+ * expensive kind: `runErasureOnce` wraps each member in `try { … } catch { }` and
+ * the catch does nothing but `result.failed += 1`. No throw, no log, no name. So a
+ * regression here does not crash the job — it quietly stops erasing precisely the
+ * members who had ORDERED something, which is to say the ones with the most data,
+ * while the run report still looks like a run report.
  *
- *   `shop_order.*`     THE SNAPSHOT. Harder, and genuinely arguable. The row hangs
- *                      off a `transaction` that survives seven years by financial
- *                      rule, and a salon may have an operational claim on a
- *                      fulfilment record. But the address COLUMNS are separable
- *                      from the order: nulling block/street/building/floor/
- *                      apartment/instructions/coordinates leaves the order, its
- *                      lines, its money and its status intact and removes the
- *                      household. `shop_order_delivery_has_an_address` would
- *                      REFUSE that update as written — a delivery must have the
- *                      three parts — so it is a migration and not a one-liner,
- *                      which is exactly why it should not be decided in passing.
+ * That is why the fixture gives the erasure subject an order pointing INTO her
+ * book, and why one spec below asserts the FK's delete rule from the catalogue
+ * rather than trusting the comment that describes it. A spec that only checked
+ * "the book is empty" against a member who had never ordered would be green on
+ * the day this breaks.
  *
- * AND A THIRD THING THAT IS NOT LANE A'S AT ALL — CLIENT-OWNED, per CLAUDE.md's
- * escalations. The policy's § 2 is the collection notice and it enumerates what
- * was collected: "your name, phone number, appointment history, transaction and
- * reward history, and basic device data". A HOME ADDRESS IS NOT IN THAT LIST. The
- * published text predates item 7, so the product now stores a category of personal
- * data its own privacy policy does not disclose. That is counsel's, not
- * engineering's, and it is the reason this section reports rather than proposes.
+ * ---------------------------------------------------------------------------
+ * AND THIS IS THE ONLY PLACE IN `pnpm check` WHERE ANY OF IT IS GUARDED.
+ * ---------------------------------------------------------------------------
+ * Do not delete these as duplicates of lane A's own suite. That suite —
+ * `api/src/services/erasureAddress.int.test.ts` — is deeper than this section on
+ * the money half and should stay so: it drives a real top-up and a real order
+ * through the real handlers and reconciles `ledger_entry` to the fils, which this
+ * file cannot do because a seeded ledger row can never be torn down (see
+ * `seedOrder`).
  *
- * WHAT IS DELIBERATELY NOT DONE HERE. This is not an erasure audit — the brief
- * that dispatched this slice said not to build one and it is the right call: the
- * job's twelve-table header is lane A's own work and re-deriving it would be
- * expensive and would not change the finding. The two specs below establish the
- * fact behaviourally, name the tables, and stop.
+ * But it is an `*.int.test.ts`, and `api/vitest.config.ts` EXCLUDES that pattern,
+ * so it does not run under `pnpm check`. It is also gated on
+ * `AVO_INT_DATABASE_URL`, which `.github/workflows/ci.yml` never sets — CI runs
+ * `pnpm check` and `db:verify` and nothing else. So lane A's suite is skipped in
+ * the pipeline, `describe.skip` and green, and the specs below are what actually
+ * stands between #97 and a regression. Two layers asserting one behaviour is
+ * normally rot; two layers where one of them never executes is not.
+ *
+ * ---------------------------------------------------------------------------
+ * TWO THINGS ARE STILL OPEN, AND NEITHER IS LANE A'S.
+ * ---------------------------------------------------------------------------
+ * THE DISCLOSURE. The published policy's § 2 collection notice enumerates what
+ * was collected — "your name, phone number, appointment history, transaction and
+ * reward history, and basic device data" — and A HOME ADDRESS IS NOT IN THAT LIST.
+ * Migration 0048 assumes § 5's "the rest of your account data" covers it, which is
+ * the reading under which the old state was a defect at all. Whether § 2 must also
+ * disclose the collection is counsel's, and that document is with counsel now.
+ * Nothing here is a fix for it and nothing here should be read as one.
+ *
+ * THE HORIZON. The scrub fires only on ERASURE — a member who asked, 30+ days ago.
+ * It sets no retention horizon for the far larger case: a salon's fulfilment board
+ * serving a two-day-old CLOSED order's street and gate code for a member who never
+ * asked for anything. A salon has a plausible claim there (its own delivery
+ * history, a dispute), the policy is silent, and a horizon is CLIENT-OWNED per
+ * CLAUDE.md's escalations. `address_erased_at` is the column such a job would set;
+ * nothing but erasure sets it today. The last spec in this section pins that
+ * exposure on a member the scrub does not reach, so the question stays visible and
+ * stays unanswered here.
  */
-describe('the erasure job has never heard of member_address or shop_order', () => {
+describe('erasure reaches both copies of where she lives', () => {
   /**
-   * ONE JOB RUN SERVES BOTH SPECS AND IS PERFORMED HERE, not in each. It is
+   * ONE JOB RUN SERVES EVERY SPEC AND IS PERFORMED HERE, not in each. It is
    * irreversible for the member it erases, and running it twice would make the
-   * second spec's subject a member already erased — which is a different state and
-   * would read as a different bug.
+   * later specs' subject a member already erased — which is a different state and
+   * would read as a different result.
    *
    * THE JOB IS SHARED WITH EVERY OTHER MEMBER IN THE DATABASE, so nothing below
    * asserts on `candidates` or `erased`. Another file's fixture with a past due
    * date is legitimately erased by the same pass, and a spec that counted would go
-   * red for somebody else's reasons. What is asserted is this member's own state.
+   * red for somebody else's reasons. What is asserted is this member's own state,
+   * plus `failed`, which is per-member and is the one figure a regression in the
+   * ordered pair of writes would move.
    */
   let result: ErasureResult | null = null;
 
+  /**
+   * THE PRE-STATE, CAPTURED BEFORE THE JOB RUNS, because after it runs every
+   * trace of it is gone — which is the whole outcome under test and also what
+   * makes the preconditions below unrecoverable afterwards.
+   *
+   * `orderPointedAtBook` is the one that matters. The claim the ordering spec
+   * makes is "an erasure for a member who HAD ordered something", and after the
+   * scrub `shop_order.address_id` is NULL, so the only moment that fact is
+   * observable is now.
+   */
+  const pre = {
+    bookRows: 0,
+    softDeletedRows: 0,
+    orders: 0,
+    orderPointedAtBook: false,
+    orderLines: 0,
+  };
+
   beforeAll(() => {
+    pre.bookRows = count(`select count(*) from member_address where member_id='${ERASED}'`);
+    pre.orders = count(`select count(*) from shop_order where member_id='${ERASED}'`);
+    pre.softDeletedRows = count(`
+      select count(*) from member_address
+       where member_id='${ERASED}' and deleted_at is not null
+    `);
+    pre.orderPointedAtBook =
+      scalar(`
+        select exists (
+          select 1 from shop_order o
+            join member_address a ON a.id = o.address_id
+           where o.member_id='${ERASED}' and o.fulfilment='delivery'
+        )
+      `).trim() === 't';
+    pre.orderLines = count(
+      `select count(*) from shop_order_line where transaction_id='${ERASED_ORDER}'`,
+    );
+
     precondition(
-      count(`select count(*) from member_address where member_id='${ERASED}'`) === 1 &&
-        count(`select count(*) from shop_order where member_id='${ERASED}'`) === 1,
-      'the erasure subject has no address or no order, so the job has nothing to miss',
+      pre.bookRows === 2 && pre.orders === 1,
+      `the erasure subject should have two addresses and one order and has ` +
+        `${pre.bookRows} and ${pre.orders}. Both halves matter: two addresses because ` +
+        `one is soft-deleted and one is USED, and the spec about the ordered pair of ` +
+        `writes needs the used one.`,
+    );
+    precondition(
+      pre.softDeletedRows === 1,
+      'the erasure subject has no soft-deleted address, so "soft-deleted rows included" ' +
+        'below would assert nothing — a job scoped `AND deleted_at IS NULL` would pass it',
+    );
+    precondition(
+      pre.orderPointedAtBook,
+      'the erasure subject\'s order does not point into her address book, so the ordered ' +
+        'pair of writes is not exercised and a plain DELETE of the book would pass every ' +
+        'spec here. This is the precondition DECISIONS.md #97 is about.',
+    );
+    precondition(
+      pre.orderLines === 1,
+      'the erasure subject\'s order has no lines, so "the lines survive" asserts nothing',
     );
 
     // Due yesterday. `runErasureOnce` selects on `deletion_due_at <= now()` with
@@ -847,93 +1065,441 @@ describe('the erasure job has never heard of member_address or shop_order', () =
 
     precondition(
       scalar(`select erased_at is not null from member where id='${ERASED}'`).trim() === 't',
-      `the job did not erase the subject at all, so neither spec below is about what it ` +
+      `the job did not erase the subject at all, so no spec below is about what it ` +
         `says it is about. The job reported ${JSON.stringify(result)} — a nonzero ` +
         `deferredBalance or deferredEscrow means the fixture has money state the job ` +
-        `refuses to decide, which is the job working and a broken fixture.`,
+        `refuses to decide, which is the job working and a broken fixture; a nonzero ` +
+        `failed with this fixture is most likely the ordered pair of writes, which the ` +
+        `spec below reports properly.`,
     );
   }, 120_000);
 
-  knownBug(
-    'her address book is deleted with the rest of her account data',
-    () => {
-      precondition(
-        scalar(`select name from member where id='${ERASED}'`).trim() === 'Deleted account',
-        'the member is not a tombstone, so the scrub did not run on her',
-      );
+  /**
+   * PROMOTED FROM `knownBug()` — lane A closed this in `1f6bfb3` and the helper
+   * went red asking for it, which is the promotion path working as designed.
+   *
+   * THE ASSERTION IS NOT "THE BOOK IS EMPTY". It is "the book is empty INCLUDING
+   * the row `deleted_at` hides", and the two are different claims because the
+   * plausible wrong fix is a specific one: `routes/addresses.ts` scopes every read
+   * and write `AND deleted_at IS NULL`, correctly, because a soft-deleted address
+   * must stay resolvable from a past order. Copying that clause into the erasure
+   * job would look consistent, would pass a spec that counted live rows, and would
+   * leave a block, a street, a building and a coordinate pair on disk for ever.
+   *
+   * `deleted_at` IS A UI FACT. It hides an address from her own list. It does not
+   * make the street stop naming a household, and a household is what the whole
+   * finding was about.
+   */
+  it('her address book is deleted WHOLE — soft-deleted rows included', () => {
+    precondition(
+      scalar(`select name from member where id='${ERASED}'`).trim() === 'Deleted account',
+      'the member is not a tombstone, so the scrub did not run on her',
+    );
 
-      expect(
-        count(`select count(*) from member_address where member_id='${ERASED}'`),
-        'HER SAVED ADDRESS BOOK SURVIVED THE ERASURE, INTACT.\n\n' +
-          'The published privacy policy promises "the rest of your account data is deleted ' +
-          'within 30 days", the job carries out that promise for twelve other tables, and ' +
-          '`member_address` is in neither its code nor its header. The rows are not kept ' +
-          'on an argument the way `booking` and `loyalty_event` are — they are absent, ' +
-          'because migration 0045 landed after the job was written and nothing brought the ' +
-          'job forward.\n\n' +
-          'AND THE JOB\'S OWN STANDING ARGUMENT DOES NOT COVER THEM. It keeps de-identified ' +
-          'rows on the grounds that "a booking pointing at a tombstone identifies nobody". ' +
-          'A street address is not de-identified by the name beside it becoming ' +
-          '"Deleted account": block, street, building, floor and apartment identify a ' +
-          'household on their own.\n\n' +
-          'THE FIX IS LANE A\'S and looks like a DELETE in the same list as `wallet_token` — ' +
-          'nothing references these rows but her own orders, and an address is not a ' +
-          'financial record, so the seven-year books argument does not reach it. See this ' +
-          'file\'s § 4 header for the snapshot half, which is harder, and for the disclosure ' +
-          'question that is counsel\'s rather than engineering\'s.',
-      ).toBe(0);
-    },
-    120_000,
-  );
+    /**
+     * THE SOFT-DELETED ROW BY ID, AND IT IS ASSERTED **FIRST** ON PURPOSE. A total
+     * would fail on this row too, so putting the total first would make this
+     * assertion unreachable and its message — the one that names the actual
+     * mistake — dead code. Vitest stops a spec at its first failure, so the order
+     * of two assertions that overlap decides which diagnosis a reader gets.
+     */
+    expect(
+      count(`select count(*) from member_address where id='${ERASED_DELETED_ADDRESS}'`),
+      'THE SOFT-DELETED ADDRESS SURVIVED THE ERASURE. This is the signature of a job ' +
+        'scoped `AND deleted_at IS NULL` — the clause `routes/addresses.ts` is right to ' +
+        'carry, because a soft-deleted address must stay resolvable from a past order, ' +
+        'and the erasure job must not. `deleted_at` hides an address from her own list; ' +
+        'the street still names a household, and this row still carries a block, a ' +
+        'building and a coordinate pair. Check the total below too: if it is 1, the live ' +
+        'rows went and only the hidden one stayed, which is that exact mistake.',
+    ).toBe(0);
 
-  knownBug(
-    'the address snapshot on her past order is scrubbed with her',
-    () => {
-      precondition(
-        count(`select count(*) from shop_order where member_id='${ERASED}'`) === 1,
-        'the order row is gone entirely, which is a different outcome than this asserts',
-      );
+    expect(
+      count(`select count(*) from member_address where member_id='${ERASED}'`),
+      `HER SAVED ADDRESS BOOK SURVIVED THE ERASURE. It had ${pre.bookRows} rows before ` +
+        'the job ran and should have none after: nothing but her own orders references ' +
+        'these rows, an address is not a financial record, and the seven-year books ' +
+        'argument that keeps `transaction` and `ledger_entry` does not reach it. ' +
+        'DECISIONS.md #97, migration 0048.',
+    ).toBe(0);
 
-      const survives = count(`
-        select count(*) from shop_order
-         where member_id='${ERASED}'
-           and (street is not null or block is not null or building is not null
-                or floor is not null or apartment is not null
-                or instructions is not null
-                or latitude is not null or longitude is not null)
-      `);
-
-      expect(
-        survives,
-        'THE HOME ADDRESS ON HER PAST ORDER SURVIVED THE ERASURE, AND THIS IS THE COPY A ' +
-          'SALON READS.\n\n' +
-          'The snapshot is served by `GET /v1/salons/{id}/orders` behind `perms.shop`, with ' +
-          'every component: block, street, building, floor, apartment, instructions and ' +
-          'coordinates. The member row is a tombstone — name "Deleted account", a synthetic ' +
-          '+990 phone — and the merchant board still renders exactly where she lives beside ' +
-          'it. De-identifying the name and keeping the address is the worst of the two ' +
-          'available outcomes, because it removes the accountability and keeps the exposure.\n\n' +
-          'THE ORDER ITSELF NEED NOT GO. The address columns are separable: nulling them ' +
-          'leaves the transaction, the lines, the money and the status intact. But ' +
-          '`shop_order_delivery_has_an_address` REFUSES that update as written — a delivery ' +
-          'row must carry block, street and building — so this is a migration plus a job ' +
-          'clause, not a one-line addition, and that is why it is reported rather than ' +
-          'guessed at.\n\n' +
-          'IF THE DECISION IS TO KEEP IT, that is a legitimate answer and it belongs in the ' +
-          'job\'s header beside `booking` and `loyalty_event`, with the argument written ' +
-          'down — the standard the rest of that file already meets. What is not acceptable ' +
-          'is the current state, where the table is absent rather than decided.',
-      ).toBe(0);
-    },
-    120_000,
-  );
+    /**
+     * AND NO SENTINEL SURVIVES ANYWHERE IN THE TABLE, scoped by string rather than
+     * by member id — because the two assertions above are both scoped by a column
+     * the fix itself rewrites nothing in, and a fix that reparented a row instead of
+     * deleting it would satisfy both. The sentinels are unique to this file
+     * (`seedAddress` writes them and nothing else does), so a nonzero count here is
+     * a row that still exists under some other owner.
+     */
+    expect(
+      count(`
+        select count(*) from member_address
+         where street IN ('${ERASED_STREET}', '${ERASED_GONE_STREET}')
+      `),
+      'one of the erased member\'s street sentinels is still in `member_address` under ' +
+        'a different member_id — the row was moved rather than deleted',
+    ).toBe(0);
+  });
 
   /**
-   * THE HALF THAT IS NOT A BUG, ASSERTED SO THE TWO ABOVE CANNOT BE READ AS "THE
-   * JOB DOES NOT WORK". It does work, on everything it knows about — and that is
-   * what makes the two absences findings about item 7 rather than about erasure.
+   * PROMOTED FROM `knownBug()`, same merge, and this is the half that needed a
+   * migration rather than a line of SQL.
+   *
+   * EVERY COMPONENT, ENUMERATED, AND THE COORDINATE PAIR BY NAME. The old
+   * knownBug checked eight columns; the erased arm of
+   * `shop_order_delivery_has_an_address` names twelve, enumerated one-for-one below
+   * so the two lists cannot drift, and the ones it did not check are the sharp ones. `area` and `governorate` are
+   * coarser than a street but they still narrow. `latitude`/`longitude` are worse
+   * than the street they sit beside: A COORDINATE PAIR WITH THE STREET REMOVED
+   * STILL LOCATES THE ADDRESS EXACTLY, to about 0.1m at this latitude. "The street
+   * is gone" and "the address is gone" are not the same claim, so this asserts the
+   * second one.
+   *
+   * AND THE STAMP, WHICH IS THE PART THAT MAKES THE STATE REPRESENTABLE RATHER
+   * THAN MERELY PERMITTED. Migration 0048 did not relax
+   * `shop_order_delivery_has_an_address`; it added a third arm requiring
+   * `address_erased_at IS NOT NULL` alongside all-null columns, and added
+   * `address_erased_at IS NULL` to the live-delivery arm. So the CHECK still
+   * refuses a delivery order whose snapshot `services/order.ts` simply forgot to
+   * copy — the invariant survives the fix — and a row cannot carry a street AND an
+   * erasure stamp, so "erased" cannot become a label somebody sets while the data
+   * is still there. Both directions are asserted below.
    */
-  it('everything the job DOES know about was scrubbed — the finding is the gap, not the job', () => {
+  it('the snapshot is nulled and STAMPED, and the order, its lines and its money survive', () => {
+    precondition(
+      count(`select count(*) from shop_order where member_id='${ERASED}'`) === 1,
+      'the order row is gone entirely, which is a DIFFERENT outcome than this asserts ' +
+        'and a worse one: the order hangs off a settled transaction that a salon\'s books ' +
+        'keep for seven years, and deleting it is how a privacy finding gets resolved by ' +
+        'destroying money evidence',
+    );
+
+    /**
+     * ALL THIRTEEN, IN ONE COUNT WITH A NAMED FAILURE. A per-column loop would
+     * report the first survivor and stop; this reports which ones survived, which is
+     * the useful thing when the answer is "the coordinates".
+     */
+    const survivors = scalar(`
+      select coalesce(string_agg(c, ', ' ORDER BY c), '') FROM (
+        select 'address_id' AS c FROM shop_order
+         WHERE member_id='${ERASED}' AND address_id IS NOT NULL
+        UNION ALL select 'address_label' FROM shop_order
+         WHERE member_id='${ERASED}' AND address_label IS NOT NULL
+        UNION ALL select 'block' FROM shop_order
+         WHERE member_id='${ERASED}' AND block IS NOT NULL
+        UNION ALL select 'street' FROM shop_order
+         WHERE member_id='${ERASED}' AND street IS NOT NULL
+        UNION ALL select 'building' FROM shop_order
+         WHERE member_id='${ERASED}' AND building IS NOT NULL
+        UNION ALL select 'floor' FROM shop_order
+         WHERE member_id='${ERASED}' AND floor IS NOT NULL
+        UNION ALL select 'apartment' FROM shop_order
+         WHERE member_id='${ERASED}' AND apartment IS NOT NULL
+        UNION ALL select 'area' FROM shop_order
+         WHERE member_id='${ERASED}' AND area IS NOT NULL
+        UNION ALL select 'governorate' FROM shop_order
+         WHERE member_id='${ERASED}' AND governorate IS NOT NULL
+        UNION ALL select 'instructions' FROM shop_order
+         WHERE member_id='${ERASED}' AND instructions IS NOT NULL
+        UNION ALL select 'latitude' FROM shop_order
+         WHERE member_id='${ERASED}' AND latitude IS NOT NULL
+        UNION ALL select 'longitude' FROM shop_order
+         WHERE member_id='${ERASED}' AND longitude IS NOT NULL
+      ) s
+    `).trim();
+
+    expect(
+      survivors,
+      'A COMPONENT OF HER HOME ADDRESS SURVIVED ON THE ORDER SNAPSHOT, AND THIS IS THE ' +
+        'COPY A SALON READS — served by `GET /v1/salons/{id}/orders` behind `perms.shop`, ' +
+        'beside a member row now reading "Deleted account". A PARTIAL SCRUB IS THE ' +
+        'OUTCOME MIGRATION 0048 REFUSED TO LEAVE AVAILABLE: if the columns named above ' +
+        'are `latitude, longitude`, note that a coordinate pair locates the address ' +
+        'exactly on its own, so the street being gone bought nothing.',
+    ).toBe('');
+
+    /**
+     * THE STAMP. Not merely blank — the CHECK's erased arm requires it, so a job
+     * that nulled without stamping could not have committed at all; asserting it is
+     * how this spec distinguishes "the fix ran" from "somebody dropped the
+     * constraint and nulled the columns".
+     */
+    expect(
+      scalar(`
+        select address_erased_at is not null from shop_order where member_id='${ERASED}'
+      `).trim(),
+      '`address_erased_at` IS NOT SET. If the columns are null and the stamp is not, the ' +
+        'CHECK constraint that should have refused that row is gone — check whether ' +
+        '`shop_order_delivery_has_an_address` still has its three arms, because the ' +
+        'alternative migration 0048 rejected was to RELAX the constraint, and a relaxed ' +
+        'one lets `services/order.ts` commit a live delivery whose snapshot it forgot.',
+    ).toBe('t');
+
+    /** The fulfilment kind does NOT change. A scrubbed delivery is not a pickup. */
+    expect(
+      scalar(`select fulfilment from shop_order where member_id='${ERASED}'`).trim(),
+      'the order was turned into a `pickup` to satisfy the CHECK — that rewrites what ' +
+        'happened rather than erasing who it happened to, and the pickup arm requires ' +
+        '`address_erased_at IS NULL`, so the stamp would be gone with it',
+    ).toBe('delivery');
+
+    /**
+     * THE MONEY, WHICH IS THE OTHER HALF OF EVERY ASSERTION IN THIS SECTION. The
+     * order, its status, its transaction and its lines. `shop_order_line` has UPDATE
+     * and DELETE revoked from `avo_app` exactly as `ledger_entry` does, so a scrub
+     * reaching it would be reaching into append-only purchase evidence.
+     */
+    expect(
+      scalar(`select status from shop_order where member_id='${ERASED}'`).trim(),
+      'the order status moved, so something other than the address was rewritten',
+    ).toBe('preparing');
+    expect(
+      scalar(`
+        select kind || '/' || status || '/' || amount_fils
+          from transaction where id='${ERASED_ORDER}'
+      `).trim(),
+      'the settled shop transaction under her order changed or is gone — non-negotiable ' +
+        '#1: a deleted member\'s charges still happened and commission was still owed',
+    ).toBe(`shop/settled/${-ORDER_PRICE_FILS}`);
+    expect(
+      count(`
+        select count(*) from shop_order_line
+         where transaction_id='${ERASED_ORDER}' and line_total_fils=${ORDER_PRICE_FILS}
+      `),
+      'the order LINE is gone or was re-itemised. It is append-only purchase evidence ' +
+        '(migration 0027) and holds a product name, a quantity and a price — no address, ' +
+        'so the scrub has no business there',
+    ).toBe(pre.orderLines);
+
+    /**
+     * AND THE LEDGER, STRUCTURALLY. This file cannot seed `ledger_entry` rows —
+     * append-only by TRIGGER, so a fixture row could never be torn down and this
+     * file's teardown is what keeps two other suites honest (see `seedOrder`). So
+     * the claim is made about the mechanism instead, which is a statement about
+     * every transaction rather than about one fixture pair: `avo_app` — the role the
+     * job runs as — holds no UPDATE and no DELETE on the table, and a trigger
+     * refuses both for every role including the owner.
+     *
+     * Lane A's `services/erasureAddress.int.test.ts` asserts the behavioural half,
+     * reconciling count and sum to the fils on a member whose money moved through
+     * the real handlers. That suite does not run under `pnpm check` (see this
+     * section's header), which is why the structural claim is here rather than
+     * assumed.
+     */
+    expect(
+      scalar(`
+        select coalesce(string_agg(privilege_type, ',' ORDER BY privilege_type), '')
+          from information_schema.role_table_grants
+         where table_name = 'ledger_entry' and grantee = 'avo_app'
+           and privilege_type IN ('UPDATE','DELETE')
+      `).trim(),
+      'THE ERASURE ROLE CAN NOW WRITE OVER THE MONEY LEDGER. `avo_app` held only SELECT ' +
+        'and INSERT on `ledger_entry` (migration 0001) and that grant is what makes ' +
+        '"erasure cannot reach the money" true by construction rather than by the job ' +
+        'choosing not to.',
+    ).toBe('');
+    expect(
+      count(`
+        select count(*) from pg_trigger t
+          join pg_class c ON c.oid = t.tgrelid
+         where c.relname = 'ledger_entry' and t.tgname = 'ledger_entry_is_immutable'
+           and NOT t.tgisinternal
+      `),
+      '`ledger_entry_is_immutable` is gone. It is the trigger that refuses UPDATE and ' +
+        'DELETE on the money ledger for EVERY role — the reason `shop_order` could be ' +
+        'admitted an erased state and `ledger_entry` could not. Migration 0048\'s whole ' +
+        'argument for resolving differently from decision 12 rests on this asymmetry.',
+    ).toBe(1);
+  });
+
+  /**
+   * ===========================================================================
+   * THE TWO WRITES ARE ORDERED BY FORCE, NOT BY CHOICE — AND A REGRESSION HERE
+   * IS SILENT.
+   * ===========================================================================
+   * THE CASE A NAIVE FIX BREAKS IS AN ERASURE FOR A MEMBER WHO HAD ORDERED
+   * SOMETHING, and it is worth its own spec because every other spec in this
+   * section would stay green while it broke.
+   *
+   * `shop_order.address_id` references `member_address` with `ON DELETE restrict`,
+   * so the book cannot be deleted while an order points into it. DECISIONS.md #97
+   * records trunk's own first reading — "the address book looks like a plain
+   * DELETE, in the same list as `wallet_token`" — as wrong on exactly this point.
+   * A plain DELETE succeeds for every member who never ordered anything and fails
+   * for every member who did.
+   *
+   * AND IT FAILS INTO A COUNTER. `runErasureOnce` wraps each member in
+   * `try { … } catch { result.failed += 1; }` — no rethrow, no log line, no member
+   * id. So the regression does not look like a crash. It looks like a job that
+   * ran, and quietly stopped erasing the members with the most data on file, and
+   * kept saying so once per run in a number nobody reads. Deferred states are
+   * broken out (`deferredBalance`, `deferredEscrow`, `deferredPendingTopup`) and
+   * are the job REFUSING to decide, on an argument; `failed` is the job not
+   * knowing what happened.
+   *
+   * THREE THINGS ARE ASSERTED AND NONE OF THEM ALONE IS THE CLAIM: that the FK is
+   * still `restrict` (read from the catalogue, not from the comment that describes
+   * it), that this member's order genuinely pointed into her book before the job
+   * ran, and that `failed` is zero. The first says the ordering is still forced;
+   * the second says the forced case was exercised; the third says it succeeded.
+   */
+  it('an erasure for a member who HAD ordered something does not fail silently', () => {
+    /**
+     * THE FK'S DELETE RULE, FROM `pg_constraint`. `confdeltype` is 'r' for
+     * RESTRICT, 'a' for NO ACTION, 'c' for CASCADE, 'n' for SET NULL.
+     *
+     * READ FROM THE CATALOGUE RATHER THAN TRUSTED, because the whole reason the
+     * ordering is forced is this one letter, and it is currently asserted by four
+     * prose comments and nothing else. A migration that changed it to CASCADE would
+     * make the job's careful ordering unnecessary and its comments wrong, and would
+     * ALSO silently make `DELETE /members/me/addresses/:id` destroy the snapshot on
+     * a past order — the exact thing § 3 of this file proves it does not do.
+     */
+    const rule = scalar(`
+      select c.confdeltype from pg_constraint c
+        join pg_class src ON src.oid = c.conrelid
+        join pg_class tgt ON tgt.oid = c.confrelid
+       where c.contype = 'f' and src.relname = 'shop_order' and tgt.relname = 'member_address'
+    `).trim();
+    expect(
+      rule,
+      `shop_order.address_id -> member_address is no longer ON DELETE restrict ` +
+        `(pg_constraint.confdeltype = "${rule}"; r=restrict, a=no action, c=cascade, ` +
+        `n=set null).\n\n` +
+        'IF IT IS NOW CASCADE, two things silently changed and neither is in a test that ' +
+        'names it: the erasure job\'s snapshot-first ordering became unnecessary (its ' +
+        'header and migration 0048 both explain it at length and would now be wrong), and ' +
+        '`DELETE /members/me/addresses/:id` — a soft delete precisely BECAUSE of this ' +
+        'restrict — would take a past order\'s destination with it if it were ever ' +
+        'changed to a hard delete. IF IT IS NOW SET NULL, the snapshot loses its ' +
+        'provenance link without the erasure stamp, which no arm of ' +
+        '`shop_order_delivery_has_an_address` permits.',
+    ).toBe('r');
+
+    precondition(
+      pre.orderPointedAtBook,
+      'captured before the job ran: her order did not point into her book, so this spec ' +
+        'is not exercising the ordered pair at all',
+    );
+
+    expect(
+      result?.failed,
+      `THE ERASURE JOB REPORTED A FAILURE, and with this fixture the ordered pair of ` +
+        `writes is the first thing to check. The job reported ` +
+        `${JSON.stringify(result)}.\n\n` +
+        'A `member_address` DELETE attempted BEFORE the snapshot null-out raises a ' +
+        'foreign key violation on `shop_order_address_id_member_address_id_fk`, the whole ' +
+        'per-member transaction rolls back, and `runErasureOnce`\'s bare `catch` turns ' +
+        'that into `failed += 1` with no message anywhere. Which means: this member is ' +
+        'still un-erased, she will be retried and fail identically every run for ever, ' +
+        'and the only visible symptom is this integer. Read the job\'s stderr for the ' +
+        'constraint name; a `deferred*` count instead would be the job working.',
+    ).toBe(0);
+
+    /**
+     * AND THE COMPLETED STATE, which is the positive form of the same claim: the
+     * transaction is per-member and all-or-nothing, so a tombstoned member row is
+     * proof that BOTH address writes committed. A run that failed on the book delete
+     * would have rolled the name back with it.
+     */
+    expect(
+      scalar(`
+        select (erased_at is not null)::text || '/' || name
+          from member where id='${ERASED}'
+      `).trim(),
+      'the member is not a tombstone even though `failed` is 0, which means she was ' +
+        'skipped rather than erased — check `deletion_due_at` and the re-check inside ' +
+        'the FOR UPDATE',
+    ).toBe('true/Deleted account');
+  });
+
+  /**
+   * ===========================================================================
+   * AND THE JOB'S OWN CENSUS NAMES BOTH TABLES — because the count in the prose
+   * that used to be here was wrong twice, and a number nothing checks is the
+   * defect DECISIONS.md row 26 is about.
+   * ===========================================================================
+   * THIS SECTION'S HEADER CALLED `services/erasure.ts`'s table-by-table header a
+   * "twelve-table header", in two places. It was 13 rows when that was written and
+   * is 15 now (14 sibling tables plus `member` itself); DECISIONS.md #97 carried
+   * the same wrong figure and trunk has corrected it there. Row 26's ruling is
+   * STOP COUNTING: "a number in this row is the same defect the row is about."
+   *
+   * So the prose no longer states a count anywhere, and this spec asserts the part
+   * that actually matters instead. The failure that produced #97 was not a wrong
+   * number — it was `member_address` and `shop_order` being ABSENT from that
+   * census, in the way a table nobody has thought about is absent, which is
+   * different from `booking` and `loyalty_event` being absent from the DELETE list
+   * on a written argument. This is the assertion that goes red if either table
+   * ever falls back out of it.
+   *
+   * WHAT THIS CAN AND CANNOT SAY, stated plainly because asserting on a comment is
+   * weak and pretending otherwise is worse. It CANNOT say the job does the right
+   * thing — the specs above do that, behaviourally, and they are the real guard.
+   * What it CAN say is that the job's own record of its decisions still accounts
+   * for the two tables holding a street, which is the standard the rest of that
+   * file meets and the standard item 7 slipped past. A future table with personal
+   * data in it will slip past the same way, and the honest version of this guard is
+   * derived from the schema rather than from a list — which is trunk's to scope,
+   * not something to invent here.
+   */
+  it('`services/erasure.ts` still accounts for member_address and shop_order by name', () => {
+    const source = readFileSync(join(repoRoot, 'api', 'src', 'services', 'erasure.ts'), 'utf8');
+
+    /**
+     * THE CENSUS IS THE LEADING DOCBLOCK'S TABLE, and it is parsed rather than
+     * grepped so a mention anywhere else in the file cannot satisfy this. Each row
+     * is ` *   <table_name><padding><Decision…>`; the decision text is what makes a
+     * row a decision rather than a passing reference.
+     */
+    const docblockEnd = source.indexOf('*/');
+    precondition(
+      docblockEnd > 0,
+      'services/erasure.ts has no leading docblock, so its census cannot be read. The ' +
+        'file was restructured; re-derive this spec or delete it, but do not leave it ' +
+        'parsing nothing and reporting green.',
+    );
+    const census = [
+      ...source
+        .slice(0, docblockEnd)
+        .matchAll(/^ \* {3}([a-z_]+) {2,}(?=\S)/gm),
+    ].map((m) => m[1]);
+
+    precondition(
+      census.length >= 10,
+      `only ${census.length} census rows parsed out of services/erasure.ts — the header's ` +
+        `format changed and this spec is no longer reading what it thinks it is. Rows ` +
+        `found: ${JSON.stringify(census)}`,
+    );
+
+    for (const table of ['member_address', 'shop_order']) {
+      expect(
+        census,
+        `\`${table}\` IS NO LONGER IN THE ERASURE JOB'S TABLE-BY-TABLE HEADER. That header ` +
+          `is where every decision about what the scrub reaches is written down, and the ` +
+          `absence of these two tables from it IS decision #97 — item 7 landed the first ` +
+          `personal data in this product with a street in it and nothing brought the job ` +
+          `forward. The census currently names ${census.length} tables: ` +
+          `${census.join(', ')}.\n\n` +
+          `If the row was removed because the behaviour changed, the specs above will be ` +
+          `red too and those are the ones to read. If the row was removed and the ` +
+          `behaviour did not change, put it back: a scrub whose reasoning is not written ` +
+          `down is how this happened the first time.`,
+      ).toContain(table);
+    }
+  });
+
+  /**
+   * THE REST OF THE SCRUB, ASSERTED SO A FAILURE ABOVE CAN BE LOCALISED. When it
+   * was written this existed to stop the two `knownBug`s being read as "the job
+   * does not work"; it now does the opposite job and is worth keeping for it. If
+   * the address specs go red and this one is green, the address writes are the
+   * regression. If both go red, the job did not run on her at all and every
+   * message above is misleading.
+   *
+   * `failed` MOVED to the ordering spec, which is the one that can explain it.
+   */
+  it('the rest of the scrub still ran — a failure above is about the address, not the job', () => {
     expect(scalar(`select name from member where id='${ERASED}'`).trim()).toBe(
       'Deleted account',
     );
@@ -945,36 +1511,67 @@ describe('the erasure job has never heard of member_address or shop_order', () =
       count(`select count(*) from session where member_id='${ERASED}'`),
       'her sessions survived, which the job explicitly deletes',
     ).toBe(0);
-    expect(
-      result?.failed,
-      `the job reported failures: ${JSON.stringify(result)}`,
-    ).toBe(0);
   });
 
   /**
-   * AND THE READ PATH, WHICH IS WHERE THE COST LANDS. The two knownBugs are about
-   * rows; this is about a response, and it is the one a reviewer should look at
-   * first because it is what a salon actually sees.
+   * ===========================================================================
+   * AND THE READ PATH — TWO CLOSED ORDERS ON ONE BOARD, WHICH IS WHERE BOTH THE
+   * FIX AND THE OPEN QUESTION ARE VISIBLE AT ONCE.
+   * ===========================================================================
+   * THIS SPEC USED TO ASSERT `row.address` WAS NOT NULL, AND IT RAN AGAINST THE
+   * ERASED MEMBER'S ORDER. Its own header predicted it would keep passing "for the
+   * orders of members who have NOT asked to be erased" — correctly — but it read
+   * the one order the scrub does reach, so `1f6bfb3` turned it red. The concern it
+   * was written to flag is untouched by that; only its subject was wrong.
    *
-   * A PLAIN `it`, NOT A `knownBug`, and the distinction is deliberate: this
-   * asserts what the API DOES today so the claim cannot rot, and it will keep
-   * passing after the erasure gap is closed for the orders of members who have NOT
-   * asked to be erased — which is correct behaviour. What it pins is that the
-   * merchant board serves the full snapshot for a CLOSED order with no horizon,
-   * which is a retention question rather than a defect.
+   * SO IT NOW READS BOTH ROWS FROM ONE BOARD RESPONSE, and the contrast is the
+   * assertion:
+   *
+   *   the ERASED member's order   `address: null`. The read-path half of #97, and
+   *                               a state that cannot arise any other way — a LIVE
+   *                               delivery is CHECKed to carry block, street and
+   *                               building. Also the reason `contract.test.ts`
+   *                               stayed green through the fix: the serialiser
+   *                               returns `address: null` rather than an object
+   *                               with null fields, so `ShopOrderSchema` never sees
+   *                               an address whose `id` is missing.
+   *   HER order                   THE FULL SNAPSHOT — street and gate code — on a
+   *                               CLOSED order, two days old, for a member who has
+   *                               asked for nothing and is not a candidate for
+   *                               erasure. No expiry, on any surface.
+   *
+   * THE SECOND ROW IS THE HORIZON QUESTION AND IT IS NOT ANSWERED HERE.
+   * REPORTED, NOT REFUSED: there is nothing wrong with a merchant reading her own
+   * salon's fulfilment history, and `perms.shop` is the right gate for it (see
+   * `permission-census.test.ts`'s note). A permission decides WHO. Nothing in this
+   * feature decides FOR HOW LONG, the published policy is silent on it, and a
+   * retention horizon is CLIENT-OWNED per CLAUDE.md's escalations.
+   *
+   * WHAT WOULD MAKE THIS SPEC RED IS A HORIZON BEING BUILT, which is the outcome
+   * it exists to notice rather than to prevent. `address_erased_at` is the column
+   * such a job would set, and today nothing but erasure sets it — so if this goes
+   * red, read the failure as "the decision was taken" and rewrite the spec to
+   * assert the rule that was chosen. Do NOT relax it to `.toBeDefined()`; a
+   * silently-loosened assertion here is how the exposure stops being visible
+   * without anyone deciding it should.
    */
-  it('the board has no horizon — a closed order still serves the full snapshot', async () => {
+  it('the board serves the erased order without an address and a live member\'s closed order in full', async () => {
+    /**
+     * BOTH ORDERS CLOSED AND AGED, in one statement, so the two rows differ in
+     * exactly one respect: whether their member asked to be erased.
+     */
     psql(`
       UPDATE shop_order
          SET status = 'closed', ready_at = now() - interval '2 days',
              closed_at = now() - interval '2 days'
-       WHERE transaction_id = '${ERASED_ORDER}';
+       WHERE transaction_id IN ('${ERASED_ORDER}', '${HER_ORDER}');
     `);
 
     const merchant = await treq<{
       items: Array<{
         transactionId: string;
         memberName: string;
+        fulfilment: string;
         address: null | { street: string | null; instructions: string | null };
       }>;
       truncated: boolean;
@@ -984,29 +1581,87 @@ describe('the erasure job has never heard of member_address or shop_order', () =
     });
     expect(merchant.status, `answered ${merchant.status}: ${merchant.raw}`).toBe(200);
 
-    const row = merchant.body.items.find((o) => o.transactionId === ERASED_ORDER);
-    precondition(row !== undefined, 'the closed order is not on the board at all');
+    const erasedRow = merchant.body.items.find((o) => o.transactionId === ERASED_ORDER);
+    const herRow = merchant.body.items.find((o) => o.transactionId === HER_ORDER);
+    precondition(
+      erasedRow !== undefined && herRow !== undefined,
+      'one of the two closed orders is not on the board, so the contrast this spec is ' +
+        'about cannot be read. Check `truncated` — the board has no cursor (see § 5).',
+    );
+
+    // ---- the erased member's order: the fix, as a merchant sees it ----
+    expect(
+      erasedRow!.address,
+      'THE ERASED MEMBER\'S HOME ADDRESS IS STILL ON THE MERCHANT BOARD. This is the ' +
+        'read path for #97 and the copy that actually mattered: the member row is a ' +
+        'tombstone — name "Deleted account", a synthetic +990 phone — and the board ' +
+        'renders exactly where she lives beside it. De-identifying the name and keeping ' +
+        'the address is the worst of the two available outcomes, because it removes the ' +
+        'accountability and keeps the exposure.',
+    ).toBeNull();
+    expect(
+      erasedRow!.fulfilment,
+      'the erased order is served as a pickup, which rewrites what happened. It WAS a ' +
+        'delivery; `fulfilment: \'delivery\'` with `address: null` is the state the fix ' +
+        'creates and a merchant should see it as such',
+    ).toBe('delivery');
+    expect(
+      erasedRow!.memberName,
+      'the board no longer names the tombstone — a different change from this one',
+    ).toBe('Deleted account');
+    /**
+     * NO COMPONENT ANYWHERE IN THE RAW RESPONSE, which the typed read above cannot
+     * say. `address: null` is a claim about one key; the sentinels are unique to
+     * this file, so their absence from the whole body is a claim about every key,
+     * including ones no schema declares. Same argument as `expectNoSalonALeak`.
+     */
+    for (const sentinel of [ERASED_STREET, ERASED_INSTRUCTIONS, ERASED_GONE_STREET]) {
+      expect(
+        merchant.raw.includes(sentinel),
+        `the board response still contains "${sentinel}" somewhere — the typed ` +
+          '`address` key is null but a component of her address is being served under ' +
+          'another key',
+      ).toBe(false);
+    }
+
+    // ---- her order: the horizon, which nothing has decided ----
+    expect(
+      herRow!.address,
+      'A LIVE MEMBER\'S SNAPSHOT IS GONE FROM THE BOARD. If a retention horizon was ' +
+        'built, this spec is now asserting the wrong thing — read this file\'s § 4 ' +
+        'header and rewrite it to assert whatever rule was chosen. If no horizon was ' +
+        'built, the address has been scrubbed from a member who never asked, which is a ' +
+        'defect: a salon cannot answer a dispute about an order it can no longer locate.',
+    ).not.toBeNull();
+    expect(
+      herRow!.address!.street,
+      'the street she typed is no longer on her own closed order',
+    ).toBe(HER_GONE_STREET);
+    expect(
+      herRow!.address!.instructions,
+      'the free-text delivery instruction — a gate code, a "ring twice" — is served too, ' +
+        'two days after the order closed, with no expiry',
+    ).toBe(HER_INSTRUCTIONS);
 
     /**
-     * REPORTED, NOT REFUSED. There is nothing wrong with the merchant reading her
-     * own salon's fulfilment history, and `perms.shop` is the right gate for it
-     * (see permission-census.test.ts's note). What this pins is the SHAPE of the
-     * exposure so the retention decision is taken deliberately: the row is closed,
-     * two days old, its member is an erased tombstone, and the board still carries
-     * the street and the gate code. A permission decides who; nothing in this
-     * feature decides for how long.
+     * AND THE STAMP IS WHAT SEPARATES THEM, asserted in the database rather than
+     * inferred from the two responses — because the honest statement of the open
+     * question is precisely "this column is set by exactly one thing".
+     *
+     * If a retention job is ever built, `address_erased_at` is the column it would
+     * set, and this count is what would change first.
      */
-    expect(row!.address, 'the snapshot is gone from the board').not.toBeNull();
-    expect(row!.address!.street).toBe(ERASED_STREET);
     expect(
-      row!.address!.instructions,
-      'the free-text delivery instruction — a gate code, a "ring twice" — is served too',
-    ).toBe(ERASED_INSTRUCTIONS);
-    expect(
-      row!.memberName,
-      'the board names the tombstone, which is the point: the identity is de-identified ' +
-        'and the address beside it is not',
-    ).toBe('Deleted account');
+      count(`
+        select count(*) from shop_order
+         where address_erased_at is not null and transaction_id='${HER_ORDER}'
+      `),
+      'HER order carries an `address_erased_at` stamp and she never asked to be erased. ' +
+        'Today the only writer of that column is `services/erasure.ts`, so either a ' +
+        'retention horizon now exists — in which case this file\'s § 4 header is stale ' +
+        'and the client decision it describes as open has been taken — or something else ' +
+        'has learned to stamp it.',
+    ).toBe(0);
   });
 });
 
@@ -1105,25 +1760,50 @@ describe('the two the schema cannot say', () => {
    * THE COLUMN IS WIDER THAN THE SCHEMA — `shop_order.address_id` is NULLABLE and
    * `ShopOrderSchema.address.id` is `IdSchema`, which is `z.string().min(1)`.
    *
-   * REPORTED, NOT ASSERTED AS A BUG, because no API path can produce the state
-   * today and this spec says exactly that. `services/order.ts` § 5b resolves the
-   * address before writing the row and throws if it is not hers, so a delivery
-   * order always gets a real id; and the FK is `ON DELETE restrict`, so the row it
-   * points at cannot be removed underneath it. The only writer that can produce
-   * `address_id IS NULL` on a delivery is direct SQL.
+   * ---------------------------------------------------------------------------
+   * THE INVARIANT WAS STATED ONE CONDITION TOO BROADLY, AND #97 IS WHAT FOUND IT.
+   * ---------------------------------------------------------------------------
+   * This counted `fulfilment='delivery' AND address_id IS NULL` and expected zero.
+   * After `1f6bfb3` the count is 1 and correctly so: erasure nulls the provenance
+   * link along with the snapshot, because the FK is `ON DELETE restrict` and the
+   * book cannot be deleted while an order points into it. The condition is now
+   * `AND address_erased_at IS NULL` — a LIVE delivery has a real `address_id`, and
+   * an erased one has none by construction.
    *
-   * IT IS WORTH A SPEC ANYWAY, for two reasons that have nothing to do with it
-   * being reachable. First, it already cost something: `tenancy.test.ts`'s order
-   * fixture seeded `address_id` NULL — legal, and its own specs passed — and that
-   * row would have failed `contract.test.ts`'s board probe, in a third file, for a
-   * state the product cannot reach. That note is now on `PROBE_ORDER_A`. Second,
-   * the honest fix is a decision rather than a patch: either the column becomes
-   * NOT NULL for deliveries (a migration, and `shop_order_delivery_has_an_address`
-   * is the natural place), or `ShopOrderSchema.address.id` becomes nullable and
-   * every client learns to render an order whose address has no provenance. Lane A
-   * owns the first, trunk the second.
+   * TWO SENTENCES IN THE OLD VERSION OF THIS BLOCK WERE FALSE AND ARE WORTH
+   * NAMING, because both were the confident kind:
+   *
+   *   "THE ONLY WRITER THAT CAN PRODUCE `address_id IS NULL` ON A DELIVERY IS
+   *   DIRECT SQL." It was true when written. `services/erasure.ts` is now a second
+   *   writer, and a deliberate one — migration 0048's third CHECK arm exists
+   *   precisely to make that row storable.
+   *
+   *   "THIS ROW CANNOT BE SERIALISED TO ANY CLIENT — `contract.test.ts`'s probes on
+   *   both order reads will fail on it." FALSE FOR AN ERASED ROW SPECIFICALLY, and
+   *   the reason matters more than the correction: the serialiser returns
+   *   `address: null` rather than building an object with a null `id`, so
+   *   `ShopOrderSchema` never sees the shape the claim was about. That is why
+   *   `contract.test.ts` stayed green straight through the fix, and it is also the
+   *   read-path behaviour § 4's board spec now pins. The claim survives for the
+   *   state this spec still checks — a row with a live snapshot and no provenance
+   *   link — because there the serialiser DOES build an address object.
+   *
+   * IT IS STILL WORTH A SPEC, for the two reasons that have nothing to do with the
+   * state being reachable. First, it already cost something: `tenancy.test.ts`'s
+   * order fixture seeded `address_id` NULL — legal, and its own specs passed — and
+   * that row would have failed `contract.test.ts`'s board probe, in a third file,
+   * for a state the product cannot reach. That note is now on `PROBE_ORDER_A`.
+   * Second, the honest fix is a decision rather than a patch — and 0048 removed one
+   * of the two options that used to be available. The column can no longer become
+   * NOT NULL, for deliveries or otherwise: the erased arm of
+   * `shop_order_delivery_has_an_address` REQUIRES `address_id IS NULL`, so a NOT
+   * NULL column would make an erased order unstorable and #97 unfixable. What is
+   * left is trunk's half: `ShopOrderSchema.address.id` becomes nullable and every
+   * client learns to render an order whose address has no provenance — or the
+   * schema keeps refusing a shape the serialiser never emits, which is the status
+   * quo and is defensible as long as it is deliberate.
    */
-  it('the column permits an address_id the schema refuses, and no API path produces it', () => {
+  it('a LIVE delivery has a real address_id — erased orders are the one exception', () => {
     const nullableColumn = scalar(`
       select is_nullable from information_schema.columns
        where table_name = 'shop_order' and column_name = 'address_id'
@@ -1135,32 +1815,53 @@ describe('the two the schema cannot say', () => {
 
     if (nullableColumn === 'NO') {
       /**
-       * The gap closed. Good — say so rather than keep reporting it, and this is the
-       * branch that makes the spec self-retiring instead of a permanent complaint.
+       * NOT A SELF-RETIRING BRANCH ANY MORE — A CONTRADICTION. This used to be the
+       * "gap closed, good" branch. It cannot be that now: migration 0048's erased arm
+       * requires `address_id IS NULL`, so a NOT NULL column and that CHECK cannot both
+       * exist, and reaching here means one of them was dropped.
        */
-      expect(nullableColumn).toBe('NO');
+      expect(
+        nullableColumn,
+        '`shop_order.address_id` IS NOW NOT NULL, WHICH CONTRADICTS MIGRATION 0048. Its ' +
+          'erased arm of `shop_order_delivery_has_an_address` requires `address_id IS ' +
+          'NULL`, so either that constraint was dropped — and § 4\'s specs should be red ' +
+          'too — or a migration made the column NOT NULL and no erasure can ever commit ' +
+          'again for a member who ordered something. Either way this is not the gap ' +
+          'closing; do not delete this spec on the strength of it.',
+      ).toBe('YES');
       return;
     }
 
     /**
-     * The column is nullable, so the claim to check is the NARROW one: every
+     * The column is nullable, so the claim to check is the NARROW one: every LIVE
      * delivery order in this database has a real `address_id`. That is the property
      * the product actually depends on, and it is the one a future writer — a bulk
      * import, an admin tool, a migration backfill — would break.
+     *
+     * `address_erased_at IS NULL` IS WHAT MAKES IT AN INVARIANT RATHER THAN A COUNT.
+     * Without it the assertion goes red every time this file's own § 4 runs, which is
+     * how it read after `1f6bfb3`.
      */
     expect(
       count(`
         select count(*) from shop_order
-         where fulfilment = 'delivery' and address_id is null
+         where fulfilment = 'delivery'
+           and address_erased_at is null
+           and address_id is null
       `),
-      'A DELIVERY ORDER HAS NO address_id. The column allows it and ' +
-        '`ShopOrderSchema.address.id` (IdSchema, z.string().min(1)) does NOT, so this row ' +
-        'cannot be serialised to any client — `contract.test.ts`\'s probes on both order ' +
-        'reads will fail on it.\n\n' +
+      'A LIVE DELIVERY ORDER HAS NO address_id. The column allows it and ' +
+        '`ShopOrderSchema.address.id` (IdSchema, z.string().min(1)) does NOT, and for a ' +
+        'row in THIS state the serialiser does build an address object — so it cannot be ' +
+        'serialised and `contract.test.ts`\'s probes on both order reads will fail on it. ' +
+        '(An ERASED row is excluded above and is a different matter: the serialiser ' +
+        'returns `address: null` for it and never builds an object with a null `id`, which ' +
+        'is why that state is safe and why it needs excluding here.)\n\n' +
         'If a TEST fixture wrote it, point its `address_id` at a real `member_address` row; ' +
         '`tenancy.test.ts`\'s PROBE_ORDER_A carries the same note for the same reason. If an ' +
         'API path wrote it, that is a defect in lane A\'s column and the finding is that ' +
-        '`services/order.ts` § 5b can now leave the provenance link empty on a delivery.',
+        '`services/order.ts` § 5b can now leave the provenance link empty on a delivery. ' +
+        'If `services/erasure.ts` wrote it WITHOUT stamping `address_erased_at`, the CHECK ' +
+        'that should have refused that row is gone — see § 4.',
     ).toBe(0);
   });
 });

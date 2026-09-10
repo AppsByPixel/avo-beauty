@@ -503,7 +503,11 @@ const PROBE_CAMPAIGN_B = 'CMP-TEN-B';
  *
  * (That the column permits a state the schema refuses is a real modelling gap and
  * it is REPORTED rather than papered over here — see
- * `delivery-address-privacy.test.ts` § "the column is wider than the schema".)
+ * `delivery-address-privacy.test.ts` § "the column is wider than the schema".
+ * "No API path can produce it" is about a LIVE delivery, which is the case above:
+ * erasure produces `address_id IS NULL` deliberately since `1f6bfb3`, and the
+ * serialiser answers `address: null` for those rows rather than building an
+ * address object, so they do not reach the probe this note is about.)
  */
 const PROBE_ORDER_A = 'TX-TEN-A-ORDER';
 const PROBE_ORDER_B = 'TX-TEN-B-ORDER';
