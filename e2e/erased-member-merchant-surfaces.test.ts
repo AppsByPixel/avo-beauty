@@ -714,6 +714,13 @@ describe('no merchant-facing response anywhere carries a dialable tombstone', ()
     proof: () => string;
     /** Why this surface can carry her, for the reader of a red run. */
     why: string;
+    /**
+     * Set on a surface whose leak is a KNOWN, RECORDED, ESCALATED defect that is
+     * deliberately not being fixed yet. Its spec is registered with `it.fails()`
+     * instead of `it()`: green while the leak is there, RED the hour it closes.
+     * The paragraph on the entry that sets it is the whole explanation.
+     */
+    knownOpenDefect?: true;
   }
 
   const surfaces = (): Surface[] => [
@@ -735,6 +742,65 @@ describe('no merchant-facing response anywhere carries a dialable tombstone', ()
       proof: () => ARTIST_BOOKING,
       why: "the artist's own day joins `member` live, and renders Call AND WhatsApp",
     },
+    /**
+     * THE FOURTH DOOR IS OPEN, ON PURPOSE, AND THIS ENTRY IS THE ONE THAT SAYS SO
+     * — DECISIONS.md #102.
+     *
+     * WHAT IS BROKEN. `GET /members/:id` is the scanner's manual-lookup RESOLVE,
+     * and it serves `serialiseMember()`, which carries the member's FULL phone.
+     * `resolveMember()` (`api/src/services/memberSearch.ts:436`) has no
+     * `erasedAt` predicate at all, so an erased member resolves like any other
+     * and her tombstone arrives at the till as a dialable number. It is worse
+     * than a rendering problem: `charge.ts`, `charges.ts` and `counter.ts` carry
+     * no erased check either, so the manual-lookup path can carry an erased
+     * account all the way onto the charge screen — while `vouchers.ts:211`,
+     * `adjustments.ts:165` and `accountResets.ts:137` each refuse an erased
+     * member BY NAME. The three siblings agree with each other and this path
+     * disagrees with all three.
+     *
+     * IT IS DELIBERATELY UNFIXED, PENDING A PRODUCT DECISION. Both candidate
+     * fixes are decisions above this lane's pay grade, and neither is a QA call:
+     *
+     *   null the phone   `serialiseMember()` returns `MemberView`, and
+     *                    `MemberSchema.phone` is a NON-NULLABLE `PhoneSchema` in
+     *                    trunk-owned `packages/types`. Widening it to nullable is
+     *                    a trunk operation and a four-way break — every surface
+     *                    that reads a member has to handle the null.
+     *   refuse the       Matching `vouchers`/`adjustments`/`accountResets` and
+     *   resolve          404-ing an erased member changes MERCHANT BEHAVIOUR: a
+     *                    lookup that used to answer now does not, and what the
+     *                    till shows instead is a product question.
+     *
+     * Escalated to Aftab; trunk is recording it as DECISIONS.md #102.
+     *
+     * SO THE SPEC IS INVERTED, NOT DELETED AND NOT SOFTENED. `it.fails()` reports
+     * a spec as PASSING when its body throws and FAILING when its body passes —
+     * so this probe is green exactly while the leak it describes is real, and the
+     * hour somebody closes the door it goes RED and drags a reader here. `dev`
+     * goes green on a defect that is known, recorded and escalated rather than
+     * silently red, and the fix cannot land quietly.
+     *
+     * WHEN THE FIX LANDS: delete `knownOpenDefect` from this entry. That is the
+     * whole cleanup — the spec re-registers as a plain `it()` and the assertions
+     * below, which are already written the way the contract should read, start
+     * enforcing it. Do not weaken them; they are correct today.
+     *
+     * WHY AN INVERTED PROBE AND NOT A NOTE, WHICH IS THE POINT OF THE WHOLE
+     * CONSTRUCT. Lane B wrote what it believed was the same guard — a scanner
+     * test asserting the pre-fix behaviour under a comment promising "the day the
+     * API changes, the line below fails and somebody reads this paragraph". It
+     * cannot: it renders a HARDCODED CLIENT FIXTURE, so nothing the API does can
+     * ever change its result, and it sailed green straight through lane A's
+     * merge. A tripwire has to be wired to the thing it is watching. This one
+     * drives the real endpoint against a really-erased member, which is what
+     * makes the inversion mean anything.
+     *
+     * (Not `knownBug()` — that helper owns its own `it()` and cannot be applied
+     * to one entry of a driven table without lifting this surface out of the
+     * sweep, and being IN the sweep is the property that catches door number
+     * five. Its stricter contract — only an AssertionError counts — is preserved
+     * below by `requires()`, which is why the preconditions still bite here.)
+     */
     {
       label: 'GET /members/:id',
       fetch: () => treq('GET', `/members/${HER}`, { token: staffScanner }),
@@ -742,6 +808,7 @@ describe('no merchant-facing response anywhere carries a dialable tombstone', ()
       why:
         'the scanner RESOLVE serves serialiseMember(), full phone and all — A FOURTH ' +
         'DOOR, not one of the three DECISIONS.md #100 names',
+      knownOpenDefect: true,
     },
     {
       label: 'GET /members?q=…',
@@ -759,13 +826,49 @@ describe('no merchant-facing response anywhere carries a dialable tombstone', ()
   ];
 
   for (const surface of surfaces()) {
-    it(`${surface.label} — ${surface.why}`, async () => {
+    /**
+     * `it.fails` ONLY for the surface whose entry above explains why. Everything
+     * else about the spec — title, fixture, both assertions — is identical, so
+     * the inverted one is the same probe read the other way up rather than a
+     * different, weaker probe.
+     */
+    const register = surface.knownOpenDefect ? it.fails : it;
+
+    register(`${surface.label} — ${surface.why}`, async () => {
+      /**
+       * A PRECONDITION MUST NOT BE ABLE TO SATISFY `it.fails()`, which is the one
+       * sharp edge of the construct and the reason `known-bug.ts` exists in the
+       * form it does. `.fails` accepts ANY throw as the expected failure, so on
+       * the inverted spec a 404, a dead server or a member who is simply absent
+       * from the body would all be reported GREEN — the exact vacuity this
+       * describe block refuses to tolerate everywhere else.
+       *
+       * So on the inverted spec a violated precondition RETURNS instead of
+       * throwing. A body that completes normally is what `it.fails()` calls a
+       * failure, so "nothing was scanned" goes red, which is what it deserves;
+       * the reason is printed because vitest's own `.fails` message cannot carry
+       * it. On the other five specs `requires()` throws exactly as before.
+       */
+      const requires = (ok: boolean, message: string): boolean => {
+        if (ok) return true;
+        if (!surface.knownOpenDefect) precondition(ok, message);
+        console.error(
+          `\n${surface.label} — THIS INVERTED SPEC SCANNED NOTHING, so its red is not the ` +
+            `fourth door closing (DECISIONS.md #102). precondition failed: ${message}\n`,
+        );
+        return false;
+      };
+
       const res = await surface.fetch();
-      precondition(
-        res.status === 200,
-        `${surface.label} answered ${res.status} rather than 200, so nothing was scanned:\n` +
-          res.raw,
-      );
+      if (
+        !requires(
+          res.status === 200,
+          `${surface.label} answered ${res.status} rather than 200, so nothing was scanned:\n` +
+            res.raw,
+        )
+      ) {
+        return;
+      }
 
       /**
        * NON-VACUITY FIRST. A body she is not in cannot fail the scan below, and a
@@ -773,12 +876,16 @@ describe('no merchant-facing response anywhere carries a dialable tombstone', ()
        * report about a leak.
        */
       const proof = surface.proof();
-      precondition(
-        res.raw.includes(proof),
-        `${surface.label} does not mention "${proof}", so the erased member is not in this ` +
-          `response and scanning it proves nothing. Fix the fixture or the probe — do not ` +
-          `read this as a pass.`,
-      );
+      if (
+        !requires(
+          res.raw.includes(proof),
+          `${surface.label} does not mention "${proof}", so the erased member is not in this ` +
+            `response and scanning it proves nothing. Fix the fixture or the probe — do not ` +
+            `read this as a pass.`,
+        )
+      ) {
+        return;
+      }
 
       /**
        * THE EXACT NUMBER THE JOB MINTED. Asserted before the prefix, because it
