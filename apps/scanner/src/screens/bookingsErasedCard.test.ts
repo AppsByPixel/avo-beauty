@@ -41,6 +41,12 @@
  * `wa.me`, and the `+990` digits appear nowhere as text. It does that by
  * WALKING THE TREE AND FIRING EVERY `onPress` IT FINDS, so a button that is
  * merely styled away, or moved, or renamed, still fails this test.
+ *
+ * AND WHAT IT CANNOT PROVE IS THE API. Every fixture below is a wire body typed
+ * out in this file, so no change on the server — a regression included — can
+ * reach any assertion here. This suite pins the CARD's behaviour given a
+ * payload; the erased member's safety is a property of the payload, and the
+ * probe that trips when the payload changes is the live-endpoint one in `e2e/`.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -143,7 +149,10 @@ function wire(over: Record<string, unknown>) {
   };
 }
 
-/** Lane A's payload for an erased member: null phone, flag true, name kept. */
+/**
+ * Lane A's payload for an erased member — live since `serialiseMemberContact()`:
+ * null phone, flag true, tombstone name kept.
+ */
 const erasedWire = wire({
   id: 'BK-ERASED',
   memberName: 'Deleted account',
@@ -151,16 +160,26 @@ const erasedWire = wire({
   memberErased: true,
 });
 
-/** Today's payload, before lane A merges. No `memberErased` key at all. */
+/**
+ * A member who is not erased, with no `memberErased` key at all.
+ *
+ * `serialiseMemberContact()` always emits the field now, so this is no longer
+ * the wire — it is the TOLERANCE. A scanner build outliving a rollback, or a
+ * cached body, must still parse and must still default to not-erased.
+ */
 const liveWire = wire({ id: 'BK-LIVE' });
 
 /**
- * The case that has no contract and can still arrive: the tombstone STRING,
- * with no flag, because lane A has not landed and the API is still joining
- * `member` live. This is the one the `+990` sentinel was actually reaching.
+ * The payload with no contract behind it: the tombstone STRING in `memberPhone`,
+ * and no flag. `serialiseMemberContact()` does not produce this — it is what the
+ * endpoint served while it joined `member` live, and `member.phone` still HOLDS
+ * that string after erasure, because `erasure.ts` writes it there.
+ *
+ * Kept as a fixture because it is the shape the card cannot tell from a real
+ * number, which is the point of the last spec in this file.
  */
-const preLaneAWire = wire({
-  id: 'BK-PRELANEA',
+const unflaggedTombstoneWire = wire({
+  id: 'BK-UNFLAGGED',
   memberName: 'Deleted account',
   memberPhone: `+${TOMBSTONE_DIGITS}`,
 });
@@ -243,10 +262,11 @@ beforeEach(() => openURL.mockClear());
 
 describe('ArtistBookingSchema takes both payloads', () => {
   /**
-   * THE URGENT HALF. `memberPhone: z.string()` does not degrade when lane A
-   * starts sending `null` — it throws, `fetchMyBookings` rejects, and the
-   * artist's whole day renders as an error. A privacy fix that ships after the
-   * contract lands is a privacy fix that shipped as an outage first.
+   * THE HALF THAT HAD TO LAND BEFORE LANE A DID, AND DID. `memberPhone:
+   * z.string()` does not degrade when the API sends `null` — it throws,
+   * `fetchMyBookings` rejects, and the artist's whole day renders as an error.
+   * The endpoints send null for an erased member now, so this line is load
+   * bearing on every list that contains one.
    */
   it('parses lane A’s null phone rather than rejecting the whole page', () => {
     const parsed = ArtistBookingSchema.parse(erasedWire);
@@ -255,7 +275,11 @@ describe('ArtistBookingSchema takes both payloads', () => {
     expect(parsed.memberName).toBe('Deleted account');
   });
 
-  /** And is still green on the payload the API serves today, without the flag. */
+  /**
+   * And on a body with no flag at all. The API no longer sends one of these, so
+   * what this pins is the default: absent must read as not-erased, never as
+   * erased, or every ordinary card blanks itself.
+   */
   it('defaults memberErased to false when the key is absent', () => {
     const parsed = ArtistBookingSchema.parse(liveWire);
     expect(parsed.memberErased).toBe(false);
@@ -313,18 +337,28 @@ describe('the erased card offers no way to reach nobody', () => {
   });
 
   /**
-   * The belt to the flag's braces. Until lane A merges, the API still joins the
-   * scrubbed row live and the phone arrives as the `+990` STRING with no flag.
-   * The null guard cannot catch that one; nothing can, on the client, without
-   * pattern-matching a sentinel — which this deliberately does NOT do.
+   * THE CARD IS NOT THE GUARD, AND THIS IS WHERE THAT IS WRITTEN DOWN.
    *
-   * So this test asserts the honest state of affairs rather than a fix that is
-   * not ours to make: the card behaves normally, and the exposure closes when
-   * lane A lands. It is here so that the day the API changes, the line below
-   * fails and somebody reads this paragraph.
+   * It reads two things: `memberErased`, and a null `memberPhone`. It does not
+   * pattern-match `+990`, deliberately — a sentinel check on the client is a
+   * second definition of "erased" that drifts from the API's, and it would mask
+   * a serialiser regression behind a card that still looks correct.
+   *
+   * So an erased member's safety on this screen is a property of the CONTRACT,
+   * not of this component: the tombstone is still in `member.phone`, and what
+   * keeps it off the wire is `serialiseMemberContact()` sending
+   * `memberErased: true` with `memberPhone: null`.
+   *
+   * Hand the card the payload that carries the tombstone with no flag and it
+   * renders the link. That is not a gap left open — it is the dependency,
+   * executable: if the server regresses, the UI regresses with it, and nothing
+   * on this side can notice. Noticing is the job of the live-endpoint probe in
+   * `e2e/`, which drives the real response and inverts when it changes. A
+   * fixture cannot do that, however it is worded. Lane C keeps the same
+   * assertion on the dashboard under the same name.
    */
-  it('documents the pre-lane-A gap: an unflagged tombstone still renders', () => {
-    const r = render(preLaneAWire);
+  it('renders the old link on the old payload, because the fix is the API signal', () => {
+    const r = render(unflaggedTombstoneWire);
     expect(r.opened).toContain(`https://wa.me/${TOMBSTONE_DIGITS}`);
   });
 });
