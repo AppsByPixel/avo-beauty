@@ -487,3 +487,26 @@ Lane D runs the whole way and gets more valuable as more lands.
 - **Do not fix another lane's bug from inside your lane.** Report it.
 - **Do not add a fifth lane** because things feel fast. Four is already more than one
   person can review well.
+
+---
+
+## After merging `dev`, rebuild `packages/types` before believing any typecheck
+
+Added 2026-09-10, after lane C nearly filed a false break.
+
+`packages/types/dist` is **gitignored and per-worktree**. So merging `dev` brings the
+*source* of a new field but leaves your built `.d.ts` on the old shape, and the first
+typecheck after a merge fails in a package that is not broken — lane C saw
+`packages/mock` red for an `emailEnabled` that existed in the source and not in the
+build.
+
+A lane that trusted that first run would have reported `dev` broken. The fix is one
+command before the first verdict:
+
+```bash
+pnpm --dir=/abs/path/to/repo turbo run build --filter=@avo/types --filter=@avo/tokens
+```
+
+This is the same class as the workspace-symlink trap recorded above: a warm tree has
+artefacts a merge does not update, and the error names the consumer rather than the
+cause.

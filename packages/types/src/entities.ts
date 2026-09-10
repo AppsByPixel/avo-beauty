@@ -659,7 +659,25 @@ export const ShopOrderSchema = z.object({
   transactionId: IdSchema,
   fulfilment: z.enum(['pickup', 'delivery']),
   status: OrderStatusSchema,
-  /** Null for pickup. The snapshot for delivery — see above. */
+  /**
+   * NULL HAS TWO MEANINGS AND THE FULFILMENT DISTINGUISHES THEM — do not read
+   * a null address as pickup, which was true until migration 0048.
+   *
+   *   `pickup`   + null  → she is collecting. There was never an address.
+   *   `delivery` + null  → the customer asked to be erased; the snapshot's
+   *                        columns are scrubbed and `address_erased_at` stamped
+   *                        server-side. The order, its lines, its transaction
+   *                        and its ledger pair all survive.
+   *
+   * A *live* delivery is CHECKed to carry block, street and building, so a
+   * delivery with a null address cannot arise from a bug or a forgotten
+   * snapshot — the database refuses both. The state is unambiguous, which is why
+   * no extra wire field was added for it.
+   *
+   * The erasure date is deliberately NOT served: it would tell a salon *when* a
+   * customer it can still name asked to be erased, which is a fact about her
+   * rather than about the order.
+   */
   address: MemberAddressSchema.omit({ createdAt: true }).nullable(),
   createdAt: DateTimeSchema,
   readyAt: DateTimeSchema.nullable(),
