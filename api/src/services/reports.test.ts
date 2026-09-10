@@ -10,7 +10,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { neutralise, toCsv, reportFilename, REPORT_PERMISSION, REPORT_KINDS } from './reports';
+import {
+  neutralise,
+  reportExportAudit,
+  reportFilename,
+  toCsv,
+  REPORT_AUDITED,
+  REPORT_KINDS,
+  REPORT_PERMISSION,
+} from './reports';
 import type { ReportShape } from './reports';
 
 function shape(rows: ReportShape['rows']): ReportShape {
@@ -137,6 +145,130 @@ describe('the filename, which embeds a name a salon chose', () => {
 
   it('never yields an empty branch segment, even for a fully stripped name', () => {
     expect(reportFilename('sales', 'مجمع', '7d')).toBe('sales_branch_7d.csv');
+  });
+});
+
+describe('which exports are audited, and what the row may carry', () => {
+  it('covers every kind, so a sixth cannot arrive unclassified', () => {
+    expect(Object.keys(REPORT_AUDITED).sort()).toEqual([...REPORT_KINDS].sort());
+  });
+
+  it('audits the two kinds whose rows name identifiable people', () => {
+    expect(REPORT_AUDITED.customers).toBe(true);
+    expect(REPORT_AUDITED['artist-performance']).toBe(true);
+  });
+
+  it('does NOT audit the three that name days, services and products', () => {
+    expect(REPORT_AUDITED.sales).toBe(false);
+    expect(REPORT_AUDITED['best-selling-services']).toBe(false);
+    expect(REPORT_AUDITED['products-sold']).toBe(false);
+  });
+
+  /**
+   * THE INVARIANT THAT KEEPS TWO DECISIONS FROM WELDING TOGETHER.
+   *
+   * `REPORT_AUDITED` is written out rather than derived from
+   * `REPORT_PERMISSION[kind] === 'team'`, so a future re-gate cannot silently
+   * change what is audited. This is the property worth pinning instead: an
+   * audited export is gated on `team`. Re-gate one to something weaker and this
+   * fails, rather than the audit trail quietly following the permission down.
+   */
+  it('every audited kind is gated on `team`', () => {
+    for (const kind of REPORT_KINDS) {
+      if (REPORT_AUDITED[kind]) {
+        expect(REPORT_PERMISSION[kind], `${kind} is audited but gated on a weaker section`).toBe(
+          'team',
+        );
+      }
+    }
+  });
+
+  /**
+   * THE ROW RECORDS THE ACT, NEVER THE CONTENT — and the reason is a privilege
+   * downgrade rather than a tidiness principle. `GET /salons/{id}/audit` is
+   * `requireDashboardPerm(req, 'dashboard')` while both audited reports are
+   * gated `team`, so a figure copied into this row becomes readable at a WEAKER
+   * permission than the report it came from.
+   *
+   * Asserted against a row built from a fixture whose values would be
+   * unmistakable if any of them leaked: a distinctive name and a distinctive
+   * number.
+   */
+  describe('the audit row is not a second copy of the export', () => {
+    const row = reportExportAudit({
+      salonId: 'SAL-AMARA',
+      kind: 'artist-performance',
+      branchId: 'BR-KWC',
+      period: '30d',
+      rowCount: 12,
+      via: 'csv',
+    });
+    const serialised = JSON.stringify(row);
+
+    it('carries the act: who is asked of writeAudit, and what/how wide/how much are here', () => {
+      expect(row.kind).toBe('access');
+      expect(row.action).toBe('Report exported');
+      expect(row.subjectType).toBe('report');
+      expect(row.subjectId).toBe('artist-performance');
+      expect(row.metadata).toEqual({
+        kind: 'artist-performance',
+        branchId: 'BR-KWC',
+        period: '30d',
+        rowCount: 12,
+        via: 'csv',
+      });
+    });
+
+    it('names the scope in the detail, because a 90d all-branch pull is a different act', () => {
+      expect(row.detail).toContain('BR-KWC');
+      expect(row.detail).toContain('30d');
+      expect(row.detail).toContain('12 rows');
+      expect(row.detail).toContain('csv');
+    });
+
+    it('sets no amountFils — that column is for money that MOVED', () => {
+      // Absent rather than zero: a zero would read as "an export worth nothing".
+      expect('amountFils' in row).toBe(false);
+    });
+
+    /**
+     * `access`, not `money` and not `rules`. Nothing moved and nothing changed.
+     */
+    it('is an access event', () => {
+      expect(row.kind).toBe('access');
+      expect(row.kind).not.toBe('money');
+      expect(row.kind).not.toBe('rules');
+    });
+
+    /**
+     * The catch-all: the builder is handed ONLY scope and a count, so there is
+     * no path by which a figure or a name could reach the row. Pinned as a
+     * serialised-shape assertion so adding one is a red test rather than a diff.
+     */
+    it('the whole serialised row contains no figure but the row count', () => {
+      /**
+       * The DISTINCT set, because the count legitimately appears twice — once in
+       * the human `detail` and once in `metadata.rowCount`. `30` is the period
+       * (`30d`) and is excluded by name rather than by pattern, so a figure that
+       * happened to be 30 would still fail this.
+       */
+      const numbers = new Set((serialised.match(/\d+/g) ?? []).filter((n) => n !== '30'));
+      expect([...numbers]).toEqual(['12']);
+    });
+
+    it('a one-row export says "1 row", not "1 rows"', () => {
+      const one = reportExportAudit({
+        salonId: 'SAL-AMARA',
+        kind: 'customers',
+        branchId: null,
+        period: '7d',
+        rowCount: 1,
+        via: 'download-link',
+      });
+      expect(one.detail).toContain('1 row ');
+      expect(one.detail).toContain('all branches');
+      expect(one.detail).toContain('download-link');
+    });
   });
 });
 
