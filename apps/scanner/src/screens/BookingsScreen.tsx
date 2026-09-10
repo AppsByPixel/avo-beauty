@@ -21,6 +21,11 @@
  * so both are `Linking.openURL` rather than an anchor: on a phone an
  * unhandled scheme fails silently, and a Call button that does nothing at a
  * counter is worse than no button.
+ *
+ * AND THERE IS ONE CUSTOMER THIS DISCLOSURE DOES NOT COVER: an erased one. The
+ * paragraph above bounds WHOSE numbers reach this screen; it says nothing about
+ * a number that belongs to nobody. `BookingCard` below carries that case and
+ * the reasoning for it.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -189,10 +194,59 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
 
 // ------------------------------------------------------------------- a card --
 
-/** design:150-172. */
-function BookingCard({ booking }: { booking: ArtistBooking }) {
+/**
+ * design:150-172.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * AN ERASED CUSTOMER HAS NO CONTACT ROW — DECISIONS.md #100
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Erasure scrubs the member in place rather than deleting her: the name becomes
+ * `'Deleted account'` and the phone becomes `+990` and twelve random digits.
+ * `+990` is an UNASSIGNED country code, so the value is a tombstone wearing the
+ * shape of a contact. This screen joined it live and did three things with it —
+ * printed it, dialled it, and opened `https://wa.me/<those digits>`.
+ *
+ * The dashboard has the same defect one step milder, because it only DISPLAYS.
+ * Here the card offers to send. `wa.me/990418702935514` is an outbound request
+ * built from digits that name nobody, and the only reason it has not fired is
+ * that the window is narrow: the query takes `deposit_held` and `completed`
+ * since yesterday, and erasure defers while a deposit is in escrow, so the live
+ * case is a booking COMPLETED for a member erased inside that window. Narrow is
+ * not a fix.
+ *
+ * THE GUARD IS `memberErased || memberPhone === null`, not either alone:
+ *
+ *   the flag   is the contract's answer and the one Lane A is landing. It is
+ *              also the only signal that survives if the tombstone format ever
+ *              changes — nothing here should be pattern-matching `+990`.
+ *   the null   is what the payload actually carries, and it catches a tombstone
+ *              that arrives while `memberErased` is still defaulting to false
+ *              (see `ArtistBookingSchema`). It is also the crash guard: the old
+ *              `booking.memberPhone.replace(...)` on `null` throws inside render
+ *              and takes the WHOLE DAY SCREEN down, not one card.
+ *
+ * WHAT GOES, AND WHAT STAYS. Both buttons go, and so do the digits as TEXT — an
+ * artist can read a number off a card and type it into a handset, so printing it
+ * is barely better than linking it. The NAME line stays and keeps showing the
+ * tombstone, because `memberName` is still a real string and the avatar initial
+ * reads from it; the card must still identify WHICH booking this is. Everything
+ * else on the card — time, service, deposit, tier, source — is about the
+ * appointment rather than the person, and is untouched.
+ *
+ * EXPORTED FOR THE TEST, and for nothing else — `bookingsErasedCard.test.ts`
+ * calls it as a function and walks the tree it returns, because the only honest
+ * proof that no `wa.me` survives is to fire every handler the card produces.
+ * Nothing outside this file renders it.
+ */
+export function BookingCard({ booking }: { booking: ArtistBooking }) {
   const tier = tierStyles[booking.memberTier];
-  const digits = booking.memberPhone.replace(/[^0-9]/g, '');
+  /*
+    One derivation, read by three places below: the phone line, the Call button
+    and the WhatsApp button. Splitting the check across the three is how one of
+    them survives the next edit.
+  */
+  const phone = booking.memberErased ? null : booking.memberPhone;
+  const digits = phone === null ? null : phone.replace(/[^0-9]/g, '');
   const isNew = isRecent(booking);
 
   const open = useCallback((url: string) => {
@@ -245,7 +299,15 @@ function BookingCard({ booking }: { booking: ArtistBooking }) {
               <Text style={[ui(10, '600'), { color: tier.pillText }]}>{tierLabel(booking.memberTier)}</Text>
             </View>
           </View>
-          <Text style={[ui(12), styles.dim]}>{booking.memberPhone}</Text>
+          {/*
+            `styles.dim` either way, deliberately: the sentence sits exactly
+            where the number sat, at the same weight, so the card's geometry
+            does not move when a booking is erased. Nothing is restyled here —
+            only the words change.
+          */}
+          <Text style={[ui(12), styles.dim]}>
+            {phone === null ? copy.bookingsPhoneErased : phone}
+          </Text>
         </View>
         {/*
           design:166 — where the booking came from. `source` is on the entity,
@@ -265,27 +327,29 @@ function BookingCard({ booking }: { booking: ArtistBooking }) {
         </View>
       </View>
 
-      <View style={styles.actions}>
-        <Pressable
-          onPress={() => open(`tel:${digits}`)}
-          accessibilityRole="button"
-          accessibilityLabel={`${copy.bookingsCall} ${booking.memberName}`}
-          testID={`booking-call-${booking.id}`}
-          style={[styles.action, styles.actionCall]}
-        >
-          <Text style={[ui(13, '600'), styles.actionCallText]}>{copy.bookingsCall}</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => open(`https://wa.me/${digits}`)}
-          accessibilityRole="button"
-          accessibilityLabel={`${copy.bookingsWhatsApp} ${booking.memberName}`}
-          testID={`booking-wa-${booking.id}`}
-          style={[styles.action, styles.actionWa]}
-        >
-          {/* design:170 — dark ink on WhatsApp green, which is the readable pair. */}
-          <Text style={[ui(13, '600'), styles.actionWaText]}>{copy.bookingsWhatsApp}</Text>
-        </Pressable>
-      </View>
+      {digits === null ? null : (
+        <View style={styles.actions}>
+          <Pressable
+            onPress={() => open(`tel:${digits}`)}
+            accessibilityRole="button"
+            accessibilityLabel={`${copy.bookingsCall} ${booking.memberName}`}
+            testID={`booking-call-${booking.id}`}
+            style={[styles.action, styles.actionCall]}
+          >
+            <Text style={[ui(13, '600'), styles.actionCallText]}>{copy.bookingsCall}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => open(`https://wa.me/${digits}`)}
+            accessibilityRole="button"
+            accessibilityLabel={`${copy.bookingsWhatsApp} ${booking.memberName}`}
+            testID={`booking-wa-${booking.id}`}
+            style={[styles.action, styles.actionWa]}
+          >
+            {/* design:170 — dark ink on WhatsApp green, which is the readable pair. */}
+            <Text style={[ui(13, '600'), styles.actionWaText]}>{copy.bookingsWhatsApp}</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }

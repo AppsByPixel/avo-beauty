@@ -49,6 +49,9 @@ import { getJson, putJson } from './client';
  * The API joins the customer's name, phone and tier onto each row — a real
  * disclosure, bounded to her own bookings by construction, because there is no
  * id in this URL to point at somebody else's.
+ *
+ * It also joins `member` LIVE, which is how an erased customer's tombstone
+ * reaches this parse. See `memberPhone` and `memberErased` below.
  */
 export const ArtistBookingSchema = BookingSchema.extend({
   endsAt: z.string().datetime(),
@@ -57,7 +60,35 @@ export const ArtistBookingSchema = BookingSchema.extend({
   rescheduledCount: z.number().int().nonnegative(),
   calendarSyncState: z.enum(['not_applicable', 'pending', 'synced', 'failed']),
   memberName: z.string(),
-  memberPhone: z.string(),
+  /**
+   * NULL WHEN SHE HAS BEEN ERASED, and this parse is the urgent half of the fix.
+   *
+   * `api/src/services/erasure.ts` scrubs the member row IN PLACE: the name
+   * becomes the tombstone `'Deleted account'` and the phone becomes `+990`
+   * followed by twelve random digits. `+990` is an unassigned country code, so
+   * the string is well-formed and names nobody. `GET /artists/me/bookings`
+   * joins `member` live and `erasure.ts` keeps `booking` rows deliberately, so
+   * the tombstone reached this schema as an ordinary `z.string()` and the card
+   * below it offered to CALL and WhatsApp the number — an outbound request
+   * built from fabricated digits.
+   *
+   * Lane A is replacing that with `null` + `memberErased`. Declared `z.string()`,
+   * the day the API starts sending `null` is the day a `z.string()` parse throws
+   * and the artist's ENTIRE DAY fails to load — a schema-shaped outage, not a
+   * privacy bug. `.nullable()` lands first for exactly that reason.
+   */
+  memberPhone: z.string().nullable(),
+  /**
+   * `.default(false)`, so this branch is green on BOTH payloads.
+   *
+   * Lane A has not merged yet. A required `z.boolean()` here would reject every
+   * booking the API serves TODAY, which trades a future outage for a present
+   * one. Absent means "not erased", which is the truthful reading of the older
+   * payload — and it is safe in the one direction that matters, because the
+   * card's guard is `memberErased || memberPhone === null`: a real tombstone
+   * arriving without the flag is still caught by the null.
+   */
+  memberErased: z.boolean().default(false),
   memberTier: z.enum(['bronze', 'silver', 'gold', 'black']),
   serviceName: z.string(),
 });
