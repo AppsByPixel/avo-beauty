@@ -631,6 +631,187 @@ export interface Copy {
   cartStaleBody(names: string): string;
   /** Any other refused order. Never an undo — `voidable` is always false. */
   shopOrderFailed: string;
+  /**
+   * A CHECKOUT THAT COULD NOT REACH THE SERVER, and this key exists because the
+   * cart was rendering `signUpOffline` here.
+   *
+   * FOUND BY DRIVING, not by reading: an Arabic wallet, mid-checkout, with the
+   * API unreachable, showed "No connection. You need one to create an account."
+   * — the SIGN-UP sentence, to a customer who has an account and is paying for a
+   * basket, in English inside an RTL layout (`signUpOffline` is in `AR_GAPS`).
+   *
+   * Two defects in one string. The words were wrong for the surface, and the
+   * reuse silently imported a translation gap into a screen that had none.
+   *
+   * WHAT THIS SENTENCE MUST DO: say the outcome is UNKNOWN. An order moves money
+   * with one concurrency guard where a charge has two, so a client that could not
+   * read the response does not know whether the money moved — it must not say
+   * "nothing was charged" (that is `shopOrderFailed`, for a refusal the server
+   * demonstrably made) and it must not offer a retry.
+   */
+  cartOffline: string;
+
+  // ══════════════════════════════════════════════════ delivery — item 7 ══
+  /**
+   * EVERY STRING FROM HERE TO `orderTruncated` IS NEW, AND THE DESIGN BUNDLE
+   * DRAWS NONE OF IT.
+   *
+   * There is no delivery UI anywhere in `design/`. The shop was collection-only
+   * when the bundle was made — `shopSub` says "pick up at the salon" and the
+   * receipt row says "Pickup" — so this is the second feature after the branch
+   * strip where the copy is WRITTEN rather than lifted, in both languages.
+   *
+   * Consequences, all three of them recorded rather than assumed:
+   *
+   *   THE ENGLISH IS OWED TO THE COPYWRITER. It borrows the vocabulary of the
+   *   surfaces that exist (the cart sheet, the top-up sheet) rather than
+   *   inventing a register, but nobody has written it.
+   *
+   *   THE ARABIC IS OWED TO THE NATIVE-SPEAKER REVIEW. Every key here is in
+   *   `AR_UNVERIFIED`, not `AR_GAPS`: it renders Arabic, and plausible-but-wrong
+   *   Arabic is the failure mode. Feminine address forms throughout, matching
+   *   `اختاري المصففة`.
+   *
+   *   NOTHING HERE NAMES A FEE. There is no delivery fee anywhere in the
+   *   feature, asserted server-side rather than merely absent, so there is no
+   *   fee row, no subtotal split and no "Delivery: free" line — a free-fee line
+   *   tells a customer a fee exists and is waived today, which is a promise
+   *   about pricing nobody has made.
+   */
+  /** The section heading in the cart, above the two options. */
+  fulfilTitle: string;
+  /** The two options. Nouns, matching the cart's `cartTotal`/`cartPayFrom` register. */
+  fulfilPickup: string;
+  fulfilDelivery: string;
+  /**
+   * Under the pickup option. IT NAMES THE SALON AND NOT A BRANCH, deliberately:
+   * `POST /orders` takes no pickup branch, resolves the branch server-side, and
+   * refuses a client-supplied `branchId` by name — so a sentence naming a branch
+   * would be a promise this app cannot keep. See `domain/fulfilment.ts` § THE
+   * PICKUP BRANCH.
+   */
+  fulfilPickupBody: string;
+  /** Under the delivery option, when she has at least one saved address. */
+  fulfilDeliveryBody: string;
+  /** The heading above her saved addresses, inside the delivery section. */
+  addressChooseTitle: string;
+  /** The button that opens a blank address form. */
+  addressAddCta: string;
+  /** Edit and delete, on a saved row. Screen-reader labels are composed from these. */
+  addressEdit: string;
+  addressDelete: string;
+  /**
+   * NO SAVED ADDRESSES — the first-run case, and the one a real customer hits.
+   * A different fact from "we could not read your book", so different words: it
+   * names what to do, because here there IS something for her to do.
+   */
+  addressEmptyTitle: string;
+  addressEmptyBody: string;
+  /** The book could not be read at all. A retry is offered; the list is cold. */
+  addressLoadFailed: string;
+  /** A save or a delete that failed for any reason other than the two below. */
+  addressWriteFailed: string;
+  /** A save or a delete attempted with no connection. Outcome unknown. */
+  addressWriteOffline: string;
+  /** The row is gone — deleted on another device, or already deleted. */
+  addressGoneBody: string;
+
+  // ---- the form
+  /** The two titles the one sheet takes. */
+  addressFormNewTitle: string;
+  addressFormEditTitle: string;
+  /**
+   * The nine field labels.
+   *
+   * `addrLabel` is HER NAME for the address — Lean's `saveAs`, and what makes a
+   * book reusable. It is required by the API and by the database, which is why
+   * the form requires it: four required fields, not the three a Kuwaiti address
+   * strictly needs.
+   *
+   * The other eight are the address components, and the four short ones double
+   * as the words `addressLines` builds a rendered address out of.
+   */
+  addrLabel: string;
+  addrBlock: string;
+  addrStreet: string;
+  addrBuilding: string;
+  addrFloor: string;
+  addrApartment: string;
+  addrArea: string;
+  addrGovernorate: string;
+  addrInstructions: string;
+  /**
+   * The suffix on every optional label. The account sheets already draw this
+   * shape (design:786, :829) — a nested Text inside the micro-label — so the
+   * word is borrowed rather than coined.
+   *
+   * IT IS ON FIVE FIELDS AND NOT ON FOUR, and that asymmetry IS the feature.
+   * `PRIOR-ART.md` records an address payload that fans one input across four
+   * fields and ships the literal text `'string'` in two more; the answer is that
+   * an empty field is stored empty, so the form has to SAY which fields may be
+   * empty rather than implying all of them are needed.
+   */
+  addrOptional: string;
+  /** Above the optional fields — one line saying what "optional" means here. */
+  addrOptionalNote: string;
+  /** The placeholder on `instructions`. A note to a human, not a component. */
+  addrInstructionsPh: string;
+  /** Save, and the required-fields refusal. */
+  addressSaveCta: string;
+  addressMissingBody: string;
+  /** The delete confirmation, in the same shape the account sheets use. */
+  addressDeleteTitle: string;
+  addressDeleteBody: string;
+  addressDeleteCta: string;
+  addressDeleteCancel: string;
+
+  // ---- checkout refusals owed to the delivery fork
+  /** `address_required`, and the client-side block that mirrors it. */
+  cartNoAddress: string;
+  /**
+   * `idempotency_key_reused`. THE ONE REFUSAL THAT MEANS THE MONEY MOVED, so
+   * this sentence must not read as a failure — see `domain/orderRefusal.ts`.
+   */
+  cartAlreadyPlaced: string;
+
+  // ---- her orders
+  /** The button on the Shop header, and the sheet's title. */
+  ordersCta: string;
+  ordersTitle: string;
+  /** Nothing ordered yet. Not a failure, and nothing for her to fix. */
+  ordersEmptyTitle: string;
+  ordersEmptyBody: string;
+  /** The list could not be read at all. */
+  ordersLoadFailed: string;
+  /**
+   * The six status sentences: three statuses × two fulfilments.
+   *
+   * THREE STATUSES, NOT FOUR — `preparing → ready → closed` is the whole
+   * lifecycle. `closed` means both "collected" and "delivered", which is why the
+   * SENTENCE differs by fulfilment while the enum does not.
+   */
+  orderPickupPreparing: string;
+  orderPickupReady: string;
+  orderPickupClosed: string;
+  orderDeliveryPreparing: string;
+  orderDeliveryReady: string;
+  orderDeliveryClosed: string;
+  /** "Step 2 of 3" for an order. A count, so Eastern in Arabic. */
+  orderStep(step: number, total: number): string;
+  /** The heading above an order's address SNAPSHOT. */
+  orderDeliveringTo: string;
+  /**
+   * The line that stops a snapshot being read as live. `ShopOrder.address` is
+   * what she typed WHEN SHE ORDERED — editing her book does not change a past
+   * order, deliberately, so a delivered order stays answerable — and the UI must
+   * not present it as editable. This sentence is that rule, said out loud, and it
+   * is why there is no edit control on an order.
+   */
+  orderAddressFixed: string;
+  /** Where a pickup order is collected. Names the salon, not a branch. */
+  orderCollectAt: string;
+  /** The page was capped at 200. Not a case this app will meet; read anyway. */
+  orderTruncated: string;
 
   // book — shell
   bookTitle: string;

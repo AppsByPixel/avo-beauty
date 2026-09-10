@@ -23,17 +23,43 @@
  * with the 402's `shortfallFils` the moment one arrives (#2 gives the server the
  * difference as well as the balance). The local one exists only to pick the CTA
  * before submission.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE FULFILMENT FORK LIVES HERE, AND THE TOTALS BLOCK IS UNTOUCHED BY IT.
+ *
+ * Collect-or-deliver sits between the lines and the totals — after what she is
+ * buying, before what it costs — because that is the order the decision happens
+ * in. `FulfilmentSection` owns it, and the two arguments for putting it in this
+ * sheet rather than on its own screen are that a cart is where a checkout
+ * decision belongs, and that the design bundle draws no delivery screen to copy.
+ *
+ * NO FEE LINE, NO SUBTOTAL SPLIT, NO "DELIVERY: FREE" ROW. Three rows exist in
+ * the totals block and this slice added none of them: `cartTotal`, `cartPayFrom`
+ * and the shortfall chip. There is no delivery fee anywhere in the feature —
+ * asserted server-side, not merely absent — so the same cart costs the same
+ * collected or delivered, and a row saying "free" would tell a customer a fee
+ * EXISTS and is waived today. That is a promise about pricing nobody has made,
+ * and it is the row somebody later "fixes" by putting a number in it.
+ *
+ * THE PAY BUTTON GAINS ONE MORE REASON TO BE DISABLED: delivery with no address
+ * chosen (`block === 'noAddress'`). That is a COURTESY and not a control — the
+ * server refuses the same case by name (`address_required`) and #7 makes that the
+ * authority — and `useShop.checkout` re-checks it, so a caller that ignored
+ * `block` still cannot send an unsubmittable order.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { fils, formatMoney, moneyAriaLabel, type Fils } from '@avo/types';
+import { fils, formatMoney, moneyAriaLabel, type Fils, type MemberAddress } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { type PricedLine } from '../domain/cart';
 import type { CheckoutRefusal } from '../state/useShop';
 import { ProductImage } from './ProductImage';
 import { Sheet } from './Sheet';
+import { FulfilmentSection } from './FulfilmentSection';
 import { PrimaryButton } from './Buttons';
+import type { AddressBookController } from '../state/useAddresses';
+import type { CheckoutBlock, Fulfilment, FulfilmentChoice } from '../domain/fulfilment';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
 import { alignEnd } from '../i18n/rtl';
@@ -50,11 +76,22 @@ interface Props {
   stale: string[];
   busy: boolean;
   refusal: CheckoutRefusal | null;
+  /** Collect or deliver, and the address a delivery names. */
+  fulfilment: FulfilmentChoice;
+  /** Why Pay cannot be tapped. Today: delivery with no address chosen. */
+  block: CheckoutBlock | null;
+  /** The address book, for the chooser under Delivery. */
+  book: AddressBookController;
   onClose: () => void;
   onAdd: (productId: string) => void;
   onRemove: (productId: string) => void;
   onCheckout: () => void;
   onTopUp: () => void;
+  onFulfilment: (mode: Fulfilment) => void;
+  onChooseAddress: (addressId: string) => void;
+  onAddAddress: () => void;
+  onEditAddress: (address: MemberAddress) => void;
+  onDeleteAddress: (address: MemberAddress) => void;
 }
 
 export function CartSheet({
@@ -68,11 +105,19 @@ export function CartSheet({
   stale,
   busy,
   refusal,
+  fulfilment,
+  block,
+  book,
   onClose,
   onAdd,
   onRemove,
   onCheckout,
   onTopUp,
+  onFulfilment,
+  onChooseAddress,
+  onAddAddress,
+  onEditAddress,
+  onDeleteAddress,
 }: Props) {
   const { lang, copy } = useLanguage();
   const empty = lines.length === 0;
@@ -153,6 +198,22 @@ export function CartSheet({
             ))}
           </ScrollView>
 
+          {/*
+            COLLECT OR DELIVER — after what she is buying, before what it costs,
+            because that is the order the decision happens in. The section owns
+            its own states; this sheet just hands it the book. It adds NO row to
+            the totals block below: there is no delivery fee anywhere.
+          */}
+          <FulfilmentSection
+            choice={fulfilment}
+            book={book}
+            onMode={onFulfilment}
+            onChoose={onChooseAddress}
+            onAdd={onAddAddress}
+            onEdit={onEditAddress}
+            onDelete={onDeleteAddress}
+          />
+
           {/* design:965-966 — the total, then where it is paid from. */}
           <View style={styles.totals}>
             <Row
@@ -193,10 +254,42 @@ export function CartSheet({
               below stays out of the way.
             */}
             {refusal?.kind === 'offline' ? (
-              <Chip lang={lang} testID="cart-offline" text={copy.signUpOffline} />
+              /*
+                `cartOffline`, NOT `signUpOffline`. This chip rendered the SIGN-UP
+                sentence — "No connection. You need one to create an account." —
+                to a customer mid-checkout, and because that key is in `AR_GAPS`
+                it rendered in English inside an Arabic layout. Found by driving
+                an Arabic checkout against a dead API, not by reading.
+              */
+              <Chip lang={lang} testID="cart-offline" text={copy.cartOffline} />
             ) : null}
             {refusal?.kind === 'failed' ? (
               <Chip lang={lang} testID="cart-failed" text={copy.shopOrderFailed} />
+            ) : null}
+
+            {/*
+              DELIVERY WITH NO ADDRESS. One chip for the client-side block and the
+              server's `address_required`, because they are the same fact told at
+              two moments and she should not read two different sentences for it.
+            */}
+            {block === 'noAddress' || refusal?.kind === 'noAddress' ? (
+              <Chip lang={lang} testID="cart-no-address" text={copy.cartNoAddress} />
+            ) : null}
+
+            {/* The address she chose is gone — deleted on another device. */}
+            {refusal?.kind === 'addressGone' ? (
+              <Chip lang={lang} testID="cart-address-gone" text={copy.addressGoneBody} />
+            ) : null}
+
+            {/*
+              ALREADY PLACED, and this chip must not read as a failure: the 422
+              means an earlier attempt COMMITTED, so her money moved and an order
+              exists. See `domain/orderRefusal.ts` § `alreadyPlaced`. It is drawn
+              in the same chip as the refusals only because that is where this
+              sheet puts a sentence — the WORDS are what carry the difference.
+            */}
+            {refusal?.kind === 'alreadyPlaced' ? (
+              <Chip lang={lang} testID="cart-already-placed" text={copy.cartAlreadyPlaced} />
             ) : null}
 
             {/*
@@ -218,7 +311,24 @@ export function CartSheet({
               <PrimaryButton
                 label={copy.cartPayCta(formatMoney(total, lang))}
                 onPress={onCheckout}
-                disabled={busy || blocked || refusal?.kind === 'offline' || refusal?.kind === 'failed'}
+                disabled={
+                  busy ||
+                  blocked ||
+                  /*
+                    Delivery with no address. A COURTESY — the server refuses the
+                    same case by name and `useShop.checkout` re-checks it, so #7
+                    is satisfied by the server rather than by this line.
+                  */
+                  block === 'noAddress' ||
+                  refusal?.kind === 'offline' ||
+                  refusal?.kind === 'failed' ||
+                  /*
+                    ALREADY PLACED. No retry, for the opposite reason to the two
+                    above: retrying this would be asking for a SECOND order over a
+                    debit that has settled.
+                  */
+                  refusal?.kind === 'alreadyPlaced'
+                }
                 testID="cart-pay"
                 style={styles.cta}
               />

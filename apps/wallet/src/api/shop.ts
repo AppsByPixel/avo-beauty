@@ -44,10 +44,26 @@
  * Declaring it as a literal means a server that ever started sending `true`
  * fails the parse instead of quietly growing an undo button.
  *
- * THERE IS NO `GET /orders`, BY DESIGN. An order is a `shop` transaction and
- * reaches the customer through the activity feed and its receipt sheet, which is
- * where the design draws it (`AVO Wallet Home.dc.html:1573`). A second collection
- * over the same rows would be two endpoints able to disagree about one purchase.
+ * ⚠️ THIS HEADER USED TO SAY "THERE IS NO `GET /orders`, BY DESIGN" AND IT IS NO
+ * LONGER TRUE. Corrected rather than quietly deleted, because it is the third
+ * instance of the defect `domain/names.ts` catalogues at length: a comment
+ * asserting a contract gap, the gap closed on trunk, and nothing recompiling the
+ * comment. The claim was accurate when written — an order was a `shop`
+ * transaction reaching her through the activity feed (`AVO Wallet Home.dc.html:1573`),
+ * and a second collection over the same rows would have been two endpoints able
+ * to disagree about one purchase.
+ *
+ * `GET /members/me/orders` now exists and does NOT list the same rows. It reads
+ * `shop_order` — the FULFILMENT, which the transaction does not carry: what she
+ * chose, which of the three statuses it is in, and the address snapshot. Without
+ * it `preparing → ready → closed` is invisible to the person waiting for the
+ * bottle, which would make the lifecycle a merchant's private bookkeeping rather
+ * than the thing it is for. The two reads are complementary: the transaction is
+ * what she paid, the order is where it is.
+ *
+ * Note the path: `/members/me/orders`, scoped by the credential, while the WRITE
+ * is `POST /orders` at the root. That asymmetry is the API's and is deliberate —
+ * the contract names `POST /orders` the way it names `POST /bookings`.
  *
  * ORDERS HAVE ONE CONCURRENCY GUARD WHERE A CHARGE HAS TWO — recorded here
  * because it changes what this client may do. Lane A removed it and five
@@ -59,7 +75,13 @@
  */
 
 import { z } from 'zod';
-import { FilsSchema, IdSchema, ProductSchema, TransactionSchema } from '@avo/types';
+import {
+  FilsSchema,
+  IdSchema,
+  ProductSchema,
+  ShopOrderSchema,
+  TransactionSchema,
+} from '@avo/types';
 import { getJson, postJson } from './client';
 
 // ------------------------------------------------------------------- loyalty --
@@ -198,11 +220,72 @@ export interface CartLine {
 export function placeOrder(
   items: CartLine[],
   idempotencyKey: string,
+  /**
+   * WHERE IT GOES, AND IT IS `{}` FOR PICKUP.
+   *
+   * Built by `domain/fulfilment.ts` § `fulfilmentBody`, which carries the whole
+   * argument. The short version, because it decides what this function sends:
+   * `routes/orders.ts` reads `body.fulfilment ?? 'pickup'`, so omitting the
+   * field IS pickup and a pickup body is byte-identical to the one this app sent
+   * before delivery existed. The shipped, driven, tested path is not re-entered
+   * through a new branch.
+   *
+   * It defaults to `{}` so every existing call site — and there is one, plus its
+   * tests — keeps compiling and keeps sending exactly what it sent.
+   *
+   * NEVER THE ADDRESS FIELDS. `block`, `street`, `building` and `address` are
+   * refused BY NAME by the route, alongside a price and a branch, because an
+   * address posted into an order never entered her book. Only an `addressId`,
+   * and only for delivery.
+   */
+  fulfilment: { fulfilment?: 'delivery'; addressId?: string } = {},
   signal?: AbortSignal,
 ): Promise<OrderResult> {
   const body = {
     // Mapped field by field, never spread. See the header.
     items: items.map((l) => ({ productId: l.productId, qty: l.qty })),
+    /*
+      Spread, and therefore contributing NO KEYS on the pickup path — not
+      `fulfilment: undefined`, which `JSON.stringify` drops anyway but which
+      would make the intent unreadable at the one place it matters.
+    */
+    ...fulfilment,
   };
   return postJson('/orders', body, OrderResultSchema, idempotencyKey, signal);
+}
+
+// -------------------------------------------------------------- her orders --
+
+/**
+ * `{ items, truncated, nextCursor }` — and `truncated` is NOT the usual envelope.
+ *
+ * The route caps at 200 and REPORTS the cap as a flag rather than hardcoding
+ * `nextCursor: null` on a capped list, which is a defect lane A fixed in this
+ * area once already: a list that silently ends at its cap claims to be complete.
+ * Declared here so a client cannot ignore it — a customer with 200 orders is not
+ * a case this app will meet, and the field being read is what makes that a
+ * measurement rather than an assumption.
+ */
+export const ShopOrderPageSchema = z.object({
+  items: z.array(ShopOrderSchema),
+  truncated: z.boolean(),
+  nextCursor: z.string().nullable(),
+});
+
+export type ShopOrderPage = z.infer<typeof ShopOrderPageSchema>;
+
+/**
+ * `GET /members/me/orders` — her side of the three statuses.
+ *
+ * Scoped to her by the principal; no member id is read from the path or the
+ * query, so one customer cannot read another's order or the address on it. The
+ * snapshot on the row is HER OWN address, which is correct rather than a leak:
+ * it is where she asked her own order to be sent.
+ *
+ * Returns the whole page rather than just `items`, unlike `getProducts` — the
+ * cap flag is part of the answer and a helper that dropped it would be the
+ * silent truncation the schema exists to prevent.
+ */
+export function getMyOrders(signal?: AbortSignal): Promise<ShopOrderPage> {
+  return getJson('/members/me/orders', ShopOrderPageSchema, signal);
 }

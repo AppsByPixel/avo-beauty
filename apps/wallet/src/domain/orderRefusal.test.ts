@@ -170,12 +170,34 @@ describe('the refusals whose outcome is unknown', () => {
     expect(orderRefusal(err)).toEqual({ kind: 'failed' });
   });
 
-  it('classifies a reused idempotency key as failed', () => {
-    // Driven: replaying a COMMITTED key with a different body answers 422
-    // `idempotency_key_reused`. It is not actionable copy — the cart re-mints the
-    // key on every edit, so reaching this is a client bug, not a customer one.
+  /**
+   * ⚠️ THIS ASSERTION WAS `{ kind: 'failed' }` AND WAS CHANGED BY THE DELIVERY
+   * SLICE. Recorded rather than quietly amended, because the reasoning it
+   * carried was correct when written and stopped being correct:
+   *
+   *     "It is not actionable copy — the cart re-mints the key on every edit,
+   *      so reaching this is a client bug, not a customer one."
+   *
+   * That was true while the CART WAS THE WHOLE BODY. `useShop` mints one key per
+   * cart and the API hashes the request; before delivery there was no way for one
+   * key to carry two different bodies, so a 422 here really was unreachable
+   * except through a client bug.
+   *
+   * The fulfilment can now change under an UNCHANGED cart — she taps Pay as a
+   * pickup, the response never arrives, she switches to delivery and taps again —
+   * and the key deliberately does NOT include the fulfilment, because re-minting
+   * it would place a second order over a first that may have committed. So this
+   * 422 is now a REACHABLE CUSTOMER-FACING STATE, and it is the one refusal in
+   * this function that means the money MOVED: `readCommittedKey` only throws it
+   * for a key that exists with a different hash, and a key only persists if its
+   * transaction committed.
+   *
+   * `failed` would therefore render "We couldn't complete your order. Nothing has
+   * been charged." over a settled debit. That is the worst sentence in the app.
+   */
+  it('classifies a reused idempotency key as alreadyPlaced, not failed', () => {
     const err = new ApiError('server', 'Already used.', 'WLT-1', 422, 'idempotency_key_reused');
-    expect(orderRefusal(err)).toEqual({ kind: 'failed' });
+    expect(orderRefusal(err)).toEqual({ kind: 'alreadyPlaced' });
   });
 
   /**
