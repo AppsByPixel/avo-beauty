@@ -76,6 +76,16 @@ const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toStri
 const DEVICE = `EN-DEV-${RUN}`;
 const OTHER_DEVICE = `EN-DEV2-${RUN}`;
 /**
+ * The happy-hour group's own till.
+ *
+ * A THIRD device rather than a reuse of `DEVICE`, because that one arrives at
+ * the bottom of this file having been enrolled, re-pointed, revoked, refused and
+ * re-enrolled by four groups. A happy-hour arm that read "+1, unenrolled" would
+ * then be provable only by re-deriving which of those left it revoked. A device
+ * whose whole history is written inside one group needs no such argument.
+ */
+const HH_DEVICE = `EN-DEV3-${RUN}`;
+/**
  * A REAL manager holding the REAL permission at the WRONG salon. Created here
  * rather than borrowed from the seed, which has no SAL-LUMIERE staff row — and
  * deliberately `perm_dashboard TRUE`, because a 403 from somebody who lacks the
@@ -115,6 +125,30 @@ suite('device enrolment binds a till to a branch', () => {
   let frontdesk: string;
   /** A real manager holding the real permission, at the WRONG salon. */
   let foreign: string;
+
+  /**
+   * Seeded happy hours switched off for the length of this file, and the state
+   * to put them back to.
+   *
+   * NOT TIDINESS — every visit count in this file depends on it. `HH-01` is
+   * "all branches, Sun/Mon/Tue 16:00–18:00, x2visit, ON" (db/seed.ts), so for
+   * six hours a week it is genuinely live and pays 2× visits to EVERY charge at
+   * this salon. During those six hours "unenrolled: assumed, and no boost"
+   * reads +2 and goes red for a reason that has nothing to do with enrolment,
+   * and the happy-hour group below cannot distinguish its own window applying
+   * from HH-01 applying. A suite that is right 96% of the week is not a proof;
+   * it is a scheduled false red with a scheduled false green beside it.
+   *
+   * Switched off with SQL, unlike the windows the happy-hour group PUBLISHES
+   * through the endpoint. The reason to publish through the API — a red must
+   * distinguish "never stored" from "never applied" — is a claim about the row
+   * being proved, not about a row being got out of the way.
+   *
+   * Restored from what was read, never from a hardcoded `true`: HH-02 ships
+   * OFF on purpose and a restore that switched it on would hand every later run
+   * of every other suite a live Thursday window nobody configured.
+   */
+  let suppressed: Array<{ id: string; on: boolean }> = [];
 
   const exec = async (q: unknown) =>
     (await db.execute(q as never)) as unknown as Array<Record<string, unknown>>;
@@ -157,6 +191,15 @@ suite('device enrolment binds a till to a branch', () => {
       `${SALMIYA}=1`,
     ]);
 
+    // See `suppressed`. Read first, then switched off, so the restore is a
+    // restore rather than an assumption about the seed.
+    suppressed = (
+      await exec(sql`SELECT id, "on" FROM happy_hour WHERE salon_id = ${SALON} AND "on" = true`)
+    ).map((r) => ({ id: String(r.id), on: r.on === true }));
+    await db.execute(
+      sql`UPDATE happy_hour SET "on" = false WHERE salon_id = ${SALON} AND "on" = true`,
+    );
+
     await db.execute(sql`
       INSERT INTO staff_user (id, salon_id, name, handle, role, branch_access_all,
                               perm_team, perm_dashboard)
@@ -191,10 +234,15 @@ suite('device enrolment binds a till to a branch', () => {
 
   afterAll(async () => {
     if (db) {
+      for (const s of suppressed) {
+        await db.execute(sql`UPDATE happy_hour SET "on" = ${s.on} WHERE id = ${s.id}`);
+      }
       await db.execute(
-        sql`DELETE FROM device_enrolment WHERE device_id IN (${DEVICE}, ${OTHER_DEVICE})`,
+        sql`DELETE FROM device_enrolment WHERE device_id IN (${DEVICE}, ${OTHER_DEVICE}, ${HH_DEVICE})`,
       );
-      await db.execute(sql`DELETE FROM session WHERE device_id IN (${DEVICE}, ${OTHER_DEVICE})`);
+      await db.execute(
+        sql`DELETE FROM session WHERE device_id IN (${DEVICE}, ${OTHER_DEVICE}, ${HH_DEVICE})`,
+      );
       await db.execute(sql`DELETE FROM session WHERE staff_id = ${FOREIGN_STAFF}`);
       await db.execute(sql`DELETE FROM staff_user WHERE id = ${FOREIGN_STAFF}`);
       /**
@@ -285,15 +333,33 @@ suite('device enrolment binds a till to a branch', () => {
     // caller's point of view, it is a debit. Pinned because getting it wrong
     // made six specs here fail identically for a reason unrelated to branches.
     expect(res.statusCode, res.body).toBe(200);
-    const txId = (JSON.parse(res.body).transaction ?? JSON.parse(res.body)).id as string;
+    const body = JSON.parse(res.body) as {
+      transaction?: { id: string };
+      id?: string;
+      happyHour: { id: string; visitMultiplier: number; creditFils: number } | null;
+    };
+    const txId = ((body.transaction ?? body) as { id: string }).id;
     const [row] = await exec(
-      sql`SELECT branch_id, branch_assumed FROM "transaction" WHERE id = ${txId}`,
+      sql`SELECT branch_id, branch_assumed, promotion_id FROM "transaction" WHERE id = ${txId}`,
     );
     const after = Number(await scalar(sql`SELECT visits AS n FROM member WHERE id = ${MEMBER}`));
     return {
       branchId: String(row?.branch_id),
       assumed: row?.branch_assumed === true,
       visitsGained: after - before,
+      /**
+       * THE WIRE — what `POST /charges` told the till, which is what the scanner
+       * puts on screen and what a customer is shown.
+       */
+      happyHour: body.happyHour ?? null,
+      /**
+       * THE ROW — `transaction.promotion_id`, the attribution a merchant reads
+       * back weeks later. Asserted alongside the wire rather than instead of it:
+       * a decision that reached the response and not the row is a receipt that
+       * cannot explain itself, and the two are written in different places
+       * (`charge.ts` updates the row, then builds the result).
+       */
+      promotionId: row?.promotion_id == null ? null : String(row.promotion_id),
     };
   }
 
@@ -529,6 +595,237 @@ suite('device enrolment binds a till to a branch', () => {
       expect(actions).toContain('device_revoked');
       // The surface is recorded rather than flattened: this suite calls from both.
       expect(new Set(rows.map((r) => String(r.source))).size).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // ==================================================================
+  // THE OTHER HALF OF #82 — the same one line, never proved.
+  // ==================================================================
+  /**
+   * A BRANCH-SCOPED HAPPY HOUR ON AN ENROLLED TILL.
+   *
+   * The group above proves the boost half: an enrolled till earns its branch's
+   * boost, and re-pointing the same device to the other branch changes the
+   * multiplier. Both halves are decided by the same input. `services/promotions.ts`
+   * looks the boost up with `input.branchId` at :226 and filters windows with
+   *
+   *   (w.branchId === 'all' || (input.branchId !== null && w.branchId === input.branchId))
+   *
+   * at :246 — the same value, the same null rule, stated twice. So a branch-scoped
+   * window on an enrolled till SHOULD apply for exactly the reason the boost pays.
+   *
+   * Should is not proved, and nothing else proves it: no `.int.test.ts` in `api/`
+   * put a happy hour and an enrolment in the same file before this group, and the
+   * only spec anywhere that names the case charges from an UNENROLLED scanner
+   * session, so it can never go red on this.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY FOUR ARMS AND NOT ONE
+   * ---------------------------------------------------------------------------
+   * "Enrolled → the window applies" alone would pass against a server that
+   * applied every happy hour to everybody, which is the older and more likely
+   * defect: `branchId` scoping is the newer half of that predicate. So the arms
+   * are chosen to make the branch the ONLY thing that differs.
+   *
+   *   1. scoped to the ENROLLED branch      → applies       (the claim)
+   *   2. scoped to the OTHER branch         → does not      (the discrimination)
+   *   3. unenrolled, scoped window          → does not      (the null rule)
+   *   4. scoped to "all", both ways         → applies       (the regression guard)
+   *
+   * Arm 2 is the one that earns the group its credibility: same till, same
+   * enrolment, same member, same service, same instant of the week — only the
+   * window's `branchId` moves, and the answer must flip. Arm 4 exists because
+   * "all" is what a fix to arm 2 could plausibly break, and a salon-wide window
+   * silently ceasing to pay is money the merchant promised and did not deliver.
+   *
+   * ---------------------------------------------------------------------------
+   * THE ENROLLED BRANCH IS SALMIYA, NOT KUWAIT CITY, AND THAT IS THE WHOLE TRICK
+   * ---------------------------------------------------------------------------
+   * `x2visit` is the only reward that moves visits, and BR-KWC's seeded boost is
+   * already `visit = 2`. A window proved at BR-KWC would show +2 whether it
+   * applied or not — the group above's own number, borrowed. BR-SAL's boost is
+   * `visit = 1`, so at BR-SAL a +2 can have come from nowhere but the window.
+   *
+   * The windows are PUBLISHED THROUGH `POST /v1/salons/:id/promotions/happy-hours`
+   * rather than inserted, for the reason the e2e boost spec gives: a row written
+   * by the test leaves a red unable to say whether the window was never stored or
+   * never applied. Through the endpoint, a stored-but-inert window is the only
+   * thing a red can mean.
+   *
+   * They are switched off and not deleted in `afterAll`: once a window has paid
+   * out, `transaction.promotion_id` is `ON DELETE restrict` and the endpoint
+   * refuses with `happy_hour_in_use` and names switching off as the alternative.
+   * An off window is inert on the shared predicate's first line, so nothing later
+   * measures them. The seeded windows this file suppressed are restored by the
+   * outer `afterAll` — see `suppressed`.
+   */
+  describe('an enrolled till resolves branch-scoped happy hours', () => {
+    /** Scoped to BR-SAL — the branch the till below is enrolled to. */
+    let wSalmiya: string;
+    /** Scoped to BR-KWC — the branch it is NOT. Arm 2. */
+    let wKuwait: string;
+    /** `branchId: "all"`. Arm 4. */
+    let wAll: string;
+
+    /** `branchId: null` on the wire is spelled `"all"`; the serialiser translates. */
+    const publish = async (branchId: string | null) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/salons/${SALON}/promotions/happy-hours`,
+        headers: { authorization: `Bearer ${dashboard}` },
+        payload: {
+          branchId: branchId ?? 'all',
+          // Every day, all day. The window under test must be live at whatever
+          // instant the suite happens to run at, or this group would be a
+          // statement about the clock — which is `rules.test.ts`'s job and is
+          // already covered there against a frozen `now`.
+          days: [0, 1, 2, 3, 4, 5, 6],
+          from: '00:00',
+          to: '24:00',
+          reward: 'x2visit',
+          // Published OFF and switched on per arm, so exactly one window is ever
+          // live and a result naming a window names an unambiguous one.
+          on: false,
+          notify: false,
+        },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const wire = JSON.parse(res.body) as { id: string; branchId: string };
+      // The endpoint stored what was asked for. Arm 2's red would otherwise be
+      // readable as "the branch scoping was dropped on the way in".
+      expect(wire.branchId).toBe(branchId ?? 'all');
+      return wire.id;
+    };
+
+    const setOn = async (id: string, on: boolean) => {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/v1/salons/${SALON}/promotions/happy-hours/${id}`,
+        headers: { authorization: `Bearer ${dashboard}` },
+        payload: { on },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(JSON.parse(res.body).on).toBe(on);
+    };
+
+    /** Exactly one of the three live, and the other two provably off. */
+    const only = async (id: string) => {
+      for (const w of [wSalmiya, wKuwait, wAll]) await setOn(w, w === id);
+    };
+
+    beforeAll(async () => {
+      wSalmiya = await publish(SALMIYA);
+      wKuwait = await publish(KUWAIT_CITY);
+      wAll = await publish(null);
+
+      /**
+       * NOTHING ELSE AT THIS SALON IS LIVE. The outer `beforeAll` switched the
+       * seeded windows off; this asserts it held, because every "does not apply"
+       * below is an assertion about the ABSENCE of a multiplier and a second live
+       * window would supply one silently.
+       */
+      const live = await exec(
+        sql`SELECT id FROM happy_hour WHERE salon_id = ${SALON} AND "on" = true`,
+      );
+      expect(live.map((r) => String(r.id))).toEqual([]);
+    });
+
+    afterAll(async () => {
+      // Switched off, not deleted — see the group header. Direct SQL because a
+      // cleanup that can 409 is not a cleanup.
+      if (db) {
+        for (const w of [wSalmiya, wKuwait, wAll]) {
+          if (w) await db.execute(sql`UPDATE happy_hour SET "on" = false WHERE id = ${w}`);
+        }
+      }
+    });
+
+    // -------------------------------------------------------------- arm 1 --
+    it('scoped to the branch the till is enrolled to: it APPLIES', async () => {
+      const res = await enrol(scanner, {
+        deviceId: HH_DEVICE,
+        branchId: SALMIYA,
+        label: 'Salmiya happy-hour till',
+      });
+      expect([200, 201]).toContain(res.statusCode);
+      await only(wSalmiya);
+
+      const r = await chargeOnce('SV-01', HH_DEVICE);
+      expect(r.branchId).toBe(SALMIYA);
+      expect(r.assumed).toBe(false);
+      // BR-SAL's boost is 1×. The 2 can only have come from the window.
+      expect(r.visitsGained).toBe(2);
+      // The wire.
+      expect(r.happyHour?.id).toBe(wSalmiya);
+      expect(r.happyHour?.visitMultiplier).toBe(2);
+      // And the row.
+      expect(r.promotionId).toBe(wSalmiya);
+    });
+
+    // -------------------------------------------------------------- arm 2 --
+    /**
+     * THE CONTROL. Nothing moves but the window's branch: the same till is still
+     * enrolled to BR-SAL, the same member buys the same service. A server that
+     * applied every happy hour to everyone passes arm 1 and fails here.
+     */
+    it('scoped to the OTHER branch: it does NOT apply', async () => {
+      await only(wKuwait);
+
+      const r = await chargeOnce('SV-01', HH_DEVICE);
+      expect(r.branchId).toBe(SALMIYA);
+      expect(r.assumed).toBe(false);
+      expect(r.visitsGained).toBe(1);
+      expect(r.happyHour).toBeNull();
+      expect(r.promotionId).toBeNull();
+    });
+
+    // -------------------------------------------------------------- arm 3 --
+    /**
+     * The null rule of `:246`, which is the same sentence as the boost's at
+     * `:226`: an unknown branch is not a match. A two-branch salon cannot be
+     * told which window a walk-in belongs to, and guessing would pay one
+     * branch's promotion out of the other's.
+     */
+    it('unenrolled: a branch-scoped window applies to nobody', async () => {
+      expect((await revoke(scanner, HH_DEVICE)).statusCode).toBe(200);
+      await only(wSalmiya);
+
+      const r = await chargeOnce('SV-01', HH_DEVICE);
+      expect(r.assumed).toBe(true);
+      expect(r.visitsGained).toBe(1);
+      expect(r.happyHour).toBeNull();
+      expect(r.promotionId).toBeNull();
+    });
+
+    // -------------------------------------------------------------- arm 4 --
+    /**
+     * THE REGRESSION GUARD. `"all"` has no branch to disagree with, so it applies
+     * whether or not the till is enrolled — and it is exactly what a narrowing of
+     * the branch arm could take out. Both halves in one spec, because the claim is
+     * that the two agree.
+     */
+    it('scoped to "all": applies unenrolled AND enrolled', async () => {
+      await only(wAll);
+
+      const unenrolled = await chargeOnce('SV-01', HH_DEVICE);
+      expect(unenrolled.assumed).toBe(true);
+      expect(unenrolled.visitsGained).toBe(2);
+      expect(unenrolled.happyHour?.id).toBe(wAll);
+      expect(unenrolled.promotionId).toBe(wAll);
+
+      const res = await enrol(scanner, {
+        deviceId: HH_DEVICE,
+        branchId: SALMIYA,
+        label: 'Salmiya happy-hour till',
+      });
+      expect([200, 201]).toContain(res.statusCode);
+
+      const enrolled = await chargeOnce('SV-01', HH_DEVICE);
+      expect(enrolled.branchId).toBe(SALMIYA);
+      expect(enrolled.assumed).toBe(false);
+      expect(enrolled.visitsGained).toBe(2);
+      expect(enrolled.happyHour?.id).toBe(wAll);
+      expect(enrolled.promotionId).toBe(wAll);
     });
   });
 });
