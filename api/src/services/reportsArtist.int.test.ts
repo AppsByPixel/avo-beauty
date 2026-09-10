@@ -115,15 +115,50 @@ suite('GET /salons/:id/reports/artist-performance', () => {
   let noTeamBearer: string;
   let foreignBearer: string;
 
-  const AR = [1, 2, 3, 4, 5].map((n) => id('AR', n));
+  /**
+   * FIXED-LENGTH ON PURPOSE. `[1,2,3,4,5].map(...)` is a `string[]`, so under
+   * `noUncheckedIndexedAccess` every destructured name and every `M[n]` below was
+   * `string | undefined` - which is what made `mine(rows, AR1)` and the computed
+   * keys in `mine` fail once specs were typechecked. The annotation is not a cast:
+   * the compiler counts the elements of the literal against it, so a sixth artist
+   * added here without widening the type is an error rather than a silent
+   * `undefined` interpolated into a fixture name.
+   */
+  const AR: readonly [string, string, string, string, string] = [
+    id('AR', 1),
+    id('AR', 2),
+    id('AR', 3),
+    id('AR', 4),
+    id('AR', 5),
+  ];
   const [AR1, AR2, AR3, AR4, AR5] = AR;
   const AR2_STAFF = id('ST', 2);
   const FOREIGN_STAFF = id('ST', 'lum');
   const SVC = id('SV', 1);
-  const M = [1, 2, 3, 4, 5, 6].map((n) => id('M', n));
+  /** Six members, indexed by literal below - see `AR`'s note. */
+  const M: readonly [string, string, string, string, string, string] = [
+    id('M', 1),
+    id('M', 2),
+    id('M', 3),
+    id('M', 4),
+    id('M', 5),
+    id('M', 6),
+  ];
 
   const exec = async (q: unknown) =>
     (await db.execute(q as never)) as unknown as Array<Record<string, unknown>>;
+  /**
+   * The single row a `SELECT ... aggregate` or a keyed lookup is expected to
+   * return. `const [r] = await exec(...)` types `r` as possibly undefined and it
+   * genuinely can be - a query whose predicate matched nothing. Reading `r.foo`
+   * off that fails with `Cannot read properties of undefined`, naming the property
+   * and not the query; this names the query.
+   */
+  const only = (rows: Array<Record<string, unknown>>, what: string): Record<string, unknown> => {
+    const [row] = rows;
+    if (row === undefined) throw new Error(`expected one row for ${what}, got none`);
+    return row;
+  };
   const scalar = async (q: unknown) => Number((await exec(q))[0]?.n ?? 0);
 
   beforeAll(async () => {
@@ -368,7 +403,8 @@ suite('GET /salons/:id/reports/artist-performance', () => {
   async function salonWide(branch: string | null, days = 30) {
     const from = new Date(Date.now() - days * DAY).toISOString();
     const b = branch === null ? sql`` : sql`AND t.branch_id = ${branch}`;
-    const [r] = await exec(sql`
+    const r = only(
+      await exec(sql`
       SELECT coalesce(sum(-t.amount_fils), 0)::bigint AS charged,
              coalesce(sum(dep.amount_fils), 0)::bigint AS deposit_applied
         FROM "transaction" t
@@ -383,7 +419,9 @@ suite('GET /salons/:id/reports/artist-performance', () => {
          ${b}
          AND NOT EXISTS (
            SELECT 1 FROM "transaction" r WHERE r.reverses_transaction_id = t.id AND r.status = 'settled'
-         )`);
+         )`),
+      'the oracle sum',
+    );
     const charged = Number(r.charged);
     const depositApplied = Number(r.deposit_applied);
     return { charged, depositApplied, earned: charged + depositApplied };
@@ -591,9 +629,12 @@ suite('GET /salons/:id/reports/artist-performance', () => {
       expect(mine(sal.rows, AR5).earnedFils).toBe(0);
       expect(mine(sal.rows, AR5).appointments).toBe(0);
 
-      const bookingBranch = await exec(sql`
-        SELECT branch_id FROM booking WHERE id = ${id('BK', 5)}`);
-      expect(String(bookingBranch[0].branch_id)).toBe(SALMIYA);
+      const bookingBranch = only(
+        await exec(sql`
+        SELECT branch_id FROM booking WHERE id = ${id('BK', 5)}`),
+        'BK-5',
+      );
+      expect(String(bookingBranch.branch_id)).toBe(SALMIYA);
     });
 
     it('reconciles under a branch too, and the branches re-sum to the salon', async () => {

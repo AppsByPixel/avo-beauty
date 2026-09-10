@@ -105,6 +105,20 @@ interface MoneyRow {
   earnedFils?: number;
   grossFils?: number;
   transactions?: number;
+  /**
+   * THESE THREE WERE MISSING and `appointments` is asserted twice below - the
+   * booked-appointment count and the voided artist's zero. `reports.ts`'s artist
+   * row emits `customers`, `appointments` and `staffAccount` alongside the money
+   * columns; this hand-kept shape had fallen behind it, and because every field
+   * here is optional the compiler was the only thing that could have said so.
+   *
+   * The assertions were NOT vacuous: the field is present at runtime, so
+   * `expect(row?.appointments).toBe(3)` was comparing 3 to 3. Had it been absent
+   * the comparison would have gone red, not quiet.
+   */
+  customers?: number;
+  appointments?: number;
+  staffAccount?: string;
 }
 interface Report {
   rows: MoneyRow[];
@@ -138,6 +152,17 @@ suite('sales and artist-performance reconcile over the same money', () => {
 
   const exec = async (q: unknown) =>
     (await db.execute(q as never)) as unknown as Array<Record<string, unknown>>;
+  /**
+   * The one row a keyed lookup or an aggregate is expected to return. `const [r]
+   * = await exec(...)` types `r` as possibly undefined and it genuinely can be;
+   * reading a property off that names the property rather than the query, so this
+   * names the query instead.
+   */
+  const only = (rows: Array<Record<string, unknown>>, what: string): Record<string, unknown> => {
+    const [row] = rows;
+    if (row === undefined) throw new Error(`expected one row for ${what}, got none`);
+    return row;
+  };
 
   beforeAll(async () => {
     db = (await import('../db/client')).db;
@@ -348,7 +373,8 @@ suite('sales and artist-performance reconcile over the same money', () => {
   async function oracle(branch: string | null, days = 30) {
     const from = new Date(Date.now() - days * DAY).toISOString();
     const b = branch === null ? sql`` : sql`AND t.branch_id = ${branch}`;
-    const [r] = await exec(sql`
+    const r = only(
+      await exec(sql`
       SELECT coalesce(sum(-t.amount_fils), 0)::bigint AS naive,
              coalesce(sum(dep.applied), 0)::bigint AS deposits
         FROM "transaction" t
@@ -366,7 +392,9 @@ suite('sales and artist-performance reconcile over the same money', () => {
          AND NOT EXISTS (
            SELECT 1 FROM "transaction" r
             WHERE r.reverses_transaction_id = t.id AND r.status = 'settled'
-         )`);
+         )`),
+      'the oracle sum',
+    );
     const naive = Number(r.naive);
     const deposits = Number(r.deposits);
     return { naive, deposits, earned: naive + deposits };
@@ -528,24 +556,31 @@ suite('sales and artist-performance reconcile over the same money', () => {
        * expression, forget that the void's refund already included the deposit,
        * and the voided appointment leaves 3.000 of phantom revenue behind.
        */
-      const [w] = await exec(sql`
+      const w = only(
+        await exec(sql`
         SELECT rev.charged_fils, rev.deposit_applied_fils, rev.earned_fils
           FROM transaction_revenue rev
-         WHERE rev.transaction_id = ${id('TX', 'c5')}`);
+         WHERE rev.transaction_id = ${id('TX', 'c5')}`),
+        `transaction_revenue for ${id('TX', 'c5')}`,
+      );
       expect(Number(w.charged_fils)).toBe(2000);
       expect(Number(w.deposit_applied_fils)).toBe(3000);
       expect(Number(w.earned_fils)).toBe(5000);
 
       const from = new Date(Date.now() - 30 * DAY).toISOString();
-      const [all] = await exec(sql`
+      const all = only(
+        await exec(sql`
         SELECT coalesce(sum(rev.earned_fils), 0)::bigint AS worth
           FROM "transaction" t
           JOIN transaction_revenue rev ON rev.transaction_id = t.id
          WHERE t.salon_id = ${SALON}
-           AND t.created_at >= ${from}::timestamptz`);
+           AND t.created_at >= ${from}::timestamptz`),
+        'earned over the window',
+      );
 
       const sales = await report('sales', '?period=30d');
-      const voidedInWindow = await exec(sql`
+      const voidedInWindow = only(
+        await exec(sql`
         SELECT coalesce(sum(rev.earned_fils), 0)::bigint AS worth
           FROM "transaction" t
           JOIN transaction_revenue rev ON rev.transaction_id = t.id
@@ -554,15 +589,20 @@ suite('sales and artist-performance reconcile over the same money', () => {
            AND EXISTS (
              SELECT 1 FROM "transaction" r
               WHERE r.reverses_transaction_id = t.id AND r.status = 'settled'
-           )`);
+           )`),
+        'earned on voided transactions over the window',
+      );
 
-      expect(Number(voidedInWindow[0].worth)).toBeGreaterThanOrEqual(5000);
-      expect(sales.stat.value).toBe(Number(all.worth) - Number(voidedInWindow[0].worth));
+      expect(Number(voidedInWindow.worth)).toBeGreaterThanOrEqual(5000);
+      expect(sales.stat.value).toBe(Number(all.worth) - Number(voidedInWindow.worth));
     });
 
     it("the void's refund is the whole worth of the visit, deposit included", async () => {
-      const [r] = await exec(sql`
-        SELECT amount_fils FROM "transaction" WHERE id = ${id('TX', 'v5')}`);
+      const r = only(
+        await exec(sql`
+        SELECT amount_fils FROM "transaction" WHERE id = ${id('TX', 'v5')}`),
+        `${id('TX', 'v5')}`,
+      );
       expect(Number(r.amount_fils)).toBe(5000);
     });
 

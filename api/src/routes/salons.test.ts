@@ -50,6 +50,19 @@ const BEFORE: SalonRow = {
   businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
   social: [],
   whatsappEnabled: true,
+  /**
+   * THIS FIELD WAS MISSING, and it is the drift decision 89 was opened for. It
+   * landed with migration 0047 (DECISIONS.md #88) and this literal - declared
+   * `SalonRow`, described above as "the shape `loadSalon` would hand the builder"
+   * - never grew it, because `tsconfig.json` excluded every spec from typecheck.
+   *
+   * It is not read by the assertions below, and that is the point rather than a
+   * mitigation: the handler's receipt-channel floor is
+   * `patch.emailEnabled ?? before.emailEnabled` (`salons.ts`), so the first spec
+   * written against this fixture for `receipt_channels_required` would have read
+   * `undefined` off the current row and refused a salon whose email is on.
+   */
+  emailEnabled: true,
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
 };
