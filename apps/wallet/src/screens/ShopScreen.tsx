@@ -40,16 +40,43 @@
  * App.tsx — two would be two balances and the one on screen would be whichever
  * mounted last. After an order this screen asks the owner to re-read rather than
  * storing `balanceAfterFils` (#2).
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE ADDRESS BOOK AND THE ORDER LIST ARE OWNED HERE, NOT IN THE SHELL.
+ *
+ * The cart is app state because it has to survive leaving the tab and because
+ * the nav badge reads its count (App.tsx § THE CART LIVES HERE). Neither of these
+ * two is like that:
+ *
+ *   THE ADDRESS BOOK is read when the Shop tab mounts and is only ever looked at
+ *   inside the cart sheet. Nothing outside Shop draws an address, so hoisting it
+ *   would be state in the shell that the shell has no use for — the test App.tsx
+ *   itself sets ("unless something outside Shop ever needs it").
+ *
+ *   THE ORDER LIST is gated on the sheet being open, so it does not read on every
+ *   visit to the tab. It is owned by this SCREEN rather than by the sheet because
+ *   `Sheet` returns null when closed: a hook owned by the sheet's component would
+ *   unmount and refetch on every open.
+ *
+ * The SELECTION, though, lives in `useShop` beside the cart — because it is part
+ * of the order being composed, and because it has to survive leaving the tab for
+ * exactly the reason the cart does.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { formatMoney, moneyAriaLabel, fils } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import type { ShopController } from '../state/useShop';
+import type { MemberAddress } from '@avo/types';
 import { CartSheet } from '../components/CartSheet';
+import { AddressSheet } from '../components/AddressSheet';
+import { OrdersSheet } from '../components/OrdersSheet';
+import { useAddresses } from '../state/useAddresses';
+import type { AddressPayload } from '../domain/address';
+import { useOrders } from '../state/useOrders';
 import { ProductImage } from '../components/ProductImage';
 import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
@@ -74,6 +101,33 @@ export function ShopScreen({
 }) {
   const { lang, copy } = useLanguage();
   const [cartOpen, setCartOpen] = useState(false);
+  const [ordersOpen, setOrdersOpen] = useState(false);
+  /**
+   * `null` = closed. `{ address: null }` = a blank form; `{ address }` = an edit.
+   *
+   * One piece of state rather than an `open` boolean beside an `editing` row, so
+   * "open on nothing" is not a representable state and the sheet cannot be shown
+   * mid-transition with the previous address still in it.
+   */
+  const [addressSheet, setAddressSheet] = useState<{ address: MemberAddress | null } | null>(null);
+
+  const book = useAddresses();
+  // Gated: the list is not read until the sheet is open. See the header.
+  const orders = useOrders(ordersOpen);
+
+  /*
+    THE SELECTION IS RE-RESOLVED WHENEVER THE BOOK CHANGES, and never falls back
+    to a different address. `reconcileChoice` loses the selection instead —
+    picking a destination for her because the one she chose disappeared is the
+    worst available behaviour on this path.
+
+    Runs on every successful read as well as after a delete, because the delete
+    may have happened on another device.
+  */
+  useEffect(() => {
+    if (book.addresses === null) return;
+    shop.reconcileAddresses(book.addresses.map((a) => a.id));
+  }, [book.addresses, shop]);
 
   const checkout = useCallback(async () => {
     const result = await shop.checkout();
@@ -87,6 +141,50 @@ export function ShopScreen({
     */
     onToast(copy.shopPaidToast(formatMoney(fils(result.totalFils), lang)));
   }, [shop, copy, lang, onToast]);
+
+  /**
+   * Save, then SELECT WHAT SHE JUST SAVED.
+   *
+   * The id comes back from `useAddresses.save` rather than being read out of the
+   * refetched list, because the refetch has not landed yet — and selecting by
+   * position ("the newest one") would be a guess that is wrong the moment two
+   * saves race. Selecting it also sets the mode to delivery, which is right: she
+   * typed an address inside the delivery section.
+   *
+   * On a refusal the sheet STAYS OPEN with the error in it. Closing it would
+   * discard nine fields she has just typed, and `writeError` is rendered where
+   * she is looking.
+   */
+  const saveAddress = useCallback(
+    async (payload: AddressPayload, id: string | null) => {
+      const savedId = await book.save(payload, id);
+      if (savedId === null) return;
+      setAddressSheet(null);
+      shop.chooseAddress(savedId);
+    },
+    [book, shop],
+  );
+
+  /**
+   * Delete one, and let `reconcileAddresses` lose the selection if it was this
+   * one — the effect above does that off the refetched list rather than this
+   * handler doing it by hand, so a delete on another device is handled by the
+   * same path.
+   *
+   * NO CONFIRMATION DIALOG, and that is a considered omission rather than a
+   * missing state: the account sheets confirm because account deletion is
+   * irreversible and consequential, while this is one row in an address book that
+   * she can retype in nine fields, and — the part that matters — DELETING IT DOES
+   * NOT TOUCH AN ORDER ALREADY PLACED TO IT. The order snapshotted the address.
+   * `addressDeleteBody` says so, and it is REPORTED as a copy decision for
+   * review: if a confirmation is wanted, the strings for it are already written.
+   */
+  const deleteAddress = useCallback(
+    async (address: MemberAddress) => {
+      await book.remove(address.id);
+    },
+    [book],
+  );
 
   // --------------------------------------------------------------- failed --
   /*
@@ -136,6 +234,24 @@ export function ShopScreen({
         {/* design:480-491 — the title and the cart button with its badge. */}
         <View style={styles.head}>
           <Text style={[text('displayM', lang), styles.title]}>{copy.shopTitle}</Text>
+          {/*
+            MY ORDERS — NOT IN THE DESIGN, which draws only the cart button here.
+            An order's three statuses have to be reachable from somewhere and this
+            is the screen the order was placed from; a nav tab for it would be a
+            fifth tab against a design that draws four. It is text rather than a
+            second glyph so it cannot be mistaken for another cart.
+          */}
+          <View style={styles.headActions}>
+            <Pressable
+              onPress={() => setOrdersOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={copy.ordersCta}
+              dataSet={focusable}
+              testID="shop-orders-button"
+              style={styles.ordersButton}
+            >
+              <Text style={[text('bodyS', lang), styles.ordersText]}>{copy.ordersCta}</Text>
+            </Pressable>
           <Pressable
             onPress={() => setCartOpen(true)}
             accessibilityRole="button"
@@ -164,6 +280,7 @@ export function ShopScreen({
               </View>
             ) : null}
           </Pressable>
+          </View>
         </View>
         <Text style={[text('bodyS', lang), styles.sub]}>{copy.shopSub}</Text>
 
@@ -300,6 +417,9 @@ export function ShopScreen({
         stale={shop.stale}
         busy={shop.busy}
         refusal={shop.refusal}
+        fulfilment={shop.fulfilment}
+        block={shop.block}
+        book={book}
         onClose={() => {
           setCartOpen(false);
           shop.clearRefusal();
@@ -311,6 +431,41 @@ export function ShopScreen({
           setCartOpen(false);
           onTopUp();
         }}
+        onFulfilment={shop.setFulfilment}
+        onChooseAddress={shop.chooseAddress}
+        onAddAddress={() => {
+          book.clearWriteError();
+          setAddressSheet({ address: null });
+        }}
+        onEditAddress={(address) => {
+          book.clearWriteError();
+          setAddressSheet({ address });
+        }}
+        onDeleteAddress={(address) => void deleteAddress(address)}
+      />
+
+      {/*
+        THE FORM SHEET IS RENDERED AFTER THE CART, and the order matters: both are
+        absolutely positioned overlays at the same `zIndex`, so the later one
+        paints on top. The cart stays mounted underneath rather than being closed
+        — she is mid-checkout, and closing it would lose the sheet she came from.
+      */}
+      <AddressSheet
+        open={addressSheet !== null}
+        editing={addressSheet?.address ?? null}
+        busy={book.busy}
+        writeError={book.writeError}
+        onClose={() => {
+          setAddressSheet(null);
+          book.clearWriteError();
+        }}
+        onSave={(payload, id) => void saveAddress(payload, id)}
+      />
+
+      <OrdersSheet
+        open={ordersOpen}
+        orders={orders}
+        onClose={() => setOrdersOpen(false)}
       />
     </View>
   );
@@ -322,6 +477,17 @@ const styles = StyleSheet.create({
   // design:480 — padding 58/20/20, centred at the phone width like every screen.
   content: { width: '100%', maxWidth: 402, alignSelf: 'center', paddingTop: 58, paddingHorizontal: 20, paddingBottom: 24 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  headActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // The Shop row's Add button, one step quieter: brandTint is a light surface and
+  // its text is brandDeep, never brand (#9).
+  ordersButton: {
+    minHeight: MIN_TAP_TARGET,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: radius.chip,
+    backgroundColor: color.brandTint,
+  },
+  ordersText: { color: color.brandDeep, fontWeight: '600' },
   title: { color: color.ink },
   sub: { color: color.textMuted, marginBottom: 18 },
   cartButton: {

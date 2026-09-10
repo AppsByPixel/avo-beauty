@@ -133,7 +133,7 @@ interface ErrorBody {
 }
 
 interface RequestOptions {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** JSON body. Absent on a GET. */
   body?: unknown;
   /**
@@ -525,6 +525,50 @@ export function deleteJson<S extends z.ZodTypeAny>(
   signal?: AbortSignal,
 ): Promise<z.infer<S>> {
   return request(path, schema, { method: 'DELETE', signal });
+}
+
+/**
+ * PUT a resource and validate the replaced entity that comes back.
+ *
+ * PUT AND NOT PATCH, AND THE VERB IS THE CONTRACT'S RATHER THAN A PREFERENCE.
+ * `PUT /members/me/addresses/{id}` is a WHOLE-ROW REPLACE of the editable parts:
+ * an omitted optional field becomes NULL rather than keeping its old value, and
+ * `routes/addresses.ts` argues for that at length — the alternative, merging on
+ * present keys, makes "clear the instructions" unexpressible without a sentinel,
+ * and a sentinel is how the literal text `'string'` gets stored.
+ *
+ * So a caller must send every field it wants kept. `toAddressPayload` always
+ * emits all nine, which is why that is the only way to build this body.
+ *
+ * NO IDEMPOTENCY KEY: an address moves no money (there is no delivery fee
+ * anywhere), and a PUT is idempotent by construction — the same body twice
+ * leaves the same row. Non-negotiable #4 is about money-moving POSTs.
+ */
+export function putJson<S extends z.ZodTypeAny>(
+  path: string,
+  body: unknown,
+  schema: S,
+  signal?: AbortSignal,
+): Promise<z.infer<S>> {
+  return request(path, schema, { method: 'PUT', body, signal });
+}
+
+/**
+ * DELETE something whose success is a 204 with no body.
+ *
+ * Separate from `deleteJson` because there is nothing to parse and `.json()` on
+ * an empty body throws — which would surface as `'server'` with "That response
+ * did not match the contract" for a delete that had in fact succeeded, and the
+ * row would be gone while the sheet said it had failed.
+ *
+ * `DELETE /members/me/addresses/{id}` is that endpoint. Its second call is a 404
+ * rather than a silent success, because the transition is the WHERE clause and
+ * the row count decides — so a caller that wants "gone either way" has to treat
+ * `unknown_address` as success itself, deliberately, rather than getting it for
+ * free from a helper.
+ */
+export async function deleteNoContent(path: string, signal?: AbortSignal): Promise<void> {
+  await send(path, { method: 'DELETE', signal });
 }
 
 /** PATCH a resource and validate the updated entity that comes back. */

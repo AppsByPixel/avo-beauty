@@ -568,6 +568,93 @@ export const ar: Copy = {
   shopOffBody: en.shopOffBody, // AR GAP
   cartStaleBody: en.cartStaleBody, // AR GAP
   shopOrderFailed: en.shopOrderFailed, // AR GAP
+  /*
+    ليست ترجمة: مكتوبة، ومُدرجة في AR_UNVERIFIED. تحل محل `signUpOffline` الذي كان
+    يظهر بالإنجليزية في سلة عربية — راجعي copy/types.ts.
+  */
+  cartOffline: 'لا يوجد اتصال. راجعي طلباتي قبل المحاولة مرة أخرى.',
+
+  /**
+   * DELIVERY — item 7. NOT IN THE BUNDLE, and owed in Arabic just as much as in
+   * English: non-negotiable #12, Arabic is a first-class layout and not a
+   * translation pass.
+   *
+   * Every key here is WRITTEN rather than transcribed, so every key here is in
+   * `AR_UNVERIFIED` — it renders Arabic, and no designer wrote it. That is a
+   * different failure mode from `AR_GAPS`: a gap shows English and is obvious, an
+   * unverified string shows plausible Arabic that may be wrong.
+   *
+   * FEMININE ADDRESS FORMS THROUGHOUT, matching `اختاري المصففة` and `أضيفي
+   * منتجاً` above: `اختاري` (choose), `أضيفي` (add), `احفظي` (save), `اتركي`
+   * (leave), `سمّيها` (name it) are all feminine imperatives.
+   *
+   * COUNTS ARE EASTERN (`orderStep` goes through `ea`), money is Western and
+   * never comes through this file. No string below carries a Western digit —
+   * `digits.test.ts` asserts that over the whole set.
+   */
+  fulfilTitle: 'كيف تحبين أن تستلميها؟',
+  fulfilPickup: 'أستلمها بنفسي',
+  fulfilDelivery: 'توصيل',
+  // يذكر الصالون ولا يذكر الفرع — لا يوجد فرع استلام في العقد.
+  fulfilPickupBody: 'استلميها من الصالون عند جهوزها.',
+  fulfilDeliveryBody: 'سنوصلها إلى أحد عناوينك المحفوظة.',
+  addressChooseTitle: 'التوصيل إلى',
+  addressAddCta: 'أضيفي عنواناً',
+  addressEdit: 'تعديل',
+  addressDelete: 'حذف',
+  addressEmptyTitle: 'لا عناوين محفوظة',
+  addressEmptyBody: 'أضيفي عنواناً وسنحفظه للمرة القادمة.',
+  addressLoadFailed: 'لم نتمكن من تحميل عناوينك.',
+  addressWriteFailed: 'لم نتمكن من الحفظ. حاولي مرة أخرى.',
+  addressWriteOffline: 'لا يوجد اتصال، فلم نتمكن من تأكيد الحفظ.',
+  addressGoneBody: 'هذا العنوان لم يعد محفوظاً.',
+
+  addressFormNewTitle: 'عنوان جديد',
+  addressFormEditTitle: 'تعديل العنوان',
+  addrLabel: 'سمّيها',
+  addrBlock: 'القطعة',
+  addrStreet: 'الشارع',
+  addrBuilding: 'المبنى',
+  addrFloor: 'الطابق',
+  addrApartment: 'الشقة',
+  addrArea: 'المنطقة',
+  addrGovernorate: 'المحافظة',
+  addrInstructions: 'ملاحظات للمندوب',
+  addrOptional: '(اختياري)',
+  /*
+    الجملة التي تقوم عليها هذه الميزة كلها: الحقل الفارغ يُحفظ فارغاً، ولا يُملأ
+    بنسخة عن حقل آخر. راجعي `copy/en.ts` وسجل PRIOR-ART.
+  */
+  addrOptionalNote: 'اتركي ما لا تحتاجينه فارغاً.',
+  addrInstructionsPh: 'اقرعي الجرس مرتين، لو سمحت',
+  addressSaveCta: 'احفظي العنوان',
+  addressMissingBody: 'سمّي العنوان، واملأي القطعة والشارع والمبنى.',
+  addressDeleteTitle: 'حذف هذا العنوان؟',
+  addressDeleteBody: 'الطلبات التي سبق إرسالها إليه لا تتأثر.',
+  addressDeleteCta: 'حذف',
+  addressDeleteCancel: 'الاحتفاظ به',
+
+  cartNoAddress: 'اختاري إلى أين نوصلها.',
+  // ليست جملة فشل: المبلغ خُصم فعلاً والطلب موجود.
+  cartAlreadyPlaced: 'طلبك مُسجّل بالفعل. راجعي طلباتي.',
+
+  ordersCta: 'طلباتي',
+  ordersTitle: 'طلباتي',
+  ordersEmptyTitle: 'لا طلبات بعد',
+  ordersEmptyBody: 'كل ما تشترينه من المتجر يظهر هنا.',
+  ordersLoadFailed: 'لم نتمكن من تحميل طلباتك.',
+  // ثلاث حالات، وطريقتا استلام. `closed` هي النهاية في الحالتين.
+  orderPickupPreparing: 'قيد التحضير',
+  orderPickupReady: 'جاهز للاستلام',
+  orderPickupClosed: 'تم الاستلام',
+  orderDeliveryPreparing: 'قيد التحضير',
+  orderDeliveryReady: 'جاهز وفي الطريق',
+  orderDeliveryClosed: 'تم التوصيل',
+  orderStep: (step, total) => `الخطوة ${ea(step)} من ${ea(total)}`,
+  orderDeliveringTo: 'إلى',
+  orderAddressFixed: 'العنوان الذي أدخلتِه عند الطلب.',
+  orderCollectAt: 'الاستلام من الصالون',
+  orderTruncated: 'نعرض أحدث طلباتك.',
 
   bookTitle: 'احجزي', // design:1347
   bookStep: (step, total) => `الخطوة ${ea(step)} من ${ea(total)}`, // design:1876
@@ -934,4 +1021,98 @@ export const AR_UNVERIFIED = [
   'tierRequirement(11+)',
   'stampsGoal',
   'stampRule3',
+  /**
+   * THE BRANCH STRIP — SEVEN KEYS THAT SHOULD HAVE BEEN LISTED HERE AND WERE
+   * NOT, and this is my own omission from the branch-picker slice rather than
+   * somebody else's.
+   *
+   * They were written in Arabic, flagged in a COMMENT above them in `ar.ts`
+   * ("NOT IN THE BUNDLE, and owed in Arabic just as much as in English"), and
+   * never added to this list. A comment is not a worksheet: the native-speaker
+   * review reads `AR_UNVERIFIED`, so seven strings the design never wrote would
+   * have gone to production unreviewed while the comment sat two lines above
+   * them saying so.
+   *
+   * That is the same shape as the `nameAr` defect `domain/names.ts` documents at
+   * length — a true comment that nothing acts on — and worth naming as such,
+   * because this list is only worth anything if it is where the flags actually
+   * go. Added now rather than in the branch-picker slice's own commit, and
+   * reported.
+   */
+  'branchFilterAll',
+  'branchFilterOther',
+  'branchFilterOtherNote',
+  'branchEmptyTitle',
+  'branchEmptyBody',
+  'artistsEmptyTitle',
+  'artistsEmptyBody',
+  /**
+   * DELIVERY — item 7. All 51 keys, because the design bundle draws no delivery
+   * UI at all: the shop was collection-only when it was made, `shopSub` says
+   * "pick up at the salon" and the receipt row says "Pickup".
+   *
+   * So unlike the shop's six failure states — which are in `AR_GAPS` because
+   * they render ENGLISH — these render written Arabic with feminine address
+   * forms, and the whole set needs a native speaker. `fulfilTitle`,
+   * `addrOptionalNote` and the six order-status sentences are the ones to read
+   * first: the first sets the register for the section, the second is the
+   * sentence the entire feature turns on, and the six are what a customer reads
+   * while she waits.
+   */
+  'fulfilTitle',
+  'fulfilPickup',
+  'fulfilDelivery',
+  'fulfilPickupBody',
+  'fulfilDeliveryBody',
+  'addressChooseTitle',
+  'addressAddCta',
+  'addressEdit',
+  'addressDelete',
+  'addressEmptyTitle',
+  'addressEmptyBody',
+  'addressLoadFailed',
+  'addressWriteFailed',
+  'addressWriteOffline',
+  'addressGoneBody',
+  'addressFormNewTitle',
+  'addressFormEditTitle',
+  'addrLabel',
+  'addrBlock',
+  'addrStreet',
+  'addrBuilding',
+  'addrFloor',
+  'addrApartment',
+  'addrArea',
+  'addrGovernorate',
+  'addrInstructions',
+  'addrOptional',
+  'addrOptionalNote',
+  'addrInstructionsPh',
+  'addressSaveCta',
+  'addressMissingBody',
+  'addressDeleteTitle',
+  'addressDeleteBody',
+  'addressDeleteCta',
+  'addressDeleteCancel',
+  'cartNoAddress',
+  'cartAlreadyPlaced',
+  'ordersCta',
+  'ordersTitle',
+  'ordersEmptyTitle',
+  'ordersEmptyBody',
+  'ordersLoadFailed',
+  // The cart's offline chip. It was `signUpOffline` — English, and the wrong
+  // sentence — until driving an Arabic checkout against a dead API showed it.
+  'cartOffline',
+  'orderPickupPreparing',
+  'orderPickupReady',
+  'orderPickupClosed',
+  'orderDeliveryPreparing',
+  'orderDeliveryReady',
+  'orderDeliveryClosed',
+  'orderStep',
+  'orderDeliveringTo',
+  'orderAddressFixed',
+  'orderCollectAt',
+  'orderTruncated',
 ] as const;

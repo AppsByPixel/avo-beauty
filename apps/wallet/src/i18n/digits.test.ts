@@ -180,6 +180,9 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   // --- book ---
   // A step counter and a total: counts, so Eastern in Arabic.
   bookStep: [2, 4],
+  // An order's position in `preparing → ready → closed`. Three, always — the
+  // whole lifecycle, and not a fourth status.
+  orderStep: [2, 3],
   // An artist's name, already resolved to the reading language by
   // domain/booking.ts § artistName.
   upWith: ['رنا'],

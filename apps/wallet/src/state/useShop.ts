@@ -49,6 +49,49 @@
  * not know whether the money moved. `busy` disables the button, the key protects
  * the attempt, and the failure state says what to check rather than offering a tap
  * that could commit a second order.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE KEY IS KEYED ON THE CART, AND DELIVERY MUST NOT CHANGE THAT.
+ *
+ * This is the one correctness decision the delivery slice added here, and it
+ * goes against the obvious reading of the API's own comment, so it is written
+ * down at length.
+ *
+ * `routes/orders.ts` hashes `{items, fulfilment, addressId}` and says: "FULFILMENT
+ * IS IN THE HASH. Two different destinations under one key is a 422 rather than a
+ * replay of the first — a client that retried a pickup as a delivery meant
+ * something different, and replaying the pickup would hand her a 'delivered'
+ * order that is sitting on a counter." That is right, and it describes the
+ * SERVER's job.
+ *
+ * The tempting client move is to mirror it: put the fulfilment into
+ * `cartSignature` so a changed destination mints a fresh key. THAT IS A DOUBLE
+ * CHARGE. Walk the case the states brief names — she taps Pay as a pickup, the
+ * response never arrives (offline, timeout), she switches to delivery and taps
+ * again:
+ *
+ *   fulfilment NOT in the signature — SAME key.
+ *       the first attempt COMMITTED  → 422 `idempotency_key_reused`. She is told
+ *           the order was already placed. ONE debit. Correct.
+ *       the first attempt ROLLED BACK → the key was never persisted, so it is
+ *           not burned; the delivery order is placed at 201. ONE debit. Correct.
+ *
+ *   fulfilment IN the signature — NEW key.
+ *       the first attempt COMMITTED  → a second, unrelated key, a second order,
+ *           A SECOND DEBIT. Her cart was never emptied because she never saw the
+ *           first response, so she is charged twice for one basket.
+ *
+ * So the signature stays `productId:qty` only. The 422 is not a defect to be
+ * engineered around — it is the guard reporting a genuinely ambiguous retry, and
+ * `orderRefusal` classifies it as `alreadyPlaced` precisely so the sheet can say
+ * "your order was placed" instead of "nothing was charged".
+ *
+ * The re-mint on a CART change is unaffected and still load-bearing for its one
+ * case: after an order settles the cart is emptied, she adds something else, and
+ * that new cart must not arrive under the key the settled order burned.
+ *
+ * `fulfilmentBody(choice)` is therefore read at CALL TIME rather than folded into
+ * the key, and pickup contributes no keys at all — see `domain/fulfilment.ts`.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -73,6 +116,15 @@ import {
   type PricedLine,
 } from '../domain/cart';
 import { orderRefusal, type CheckoutRefusal } from '../domain/orderRefusal';
+import {
+  checkoutBlock,
+  fulfilmentBody,
+  PICKUP,
+  reconcileChoice,
+  type CheckoutBlock,
+  type Fulfilment,
+  type FulfilmentChoice,
+} from '../domain/fulfilment';
 
 /**
  * Re-exported so the screen and the sheet keep importing it from here.
@@ -152,6 +204,21 @@ export interface ShopState {
   shortfall: Fils;
   busy: boolean;
   refusal: CheckoutRefusal | null;
+  /**
+   * Collect or deliver, and the address a delivery names.
+   *
+   * IT IS NOT DERIVED FROM THE ADDRESS BOOK. A customer with one saved address
+   * is not thereby choosing delivery — pickup is a live fork and the default —
+   * and auto-selecting delivery because she happens to have an address would
+   * decide the thing this control exists to ask.
+   */
+  fulfilment: FulfilmentChoice;
+  /**
+   * Why Pay cannot be tapped yet, or null. Today the only value is `noAddress`.
+   * A COURTESY, not a control: the server refuses the same case by name and #7
+   * makes that the authority.
+   */
+  block: CheckoutBlock | null;
 }
 
 export interface ShopActions {
@@ -159,6 +226,24 @@ export interface ShopActions {
   add: (productId: string) => void;
   remove: (productId: string) => void;
   clearRefusal: () => void;
+  /**
+   * Switch between collecting and delivering.
+   *
+   * Switching to PICKUP KEEPS the chosen address in state rather than clearing
+   * it, so flipping back does not lose her selection — and it is safe because
+   * `fulfilmentBody` drops the address on the pickup path by construction, which
+   * is what stops `address_not_for_pickup` reaching the wire.
+   */
+  setFulfilment: (mode: Fulfilment) => void;
+  /** Choose which saved address a delivery goes to. */
+  chooseAddress: (addressId: string) => void;
+  /**
+   * Re-resolve the selection against the ids that still exist, after the
+   * address book has been read or written. See `reconcileChoice` — a selection
+   * pointing at a deleted row loses the selection and NEVER falls back to
+   * another address.
+   */
+  reconcileAddresses: (addressIds: readonly string[]) => void;
   /** Resolves with the order on success, null on any refusal. */
   checkout: () => Promise<OrderResult | null>;
 }
@@ -173,6 +258,7 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
   const [cart, setCart] = useState<Cart>({});
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<CheckoutRefusal | null>(null);
+  const [fulfilment, setChoice] = useState<FulfilmentChoice>(PICKUP);
   const [reload, setReload] = useState(0);
   /** When the catalogue on screen was read, for the stale banner's stamp. */
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
@@ -270,22 +356,81 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
 
   const clearRefusal = useCallback(() => setRefusal(null), []);
 
+  // ------------------------------------------------------------ fulfilment --
+  const setFulfilment = useCallback((mode: Fulfilment) => {
+    // The address is KEPT across a switch to pickup — see `ShopActions`.
+    setChoice((c) => ({ mode, addressId: c.addressId }));
+    setRefusal(null);
+  }, []);
+
+  const chooseAddress = useCallback((addressId: string) => {
+    /*
+      Choosing an address IMPLIES delivery, and this is the one place a mode is
+      set as a side effect. It is not the auto-selection the state interface
+      warns against: that would be inferring her intent from the mere EXISTENCE
+      of a saved address. Here she has tapped a specific address inside the
+      delivery section, which is an act of choosing, and leaving the mode on
+      pickup would drop what she just did.
+    */
+    setChoice({ mode: 'delivery', addressId });
+    setRefusal(null);
+  }, []);
+
+  const reconcileAddresses = useCallback((addressIds: readonly string[]) => {
+    setChoice((c) => {
+      const next = reconcileChoice(c, addressIds);
+      // Identity is preserved when nothing changed, so this never re-renders on
+      // every refetch of an unchanged book.
+      return next.addressId === c.addressId && next.mode === c.mode ? c : next;
+    });
+  }, []);
+
   // -------------------------------------------------------------- checkout --
   const checkout = useCallback(async (): Promise<OrderResult | null> => {
     if (busy) return null;
     const items = toOrderLines(cart, products ?? []);
     if (items.length === 0) return null;
+    /*
+      Delivery with no address is not submittable. The sheet disables the button
+      on the same predicate, and this is the second gate rather than the first —
+      `checkout` is reachable from a caller that did not read `block`, and the
+      honest failure of an unsubmittable form is not sending it.
+
+      It sets the refusal the SERVER would have set, so the sentence she reads is
+      the same either way.
+    */
+    if (checkoutBlock(fulfilment) === 'noAddress') {
+      setRefusal({ kind: 'noAddress' });
+      return null;
+    }
 
     setBusy(true);
     setRefusal(null);
     try {
-      const result = await placeOrder(items, keyRef.current.key);
+      /*
+        The key comes from the cart signature ONLY. `fulfilmentBody` is read here,
+        at call time, and deliberately does not feed the key — see the header §
+        THE KEY IS KEYED ON THE CART, which walks the double-charge this prevents.
+      */
+      const result = await placeOrder(items, keyRef.current.key, fulfilmentBody(fulfilment));
       /*
         The cart is emptied on success and the wallet re-reads. `balanceAfterFils`
         is deliberately not stored — #2: the balance on screen is the server's
         answer to `GET /members/me`, never a figure this app carried across.
       */
       setCart({});
+      /*
+        THE FULFILMENT CHOICE IS RESET WITH THE CART. Her next order is a new
+        decision, and leaving `delivery` selected would carry a destination across
+        a purchase boundary — so the next cart would open already committed to an
+        address she chose for a different basket.
+
+        The cart and the choice are cleared TOGETHER for the idempotency key's
+        sake as well: the key is re-minted on the cart signature change, and a
+        cleared cart with a retained delivery choice would be a fresh key over a
+        stale destination.
+      */
+      setChoice(PICKUP);
       onPaid();
       return result;
     } catch (err) {
@@ -301,7 +446,15 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
     } finally {
       if (aliveRef.current) setBusy(false);
     }
-  }, [busy, cart, products, onPaid]);
+    /*
+      THE CART IS NOT CLEARED ON A REFUSAL, and that is the states brief's "a
+      failed order leaving her cart intact". It falls out of the structure —
+      `setCart({})` is inside the success path only — but it is asserted in
+      `useShop.test.ts` rather than left to the reading, because it is one
+      misplaced line from being wrong and the cost is a customer who has to
+      rebuild her basket after a network blip.
+    */
+  }, [busy, cart, products, fulfilment, onPaid]);
 
   return {
     status,
@@ -317,10 +470,15 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
     shortfall,
     busy,
     refusal,
+    fulfilment,
+    block: checkoutBlock(fulfilment),
     retry: useCallback(() => setReload((n) => n + 1), []),
     add,
     remove,
     clearRefusal,
+    setFulfilment,
+    chooseAddress,
+    reconcileAddresses,
     checkout,
   };
 }

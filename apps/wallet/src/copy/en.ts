@@ -480,6 +480,97 @@ export const en: Copy = {
    */
   cartStaleBody: (names) => `${names} has been removed from the shop. Take it out of your cart to pay.`,
   shopOrderFailed: "We couldn't complete your order. Nothing has been charged.",
+  /*
+    INVENTED, and it replaces `signUpOffline` at the cart's offline chip — see
+    `copy/types.ts` for the defect that found it. It deliberately does NOT
+    promise nothing was charged: the outcome of a money-moving POST that never
+    answered is unknown, so it sends her where the truth is.
+  */
+  cartOffline: 'No connection. Check My orders before trying again.',
+
+  /**
+   * DELIVERY — item 7. NOT IN THE BUNDLE: there is no delivery UI drawn
+   * anywhere in `design/`, so every string below is written rather than lifted
+   * and all of them are owed to the copywriter. See `copy/types.ts` for the
+   * three constraints they were written under, and note the one they all obey:
+   * NOTHING HERE NAMES A FEE, because there is no fee to name.
+   */
+  fulfilTitle: 'How would you like it?',
+  fulfilPickup: 'Collect it',
+  fulfilDelivery: 'Have it delivered',
+  // Names the salon, never a branch — `POST /orders` takes no pickup branch.
+  fulfilPickupBody: 'Pick it up at the salon when it is ready.',
+  fulfilDeliveryBody: 'We will bring it to one of your saved addresses.',
+  addressChooseTitle: 'Deliver to',
+  addressAddCta: 'Add an address',
+  addressEdit: 'Edit',
+  addressDelete: 'Delete',
+  addressEmptyTitle: 'No saved addresses',
+  addressEmptyBody: 'Add one and we will keep it for next time.',
+  addressLoadFailed: "We couldn't load your addresses.",
+  addressWriteFailed: "We couldn't save that. Try again.",
+  addressWriteOffline: 'No connection, so we could not confirm that was saved.',
+  addressGoneBody: 'That address is no longer saved.',
+
+  addressFormNewTitle: 'New address',
+  addressFormEditTitle: 'Edit address',
+  addrLabel: 'Name it',
+  addrBlock: 'Block',
+  addrStreet: 'Street',
+  addrBuilding: 'Building',
+  addrFloor: 'Floor',
+  addrApartment: 'Apartment',
+  addrArea: 'Area',
+  addrGovernorate: 'Governorate',
+  addrInstructions: 'Notes for the driver',
+  // Borrowed from the account sheets' own label suffix (design:786, :829).
+  addrOptional: '(optional)',
+  /*
+    THE SENTENCE THIS WHOLE FEATURE TURNS ON. Lean's live app fills four address
+    fields from one input and ships the literal text `'string'` in two more, so a
+    driver receives a house number in the block field. Saying "leave it blank" out
+    loud is the customer-facing half of storing NULL.
+  */
+  addrOptionalNote: 'Leave anything you do not need blank.',
+  addrInstructionsPh: 'Ring the bell twice, please',
+  addressSaveCta: 'Save address',
+  addressMissingBody: 'Name it, and fill in block, street and building.',
+  addressDeleteTitle: 'Delete this address?',
+  /*
+    It says what stays true. Deleting an address does NOT change an order already
+    placed to it — the order snapshotted what she typed, deliberately, so a
+    delivered order stays answerable — and a customer deleting an address is
+    entitled to know she is not editing history.
+  */
+  addressDeleteBody: 'Orders already placed to it are not affected.',
+  addressDeleteCta: 'Delete',
+  addressDeleteCancel: 'Keep it',
+
+  cartNoAddress: 'Choose where it should go.',
+  // NOT a failure sentence. The money moved; see `domain/orderRefusal.ts`.
+  cartAlreadyPlaced: 'Your order was already placed. Check My orders.',
+
+  ordersCta: 'My orders',
+  ordersTitle: 'My orders',
+  ordersEmptyTitle: 'No orders yet',
+  ordersEmptyBody: 'Anything you buy from the shop shows up here.',
+  ordersLoadFailed: "We couldn't load your orders.",
+  // Three statuses, two fulfilments. `closed` is both endings.
+  orderPickupPreparing: 'Being prepared',
+  orderPickupReady: 'Ready to collect',
+  orderPickupClosed: 'Collected',
+  orderDeliveryPreparing: 'Being prepared',
+  orderDeliveryReady: 'Ready and on its way',
+  orderDeliveryClosed: 'Delivered',
+  orderStep: (step, total) => `Step ${step} of ${total}`,
+  orderDeliveringTo: 'Going to',
+  /*
+    The snapshot rule, said to the customer. There is no edit control on an
+    order's address and this line is why.
+  */
+  orderAddressFixed: 'The address you gave when you ordered.',
+  orderCollectAt: 'Collect at the salon',
+  orderTruncated: 'Showing your most recent orders.',
 
   bookTitle: 'Book', // design:1240
   bookStep: (step, total) => `Step ${step} of ${total}`, // design:1876
