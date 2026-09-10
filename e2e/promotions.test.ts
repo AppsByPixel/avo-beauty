@@ -38,7 +38,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import {
   B_BRANCH,
   B_MEMBER,
@@ -781,8 +781,10 @@ describe('overlapping windows resolve to one outcome', () => {
 
 describe('branch scoping', () => {
   it("a window scoped to 'all' branches applies", async () => {
-    // The control for the knownBug below: 'all' needs no branch to be known, so
-    // it applies today and proves the window machinery itself works.
+    // The control for the two branch-scoped specs below: 'all' needs no branch
+    // to be known, so it applies on an unenrolled till too — which is what makes
+    // a null there attributable to the BRANCH rather than to the window
+    // machinery. If this spec ever goes red, read nothing into those two.
     happyHour({ id: 'allbranch', fromOffset: -10, toOffset: 10, branchId: null });
     const res = await charge('allbranch');
 
@@ -791,83 +793,261 @@ describe('branch scoping', () => {
   });
 
   /**
-   * BRANCH-SCOPED PROMOTIONS ARE STORED, SERVED, AND APPLIED BY NOBODY — and the
-   * near-miss on the way here is the part worth writing down.
+   * BRANCH-SCOPED PROMOTIONS FOLLOW THE TILL, AND THE TILL HAS TO SAY WHERE IT
+   * STANDS.
    *
-   * `POST /charges` takes `{ memberId, serviceIds[], token }`. There is no branch
-   * in the contract's body and `routes/charges.ts` reads none, so
-   * `decideEarning` receives `branchId: null` and skips every branch-scoped
-   * window and every branch boost.
+   * THESE THREE SPECS WERE TWO `knownBug`s, AND WHY THEY STOPPED BEING ONE IS
+   * THE PART WORTH KEEPING. They read "a branch-scoped happy hour never applies,
+   * because a charge does not know its branch" and "a branch BOOST never
+   * applies, for the same reason", and they were correct the day they were
+   * written: `POST /charges` took `{ memberId, serviceIds[], token }`, nothing
+   * established a branch, `decideEarning` received `branchId: null`, and every
+   * branch-scoped window and every branch boost was skipped.
    *
-   * THE NEAR-MISS. The transaction row still needs a branch for its NOT NULL
-   * column, and it gets one from `defaultBranchId()` — the salon's first branch
-   * BY ID. Deriving the earning rate from that instead is the obvious-looking fix
-   * and it is badly wrong: lane A hit it live, and the first charge under the new
-   * promotion set doubled a customer's visits because 'BR-KWC' sorts before
-   * 'BR-SAL' and Kuwait City carried a 2x boost. A sort order decided a
-   * multiplier. `services/charge.ts` now passes `input.branchId` explicitly and
-   * says why.
-   *
-   * THE FIX THAT MUST NOT BE TAKEN is letting the client send its branch: a
-   * client naming its branch is a client choosing its own multiplier, which is
-   * non-negotiable #2 with extra steps. The branch has to come from something the
+   * The comment they carried ended "the branch has to come from something the
    * server established — a branch-bound scanner session — and that waits on the
-   * device-enrolment decision this suite already flags in `scanner.test.ts`.
+   * device-enrolment decision this suite already flags in `scanner.test.ts`."
+   * THAT SENTENCE IS NO LONGER TRUE AND IS THE REASON FOR THIS REWRITE. Device
+   * enrolment landed (decision 82, migration 0043): `POST /salons/{id}/devices`
+   * binds a device to a branch under `perms.dashboard`, `auth/principal.ts`
+   * reads `device_enrolment` on a scanner session's own device id into
+   * `enrolledBranchId`, and `services/charge.ts` passes it to `resolveBranch` as
+   * `supplied`.
    *
-   * Held rather than patched, and written down here so it cannot be quietly
-   * forgotten. It flips green the day a charge knows where it happened.
+   * `scanner.test.ts` STILL FLAGS A DEVICE GAP AND IT IS NOT THIS ONE — checked
+   * rather than assumed, because pointing at another file's todo is how the
+   * sentence being corrected here went stale in the first place. That todo is
+   * about `staff_user.pin_device_id`, WHICH DEVICE A STAFF PIN IS BOUND TO, and
+   * is still open: there is no way to enrol a replacement tablet for a PIN or to
+   * revoke a lost one. `device_enrolment` is a different column answering a
+   * different question — WHICH BRANCH A TILL STANDS IN — and it does not gate
+   * anything below.
+   *
+   * WHY THE OLD SPECS COULD NOT SURVIVE THE FIX, WHICH IS THE DEFECT IN THEM.
+   * `charge()` signs in with a plain scanner session and enrols nothing, so both
+   * specs asserted the UNENROLLED case — and the unenrolled case is now correct
+   * by design rather than broken. A two-branch salon with no enrolled till
+   * genuinely cannot know where a charge happened, and paying a boost from
+   * `ORDER BY id LIMIT 1` is the live defect that started all of this. So the
+   * assertion could never flip, and a `knownBug` that cannot flip is a permanent
+   * green wearing the costume of a pending fix: it consumes the attention a real
+   * red would get and reports nothing. Decisions 104 and 105 — a cross-cutting
+   * claim must expire by construction.
+   *
+   * WHAT THEY ARE NOW, AND WHAT EACH ONE IS EVIDENCE OF.
+   *
+   *   1. UNENROLLED, HAPPY HOUR — states the contract the first `knownBug` was
+   *      accidentally asserting, as a rule instead of a grievance. Nothing else
+   *      in `e2e/` covers it: the two-branch spec below is about a BOOST.
+   *   2. ENROLLED, HAPPY HOUR — the arm the `knownBug` promised, and the only
+   *      thing anywhere that proves it. `api/src/routes/devices.int.test.ts`
+   *      proves the enrolled BOOST half — "enrolled to BR-KWC (visit 2x):
+   *      established, and the boost PAYS" — and contains no happy-hour spec at
+   *      all (searched, not assumed; no spec-count quoted here, because a count
+   *      of another lane's file is the kind of fact that rots quietly), so
+   *      `promotions.ts § decideEarning`'s branch-scoped window arm —
+   *      `w.branchId === 'all' || (input.branchId !== null && w.branchId ===
+   *      input.branchId)` — was implemented and unexercised until this spec.
+   *   3. ENROLLED, BOOST — the second `knownBug`'s arm, end to end through real
+   *      HTTP: a real PIN sign-in, a real `PUT .../boosts`, a real enrolment,
+   *      a real charge. Its unenrolled control is not repeated here because it
+   *      already exists as "TWO BRANCHES" below, and duplicating it would be two
+   *      specs failing together for one cause.
+   *
+   * THE FIX THAT MUST NOT BE TAKEN is unchanged and is still the point: a client
+   * naming its branch is a client choosing its own multiplier, non-negotiable #2
+   * with extra steps. Nothing below puts a branch in a charge body — the branch
+   * is CONFIGURED once, by a `perms.dashboard` holder, through a different
+   * endpoint, and the charge reads what was configured. "A CLIENT CANNOT NAME
+   * ITS BRANCH" below is the spec that keeps that door shut.
    */
-  knownBug('a branch-scoped happy hour never applies, because a charge does not know its branch', async () => {
-    happyHour({ id: 'branchscoped', fromOffset: -10, toOffset: 10, branchId: B_BRANCH });
-    const res = await charge('branchscoped');
-
-    expect(
-      res.happyHour,
-      'a happy hour scoped to the branch this charge happened at did not apply, because ' +
-        'POST /charges cannot establish a branch. Branch boosts have the same problem and ' +
-        'the same cause — see services/promotions.ts § PromotionInputs.',
-    ).not.toBeNull();
-  });
-
-  knownBug('a branch BOOST never applies, for the same reason', async () => {
+  describe('a branch-scoped promotion follows the till, not the request', () => {
     /**
-     * Published through lane A's OWN endpoint rather than written to the table.
+     * `DEV-SCANNER-B` is the device `scanner` signed in on in `beforeAll`, and
+     * enrolling it mid-spec is enough — no re-sign-in.
      *
-     * That matters for what a failure means: if this spec wrote the row itself, a
-     * red result could be "the boost was never stored" as easily as "the boost was
-     * never applied", and those belong to different people. Going through
-     * `PUT /v1/salons/{id}/promotions/boosts` means the storing half is asserted
-     * separately, right here, and only the APPLYING half is in question.
+     * `auth/principal.ts` reads `device_enrolment` on EVERY scanner request
+     * rather than baking the branch into the token at sign-in, which is what
+     * makes a revoke take effect immediately instead of at the end of a shift.
+     * That is a property worth relying on deliberately: if this ever needed a
+     * fresh session to see its own enrolment, the revoke half of decision 82
+     * would be a promise the product could not keep.
      */
-    const published = await treq('PUT', `/v1/salons/${SALON_B}/promotions/boosts`, {
-      token: dashboard,
-      body: { boosts: { [B_BRANCH]: { visit: 2, topup: 0, stamp: 1 } } },
-    });
-    precondition(
-      published.status === 200,
-      `could not publish the boost: ${published.status} ${published.raw}`,
-    );
-    precondition(
-      scalar(`select visit::text from boost where salon_id='${SALON_B}' and branch_id='${B_BRANCH}'`) === '2',
-      'the boost endpoint answered 200 but stored nothing — that is a different defect',
-    );
+    async function enrol(branchId: string): Promise<void> {
+      const res = await treq('POST', `/salons/${SALON_B}/devices`, {
+        token: dashboard,
+        body: { deviceId: B_SCANNER_DEVICE, branchId, label: 'Promotions suite till' },
+      });
+      precondition(
+        res.status === 201 || res.status === 200,
+        `could not enrol ${B_SCANNER_DEVICE} to ${branchId}: ${res.status} ${res.raw}`,
+      );
+      precondition(
+        scalar(
+          `select branch_id from device_enrolment
+            where salon_id='${SALON_B}' and device_id='${B_SCANNER_DEVICE}'
+              and revoked_at is null`,
+        ) === branchId,
+        'the enrolment endpoint answered but stored no live row — that is a different defect',
+      );
+    }
 
-    const before = visitsOf();
-    try {
-      await charge('branchboost');
+    /**
+     * Unbind it again, tolerating "was not enrolled" AND NOTHING ELSE.
+     *
+     * A 404 is the endpoint's honest answer to a revoke of a till that is not
+     * enrolled — `routes/devices.ts` § revoke puts `revoked_at IS NULL` in the
+     * predicate precisely so a second revoke is a 404 rather than a second
+     * revocation — and this runs in an `afterEach` that follows specs which
+     * enrolled and specs which did not. So both 200 and 404 leave the till
+     * unbound, which is the postcondition this function is for.
+     *
+     * ANY OTHER STATUS IS RAISED HERE RATHER THAN LEFT TO BE FOUND LATER. An
+     * ignored non-404 failure would leave the till enrolled, and the first
+     * symptom would be "TWO BRANCHES — the boost does not pay" going red two
+     * describes down — a spec about a different question, failing for a reason
+     * nobody would look for in this block. It is a real signal (removing this
+     * revoke reddens that spec, deliberately checked), but it names the wrong
+     * cause, and a cleanup that can fail quietly is how a suite starts lying
+     * about which thing broke.
+     */
+    async function revokeTill(): Promise<void> {
+      const res = await treq('DELETE', `/salons/${SALON_B}/devices/${B_SCANNER_DEVICE}`, {
+        token: dashboard,
+      });
+      precondition(
+        res.status === 200 || res.status === 404,
+        `could not unbind ${B_SCANNER_DEVICE}: ${res.status} ${res.raw}. The till is still ` +
+          'enrolled, so every later charge at salon B is established and no spec below is ' +
+          'measuring what it says it measures.',
+      );
+    }
+
+    /** Publish a boost through lane A's own endpoint, as the block below does. */
+    async function publishBoost(branchId: string, visit: number): Promise<void> {
+      const res = await treq('PUT', `/v1/salons/${SALON_B}/promotions/boosts`, {
+        token: dashboard,
+        body: { boosts: { [branchId]: { visit, topup: 0, stamp: 1 } } },
+      });
+      precondition(res.status === 200, `could not publish the boost: ${res.status} ${res.raw}`);
+    }
+
+    /**
+     * A LEAKED ENROLMENT WOULD BE INVISIBLE AND WOULD CHANGE EVERY LATER FILE.
+     *
+     * `device_enrolment` rows live in the run database for the whole run, and
+     * `DEV-SCANNER-B` is the device most of this suite's scanner sessions sign in
+     * on. An enrolment left behind here would silently make salon B's charges
+     * `established` everywhere — turning "TWO BRANCHES — the boost does not pay"
+     * below into a spec that fails for a reason no one would look for in this
+     * file. Revoked after every spec, enrolled or not, for the same reason the
+     * boost goes back to the identity.
+     */
+    afterEach(async () => {
+      await revokeTill();
+      await publishBoost(B_BRANCH, 1);
+    });
+
+    it('UNENROLLED — a branch-scoped happy hour does not apply, and that is the contract', async () => {
+      /**
+       * NOT A DEFECT, WHICH IS THE WHOLE CORRECTION. Salon B has more than one
+       * open branch and this till is bound to none of them, so the server does
+       * not know where the charge happened; `resolveBranch` marks the row
+       * assumed and `charge.ts` passes `null` for the promotion branch. A window
+       * scoped to one branch must not pay on a charge that might have happened
+       * at the other — that is the same class of error as the live one that
+       * doubled a customer's visits off an alphabetical tie-break.
+       *
+       * The `'all'` control directly above is what separates this from the
+       * boring failure: the window machinery demonstrably works, so a null here
+       * is the BRANCH being unknown and not the happy hour being broken.
+       */
+      precondition(
+        Number(
+          scalar(
+            `select count(*) from branch where salon_id='${SALON_B}' and closed_at is null`,
+          ),
+        ) >= 2,
+        'salon B is not multi-branch, so an unenrolled till is established and this spec ' +
+          'is about the other case',
+      );
+      happyHour({ id: 'branchscoped', fromOffset: -10, toOffset: 10, branchId: B_BRANCH });
+
+      const res = await charge('branchscoped-unenrolled');
+
+      expect(
+        res.happyHour,
+        'a happy hour scoped to one branch of a multi-branch salon applied to a charge whose ' +
+          'branch nobody established — the earning rate was decided by resolveBranch\'s ' +
+          'alphabetical fallback, which is the defect services/branch.ts exists for',
+      ).toBeNull();
+    });
+
+    it('ENROLLED — the same window applies, because the till says which branch it stands in', async () => {
+      /**
+       * THE SPEC THE FIRST `knownBug` PROMISED, and the only evidence anywhere
+       * that a branch-scoped happy hour is applied at all.
+       *
+       * Same salon, same multi-branch ambiguity, same window as the spec above —
+       * ONE THING CHANGES, and it is the enrolment. That pairing is what makes
+       * the null above attributable: two specs, one variable.
+       */
+      happyHour({ id: 'branchscoped', fromOffset: -10, toOffset: 10, branchId: B_BRANCH });
+      await enrol(B_BRANCH);
+
+      const res = await charge('branchscoped-enrolled');
+
+      expect(
+        res.happyHour,
+        'the till is enrolled to this very branch and a window scoped to it did not apply. ' +
+          'The merchant is shown a per-branch happy hour she can edit, and it earns nobody ' +
+          'anything — see services/promotions.ts § decideEarning, the w.branchId arm',
+      ).not.toBeNull();
+      expect(
+        res.happyHour!.id,
+        'a branch-scoped window applied, but not the one this spec published',
+      ).toBe(`${MINE}branchscoped`);
+      expect(res.happyHour!.visitMultiplier).toBe(2);
+    });
+
+    it('ENROLLED — a branch BOOST pays, published through the endpoint that stores it', async () => {
+      /**
+       * Published through lane A's OWN endpoint rather than written to the table.
+       *
+       * That matters for what a failure means: if this spec wrote the row itself, a
+       * red result could be "the boost was never stored" as easily as "the boost was
+       * never applied", and those belong to different people. Going through
+       * `PUT /v1/salons/{id}/promotions/boosts` means the storing half is asserted
+       * separately, right here, and only the APPLYING half is in question.
+       *
+       * THE UNENROLLED CONTROL IS "TWO BRANCHES" BELOW, not a fourth spec here.
+       * It publishes a 2x on the branch a multi-branch charge is attributed to and
+       * proves it does not pay. Repeating it would be two specs going red together
+       * for one cause, which is how a suite stops naming the thing that broke.
+       */
+      await publishBoost(B_BRANCH, 2);
+      await enrol(B_BRANCH);
+
+      const before = visitsOf();
+      const res = await charge('branchboost-enrolled');
+
       expect(
         visitsOf(),
-        "a 2x visit boost is published against this salon's branch and the charge still earned " +
-          'a single visit — the boost is stored, served to both clients, and applied by neither.',
+        "a 2x visit boost is published against this till's own enrolled branch and the charge " +
+          'still earned a single visit — the boost is stored, served to both clients, and ' +
+          'applied by neither',
       ).toBe(before + 2);
-    } finally {
-      // Back to the identity boost, through the same endpoint. A 2x visit left
-      // behind would change what every other suite sees a charge do.
-      await treq('PUT', `/v1/salons/${SALON_B}/promotions/boosts`, {
-        token: dashboard,
-        body: { boosts: { [B_BRANCH]: { visit: 1, topup: 0, stamp: 1 } } },
-      });
-    }
+      // Established, not assumed: the row says of itself that its branch is a
+      // fact. A `true` here with the visits right would mean the boost paid off
+      // a guess, which is worse than not paying at all.
+      expect(
+        scalar(
+          `select branch_id || '|' || branch_assumed::text
+             from transaction where id='${res.transaction.id}'`,
+        ),
+        'the charge earned an enrolled branch\'s boost while recording its branch as assumed',
+      ).toBe(`${B_BRANCH}|false`);
+    });
   });
 });
 
@@ -901,12 +1081,24 @@ describe('branch scoping', () => {
  *
  * THE FIX THAT MUST NOT BE TAKEN, and the reason the third spec exists: letting
  * the client name its branch. It is the obvious way to make the multi-branch case
- * pay, it would turn every spec above green, and it is non-negotiable #2 with
- * extra steps — a client naming its branch is a client choosing its own
- * multiplier. The branch has to arrive from something the SERVER established, and
- * that waits on device enrolment. So the third spec asserts that a `branchId` in
- * the charge body is INERT, which is the assertion a well-meaning future fix
- * trips over.
+ * pay, and it is non-negotiable #2 with extra steps — a client naming its branch
+ * is a client choosing its own multiplier. The branch has to arrive from
+ * something the SERVER established.
+ *
+ * AND IT NOW DOES, WHICH IS WHY THIS PARAGRAPH NO LONGER ENDS "that waits on
+ * device enrolment". It waited; device enrolment landed (decision 82, migration
+ * 0043); `POST /salons/{id}/devices` binds a till to a branch under
+ * `perms.dashboard` and `auth/principal.ts` hands it to the charge as
+ * `enrolledBranchId`. The branch-scoping block above proves an enrolled till
+ * earns its branch's happy hour and its boost.
+ *
+ * THAT CHANGES NOTHING ABOUT THE THIRD SPEC, and saying so is the point of
+ * correcting this rather than deleting it. The arrival of a legitimate way to
+ * establish a branch is exactly when the illegitimate one gets tried — the
+ * enrolment path and a body field look equally like "the server got a branch"
+ * from inside `resolveBranch`. So the third spec still asserts that a `branchId`
+ * in the charge body is INERT, and it is a MULTI-BRANCH, UNENROLLED charge on
+ * purpose: the one arrangement where believing the body would visibly pay out.
  *
  * THIS BLOCK OWNS ITS OPEN-BRANCH SET, AND DID NOT USED TO
  * ---------------------------------------------------------
