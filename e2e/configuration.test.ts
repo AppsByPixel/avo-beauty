@@ -661,10 +661,35 @@ describe('Settings — the structure of a salon, and it is configurable now', ()
      * THE FOUR IMPACT FIELDS, COMPARED AS A UNIT. Not `closable`, `blockedReason` or
      * `closedAt` — those describe the preview's own verdict and the close's own
      * outcome, and are expected to differ.
+     *
+     * AS SETS, NOT AS SEQUENCES — and this was a real 50/50 flake, not a hypothetical.
+     * The two name lists are built from two different reads that agree on their MEMBERS
+     * by construction and on their ORDER only by luck:
+     *
+     *   preview  `api/src/services/branchClosure.ts` selects the scoped staff with an
+     *            explicit `.orderBy(staffUser.id)` — deterministic.
+     *   close    `api/src/routes/salons.ts` reads `affected` out of the `UPDATE …
+     *            array_remove` RETURNING, deliberately, so the body describes THIS close
+     *            rather than the salon's general state. Postgres does not order a
+     *            RETURNING; it yields rows in whatever order the update touched them.
+     *
+     * With one rescoped staff member the distinction is invisible. This fixture has two,
+     * and the suite went green twice and then red on the third run of an unchanged tree
+     * with `["Branch Survivor","Branch Stranded"]` against the reverse — the same two
+     * names, in the other order.
+     *
+     * SORTING IS THE HONEST FIX HERE, and the reason is what the spec's own failure
+     * message claims: that a disagreement means "one of the two sentences she read was
+     * false". A merchant reading two names in the other order has not been told anything
+     * false. No design file specifies an order for this list, so the contract this spec
+     * can defend is the MEMBERSHIP. If an order is ever specified, it belongs in lane A's
+     * query — a CTE with an `ORDER BY` around the RETURNING — and gets its own spec
+     * saying so; it cannot be asserted here by accident.
      */
+    const sorted = (v: unknown) => (Array.isArray(v) ? [...v].sort() : v);
     const impactOf = (body: any) => ({
-      staffRescoped: body.staffRescoped,
-      staffLeftWithNoBranch: body.staffLeftWithNoBranch,
+      staffRescoped: sorted(body.staffRescoped),
+      staffLeftWithNoBranch: sorted(body.staffLeftWithNoBranch),
       depositHeldBookings: body.depositHeldBookings,
       depositHeldBookingsBranchAssumed: body.depositHeldBookingsBranchAssumed,
     });
