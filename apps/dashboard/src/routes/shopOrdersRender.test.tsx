@@ -31,7 +31,15 @@
  *      placed" is a false promise to a salon whose Shop module is off, because
  *      nobody CAN place one.
  *
- *   5. THE TRUNCATION NAMES WHICH END IS MISSING. This lane has already paid for
+ *   5. AN ERASED MEMBER IS NOT CONTACTABLE, AND THE ROW MUST NOT IMPLY SHE IS.
+ *      This one shipped: `erasure.ts` mints a `+990` tombstone phone, the board
+ *      joins `member` live, and the cell drew a working `tel:` link beside the
+ *      words "Deleted account". Two assertions and not one — no anchor AND no
+ *      digits — because printing the tombstone as plain text passes the first
+ *      and fixes nothing a merchant with a handset cares about. DECISIONS.md
+ *      #100.
+ *
+ *   6. THE TRUNCATION NAMES WHICH END IS MISSING. This lane has already paid for
  *      the alternative once — a `DESC LIMIT 200` believed complete, and a closure
  *      preview that reported 0 held deposits against the server's 3. A notice
  *      that says "some rows are missing" without saying WHICH is only half a fix.
@@ -80,6 +88,8 @@ const DELIVERY: MerchantShopOrder = {
   closedAt: null,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
+  /* A live member. The flag is on every row, not only the erased ones. */
+  memberErased: false,
 };
 
 const PICKUP: MerchantShopOrder = {
@@ -97,6 +107,7 @@ const PICKUP: MerchantShopOrder = {
   closedAt: null,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
+  memberErased: false,
 };
 
 /**
@@ -108,12 +119,33 @@ const PICKUP: MerchantShopOrder = {
  * is deliberately not on the wire (`api/src/routes/orders.ts § serialiseShopOrder`)
  * because it would tell a salon WHEN a customer asked to be erased.
  *
- * `status: 'closed'` and the tombstoned name/phone, because that is what the row
- * genuinely looks like: erasure runs 30+ days after the request and scrubs
- * `member` in the SAME transaction, so an erased order's Customer cell reads
- * "Deleted account" and its phone is a `+990` sentinel. The fixture carries them
- * so the tests below are asserting about a row that can exist rather than about a
- * shape assembled to make a point.
+ * `status: 'closed'`, because that is what the row genuinely looks like: erasure
+ * runs 30+ days after the request and scrubs `member` in the SAME transaction, so
+ * an erased order is almost always one already handed over and paid for. The
+ * fixture is a row that can exist rather than a shape assembled to make a point.
+ *
+ * ---------------------------------------------------------------------------
+ * THE MEMBER HALF OF THIS FIXTURE CHANGED, AND THE OLD VALUE IS WHY THE SCREEN
+ * CHANGED — DECISIONS.md #100.
+ *
+ * It used to carry `memberPhone: '+990418702935514'` with no `memberErased`,
+ * because that is exactly what the wire sent: `services/erasure.ts` mints `+990`
+ * plus twelve random digits as the tombstone — an UNASSIGNED country code, so the
+ * number is unreachable by construction — and the board's live `member` join
+ * served it as an ordinary contact. This screen rendered it as a working `tel:`
+ * link. Confirmed on a real row at SAL-AMARA before the fix:
+ * `{"ref":"TX-5625509","name":"Deleted account","href":"tel:+990224285141169"}`.
+ *
+ * A REAL ERASED ROW NO LONGER LOOKS LIKE THAT, which is why the fixture no longer
+ * does either. The signal is the API's, not this client's: string-matching `+990`
+ * would have been the UI reimplementing a server constant, and the day the
+ * sentinel prefix changes the link would come back with nothing failing. So the
+ * payload says `memberErased: true` and serves NO phone at all.
+ *
+ * THE NAME IS STILL THE TOMBSTONE. `memberName: 'Deleted account'` is unchanged
+ * and stays on the wire — a fulfilment row needs a subject, and the erased state
+ * has to be legible rather than blank. It is the CONTACT that is withheld, not
+ * the row.
  */
 const ERASED_DELIVERY: MerchantShopOrder = {
   transactionId: 'TX-5510923',
@@ -124,7 +156,52 @@ const ERASED_DELIVERY: MerchantShopOrder = {
   readyAt: '2026-07-28T10:41:55.402Z',
   closedAt: '2026-07-28T13:08:19.660Z',
   memberName: 'Deleted account',
+  memberPhone: null,
+  memberErased: true,
+};
+
+/**
+ * THE PRE-FIX WIRE SHAPE, KEPT AS A FIXTURE AND NOT AS PROSE.
+ *
+ * Lane A's signal and this change land in either order — trunk merges this lane
+ * FIRST, deliberately — so for a window the board reads a payload with no
+ * `memberErased` key and the tombstone still on `memberPhone`. `authedRequest` is
+ * an unchecked assertion over `unknown` JSON, so that arrives as `undefined` and
+ * no type error announces it.
+ *
+ * This pins what the screen does in that window: nothing new. It renders the link
+ * it always rendered, which is the honest answer — the client cannot detect an
+ * erasure the server has not told it about, and the alternative (a prefix match)
+ * is the rotting shape #100 rejected by name. The value of the fixture is that
+ * the window is a TESTED state rather than an assumption, and that the day it
+ * closes this test is the one that has to be deleted on purpose.
+ */
+const ERASED_DELIVERY_PRE_SIGNAL = {
+  ...ERASED_DELIVERY,
   memberPhone: '+990418702935514',
+  memberErased: undefined,
+} as unknown as MerchantShopOrder;
+
+/**
+ * FLAG SET, PHONE NOT YET WITHHELD — the payload that makes the no-digits
+ * assertion bite.
+ *
+ * Off-contract by construction: `memberPhone` is specified null whenever
+ * `memberErased` is true. It is a fixture anyway because the alternative is a
+ * test that cannot fail. Against `ERASED_DELIVERY` the phone is already null, so
+ * "the row contains no `+990`" is true of ANY implementation, including the one
+ * that prints the tombstone as plain text — the exact half-fix this block exists
+ * to refuse. Here the digits are present in the props and must still not reach
+ * the paint.
+ *
+ * It also pins a real transitional risk rather than a hypothetical one: lane A
+ * adding the flag and nulling the phone are two edits, and this is what the wire
+ * looks like between them.
+ */
+const ERASED_DELIVERY_TOMBSTONE_STILL_SERVED: MerchantShopOrder = {
+  ...ERASED_DELIVERY,
+  memberPhone: '+990418702935514',
+  memberErased: true,
 };
 
 /**
@@ -439,6 +516,122 @@ describe('the customer is reachable, because a wrong building number is the norm
   });
 });
 
+/**
+ * ===========================================================================
+ * AND AN ERASED CUSTOMER IS NOT REACHABLE, SO THE ROW MAY NOT PRETEND — #100
+ * ===========================================================================
+ * The defect this block pins SHIPPED, and it shipped looking correct: a row
+ * reading "Deleted account" beside a normal-looking, tappable phone number. The
+ * number is `+990` + twelve random digits, minted by `services/erasure.ts` as a
+ * tombstone — `+990` is an unassigned country code, so it reaches nobody by
+ * construction — and the fulfilment board's live `member` join served it as an
+ * ordinary contact. Seen on a real row at SAL-AMARA:
+ * `{"ref":"TX-5625509","name":"Deleted account","href":"tel:+990224285141169"}`.
+ *
+ * IT IS ASSERTED AGAINST THE DOM RATHER THAN THE SOURCE FOR THE SAME REASON THE
+ * ADDRESS CELL IS: the requirement is NEGATIVE — no link, and no digits — and a
+ * negative is what gets rebuilt by accident. A grep cannot tell the `tel:` in a
+ * comment above the cell from the one in the cell.
+ *
+ * THE SECOND ASSERTION IS THE ONE THAT WOULD BE LEFT OUT. Removing the anchor and
+ * printing `+990224285141169` as text passes any "nothing clickable" check and
+ * fixes almost nothing: a merchant copies the digits into a handset just as
+ * easily, and now has no `tel:` affordance to tell her the platform meant them
+ * seriously either. So the digits must not be in the cell at all — pinned by the
+ * sentinel PREFIX rather than by the fixture's exact number, so a future
+ * fixture with different random digits still fails if they reach the paint.
+ */
+describe('an erased member has no contact, so the row offers no link and no digits', () => {
+  it('renders no tel: anchor anywhere on the row', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    expect(container.querySelector('a.orders__phone')).toBeNull();
+    expect(container.querySelector('a[href^="tel:"]')).toBeNull();
+    /*
+     * The whole row, not just the cell. A dial affordance moved somewhere else
+     * on the row would satisfy the two above and still be the defect.
+     */
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+  });
+
+  it('does not print the tombstone digits as plain text either', () => {
+    /*
+     * THE FIXTURE WITH THE DIGITS STILL IN THE PROPS, deliberately — see
+     * `ERASED_DELIVERY_TOMBSTONE_STILL_SERVED`. Run against `ERASED_DELIVERY`,
+     * whose phone is already null, this assertion is true of every possible
+     * implementation and therefore proves nothing.
+     */
+    const { container } = renderRow(ERASED_DELIVERY_TOMBSTONE_STILL_SERVED);
+    const row = container.querySelector('tr')!;
+    const text = row.textContent ?? '';
+    // The sentinel prefix, so a different set of random digits fails too.
+    expect(text).not.toContain('+990');
+    expect(text).not.toContain('990418702935514');
+    // And no bare E.164 of any origin survived into the row.
+    expect(text).not.toMatch(/\+\d{6,}/);
+    // Nor as an attribute — `tel:`, `title`, `aria-label`, anywhere.
+    expect(container.innerHTML).not.toContain('990418702935514');
+  });
+
+  it('offers nothing clickable on a row whose tombstone phone is still served', () => {
+    const { container } = renderRow(ERASED_DELIVERY_TOMBSTONE_STILL_SERVED);
+    expect(container.querySelector('a[href^="tel:"]')).toBeNull();
+    expect(container.querySelector('.orders__contact-erased')?.textContent).toBe(
+      'Phone no longer held',
+    );
+  });
+
+  /**
+   * NOT A BLANK, for `.orders__where`'s reason one cell over: an empty slot reads
+   * as a broken screen and sends a merchant looking for the number somewhere the
+   * scrub could not reach. The sentence exists to END that search.
+   */
+  it('says the contact is gone rather than leaving the slot empty', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    const line = container.querySelector('.orders__contact-erased');
+    expect(line).toBeTruthy();
+    expect(line!.textContent).toBe('Phone no longer held');
+  });
+
+  /**
+   * THE NAME IS NOT THE THING BEING WITHHELD. The tombstone name still renders —
+   * a fulfilment row needs a subject, and "Deleted account" is the API's word for
+   * it, not this screen's. Pinned so a future "hide everything about an erased
+   * member" reading of #100 fails loudly rather than blanking the column.
+   */
+  it('still names the row, because the contact is what is gone and not the row', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    expect(container.querySelector('.orders__customer')?.textContent).toBe('Deleted account');
+  });
+
+  /**
+   * THE MOVED ROW, which is where this would come back. `writeRow` merges the
+   * PATCH's bare `ShopOrder` over the cached row; if `memberErased` were dropped
+   * in that merge the cell would fall back to the not-erased arm on the next
+   * "Mark ready". This asserts the row's contract given the merged shape, exactly
+   * as the live-row test below it does.
+   */
+  it('is still contactless after a status move', () => {
+    const { container } = renderRow({ ...ERASED_DELIVERY, status: 'ready' });
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+    expect(container.querySelector('.orders__contact-erased')).toBeTruthy();
+  });
+
+  /**
+   * THE WINDOW BEFORE LANE A LANDS, stated rather than assumed — see
+   * `ERASED_DELIVERY_PRE_SIGNAL`. With no flag on the wire the screen renders the
+   * link it always rendered, because a client cannot detect an erasure it has not
+   * been told about and a `+990` prefix match is the rotting shape #100 rejected.
+   *
+   * DELETE THIS TEST WHEN THE SIGNAL LANDS, deliberately, rather than letting it
+   * quietly keep passing about a payload the API no longer sends.
+   */
+  it('renders the old link on the old payload, because the fix is the API signal', () => {
+    const { container } = renderRow(ERASED_DELIVERY_PRE_SIGNAL);
+    const tel = container.querySelector<HTMLAnchorElement>('a.orders__phone');
+    expect(tel?.getAttribute('href')).toBe('tel:+990418702935514');
+  });
+});
+
 describe('the three empties are three different sentences', () => {
   /**
    * The pairwise assertion rather than three independent ones, because the defect
@@ -638,6 +831,7 @@ describe('a moved row keeps the fields the PATCH does not send', () => {
     const stripped = { ...DELIVERY } as Partial<MerchantShopOrder>;
     delete stripped.memberName;
     delete stripped.memberPhone;
+    delete stripped.memberErased;
     const { container } = renderRow(stripped as MerchantShopOrder);
     /*
      * Today this WOULD render blank, which is why the guarantee lives in the

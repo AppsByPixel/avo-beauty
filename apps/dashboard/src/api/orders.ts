@@ -96,9 +96,35 @@ import { useSalonId } from '../auth/AuthProvider.js';
  * beside it, exactly as `MerchantBooking`'s five do.
  */
 export interface MerchantShopOrder extends ShopOrder {
+  /**
+   * STILL 'Deleted account' AFTER ERASURE, and it stays on the wire. A row needs
+   * a subject even when the subject is gone — see `memberErased`.
+   */
   memberName: string;
-  /** E.164. The board's one call-her-back affordance; see the `tel:` link. */
-  memberPhone: string;
+  /**
+   * E.164. The board's one call-her-back affordance; see the `tel:` link.
+   *
+   * NULL WHEN `memberErased`, AND NULLABLE FOR THAT REASON ALONE. `erasure.ts`
+   * tombstones the phone as `+990` + twelve random digits — an unassigned
+   * country code, so it is unreachable by construction — and this board joined
+   * it straight through as an ordinary contact until DECISIONS.md #100. The
+   * server now withholds it rather than serving a number that dials nowhere.
+   */
+  memberPhone: string | null;
+  /**
+   * TRUE WHEN THE MEMBER HAS BEEN ERASED. The signal is the API's because the
+   * only client-side detection available was string-matching a server constant,
+   * which rots the moment the sentinel prefix changes — silently, by re-offering
+   * the link. Contract decided at trunk; served by this endpoint and by
+   * `GET /salons/{id}/bookings`.
+   *
+   * WHILE LANE A IS MID-FLIGHT this field is simply absent from the wire, and
+   * `authedRequest` is an unchecked assertion, so it reads `undefined` — falsy,
+   * which is the pre-fix rendering. That is deliberate: this lane merges first
+   * and is green either way, and `ShopOrders.tsx` reads the null phone as the
+   * second, independent arm so a half-landed payload cannot produce `tel:null`.
+   */
+  memberErased: boolean;
 }
 
 /**
@@ -215,10 +241,11 @@ export interface MoveOrderInput {
  * THE PATCH ANSWERS A NARROWER SHAPE THAN THE GET, AND THIS COST A DEFECT
  * ===========================================================================
  * `PATCH …/orders/{tid}` returns `{ order }` where `order` is
- * `serialiseShopOrder(row)` — the BARE `ShopOrder`. It has NO `memberName` and NO
- * `memberPhone`, because that pair is a JOIN the board's GET does and this
- * handler does not: `serialiseShopOrder` is shared with `GET /members/me/orders`,
- * where the member is the principal and needs no name on her own order.
+ * `serialiseShopOrder(row)` — the BARE `ShopOrder`. It has NO `memberName`, NO
+ * `memberPhone` and NO `memberErased`, because those three are a JOIN the board's
+ * GET does and this handler does not: `serialiseShopOrder` is shared with
+ * `GET /members/me/orders`, where the member is the principal and needs no name
+ * on her own order.
  *
  * This hook originally declared the response `MerchantShopOrder` and wrote it
  * straight into the cache. It type-checked, it passed every unit test, and IT
@@ -332,9 +359,21 @@ function writeRow(
             /*
              * MERGED, NOT REPLACED. `updated` is a bare `ShopOrder` — the PATCH
              * does not repeat the GET's member join (see the hook's header), so
-             * spreading it over the existing row keeps `memberName` and
-             * `memberPhone` while taking the server's new `status`, `readyAt` and
-             * `closedAt`. A straight replace blanked the customer column.
+             * spreading it over the existing row keeps `memberName`,
+             * `memberPhone` AND `memberErased` while taking the server's new
+             * `status`, `readyAt` and `closedAt`. A straight replace blanked the
+             * customer column.
+             *
+             * `memberErased` IS IN THAT LIST FOR A QUIETER REASON THAN THE OTHER
+             * TWO. Losing the name blanks a cell and somebody sees it. Losing
+             * the FLAG changes which arm the Customer cell takes, and the row
+             * still renders — so the failure is a merchant being offered a
+             * contact again on an order she just marked "Ready", with nothing on
+             * screen to say the state changed. It survives here for free
+             * (`updated` does not carry the key, so the spread cannot clobber
+             * it), and `ShopOrders.tsx` reads the null phone as a second,
+             * independent arm so this is belt and braces rather than the only
+             * thing holding #100 shut.
              *
              * The order of the spread matters: `updated` LAST, so the server's
              * values win on every field it actually sent.

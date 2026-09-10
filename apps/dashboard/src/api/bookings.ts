@@ -46,7 +46,25 @@ export interface MerchantBooking extends Booking {
    */
   branchAssumed: boolean;
   memberName: string;
-  memberPhone: string;
+  /**
+   * NULL WHEN `memberErased`, AND NO ROUTE RENDERS IT TODAY.
+   *
+   * `Appointments.tsx` shows `memberName` and nothing else from this pair, so
+   * the appointments board never shipped the fulfilment board's defect. The type
+   * is widened anyway and BEFORE a render site exists, which is the cheap half:
+   * the next person who reaches for a `tel:` link here gets `string | null` from
+   * the compiler and has to decide about the erased case rather than discover it
+   * in production the way the orders board did (DECISIONS.md #100).
+   */
+  memberPhone: string | null;
+  /**
+   * TRUE WHEN THE MEMBER HAS BEEN ERASED. Same contract as
+   * `api/orders.ts § MerchantShopOrder`, served by `GET /salons/{id}/bookings`;
+   * the reasoning for why the signal is the API's and not a client prefix match
+   * lives there. Absent from the wire until lane A lands, so it reads `undefined`
+   * — falsy, and nothing on this surface branches on it yet.
+   */
+  memberErased: boolean;
   memberTier: string | null;
   artistName: string;
   serviceName: string;

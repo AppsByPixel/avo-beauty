@@ -6279,6 +6279,33 @@ a:hover {
   text-decoration: underline;
 }
 
+/*
+ * AN ERASED MEMBER'S CONTACT LINE — where `.orders__phone` would have been.
+ * DECISIONS.md #100.
+ *
+ * IT OCCUPIES THE PHONE'S SLOT EXACTLY: the same `margin-top` and the same
+ * `font-size`, so an erased row does not reflow against the rows above and below
+ * it and the column keeps one rhythm. What changes is the register, and it is
+ * borrowed rather than invented — italic on `--avo-text-muted-strong`, which is
+ * `.orders__erased` one cell to the right saying the same kind of thing about the
+ * same event. Two cells, one voice.
+ *
+ * NOT `--avo-text-muted-soft`, which is what `.orders__phone` itself carries.
+ * That token measures 2.83:1 composited on `--avo-surface` against a 4.5:1 floor
+ * (`app.css § .orders__erased` carries the measurements) — acceptable on a phone
+ * number a merchant hunts for deliberately, not on a sentence that is the only
+ * thing in the slot and has to be READ for the row to make sense.
+ *
+ * NO `font-variant-numeric`, because there are no digits. That is the whole
+ * point of the state.
+ */
+.orders__contact-erased {
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--avo-text-muted-strong);
+}
+
 .orders__where {
   min-width: 240px;
 }
