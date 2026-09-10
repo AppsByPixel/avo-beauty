@@ -186,6 +186,68 @@ export function ArtistRow({
   );
 }
 
+// ----------------------------------------------- step two: the branch strip --
+
+/**
+ * One branch filter chip. (migration 0044)
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * NOT DRAWN IN THE BUNDLE, SO IT BORROWS RATHER THAN INVENTS
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `AVO Wallet Home.dc.html` draws three booking steps -- service :534, artist
+ * :547, date & time :565 -- and no branch step. CLAUDE.md forbids restyling and
+ * this is new UI, so the vocabulary is taken wholesale from the DAY STRIP at
+ * :568-572: a horizontally scrolling row of chips above the content it governs,
+ * `gap:9px`, `overflow:auto`, white with a hairline border, and the selected one
+ * filled.
+ *
+ * That borrowing is not just economy, it is the correct SEMANTICS. The day strip
+ * is the bundle's own idiom for "narrow what is below", and a branch is a filter
+ * over the artist list rather than a step in the flow -- the API is explicit
+ * that choosing a branch "is a FILTER and never an assertion". Drawing it as a
+ * fourth step would claim she had decided something the server never receives.
+ *
+ * ONE DIFFERENCE FROM `DayChip`, and it is deliberate: a single line, not two.
+ * A day chip stacks a weekday over a date because it carries two facts. A branch
+ * carries one -- its name, resolved through `branchName` for Arabic -- so a
+ * second line would be an empty row held open for nothing.
+ *
+ * `accessibilityRole="radio"` and a `selected` state, the same as `DayChip` and
+ * `SlotChip`: one of these is always chosen, and the strip is a single choice.
+ * Non-negotiable #9 holds -- the filled chip is white on `brandDeep` via
+ * `onBrandFill`, never on `brand`.
+ */
+export function BranchChip({
+  label,
+  selected,
+  onPick,
+  testID,
+}: {
+  label: string;
+  selected: boolean;
+  onPick: () => void;
+  testID?: string;
+}) {
+  const { lang } = useLanguage();
+  return (
+    <TappableRow
+      onPress={onPick}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={label}
+      testID={testID}
+      style={[styles.branchChip, selected && styles.branchChipOn]}
+    >
+      <Text
+        style={[text('bodyL', lang), selected ? styles.branchNameOn : styles.branchName]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </TappableRow>
+  );
+}
+
 // -------------------------------------------------------------- step three --
 
 /** design:568-572 — the horizontal day strip. The first chip reads "Today". */
@@ -493,6 +555,30 @@ const styles = StyleSheet.create({
   },
   tickOn: { backgroundColor: color.brand, borderColor: color.brand },
   tickMark: { color: WHITE, fontSize: 12, fontWeight: '700', lineHeight: 14 },
+
+  /**
+   * The day chip's box, minus the two-line stack. `maxWidth` because a branch
+   * name is arbitrary text from a merchant -- "Kuwait City" and
+   * "مدينة الكويت" both fit, and a longer one truncates at one line rather
+   * than pushing the rest of the strip off the far edge where a customer in
+   * either script would not think to scroll for it.
+   */
+  branchChip: {
+    minWidth: 58,
+    maxWidth: 190,
+    minHeight: MIN_TAP_TARGET,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: color.white,
+    borderWidth: 1,
+    borderColor: color.borderControl,
+  },
+  branchChipOn: { backgroundColor: onBrandFill.backgroundColor, borderColor: color.brandDeep },
+  branchName: { color: color.ink, fontWeight: '600' },
+  branchNameOn: { color: WHITE, fontWeight: '600' },
 
   dayChip: {
     minWidth: 58,

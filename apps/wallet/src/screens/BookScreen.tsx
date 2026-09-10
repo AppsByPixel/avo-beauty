@@ -35,6 +35,7 @@ import { useTopUp } from '../state/useTopUp';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { fils } from '@avo/types';
 import {
+  BranchChip,
   DayChip,
   DepositCard,
   EmptyPanel,
@@ -55,6 +56,11 @@ import {
   type LoadState,
   type RescheduleTarget,
 } from '../state/useBooking';
+import {
+  branchChoiceLabel,
+  sameChoice,
+  type BranchChoice,
+} from '../domain/branchPicker';
 import {
   artistName,
   formatWhen,
@@ -218,16 +224,23 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
           label={copy.chooseArtist}
         >
           {(artists) => (
-            <View style={styles.rows}>
-              {artists.map((artist) => (
-                <ArtistRow
-                  key={artist.id}
-                  artist={artist}
-                  selected={flow.selectedArtist?.id === artist.id}
-                  onPick={() => flow.pickArtist(artist)}
-                />
-              ))}
-            </View>
+            <>
+              <BranchStrip flow={flow} salon={salon} />
+              {artists.length === 0 ? (
+                <ArtistsEmpty flow={flow} />
+              ) : (
+                <View style={styles.rows}>
+                  {artists.map((artist) => (
+                    <ArtistRow
+                      key={artist.id}
+                      artist={artist}
+                      selected={flow.selectedArtist?.id === artist.id}
+                      onPick={() => flow.pickArtist(artist)}
+                    />
+                  ))}
+                </View>
+              )}
+            </>
           )}
         </Step>
       )}
@@ -350,6 +363,107 @@ function Step<T>({
       <StepLabel>{label}</StepLabel>
       {children(state.data)}
     </>
+  );
+}
+
+/**
+ * STEP 2's BRANCH FILTER -- the branch switch Aftab asked for. (migration 0044)
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * IT RENDERS NOTHING MOST OF THE TIME, AND THAT IS THE FEATURE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `flow.branchOptions` is empty for a single-branch salon, for a salon whose
+ * artists are all unassigned (the common case today -- migration 0044
+ * deliberately did not guess), and while the roster's split is still unknown.
+ * `domain/branchPicker.ts` owns that rule and argues each of the three
+ * suppressions. Here it is one early return, so there is no second place for
+ * the rule to be half-applied.
+ *
+ * A SINGLE-BRANCH SALON SEES NO PICKER at all: one option is not a choice, and
+ * `resolveBranch` already treats a lone open branch as ESTABLISHED, so those
+ * bookings are correctly attributed with nothing on screen.
+ *
+ * The horizontal `ScrollView` and `styles.strip` are the day strip's own
+ * (design:568-572), reused rather than restyled -- see `BranchChip`.
+ */
+function BranchStrip({
+  flow,
+  salon,
+}: {
+  flow: ReturnType<typeof useBooking>;
+  salon: Salon;
+}) {
+  const { lang, copy } = useLanguage();
+  if (flow.branchOptions.length === 0) return null;
+
+  const label = (choice: BranchChoice) =>
+    branchChoiceLabel(choice, salon.branches, lang, copy);
+
+  return (
+    <View style={styles.branchBlock}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.strip}
+      >
+        {flow.branchOptions.map((choice) => (
+          <BranchChip
+            key={choice.kind === 'branch' ? choice.branchId : choice.kind}
+            label={label(choice)}
+            selected={sameChoice(flow.branchChoice, choice)}
+            onPick={() => flow.pickBranch(choice)}
+            testID={`book-branch-${choice.kind === 'branch' ? choice.branchId : choice.kind}`}
+          />
+        ))}
+      </ScrollView>
+
+      {/*
+        THE NOTE IS WHAT STOPS THE THIRD GROUP BEING A HALF-TRUTH.
+        "Other artists" says these are not at any of the branches beside it; the
+        note says why, in a customer's words, without using the API's
+        "unassigned". Shown only while that group is selected -- on a branch chip
+        it would be a caveat about rows she is not looking at.
+      */}
+      {flow.branchChoice.kind === 'unassigned' ? (
+        <View style={styles.branchNote}>
+          <Note tone="wash">{copy.branchFilterOtherNote}</Note>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Step 2's EMPTY state, which it did not have before this slice.
+ *
+ * Two different emptinesses, and telling them apart is the whole value:
+ *
+ *   A BRANCH WITH NO ARTISTS. She filtered, and that location has nobody
+ *   bookable. The body points at the way out -- another branch, or All -- because
+ *   an empty state that names nothing to do is a dead end. This is reachable by
+ *   design rather than by accident: `branchChoices` keeps a chip for every open
+ *   branch even when its roster is empty, on the grounds that a MISSING chip
+ *   reads as a branch that does not exist while an empty one reads as a branch
+ *   with nobody in today. Only one of those is true.
+ *
+ *   THE SALON HAS NOBODY AT ALL. Nothing to filter and nothing to suggest, so it
+ *   says so plainly. Lumiere in the seed is exactly this -- two branches, zero
+ *   artists -- and before this slice it rendered as an empty area with a
+ *   Continue button that did nothing, which reads as a screen that failed to
+ *   load.
+ *
+ * `EmptyPanel` is States:112-119's own shape: name the thing, offer the one
+ * action, no illustration.
+ */
+function ArtistsEmpty({ flow }: { flow: ReturnType<typeof useBooking> }) {
+  const { copy } = useLanguage();
+  const filtered = flow.branchChoice.kind !== 'all';
+  return (
+    <EmptyPanel
+      title={filtered ? copy.branchEmptyTitle : copy.artistsEmptyTitle}
+      body={filtered ? copy.branchEmptyBody : copy.artistsEmptyBody}
+      testID={filtered ? 'book-branch-empty' : 'book-artists-empty'}
+    />
   );
 }
 
@@ -700,6 +814,14 @@ const styles = StyleSheet.create({
 
   rows: { gap: 9 },
   strip: { gap: 9, paddingBottom: 4, paddingHorizontal: 1 },
+  /**
+   * The strip sits directly above the roster, which has no top margin of its
+   * own -- step 3 gets away without this because `SlotSection`'s first group
+   * label carries `marginTop: 18`. One block owns the gap so the note, which is
+   * conditional, cannot double it.
+   */
+  branchBlock: { marginBottom: 12 },
+  branchNote: { marginTop: 10 },
   groupLabel: { marginTop: 18 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
   gridSpace: { marginTop: 16 },

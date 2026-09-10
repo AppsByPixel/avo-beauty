@@ -487,6 +487,19 @@ export const en: Copy = {
   chooseService: 'Choose a service', // design:1240
   chooseArtist: 'Choose an artist', // design:1240
   chooseDay: 'Pick a day', // design:1241
+
+  // The branch strip. NOT IN THE BUNDLE -- see copy/types.ts for why each of
+  // these reads the way it does, and that all seven are owed to the copywriter.
+  // "All branches" is the one borrowed word: `branchNote` below already says
+  // "One wallet -- valid at all branches" (design:1163), so "all branches" is
+  // established product vocabulary rather than a new coinage.
+  branchFilterAll: 'All branches',
+  branchFilterOther: 'Other artists',
+  branchFilterOtherNote: "The salon hasn't listed a branch for these artists yet.",
+  branchEmptyTitle: 'No artists at this branch',
+  branchEmptyBody: 'Try another branch, or choose All branches to see everyone.',
+  artistsEmptyTitle: 'No artists to book with',
+  artistsEmptyBody: "This salon hasn't added anyone to book with yet.",
   morning: 'Morning', // design:1241
   evening: 'Evening', // design:1241
   review: 'Review', // design:1241

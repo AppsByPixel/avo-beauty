@@ -60,7 +60,11 @@ export function useBookingLabels(salonId: string | null, enabled: boolean): Book
     if (!enabled || !salonId) return;
     const controller = new AbortController();
 
-    getArtists(salonId, controller.signal)
+    // NO BRANCH FILTER, and `undefined` is spelled out rather than dropped: this
+    // resolves the artist NAME on an existing appointment, so it must be able to
+    // find an artist whose branch has since changed or been cleared. A filtered
+    // read here would turn a reassigned artist's name into a dash.
+    getArtists(salonId, undefined, controller.signal)
       .then((list) => setArtists(new Map(list.map((a) => [a.id, a]))))
       .catch(() => {
         /* Offline, a 500, an abort — see the header. The card copes. */
