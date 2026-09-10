@@ -437,11 +437,34 @@ export function OrderRow({
         {/*
           `dir="ltr"`, on `console/SupportPanel.tsx`'s measured precedent: this is
           E.164, and a leading `+` inside an RTL run is reordered to the wrong end
-          by the bidi algorithm, so an Arabic dashboard would print
-          "965 9912 4408+". The merchant dashboard has NO RTL pass yet — there is
-          not one `[dir]` rule in `app.css` — so this changes nothing today and is
-          one fewer thing to find later. Non-negotiable #12 is named in the lane
-          report as a whole-surface gap rather than pretended at on one screen.
+          by the bidi algorithm, so it would print "965 9912 4408+".
+
+          AND THIS DASHBOARD IS ENGLISH-ONLY BY DECISION, so the pin is defensive
+          rather than required. `design/README.md` § Known gaps 1: "Arabic is
+          customer-app only. Decided. Merchant dashboard, owner console and the
+          staff scanner ship English-only." The absence of any `[dir]` rule in
+          `app.css` is therefore the decision, NOT a gap in non-negotiable #12.
+
+          Worth the four lines because the correction is the interesting part: I
+          first read the empty `app.css` as #12 being unmet on this surface and
+          reported it as a finding. It is the stale-comment shape this codebase
+          keeps hitting, running backwards — a REAL rule, read without the
+          decision that scopes it, produces a confident finding about a gap that
+          does not exist. The rule was right, the scope was in another file, and
+          the fix is to cite the scope wherever the rule gets invoked.
+
+          The attribute stays regardless: it costs nothing, it is correct for a
+          bidi-sensitive value on any surface, and it is why the copy WhatsApp
+          number two files over carries the same one.
+
+          DO NOT OVER-READ THE CORRECTION, because the opposite mistake is now the
+          cheaper one to make. "English-only UI" is not "no Arabic anywhere": this
+          dashboard AUTHORS and RENDERS Arabic CONTENT — `nameAr`,
+          `stampRewardAr`, the support channel and topic labels — and `app.css`
+          § `.support input[lang='ar']` gives those the Arabic face, citing #12,
+          correctly. The chrome ships English; the DATA can be Arabic. Nothing here
+          is Arabic content, which is the only reason this screen needs no more
+          than these two attributes.
         */}
         <a className="orders__phone" href={`tel:${order.memberPhone}`} dir="ltr">
           {order.memberPhone}
