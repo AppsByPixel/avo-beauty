@@ -70,13 +70,16 @@ const ORDERS_PAGE = 200;
  * merchant to go looking for the street; `null` says the field is gone rather
  * than missing.
  *
- * ONE CONSEQUENCE IS OUTSIDE THIS LANE AND IS FLAGGED RATHER THAN FIXED.
- * `apps/dashboard/src/routes/ShopOrders.tsx` renders its null-address branch as
- * "Collecting at the salon" — correct while `address === null` meant pickup, and
- * a FALSE SENTENCE about an erased delivery, which the row's own Delivery pill
- * contradicts in the next cell. The fix is one condition keyed on `fulfilment`
- * rather than on the address, and `apps/dashboard/` is lane C's column
- * (CLAUDE.md § Lanes). Reported in the lane handoff.
+ * THE CONSEQUENCE FOR THE BOARD, WHICH WAS FLAGGED FROM HERE AND IS NOW FIXED —
+ * and this paragraph is dated on purpose, because its first version outlived the
+ * fix by a day and was relayed back to trunk as a live defect (DECISIONS.md
+ * #104). `null` here has TWO meanings, pickup and erased delivery, so a board
+ * that branches on the address alone prints "Collecting at the salon" over a row
+ * whose own Delivery pill says otherwise. `apps/dashboard/` is lane C's column
+ * (CLAUDE.md § Lanes) and lane C landed it: `ShopOrders.tsx` now keys the third
+ * arm on `fulfilment`, not on the address, and renders "Address no longer held"
+ * for the erased delivery. If you are reading this to find out whether that is
+ * still true, read `ShopOrders.tsx` — this comment cannot know.
  */
 function serialiseShopOrder(row: typeof shopOrder.$inferSelect) {
   return {
