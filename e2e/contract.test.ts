@@ -1165,6 +1165,81 @@ const UNMODELLED: Record<string, string> = {
     'checksum ETag), pinned in api/src/routes/images.int.test.ts. Its tenancy gate — ' +
     'requireSalonScoped plus the image\'s own salon, deliberately no permission — is ' +
     'pinned in permission-census.test.ts\'s classification ledger.',
+  /**
+   * THE CONSOLE'S VOUCHER LIST, arriving with lane A's `routes/vouchers.ts` on dev
+   * `a1be122` — and the first surface this census named a SLICE LATE rather than on
+   * the first run after the merge.
+   *
+   * NO ORDINAL ON THIS ONE, DELIBERATELY. The other arrival notes in this file count
+   * themselves ("the fourth new surface", "the sixth") and the sequence has already
+   * broken: :715 and :1120 both say FIFTH. That is a hand-maintained tally nothing
+   * executes — the same class of claim as an `UNMODELLED` reason, and this block is
+   * about a hand-copied count being wrong, so adding a number I cannot substantiate
+   * would be the defect it describes. The two stale `fifth`s are reported to trunk.
+   * Worth separating those two facts: the census caught it by name and with the file
+   * the moment it was run, exactly as designed; what was late was the RUN, because
+   * item 10 merged after the lane D brief that registered item 7's ledgers. The
+   * mechanism did not miss it, the queue was out of order.
+   *
+   * ONLY THE GET IS HERE. This census is GETs, so `POST /v1/vouchers`,
+   * `DELETE /v1/vouchers/:id` and `POST /members/me/vouchers/redeem` are outside it
+   * — all three are registered and behaviourally driven in `permission-census.test.ts`
+   * instead, and the redeem endpoint's money path is lane A's `vouchers.int.test.ts`.
+   *
+   * UNMODELLED, AND THE CLAIM WAS CHECKED AGAINST `dev` AS IT IS RATHER THAN AS I
+   * REMEMBERED IT. `grep -rni voucher packages/` at `844277a` returns ZERO matches
+   * outside `node_modules` and `dist` — no `VoucherSchema`, no wrapper, and nothing
+   * in `packages/mock` either. Grepped the whole of `packages/`, not just
+   * `packages/types/src`, because the item 7 block above records three `UNMODELLED`
+   * entries whose reason "there is no schema" was FALSE BEFORE THEY WERE COMMITTED:
+   * trunk landed `MemberAddressSchema`, `OrderStatusSchema` and `ShopOrderSchema` in
+   * `65ab72e` while the entries were being written. No spec can catch that — the
+   * unclassified check cannot tell a sound reason from a false one, both are just a
+   * key in a map — so re-reading `dev` before committing IS the guard, and this line
+   * is the second time it has been applied deliberately.
+   *
+   * SO THIS IS A GENUINELY MISSING SCHEMA, NOT A ROUTE THAT IS NOT THE ENTITY.
+   * Unlike the two booking lists and the scanner's member search, this response
+   * really is an entity list wearing a wrapper: `serialiseVoucher` is the `voucher`
+   * row plus ONE derived boolean. So a `VoucherSchema` would fit it exactly, and it
+   * is worth having — a trunk/types decision rather than lane D's.
+   *
+   * NO WIRE-PIN IS OWED YET, and that is the difference between this entry and the
+   * notifications/deletion/policy-acceptance ones, which are pinned at the bottom of
+   * this file precisely because the wallet is already built against them. Grepped:
+   * `voucher` appears NOWHERE in `apps/dashboard/src`, `apps/wallet/src` or
+   * `packages/mock/src`. There is no client to drift from. The hour lane C wires the
+   * Accounts panel's voucher list, this entry is worth revisiting as a wire-pin —
+   * because at that point "unmodelled" becomes the whole of the guard on a shape a
+   * screen renders, which is the argument those three entries make.
+   *
+   * TWO THINGS FOR WHOEVER WRITES THE SCHEMA, both of them traps this file has
+   * already been bitten by once:
+   *
+   *   - IT SERVES `{ items, truncated, nextCursor }` — `paginated()`, with
+   *     `truncated` annotated `wireOnly`, exactly as both order lists above are.
+   *     NOT `countedPage()`: `truncated` is a boolean saying the 200-row cap was hit,
+   *     not a `total`.
+   *   - `nextCursor` IS A HARDCODED `null` AND THIS ROUTE DOES NOT PAGE AT ALL. The
+   *     same shape `GET /salons/:id/devices` is annotated for, and the same lie
+   *     `GET /salons/{id}/bookings` was fixed for. A schema binding it would make
+   *     that literal look like a cursor contract this handler honours.
+   */
+  'GET /v1/vouchers':
+    'the owner console\'s voucher list — AVO-issued credit instruments, newest first, ' +
+    'behind requirePlatform(accounts). No schema in packages/types: `voucher` appears ' +
+    'nowhere under packages/ at 844277a, grepped rather than remembered. Unlike the ' +
+    'booking lists this IS an entity list wearing a wrapper — a voucher row plus a ' +
+    'derived `redeemable` computed from redeemedAt/voidedAt/expiresAt — so a ' +
+    'VoucherSchema would fit and is worth having (trunk/types, not lane D). It serves ' +
+    '{items, truncated, nextCursor} with `truncated` the 200-row cap and `nextCursor` a ' +
+    'hardcoded null this route does not implement, so it binds through paginated() with ' +
+    '`truncated` wireOnly, never countedPage(). No client parses it yet — `voucher` is ' +
+    'absent from dashboard, wallet and mock — which is why it is not wire-pinned like the ' +
+    'notifications and deletion reads. Its gate is driven behaviourally by the generated ' +
+    'console sweep in permission-census.test.ts, section-isolated and copy-discriminated; ' +
+    'what `accounts` grants, and the `support` preset that holds it, are written up at ' +
+    'that file\'s `POST /v1/vouchers` pin.',
   'GET /_gateway/:ref':
     'the sandbox PSP\'s hosted page. Serves HTML to a browser, not JSON to a client, ' +
     'and exists only under the test driver.',

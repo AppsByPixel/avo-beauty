@@ -701,6 +701,7 @@ const PINNED_COVERAGE: string[] = [
   'DELETE /v1/salons/:id/products/:oid/image → shop',
   'DELETE /v1/salons/:id/promotions/happy-hours/:hid → marketing',
   'DELETE /v1/salons/:id/services/:oid/image → appointments',
+  'DELETE /v1/vouchers/:id → accounts',
   'GET /_gateway/:ref [ANONYMOUS]',
   'GET /artists/:id/availability [requireSalonScoped]',
   'GET /artists/me [requireScannerScope]',
@@ -803,6 +804,7 @@ const PINNED_COVERAGE: string[] = [
   'GET /v1/salons/:id/promotions [requireSalonScoped]',
   'GET /v1/support/tickets → dashboard',
   'GET /v1/support/tickets → policies',
+  'GET /v1/vouchers → accounts',
   'PATCH /members/me [requireMember]',
   'PATCH /members/me/notifications [requireMember]',
   'PATCH /salons/:id → loyalty',
@@ -885,6 +887,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /members/me/phone-change [requireMember]',
   'POST /members/me/phone-change/:id/verify [requireMember]',
   'POST /members/me/policy-acceptance [requireMember]',
+  'POST /members/me/vouchers/redeem [requireMember]',
   'POST /orders [requireMember]',
   'POST /salons/:id/branches → loyalty',
   'POST /salons/:id/devices → dashboard',
@@ -912,6 +915,103 @@ const PINNED_COVERAGE: string[] = [
   'POST /v1/salons/:id/promotions/happy-hours → marketing',
   'POST /v1/salons/:id/services/:oid/image → appointments',
   'POST /v1/support/tickets [requireMember]',
+  /**
+   * =======================================================================
+   * ITEM 10'S FOUR DOORS — AVO issues, AVO lists, AVO voids, she redeems.
+   * dev `a1be122`. Registered a slice LATE, and the reason is worth the line:
+   * the previous lane D session was briefed on item 7's ledgers and registered
+   * them correctly; item 10 merged AFTER that brief, so these four routes did
+   * not exist when it was written. The pin did its job — `dev`'s gate sat at
+   * 10 of 11 with the census naming all four by path and file, which is the
+   * arrival mechanism working rather than a coverage miss.
+   *
+   * FOUR LINES, NOT THREE. The brief that dispatched this slice relayed lane
+   * A's own list as three: `POST|GET /v1/vouchers`, `DELETE /v1/vouchers/:id`,
+   * `POST /members/me/vouchers/redeem`. That collapses the POST and the GET
+   * into one line, and this ledger is one line PER GATE PATH. The census's own
+   * output is the authority and it printed four — the same correction item 7's
+   * block above records, arriving the same way, from the same direction.
+   *
+   * -----------------------------------------------------------------------
+   * WHAT CONFIRMS `accounts` HERE, AND WHAT ONLY LOOKS LIKE IT DOES
+   * -----------------------------------------------------------------------
+   * NOT this line. `perm-census.ts` reads the gate's last quoted argument out
+   * of `routes/vouchers.ts`, so a pinned line saying `→ accounts` agrees with
+   * the source BY CONSTRUCTION — it would still say `accounts` if the gate
+   * were wrong, and it would move in lockstep if someone changed it. Pinning
+   * it proves the door is READ, not that it is BOLTED. That distinction has
+   * now been established twice in this lane and it is restated here because
+   * this is the third route family where the tempting reading is available.
+   *
+   * WHAT ACTUALLY CONFIRMS IT is the generated console sweep below, and it is
+   * a real HTTP call with two properties this ledger has neither of:
+   *
+   *   - `grantAllSections()` THEN `setSection('accounts', false)`. The probe
+   *     admin holds EVERY OTHER SECTION, so a 403 cannot be "no permissions at
+   *     all" — it isolates this one. A precondition re-reads the column and
+   *     fails if the revoke did not take.
+   *   - `expect(res.body.message).toBe(SECTION_COPY.accounts)`. `forbidden` is
+   *     also the code for a wrong surface and for a salon-scope refusal, so the
+   *     COPY is what says the refusal came from `accounts` and not from
+   *     something else that also says no. This is precisely the assertion that
+   *     would fail if the census had attributed the wrong permission — which is
+   *     the check that keeps the tautology above from mattering.
+   *
+   * Both directions already ran GREEN on all three console verbs before these
+   * lines existed, because the sweep is generated from the census rather than
+   * from this ledger. So the behavioural evidence for `accounts` on vouchers
+   * predates its registration; what was missing was only the register.
+   *
+   * -----------------------------------------------------------------------
+   * AND WHAT `accounts` NOW GRANTS — read before widening this section
+   * -----------------------------------------------------------------------
+   * Six routes, across four files, and two of them CREATE MONEY:
+   *
+   *   POST   /members/:id/adjustments   routes/adjustments.ts   signed wallet delta
+   *   POST   /v1/vouchers              routes/vouchers.ts      mints a credit instrument
+   *   GET    /v1/vouchers              routes/vouchers.ts
+   *   DELETE /v1/vouchers/:id          routes/vouchers.ts      the only recall
+   *   POST   /accounts/:id/reset-link  routes/accountResets.ts
+   *   GET    /v1/platform/accounts     routes/accounts.ts      the widest read in the product
+   *
+   * THE BRIEF'S FRAMING IS OFF BY ONE FEATURE AND THE CORRECTION MATTERS.
+   * A voucher is NOT the first object that lets AVO put credit into a salon's
+   * wallet liability without the salon acting — `POST /members/:id/adjustments`
+   * already did, on THIS SAME GATE, and `walletAdjustedPosting` credits
+   * `member_wallet` against `gateway_clearing` exactly as
+   * `voucherRedeemedPosting` credits it against `avo_voucher_funding`. So item
+   * 10 added a second INSTRUMENT on an existing authority, not a new authority.
+   * That matters because it dates the exposure below to whenever adjustments
+   * and the `support` preset first coexisted, not to `a1be122` — so nobody
+   * closes it by reverting vouchers.
+   *
+   * WHAT IS GENUINELY NEW is that a voucher is DEFERRED. An adjustment moves
+   * money at the moment of the act, under the actor's own principal; an issued
+   * voucher is a commitment that materialises later, on a `requireMember`
+   * endpoint, at a moment the issuer does not choose. `DELETE /v1/vouchers/:id`
+   * is the only recall and it stops working the instant she redeems, by both the
+   * handler's predicate and `voucher_is_not_both_redeemed_and_voided`.
+   *
+   * THE PRESET EXPOSURE, AND IT IS LATENT RATHER THAN LIVE.
+   * `PLATFORM_ROLE_PRESETS` (`api/src/db/schema/platformAdmin.ts:153-170`, the
+   * `support` entry at :166-169) gives
+   * `accounts: true` to `support` — the design's "Support — accounts & salons"
+   * — alongside `audit: false`. So the support preset carries the power to mint
+   * wallet credit and to issue an instrument a customer redeems later, and not
+   * the power to read the platform authority log that records either. `analyst`
+   * is correctly `accounts: false`.
+   *
+   * LATENT, asserted against this lane's own database rather than inferred from
+   * the seed file: `select role, perm_accounts from platform_admin` returns
+   * owner/t, analyst/f, admin/t and NO `support` row, so nobody holds it today.
+   * One `POST /v1/platform/admins {role:'support'}` makes it live — the preset is
+   * applied at invite and re-applied on every role change in
+   * `routes/platformAdmins.ts` — and that route is gated `admins`, which only
+   * owner and admin hold. Reported to trunk rather than changed here: presets are
+   * lane A's column, and whether support should mint money is Aftab's call, not a
+   * test's.
+   */
+  'POST /v1/vouchers → accounts',
   'POST /voids → void',
   'POST /webhooks/:provider [ANONYMOUS]',
   'PUT /artists/:id/availability → team',
