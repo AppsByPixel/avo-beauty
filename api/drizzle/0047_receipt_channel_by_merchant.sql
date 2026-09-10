@@ -1,0 +1,79 @@
+-- ---------------------------------------------------------------------------
+-- THE MERCHANT CHOOSES THE INVOICE CHANNEL — AND `whatsappEnabled` HAS BEEN
+-- STORED, SERVED AND NEVER CONSULTED.                    (DECISIONS.md #88)
+--
+-- The defect first, because the feature sits on top of it. `services/receipts.ts`
+-- builds its job list with `channel: 'whatsapp'` as an UNCONDITIONAL array
+-- literal. `salon.whatsapp_enabled` is merchant-editable, served in the payload,
+-- declared in `SalonSchema` — and appears NOWHERE in the receipt path.
+-- SAL-LUMIERE ships it `false` and has a WhatsApp receipt queued for every
+-- charge. Latent only because `RECEIPT_DRIVER` accepts one value, `logging`, and
+-- sends nothing; the day a real driver lands, that salon starts sending messages
+-- it opted out of. Decision 82's shape exactly: stored, served to both clients,
+-- applied by neither.
+--
+-- =========================================================================
+-- TWO BOOLEANS WITH A CHECK, NOT AN ENUM
+-- =========================================================================
+-- Trunk's objection to a second boolean was that it makes four states, two of
+-- which are "no receipt". `salon_receipt_channel_floor` answers it: with
+-- `whatsapp_enabled OR email_enabled` enforced, only THREE states exist and none
+-- of them is "no receipt". The floor is a database constraint rather than a
+-- handler that remembers, so a direct SQL edit cannot produce it either.
+--
+-- An enum (`both | whatsapp | email`) is conceptually tidier and loses on one
+-- specific ground: `whatsappEnabled` is already in `SalonSchema` and already
+-- served to both clients, so an enum RETIRES a field in the live contract — the
+-- four-way break `CLAUDE.md` warns about — while `email_enabled` is purely
+-- additive.
+--
+-- =========================================================================
+-- THE BACKFILL IS `true`, AND IT IS THE CURRENT BEHAVIOUR RATHER THAN A POLICY
+-- =========================================================================
+-- Today BOTH channels are effectively on for every salon: WhatsApp because the
+-- flag is ignored, email because `queueReceipts` queues it whenever there is a
+-- verified address. So `email_enabled = true` preserves the email behaviour
+-- exactly and invents nothing.
+--
+-- It also has to be `true` for the CHECK to hold: SAL-LUMIERE is
+-- `whatsapp_enabled = false`, so a `false` default would make this migration
+-- fail on the seed — which is the constraint proving it is worth having.
+--
+-- The only behaviour that CHANGES is the one that is the defect: a salon with
+-- `whatsapp_enabled = false` stops having WhatsApp receipts queued.
+--
+-- =========================================================================
+-- `receipt_job.fallback_reason` — WHY A ROW EXISTS THAT THE MERCHANT DID NOT PICK
+-- =========================================================================
+-- `member.phone` is NOT NULL and `member.email` is nullable with
+-- `email_verified` defaulting false. So the two channels are ASYMMETRIC:
+-- WhatsApp is always possible for every customer, email is conditional. Exactly
+-- one combination is therefore dangerous — merchant chose EMAIL-ONLY and the
+-- customer has no verified address — and `design/README.md` § Known gaps 7 says
+-- a receipt is "a record-keeping obligation, not marketing", so that must be a
+-- FALLBACK and never a gap.
+--
+-- The floor is WhatsApp, and that falls out of the schema rather than being
+-- chosen. When it fires, the row says so: NULL means the channel was the
+-- merchant's choice, a value means the floor overrode her preference.
+--
+-- STORED RATHER THAN DERIVED, which is the opposite of the call made for
+-- `voucher.status` and for the same reason read backwards. "WhatsApp queued at a
+-- salon with the flag off" is derivable TODAY, and stops being derivable the
+-- moment she turns WhatsApp back on — at which point every historical fallback
+-- becomes indistinguishable from a chosen send. A fact that decays is a fact to
+-- store, exactly as `shop_order` snapshots the delivery address.
+--
+-- GRANTS: 0001's defaults cover both tables; neither is append-only.
+-- ---------------------------------------------------------------------------
+ALTER TABLE "salon" ADD COLUMN "email_enabled" boolean DEFAULT true NOT NULL;
+--> statement-breakpoint
+ALTER TABLE "salon" ADD CONSTRAINT "salon_receipt_channel_floor"
+  CHECK ("whatsapp_enabled" OR "email_enabled");
+--> statement-breakpoint
+ALTER TABLE "receipt_job" ADD COLUMN "fallback_reason" text;
+--> statement-breakpoint
+-- The one value it currently takes, named so a second one is a deliberate
+-- addition rather than a typo that reads as a new category.
+ALTER TABLE "receipt_job" ADD CONSTRAINT "receipt_job_fallback_reason_known"
+  CHECK ("fallback_reason" IS NULL OR "fallback_reason" IN ('email_unavailable'));

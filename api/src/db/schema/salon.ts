@@ -143,7 +143,26 @@ export const salon = pgTable(
       .$type<SocialLink[]>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    /**
+     * The merchant's receipt channels (DECISIONS.md #88, migration 0047).
+     *
+     * `whatsapp_enabled` was stored, merchant-editable, served in the payload,
+     * declared in `SalonSchema` — and consulted by NOTHING.
+     * `services/receipts.ts` queued a WhatsApp job unconditionally, so
+     * SAL-LUMIERE shipped `false` and had one queued for every charge. It is
+     * read now, in `decideReceiptChannels`.
+     *
+     * TWO BOOLEANS WITH A FLOOR, not an enum: `salon_receipt_channel_floor`
+     * makes both-off unstorable, so the four states a second boolean would
+     * imply are three and none of them is "no receipt". An enum would have
+     * retired `whatsappEnabled` from a live contract; this is additive.
+     *
+     * `email_enabled` DEFAULTS TRUE and that is the current behaviour rather
+     * than a policy: `queueReceipts` already queued email whenever there was a
+     * verified address. It also has to be, or the CHECK would fail on the seed.
+     */
     whatsappEnabled: boolean('whatsapp_enabled').notNull().default(false),
+    emailEnabled: boolean('email_enabled').notNull().default(true),
 
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
@@ -156,6 +175,14 @@ export const salon = pgTable(
     check('salon_deposit_in_range', sql`${t.depositFils} BETWEEN 1000 AND 10000`),
     check('salon_no_show_return_positive', sql`${t.noShowReturnMinutes} > 0`),
     check('salon_timezone_not_blank', sql`length(btrim(${t.timezone})) > 0`),
+    /**
+     * THE FLOOR, AND IT IS THE CONSTRAINT RATHER THAN A HANDLER. A receipt is "a
+     * record-keeping obligation, not marketing" (design/README.md § Known gaps
+     * 7), so a merchant may choose a channel and may not choose silence. In the
+     * database because a handler that remembers is not the same guarantee, and
+     * because a direct SQL edit must not be able to produce it either.
+     */
+    check('salon_receipt_channel_floor', sql`${t.whatsappEnabled} OR ${t.emailEnabled}`),
     check('salon_stamp_target_positive', sql`${t.stampTarget} IS NULL OR ${t.stampTarget} > 0`),
     // An empty string is not a translation, it is a rendering bug waiting to
     // happen: `'' ?? name` is `''`, so a blank Arabic name defeats the client's

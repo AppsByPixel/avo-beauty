@@ -63,6 +63,22 @@ export const receiptJob = pgTable(
 
     attempts: integer('attempts').notNull().default(0),
     lastError: text('last_error'),
+    /**
+     * WHY A ROW EXISTS THAT THE MERCHANT DID NOT ASK FOR (migration 0047).
+     *
+     * NULL means the channel was her choice. `'email_unavailable'` means she
+     * chose email-only and the customer has no verified address, so the floor
+     * queued WhatsApp instead — see `services/receipts.ts §
+     * decideReceiptChannels`.
+     *
+     * STORED RATHER THAN DERIVED, which is the opposite of the call made for
+     * `voucher.status` and the same reasoning read backwards: "WhatsApp queued at
+     * a salon with the flag off" is derivable today and stops being derivable
+     * the moment she turns WhatsApp back on, at which point every historical
+     * fallback becomes indistinguishable from a chosen send. A fact that decays
+     * is a fact to store.
+     */
+    fallbackReason: text('fallback_reason'),
 
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     /** Backoff. The worker claims rows where `available_at <= now()`. */
