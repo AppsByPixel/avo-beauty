@@ -25,6 +25,7 @@ import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { requireDashboardPerm, requireMember, requireSameSalon } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
+import { serialiseMemberContact } from '../http/serialise';
 import { requireString } from '../money/validate';
 import { MAX_LINE_QTY } from '../db/schema/shopOrder';
 import {
@@ -242,7 +243,21 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const rows = await db
-        .select({ o: shopOrder, memberName: member.name, memberPhone: member.phone })
+        /**
+         * `erased_at` COMES BACK WITH THE PHONE, ALWAYS. The join is live, so an
+         * erased member's row on this board carries the `+990` tombstone
+         * `services/erasure.ts` minted. `http/serialise.ts § serialiseMemberContact`
+         * holds the whole argument for why that must not travel in a field the
+         * wire calls a phone number; selecting the timestamp beside it is what
+         * lets this route answer the question rather than leaving a client to
+         * guess it from the shape of the digits.
+         */
+        .select({
+          o: shopOrder,
+          memberName: member.name,
+          memberPhone: member.phone,
+          memberErasedAt: member.erasedAt,
+        })
         .from(shopOrder)
         .innerJoin(member, eq(member.id, shopOrder.memberId))
         .where(
@@ -257,8 +272,14 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
       return reply.send({
         items: rows.map((r) => ({
           ...serialiseShopOrder(r.o),
+          /**
+           * THE NAME IS THE TOMBSTONE AND STAYS THE TOMBSTONE — "Deleted account"
+           * is the sentence this board is meant to render, and it is already
+           * display-safe. Only the PHONE is withheld, and `memberErased` is what
+           * makes the withholding legible instead of a hole.
+           */
           memberName: r.memberName,
-          memberPhone: r.memberPhone,
+          ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
         })),
         /**
          * A CAP WITH AN HONEST CURSOR IS NOT WHAT THIS IS — it is a cap, said out

@@ -469,11 +469,21 @@ suite('erasure reaches the address, in both places it lives', () => {
      * wire field, which is also why `ShopOrderSchema` needs no change: `address`
      * is already `.nullable()` there and `contract.test.ts` keeps passing.
      *
-     * THE MERCHANT STILL SEES THE TOMBSTONE'S NAME AND PHONE, joined from
-     * `member` — "Deleted account" and the synthetic `+990`. That is the erasure
-     * working, not a leak, and it is asserted here so the pair is read together:
-     * the identity is de-identified AND the address is gone, rather than one of
-     * the two.
+     * THE MERCHANT STILL SEES THE TOMBSTONE'S NAME — "Deleted account", joined
+     * from `member`. That is the erasure working, not a leak, and it is asserted
+     * here so the pair is read together: the identity is de-identified AND the
+     * address is gone, rather than one of the two.
+     *
+     * THE PHONE IS THE HALF THAT CHANGED, AND THIS ASSERTION USED TO PIN THE BUG.
+     * It read `expect(row.memberPhone).toMatch(/^\+990\d+$/)` — the synthetic
+     * number asserted as correct behaviour, on the grounds that a de-identified
+     * value is not a leak. True as far as it goes, and it missed that the field
+     * is named `memberPhone`: lane C's dashboard rendered it as
+     * `href="tel:+990224285141169"` beside the "Deleted account" row, because a
+     * field that says phone gets treated as one. DECISIONS.md #100 settles it —
+     * `memberPhone: null`, `memberErased: true`, the same on all three merchant
+     * reads that join `member`. `http/serialise.ts § serialiseMemberContact`
+     * carries the reasoning; this is where the old expectation dies.
      */
     const board = await app.inject({
       method: 'GET',
@@ -487,7 +497,8 @@ suite('erasure reaches the address, in both places it lives', () => {
       fulfilment: string;
       address: unknown;
       memberName: string;
-      memberPhone: string;
+      memberPhone: string | null;
+      memberErased: boolean;
     }>;
     const row = items.find((o) => o.transactionId === orderTxId);
     if (!row) throw new Error('her order is not on the board at all, which asserts nothing');
@@ -499,7 +510,19 @@ suite('erasure reaches the address, in both places it lives', () => {
         'street and the gate code rendered beside a member row reading "Deleted account".',
     ).toBeNull();
     expect(row.memberName).toBe(erasure.TOMBSTONE_NAME);
-    expect(row.memberPhone).toMatch(/^\+990\d+$/);
+    expect(
+      row.memberPhone,
+      'the tombstone number is on the board in a field the wire calls a phone number',
+    ).toBeNull();
+    expect(
+      row.memberErased,
+      'null alone is indistinguishable from "no phone on file" — the flag is what ' +
+        'lets a client render honest copy without string-matching +990',
+    ).toBe(true);
+    expect(
+      board.body.includes('+990'),
+      'a tombstone number reached the board through some other key',
+    ).toBe(false);
 
     /**
      * AND THE WHOLE RESPONSE, not only this row's address object: a component
