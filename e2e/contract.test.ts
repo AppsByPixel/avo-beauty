@@ -131,6 +131,7 @@ import {
   describeDeltas,
   describeParseError,
   discoverGetRoutes,
+  getRoutesIn,
   keyDeltas,
   wireShape,
 } from './support/contract-drift.js';
@@ -1939,6 +1940,128 @@ describe('and no schema is narrower than the wire', () => {
 // The census — a served shape with no schema is NAMED, not skipped
 // ===========================================================================
 
+/**
+ * THE SPEC THAT FAILS ON THE OLD REGEX.
+ *
+ * `discoverGetRoutes` was `e2e`'s THIRD independent definition of "a route
+ * registration" — see the long note on `getRoutesIn` for the four ways it was
+ * wrong. Not one of the four had a reproduction in `api/src/routes/`: every path
+ * there is an inline, single-quoted literal on an `app` receiver, so the old
+ * regex and the shared reader returned the same 55 GET paths, set-identical, on
+ * the tree this was written against. A change that moves no number is a change
+ * that has to be asserted on source of its own, or it is a change nobody can
+ * check.
+ *
+ * VERIFIED IN BOTH DIRECTIONS RATHER THAN ASSERTED, and the measured numbers are
+ * written here rather than a claim that it "would" fail. With `getRoutesIn`'s
+ * body replaced by the old `/app\.get[^(]*\(\s*'([^']+)'/g` over UNSTRIPPED
+ * source: 3 failed, 2 passed. Red were the encapsulated receiver (`expected []`),
+ * the double-quoted path (`expected []`), and the commented-out ghost — which
+ * returned the two retired routes and the live one, three GETs where one is
+ * served. With the shared reader: 5 passed, 0 failed.
+ *
+ * TWO OF THE FIVE PASS UNDER BOTH READERS AND BOTH EARN THEIR PLACE. The inline
+ * single-quoted case is the baseline — it is the shape of every path in
+ * `api/src/routes/` today, and a "fix" that broke it would take the census with
+ * it. The `const`-lifted case is dropped by both, for different reasons: the old
+ * pattern could not cross a `(`, the new reader refuses a first argument that is
+ * not a path literal. What it pins is the thing that must not happen under
+ * either — the DELETE-ghost shape, a dropped path re-attached to some other
+ * registration's method. The drop itself is now reported by
+ * `ambiguousRegistrations()`, which the old reader had no equivalent of.
+ *
+ * The 55-path GET set does NOT move across this change: measured set-identical,
+ * old reader and new, so `toBe(55)` below is green either way and is not part of
+ * this proof.
+ */
+describe("the GET reader is the census's reader, not a fourth regex", () => {
+  /** The shape every path in `api/src/routes/` has today. The baseline both readers pass. */
+  it('reads an inline single-quoted path on `app` — the tree as it stands', () => {
+    expect(
+      getRoutesIn(`
+        app.get<{ Params: { id: string } }>('/salons/:id', async (req, reply) => {
+          return serve(req, reply);
+        });
+      `),
+    ).toEqual(['/salons/:id']);
+  });
+
+  /**
+   * WEAKNESS 1, AND IT IS THE ONE THAT HID THE PAYMENT WEBHOOK ONE FILE OVER.
+   * `POST /webhooks/:provider` registers on `scoped` because it needs its own
+   * raw-body parser, and was invisible to every `app.`-anchored sweep until
+   * `registrationsIn` stopped anchoring. A GET on an encapsulated context was
+   * invisible HERE for the same reason, and the census's own silence was the
+   * only report of it.
+   */
+  it('reads a GET on an encapsulated context, not only on `app`', () => {
+    expect(
+      getRoutesIn(`
+        app.register(async (scoped) => {
+          scoped.get('/webhooks/:provider/health', async (req, reply) => reply.send({ ok: true }));
+        });
+      `),
+      'a GET registered on anything but `app` must still be enumerated. An encapsulated ' +
+        'context is what a route reaches for when it needs its own parser or error handler, ' +
+        'and a census cannot report a hole in a route it never saw.',
+    ).toEqual(['/webhooks/:provider/health']);
+  });
+
+  /** WEAKNESS 3. `'([^']+)'` could not see this at all. */
+  it('reads a double-quoted path', () => {
+    expect(getRoutesIn(`app.get("/v1/images/:imageId", serve);`)).toEqual(['/v1/images/:imageId']);
+  });
+
+  /**
+   * THE FOURTH WEAKNESS, WHICH WAS NOT ON THE LIST AND IS THE ONE THAT WOULD HAVE
+   * FIRED FIRST. `censusOfRoutes` reads `stripComments(raw)`; this reader read
+   * `raw`. So a route commented out during a revert — the most ordinary way a
+   * registration stops existing — stayed in the census as a live GET, and the
+   * unclassified spec would have demanded a probe or an `UNMODELLED` reason for
+   * an endpoint the API does not serve. The two readers differed here and the
+   * difference was never decided, only never exercised.
+   */
+  it('does not read a commented-out registration as a served route', () => {
+    expect(
+      getRoutesIn(`
+        // app.get('/v1/platform/retired', async (req, reply) => serve(req, reply));
+        /* app.get('/v1/platform/also-retired', serve); */
+        app.get('/v1/platform/policies', async (req, reply) => serve(req, reply));
+      `),
+      'a commented-out route is not a served route. Leaving it in the census invents a GET ' +
+        'that must be probed or excused, which is the census lying in the direction that ' +
+        'costs someone an afternoon.',
+    ).toEqual(['/v1/platform/policies']);
+  });
+
+  /**
+   * WEAKNESS 2. Both readers DROP this GET — the old one because `[^(]*` cannot
+   * cross the `(`, the new one because `registrationsIn` refuses a first argument
+   * that is not a path literal. The assertion that matters is the one this file
+   * can still get wrong: the dropped path must not reappear welded to another
+   * registration's method, which is exactly the ghost
+   * `permission-census.test.ts` § "a registration's path is read from its own
+   * argument list" was written for. The drop itself is reported by
+   * `ambiguousRegistrations()`, by file and line, across all five methods.
+   */
+  it('drops a const-lifted path rather than welding it to the next registration', () => {
+    expect(
+      getRoutesIn(`
+        const PRODUCTS = '/salons/:id/products';
+
+        app.get<{ Params: { id: string } }>(PRODUCTS, async (req, reply) => serve(req, reply));
+
+        app.get<{ Params: { imageId: string } }>('/v1/images/:imageId', async (req, reply) => {
+          return serve(req, reply);
+        });
+      `),
+      'an unreadable registration must leave the census entirely — never re-attached to a ' +
+        'later literal. A census that invents a route sends whoever reads the failure to a ' +
+        'line that says something else, and takes the real route down with it.',
+    ).toEqual(['/v1/images/:imageId']);
+  });
+});
+
 describe('census — every GET the API registers is either probed or explicitly unmodelled', () => {
   const discovered = discoverGetRoutes();
 
@@ -1958,7 +2081,44 @@ describe('census — every GET the API registers is either probed or explicitly 
     ]) {
       expect(paths, `the GET scan lost ${known}`).toContain(known);
     }
-    expect(discovered.length).toBeGreaterThanOrEqual(25);
+    /**
+     * PINNED EXACTLY, REPLACING A FLOOR OF 25 AGAINST 55 REAL GETs.
+     *
+     * `>= 25` was not a floor, it was thirty routes of slack. Weakness 2 of the
+     * old reader — a `const`-lifted path leaving the census with both consumers
+     * going quiet — could have taken THIRTY GETs out of this scan before any
+     * aggregate here noticed. A bound that loose does not detect the failure it
+     * is nominally guarding, and the routes it would have lost are the ones a
+     * refactor touched, not a random thirty.
+     *
+     * PINNED RATHER THAN RAISED, and rather than restated as a 55-path set
+     * literal, for a maintenance reason that is worth writing down:
+     *
+     *   - A set literal here would be a SECOND pin of the same fact.
+     *     `permission-census.test.ts` § `PINNED_COVERAGE` already pins every
+     *     route the census reads, GETs included, in both directions and with a
+     *     paste-ready line on failure. That pin now covers THIS scan too, which
+     *     it did not before — the two files read `api/src/routes/` through one
+     *     reader as of this change, so a GET that vanishes from `registrationsIn`
+     *     vanishes from both and is named there. Duplicating 55 paths here would
+     *     mean two files to edit per route and would add nothing.
+     *   - An exact count costs no maintenance this file does not already impose.
+     *     A new GET must be added to `probes()` or `UNMODELLED` regardless — the
+     *     unclassified spec below sees to that — so it is already an edit here.
+     *     The count moves in the same commit.
+     *
+     * So this catches the case the other guards do not: the scan COLLAPSING —
+     * quietly returning fewer routes than were written — which is precisely the
+     * shape all four weaknesses of the old reader had.
+     */
+    expect(
+      discovered.length,
+      'the GET census no longer sees 55 routes. If you added or removed a GET, classify it ' +
+        '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
+        'NEITHER, the reader has stopped reading routes it used to read — start at ' +
+        '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
+        'registrations it could see and could not resolve.',
+    ).toBe(55);
   });
 
   it('no GET route is left unclassified', () => {
