@@ -569,6 +569,44 @@ describe('Settings — the structure of a salon, and it is configurable now', ()
    * THE PREVIEW IS COMPARED AGAINST THE CLOSE OF THE SAME BRANCH, in that order, so
    * the "would" and the "did" describe one event. Both are taken on a branch this
    * spec created, so no fixture is closed as a side effect.
+   *
+   * =====================================================================
+   * IF THIS SPEC IS RED ON `staffRescoped` ORDER, DO NOT SORT THE ASSERTION.
+   * =====================================================================
+   * Observed once in a full-suite run on 2026-09-10 (lane D), green in isolation
+   * and green in three consecutive runs of its own file, which is the tell:
+   *
+   *     - Expected  ["Branch Survivor", "Branch Stranded"]     the PREVIEW
+   *     + Received  ["Branch Stranded", "Branch Survivor"]     the CLOSE
+   *
+   * Same two members, identical counts, different ORDER. The two sides are ordered
+   * by different things and only one of them is ordered at all:
+   *
+   *   PREVIEW  `services/branchClosure.ts:107` ends `.orderBy(staffUser.id)`, so it
+   *            is deterministic — ST-B09 (Survivor) before ST-B10 (Stranded).
+   *   CLOSE    `routes/salons.ts:1254` is `UPDATE … RETURNING` with NO ordering
+   *            applied, before or after. RETURNING emits in the UPDATE's scan
+   *            order, which postgres does not guarantee and which can flip on
+   *            planner choice, buffer state or a concurrent autovacuum.
+   *
+   * THIS IS DECISION 75'S DEFECT IN A SECOND FUNCTION, and 75 is worth re-reading
+   * before touching anything here: it records that `RETURNING` does not honour an
+   * `ORDER BY`, measured on trunk — "the subquery picks 8,7,6,5 and RETURNING
+   * returns 5,6,7,8, the exact reverse" — and that the resulting failure is
+   * INTERMITTENT, so "the first single run of the broken spec passed".
+   *
+   * SORTING EITHER SIDE HERE WOULD DELETE A REAL DEFECT AND LOOK LIKE A FIX. The
+   * merchant reads `staffRescoped` as a list of names on a confirmation dialog and
+   * then again on the outcome; two different orders for one event is the same class
+   * of wrong as two different numbers, and it is the shared-builder property this
+   * spec exists to protect. 75's resolution was the same shape: lane A fixed the
+   * CODE so the spec depended on no order, rather than relaxing the spec.
+   *
+   * THE FIX IS LANE A'S COLUMN (`api/`): order the close's staff list the way the
+   * preview orders it — `affected` sorted by `id` after the RETURNING, or the same
+   * `.orderBy` intent expressed in the serialiser at `routes/salons.ts:1373` and
+   * `:1189` so both doors emit one order. Reported by lane D 2026-09-10, not fixed
+   * here.
    */
   it('the closure preview reports exactly what the close then reports — one builder, not two', async () => {
     const created = await openBranch(probeBranchName('preview'));

@@ -214,6 +214,57 @@ beforeAll(async () => {
       revoked_at = NULL, revoked_by_staff_id = NULL,
       salon_id = EXCLUDED.salon_id, branch_id = EXCLUDED.branch_id;
 
+    -- ---------------------------------------------------------------------
+    -- THE TWO SHOP ORDERS THE FULFILMENT LEDGER ADDRESSES. See PROBE_ORDER_A.
+    --
+    -- \`kind = 'shop'\` forces \`amount_fils < 0\` (transaction_amount_sign_matches_kind)
+    -- and \`status = 'settled'\` forces \`settled_at\` non-null
+    -- (transaction_settled_at_matches_status). Both are the real shape: an order hangs
+    -- off a charge that already settled, which is why deciding where the bottle goes
+    -- touches no money.
+    --
+    -- NO \`member_wallet\` ENTRY, AND THAT IS NOT A DEBT TO THE LEDGER. db:verify
+    -- invariant 5 — the wallet census in global-setup.ts — reconciles
+    -- \`member.balance_fils\` against \`member_wallet\`, and this touches neither, so
+    -- \`reconcileWalletLedger\` has nothing to pay here. A \`transaction\` row with no
+    -- wallet entry is invisible to that count.
+    INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils,
+                             method, status, settled_at)
+    VALUES
+      ('${PROBE_ORDER_A}', '${A_MEMBER}', '${SALON_A}', '${A_BRANCH}', 'shop', -1000,
+       'wallet', 'settled', now()),
+      ('${PROBE_ORDER_B}', '${B_MEMBER}', '${SALON_B}', '${B_BRANCH}', 'shop', -1000,
+       'wallet', 'settled', now())
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id;
+
+    -- THE STATUS IS RESET, not just the row re-created. The PATCH control really moves
+    -- preparing → ready, and shop_order_ready_at_matches_status makes the timestamps
+    -- part of the status rather than decoration — so ready_at and closed_at have to go
+    -- back to NULL with it or the CHECK refuses the update.
+    -- The address rows the two orders point at. See the note on PROBE_ORDER_A for
+    -- why \`address_id\` is not simply NULL.
+    INSERT INTO member_address (id, member_id, label, block, street, building)
+    VALUES
+      ('${PROBE_ADDRESS_A}', '${A_MEMBER}', 'TENANCY-PROBE-LABEL-A',
+       'TENANCY-PROBE-BLOCK-A', 'TENANCY-PROBE-STREET-A', 'TENANCY-PROBE-BUILDING-A'),
+      ('${PROBE_ADDRESS_B}', '${B_MEMBER}', 'TENANCY-PROBE-LABEL-B',
+       'TENANCY-PROBE-BLOCK-B', 'TENANCY-PROBE-STREET-B', 'TENANCY-PROBE-BUILDING-B')
+    ON CONFLICT (id) DO UPDATE SET member_id = EXCLUDED.member_id, deleted_at = NULL;
+
+    INSERT INTO shop_order (transaction_id, salon_id, member_id, fulfilment, status,
+                            address_id, address_label, block, street, building)
+    VALUES
+      ('${PROBE_ORDER_A}', '${SALON_A}', '${A_MEMBER}', 'delivery', 'preparing',
+       '${PROBE_ADDRESS_A}', 'TENANCY-PROBE-LABEL-A', 'TENANCY-PROBE-BLOCK-A',
+       'TENANCY-PROBE-STREET-A', 'TENANCY-PROBE-BUILDING-A'),
+      ('${PROBE_ORDER_B}', '${SALON_B}', '${B_MEMBER}', 'delivery', 'preparing',
+       '${PROBE_ADDRESS_B}', 'TENANCY-PROBE-LABEL-B', 'TENANCY-PROBE-BLOCK-B',
+       'TENANCY-PROBE-STREET-B', 'TENANCY-PROBE-BUILDING-B')
+    ON CONFLICT (transaction_id) DO UPDATE SET
+      status = 'preparing', ready_at = NULL, closed_at = NULL,
+      address_id = EXCLUDED.address_id,
+      salon_id = EXCLUDED.salon_id;
+
     -- THE POST CONTROL'S SLOT IS EMPTIED, not assumed empty — the image POST's rule, and
     -- here it decides a status code rather than a row: re-posting an enrolment that
     -- already names the same branch AND label returns the existing row with 200, and the
@@ -415,6 +466,49 @@ const PROBE_PRODUCT_B_PATCH = 'PR-TEN-B-PATCH';
 const PROBE_PRODUCT_B_DELETE = 'PR-TEN-B-DEL';
 const PROBE_CAMPAIGN_A = 'CMP-TEN-A';
 const PROBE_CAMPAIGN_B = 'CMP-TEN-B';
+
+/**
+ * THE TWO SHOP ORDERS THE FULFILMENT LEDGER ADDRESSES — item 7, lane A's
+ * `routes/orders.ts`.
+ *
+ * `{tid}` IS A TRANSACTION ID, not a surrogate: `shop_order`'s primary key IS
+ * `transaction_id` (`db/schema/delivery.ts`), because an order has exactly one
+ * fulfilment and a second one is not storable. So these ids are transaction ids
+ * and each needs a real `transaction` row behind it — `ON DELETE restrict`.
+ *
+ * ONE PER SALON RATHER THAN ONE PER VERB, unlike `productFor`. Only the PATCH
+ * carries `{tid}`; the GET addresses the collection. And the PATCH control is
+ * not destructive in `productFor`'s sense — it moves `preparing → ready`, which
+ * the `ON CONFLICT` below undoes by resetting the status and both timestamps, so
+ * one row serves every run.
+ *
+ * DELIVERY, NOT PICKUP, and the snapshot fields are deliberately absurd. The
+ * board is the only merchant screen that renders a customer's home address, so a
+ * pickup fixture would leave the leak sweep with nothing to sweep for. The
+ * values are 'TENANCY-PROBE-…' rather than anything address-shaped for the
+ * reason `expectNoSalonALeak` exists: a probe string is greppable in a response
+ * body, and a plausible street is not distinguishable from a real one.
+ *
+ * `address_id` POINTS AT A REAL `member_address` ROW, AND IT WAS NULL FIRST.
+ * NULL is a legal state — `shop_order_delivery_has_an_address` requires only
+ * block/street/building for a delivery, and the column is nullable — so the
+ * shorter fixture parsed and this table's own specs passed either way. It was
+ * changed because of what it does to a DIFFERENT file: `contract.test.ts` now
+ * probes `GET /v1/salons/{id}/orders` against `ShopOrderSchema`, whose
+ * `address.id` is `IdSchema` (`z.string().min(1)`) and NOT nullable, so a row
+ * seeded here with a null `address_id` makes THAT probe fail — for a state no
+ * API path can produce, in a file that never mentions this one. A fixture whose
+ * cost lands in another spec is the shared-fixture trap this file's header is
+ * about, arriving through a schema instead of through a row.
+ *
+ * (That the column permits a state the schema refuses is a real modelling gap and
+ * it is REPORTED rather than papered over here — see
+ * `delivery-address-privacy.test.ts` § "the column is wider than the schema".)
+ */
+const PROBE_ORDER_A = 'TX-TEN-A-ORDER';
+const PROBE_ORDER_B = 'TX-TEN-B-ORDER';
+const PROBE_ADDRESS_A = 'ADR-TEN-A';
+const PROBE_ADDRESS_B = 'ADR-TEN-B';
 
 /**
  * THE TILLS THE DEVICE LEDGER ADDRESSES — decision 82, lane A's `devices.ts`.
@@ -652,6 +746,41 @@ const SALON_ROUTES: SalonRoute[] = [
   { method: 'POST', template: '/salons/{id}/reports/{kind}/download-url' },
   // ---- lane A's shop and campaign routes. The gap ledger fired on all six. ----
   { method: 'GET', template: '/v1/salons/{id}/messaging-policy' },
+  /**
+   * ---- ITEM 7'S MERCHANT FULFILMENT BOARD. The gap ledger fired on both, by
+   * name, on the first run after the merge that brought them in — the fourth
+   * census to catch a surface arriving, and all three others fired on the same
+   * run (contract.test.ts's unclassified check named three GETs and
+   * permission-census.test.ts's PINNED_COVERAGE named seven doors).
+   *
+   * THE 403 HERE IS THE ONE THAT MATTERS MOST IN THIS TABLE, and the reports rows
+   * above used to hold that title. A report is the densest tenant read in the API
+   * — names, phones and balances — but this board carries a customer's HOME
+   * ADDRESS: `serialiseShopOrder` returns block, street, building, floor,
+   * apartment, instructions and coordinates on every delivery row, joined to
+   * `memberName` and `memberPhone`. A salon reading another salon's board learns
+   * where a stranger's customers live.
+   *
+   * BOTH SCOPE ON `p.salonId` AND NOT ON `req.params.id` — checked, because the
+   * two differ and only one is safe. `requireSameSalon(p, req.params.id)` throws
+   * first, and the WHERE then filters on the PRINCIPAL's salon, so even a guard
+   * that somehow passed could not address another salon's rows. That belt-and-
+   * braces is why the control half is the interesting half here: it proves the
+   * 403 is tenancy rather than a query that matches nothing.
+   */
+  { method: 'GET', template: '/v1/salons/{id}/orders' },
+  {
+    method: 'PATCH',
+    template: '/v1/salons/{id}/orders/{tid}',
+    /**
+     * `preparing → ready` is the only transition the seeded fixture can make, and
+     * the route derives the FROM status from the TO status — so a body of
+     * `{ status: 'closed' }` would answer 409 against a `preparing` row and the
+     * control would read as a tenancy hole. The `ON CONFLICT` above resets the
+     * row so this is re-runnable.
+     */
+    body: { status: 'ready' },
+  },
   { method: 'GET', template: '/v1/salons/{id}/campaigns' },
   {
     method: 'POST',
@@ -1027,6 +1156,16 @@ function imageOwnerFor(route: SalonRoute, salonId: string): string {
     : PROBE_SERVICE_B_IMAGE_POST;
 }
 
+/**
+ * The shop order belonging to the salon being addressed. Only the PATCH uses it.
+ *
+ * No per-verb split, unlike `productFor`: the transition is idempotent-by-reset
+ * rather than destructive, and the GET addresses the collection. See
+ * `PROBE_ORDER_A` for why one row per salon is enough.
+ */
+const orderFor = (salonId: string): string =>
+  salonId === SALON_B ? PROBE_ORDER_B : PROBE_ORDER_A;
+
 /** A campaign belonging to the salon being addressed. Only DELETE uses it. */
 const campaignFor = (salonId: string): string =>
   salonId === SALON_B ? PROBE_CAMPAIGN_B : PROBE_CAMPAIGN_A;
@@ -1047,6 +1186,16 @@ const url = (r: SalonRoute, salonId: string) =>
     .replace('{bid}', branchFor(salonId))
     .replace('{pid}', productFor(r, salonId))
     .replace('{cid}', campaignFor(salonId))
+    /**
+     * `{tid}` is a shop order at the salon being addressed, resolved the way `{cid}`
+     * is: the control half really performs the transition, so the id has to name a
+     * `preparing` row at THAT salon or the control 409s and the ledger reports a
+     * tenancy hole that is really a missing fixture.
+     *
+     * The brace name matches the registered parameter — the route is
+     * `/v1/salons/:id/orders/:tid` — per the `{deviceId}` note below.
+     */
+    .replace('{tid}', orderFor(salonId))
     /**
      * `{deviceId}` is an enrolled device at the salon being addressed, resolved the way
      * `{cid}` is and for the same reason: the control half really revokes, so the id has

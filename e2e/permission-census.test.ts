@@ -655,6 +655,41 @@ const PINNED_COVERAGE: string[] = [
   'DELETE /artists/:id/calendar → team',
   'DELETE /bookings/:id [requireMember]',
   'DELETE /members/me/deletion [requireMember]',
+  /**
+   * =======================================================================
+   * ITEM 7'S SEVEN DOORS — the address book, her order list, and the merchant's
+   * fulfilment board. dev `e4b411a`. The census named all seven on the first run
+   * after the merge, which is what this half of the pin is for.
+   * =======================================================================
+   * SEVEN, NOT SIX. The brief that dispatched this slice said "the two merchant
+   * routes → shop, and the four member routes as [requireMember]". There are
+   * FIVE member routes: `GET` and `POST /members/me/addresses`, `PUT` and
+   * `DELETE /members/me/addresses/:id`, and `GET /members/me/orders`. The
+   * census's own output is the authority and it listed all five — recorded
+   * because a hand-counted ledger line is exactly the thing this pin exists to
+   * stop anyone trusting, including when the hand belongs to trunk.
+   *
+   * `[requireMember]` IS THE RIGHT CLASSIFICATION AND IT IS THE INTERESTING ONE.
+   * A `[scopeGuard]` line, per this ledger's own header, is "legitimate for a
+   * customer's own record or a shared catalog read, and a bug for a merchant
+   * write". All five are a customer's own record: no route in `routes/addresses.ts`
+   * or the member half of `routes/orders.ts` reads a member id from a path, a query
+   * or a body, so the principal IS the scope. `POST /members/me/addresses` goes
+   * further and REFUSES a `memberId` in the body by name
+   * (`member_not_client_supplied`) rather than ignoring it, which is the
+   * treatment `POST /orders` gives a client-supplied price.
+   *
+   * BUT "THE PRINCIPAL IS THE SCOPE" IS A CLAIM ABOUT CODE, AND THIS LEDGER
+   * CANNOT TEST IT. `PUT` and `DELETE /members/me/addresses/:id` take an ADDRESS
+   * id in the path, and what keeps one customer out of another's book is the
+   * second term of a WHERE clause — `eq(memberAddress.memberId, p.id)` — not a
+   * guard the census can read. A `[requireMember]` line is byte-identical whether
+   * that term is there or not. So the cross-member probe is driven directly, by
+   * request, in `delivery-address-privacy.test.ts` § "one member cannot reach
+   * another's address book", and this line is the register that the door exists
+   * rather than the evidence it is bolted.
+   */
+  'DELETE /members/me/addresses/:id [requireMember]',
   'DELETE /salons/:id/branches/:bid → loyalty',
   'DELETE /salons/:id/devices/:deviceId → dashboard',
   'DELETE /salons/:id/products/:pid → shop',
@@ -677,7 +712,9 @@ const PINNED_COVERAGE: string[] = [
   'GET /members/:id → scanner',
   'GET /members/me [requireMember]',
   'GET /members/me/deletion [requireMember]',
+  'GET /members/me/addresses [requireMember]',
   'GET /members/me/notifications [requireMember]',
+  'GET /members/me/orders [requireMember]',
   'GET /members/me/policy-acceptance [requireMember]',
   'GET /members/me/transactions [requireMember]',
   'GET /members/me/wallet-token [requireMember]',
@@ -762,6 +799,7 @@ const PINNED_COVERAGE: string[] = [
   'GET /v1/platform/support [requirePrincipal]',
   'GET /v1/salons/:id/campaigns → marketing',
   'GET /v1/salons/:id/messaging-policy → marketing',
+  'GET /v1/salons/:id/orders → shop',
   'GET /v1/salons/:id/promotions [requireSalonScoped]',
   'GET /v1/support/tickets → dashboard',
   'GET /v1/support/tickets → policies',
@@ -778,6 +816,48 @@ const PINNED_COVERAGE: string[] = [
   'PATCH /v1/platform/settings → controls',
   'PATCH /v1/platform/support/channels → policies',
   'PATCH /v1/platform/support/topics/:id → policies',
+  /**
+   * THE MERCHANT FULFILMENT BOARD AND ITS TRANSITION. Both `→ shop`.
+   *
+   * `→ shop` IS THE RIGHT PERMISSION, AND THE CENSUS AGREEING IS NOT WHY.
+   *
+   * Lane A reports that the census derived `shop` independently. It did not, and
+   * this is the second time the distinction has had to be drawn — the
+   * device-enrolment block above draws it for `→ dashboard` and decision 82.
+   * `censusOfRoutes` takes "the LAST quoted argument"
+   * (`support/perm-census.ts:655`) of `requireDashboardPerm(req, 'shop')`. That
+   * is the literal token `'shop'`, the same six characters a reader reads off the
+   * source line. A pin agreeing with the source there is a TAUTOLOGY, not a
+   * second opinion, and calling it independent corroboration would make every
+   * line in this ledger self-confirming.
+   *
+   * WHAT DOES CONFIRM IT is behavioural and generated from these lines: the sweep
+   * revokes `shop`, requires a 403 carrying `shop`'s own refusal copy, then grants
+   * `shop` alone and requires the refusal to stop. A gate really written on
+   * `dashboard`, `appointments` or `marketing` fails both halves by name. That is
+   * non-negotiable #7's second half — "a test that calls it directly with the
+   * permission off" — and it is what makes these two lines worth pasting.
+   *
+   * AND THE CHOICE IS RIGHT ON ITS MERITS, which is a third and separate question
+   * the census cannot ask at all. Lane A's argument is that the board carries a
+   * customer's DELIVERY ADDRESS, so it must not sit behind `dashboard` — checked
+   * and agreed, and the check is `serialiseShopOrder` in `routes/orders.ts:46`,
+   * which returns the full snapshot (`block`, `street`, `building`, `floor`,
+   * `apartment`, `instructions`, `latitude`, `longitude`) on every delivery row.
+   * `dashboard` is the Overview section's permission and the widest chip a
+   * receptionist holds; `shop` is the same gate as the catalogue and the
+   * `products-sold` report (`services/reports.ts:127`), which is the section this
+   * screen belongs to. Not `appointments`, which is a different section entirely.
+   *
+   * ONE THING THE PERMISSION CANNOT DO, and it is reported rather than pinned: the
+   * board has no time horizon. `closed` is in `ORDER_STATUS_FLOW` and the query
+   * applies no date floor, so `perms.shop` reads the home address of every
+   * delivery customer the salon has ever had, indefinitely — see
+   * `delivery-address-privacy.test.ts` § "the board has no horizon". A permission
+   * decides WHO; retention decides FOR HOW LONG, and nothing in this feature
+   * decides the second.
+   */
+  'PATCH /v1/salons/:id/orders/:tid → shop',
   'PATCH /v1/salons/:id/promotions/happy-hours/:hid → marketing',
   'PATCH /v1/salons/:id/social/:linkId → loyalty',
   'PATCH /v1/support/tickets/:id → dashboard',
@@ -799,6 +879,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /bookings/:id/reschedule [requireMember]',
   'POST /charges → scanner',
   'POST /members/:id/adjustments → accounts',
+  'POST /members/me/addresses [requireMember]',
   'POST /members/me/deletion [requireMember]',
   'POST /members/me/password [requirePrincipal]',
   'POST /members/me/phone-change [requireMember]',
@@ -836,6 +917,7 @@ const PINNED_COVERAGE: string[] = [
   'PUT /artists/:id/availability → team',
   'PUT /artists/:id/branch → team',
   'PUT /artists/me/availability [requireScannerScope]',
+  'PUT /members/me/addresses/:id [requireMember]',
   /**
    * `→ salons`, AND IT WAS `→ loyalty` UNTIL DECISION 79 — a line that MOVED rather
    * than one that arrived, which is the amendment this ledger is least able to
