@@ -880,9 +880,18 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
                 on={booking}
                 onChange={setBooking}
               />
+              {/*
+                "pickup or delivery" — `AVO Owner Console.dc.html:1232` says
+                "pickup at salon", which described the module before delivery
+                shipped. Delivery is not separately gated (`SalonSchema.modules`
+                is `{ booking, shop }`), so this toggle turns it on, and this is
+                the sentence an owner reads while onboarding a salon. Same
+                correction as `routes/Settings.tsx § ModulesPanel`, which carries
+                the argument.
+              */}
               <ModuleRow
                 label="Shop"
-                sub="Flat catalog, pay from wallet, pickup at salon"
+                sub="Flat catalog, pay from wallet, pickup or delivery"
                 on={shop}
                 onChange={setShop}
               />

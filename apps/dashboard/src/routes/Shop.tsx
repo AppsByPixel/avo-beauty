@@ -389,6 +389,12 @@ export function countLabel(count: number): string {
  * It reuses the design's own words for the module ("Flat catalog, pay from
  * wallet, pickup at salon") and names the switch by its drawn location, so the
  * sentence points at a control that exists rather than at a support call.
+ *
+ * WITH ONE WORD-GROUP CORRECTED — "pickup or delivery" — for the reason inside
+ * the banner below, and the same correction in `Settings.tsx § ModulesPanel` and
+ * `console/Salons.tsx § the wizard`. The clause was accurate when drawn and is
+ * not now, and this file had already corrected the other half of the same
+ * sentence at the top of the screen.
  */
 export function ShopModuleOffNotice() {
   return (
@@ -412,9 +418,20 @@ export function ShopModuleOffNotice() {
         </svg>
       }
     >
+      {/*
+        "PICKUP OR DELIVERY", MATCHING `shop__hint` TWO HUNDRED LINES UP. This
+        sentence was the design's module description and said "pickup at salon";
+        the hint at the top of this same screen has already been corrected to
+        "choose pickup or delivery" on the argument in its own comment. Two
+        sentences on one screen disagreeing about what the module does is not a
+        copy decision anybody made — it is half a correction. Same word-group
+        changed in `Settings.tsx § ModulesPanel` and
+        `console/Salons.tsx § the wizard`, which are the other two places a
+        merchant or an owner reads what turning Shop on gets her.
+      */}
       <b>The Shop module is off, so customers can&rsquo;t buy any of this yet.</b> Build the catalog
       here, then turn Shop on in Settings → Optional modules — flat catalog, pay from wallet, pickup
-      at salon.
+      or delivery.
     </InfoBanner>
   );
 }

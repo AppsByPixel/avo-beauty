@@ -100,6 +100,34 @@ const PICKUP: MerchantShopOrder = {
 };
 
 /**
+ * A DELIVERY WHOSE ADDRESS SNAPSHOT WAS ERASED — the third state, and the one a
+ * merchant actually meets. DECISIONS.md #97, migration 0048.
+ *
+ * `fulfilment: 'delivery'` WITH `address: null`, which is exactly the pair the
+ * board has to read, and there is no fourth field to help it: `address_erased_at`
+ * is deliberately not on the wire (`api/src/routes/orders.ts § serialiseShopOrder`)
+ * because it would tell a salon WHEN a customer asked to be erased.
+ *
+ * `status: 'closed'` and the tombstoned name/phone, because that is what the row
+ * genuinely looks like: erasure runs 30+ days after the request and scrubs
+ * `member` in the SAME transaction, so an erased order's Customer cell reads
+ * "Deleted account" and its phone is a `+990` sentinel. The fixture carries them
+ * so the tests below are asserting about a row that can exist rather than about a
+ * shape assembled to make a point.
+ */
+const ERASED_DELIVERY: MerchantShopOrder = {
+  transactionId: 'TX-5510923',
+  fulfilment: 'delivery',
+  status: 'closed',
+  address: null,
+  createdAt: '2026-07-28T09:12:04.117Z',
+  readyAt: '2026-07-28T10:41:55.402Z',
+  closedAt: '2026-07-28T13:08:19.660Z',
+  memberName: 'Deleted account',
+  memberPhone: '+990418702935514',
+};
+
+/**
  * A `<tr>` needs a table around it or jsdom hoists it out of the tree and the
  * queries below find nothing — a zero result that would be a claim about the
  * harness rather than about the row.
@@ -136,6 +164,107 @@ describe('pickup is a live fork, so its row states a fact rather than an absence
     cleanup();
     renderRow(DELIVERY);
     expect(screen.getByText('Delivery')).toBeTruthy();
+  });
+});
+
+/**
+ * THE ERASED DELIVERY — `fulfilment: 'delivery'`, `address: null`.
+ *
+ * WHY THIS BLOCK IS NOT A DUPLICATE OF THE ONE ABOVE. `address === null` had one
+ * meaning when this screen was built and now has two, so every assertion above
+ * about "the null cell" was implicitly an assertion about pickup. The regression
+ * this block pins is the one the screen actually shipped: a row printing
+ * "Collecting at the salon" two cells from its own Delivery pill. A false
+ * sentence renders identically to a true one and no source scan can tell them
+ * apart, so it has to be read out of the DOM.
+ *
+ * AND IT PINS WHAT THE COPY MUST NOT SAY, which is the half that would rot
+ * first. The constraints are privacy constraints rather than style ones — no
+ * date, no reason, nothing about the order's status, no "deleted" — so they are
+ * asserted, not left to the comment in `ShopOrders.tsx` to defend.
+ */
+describe('a delivery with no address was erased, and the cell must not call it pickup', () => {
+  it('never says the customer is collecting on a delivery row', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    const where = container.querySelector('.orders__where')!;
+    // THE SHIPPED DEFECT, stated as the thing that must not be in the cell.
+    expect(where.textContent).not.toContain('Collecting at the salon');
+    expect(where.textContent?.toLowerCase()).not.toContain('collect');
+    expect(where.textContent?.toLowerCase()).not.toContain('salon');
+  });
+
+  it('says the address is gone rather than leaving the cell blank', () => {
+    renderRow(ERASED_DELIVERY);
+    expect(screen.getByText('Address no longer held')).toBeTruthy();
+  });
+
+  it('does not read as a missing field a merchant should go looking for', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    const where = container.querySelector('.orders__where')!;
+    expect(where.textContent?.trim()).not.toBe('');
+    expect(where.textContent).not.toContain('—');
+    expect(where.textContent?.toLowerCase()).not.toContain('no address');
+    expect(where.textContent?.toLowerCase()).not.toContain('unknown');
+  });
+
+  /**
+   * THE FOUR THINGS THE COPY MAY NOT CONTAIN, each one a privacy or a
+   * truthfulness constraint from `ShopOrders.tsx § the erased delivery`:
+   *
+   *   a date        the API does not serve `address_erased_at` on purpose — it
+   *                 would say WHEN a customer asked to be erased. If a field
+   *                 like it ever appears on the wire, this screen still may not
+   *                 print it, and this assertion is what notices.
+   *   a person      "deleted", "erased", "removed by" — the sentence is about a
+   *                 record and has no subject who is her. ("Deleted account" in
+   *                 the Customer cell is the API's tombstone, which is why the
+   *                 assertion is scoped to this cell.)
+   *   a reason      nothing invented about why.
+   *   the order     "cancelled" / "undeliverable" would be a claim about the
+   *                 purchase derived from a fact about the data. The Status
+   *                 column owns the status and the row is closed and paid.
+   */
+  it('says nothing about when, who, why, or what became of the order', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    const text = container.querySelector('.orders__where')!.textContent!.toLowerCase();
+    for (const forbidden of [
+      'deleted',
+      'erased',
+      'erasure',
+      'request',
+      'gdpr',
+      'privacy',
+      'cancel',
+      'undeliverable',
+      'failed',
+      'error',
+      '2026',
+      '2025',
+    ]) {
+      expect(text).not.toContain(forbidden);
+    }
+  });
+
+  it('still labels the row Delivery, because that is what she chose', () => {
+    renderRow(ERASED_DELIVERY);
+    expect(screen.getByText('Delivery')).toBeTruthy();
+  });
+
+  /**
+   * NOT STYLED AS A PROBLEM. `--avo-warn` on this cell would read as something
+   * wrong with a paid, delivered order — see `app.css § .orders__erased`. Pinned
+   * by class rather than by computed colour, which jsdom does not resolve.
+   */
+  it('is a quiet statement, and offers nothing to click', () => {
+    const { container } = renderRow(ERASED_DELIVERY);
+    expect(container.querySelector('.orders__erased')).toBeTruthy();
+    /*
+     * THE NEGATIVE REQUIREMENT, which this state needs MORE than the snapshot
+     * does: a "why is this gone?" link, or anything that looks like a way to
+     * recover the address, would undo the erasure by inviting the search.
+     */
+    expect(container.querySelector('.orders__where a')).toBeNull();
+    expect(container.querySelector('.orders__where button')).toBeNull();
   });
 });
 

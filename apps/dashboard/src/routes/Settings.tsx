@@ -225,9 +225,27 @@ function ModulesPanel({ salon, update }: { salon: Salon | undefined; update: Upd
         busy={update.isPending}
         onChange={(next) => update.mutate({ modules: { booking: next } })}
       />
+      {/*
+        "PICKUP OR DELIVERY", AND THE DESIGN SAYS "pickup at salon".
+        `AVO Merchant Dashboard.dc.html:1044`, verbatim: "Flat catalog, pay from
+        wallet, pickup at salon. Default off." That was a complete description of
+        the module when it was drawn and is no longer one — `POST /orders` takes
+        `fulfilment: 'delivery'`, and Shop → Orders is the board that fulfils
+        them. There is no `modules.delivery`: `SalonSchema.modules` is
+        `{ booking, shop }`, so delivery arrives WITH this toggle and nothing
+        else gates it. A sentence that tells an owner this switch buys collection
+        only is therefore wrong about the switch she is reading it beside.
+
+        Corrected on `Shop.tsx § the design's sentence`'s precedent — the false
+        clause replaced, the true ones kept word for word, including "Default
+        off." Reported to trunk as a design copy conflict rather than treated as
+        settled: the same string is in the owner console's wizard
+        (`console/Salons.tsx`) and it is changed there too, so the three places a
+        salon is told what Shop does now agree.
+      */}
       <ModuleRow
         name="Shop"
-        body="Flat catalog, pay from wallet, pickup at salon. Default off."
+        body="Flat catalog, pay from wallet, pickup or delivery. Default off."
         on={salon?.modules.shop}
         busy={update.isPending}
         onChange={(next) => update.mutate({ modules: { shop: next } })}
