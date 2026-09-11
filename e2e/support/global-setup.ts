@@ -434,6 +434,27 @@ let censusVerdict: string | null = null;
  * but the second is real and is accepted knowingly, because the alternative is
  * the state this instrument was actually in: correct, ignored, and stale.
  *
+ * AND THE CAP GUARDS THE NUMBER, SO SOMETHING HAS TO GUARD THE INSTRUMENT.
+ * A cap on drifters is worth nothing if the census can decline to run and say
+ * nothing about it, and until now it could, three ways: `!AVO_QA_DB` returned
+ * early, a `psql` failure fell into a bare `catch {}`, and a missing census line
+ * returned. All three printed NOTHING, so a run whose census never happened was
+ * indistinguishable from a healthy one — and it counts zero drifters, which
+ * passes the cap. That was found by accident, running `commit-order.test.ts`
+ * alone to test the cap and getting no census line at all.
+ *
+ * SO THE FUNCTION NOW PRINTS EXACTLY ONE LINE EVERY RUN, whatever happened, and
+ * the only question left is which lines are failures. It is settled by asking
+ * Postgres whether the database exists, because that is precisely the difference
+ * between the benign case and every bad one:
+ *
+ *   no database          no file in this run needed one — a static-analysis run.
+ *                        Printed, not failed. Genuinely nothing to reconcile.
+ *   database, no answer  the query broke against a real schema. FAILS.
+ *   database, wrong shape the query answered something that is not a census.
+ *                        FAILS.
+ *   Postgres unreachable it answered at setup, so it died mid-run. FAILS.
+ *
  * THIS OVERRIDES A WRITTEN DECISION AND SAYS SO ON PURPOSE. It was made on
  * Aftab's instruction after the tension above was put to him. If the red gate in
  * other lanes' runs turns out to cost more than the staleness did, the honest
@@ -497,9 +518,56 @@ let censusVerdict: string | null = null;
  * said so for four members.
  */
 async function reportWalletDrift(): Promise<void> {
-  if (!process.env.AVO_QA_DB) return;
+  const { psql, pgDb, databaseExists } = await import('./tenancy-harness.js');
+
+  /*
+   * WHICH DATABASE, IN BOTH MODES. `pgDb()` resolves the minted `AVO_QA_DB` for
+   * an ordinary run and an explicit `POSTGRES_DB` for the discouraged one. The
+   * census used to bail on `!AVO_QA_DB`, which meant setting `POSTGRES_DB`
+   * silently switched the instrument off — a third way to be quiet. Invariant 5
+   * is the invariant in either mode, so it is measured in either mode.
+   */
+  const db = pgDb();
+
+  /*
+   * "NOTHING PROVISIONED A DATABASE" IS NOT "THE CENSUS IS BROKEN", AND
+   * TELLING THEM APART IS THE WHOLE OF THIS FUNCTION'S HONESTY.
+   *
+   * The run database is minted lazily: a file that needs one calls into the
+   * harness and it is created then. A run of only static-analysis files —
+   * `commit-order.test.ts` is the clean example — never provisions one, so
+   * there is genuinely nothing to reconcile and no failure to report.
+   *
+   * That case used to be indistinguishable from a broken query, because BOTH
+   * threw out of `psql` into a bare `catch {}` and printed nothing at all. A
+   * missing census line looked exactly like a healthy one that happened not to
+   * be there, and the cap added above cannot help: a census that never runs
+   * counts zero drifters and passes. Asking Postgres whether the database
+   * exists splits the two cleanly, and everything after this point is a
+   * database that IS there — where any failure is the instrument, not the run.
+   */
+  let exists: boolean;
   try {
-    const { psql } = await import('./tenancy-harness.js');
+    exists = databaseExists(db);
+  } catch (err) {
+    announce(`could not ask Postgres whether "${db}" exists — ${String(err)}`);
+    censusVerdict =
+      `the wallet census could not reach Postgres to ask whether "${db}" exists: ${String(err)}\n\n` +
+      'Postgres answered at setup — `sweepStaleRunDatabases` runs there and would have failed ' +
+      'the run otherwise — so it became unreachable during this run. That is worth a red run ' +
+      'rather than a silent one: every money assertion above it talked to the same container.';
+    return;
+  }
+
+  if (!exists) {
+    announce(
+      `no database — "${db}" was never provisioned, so no file in this run needed one. ` +
+        'Nothing to reconcile; this is not a failure.',
+    );
+    return;
+  }
+
+  try {
     const out = psql(`
       WITH d AS (
         SELECT m.id,
@@ -524,9 +592,26 @@ async function reportWalletDrift(): Promise<void> {
       .split('\n')
       .map((l) => l.trim())
       .find((l) => l.includes('reconcile to their wallet ledger'));
-    if (!line) return;
-    // eslint-disable-next-line no-console
-    console.log(`[lane D] wallet census (db:verify invariant 5) — ${line}`);
+
+    /*
+     * THE DATABASE IS THERE AND THE QUERY ANSWERED SOMETHING THAT IS NOT A
+     * CENSUS. `psql` ran with `ON_ERROR_STOP=1`, so a broken query throws
+     * rather than arriving here — this is the narrower case where it succeeded
+     * and the shape changed: someone edited the `format()` string, or the
+     * column list moved under it. Silence here would be the original defect
+     * wearing a different hat.
+     */
+    if (!line) {
+      announce(`ran against "${db}" and produced no census line — the query's shape changed.`);
+      censusVerdict =
+        `the wallet census queried "${db}" successfully and got back something that is not a ` +
+        'census line. The `format()` string in support/global-setup.ts § reportWalletDrift and ' +
+        'the line it is recognised by have diverged. Fix the reader or the query — do not ' +
+        'delete the check: a census that cannot be read is the exact silence this branch ' +
+        `exists to break.\n\npsql said:\n${out.trim().slice(0, 600)}`;
+      return;
+    }
+    announce(line);
 
     /*
      * `11 of 24 members reconcile …; drifting: a by N fils, b by M fils`.
@@ -548,9 +633,29 @@ async function reportWalletDrift(): Promise<void> {
         'balance genuinely cannot come from a real ledger pair, raise MAX_DRIFTING_MEMBERS in ' +
         'support/global-setup.ts and say which member and why.';
     }
-  } catch {
-    /* nothing here is worth failing a run over — see dropRunDatabaseIfOurs */
+  } catch (err) {
+    /*
+     * WAS A BARE `catch {}` WITH "nothing here is worth failing a run over".
+     * That was right about `dropRunDatabaseIfOurs`, whose job is cleanup, and
+     * wrong here: the database EXISTS by this point, so the only way to arrive
+     * is a query that broke against a real schema — a renamed `balance_fils`,
+     * `ledger_entry.account` or `direction`. Swallowing that removed the one
+     * instrument watching invariant 5 and left nothing behind to say so.
+     */
+    announce(`failed against "${db}" — ${String(err)}`);
+    censusVerdict =
+      `the wallet census failed against "${db}", which exists: ${String(err)}\n\n` +
+      'This query is the only thing measuring `db:verify` invariant 5 across a run. It reads ' +
+      '`member.balance_fils`, `ledger_entry.member_id`, `.account`, `.direction` and ' +
+      '`.amount_fils`; if one of those was renamed, follow the rename here. Restoring the ' +
+      'query is the fix — a census that cannot run must not be a census that says nothing.';
   }
+}
+
+/** One line, every run, whatever happened. The property finding 3 was about. */
+function announce(what: string): void {
+  // eslint-disable-next-line no-console
+  console.log(`[lane D] wallet census (db:verify invariant 5) — ${what}`);
 }
 
 async function dropRunDatabaseIfOurs(): Promise<void> {
