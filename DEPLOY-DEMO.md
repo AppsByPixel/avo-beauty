@@ -1,0 +1,196 @@
+# Deploying the demo
+
+A reachable URL for the dashboard and the API, on free tiers, for showing the
+product. **This is not the production deployment and cannot become one by
+changing a variable** — the reason is the first section below, and it is worth
+reading before you spend an evening on it.
+
+`go-live-checklist.md` is the real thing. This is the demo.
+
+---
+
+## The one blocker, and why it is not a bug
+
+**The API refuses to boot with `NODE_ENV=production`, on purpose, and there is
+no combination of environment variables that gets a demo past it.**
+
+`api/src/env.ts:486`:
+
+> `GATEWAY_DRIVER=sandbox` settles payments nobody paid for. Select a real
+> processor before production.
+
+The only other driver is `myfatoorah`, and `:502` refuses to boot with it unless
+real processor credentials are present — which is a client decision this project
+does not have (CLAUDE.md § Escalate, don't guess: "CBK/PSP selection").
+
+So the honest configuration for a demo is `NODE_ENV=development` on a public
+host. That is not defeating the assertion; it is answering it. A demo *is* a
+deployment where the money is fake, and the environment should say so rather
+than claim production and then be lied to about the gateway.
+
+`render.yaml` does exactly this, with the reason written at the top of the file
+so nobody later reads it as an accident.
+
+---
+
+## What is weaker here than in production
+
+Four things, all consequences of the above. None is a defect; each is a fact to
+know before someone draws a conclusion from the demo.
+
+**1 · Money is not real, and the gateway will confirm anything.** The sandbox
+gateway settles a top-up nobody paid for. Charges, wallet balances, tiers and
+the ledger are all genuinely exercised — only the payment leg is fabricated.
+
+**2 · Uploaded images do not survive a restart, and there are none to begin
+with.** `IMAGE_DRIVER=disk` writes to the container filesystem, which a free
+service replaces on every deploy and every wake from idle. `db/seed.ts` inserts
+no images at all, so products and services start with placeholders. If the demo
+needs pictures, upload them immediately before showing it, or attach a persistent
+disk (paid).
+
+**3 · Anyone with the URL can sign in.** `db/seed.ts` creates its console and
+staff users with known development passwords — `yousef / yousef-dev-password`
+and friends, printed by the seed itself. That is correct for a seed and wrong
+for something on the public internet. Either treat the URL as the secret, or
+change the passwords after seeding. **Do not put real customer data in it.**
+
+**4 · The first request after an idle period is slow.** A free service spins
+down. The wake takes tens of seconds, and it will happen at the worst moment.
+Hit the URL a minute before showing it to anybody.
+
+---
+
+## The stack
+
+| | | |
+|---|---|---|
+| Dashboard | Render static site | free, no spin-down, CDN |
+| API | Render web service | free, spins down when idle |
+| Postgres | Neon | free tier, Postgres 17 |
+
+Postgres is on **Neon rather than Render** deliberately: Render's own free
+database has historically been time-limited, and a demo database that expires a
+month later is a demo that breaks with no warning. Check both providers' current
+free-tier terms before committing — they change, and this file will not know.
+
+Nothing here is Render-specific except `render.yaml` itself. The API is a plain
+Node process (`pnpm --dir api start`) and the dashboard is a static Vite build,
+so any host that runs Node 22 and serves a directory will do.
+
+---
+
+## Steps
+
+**I cannot do the account parts.** Creating accounts and entering credentials is
+yours — I can prepare everything else, and have.
+
+### 1 · Database
+
+Create a Neon project (Postgres 17). You need **two roles**, not one:
+
+- the **owner** role Neon gives you → `DATABASE_URL`
+- a second, **non-owner** role → `APP_DATABASE_URL`
+
+The split is not ceremony. An owner can `UPDATE` its own tables regardless of
+`REVOKE`, so serving requests as the owner makes the append-only ledger
+guarantees decorative — the API would be *allowed* to rewrite history it
+promises never to rewrite. `api/scripts/verify-constraints.sql` asserts those
+guarantees and is the thing that would go quiet.
+
+Create the app role with the same grants `api/drizzle/` sets up for `avo_app`
+locally.
+
+### 2 · Schema and seed
+
+From your machine, against the Neon URLs:
+
+```bash
+DATABASE_URL='postgres://…owner…' APP_DATABASE_URL='postgres://…app…' pnpm --dir api run db:migrate
+```
+
+```bash
+DATABASE_URL='postgres://…owner…' APP_DATABASE_URL='postgres://…app…' pnpm --dir api run db:seed
+```
+
+Optionally verify the database says what the schema claims — 93 invariants:
+
+```bash
+AVO_VERIFY_DB='…' pnpm --dir api run db:verify
+```
+
+For a richer demo (a diary with appointments on the next open day, one charged
+visit attributed to an artist), `scripts/demo-seed.sh` does that on top of the
+seed.
+
+### 3 · Services
+
+Point Render at the repo as a Blueprint; it reads `render.yaml` and creates both
+services. Then fill in the four secrets it leaves blank, in the Render dashboard:
+
+| Service | Variable | Value |
+|---|---|---|
+| `avo-api` | `DATABASE_URL` | Neon owner URL |
+| `avo-api` | `APP_DATABASE_URL` | Neon app-role URL |
+| `avo-api` | `PUBLIC_BASE_URL` | the dashboard's URL, once it has one |
+| `avo-dashboard` | `VITE_AVO_API_URL` | the API's URL |
+
+`VITE_AVO_API_URL` is read at **build** time, so changing it needs a redeploy of
+the static site, not a restart.
+
+### 4 · Check it
+
+```bash
+curl -sS "$API_URL/v1/platform/policies" | head -c 200
+```
+
+A JSON policy set means the API booted, reached Postgres, and the seed landed.
+An empty reply usually means the service is still waking up.
+
+**Rehearse it locally first** — this exact shape was driven against the local
+`avo_ci` before this file was written, and it is the fastest way to find a typo
+in an environment variable without waiting on a deploy:
+
+```bash
+NODE_ENV=development PORT=4599 DATABASE_URL='…' APP_DATABASE_URL='…' JWT_SECRET='at-least-32-characters-long-please' GATEWAY_WEBHOOK_SECRET='at-least-16-chars' TRUST_PROXY=1 pnpm --dir api start
+```
+
+It should log `Server listening`, `receipt worker on, driver=logging`, and a
+no-show worker tick. The top-up reaper logging that it is **off** is correct and
+is the default.
+
+---
+
+## Gotchas that will cost you an hour each
+
+- **`pnpm install --prod` breaks the API.** `api`'s `start` runs `tsx`, a
+  devDependency. A production install prunes it and the service dies with
+  `tsx: not found`, which reads like a missing package rather than a pruned one.
+- **`pnpm build` is required even though `api` has no build script.** It imports
+  `@avo/types` and `@avo/tokens` from their built `dist/`, which is gitignored.
+  Without it the process dies at import, before any of the readable boot errors.
+- **`--dir`, never `--filter`.** `--filter` runs from the workspace root, so
+  `--env-file-if-exists=.env` resolves against the wrong directory and the
+  command exits 9 with nothing useful said. RUNBOOK.md carries this too.
+- **Connection ceiling.** `db/client.ts` opens a pool of `max: 10`. Free
+  Postgres tiers cap connections low; use Neon's **pooled** connection string,
+  or the API will exhaust them and fail in a way that looks like a query bug.
+- **The secrets have minimum lengths, enforced at boot.** `JWT_SECRET` must be
+  at least **32** characters and `GATEWAY_WEBHOOK_SECRET` at least **16**. Too
+  short is a boot refusal, not a warning: `JWT_SECRET: String must contain at
+  least 32 character(s)`, and the process exits 1. If your host's generated
+  value is shorter, set one by hand.
+- **There is no health endpoint.** Nothing serves `/health`, so `render.yaml`
+  declares no health check and the platform probes the port instead. Adding one
+  is a product change — ask first (CLAUDE.md: "Do not add features").
+
+---
+
+## What this demo does not show
+
+- **Receipts do not send.** `RECEIPT_DRIVER=logging` queues and logs; nothing
+  reaches a customer. Real sending needs WhatsApp template approval and a
+  transactional email domain — both client-owned.
+- **Calendar is a stub.** `CALENDAR_DRIVER=stub`; no Google project exists.
+- **Arabic has unreviewed strings.** 81 keys have no source in the design bundle
+  and await a native-speaker review. Demo in English unless that is the point.

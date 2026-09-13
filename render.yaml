@@ -1,0 +1,115 @@
+# DEMO DEPLOYMENT ONLY. NOT A PRODUCTION CONFIGURATION.
+#
+# Read `DEPLOY-DEMO.md` before using this. The short version, because the one
+# thing that surprises people is load-bearing:
+#
+#   THIS RUNS WITH `NODE_ENV=development`, DELIBERATELY, AND IT CANNOT RUN ANY
+#   OTHER WAY YET.
+#
+# `api/src/env.ts` refuses to boot in production with `GATEWAY_DRIVER=sandbox`
+# — "sandbox settles payments nobody paid for" — and the only other driver,
+# `myfatoorah`, refuses to boot without real processor credentials this project
+# does not have (CLAUDE.md § Escalate, don't guess). So a demo is not a
+# production deployment with the money turned off; it is a development
+# deployment that happens to be reachable, and saying so in the environment is
+# more honest than defeating the assertion that says so.
+#
+# What that costs, and what this file does about it, is in DEPLOY-DEMO.md
+# § "What is weaker here than in production". Everything the development
+# default would leave to chance — the JWT secret, the app database role, the
+# proxy count — is set explicitly below rather than left to a per-boot random
+# value, because "development" should not also mean "unconfigured".
+
+services:
+  # ---------------------------------------------------------------- the API --
+  - type: web
+    name: avo-api
+    runtime: node
+    plan: free
+    region: frankfurt
+
+    # NOT `pnpm install --prod`. `api`'s `start` script runs `tsx`, which is a
+    # devDependency — a production install removes it and the service dies at
+    # start with "tsx: not found", which reads like a missing package rather
+    # than a pruned one.
+    #
+    # `pnpm build` is required even though `api` has no build script: `api`
+    # imports `@avo/types` and `@avo/tokens` from their built `dist/`, which is
+    # gitignored. Without this the API dies at import, not at boot.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+
+    # `--dir`, NEVER `--filter`. `--filter` runs from the workspace root, so
+    # `--env-file-if-exists=.env` resolves against the wrong directory and the
+    # command exits 9. RUNBOOK.md carries this; it has cost this project time
+    # twice.
+    startCommand: pnpm --dir api start
+
+    envVars:
+      # See the header. This is the whole reason the demo boots.
+      - key: NODE_ENV
+        value: development
+
+      # Node 20.12+ for `--env-file-if-exists`, which every `api` script uses.
+      - key: NODE_VERSION
+        value: "22"
+
+      # Set rather than generated. Outside production `env.ts` mints a fresh
+      # JWT secret PER BOOT, and a free service spins down when idle — so every
+      # cold start would silently sign everyone out mid-demo.
+      #
+      # MINIMUM 32 CHARACTERS (`env.ts:33`, `z.string().min(32)`), and it is a
+      # zod refusal at boot rather than a warning. Found by booting this exact
+      # configuration, not by reading it. If the platform's generated value is
+      # shorter than 32, set one by hand.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Same reasoning: generated per boot otherwise. Minimum 16 (`env.ts:160`).
+      - key: GATEWAY_WEBHOOK_SECRET
+        generateValue: true
+
+      # One proxy in front of this process (Render's). Not `true`, which would
+      # let any client forge `X-Forwarded-For` and mint itself a fresh rate
+      # limit bucket per request; not unset, which puts every caller in one
+      # bucket and lets twenty probes lock out signup for everybody.
+      - key: TRUST_PROXY
+        value: "1"
+
+      # Both are set in the Render dashboard, not here — they carry credentials.
+      # APP_DATABASE_URL is the NON-OWNER role. Outside production it would fall
+      # back to DATABASE_URL, which serves every request as the table owner and
+      # makes the append-only ledger guarantees decorative. Set it properly.
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_DATABASE_URL
+        sync: false
+
+      # The dashboard's origin, for the links the API builds into receipts and
+      # callbacks. Fill in once the static site below has its URL.
+      - key: PUBLIC_BASE_URL
+        sync: false
+
+  # ---------------------------------------------------------- the dashboard --
+  - type: web
+    name: avo-dashboard
+    runtime: static
+    plan: free
+
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    staticPublishPath: apps/dashboard/dist
+
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Read at BUILD time by Vite, not at runtime — changing it needs a
+      # redeploy, not a restart. Set to the API service's URL.
+      - key: VITE_AVO_API_URL
+        sync: false
+
+    routes:
+      # A client-side router serving deep links: anything that is not a built
+      # asset has to fall through to the app shell, or a refresh on
+      # /salons/SAL-AMARA/orders is a 404 from the CDN.
+      - type: rewrite
+        source: /*
+        destination: /index.html
