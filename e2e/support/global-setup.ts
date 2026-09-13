@@ -453,7 +453,11 @@ let censusVerdict: string | null = null;
  *   database, no answer  the query broke against a real schema. FAILS.
  *   database, wrong shape the query answered something that is not a census.
  *                        FAILS.
- *   Postgres unreachable it answered at setup, so it died mid-run. FAILS.
+ *   Postgres unreachable announced, NOT failed — the question that would tell
+ *                        this apart from "no database needed" is the one that
+ *                        just failed. A real mid-run death is already red from
+ *                        every database-touching spec. See the branch itself for
+ *                        the version of this row that was wrong, and how.
  *
  * THIS OVERRIDES A WRITTEN DECISION AND SAYS SO ON PURPOSE. It was made on
  * Aftab's instruction after the tension above was put to him. If the red gate in
@@ -546,16 +550,48 @@ async function reportWalletDrift(): Promise<void> {
    * exists splits the two cleanly, and everything after this point is a
    * database that IS there — where any failure is the instrument, not the run.
    */
+  /*
+   * POSTGRES UNREACHABLE IS ANNOUNCED AND NOT FAILED, AND THE FIRST VERSION OF
+   * THIS BRANCH GOT IT WRONG IN A WAY WORTH KEEPING ON THE RECORD.
+   *
+   * It failed the run, on the reasoning that "Postgres answered at setup —
+   * `sweepStaleRunDatabases` runs there and would have failed the run otherwise
+   * — so it became unreachable DURING this run". That reasoning was false when
+   * it was written. `sweepStaleRunDatabases` ends in `catch { return []; // no
+   * container, no sweep, no complaint }`, so setup is silent about a Postgres
+   * that was never up, and the inference had no support at all.
+   *
+   * IT WAS CAUGHT BY THE OBVIOUS CASE: `docker` not running. Both full runs on
+   * the merged base died here and told the reader that Postgres "became
+   * unreachable during this run" and that "every money assertion above it talked
+   * to the same container" — when nothing had talked to any container, because
+   * the daemon was down before vitest started. A census that misdiagnoses is
+   * worse than the silence it replaced; it sends someone looking for a
+   * mid-run database death that never happened.
+   *
+   * AND IT REGRESSED A RUN THAT USED TO WORK. `vitest run commit-order.test.ts`
+   * needs no database at all. With the daemon off, this branch turned a passing
+   * static-analysis run red — exactly the "gate people learn to disable" shape
+   * the cap above was careful to avoid.
+   *
+   * SO: unreachable Postgres cannot be told apart from "no database was needed",
+   * because the question that separates them is the one that just failed. It is
+   * announced loudly and the run is left alone. NOTHING IS LOST BY THAT — a
+   * Postgres that really did die mid-run takes every database-touching spec with
+   * it, and those are already red on their own merits. The census does not have
+   * to be what catches it, and it is the one thing here that cannot tell.
+   */
   let exists: boolean;
   try {
     exists = databaseExists(db);
   } catch (err) {
-    announce(`could not ask Postgres whether "${db}" exists — ${String(err)}`);
-    censusVerdict =
-      `the wallet census could not reach Postgres to ask whether "${db}" exists: ${String(err)}\n\n` +
-      'Postgres answered at setup — `sweepStaleRunDatabases` runs there and would have failed ' +
-      'the run otherwise — so it became unreachable during this run. That is worth a red run ' +
-      'rather than a silent one: every money assertion above it talked to the same container.';
+    announce(
+      `could not reach Postgres to ask whether "${db}" exists — ${String(err)}. ` +
+        'NOT failing the run: this is what a `docker` daemon that is not running looks like, ' +
+        'and a static-analysis-only run legitimately needs no database. If any spec above ' +
+        'needed one, it has already failed on its own and says so more precisely than this ' +
+        'line can.',
+    );
     return;
   }
 
