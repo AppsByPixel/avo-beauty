@@ -1,0 +1,31 @@
+# Vercel CLI deploys upload the working tree. Without this it sent 40195 files
+# and was refused at 15000 — the monorepo's node_modules and build output are
+# the bulk of it, and Vercel reinstalls and rebuilds anyway.
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+.git
+.claude
+coverage
+**/coverage
+
+# Suites no deployed surface imports.
+#
+# `design/` IS NOT LISTED, and that is deliberate rather than an oversight.
+# Excluding it looked obviously right — it is the reference bundle, not code —
+# and it broke the build: `packages/tokens/src/generate.ts:21` reads
+# `design/tokens/avo-tokens.json`, which CLAUDE.md calls the only place a hex
+# may be written. `pnpm build` regenerates the tokens from it on every deploy,
+# so the design bundle is a build input, not documentation.
+e2e
+
+# Native mobile build artifacts. The scanner's CocoaPods tree contains a
+# symlink to an .xcframework that does not resolve off a Mac, and the deploy
+# refused the whole upload over it. Neither deployed surface imports any of
+# this — the wallet and scanner ship through App Store Connect.
+**/ios
+**/android
+**/Pods

@@ -16,3 +16,13 @@ packages/tokens/dist/
 *.log
 coverage/
 .expo/
+.vercel
+
+# Vercel CLI. `.vercel/` holds project ids AND, after `vercel pull`, the pulled
+# environment — JWT_SECRET and both database URLs in plaintext. It was ignored
+# only in trunk's working copy and on no branch, so every lane worktree could
+# have committed it.
+# (.vercel is listed above.)
+
+# Supabase CLI scratch state written by `supabase link` / `supabase projects`.
+supabase/.temp/
