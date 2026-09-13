@@ -329,11 +329,19 @@ describe('native: the URL and a header, handed straight to <Image>', () => {
 
 describe('web: the bytes are fetched, because react-native-web drops headers', () => {
   const objectUrls: string[] = [];
+  /*
+    WHAT WAS HANDED TO `createObjectURL`, KEPT SO A TEST CAN LOOK AT IT. Until
+    this was recorded, nothing in this file ever inspected the body the fake API
+    served — see `PAYLOAD` below for what that cost.
+  */
+  const published: Blob[] = [];
 
   beforeEach(() => {
     objectUrls.length = 0;
+    published.length = 0;
     // jsdom implements neither, and RNW's loader would use them for real.
-    globalThis.URL.createObjectURL = vi.fn((_blob: Blob) => {
+    globalThis.URL.createObjectURL = vi.fn((blob: Blob) => {
+      published.push(blob);
       const url = `blob:avo/${objectUrls.length}`;
       objectUrls.push(url);
       return url;
@@ -341,7 +349,41 @@ describe('web: the bytes are fetched, because react-native-web drops headers', (
     globalThis.URL.revokeObjectURL = vi.fn();
   });
 
-  const ok = () => new Response(new Blob([new Uint8Array([1, 2, 3])]), { status: 200 });
+  /*
+    THE BODY IS THE BYTES THEMSELVES, NOT A `Blob` WRAPPING THEM, AND THAT IS A
+    RUNTIME DEFECT THIS FIXTURE USED TO HAVE RATHER THAN A STYLE PREFERENCE.
+
+    Under `// @vitest-environment jsdom` the global `Blob` is JSDOM's and the
+    global `Response` is NODE'S: jsdom implements no fetch, so vitest leaves
+    undici's `Response` in place. The two do not know each other. jsdom's `Blob`
+    has no `.stream()`, and undici's body extraction is what reaches for it:
+
+      Node 22 / undici 6   new Response(jsdomBlob)  THROWS
+                           `TypeError: object.stream is not a function`
+      Node 25 / undici 7   new Response(jsdomBlob)  SUCCEEDS — with a body of
+                           the thirteen bytes of the STRING "[object Blob]"
+
+    So `new Response(new Blob([1, 2, 3]))` never served `[1, 2, 3]` on EITHER
+    runtime. CI runs 22 and failed loudly; a developer runs 25 and it passed
+    while serving the wrong body, because no assertion here had ever looked at
+    the bytes. That is the same shape as DECISIONS.md #106 — a guard verified in
+    the one environment where its defect is invisible.
+
+    A `Uint8Array` is a body both undici versions accept unchanged, and the
+    `published` assertion in the first test is what stops this coming back: a
+    fixture that silently serves the wrong thing now fails.
+  */
+  const PAYLOAD = Uint8Array.of(1, 2, 3);
+  const ok = () => new Response(PAYLOAD, { status: 200 });
+
+  /** The bytes that actually reached `createObjectURL`, not the ones we meant to send. */
+  const bytesPublished = async (i: number) => {
+    const blob = published[i];
+    // Named rather than `!`: "nothing was published" and "the wrong bytes were
+    // published" are different failures and should not arrive as the same crash.
+    if (blob === undefined) throw new Error(`nothing reached createObjectURL at index ${i}`);
+    return new Uint8Array(await blob.arrayBuffer());
+  };
 
   it('sends the session as a header and renders the blob it gets back', async () => {
     const fetchMock = vi.fn().mockResolvedValue(ok());
@@ -355,6 +397,9 @@ describe('web: the bytes are fetched, because react-native-web drops headers', (
     });
     expect(hook.current.source).toEqual({ uri: 'blob:avo/0' });
     expect(hook.current.failed).toBe(false);
+    // THE BYTES THE API SERVED ARE THE BYTES THAT GOT PUBLISHED. Without this
+    // the whole block passes on a body of "[object Blob]".
+    expect(await bytesPublished(0)).toEqual(PAYLOAD);
   });
 
   it('takes an already-rotated token WITHOUT spending a refresh — same rule as native', async () => {

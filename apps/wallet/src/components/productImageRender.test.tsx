@@ -20,6 +20,13 @@
  * `./authedImage` the way a bundler without a platform extension does. That is
  * stated rather than hidden: the native half's logic is driven directly in
  * `authedImage.test.tsx`, and its rendering was driven on a simulator.
+ *
+ * A SERVED BODY IS A `Uint8Array`, NEVER `new Blob([...])`. In this environment
+ * the global `Blob` is jsdom's and the global `Response` is undici's, and undici
+ * 6 — the one Node 22 and therefore CI carries — throws `object.stream is not a
+ * function` on a jsdom Blob while undici 7 quietly serves the string
+ * "[object Blob]" instead. `authedImage.test.tsx` § `PAYLOAD` carries the whole
+ * argument and the assertion that keeps it from returning.
  */
 
 import type { ImageRef } from '@avo/types';
@@ -108,7 +115,7 @@ describe('a product with a photograph', () => {
   });
 
   it('fades one in once the bytes arrive', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob([new Uint8Array([1])]))));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(Uint8Array.of(1))));
 
     tile(IMAGE);
     await settle();
@@ -175,7 +182,7 @@ describe('Arabic', () => {
     for `I18nManager.forceRTL` to put on the wrong side of the row.
   */
   it('renders the same square, and does not invent an Arabic product name', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Blob([new Uint8Array([1])]))));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(Uint8Array.of(1))));
 
     tile(IMAGE, 'ar');
     await settle();
