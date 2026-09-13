@@ -5,7 +5,7 @@ import { ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { displayNameFor } from '../auth/api.js';
 import { SCOPES } from '../auth/scopes.js';
-import { rememberWorkspace, suggestedWorkspace, workspaceHintFromHost } from '../config.js';
+import { rememberWorkspace, suggestedWorkspace } from '../config.js';
 
 /** AVO Login.dc.html 5a. Copy is verbatim; do not paraphrase it. */
 const COPY = {
@@ -14,15 +14,19 @@ const COPY = {
   unreachable: "We couldn't reach your workspace. Check your connection and try again.",
   rejected: 'That username and password do not match. Try again.',
   /*
-   * NOT FROM THE DESIGN — flagged in the lane report.
+   * NOT FROM THE DESIGN — flagged in the lane report, and ruled on since.
    *
    * AVO Login.dc.html 5a draws two fields, username and password. The API needs
    * three: `staff_user_salon_handle_uq` is on (salon_id, handle), so "noura" is
-   * not a unique person and a two-field form cannot address a second salon. On
-   * a per-salon subdomain this field is derived from the host and hidden, which
-   * is the deployed shape and matches the design exactly; on a bare host it has
-   * to be asked for. The alternative was a build-time constant, which is the
-   * thing this change removes.
+   * not a unique person and a two-field form cannot address a second salon. The
+   * departure is normative, not this lane's invention — api-contract.md:787,
+   * marked "Ruling": *"merchant sign-in carries a workspace field and platform
+   * sign-in does not … forced by the data model rather than chosen"*. It is
+   * DECISIONS.md queue item 7.
+   *
+   * The ruling says the field is CARRIED. It does not say "carried unless the
+   * hostname looks like it knows better" — see the field itself below for what
+   * that conditional cost.
    */
   missingWorkspace: 'Enter the workspace for your salon.',
 } as const;
@@ -34,13 +38,10 @@ export function SignIn() {
   const { signIn, sessionFor } = useAuth();
   const errorId = useId();
 
-  /*
-   * A subdomain is authoritative enough to hide the field: on `amara.avo.app`
-   * the merchant did not choose the workspace, the URL did. On `localhost` and
-   * on the apex there is no host to read, so the field is shown and pre-filled
-   * with whatever last signed in here.
-   */
-  const fromHost = workspaceHintFromHost(window.location.hostname);
+  // The workspace pre-fill: the last workspace that signed in successfully on
+  // this browser, else the host's subdomain label (config.ts states the order
+  // and why). A default, never a verdict — the field carrying it is always
+  // rendered. See below.
   const [salonId, setSalonId] = useState(() => suggestedWorkspace());
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -155,21 +156,50 @@ export function SignIn() {
         <p className="signin__sub">Enter the credentials for your salon workspace.</p>
 
         <div className="signin__fields">
-          {fromHost ? null : (
-            <TextField
-              label="Workspace"
-              placeholder="SAL-AMARA"
-              autoComplete="organization"
-              autoCapitalize="characters"
-              spellCheck={false}
-              value={salonId}
-              describedBy={error ? errorId : undefined}
-              onChange={(event) => {
-                setSalonId(event.target.value);
-                setError('');
-              }}
-            />
-          )}
+          {/*
+            ALWAYS RENDERED. This was `{fromHost ? null : <TextField … />}`, and
+            the hint it trusted is documented one file away as authoritative for
+            nobody — config.ts: *"A HINT, NOT A RESOLUTION. It assumes the
+            subdomain label equals the salon id, which is true for nobody today."*
+            A value that weak may pre-fill a control. It may not remove one.
+
+            What the conditional actually did: `workspaceHintFromHost` returns
+            the first DNS label of any host with three or more labels, so every
+            hosted domain — not just a per-salon subdomain — deleted the field
+            and submitted its own first label as the salon id. Driven, on the
+            hosts that matter:
+
+              localhost                        null   the only one that worked
+              98a0-39-49-146-53.ngrok-free.app "98a0-39-49-146-53"
+              abc-def.trycloudflare.com        "abc-def"
+              avo-dashboard.onrender.com       "avo-dashboard"
+              dashboard.avo.beauty             "dashboard"
+              amara.avo.app                    "amara"
+
+            The deployed sign-in page rendered two inputs, username and password,
+            and POSTed a salon id that is not a salon: one 401, deliberately
+            unspecific (see the catch above), and no control on the screen able
+            to correct it. Not an ngrok artefact — `onrender.com` fails
+            identically, and so does `dashboard.avo.beauty`, which is the host
+            the design itself draws in the browser chrome of AVO Login.dc.html 5a.
+
+            The hint keeps its whole job on a per-salon subdomain: on
+            `amara.avo.app` nobody types the workspace, it is already in the box.
+            It just no longer decides whether the box exists.
+          */}
+          <TextField
+            label="Workspace"
+            placeholder="SAL-AMARA"
+            autoComplete="organization"
+            autoCapitalize="characters"
+            spellCheck={false}
+            value={salonId}
+            describedBy={error ? errorId : undefined}
+            onChange={(event) => {
+              setSalonId(event.target.value);
+              setError('');
+            }}
+          />
 
           <TextField
             label="Username"

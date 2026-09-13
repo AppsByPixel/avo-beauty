@@ -34,6 +34,16 @@ export const API_BASE_URL: string =
  * is real. Making the subdomain authoritative needs a public
  * `GET /workspaces/{subdomain}` on the API to map a host to a salon id — see the
  * lane report.
+ *
+ * AND THE CONSEQUENCE, WHICH THE PARAGRAPH ABOVE USED TO LEAVE OUT. "Stays
+ * editable" was true of the field and false of the screen: `SignIn.tsx` rendered
+ * the field only when this function returned null, so on every host with three
+ * or more labels the hint did not pre-fill a control, it deleted one — and the
+ * "true for nobody today" caveat stopped being cosmetic and became a lock-out.
+ * Fixed at the call site (the field is now unconditional) rather than here,
+ * because the hint is right about what it claims; it was only ever wrong about
+ * what it was allowed to decide. Read as a caution: a note that documents an
+ * assumption has not documented the assumption's failure mode.
  */
 export function workspaceHintFromHost(hostname: string): string | null {
   if (!hostname) return null;
@@ -61,14 +71,24 @@ export function rememberWorkspace(salonId: string): void {
   }
 }
 
+/**
+ * REMEMBERED BEATS GUESSED. A remembered workspace is the id the SERVER put on a
+ * session that actually signed in here; the host label is a guess this file
+ * already admits is true for nobody. The old order put the guess first, so a
+ * browser that had signed in as `SAL-AMARA` was offered `98a0-39-49-146-53` the
+ * next time it opened the tunnelled host — asserted in
+ * `routes/signInWorkspaceField.test.tsx`. On a fresh browser nothing is remembered,
+ * so a per-salon subdomain still pre-fills from the host — which is the case the
+ * hint exists for.
+ */
 export function suggestedWorkspace(): string {
-  const fromHost = workspaceHintFromHost(window.location.hostname);
-  if (fromHost) return fromHost;
   try {
-    return window.localStorage.getItem(LAST_WORKSPACE_KEY) ?? '';
+    const remembered = window.localStorage.getItem(LAST_WORKSPACE_KEY);
+    if (remembered) return remembered;
   } catch {
-    return '';
+    // Storage disabled. Fall through to the host hint, then to an empty field.
   }
+  return workspaceHintFromHost(window.location.hostname) ?? '';
 }
 
 /**
