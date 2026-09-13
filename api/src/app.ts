@@ -72,11 +72,44 @@ export async function buildApp(): Promise<FastifyInstance> {
      * `level: 'error'` and no pino-pretty transport: Fastify's own
      * request/response lines are `info`, so a green run stays exactly as quiet
      * as it was, and the raw JSON goes straight to the harness's capture.
+     *
+     * AND OUTSIDE TEST, PRETTY ONLY FOR A TTY — which is a fix, not a preference.
+     *
+     * The `else` branch used to be an unconditional `pino-pretty` transport, and
+     * it killed the first working serverless deploy at boot:
+     *
+     *     Error: unable to determine transport target for "pino-pretty"
+     *       at createPinoLogger (.../fastify/lib/logger-pino.js:40:14)
+     *       at buildApp (/var/task/api/src/app.ts:60:15)
+     *
+     * `pino-pretty` IS NOT A DEPENDENCY OF `@avo/api`. It is declared by
+     * `packages/mock` alone, and the only reason `pnpm --dir api start` ever
+     * printed colour is that the monorepo install happens to leave it somewhere
+     * this package can reach. Declaring it here would not have fixed the deploy
+     * either: pino names a transport target by STRING and loads it in a worker
+     * thread, so Vercel's dependency tracer — which follows imports — ships
+     * nothing for it and the resolution fails inside the function regardless.
+     *
+     * It is also the wrong thing to want there. A pretty transport is a second
+     * thread whose job is ANSI colour for a human watching a terminal; a function
+     * invocation may be frozen the instant it replies (serverless.ts § HOW A
+     * FASTIFY APP BECOMES A NODE HANDLER makes the same argument about the
+     * background workers), and Vercel parses pino's plain JSON into structured log
+     * rows on its own. Colour there is cost with no reader.
+     *
+     * `process.stdout.isTTY` is the narrowest predicate that says "a developer is
+     * watching this": true for `pnpm --dir api start` in a terminal, which keeps
+     * that output byte-for-byte what it was, and false for a function, for CI, and
+     * for anything capturing the stream — all of which get pino's JSON, which is
+     * what reads those. No new environment variable, because the question is not
+     * a configuration choice.
      */
     logger:
       env.nodeEnv === 'test'
         ? { level: 'error', redact: ['req.headers.authorization'] }
-        : { transport: { target: 'pino-pretty' }, redact: ['req.headers.authorization'] },
+        : process.stdout.isTTY
+          ? { transport: { target: 'pino-pretty' }, redact: ['req.headers.authorization'] }
+          : { redact: ['req.headers.authorization'] },
     // Money bodies are small. A generous limit is just a DoS surface.
     bodyLimit: 256 * 1024,
     /**
