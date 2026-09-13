@@ -244,6 +244,14 @@ export const ar: Copy = {
     `مستواكِ ${TIER_ADJECTIVE[tier]} يضيف ${ea(percent)}${PC} رصيد مجاني على كل شحن.`,
   stampsBadge: (target) => `اجمعي ${ea(target)} · واحدة مجاناً`, // design:1366
   stampsExplain: 'اشحني أي مبلغ — كل زيارة للصالون تضيف ختماً.', // design:1367
+  /**
+   * design:295 — the same markup serves both languages, so the same `+`. The
+   * figure arrives formatted by `formatFils`, i.e. Western digits, which is what
+   * the designer's own Arabic does for money (design:1286 writes `عربون 5.000
+   * د.ك`). Deliberately NOT `ea()`: this is money, not a count.
+   */
+  topupTileBonus: (bonus) => `+${bonus}`,
+  topupGet: 'تحصلين على', // design:1283 — feminine, as the design wrote it
   continuePay: 'متابعة الدفع', // design:1283
 
   // -------------------------------------------------- top-up sheet: choose --
