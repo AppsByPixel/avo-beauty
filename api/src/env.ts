@@ -23,6 +23,23 @@ const EnvSchema = z.object({
   /** Application connection. Falls back to DATABASE_URL only outside production. */
   APP_DATABASE_URL: z.string().url().optional(),
 
+  /**
+   * How `db/client.ts` pools. `default` is `{ max: 10 }` — today's behaviour,
+   * unchanged, and what local dev, CI and both test suites run.
+   *
+   * `serverless` is `{ max: 1, prepare: false }` and is ONLY correct against a
+   * TRANSACTION-mode pooler (Supabase's port 6543). Set it together with an
+   * APP_DATABASE_URL on that port, never separately: `prepare: false` on a
+   * session-mode pooler is merely slower, but leaving it on against 6543 fails
+   * intermittently with `prepared statement "…" does not exist`.
+   *
+   * There is no assertion tying the two together, and that is deliberate — the
+   * port is not a reliable signal (a self-hosted PgBouncer is on 5432), so a
+   * guess here would refuse valid deployments. `db/poolOptions.ts` carries the
+   * whole argument.
+   */
+  DB_POOL_MODE: z.enum(['default', 'serverless']).default('default'),
+
   PORT: z.coerce.number().int().positive().default(3000),
 
   /**
@@ -547,6 +564,7 @@ export const env = {
   nodeEnv: raw.NODE_ENV,
   databaseUrl: raw.DATABASE_URL,
   appDatabaseUrl: raw.APP_DATABASE_URL ?? raw.DATABASE_URL,
+  dbPoolMode: raw.DB_POOL_MODE,
   port: raw.PORT,
   jwtSecret,
   accessTokenTtlMinutes: raw.ACCESS_TOKEN_TTL_MINUTES,

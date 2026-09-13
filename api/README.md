@@ -67,3 +67,87 @@ Lanes) and Lane A may not write to it.
 deciding that `api` provisions its own database. Until one of those happens, run
 `test:int` by hand after any change to a limiter or to `POST /topups`,
 `POST /charges` or `POST /scans`. `vitest.int.config.ts` carries the full argument.
+
+---
+
+## Two entry points: `src/server.ts` and `src/serverless.ts`
+
+Both build the same app with the same `buildApp()`. The difference is the loops.
+
+| | `src/server.ts` | `src/serverless.ts` |
+|---|---|---|
+| Started by | `pnpm --dir=/abs/path/to/api start` | the platform, per request (`api/index.ts`) |
+| Listens | yes, on `PORT` | no — Fastify's server is fed `'request'` events |
+| Receipt worker | on unless `RECEIPT_WORKER_ENABLED=0` | **never** |
+| No-show worker | on unless `NO_SHOW_WORKER_ENABLED=0` | **never** |
+| Top-up reaper | off unless `TOPUP_REAPER_ENABLED=1` | **never** |
+
+`server.ts` is unchanged by the serverless port and is still the way to run this
+API as a process. Nothing selects between the two at runtime: they are two files,
+and a deployment picks one by picking what it invokes.
+
+### What the absent background jobs cost
+
+A serverless deployment runs no loop at all, so each of the five is a scheduled
+invocation of its existing one-shot script (`pnpm run job:*`) or it does not
+happen. In order of what it costs to skip:
+
+- **`job:no-show` — the one that matters.** Without it a customer who misses an
+  appointment keeps her deposit held out of her wallet for ever. It is money the
+  product promises to return, and nothing else returns it.
+- **`job:topup-reap`** — off by default even under `server.ts` (DECISIONS.md #27),
+  so its absence changes nothing. Abandoned intents accumulate either way.
+- **`job:campaign-release`** and **`job:erasure`** — both are deliberate manual
+  passes today; a schedule would be a new behaviour, not a restored one.
+- **the receipt worker** — costs nothing while `RECEIPT_DRIVER=logging`, because
+  nothing is sent in that configuration anyway. It starts costing the moment a
+  real driver is selected: receipts queue in `receipt_job` and nobody drains them.
+
+**No HTTP endpoints were added for these.** A cron platform calls URLs, so wiring
+them would mean new routes, which is a product change (CLAUDE.md: "Do not add
+features"). Decide it, then build it.
+
+### Images break; they do not degrade
+
+`IMAGE_DRIVER=disk` writes to a filesystem a serverless function does not have.
+The failure is clean and was driven rather than assumed: the upload answers
+**`502 image_store_unavailable`**, the underlying `ENOTDIR`/`EROFS` is in the log
+as a `cause` chain, and **no `image` row is written** — so there is no record
+pointing at bytes that never existed. Reads of images uploaded elsewhere would
+404. `images/disk.ts` § "WHY A WRITE REFUSAL AND NOT A BOOT REFUSAL" is the
+reasoning; a durable store is a driver nobody has written, and writing one needs
+the data-residency decision (CLAUDE.md § Escalate).
+
+### `DB_POOL_MODE`
+
+`default` (the default) is `{ max: 10 }` — unchanged, and what every suite runs.
+`serverless` is `{ max: 1, prepare: false }` and is only correct against a
+**transaction-mode** pooler. `src/db/poolOptions.ts` carries the argument and
+`src/db/poolOptions.test.ts` holds both halves of it.
+
+### Deploying as Vercel functions
+
+`vercel.json` and `api/index.ts` are the whole of it. Set the project's **Root
+Directory to `api`** — that is what makes Vercel scan `api/api/` for functions —
+and leave "include files outside the root directory" ON, because the install and
+build commands in `vercel.json` run at the workspace root: `@avo/types` and
+`@avo/tokens` are consumed from a `dist/` that is gitignored and produced by
+`pnpm build`. Without that build the function dies at import, before any of the
+readable boot errors.
+
+`rewrites` sends every path to the single function, so Fastify keeps doing the
+routing and no route list is duplicated in configuration. `public/index.html`
+exists only because Vercel requires an output directory when a build command is
+set; the rewrite means nothing but `/` ever reaches it.
+
+Environment, beyond the ordinary set:
+
+| Variable | Value | Why |
+|---|---|---|
+| `APP_DATABASE_URL` | pooler host, **port 6543** | transaction mode; see below |
+| `DB_POOL_MODE` | `serverless` | `{ max: 1, prepare: false }` |
+| `TRUST_PROXY` | the platform's proxy | every request arrives through one, and `services/signupLimit.ts` keys on `req.ip` |
+| `DATABASE_URL` | owner, **port 5432** | migrations only, and they want session mode |
+
+`NODE_ENV=development` for a demo, for the reason `DEPLOY-DEMO.md` § "The one
+blocker" gives — the gateway assertion is an answer, not an obstacle.
