@@ -79,6 +79,12 @@ services:
       # APP_DATABASE_URL is the NON-OWNER role. Outside production it would fall
       # back to DATABASE_URL, which serves every request as the table owner and
       # makes the append-only ledger guarantees decorative. Set it properly.
+      #
+      # The demo database is Supabase `avo-demo` (eu-central-1), already
+      # migrated, seeded and verified 93/93. USE THE POOLER HOST ON PORT 5432,
+      # not the direct host and not port 6543 — the direct host is IPv6-only,
+      # and transaction-mode pooling breaks the prepared statements postgres.js
+      # uses by default. DEPLOY-DEMO.md § Database has the full reasoning.
       - key: DATABASE_URL
         sync: false
       - key: APP_DATABASE_URL

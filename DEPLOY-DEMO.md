@@ -67,12 +67,20 @@ Hit the URL a minute before showing it to anybody.
 |---|---|---|
 | Dashboard | Render static site | free, no spin-down, CDN |
 | API | Render web service | free, spins down when idle |
-| Postgres | Neon | free tier, Postgres 17 |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **provisioned 2026-09-13, migrated, seeded, 93/93 verified** |
 
-Postgres is on **Neon rather than Render** deliberately: Render's own free
-database has historically been time-limited, and a demo database that expires a
-month later is a demo that breaks with no warning. Check both providers' current
-free-tier terms before committing — they change, and this file will not know.
+Postgres is **not on Render** deliberately: its own free database has
+historically been time-limited, and a demo database that expires a month later
+is a demo that breaks with no warning. Supabase's free tier pauses after about a
+week of inactivity instead and wakes on request, which is a better failure mode
+for something shown occasionally. Check current terms before relying on either —
+they change, and this file will not know.
+
+`eu-central-1` matches `render.yaml`'s `frankfurt` on purpose: the latency that
+matters is API-to-database, not you-to-database. Note this puts demo data in the
+EU, which is one of the two candidate answers to the open data-residency
+question (CLAUDE.md § Escalate) — fine for seeded fixtures, a decision to make
+properly before anything real.
 
 Nothing here is Render-specific except `render.yaml` itself. The API is a plain
 Node process (`pnpm --dir api start`) and the dashboard is a static Vite build,
@@ -85,43 +93,72 @@ so any host that runs Node 22 and serves a directory will do.
 **I cannot do the account parts.** Creating accounts and entering credentials is
 yours — I can prepare everything else, and have.
 
-### 1 · Database
+### 1 · Database — **already done**
 
-Create a Neon project (Postgres 17). You need **two roles**, not one:
+Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
+is migrated, is seeded, and passes all 93 invariants. Both connection strings
+are in the scratchpad file named in the handover note, not in this repo.
 
-- the **owner** role Neon gives you → `DATABASE_URL`
-- a second, **non-owner** role → `APP_DATABASE_URL`
+It has **two roles**, not one, and the split is not ceremony: an owner can
+`UPDATE` its own tables regardless of `REVOKE`, so serving requests as the owner
+would make the append-only ledger guarantees decorative — the API would be
+*allowed* to rewrite history it promises never to rewrite.
 
-The split is not ceremony. An owner can `UPDATE` its own tables regardless of
-`REVOKE`, so serving requests as the owner makes the append-only ledger
-guarantees decorative — the API would be *allowed* to rewrite history it
-promises never to rewrite. `api/scripts/verify-constraints.sql` asserts those
-guarantees and is the thing that would go quiet.
+- `postgres` — owns the tables → `DATABASE_URL`
+- `avo_app` — created `LOGIN`, non-owner, granted `CONNECT` → `APP_DATABASE_URL`
 
-Create the app role with the same grants `api/drizzle/` sets up for `avo_app`
-locally.
+**Three provider-specific things, each found by doing it rather than reading
+about it. Any of them would have cost an evening.**
 
-### 2 · Schema and seed
+1. **Use the pooler host, not the direct one.** `db.<ref>.supabase.co` has an
+   `AAAA` record and no `A` record — it is **IPv6-only**, and a host without
+   IPv6 egress cannot reach it at all. `aws-0-eu-central-1.pooler.supabase.com`
+   resolves through an ELB with IPv4.
+2. **Session mode (port 5432), not transaction mode (6543).** `db/client.ts` is
+   `postgres(url, { max: 10 })`, and postgres.js uses prepared statements by
+   default. Transaction pooling does not support them. Session mode does.
+3. **`GRANT avo_app TO postgres` before verifying.** Supabase's `postgres` is
+   not a superuser, so `verify-constraints.sql` failed at line 221 with
+   `permission denied to set role "avo_app"` — it impersonates the app role to
+   prove the `REVOKE`s actually bite. The grant makes `SET ROLE` legal; it
+   changes nothing about who owns the tables.
 
-From your machine, against the Neon URLs:
+Then verify — and note the wrapper cannot do this. `api/scripts/db-verify.sh`
+shells to `docker exec avo-postgres`, so it only ever targets the local
+container. Against a managed provider, run the SQL the wrapper runs:
 
 ```bash
-DATABASE_URL='postgres://…owner…' APP_DATABASE_URL='postgres://…app…' pnpm --dir api run db:migrate
+psql "$DATABASE_URL" -q -f api/scripts/verify-constraints.sql
+```
+
+**That returned `invariants checked: 93   failed: 0` on Supabase**, which is
+worth more than it sounds: ADR-0001's claim that the schema is provider-neutral
+had only ever been tested against the local container. It now holds on a second
+provider, with the append-only triggers and the non-owner `REVOKE`s intact.
+
+### 2 · Schema and seed — **already done**
+
+For the record, this is what was run, and it is what to re-run if the demo
+database is ever rebuilt:
+
+```bash
+DATABASE_URL='…owner…' APP_DATABASE_URL='…app…' pnpm --dir api run db:migrate
 ```
 
 ```bash
-DATABASE_URL='postgres://…owner…' APP_DATABASE_URL='postgres://…app…' pnpm --dir api run db:seed
+DATABASE_URL='…owner…' APP_DATABASE_URL='…app…' pnpm --dir api run db:seed
 ```
 
-Optionally verify the database says what the schema claims — 93 invariants:
+The seed prints the credentials it creates. They are development passwords —
+see "Anyone with the URL can sign in" above.
 
-```bash
-AVO_VERIFY_DB='…' pnpm --dir api run db:verify
-```
-
-For a richer demo (a diary with appointments on the next open day, one charged
-visit attributed to an artist), `scripts/demo-seed.sh` does that on top of the
-seed.
+**`scripts/demo-seed.sh` will NOT work against this database.** It shells to
+`docker exec` in three places, so it is local-only. The richer diary it builds —
+appointments on the next open day, one charged visit attributed to an artist —
+is not available on the demo unless someone adapts the script or does it through
+the UI. The base seed is still substantial: two members with balances, tiers and
+visit history, a salon with two branches, staff with PINs, and three console
+users.
 
 ### 3 · Services
 
@@ -130,8 +167,8 @@ services. Then fill in the four secrets it leaves blank, in the Render dashboard
 
 | Service | Variable | Value |
 |---|---|---|
-| `avo-api` | `DATABASE_URL` | Neon owner URL |
-| `avo-api` | `APP_DATABASE_URL` | Neon app-role URL |
+| `avo-api` | `DATABASE_URL` | Supabase pooler URL, `postgres` role |
+| `avo-api` | `APP_DATABASE_URL` | Supabase pooler URL, `avo_app` role |
 | `avo-api` | `PUBLIC_BASE_URL` | the dashboard's URL, once it has one |
 | `avo-dashboard` | `VITE_AVO_API_URL` | the API's URL |
 
@@ -173,8 +210,9 @@ is the default.
   `--env-file-if-exists=.env` resolves against the wrong directory and the
   command exits 9 with nothing useful said. RUNBOOK.md carries this too.
 - **Connection ceiling.** `db/client.ts` opens a pool of `max: 10`. Free
-  Postgres tiers cap connections low; use Neon's **pooled** connection string,
-  or the API will exhaust them and fail in a way that looks like a query bug.
+  Postgres tiers cap connections low, which is the other reason both URLs go
+  through the **pooler** rather than direct — otherwise the API exhausts them
+  and fails in a way that looks like a query bug.
 - **The secrets have minimum lengths, enforced at boot.** `JWT_SECRET` must be
   at least **32** characters and `GATEWAY_WEBHOOK_SECRET` at least **16**. Too
   short is a boot refusal, not a warning: `JWT_SECRET: String must contain at
