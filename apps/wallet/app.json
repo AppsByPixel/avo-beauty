@@ -2,17 +2,39 @@
   "expo": {
     "name": "AVO Wallet",
     "slug": "avo-wallet",
-    "version": "0.0.0",
+    "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "scheme": "avo",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "beauty.avo.wallet"
+      "bundleIdentifier": "beauty.avo.wallet",
+      "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["CA92.1"]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPITypeReasons": ["C617.1"]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+            "NSPrivacyAccessedAPITypeReasons": ["35F9.1"]
+          }
+        ]
+      }
     },
     "android": {
       "package": "beauty.avo.wallet",
+      "versionCode": 1,
       "predictiveBackGestureEnabled": false
     },
     "web": {
