@@ -109,6 +109,12 @@ export const shopOrder = pgTable(
     /**
      * THE TRANSACTION IS THE KEY, not a surrogate with a unique index. An order
      * has exactly one fulfilment, so a second one is not storable at all.
+     *
+     * It is also what keeps this table off the money path: the identity is
+     * borrowed from the row that holds the amount, so there is nothing here to
+     * disagree with `transaction.amount_fils`. `db/schema/shopOrder.ts` carries
+     * that argument in full — it is the one this table had to be reconciled
+     * with rather than an exception to.
      */
     transactionId: text('transaction_id')
       .primaryKey()

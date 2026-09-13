@@ -460,4 +460,109 @@ suite('the shop delivers, and it costs nothing extra', () => {
       expect(JSON.parse(res.body).error).toBe('invalid_order_status');
     });
   });
+
+  // ==================================================================
+  // WHAT THE ORDER TELLS THE REST OF THE SYSTEM ABOUT ITSELF.
+  //
+  // `services/order.ts` resolved the fulfilment, wrote it to `shop_order`, and
+  // then told the receipt queue `pickup: true` and the salon's audit log
+  // `· to collect` — both hardcoded, three lines below the value that contradicts
+  // them. Every spec above this one passed throughout, because all of them read
+  // the `shop_order` row, which was always right.
+  //
+  // THE TWO HALVES DIFFER IN SEVERITY AND THE SPECS SAY SO. Nothing in `api/src`
+  // reads `receipt_job.payload` and `RECEIPT_DRIVER=logging` sends nothing, so
+  // the wrong value was PERSISTED AND LATENT — the shape of DECISIONS.md #88.
+  // The audit detail is not latent: the dashboard renders the audit log today.
+  // ==================================================================
+  describe('the receipt and the audit log say which fulfilment it was', () => {
+    const cart = () => ({ items: [{ productId: PRODUCT, qty: 1 }] });
+
+    /** Every queued channel for one transaction. One row per channel; both carry the payload. */
+    const payloads = async (txId: string) =>
+      (
+        await exec(sql`SELECT payload FROM receipt_job WHERE transaction_id = ${txId}`)
+      ).map((r) => r.payload as Record<string, unknown>);
+
+    const auditDetail = async (txId: string) =>
+      String(
+        (
+          await exec(sql`
+            SELECT detail FROM audit_log
+             WHERE subject_type = 'transaction' AND subject_id = ${txId}
+               AND action = 'Shop order paid'`)
+        )[0]?.detail ?? '',
+      );
+
+    const place = async (body: Record<string, unknown>) => {
+      const res = await req('POST', '/orders', hers, body);
+      expect(res.statusCode, res.body).toBe(201);
+      return JSON.parse(res.body).transaction.id as string;
+    };
+
+    /**
+     * THE SPEC THAT FAILED BEFORE THE FIX. A delivery order queued a receipt
+     * payload saying `pickup: true` — the receipt she would be sent, frozen at
+     * order time (`db/schema/receipt.ts`), telling her to come and collect a
+     * thing that was being driven to her door.
+     */
+    it('a DELIVERY order does not queue a receipt payload claiming pickup', async () => {
+      const txId = await place({ ...cart(), fulfilment: 'delivery', addressId });
+      const rows = await payloads(txId);
+      // At least one channel is always queued — `salon_receipt_channel_floor`.
+      expect(rows.length).toBeGreaterThan(0);
+      for (const payload of rows) {
+        expect(payload.kind).toBe('shop');
+        expect(payload.fulfilment).toBe('delivery');
+        // And not the old boolean under a new name beside it: one vocabulary.
+        expect(payload).not.toHaveProperty('pickup');
+      }
+    });
+
+    it('a PICKUP order queues a payload that says pickup, from the value it resolved', async () => {
+      const txId = await place({ ...cart(), fulfilment: 'pickup' });
+      for (const payload of await payloads(txId)) {
+        expect(payload.fulfilment).toBe('pickup');
+      }
+    });
+
+    /**
+     * And it agrees with the row, which is the property that was broken: the
+     * payload and `shop_order.fulfilment` came from the same variable or they
+     * did not.
+     */
+    it('the queued payload agrees with the shop_order row, both ways', async () => {
+      for (const fulfilment of ['pickup', 'delivery'] as const) {
+        const txId = await place({
+          ...cart(),
+          fulfilment,
+          ...(fulfilment === 'delivery' ? { addressId } : {}),
+        });
+        const [row] = await exec(
+          sql`SELECT fulfilment::text AS f FROM shop_order WHERE transaction_id = ${txId}`,
+        );
+        for (const payload of await payloads(txId)) {
+          expect(payload.fulfilment, fulfilment).toBe(row?.f);
+        }
+      }
+    });
+
+    /**
+     * THE HALF THAT IS NOT LATENT. This sentence is rendered in the merchant's
+     * audit log today, so a delivery order was telling her staff to hand the bag
+     * over the counter.
+     */
+    it("a DELIVERY order's audit detail does not end '· to collect'", async () => {
+      const txId = await place({ ...cart(), fulfilment: 'delivery', addressId });
+      const detail = await auditDetail(txId);
+      expect(detail).not.toBe('');
+      expect(detail.endsWith('· to collect')).toBe(false);
+      expect(detail.endsWith('· for delivery')).toBe(true);
+    });
+
+    it("a PICKUP order's audit detail still ends '· to collect'", async () => {
+      const txId = await place({ ...cart(), fulfilment: 'pickup' });
+      expect((await auditDetail(txId)).endsWith('· to collect')).toBe(true);
+    });
+  });
 });
