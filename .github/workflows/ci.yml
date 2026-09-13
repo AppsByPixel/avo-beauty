@@ -21,6 +21,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THE SECOND RUNTIME, AND WHY IT IS NOT A MATRIX OVER THE JOB BELOW.
+  #
+  # On 2026-09-13 the wallet suite was green on Node 25 and red on Node 22, and
+  # the GREEN ONE WAS THE DEFECTIVE RUN: `new Response(new Blob([1,2,3]))` threw
+  # on undici 6 and, on undici 7, quietly served the 13 bytes of the string
+  # "[object Blob]" to a spec that never looked at the bytes. Today's truth
+  # surfaced only because two runtimes disagreed.
+  #
+  # `.nvmrc` now pins local development to 22, which removes accidental drift —
+  # and would also make that disagreement INVISIBLE FROM THE OTHER SIDE. Pinning
+  # everyone to one runtime does not make the suite correct on the others; it
+  # stops anyone finding out. So a second runtime runs here on purpose.
+  #
+  # It is NOT a matrix over `check`: that job boots Postgres, migrates, seeds and
+  # runs 93 invariants plus the integration suites, and none of that is
+  # runtime-sensitive in the way this is. Doubling it buys nothing. This job runs
+  # only the packages whose suites touch jsdom, undici and the DOM — which is
+  # exactly where the drift lives — and needs no database at all.
+  runtime-drift:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9.15.0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: The DOM-facing suites on a second runtime
+        run: >
+          pnpm --filter @avo/wallet --filter @avo/dashboard --filter @avo/scanner
+          --filter @avo/ui --filter @avo/types --filter @avo/tokens --filter @avo/mock
+          run test
+
   check:
     runs-on: ubuntu-latest
 
