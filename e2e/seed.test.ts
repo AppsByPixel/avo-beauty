@@ -49,7 +49,7 @@
  * the time one gateway spec takes.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   RUN_DB_PREFIX,
@@ -350,26 +350,103 @@ describe('dropRunDatabase refuses a database this run did not mint', () => {
   });
 
   /**
-   * AND THE NAME THE REAL HAZARD USES, checked through the predicate because the
-   * function cannot be asked twice — see the control below for why.
+   * AND THE NAMES THE REAL HAZARD USES — IN TWO HALVES, BECAUSE ONLY ONE OF THEM
+   * CAN SAFELY BE PUT THROUGH THE FUNCTION.
    *
-   * `avo_lane_d` is trunk-owned and pre-created; LANES.md says to ask trunk rather
-   * than create one. This is the assertion that ties the guard to the database it
-   * exists to protect, and it is safe because the refusal happens on the name,
-   * before any connection is opened.
+   * `avo`, `avo_ci` and `avo_lane_a`…`avo_lane_d` are trunk-owned; LANES.md says to
+   * ask trunk for one rather than create your own. Dropping one destroys a lane's
+   * work, so the FUNCTION is never pointed at those names — not even to prove that
+   * it refuses them. Aiming it there and then deleting the guard to find out
+   * whether this spec noticed would make the check the incident. Those names go
+   * through the predicate, and only through the predicate.
+   *
+   * WHAT THIS SPEC USED TO DO, AND WHY IT WAS WRONG IN THE PLACE IT ACTUALLY RUNS
+   * ---------------------------------------------------------------------------
+   * It opened with `precondition(dbExists('avo_lane_d'), 'avo_lane_d does not
+   * exist, so this spec is not about anything real')`. The lane databases are
+   * LOCAL development databases: they exist on a machine that has run
+   * `scripts/lane-db.sh`, and they do not exist on a CI runner, which mints only
+   * `avo_migrate_check` and `avo_int_check`. So the spec passed where it was
+   * written and threw where it runs — the same shape as the CI guard verified
+   * against an uncoloured local pipe, the Vercel function whose imports only
+   * resolved under `tsx`, and the `pino-pretty` that was reachable only through a
+   * monorepo hoist. Each was checked in the one environment that happened to
+   * satisfy it.
+   *
+   * AND THE PRECONDITION ASKED A QUESTION THE GUARD NEVER ASKS. Checked in the
+   * source rather than assumed, because if the guard looked the database up first
+   * then "refused by name" and "refused, and it survived" would not be the same
+   * claim and saying so would be the finding. It does not look it up:
+   * `dropRunDatabase()` reads `ownsItsDatabase()` — a `process.env.POSTGRES_DB`
+   * captured at module load — then `pgDb()`, another environment variable, then
+   * `isOwnRunDatabaseName()`, which is `database.startsWith(RUN_DB_PREFIX)` and
+   * nothing else. No connection is opened and no catalogue is consulted anywhere
+   * on the refusal path. Whether the database exists cannot change the answer, so
+   * its existence was never evidence for anything.
+   *
+   * SO THE SECOND HALF DRIVES THE FUNCTION AT A STAND-IN THIS SPEC NAMES ITSELF.
+   * It is the same shape as `avo_lane_d` in the only respect the guard reads — it
+   * does not carry `RUN_DB_PREFIX` — and it is a name nothing on any machine owns,
+   * so a regressed guard would issue `DROP DATABASE IF EXISTS` against nothing.
+   * That half depends on no pre-existing database and no container, which is the
+   * point: it runs identically on a developer laptop and on a bare CI runner, and
+   * if the prefix check is ever deleted from `dropRunDatabase` it returns the name
+   * instead of `undefined` and this spec goes red in BOTH.
+   *
+   * THE EXISTENCE HALF IS NOT LOST — it is the spec above, which puts the same
+   * function through `SCRATCH`, a database that really is there, and checks it is
+   * still there afterwards. Between the two: a real database survives the refusal,
+   * and a lane-shaped name is refused whether or not there is a database behind it
+   * to survive.
+   *
+   * `vi.resetModules()` IS LOAD-BEARING, for the reason the control below gives.
+   * `pgDb()` caches on first call, so the spec above has already fixed THIS
+   * module's answer to `SCRATCH`; a second `dropRunDatabase()` under a new
+   * `AVO_QA_DB` would re-read nothing and refuse for the wrong reason. A fresh
+   * module instance has a fresh cache. The `expect(fresh.pgDb()).toBe(STAND_IN)`
+   * below exists so that a reset which silently did not take goes RED rather than
+   * quietly measuring the cache a second time and passing.
    */
-  it('and the trunk-owned lane databases are exactly what it refuses', () => {
-    precondition(
-      dbExists('avo_lane_d'),
-      'avo_lane_d does not exist, so this spec is not about anything real',
-    );
+  it('and the trunk-owned lane databases are exactly what it refuses', async () => {
+    // The names themselves, through the predicate — the only safe way to ask
+    // about a database that must not be dropped to find out.
     for (const trunkOwned of ['avo', 'avo_ci', 'avo_lane_a', 'avo_lane_b', 'avo_lane_c', 'avo_lane_d']) {
       expect(
         isOwnRunDatabaseName(trunkOwned),
         `${trunkOwned} would have been dropped at teardown under AVO_QA_DB=${trunkOwned}`,
       ).toBe(false);
     }
-    expect(dbExists('avo_lane_d'), 'avo_lane_d was dropped').toBe(true);
+
+    /**
+     * A name of exactly that shape, owned by nobody. Carries the pid so two
+     * checkouts running at once cannot collide, and is deliberately NOT created:
+     * the guard decides before it would look, and a stand-in that existed would
+     * only re-prove what `SCRATCH` proves above.
+     */
+    const STAND_IN = `avo_lane_standin_${process.pid}`;
+    expect(
+      isOwnRunDatabaseName(STAND_IN),
+      'the stand-in carries RUN_DB_PREFIX, so it is not standing in for a lane database at all',
+    ).toBe(false);
+
+    vi.resetModules();
+    delete process.env.POSTGRES_DB;
+    process.env.AVO_QA_DB = STAND_IN;
+    const fresh = await import('./support/tenancy-harness.js');
+
+    expect(
+      fresh.pgDb(),
+      'vi.resetModules() did not give a fresh module, so pgDb() is still answering with the ' +
+        'name the spec above resolved. Everything below would be measuring that cache rather ' +
+        'than the guard — which is the defect this assertion exists to refuse to hide.',
+    ).toBe(STAND_IN);
+
+    expect(
+      fresh.dropRunDatabase(),
+      `dropRunDatabase returned "${STAND_IN}" for a name carrying no ${RUN_DB_PREFIX}. Pointed ` +
+        'at AVO_QA_DB=avo_lane_d — same shape, same decision — that is a trunk-owned database ' +
+        'gone at teardown, silently, because dropDatabase swallows its own errors.',
+    ).toBeUndefined();
   });
 
   /**
@@ -379,12 +456,16 @@ describe('dropRunDatabase refuses a database this run did not mint', () => {
    *
    * IT GOES THROUGH THE PREDICATE RATHER THAN THE FUNCTION, and the reason is
    * worth knowing before writing the obvious version. `pgDb()` caches its
-   * resolution on first call, so the spec above has already fixed this worker's
-   * answer to `avo_lane_d`; a second `dropRunDatabase()` under a fresh
+   * resolution on first call, so the first spec in this block has already fixed
+   * this module's answer to `SCRATCH`; a second `dropRunDatabase()` under a fresh
    * `AVO_QA_DB` re-reads nothing and refuses for the wrong reason. The first draft
    * of this spec did exactly that and failed with
    * "declined a name it had minted itself" — the guard was fine and the spec was
    * measuring the cache.
+   *
+   * The escape hatch is `vi.resetModules()` and a dynamic re-import, which the
+   * spec above uses and which this one does not need: the accept half is a
+   * question about a NAME, and the predicate is where a name is decided.
    */
   it('but a name this file minted is still accepted — the guard is a filter, not an off switch', () => {
     const minted = newRunDatabaseName();
@@ -401,17 +482,60 @@ describe('dropRunDatabase refuses a database this run did not mint', () => {
   });
 
   /**
-   * THE OTHER GUARD IS NOT TESTED HERE, AND SAYING WHY IS THE USEFUL PART.
+   * THE OTHER GUARD, WHICH THIS FILE USED TO RECORD AS UNREACHABLE.
    *
-   * `ownsItsDatabase()` closes over `EXPLICIT_DB`, which is `process.env.POSTGRES_DB`
-   * read once at module load. Nothing a spec does to `process.env` afterwards can
-   * change it, so a spec that set `POSTGRES_DB` here and asserted a refusal would
-   * be asserting the PREFIX guard while appearing to assert the `POSTGRES_DB` one —
-   * and it would keep passing if `ownsItsDatabase()` were deleted outright.
+   * What stood here said `ownsItsDatabase()` could not be tested: it closes over
+   * `EXPLICIT_DB`, which is `process.env.POSTGRES_DB` read once at module load, so
+   * nothing a spec does to `process.env` afterwards can change it — and a spec
+   * that set `POSTGRES_DB` here and asserted a refusal would be asserting the
+   * PREFIX guard while appearing to assert this one, and would keep passing if
+   * `ownsItsDatabase()` were deleted outright. That is the "assertion satisfied by
+   * the guard next door" shape, and the note ended by saying reaching it needed a
+   * separate worker started with the variable already set, "which is a
+   * `vitest.config.ts` change and worth doing only if that guard is ever
+   * suspected".
    *
-   * That is the "assertion satisfied by the guard next door" shape, so it is
-   * recorded rather than written. Reaching it needs a separate worker started with
-   * the variable already set, which is a `vitest.config.ts` change and worth doing
-   * only if that guard is ever suspected.
+   * The first half of that is still exactly right. The conclusion was not: a
+   * module-load capture is reachable from inside one worker, because
+   * `vi.resetModules()` makes the next import a fresh module LOAD, and the fresh
+   * load reads `POSTGRES_DB` as it finds it. No config change, no second worker.
+   * The note is replaced rather than deleted because it was believed over the code
+   * — the same way the stale turbo-cache paragraph in `vitest.config.ts` was
+   * repeated to trunk as an outstanding item after it had been fixed.
+   *
+   * AND THE OBJECTION IT RAISED IS ANSWERED RATHER THAN IGNORED. The database this
+   * spec names CARRIES `RUN_DB_PREFIX`, on purpose. The prefix guard would wave it
+   * through. So the only thing that can be producing the refusal is
+   * `ownsItsDatabase()`, and deleting that function makes this spec red on its
+   * own — which is precisely what the neighbour-guard objection asked for.
    */
+  it('and POSTGRES_DB — somebody\'s long-lived database — is refused by the other guard', async () => {
+    /**
+     * Prefixed DELIBERATELY: `isOwnRunDatabaseName` says yes to this name, so it
+     * cannot be the one refusing. Not created, for the reason the stand-in above
+     * is not created — and it would be refused either way.
+     */
+    const LONG_LIVED = `${RUN_DB_PREFIX}pretend_long_lived_${process.pid}`;
+    expect(
+      isOwnRunDatabaseName(LONG_LIVED),
+      'the name must pass the PREFIX guard, or this spec cannot tell the two guards apart',
+    ).toBe(true);
+
+    vi.resetModules();
+    process.env.POSTGRES_DB = LONG_LIVED;
+    process.env.AVO_QA_DB = LONG_LIVED;
+    const fresh = await import('./support/tenancy-harness.js');
+
+    expect(
+      fresh.ownsItsDatabase(),
+      'POSTGRES_DB was set before this module loaded, so the run did not mint its database',
+    ).toBe(false);
+
+    expect(
+      fresh.dropRunDatabase(),
+      'dropRunDatabase dropped a database named by POSTGRES_DB. That is the deliberate opt-out ' +
+        'for pointing this suite at a long-lived environment, and it is never ours to drop — ' +
+        'and the prefix guard cannot have caught this one, because this name carries the prefix.',
+    ).toBeUndefined();
+  });
 });
