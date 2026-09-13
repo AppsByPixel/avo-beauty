@@ -149,6 +149,9 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   tierBonusBadge: ['silver', 10],
   tierBonusExplain: ['silver', 10],
   stampsBadge: [8],
+  // The tile bonus, already formatted by `formatFils` — money, so Western in
+  // both languages. A fractional sample so a stray `ea()` would show up here.
+  topupTileBonus: ['0.500'],
   bonusRow: ['silver'],
   payRedirectTitle: ['كي نت'],
   // The server's `graceDays`. Two digits so a partial conversion is visible.
@@ -277,6 +280,15 @@ const MONEY_ARG_KEYS = new Set([
     mixed-script test below, which nothing in this set is exempt from.
   */
   'tierBonusIllustration',
+  /*
+    The amount tile's bonus — "+0.500", design:295. Its one argument is
+    `formatFils` output and there is no other number in the string, so it is the
+    ordinary case this set exists for: Western digits in Arabic too, because it
+    is money. The pay→get card's two figures are not here because they are not
+    copy arguments at all — `Money` renders them, so `formatMoney` owns their
+    script and this harness never sees them.
+  */
+  'topupTileBonus',
 ]);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */
@@ -384,6 +396,15 @@ describe('the two languages stay the same shape', () => {
       // sentence. `cRouteAvo` is the AVO wordmark (design:1331), `appVersion`
       // is a wordmark and a build number (design:475), and `pfEmailPh` is a
       // Latin email placeholder (design:1293).
+      //
+      // `topupTileBonus` joins them on the same grounds and it is worth being
+      // explicit about why, since it is the first MONEY key here. It renders
+      // "+0.500": a plus sign in front of a `formatFils` figure, and nothing
+      // else. There is no word in it to translate, and the design writes it
+      // with one shared template for both languages (design:295) rather than
+      // once per language. Listing it in AR_GAPS instead would be a lie in the
+      // other direction — it would tell the native-speaker review that Arabic
+      // is OWED here, and no Arabic is owed for a sign and a number.
       .filter(
         (key) =>
           ![
@@ -393,6 +414,7 @@ describe('the two languages stay the same shape', () => {
             'cRouteAvo',
             'appVersion',
             'pfEmailPh',
+            'topupTileBonus',
           ].includes(key),
       )
       .sort();

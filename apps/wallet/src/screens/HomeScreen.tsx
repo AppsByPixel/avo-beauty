@@ -307,12 +307,20 @@ export function HomeScreen({
         Both cards carry the design's own `margin-top:22px` (design:284 and
         design:313), so the order is the only thing the swap changes — the gap
         is 22 either way. The `margin-top:15px` in this section belongs to the
-        you-pay/you-get panel at design:300, which we deliberately do not
-        render; TopUpCard's header is that decision and is load-bearing.
+        you-pay/you-get panel at design:300, which IS now rendered — inside
+        TopUpCard, from `domain/topupPreview.ts`. This note used to say we
+        deliberately did not render it and that TopUpCard's header was that
+        decision; both halves are now out of date and the header there carries
+        the reversal.
+
+        `promotions` is passed because the preview's figures include a live
+        top-up window, and because a NULL set means the figures are withheld
+        rather than guessed — see topupPreview.ts § bonusPercents.
       */}
       <TopUpCard
         member={member}
         salon={salon}
+        promotions={promotions}
         selected={amount}
         onSelect={setAmount}
         onContinue={() => topUp.open(amount)}

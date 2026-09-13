@@ -113,6 +113,27 @@ export interface Copy {
   tierBonusExplain(tier: TierName, percent: number): string;
   stampsBadge(target: number): string;
   stampsExplain: string;
+  /**
+   * The bonus printed under an amount tile — "+0.500". design:295 renders it as
+   * a literal `+` in front of the formatted figure, in the SAME markup for both
+   * languages, so both files spell it the same way.
+   *
+   * It takes the figure ALREADY FORMATTED, exactly as `tierBonusIllustration`
+   * does, so that no arithmetic and no money formatting happens in a copy file.
+   * The figure is money, so it is Western digits in Arabic — non-negotiable #12,
+   * which is what `formatFils` guarantees and what a copy-file `ea()` call here
+   * would silently undo.
+   */
+  topupTileBonus(bonus: string): string;
+  /**
+   * "Get" — the right-hand label of the pay→get card. design:1176 / design:1283.
+   *
+   * Its partner is `youPay`, which already exists: the design uses ONE `t.youPay`
+   * for both this card (design:302) and the sheet's (design:660), so this reuses
+   * it rather than minting a second key that could drift from it. Only "Get" is
+   * new, because only this card has a right-hand side.
+   */
+  topupGet: string;
   continuePay: string;
 
   // top-up sheet — choose

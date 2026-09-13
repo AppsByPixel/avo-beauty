@@ -138,6 +138,8 @@ export const en: Copy = {
     `Your ${TIER_NAME[tier]} tier adds ${percent}% free credit to every top-up.`,
   stampsBadge: (target) => `Collect ${target} · get 1 free`,
   stampsExplain: 'Top up any amount — every salon visit adds a stamp.',
+  topupTileBonus: (bonus) => `+${bonus}`, // design:295
+  topupGet: 'Get', // design:1176
   continuePay: 'Continue to payment',
 
   // top-up sheet — choose
