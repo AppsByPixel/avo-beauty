@@ -18,7 +18,7 @@ const TOKEN: WalletToken = {
   memberId: '8842',
   token: 'wt_9f2c41',
   expiresAt: '2026-08-25T12:00:45.000Z',
-  uri: 'avo://pay?m=8842&t=wt_9f2c41',
+  uri: 'avostaff://pay?m=8842&t=wt_9f2c41',
 };
 
 describe('paymentCodeView', () => {

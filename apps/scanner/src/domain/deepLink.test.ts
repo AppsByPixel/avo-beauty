@@ -41,9 +41,9 @@ describe('a URL that is not a payment code', () => {
       'exp+avo-scanner://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8199',
       'https://avorewards.com/staff',
       'avo://home',
-      'avo://pay', // our scheme, our path, but no credential
-      'avo://pay?m=8842', // half a credential
-      'avo://pay?t=wt_9f2c41', // the other half
+      'avostaff://pay', // our scheme, our path, but no credential
+      'avostaff://pay?m=8842', // half a credential
+      'avostaff://pay?t=wt_9f2c41', // the other half
       '',
       '   ',
     ];
@@ -64,18 +64,18 @@ describe('a URL that IS a payment code', () => {
    * hardware with no camera, and it is a real delivery route in production.
    */
   it('still charges', () => {
-    expect(deepLinkAction('avo://pay?m=8842&t=wt_9f2c41')).toEqual({
+    expect(deepLinkAction('avostaff://pay?m=8842&t=wt_9f2c41')).toEqual({
       kind: 'charge',
       code: { memberId: '8842', token: 'wt_9f2c41' },
     });
   });
 
   it('accepts the same forms the parser accepts, including trimming and case', () => {
-    expect(deepLinkAction('  avo://pay?m=8842&t=wt_1  ')).toEqual({
+    expect(deepLinkAction('  avostaff://pay?m=8842&t=wt_1  ')).toEqual({
       kind: 'charge',
       code: { memberId: '8842', token: 'wt_1' },
     });
-    expect(deepLinkAction('AVO://PAY?m=8842&t=wt_1').kind).toBe('charge');
+    expect(deepLinkAction('AVOSTAFF://PAY?m=8842&t=wt_1').kind).toBe('charge');
   });
 
   /**
@@ -84,7 +84,7 @@ describe('a URL that IS a payment code', () => {
    * otherwise; it hands over exactly what the parser returned.
    */
   it('hands over the parser’s result unchanged', () => {
-    const action = deepLinkAction('avo://pay?m=forged&t=wt_real');
+    const action = deepLinkAction('avostaff://pay?m=forged&t=wt_real');
     expect(action).toEqual({ kind: 'charge', code: { memberId: 'forged', token: 'wt_real' } });
   });
 });
@@ -95,8 +95,8 @@ describe('the invariant', () => {
       null,
       '',
       'exp://127.0.0.1:8199',
-      'avo://pay',
-      'avo://pay?m=8842&t=wt_1',
+      'avostaff://pay',
+      'avostaff://pay?m=8842&t=wt_1',
       'https://example.com',
     ];
     for (const url of urls) {

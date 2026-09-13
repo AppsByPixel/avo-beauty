@@ -38,7 +38,7 @@ export function getPromotions(salonId: string, signal?: AbortSignal): Promise<Pr
  * client asks for one and counts down to `expiresAt` — it never mints, extends
  * or reuses a token, and the countdown is cosmetic.
  *
- * `uri` — the `avo://pay?m=…&t=…` string the QR encodes — is the server's too,
+ * `uri` — the `avostaff://pay?m=…&t=…` string the QR encodes — is the server's too,
  * and PaymentCode renders it verbatim. This comment used to say the field was
  * ignored "so the client is not depending on a field the real API need not
  * send". That reasoning was wrong twice over: both the mock and

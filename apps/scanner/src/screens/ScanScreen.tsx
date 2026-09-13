@@ -87,7 +87,7 @@ export function ScanScreen({
   /**
    * THE SAME PAYMENT CODE, ARRIVING AS A DEEP LINK.
    *
-   * `avo://pay?m=…&t=…` is a URI, so the OS can deliver it directly — from a
+   * `avostaff://pay?m=…&t=…` is a URI, so the OS can deliver it directly — from a
    * link in a message, from another app, or from `simctl openurl` on a
    * simulator. It is handled by `accept`, the SAME function the camera calls, so
    * there is one code path into a charge and no test-only branch beside it.

@@ -11,7 +11,7 @@
  * THE SCAN → CHARGE PATH, IN ONE PLACE
  * ------------------------------------
  * `handleCode` is the only entry into a member card, and both sources reach it:
- * the camera, and a deep link carrying the same `avo://pay` URI. `POST /scans`
+ * the camera, and a deep link carrying the same `avostaff://pay` URI. `POST /scans`
  * resolves the token to a member — the member charged is the one the SERVER
  * returns, never the `m` parameter in the code.
  */

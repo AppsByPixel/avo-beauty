@@ -1,7 +1,7 @@
 /**
  * The QR payload, parsed.
  *
- * The wallet mints `avo://pay?m={memberId}&t={token}` through
+ * The wallet mints `avostaff://pay?m={memberId}&t={token}` through
  * `walletTokenUri()` in @avo/types. This is the other half of that function and
  * it is deliberately strict: a camera pointed at a counter reads receipts,
  * loyalty cards, product barcodes and other salons' codes, and every one of
@@ -18,7 +18,7 @@ export interface PaymentCode {
   token: string;
 }
 
-const SCHEME = 'avo://pay';
+const SCHEME = 'avostaff://pay';
 
 /**
  * Parse a scanned string. Returns null for anything that is not an AVO payment

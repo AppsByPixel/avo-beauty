@@ -235,7 +235,7 @@ export const WalletTokenSchema = z.object({
   token: z.string().min(1),
   expiresAt: DateTimeSchema,
   /**
-   * The string the QR encodes — `avo://pay?m=…&t=…` — minted by the server.
+   * The string the QR encodes — `avostaff://pay?m=…&t=…` — minted by the server.
    *
    * It was being stripped, so every client re-derived it with `walletTokenUri()`
    * and none of them was using the authoritative one. Two implementations of a
@@ -246,7 +246,7 @@ export const WalletTokenSchema = z.object({
 
 /** The string the QR encodes. */
 export function walletTokenUri(memberId: string, token: string): string {
-  return `avo://pay?m=${encodeURIComponent(memberId)}&t=${encodeURIComponent(token)}`;
+  return `avostaff://pay?m=${encodeURIComponent(memberId)}&t=${encodeURIComponent(token)}`;
 }
 
 // ------------------------------------------------------------ transaction --

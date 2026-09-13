@@ -35,7 +35,7 @@
  * package can reach — which is how the original shipped.
  *
  * ENVIRONMENT NOTE, so nobody concludes the deep-link path is broken:
- * `avo://pay?…` delivered with `simctl openurl` does NOT route into a project
+ * `avostaff://pay?…` delivered with `simctl openurl` does NOT route into a project
  * loaded in Expo Go. iOS hands the custom scheme to a standalone shell which
  * then has no JS bundle ("No script URL provided"). Exercising the deep-link
  * charge needs a dev-client or a standalone build. That is the environment, not
@@ -46,7 +46,7 @@
 import { parsePaymentCode, type PaymentCode } from './paymentCode';
 
 export type LinkAction =
-  /** It really is `avo://pay?m=…&t=…`. Charge it, exactly as a scan would. */
+  /** It really is `avostaff://pay?m=…&t=…`. Charge it, exactly as a scan would. */
   | { kind: 'charge'; code: PaymentCode }
   /** Anything else. Silence — NOT "that isn't an AVO wallet code". */
   | { kind: 'ignore' };
