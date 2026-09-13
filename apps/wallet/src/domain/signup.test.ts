@@ -24,6 +24,7 @@
  * it — which is precisely the event this test should fail on.
  */
 
+import { API_BASE_URL } from '../api/client.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -72,7 +73,7 @@ function stubFetch(respond: () => Response): Call[] {
     'fetch',
     vi.fn(async (url: string, init: { body?: string }) => {
       calls.push({
-        path: url.replace('http://localhost:4100', ''),
+        path: url.replace(API_BASE_URL, ''),
         body: JSON.parse(init.body ?? '{}') as Record<string, unknown>,
       });
       return respond();

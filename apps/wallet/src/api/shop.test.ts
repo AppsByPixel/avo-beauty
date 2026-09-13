@@ -17,6 +17,7 @@
  *   `active`      NOT declared on a product, because the route does not send it.
  */
 
+import { API_BASE_URL } from './client.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -126,7 +127,7 @@ function stub(respond: (path: string) => Response): Call[] {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: { headers?: Record<string, string>; body?: string }) => {
-      const path = url.replace('http://localhost:4100', '');
+      const path = url.replace(API_BASE_URL, '');
       calls.push({
         path,
         idempotencyKey: init.headers?.['idempotency-key'] ?? null,

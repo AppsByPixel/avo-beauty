@@ -36,7 +36,33 @@ import { clearSession, getAccessToken, getRefreshToken, rotated } from './sessio
  * `/auth/refresh`. Pointing at it now fails at sign-in rather than silently
  * succeeding everywhere, which is the correct direction for that failure.
  */
-export const API_BASE_URL: string = process.env['EXPO_PUBLIC_AVO_API'] ?? 'http://localhost:4100';
+
+/**
+ * WHERE A RELEASE BUILD TALKS TO, AND WHY IT IS A TRACKED CONSTANT.
+ *
+ * The default below is a DEVELOPMENT default and nothing carried it across into
+ * an archive. An .ipa built without `EXPO_PUBLIC_AVO_API` set shipped pointing
+ * at `http://localhost:4100`, which on a tester's phone is THAT PHONE — every
+ * request fails, and it fails twice, because `NSAllowsArbitraryLoads` is false
+ * so App Transport Security refuses cleartext http before the host is even
+ * reached. A dead app with no useful error.
+ *
+ * NOT AN .env FILE: `.gitignore` excludes `.env.*` by policy — "secrets live in
+ * a manager, never here" — so the value would live on one machine and the next
+ * person to archive would silently get localhost back.
+ *
+ * NOT `expo.extra` VIA expo-constants EITHER: `expo-constants` is not a declared
+ * dependency of this app, only a hoisted transitive one. Importing it would be
+ * the `pino-pretty` defect again — reachable locally, absent where it counts.
+ *
+ * So: a tracked constant. It is a public URL, not a secret. `__DEV__` is false
+ * in a release bundle (see `api/scenario.ts`), and the env var still overrides
+ * both, which is how a device on the salon wifi reaches a laptop.
+ */
+const RELEASE_API_BASE = 'https://avo-api.vercel.app';
+
+export const API_BASE_URL: string =
+  process.env['EXPO_PUBLIC_AVO_API'] ?? (__DEV__ ? 'http://localhost:4100' : RELEASE_API_BASE);
 
 /** Timeout past which we treat the request as a connection failure, not a 500. */
 const REQUEST_TIMEOUT_MS = 15_000;

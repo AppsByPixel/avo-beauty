@@ -16,6 +16,7 @@
  *                 "you have been signed out".
  */
 
+import { API_BASE_URL } from './client.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -78,7 +79,7 @@ function stubFetch(handler: (path: string, call: Call) => Response): Call[] {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: { headers?: Record<string, string>; body?: string }) => {
-      const path = url.replace('http://localhost:4100', '').replace('http://localhost:4000', '');
+      const path = url.replace(API_BASE_URL, '').replace('http://localhost:4000', '');
       const headers = init.headers ?? {};
       const call: Call = {
         path,
