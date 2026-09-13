@@ -250,9 +250,19 @@ charge() {
       -o "$TMP/charge.json" -w '%{http_code}' > "$TMP/code"
   fi
 
-  if [[ "$(cat "$TMP/code")" != "200" ]]; then
-    echo "    ~ charge skipped for $mid ($(cat "$TMP/code")): $(python3 -c "import json;print(json.load(open('$TMP/charge.json')).get('message',''))" 2>/dev/null | head -c 110)" >&2
-    return 0   # an insufficient balance is not a script failure
+  code="$(cat "$TMP/code")"
+  if [[ "$code" != "200" ]]; then
+    echo "    ~ charge skipped for $mid ($code): $(python3 -c "import json;print(json.load(open('$TMP/charge.json')).get('message',''))" 2>/dev/null | head -c 110)" >&2
+    # A REFUSAL AND A BROKEN SCRIPT ARE NOT THE SAME OUTCOME, and this returned 0
+    # for both. "An insufficient balance is not a script failure" is true and was
+    # applied too widely: 401/403 means the SESSION is dead or unauthorised, which
+    # is this script being broken, not the product refusing. It cost an attributed
+    # appointment — step 3b charged with a STAFF_TOKEN minted minutes earlier, got
+    # 401, and printed "charged" anyway because `|| true` had nothing to catch.
+    case "$code" in
+      401|403) return 1 ;;
+      *)       return 0 ;;
+    esac
   fi
   CHARGES_MADE=$((CHARGES_MADE + 1))
 }
@@ -468,9 +478,17 @@ else
       echo "    booked  AR-003 · SV-04 · $SLOT"
       # The charge settles the hold, completes the booking, and is the row the
       # artist-performance report attributes. Needs a scanner session, like any charge.
-      if [[ -n "$STAFF_TOKEN" ]]; then
-        charge "$STAFF_TOKEN" "$ATT_MID" '["SV-04"]' attributed || true
-        echo "    charged — this appointment now attributes to AR-003 in Reports"
+      # RE-MINTED HERE, NOT REUSED FROM THE TOP OF THE RUN. The scanner session
+      # above is minted before ~100 API calls, and by the time this step runs it
+      # has expired: the charge that attributes the only appointment in the report
+      # came back 401. A fresh session costs one request.
+      ATT_STAFF="$(staff_session SAL-AMARA noura 2468 DEV-SCANNER-01)" || ATT_STAFF=""
+      if [[ -n "$ATT_STAFF" ]]; then
+        if charge "$ATT_STAFF" "$ATT_MID" '["SV-04"]' attributed; then
+          echo "    charged — this appointment now attributes to AR-003 in Reports"
+        else
+          echo "    ~ booked but NOT charged: the appointment stays unattributed." >&2
+        fi
       else
         echo "    ~ booked but not charged: no scanner session, so it stays unattributed." >&2
       fi
