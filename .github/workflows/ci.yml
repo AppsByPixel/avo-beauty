@@ -160,7 +160,22 @@ jobs:
           DATABASE_URL=postgres://avo:avo_dev_password@localhost:5433/avo_int_check \
           APP_DATABASE_URL=postgres://avo_app:avo_app_dev_password@localhost:5433/avo_int_check \
             pnpm run db:seed
-          pnpm run test:int 2>&1 | tee /tmp/int.log
+          # ANSI-STRIPPED, AND THAT IS LOAD-BEARING RATHER THAN TIDY.
+          #
+          # vitest keeps colour on in CI, so every summary line arrives as
+          # `\e[2m      Tests \e[22m ...` — an escape sequence BETWEEN the start
+          # of the line and the word. Both greps below anchor on `^ +`, so
+          # neither can match, and the consequences ran in opposite directions:
+          # the final grep failed every run (six red builds in one day on a tree
+          # whose 360 int tests all passed), while the skip guard — the whole
+          # point of decision 101 — was silently unable to fire at all.
+          #
+          # It passed locally because vitest DROPS colour for a non-TTY pipe, so
+          # the guard was verified in the one environment where the bug is
+          # invisible. `tee` still shows the coloured output in the CI console;
+          # only the file the greps read is stripped.
+          pnpm run test:int 2>&1 | tee /tmp/int.raw
+          sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g' /tmp/int.raw > /tmp/int.log
 
           # THE GUARD, because this step can otherwise pass having run nothing.
           #
