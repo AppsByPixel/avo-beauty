@@ -1151,11 +1151,24 @@ function scalarOn(database: string, sql: string): string {
  * same three steps a new environment gets, run about five seconds slower than a
  * clone and worth every one of them.
  */
+/**
+ * Does a named database exist? Asked against the maintenance database, so it is
+ * answerable before the run database is created — and after it is dropped.
+ *
+ * ONE DEFINITION, TWO CALLERS WHO ASK IT FOR OPPOSITE REASONS. `ensureDatabase`
+ * asks so it can provision when the answer is no. `global-setup.ts` § the wallet
+ * census asks so it can tell "no file in this run needed a database" apart from
+ * "the census is broken" — the distinction that decides whether a missing census
+ * line is fine or is a failure. Both need the same question answered the same
+ * way, and the maintenance database's name should not be spelled out twice.
+ */
+export function databaseExists(database: string): boolean {
+  return scalarOn(PG_MAINTENANCE_DB, `select 1 from pg_database where datname='${database}'`) === '1';
+}
+
 function ensureDatabase(): void {
   const db = pgDb();
-  const exists =
-    scalarOn(PG_MAINTENANCE_DB, `select 1 from pg_database where datname='${db}'`) === '1';
-  if (exists) return;
+  if (databaseExists(db)) return;
 
   // eslint-disable-next-line no-console
   console.log(`[lane D] provisioning "${db}" — migrate and seed from empty, lane A's own scripts.`);
