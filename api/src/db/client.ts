@@ -12,9 +12,17 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { env } from '../env';
+import { poolOptionsFor } from './poolOptions';
 import * as schema from './schema/index';
 
-export const sql = postgres(env.appDatabaseUrl, { max: 10 });
+/**
+ * POOLING IS THE ONLY THING THAT VARIES HERE, and it varies by an explicit
+ * environment setting whose default is the `{ max: 10 }` this line has always
+ * been. `db/poolOptions.ts` is the argument; `DB_POOL_MODE` in `env.ts` is the
+ * switch. The role, the URL and the absence of a money-path type parser — the
+ * three things this file's header promises — are not configurable.
+ */
+export const sql = postgres(env.appDatabaseUrl, poolOptionsFor(env.dbPoolMode));
 
 export const db = drizzle(sql, { schema });
 
