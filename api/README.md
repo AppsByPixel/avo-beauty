@@ -127,18 +127,47 @@ the data-residency decision (CLAUDE.md § Escalate).
 
 ### Deploying as Vercel functions
 
-`vercel.json` and `api/index.ts` are the whole of it. Set the project's **Root
-Directory to `api`** — that is what makes Vercel scan `api/api/` for functions —
-and leave "include files outside the root directory" ON, because the install and
-build commands in `vercel.json` run at the workspace root: `@avo/types` and
-`@avo/tokens` are consumed from a `dist/` that is gitignored and produced by
-`pnpm build`. Without that build the function dies at import, before any of the
-readable boot errors.
+`vercel.json`, `api/index.ts` and `scripts/build-function.mjs` are the whole of it.
+Set the project's **Root Directory to `api`** — that is what makes Vercel scan
+`api/api/` for functions — and leave "include files outside the root directory" ON,
+because the install and build commands in `vercel.json` run at the workspace root:
+`@avo/types` and `@avo/tokens` are consumed from a `dist/` that is gitignored and
+produced by `pnpm build`. Without that build the function dies at import, before
+any of the readable boot errors.
 
 `rewrites` sends every path to the single function, so Fastify keeps doing the
 routing and no route list is duplicated in configuration. `public/index.html`
 exists only because Vercel requires an output directory when a build command is
 set; the rewrite means nothing but `/` ever reaches it.
+
+**The function is BUNDLED before Vercel sees it, and it has to be.** Vercel's Node
+runtime does not bundle — it transpiles each `.ts` in the entrypoint's import graph
+to a sibling `.js` and leaves every specifier exactly as written. `api/src` writes
+extensionless relative imports throughout (`./app`, `./db/client`, `./env`), which
+`tsx` and `vitest` resolve and real Node ESM does not, so the first deploy of this
+function built green and then died on every request with
+`ERR_MODULE_NOT_FOUND ... /var/task/api/src/serverless`. That is not one bad
+import: all 836 of them would have failed in turn.
+
+So `vercel.json`'s build command runs `pnpm --filter @avo/api run build:function`
+after `pnpm build`, and that esbuilds `src/serverless.ts` into
+`api/_serverless.js` — one file, every bare specifier still bare, no relative
+import left to resolve. `api/index.ts` is a one-line re-export of it and is the
+only thing Vercel compiles. The leading underscore keeps Vercel from making the
+bundle a second function; `api/_serverless.d.ts` is committed and gives the shim
+the real handler's type by re-exporting `src/serverless.ts`, so `pnpm typecheck`
+neither needs a build nor trusts one.
+
+`scripts/build-function.mjs`'s header carries the evidence and argues the
+alternative — moving `api/src` to explicit `.js` specifiers under NodeNext, which
+`packages/types` and `packages/tokens` already do — and why it was not taken. The
+bundle step is deliberately NOT the package's turbo `build` task: `build.outputs`
+is `dist/**`, and a cache hit would restore nothing and ship a handler-less
+function.
+
+**`pnpm --dir api start` and `tsx` are untouched by all of this.** `src/server.ts`
+is still the long-running entry, still runs the three background workers, and the
+bundle is a build artifact nothing local reads.
 
 Environment, beyond the ordinary set:
 
@@ -151,3 +180,14 @@ Environment, beyond the ordinary set:
 
 `NODE_ENV=development` for a demo, for the reason `DEPLOY-DEMO.md` § "The one
 blocker" gives — the gateway assertion is an answer, not an obstacle.
+
+One consequence of that setting is now handled rather than latent. `buildApp()`
+used to attach a `pino-pretty` transport to every non-`test` environment, and with
+`NODE_ENV=development` in Production the function boot-failed on
+`unable to determine transport target for "pino-pretty"` — `pino-pretty` is
+declared by `packages/mock`, never by `@avo/api`, and pino names a transport by
+string, so Vercel's tracer ships nothing for it. It is also the wrong thing to
+want in a function, which is frozen between invocations and whose log rows Vercel
+parses as JSON. `app.ts` now gates the pretty transport on `process.stdout.isTTY`:
+a developer's terminal gets exactly the output it always did, and a function, CI
+and any captured pipe get pino's JSON.

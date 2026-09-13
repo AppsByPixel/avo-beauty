@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "cd .. && pnpm install --frozen-lockfile",
-  "buildCommand": "cd .. && pnpm build",
+  "buildCommand": "cd .. && pnpm build && pnpm --filter @avo/api run build:function",
   "outputDirectory": "public",
   "functions": {
     "api/index.ts": {

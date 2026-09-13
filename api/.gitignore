@@ -7,3 +7,9 @@
 # `api/` is this lane's column (CLAUDE.md § Lanes). The default IMAGE_STORE_PATH
 # resolves against api/, so this is also where the directory actually lands.
 .image-store/
+
+# The bundled serverless handler, produced by `scripts/build-function.mjs` during
+# Vercel's build command. Generated, never edited, never committed — the source is
+# `src/serverless.ts` and the reasoning is in the script's header. `_serverless.d.ts`
+# beside it IS committed: it is the hand-written type, not the output.
+api/_serverless.js
