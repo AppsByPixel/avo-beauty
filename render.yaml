@@ -44,6 +44,9 @@ services:
     # twice.
     startCommand: pnpm --dir api start
 
+    # `app.ts:170` serves GET /_health -> {"ok":true}. Driven and confirmed.
+    healthCheckPath: /_health
+
     envVars:
       # See the header. This is the whole reason the demo boots.
       - key: NODE_ENV

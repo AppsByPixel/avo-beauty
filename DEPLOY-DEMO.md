@@ -114,9 +114,28 @@ about it. Any of them would have cost an evening.**
    `AAAA` record and no `A` record — it is **IPv6-only**, and a host without
    IPv6 egress cannot reach it at all. `aws-0-eu-central-1.pooler.supabase.com`
    resolves through an ELB with IPv4.
-2. **Session mode (port 5432), not transaction mode (6543).** `db/client.ts` is
-   `postgres(url, { max: 10 })`, and postgres.js uses prepared statements by
-   default. Transaction pooling does not support them. Session mode does.
+2. **Session mode (port 5432), not transaction mode (6543)** — for the
+   long-running server. `db/client.ts` is `postgres(url, { max: 10 })` and
+   postgres.js uses prepared statements by default, which transaction pooling
+   does not support.
+
+   **AND THE FAILURE MODE IS NOT WHAT EVERY ACCOUNT SAYS, INCLUDING THE FIRST
+   VERSION OF THIS LINE.** The documented symptom is
+   `26000 prepared statement "…" does not exist`. Measured against this project's
+   own database, twelve concurrent queries per round on port 6543: it **does not
+   error, it HANGS** — no code, no rollback, no timeout. Round one Parses the
+   statement; round two Binds it by name on a backend that never saw the Parse.
+
+   | | |
+   |---|---|
+   | `prepare: false, max: 1` | 5/5 rounds, 60/60 queries and transactions |
+   | `prepare: true, max: 1` | round 1 never returned, abandoned at 40s |
+   | `prepare: true, max: 10` | round 1 fine (1978ms), **round 2 never returned** |
+
+   A money endpoint that hangs is worse than one that raises: nothing retries
+   and nothing alerts. For serverless, `DB_POOL_MODE=serverless` sets
+   `{ max: 1, prepare: false }` and transaction mode is then correct — see
+   `api/README.md`.
 3. **`GRANT avo_app TO postgres` before verifying.** Supabase's `postgres` is
    not a superuser, so `verify-constraints.sql` failed at line 221 with
    `permission denied to set role "avo_app"` — it impersonates the app role to
@@ -140,6 +159,12 @@ provider, with the append-only triggers and the non-owner `REVOKE`s intact.
 
 For the record, this is what was run, and it is what to re-run if the demo
 database is ever rebuilt:
+
+**If you are REBUILDING rather than creating, drop `drizzle` as well as
+`public`.** The migrator's journal lives in its own schema and survives a
+`public` drop, so re-migrating against a half-dropped database is a silent
+no-op — it reports "migrations applied" and applies nothing, leaving an empty
+schema that fails at the first query rather than at the migration.
 
 ```bash
 DATABASE_URL='…owner…' APP_DATABASE_URL='…app…' pnpm --dir api run db:migrate
@@ -218,9 +243,11 @@ is the default.
   short is a boot refusal, not a warning: `JWT_SECRET: String must contain at
   least 32 character(s)`, and the process exits 1. If your host's generated
   value is shorter, set one by hand.
-- **There is no health endpoint.** Nothing serves `/health`, so `render.yaml`
-  declares no health check and the platform probes the port instead. Adding one
-  is a product change — ask first (CLAUDE.md: "Do not add features").
+- **There IS a health endpoint and this file said there wasn't.** `app.ts:170`
+  serves `GET /_health` → `{"ok":true}`, driven and confirmed. The earlier claim
+  here came from grepping for `/health` and not for `/_health`, which is a
+  search that answers a slightly different question than the one asked. Use it
+  for any platform health check.
 
 ---
 
