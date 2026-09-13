@@ -49,6 +49,29 @@ API_BASE="${API_BASE:-http://localhost:4100}"
 DEMO_DB="${DEMO_DB:-avo_lane_c}"
 PG_CONTAINER="${PG_CONTAINER:-avo-postgres}"
 
+# HOW THIS SCRIPT REACHES POSTGRES, AND WHY IT IS NO LONGER `docker exec` ONLY.
+#
+# Three reads here need SQL: the published policy version (signup is refused
+# without it), a visit count, and a balance. They went through
+# `docker exec avo-postgres psql`, which quietly made the whole script
+# LOCAL-ONLY — it could not touch a managed database at all, and the failure
+# was a docker error rather than anything about databases. DEPLOY-DEMO.md had
+# to carry a line saying so.
+#
+# Now: if DATABASE_URL is set, talk to that. Otherwise fall back to the
+# container, so every existing local invocation behaves exactly as before.
+#
+# The guard below still applies either way — a URL is checked by NAME, so
+# pointing this at a production database is refused for the same reason a
+# DEMO_DB of `avo` is.
+psql_q() {
+  if [[ -n "${DATABASE_URL:-}" ]]; then
+    psql "$DATABASE_URL" -tAc "$1"
+  else
+    docker exec -i "$PG_CONTAINER" psql -U avo -d "$DEMO_DB" -tAc "$1"
+  fi
+}
+
 # ---------------------------------------------------------------- guards --
 #
 # This script writes to money tables through the API. The only thing standing
@@ -81,7 +104,7 @@ if ! curl -fsS -o /dev/null "$API_BASE/salons/SAL-AMARA" 2>/dev/null; then
 fi
 
 RUN_TAG="${RUN_TAG:-$(date +%H%M%S)}"
-POLICY_VERSION="$(docker exec -i "$PG_CONTAINER" psql -U avo -d "$DEMO_DB" -tAc \
+POLICY_VERSION="$(psql_q \
   "SELECT version FROM legal_document_set WHERE published_at IS NOT NULL ORDER BY version DESC LIMIT 1;" | tr -d '[:space:]')"
 
 if [[ -z "$POLICY_VERSION" ]]; then
@@ -304,7 +327,7 @@ for row in "${AMARA[@]}"; do
 
   # VISITS ARE TOPPED UP TO A TARGET, not added blindly — so a second run of this
   # script converges instead of pushing everyone two tiers higher.
-  have="$(docker exec -i "$PG_CONTAINER" psql -U avo -d "$DEMO_DB" -tAc \
+  have="$(psql_q \
     "SELECT visits FROM member WHERE id='$mid';" | tr -d '[:space:]')"
   have="${have:-0}"
   want=$(( visits - have ))
@@ -325,7 +348,7 @@ for row in "${AMARA[@]}"; do
     top_up "$token" "$mid" $((TRANCHE / 2)) "$method" z || true
   fi
 
-  bal="$(docker exec -i "$PG_CONTAINER" psql -U avo -d "$DEMO_DB" -tAc \
+  bal="$(psql_q \
     "SELECT balance_fils || ' ' || tier || ' ' || visits FROM member WHERE id='$mid';" | tr -d '\r')"
   printf '   %-22s %-7s %s\n' "$name" "$mid" "$bal"
 done
@@ -494,7 +517,13 @@ if [[ -n "$WEB_TOKEN" ]]; then
   CAMPAIGNS=(
     "Eid weekend — double visit credit|Book any colour service this Eid weekend and earn two visits towards your next tier.|all"
     "We have missed you|It has been a while. Your wallet balance is still here whenever you are ready.|lapsed"
-    "Gold and Black members — early access|Priority booking for the new treatment menu opens to you a week early.|tier"
+    # `gold`, NOT `tier`. The audience enum is
+    # `all | lapsed | lowbal | gold | new` (`packages/types/src/entities.ts:855`)
+    # and `tier` was never in it, so this row was refused 400 `invalid_audience`
+    # on every run this script has ever made — silently, because the loop logs a
+    # skip and carries on. The console's Campaigns screen was one campaign short
+    # in every demo and nobody noticed, which is what a non-fatal skip buys you.
+    "Gold and Black members — early access|Priority booking for the new treatment menu opens to you a week early.|gold"
   )
   for row in "${CAMPAIGNS[@]}"; do
     IFS='|' read -r title body audience <<< "$row"
