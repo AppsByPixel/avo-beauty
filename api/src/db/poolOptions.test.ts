@@ -45,7 +45,7 @@ describe('the options actually reach the constructed client', () => {
     const sql = postgres(UNREACHABLE, poolOptionsFor('serverless'));
     expect(sql.options.max).toBe(1);
     expect(sql.options.prepare).toBe(false);
-  });
+  }, 30_000);
 
   it('default: ten connections, prepared statements on', () => {
     const sql = postgres(UNREACHABLE, poolOptionsFor('default'));
@@ -53,7 +53,7 @@ describe('the options actually reach the constructed client', () => {
     // postgres.js's own default, restated so a library change is visible here
     // rather than in a money path.
     expect(sql.options.prepare).toBe(true);
-  });
+  }, 30_000);
 });
 
 /**
@@ -79,6 +79,21 @@ describe('db/client.ts honours DB_POOL_MODE', () => {
     }
   }
 
+  /**
+   * AN EXPLICIT TIMEOUT, BECAUSE THE COST HERE IS NOT THE ASSERTION.
+   *
+   * Each of these re-imports the whole module graph after `vi.resetModules()` —
+   * `env.ts` parses and `db/client.ts` constructs a pool on load, which is the
+   * point: the spec asserts what the REAL client is built with, not what a
+   * helper returns. Locally that costs ~300ms. On CI it cost 5029ms and failed
+   * against vitest's 5s default, on a runner simultaneously running Postgres,
+   * the integration suites and every other package through turbo.
+   *
+   * So the default was a general-purpose budget, not a statement about this
+   * test, and it made a green tree red for a reason with nothing to do with
+   * pooling. Bounded rather than removed: a genuine hang still fails here, it
+   * just is not measured against someone else's parallelism.
+   */
   it('unset means default — a deployment gets today behaviour unless it asks otherwise', async () => {
     const { sql } = await clientUnder(undefined);
     expect(sql.options.max).toBe(10);
