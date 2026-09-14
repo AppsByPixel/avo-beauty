@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import { DateTimeSchema, FilsSchema, IdSchema, TransactionSchema } from '@avo/types';
+import { DateTimeSchema, FilsSchema, IdSchema, TransactionSchema, type Fils } from '@avo/types';
 import { getJson, postMoney } from './client';
 
 // ------------------------------------------------------------------ loyalty --
@@ -99,9 +99,32 @@ export const ChargeResultSchema = z.object({
 
 export type ChargeResult = z.infer<typeof ChargeResultSchema>;
 
+/**
+ * EXACTLY ONE PRICING SOURCE, EXPRESSED AS A TYPE RATHER THAN A CHECK.
+ *
+ * `POST /charges` refuses a body carrying both `serviceIds` and `amountFils`
+ * with `400 ambiguous_pricing`, "because every precedence rule is a rule
+ * somebody has to know". A union means the scanner has no value it could send
+ * that carries both — the refusal is unreachable from this client by
+ * construction rather than by a guard somebody has to keep.
+ *
+ * That is a property of the CLIENT, not a reason to trust it. The server still
+ * refuses, and it refuses anything else that reaches it.
+ */
+export type ChargePricing =
+  /** What the customer picked off the menu. The ordinary path. */
+  | { kind: 'basket'; serviceIds: string[] }
+  /**
+   * A price a manager typed, with the words that justify it. Gated on
+   * `perms.void` server-side, on the PRESENCE of the field rather than on the
+   * branch taken — so sending this without the authority is a 403, never a
+   * silent fall back to pricing the basket.
+   */
+  | { kind: 'custom'; amountFils: Fils; reason: string };
+
 export interface ChargeInput {
   memberId: string;
-  serviceIds: string[];
+  pricing: ChargePricing;
   /**
    * Present when the member was reached by scanning her code, absent when she
    * was found by manual lookup. The API declares it optional for exactly this
@@ -125,10 +148,24 @@ export function charge(
   accessToken: string,
   signal?: AbortSignal,
 ): Promise<ChargeResult> {
-  const body: Record<string, unknown> = {
-    memberId: input.memberId,
-    serviceIds: input.serviceIds,
-  };
+  const body: Record<string, unknown> = { memberId: input.memberId };
+
+  if (input.pricing.kind === 'custom') {
+    /**
+     * `serviceIds` IS ABSENT, NOT EMPTY. The server gates on
+     * `body.serviceIds !== undefined`, so an `[]` sent alongside a typed figure
+     * is `400 ambiguous_pricing` exactly as a full basket would be.
+     *
+     * `amountFils` is a branded `Fils` and reaches `JSON.stringify` as the
+     * integer the parser produced. Nothing on this path multiplies, rounds or
+     * reformats it (#1).
+     */
+    body['amountFils'] = input.pricing.amountFils;
+    body['reason'] = input.pricing.reason;
+  } else {
+    body['serviceIds'] = input.pricing.serviceIds;
+  }
+
   if (input.token !== undefined) body['token'] = input.token;
 
   return postMoney('/charges', body, ChargeResultSchema, idempotencyKey, accessToken, signal);
@@ -136,12 +173,40 @@ export function charge(
 
 // ---------------------------------------------------------- today's charges --
 
+/**
+ * A row on Today's charges — a `Transaction` PLUS the reason, which is this
+ * route's own key.
+ *
+ * WHY IT IS WIDENED HERE AND NOT IN `packages/types`.
+ * ---------------------------------------------------
+ * `TransactionSchema` declares `customAmount` and deliberately does NOT declare
+ * `note`. That is not an oversight to fix: `transaction.note` is a
+ * merchant-route key that also carries void reasons and an owner's adjustment
+ * text, so a `Transaction` parsed anywhere else has no business claiming it.
+ * `e2e/contract.test.ts` annotates it `wireOnly` for exactly this reason.
+ *
+ * `GET /charges` does send it — `note: t.customAmount ? t.note : null`,
+ * api/src/routes/charges.ts:477 — always present, null on a menu charge, which
+ * makes null a positive statement rather than an omission to interpret. So the
+ * widening belongs to the route that sends it, which is this file.
+ *
+ * WIDENING MATTERS BECAUSE ZOD STRIPS. An undeclared key does not fail the
+ * parse, it vanishes — the drift that has already eaten `voidedAt`,
+ * `depositReturnedFils` and `bookingId` on this surface, each time silently.
+ * Parsing these rows with the bare `TransactionSchema` would drop the reason and
+ * the screen would have nothing to show.
+ */
+export const ChargeRowSchema = TransactionSchema.extend({
+  /** The typed price's justification. Null on every charge that came off the menu. */
+  note: z.string().nullable(),
+});
+
 const ChargeListSchema = z.object({
-  items: z.array(TransactionSchema),
+  items: z.array(ChargeRowSchema),
   nextCursor: z.string().nullable(),
 });
 
-export type ChargeRow = z.infer<typeof TransactionSchema>;
+export type ChargeRow = z.infer<typeof ChargeRowSchema>;
 
 /**
  * `GET /charges?date=today` — requires `perms.charges`, enforced server-side.
