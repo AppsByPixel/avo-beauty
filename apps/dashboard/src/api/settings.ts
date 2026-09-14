@@ -72,10 +72,47 @@ import { staffKeys } from './staff.js';
  *     The module toggles in `Settings.tsx § ModulesPanel` are wired to the first
  *     of those and their notice is gone.
  */
+/**
+ * `emailEnabled` IS IN THIS LIST AND WAS NOT, AND THAT OMISSION WAS THE FEATURE.
+ *
+ * Aftab's item 11 — "invoice through emails or WhatsApp, option set by merchant"
+ * — had both halves on the server: `emailEnabled` is stored, it is in
+ * `MERCHANT_EDITABLE` beside `whatsappEnabled` (`routes/salons.ts`), it is served
+ * by `serialiseSalon`, and `services/receipts.ts § decideReceiptChannels` reads
+ * it. It appeared ZERO times under `apps/dashboard/`, so the only channel a
+ * merchant could touch was WhatsApp. Measured on the demo database: 107
+ * `receipt_job` rows, every one `whatsapp`.
+ *
+ * NOT ANOTHER "NOT BUILT" CLAIM — the inverse, and worth naming as such since
+ * this file already counts six of those. Nothing here asserted that email was
+ * unavailable; the field was simply never reached for, which is the quieter
+ * failure: there was no sentence for anyone to re-check.
+ *
+ * Verified before the switch was built, not assumed:
+ *   `MERCHANT_EDITABLE` contains 'emailEnabled'      routes/salons.ts:152
+ *   the PATCH refuses both-off in words, not a 500   routes/salons.ts:763-769
+ *   the response carries it back                     routes/salons.ts:466
+ * and pinned from a spec so the day it is taken out lands on this column —
+ * `routes/settingsReceiptChannels.test.ts`.
+ *
+ * WHAT THIS CLIENT MUST NOT DO WITH IT. Both channels off is refused by
+ * `salon_receipt_channel_floor` (a CHECK) and, in a readable sentence, by the
+ * handler's 409 `receipt_channels_required`. The screen sends the flip and
+ * renders the refusal; it does not re-implement the rule. A receipt is "a
+ * record-keeping obligation, not marketing" (design/README.md § Known gaps 7),
+ * and the client is not where that gets enforced.
+ */
 export type SalonPatch = Partial<
   Pick<
     Salon,
-    'name' | 'nameAr' | 'brandColor' | 'depositFils' | 'businessHours' | 'whatsappEnabled' | 'timezone'
+    | 'name'
+    | 'nameAr'
+    | 'brandColor'
+    | 'depositFils'
+    | 'businessHours'
+    | 'whatsappEnabled'
+    | 'emailEnabled'
+    | 'timezone'
   >
 > & {
   /**
