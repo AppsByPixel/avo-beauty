@@ -135,8 +135,53 @@ The failure is clean and was driven rather than assumed: the upload answers
 as a `cause` chain, and **no `image` row is written** — so there is no record
 pointing at bytes that never existed. Reads of images uploaded elsewhere would
 404. `images/disk.ts` § "WHY A WRITE REFUSAL AND NOT A BOOT REFUSAL" is the
-reasoning; a durable store is a driver nobody has written, and writing one needs
-the data-residency decision (CLAUDE.md § Escalate).
+reasoning. **That refusal is unchanged**, and `disk` is still the default.
+
+### A durable store exists now: `IMAGE_DRIVER=supabase`
+
+`src/images/supabase.ts` is a Supabase Storage driver behind the same seam — one
+file next to `disk.ts`, one case in `images/index.ts`, three variables in
+`env.ts`. **No SDK**: `@supabase/supabase-js` would mean a new entry in the
+workspace-root `pnpm-lock.yaml`, outside `api/`, and Storage's REST surface is
+three verbs on one URL grammar reached with the runtime's own `fetch`.
+
+**It settles nothing about data residency, and must not be read as though it
+does.** It is selected by an environment variable, in one environment: the demo.
+The `avo-demo` project is in **eu-central-1** — which is exactly the fact that
+makes it a demo-only configuration, not a proposal for where a Kuwaiti salon's
+customer photographs should live. CLAUDE.md § Escalate still owns that question,
+and pointing this driver at a production bucket needs the answer first.
+
+**The failure contract is the same and was proved, not assumed.** A refused
+upload leaves **no `image` row** — `src/images/supabaseAttach.int.test.ts` drives
+a 403 through the real `attachImage` against a real database and counts the rows.
+The assertion was anchored by deliberately inverting the write order and watching
+it go red; the comment in that file records which inversion does it and which one
+does not.
+
+**Reads of an image uploaded under the OTHER driver 404**, exactly as `disk` does
+for one uploaded elsewhere. The `image` row carries a `driver` column and the
+`storage_key` is driver-independent, but the bytes only exist in the store that
+was configured when they were written, so switching `IMAGE_DRIVER` in either
+direction strands whatever the previous store held. Nothing migrates them, and no
+job exists that would. **There is no error for this**: `GET /v1/images/{id}` finds
+the row, the store answers "absent", and the route turns that into its documented
+uniform 404 plus an error-level log line naming the image id, the storage key and
+the driver — which is the one place an operator can see it happening.
+
+**Not implemented: `presignedUrl`.** Supabase has the call, and the seam has the
+plug, but a `302` to storage drops every response header `routes/images.ts`
+documents as load-bearing — `nosniff`, the `default-src 'none'; sandbox` CSP,
+`cache-control: private`, and the stored `content-type` from the row. The seam can
+express "redirect there"; it cannot express "redirect there and keep these". So
+reads still stream through the function, at up to `IMAGE_MAX_BYTES` (2 MiB) per
+image per request with no CDN in front. Reported as a decision with a named cost,
+not taken silently.
+
+**The reaper needs no change.** `services/imageReaper.ts` and
+`pnpm run job:image-reap` only ever call `imageStore.remove`, and assume nothing
+about a filesystem; the int spec above runs a real reap pass against the Supabase
+driver and asserts the `DELETE` reached the store.
 
 ### `DB_POOL_MODE`
 

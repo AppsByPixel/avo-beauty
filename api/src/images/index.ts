@@ -17,12 +17,32 @@
 
 import { env } from '../env';
 import { DiskImageStore } from './disk';
+import { SupabaseImageStore } from './supabase';
 import type { ImageStore } from './types';
 
 function build(): ImageStore {
   switch (env.imageDriver) {
     case 'disk':
       return new DiskImageStore(env.imageStorePath, env.nodeEnv === 'production');
+    case 'supabase':
+      /**
+       * The three are asserted present at boot in env.ts, which is why the
+       * non-null assertions here are safe and why they are assertions rather
+       * than `?? ''`: an empty-string fallback would make this driver boot
+       * unconfigured and fail on the first upload with a 401 nobody can read,
+       * which is the failure this file's header refuses.
+       *
+       * SELECTING THIS DECIDES NOTHING ABOUT DATA RESIDENCY. See
+       * ./supabase.ts § WHAT THIS DOES AND DOES NOT SETTLE — the demo project
+       * is in eu-central-1, which is what makes it a demo-only configuration,
+       * and CLAUDE.md § Escalate still owns the question.
+       */
+      return new SupabaseImageStore({
+        url: env.supabaseUrl!,
+        serviceRoleKey: env.supabaseServiceRoleKey!,
+        bucket: env.supabaseStorageBucket!,
+        timeoutMs: env.supabaseStorageTimeoutMs,
+      });
     default: {
       // Exhaustive: adding a driver to the env enum without wiring it here is a
       // type error, not a runtime surprise on the first upload.
