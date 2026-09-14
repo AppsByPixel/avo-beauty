@@ -263,6 +263,41 @@ export function ChargesScreen({
                     */}
                     <Text style={ui(14.5, '600')}>{row.reference}</Text>
                     <Text style={[ui(11.5), styles.cardMeta]}>{timeOf(row.createdAt)}</Text>
+                    {/*
+                      A PRICE SOMEBODY TYPED, SAID SO.
+
+                      Until now a charge a manager invented the figure for
+                      rendered identically to one that came off the service menu
+                      — the same defect `voidedAt` had one field over, and the
+                      person most likely to be reading this list is a manager
+                      reviewing the day.
+
+                      THE REASON IS THE POINT, NOT THE TAG. A custom charge has
+                      no service row anywhere and `best-selling-services` cannot
+                      attribute it, so `note` is the only thing that will ever
+                      answer "what was this for". The tag alone would say a price
+                      was typed and still not say why.
+
+                      `note` COMES OFF THIS ROUTE, NOT OFF A `Transaction`.
+                      `TransactionSchema` declares `customAmount` and
+                      deliberately does not declare `note` — it is a
+                      merchant-route key that also carries void reasons and an
+                      owner's adjustment text. `api/charges.ts § ChargeRowSchema`
+                      widens it here, where the server does send it.
+
+                      Both fields are always present and `false`/`null` is a
+                      positive statement — not typed — so the fallback to the bare
+                      tag is for a reason that is genuinely empty, never for a
+                      field this screen failed to read.
+                    */}
+                    {row.customAmount && (
+                      <View style={styles.typedTag} testID={`typed-${row.id}`}>
+                        <View style={styles.typedDot} />
+                        <Text style={[ui(11.5, '600'), styles.typedText]}>
+                          {row.note ? copy.typedPriceRowReason(row.note) : copy.typedPriceRowTag}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <Money
                     amount={fils(Math.abs(row.amountFils))}
@@ -365,6 +400,15 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   cardText: { flex: 1 },
   cardMeta: { color: color.textMutedSoft, marginTop: 4 },
+  /*
+    The voided note's shape, one tone over: the same dot-and-sentence row, in the
+    brand's muted label colour rather than the danger red. A typed price is a
+    fact about the charge, not a problem with it — reusing the red would read as
+    a warning on a charge that is perfectly good.
+  */
+  typedTag: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  typedDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: color.brand },
+  typedText: { color: color.textMutedLabel, flexShrink: 1 },
   struck: { color: color.textMutedSoft, textDecorationLine: 'line-through' },
   voidAction: { marginTop: 13 },
   voidedNote: {

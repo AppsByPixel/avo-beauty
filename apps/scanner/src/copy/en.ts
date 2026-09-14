@@ -228,6 +228,86 @@ export const copy = {
   chargeAction: (amount: string) => `Charge ${amount}`,
   chargeWorking: 'Charging…',
 
+  // ------------------------------------------------------- a typed price --
+  /**
+   * NO DESIGN SOURCE. EVERY STRING BELOW IS WRITTEN BY THIS LANE.
+   *
+   * `design/AVO Staff Scanner.dc.html` has no custom-amount control: the
+   * scanner it draws can only charge what is on the service menu, which is the
+   * gap Aftab's ruling closes. There is nothing to be verbatim against, so
+   * unlike every other entry in this file these carry no `:line` reference —
+   * and that absence is the marker. CLAUDE.md's "do not restyle / keep the copy
+   * verbatim" is about not paraphrasing written copy; writing new copy for a
+   * control the bundle never drew is unavoidable, and saying so is the
+   * alternative to hiding it.
+   *
+   * ENGLISH ONLY, like the rest of this file, and NOT an AR_GAPS case.
+   * `design/README.md` § Known gaps 1 is a decision, not an omission:
+   * "Merchant dashboard, owner console and the staff scanner ship
+   * English-only." There is no `ar.ts` beside this file and no language
+   * provider to add one to.
+   */
+  typedPriceOpen: 'Type an amount instead',
+  typedPriceClose: 'Back to the service menu',
+  typedPriceTitle: 'Type an amount',
+  /** Says whose authority this is, so the padlock is not the only explanation. */
+  typedPriceAuthority: 'Manager authority · every typed price is recorded',
+  typedPriceAmountLabel: 'Amount in KD',
+  /**
+   * The placeholder carries the unit convention rather than a comment doing it:
+   * three decimals, Western digits, a dinar figure and not a fils one.
+   */
+  typedPriceAmountPlaceholder: '0.000',
+  typedPriceReasonLabel: 'What is this for?',
+  typedPriceReasonPlaceholder: 'Bridal trial, colour correction…',
+  /**
+   * The server requires the reason and this says WHY rather than just that it is
+   * required — a custom charge has no service row anywhere, so this string is
+   * the only thing that will ever answer "what was this for".
+   */
+  typedPriceReasonWhy: 'A typed price has no service attached, so the reason is the only record of it.',
+  typedPriceReasonCount: (used: number, max: number) => `${used}/${max}`,
+
+  /** The keyboard-side refusals. Courtesies — the server refuses these too. */
+  typedPriceNotANumber: 'Enter the amount in dinars, using digits and one decimal point.',
+  typedPriceTooPrecise: 'The dinar has three decimal places — 18.5 is 18.500 KD.',
+  typedPriceZero: 'Enter an amount above zero.',
+  typedPriceAboveCeiling: (typed: string, max: string) =>
+    `${typed} is over the ${max} limit for a typed price. Check the figure.`,
+  /** Shown under a valid figure so she sees what will be charged before she taps. */
+  typedPriceConfirm: (amount: string) => `Charging ${amount} from her wallet`,
+  typedPriceSelectFirst: 'Enter an amount',
+  typedPriceReasonFirst: 'Add a reason',
+
+  /**
+   * The 403's companion line. The server's own sentence is rendered above it
+   * verbatim and names VOIDING, because the gate really is `perms.void` — the
+   * API concedes `perms.customAmount` would be the honest gate and is a
+   * four-way break a lane may not make. This line closes the gap between what
+   * she did and what the refusal calls it, without overwriting the refusal.
+   */
+  typedPriceForbiddenHint: 'Typing a price needs the same authority as voiding one.',
+  /**
+   * The 422, and it is NOT "nothing happened".
+   *
+   * `idempotency_key_reused` means the key already carries a DIFFERENT body — so
+   * the request just refused did nothing, but the earlier figure it was compared
+   * against may well have been charged. The server's own copy ("Use a new key")
+   * is written for a client; the sentence a woman at a counter needs is the same
+   * one the unreadable-response path gives her, because the doubt is identical:
+   * check the balance before charging again.
+   *
+   * NO BUTTON ACCOMPANIES IT, for the reason § THE DOUBLE-CHARGE PATH gives at
+   * the top of MemberScreen. Editing the amount is what mints a fresh key, so
+   * the recovery is the correction itself and needs no affordance of its own.
+   */
+  typedPriceKeyReused:
+    'That figure changed after the charge was sent. The earlier amount may already have gone through.',
+
+  /** Today's charges — how a typed row differs from a menu one. */
+  typedPriceRowTag: 'Typed price',
+  typedPriceRowReason: (reason: string) => `Typed price · ${reason}`,
+
   // ----------------------------------------------------------------- done --
   /** :380 — "Charged 3.000 KD" */
   charged: (amount: string) => `Charged ${amount}`,

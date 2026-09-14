@@ -62,12 +62,19 @@ import { charge, type ChargeResult } from '../api/charges';
 import type { ScanResult } from '../api/scans';
 import { copy } from '../copy/en';
 import { chargeTotals } from '../domain/charge';
+import {
+  customAmountRefusal,
+  parseTypedKd,
+  typedChargeReady,
+  type CustomAmountRefusal,
+} from '../domain/customAmount';
 import { loyaltyPill, memberSubtitle } from '../domain/loyalty';
 import { useSession } from '../state/session';
 import { card, color, display, MIN_TAP_TARGET, radius, ui } from '../theme';
 import { LinkButton, PrimaryButton } from '../components/Buttons';
 import { figureOf, Money } from '../components/Money';
 import { OfflineBanner } from '../components/States';
+import { TypedAmountCard } from '../components/TypedAmountCard';
 
 export interface ChargeAttempt {
   result: ChargeResult;
@@ -92,11 +99,39 @@ export function MemberScreen({
   onRescan: () => void;
   onCharged: (attempt: ChargeAttempt) => void;
 }) {
-  const { reportFailure } = useSession();
+  const { can, refreshPerms, reportFailure } = useSession();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [shortfall, setShortfall] = useState<Fils | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * A PRICE A MANAGER TYPED.
+   * ═══════════════════════════════════════════════════════════════════════════
+   * `can('void')` — `useSession().can`, the SAME read the void button on
+   * ChargesScreen and the padlocked tiles on HomeScreen use, and the only read of
+   * authority this app has. It is `session.staff.perms[perm]`, re-fetched by
+   * `refreshPerms()` whenever the app foregrounds, so a manager granting the
+   * permission mid-shift takes effect without a sign-out.
+   *
+   * WHY `void` AND NOT SOMETHING OF THIS SCREEN'S OWN: the server gates
+   * `amountFils` on `perms.void`, on the PRESENCE of the field rather than the
+   * branch taken. Gating the control on anything else would draw a button whose
+   * every use is a 403. The API's own comment concedes `perms.customAmount` would
+   * be the honest gate and is a four-way break a lane may not make.
+   *
+   * AND IT DECIDES NOTHING (non-negotiable #7). Hiding the control is a courtesy
+   * to a staff member who cannot use it, not the thing that stops her: a cached
+   * `perms.void: true` against a server that has revoked it puts the figure on
+   * the wire and gets a 403, and rendering that refusal well is this screen's
+   * actual job. Nothing below depends on the gate for correctness.
+   */
+  const canTypeAmount = can('void');
+  const [typing, setTyping] = useState(false);
+  const [typedRaw, setTypedRaw] = useState('');
+  const [reason, setReason] = useState('');
+  const typed = useMemo(() => parseTypedKd(typedRaw), [typedRaw]);
 
   /**
    * One key per ATTEMPT. It is regenerated when the basket changes, because the
@@ -124,8 +159,60 @@ export function MemberScreen({
     });
   }, []);
 
+  /**
+   * EDITING THE FIGURE OR THE REASON MINTS A NEW KEY, for exactly the reason
+   * `toggle` does it for the basket: both are in the server's request hash
+   * (api/src/routes/charges.ts § "THE TYPED FIGURE IS IN THE HASH"), so reusing
+   * the key after a correction answers 422 `idempotency_key_reused` instead of
+   * charging the corrected amount.
+   *
+   * This is what makes the 422 unreachable from this screen's own flow. It is
+   * still rendered — see the failure panel — because a client-side habit is not a
+   * guarantee, and the refusal that says "the earlier amount may already have
+   * gone through" is the one she must not be shown as a generic error.
+   */
+  const editTyped = useCallback((next: string) => {
+    setShortfall(null);
+    setFailure(null);
+    attemptKey.current = newIdempotencyKey();
+    setTypedRaw(next);
+  }, []);
+
+  const editReason = useCallback((next: string) => {
+    setFailure(null);
+    attemptKey.current = newIdempotencyKey();
+    setReason(next);
+  }, []);
+
+  /**
+   * Switching between the menu and the typed field is a different request either
+   * way, so it mints a key too — and it clears the other side's input rather than
+   * leaving a selected chip behind a typed figure. The two can never be sent
+   * together (`ChargePricing` is a union, and the server answers
+   * `400 ambiguous_pricing`), so leaving stale state on the hidden side would only
+   * be a surprise waiting for the next toggle.
+   */
+  const setMode = useCallback((next: boolean) => {
+    setShortfall(null);
+    setFailure(null);
+    attemptKey.current = newIdempotencyKey();
+    setTyping(next);
+    if (next) setSelected(new Set());
+    else {
+      setTypedRaw('');
+      setReason('');
+    }
+  }, []);
+
   const submit = useCallback(async () => {
-    if (busy || !totals.hasSelection) return;
+    /**
+     * RE-READ, NOT TRUSTED. The Charge button is already disabled in both of
+     * these cases, and that disabling is a courtesy — this line is what actually
+     * stops a bad request leaving, and even it is not the control: the server
+     * refuses an empty basket and a malformed figure regardless.
+     */
+    if (busy) return;
+    if (typing ? !typedChargeReady(typed, reason) : !totals.hasSelection) return;
     setBusy(true);
     setFailure(null);
     setShortfall(null);
@@ -133,7 +220,22 @@ export function MemberScreen({
       const result = await charge(
         {
           memberId: scan.member.id,
-          serviceIds: scan.services.filter((s) => selected.has(s.id)).map((s) => s.id),
+          /**
+           * ONE PRICING SOURCE, chosen here and unable to carry both:
+           * `ChargePricing` is a union, so a body with `serviceIds` AND
+           * `amountFils` — the server's `400 ambiguous_pricing` — has no value
+           * this call site could construct.
+           *
+           * `typed.amountFils` is a branded `Fils` straight off `parseTypedKd`.
+           * No arithmetic happens between the keyboard and the wire (#1).
+           */
+          pricing:
+            typing && typed.state === 'ok'
+              ? { kind: 'custom' as const, amountFils: typed.amountFils, reason: reason.trim() }
+              : {
+                  kind: 'basket' as const,
+                  serviceIds: scan.services.filter((s) => selected.has(s.id)).map((s) => s.id),
+                },
           token,
         },
         attemptKey.current,
@@ -155,6 +257,13 @@ export function MemberScreen({
           setShortfall(fils(short));
         } else {
           setFailure(err);
+          /**
+           * The server disagreed with our cached authority, so re-read it — the
+           * same move `ChargesScreen` makes on its own 403. It does not undo the
+           * refusal or retry anything; it stops the control promising something
+           * the server refuses on the next tap.
+           */
+          if (err.status === 403) void refreshPerms();
         }
       }
     } finally {
@@ -162,6 +271,9 @@ export function MemberScreen({
     }
   }, [
     busy,
+    typing,
+    typed,
+    reason,
     totals.hasSelection,
     scan,
     selected,
@@ -170,18 +282,42 @@ export function MemberScreen({
     stampTarget,
     onCharged,
     reportFailure,
+    refreshPerms,
   ]);
 
   const firstName = scan.member.name.split(' ')[0] ?? scan.member.name;
   const shortCopy = copy.shortfall(firstName);
 
-  const label = !totals.hasSelection
-    ? copy.chargeSelectFirst
-    : busy
-      ? copy.chargeWorking
-      : shortfall !== null
-        ? copy.chargeTooLow
-        : copy.chargeAction(formatMoney(totals.chargedFils));
+  /**
+   * The typed figure replaces the basket wholesale — there is no deposit line and
+   * no service sum against it, because the server prices nothing when
+   * `amountFils` is present. So the footer shows the one number that will move.
+   */
+  const typedFils = typed.state === 'ok' ? typed.amountFils : fils(0);
+  const readyToCharge = typing ? typedChargeReady(typed, reason) : totals.hasSelection;
+  const dueFils = typing ? typedFils : totals.chargedFils;
+
+  const label = busy
+    ? copy.chargeWorking
+    : shortfall !== null
+      ? copy.chargeTooLow
+      : typing
+        ? typed.state !== 'ok'
+          ? copy.typedPriceSelectFirst
+          : reason.trim() === ''
+            ? copy.typedPriceReasonFirst
+            : copy.chargeAction(formatMoney(typedFils))
+        : !totals.hasSelection
+          ? copy.chargeSelectFirst
+          : copy.chargeAction(formatMoney(totals.chargedFils));
+
+  /**
+   * The server's refusal, turned into something readable — see
+   * `domain/customAmount.ts`. Applied only on the typed path: the menu path's
+   * failure panel is unchanged, and its no-retry rule is load-bearing.
+   */
+  const typedRefusal: CustomAmountRefusal | null =
+    typing && failure ? customAmountRefusal(failure) : null;
 
   return (
     <View style={styles.screen}>
@@ -268,6 +404,31 @@ export function MemberScreen({
           </View>
         )}
 
+        {/*
+          THE DISCLOSURE, AND IT IS THE ONLY THING `canTypeAmount` DECIDES.
+          Hidden without `perms.void`, which is a courtesy to a staff member who
+          cannot use it — never the control. Non-negotiable #7.
+        */}
+        {canTypeAmount && (
+          <View style={styles.modeRow}>
+            <LinkButton
+              label={typing ? copy.typedPriceClose : copy.typedPriceOpen}
+              onPress={() => setMode(!typing)}
+              testID="typed-amount-toggle"
+            />
+          </View>
+        )}
+
+        {typing ? (
+          <TypedAmountCard
+            raw={typedRaw}
+            amount={typed}
+            reason={reason}
+            onRawChange={editTyped}
+            onReasonChange={editReason}
+          />
+        ) : (
+          <>
         <Text style={[ui(12, '600'), styles.sectionLabel]}>{copy.selectServices}</Text>
         <View style={styles.chips}>
           {scan.services.map((s) => {
@@ -297,6 +458,8 @@ export function MemberScreen({
             );
           })}
         </View>
+          </>
+        )}
 
         {/* design:364 — the shortfall, verbatim, with the SERVER's number. */}
         {shortfall !== null && (
@@ -329,7 +492,59 @@ export function MemberScreen({
           her balance. An offline failure is the exception — nothing left the
           device, so the outcome is not in doubt and the banner alone is honest.
         */}
-        {failure && (
+        {failure && typedRefusal && (
+          /*
+            THE TYPED PATH'S REFUSALS, RENDERED RATHER THAN GENERALISED.
+
+            Four of them reach here and each says a different thing:
+              403  the server's own sentence, verbatim, plus a line naming what
+                   she was doing — it speaks of VOIDING because the gate really
+                   is `perms.void`;
+              400 amount_above_ceiling / invalid_amount  the server's figures,
+                   not a recomputed pair;
+              422 idempotency_key_reused  replaced, because "use a new key" is
+                   written for a client, and paired with the check-her-balance
+                   line since an EARLIER figure under that key may have charged;
+              offline  nothing left the device, so the outcome is not in doubt.
+
+            Still NO RETRY BUTTON, on this path as on the menu path, for the
+            reason § THE DOUBLE-CHARGE PATH gives at the top of this file.
+            Correcting the amount is what mints a fresh key, so the recovery is
+            the correction and needs no affordance of its own.
+          */
+          <View style={styles.failure} accessibilityRole="alert" testID="typed-charge-failure">
+            {typedRefusal.offline ? (
+              <OfflineBanner label={copy.offlineBody} />
+            ) : (
+              <>
+                <Text style={[ui(12.5), styles.shortfallText]} testID="typed-refusal-body">
+                  {typedRefusal.body}
+                </Text>
+                {typedRefusal.hint && (
+                  <Text
+                    style={[ui(12.5), styles.shortfallText, styles.unknownOutcome]}
+                    testID="typed-refusal-hint"
+                  >
+                    {typedRefusal.hint}
+                  </Text>
+                )}
+                {typedRefusal.outcomeUnknown && (
+                  <Text
+                    style={[ui(12.5, '600'), styles.shortfallText, styles.unknownOutcome]}
+                    testID="typed-refusal-unknown"
+                  >
+                    {copy.chargeUnknownOutcome}
+                  </Text>
+                )}
+                <Text style={[ui(11.5), styles.failureRef]}>
+                  {copy.reference(failure.reference)}
+                </Text>
+              </>
+            )}
+          </View>
+        )}
+
+        {failure && !typedRefusal && (
           <View style={styles.failure} accessibilityRole="alert" testID="charge-failure">
             {failure.kind === 'offline' ? (
               <OfflineBanner label={copy.offlineBody} />
@@ -351,12 +566,25 @@ export function MemberScreen({
 
       {/* The totals footer — design:367-372. Pinned, outside the scroll. */}
       <View style={styles.footer}>
-        <Row label={copy.totalServices} amount={totals.totalFils} />
-        <Row label={copy.totalDeposit} amount={totals.creditFils} negative />
+        {/*
+          THE SERVICE AND DEPOSIT ROWS ARE THE MENU PATH'S ONLY.
+
+          A typed price is not a basket with a held deposit applied to it: the
+          server prices nothing when `amountFils` is present, so there is no
+          service sum and no deposit line. Showing `Services 0.000` above a typed
+          18.500 would be a figure this screen invented about money, and showing
+          the deposit row would promise a credit that is not being applied.
+        */}
+        {!typing && (
+          <>
+            <Row label={copy.totalServices} amount={totals.totalFils} />
+            <Row label={copy.totalDeposit} amount={totals.creditFils} negative />
+          </>
+        )}
         <View style={styles.grandRow}>
           <Text style={ui(14, '600')}>{copy.totalToCharge}</Text>
           <Money
-            amount={totals.chargedFils}
+            amount={dueFils}
             figureStyle={display(22, '600')}
             unitStyle={[ui(13), styles.mutedUnit]}
           />
@@ -364,7 +592,7 @@ export function MemberScreen({
         <PrimaryButton
           label={label}
           onPress={() => void submit()}
-          disabled={!totals.hasSelection || busy || shortfall !== null}
+          disabled={!readyToCharge || busy || shortfall !== null}
           testID="charge-button"
         />
       </View>
@@ -453,6 +681,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     marginHorizontal: 2,
   },
+  modeRow: { alignItems: 'flex-end', marginTop: 16 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   chip: {
     flexBasis: '47.5%',
