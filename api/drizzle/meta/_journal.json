@@ -344,6 +344,13 @@
       "when": 1789187600000,
       "tag": "0048_erasure_reaches_the_address",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1789274000000,
+      "tag": "0049_a_price_a_manager_typed",
+      "breakpoints": true
     }
   ]
 }

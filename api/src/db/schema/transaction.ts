@@ -183,6 +183,34 @@ export const transaction = pgTable(
      */
     basketHash: text('basket_hash'),
 
+    /**
+     * TRUE when a staff member TYPED this charge's price instead of selecting it
+     * from the service menu.  (migration 0049)
+     *
+     * WHY A COLUMN AND NOT A DERIVATION, which is the question migration 0027 and
+     * migration 0042 both answered the other way. Those refused to store a second
+     * copy of something the schema already determined — the basket's service ids,
+     * the applied deposit. This is the opposite case: NOTHING ELSE IN THE SCHEMA
+     * RECORDS WHO DECIDED THE PRICE. `basket_hash` says what the charge was for,
+     * `amount_fils` says what moved, `created_by_staff_id` says who rang it up —
+     * and a 25.000 KD charge looks identical whether it came off the menu or out
+     * of a manager's head. It is not derivable, so it is stored.
+     *
+     * `branch_assumed` immediately above is the precedent, and the reasoning is
+     * the same one: per-artist and per-period revenue is a figure a merchant PAYS
+     * A BONUS ON, and a typed figure inside it must be visible as a typed figure.
+     * Without this column an audit two years later cannot separate the menu from
+     * the judgement, and the only honest answer to "how much of this month's
+     * takings did somebody type" is "we cannot tell". With it, the answer is a
+     * WHERE clause.
+     *
+     * DEFAULT FALSE, so every charge written before 0049 reads as what it was: a
+     * menu price. Unlike `basket_hash`, there is no ambiguous history here — a
+     * custom amount could not be taken at all before this column existed, so
+     * `false` on an old row is a fact and not an absence of information.
+     */
+    customAmount: boolean('custom_amount').notNull().default(false),
+
     createdByStaffId: text('created_by_staff_id').references(() => staffUser.id, {
       onDelete: 'restrict',
     }),
@@ -272,6 +300,60 @@ export const transaction = pgTable(
       'transaction_basket_hash_is_charge_only',
       sql`${t.basketHash} IS NULL OR ${t.kind} = 'charge'`,
     ),
+
+    /**
+     * A TYPED PRICE IS A CHARGE, and can be nothing else.
+     *
+     * The same shape as `transaction_basket_hash_is_charge_only` and for the same
+     * reason: a top-up, a deposit movement, a shop order and a void's
+     * `adjustment` all get their amount from somewhere the staff member is not.
+     * A `shop` row in particular is priced from `product.price_fils` exactly as a
+     * charge is priced from `service.price_fils`, so "a custom shop order" is a
+     * separate authority nobody has asked for — and an endpoint that quietly
+     * acquired one would be caught here rather than in a report.
+     */
+    check(
+      'transaction_custom_amount_is_charge_only',
+      sql`${t.customAmount} = false OR ${t.kind} = 'charge'`,
+    ),
+    /**
+     * A CUSTOM CHARGE CARRIES ITS BASKET HASH, and this is what keeps the
+     * near-duplicate guard reachable on the riskiest path in the product.
+     *
+     * `services/charge.ts § basketHashFor` hashes the sorted service ids for a
+     * menu charge and the AMOUNT for a typed one, so `basket_hash` keeps its
+     * meaning — "what this charge was for, canonically" — in both cases. Without
+     * this CHECK a custom charge could commit with a NULL hash, which the guard
+     * treats as un-comparable history (see `basket_hash` above), and a
+     * double-tapped 40.000 KD would go through twice with nothing to compare it
+     * against.
+     *
+     * One-directional, deliberately: a MENU charge may still have a NULL hash,
+     * because every charge written before migration 0031 does.
+     */
+    check(
+      'transaction_custom_amount_has_basket_hash',
+      sql`${t.customAmount} = false OR ${t.basketHash} IS NOT NULL`,
+    ),
+    /**
+     * A TYPED PRICE SAYS WHAT IT WAS FOR.
+     *
+     * A menu charge is self-describing: `basket_hash` names services that are
+     * rows in a table with names and prices. A custom charge has no such row
+     * anywhere — `best-selling-services` cannot attribute it, and the hash is a
+     * sha256 of a number. The `note` is therefore the ONLY thing that will ever
+     * answer "what was this 25.000 KD" — which is the question the whole feature
+     * has to survive in a dispute.
+     *
+     * `POST /voids` already requires a reason for the same reason and carries it
+     * into this same column. Enforced here as well as in the handler because a
+     * second writer of this table is how the `perms` columns came to need
+     * `PERM_COLUMN`: a constraint is the copy that cannot be forgotten.
+     */
+    check(
+      'transaction_custom_amount_has_note',
+      sql`${t.customAmount} = false OR (${t.note} IS NOT NULL AND length(btrim(${t.note})) > 0)`,
+    ),
     /**
      * The near-duplicate guard's only query: "has this member been charged for this
      * basket recently". Partial, because only charges carry a hash.
@@ -279,5 +361,15 @@ export const transaction = pgTable(
     index('transaction_member_basket_recent_idx')
       .on(t.memberId, t.basketHash, t.createdAt.desc())
       .where(sql`kind = 'charge' AND basket_hash IS NOT NULL`),
+
+    /**
+     * "Show me every typed price this salon took." Partial, on the true rows
+     * only, because they are the rare case — the index is a few pages rather
+     * than a copy of the table, and it is the query a merchant reviewing the
+     * month actually runs.
+     */
+    index('transaction_custom_amount_idx')
+      .on(t.salonId, t.createdAt.desc())
+      .where(sql`custom_amount`),
   ],
 );

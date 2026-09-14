@@ -1188,6 +1188,115 @@ SELECT pg_temp.assert('15', 'every erased snapshot still has its settled transac
      FROM shop_order WHERE address_erased_at IS NOT NULL));
 
 -- =========================================================================
+-- 16. a typed price is a charge, says what it was for, and can be compared
+-- =========================================================================
+-- Migration 0049. `transaction.custom_amount` is the one fact about a charge that
+-- nothing else in the schema records: WHO DECIDED THE PRICE. `amount_fils` says
+-- what moved, `basket_hash` says what for, `created_by_staff_id` says who was at
+-- the till — and a 25.000 KD charge is byte-identical whether it came off the menu
+-- or out of a manager's head.
+--
+-- The AUTHORITY behind such a row — `perms.void`, checked server-side on the
+-- PRESENCE of the field — is a boundary control and lives in
+-- `routes/customAmount.int.test.ts`, which calls the endpoint directly with the
+-- permission off. This section checks only the SHAPE the column commits to, which
+-- is what survives a handler being rewritten.
+-- WHY THE MATCH IS THE SUFFIX `is_charge_only` AND NOT THE WHOLE NAME, which is
+-- the kind of loosening that usually hides a probe testing nothing.
+--
+-- A non-charge row carrying a typed price violates TWO constraints at once and
+-- cannot be made to violate only one. With `basket_hash` set it breaks
+-- `transaction_basket_hash_is_charge_only` (0031) as well as
+-- `transaction_custom_amount_is_charge_only` (0049); with it NULL it breaks
+-- `transaction_custom_amount_has_basket_hash` instead. Postgres reports whichever
+-- it evaluates first and that order is not ours to fix. The shared suffix is the
+-- guarantee actually under test — a property that belongs to a charge reached
+-- something that is not one — and the assertion immediately below is what pins
+-- 0049's own constraint as existing rather than letting 0031's stand in for it.
+SELECT pg_temp.assert('16', 'the charge-only rule for a typed price exists as a constraint',
+  EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'transaction'::regclass
+       AND conname = 'transaction_custom_amount_is_charge_only'),
+  'transaction_custom_amount_is_charge_only is present on "transaction"');
+
+SELECT pg_temp.probe('16', 'a top-up cannot be a custom amount', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash,note,custom_amount)
+    VALUES ('TX-CUST-T','MB-VERIFY','SL-VERIFY','BR-VERIFY','topup',10000,'settled',now(),'deadbeef','a reason',true)$probe$,
+  'is_charge_only');
+
+-- A `shop` row is priced from `product.price_fils` exactly as a charge is priced
+-- from `service.price_fils`, so "a custom shop order" is a separate authority
+-- nobody has asked for. An endpoint that quietly acquired one fails here.
+SELECT pg_temp.probe('16', 'a shop order cannot be a custom amount', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash,note,custom_amount)
+    VALUES ('TX-CUST-S','MB-VERIFY','SL-VERIFY','BR-VERIFY','shop',-5000,'settled',now(),'deadbeef','a reason',true)$probe$,
+  'is_charge_only');
+
+-- An `adjustment` — a void's compensating row, or an owner's wallet correction —
+-- with NO basket hash, so 0031's constraint is out of the picture entirely. This
+-- one can only be refused by 0049.
+SELECT pg_temp.probe('16', 'a void adjustment cannot be a custom amount', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,note,custom_amount)
+    VALUES ('TX-CUST-A','MB-VERIFY','SL-VERIFY','BR-VERIFY','adjustment',5000,'settled',now(),'a reason',true)$probe$,
+  'transaction_custom_amount_');
+
+-- WITHOUT A HASH THE NEAR-DUPLICATE GUARD CANNOT SEE IT. A NULL hash is what the
+-- guard treats as un-comparable history (DECISIONS.md item 3, migration 0031), so a
+-- custom charge committed without one is a double-tapped 40.000 KD with nothing to
+-- compare against — on the one path in the product where the amount is typed.
+SELECT pg_temp.probe('16', 'a custom amount cannot be written without a basket hash', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,note,custom_amount)
+    VALUES ('TX-CUST-NH','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-25000,'settled',now(),'a reason',true)$probe$,
+  'transaction_custom_amount_has_basket_hash');
+
+-- THE NOTE IS THE ONLY DESCRIPTION THAT WILL EVER EXIST. A menu charge's hash names
+-- rows in `service` that have names and prices; a custom charge's hash is a sha256 of
+-- a number, and `best-selling-services` cannot attribute it at all. "What was this
+-- 25.000 KD" is the question the feature has to survive in a dispute.
+SELECT pg_temp.probe('16', 'a custom amount cannot be written without a reason', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash,custom_amount)
+    VALUES ('TX-CUST-NN','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-25000,'settled',now(),'deadbeef',true)$probe$,
+  'transaction_custom_amount_has_note');
+
+-- Whitespace is not a reason. Without `btrim` the constraint would be satisfied by a
+-- space bar, which is the shape of "required" that is not.
+SELECT pg_temp.probe('16', 'a blank reason is not a reason', 'refused',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash,note,custom_amount)
+    VALUES ('TX-CUST-BL','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-25000,'settled',now(),'deadbeef','   ',true)$probe$,
+  'transaction_custom_amount_has_note');
+
+-- MUST SUCCEED, or the column would be useless.
+SELECT pg_temp.probe('16', 'a charge may carry a typed price', 'allowed',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at,basket_hash,note,custom_amount)
+    VALUES ('TX-CUST-OK','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-25000,'settled',now(),'deadbeef','bridal package',true)$probe$);
+
+-- MUST ALSO SUCCEED: the three constraints are ONE-DIRECTIONAL by design. Every
+-- charge written before migration 0031 has a NULL `basket_hash` and no note, and
+-- making the rules biconditional would refuse the entire history of this table.
+SELECT pg_temp.probe('16', 'an ordinary charge still needs neither hash nor note', 'allowed',
+  $probe$INSERT INTO transaction (id,member_id,salon_id,branch_id,kind,amount_fils,status,settled_at)
+    VALUES ('TX-CUST-OLD','MB-VERIFY','SL-VERIFY','BR-VERIFY','charge',-8000,'settled',now())$probe$);
+
+-- A TYPED PRICE IS REVENUE LIKE ANY OTHER, and `transaction_revenue` (0042) must
+-- still cover it — `sales` gross and the artist-performance reconciliation both read
+-- that view, and a custom charge silently outside it would make the two disagree.
+-- Asserted against whatever this database holds rather than against a fixture: it is
+-- a statement about the view's definition, which has no `custom_amount` predicate and
+-- must never acquire one.
+SELECT pg_temp.assert('16', 'every settled custom charge is in transaction_revenue',
+  NOT EXISTS (
+    SELECT 1 FROM transaction t
+     WHERE t.custom_amount
+       AND t.status = 'settled'
+       AND NOT EXISTS (SELECT 1 FROM transaction_revenue r WHERE r.transaction_id = t.id)
+  ),
+  (SELECT CASE
+     WHEN count(*) = 0 THEN 'no custom-amount charges in this database yet'
+     ELSE count(*) || ' custom charge(s) checked' END
+     FROM transaction WHERE custom_amount AND status = 'settled'));
+
+-- =========================================================================
 -- the report, then the verdict — in that order, and the verdict LAST
 -- =========================================================================
 \pset format aligned

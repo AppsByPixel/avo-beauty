@@ -26,7 +26,7 @@
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { fils } from '@avo/types';
+import { fils, formatMoney } from '@avo/types';
 import { db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
@@ -37,7 +37,7 @@ import { transaction } from '../db/schema/transaction';
 import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
 import { badRequest, conflict, notFound } from '../http/errors';
-import { requireString, requireStringArray } from '../money/validate';
+import { parseAmountFils, requireString, requireStringArray } from '../money/validate';
 import {
   awaitCommittedKey,
   claimKey,
@@ -48,7 +48,11 @@ import {
   readIdempotencyKey,
   violatedConstraint,
 } from '../services/idempotency';
-import { performCharge, VOID_WINDOW_MINUTES } from '../services/charge';
+import {
+  CUSTOM_AMOUNT_MAX_FILS,
+  performCharge,
+  VOID_WINDOW_MINUTES,
+} from '../services/charge';
 import { chargeScannerBudget } from '../services/scannerLimit';
 import { writeAudit } from '../services/audit';
 import type { StaffPrincipal } from '../auth/principal';
@@ -118,6 +122,27 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
     // Then the key — a money-moving POST without one is refused before any work.
     const key = readIdempotencyKey(req);
 
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    /**
+     * SECOND, AND ABOVE THE BUDGET: is this caller allowed to NAME A PRICE?
+     *
+     * `wantsCustom` is read here, before `chargeScannerBudget`, because that call
+     * WRITES — a `scanner_attempt` row, which is the whole point of it
+     * (services/scannerLimit.ts: "a refusal is an attempt"). Non-negotiable #7
+     * wants authority decided before any work, and a permission gate that sits
+     * after a write is a gate that lets an unauthorised caller spend the till's
+     * shared budget. Reading `req.body` costs nothing: fastify has already parsed
+     * it, and this line does not touch the database.
+     *
+     * The gate itself, and the whole argument for `perms.void` over `perms.charges`
+     * and `perms.scanner`, is at `custom` below.
+     */
+    const wantsCustom = 'amountFils' in body;
+    if (wantsCustom) {
+      requireScannerPerm(req, 'void');
+    }
+
     /**
      * The till's budget — BEFORE any transaction is opened. See
      * services/scannerLimit.ts § WHERE THE CHECK SITS for why this line is here
@@ -126,9 +151,155 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
      */
     await chargeScannerBudget(db, p, 'charge');
 
-    const body = (req.body ?? {}) as Record<string, unknown>;
     const memberId = resolveMemberId(req, requireString(body.memberId, 'memberId', 100));
-    const serviceIds = requireStringArray(body.serviceIds, 'serviceIds');
+
+    /**
+     * ========================================================================
+     * A CUSTOM AMOUNT — A PRICE A MANAGER TYPED.  (migration 0049)
+     * ========================================================================
+     * The scanner could only ever charge what was on the service menu. A salon
+     * doing something the menu does not name had no way to take the money
+     * through AVO at all. Aftab ruled the authority to type a figure to
+     * MANAGERS; what follows is the shape of it.
+     *
+     * ------------------------------------------------------------------------
+     * THE GATE IS ON THE PRESENCE OF THE FIELD, NOT ON THE BRANCH TAKEN.
+     * ------------------------------------------------------------------------
+     * This is the single most important line in the feature and it is easy to
+     * write the other way round. The tempting version checks the permission
+     * inside the `if (custom)` branch, or — worse — ignores `amountFils` when the
+     * caller lacks authority and prices the basket instead. Both are wrong, and
+     * the second is a silent money bug of exactly the class the idempotency
+     * addendum rules against: a staff member types 40.000, the server charges the
+     * menu's 8.000, and the response says the charge succeeded. She has no way to
+     * learn that a different number moved.
+     *
+     * So an `amountFils` in the body is a CLAIM OF AUTHORITY, and it is answered
+     * before it is read. `'amountFils' in body` — not a truthiness test — so a
+     * `null`, a `0` and a string all reach the refusal rather than being dropped.
+     *
+     * ------------------------------------------------------------------------
+     * WHY `perms.void`, AND WHY NOT THE OTHER TWO.
+     * ------------------------------------------------------------------------
+     *   `scanner` is the base permission every artist on the floor holds — it is
+     *       what "can scan & charge" means, and gating on it would be no gate.
+     *
+     *   `charges` is a READ. api-contract.md § StaffUser: "can open Today's
+     *       charges ON THE SCANNER". It is senior because the day's takings and
+     *       every customer's name are on that screen, but it moves no money.
+     *       Reusing a read to grant a write is precisely the overload
+     *       `auth/principal.ts § StaffPerms.loyalty` spends forty lines
+     *       apologising for — a permission whose name stopped describing what it
+     *       controls, now unrenameable without a four-way break. Doing it
+     *       deliberately a second time to save a migration would be repeating a
+     *       mistake this codebase has already written down. It is also concretely
+     *       wrong: `charges: true, void: false` is the supervisor shape — trusted
+     *       to read the till, not to move money — and it is exactly the person
+     *       who must not be able to invent a price.
+     *
+     *   `void` is the senior scanner WRITE: "can reverse a charge within 15 min",
+     *       and it implies `charges` both in `permsOf` and at the database. It is
+     *       a staff member's own judgement substituted for what the menu said,
+     *       moving money outside the catalogue. A custom amount is structurally
+     *       the same authority pointed the other way — a void decides this visit
+     *       was worth nothing, a custom amount decides it was worth 25.000 — and
+     *       it is operationally "manager", which is the ruling.
+     *
+     * ------------------------------------------------------------------------
+     * THE COST OF NOT ADDING A TENTH PERMISSION, STATED RATHER THAN BURIED.
+     * ------------------------------------------------------------------------
+     * A void is BOUNDED — it can only return what was already taken, only within
+     * fifteen minutes. A custom amount is unbounded and forward-looking. So
+     * `void` is strictly LESS authority than what it is now gating, and granting
+     * it today silently widens what every existing holder can do tomorrow.
+     *
+     * That is a real consequence and the alternative is a tenth permission —
+     * `perms.customAmount` — which would be the honest gate and is a four-way
+     * break a lane may not make: `PERMISSION_NAMES`, `PERM_COLUMN`, a
+     * `staff_user` column, `StaffPermsSchema` in trunk-owned `packages/types`,
+     * `PERMISSION_COPY`, the Accounts → Team chips in Lane C's column and Lane
+     * D's permission census all move together. Escalated, not done.
+     *
+     * What makes the widening survivable in the meantime is that it is not
+     * silent where it matters: every custom charge is a `custom_amount = true`
+     * row with a required reason, its own audit action, and a fifteen-minute
+     * void window.
+     *
+     * THE CHECK ITSELF IS HOISTED, twenty lines up, above `chargeScannerBudget`.
+     * It has to be: that call writes a `scanner_attempt` row, and an authority
+     * decided after a write is decided too late. The argument lives here, beside
+     * the field it is about; the statement lives where it can be first.
+     */
+
+    /**
+     * EXACTLY ONE PRICING SOURCE. Both is refused rather than resolved by
+     * precedence, because every precedence rule is a rule somebody has to know:
+     * a client that sends a basket AND a figure has lost track of what it is
+     * charging, and silently picking one would charge a number nobody chose. The
+     * same refusal `POST /charges` gives a repeated service id, for the same
+     * reason it gives it.
+     */
+    if (wantsCustom && body.serviceIds !== undefined) {
+      throw badRequest(
+        'ambiguous_pricing',
+        'Send either serviceIds or amountFils, not both. A custom amount replaces the basket.',
+      );
+    }
+
+    const serviceIds = wantsCustom ? [] : requireStringArray(body.serviceIds, 'serviceIds');
+
+    /**
+     * The figure, and the words beside it.
+     *
+     * `parseAmountFils` is the money boundary — it refuses a non-number, a NaN, a
+     * fraction (the 18.5-means-18.500-KD mix-up), zero and anything negative,
+     * each with a 400 a client can act on rather than the 500 a bare `fils()`
+     * would produce. Non-negotiable #1: what reaches `performCharge` is a branded
+     * `Fils` and no float has touched it.
+     *
+     * THE CEILING. `services/charge.ts § CUSTOM_AMOUNT_MAX_FILS` carries the
+     * argument in full, including the honest limit of what a ceiling buys. The
+     * short version: an unbounded number field on a money path is a decision
+     * nobody made, the balance check is loosest exactly where a typo is most
+     * expensive, and 200.000 KD bounds the blast radius without blocking
+     * anything a salon legitimately does in one visit.
+     *
+     * THE REASON IS REQUIRED. A menu charge is self-describing; a custom one has
+     * no service row anywhere and `best-selling-services` cannot attribute it, so
+     * this string is the only thing that will ever answer "what was this for".
+     * 300 characters, matching the owner adjustment's reason — the other place
+     * this product makes somebody justify a number in a free-text field.
+     */
+    const custom = wantsCustom
+      ? (() => {
+          const amountFils = parseAmountFils(body.amountFils);
+          if (amountFils > CUSTOM_AMOUNT_MAX_FILS) {
+            /**
+             * `formatMoney`, NOT A HAND-ROLLED `/ 1000 .toFixed(3)`.
+             *
+             * `packages/types/src/money.ts` is the display boundary and the only
+             * sanctioned place money stops being an integer. It also groups
+             * thousands, which matters precisely here: a figure large enough to
+             * hit this ceiling is a figure a staff member needs to read at a
+             * glance, and `1,500.000 KD` is legible where `1500.000 KD` is the
+             * number she just mistyped in a different costume.
+             *
+             * Sibling strings in this file and in `services/charge.ts` still
+             * build money by hand. They are unchanged deliberately — Lane D and
+             * the scanner assert on several of them verbatim — and converting
+             * them is a mechanical pass of its own rather than a rider on this
+             * one. Reported.
+             */
+            throw badRequest(
+              'amount_above_ceiling',
+              `A custom amount cannot exceed ${formatMoney(fils(CUSTOM_AMOUNT_MAX_FILS))}. ` +
+                `Check the figure — ${formatMoney(amountFils)} looks like a typing mistake.`,
+              { maxFils: CUSTOM_AMOUNT_MAX_FILS, amountFils },
+            );
+          }
+          return { amountFils, reason: requireString(body.reason, 'reason', 300) };
+        })()
+      : undefined;
 
     /**
      * A REPEATED SERVICE ID IS REFUSED, AND IT USED TO BE SILENTLY COLLAPSED.
@@ -194,13 +365,31 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
        * `idempotency_key_reused` — the client would have to mint a new key to confirm,
        * which is precisely the state where a lost response causes a double charge.
        */
-      requestHash: hashRequestBody({ memberId, serviceIds, token: token ?? null }),
+      /**
+       * THE TYPED FIGURE IS IN THE HASH, and leaving it out would be the exact
+       * defect api-contract.md's idempotency addendum was written about: "a
+       * customer who retries a 5 KD top-up as 50 KD would be shown a 5 KD success
+       * and never learn the 50 never happened." Same key, different amount is a
+       * 422 naming the mismatch — not a replay, and not a second charge.
+       *
+       * THE REASON IS IN IT TOO. It lands on the row and in the audit log as the
+       * only description of what the money was for, so two different reasons under
+       * one key are two different requests. Unlike `confirmDuplicate` below, it is
+       * part of WHAT IS BEING CHARGED rather than a decision about how to handle a
+       * refusal.
+       */
+      requestHash: hashRequestBody({
+        memberId,
+        serviceIds,
+        token: token ?? null,
+        custom: custom ? { amountFils: custom.amountFils, reason: custom.reason } : null,
+      }),
     };
 
     const { status, body: out } = await withIdempotency(idem, () =>
       performCharge(
         db,
-        { memberId, serviceIds, token, confirmDuplicate },
+        { memberId, serviceIds, token, confirmDuplicate, custom },
         {
           principal: p,
           idempotency: idem,
@@ -274,6 +463,18 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
         status: t.status,
         reference: t.reference,
         createdAt: t.createdAt.toISOString(),
+        /**
+         * WHETHER THIS PRICE WAS TYPED, and the reason if it was.
+         *
+         * The same argument `voidedAt` carries two fields down: this screen was
+         * rendering a charge that somebody had invented the price of identically
+         * to one that came off the menu, and the person most likely to be looking
+         * at it is a manager reviewing the day. Both fields are always present and
+         * `null`/`false` is a positive statement — not typed — rather than an
+         * omission a client has to interpret.
+         */
+        customAmount: t.customAmount,
+        note: t.customAmount ? t.note : null,
         /**
          * Both, and deliberately not one.
          *

@@ -39,7 +39,7 @@
  */
 
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
-import { add, fils, subtract, type Fils, type Transaction } from '@avo/types';
+import { add, fils, formatMoney, subtract, type Fils, type Transaction } from '@avo/types';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
@@ -94,6 +94,73 @@ export function basketHashFor(serviceIds: readonly string[]): string {
   return hashRequestBody({ basket: [...serviceIds].sort() });
 }
 
+/**
+ * The same question for a TYPED price: what was this charge for, canonically.
+ *
+ * A custom amount has no basket to sort, so the amount itself is the canonical
+ * answer — two 40.000 KD custom charges to one customer inside the window are the
+ * same charge as far as a double-tapped scanner is concerned, which is the whole
+ * thing the guard exists to catch. `transaction_custom_amount_has_basket_hash`
+ * (migration 0049) is what makes this reachable: without a hash on the row the
+ * guard treats the earlier charge as un-comparable history and the second tap
+ * goes through.
+ *
+ * A DIFFERENT JSON SHAPE, so it cannot collide with a basket. `{ custom: 40000 }`
+ * and `{ basket: [...] }` hash differently for every input, so a service id can
+ * never be mistaken for an amount or the reverse.
+ *
+ * THE REASON IS NOT IN THE HASH. It is a description of a charge, not part of what
+ * is being charged, and including it would let a typo in the description defeat the
+ * guard — the conservative direction is to catch MORE double-taps and pay for it
+ * with one extra tap on the rare genuine repeat, which is the trade
+ * `NEAR_DUPLICATE_WINDOW_SECONDS` already made.
+ */
+export function customAmountHashFor(amountFils: Fils): string {
+  return hashRequestBody({ custom: amountFils });
+}
+
+/**
+ * =========================================================================
+ * THE CEILING ON A TYPED PRICE, AND WHAT IT DOES AND DOES NOT BUY
+ * =========================================================================
+ * 200.000 KD. An unbounded number field on a money path is a decision nobody
+ * made, so this is the decision.
+ *
+ * WHY THERE IS A CEILING AT ALL. The failure mode on a typed figure is an extra
+ * zero, and the customer whose wallet can absorb one is exactly the customer with
+ * a large balance — the balance check at step 5 is a real bound, and it is
+ * loosest precisely where the mistake is most expensive. The ceiling is what
+ * bounds the blast radius when the balance does not.
+ *
+ * WHY THIS NUMBER. Eight times the most expensive service in the seeded
+ * catalogue (25.000, a roots colour) and twenty times the contract's maximum
+ * deposit (10.000, `salon_deposit_in_range`). A bridal package or a full day
+ * assembled out of several treatments fits under it comfortably; nothing a salon
+ * legitimately does in one visit does not.
+ *
+ * WHAT IT DOES NOT DO, STATED RATHER THAN IMPLIED. A ceiling at C catches the
+ * extra-zero typo only when the true amount is above C/10 — so an 8.000 blow-dry
+ * mistyped as 80.000 sails straight through this check. NO ceiling value catches
+ * the small-charge typo without blocking real work, and pretending otherwise is
+ * how a control comes to be trusted for something it does not do. What catches
+ * that case is the rest of the design: the balance refusal, the 15-minute void,
+ * the near-duplicate guard on a second tap, and an audit row that names the
+ * amount, the customer, the manager and the reason.
+ *
+ * WHY A REFUSAL AND NOT A CONFIRM. The near-duplicate guard confirms because it
+ * is PROBABILISTIC — two identical services back to back is a real case, so
+ * refusing outright would block legitimate work. A ceiling is definite: nothing
+ * above it is legitimate, and a confirm dialogue on a money field trains people
+ * to tap through the next one.
+ *
+ * PER-SALON WOULD BE BETTER AND IS NOT A LANE'S TO BUILD. The honest home for
+ * this is a `salon` column beside `deposit_fils` with a control in Merchant →
+ * Settings, so a salon doing 500 KD bridal work can raise it and a nail bar can
+ * lower it to 50. That is a schema field, a contract field in `packages/types`
+ * and a dashboard control across three columns. Reported, not done.
+ */
+export const CUSTOM_AMOUNT_MAX_FILS = 200_000;
+
 export interface ChargeInput {
   memberId: string;
   serviceIds: string[];
@@ -122,6 +189,43 @@ export interface ChargeInput {
    * `idempotency_key_reused`, when it is the same attempt being allowed to proceed.
    */
   confirmDuplicate?: boolean | undefined;
+  /**
+   * ============================================================================
+   * A PRICE AN AUTHORISED STAFF PRINCIPAL TYPED, INSTEAD OF A BASKET TO PRICE.
+   * ============================================================================
+   * Set exactly when `serviceIds` is empty, and never alongside it —
+   * `routes/charges.ts` refuses a body carrying both, and the assertion at the top
+   * of `performCharge` refuses the combination again here.
+   *
+   * WHY THIS IS NOT NON-NEGOTIABLE #2 BEING BROKEN, which is the first thing a
+   * reader should be suspicious of. #2 is "the server owns the balance: clients
+   * never add credit locally, never mint a QR token, never decide whether a happy
+   * hour is live for the purpose of a charge." Every one of those is a case where
+   * the SERVER CAN ANSWER THE QUESTION and a client's answer would be a second,
+   * untrusted opinion about it. A price that is not on the menu is not a question
+   * the server can answer at all — there is no row to read.
+   *
+   * So what makes it safe is not that the number is derived. It is that naming it
+   * is an AUTHORITY, held server-side and checked before anything is read:
+   *
+   *   `routes/charges.ts` requires `perms.void` — the senior scanner write — on
+   *   the PRESENCE of the field, not on the branch taken. That distinction is the
+   *   load-bearing one: a handler that IGNORED an unauthorised `amountFils` and
+   *   priced the basket instead would charge a different number from the one the
+   *   staff member typed, with nobody told. Refusing is the only safe reading of
+   *   an authority the caller does not hold.
+   *
+   * `Fils`, not `number`, so a float cannot reach here — non-negotiable #1. The
+   * route parses it through `parseAmountFils`, which refuses a fraction with a
+   * 400 naming the KWD mix-up rather than letting `fils()` throw a 500.
+   *
+   * `reason` is REQUIRED and is not decoration. It becomes `transaction.note` and
+   * the audit detail, and it is the only thing in the entire system that will ever
+   * say what the money was for: there is no service row to name, and
+   * `best-selling-services` cannot attribute the charge.
+   * `transaction_custom_amount_has_note` enforces it at the database too.
+   */
+  custom?: { amountFils: Fils; reason: string } | undefined;
 }
 
 export interface ChargeContext {
@@ -159,6 +263,16 @@ export interface ChargeResult {
    */
   depositReturnedFils: number;
   bookingId: string | null;
+  /**
+   * TRUE when this charge's price was typed rather than priced from the menu.
+   *
+   * Always present, never omitted, for the reason `happyHour` gives one field up:
+   * a client has to be able to tell "this was a menu price" from "this API is too
+   * old to say". The scanner renders the receipt off this response, and a receipt
+   * that cannot distinguish the two is the customer-facing half of the same
+   * problem `transaction.custom_amount` solves for the merchant.
+   */
+  customAmount: boolean;
   loyalty: LoyaltyOutcome;
   voidableUntil: string;
   /**
@@ -189,6 +303,27 @@ export async function performCharge(
   input: ChargeInput,
   ctx: ChargeContext,
 ): Promise<ChargeResult> {
+  /**
+   * EXACTLY ONE PRICING SOURCE, ASSERTED BEFORE THE TRANSACTION OPENS.
+   *
+   * `routes/charges.ts` already refuses a body carrying both and a body carrying
+   * neither, with copy a client can act on. This is the second copy, and it is here
+   * rather than left to the route for the reason `permsOf` re-resolves `void` after
+   * the database CHECK already has: the route is one door, and a second caller of
+   * `performCharge` that got this wrong would price a basket AND debit a typed
+   * figure. A 500 from an unreachable branch is the correct outcome for a
+   * programming error; the client-facing refusals live in the route.
+   */
+  const hasBasket = input.serviceIds.length > 0;
+  const hasCustom = input.custom !== undefined;
+  if (hasBasket === hasCustom) {
+    throw new Error(
+      `performCharge needs exactly one pricing source, got ${
+        hasBasket ? 'both a basket and a custom amount' : 'neither'
+      }`,
+    );
+  }
+
   return db.transaction(async (tx) => {
     // ---------------------------------------------------------------- 0. key --
     // Claimed FIRST, inside the transaction. A duplicate raises a unique
@@ -271,16 +406,36 @@ export async function performCharge(
     }
 
     // ------------------------------------------------------------- 3. basket --
-    const rows = await tx
-      .select({ id: service.id, name: service.name, priceFils: service.priceFils })
-      .from(service)
-      .where(
-        and(
-          inArray(service.id, input.serviceIds),
-          eq(service.salonId, ctx.principal.salonId),
-          eq(service.active, true),
-        ),
-      );
+    /**
+     * ONE OF TWO PRICING SOURCES, AND THE ASSERTION AT THE TOP OF THIS FUNCTION
+     * GUARANTEES IT IS EXACTLY ONE.
+     *
+     * `input.custom` is a price an authorised staff principal typed — see
+     * `ChargeInput.custom` for why that is not a client naming its own price, and
+     * `routes/charges.ts` for the `perms.void` gate and the ceiling that make it
+     * true. Here it is simply the gross: there is no catalogue row to read, so
+     * there is no query, and `rows` stays empty.
+     *
+     * EVERYTHING BELOW THIS POINT IS UNCHANGED BY WHICH BRANCH RAN, and that is
+     * the design rather than an accident. The deposit still applies, the balance
+     * still refuses, the token is still consumed after the debit, loyalty still
+     * increments, the happy hour is still decided by the server, the receipt is
+     * still queued inside the transaction and the whole thing is still one
+     * transaction — non-negotiable #3. A custom amount replaces the PRICING and
+     * nothing else.
+     */
+    const rows = input.custom
+      ? []
+      : await tx
+          .select({ id: service.id, name: service.name, priceFils: service.priceFils })
+          .from(service)
+          .where(
+            and(
+              inArray(service.id, input.serviceIds),
+              eq(service.salonId, ctx.principal.salonId),
+              eq(service.active, true),
+            ),
+          );
 
     // An unknown id must not silently price at 0 and settle a real transaction
     // with a voidable window for work that does not exist — Lane D's finding.
@@ -290,9 +445,12 @@ export async function performCharge(
       throw badRequest('invalid_services', `Unknown service: ${unknown.join(', ')}.`, { unknown });
     }
 
-    // Priced from the database. A price in the request body is a scanner that
-    // can charge 0.000 for a colour — non-negotiable #2.
-    const gross = rows.reduce<Fils>((sum, r) => add(sum, fils(r.priceFils)), fils(0));
+    // Priced from the database, or typed by a manager. A price in the request body
+    // from an UNAUTHORISED caller is a scanner that can charge 0.000 for a colour —
+    // non-negotiable #2, and `routes/charges.ts` is where that authority is checked.
+    const gross = input.custom
+      ? input.custom.amountFils
+      : rows.reduce<Fils>((sum, r) => add(sum, fils(r.priceFils)), fils(0));
 
     /**
      * ------------------------------------------ 3a. THE NEAR-DUPLICATE GUARD --
@@ -326,7 +484,16 @@ export async function performCharge(
      * none, and treating null as a wildcard would refuse legitimate charges against
      * history nobody recorded.
      */
-    const basketHash = basketHashFor(input.serviceIds);
+    /**
+     * WHAT THIS CHARGE WAS FOR, CANONICALLY — the sorted services, or the typed
+     * amount. `customAmountHashFor` carries why a custom charge gets one at all,
+     * and `transaction_custom_amount_has_basket_hash` (migration 0049) is what
+     * makes forgetting it fail to commit rather than fail silently two minutes
+     * later on a second tap.
+     */
+    const basketHash = input.custom
+      ? customAmountHashFor(input.custom.amountFils)
+      : basketHashFor(input.serviceIds);
     if (!input.confirmDuplicate) {
       const since = new Date(Date.now() - NEAR_DUPLICATE_WINDOW_SECONDS * 1000);
       const [earlier] = await tx
@@ -368,11 +535,34 @@ export async function performCharge(
          * ago" — rather than a bare "are you sure?". A confirmation dialogue that
          * cannot name what it is warning about trains people to tap through it.
          */
+        /**
+         * TWO SENTENCES, BECAUSE "the same services" IS FALSE OF A TYPED PRICE.
+         *
+         * The menu wording is BYTE-IDENTICAL to what shipped — the scanner and
+         * Lane D's specs read it — and the custom variant exists only because a
+         * confirmation dialogue that misdescribes what it is warning about is the
+         * thing this refusal's own comment says trains people to tap through.
+         * There are no services to name on a custom charge; the amount is the
+         * whole of what was repeated.
+         *
+         * BOTH BRANCHES HAND-ROLL THE MONEY, and that is deliberate here where
+         * the audit detail below uses `formatMoney`. The two sentences render the
+         * SAME quantity — `earlier.t.amountFils` — so formatting one of them
+         * through the display boundary and the other by hand would print one
+         * amount two ways depending on a word elsewhere in the sentence. The menu
+         * branch cannot change (verbatim, asserted), so the custom branch matches
+         * it. Converting the pair belongs to the same mechanical pass as the rest
+         * of this file's money strings.
+         */
         throw conflict(
           'possible_duplicate',
-          `This customer was charged ${(Math.abs(earlier.t.amountFils) / 1000).toFixed(3)} KD ` +
-            `for the same services ${secondsAgo} second(s) ago. Charge her again only if ` +
-            `that is genuinely a second visit.`,
+          input.custom
+            ? `This customer was charged ${(Math.abs(earlier.t.amountFils) / 1000).toFixed(3)} KD ` +
+              `as a custom amount ${secondsAgo} second(s) ago. Charge her again only if ` +
+              `that is genuinely a second visit.`
+            : `This customer was charged ${(Math.abs(earlier.t.amountFils) / 1000).toFixed(3)} KD ` +
+              `for the same services ${secondsAgo} second(s) ago. Charge her again only if ` +
+              `that is genuinely a second visit.`,
           {
             secondsAgo,
             windowSeconds: NEAR_DUPLICATE_WINDOW_SECONDS,
@@ -518,6 +708,20 @@ export async function performCharge(
       // What this charge was for, canonically. The next charge two minutes from now
       // compares against it — see step 3a.
       basketHash,
+      /**
+       * THE ROW SAYS OF ITSELF WHETHER ITS PRICE WAS TYPED. Migration 0049 carries
+       * why this is stored rather than derived: nothing else in the schema records
+       * who decided the price, and per-artist revenue is a figure a merchant pays a
+       * bonus on.
+       */
+      customAmount: input.custom !== undefined,
+      /**
+       * The reason, on the row, for the same reason a void's is. It is the only
+       * thing that will ever say what a typed figure was for — there is no service
+       * row to name it and `best-selling-services` cannot attribute it — and
+       * `transaction_custom_amount_has_note` refuses the row without it.
+       */
+      note: input.custom ? input.custom.reason : null,
       createdByStaffId: ctx.principal.id,
       createdAt: now,
       settledAt: now,
@@ -851,22 +1055,64 @@ export async function performCharge(
       kind: 'charge',
       transactionId: txId,
       amountFils: due,
+      // Empty on a custom charge, because there were none. `custom` below is what
+      // carries the fact and the description in its place — a receipt listing
+      // nothing and saying nothing is the shape that would reach the customer
+      // otherwise.
       services: rows.map((r) => ({ id: r.id, name: r.name, priceFils: r.priceFils })),
+      ...(input.custom ? { custom: { reason: input.custom.reason } } : {}),
       balanceAfterFils: balanceFinal,
     });
 
     // ------------------------------------------------------------ 11. audit --
+    /**
+     * ITS OWN ACTION STRING, NOT A FLAG INSIDE `metadata`.
+     *
+     * The dashboard's audit log filters on Money / Rules / Access / Risk and
+     * renders `action` and `detail` verbatim; `metadata` is not on the face of the
+     * screen. A typed price that read as "Charge taken" would be invisible in the
+     * one place it most needs to be visible — a merchant reviewing the month can
+     * scan for "Custom amount charged" and cannot scan for a JSON key.
+     *
+     * THE DETAIL NAMES THE GROSS AND THE REASON, not the debit. On a booked visit
+     * `due` is what came out of her SPENDABLE balance after the deposit, so a
+     * detail line built from it would report 3.000 for a 25.000 KD figure somebody
+     * typed — the exact understatement `money/revenue.ts` exists to stop, arriving
+     * in the audit log this time. The gross is what was authorised, so the gross is
+     * what the row records.
+     */
     await writeAudit(tx, ctx.principal, {
       salonId: ctx.principal.salonId,
       kind: 'money',
-      action: 'Charge taken',
-      detail: `${(due / 1000).toFixed(3)} KD charged to ${m.name}`,
+      action: input.custom ? 'Custom amount charged' : 'Charge taken',
+      /**
+       * THE NEW BRANCH USES `formatMoney`; THE OLD ONE IS UNTOUCHED.
+       *
+       * `packages/types/src/money.ts` is the display boundary — the one place
+       * money is allowed to stop being an integer — and it groups thousands,
+       * which a typed figure can reach and a menu basket realistically cannot.
+       * The menu branch is byte-identical to what shipped and stays that way; an
+       * audit row's `detail` is rendered verbatim in the dashboard and is not a
+       * string to reformat as a side effect of an unrelated slice.
+       */
+      detail: input.custom
+        ? `${formatMoney(gross)} custom amount charged to ${m.name} · ${input.custom.reason}`
+        : `${(due / 1000).toFixed(3)} KD charged to ${m.name}`,
       source: 'scanner',
       subjectType: 'transaction',
       subjectId: txId,
       amountFils: -due,
       metadata: {
         serviceIds: input.serviceIds,
+        /**
+         * The authorised figure and the words beside it, so the row is answerable
+         * without a join to `transaction`. Null on a menu charge rather than
+         * omitted — the same reasoning `voidedAt` carries on `GET /charges`: null
+         * is the positive statement "this price came off the menu".
+         */
+        customAmount: input.custom
+          ? { amountFils: gross, reason: input.custom.reason }
+          : null,
         tokenUsed: Boolean(input.token),
         // The promotion decision, stamped into the audit line. A merchant asking
         // "why did this charge count double" gets the window id and the instant
@@ -915,6 +1161,7 @@ export async function performCharge(
       depositAppliedFils: heldDeposit,
       depositReturnedFils,
       bookingId: held?.id ?? null,
+      customAmount: input.custom !== undefined,
       loyalty,
       voidableUntil: new Date(now.getTime() + VOID_WINDOW_MINUTES * 60_000).toISOString(),
       happyHour: earning.happyHourId
