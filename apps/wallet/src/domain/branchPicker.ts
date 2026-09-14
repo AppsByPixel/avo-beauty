@@ -14,10 +14,37 @@
  * assertion about where money moves. Non-negotiable #2 is untouched, and it is
  * untouched by construction rather than by care: there is no field to send.
  *
- * That is also why the picker is not a fourth step. `design/AVO Wallet Home.dc.html`
- * draws three (service :534, artist :547, date & time :565) and no branch step,
- * and `TOTAL_STEPS` stays 4. A filter that changed the step count would be
- * claiming the customer had decided something she has not.
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE PICKER IS NOW A STEP. THE MODEL IS NOT.
+ * ═════════════════════════════════════════════════════════════════════════════
+ * This paragraph used to read "that is also why the picker is not a fourth
+ * step" — `design/AVO Wallet Home.dc.html` draws three (service :534, artist
+ * :547, date & time :565) and no branch step, so `TOTAL_STEPS` stayed 4 and the
+ * picker was a filter strip inside step 2.
+ *
+ * Aftab reversed that after testing the app: the flow is now service → branch →
+ * artist → time → confirmation, and `TOTAL_STEPS` is 5. WHAT DID NOT CHANGE IS
+ * THE SENTENCE ABOVE IT. The step selects which artists she SEES; the booking's
+ * branch is still derived server-side from the artist she picks. `POST
+ * /bookings` still takes only `{artistId, serviceId, startsAt}` and still
+ * refuses a `branchId` by name, so non-negotiable #2 remains untouched BY
+ * CONSTRUCTION — there is no field to send, and promoting the control to a step
+ * did not create one.
+ *
+ * The old argument was that "a filter that changed the step count would be
+ * claiming the customer had decided something she has not". That risk is real
+ * and it is now carried by the SCREEN rather than by the step count: the review
+ * step names the service, the artist and the time, and it does not name a
+ * branch — because the branch she filtered by is not necessarily the branch the
+ * server will record, and the `unassigned` group means it can legitimately be
+ * neither. A step she walks through is not a fact she asserted.
+ *
+ * THE SUPPRESSION RULE BECAME LOAD-BEARING RATHER THAN COSMETIC. As a strip, an
+ * absent picker cost nothing. As a step, an absent picker changes the number
+ * printed on every screen of the flow — so `branchStepApplies` and
+ * `branchChoices` are the SAME predicate (the first is defined as the second
+ * being non-empty) and cannot drift into disagreeing about whether a salon has
+ * four steps or five.
  *
  * ═════════════════════════════════════════════════════════════════════════════
  * THE HARD PART: `branch_id` IS NULL FOR MOST ARTISTS AND THAT IS NOT AN ERROR
@@ -183,6 +210,32 @@ export function branchChoices(input: {
   // merchant works through the roster.
   if (split.unassigned > 0) chips.push({ kind: 'unassigned' });
   return chips;
+}
+
+/**
+ * Is the branch a STEP of this flow at all — five steps, or four?
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * DEFINED AS `branchChoices(...).length > 0`, AND THAT IS THE WHOLE POINT
+ * ═════════════════════════════════════════════════════════════════════════════
+ * Not a second rule that happens to agree with the first today. The three
+ * suppressions argued at length above — one open branch, nothing assigned,
+ * roster not known yet — are exactly the cases where the step has no answer
+ * she could give, and a step with no answer is worse than no step. Writing the
+ * rule twice is how a salon ends up counting five steps and drawing four chips
+ * on one of them.
+ *
+ * THE ONE THAT MATTERS IS THE FIRST. A single-branch salon is the ordinary
+ * salon: one option is not a choice, `resolveBranch` already treats a lone open
+ * branch as `established`, and she must not be asked. The caller is responsible
+ * for the other half of honesty — that the COUNTER says four when this returns
+ * false. See `useBooking` § the branch step.
+ */
+export function branchStepApplies(input: {
+  branches: readonly PickableBranch[];
+  split: RosterSplit | null;
+}): boolean {
+  return branchChoices(input).length > 0;
 }
 
 /**

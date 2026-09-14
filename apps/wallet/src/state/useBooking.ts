@@ -1,10 +1,15 @@
 /**
  * The Book flow's state machine.
  *
- * Five steps, expressed as a discriminated union for the same reason
- * `useTopUp` is: "which step am I on" and "what has been chosen by now" cannot
- * drift apart. There is no path to the review step without a service, an artist
- * and a slot, and the compiler is what says so.
+ * Service → branch → artist → time → confirmation, expressed as a union for the
+ * same reason `useTopUp` is: "which step am I on" and "what has been chosen by
+ * now" cannot drift apart. There is no path to the review step without a
+ * service, an artist and a slot, and the compiler is what says so.
+ *
+ * THE BRANCH STEP IS CONDITIONAL AND THE COUNTER IS NOT A CONSTANT. Most salons
+ * have one open branch and are never asked, so their flow is four steps long
+ * and says so. `TOTAL_STEPS` is the ceiling; `totalSteps` on the controller is
+ * the answer. See § the branch step, at the latch.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE THINGS THIS FILE REFUSES TO DECIDE
@@ -50,15 +55,30 @@ import {
   ALL_BRANCHES,
   branchChoices,
   branchQuery,
+  branchStepApplies,
   sameChoice,
   type BranchChoice,
   type RosterSplit,
 } from '../domain/branchPicker';
 
-export type StepName = 'service' | 'artist' | 'day' | 'review' | 'confirmed';
+export type StepName = 'service' | 'branch' | 'artist' | 'day' | 'review' | 'confirmed';
 
-/** The four numbered steps of the design's progress bar. `confirmed` is past it. */
-export const TOTAL_STEPS = 4;
+/**
+ * The numbered steps of the progress bar AT FULL LENGTH. `confirmed` is past it.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * FIVE IS THE CEILING, NOT THE ANSWER. READ `totalSteps` OFF THE CONTROLLER.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Service → branch → artist → time → confirmation is the flow Aftab asked for,
+ * and it is five steps at a salon where the branch question can be answered.
+ * At every other salon — which today is MOST salons — the branch step is
+ * suppressed and the flow is four, so this constant is the wrong number to
+ * print. A "Step 2 of 5" naming a step she cannot reach is worse than four
+ * steps, so the screen reads `flow.totalSteps`, which is 5 or 4 per salon, and
+ * this export survives only as the ceiling the bar is defined against and as
+ * the thing a spec can assert the flow's full length against.
+ */
+export const TOTAL_STEPS = 5;
 
 /**
  * Re-exported from `domain/loadFailure.ts`, which owns the type and the mapping.
@@ -90,22 +110,43 @@ export interface RescheduleTarget {
 
 export interface BookingController {
   step: StepName;
-  /** 1-4 for the progress bar. `confirmed` reports 4, the bar being complete. */
+  /**
+   * 1..`totalSteps` for the progress bar. `confirmed` reports `totalSteps`, the
+   * bar being complete.
+   */
   stepIndex: number;
+  /**
+   * HOW LONG THIS SALON'S FLOW ACTUALLY IS — 5 with the branch step, 4 without.
+   *
+   * Not `TOTAL_STEPS`. The constant is the ceiling; this is the number the
+   * customer is entitled to be told, and it is the one the counter and the
+   * progress bar both read. See § the branch step below for why it only ever
+   * rises.
+   */
+  totalSteps: number;
+  /**
+   * Whether `'branch'` is on this salon's path at all.
+   *
+   * Exposed so the screen does not have to re-derive the skip from
+   * `branchOptions`, which is the same information wearing a different hat and
+   * would be a second place for the rule to be half-applied.
+   */
+  hasBranchStep: boolean;
 
   services: LoadState<BookableService[]>;
   artists: LoadState<BookableArtist[]>;
   availability: LoadState<Availability>;
 
   /**
-   * THE BRANCH SWITCH -- step 2's filter strip, not a fifth step.
+   * THE BRANCH SWITCH -- step 2's chips, when step 2 exists.
    *
-   * `branchOptions` is EMPTY when there should be no strip at all, which is the
-   * common case: a single-branch salon, or a salon whose artists are all
+   * `branchOptions` is EMPTY when there should be no branch step at all, which
+   * is the common case: a single-branch salon, or a salon whose artists are all
    * unassigned. `domain/branchPicker.ts` owns that rule and argues it at
    * length. The one thing to know here is that a branch is never sent to
    * `POST /bookings` -- it filters the roster, and the booking's branch is
-   * derived server-side from the artist she picks.
+   * derived server-side from the artist she picks. Promoting the control from a
+   * strip to a step did not change that: there is still no field to send.
    */
   branchOptions: BranchChoice[];
   branchChoice: BranchChoice;
@@ -194,11 +235,64 @@ export function useBooking(options: {
   /**
    * MORE THAN ONE OPEN BRANCH IS THE ONLY REASON TO ASK THE SECOND QUESTION.
    *
-   * `salon.branches` carries only OPEN branches. Below two there is no strip
+   * `salon.branches` carries only OPEN branches. Below two there is no step
    * whatever the roster looks like, so the `?branch=unassigned` read below is
    * not made at all and a single-branch salon's network traffic is unchanged.
+   *
+   * A RESCHEDULE IS EXCLUDED HERE, AND THAT IS WHAT KEEPS IT UNTOUCHED. It
+   * enters at the grid with the artist already fixed, so there is no roster to
+   * filter and no branch question to ask -- and asking it would print a "Step 4
+   * of 5" over a flow whose first three steps do not exist. Gating the split
+   * read on it also drops two requests a reschedule was making and never using.
    */
-  const multiBranch = salon.branches.length >= 2;
+  const multiBranch = !rescheduling && salon.branches.length >= 2;
+
+  /**
+   * The chips, or an empty array meaning "no branch step". `branches` is passed
+   * straight through -- the salons route serves only OPEN branches, which is
+   * the same reading `resolveBranch` takes when it decides whether a branch was
+   * established.
+   */
+  const branchOptions = useMemo(
+    () => (multiBranch ? branchChoices({ branches: salon.branches, split: rosterSplit }) : []),
+    [multiBranch, salon.branches, rosterSplit],
+  );
+
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * THE BRANCH STEP -- WHETHER THIS SALON HAS ONE, AND WHY IT ONLY EVER RISES
+   * ═════════════════════════════════════════════════════════════════════════
+   * `branchStepApplies` is `branchChoices(...).length > 0`, so the step and the
+   * chips on it cannot disagree. But that predicate is FALSE WHILE THE ROSTER
+   * SPLIT IS STILL LOADING, and a step count is not a thing that may flicker:
+   * it is printed on the header of step 1, the step she is looking at while
+   * that read is in flight.
+   *
+   * So the answer is LATCHED. Four until the split proves the question is
+   * answerable, then five, and never back down. That direction is chosen, not
+   * incidental:
+   *
+   *   4 → 5   understates for a moment and then adds a step she can walk.
+   *   5 → 4   printed "Step 2 of 5" over a step that turned out not to exist.
+   *
+   * The brief's rule is the second one -- "a Step 2 of 5 that cannot be reached
+   * is worse than four steps" -- so the monotone direction is up.
+   *
+   * IT ALSO SURVIVES A RETRY. `retryLoad` nulls `rosterSplit` to re-read it;
+   * without the latch the branch step would vanish from under a customer
+   * standing on it, taking the flow's length with it. While that re-read is in
+   * flight `branchOptions` is empty and the step renders its skeleton, which is
+   * what a step whose content is loading should do.
+   *
+   * A ref rather than state because it is derived from a render that has
+   * already been scheduled by `setRosterSplit` -- the same reason `keyRef`
+   * below is a ref. It never needs to cause a render of its own.
+   */
+  const branchStepLatch = useRef(false);
+  if (branchStepApplies({ branches: salon.branches, split: rosterSplit })) {
+    branchStepLatch.current = true;
+  }
+  const hasBranchStep = multiBranch && branchStepLatch.current;
 
   /**
    * The strip is computed ONCE per mount from one instant.
@@ -403,8 +497,14 @@ export function useBooking(options: {
   }, []);
 
   const next = useCallback(() => {
-    setStep((s) => (s === 'service' ? 'artist' : s === 'artist' ? 'day' : s === 'day' ? 'review' : s));
-  }, []);
+    setStep((s) => {
+      if (s === 'service') return hasBranchStep ? 'branch' : 'artist';
+      if (s === 'branch') return 'artist';
+      if (s === 'artist') return 'day';
+      if (s === 'day') return 'review';
+      return s;
+    });
+  }, [hasBranchStep]);
 
   const back = useCallback(() => {
     setStep((s) => {
@@ -412,10 +512,14 @@ export function useBooking(options: {
       // A reschedule starts at the grid, so stepping back out of it leaves the
       // flow rather than walking into an artist picker she never saw.
       if (s === 'day') return rescheduling ? 'day' : 'artist';
-      if (s === 'artist') return 'service';
+      // The skip is honoured in BOTH directions. Walking back into a branch
+      // step a salon does not have would be a dead screen with one chip on it,
+      // and it would do it after the counter had already said there were four.
+      if (s === 'artist') return hasBranchStep ? 'branch' : 'service';
+      if (s === 'branch') return 'service';
       return s;
     });
-  }, [rescheduling]);
+  }, [rescheduling, hasBranchStep]);
 
   const confirm = useCallback(() => {
     if (!artistId || !serviceId || !selectedSlot || submitting) return;
@@ -469,21 +573,33 @@ export function useBooking(options: {
   const clearShortfall = useCallback(() => setShortfallFils(null), []);
 
   /**
-   * The chips, or an empty array meaning "no strip". `branches` is passed
-   * straight through -- the salons route serves only OPEN branches, which is
-   * the same reading `resolveBranch` takes when it decides whether a branch was
-   * established.
+   * THE COUNTER, AND THE ONE RULE IT HAS TO KEEP: every number it prints names
+   * a step she can actually stand on.
+   *
+   * `confirmed` reports `totalSteps` rather than a number of its own -- the bar
+   * is complete, and the design draws it full behind the confirmation.
    */
-  const branchOptions = useMemo(
-    () => branchChoices({ branches: salon.branches, split: rosterSplit }),
-    [salon.branches, rosterSplit],
-  );
-
-  const stepIndex = step === 'service' ? 1 : step === 'artist' ? 2 : step === 'day' ? 3 : 4;
+  const totalSteps = hasBranchStep ? 5 : 4;
+  const stepIndex =
+    step === 'service'
+      ? 1
+      : step === 'branch'
+        ? 2
+        : step === 'artist'
+          ? hasBranchStep
+            ? 3
+            : 2
+          : step === 'day'
+            ? hasBranchStep
+              ? 4
+              : 3
+            : totalSteps;
 
   return {
     step,
     stepIndex,
+    totalSteps,
+    hasBranchStep,
     services,
     artists,
     availability,

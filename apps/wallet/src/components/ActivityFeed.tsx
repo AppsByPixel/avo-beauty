@@ -1,18 +1,39 @@
 /**
- * The activity feed and its empty state.
+ * The activity feed, its disclosure and its empty state.
  *
  * The empty state is a section-level state, not a screen-level one: a brand-new
  * member's wallet card, tier and payment code are all real and should render.
  * Only the list is empty, and interaction-spec.md §4 asks that an empty state
  * name the thing and offer the one action that fills it. Here that action is a
  * top-up, which is exactly what turns an empty feed into a non-empty one.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * FOUR ROWS, THEN A CONTROL — AND A THIRD SECTION-LEVEL STATE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * This rendered every row until now, so an account with a year of history
+ * pushed Membership and everything below it off the bottom of Home. Aftab asked
+ * for four and a disclosure beneath.
+ *
+ * The rule is `domain/activity.ts § discloseActivity` and NOT an inline
+ * `slice(0, 4)`, for the reason the near-empty case makes concrete: at exactly
+ * four rows there is nothing under the fourth, so the control must not appear,
+ * and `hidden > 0` is the single expression that decides it. A `slice` here and
+ * a `length > 4` in the JSX would be two statements of one rule, and the
+ * boundary is where they would disagree.
+ *
+ * EXPANDED IS VIEW STATE AND LIVES HERE. It is not a preference, it is not
+ * persisted, and it does not belong on `useWalletHome`: the feed remounts on
+ * every return to Home and opens collapsed again, which is the behaviour a
+ * disclosure should have. Nothing about it reaches the server.
  */
 
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MICRO_LABEL_COLOR, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
+import { focusable } from '../theme/focus';
 import { SignedAmount } from './Money';
-import type { ActivityRow } from '../domain/activity';
+import { discloseActivity, type ActivityRow } from '../domain/activity';
 
 interface Props {
   rows: ActivityRow[];
@@ -23,13 +44,41 @@ interface Props {
 
 export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
   const { lang, copy } = useLanguage();
+  const [expanded, setExpanded] = useState(false);
+  const { visible, hidden } = discloseActivity(rows, expanded);
+
   return (
     <View style={styles.section}>
       <Text style={[text('label', lang), styles.sectionLabel]}>{copy.activityLabel}</Text>
       {rows.length === 0 ? (
         <EmptyActivity onTopUp={onTopUp} />
       ) : (
-        <Rows rows={rows} onOpen={onOpen} />
+        <>
+          <Rows rows={visible} onOpen={onOpen} />
+          {/*
+            BENEATH THE CARD, NOT INSIDE IT. The card's last row drops its
+            bottom hairline (`rowLast`) so the list closes cleanly; a control
+            inside would either reinstate that line or sit flush against it.
+            Outside, it reads as an action on the card rather than an entry in
+            it — which is what it is.
+
+            It withdraws once pressed because `hidden` is then 0. There is no
+            "show less": the bundle has no such string in either language, and
+            `activityShowMore` is already an invented one.
+          */}
+          {hidden > 0 ? (
+            <Pressable
+              onPress={() => setExpanded(true)}
+              accessibilityRole="button"
+              accessibilityLabel={copy.activityShowMore}
+              dataSet={focusable}
+              testID="activity-show-more"
+              style={styles.more}
+            >
+              <Text style={[text('body', lang), styles.moreText]}>{copy.activityShowMore}</Text>
+            </Pressable>
+          ) : null}
+        </>
       )}
     </View>
   );
@@ -132,6 +181,24 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, minWidth: 0 },
   rowTitle: { color: color.ink, fontWeight: '500' },
   rowWhen: { color: color.textMuted, marginTop: 1 },
+
+  /**
+   * The disclosure. A text action, centred under the card, at the tap target
+   * every other control on Home keeps.
+   *
+   * NOT A FILLED BUTTON. `emptyAction` above is filled because it is the one
+   * thing to do on an empty screen; this sits under a card full of content and
+   * a second brand-filled button on Home would compete with the wallet card's
+   * own. `color.ink` rather than the brand for the same reason — and it keeps
+   * non-negotiable #9 a non-question here, since no white text goes near a fill.
+   */
+  more: {
+    minHeight: MIN_TAP_TARGET,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  moreText: { color: color.ink, fontWeight: '600' },
 
   empty: { paddingVertical: 44, paddingHorizontal: 24, alignItems: 'center' },
   emptyIcon: {

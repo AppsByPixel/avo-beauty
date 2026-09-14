@@ -314,6 +314,9 @@ export const ar: Copy = {
 
   // -------------------------------------------------------------- activity --
   activityLabel: 'النشاط', // design:1339
+  // AR GAP. The design draws no disclosure control in either language, so
+  // there is nothing to lift — see copy/types.ts § activityShowMore.
+  activityShowMore: en.activityShowMore, // AR GAP
   emptyActivityTitle: en.emptyActivityTitle, // AR GAP
   emptyActivityBody: en.emptyActivityBody, // AR GAP
   emptyActivityAction: en.emptyActivityAction, // AR GAP
@@ -670,6 +673,10 @@ export const ar: Copy = {
   chooseService: 'اختاري الخدمة', // design:1347
   chooseArtist: 'اختاري المصففة', // design:1347
   chooseDay: 'اختاري اليوم', // design:1348
+  // AR GAP. The branch step's label is invented in English and deliberately
+  // NOT derived here — see copy/types.ts § chooseBranch for why this one goes
+  // to the worksheet rather than in as plausible Arabic.
+  chooseBranch: en.chooseBranch, // AR GAP
 
   // The branch strip. NOT IN THE BUNDLE, and owed in Arabic just as much as in
   // English -- non-negotiable #12, Arabic is a first-class layout and not a
@@ -891,15 +898,23 @@ export const ar: Copy = {
  * translation without removing its entry here fails the build, and adding a key
  * without Arabic and without listing it here fails too.
  *
- * This is the worksheet for the native-speaker review. It stands at 81 entries
+ * This is the worksheet for the native-speaker review. It stands at 86 entries
  * and almost every one of them is state or refusal copy, which is not an accident —
  * see the section notes below.
  *
- * THE COUNT IN THIS COMMENT HAS NOW BEEN WRONG THREE TIMES. It read
+ * THE COUNT IN THIS COMMENT HAS NOW BEEN WRONG FOUR TIMES. It read
  * "twenty-four", then "76" — the latter while asserting, in the same sentence,
  * that it "is recomputed here rather than carried". It was carried. STATUS.md
  * said 74 and DECISIONS.md said 31 at the same moment the array held 81, and one
  * of those figures had already been repeated into two lane briefs.
+ *
+ * AND IT WAS WRONG AGAIN WHEN THIS SLICE OPENED THE FILE. The prose said 81; the
+ * array at `ae6eefc` held 84. Nobody wrote 81 down wrongly — three entries were
+ * added by later slices that did not re-read the sentence three lines above the
+ * list they were appending to. Which is the point: this number cannot be
+ * maintained by intention, only by the `awk` below. DECISIONS.md queue item 4
+ * still says 81 and is now stale by five; that file is trunk-owned, so it is
+ * REPORTED rather than edited here.
  *
  * The list itself cannot rot — `i18n/digits.test.ts` asserts it is EXACTLY the
  * set of keys where `ar` and `en` are identical, so adding a gap without listing
@@ -918,6 +933,7 @@ export const AR_GAPS = [
   'gatewayFailedTitle',
   'gatewayFailedBody',
   'gatewayFailedRetry',
+  'activityShowMore',
   'emptyActivityTitle',
   'emptyActivityBody',
   'emptyActivityAction',
@@ -975,6 +991,10 @@ export const AR_GAPS = [
   // ---- book. Every one of these is a STATE or a refusal; see the section
   // header above. The design's booking prototype has no failure in it, so the
   // Arabic block that covers its whole happy path covers none of these.
+  // The branch STEP's micro label. Invented in English, and the one string in
+  // the branch family that did NOT go in as unverified Arabic — see the note
+  // in AR_UNVERIFIED about the seven that did.
+  'chooseBranch',
   'availFallback',
   'bookEmptyDayTitle',
   'bookEmptyDayBody',

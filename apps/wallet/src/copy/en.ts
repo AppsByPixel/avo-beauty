@@ -209,6 +209,9 @@ export const en: Copy = {
 
   // activity
   activityLabel: 'Activity',
+  // INVENTED. The design renders the whole list with no control beneath it.
+  // Countless on purpose — see copy/types.ts. AR GAP.
+  activityShowMore: 'Show more',
   emptyActivityTitle: 'Nothing here yet',
   emptyActivityBody: 'Top-ups, visits and purchases will appear here.',
   emptyActivityAction: 'Top up your wallet',
@@ -580,6 +583,9 @@ export const en: Copy = {
   chooseService: 'Choose a service', // design:1240
   chooseArtist: 'Choose an artist', // design:1240
   chooseDay: 'Pick a day', // design:1241
+  // INVENTED. The bundle draws three steps and no branch step; written to
+  // the register of the three above it. See copy/types.ts. AR GAP.
+  chooseBranch: 'Choose a branch',
 
   // The branch strip. NOT IN THE BUNDLE -- see copy/types.ts for why each of
   // these reads the way it does, and that all seven are owed to the copywriter.

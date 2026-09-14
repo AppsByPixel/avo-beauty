@@ -1,8 +1,25 @@
 /**
  * Wallet · Book. design/AVO Wallet Home.dc.html § BOOK (:521-618).
  *
- * Service → artist → day and time → review → confirmed, with the deposit held
- * by the server at the moment of confirmation.
+ * Service → branch → artist → day and time → review → confirmed, with the
+ * deposit held by the server at the moment of confirmation.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE BRANCH STEP MOST SALONS NEVER SEE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The design draws three numbered steps and no branch step; Aftab added one
+ * after testing the app. It is CONDITIONAL, and the condition is the whole
+ * feature: a salon with one open branch is never asked, and its counter reads
+ * "Step 2 of 4" rather than a "Step 2 of 5" whose second step does not exist.
+ * That is why the header below reads `flow.totalSteps` and not `TOTAL_STEPS` —
+ * the constant is the ceiling, the controller has the answer, and
+ * `state/useBooking.ts § the branch step` argues the latch that keeps the
+ * number from flickering while the roster loads.
+ *
+ * THE STEP DOES NOT ASSERT A BRANCH. It filters the roster; the booking's
+ * branch is still derived server-side from the artist. There is no `branchId`
+ * in the body of `POST /bookings` and this change did not add one — which is
+ * also why the review step does not list a branch row.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE FOUR STATES ARE NOT APPENDED TO THIS SCREEN
@@ -50,12 +67,11 @@ import {
   StepLabel,
   ArtistRow,
 } from '../components/booking/BookingParts';
-import {
-  TOTAL_STEPS,
-  useBooking,
-  type LoadState,
-  type RescheduleTarget,
-} from '../state/useBooking';
+// `TOTAL_STEPS` is deliberately NOT imported: it is the flow's ceiling, and the
+// number this screen prints is `flow.totalSteps`, which is 4 at a salon with one
+// open branch. Importing the constant here is how the counter would go back to
+// promising a step she cannot reach.
+import { useBooking, type LoadState, type RescheduleTarget } from '../state/useBooking';
 import {
   branchChoiceLabel,
   sameChoice,
@@ -189,10 +205,15 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
         </Pressable>
         <Text style={[text('displayM', lang), styles.title]}>{copy.bookTitle}</Text>
         <Text style={[text('body', lang), styles.stepCount]}>
-          {copy.bookStep(flow.stepIndex, TOTAL_STEPS)}
+          {/*
+            `flow.totalSteps`, NOT `TOTAL_STEPS`. Four at a single-branch salon,
+            five where the branch step is real. Printing the constant here is
+            the exact defect this slice was told to avoid.
+          */}
+          {copy.bookStep(flow.stepIndex, flow.totalSteps)}
         </Text>
       </View>
-      <ProgressBar step={flow.stepIndex} total={TOTAL_STEPS} />
+      <ProgressBar step={flow.stepIndex} total={flow.totalSteps} />
 
       {flow.step === 'service' && (
         <Step
@@ -216,6 +237,8 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
         </Step>
       )}
 
+      {flow.step === 'branch' && <BranchStep flow={flow} salon={salon} />}
+
       {flow.step === 'artist' && (
         <Step
           state={flow.artists}
@@ -225,7 +248,6 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
         >
           {(artists) => (
             <>
-              <BranchStrip flow={flow} salon={salon} />
               {artists.length === 0 ? (
                 <ArtistsEmpty flow={flow} />
               ) : (
@@ -367,26 +389,39 @@ function Step<T>({
 }
 
 /**
- * STEP 2's BRANCH FILTER -- the branch switch Aftab asked for. (migration 0044)
+ * STEP 2 -- THE BRANCH. (migration 0044; promoted from a filter strip to a step
+ * by Aftab after testing the app.)
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * IT RENDERS NOTHING MOST OF THE TIME, AND THAT IS THE FEATURE
+ * MOST SALONS NEVER REACH THIS COMPONENT, AND THAT IS STILL THE FEATURE
  * ═══════════════════════════════════════════════════════════════════════════
- * `flow.branchOptions` is empty for a single-branch salon, for a salon whose
+ * `flow.hasBranchStep` is false for a single-branch salon, for a salon whose
  * artists are all unassigned (the common case today -- migration 0044
- * deliberately did not guess), and while the roster's split is still unknown.
- * `domain/branchPicker.ts` owns that rule and argues each of the three
- * suppressions. Here it is one early return, so there is no second place for
- * the rule to be half-applied.
+ * deliberately did not guess), and for a reschedule. Those flows never route
+ * here at all and their counter says four. `domain/branchPicker.ts` owns that
+ * rule and argues each suppression; `useBooking` owns the counter that has to
+ * agree with it.
  *
- * A SINGLE-BRANCH SALON SEES NO PICKER at all: one option is not a choice, and
+ * A SINGLE-BRANCH SALON IS NEVER ASKED: one option is not a choice, and
  * `resolveBranch` already treats a lone open branch as ESTABLISHED, so those
  * bookings are correctly attributed with nothing on screen.
  *
- * The horizontal `ScrollView` and `styles.strip` are the day strip's own
- * (design:568-572), reused rather than restyled -- see `BranchChip`.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * IT IS THE SAME CHIPS, NOT A NEW VISUAL LANGUAGE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The bundle draws no branch step, so anything invented here is unsourced. The
+ * least-invented option is the one already approved: `BranchChip` in the day
+ * strip's own horizontal `ScrollView` (design:568-572), under the same
+ * uppercase micro label the other three steps carry. `BranchChip` therefore
+ * keeps its place — not at review, where it never was, but as the control of
+ * the step it was always drawing.
+ *
+ * AN EMPTY `branchOptions` HERE IS A LOAD, NOT AN ABSENCE. The step's existence
+ * is latched, so a `retryLoad` that nulls the roster split leaves her standing
+ * on this step with no chips for an instant. That is the step's loading state
+ * and it renders as one, rather than as a step with nothing on it.
  */
-function BranchStrip({
+function BranchStep({
   flow,
   salon,
 }: {
@@ -394,13 +429,22 @@ function BranchStrip({
   salon: Salon;
 }) {
   const { lang, copy } = useLanguage();
-  if (flow.branchOptions.length === 0) return null;
+
+  if (flow.branchOptions.length === 0) {
+    return (
+      <>
+        <StepLabel>{copy.chooseBranch}</StepLabel>
+        <RowSkeleton count={2} />
+      </>
+    );
+  }
 
   const label = (choice: BranchChoice) =>
     branchChoiceLabel(choice, salon.branches, lang, copy);
 
   return (
     <View style={styles.branchBlock}>
+      <StepLabel>{copy.chooseBranch}</StepLabel>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -422,7 +466,12 @@ function BranchStrip({
         "Other artists" says these are not at any of the branches beside it; the
         note says why, in a customer's words, without using the API's
         "unassigned". Shown only while that group is selected -- on a branch chip
-        it would be a caveat about rows she is not looking at.
+        it would be a caveat about a location she did not choose.
+
+        IT MATTERS MORE AS A STEP THAN IT DID AS A FILTER. A strip that narrowed
+        a list she could already see claimed little; a numbered step reads as a
+        decision. This sentence is what keeps "Other artists" from being read as
+        "a branch called Other".
       */}
       {flow.branchChoice.kind === 'unassigned' ? (
         <View style={styles.branchNote}>
@@ -438,13 +487,23 @@ function BranchStrip({
  *
  * Two different emptinesses, and telling them apart is the whole value:
  *
- *   A BRANCH WITH NO ARTISTS. She filtered, and that location has nobody
- *   bookable. The body points at the way out -- another branch, or All -- because
- *   an empty state that names nothing to do is a dead end. This is reachable by
- *   design rather than by accident: `branchChoices` keeps a chip for every open
- *   branch even when its roster is empty, on the grounds that a MISSING chip
- *   reads as a branch that does not exist while an empty one reads as a branch
- *   with nobody in today. Only one of those is true.
+ *   A BRANCH WITH NO ARTISTS. She chose a location and it has nobody bookable.
+ *   The body points at the way out -- another branch, or All -- because an empty
+ *   state that names nothing to do is a dead end. This is reachable by design
+ *   rather than by accident: `branchChoices` keeps a chip for every open branch
+ *   even when its roster is empty, on the grounds that a MISSING chip reads as a
+ *   branch that does not exist while an empty one reads as a branch with nobody
+ *   in today. Only one of those is true.
+ *
+ *   THE WAY OUT MOVED AND THE SENTENCE DID NOT. `branchEmptyBody` says "Try
+ *   another branch, or choose All branches to see everyone" -- and until this
+ *   slice the chips were on this same step, one tap above the panel. They are
+ *   now the previous step, so the way out is the Back button. The copy is still
+ *   TRUE and still names the one useful action, so it is left verbatim rather
+ *   than reworded: it is an invented string already (`AR_UNVERIFIED`), and a
+ *   lane quietly rewriting invented copy to match its own layout change is how
+ *   the copywriter ends up reviewing a sentence nobody chose. Flagged in the
+ *   report instead.
  *
  *   THE SALON HAS NOBODY AT ALL. Nothing to filter and nothing to suggest, so it
  *   says so plainly. Lumiere in the seed is exactly this -- two branches, zero
@@ -629,10 +688,18 @@ function ConfirmFailure({ failure }: { failure: { code: string | null; message: 
 /**
  * design:1549-1558 — one button, four labels.
  *
- *   step 1/2   Continue, enabled once something is chosen
- *   step 3     Review booking, enabled once a slot is chosen
- *   step 4     Confirm · hold <deposit>  — or, when the server has said she is
- *              short, "Top up to book", which opens the sheet instead.
+ *   service/branch/artist   Continue, enabled once something is chosen
+ *   day                     Review booking, enabled once a slot is chosen
+ *   review                  Confirm · hold <deposit>  — or, when the server has
+ *                           said she is short, "Top up to book", which opens the
+ *                           sheet instead.
+ *
+ * THE BRANCH STEP IS ALWAYS ENABLED, and it is the only step that is. The other
+ * three gate on a selection because there is no default: no service is chosen
+ * until she chooses one. A branch IS defaulted — `ALL_BRANCHES` is the initial
+ * `branchChoice` and the first chip is selected when the step paints — so
+ * Continue is a legitimate answer from the first frame, and disabling it would
+ * demand a tap on a chip that is already on.
  */
 function Cta({
   flow,
@@ -686,9 +753,11 @@ function Cta({
   const enabled =
     flow.step === 'service'
       ? flow.selectedService !== null
-      : flow.step === 'artist'
-        ? flow.selectedArtist !== null
-        : flow.selectedSlot !== null;
+      : flow.step === 'branch'
+        ? true
+        : flow.step === 'artist'
+          ? flow.selectedArtist !== null
+          : flow.selectedSlot !== null;
 
   return (
     <PrimaryButton

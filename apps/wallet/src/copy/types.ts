@@ -210,6 +210,19 @@ export interface Copy {
 
   // activity
   activityLabel: string;
+  /**
+   * The activity feed's disclosure control — four rows, then this.
+   *
+   * ⚠️ INVENTED, AND AN AR GAP. `design/AVO Wallet Home.dc.html:328` renders the
+   * whole list (`<sc-for list="{{ activities }}">`) with no control under it, in
+   * either language — its `hint-placeholder-count="4"` is a placeholder height,
+   * not a limit. So there is no source string to lift. English is written flat
+   * and countless on purpose: "Show more" carries no number, which keeps it out
+   * of the digit rule and out of Arabic's counted-noun agreement, so the
+   * native-speaker review gets to answer one question rather than three.
+   * Arabic holds the English, listed in `AR_GAPS`. Reported to Aftab.
+   */
+  activityShowMore: string;
   emptyActivityTitle: string;
   emptyActivityBody: string;
   emptyActivityAction: string;
@@ -865,6 +878,23 @@ export interface Copy {
    */
   branchFilterAll: string;
   branchFilterOther: string;
+  /**
+   * The branch STEP's own micro label, beside `chooseService` / `chooseArtist` /
+   * `chooseDay`.
+   *
+   * ⚠️ INVENTED, AND AN AR GAP. The bundle draws three steps (design:1240-1241)
+   * and no branch step, so there is no string for a fourth label in EITHER
+   * language. English is written to the register of the three beside it —
+   * "Choose a service", "Choose an artist", so "Choose a branch" — and Arabic
+   * holds the English, listed in `AR_GAPS`.
+   *
+   * The Arabic is deliberately NOT written here even though the sibling branch
+   * strings were: `اختاري الفرع` is the obvious derivation and that is exactly
+   * why it is the wrong call to make silently. The seven strip strings went in
+   * as unverified Arabic and had to be retro-fitted to `AR_UNVERIFIED` a slice
+   * later; this one goes to the worksheet the first time. Reported to Aftab.
+   */
+  chooseBranch: string;
   /** Shown under the strip while the Other artists group is selected. */
   branchFilterOtherNote: string;
   /** A branch chip whose roster came back empty. */
