@@ -165,6 +165,21 @@ interface ReceiptPayloadCommon {
 export interface ChargeReceiptPayload extends ReceiptPayloadCommon {
   kind: 'charge';
   services: Array<{ id: string; name: string; priceFils: number }>;
+  /**
+   * PRESENT ONLY WHEN THE PRICE WAS TYPED, in which case `services` is empty.
+   *
+   * A custom charge has no catalogue rows to list, so a receipt built from
+   * `services` alone would tell the customer a figure left her wallet and nothing
+   * about what for. The reason the manager gave is the only description that
+   * exists — see `transaction_custom_amount_has_note`, migration 0049.
+   *
+   * WHAT THIS FIELD DOES NOT DO IS PROMISE A SENTENCE, exactly as
+   * `ShopReceiptPayload.fulfilment` does not: `design/whatsapp-templates.md` § 3
+   * has no custom-amount variable, so this carries the FACT truthfully and leaves
+   * the customer-facing wording to whoever writes that copy. Inventing one here
+   * would be adding a feature — CLAUDE.md § How to work, § Keep the copy verbatim.
+   */
+  custom?: { reason: string };
 }
 
 /**
