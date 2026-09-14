@@ -67,7 +67,7 @@ Hit the URL a minute before showing it to anybody.
 |---|---|---|
 | Dashboard | Render static site | free, no spin-down, CDN |
 | API | Render web service | free, spins down when idle |
-| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **provisioned 2026-09-13, migrated, seeded, 93/93 verified** |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **provisioned 2026-09-13, migrated to 0049, seeded, 103/103 verified 2026-09-14** |
 
 Postgres is **not on Render** deliberately: its own free database has
 historically been time-limited, and a demo database that expires a month later
@@ -96,8 +96,26 @@ yours — I can prepare everything else, and have.
 ### 1 · Database — **already done**
 
 Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
-is migrated, is seeded, and passes all 93 invariants. Both connection strings
-are in the scratchpad file named in the handover note, not in this repo.
+is migrated (through `0049`), is seeded, and passes all **103** invariants —
+re-verified 2026-09-14. Both connection strings are in the scratchpad file named
+in the handover note, not in this repo.
+
+**Run the invariants against it with `psql` directly, NOT with `pnpm run
+db:verify`:**
+
+```bash
+psql -q "$DATABASE_URL" -f api/scripts/verify-constraints.sql
+```
+
+`scripts/db-verify.sh` parses only the DATABASE NAME out of `DATABASE_URL` and
+then connects through `docker exec avo-postgres` — so it throws the host away
+and verifies a LOCAL database of the same name. Against this URL the name is
+`postgres`, which exists locally and has no schema, so it fails loudly with
+*relation "salon" does not exist*. **That loudness is luck.** Had the demo
+database been called `avo`, the wrapper would have verified the local `avo` and
+printed a green verdict about the wrong machine — which is the defect its own
+header calls "defaulting is the defect", one level up. Flagged to Lane A; the
+SQL file itself is host-agnostic and is what actually holds the proof.
 
 It has **two roles**, not one, and the split is not ceremony: an owner can
 `UPDATE` its own tables regardless of `REVOKE`, so serving requests as the owner
