@@ -484,8 +484,34 @@ else
       # came back 401. A fresh session costs one request.
       ATT_STAFF="$(staff_session SAL-AMARA noura 2468 DEV-SCANNER-01)" || ATT_STAFF=""
       if [[ -n "$ATT_STAFF" ]]; then
+        # THE SENTENCE IS NOW CHECKED, AND IT WAS FALSE FOR A DAY.
+        #
+        # This printed "now attributes to AR-003" off a 200 and nothing else. A 200
+        # says money moved; it says NOTHING about whether a booking was settled,
+        # and those are different events. Verified against the live demo database
+        # on 2026-09-14: six bookings, every one `deposit_held`, zero
+        # `settled_transaction_id`, every artist at 0.000 in the report — under a
+        # run that had printed this exact line.
+        #
+        # `findApplicableHold` matches a booking whose no-show window is still OPEN
+        # (`no_show_return_due_at > now`). The booking above was made at 15:26 and
+        # the charge landed at 17:49, nineteen minutes past a 17:30 deadline, so
+        # the hold was correctly not applied and the charge was an ordinary
+        # walk-in. Everything behaved; only the script lied.
+        #
+        # The check is free: the response already carries `bookingId`, non-null
+        # exactly when a hold was settled. This is the SECOND time this function
+        # has claimed an outcome it did not read — the 401 paragraph above is the
+        # first — so it now reports the booking id it actually settled.
         if charge "$ATT_STAFF" "$ATT_MID" '["SV-04"]' attributed; then
-          echo "    charged — this appointment now attributes to AR-003 in Reports"
+          ATT_BK="$(python3 -c "import json;print(json.load(open('$TMP/charge.json')).get('bookingId') or '')" 2>/dev/null)"
+          if [[ -n "$ATT_BK" ]]; then
+            echo "    charged $ATT_BK — this appointment attributes to AR-003 in Reports"
+          else
+            echo "    ~ charged, but NO booking was settled: the charge carried no bookingId," >&2
+            echo "      so it is an ordinary walk-in and AR-003 stays at 0.000. The hold's" >&2
+            echo "      no-show window had already closed by the time the charge landed." >&2
+          fi
         else
           echo "    ~ booked but NOT charged: the appointment stays unattributed." >&2
         fi
