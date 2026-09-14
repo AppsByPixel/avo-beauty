@@ -303,7 +303,40 @@ const EnvSchema = z.object({
   // including charges and sign-in, over a product-photo capability would be the
   // wrong trade, and letting it accept uploads it will silently lose would be the
   // other wrong trade.
-  IMAGE_DRIVER: z.enum(['disk']).default('disk'),
+  //
+  // `supabase` is the second driver and it is NOT the default. It exists because
+  // the deployed demo has no filesystem, so `disk` answers 502 there and no image
+  // works. Selecting it is an OPERATOR'S ACT in one environment, and it settles
+  // nothing about where bytes are allowed to live in production — the demo
+  // project sits in eu-central-1, which is exactly why it is a demo-only
+  // configuration. Data residency is still the client's open question
+  // (CLAUDE.md § Escalate, don't guess) and src/images/supabase.ts says so at
+  // length. `disk`'s production write refusal is unchanged.
+  IMAGE_DRIVER: z.enum(['disk', 'supabase']).default('disk'),
+
+  /**
+   * ------------------------------------------------------------- supabase --
+   *
+   * NO DEFAULTS ON ANY OF THE THREE, which is the MyFatoorah block's rule and
+   * src/images/index.ts restates it: "a bucket name baked in as a fallback is how
+   * somebody else's bucket ends up holding a client's customer photos." The
+   * assertion below names whichever is missing.
+   *
+   * NO VALUE FOR ANY OF THESE IS COMMITTED ANYWHERE IN THIS REPOSITORY — not
+   * here, not in api/.env.example, not in a test fixture. `SUPABASE_SERVICE_ROLE_KEY`
+   * bypasses every row-level policy in the project; it belongs in a secret
+   * manager, and `.env.*` is gitignored by repo policy for this reason.
+   */
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+  /** The bucket. Must be PRIVATE — src/images/supabase.ts § THE BUCKET MUST BE PRIVATE. */
+  SUPABASE_STORAGE_BUCKET: z.string().min(1).optional(),
+  /**
+   * A ceiling on one storage call. Defaulted, unlike the three above, because it
+   * is a tuning number rather than a credential or a destination — nothing is
+   * misdirected by getting it wrong, a request just waits longer before the 502.
+   */
+  SUPABASE_STORAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
   /**
    * Where `disk` keeps them. Relative paths resolve against the api/ package, so
@@ -537,6 +570,43 @@ if (raw.GATEWAY_DRIVER === 'myfatoorah') {
   }
 }
 
+/**
+ * The Supabase image driver refuses to boot half-configured, naming the variable.
+ *
+ * NOT PRODUCTION-ONLY, and for the reason the MyFatoorah assertion above gives:
+ * selecting this driver at all means intending to talk to a real bucket, and a
+ * driver that boots with no key sends `Bearer undefined`, gets a 401 from
+ * storage-api, and the operator then debugs Supabase instead of their own
+ * environment. Fail here, where the cause has a name.
+ *
+ * THIS IS NOT A SEVENTH PRODUCTION ASSERTION, and deliberately not. The obvious
+ * candidate — refuse to boot in production on `IMAGE_DRIVER=disk` — is exactly
+ * what src/images/disk.ts § WHY A WRITE REFUSAL AND NOT A BOOT REFUSAL argues
+ * against: it would stop charges, top-ups and sign-in over a product-photo
+ * capability nobody has to use. The disk driver's per-write 503 stays the answer
+ * and is untouched by this file.
+ */
+if (raw.IMAGE_DRIVER === 'supabase') {
+  const missing = (
+    [
+      ['SUPABASE_URL', raw.SUPABASE_URL],
+      ['SUPABASE_SERVICE_ROLE_KEY', raw.SUPABASE_SERVICE_ROLE_KEY],
+      ['SUPABASE_STORAGE_BUCKET', raw.SUPABASE_STORAGE_BUCKET],
+    ] as const
+  )
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `IMAGE_DRIVER=supabase requires ${missing.join(', ')}. ` +
+        'None of the three has a default and no value for any of them is committed in ' +
+        'this repository — SUPABASE_SERVICE_ROLE_KEY bypasses every row-level policy in ' +
+        'the project, so it lives in a secret manager. See api/.env.example.',
+    );
+  }
+}
+
 if (raw.NODE_ENV === 'production' && !raw.GATEWAY_WEBHOOK_SECRET) {
   throw new Error(
     'GATEWAY_WEBHOOK_SECRET is required in production. Without it the webhook ' +
@@ -631,6 +701,10 @@ export const env = {
   topupReaperPollMs: raw.TOPUP_REAPER_POLL_MS,
   bookingChangeWindowMinutes: raw.BOOKING_CHANGE_WINDOW_MINUTES,
   imageDriver: raw.IMAGE_DRIVER,
+  supabaseUrl: raw.SUPABASE_URL,
+  supabaseServiceRoleKey: raw.SUPABASE_SERVICE_ROLE_KEY,
+  supabaseStorageBucket: raw.SUPABASE_STORAGE_BUCKET,
+  supabaseStorageTimeoutMs: raw.SUPABASE_STORAGE_TIMEOUT_MS,
   /**
    * Absolute, resolved once. A relative default that each caller resolved
    * against its own cwd would put a lane's bytes wherever the process happened
