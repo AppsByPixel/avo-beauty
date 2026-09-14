@@ -1322,6 +1322,21 @@ a:hover {
   grid-template-columns: 1fr;
 }
 
+/*
+ * RESTORED, UNCHANGED, WITH A REAL SECOND CHILD AGAIN.
+ *
+ * This rule went out when the commission card left the screen, correctly: it had
+ * one user with one child, and a flex column of one renders identically to the
+ * card sitting in the grid cell. The two receipt channels — WhatsApp above Email
+ * receipts — are two cards in one cell, so it is back at the same 18px rather
+ * than under a new name. `Settings.tsx § settings__stack IS BACK`.
+ */
+.settings__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .settings__card {
   padding: 20px;
 }

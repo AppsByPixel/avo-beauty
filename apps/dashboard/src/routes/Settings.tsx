@@ -16,8 +16,12 @@ import { Tills } from './Tills.js';
 /**
  * Merchant → Settings.
  *
- * Five panels, in the design's order: optional modules, booking deposit,
- * business hours, branches, and WhatsApp.
+ * Six panels, in the design's order: optional modules, booking deposit,
+ * business hours, branches, and the two receipt channels — WhatsApp, and the
+ * email switch the design bundle does not draw. The bundle has one channel row;
+ * the API has had two fields for it since decision 88, and a merchant who cannot
+ * reach the second one cannot do what Aftab's item 11 asks. See § receipt
+ * channels for what the extra row may and may not say.
  *
  * NOT BUILT HERE, DELIBERATELY: the brand kit (logo upload, palette,
  * typography), social links, and Your plan & invoices. The first two are a
@@ -147,16 +151,36 @@ export function Settings() {
             <BusinessHoursPanel salon={salon} />
           </div>
           {/*
-            * `settings__stack` IS GONE WITH THE SECOND CARD IT EXISTED TO SPACE. It
-            * was a flex column with an 18px gap holding WhatsApp above Commission;
-            * with one child it renders identically to the card sitting in the grid
-            * cell directly, so keeping it would leave a wrapper whose only reason is
-            * a sibling that no longer exists. Its rule is out of app.css too — this
-            * was its only user.
+            * `settings__stack` IS BACK, AND THE NOTE THAT REMOVED IT WAS RIGHT.
+            *
+            * It read: "`settings__stack` IS GONE WITH THE SECOND CARD IT EXISTED TO
+            * SPACE. It was a flex column with an 18px gap holding WhatsApp above
+            * Commission; with one child it renders identically to the card sitting in
+            * the grid cell directly, so keeping it would leave a wrapper whose only
+            * reason is a sibling that no longer exists. Its rule is out of app.css
+            * too — this was its only user."
+            *
+            * Every word of that held while there was one card. There are two again —
+            * the two receipt channels — so the wrapper has a real second child and the
+            * identical rule is restored, unchanged, rather than a new class invented
+            * for the same 18px. Kept rather than tidied because the reasoning is the
+            * point: a wrapper is justified by its children, and both directions of
+            * that decision are now on the record.
             */}
           <div className="settings__pair">
             <BranchesPanel salon={salon} />
-            <WhatsAppPanel salon={salon} update={update} />
+            <div className="settings__stack">
+              <WhatsAppPanel
+                salon={salon}
+                busy={update.isPending}
+                onChange={(next) => update.mutate({ whatsappEnabled: next })}
+              />
+              <EmailReceiptsPanel
+                salon={salon}
+                busy={update.isPending}
+                onChange={(next) => update.mutate({ emailEnabled: next })}
+              />
+            </div>
           </div>
         </>
       ) : (
@@ -833,9 +857,86 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
   );
 }
 
-/* ----------------------------------------------------------------- whatsapp */
+/* --------------------------------------------------------- receipt channels */
 
-function WhatsAppPanel({ salon, update }: { salon: Salon | undefined; update: Updater }) {
+/**
+ * ===========================================================================
+ * THE TWO CHANNELS A RECEIPT CAN GO OUT ON — Aftab's item 11.
+ * ===========================================================================
+ * "Invoice through emails or WhatsApp, option set by merchant." The server had
+ * both halves and this screen exposed one: `emailEnabled` appeared zero times
+ * under `apps/dashboard/`, so a merchant could turn WhatsApp off and could not
+ * turn email on. 107 `receipt_job` rows on the demo database, every one
+ * `whatsapp`. `api/settings.ts § SalonPatch` carries the verification.
+ *
+ * TWO INDEPENDENT SWITCHES, NEVER A CHOICE BETWEEN THE TWO, and this is the
+ * design decision rather than a styling one.
+ *
+ * The obvious control for "option set by merchant" is a segment — WhatsApp |
+ * Email | Both — and it would be a lie. `services/receipts.ts §
+ * decideReceiptChannels` does not implement an either/or:
+ *
+ *   `member.phone` is NOT NULL, so WhatsApp is possible for every customer.
+ *   `member.email` is nullable and `email_verified` defaults false, and email is
+ *   queued only for `email && emailVerified` — "an unverified address is one the
+ *   customer typed, and it might be someone else's. A receipt names what she
+ *   bought, what it cost and what her wallet balance is now."
+ *
+ * So a salon set to email-only STILL SENDS WHATSAPP to every customer who has
+ * not verified an address — the server falls back to it and stamps
+ * `fallbackReason: 'email_unavailable'` on the row, because a receipt is "a
+ * record-keeping obligation, not marketing" (design/README.md § Known gaps 7)
+ * and the merchant's preference must not be able to produce silence. A segment
+ * reading "Email" would tell her WhatsApp is off for everyone. Two switches
+ * state only what is true: each channel is on or off as a PREFERENCE, and the
+ * intersection with what is possible for a given customer is the server's.
+ *
+ * SHE MAY CHOOSE A CHANNEL; SHE MAY NOT CHOOSE SILENCE, AND NOT FROM HERE.
+ * Both off is refused twice on the server — `salon_receipt_channel_floor` is a
+ * CHECK, and `PATCH /salons/{id}` answers 409 `receipt_channels_required` with a
+ * sentence written to be read. This screen does NOT grey the second switch when
+ * the first is off. That version is non-negotiable #7 inverted: the UI becomes
+ * the control, and it drifts, because it can see `salon.whatsappEnabled` and
+ * cannot see whether any member of this salon has a verified address. The flip
+ * goes to the server, the server refuses, and `WriteError` at the foot of the
+ * screen renders the API's own sentence verbatim.
+ *
+ * WHAT IS MISSING HERE IS COPY, AND IT IS REPORTED RATHER THAN INVENTED.
+ * There is no merchant-facing string anywhere in the design bundle for the
+ * fallback above — "WhatsApp receipts still reach customers who have not
+ * verified an email address". `AVO Merchant Dashboard.dc.html:1090` draws ONE
+ * channel row and no second one; the only wording for the fallback rule anywhere
+ * is `api-contract.md:116`, written for an implementer rather than for a
+ * merchant. CLAUDE.md § Keep the copy verbatim, so that state has no words and
+ * is reported as needing them. What the screen does meanwhile is decline to
+ * assert the opposite — hence two switches and no segment.
+ *
+ * "Email receipts" IS THE BUNDLE'S OWN NAME FOR THE CHANNEL, not a coinage:
+ * `AVO Wallet Home.dc.html:1205`, `AVO Receipt Email.html:164` ("Manage email
+ * receipts") and `design/README.md`. It is also the precise one — this channel
+ * carries receipts and nothing else, while WhatsApp carries "Confirmations ·
+ * reminders · receipts". The sub-line under it is the string that does not
+ * exist; the wallet's `nReceiptSub` is written to a customer about her own
+ * receipts and is a different register from the dot list beside it, so it is not
+ * borrowed. The row ships without one.
+ *
+ * `labelHidden` ON BOTH, AND IT IS A FIX. `Toggle` renders its label visibly
+ * unless told not to, so the WhatsApp card has been painting "WhatsApp
+ * notifications" twice — once as the row name the design draws, once beside the
+ * knob. The design draws it once (`…dc.html:1090` is a name, a sub-line and a
+ * bare switch). `labelHidden` keeps the accessible name in the DOM under
+ * `.avo-sr-only` — the switch still announces what it does — and stops the
+ * duplicate paint. Marketing solved the same duplication with a CSS override;
+ * `Toggle` grew the prop afterwards, and this is what it is for.
+ */
+export interface ChannelPanelProps {
+  salon: Salon | undefined;
+  /** A write is in flight. Not "this channel may not be changed". */
+  busy: boolean;
+  onChange: (next: boolean) => void;
+}
+
+export function WhatsAppPanel({ salon, busy, onChange }: ChannelPanelProps) {
   return (
     <Card className="settings__card settings__card--inline">
       <div>
@@ -847,9 +948,37 @@ function WhatsAppPanel({ salon, update }: { salon: Salon | undefined; update: Up
       ) : (
         <Toggle
           checked={salon.whatsappEnabled}
-          disabled={update.isPending}
-          onChange={(next) => update.mutate({ whatsappEnabled: next })}
+          disabled={busy}
+          onChange={onChange}
           label="WhatsApp notifications"
+          labelHidden
+        />
+      )}
+    </Card>
+  );
+}
+
+export function EmailReceiptsPanel({ salon, busy, onChange }: ChannelPanelProps) {
+  return (
+    <Card className="settings__card settings__card--inline">
+      <div>
+        {/*
+          NO SUB-LINE. Not an oversight and not a layout choice — see the block
+          above: the bundle has no merchant-facing sentence for this row, and the
+          one string that describes the channel is written to a customer about
+          her own receipts. Reported as needing copy rather than paraphrased.
+        */}
+        <div className="settings__row-name">Email receipts</div>
+      </div>
+      {salon === undefined ? (
+        <Skeleton width={40} height={24} radius={999} />
+      ) : (
+        <Toggle
+          checked={salon.emailEnabled}
+          disabled={busy}
+          onChange={onChange}
+          label="Email receipts"
+          labelHidden
         />
       )}
     </Card>
