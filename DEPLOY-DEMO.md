@@ -42,12 +42,30 @@ know before someone draws a conclusion from the demo.
 gateway settles a top-up nobody paid for. Charges, wallet balances, tiers and
 the ledger are all genuinely exercised — only the payment leg is fabricated.
 
-**2 · Uploaded images do not survive a restart, and there are none to begin
-with.** `IMAGE_DRIVER=disk` writes to the container filesystem, which a free
-service replaces on every deploy and every wake from idle. `db/seed.ts` inserts
-no images at all, so products and services start with placeholders. If the demo
-needs pictures, upload them immediately before showing it, or attach a persistent
-disk (paid).
+**2 · There are no images to begin with, and `disk` cannot hold any — but a
+durable driver exists now.** `db/seed.ts` inserts no images at all, so products
+and services start with placeholders.
+
+`IMAGE_DRIVER=disk` (still the default) writes to a filesystem a serverless
+function does not have, and it refuses rather than degrades: no `image` row is
+written for bytes that never landed. **Which refusal you get depends on
+`NODE_ENV`** — `DiskImageStore.refuseWrites` is `nodeEnv === 'production'`, so a
+production environment answers `503 image_store_unconfigured` **before touching
+the filesystem at all**, and any other answers `502 image_store_unavailable`
+with `ENOTDIR`/`EROFS` in the cause chain. This deployment runs
+`NODE_ENV=development` (see § "The one blocker"), so it is the 502.
+
+**`IMAGE_DRIVER=supabase` is the fix**, added 2026-09-14: a Supabase Storage
+driver behind the same seam, no SDK and no lockfile change. Set `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_STORAGE_BUCKET` — all three, no
+defaults, and the API refuses to boot naming the missing ones. **Selecting it
+settles nothing about data residency**, which is still the client's decision
+(`CLAUDE.md` § Escalate): the demo's bucket is in `eu-central-1` because the demo
+database is, and that is a demo fact rather than a product one.
+
+Switching the driver in **either** direction strands whatever the previous store
+held — the `image` row and its `storage_key` survive, the bytes do not, nothing
+migrates them, and the only signal is an error-level log line.
 
 **3 · Anyone with the URL can sign in.** `db/seed.ts` creates its console and
 staff users with known development passwords — `yousef / yousef-dev-password`

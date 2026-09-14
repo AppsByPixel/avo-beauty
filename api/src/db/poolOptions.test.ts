@@ -93,16 +93,32 @@ describe('db/client.ts honours DB_POOL_MODE', () => {
    * test, and it made a green tree red for a reason with nothing to do with
    * pooling. Bounded rather than removed: a genuine hang still fails here, it
    * just is not measured against someone else's parallelism.
+   *
+   * ---------------------------------------------------------------------------
+   * AND THE FIRST TIME THIS WAS FIXED, THE TIMEOUT WENT ON THE WRONG TWO SPECS.
+   * ---------------------------------------------------------------------------
+   * `2122069` added `30_000` to the two specs in
+   * `the options actually reach the constructed client` — which call
+   * `postgres(UNREACHABLE, ...)` SYNCHRONOUSLY, assert two properties, and
+   * cannot be slow. The two this paragraph is actually about, one describe-block
+   * below it, got nothing and kept vitest's 5s default.
+   *
+   * It stayed hidden because 5s was enough — until lane A's image-driver slice
+   * took the api unit suite from 393 specs to 415 and the extra parallel load
+   * pushed this one to **14678ms, timing out at 5000ms** under `pnpm check`
+   * while passing in 3154ms when the suite runs alone. A prose explanation one
+   * block away from the code it explains is the same defect as a comment that
+   * has gone stale: it reads as though the thing were done.
    */
   it('unset means default — a deployment gets today behaviour unless it asks otherwise', async () => {
     const { sql } = await clientUnder(undefined);
     expect(sql.options.max).toBe(10);
     expect(sql.options.prepare).toBe(true);
-  });
+  }, 30_000);
 
   it('DB_POOL_MODE=serverless reshapes the real client', async () => {
     const { sql } = await clientUnder('serverless');
     expect(sql.options.max).toBe(1);
     expect(sql.options.prepare).toBe(false);
-  });
+  }, 30_000);
 });

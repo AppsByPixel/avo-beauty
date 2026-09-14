@@ -688,6 +688,28 @@ app.post('/charges', async (req, reply) => {
     transaction: tx,
     balanceAfterFils: after,
     depositAppliedFils: heldDeposit,
+    /**
+     * THREE KEYS THAT WERE MISSING, AND THEIR ABSENCE REJECTED EVERY SUCCESSFUL
+     * CHARGE THIS MOCK EVER ANSWERED — the menu path included.
+     *
+     * `ChargeResultSchema` (apps/scanner/src/api/charges.ts) requires
+     * `depositReturnedFils`, `bookingId` and `happyHour`, all three
+     * `.nullable()` rather than `.optional()` — present always, null when there
+     * is nothing to say. The mock sent none of them, so a scanner built against
+     * `pnpm mock` got a parse failure on a 200 and could not complete a charge at
+     * all. Found by lane B while driving the typed-price path live.
+     *
+     * Their VALUES here are the honest ones rather than convenient ones. The
+     * mock holds no deposit (`heldDeposit` is `fils(0)` above), so nothing was
+     * returned and no booking was settled — null is the true answer, not a
+     * placeholder. And `happyHour` is null because THE MOCK DOES NOT DECIDE
+     * HAPPY HOUR: non-negotiable #2 puts that on the server, `POST /charges`
+     * reads no promotion field from its body, and a mock that invented an
+     * outcome here would be teaching a client to expect one it cannot cause.
+     */
+    depositReturnedFils: fils(0),
+    bookingId: null,
+    happyHour: null,
     loyalty:
       salonFor(req).loyaltyMode === 'stamps'
         ? { mode: 'stamps' as const, stamps: 5, target: salon.stampTarget, rewardReady: false }
