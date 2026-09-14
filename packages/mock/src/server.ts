@@ -36,6 +36,7 @@ import {
   add,
   commissionFor,
   fils,
+  formatMoney,
   percentOf,
   subtract,
   walletTokenUri,
@@ -133,6 +134,23 @@ const idempotency = new Map<string, { fingerprint: string; value: unknown }>();
 const topups = new Map<string, TopUpIntent>();
 /** Wallet tokens issued and not yet consumed. Single use — non-negotiable #2. */
 const liveTokens = new Map<string, { memberId: string; expiresAt: number }>();
+/**
+ * The reason beside a typed price, by transaction id.
+ *
+ * A MAP RATHER THAN A FIELD ON THE TRANSACTION, because `note` is deliberately
+ * not on `TransactionSchema` — that column carries void reasons, "Cancelled by
+ * the customer" and an owner's adjustment text as well, and none of those are a
+ * customer's to read. `GET /charges` is a merchant surface and serves it there;
+ * `GET /members/me/transactions` reads the same rows and must not.
+ */
+const chargeNotes = new Map<string, string | null>();
+/**
+ * The real API's ceiling, restated rather than imported: `@avo/api` is not a
+ * dependency of this package and must not become one — the mock exists so a
+ * client lane can build with the API absent. If `services/charge.ts` moves this
+ * number, this line moves with it.
+ */
+const CUSTOM_AMOUNT_MAX_FILS = 200_000;
 
 function idempotencyKey(req: FastifyRequest): string | null {
   const k = req.headers['idempotency-key'];
@@ -506,14 +524,89 @@ app.post('/charges', async (req, reply) => {
   const idem = replayOrConflict(req, reply, key);
   if (idem.hit) return idem.value;
 
-  const body = req.body as { memberId: string; serviceIds: string[]; token?: string };
+  const body = req.body as {
+    memberId: string;
+    serviceIds?: string[];
+    token?: string;
+    amountFils?: number;
+    reason?: string;
+  };
+
+  /**
+   * A PRICE SOMEBODY TYPED. (api migration 0049; `perms.void` gates it.)
+   *
+   * THE GATE IS ON THE PRESENCE OF THE FIELD, NOT ON THE BRANCH TAKEN, and the
+   * mock models that ordering deliberately rather than approximately. The
+   * dangerous implementation is not one that forgets the gate — it is one that
+   * drops an unauthorised `amountFils` and prices the basket instead: the staff
+   * member types 40.000, 8.000 moves, and the response says success. A scanner
+   * built against a mock that forgives this would never see the refusal it has
+   * to render.
+   *
+   * `'amountFils' in body` — not a truthiness test — so `null`, `0` and a string
+   * all reach the refusal rather than being silently dropped.
+   *
+   * The 403 copy is the VOID refusal verbatim, because `perms.void` is the
+   * permission the real API checks: `requireScannerPerm(req, 'void')`. If that
+   * ruling changes, this string and `/voids` change together.
+   */
+  const asRecord = (req.body ?? {}) as Record<string, unknown>;
+  const wantsCustom = 'amountFils' in asRecord;
+  if (wantsCustom && has(req, 'noperms')) {
+    return reply.code(403).send({
+      error: 'forbidden',
+      message: "You don't have permission to void a charge. A manager can grant it.",
+    });
+  }
+  if (wantsCustom && body.serviceIds !== undefined) {
+    return reply.code(400).send({
+      error: 'ambiguous_pricing',
+      message: 'Send either serviceIds or amountFils, not both. A custom amount replaces the basket.',
+    });
+  }
+
+  let customReason: string | null = null;
+  let typed: Fils | null = null;
+  if (wantsCustom) {
+    const v = body.amountFils;
+    // The same refusals `money/validate.ts § parseAmountFils` gives, in the same
+    // order — a non-number, a NaN, the 18.5-means-18.500-KD fraction, zero and
+    // negatives — because a client that only ever meets the mock must meet them.
+    if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v) || v <= 0) {
+      return reply.code(400).send({
+        error: 'invalid_amount',
+        message: 'amountFils must be a whole number of fils greater than zero. 10.000 KD is 10000, not 10.5.',
+      });
+    }
+    if (v > CUSTOM_AMOUNT_MAX_FILS) {
+      return reply.code(400).send({
+        error: 'amount_above_ceiling',
+        message:
+          `A custom amount cannot exceed ${formatMoney(fils(CUSTOM_AMOUNT_MAX_FILS))}. ` +
+          `Check the figure — ${formatMoney(fils(v))} looks like a typing mistake.`,
+        maxFils: CUSTOM_AMOUNT_MAX_FILS,
+        amountFils: v,
+      });
+    }
+    // Required, and the real API's reason for requiring it is the one that
+    // matters here too: a custom charge has no service row anywhere, so this
+    // string is the only thing that will ever answer "what was this for".
+    if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+      return reply.code(400).send({
+        error: 'invalid_request',
+        message: 'reason is required.',
+      });
+    }
+    customReason = body.reason;
+    typed = fils(v);
+  }
 
   const requested = body.serviceIds ?? [];
   const chosen = services.filter((sv) => requested.includes(sv.id));
   // An unknown service id must not silently charge 0.000 and settle a real
   // transaction with a voidable window for work that doesn't exist.
   const unknown = requested.filter((id) => !services.some((sv) => sv.id === id));
-  if (requested.length === 0 || unknown.length > 0) {
+  if (!wantsCustom && (requested.length === 0 || unknown.length > 0)) {
     return reply.code(400).send({
       error: 'invalid_services',
       message:
@@ -523,7 +616,10 @@ app.post('/charges', async (req, reply) => {
       unknown,
     });
   }
-  const gross = chosen.reduce<Fils>((sum, sv) => add(sum, fils(sv.priceFils)), fils(0));
+  // The typed figure REPLACES the basket rather than adding to it — the two are
+  // mutually exclusive above, so there is no precedence rule to remember.
+  const gross =
+    typed ?? chosen.reduce<Fils>((sum, sv) => add(sum, fils(sv.priceFils)), fils(0));
 
   // VALIDATE the token here, but do NOT consume it yet.
   if (body.token) {
@@ -575,11 +671,18 @@ app.post('/charges', async (req, reply) => {
     status: 'settled',
     reference: `AVO-CHG-${Math.floor(Math.random() * 9000 + 1000)}`,
     createdAt: new Date().toISOString(),
+    customAmount: wantsCustom,
     // A charge is not voided at the moment it settles. The real API left-joins
     // the reversal; the mock has no void history to join to.
     voidedAt: null,
     reversedByTransactionId: null,
   };
+  // The reason rides beside the transaction rather than on it: `note` is a
+  // MERCHANT-ROUTE key, not part of `TransactionSchema`, for the reason that
+  // schema gives — the real column also carries void reasons and an owner's
+  // adjustment text, none of which are a customer's to read.
+  if (wantsCustom) chargeNotes.set(tx.id, customReason);
+  transactions.unshift(tx);
 
   const result = {
     transaction: tx,
@@ -609,7 +712,19 @@ app.get('/charges', async (req, reply) => {
   // Honour `empty` — a salon that has taken no charges today is the normal
   // state at opening time, and its empty state has to be reachable.
   if (has(req, 'empty')) return { items: [], nextCursor: null };
-  return { items: transactions.filter((t) => t.kind === 'charge'), nextCursor: null };
+  return {
+    /**
+     * `note` is added HERE and nowhere else — the merchant surface, matching
+     * `api/src/routes/charges.ts`. It is a wire-only key by design: it is not on
+     * `TransactionSchema`, and `e2e/contract.test.ts` annotates it as such with
+     * the reason. A client that reads it must read it off this route's item, not
+     * off a parsed `Transaction`.
+     */
+    items: transactions
+      .filter((t) => t.kind === 'charge')
+      .map((t) => ({ ...t, note: t.customAmount ? (chargeNotes.get(t.id) ?? null) : null })),
+    nextCursor: null,
+  };
 });
 
 app.post('/voids', async (req, reply) => {

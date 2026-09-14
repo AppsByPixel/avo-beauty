@@ -30,6 +30,14 @@ export interface TransactionRow {
   status: 'pending' | 'settled' | 'failed' | 'cancelled';
   reference: string;
   createdAt: Date;
+  /** migration 0049. Stored, not derived — `db/schema/transaction.ts` argues why. */
+  customAmount: boolean;
+  /**
+   * Void reason, adjustment reason, "Cancelled by the customer", and a typed
+   * price's justification — one column, four meanings. Only the merchant
+   * serialiser emits it, and only for the fourth.
+   */
+  note: string | null;
 }
 
 /**
@@ -91,6 +99,13 @@ export function serialiseTransactionForCustomer(
     reference: row.reference,
     createdAt: row.createdAt.toISOString(),
     /**
+     * Whether somebody typed this price. `TransactionSchema` § `customAmount`
+     * carries the argument, including why `row.note` does NOT follow it here:
+     * that column also holds void reasons, no-show text and an owner's
+     * adjustment reason, none of which are the customer's to read.
+     */
+    customAmount: row.customAmount,
+    /**
      * Both, and deliberately not one. `voidedAt` is what a list renders —
      * "Voided 14:32" is the sentence a human reads; `reversedByTransactionId`
      * names the refund row, so "where did the money go" is answerable from the
@@ -108,12 +123,23 @@ export function serialiseTransactionForCustomer(
  * Not used by a route yet — Merchant → Settings is phase 4 — but it is written
  * here so the next lane that needs the fee reaches for a named merchant
  * serializer instead of adding `feeFils` to the customer one.
+ *
+ * `note` joins `feeFils` here for exactly that reason, and it is MASKED the same
+ * way `GET /charges` masks it: the column carries void reasons, "Cancelled by
+ * the customer" and an owner's adjustment text as well as a typed price's
+ * justification, and only the last of those is a thing a scanner screen is asking
+ * about. Emitting the column raw would put the other three on a screen that has
+ * no words for them.
  */
 export function serialiseTransactionForMerchant(
   row: TransactionRow,
   reversal: ReversalRow | null,
-): Transaction & { feeFils: number } {
-  return { ...serialiseTransactionForCustomer(row, reversal), feeFils: row.feeFils };
+): Transaction & { feeFils: number; note: string | null } {
+  return {
+    ...serialiseTransactionForCustomer(row, reversal),
+    feeFils: row.feeFils,
+    note: row.customAmount ? row.note : null,
+  };
 }
 
 /**

@@ -581,6 +581,12 @@ export async function performCharge(
                 status: earlier.t.status,
                 reference: earlier.t.reference,
                 createdAt: earlier.t.createdAt,
+                // READ FROM THE ROW, not assumed from `input`. The refusal is
+                // about an EARLIER charge, and whether that one's price was typed
+                // is a fact about it — a second tap on a custom amount and a
+                // second tap on a basket can each be the duplicate here.
+                customAmount: earlier.t.customAmount,
+                note: earlier.t.note,
               },
               // The query already established it has no reversal, which is why it
               // matched at all. `null` here is that fact, not a default.
@@ -1147,6 +1153,16 @@ export async function performCharge(
           status: 'settled',
           reference: `AVO-CHG-${txId.slice(3)}`,
           createdAt: now,
+          /**
+           * THE SAME TWO EXPRESSIONS THE INSERT USED, and that duplication is
+           * the defect this literal has already had twice: one payload built in
+           * two places, so the row says one thing and the reply says another.
+           * Kept identical to the `values({...})` above deliberately — a
+           * divergence here would tell the scanner a typed charge came off the
+           * menu, on the one screen where that distinction is the feature.
+           */
+          customAmount: input.custom !== undefined,
+          note: input.custom ? input.custom.reason : null,
         },
         /**
          * NO REVERSAL, and stated rather than defaulted. This charge was created

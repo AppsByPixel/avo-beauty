@@ -590,6 +590,23 @@ function probes(): Probe[] {
       schemaName: 'paginated(TransactionSchema)',
       schema: paginated(TransactionSchema),
       requireNonEmpty: ['items'],
+      wireOnly: {
+        '$.items[].note':
+          'the reason beside a price somebody TYPED (api migration 0049), and the one ' +
+          'field of this feature that deliberately did NOT join `TransactionSchema` when ' +
+          '`customAmount` did. `transaction.note` is a general-purpose internal column: ' +
+          'void reasons, "Cancelled by the customer", "Deposit larger than the visit", ' +
+          '"No-show · deposit returned automatically" and an owner\'s free-text ' +
+          'adjustment reason all live in it. Declaring it on the CUSTOMER\'s transaction ' +
+          'type would put every one of those one careless serialiser away from her own ' +
+          'activity list — and this route keeps them off her wire today only by a ternary ' +
+          '(`note: t.customAmount ? t.note : null`), which is a rule in one place with ' +
+          'nothing stopping the second. So it stays a merchant-route key beside ' +
+          '`feeFils`, whose own column carries the words "merchant-visible, ' +
+          'customer-never". DECISIONS.md 107. ' +
+          'The day `note` means one thing rather than four, it can become a schema field ' +
+          'and this note goes.',
+      },
       /**
        * PROMOTED, AND IT WAS THE FIRST OF FOUR.
        *

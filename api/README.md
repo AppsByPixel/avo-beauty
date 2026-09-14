@@ -32,6 +32,26 @@ than connecting to something it was not pointed at. Absolute paths and `--dir`, 
 `--filter` and not `./scripts/...` — `LANES.md` § "Every lane isolates its own
 resources" carries why.
 
+### ⚠ `db:verify` and `test:int` need SEPARATE databases
+
+Run both against one database, in the order a person naturally runs them, and
+`db:verify` reports a **false red on invariant 5** — `member.balance_fils =
+sum(member_wallet entries)`, naming `AP-M-…` members "off by 59000 fils". Those
+are the integration suite's own fixtures: they mint a member with a balance
+directly rather than through a top-up, so nothing in `member_wallet` backs it.
+The invariant is correct and the product is fine; the database has test data in
+it that no product code path can produce.
+
+Reset and run `db:verify` alone and it is **103 / 103**.
+
+CI never meets this because it already separates them — `db:verify` gets
+`avo_migrate_check` and the integration suite gets `avo_int_check`
+(`.github/workflows/ci.yml`). That separation is the correct design and it was
+written only into the workflow, which is not where somebody running the gates by
+hand looks. It is here now. **DECISIONS.md 108** carries what it cost: a FAIL on
+the one assertion that stands between this product and a ledger that disagrees
+with itself, arriving minutes after a money-moving merge.
+
 The suite is idempotent: it may be run repeatedly against the same database with no
 reset in between, and it deletes nothing. Counts are asserted as **deltas** against
 what each run finds, because `topup_intent` rows are real payment records and a

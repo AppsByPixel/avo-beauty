@@ -676,6 +676,11 @@ export async function performOrder(
           status: 'settled',
           reference: `AVO-SH-${txId.slice(3)}`,
           createdAt: now,
+          // A shop order is priced from the catalogue, and `custom_amount` is
+          // CHECKed charge-only at the database (0049), so `false` here is not a
+          // choice this code is making.
+          customAmount: false,
+          note: null,
         },
         // No reversal is possible: nothing voids a `shop` row. Stated, because
         // the parameter is required precisely so a caller that COULD have one

@@ -42,6 +42,15 @@ const ORDER_201 = {
     status: 'settled',
     reference: 'AVO-SH-10001',
     createdAt: '2026-08-19T01:20:00.000Z',
+    /*
+      THE THIRTEENTH KEY, and the spec below predicted it by name: "if the schema
+      ever grows a required thirteenth, this fails here rather than on every real
+      response in production." It grew one — `customAmount`, api migration 0049 —
+      and this is what that prediction cost to honour. `false` because a shop
+      order is priced from the catalogue, and `custom_amount` is CHECKed
+      charge-only at the database, so no `shop` row can ever carry `true`.
+    */
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
     /*
@@ -179,6 +188,7 @@ describe('the real responses parse with nothing lost', () => {
       'bonusFils',
       'branchId',
       'createdAt',
+      'customAmount',
       'id',
       'kind',
       'memberId',

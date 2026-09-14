@@ -275,6 +275,35 @@ export const TransactionSchema = z.object({
   reference: z.string(),
   createdAt: DateTimeSchema,
   /**
+   * WHETHER SOMEBODY TYPED THIS PRICE, rather than it coming off the menu.
+   * (api migration 0049; `perms.void` gates minting one.)
+   *
+   * Here for the same reason `voidedAt` is, three lines down: the server knows
+   * it, `GET /charges` sends it, and a schema that does not declare it does not
+   * fail — zod DELETES it, and no client can tell "the server did not send it"
+   * apart from "our own types ate it". That is drift (7) and it cost this
+   * project a whole 15-minute reversal feature once already.
+   *
+   * IT IS ON THE CUSTOMER'S TRANSACTION, NOT ONLY THE MERCHANT'S, AND THAT IS
+   * THE POINT. A charge whose price a staff member invented is precisely the
+   * charge a customer has cause to query, and `false` is a positive statement —
+   * this came off the menu — rather than an absence she has to interpret.
+   *
+   * THE REASON STRING IS DELIBERATELY NOT HERE. `transaction.note` is a
+   * general-purpose internal column: void reasons, "Cancelled by the customer",
+   * "Deposit larger than the visit", "No-show · deposit returned automatically",
+   * and an owner's free-text adjustment reason all live in it. Declaring `note`
+   * on the customer's transaction type would put every one of those one careless
+   * serialiser away from the customer's own activity list — and `GET /charges`
+   * keeps it off her wire today only by a ternary
+   * (`note: t.customAmount ? t.note : null`), which is a rule in one place with
+   * nothing stopping the second. So it stays a MERCHANT-ROUTE key, alongside
+   * `feeFils`, which carries the same "merchant-visible, customer-never" note
+   * eight lines up in `db/schema/transaction.ts`. `e2e/contract.test.ts`
+   * annotates it `wireOnly` with that reason.
+   */
+  customAmount: z.boolean(),
+  /**
    * The void state. `voidedAt` is what a list renders — "Voided 14:32" is the
    * sentence a human reads; `reversedByTransactionId` is what makes it auditable.
    *

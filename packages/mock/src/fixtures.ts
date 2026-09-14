@@ -104,6 +104,16 @@ export const memberStamps: Member = {
   stamps: 4,
 };
 
+/**
+ * EVERY ONE OF THESE IS `customAmount: false`, AND NONE OF THEM WAS CHANGED TO
+ * `true` TO GIVE THE SCANNER SOMETHING TO RENDER.
+ *
+ * Flipping an existing row would quietly change what it means to every spec that
+ * already asserts on it, and appending a sixth would change the length of a list
+ * three surfaces count. A custom charge is reachable the honest way instead: POST
+ * one through `/charges` with `amountFils`, which the handler stores like any
+ * other, and it appears in `GET /charges` with the flag set.
+ */
 export const transactions: Transaction[] = [
   {
     id: 'TX-9021',
@@ -116,6 +126,7 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'AVO-CHG-9021',
     createdAt: '2026-08-14T19:05:00+03:00',
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
   },
@@ -130,6 +141,7 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'KNET-77120043',
     createdAt: '2026-08-14T11:42:00+03:00',
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
   },
@@ -144,6 +156,7 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'AVO-CHG-8810',
     createdAt: '2026-08-02T17:30:00+03:00',
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
   },
@@ -158,6 +171,7 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'AVO-DEP-8642',
     createdAt: '2026-07-28T15:00:00+03:00',
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
   },
@@ -172,6 +186,7 @@ export const transactions: Transaction[] = [
     status: 'settled',
     reference: 'KNET-76988201',
     createdAt: '2026-07-19T13:10:00+03:00',
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
   },

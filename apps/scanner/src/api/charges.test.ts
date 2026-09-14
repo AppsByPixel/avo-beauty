@@ -36,6 +36,13 @@ const WIRE = {
     status: 'settled',
     reference: 'AVO-CHG-9802919',
     createdAt: '2026-08-18T10:20:31.000Z',
+    // Added by trunk when `customAmount` joined `TransactionSchema` (api 0049).
+    // This constant is a RECORDED wire body, which is the thing
+    // `e2e/support/contract-drift.ts` opens by warning about: it drifts alongside
+    // the schema it is meant to police, and the seven specs below went red on a
+    // field the server had started sending rather than on anything they assert.
+    // Lane D owns whether this file keeps a recording at all.
+    customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
   },

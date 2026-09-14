@@ -605,6 +605,13 @@ export async function createBooking(
           status: 'settled',
           reference: `AVO-DEP-${txId.slice(3)}`,
           createdAt: now,
+          // A deposit is the salon's published figure, not one anybody typed —
+          // and `transaction_custom_amount_is_charge_only` (0049) makes that a
+          // database fact for every kind but `charge`. Said, because tsc naming
+          // this literal is the only reason the Book flow's reply is not once
+          // again narrower than the schema.
+          customAmount: false,
+          note: null,
         },
         // Created inside this transaction, so nothing can have reversed it yet. Said
         // rather than defaulted — the same argument as services/charge.ts.
