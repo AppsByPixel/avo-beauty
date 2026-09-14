@@ -181,8 +181,11 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   legalUpdated: ['2026-07-01', 3],
   vfSub: ['+96599887766'],
   // --- book ---
-  // A step counter and a total: counts, so Eastern in Arabic.
-  bookStep: [2, 4],
+  // A step counter and a total: counts, so Eastern in Arabic. The total is 5 at
+  // a multi-branch salon and 4 at every other one — `useBooking § totalSteps` —
+  // so the sample is the full-length flow rather than a constant this file
+  // would otherwise be quietly asserting.
+  bookStep: [2, 5],
   // An order's position in `preparing → ready → closed`. Three, always — the
   // whole lifecycle, and not a fourth status.
   orderStep: [2, 3],

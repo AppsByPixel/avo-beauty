@@ -4,6 +4,7 @@ import {
   branchChoiceLabel,
   branchChoices,
   branchQuery,
+  branchStepApplies,
   sameChoice,
   type BranchChoice,
   type PickableBranch,
@@ -155,5 +156,57 @@ describe('branchChoiceLabel — non-negotiable #12', () => {
     expect(branchChoiceLabel({ kind: 'branch', branchId: 'BR-GONE' }, [KWC], 'en', COPY)).toBe(
       'All branches',
     );
+  });
+});
+
+/**
+ * `branchStepApplies` — whether the flow is five steps or four.
+ *
+ * FAILS BEFORE THIS SLICE: the export did not exist. The picker was a filter
+ * strip inside step 2 and the step count was the literal 4.
+ *
+ * The value of these cases is not that the predicate is hard — it is one
+ * expression — but that it is the same expression. The step count and the chips
+ * on the step are now the same decision, and a salon counting five steps while
+ * drawing no chips would be the visible form of them drifting apart. Each case
+ * below asserts BOTH sides so a future edit cannot satisfy one and not the other.
+ */
+describe('branchStepApplies — the step and the chips are one decision', () => {
+  const agree = (input: Parameters<typeof branchStepApplies>[0]) =>
+    expect(branchStepApplies(input)).toBe(branchChoices(input).length > 0);
+
+  it('is false for a single-branch salon — she is not asked', () => {
+    const input = { branches: [KWC], split: { total: 4, unassigned: 0 } };
+    expect(branchStepApplies(input)).toBe(false);
+    agree(input);
+  });
+
+  it('is false when nothing is assigned — the step would have no answer', () => {
+    const input = { branches: [KWC, SAL], split: { total: 4, unassigned: 4 } };
+    expect(branchStepApplies(input)).toBe(false);
+    agree(input);
+  });
+
+  it('is false while the roster split is unknown', () => {
+    const input = { branches: [KWC, SAL], split: null };
+    expect(branchStepApplies(input)).toBe(false);
+    agree(input);
+  });
+
+  it('is false for a salon with no open branch at all', () => {
+    agree({ branches: [], split: { total: 4, unassigned: 0 } });
+    expect(branchStepApplies({ branches: [], split: { total: 4, unassigned: 0 } })).toBe(false);
+  });
+
+  it('is true for two open branches with somebody assigned to one', () => {
+    const input = { branches: [KWC, SAL], split: { total: 4, unassigned: 2 } };
+    expect(branchStepApplies(input)).toBe(true);
+    agree(input);
+  });
+
+  it('is true once every artist has been assigned — the Other group is gone, the step is not', () => {
+    const input = { branches: [KWC, SAL], split: { total: 4, unassigned: 0 } };
+    expect(branchStepApplies(input)).toBe(true);
+    agree(input);
   });
 });

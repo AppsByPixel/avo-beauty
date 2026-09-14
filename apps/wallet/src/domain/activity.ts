@@ -227,3 +227,55 @@ export function clockTime(epochMs: number, lang: Language = 'en'): string {
     timeZone: KUWAIT_TIME_ZONE,
   }).format(new Date(epochMs));
 }
+
+// ════════════════════════════════════════════════════ four, then the rest ══
+
+/**
+ * How many activity rows the feed shows before it asks.
+ *
+ * FOUR, and the design agrees with the number without specifying the control:
+ * `design/AVO Wallet Home.dc.html:328` sizes the list's own placeholder at
+ * `hint-placeholder-count="4"`, which is the designer's idea of how tall that
+ * card sits on the home screen. The bundle draws no disclosure — the prototype's
+ * list is however long its fixture is — so the CONTROL is new and its label is
+ * an AR GAP. See `copy/en.ts § activityShowMore`.
+ */
+export const ACTIVITY_VISIBLE = 4;
+
+export interface ActivityDisclosure<T> {
+  /** The rows to render. */
+  visible: T[];
+  /**
+   * How many rows the control would reveal. ZERO MEANS NO CONTROL — which is
+   * what makes the two ends of this rule one branch rather than two: a
+   * three-row account and an already-expanded twelve-row account both report 0
+   * and both draw nothing.
+   */
+  hidden: number;
+}
+
+/**
+ * Four rows, then a control that reveals the rest.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * IT DISCLOSES ONCE AND DOES NOT RE-COLLAPSE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `hidden` is 0 after expanding, so the control withdraws itself. That is not
+ * an omission of a "show less": the bundle has no such string in either
+ * language, and inventing a second one to undo the first is a worse trade than
+ * a list that stays open for as long as she is on the screen. The feed is
+ * remounted on every return to Home, so it opens collapsed again.
+ *
+ * THE BOUNDARY IS `>` AND NOT `>=`, and it is the whole near-empty case: at
+ * exactly four there is nothing beneath the fourth row, so a control there
+ * would reveal nothing and read as broken. `activityDisclosure.test.ts` asserts
+ * both sides of it — three, four and five — because an off-by-one here is
+ * invisible on any account that has been used.
+ */
+export function discloseActivity<T>(
+  rows: readonly T[],
+  expanded: boolean,
+): ActivityDisclosure<T> {
+  if (expanded || rows.length <= ACTIVITY_VISIBLE) return { visible: [...rows], hidden: 0 };
+  return { visible: rows.slice(0, ACTIVITY_VISIBLE), hidden: rows.length - ACTIVITY_VISIBLE };
+}
