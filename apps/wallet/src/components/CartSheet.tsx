@@ -152,7 +152,7 @@ export function CartSheet({
         </View>
       ) : (
         <>
-          <ScrollView style={styles.lines} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.lines} showsVerticalScrollIndicator={false} testID="cart-scroll">
             {lines.map((line) => (
               <View key={line.product.id} style={styles.line} testID={`cart-line-${line.product.id}`}>
                 {/*
@@ -196,23 +196,44 @@ export function CartSheet({
                 />
               </View>
             ))}
-          </ScrollView>
 
-          {/*
-            COLLECT OR DELIVER — after what she is buying, before what it costs,
-            because that is the order the decision happens in. The section owns
-            its own states; this sheet just hands it the book. It adds NO row to
-            the totals block below: there is no delivery fee anywhere.
-          */}
-          <FulfilmentSection
-            choice={fulfilment}
-            book={book}
-            onMode={onFulfilment}
-            onChoose={onChooseAddress}
-            onAdd={onAddAddress}
-            onEdit={onEditAddress}
-            onDelete={onDeleteAddress}
-          />
+            {/*
+              COLLECT OR DELIVER — after what she is buying, before what it costs,
+              because that is the order the decision happens in. The section owns
+              its own states; this sheet just hands it the book. It adds NO row to
+              the totals block below: there is no delivery fee anywhere.
+
+              IT SCROLLS WITH THE LINES, AND THAT IS A BUILD DECISION THE DESIGN
+              CANNOT MAKE. The bundle draws no delivery UI at all — this sheet's
+              own header says so — so there is no drawn arrangement to copy for
+              it. As a rigid SIBLING of the scroll region it reintroduced the bug
+              it was not part of: fed a 430pt fulfilment block on a 667pt screen,
+              Yoga 3.2.1 squeezed the lines region to 0 AND still put the pay
+              button 80pt below the bottom of the screen. Inside the scroll
+              region the CTA was reachable in every combination tried — 1 and 20
+              lines, 176pt and 430pt of fulfilment, 812pt and 667pt screens.
+
+              THE 430 IS A MODELLED HEIGHT, NOT A MEASURED ONE. It stands for
+              delivery with several saved addresses; this component's real height
+              was not measured, because RN gives no way to do that outside a
+              device and the point does not turn on the exact figure — it turns
+              on the fact that this block's height is UNBOUNDED (it grows with
+              her address book) while the sheet's is not. A rigid sibling of
+              unbounded height is the bug however tall it happens to be today.
+
+              The visual order is unchanged: lines, then collect-or-deliver,
+              then totals.
+            */}
+            <FulfilmentSection
+              choice={fulfilment}
+              book={book}
+              onMode={onFulfilment}
+              onChoose={onChooseAddress}
+              onAdd={onAddAddress}
+              onEdit={onEditAddress}
+              onDelete={onDeleteAddress}
+            />
+          </ScrollView>
 
           {/* design:965-966 — the total, then where it is paid from. */}
           <View style={styles.totals}>
@@ -468,7 +489,36 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { color: color.ink },
   count: { color: color.textMuted },
-  lines: { marginTop: 14, maxHeight: 320 },
+  /*
+    design:948 — `flex:1;overflow:auto;margin-top:14px`, inside a sheet the design
+    gives `max-height:88%;display:flex;flex-direction:column` at :943, with
+    `flex-shrink:0` pinned on the grabber (:944), the head (:945) and the totals
+    block (:962).
+
+    IT IS `flexShrink`, NOT `flex: 1`, AND THE DIFFERENCE IS THE WHOLE BUG.
+    Yoga is not a CSS engine. `flex: 1` means `flexBasis: 0`, and in a container
+    whose own height is auto-with-a-max there is no free space to grow into — so
+    the region resolves to ZERO and the cart renders with no rows at all.
+    Measured in Yoga 3.2.1 against a faithful model of this tree: 1 row, 2 rows
+    and 6 rows all gave the lines region height 0. A browser does not do this,
+    because CSS feeds a flex item's max-content contribution into the container's
+    intrinsic size; Yoga does not. Copying the design's declaration literally is
+    the wrong move here, and it is the move that reads as most faithful.
+
+    `flexShrink: 1` with the default `flexBasis: auto` gives the design's actual
+    BEHAVIOUR: the region takes its content height while the sheet fits under the
+    88% ceiling, and gives height back once it does not. RN defaults every other
+    child to `flexShrink: 0`, which is exactly the `flex-shrink:0` the design
+    pins on the grabber, the head and the totals block — so those never
+    compress and the CTA stays reachable.
+
+    WHAT WAS HERE BEFORE: `maxHeight: 320`. A flex-fill region had become a magic
+    number, which clipped rows against a hard edge AND pushed the totals and the
+    pay button past the sheet's own 88% ceiling. On a 667pt screen with six lines
+    the CTA resolved 146pt below the bottom of the screen — unreachable, which is
+    the same defect's worse half. `cartScrollRegion.test.tsx` holds it.
+  */
+  lines: { marginTop: 14, flexShrink: 1 },
   // design:952 — a hairline under each line, gap 13.
   line: {
     flexDirection: 'row',

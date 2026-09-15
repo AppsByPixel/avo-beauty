@@ -70,10 +70,13 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { formatMoney, moneyAriaLabel, fils } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import type { ShopController } from '../state/useShop';
-import type { MemberAddress } from '@avo/types';
+import type { MemberAddress, TierName } from '@avo/types';
 import { CartSheet } from '../components/CartSheet';
 import { AddressSheet } from '../components/AddressSheet';
 import { OrdersSheet } from '../components/OrdersSheet';
+import { TopUpSheet } from '../components/TopUpSheet';
+import { useTopUp } from '../state/useTopUp';
+import { topUpAmountForShortfall } from '../domain/topup';
 import { useAddresses } from '../state/useAddresses';
 import type { AddressPayload } from '../domain/address';
 import { useOrders } from '../state/useOrders';
@@ -86,8 +89,9 @@ import { focusable } from '../theme/focus';
 export function ShopScreen({
   shop,
   balanceFils,
+  tier,
   onToast,
-  onTopUp,
+  onToppedUp,
 }: {
   /**
    * OWNED BY THE SHELL, not by this screen — see App.tsx. Her cart has to survive
@@ -95,9 +99,18 @@ export function ShopScreen({
    */
   shop: ShopController;
   balanceFils: number;
+  /**
+   * The tier that funds the bonus, for the top-up sheet's calculation card. A
+   * `TierName` and not a rendered label, because Arabic inflects it.
+   */
+  tier: TierName | null;
   onToast: (message: string) => void;
-  /** The shortfall CTA's destination. */
-  onTopUp: () => void;
+  /**
+   * Re-read `GET /members/me` after a successful top-up. The same callback
+   * `useShop` gets as `onPaid`, and for the same reason: #2 makes the balance
+   * the server's answer, so nothing here adds `creditFils` to what it is holding.
+   */
+  onToppedUp: () => void;
 }) {
   const { lang, copy } = useLanguage();
   const [cartOpen, setCartOpen] = useState(false);
@@ -110,6 +123,42 @@ export function ShopScreen({
    * mid-transition with the previous address still in it.
    */
   const [addressSheet, setAddressSheet] = useState<{ address: MemberAddress | null } | null>(null);
+
+  /**
+   * THE CART'S TOP-UP, OWNED HERE, FOR THE REASON `BookScreen` OWNS ITS OWN.
+   *
+   * WHAT THIS REPLACED: `onTopUp` was wired to `goHome` in App.tsx, which set
+   * the screen to Home and nothing else. Tapping "Top up to continue" closed the
+   * cart, switched tab, and opened nothing — so the one action offered to a
+   * customer who cannot pay silently discarded her cart and left no trace of
+   * what had happened. `HomeScreen:363` already did this properly one file away.
+   *
+   * A SHEET, NOT A NAVIGATION, and that is the whole point. Navigating away
+   * loses the cart, the fulfilment choice and the address she picked, exactly as
+   * navigating away from the Book flow would lose her slot. The sheet is
+   * rendered last so it paints over the cart, which stays mounted underneath —
+   * she tops up and is returned to the same cart with the same items.
+   */
+  const topUp = useTopUp({
+    onSucceeded: useCallback(() => {
+      // The balance changed, so the owner re-reads the member — #2, and the
+      // reason nothing here touches `balanceFils` itself.
+      onToppedUp();
+      /*
+        AND THE STALE 402 GOES, BUT ONLY THAT ONE.
+        A top-up resolves exactly one refusal: `short`. Clearing the refusal
+        unconditionally would re-enable Pay on a cart sitting in
+        `alreadyPlaced` — a 422 that means an earlier attempt COMMITTED — and
+        she can reach this CTA from that state, because a settled order is
+        precisely what can have left her short. No second debit would follow
+        (the idempotency key is derived from the cart, which `useShop` does not
+        empty on a 422, so the same key returns the same 422 — #4 holding
+        server-side), but re-arming a button over a debit that has settled is
+        not something to leave to that guard.
+      */
+      if (shop.refusal?.kind === 'short') shop.clearRefusal();
+    }, [onToppedUp, shop]),
+  });
 
   const book = useAddresses();
   // Gated: the list is not read until the sheet is open. See the header.
@@ -427,10 +476,17 @@ export function ShopScreen({
         onAdd={shop.add}
         onRemove={shop.remove}
         onCheckout={() => void checkout()}
-        onTopUp={() => {
-          setCartOpen(false);
-          onTopUp();
-        }}
+        /*
+          The cart stays OPEN underneath. `topUpAmountForShortfall` argues the
+          choice of tile; the short version is that it is the smallest offered
+          denomination that clears the shortfall, never below the default, and
+          the server still decides what the tile is worth (#2).
+
+          `shop.shortfall` is the server's `shortfallFils` once a 402 has landed
+          — `useShop` swaps its local figure for the server's the moment one does
+          — and the local one only until then.
+        */
+        onTopUp={() => topUp.open(topUpAmountForShortfall(shop.shortfall))}
         onFulfilment={shop.setFulfilment}
         onChooseAddress={shop.chooseAddress}
         onAddAddress={() => {
@@ -466,6 +522,23 @@ export function ShopScreen({
         open={ordersOpen}
         orders={orders}
         onClose={() => setOrdersOpen(false)}
+      />
+
+      {/*
+        LAST, so it paints over the cart. Same ordering argument as the address
+        form sheet above: both are absolutely positioned overlays at the same
+        `zIndex`, so the later one wins and the cart is preserved underneath.
+
+        `newBalanceFils` is null, as it is in the Book flow: the "new balance"
+        row belongs to the top-up's own success screen, which re-reads the member
+        itself. Deriving it here would mean adding `creditFils` to a balance this
+        screen is holding, which is precisely what #2 forbids.
+      */}
+      <TopUpSheet
+        stage={topUp.stage}
+        controller={topUp}
+        newBalanceFils={null}
+        tier={tier}
       />
     </View>
   );

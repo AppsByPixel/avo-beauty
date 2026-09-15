@@ -399,7 +399,7 @@ export function MemberScreen({
             <View style={styles.depositDot} />
             <Text style={[ui(12.5), styles.depositText]}>
               {copy.depositAppliesLead}{' '}
-              <Text style={ui(12.5, '700')}>{figureOf(heldDeposit)}</Text> {copy.depositApplies}
+              <Text style={ui(12.5, '600')}>{figureOf(heldDeposit)}</Text> {copy.depositApplies}
             </Text>
           </View>
         )}
@@ -472,7 +472,7 @@ export function MemberScreen({
             <View style={styles.shortfallDot} />
             <Text style={[ui(12.5), styles.shortfallText]}>
               {shortCopy.lead}{' '}
-              <Text style={ui(12.5, '700')}>{formatMoney(shortfall)}</Text> {shortCopy.tail}
+              <Text style={ui(12.5, '600')}>{formatMoney(shortfall)}</Text> {shortCopy.tail}
             </Text>
           </View>
         )}

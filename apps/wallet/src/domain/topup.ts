@@ -20,6 +20,59 @@ export const TOP_UP_AMOUNTS: Fils[] = [fils(5000), fils(10000), fils(25000), fil
 /** The amount selected when the card first renders. */
 export const DEFAULT_TOP_UP_AMOUNT: Fils = fils(10000);
 
+/**
+ * Which tile a "Top up to continue" hand-off should open the sheet on.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * WHY THE CALLER CANNOT JUST PASS THE SHORTFALL.
+ *
+ * `useTopUp.open()` QUOTES IMMEDIATELY. There is no tile picker inside the
+ * sheet — the amount it is opened with is the amount `POST /topups` is asked
+ * for. So whatever a caller passes is a committed choice, not a suggestion, and
+ * the exact shortfall is the wrong committed choice for three separate reasons:
+ *
+ *   1. It is not an offered denomination. `TOP_UP_AMOUNTS` above is "the salon's
+ *      offered denominations, not a free-entry field", and a custom amount is
+ *      "a product decision, not something to add here". Quoting 3.250 because
+ *      that is what she happens to be short by invents the free-entry field by
+ *      the back door.
+ *   2. It leaves her at exactly zero. She clears this cart and the next screen
+ *      she sees has an empty wallet.
+ *   3. It is the one figure that earns nothing. The tier bonus and any live
+ *      `topup10`/`topup20` window are what make a tile worth more than its face
+ *      value — see `domain/topupPreview.ts`.
+ *
+ * Points 2 and 3 are `BookScreen`'s argument, already in this codebase, for
+ * opening its booking-deposit shortfall on `DEFAULT_TOP_UP_AMOUNT`. This
+ * function does not contradict it; it generalises it, and returns exactly the
+ * default for every shortfall the default already covers.
+ *
+ * WHY THE BARE DEFAULT IS NOT ENOUGH HERE EITHER. A booking deposit is
+ * `salon.depositFils` — one salon-set figure, so its shortfall is bounded and
+ * small, and 10.000 covers it. A CART IS UNBOUNDED. Short by 30.000, the bare
+ * default sends her through a full gateway round trip and returns her to a cart
+ * she still cannot pay for: the same dead end this hand-off exists to close,
+ * one screen later and after a real payment. So: the smallest offered tile that
+ * covers the shortfall, floored at the default so a small shortfall still
+ * leaves a cushion, and capped at the largest tile when nothing covers it —
+ * which is not a dead end, because each such top-up strictly reduces what is
+ * left and the next hand-off is smaller.
+ *
+ * NON-NEGOTIABLE #2 IS INTACT. This picks WHICH published denomination to ask
+ * the server to quote. It does not compute credit, does not add anything to a
+ * balance, and does not decide what lands in the wallet: `POST /topups` returns
+ * the intent, `TopUpSheet` renders the server's `creditFils` before she commits,
+ * and `pay()` fires only from the `ready` stage. The `shortfall` handed in is
+ * itself the server's `shortfallFils` whenever a 402 has arrived — `useShop`
+ * replaces its local figure with the server's the moment one does.
+ */
+export function topUpAmountForShortfall(shortfallFils: Fils): Fils {
+  const target = Math.max(shortfallFils, DEFAULT_TOP_UP_AMOUNT);
+  const covering = TOP_UP_AMOUNTS.find((tile) => tile >= target);
+  // Nothing covers it: the largest tile is the most progress one tap can make.
+  return covering ?? TOP_UP_AMOUNTS[TOP_UP_AMOUNTS.length - 1]!;
+}
+
 export interface MethodOption {
   id: PaymentMethod;
   /**
