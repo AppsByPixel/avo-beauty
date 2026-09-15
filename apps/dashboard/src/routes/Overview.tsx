@@ -1,5 +1,15 @@
+import { useRef, useState } from 'react';
 import { fils } from '@avo/types';
-import { Card, EmptyState, ErrorState, Money, Skeleton, StatCard, StaleBanner } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  Money,
+  Skeleton,
+  StatCard,
+  StaleBanner,
+} from '@avo/ui';
 import { ApiError } from '../api/client.js';
 import {
   useRecentActivity,
@@ -422,6 +432,99 @@ function nextAtLabel(iso: string): string {
   });
 }
 
+/* ------------------------------------------------ five, then the rest ---- */
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * HOW MANY LINES THE PANEL DRAWS BEFORE IT ASKS — AND WHY IT IS DISCLOSURE
+ * ═══════════════════════════════════════════════════════════════════════════
+ * NEW WORK. The design bundle draws no control here: `AVO Merchant Dashboard
+ * .dc.html:153` is a bare `<sc-for list="{{ feed }}" …>` whose only statement
+ * about length is `hint-placeholder-count="5"`. So the NUMBER is the designer's
+ * and the CONTROL is invented — said plainly rather than implied, because a
+ * later reader should not go looking for a button in the bundle.
+ *
+ * FIVE, and it is not a taste call. Three things already say five and this file
+ * was the only one that stopped agreeing:
+ *   - the design's placeholder count, above;
+ *   - the loading skeleton twenty lines below, which draws rows 0..4;
+ *   - `routes/activity.ts`'s own header, which lists the five lines by name and
+ *     titles the endpoint after them.
+ * `FEED_DEFAULT_LIMIT` is 20 (`api/src/services/activityFeed.ts:33`) and
+ * `useRecentActivity` sends no `limit`, so twenty rows were drawn in a card
+ * beside the KPI tiles under a design that draws five. That is the complaint.
+ *
+ * THE SKELETON AND THE VISIBLE COUNT NOW AGREE, which they did not before, and
+ * that was a second and smaller version of the same defect: five skeleton rows
+ * resolved into a twenty-row card, so the Overview reflowed on every load. The
+ * skeleton is therefore left at five deliberately, not left alone by accident.
+ *
+ * DISCLOSURE, NOT PAGING, AND THE ENDPOINT DECIDES IT RATHER THAN TASTE.
+ * `Activity.tsx` and `Audit.tsx` say "Show older" and fetch another page; those
+ * are screens "whose job is looking backwards" and their endpoints carry a
+ * cursor. This one cannot: `GET /salons/{id}/activity` ends
+ * `return reply.send({ items, nextCursor: null })` — unconditionally, with no
+ * cursor parameter to send back — and its header says why ("NO CURSOR, ON
+ * PURPOSE"). A `useInfiniteQuery` here would give `hasNextPage === false` on
+ * every load, so the paging control those two screens use would never once
+ * appear. Paging is not the wrong choice here; it is not a choice.
+ *
+ * SO THE BUTTON REVEALS ROWS ALREADY IN HAND AND FETCHES NOTHING. It cannot
+ * reach a twenty-first row, and it does not claim to — see the label.
+ */
+export const FEED_VISIBLE = 5;
+
+export interface FeedDisclosure {
+  /** The rows to render. */
+  visible: ActivityItem[];
+  /**
+   * How many rows the control would reveal. ZERO MEANS NO CONTROL — which is
+   * what keeps this one branch rather than two: a four-row morning and an
+   * already-expanded twenty-row one both report 0 and both draw nothing.
+   */
+  hidden: number;
+}
+
+/**
+ * Five rows, then a control that reveals the rest.
+ *
+ * A NAMED RULE RATHER THAN A `slice(0, 5)` IN THE JSX, for the boundary's sake.
+ * At exactly five there is nothing beneath the fifth, so the control must not
+ * appear — a control that reveals nothing reads as broken — and `hidden > 0` is
+ * the single expression that decides it. A `slice` here and a `length > 5` at
+ * the call site would be two statements of one rule, and the boundary is
+ * precisely where they would disagree.
+ *
+ * THE GUARD'S OWN `<=` IS NOT THE BOUNDARY, and this comment said it was until a
+ * mutation proved otherwise. `apps/wallet § discloseActivity` warns that "the
+ * boundary is `>` and not `>=`, and it is the whole near-empty case", so the
+ * same warning was written here — but it does not transfer to this shape.
+ * Flipping `<=` to `<` changes nothing for any length: at exactly five the early
+ * return gives `hidden: 0`, and falling through instead gives
+ * `5 - FEED_VISIBLE`, which is also 0. Measured for n = 0,1,3,4,5,6,20,21; every
+ * pair identical, and a test asserting the boundary stayed green on the mutant.
+ *
+ * WHICH MEANS THE SUBTRACTION IS THE RULE. `items.length - FEED_VISIBLE` cannot
+ * be positive while the list is short, so the near-empty case is structural
+ * rather than guarded. The early return is kept for the identity it gives
+ * `visible` and for reading as one statement of intent — not because the
+ * comparison is load-bearing. A later reader tempted to "tighten" it should know
+ * it is already inert.
+ *
+ * IT DISCLOSES ONCE AND DOES NOT RE-COLLAPSE. `hidden` is 0 afterwards, so the
+ * control withdraws itself. That matches `apps/wallet § discloseActivity`, which
+ * decided the same thing for the same panel on the other surface and argued that
+ * inventing a second string to undo the first is the worse trade. The panel
+ * remounts on every return to Overview and opens at five again.
+ */
+export function discloseFeed(
+  items: readonly ActivityItem[],
+  expanded: boolean,
+): FeedDisclosure {
+  if (expanded || items.length <= FEED_VISIBLE) return { visible: [...items], hidden: 0 };
+  return { visible: items.slice(0, FEED_VISIBLE), hidden: items.length - FEED_VISIBLE };
+}
+
 /* ------------------------------------------------------------- activity feed */
 
 interface ActivityListProps {
@@ -432,7 +535,33 @@ interface ActivityListProps {
   retrying: boolean;
 }
 
-function ActivityList({ items, loading, error, onRetry, retrying }: ActivityListProps) {
+export function ActivityList({ items, loading, error, onRetry, retrying }: ActivityListProps) {
+  /*
+   * VIEW STATE, AND IT LIVES HERE. It is not a preference, it is not persisted,
+   * and it does not belong on `useRecentActivity`: nothing about it reaches the
+   * server, and the panel unmounts when the merchant leaves the Overview, which
+   * is the behaviour a disclosure should have.
+   *
+   * Declared before the early returns because hooks must be — the four states
+   * below all return without reading it.
+   */
+  const [expanded, setExpanded] = useState(false);
+  /*
+   * WHERE FOCUS GOES WHEN THE BUTTON REMOVES ITSELF.
+   *
+   * Pressing it reveals fifteen rows and withdraws the control, so the element
+   * the keyboard was on leaves the document — and focus falls to <body>, which
+   * puts the merchant back at the top of the dashboard having just asked to see
+   * MORE of something further down. The list is given `tabIndex={-1}` (never
+   * reachable by Tab, reachable by `.focus()`) and takes focus instead, so a
+   * reader lands on the list it just grew and announces its new length.
+   *
+   * `MerchantShell`'s drawer is the precedent for the technique. The ring is the
+   * token `:focus-visible` one, so a mouse press draws no outline and a keyboard
+   * press does.
+   */
+  const listRef = useRef<HTMLUListElement>(null);
+
   if (loading) {
     return (
       <ul className="overview__feed">
@@ -561,20 +690,70 @@ function ActivityList({ items, loading, error, onRetry, retrying }: ActivityList
    * the customer paid. `amountFils` is carried on the item for a caller that
    * needs to total or colour by it; this row is prose and prints the prose.
    */
+  /*
+   * THE SUCCESS PATH, AND THE ONLY PATH THE CONTROL IS ON.
+   *
+   * Every state above returns before this line, so the disclosure cannot appear
+   * under a skeleton, an empty state or a refusal. The one state it DOES share a
+   * screen with is `keepStale` — rows held behind the KPI row's stale banner —
+   * and that is correct: those rows are in hand, the button reveals what is in
+   * hand, and it fetches nothing that could fail again.
+   */
+  const { visible, hidden } = discloseFeed(items, expanded);
+
   return (
-    <ul className="overview__feed">
-      {items.map((item) => (
-        <li key={item.id} className="overview__feed-item">
-          <span className="overview__feed-dot" aria-hidden="true" />
-          <span className="overview__feed-body">
-            <span className="overview__feed-text">
-              <b>{item.who}</b> {item.what}
+    <>
+      <ul className="overview__feed" ref={listRef} tabIndex={-1}>
+        {visible.map((item) => (
+          <li key={item.id} className="overview__feed-item">
+            <span className="overview__feed-dot" aria-hidden="true" />
+            <span className="overview__feed-body">
+              <span className="overview__feed-text">
+                <b>{item.who}</b> {item.what}
+              </span>
+              <span className="overview__feed-when">{timeLabel(item.at)}</span>
             </span>
-            <span className="overview__feed-when">{timeLabel(item.at)}</span>
-          </span>
-        </li>
-      ))}
-    </ul>
+          </li>
+        ))}
+      </ul>
+
+      {hidden > 0 ? (
+        /*
+         * THE AFFORDANCE IS THE ONE THE LOG SCREENS ALREADY ESTABLISHED — a
+         * secondary `Button` beneath the rows, with the count in the label —
+         * because a second shape for "there is more below" would be a second
+         * thing to learn. THE WORD IS NOT. `Audit.tsx`, `AuditLog.tsx` and
+         * `Activity.tsx` all say "Show older", and there it means "ask the
+         * server for another page", an unbounded walk backwards. Here it means
+         * "reveal the rest of what already arrived", and then there is no more.
+         * Borrowing their label for a different mechanism is exactly the "two
+         * screens disagree about the same word" hazard `services/activityFeed.ts`
+         * exists to prevent, one layer up.
+         *
+         * THE COUNT IS THE DELTA, NOT A TOTAL, and it is a count this panel can
+         * actually stand behind: `hidden` is rows it is holding. The endpoint
+         * sends no `total` — and could not, since the sum of two streams' counts
+         * is not the length of the merged list — so nothing here claims one.
+         *
+         * THE ACCESSIBLE NAME NAMES THE THING. "Show 15 more" out of context
+         * says nothing about what fifteen of; the label extends it rather than
+         * replacing it, so the visible text is still contained in the accessible
+         * name (WCAG 2.5.3). Singular at exactly one.
+         */
+        <div className="overview__feed-more">
+          <Button
+            variant="secondary"
+            aria-label={`Show ${hidden} more activity ${hidden === 1 ? 'row' : 'rows'}`}
+            onClick={() => {
+              setExpanded(true);
+              listRef.current?.focus();
+            }}
+          >
+            Show {hidden} more
+          </Button>
+        </div>
+      ) : null}
+    </>
   );
 }
 

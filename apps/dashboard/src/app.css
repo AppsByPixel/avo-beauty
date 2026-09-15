@@ -733,6 +733,32 @@ a:hover {
   border-top: 1px solid var(--avo-hairline-inner);
 }
 
+/*
+ * "Show 15 more" — the disclosure beneath the five drawn lines. NEW: the design
+ * bundle has no such control on this panel (see routes/Overview.tsx
+ * § FEED_VISIBLE), so this rule invents no value. The hairline and the 11px top
+ * padding are `.overview__feed-item`'s own, so the control sits on the list's
+ * existing rhythm rather than on a new one; the 6px below is the card's own
+ * bottom padding (`.overview__activity`), so the button closes the card at the
+ * same distance the last row would have.
+ *
+ * The log screens put their "Show older" OUTSIDE the card. This one is inside
+ * it, because those sit under a bordered table and this list's rows are
+ * separated by top hairlines only — outside, the control would float away from a
+ * card with no bottom edge to sit against.
+ */
+.overview__feed-more {
+  border-top: 1px solid var(--avo-hairline-inner);
+  padding: 11px 0 6px;
+}
+
+/*
+ * The list takes focus when the control withdraws itself (routes/Overview.tsx
+ * § listRef). No outline rule here on purpose: the token `:focus-visible` ring
+ * in @avo/tokens applies, so a mouse press draws nothing and a keyboard press
+ * draws the same ring as everything else.
+ */
+
 /* ====================================================== below 768 notice === */
 
 .dash-toosmall {
