@@ -71,7 +71,8 @@ import {
   SOCIAL_IDS,
 } from '../services/socialLinks';
 import { serialiseBooking, type BookingRow } from '../services/booking';
-import { computeMetrics, parsePeriod } from '../services/metrics';
+import { computeMetrics } from '../services/metrics';
+import { parsePeriod } from '../services/period';
 import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
 
@@ -1469,6 +1470,27 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const p = requireDashboardPerm(req, 'dashboard');
       requireSameSalon(p, req.params.id);
 
+      /**
+       * `?period=` NOW TAKES A CALENDAR RANGE TOO - `services/period.ts`. `30d`
+       * behaves exactly as it did; `2026-03-01_2026-03-31` measures the salon's
+       * own March.
+       *
+       * IT MOVES FIVE OF THE SEVEN FIGURES, NOT ALL SEVEN. `loadedTodayFils`,
+       * `knetSharePercent`, `upcomingAppointments` and `nextAppointmentAt` are
+       * TODAY figures - the design labels them "Loaded today" and "Upcoming
+       * today" - and today does not move because a merchant selected March.
+       * `services/metrics.ts` § the day states it next to the bounds.
+       *
+       * `?compare=` IS DELIBERATELY NOT ACCEPTED HERE. `activeMembersDelta`
+       * already IS this endpoint's comparison, and it is a different statistic:
+       * the same window ended a week earlier, which for `30d` overlaps itself by
+       * 23 days on purpose. A second, non-overlapping comparison beside it would
+       * be two answers to one question in one payload - the failure
+       * `services/metrics.ts`'s header exists to prevent. Unknown query
+       * parameters are dropped by Fastify, so `?compare=` here is inert rather
+       * than refused; that, and the wider hole it belongs to, is reported to
+       * trunk rather than closed in this slice.
+       */
       const period = parsePeriod(req.query?.period);
 
       const rows = await db

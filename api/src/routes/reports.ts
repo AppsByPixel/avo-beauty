@@ -51,9 +51,15 @@ import {
   type StaffPrincipal,
 } from '../auth/principal';
 import { hashWalletToken, mintWalletTokenValue } from '../auth/tokens';
-import { notFound, unauthorized } from '../http/errors';
+import { badRequest, notFound, unauthorized } from '../http/errors';
 import { resolveBranchFilter } from '../services/branchFilter';
-import { parsePeriod, type Period } from '../services/metrics';
+import {
+  parseCompare,
+  parsePeriod,
+  periodToken,
+  serialiseWindow,
+  type Period,
+} from '../services/period';
 import {
   computeReport,
   parseReportKind,
@@ -63,13 +69,61 @@ import {
   REPORT_AUDITED,
   REPORT_PERMISSION,
   type ReportKind,
-  type ReportShape,
+  type ReportResult,
 } from '../services/reports';
 import { writeAudit } from '../services/audit';
 
 interface ReportQuery {
   branch?: unknown;
   period?: unknown;
+  /**
+   * `?compare=` — THE SECOND WINDOW, AND IT IS A CARD PARAMETER ONLY.
+   *
+   * Accepted and validated on all three routes so that a malformed value answers
+   * the same way everywhere; RENDERED on the JSON route alone. The `.csv` route
+   * and the download mint REFUSE it outright rather than accepting and dropping
+   * it - see `refuseCompareOnExport`.
+   */
+  compare?: unknown;
+}
+
+/**
+ * ==========================================================================
+ * AN EXPORT IS OF ONE WINDOW. A COMPARISON IS NOT EXPORTABLE.
+ * ==========================================================================
+ * The design's Reports page promises that "the export matches exactly what you
+ * see". A card showing two windows whose CSV contains one would break that
+ * promise quietly, which is the worst way to break it - the merchant discovers it
+ * in Excel, against a number she was about to act on.
+ *
+ * The two honest options are to render the comparison in the file or to refuse.
+ * Rendering it loses on the constraint this whole slice is shaped by: the file is
+ * named `{kind}_{branch}_{period}.csv` and the audit row reads `… · {period} · …`,
+ * and a file carrying two windows has no single period to put in either. A
+ * filename that named both would be twice the length and still ambiguous about
+ * which half was the subject; an audit row that named both would make "which
+ * window did she export" a question with two answers.
+ *
+ * So: refused, with a message that names the fix. Lane C drops `compare` from the
+ * export link rather than passing the card's whole query string through, and the
+ * merchant exports each window as its own file - each with its own honest name
+ * and its own audit row.
+ *
+ * REFUSED RATHER THAN IGNORED, and that distinction is the point. Before this
+ * slice, `?compare=previous` on any of these routes returned 200 and a plain 30d
+ * report: Fastify drops unknown query parameters, so a client asking a question
+ * the server did not understand got a confident answer to a different one. That
+ * is the failure mode being closed here, not merely a missing feature.
+ */
+function refuseCompareOnExport(query: ReportQuery, period: Period): void {
+  // Parsed first, so a malformed `compare` answers `invalid_compare` here exactly
+  // as it does on the card - one vocabulary, one set of refusals, three routes.
+  const compare = parseCompare(query.compare, period);
+  if (compare === null) return;
+  throw badRequest(
+    'compare_not_exportable',
+    'A comparison is a card figure, not a file. Export each window on its own: drop compare= and request each period separately.',
+  );
 }
 
 /**
@@ -82,7 +136,7 @@ interface ReportQuery {
  */
 
 interface Built {
-  shape: ReportShape;
+  result: ReportResult;
   branchId: string | null;
   branchName: string | null;
   period: Period;
@@ -97,7 +151,17 @@ interface Built {
  * one of them is the day the card and the file started disagreeing about the same
  * salon.
  */
-async function build(req: FastifyRequest, kindRaw: string, salonId: string): Promise<Built> {
+async function build(
+  req: FastifyRequest,
+  kindRaw: string,
+  salonId: string,
+  /**
+   * The card allows `?compare=`; the two export paths do not. False makes this
+   * function REFUSE a comparison rather than silently drop one - see
+   * `refuseCompareOnExport`, which it calls in the same position the card parses.
+   */
+  compareAllowed: boolean,
+): Promise<Built> {
   /**
    * THE SURFACE IS CHECKED BEFORE THE KIND IS EVEN PARSED, so an anonymous caller
    * gets 401 for every path under this route rather than a 400 that quietly confirms
@@ -123,6 +187,18 @@ async function build(req: FastifyRequest, kindRaw: string, salonId: string): Pro
 
   const query = (req.query ?? {}) as ReportQuery;
   const period = parsePeriod(query.period);
+  /**
+   * PARSED AGAINST THE PERIOD, because `compare=previous` is only defined for a
+   * rolling one - `services/period.ts` § Compare.
+   *
+   * AFTER the three gates above and BEFORE the salon lookup. Both halves of that
+   * matter and this file already argues each: an unauthenticated caller must get
+   * 401 rather than a critique of a parameter, and a caller who cleared the gate
+   * must get the parameter refusal without the endpoint first revealing, through a
+   * 404, whether the salon exists.
+   */
+  if (!compareAllowed) refuseCompareOnExport(query, period);
+  const compare = compareAllowed ? parseCompare(query.compare, period) : null;
 
   const rows = await db
     .select({ id: salon.id, timezone: salon.timezone })
@@ -134,17 +210,27 @@ async function build(req: FastifyRequest, kindRaw: string, salonId: string): Pro
 
   const br = await resolveBranchFilter(db, s.id, query.branch);
 
-  const shape = await computeReport(db, {
+  const result = await computeReport(db, {
     kind,
     salonId: s.id,
     branchId: br?.id ?? null,
     period,
     // The salon's own zone. `sales` groups by the salon's calendar day, not the
-    // process's — services/reports.ts § sales.
+    // process's — services/reports.ts § sales. IT IS ALSO WHAT RESOLVES A
+    // CALENDAR RANGE: "1 March" is a salon-local midnight, three hours from the
+    // UTC one, and a range resolved in the wrong zone reports the wrong day's
+    // takings at both ends.
     timezone: s.timezone,
+    compare,
   });
 
-  return { shape, branchId: br?.id ?? null, branchName: br?.name ?? null, period, principal: p };
+  return {
+    result,
+    branchId: br?.id ?? null,
+    branchName: br?.name ?? null,
+    period,
+    principal: p,
+  };
 }
 
 export async function registerReportRoutes(app: FastifyInstance): Promise<void> {
@@ -183,6 +269,8 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
 
       const query = (req.query ?? {}) as ReportQuery;
       const period = parsePeriod(query.period);
+      // A minted link produces a FILE, so the same refusal the `.csv` route makes.
+      refuseCompareOnExport(query, period);
       const br = await resolveBranchFilter(db, req.params.id, query.branch);
 
       // The wallet token's mint and hash, reused: same entropy class (an opaque
@@ -195,7 +283,19 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
         salonId: req.params.id,
         kind,
         branchId: br?.id ?? null,
-        period,
+        /**
+         * THE TOKEN, NOT THE `Period`. `report_download.period` is one `text`
+         * column and it now has to hold a calendar range as well as `30d`. It can,
+         * because `periodToken` round-trips: the redemption below calls
+         * `parsePeriod` on this exact string and gets the same window back. That
+         * property is the mechanism here rather than a nicety - a token that lost
+         * a day would serve a different file than the one she clicked for - and
+         * `reports.test.ts` drives it over every shape this column can hold.
+         *
+         * NO MIGRATION. A range is 21 characters of `[0-9-_]` into an unbounded
+         * `text` column, and nothing in the schema constrains its vocabulary.
+         */
+        period: periodToken(period),
         tokenHash: hashWalletToken(token),
         expiresAt,
       });
@@ -326,12 +426,29 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
           ?.name ?? null
       : null;
 
-    const shape = await computeReport(db, {
+    /**
+     * PARSED BACK OUT OF THE STORED TEXT, not cast to it.
+     *
+     * This was `row.period as Period` - a cast, which asserted rather than
+     * checked, and which worked only because the column could hold nothing but
+     * three enum values. It can hold a calendar range now, so the string has to be
+     * turned back into a window, and `parsePeriod` is the same function that put
+     * it there. A row somehow carrying a value this parser refuses now fails
+     * loudly here instead of reaching the aggregates as a `Period` that is not
+     * one.
+     */
+    const period = parsePeriod(row.period);
+    const result = await computeReport(db, {
       kind,
       salonId: s.id,
       branchId: row.branchId,
-      period: row.period as Period,
+      period,
       timezone: s.timezone,
+      /**
+       * NO COMPARISON, AND THERE CANNOT BE ONE: the mint refuses `?compare=`, so
+       * no row in this table describes a two-window export. Stated rather than
+       * implied, because this is the one place a report is rebuilt from storage.
+       */
     });
 
     /**
@@ -340,7 +457,14 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
      * route's own logger is the thing that was silenced.
      */
     app.log.info(
-      { event: 'report.download', kind, salonId: row.salonId, staffId: row.staffId, rows: shape.rows.length },
+      {
+        event: 'report.download',
+        kind,
+        salonId: row.salonId,
+        staffId: row.staffId,
+        rows: result.rows.length,
+        period: result.window.token,
+      },
       'report download redeemed',
     );
 
@@ -367,8 +491,8 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
           salonId: row.salonId,
           kind,
           branchId: row.branchId,
-          period: row.period as Period,
-          rowCount: shape.rows.length,
+          window: result.window,
+          rowCount: result.rows.length,
           via: 'download-link',
         }),
       );
@@ -378,10 +502,10 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       .header('content-type', 'text/csv; charset=utf-8')
       .header(
         'content-disposition',
-        `attachment; filename="${reportFilename(kind, branchName, row.period as Period)}"`,
+        `attachment; filename="${reportFilename(kind, branchName, period)}"`,
       )
       .header('cache-control', 'no-store')
-      .send(toCsv(shape));
+      .send(toCsv(result));
     },
   );
 
@@ -394,12 +518,13 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
   app.get<{ Params: { id: string; kind: string }; Querystring: ReportQuery }>(
     '/salons/:id/reports/:kind.csv',
     async (req, reply) => {
-      const { shape, branchId, branchName, period, principal } = await build(
+      const { result, branchId, branchName, period, principal } = await build(
         req,
         req.params.kind,
         req.params.id,
+        false,
       );
-      const filename = reportFilename(shape.kind, branchName, period);
+      const filename = reportFilename(result.kind, branchName, period);
 
       /**
        * AUDITED BEFORE THE BYTES LEAVE, and awaited rather than fired off.
@@ -414,16 +539,22 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
        * `REPORT_AUDITED` decides WHICH kinds; see services/reports.ts for where
        * that line falls and why the three aggregate exports are not on it.
        */
-      if (REPORT_AUDITED[shape.kind]) {
+      if (REPORT_AUDITED[result.kind]) {
         await writeAudit(
           db,
           principal,
           reportExportAudit({
             salonId: req.params.id,
-            kind: shape.kind,
+            kind: result.kind,
             branchId,
-            period,
-            rowCount: shape.rows.length,
+            /**
+             * THE WINDOW THE AGGREGATE ACTUALLY RAN AGAINST, carried out of
+             * `computeReport` rather than re-derived here. `30d` resolved twice is
+             * two windows milliseconds apart, and the audit row would then name a
+             * window that is not quite the one whose rows left the building.
+             */
+            window: result.window,
+            rowCount: result.rows.length,
             via: 'csv',
           }),
         );
@@ -451,7 +582,7 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
          * than through a query.
          */
         .header('cache-control', 'no-store')
-        .send(toCsv(shape));
+        .send(toCsv(result));
     },
   );
 
@@ -459,19 +590,50 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
   app.get<{ Params: { id: string; kind: string }; Querystring: ReportQuery }>(
     '/salons/:id/reports/:kind',
     async (req, reply) => {
-      const { shape, branchId, period } = await build(req, req.params.kind, req.params.id);
+      const { result, branchId } = await build(req, req.params.kind, req.params.id, true);
 
       return reply.header('cache-control', 'no-store').send({
-        kind: shape.kind,
-        title: shape.title,
-        period,
+        kind: result.kind,
+        title: result.title,
+        /**
+         * STILL A BARE TOKEN, AND STILL A STRING. It was `7d`/`30d`/`90d`; it is
+         * now also `2026-03-01_2026-03-31`. Kept as the same field with the same
+         * type deliberately - widen-then-serve, the idiom `nextAppointmentAt` used
+         * - so no existing client breaks on a shape change it did not ask for. A
+         * client that never sends a range never receives one.
+         *
+         * `window` BESIDE IT IS THE NEW HALF, and it is additive. It says which
+         * instants were actually queried, in which zone, and - the field that
+         * matters most - whether the window was ROLLING or CALENDAR. A client
+         * cannot derive that from the token without reimplementing this module's
+         * grammar, and `fromDate`/`toDate` are null for a rolling window precisely
+         * so that a date range cannot be printed over a figure that is not one.
+         */
+        period: result.window.token,
+        window: serialiseWindow(result.window),
         /** `all` rather than null, matching routes/campaigns.ts's wire sentinel. */
         branchId: branchId ?? 'all',
-        columns: shape.columns,
-        rows: shape.rows,
-        stat: shape.stat,
+        columns: result.columns,
+        rows: result.rows,
+        stat: result.stat,
         /** What the card prints as "{{ r.rowCount }} rows · {{ periodLabel }}". */
-        rowCount: shape.rows.length,
+        rowCount: result.rows.length,
+        /**
+         * NULL UNLESS `?compare=` WAS SENT. Always present as a key, so a client
+         * reads one shape rather than branching on whether a field exists.
+         */
+        comparison:
+          result.comparison === null
+            ? null
+            : {
+                window: serialiseWindow(result.comparison.window),
+                columns: result.columns,
+                rows: result.comparison.rows,
+                rowCount: result.comparison.rowCount,
+                stat: result.comparison.stat,
+                delta: result.comparison.delta,
+                comparable: result.comparison.comparable,
+              },
       });
     },
   );

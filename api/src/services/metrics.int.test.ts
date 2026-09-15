@@ -101,6 +101,7 @@ suite('GET /salons/:id/metrics — the branch filter', () => {
   let db: (typeof import('../db/client'))['db'];
   let sql: (typeof import('drizzle-orm'))['sql'];
   let computeMetrics: (typeof import('./metrics'))['computeMetrics'];
+  let parsePeriod: (typeof import('./period'))['parsePeriod'];
   let bearer: string;
 
   const rows = async (q: unknown) =>
@@ -121,6 +122,7 @@ suite('GET /salons/:id/metrics — the branch filter', () => {
     db = (await import('../db/client')).db;
     sql = (await import('drizzle-orm')).sql;
     computeMetrics = (await import('./metrics')).computeMetrics;
+    parsePeriod = (await import('./period')).parsePeriod;
     const issueSession = (await import('../auth/sessions')).issueSession;
     app = await (await import('../app')).buildApp();
 
@@ -202,7 +204,7 @@ suite('GET /salons/:id/metrics — the branch filter', () => {
   });
 
   const metrics = (branch: { id: string; name: string } | null) =>
-    computeMetrics(db, S, '30d', NOW, branch);
+    computeMetrics(db, S, parsePeriod('30d'), NOW, branch);
 
   const get = (qs: string) =>
     app.inject({

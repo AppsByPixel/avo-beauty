@@ -20,6 +20,22 @@ import {
   REPORT_PERMISSION,
 } from './reports';
 import type { ReportShape } from './reports';
+import { parsePeriod, resolveWindow, type Period, type PeriodWindow } from './period';
+
+/**
+ * A `Period` from its token. `parsePeriod` rather than a hand-built object, so
+ * these fixtures exercise the same parser the routes do - a literal would keep
+ * passing if the parser stopped producing that shape.
+ */
+const P = (token: string): Period => parsePeriod(token);
+
+/**
+ * The resolved window an export actually ran against. `reportExportAudit` takes
+ * one of these rather than a `Period`, because a row has to record which instants
+ * were queried and a `Period` does not know until a `now` is chosen.
+ */
+const AT = new Date('2026-09-16T09:00:00.000Z');
+const W = (token: string): PeriodWindow => resolveWindow(P(token), 'Asia/Kuwait', AT);
 
 function shape(rows: ReportShape['rows']): ReportShape {
   return {
@@ -128,14 +144,74 @@ describe('money in a cell — non-negotiable #1 at the display boundary', () => 
   });
 });
 
+/**
+ * ==========================================================================
+ * THE AUDIT LINE FOR A RANGE - `REPORT_AUDITED` is how a merchant proves who
+ * exported what, so two rows that read identically for two different questions
+ * would make the log read as coverage it does not have.
+ * ==========================================================================
+ */
+describe('the audit row names the window it exported', () => {
+  it('a calendar range appears in the detail in full', () => {
+    const row = reportExportAudit({
+      salonId: 'SAL-AMARA',
+      kind: 'customers',
+      branchId: null,
+      window: W('2026-03-01_2026-03-31'),
+      rowCount: 4,
+      via: 'csv',
+    });
+    expect(row.detail).toContain('2026-03-01_2026-03-31');
+    expect(row.detail).toBe('Customer information · all branches · 2026-03-01_2026-03-31 · 4 rows · csv');
+  });
+
+  /**
+   * THE FAILURE THE BRIEF NAMED. Before the token carried the range, every
+   * window would have had to fall back to a label - and two audit rows reading
+   * `… · 30d · …` for March and for June is exactly the row that proves nothing.
+   */
+  it('two different windows never produce two identical detail lines', () => {
+    const details = ['2026-03-01_2026-03-31', '2025-06-01_2025-06-30', '30d', '90d'].map(
+      (t) =>
+        reportExportAudit({
+          salonId: 'SAL-AMARA',
+          kind: 'customers',
+          branchId: null,
+          window: W(t),
+          rowCount: 4,
+          via: 'csv',
+        }).detail,
+    );
+    expect(new Set(details).size).toBe(4);
+  });
+
+  /**
+   * A ROLLING `30d` IS ONLY A COMPLETE DESCRIPTION BESIDE THE ROW'S TIMESTAMP,
+   * and a calendar one is complete on its own. `periodBasis` is what lets a
+   * reader tell which case they are in without knowing this module's grammar.
+   */
+  it('and says which KIND of window it was', () => {
+    const cal = reportExportAudit({
+      salonId: 'SAL-AMARA', kind: 'customers', branchId: null,
+      window: W('2026-03-01_2026-03-31'), rowCount: 4, via: 'csv',
+    });
+    const roll = reportExportAudit({
+      salonId: 'SAL-AMARA', kind: 'customers', branchId: null,
+      window: W('30d'), rowCount: 4, via: 'csv',
+    });
+    expect((cal.metadata as Record<string, unknown>).periodBasis).toBe('calendar');
+    expect((roll.metadata as Record<string, unknown>).periodBasis).toBe('rolling');
+  });
+});
+
 describe('the filename, which embeds a name a salon chose', () => {
   it('matches the design shape <kind>_<branch>_<period>.csv', () => {
-    expect(reportFilename('products-sold', null, '30d')).toBe('products-sold_all-branches_30d.csv');
-    expect(reportFilename('sales', 'Kuwait City', '7d')).toBe('sales_kuwait-city_7d.csv');
+    expect(reportFilename('products-sold', null, P('30d'))).toBe('products-sold_all-branches_30d.csv');
+    expect(reportFilename('sales', 'Kuwait City', P('7d'))).toBe('sales_kuwait-city_7d.csv');
   });
 
   it('strips anything that could break out of the Content-Disposition parameter', () => {
-    const name = reportFilename('sales', 'x"; drop', '90d');
+    const name = reportFilename('sales', 'x"; drop', P('90d'));
     expect(name).not.toContain('"');
     expect(name).not.toContain(';');
     // `x"; drop` → the space becomes a dash, then the quote and semicolon are
@@ -144,7 +220,45 @@ describe('the filename, which embeds a name a salon chose', () => {
   });
 
   it('never yields an empty branch segment, even for a fully stripped name', () => {
-    expect(reportFilename('sales', 'مجمع', '7d')).toBe('sales_branch_7d.csv');
+    expect(reportFilename('sales', 'مجمع', P('7d'))).toBe('sales_branch_7d.csv');
+  });
+
+  /**
+   * ======================================================================
+   * A FREE RANGE HAS NO TOKEN - SO THE TOKEN CARRIES THE RANGE
+   * ======================================================================
+   * The constraint the range work was shaped by. Two exports of two different
+   * windows must not land in a downloads folder under one name, and the fix is
+   * that the period segment IS the window rather than a label for one.
+   */
+  it('a calendar range reaches the filename in full', () => {
+    expect(reportFilename('sales', null, P('2026-03-01_2026-03-31'))).toBe(
+      'sales_all-branches_2026-03-01_2026-03-31.csv',
+    );
+    expect(reportFilename('customers', 'Kuwait City', P('2025-06-01_2025-06-30'))).toBe(
+      'customers_kuwait-city_2025-06-01_2025-06-30.csv',
+    );
+  });
+
+  /**
+   * THE PROPERTY, NOT AN EXAMPLE OF IT. Four windows a merchant might plausibly
+   * export in one afternoon, including two that share a start and two that share
+   * an end - the near-misses a truncating implementation would collapse.
+   */
+  it('four different questions produce four different filenames', () => {
+    const names = [
+      '2026-03-01_2026-03-31',
+      '2026-03-01_2026-03-30',
+      '2026-02-01_2026-03-31',
+      '30d',
+    ].map((t) => reportFilename('sales', 'Salmiya', P(t)));
+    expect(new Set(names).size).toBe(4);
+  });
+
+  it('and a range needs no sanitising, because nothing else can become one', () => {
+    expect(reportFilename('sales', null, P('2026-03-01_2026-03-31'))).toMatch(
+      /^[a-z0-9_.-]+$/,
+    );
   });
 });
 
@@ -184,7 +298,7 @@ describe('which exports are audited, and what the row may carry', () => {
       salonId: 'SAL-AMARA',
       kind: 'earnings-by-branch',
       branchId: null,
-      period: '90d',
+      window: W('90d'),
       rowCount: 2,
       via: 'csv',
     });
@@ -229,7 +343,7 @@ describe('which exports are audited, and what the row may carry', () => {
       salonId: 'SAL-AMARA',
       kind: 'artist-performance',
       branchId: 'BR-KWC',
-      period: '30d',
+      window: W('30d'),
       rowCount: 12,
       via: 'csv',
     });
@@ -240,10 +354,22 @@ describe('which exports are audited, and what the row may carry', () => {
       expect(row.action).toBe('Report exported');
       expect(row.subjectType).toBe('report');
       expect(row.subjectId).toBe('artist-performance');
+      /**
+       * `toEqual` ON THE WHOLE OBJECT, so a field added to the metadata is a red
+       * test rather than a diff nobody reads. It did exactly that when
+       * `periodBasis` landed, and again when the resolved instants were tried
+       * beside it - services/reports.ts § periodBasis is why those came back out.
+       *
+       * The metadata carries the period as a TOKEN, not as the resolved window the
+       * builder was handed: a window is two `Date` objects and this row has to
+       * survive a round trip through jsonb.
+       */
       expect(row.metadata).toEqual({
         kind: 'artist-performance',
         branchId: 'BR-KWC',
         period: '30d',
+        /** Which KIND of window `30d` is, which the token alone does not say. */
+        periodBasis: 'rolling',
         rowCount: 12,
         via: 'csv',
       });
@@ -291,7 +417,7 @@ describe('which exports are audited, and what the row may carry', () => {
         salonId: 'SAL-AMARA',
         kind: 'customers',
         branchId: null,
-        period: '7d',
+        window: W('7d'),
         rowCount: 1,
         via: 'download-link',
       });
