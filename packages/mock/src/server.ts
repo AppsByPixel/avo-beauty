@@ -1026,7 +1026,16 @@ app.post('/v1/vouchers', async (req, reply) => {
     voidedAt: null,
   };
   vouchers.unshift(created);
-  return reply.code(201).send(serialiseVoucher(created));
+  /**
+   * AN ENVELOPE, `{ voucher }`, AND I GOT THIS WRONG WHEN I ADDED THESE ROUTES.
+   *
+   * `routes/vouchers.ts` answers `{ voucher: serialiseVoucher(row) }` on both
+   * POST and DELETE, and `apps/dashboard/src/api/vouchers.ts` reads `raw.voucher`
+   * on both and THROWS on anything else. Serving the bare row here meant the
+   * console could not be developed against the very mock added to spare it
+   * running the real API. Found by lane D driving it rather than reading it.
+   */
+  return reply.code(201).send({ voucher: serialiseVoucher(created) });
 });
 
 app.get('/v1/vouchers', async (req, reply) => {
@@ -1042,7 +1051,21 @@ app.get('/v1/vouchers', async (req, reply) => {
   // platform, capped at 200 with an honest `truncated` — two lists, not one.
   const memberId = (req.query as Record<string, string> | undefined)?.memberId;
   const rows = memberId ? vouchers.filter((v) => v.memberId === memberId) : vouchers;
-  return { items: rows.map(serialiseVoucher), truncated: false };
+  return {
+    items: rows.map(serialiseVoucher),
+    truncated: false,
+    /**
+     * SERVED, AND IT IS ALWAYS NULL ON THE REAL ROUTE TOO — which is a fact
+     * about the endpoint rather than a shortcut here. `truncated` is the honest
+     * signal ("a cap, said out loud rather than a `nextCursor: null` that
+     * lies"), and this key exists only because `paginated()` declares it. Lane D
+     * has written the consequence into its probe: a declared key served as a
+     * hardcoded null is neither stripped nor invented, so the drift guard passes
+     * over it in silence — the same lie `GET /salons/{id}/bookings` shipped, which
+     * took a person to notice.
+     */
+    nextCursor: null,
+  };
 });
 
 app.delete<{ Params: { id: string } }>('/v1/vouchers/:id', async (req, reply) => {
@@ -1062,7 +1085,8 @@ app.delete<{ Params: { id: string } }>('/v1/vouchers/:id', async (req, reply) =>
     });
   }
   v.voidedAt = new Date().toISOString();
-  return serialiseVoucher(v);
+  // The same `{ voucher }` envelope as POST. See the block there.
+  return { voucher: serialiseVoucher(v) };
 });
 
 // ---- the customer's one ----
