@@ -566,6 +566,31 @@ export interface Copy {
   txBranchOnline: string;
   txReturnedTo: string;
   txAmountRow: string;
+  /**
+   * The activity title and receipt title for a POSITIVE `adjustment`.
+   *
+   * "Adjustment" is a bookkeeping word for a row that is, to her, money arriving.
+   * It is also invented English -- the design bundle writes no adjustment string
+   * at all, which is why `txKind.adjustment` was already an AR GAP before this
+   * key existed.
+   *
+   * TRUE OF EVERY POSITIVE ADJUSTMENT, WHICH IS THE CONSTRAINT THAT CHOSE IT.
+   * Five code paths write `kind: 'adjustment'` and they are not one thing: a
+   * voucher redemption and a console adjustment are AVO's, a void refund is
+   * SCANNER STAFF's, and a happy-hour credit is MERCHANT-FUNDED. "Credit" is the
+   * only noun true of all of them. See `domain/activity.ts` for why a word
+   * naming the source cannot be written from the wire we have.
+   */
+  txAdjustCredit: string;
+  /**
+   * The receipt row on a positive adjustment: "Added to . Wallet balance".
+   *
+   * The exact parallel of `txReturnedTo`, and for the same reason -- a credit that
+   * arrived without her paying has to say where it went. It is also non-negotiable
+   * #5 stated as a fact rather than a promise: it went to wallet balance, so there
+   * is no cash and no card reversal for the screen to imply.
+   */
+  txAddedTo: string;
   txStatus: Record<Transaction['status'], string>;
 
   // screen-reader phrasing for signed money, which is not a copy string in
@@ -1054,6 +1079,49 @@ export interface Copy {
   // account — help
   contactCta: string;
   contactCtaSub: string;
+
+  // account — vouchers
+  /**
+   * The section heading and its one row.
+   *
+   * ONE ROW AND NOT A LIST, BECAUSE THERE IS NO LIST ENDPOINT. The three voucher
+   * reads in the API are `requirePlatform(req, 'accounts')`; a member token
+   * cannot reach any of them, and there is no `GET /members/me/vouchers`. So the
+   * section can offer an action and cannot show an inventory -- see
+   * `api/vouchers.ts` for the whole account of it.
+   */
+  acctVouchers: string;
+  vchRow: string;
+
+  // redeem voucher sheet
+  vchTitle: string;
+  vchSub: string;
+  vchLabel: string;
+  vchPlaceholder: string;
+  vchSubmit: string;
+  vchWorking: string;
+  /** Client-side courtesy: an empty field is not a code. */
+  vchErrEmpty: string;
+  /**
+   * The ONE refusal. Expired, voided, already redeemed, never existed and issued
+   * to somebody else are one answer by design -- `domain/voucher.ts` carries the
+   * server's argument and the five driven responses. The English is the server's
+   * own sentence verbatim so the two cannot drift apart.
+   */
+  vchRefused: string;
+  /** A 400. Unreachable from this sheet, so it blames us and not her code. */
+  vchRejected: string;
+  vchOffline: string;
+  vchFailed: string;
+  vchDoneTitle: string;
+  /**
+   * Non-negotiable #5, said plainly. It must not read as offering cash or a card
+   * reversal, so it states what wallet credit IS and closes the other two doors
+   * in the same breath.
+   */
+  vchDoneBody: string;
+  vchDoneBalance: string;
+  vchDoneClose: string;
 
   // edit profile sheet
   pfTitle: string;

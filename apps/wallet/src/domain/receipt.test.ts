@@ -235,9 +235,62 @@ describe('an adjustment reads honestly in both directions', () => {
     }
   });
 
-  it('is titled as an adjustment, not left blank or generic', () => {
-    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title).toBe(en.txKind.adjustment);
-    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title).not.toBe('');
+  /**
+   * WAS `toBe(en.txKind.adjustment)` FOR BOTH DIRECTIONS. A positive adjustment
+   * now says "Credit", because "Adjustment" is a ledger word for a row that is,
+   * to her, money arriving — `domain/activity.ts § title` carries the whole
+   * argument, including why it cannot say "Voucher".
+   *
+   * BOTH DIRECTIONS ARE ASSERTED, and the debit half is the one that matters:
+   * a redeemed voucher, a console credit and a VOIDED CHARGE all land as
+   * positive adjustments, but a console DEDUCTION lands negative, and calling
+   * that a credit would be backwards.
+   */
+  it('a credit is titled Credit; a deduction is still an Adjustment', () => {
+    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title).toBe(en.txAdjustCredit);
+    expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en).title).toBe(en.txKind.adjustment);
+    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title.trim()).not.toBe('');
+  });
+
+  /**
+   * THE SHEET AND THE LIST ROW MUST ANSWER THE SAME QUESTION THE SAME WAY.
+   *
+   * Not a tidy-up: the −0.000 fix landed in `receipt.ts` and not in
+   * `activity.ts`, so tapping a zero-fils charge changed the answer —
+   * −0.000 in the feed, 0.000 in the sheet, on one transaction. This pins the
+   * pair so a future edit to one of them fails here rather than in front of a
+   * customer.
+   */
+  it('titles a credit exactly as the activity row does', () => {
+    for (const amount of [5000, -5000, 0]) {
+      expect(buildReceipt(adjustment(amount), BRANCHES, 'en', en).title).toBe(
+        toActivityRow(adjustment(amount), BRANCHES, 'en', en).title,
+      );
+    }
+  });
+
+  /**
+   * WHERE THE MONEY WENT — the row a credit adjustment did not have.
+   *
+   * `deposit_return` has said "Returned to · Wallet balance" all along, for
+   * exactly this reason: money that arrived without her paying has to name its
+   * destination. A redeemed voucher is the same event and said nothing. It is
+   * also non-negotiable #5 as a FACT — it went to wallet balance — which closes
+   * the cash and card-reversal readings without the sheet mentioning either.
+   */
+  it('a credit says where it landed; a deduction does not', () => {
+    const credit = buildReceipt(adjustment(5000), BRANCHES, 'en', en).rows;
+    expect(credit.map((r) => r.label)).toContain(en.txAddedTo);
+    expect(credit.find((r) => r.label === en.txAddedTo)?.value).toBe(en.txWalletBalance);
+
+    const debit = buildReceipt(adjustment(-5000), BRANCHES, 'en', en).rows;
+    expect(debit.map((r) => r.label)).not.toContain(en.txAddedTo);
+  });
+
+  /** A zero adjustment has no direction, so it names no destination either. */
+  it('a zero adjustment claims no destination', () => {
+    const rows = buildReceipt(adjustment(0), BRANCHES, 'en', en).rows;
+    expect(rows.map((r) => r.label)).not.toContain(en.txAddedTo);
   });
 
   it('shows the amount as a row, unsigned, so the figure is legible twice', () => {
@@ -258,7 +311,20 @@ describe('an adjustment reads honestly in both directions', () => {
       const labels = rows.map((r) => r.label);
       expect(labels).not.toContain(en.txPaidFrom);
       expect(labels).not.toContain(en.txPaidWith);
-      expect(rows.map((r) => r.value)).not.toContain(en.txMethod.wallet);
+      /*
+        WAS `expect(values).not.toContain(en.txMethod.wallet)`, WHICH WENT RED ON
+        A TRUE SENTENCE. `txMethod.wallet` and `txWalletBalance` are the same
+        string in English — 'Wallet balance' — so a blanket ban on the VALUE
+        also banned "Added to · Wallet balance", which claims no payment route
+        and is the destination row `deposit_return` has always had.
+
+        Scoped to the LABEL instead, which is what the test was ever about: the
+        defect is a row that says money came FROM somewhere, and only a label can
+        say that. `txAddedTo` is excluded by name rather than by accident.
+      */
+      for (const row of rows) {
+        if (row.value === en.txMethod.wallet) expect(row.label).toBe(en.txAddedTo);
+      }
     }
   });
 

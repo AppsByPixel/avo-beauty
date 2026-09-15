@@ -151,10 +151,28 @@ describe('an adjustment', () => {
   const adj = (amountFils: number) =>
     tx({ kind: 'adjustment', amountFils, reference: 'AVO-ADJ-4f2a9b1c8e03' });
 
-  it('is titled, not blank or fallen-through', () => {
-    const row = toActivityRow(adj(5000), BRANCHES, 'en', en);
+  /**
+   * WAS `toBe(en.txKind.adjustment)` IN BOTH DIRECTIONS. "Adjustment" is the
+   * word a ledger uses for a row that is, to her, money arriving; a positive one
+   * now says "Credit". The DEBIT half is asserted in the same test because a
+   * console deduction is also `kind: 'adjustment'`, and calling that a credit
+   * would be backwards.
+   */
+  it('a credit is titled Credit; a deduction is still an Adjustment', () => {
+    expect(toActivityRow(adj(5000), BRANCHES, 'en', en).title).toBe(en.txAdjustCredit);
+    expect(toActivityRow(adj(-5000), BRANCHES, 'en', en).title).toBe(en.txKind.adjustment);
+    expect(toActivityRow(adj(5000), BRANCHES, 'en', en).title.trim()).not.toBe('');
+  });
+
+  /**
+   * A ZERO ADJUSTMENT KEEPS THE NEUTRAL WORD. `positive` is `amount > 0`, and
+   * the title branch uses the same test, so the two cannot disagree about a row
+   * that moved nothing — the pairing the `−0.000` fix was about.
+   */
+  it('a zero adjustment is not called a credit', () => {
+    const row = toActivityRow(adj(0), BRANCHES, 'en', en);
     expect(row.title).toBe(en.txKind.adjustment);
-    expect(row.title.trim()).not.toBe('');
+    expect(row.amount).toBe('0.000');
   });
 
   it('reads as a credit when the console added credit', () => {
@@ -226,6 +244,107 @@ describe('the branch on a row is named in the reading language', () => {
       const row = toActivityRow(tx({ kind: 'topup', amountFils: 25000 }), BRANCHES, lang, copy);
       expect(row.when).not.toContain('Kuwait City');
       expect(row.when).not.toContain('مدينة الكويت');
+    }
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A REDEEMED VOUCHER, AS THE API ACTUALLY SENDS IT.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Not a hand-written fixture. Captured verbatim from
+ * `GET /members/me/transactions` on avo_lane_b (port 4710) after
+ * `POST /members/me/vouchers/redeem` credited 5.000 KD:
+ *
+ *   {"id":"TX-VCH-2c74284c-511","memberId":"8842","branchId":"BR-KWC",
+ *    "kind":"adjustment","amountFils":5000,"bonusFils":0,"method":"wallet",
+ *    "status":"settled","reference":"AVO-VCH-2c74284c-511",
+ *    "customAmount":false,"voidedAt":null,"reversedByTransactionId":null}
+ *
+ * `api/shop.test.ts`'s lesson, applied: "four contract drifts in this project
+ * were a schema narrower than the wire", and a hand-written fixture is how the
+ * top-up bonus double-count survived for months.
+ */
+describe('a redeemed voucher in the feed', () => {
+  const voucher = tx({
+    id: 'TX-VCH-2c74284c-511',
+    branchId: 'BR-KWC',
+    kind: 'adjustment',
+    amountFils: 5000,
+    bonusFils: 0,
+    method: 'wallet',
+    status: 'settled',
+    reference: 'AVO-VCH-2c74284c-511',
+  });
+
+  it('is a credit, not a top-up, and says so', () => {
+    const row = toActivityRow(voucher, BRANCHES, 'en', en);
+    expect(row.title).toBe(en.txAdjustCredit);
+    expect(row.positive).toBe(true);
+    expect(row.amount).toBe('+5.000');
+  });
+
+  /**
+   * THE BRIEF'S PREMISE, CHECKED RATHER THAN ASSUMED: it does NOT render
+   * indistinguishably from a top-up she paid for. A paid top-up takes the
+   * method suffix; this takes none, because `kind` differs before `method` is
+   * ever consulted.
+   */
+  it('never wears a payment method the way a paid top-up does', () => {
+    const row = toActivityRow(voucher, BRANCHES, 'en', en);
+    const paid = toActivityRow(
+      tx({ kind: 'topup', amountFils: 5000, method: 'knet' }),
+      BRANCHES,
+      'en',
+      en,
+    );
+    expect(paid.title).toBe(`${en.txKind.topup} · ${en.txMethod.knet}`);
+    expect(row.title).not.toBe(paid.title);
+    expect(row.title).not.toContain(en.txMethod.wallet);
+  });
+
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * IT IS NOT CALLED A VOUCHER, AND THIS TEST EXISTS TO STOP SOMEBODY MAKING
+   * IT ONE FROM THE REFERENCE PREFIX.
+   * ═════════════════════════════════════════════════════════════════════════
+   * Five code paths write `kind: 'adjustment'` and only two are AVO's. The
+   * other three — a VOID REFUND written by scanner staff, a MERCHANT-FUNDED
+   * happy-hour credit, and a seeded opening balance — are the same shape on the
+   * wire. `AVO-VOID-…` is the row a customer is most likely to be arguing about
+   * in a salon, and labelling it "Voucher from AVO" would be false.
+   *
+   * So all four positives get the SAME title, deliberately, and the day one of
+   * them gets its own word it will be because the server sent a field saying
+   * so — not because a client matched a prefix it does not own
+   * (`serialiseMemberContact` refuses exactly that reasoning for `+990`).
+   */
+  it('is indistinguishable from the other four positive adjustments — on purpose', () => {
+    const titles = ['AVO-VCH-x', 'AVO-ADJ-x', 'AVO-VOID-x', 'AVO-PRO-x', 'AVO-OPEN-8842'].map(
+      (reference) =>
+        toActivityRow(
+          tx({ kind: 'adjustment', amountFils: 5000, reference }),
+          BRANCHES,
+          'en',
+          en,
+        ).title,
+    );
+    expect(new Set(titles).size).toBe(1);
+    expect(titles[0]).toBe(en.txAdjustCredit);
+  });
+
+  /**
+   * #1 AND THE HALF A SCREENSHOT MISSES. The visible string can be right by
+   * accident; the spoken one is where a hand-rolled `/1000 .toFixed(3)` shows
+   * itself. Both are asserted, in both languages, and the digits stay Western
+   * in Arabic (#12).
+   */
+  it('announces dinars, in both languages, with Western digits', () => {
+    for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
+      const row = toActivityRow(voucher, BRANCHES, lang, copy);
+      expect(row.amount).toBe('+5.000');
+      expect(row.amountLabel).toContain('5.000');
+      expect(row.amountLabel).not.toBe(row.amount);
     }
   });
 });

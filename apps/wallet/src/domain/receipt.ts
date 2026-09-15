@@ -214,6 +214,27 @@ export function buildReceipt(
       support call; an adjustment the screen pretends to explain is worse.
     */
     rows.push({ label: copy.txAmountRow, ...money(abs, lang), emphasis: true });
+    /*
+      AND ON A CREDIT, WHERE IT WENT — the one row this branch was missing.
+
+      `deposit_return` two branches down already says "Returned to · Wallet
+      balance", for exactly this reason: money that arrived without her paying
+      has to name its destination or the sheet is a figure with no sentence. A
+      credit adjustment is the same event — a redeemed voucher, a console
+      compensation, a voided charge coming back — and said nothing at all.
+
+      It is also non-negotiable #5 stated as a FACT rather than a promise. The
+      value landed in wallet balance; naming that closes the cash and card-reversal
+      readings without the sheet having to mention either.
+
+      THE DEBIT SIDE GETS NOTHING, deliberately. "Taken from · Wallet balance" is
+      equally true and reads as an accusation on a row she cannot dispute from
+      here; and `txPaidFrom · Wallet balance` is the row the branch above already
+      refuses by name, because "nothing was paid from anywhere".
+    */
+    if (headline > 0) {
+      rows.push({ label: copy.txAddedTo, value: copy.txWalletBalance });
+    }
   } else {
     rows.push({ label: copy.txAmountRow, ...money(abs, lang), emphasis: true });
     if (tx.kind === 'deposit_return') {
@@ -227,10 +248,24 @@ export function buildReceipt(
   const spoken = moneyAriaLabel(abs, lang);
 
   return {
+    /*
+      THE SAME TITLE THE LIST ROW USES, and that identity is the point rather
+      than a tidy-up. `domain/activity.ts § title` carries the argument for
+      "Credit" on a positive adjustment and for why it is not "Voucher"; what
+      matters here is that the two must not answer differently.
+
+      The repo has already paid for that once: the `−0.000` fix landed in this
+      file and not in the list row, so tapping a zero-fils charge CHANGED THE
+      ANSWER — `−0.000` in the feed, `0.000` in the sheet, on one transaction.
+      A sheet that said "Adjustment" under a row that said "Credit" is the same
+      defect with better arithmetic.
+    */
     title:
       tx.kind === 'topup' && tx.method
         ? `${copy.txKind.topup} · ${copy.txMethod[tx.method]}`
-        : copy.txKind[tx.kind],
+        : tx.kind === 'adjustment' && headline > 0
+          ? copy.txAdjustCredit
+          : copy.txKind[tx.kind],
     subtitle: fullWhen(tx.createdAt, lang),
     // U+2212 MINUS, not a hyphen — the character the design sets.
     // MONEY: Western digits in both languages, per non-negotiable #12 and the
