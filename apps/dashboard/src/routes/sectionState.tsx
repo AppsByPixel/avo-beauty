@@ -147,6 +147,42 @@ export function namedStateAnswer(error: unknown): string | null {
   return error.message;
 }
 
+/**
+ * ===========================================================================
+ * A `400` ON A *READ* — THE SERVER CRITICISING A PARAMETER THIS CLIENT SENT
+ * ===========================================================================
+ * `WriteError` below has rendered a 400 verbatim since it was written, for a
+ * stated reason: a 400 is neither "we failed" nor "you can't do that", it is
+ * "that particular request is not allowed", and the server said why in a
+ * sentence written for a merchant that names the fix.
+ *
+ * The READ half had no such case because, until Reports could compose a window,
+ * no merchant read on this surface could be malformed: every parameter was
+ * chosen from a segment whose options were the server's own vocabulary.
+ * `?period=2026-03-31_2026-03-01` is the first one a person can get wrong, and
+ * it answers `400 invalid_period` with "period starts after it ends:
+ * 2026-03-31 is later than 2026-03-01."
+ *
+ * NOT FOLDED INTO `SectionError`, and that is deliberate rather than lazy. Eight
+ * other sections route their read failures through it and none of them can
+ * currently produce a 400; adding the branch there would change what all of them
+ * do on an answer none of them has been seen to receive, on the strength of one
+ * screen's need. The vocabulary is shared — this function — and the rendering
+ * stays where the answer is reachable and can be driven. `routes/Reports.tsx` §
+ * THE REFUSED WINDOW argues the second half of it: on that screen the refusal is
+ * a per-card fact and not a screen-level one.
+ *
+ * `http_error` is excluded for `namedStateAnswer`'s reason: it is `client.ts`'s
+ * fallback for a response with no JSON body the API composed, so there is no
+ * server sentence to render and the generic copy is the honest answer.
+ */
+export function badRequestAnswer(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  if (error.status !== 400) return null;
+  if (error.code === 'http_error') return null;
+  return error.message;
+}
+
 export interface SectionErrorProps {
   error: unknown;
   /** "You don't have access to the team" — names the section, not the endpoint. */

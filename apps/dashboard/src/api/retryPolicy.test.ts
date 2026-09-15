@@ -87,7 +87,18 @@ describe('retryPolicy — the deliberate scope limit', () => {
     expect(retryPolicy(0, api(404))).toBe(false);
   });
 
-  it.each([400, 409, 422])('still spends the budget on a %i', (status) => {
+  it('does not spend the budget on a 400, now that a read can produce one too', () => {
+    /*
+     * Reports' window controls are the first thing in this dashboard that lets a
+     * person compose a malformed READ. Driven against the real API with From
+     * after To: five cards, each asking twice, each holding a skeleton through a
+     * backoff before showing a sentence the server gave in one round trip —
+     * "period starts after it ends: 2026-09-20 is later than 2026-09-16."
+     */
+    expect(retryPolicy(0, api(400))).toBe(false);
+  });
+
+  it.each([409, 422])('still spends the budget on a %i', (status) => {
     // Unretryable in principle and still undriven on a READ in this dashboard.
     // `namedStateAnswer` already treats a served 409 as an answer where one
     // appears. Widening on principle is what this pin exists to prevent.
