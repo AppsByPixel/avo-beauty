@@ -168,6 +168,26 @@ describe('what the sheet sends', () => {
     fireEvent.click(getByTestId('voucher-submit'));
     await waitFor(() => expect(getByTestId('voucher-error').textContent).toContain('connection'));
 
+    /**
+     * WAIT FOR THE BUTTON, NOT JUST FOR THE MESSAGE — this went red in CI and
+     * green on every local run, which is the signature of a race rather than a
+     * regression. `disabled={busy || !canSubmitCode(code)}`, and the error text
+     * appearing does not prove `busy` has gone false: they are two observable
+     * effects of one failure and nothing here ordered them. On a loaded runner
+     * the second click landed on a still-disabled button, so the retry never
+     * happened and the assertion read `called 1 times`.
+     *
+     * Asserting the control is ready before acting on it is what the spec meant
+     * all along — a retry a customer could not actually perform is not the thing
+     * being tested. `aria-disabled` is the same handle line 110 already uses, and
+     * note the asymmetry it has: disabled sets it to the STRING 'true', enabled
+     * REMOVES it, so the ready state is `null` and not `'false'`. Asserting
+     * `'false'` here failed every run — which is the better failure, because it
+     * failed everywhere rather than only where it was loaded.
+     */
+    await waitFor(() =>
+      expect(getByTestId('voucher-submit').getAttribute('aria-disabled')).toBeNull(),
+    );
     fireEvent.click(getByTestId('voucher-submit'));
     await waitFor(() => expect(redeemVoucher).toHaveBeenCalledTimes(2));
     expect(redeemVoucher.mock.calls[1]![1]).toBe(redeemVoucher.mock.calls[0]![1]);
@@ -188,6 +208,12 @@ describe('what the sheet sends', () => {
     fireEvent.click(getByTestId('voucher-submit'));
     await waitFor(() => expect(redeemVoucher).toHaveBeenCalledTimes(1));
 
+    // The same race as the spec above, which had simply not fired yet: the call
+    // count reaching 1 says the request went OUT, not that the failure has come
+    // back and re-enabled the button.
+    await waitFor(() =>
+      expect(getByTestId('voucher-submit').getAttribute('aria-disabled')).toBeNull(),
+    );
     fireEvent.change(getByTestId('voucher-code'), { target: { value: 'VMQ5CXMCGGK3' } });
     fireEvent.click(getByTestId('voucher-submit'));
     await waitFor(() => expect(redeemVoucher).toHaveBeenCalledTimes(2));
