@@ -442,8 +442,16 @@ function Wallet({
             <ShopScreen
               shop={shop}
               balanceFils={snapshot.member.balanceFils}
+              tier={snapshot.member.tier}
               onToast={toast.show}
-              onTopUp={goHome}
+              /*
+                THIS USED TO BE `onTopUp={goHome}`, and that was the whole of the
+                cart's top-up: switch to the Home tab, close the cart, open
+                nothing. Shop now owns a `TopUpSheet` the way Book does, so what
+                the shell owes it is the balance re-read — `home.retry`, the same
+                callback `useShop` already gets as `onPaid`.
+              */
+              onToppedUp={home.retry}
             />
           ) : (
             homeScreen

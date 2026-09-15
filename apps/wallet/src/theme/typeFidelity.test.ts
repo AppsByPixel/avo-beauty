@@ -50,8 +50,19 @@
  * 700 in a browser — measured, not assumed. Seventeen of those are the
  * developer-addressed banner at the top of each file and are not product copy;
  * of the rest, exactly two are product copy inside this lane's column
- * (AVO Staff Scanner.dc.html:354 and :364), and `apps/scanner` already draws
- * both at `ui(12.5, '700')` — `Inter_700Bold`, the right face, matching.
+ * (AVO Staff Scanner.dc.html:354 and :364).
+ *
+ * THOSE TWO NOW DRAW AT 600, AND THIS PARAGRAPH USED TO SAY THE OPPOSITE. It
+ * read "`apps/scanner` already draws both at `ui(12.5, '700')` — `Inter_700Bold`,
+ * the right face, matching", which was an accurate measurement resting on a
+ * wrong premise: that a bare `<b>`'s rendered 700 is the design's intent. Trunk
+ * ruled otherwise (DECISIONS.md #115) on the evidence that
+ * `design/tokens/avo-tokens.json` carries no 700 at all, so inline emphasis in
+ * body copy is 600 and 700 belongs to badges. The scanner's own
+ * `MemberScreen` already drew 12.5/600 emphasis in its failure branches, so the
+ * two sites also disagreed with their own file. `apps/scanner/src/screens/
+ * emphasisWeight.test.ts` holds the line there; the sentence is corrected here
+ * because this file's census is what a later reader will cite.
  */
 
 import { describe, it, expect } from 'vitest';
