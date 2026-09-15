@@ -432,6 +432,10 @@ export const en: Copy = {
   txBranchOnline: 'Online',
   txReturnedTo: 'Returned to',
   txAmountRow: 'Amount',
+  // A positive `adjustment`. True of all five writers of that kind; see
+  // copy/types.ts and domain/activity.ts for why no narrower word is available.
+  txAdjustCredit: 'Credit',
+  txAddedTo: 'Added to',
   txStatus: {
     settled: 'Completed',
     pending: 'Pending',
@@ -706,6 +710,41 @@ export const en: Copy = {
 
   contactCta: 'Contact us',
   contactCtaSub: 'A question, a charge that looks wrong, or anything else',
+
+  // ---- vouchers. Nothing in this block is design copy: the bundle draws no
+  // voucher surface anywhere (lane C grepped coupon|voucher|compensat|gift card
+  // across the whole bundle and found nothing), so every string here is written
+  // and every one of them is an AR GAP.
+  acctVouchers: 'Vouchers',
+  vchRow: 'Redeem a voucher code',
+  vchTitle: 'Redeem a voucher',
+  // Says where the value goes before she commits, which is the honest framing of
+  // non-negotiable #5 and also the answer to "what IS this" for a surface the
+  // design never drew.
+  vchSub: 'Enter the code AVO gave you. Its value is added to your wallet balance.',
+  vchLabel: 'Voucher code',
+  // Twelve characters, the length `mintCode` produces, from its own alphabet --
+  // no I, O, 1 or 0, because these are read off a screen and typed by a person.
+  vchPlaceholder: 'ABCD2345EFGH',
+  vchSubmit: 'Redeem',
+  vchWorking: 'Redeeming...',
+  vchErrEmpty: 'Enter the code AVO gave you.',
+  // VERBATIM the server's `voucher_not_redeemable` message. Not paraphrased: if
+  // the two sentences drift, one of them is wrong and nothing will say which.
+  vchRefused: 'That code cannot be redeemed. Check it and try again, or contact support.',
+  vchRejected: "We couldn't send that code. Try again.",
+  // "Nothing has been used" is the load-bearing half: she is holding a code she
+  // may believe she has just spent.
+  vchOffline: 'No connection. Nothing has been used -- try again when you are back online.',
+  vchFailed: "We couldn't redeem that just now. Try again.",
+  vchDoneTitle: 'Added to your wallet',
+  // Non-negotiable #5. It closes the cash and card doors in the sentence that
+  // opens the wallet-credit one, so there is no reading of this screen in which
+  // either is on offer.
+  vchDoneBody:
+    'This is wallet credit. Spend it at the salon -- it is not paid out as cash or back to a card.',
+  vchDoneBalance: 'New balance',
+  vchDoneClose: 'Done',
 
   pfTitle: 'Edit profile',
   pfSub: 'Your name, and how the salon reaches you.',

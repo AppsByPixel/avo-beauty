@@ -508,6 +508,11 @@ export const ar: Copy = {
   txBranchOnline: 'عبر التطبيق', // design:1579
   txReturnedTo: 'أُعيد إلى', // design:1585
   txAmountRow: 'المبلغ', // design:1377
+  // Both AR GAPS. The design bundle writes no adjustment string in either
+  // language -- `txKind.adjustment` was already a gap before these existed -- so
+  // there is nothing to lift and nothing is invented.
+  txAdjustCredit: en.txAdjustCredit, // AR GAP
+  txAddedTo: en.txAddedTo, // AR GAP
   txStatus: {
     settled: 'مكتملة', // design:1578
     pending: en.txStatus.pending, // AR GAP
@@ -808,6 +813,30 @@ export const ar: Copy = {
   contactCta: 'اتصلي بنا', // design:1324 — feminine imperative
   contactCtaSub: 'سؤال، أو خصم يبدو غير صحيح، أو أي أمر آخر', // design:1324
 
+  // ---- vouchers. EVERY string in this block is an AR GAP, and not one of them
+  // is a judgement call: the design bundle contains no voucher surface in either
+  // language, so there is no Arabic to lift. Inventing it would be the branch
+  // strings again -- they went in as invented Arabic and had to be retro-fitted a
+  // slice later -- and this block is worse to guess at than most, because it is
+  // an apology addressed to a woman and the register is the whole point.
+  acctVouchers: en.acctVouchers, // AR GAP
+  vchRow: en.vchRow, // AR GAP
+  vchTitle: en.vchTitle, // AR GAP
+  vchSub: en.vchSub, // AR GAP
+  vchLabel: en.vchLabel, // AR GAP
+  vchPlaceholder: en.vchPlaceholder, // AR GAP
+  vchSubmit: en.vchSubmit, // AR GAP
+  vchWorking: en.vchWorking, // AR GAP
+  vchErrEmpty: en.vchErrEmpty, // AR GAP
+  vchRefused: en.vchRefused, // AR GAP
+  vchRejected: en.vchRejected, // AR GAP
+  vchOffline: en.vchOffline, // AR GAP
+  vchFailed: en.vchFailed, // AR GAP
+  vchDoneTitle: en.vchDoneTitle, // AR GAP
+  vchDoneBody: en.vchDoneBody, // AR GAP
+  vchDoneBalance: en.vchDoneBalance, // AR GAP
+  vchDoneClose: en.vchDoneClose, // AR GAP
+
   pfTitle: 'تعديل الملف الشخصي', // design:1292
   pfSub: 'اسمك وطريقة تواصل الصالون معك.', // design:1292
   pfEmailPh: 'name@email.com', // design:1293 — a Latin placeholder in both
@@ -898,7 +927,7 @@ export const ar: Copy = {
  * translation without removing its entry here fails the build, and adding a key
  * without Arabic and without listing it here fails too.
  *
- * This is the worksheet for the native-speaker review. It stands at 86 entries
+ * This is the worksheet for the native-speaker review. It stands at 105 entries
  * and almost every one of them is state or refusal copy, which is not an accident —
  * see the section notes below.
  *
@@ -924,6 +953,11 @@ export const ar: Copy = {
  *
  *     awk '/^export const AR_GAPS = \[/{f=1;next} /^\] as const;/{f=0} f' \
  *       apps/wallet/src/copy/ar.ts | grep -c "^  '"
+ *
+ * Recounted by that command on 2026-09-15, after the voucher slice added
+ * nineteen: 86 -> 105. The seventeen voucher keys are a whole surface the design
+ * bundle does not draw, so they are the largest single addition this list has
+ * taken; `txAdjustCredit` and `txAddedTo` are the other two.
  */
 export const AR_GAPS = [
   'qrAria',
@@ -985,6 +1019,8 @@ export const AR_GAPS = [
   'minus',
   'restartNeeded',
   'txKind.adjustment',
+  'txAdjustCredit',
+  'txAddedTo',
   'txStatus.pending',
   'txStatus.failed',
   'txStatus.cancelled',
@@ -1030,6 +1066,25 @@ export const AR_GAPS = [
   'shopOffBody',
   'cartStaleBody',
   'shopOrderFailed',
+  // ---- vouchers. A whole new surface with no design copy in either language;
+  // see the block in `ar` above for why none of it was guessed at.
+  'acctVouchers',
+  'vchRow',
+  'vchTitle',
+  'vchSub',
+  'vchLabel',
+  'vchPlaceholder',
+  'vchSubmit',
+  'vchWorking',
+  'vchErrEmpty',
+  'vchRefused',
+  'vchRejected',
+  'vchOffline',
+  'vchFailed',
+  'vchDoneTitle',
+  'vchDoneBody',
+  'vchDoneBalance',
+  'vchDoneClose',
 ] as const;
 
 /**

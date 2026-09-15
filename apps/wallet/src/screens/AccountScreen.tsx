@@ -56,6 +56,7 @@ import { DeleteAccountSheet } from '../components/account/DeleteAccountSheet';
 import { DeletionScheduled } from '../components/account/DeletionScheduled';
 import { FollowSalon } from '../components/account/FollowSalon';
 import { AccountSkeleton } from '../components/account/AccountSkeleton';
+import { RedeemVoucherSheet } from '../components/account/RedeemVoucherSheet';
 
 interface Props {
   onBack: () => void;
@@ -102,6 +103,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [voucherOpen, setVoucherOpen] = useState(false);
   const [openDoc, setOpenDoc] = useState<LegalDoc | null>(null);
 
   /**
@@ -229,6 +231,18 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
              */
             onDeletionChanged={deletion.reload}
             onToast={toast.show}
+          />
+          <RedeemVoucherSheet
+            open={voucherOpen}
+            onClose={() => setVoucherOpen(false)}
+            /**
+             * Re-read the member so the balance on this screen is the SERVER's
+             * (#2). The sheet already holds `balanceAfterFils` for its own
+             * confirmation line and deliberately does not hand it over — two
+             * surfaces asking the server is cheaper than two surfaces
+             * disagreeing, and it is the same shape `onDeletionChanged` uses.
+             */
+            onRedeemed={account.retry}
           />
           <Toast message={toast.message} />
         </>
@@ -415,6 +429,62 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
           <CardNote>{lang === 'ar' ? support.channels.hoursAr : support.channels.hoursEn}</CardNote>
         </>
       ) : null}
+
+      {/* --------------------------------------------------------- vouchers -- */}
+      {/*
+        WHY IT IS HERE, ON ACCOUNT, DIRECTLY AFTER HELP.
+
+        THE DESIGN DRAWS NO VOUCHER SURFACE ANYWHERE, in any of the four apps, so
+        this is a new place and the choice is a decision to record rather than a
+        layout to copy. Three things in the drawn product argue for this slot:
+
+        1. HELP IS WHERE THE CODE COMES FROM. A voucher is compensation, and the
+           only way one reaches her is a person: `POST /v1/vouchers` is
+           `requirePlatform(req, 'accounts')`, a merchant cannot issue one, and
+           the wallet has no list endpoint to discover one from. The design
+           already draws the outbound leg of that conversation — Contact us, the
+           topic list, the WhatsApp number, and a receipt's "Report a problem with
+           this payment" that prefills it. It draws no return leg at all. This is
+           the return leg, and it belongs beside the door she went out of.
+
+        2. HOME IS SETTLED AND THIS IS NOT A DAILY ACT. Home's money-in affordance
+           is Top up, which is drawn: four amounts, three payment methods, a
+           gateway redirect, a tier-bonus calculation card. A voucher has none of
+           those — no payment, no commission, no bonus — and putting a code field
+           among three payment methods invites reading it as a fourth way to pay,
+           which is the discount semantics `routes/vouchers.ts` refused outright
+           ("REDEMPTION CREDITS THE WALLET, IT DOES NOT DISCOUNT A CHARGE"). It
+           would also be restyling a settled screen for a rare, support-initiated
+           event, which CLAUDE.md forbids on its own.
+
+        3. ACCOUNT IS ALREADY THE DRAWN HOME FOR THE NON-DAILY. Policies, support,
+           notifications, deletion, language, follow — everything that is not the
+           balance-and-QR loop lives here, in exactly this SectionLabel + card
+           shape.
+
+        IT IS NOT INSIDE THE HELP CARD, and that is not tidiness: Help renders
+        only when `GET /v1/platform/support` returned a config, and redeeming does
+        not depend on support being configured. A voucher she was given must be
+        spendable whether or not the support block loaded.
+
+        ONE ROW, NOT A LIST, AND THE HEADING PROMISES NOTHING MORE. There is no
+        `GET /members/me/vouchers`; the three read routes are platform-gated. The
+        section therefore offers an ACTION and cannot show an inventory. See
+        `api/vouchers.ts` and the slice report for the endpoint that would change
+        that.
+
+        NO FIFTH STATE. It reads nothing, so it is identical loading, ready, stale
+        and offline — which is why it sits outside every conditional above it.
+      */}
+      <SectionLabel>{copy.acctVouchers}</SectionLabel>
+      <SettingsCard testID="voucher-rows">
+        <SettingsRow
+          label={copy.vchRow}
+          onPress={() => setVoucherOpen(true)}
+          last
+          testID="row-voucher"
+        />
+      </SettingsCard>
 
       {/* ----------------------------------------------------------- follow -- */}
       {salon.social.some((s) => s.on && s.handle.trim()) ? (

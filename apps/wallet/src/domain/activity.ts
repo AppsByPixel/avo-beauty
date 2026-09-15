@@ -107,9 +107,60 @@ function when(
   return withBranch;
 }
 
+/**
+ * The row's title.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * A CREDIT ADJUSTMENT SAYS "Credit", NOT "Adjustment", AND NOT "Voucher".
+ * ═════════════════════════════════════════════════════════════════════════════
+ * A redeemed voucher lands here. `POST /members/me/vouchers/redeem` writes
+ * `kind: 'adjustment'`, `method: 'wallet'`, `bonusFils: 0`, `status: 'settled'`
+ * and a positive `amountFils` — captured from `GET /members/me/transactions` on
+ * avo_lane_b:
+ *
+ *     {"id":"TX-VCH-2c74284c-511","kind":"adjustment","amountFils":5000,
+ *      "bonusFils":0,"method":"wallet","reference":"AVO-VCH-2c74284c-511"}
+ *
+ * So it ALREADY reads differently from a top-up she paid for, which arrives
+ * `kind: 'topup'` with a real `method` and takes the "Top-up · KNET" suffix two
+ * lines down. What it did NOT do was say anything at all: "Adjustment" is the
+ * word a ledger uses, and this row is, to her, money arriving.
+ *
+ * WHY NOT "Voucher", WHICH IS WHAT SHE ACTUALLY REDEEMED. Because nothing on the
+ * wire says so. FIVE code paths write `kind: 'adjustment'`, and they are not one
+ * thing:
+ *
+ *     routes/vouchers.ts    AVO-VCH-…   a redeemed voucher        — AVO's
+ *     routes/adjustments.ts AVO-ADJ-…   a console adjustment      — AVO's
+ *     routes/charges.ts     AVO-VOID-…  a VOIDED CHARGE refunded  — SCANNER STAFF's
+ *     services/charge.ts    AVO-PRO-…   a happy-hour credit       — MERCHANT-FUNDED
+ *     db/seed.ts            AVO-OPEN-…  an opening balance
+ *
+ * The only tell is the `reference` prefix, and a client that branched on
+ * `reference.startsWith('AVO-VCH-')` would be doing exactly what
+ * `api/src/http/serialise.ts § serialiseMemberContact` refuses by name —
+ * "DERIVED FROM `erased_at`, NOT FROM THE SHAPE OF THE NUMBER. A
+ * `phone.startsWith('+990')` test here would be the same string-match coupling
+ * this field exists to spare clients" — with a constant this app does not own
+ * and no test anywhere that would fail when it changed.
+ *
+ * And the cost of guessing is not cosmetic. Two of the five are not AVO at all,
+ * and one of those is a VOID REFUND — the row a customer is most likely to be
+ * standing in front of a salon arguing about. Labelling that "Voucher from AVO"
+ * would be a false statement on the highest-stakes row in the feed.
+ *
+ * "Credit" is the widest word that is true of all five. The narrower one needs a
+ * server field; it is REPORTED, not string-matched. See the slice report.
+ */
 function title(tx: Transaction, copy: Copy): string {
   const kind = copy.txKind[tx.kind];
   if (tx.kind === 'topup' && tx.method) return `${kind} · ${copy.txMethod[tx.method]}`;
+  /*
+    `> 0` and not `>= 0`, matching `toActivityRow`'s own `positive`. A zero
+    adjustment moves nothing and has no direction to name — the same reason the
+    signed amount drops its sign there.
+  */
+  if (tx.kind === 'adjustment' && tx.amountFils > 0) return copy.txAdjustCredit;
   return kind;
 }
 
