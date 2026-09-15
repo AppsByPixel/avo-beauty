@@ -230,11 +230,36 @@ services. Then fill in the four secrets it leaves blank, in the Render dashboard
 |---|---|---|
 | `avo-api` | `DATABASE_URL` | Supabase pooler URL, `postgres` role |
 | `avo-api` | `APP_DATABASE_URL` | Supabase pooler URL, `avo_app` role |
-| `avo-api` | `PUBLIC_BASE_URL` | the dashboard's URL, once it has one |
+| `avo-api` | `PUBLIC_BASE_URL` | **the API's own URL** — see below |
 | `avo-dashboard` | `VITE_AVO_API_URL` | the API's URL |
 
 `VITE_AVO_API_URL` is read at **build** time, so changing it needs a redeploy of
 the static site, not a restart.
+
+**`PUBLIC_BASE_URL` is the API's own origin, and this table said "the
+dashboard's URL" until 2026-09-15, which is wrong.** `env.ts:690` defaults it to
+`http://localhost:${PORT}` and `gateway/sandbox.ts:207` builds the hosted
+payment page from it — `new URL('/_gateway/' + pspReference, env.publicBaseUrl)`
+— and `/_gateway/:ref` is a route on **this API**. Pointed at the dashboard it
+would 404; left unset on the deployment it did something quieter and worse:
+
+```
+POST /topups -> 200
+  "redirectUrl": "http://localhost:3000/_gateway/SBX-92CA1D61B2A1?return=avo%3A%2F%2F…"
+```
+
+A successful top-up whose payment page is on the customer's own device, which
+has nothing listening. Found by running a top-up against the deployed demo after
+the pool fix landed — the request had stopped failing, so the next defect behind
+it became visible. Set and re-verified:
+
+```
+"redirectUrl": "https://avo-api.vercel.app/_gateway/SBX-0B5D3CBF8A82?return=…"
+GET that URL -> 200
+```
+
+`GOOGLE_CALENDAR` callbacks derive from the same variable (`env.ts:695`), so the
+two agree by construction.
 
 ### 4 · Check it
 
