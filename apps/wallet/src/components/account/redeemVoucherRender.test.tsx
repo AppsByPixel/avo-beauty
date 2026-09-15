@@ -329,15 +329,31 @@ describe('the error state', () => {
     fireEvent.change(getByTestId('voucher-code'), { target: { value: '5NWBVRNHLA8H' } });
     fireEvent.click(getByTestId('voucher-submit'));
     /*
-      WAIT FOR THE REFUSAL TO RENDER, NOT FOR THE CALL TO HAPPEN. Written
-      `waitFor(() => calledTimes(1))` this test went red, and the reason is worth
-      keeping: that resolves the instant the mock is INVOKED, which is before the
-      rejection has been caught and before `busy` has gone back to false. The
-      second click then landed on a disabled button and nothing happened — a
-      false red produced entirely by the test, on a sheet that was behaving
-      correctly. It also proves the in-flight guard is real.
+      WAIT FOR THE BUTTON, NOT FOR THE CALL AND NOT FOR THE MESSAGE.
+
+      The paragraph that used to sit here had the diagnosis exactly right and
+      stopped one step short of the remedy. It said: `waitFor(() =>
+      calledTimes(1))` resolves the instant the mock is INVOKED, before the
+      rejection is caught and before `busy` goes back to false, so the second
+      click lands on a disabled button and nothing happens. All true.
+
+      Waiting for `voucher-error` is BETTER and still not enough. The message
+      appearing and `busy` clearing are two observable effects of one rejection,
+      and nothing here orders them — so this remained a race, just a narrower
+      one. It came due on 2026-09-16 in CI's `runtime-drift` job (Node 24) with
+      `expected "spy" to be called 2 times, but got 1 times`, on a commit whose
+      `check` job on Node 22 was green. Two sibling specs in this file had
+      already been fixed the right way and nobody swept for a third.
+
+      The button's own readiness is the thing the assertion is actually about: a
+      second tap a customer could not perform is not the behaviour under test.
+      `aria-disabled` is absent when enabled and the string 'true' when not —
+      asserting `'false'` fails everywhere, which is how that was found.
     */
     await waitFor(() => expect(getByTestId('voucher-error')).toBeTruthy());
+    await waitFor(() =>
+      expect(getByTestId('voucher-submit').getAttribute('aria-disabled')).toBeNull(),
+    );
 
     fireEvent.click(getByTestId('voucher-submit'));
     await waitFor(() => expect(redeemVoucher).toHaveBeenCalledTimes(2));
