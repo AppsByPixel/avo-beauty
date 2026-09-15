@@ -444,9 +444,20 @@ export const copy = {
   enrolChange: 'Set up this device',
 
   // ------------------------------------------------------- my bookings ----
-  /** :138 — "3 upcoming · 2 new". */
-  bookingsCount: (total: number, isNew: number) =>
-    `${total} upcoming${isNew > 0 ? ` · ${isNew} new` : ''}`,
+  /**
+   * :138 — "3 upcoming · 2 new", plus a third segment the design never needed.
+   *
+   * `upcoming` COUNTS ONLY THE STILL-HELD ONES NOW. It used to be `bookings.length`,
+   * and `GET /artists/me/bookings` returns the last 24 hours as well as the day
+   * ahead — so an artist who had charged two of this morning's clients read "5
+   * upcoming" over a list where three were. Marking the cards done and leaving
+   * this line would have shipped a screen contradicting itself one row higher.
+   *
+   * "paid" rather than "done", matching the pill. Both segments drop at zero, so
+   * a day with nothing charged renders the design's own sentence unchanged.
+   */
+  bookingsCount: (upcoming: number, isNew: number, paid: number) =>
+    `${upcoming} upcoming${isNew > 0 ? ` · ${isNew} new` : ''}${paid > 0 ? ` · ${paid} paid` : ''}`,
   /** :138, verbatim after the em dash. */
   bookingsSource: 'pulled from the AVO app and your Google Calendar.',
   /** :142, verbatim. */
@@ -456,6 +467,27 @@ export const copy = {
   bookingsDeposit: (amount: string) => `Deposit ${amount}`,
   /** :155 */
   bookingsNew: 'NEW',
+
+  /**
+   * THE FOUR BOOKING STATUSES ON THE ARTIST'S OWN DAY. NEW COPY — the bundle
+   * draws no status at all on this card (design/AVO Staff Scanner.dc.html:150-172),
+   * because it was drawn as a list of appointments still to come. The API's
+   * window reaches back 24 hours, so it is not one.
+   *
+   * "PAID" DIVERGES FROM THE MERCHANT'S "COMPLETED", AND ONLY THAT ONE DOES.
+   * `completed` is written in exactly one place in the whole API — inside the
+   * charge transaction, when a held deposit is consumed (services/charge.ts:781)
+   * — so the status literally means the bill was settled. The artist's question
+   * at the counter is "have I rung this one up?"; the merchant's board reports
+   * outcomes across a salon and needs the neutral word for a column that also
+   * holds "Cancelled". Two readers, two words, one status.
+   *
+   * The other two take the merchant's wording unchanged (Appointments.tsx:47-50).
+   * Diverging without a reason is worse than agreeing, and here there is none.
+   */
+  bookingsStatusPaid: 'Paid',
+  bookingsStatusNoShow: 'No-show · returned',
+  bookingsStatusCancelled: 'Cancelled',
   /** :169-170 */
   bookingsCall: 'Call',
   bookingsWhatsApp: 'WhatsApp',

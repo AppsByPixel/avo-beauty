@@ -1,9 +1,17 @@
 /**
  * Scanner · My bookings. design/AVO Staff Scanner.dc.html:130-179.
  *
- * The artist's upcoming appointments, grouped by day: time, duration, service,
- * deposit held, and the client's name, tier and phone with one-tap Call and
- * WhatsApp.
+ * The artist's day, grouped by date: time, duration, service, deposit, status,
+ * and the client's name, tier and phone with one-tap Call and WhatsApp.
+ *
+ * NOT ONLY "UPCOMING", WHICH IS WHAT THIS HEADER USED TO SAY AND WHAT THE SCREEN
+ * DREW. `GET /artists/me/bookings` returns rows from `Date.now() - 24h` onward
+ * — the route's own comment says "from the start of today", and the code says a
+ * rolling twenty-four hours, which is wider — and the charge path marks a settled
+ * booking `completed` inside the money transaction. So roughly half a working
+ * day's rows are appointments that have already happened, and until this change
+ * nothing on the card or in the count line said so. `STATUS_PILL` below carries
+ * that, and `dayTally` stops the header calling finished work upcoming.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THIS SCREEN SHOWS A CUSTOMER'S PHONE NUMBER, DELIBERATELY
@@ -114,6 +122,13 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
 
   const retry = useCallback(() => setToken((t) => t + 1), []);
 
+  /*
+    Non-null exactly when the load is ready, which is why the count line below
+    branches on IT rather than on `load.status` — one condition, and TypeScript
+    narrows the value the line actually reads.
+  */
+  const tally = load.status === 'ready' ? dayTally(load.bookings) : null;
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -126,10 +141,9 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Text style={display(24)}>{copy.bookings}</Text>
 
-        {load.status === 'ready' ? (
+        {tally ? (
           <Text style={[ui(12.5), styles.sub]}>
-            {copy.bookingsCount(load.bookings.length, countNew(load.bookings))} —{' '}
-            {copy.bookingsSource}
+            {copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid)} — {copy.bookingsSource}
           </Text>
         ) : null}
 
@@ -192,6 +206,73 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
   );
 }
 
+// --------------------------------------------------------------- the status --
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * FOUR STATES ARE DEFINED HERE; TWO OF THEM CAN REACH THIS SCREEN TODAY
+ * ═══════════════════════════════════════════════════════════════════════════
+ * This card drew no status at all, and the server has always sent one. A charge
+ * that settles a held deposit sets the booking to `completed` inside the money
+ * transaction — `api/src/services/charge.ts:781`, the ONLY place in the API that
+ * writes that status — and `GET /artists/me/bookings` returns rows from
+ * `Date.now() - 24h` onward. So an appointment she charged at 11:00 was still on
+ * her screen at 15:00, byte-identical to one she had not touched, and she had to
+ * remember which of the morning she had rung up.
+ *
+ * WHY A MAP RATHER THAN A TERNARY, GIVEN ONLY TWO ARRIVE. The route filters the
+ * day to `inArray(booking.status, ['deposit_held', 'completed'])`
+ * (api/src/routes/bookings.ts:308), so `cancelled` and `no_show_returned` cannot
+ * land here as it stands. Both are one config change away from doing so, and
+ * both mean money moved BACK to the customer — a void turns a charged booking
+ * into `cancelled` (api/src/routes/charges.ts:736), and the no-show job writes
+ * `no_show_returned`. An unhandled status on this card does not render as
+ * nothing; it renders as an ordinary live appointment. Four lines buy that away
+ * permanently, and `bookingsDoneState.test.ts` fails the day the contract grows
+ * a fifth.
+ *
+ * `deposit_held` IS NULL ON PURPOSE. The merchant's Appointments board needs a
+ * "Deposit held" pill because it is a table with a status column; this card
+ * already says "Deposit 5.000" in that exact position. A second pill repeating
+ * it would land on the majority of rows and carry nothing.
+ *
+ * 600, NOT 700 — DECISIONS.md #115. #115 freezes 700 to badges and this file is
+ * where its one 700 lives, so the call needs making rather than assuming. Inside
+ * this very card the deposit pill is `ui(11, '600')`, the tier pill `ui(10,
+ * '600')` and the source pill `ui(10.5, '600')`; the single 700 is `NEW`. So the
+ * file's own line is not badge-versus-prose, it is ALERT versus DESCRIPTION —
+ * and a finished row is the least alerting thing on the screen. Drawing "Paid"
+ * at 700 would give completed work the same visual urgency as new work landing,
+ * which is exactly backwards. The proof that this landed on 600 is that
+ * `emphasisWeight.test.ts`'s frozen 700 set still has one member.
+ *
+ * The colours are existing pairs, not new ones: `surfaceAlt2` + `textMutedStrong`
+ * is the source pill's own pair, and `dangerBg` + `dangerText` is the pair Lane C
+ * already took for `no-show · returned` on the merchant's board. Both are
+ * computed against AA in the test rather than asserted in a comment.
+ */
+export const STATUS_PILL: Record<
+  ArtistBooking['status'],
+  { label: string; bg: string; text: string } | null
+> = {
+  deposit_held: null,
+  completed: {
+    label: copy.bookingsStatusPaid,
+    bg: color.surfaceAlt2,
+    text: color.textMutedStrong,
+  },
+  no_show_returned: {
+    label: copy.bookingsStatusNoShow,
+    bg: color.dangerBg,
+    text: color.dangerText,
+  },
+  cancelled: {
+    label: copy.bookingsStatusCancelled,
+    bg: color.surfaceAlt2,
+    text: color.textMutedStrong,
+  },
+};
+
 // ------------------------------------------------------------------- a card --
 
 /**
@@ -247,7 +328,24 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
   */
   const phone = booking.memberErased ? null : booking.memberPhone;
   const digits = phone === null ? null : phone.replace(/[^0-9]/g, '');
-  const isNew = isRecent(booking);
+  const status = STATUS_PILL[booking.status];
+  /*
+    Settled means the deposit is resolved — charged, returned or cancelled — and
+    it is read from the SERVER'S status, never from a timestamp or from a charge
+    this device happens to have watched. Non-negotiable #2.
+  */
+  const settled = booking.status !== 'deposit_held';
+  /*
+    AND IT SUPPRESSES `NEW`, which is not tidiness but a collision this change
+    exposed. `isRecent` is `startsAt - now < 12h` with NO LOWER BOUND, so every
+    past booking in the 24-hour window reads NEW — this morning's charged
+    appointment included. A card wearing NEW and Paid at once is nonsense.
+    REPORTED and deliberately not fixed here: a booking from yesterday evening
+    that is still `deposit_held` also reads NEW, and that half wants either a
+    `createdAt` on `Booking` or an artist-side seen marker rather than a wider
+    guess in this file.
+  */
+  const isNew = !settled && isRecent(booking);
 
   const open = useCallback((url: string) => {
     // Deliberately not awaited into a UI state: the OS takes over the screen.
@@ -258,14 +356,29 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
   }, []);
 
   return (
-    <View style={styles.card} testID={`booking-${booking.id}`}>
+    <View style={[styles.card, settled && styles.cardSettled]} testID={`booking-${booking.id}`}>
       <View style={styles.cardTop}>
         <View style={styles.timeRow}>
-          <Text style={display(17, '600')}>{clockLabel(booking.startsAt)}</Text>
+          <Text style={[display(17, '600'), settled && styles.settledInk]}>
+            {clockLabel(booking.startsAt)}
+          </Text>
           <Text style={[ui(12), styles.dim]}>· {copy.bookingsDuration(booking.durationMin)}</Text>
           {isNew ? (
             <View style={styles.newPill}>
               <Text style={[ui(10, '700'), styles.newPillText]}>{copy.bookingsNew}</Text>
+            </View>
+          ) : null}
+          {/*
+            In the slot `NEW` would have taken, because the two can never both
+            be here. Same cluster as the time: this is a fact about THIS
+            appointment's state, sitting beside when it was.
+          */}
+          {status ? (
+            <View
+              style={[styles.statusPill, { backgroundColor: status.bg }]}
+              testID={`booking-status-${booking.id}`}
+            >
+              <Text style={[ui(10, '600'), { color: status.text }]}>{status.label}</Text>
             </View>
           ) : null}
         </View>
@@ -282,7 +395,9 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
         </View>
       </View>
 
-      <Text style={[ui(14.5, '600'), styles.service]}>{booking.serviceName}</Text>
+      <Text style={[ui(14.5, '600'), styles.service, settled && styles.settledInk]}>
+        {booking.serviceName}
+      </Text>
 
       <View style={styles.client}>
         <View style={styles.avatar}>
@@ -445,8 +560,29 @@ function isRecent(booking: ArtistBooking): boolean {
   return startsAt - Date.now() < 12 * 60 * 60 * 1000;
 }
 
-function countNew(bookings: ArtistBooking[]): number {
-  return bookings.filter(isRecent).length;
+/**
+ * The three numbers the count line reads.
+ *
+ * `upcoming` USED TO BE `bookings.length`, and that was the header telling the
+ * same lie the cards were: the endpoint returns the last 24 hours as well as the
+ * day ahead, so two charged clients made "5 upcoming" out of three. Counting
+ * only the still-held ones is what lets the word keep its meaning, and `paid`
+ * names what the rest are instead of hiding them.
+ *
+ * Exported for the test, and for nothing else.
+ */
+export function dayTally(bookings: ArtistBooking[]): {
+  upcoming: number;
+  isNew: number;
+  paid: number;
+} {
+  const held = bookings.filter((b) => b.status === 'deposit_held');
+  return {
+    upcoming: held.length,
+    // `isRecent` is only consulted on held rows now — same rule the card uses.
+    isNew: held.filter(isRecent).length,
+    paid: bookings.filter((b) => b.status === 'completed').length,
+  };
 }
 
 function tierLabel(tier: ArtistBooking['memberTier']): string {
@@ -489,6 +625,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.hairline,
   },
+  /*
+    THE SETTLED ROW RECEDES, and this is the part that works at scan distance.
+    A 10px pill is a thing you read once you have stopped on a row; an artist
+    running her eye down the day needs the NEXT appointment to be the one that
+    stands out. `surface` is #FBFAF8 and a card is white, so every live row LIFTS
+    off the page; `surfaceAlt` (#F6F4EE) sits below it instead, and a finished
+    appointment stops competing without disappearing.
+
+    Nothing else on the card is restyled. The hairline, the radius, the padding
+    and every child's geometry are untouched — a row does not move when it is
+    charged, it only changes weight.
+  */
+  cardSettled: { backgroundColor: color.surfaceAlt },
+  /*
+    `textMutedStrong` on `surfaceAlt` is 6.08:1, computed in the test rather than
+    claimed here. It is the only muted token on this card that clears AA:
+    `textMutedSoft`, which `styles.dim` already uses for the duration and the
+    phone line, is 2.88:1 on WHITE before this change and 2.82:1 on the settled
+    card. That is a pre-existing failure and it is reported rather than deepened
+    — de-emphasis here moves ink DOWN from full black, never further down from an
+    already-failing grey.
+  */
+  settledInk: { color: color.textMutedStrong },
   cardTop: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -505,6 +664,13 @@ const styles = StyleSheet.create({
     backgroundColor: color.brandDeep,
   },
   newPillText: { color: color.white },
+  /*
+    Geometry copied from `newPill` deliberately: the two occupy the same slot and
+    can never both be present, so a row must not change height or rhythm
+    depending on which one it carries. Only the colours differ, and they come off
+    `STATUS_PILL` rather than from here — three statuses, two palettes.
+  */
+  statusPill: { paddingVertical: 2, paddingHorizontal: 7, borderRadius: radius.pill },
   depositPill: {
     paddingVertical: 4,
     paddingHorizontal: 10,
