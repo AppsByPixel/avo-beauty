@@ -134,6 +134,29 @@ const SECTION_SCREENS = [
    * component NAME, so the two are distinguishable there rather than colliding.
    */
   'console/Accounts.tsx',
+  /**
+   * Console → Accounts → one customer's AVO vouchers.
+   *
+   * A PANEL INSIDE A SCREEN, in THIS list rather than in a host/subview pair, for
+   * `SupportQueue`'s reason exactly: it owns its own fetch. `console/Accounts.tsx`
+   * reads `GET /v1/platform/accounts` and this reads `GET /v1/vouchers?memberId=`
+   * — two routes that fail independently, so a `SectionError` here is its own
+   * answer and not a drifting copy of its host's, and nothing hands it a pending
+   * state because its host's read landing says nothing about whether this one has.
+   *
+   * SAME SECTION GATE, WHICH IS NOT THE SAME THING AS ONE READ — `ShopOrders`'s
+   * distinction. Both are `requirePlatform(req, 'accounts')`, so unlike
+   * `Tills.tsx` this panel has no second guard to point at, and it still owns four
+   * states. The 403 arm is reachable only by a mid-session revocation through
+   * `Admins.tsx` (the server re-reads `platform_admin` per request) — built
+   * anyway, because non-negotiable #7's claim is that the server refuses whatever
+   * the UI did.
+   *
+   * The router never mounts it, so the routed-component assertion below will not
+   * see it. That is the census's standing distinction: not "is it routed" but
+   * "does it own a read".
+   */
+  'console/AccountVouchers.tsx',
   'console/Activity.tsx',
   'console/Admins.tsx',
   'console/Analytics.tsx',
