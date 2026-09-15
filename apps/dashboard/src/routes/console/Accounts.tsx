@@ -7,6 +7,7 @@ import {
   type PlatformAccount,
 } from '../../api/platformAccounts.js';
 import { SectionError, WriteError } from '../sectionState.js';
+import { AccountVouchers } from './AccountVouchers.js';
 
 /**
  * Console → Accounts. `GET /v1/platform/accounts`, section `accounts`.
@@ -72,6 +73,33 @@ import { SectionError, WriteError } from '../sectionState.js';
  * All three are reported to trunk rather than quietly worked around.
  *
  * =========================================================================
+ * THE SIXTH COLUMN IS NOT THE DESIGN'S, AND IT IS NEW RATHER THAN RESTORED
+ * =========================================================================
+ * The design's table has five columns and they are transcribed above. "Vouchers"
+ * is a sixth, added because `api/src/routes/vouchers.ts` shipped four endpoints
+ * that no client consumed and the design bundle draws no surface for them
+ * anywhere — `grep -ril 'coupon\|voucher\|compensat' design/` is empty. So this
+ * is a new control on a settled screen, marked as one.
+ *
+ * IT IS THE `Name ›` BUTTON'S PLACE AND DELIBERATELY NOT ITS FORM. The design's
+ * name link promises a customer PROFILE — phone, tier, stamp card, history — and
+ * absence 1 above is why it is not drawn. Making that link open a voucher panel
+ * instead would satisfy the letter of "a button that opens something" and break
+ * the whole point of the rule: it would be a control that opens the wrong thing.
+ * A separate button, labelled for exactly what it opens, is the honest shape.
+ *
+ * CUSTOMERS ONLY. A voucher is bound to a `member`; `POST /v1/vouchers` answers
+ * 404 `unknown_member` for a `staff_user` id — driven, against a real seeded staff
+ * row — so a staff line renders no button rather than one that 404s. The refusal
+ * is the server's; this is the courtesy over it.
+ *
+ * NOT OFFERED ON A TOMBSTONE, for the same reason the reset button is not: the
+ * issue endpoint refuses an erased member 409 `member_erased` one step BEFORE it
+ * writes, "so an unredeemable voucher is never created". A deletion-requested
+ * account still gets the button — she is still a customer with a live wallet, and
+ * the API issues to her.
+ *
+ * =========================================================================
  * THE SEARCH BOX, AND THE ONE WORD DELIBERATELY REMOVED FROM ITS PLACEHOLDER
  * =========================================================================
  * The design's placeholder is "Search name, salon or role" and its mock filters
@@ -131,6 +159,25 @@ export function ConsoleAccounts() {
    */
   const [sent, setSent] = useState<Record<string, true>>({});
 
+  /*
+   * THE OPEN VOUCHER PANEL, HELD AS THE ROW ITSELF AND NOT AS AN ID.
+   *
+   * `AccountVouchers` needs the customer's NAME for its heading and its empty
+   * state, and no endpoint serves one for a single account — absence 1 above. So
+   * the row hands over the `PlatformAccount` it already has. Holding an id and
+   * looking it back up in `rows` would work until the search box filtered the row
+   * away underneath an open panel, at which point the heading would lose the name
+   * it is titled with.
+   *
+   * ONE AT A TIME, AND IT CLOSES WHEN EITHER FILTER MOVES. A panel that survived
+   * a search would sit under a table that no longer contains the row it belongs
+   * to — the panel's own heading would be the only thing on screen naming its
+   * subject, which is the disappearing-context defect the reset error above is
+   * placed to avoid, in slower motion. Closed in the two handlers rather than in
+   * an effect, so the rule lives where the change happens.
+   */
+  const [openVouchers, setOpenVouchers] = useState<PlatformAccount | null>(null);
+
   if (accounts.isError) {
     return (
       <SectionError
@@ -161,7 +208,10 @@ export function ConsoleAccounts() {
           className="avo-input accounts-console__search"
           type="search"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setOpenVouchers(null);
+          }}
           placeholder="Search name or salon"
           aria-label="Search every account on the platform"
         />
@@ -172,7 +222,10 @@ export function ConsoleAccounts() {
         <Segmented<AccountRoleFilter>
           label="Filter by role"
           value={role}
-          onChange={setRole}
+          onChange={(next) => {
+            setRole(next);
+            setOpenVouchers(null);
+          }}
           options={[
             { value: 'all', label: 'All' },
             { value: 'customer', label: 'Customers' },
@@ -209,13 +262,15 @@ export function ConsoleAccounts() {
                 <th scope="col">Role</th>
                 <th scope="col">Password</th>
                 <th scope="col">Active</th>
+                {/* Not the design's. See the header § the sixth column. */}
+                <th scope="col">Vouchers</th>
               </tr>
             </thead>
             <tbody>
               {accounts.isPending ? (
                 [0, 1, 2, 3, 4, 5, 6].map((n) => (
                   <tr key={n}>
-                    {[0, 1, 2, 3, 4].map((c) => (
+                    {[0, 1, 2, 3, 4, 5].map((c) => (
                       <td key={c}>
                         <Skeleton width={`${80 - c * 9}%`} height={13} />
                       </td>
@@ -224,7 +279,7 @@ export function ConsoleAccounts() {
                 ))
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="accounts-console__empty">
+                  <td colSpan={6} className="accounts-console__empty">
                     {filtered ? (
                       /*
                        * NAMES WHAT IT FILTERED. "No accounts" under an invisible
@@ -259,6 +314,10 @@ export function ConsoleAccounts() {
                     account={account}
                     sent={sent[account.id] === true}
                     sending={reset.isPending && reset.variables?.id === account.id}
+                    vouchersOpen={openVouchers?.id === account.id}
+                    onVouchers={() =>
+                      setOpenVouchers((open) => (open?.id === account.id ? null : account))
+                    }
                     onSend={() => {
                       reset.mutate(
                         { id: account.id, kind: account.kind },
@@ -272,6 +331,20 @@ export function ConsoleAccounts() {
           </table>
         </div>
       </Card>
+
+      {/*
+        THE PANEL, BELOW THE TABLE AND NOT OVER IT. A modal would have to trap
+        focus and return it to a trigger that a refetch can unmount; this is a
+        region the opening button points at with `aria-controls`, so a keyboard
+        user tabs straight into it and Close returns her to the list.
+      */}
+      {openVouchers !== null ? (
+        <AccountVouchers
+          account={openVouchers}
+          panelId={`vouchers-${openVouchers.id}`}
+          onClose={() => setOpenVouchers(null)}
+        />
+      ) : null}
 
       {accounts.hasNextPage ? (
         <div className="accounts-console__more">
@@ -343,16 +416,20 @@ const STATUS_TONE: Record<PlatformAccount['status'], 'brand' | 'warn' | 'danger'
   deactivated: 'quiet',
 };
 
-function AccountRow({
+export function AccountRow({
   account,
   sent,
   sending,
   onSend,
+  vouchersOpen,
+  onVouchers,
 }: {
   account: PlatformAccount;
   sent: boolean;
   sending: boolean;
   onSend: () => void;
+  vouchersOpen: boolean;
+  onVouchers: () => void;
 }) {
   /*
    * THE ONE DISABLED STATE, AND THE SERVER INVITED IT.
@@ -427,6 +504,33 @@ function AccountRow({
       </td>
       <td>
         <Pill tone={STATUS_TONE[account.status]}>{STATUS_LABEL[account.status]}</Pill>
+      </td>
+      <td>
+        {/*
+          CUSTOMERS ONLY, AND NOT A TOMBSTONE — the header § the sixth column has
+          both refusals and where the server states each. A staff row and an
+          erased member render NOTHING here rather than a disabled button: a
+          disabled control says "not right now", and for a `staff_user` the answer
+          is "never, this is not a thing staff hold".
+
+          `aria-controls` IS SPREAD IN ONLY WHILE THE PANEL EXISTS. Pointing at an
+          id that is not in the document is worse than pointing at nothing — a
+          screen reader following it lands on no element and reports the control as
+          broken rather than as closed. `aria-expanded` carries the state on its
+          own when there is nothing to point at.
+        */}
+        {account.kind === 'customer' && !erased ? (
+          <Button
+            variant="secondary"
+            className="accounts-console__vouchers"
+            onClick={onVouchers}
+            aria-expanded={vouchersOpen}
+            {...(vouchersOpen ? { 'aria-controls': `vouchers-${account.id}` } : {})}
+            aria-label={`${vouchersOpen ? 'Hide' : 'Show'} vouchers for ${account.name}`}
+          >
+            {vouchersOpen ? 'Hide' : 'Vouchers'}
+          </Button>
+        ) : null}
       </td>
     </tr>
   );

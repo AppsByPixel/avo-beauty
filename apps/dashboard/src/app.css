@@ -5772,8 +5772,13 @@ a:hover {
 
 /*
  * interaction-spec.md §1: "Data tables never drop columns responsively… Scroll
- * the table, keep the header row sticky." Five columns, so the min-width is the
- * audit log's less one column's worth.
+ * the table, keep the header row sticky."
+ *
+ * SIX COLUMNS NOW, NOT FIVE. This comment read "Five columns, so the min-width is
+ * the audit log's less one column's worth" and stayed that way through the commit
+ * that added the Vouchers column — the exact comment-rot this file's siblings
+ * catalogue. The min-width moves with the column count, so both halves are
+ * corrected rather than only the sentence.
  */
 .accounts-console__scroll {
   overflow-x: auto;
@@ -5783,7 +5788,7 @@ a:hover {
 
 .accounts-console__table {
   width: 100%;
-  min-width: 720px;
+  min-width: 840px;
   border-collapse: collapse;
   font-size: 13.5px;
   text-align: left;
@@ -5856,6 +5861,181 @@ a:hover {
 
 .accounts-console__more {
   margin-top: 14px;
+}
+
+.accounts-console__vouchers {
+  padding: 8px 14px;
+  font-size: 12.5px;
+}
+
+/* ============================================================== vouchers == */
+
+/*
+ * Console → Accounts → one customer's AVO vouchers.
+ *
+ * NO DESIGN FILE TO CITE, and every other block in this stylesheet cites one.
+ * `design/` draws no voucher surface anywhere — see
+ * `routes/console/AccountVouchers.tsx` § the design bundle draws no voucher
+ * surface. So the spacing below is taken from the nearest drawn neighbours rather
+ * than invented against nothing: the card padding and radius are the Accounts
+ * card's, the row rhythm is the Admins card list's, and the form grid is the
+ * Admins invite grid's three-up.
+ *
+ * Every colour resolves through a token. No hex is written here, not even in a
+ * comment — a literal in a comment is the one that survives a white-label change
+ * and then disagrees with the token it claims to document.
+ */
+.vouchers {
+  margin-top: 14px;
+  overflow: hidden;
+}
+
+.vouchers__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
+.vouchers__h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.vouchers__body {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.vouchers__h3 {
+  font-family: var(--avo-font-display);
+  font-size: 13.5px;
+  margin: 0 0 10px;
+}
+
+.vouchers__form {
+  border: 1px solid var(--avo-hairline);
+  border-radius: var(--avo-radius-card);
+  padding: 16px;
+  background: var(--avo-surface-alt);
+}
+
+.vouchers__formgrid {
+  display: grid;
+  grid-template-columns: 140px minmax(220px, 1fr) 170px;
+  gap: 12px;
+  align-items: end;
+}
+
+/*
+ * interaction-spec.md §1 — the console's own narrow breakpoint. The three fields
+ * stack rather than the amount cell shrinking below the width `0.000` needs:
+ * money that wraps mid-number is the one thing on this form that must not.
+ */
+@media (max-width: 900px) {
+  .vouchers__formgrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.vouchers__unit,
+.vouchers__count {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.vouchers__note {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin: 12px 0 0;
+  line-height: 1.5;
+}
+
+.vouchers__formactions {
+  margin-top: 12px;
+}
+
+.vouchers__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vouchers__row {
+  border: 1px solid var(--avo-hairline);
+  border-radius: var(--avo-radius-card);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/*
+ * A DEAD ROW IS QUIETER, NOT HIDDEN. A redeemed or voided voucher is the record of
+ * something that happened to this customer's money, and an admin reading the list
+ * is usually reading it for exactly those. The state pill carries the meaning;
+ * this only stops four spent rows shouting as loudly as the one live one.
+ */
+.vouchers__row[data-state='redeemed'],
+.vouchers__row[data-state='void'],
+.vouchers__row[data-state='expired'] {
+  background: var(--avo-surface-alt);
+}
+
+.vouchers__rowtop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.vouchers__amount {
+  font-family: var(--avo-font-display);
+  font-size: 16px;
+}
+
+/*
+ * The code is read aloud and typed back in, so it is tracked wide and monospaced:
+ * the server mints it from an alphabet with no I, O, 1 or 0 precisely because a
+ * person reads it off a screen, and a proportional font gives that back.
+ */
+.vouchers__code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  background: var(--avo-surface-alt2);
+  border-radius: var(--avo-radius-chip);
+  padding: 3px 8px;
+}
+
+.vouchers__reason {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.vouchers__meta {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+.vouchers__rowactions {
+  margin-top: 4px;
+}
+
+.vouchers__truncated {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+  margin: 10px 0 0;
 }
 
 /* =================================================================== shop == */
