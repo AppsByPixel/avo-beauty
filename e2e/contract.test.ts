@@ -122,6 +122,8 @@ import {
   SupportTicketSchema,
   TopUpIntentPublicSchema,
   TransactionSchema,
+  VoucherRedemptionSchema,
+  VoucherSchema,
   WalletTokenSchema,
   countedPage,
   paginated,
@@ -888,6 +890,131 @@ function probes(): Probe[] {
           'regression that puts the link straight back.',
       },
     },
+    /**
+     * =====================================================================
+     * ITEM 10 — AVO ISSUES, AVO LISTS, AVO VOIDS, SHE REDEEMS.
+     * =====================================================================
+     * FOUR ROUTES, FOUR PROBES, AND ONLY ONE OF THEM IS A GET. The census below
+     * is GETs only, so `GET /v1/vouchers` is the sole voucher route it can
+     * demand — which is exactly why the other three are written here by hand.
+     * Two clients grew independent readers of this shape before any schema
+     * existed, and the drift guard could see NEITHER — on a money path. Read
+     * back at the time of writing rather than taken from the brief:
+     * `apps/wallet/src/api/vouchers.ts` now imports `VoucherRedemptionSchema`
+     * from `@avo/types` and its own header records that trunk moved it, citing
+     * this file's guard as the reason; `apps/dashboard/src/api/vouchers.ts`
+     * KEEPS its hand-rolled `interface Voucher` plus per-field coercion, which
+     * is that app's house style — it has no zod dependency at all. So one of the
+     * two readers is now the shared schema and the other is checked against the
+     * same wire by these probes. That is the whole value on offer here: the
+     * console's hand parser and the wallet's zod parser can no longer disagree
+     * about a field without one of them going red.
+     *
+     * `POST /v1/vouchers` AND `DELETE /v1/vouchers/:id` SERVE THE SAME ENVELOPE,
+     * `{ voucher }`, and are probed separately rather than once. They are two
+     * different rows through one serialiser: the POST witnesses a LIVE voucher
+     * (`redeemable: true`, three nulls and a real `expiresAt`) and the DELETE
+     * witnesses a VOIDED one (`voidedAt` populated, `redeemable: false`). A
+     * single probe would exercise whichever state happened to be sampled and
+     * would say nothing about the other, and `redeemable` is the field a client
+     * must not re-derive — so both of its values are worth witnessing.
+     *
+     * THE LIST BINDS THROUGH `paginated()`, AND THE BRIEF THAT ASKED FOR THESE
+     * PROBES WAS WRONG ABOUT THAT — recorded because the correction is the
+     * reason to read the handler rather than the report, and because the report
+     * was not wrong so much as about a different thing.
+     *
+     * The brief relayed lane C as having found `{ items, truncated }` with a
+     * 200-row cap, "NOT `nextCursor`". `routes/vouchers.ts:262-267` serves all
+     * THREE keys — `items`, `truncated`, and `nextCursor` as a hardcoded `null`.
+     * What lane C actually decided is in `apps/dashboard/src/api/vouchers.ts`:
+     * its `interface VoucherList` declares `items` and `truncated` and no
+     * cursor, with a comment saying the omission IS the decision ("a client that
+     * grew a 'load more' off it would page for ever on a cursor that never
+     * advances"). That is a statement about the CLIENT, and it travelled one hop
+     * as a statement about the wire.
+     *
+     * The distinction is this census's whole subject, in the direction it is
+     * hardest to see: what a client chooses not to read is not what the server
+     * does not send. So `paginated()` is the helper that matches the wire —
+     * `truncated` annotated `wireOnly`, exactly as both order lists above are —
+     * and `countedPage()` is still the wrong one, for the reason the old
+     * `UNMODELLED` entry gave: `truncated` is a cap flag, not a `total`.
+     *
+     * AND THE HALF OF THAT NEITHER DIRECTION OF THIS GUARD CAN SEE, said out
+     * loud rather than left implied: `nextCursor` is declared by `paginated()`
+     * and served as a literal `null` by a handler that does not page at all. It
+     * is therefore neither stripped nor invented, and both specs below pass over
+     * it in silence. That is a real gap in what this file proves and it is not
+     * one a `wireOnly` entry can close — `wireOnly` names keys NO schema models,
+     * and this one is modelled. It is named here because `GET /salons/{id}/
+     * bookings` shipped the identical lie and it took a person to notice.
+     */
+    {
+      route: 'POST /v1/vouchers',
+      label: 'POST /v1/vouchers',
+      schemaName: 'VoucherSchema',
+      schema: VoucherSchema,
+      select: 'voucher',
+      /**
+       * `select: 'voucher'` FOR THE REASON `GET /v1/platform/salons/:id` HAS ONE:
+       * the modelled shape is the nested entity and the envelope is deliberate. A
+       * flattened response would take `$.voucher` with it and this probe would go
+       * red, which is the point.
+       */
+    },
+    {
+      route: 'GET /v1/vouchers',
+      label: 'GET /v1/vouchers',
+      schemaName: 'paginated(VoucherSchema)',
+      schema: paginated(VoucherSchema),
+      /**
+       * THREE ROWS BY CONSTRUCTION — `beforeAll` issues one, voids a second and
+       * redeems a third, so this page carries a live voucher, a void one and a
+       * redeemed one rather than whatever the seed happened to leave. The seed
+       * creates NO voucher at all, so without those writes this probe would
+       * compare `VoucherSchema` against zero objects and could not fail.
+       */
+      requireNonEmpty: ['items'],
+      wireOnly: {
+        '$.truncated':
+          'the 200-row cap, said out loud — the handler\'s own words are "a cap, said out ' +
+          'loud rather than a `nextCursor: null` that lies". The same key as both order ' +
+          'lists above, annotated for the same reason: it describes a limitation of THIS ' +
+          'ENDPOINT rather than a property of a voucher, so it belongs to no entity schema. ' +
+          'It is also not a `total`, which is why this binds through paginated() and not ' +
+          'countedPage(). The day a real cursor lands, delete this note and the two above it.',
+      },
+    },
+    {
+      route: 'DELETE /v1/vouchers/:id',
+      label: 'DELETE /v1/vouchers/{id}',
+      schemaName: 'VoucherSchema',
+      schema: VoucherSchema,
+      select: 'voucher',
+      /**
+       * THE VOIDED ROW, AND IT IS SERIALISED FROM THE PRE-UPDATE `returning()`
+       * VALUE — so this probe is also the one place the suite would notice if the
+       * void response ever stopped carrying the `voidedAt` it just wrote. The
+       * console renders "Voided 14:32" off exactly that field.
+       */
+    },
+    {
+      route: 'POST /members/me/vouchers/redeem',
+      label: 'POST /members/me/vouchers/redeem',
+      schemaName: 'VoucherRedemptionSchema',
+      schema: VoucherRedemptionSchema,
+      /**
+       * NO `select` — this response IS the modelled shape, `{ voucher,
+       * creditedFils, balanceAfterFils }`, and the wrapper schema is what makes
+       * the two money fields part of the contract rather than two numbers a
+       * client hopes are there. `balanceAfterFils` is written inside the same
+       * transaction as the credit and the ledger pair, so it is the only balance
+       * on this surface safe to show; a stripped `balanceAfterFils` would push
+       * the wallet back onto adding `creditedFils` to a number it was holding,
+       * which is non-negotiable #2 broken by omission.
+       */
+    },
   ];
 }
 
@@ -1236,80 +1363,22 @@ const UNMODELLED: Record<string, string> = {
     'requireSalonScoped plus the image\'s own salon, deliberately no permission — is ' +
     'pinned in permission-census.test.ts\'s classification ledger.',
   /**
-   * THE CONSOLE'S VOUCHER LIST, arriving with lane A's `routes/vouchers.ts` on dev
-   * `a1be122` — and the first surface this census named a SLICE LATE rather than on
-   * the first run after the merge.
+   * `GET /v1/vouchers` WAS HERE, AND IS NOW A PROBE. The long entry that stood in
+   * this slot argued that a `VoucherSchema` "would fit it exactly and is worth
+   * having — a trunk/types decision rather than lane D's". Trunk landed
+   * `VoucherSchema` and `VoucherRedemptionSchema`; the four voucher probes at the
+   * bottom of `probes()` are what replaced this line.
    *
-   * NO ORDINAL ON THIS ONE, DELIBERATELY. The other arrival notes in this file count
-   * themselves ("the fourth new surface", "the sixth") and the sequence has already
-   * broken: :715 and :1120 both say FIFTH. That is a hand-maintained tally nothing
-   * executes — the same class of claim as an `UNMODELLED` reason, and this block is
-   * about a hand-copied count being wrong, so adding a number I cannot substantiate
-   * would be the defect it describes. The two stale `fifth`s are reported to trunk.
-   * Worth separating those two facts: the census caught it by name and with the file
-   * the moment it was run, exactly as designed; what was late was the RUN, because
-   * item 10 merged after the lane D brief that registered item 7's ledgers. The
-   * mechanism did not miss it, the queue was out of order.
+   * Removed rather than left in place with a note, because an `UNMODELLED` entry
+   * for a route that HAS a schema is the one direction this census must never be
+   * wrong in: a route recorded as unmodelled is a route nobody compares.
    *
-   * ONLY THE GET IS HERE. This census is GETs, so `POST /v1/vouchers`,
-   * `DELETE /v1/vouchers/:id` and `POST /members/me/vouchers/redeem` are outside it
-   * — all three are registered and behaviourally driven in `permission-census.test.ts`
-   * instead, and the redeem endpoint's money path is lane A's `vouchers.int.test.ts`.
-   *
-   * UNMODELLED, AND THE CLAIM WAS CHECKED AGAINST `dev` AS IT IS RATHER THAN AS I
-   * REMEMBERED IT. `grep -rni voucher packages/` at `844277a` returns ZERO matches
-   * outside `node_modules` and `dist` — no `VoucherSchema`, no wrapper, and nothing
-   * in `packages/mock` either. Grepped the whole of `packages/`, not just
-   * `packages/types/src`, because the item 7 block above records three `UNMODELLED`
-   * entries whose reason "there is no schema" was FALSE BEFORE THEY WERE COMMITTED:
-   * trunk landed `MemberAddressSchema`, `OrderStatusSchema` and `ShopOrderSchema` in
-   * `65ab72e` while the entries were being written. No spec can catch that — the
-   * unclassified check cannot tell a sound reason from a false one, both are just a
-   * key in a map — so re-reading `dev` before committing IS the guard, and this line
-   * is the second time it has been applied deliberately.
-   *
-   * SO THIS IS A GENUINELY MISSING SCHEMA, NOT A ROUTE THAT IS NOT THE ENTITY.
-   * Unlike the two booking lists and the scanner's member search, this response
-   * really is an entity list wearing a wrapper: `serialiseVoucher` is the `voucher`
-   * row plus ONE derived boolean. So a `VoucherSchema` would fit it exactly, and it
-   * is worth having — a trunk/types decision rather than lane D's.
-   *
-   * NO WIRE-PIN IS OWED YET, and that is the difference between this entry and the
-   * notifications/deletion/policy-acceptance ones, which are pinned at the bottom of
-   * this file precisely because the wallet is already built against them. Grepped:
-   * `voucher` appears NOWHERE in `apps/dashboard/src`, `apps/wallet/src` or
-   * `packages/mock/src`. There is no client to drift from. The hour lane C wires the
-   * Accounts panel's voucher list, this entry is worth revisiting as a wire-pin —
-   * because at that point "unmodelled" becomes the whole of the guard on a shape a
-   * screen renders, which is the argument those three entries make.
-   *
-   * TWO THINGS FOR WHOEVER WRITES THE SCHEMA, both of them traps this file has
-   * already been bitten by once:
-   *
-   *   - IT SERVES `{ items, truncated, nextCursor }` — `paginated()`, with
-   *     `truncated` annotated `wireOnly`, exactly as both order lists above are.
-   *     NOT `countedPage()`: `truncated` is a boolean saying the 200-row cap was hit,
-   *     not a `total`.
-   *   - `nextCursor` IS A HARDCODED `null` AND THIS ROUTE DOES NOT PAGE AT ALL. The
-   *     same shape `GET /salons/:id/devices` is annotated for, and the same lie
-   *     `GET /salons/{id}/bookings` was fixed for. A schema binding it would make
-   *     that literal look like a cursor contract this handler honours.
+   * The two traps the old entry left for whoever wrote the schema were both real
+   * and are both discharged at the probe: it serves `{items, truncated,
+   * nextCursor}`, so it binds through `paginated()` with `truncated` annotated
+   * `wireOnly` — never `countedPage()`, because `truncated` is a cap flag and not
+   * a `total`.
    */
-  'GET /v1/vouchers':
-    'the owner console\'s voucher list — AVO-issued credit instruments, newest first, ' +
-    'behind requirePlatform(accounts). No schema in packages/types: `voucher` appears ' +
-    'nowhere under packages/ at 844277a, grepped rather than remembered. Unlike the ' +
-    'booking lists this IS an entity list wearing a wrapper — a voucher row plus a ' +
-    'derived `redeemable` computed from redeemedAt/voidedAt/expiresAt — so a ' +
-    'VoucherSchema would fit and is worth having (trunk/types, not lane D). It serves ' +
-    '{items, truncated, nextCursor} with `truncated` the 200-row cap and `nextCursor` a ' +
-    'hardcoded null this route does not implement, so it binds through paginated() with ' +
-    '`truncated` wireOnly, never countedPage(). No client parses it yet — `voucher` is ' +
-    'absent from dashboard, wallet and mock — which is why it is not wire-pinned like the ' +
-    'notifications and deletion reads. Its gate is driven behaviourally by the generated ' +
-    'console sweep in permission-census.test.ts, section-isolated and copy-discriminated; ' +
-    'what `accounts` grants, and the `support` preset that holds it, are written up at ' +
-    'that file\'s `POST /v1/vouchers` pin.',
   'GET /_gateway/:ref':
     'the sandbox PSP\'s hosted page. Serves HTML to a browser, not JSON to a client, ' +
     'and exists only under the test driver.',
@@ -1713,6 +1782,87 @@ beforeAll(async () => {
   }
   captured.set('GET /members/me/policy-acceptance', policyRead);
 
+  // ---- item 10: a voucher issued, one voided, one redeemed --------------------
+  /**
+   * THREE VOUCHERS, ONE MEMBER, AND THE ORDER IS LOAD-BEARING IN BOTH DIRECTIONS.
+   *
+   * AFTER THE DELETION BLOCK, because `POST /members/me/deletion` answers 409
+   * while there is credit in the wallet and the redeem below puts 3.000 KD into
+   * it. Written before that block, this would not fail here — it would fail
+   * THERE, with a `balance_outstanding` that reads like the seed gave her credit.
+   *
+   * ON `PIN_MEMBER` RATHER THAN `QA_MEMBER`, for the reason that row exists at
+   * all: she is this file's own member, reset to zero on every boot, and no other
+   * file in this directory names her. A redemption writes a `transaction`, a
+   * `ledger_entry` pair and an `audit_log` row, and QA_MEMBER's numbers are what
+   * `gateway.test.ts` measures its deltas against.
+   *
+   * ISSUED THROUGH THE CONSOLE, NOT SEEDED. `api/src/db/seed.ts` creates no
+   * voucher at all, so the list probe would otherwise witness the envelope and
+   * nothing inside it — rule 2, the trap `GET /salons/{id}/products` sat in until
+   * a product was seeded. Driving the real endpoint also means the sample is
+   * whatever `serialiseVoucher` actually produces rather than what a fixture
+   * says it produces.
+   */
+  const issueVoucher = async (what: string, body: Record<string, unknown>) => {
+    const res = await treq<any>('POST', '/v1/vouchers', { token: platform, body });
+    if (res.status !== 201) {
+      throw new Error(
+        `POST /v1/vouchers (${what}): ${res.status} ${res.raw}\n` +
+          'This route is gated requirePlatform(accounts); a 403 here means the console ' +
+          'credential lost that section, which is permission-census.test.ts\'s subject.',
+      );
+    }
+    return res;
+  };
+
+  /**
+   * A REAL `expiresAt`, and it is the only one of the three that carries one.
+   * `VoucherSchema.expiresAt` is `DateTimeSchema.nullable()`, so a page of three
+   * nulls would satisfy it while never exercising the instant branch — the same
+   * shape as drift (4), where every sampled slot happened to carry the field.
+   */
+  const issuedVoucher = await issueVoucher('the live sample', {
+    memberId: PIN_MEMBER,
+    amountFils: 2_500,
+    reason: 'contract probe · live',
+    expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  });
+  captured.set('POST /v1/vouchers', issuedVoucher);
+
+  const toVoid = await issueVoucher('the void sample', {
+    memberId: PIN_MEMBER,
+    amountFils: 1_500,
+    reason: 'contract probe · void',
+  });
+  const voidedVoucher = await treq<any>('DELETE', `/v1/vouchers/${toVoid.body?.voucher?.id}`, {
+    token: platform,
+  });
+  if (voidedVoucher.status !== 200) {
+    throw new Error(`DELETE /v1/vouchers/{id}: ${voidedVoucher.status} ${voidedVoucher.raw}`);
+  }
+  captured.set('DELETE /v1/vouchers/{id}', voidedVoucher);
+
+  const toRedeem = await issueVoucher('the redeemed sample', {
+    memberId: PIN_MEMBER,
+    amountFils: 3_000,
+    reason: 'contract probe · redeem',
+  });
+  const redeemed = await treq<any>('POST', '/members/me/vouchers/redeem', {
+    token: pinMember,
+    idempotencyKey: key('voucher-redeem'),
+    body: { code: toRedeem.body?.voucher?.code },
+  });
+  if (redeemed.status !== 200) {
+    throw new Error(
+      `POST /members/me/vouchers/redeem: ${redeemed.status} ${redeemed.raw}\n` +
+        'A 409 voucher_not_redeemable here means the voucher this hook just issued is not ' +
+        'live — which is a defect in issuing or in the REDEEMABLE predicate, not a fixture ' +
+        'problem. e2e/voucher-refusal.test.ts is where that one answer is pinned.',
+    );
+  }
+  captured.set('POST /members/me/vouchers/redeem', redeemed);
+
   // ---- a support ticket -------------------------------------------------------
   const ticket = await treq<any>('POST', '/v1/support/tickets', {
     token: member,
@@ -1783,6 +1933,14 @@ beforeAll(async () => {
      * key that only appears on the wide one.
      */
     ['GET /v1/support/tickets', '/v1/support/tickets', platform],
+    /**
+     * THE CONSOLE'S VOUCHER LIST, unfiltered — `?memberId=` narrows it and is NOT
+     * what is probed. The narrow read serves the same rows through the same
+     * serialiser, so a probe on it would be a second spec that cannot fail
+     * differently; the unfiltered page is the WIDER sample, and it is the one
+     * carrying all three of this run's vouchers in three different states.
+     */
+    ['GET /v1/vouchers', '/v1/vouchers', platform],
     ['GET /topups/{id}', `/topups/${topUpId}`, member],
   ];
 
