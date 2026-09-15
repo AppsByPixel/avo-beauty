@@ -120,12 +120,74 @@ happen. In order of what it costs to skip:
 - **`job:campaign-release`** and **`job:erasure`** — both are deliberate manual
   passes today; a schedule would be a new behaviour, not a restored one.
 - **the receipt worker** — costs nothing while `RECEIPT_DRIVER=logging`, because
-  nothing is sent in that configuration anyway. It starts costing the moment a
-  real driver is selected: receipts queue in `receipt_job` and nobody drains them.
+  nothing is sent in that configuration anyway. **That moment has arrived:
+  `RECEIPT_DRIVER=email` exists** (below), and selecting it on a serverless
+  deployment is now the most expensive absence on this list. It has its own
+  one-shot: `pnpm run job:receipt-drain`.
 
 **No HTTP endpoints were added for these.** A cron platform calls URLs, so wiring
 them would mean new routes, which is a product change (CLAUDE.md: "Do not add
 features"). Decide it, then build it.
+
+### An email receipt driver exists now: `RECEIPT_DRIVER=email`
+
+`src/receipts/email/` is an email sender behind the same seam — a directory of
+new files, one case in `receipts/index.ts`, four variables in `env.ts`. **No
+SDK**: `resend` on npm would mean a new entry in the workspace-root
+`pnpm-lock.yaml`, outside `api/`, and the API is one POST reached with the
+runtime's own `fetch`. `logging` remains the default and is not deprecated by it.
+
+**It handles the email channel only**, which makes `processJob`'s give-back
+branch execute in production for the first time: under this driver every
+`whatsapp` row is claimed, handed back to `queued` with its attempt returned, and
+never sent. That is correct — it is waiting for a driver that can — and it is
+**silent**, because a re-queued row is not a failed one and writes no audit.
+
+**It settles nothing about the sending domain.** CLAUDE.md § Escalate still owns
+"whether receipts send from AVO's domain or per-salon subdomains", which is what
+decides where SPF and DKIM records go. `RECEIPT_EMAIL_FROM_ADDRESS` has no
+default and expresses both answers — written plainly it is one domain, written
+with `{salon}` it is per-salon subdomains. The display name is always the salon's
+(`whatsapp-templates.md`). The API refuses to boot with `RECEIPT_DRIVER=email` and
+either that or `RECEIPT_EMAIL_API_KEY` unset, naming whichever is missing.
+
+**What it sends is plain text, and that is a reported gap rather than a
+preference.** `design/AVO Receipt Email.html` is a finished template, and
+`receipt_job.payload` cannot fill it: the salon's address, phone and brand hex,
+the human receipt reference, the settled timestamp, the staff member and device,
+the per-line artist and duration, the deposit applied, the balance *before*, the
+loyalty counter and the happy-hour note are none of them frozen at charge time.
+Rendering that markup with two thirds of its rows deleted would be a redesign of a
+settled design wearing the design's own styling. Widening `ReceiptPayload` across
+the five callers of `queueReceipts` is the slice that closes it. There is also **no
+Arabic receipt email in the bundle and no locale column on `member`**, so the
+composer is English-only; non-negotiable #12 makes that a gap worth naming.
+
+### Serverless + `RECEIPT_DRIVER=email` is a defect, not a limitation
+
+`src/serverless.ts` starts no loops. An undrained receipt is **not** a failed
+send: it stays `queued` with no attempt, no `last_error` and no `risk` audit row,
+because `markFailed` is the only thing that writes one and it is only reached by a
+job somebody claimed. So that configuration promises every customer a receipt and
+breaks the promise invisibly, with a merchant who now believes receipts send.
+Measured on a lane database, a `receipt_job` row costs ~3.4 kB with its two
+indexes (240-byte average payload), one or two rows per settled payment — so the
+table is the small half of the cost.
+
+Two configurations are safe:
+
+- **a process deployment.** `render.yaml` runs `server.ts`, `RECEIPT_WORKER_ENABLED`
+  defaults to `1`, and the outbox drains itself. `job:receipt-drain` is then only a
+  manual catch-up.
+- **serverless plus a scheduled `job:receipt-drain`** run from something that can
+  execute the repository against the database. Nothing here sets that up, and a
+  cron platform calls URLs rather than scripts — so this needs an external runner,
+  or the HTTP endpoint that was deliberately not added.
+
+`job:receipt-drain` repeats `runOnce` until a pass claims nothing or a 50-pass
+ceiling (1000 receipts at the default batch size), and says which. `gaveUp` is
+printed to stderr with the query that lists the rows, because each one is a
+customer who paid and was not told.
 
 ### Images break; they do not degrade
 

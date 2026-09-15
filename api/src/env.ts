@@ -282,12 +282,25 @@ const EnvSchema = z.object({
 
   // ------------------------------------------------------------ receipts --
   //
-  // Neither channel can be wired yet and neither is waiting on us:
-  // design/whatsapp-templates.md says the four templates are unapproved
-  // ("approval is not instant"), and CLAUDE.md § Escalate lists "whether
-  // receipts send from AVO's domain or per-salon subdomains" as an open client
-  // decision — which is what decides the sending domain's SPF/DKIM records. So
-  // the only driver is `logging`, behind the same seam as the gateway.
+  // TWO CHANNELS, AND THEY ARE NO LONGER BLOCKED BY THE SAME THING. This block
+  // said "neither channel can be wired yet"; that has been half true for a
+  // while and the half that changed is worth stating rather than deleting.
+  //
+  //   whatsapp  STILL BLOCKED, and not on us. design/whatsapp-templates.md:
+  //             the four templates are unapproved and "approval is not
+  //             instant". There is no template id to send against, so there is
+  //             no WhatsApp driver.
+  //
+  //   email     NO LONGER BLOCKED ON COPY. design/AVO Receipt Email.html is a
+  //             finished, send-ready template and design/README.md lists
+  //             "email receipts" among the gaps it has CLOSED. What is open is
+  //             the SENDING DOMAIN — CLAUDE.md § Escalate, "whether receipts
+  //             send from AVO's domain or per-salon subdomains" — which is what
+  //             decides where SPF and DKIM records go.
+  //
+  //             That is an OPERATOR'S VARIABLE, not a code decision, so it is
+  //             RECEIPT_EMAIL_FROM_ADDRESS with no default and both answers
+  //             expressible in it. See src/receipts/email/index.ts.
   // -------------------------------------------------------------- images --
   //
   // The FIRST image capability in this product. Where the bytes live is a client
@@ -396,7 +409,77 @@ const EnvSchema = z.object({
    */
   IMAGE_DETACHED_GRACE_HOURS: z.coerce.number().int().nonnegative().default(24),
 
-  RECEIPT_DRIVER: z.enum(['logging']).default('logging'),
+  /**
+   * `logging` stays the default, and the default is the whole point of it.
+   *
+   * It is not a stub: every test run, every developer's API and every
+   * environment that has not been given a mail credential drains its own outbox
+   * against a driver that cannot fail, which is how the worker, the claim, the
+   * backoff and the transient/permanent split got exercised long before a
+   * provider existed.
+   *
+   * NO PRODUCTION REFUSAL ON `logging`, deliberately, and the argument is
+   * images/disk.ts's rather than GATEWAY_DRIVER=sandbox's. A sandbox gateway
+   * FABRICATES a payment nobody made; a logging receipt fabricates nothing and
+   * simply does not send. Refusing to boot the whole API — charges, sign-in,
+   * the scanner — over a receipt capability would be the wrong trade, and it
+   * would be a SEVENTH production assertion added on this file's judgement.
+   * What the absence costs is written down instead: api/README.md § "What the
+   * absent background jobs cost", and go-live-checklist.md owns the tick.
+   */
+  RECEIPT_DRIVER: z.enum(['logging', 'email']).default('logging'),
+
+  /**
+   * ---------------------------------------------------------- email ---------
+   *
+   * WHICH POSTMAN, under RECEIPT_DRIVER=email. One value today, for exactly the
+   * reason RECEIPT_DRIVER had one value yesterday — and the enum exists so the
+   * second one is a file and a case rather than an edit to anything that knows
+   * what a receipt says. src/receipts/email/transport.ts carries the argument
+   * for HTTP over SMTP and its cost.
+   */
+  RECEIPT_EMAIL_TRANSPORT: z.enum(['resend']).default('resend'),
+
+  /**
+   * THE SENDING IDENTITY. NO DEFAULT, and this one is not only the credential
+   * rule — it is the open client decision.
+   *
+   * CLAUDE.md § Escalate: "Whether receipts send from AVO's domain or per-salon
+   * subdomains" belongs to the client and has not been answered. Written plainly
+   * ("receipts@avo.beauty") this is the one-domain answer; written with the
+   * token `{salon}` ("receipts@{salon}.avo.beauty") it is the per-salon answer,
+   * substituted from the salon id. Both without touching code, which is what
+   * leaving a decision open has to mean.
+   *
+   * A DEFAULT HERE WOULD ANSWER IT BY ACCIDENT, which is the MyFatoorah block's
+   * rule ("a credential baked into a driver is how the live one gets committed")
+   * arriving as a product decision instead of a security one. The display name
+   * is NOT configurable: it is the salon's, per whatsapp-templates.md.
+   */
+  RECEIPT_EMAIL_FROM_ADDRESS: z.string().email().or(z.string().includes('{salon}')).optional(),
+
+  /**
+   * The transport credential. NO DEFAULT, NO VALUE ANYWHERE IN THIS REPOSITORY
+   * — not here, not in api/.env.example, not in a fixture, not in a comment.
+   * `.env.*` is gitignored by repo policy and this belongs in a secret manager.
+   * A mail API key sends mail AS the verified domain, which is the whole of the
+   * company's sending reputation.
+   */
+  RECEIPT_EMAIL_API_KEY: z.string().min(1).optional(),
+
+  /**
+   * The provider's endpoint. Optional and defaulted BY THE ADAPTER rather than
+   * here, because it is a published destination rather than a credential —
+   * overridable so a relay, a proxy or a regional endpoint is a variable.
+   */
+  RECEIPT_EMAIL_API_BASE_URL: z.string().url().optional(),
+
+  /**
+   * A ceiling on one send. Defaulted, like SUPABASE_STORAGE_TIMEOUT_MS and for
+   * the same reason: nothing is misdirected by getting it wrong. A timeout is a
+   * TRANSIENT failure, so the job comes back with its backoff intact.
+   */
+  RECEIPT_EMAIL_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 
   /**
    * THE WORKER IS ON BY DEFAULT. It was off, and the reason was coordination
@@ -607,6 +690,45 @@ if (raw.IMAGE_DRIVER === 'supabase') {
   }
 }
 
+/**
+ * The email receipt driver refuses to boot half-configured, naming the variable.
+ *
+ * NOT PRODUCTION-ONLY, for the third time and the third identical reason:
+ * selecting this driver at all means intending to send real mail to a real
+ * customer, and a driver that boots with no key sends `Bearer undefined`, gets a
+ * 401, and — because `transport.ts` classifies a non-throttling 4xx as
+ * PERMANENT — parks every receipt in the queue and writes a `risk` audit row per
+ * charge. That is the most expensive way this could fail, and it is the way it
+ * fails without this check: the operator debugs Resend instead of their own
+ * environment while the audit log fills with real customers who were not told.
+ *
+ * `RECEIPT_EMAIL_FROM_ADDRESS` is asserted beside the credential even though it
+ * is not one. It is the open client decision (CLAUDE.md § Escalate), and there
+ * is no safe value to fall back to: an address on an unverified domain is a
+ * permanent failure at the provider, and an address on somebody else's is worse.
+ */
+if (raw.RECEIPT_DRIVER === 'email') {
+  const missing = (
+    [
+      ['RECEIPT_EMAIL_FROM_ADDRESS', raw.RECEIPT_EMAIL_FROM_ADDRESS],
+      ['RECEIPT_EMAIL_API_KEY', raw.RECEIPT_EMAIL_API_KEY],
+    ] as const
+  )
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `RECEIPT_DRIVER=email requires ${missing.join(', ')}. ` +
+        'Neither RECEIPT_EMAIL_FROM_ADDRESS nor RECEIPT_EMAIL_API_KEY has a default, and ' +
+        'no value for either is committed in this repository. ' +
+        'RECEIPT_EMAIL_FROM_ADDRESS is the open client decision — CLAUDE.md § Escalate, ' +
+        '"whether receipts send from AVO\'s domain or per-salon subdomains" — and there is ' +
+        'no safe address to guess. See api/.env.example.',
+    );
+  }
+}
+
 if (raw.NODE_ENV === 'production' && !raw.GATEWAY_WEBHOOK_SECRET) {
   throw new Error(
     'GATEWAY_WEBHOOK_SECRET is required in production. Without it the webhook ' +
@@ -720,6 +842,11 @@ export const env = {
   imageMaxPixels: raw.IMAGE_MAX_PIXELS,
   imageDetachedGraceHours: raw.IMAGE_DETACHED_GRACE_HOURS,
   receiptDriver: raw.RECEIPT_DRIVER,
+  receiptEmailTransport: raw.RECEIPT_EMAIL_TRANSPORT,
+  receiptEmailFromAddress: raw.RECEIPT_EMAIL_FROM_ADDRESS,
+  receiptEmailApiKey: raw.RECEIPT_EMAIL_API_KEY,
+  receiptEmailApiBaseUrl: raw.RECEIPT_EMAIL_API_BASE_URL,
+  receiptEmailTimeoutMs: raw.RECEIPT_EMAIL_TIMEOUT_MS,
   receiptWorkerEnabled: raw.RECEIPT_WORKER_ENABLED,
   receiptPollMs: raw.RECEIPT_POLL_MS,
   receiptBatchSize: raw.RECEIPT_BATCH_SIZE,

@@ -15,13 +15,22 @@
  *             instant." The four templates are written and unapproved. There is
  *             no template id to send against.
  *
- *   Email     CLAUDE.md § Escalate: "Whether receipts send from AVO's domain or
- *             per-salon subdomains" is an open client decision, and it decides
- *             what gets SPF/DKIM records. There is no verified sending domain.
+ *   Email     NO LONGER BLOCKED, and this paragraph used to say it was.
+ *             `design/AVO Receipt Email.html` is a finished, send-ready template
+ *             and `design/README.md` lists "email receipts" among the gaps it has
+ *             CLOSED, so the copy this file assumed was missing has been there
+ *             the whole time.
  *
- * So the driver here logs. That is not a stub standing in for work that should
- * have been done — it is the only honest implementation while the two facts a
- * real sender needs do not exist.
+ *             What remains open is what it always was: CLAUDE.md § Escalate,
+ *             "whether receipts send from AVO's domain or per-salon subdomains",
+ *             which is what decides where SPF and DKIM records go. THAT IS AN
+ *             OPERATOR'S VARIABLE RATHER THAN A CODE DECISION — the sender has no
+ *             default and both answers are expressible in it — so it blocks a
+ *             DEPLOYMENT and does not block a driver. `email/` is that driver.
+ *
+ * So the driver here logs, and it is still the default: every test run and every
+ * environment without a mail credential uses it, and WhatsApp still has no
+ * adapter at all.
  *
  * THE VOCABULARY IS OURS
  * ----------------------
@@ -42,8 +51,52 @@
 /** The channels `receipt_job` is keyed on. */
 export type ReceiptChannel = 'whatsapp' | 'email';
 
+/**
+ * WHO A RECEIPT IS GOING TO, RESOLVED AT SEND TIME AND DELIBERATELY NOT FROZEN.
+ *
+ * `logging.ts` said a driver "would look it up", and that was the wrong half of
+ * the seam to put the lookup in. A driver that opens a database connection is
+ * not a driver, it is half a service: it makes every adapter depend on Drizzle,
+ * and it makes `receiptSender` -- a module-level singleton built at boot --
+ * reach for a `Db` the worker is already holding and already passing through
+ * `processJob`.
+ *
+ * SO THE WORKER RESOLVES IT. `services/receiptWorker.ts` does the read, inside
+ * `processJob`, immediately before the send.
+ *
+ * AND IT IS READ AT SEND TIME RATHER THAN FROZEN INTO `payload`, which is the
+ * opposite of the rule that governs everything else on this interface.
+ * `services/erasure.ts:437` sets `email` to NULL and `email_verified` to false
+ * when a member's erasure falls due. A receipt job outlives its transaction by
+ * design -- a parked row sits a century out -- so an address copied into
+ * `payload` at charge time is an address the erasure job structurally cannot
+ * reach, and the first thing a re-enabled worker would do is hand it to a third
+ * party. THE MONEY RECORD IS HISTORY AND IS FROZEN; THE DESTINATION IS NOT
+ * HISTORY AND IS NOT.
+ */
+export interface ReceiptAddressing {
+  /** The customer. `name` is NOT NULL on the row; `email` is neither. */
+  recipient: {
+    name: string;
+    email: string | null;
+    emailVerified: boolean;
+  };
+  /**
+   * THE SENDER IDENTITY IS THE SALON, NOT AVO -- whatsapp-templates.md, the
+   * rules that apply to all four templates: "The salon name, not 'AVO', is the
+   * sender identity. AVO is invisible to the customer."
+   * `design/AVO Receipt Email.html` says it again in its own footer: "Sent by
+   * AVO Beauty Technologies on behalf of Amara Salon."
+   *
+   * Resolved with the recipient and for the same reason: it is addressing, not
+   * money. What it is NOT is a licence to read the rest of the salon at send
+   * time -- see `email/compose.ts`.
+   */
+  salon: { id: string; name: string };
+}
+
 /** Everything a driver needs to deliver one receipt. */
-export interface ReceiptDelivery {
+export interface ReceiptDelivery extends ReceiptAddressing {
   jobId: string;
   channel: ReceiptChannel;
   transactionId: string;

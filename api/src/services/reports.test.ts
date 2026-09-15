@@ -158,10 +158,40 @@ describe('which exports are audited, and what the row may carry', () => {
     expect(REPORT_AUDITED['artist-performance']).toBe(true);
   });
 
-  it('does NOT audit the three that name days, services and products', () => {
+  /**
+   * FOUR NOW, not three - `earnings-by-branch` joins them, and it is the one an
+   * outside reader is most likely to expect on the other list. Its rows are
+   * BRANCHES: a place, not a person. And the money in them is already exportable
+   * unaudited through `sales`, one card to the left, so auditing the roll-up
+   * alone would be a control with a hole in it. See reports.ts § REPORT_AUDITED.
+   */
+  it('does NOT audit the four that name days, services, products and branches', () => {
     expect(REPORT_AUDITED.sales).toBe(false);
     expect(REPORT_AUDITED['best-selling-services']).toBe(false);
     expect(REPORT_AUDITED['products-sold']).toBe(false);
+    expect(REPORT_AUDITED['earnings-by-branch']).toBe(false);
+  });
+
+  /**
+   * THE PLUMBING IS THERE AND ONLY THE MAP DECIDES - which is the claim that
+   * matters, because the brief for this kind expected it to be audited
+   * automatically and it is not. Flipping `REPORT_AUDITED['earnings-by-branch']`
+   * to true is the whole change; the builder already formats the row, and this
+   * proves it rather than leaving the reader to check.
+   */
+  it('the audit builder already formats the branch kind, so flipping the map is enough', () => {
+    const row = reportExportAudit({
+      salonId: 'SAL-AMARA',
+      kind: 'earnings-by-branch',
+      branchId: null,
+      period: '90d',
+      rowCount: 2,
+      via: 'csv',
+    });
+    expect(row.detail).toContain('Earnings by branch');
+    expect(row.detail).toContain('all branches');
+    expect(row.detail).toContain('2 rows');
+    expect(row.subjectId).toBe('earnings-by-branch');
   });
 
   /**
@@ -301,6 +331,19 @@ describe('the permission map — #7, and the one that must not be `dashboard`', 
     expect(REPORT_PERMISSION.sales).toBe('dashboard');
     expect(REPORT_PERMISSION['best-selling-services']).toBe('appointments');
     expect(REPORT_PERMISSION['products-sold']).toBe('shop');
+  });
+
+  /**
+   * THE BRANCH ROLL-UP IS GATED EXACTLY AS `sales` IS, and the equality is the
+   * assertion rather than the literal: they are two groupings of ONE pile of
+   * money, so the day somebody re-gates one the other must move with it. Gating
+   * this kind more strictly would be theatre - the same figures come out of
+   * `sales` at `dashboard`, filtered or summed by hand.
+   */
+  it('gates earnings by branch exactly as it gates sales, because it is the same money', () => {
+    expect(REPORT_PERMISSION['earnings-by-branch']).toBe('dashboard');
+    expect(REPORT_PERMISSION['earnings-by-branch']).toBe(REPORT_PERMISSION.sales);
+    expect(REPORT_PERMISSION['earnings-by-branch']).not.toBe('team');
   });
 
   /**

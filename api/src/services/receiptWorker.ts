@@ -76,10 +76,17 @@
 
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
+import { member } from '../db/schema/member';
 import { receiptJob } from '../db/schema/receipt';
+import { salon } from '../db/schema/salon';
 import { transaction } from '../db/schema/transaction';
 import { env } from '../env';
-import { receiptSender, ReceiptPermanentError, type ReceiptChannel } from '../receipts';
+import {
+  receiptSender,
+  ReceiptPermanentError,
+  type ReceiptAddressing,
+  type ReceiptChannel,
+} from '../receipts';
 import { writeAudit } from './audit';
 
 /**
@@ -328,6 +335,48 @@ async function markFailed(
 }
 
 /**
+ * WHO THIS RECEIPT IS GOING TO AND WHO IT IS FROM, read at SEND time.
+ *
+ * ONE JOIN, NOT A SECOND CLAIM QUERY. It is deliberately not folded into
+ * `claimJobs`: that statement is the one thing in this file nothing is allowed to
+ * complicate, and a join in its `RETURNING` would widen a `FOR UPDATE SKIP
+ * LOCKED` scan to a second table for the sake of two columns. This runs after the
+ * claim, on rows this worker already owns exclusively, so it races nothing.
+ *
+ * AND IT IS READ HERE RATHER THAN FROZEN INTO `payload`, which inverts the rule
+ * that governs everything else the driver receives. `receipts/types.ts §
+ * ReceiptAddressing` carries the argument; the short form is
+ * `services/erasure.ts:437`. A member's erasure nulls her address, and a job
+ * parked a century out with the address baked into its jsonb is an address the
+ * erasure job structurally cannot reach.
+ *
+ * `null` means the member or the salon is gone. Both columns are FKs with
+ * `onDelete: 'restrict'`, so it cannot happen — and if it did, the caller treats
+ * it as PERMANENT rather than retrying a row whose recipient does not exist.
+ */
+async function addressingFor(db: Db, job: ClaimedJob): Promise<ReceiptAddressing | null> {
+  const [row] = await db
+    .select({
+      name: member.name,
+      email: member.email,
+      emailVerified: member.emailVerified,
+      salonId: salon.id,
+      salonName: salon.name,
+    })
+    .from(member)
+    .innerJoin(salon, eq(salon.id, member.salonId))
+    .where(eq(member.id, job.memberId))
+    .limit(1);
+
+  if (!row) return null;
+
+  return {
+    recipient: { name: row.name, email: row.email, emailVerified: row.emailVerified },
+    salon: { id: row.salonId, name: row.salonName },
+  };
+}
+
+/**
  * Send one claimed job. Never throws — a bad job must not stop the batch.
  *
  * `'lost'` is the fourth outcome and it is not a failure: it means the write was
@@ -368,6 +417,22 @@ export async function processJob(
   }
 
   try {
+    /**
+     * INSIDE THE `try`, on purpose. A database that falls over between the claim
+     * and the send is a transient failure of this attempt, and putting the read
+     * above the `try` would let it escape `processJob` — the function whose
+     * docblock promises it never throws — and abandon the rest of the batch in
+     * `sending` for a whole lease. That is precisely the defect
+     * receiptWorker.int.test.ts was written for, and it would have been
+     * reintroduced by a line that looks like setup.
+     */
+    const addressing = await addressingFor(db, job);
+    if (addressing === null) {
+      throw new ReceiptPermanentError(
+        `member ${job.memberId} no longer exists, so there is nobody to receipt`,
+      );
+    }
+
     const result = await receiptSender.send({
       jobId: job.id,
       channel: job.channel,
@@ -375,6 +440,7 @@ export async function processJob(
       memberId: job.memberId,
       payload: job.payload,
       attempt: job.attempts,
+      ...addressing,
     });
     return (await markSent(db, job, result.providerReference)) ? 'sent' : 'lost';
   } catch (err) {

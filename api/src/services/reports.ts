@@ -1,6 +1,13 @@
 /**
- * Reports — the four CSV exports the merchant dashboard draws, and the aggregates
+ * Reports — the SIX CSV exports the merchant dashboard draws, and the aggregates
  * behind them.
+ *
+ * "Four" stood in this line through two additions - `artist-performance` and now
+ * `earnings-by-branch` - and the design's four cards below really are four, which
+ * is how the stale number survived: the sentence was true of the design and had
+ * stopped being true of the file. The two counts are stated separately now. Only
+ * FOUR of the six are the design's; `artist-performance` and `earnings-by-branch`
+ * are requests, marked as such at REPORT_KINDS.
  *
  * api-contract.md § Operations names one row and nothing implemented it:
  *
@@ -54,7 +61,7 @@
  *       metrics.ts's header forbids. The column is dropped; `?branch=` still
  *       applies to this kind, as "customers who transacted at that branch".
  *
- * THE GATE, AND WHY IT IS FOUR DIFFERENT PERMISSIONS
+ * THE GATE, AND WHY IT IS FOUR DIFFERENT PERMISSIONS ACROSS SIX KINDS
  * -------------------------------------------------
  * The design draws NINE authority chips and Reports is not one of them — it is a
  * sidebar section with no permission of its own, the same gap the owner console had
@@ -75,6 +82,10 @@
  *   sales                   → `dashboard`     Overview's revenue figures
  *   best-selling-services   → `appointments`  bookings are the Appointments section
  *   products-sold           → `shop`          the Shop section
+ *   earnings-by-branch      → `dashboard`     the same money `sales` exports,
+ *                                             regrouped - a branch is a PLACE, and
+ *                                             a stricter gate than `sales` would
+ *                                             be theatre; see the map
  *   artist-performance      → `team`          an artist's earnings is personnel
  *                                             data, and `team` is the STRICTEST of
  *                                             the three sections this one joins —
@@ -120,6 +131,25 @@ export const REPORT_KINDS = [
   'best-selling-services',
   'products-sold',
   'artist-performance',
+  /**
+   * NEW WORK, NOT A DESIGN FIDELITY FIX - said here rather than smuggled, the way
+   * Lane C marked the vouchers panel.
+   *
+   * The design's Reports page states its own model in as many words: "Pull any
+   * list as a CSV - open it in Excel or Google Sheets. FILTER BY BRANCH and period
+   * first; the export matches exactly what you see." Filtering, not breaking down.
+   * There is no fifth card in `design/AVO Merchant Dashboard.dc.html` and no
+   * designer drew one. Aftab asked for "earning by branch" (item 7) and this is
+   * that request, built in the existing pattern rather than as a sixth one.
+   *
+   * WHAT DID NOT ALREADY EXIST. Every kind takes `?branch=` and FILTERS by it, and
+   * two of them carry a branch COLUMN: `sales` groups by (day, branch) and
+   * `products-sold` by (product, branch). So a merchant could already read one
+   * branch's number by filtering, or read a day-by-branch grid and add it up
+   * herself. What did not exist is a report whose ROWS ARE BRANCHES - the period
+   * roll-up that answers "Salmiya earned X, Kuwait City earned Y" at a glance.
+   */
+  'earnings-by-branch',
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
@@ -166,6 +196,32 @@ export const REPORT_PERMISSION: Record<ReportKind, PermissionName> = {
    * already open Accounts and read her row.
    */
   'artist-performance': 'team',
+  /**
+   * `dashboard`, the SAME permission as `sales`, and the rule forces it rather
+   * than merely permitting it.
+   *
+   * This kind exports the Overview's revenue figures, rolled up by branch. So
+   * does `sales`. They are two groupings of one pile of money - which is exactly
+   * what `services/reportsBranch.int.test.ts` asserts - and the header's rule is
+   * that a report inherits the permission of the SECTION whose data it exports.
+   * One section, one permission.
+   *
+   * THE TEMPTING ANSWER WAS `team`, and it is wrong for a reason worth writing
+   * down. Per-branch earnings is what a BRANCH MANAGER'S BONUS is decided on, and
+   * `artist-performance` reasons its way to `team` from very nearly that sentence.
+   * The difference is that an artist row NAMES A PERSON and a branch row names a
+   * PLACE - `branch` has no manager column, so nothing here identifies anybody.
+   *
+   * And the stronger argument is that a stricter gate here would be THEATRE. The
+   * identical money, per branch, is already exportable at `dashboard` through
+   * `sales`: filter to one branch, or pull the day-by-branch grid and add the
+   * column up. A gate somebody can walk around one card to the left is worse than
+   * no gate, because it reads as a control. If branch-level money should be
+   * harder to reach than `dashboard`, that is a decision about `sales` and about
+   * `GET /salons/{id}/metrics?branch=`, not about this kind, and it is above this
+   * lane's line - reported to trunk rather than taken here.
+   */
+  'earnings-by-branch': 'dashboard',
 };
 
 /**
@@ -217,6 +273,20 @@ export const REPORT_AUDITED: Record<ReportKind, boolean> = {
   'best-selling-services': false,
   /** Products. */
   'products-sold': false,
+  /**
+   * BRANCHES. A place, not a person - the line above is "the exports whose rows
+   * name identifiable people", and `branch` carries a name, an address and no
+   * human at all.
+   *
+   * AND THE SECOND HALF, WHICH IS THE ONE THAT DECIDES IT: this is the same money
+   * `sales` already exports unaudited, regrouped. Auditing the roll-up while the
+   * detail export beside it writes no row would be a control with a hole in it -
+   * anybody avoiding the trace downloads `sales` and pivots - and a control with a
+   * known hole is worse than none, because the audit log then reads as coverage it
+   * does not have. So: not audited, consistently with `sales`, and if branch-level
+   * money is to be audited then BOTH must be. Reported to trunk; not decided here.
+   */
+  'earnings-by-branch': false,
 };
 
 /** How the file actually left. Both are audited; the card render is not. */
@@ -310,6 +380,14 @@ export const REPORT_TITLE: Record<ReportKind, string> = {
    * this file's header exists to prevent, on the title line.
    */
   'artist-performance': 'Artist performance',
+  /**
+   * NOT verbatim from the design, because the design has no card for it - see
+   * REPORT_KINDS. It is Aftab's own words for the request ("earning by branch"),
+   * pluralised to match the column it heads. `Branch performance` would have
+   * mirrored `Artist performance` more neatly and says less: what the merchant
+   * asked for is the earnings, and a title should name the number.
+   */
+  'earnings-by-branch': 'Earnings by branch',
 };
 
 /**
@@ -370,6 +448,19 @@ const STAT: Record<ReportKind, Omit<ReportStat, 'value'>> = {
    * number than the file sums to, which is the one arithmetic a merchant WILL check.
    */
   'artist-performance': { key: 'earnedFils', label: 'KD earned', type: 'money' },
+  /**
+   * THE SAME KEY AND THE SAME LABEL AS `sales`, deliberately. It is the same
+   * quantity over the same window and the same filter; a different label would
+   * suggest a different definition, and two labels over one number is how a
+   * merchant ends up believing she has two figures to compare.
+   *
+   * Because `statFor` sums this column over the rows, and the rows PARTITION the
+   * salon's transactions by branch, this headline is `sales`' headline by
+   * construction rather than by coincidence. `reportsBranch.int.test.ts` asserts
+   * it anyway, per branch and per period, because "by construction" is what the
+   * `-amount_fils` defect was also believed to be.
+   */
+  'earnings-by-branch': { key: 'grossFils', label: 'KD gross', type: 'money' },
 };
 
 /**
@@ -694,6 +785,183 @@ async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody
         transactions: int(r.txns),
         grossFils: int(r.gross),
         branch: String(r.branch ?? ''),
+      })),
+    };
+  }
+
+  if (scope.kind === 'earnings-by-branch') {
+    /**
+     * =====================================================================
+     * EARNINGS BY BRANCH - the roll-up whose ROWS ARE BRANCHES.  (Aftab, item 7)
+     * =====================================================================
+     * One row per branch of the salon, over the whole period. `sales` answers
+     * "what did each DAY take, and where"; this answers "what did each BRANCH
+     * take". Same money, same predicates, same `transaction_revenue` expression -
+     * regrouped. That is the whole design, and it is the reason the reconciliation
+     * below is available at all.
+     *
+     * THE COLUMNS ARE ALL ADDITIVE, WHICH IS A CHOICE AND NOT AN ACCIDENT.
+     * `artist-performance` carries `Customers`, a DISTINCT count that does not add
+     * down its own column, and spends a comment warning about it. A branch roll-up
+     * is a table a merchant WILL add up - the total is the point of it - so no
+     * non-additive column is offered here at all. Distinct customers per branch is
+     * already `GET /salons/{id}/metrics?branch=`'s `activeMembers`, which carries
+     * the same warning in the place it belongs.
+     *
+     * EVERY BRANCH GETS A ROW, INCLUDING A CLOSED ONE AND ONE THAT TOOK NOTHING.
+     * `FROM branch LEFT JOIN`, the shape `artist-performance` uses for artists and
+     * for the same two reasons. "Salmiya earned 0.000" is a real answer to the
+     * question asked; a silently absent branch is not. And a branch that shut in
+     * March still earned last quarter's money - `services/branchFilter.ts` already
+     * settled that reporting on a closed branch is the point, not an oversight, so
+     * `closed_at` is not consulted here either.
+     *
+     * NO `Commission KD` COLUMN, and the reason is data rather than policy.
+     * `transaction.fee_fils` is merchant-visible and customer-never, so it MAY
+     * appear on a merchant report - but it is a TOP-UP concept. `services/order.ts`
+     * says so in as many words ("`commissionFor` is a top-up concept"), and
+     * `charge.ts`, `order.ts` and `booking.ts` each write `feeFils: 0`. This report
+     * counts `charge` and `shop` rows only, so a commission column here would be
+     * structurally zero in every cell forever: a fabricated column, which is the
+     * one thing this file's header forbids. If AVO ever charges commission on a
+     * charge, this is where it goes.
+     *
+     * =====================================================================
+     * `branch_assumed` IS THE SUBJECT OF THIS REPORT, NOT A FOOTNOTE ON IT
+     * =====================================================================
+     * WHAT THE COLUMN ACTUALLY MEANS, read from the code that sets it rather than
+     * from its name. `services/branch.ts` is the only writer. With no branch
+     * supplied by an enrolled device it runs
+     *
+     *     SELECT id FROM branch WHERE salon_id = $1 AND closed_at IS NULL
+     *      ORDER BY id LIMIT 2
+     *
+     * and returns the FIRST row with `established = rows.length === 1`. So
+     * `branch_assumed = true` does NOT mean "inferred, and probably right". There
+     * is no inference. It means: the salon has two or more open branches, no
+     * enrolled till said where the money moved, `transaction.branch_id` is NOT
+     * NULL, and SORT ORDER PICKED A VALUE so the column could have one.
+     *
+     * That is worse than "approximate" in a specific and directional way: every
+     * assumed row in a salon lands on the SAME branch - the lowest branch id. At
+     * the seeded salon that is `BR-KWC`. So the failure mode is not noise around a
+     * true figure, it is one branch's column inheriting another branch's takings
+     * wholesale while the other reads zero. The Overview's existing caveat -
+     * "treat these branch figures as approximate" - is true and understates it,
+     * and this file says so rather than repeating it.
+     *
+     * It is also NOT permanent and NOT universal. A single-branch salon is
+     * `established` (nowhere else it could have happened), and an enrolled,
+     * branch-bound till is `established` (migration 0043, DECISIONS.md #82). What
+     * is assumed today is a multi-branch salon's un-enrolled tills.
+     *
+     * WHAT THIS REPORT DOES ABOUT IT: INCLUDES THE ROW UNDER THE BRANCH IT WAS
+     * ATTRIBUTED TO, AND CARRIES THE SIZE OF THE DOUBT IN MONEY BESIDE IT.
+     *
+     * The three options were laid out and two were rejected:
+     *
+     *   REFUSE TO ATTRIBUTE - assumed money in no branch's row. Every per-branch
+     *     figure at every multi-branch salon reads 0.000 today, which is a
+     *     STRONGER and more wrong claim than any alternative: "nothing happened at
+     *     Salmiya" is false, where "this figure is an attribution" is true.
+     *
+     *   A SEPARATE `Branch not established` ROW - the total still reconciles with
+     *     `sales`, which is the letter of the requirement, and it fails the spirit
+     *     of it. `sales` puts an assumed row under its attributed branch; this
+     *     report would not; so the two would disagree BRANCH BY BRANCH while
+     *     agreeing on the total, and per-branch is the axis a merchant reads. A
+     *     second report that disagrees with the first is worse than no second
+     *     report, and disagreeing only in the column nobody totals is the worst
+     *     shape of that.
+     *
+     *   INCLUDE, AND REPORT THE SIZE OF THE DOUBT - chosen. It is also not a fresh
+     *     decision: `services/metrics.ts` § 2 put these same three options for the
+     *     same column and chose this one, for the Overview's per-branch tiles. A
+     *     third file inventing a third answer to one question is precisely what
+     *     these headers exist to prevent.
+     *
+     * THE DECIDING PROPERTY IS THAT IT DEGRADES CORRECTLY, which is metrics.ts's
+     * argument and holds harder here. The doubt is a NUMBER, not a flag: equal to
+     * the row's gross means the whole figure is an attribution, 0 means it is
+     * exact, and anything between is the proportion. When device enrolment reaches
+     * the tills those columns fall to zero on their own and the caveat disappears
+     * from the card with no code changed anywhere.
+     *
+     * THE DOUBT IS CARRIED IN MONEY AS WELL AS IN A COUNT, and that is this
+     * report's one departure from metrics.ts, which carries counts alone. Its
+     * tiles ARE counts; this card's subject is money, and forty assumed
+     * transactions out of fifty says nothing about whether they are 5% or 95% of
+     * the branch's takings. `Assumed KD` is the figure a bonus decision actually
+     * turns on, so it is the one on the face of the report.
+     *
+     * NOT OFFERED: a percentage. It is `Assumed KD / Gross KD`, derivable in the
+     * spreadsheet this file exists to be opened in, and a percentage of a partly
+     * attributed number reads as a precision that is not there.
+     *
+     * WHAT LANE C MUST RENDER (its column, reported not written): the card cannot
+     * print a ranking without the caveat when any row has `assumedGrossFils > 0`.
+     * The wording already exists in `apps/dashboard/src/routes/Overview.tsx` -
+     * "Branch assumed on {...} - treat these branch figures as approximate" - and
+     * should be reused rather than reinvented.
+     */
+    const rows = (await db.execute(sql`
+      WITH earned AS (
+        SELECT t.branch_id,
+               count(*) AS txns,
+               count(*) FILTER (WHERE t.branch_assumed) AS assumed_txns,
+               coalesce(sum(rev.earned_fils), 0)::bigint AS gross,
+               coalesce(sum(rev.earned_fils) FILTER (WHERE t.branch_assumed), 0)::bigint
+                 AS assumed_gross
+          FROM "transaction" t
+          ${revenueJoin('t')}
+         WHERE t.salon_id = ${scope.salonId}
+           AND t.kind IN ('charge', 'shop')
+           AND t.status = 'settled'
+           AND t.created_at >= ${at(from)}
+           AND t.created_at < ${at(now)}
+           ${b === null ? sql`` : sql`AND t.branch_id = ${b}`}
+           ${NOT_VOIDED}
+         GROUP BY t.branch_id
+      )
+      SELECT br.name AS branch,
+             coalesce(e.txns, 0) AS txns,
+             coalesce(e.assumed_txns, 0) AS assumed_txns,
+             coalesce(e.gross, 0)::bigint AS gross,
+             coalesce(e.assumed_gross, 0)::bigint AS assumed_gross
+        FROM branch br
+        LEFT JOIN earned e ON e.branch_id = br.id
+       WHERE br.salon_id = ${scope.salonId}
+         ${b === null ? sql`` : sql`AND br.id = ${b}`}
+       ORDER BY coalesce(e.gross, 0) DESC, br.name ASC
+    `)) as unknown as Array<Record<string, unknown>>;
+
+    return {
+      kind: scope.kind,
+      title: REPORT_TITLE[scope.kind],
+      columns: [
+        { header: 'Branch', key: 'branch', type: 'text' },
+        /**
+         * The same `count(*)` `sales` takes, over the same rows - so a branch's
+         * count here equals the sum of that branch's rows on the Sales card.
+         * Asserted, not assumed.
+         */
+        { header: 'Transactions', key: 'transactions', type: 'int' },
+        /** `rev.earned_fils`: the whole visit, deposit included. See § THE FIX. */
+        { header: 'Gross KD', key: 'grossFils', type: 'money' },
+        /**
+         * BESIDE the gross it qualifies rather than at the end of the row, because
+         * at the end of the row it is a footnote and here it is a caveat on the
+         * cell to its left. A merchant who reads two columns reads these two.
+         */
+        { header: 'Assumed KD', key: 'assumedGrossFils', type: 'money' },
+        { header: 'Assumed transactions', key: 'assumedTransactions', type: 'int' },
+      ],
+      rows: rows.map((r) => ({
+        branch: String(r.branch ?? ''),
+        transactions: int(r.txns),
+        grossFils: int(r.gross),
+        assumedGrossFils: int(r.assumed_gross),
+        assumedTransactions: int(r.assumed_txns),
       })),
     };
   }
