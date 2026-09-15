@@ -17,7 +17,7 @@
  * CSV does the formatting, once, on the server. One aggregate, two renderings, one
  * permission.
  *
- * What the four kinds MEAN, why each is gated on a different permission, and which
+ * What the six kinds MEAN, why each is gated on the permission it is, and which
  * two columns the design asks for that cannot exist as data: services/reports.ts.
  *
  * THE TWO GUARDS, IN THIS ORDER, ON BOTH ROUTES
@@ -303,6 +303,7 @@ export async function registerReportRoutes(app: FastifyInstance): Promise<void> 
       'best-selling-services': (x) => x.permAppointments,
       'products-sold': (x) => x.permShop,
       'artist-performance': (x) => x.permTeam,
+      'earnings-by-branch': (x) => x.permDashboard,
     };
     if (
       !staff ||
