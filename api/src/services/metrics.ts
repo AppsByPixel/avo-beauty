@@ -134,26 +134,7 @@ import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import type { BranchFilter } from './branchFilter';
 import { salonWallClock, parseDate, wallClockInstant } from '../time/zone';
-import { badRequest } from '../http/errors';
-
-/** api-contract.md § Operations: `?period=`. The membership window. */
-export const PERIODS = ['7d', '30d', '90d'] as const;
-export type Period = (typeof PERIODS)[number];
-
-export function parsePeriod(value: unknown): Period {
-  if (value === undefined || value === null || value === '') return '30d';
-  if (!(PERIODS as readonly string[]).includes(String(value))) {
-    throw badRequest('invalid_period', `period must be one of ${PERIODS.join(', ')}.`);
-  }
-  return value as Period;
-}
-
-/**
- * EXPORTED so services/reports.ts measures the same window this does. A report
- * whose "30d" differed from the Overview tile's "30d" would be two answers to one
- * question, which is the failure this file's header is entirely about.
- */
-export const PERIOD_DAYS: Record<Period, number> = { '7d': 7, '30d': 30, '90d': 90 };
+import { resolveWindow, type Period } from './period';
 
 /**
  * The SIZE of the doubt behind a per-branch figure — how many of the rows that
@@ -262,7 +243,16 @@ export async function computeMetrics(
    */
   branch: BranchFilter | null = null,
 ): Promise<SalonMetrics> {
-  const days = PERIOD_DAYS[period];
+  /**
+   * THE WINDOW, WHICH IS NOW EITHER ROLLING OR CALENDAR - `services/period.ts`.
+   *
+   * `?period=30d` resolves to exactly what this function computed before ranges
+   * existed: `[now - 30 days, now)`. `?period=2026-03-01_2026-03-31` resolves to
+   * the salon's own 1 March to 31 March. The three WINDOW figures below read the
+   * resolved bounds; the two TODAY figures do not, and that split is the next
+   * paragraph.
+   */
+  const win = resolveWindow(period, salon.timezone, now);
   const branchId = branch?.id ?? null;
 
   /**
@@ -278,6 +268,19 @@ export async function computeMetrics(
   const atBranch = branchId === null ? sql`` : sql`AND branch_id = ${branchId}`;
 
   // ---------------------------------------------------------- the day ------
+  /**
+   * TODAY IS STILL TODAY, AND A SELECTED RANGE DOES NOT MOVE IT. Both tiles that
+   * use these bounds are labelled "today" in the design - "Loaded today" and
+   * "Upcoming today" - and today is a fact about the wall clock, not about the
+   * window the merchant is looking at. Anchored to `now`, therefore, not to
+   * `win`: a merchant reviewing March 2026 still sees what has been loaded today
+   * and who is still to arrive today, which is what those two labels promise.
+   *
+   * Stated here because it is the one place a range REACHES THIS FILE AND STOPS,
+   * and a reader who assumed `?period=` moved all seven figures would be wrong
+   * about two of them. Lane C has the other half of it: the two "today" tiles
+   * must not be drawn inside a date-range selection without saying so.
+   */
   // The salon's own midnight, both ends, as real instants.
   const today = parseDate(salonWallClock(now, salon.timezone).date);
   const dayStart = wallClockInstant(today, 0, salon.timezone);
@@ -286,10 +289,33 @@ export async function computeMetrics(
   // special case.
   const dayEnd = wallClockInstant(today, 1440, salon.timezone);
 
-  const windowStart = new Date(now.getTime() - days * 86_400_000);
-  /** The same window, ended a week earlier. The `+48 this week` comparison. */
-  const priorEnd = new Date(now.getTime() - 7 * 86_400_000);
-  const priorStart = new Date(priorEnd.getTime() - days * 86_400_000);
+  const windowStart = win.fromInstant;
+  const windowEnd = win.toInstant;
+  /**
+   * THE SAME WINDOW, ENDED A WEEK EARLIER - the `+48 this week` comparison, and
+   * it is now measured against THE WINDOW'S OWN END rather than against `now`.
+   *
+   * For every rolling preset `windowEnd === now`, so this is byte-identical to
+   * what it was: `30d` still compares `[now-30d, now)` against `[now-37d,
+   * now-7d)`. For a calendar range it is the only definition that stays true to
+   * the field's own documentation - "the same measurement taken a week ago".
+   * Anchored to `now` instead, a merchant selecting March 2026 in September would
+   * have had her delta computed against a window six months AFTER the one she was
+   * looking at, and the tile would have read as a change in her March figures.
+   *
+   * THE SPAN IS TAKEN FROM THE INSTANTS, not from `win.days`, so a calendar range
+   * and its prior window have identical duration to the millisecond.
+   *
+   * AND THIS IS NOT `?compare=`. `services/period.ts` § Compare argues it at
+   * length: the two windows here OVERLAP by design (23 days of them, at `30d`),
+   * because this tile answers "how many more members are active now than a week
+   * ago". A report's `?compare=` answers "this window against that one" and its
+   * windows do not overlap. Two different statistics, deliberately not unified -
+   * which is why `?compare=` is not accepted by this endpoint at all.
+   */
+  const span = windowEnd.getTime() - windowStart.getTime();
+  const priorEnd = new Date(windowEnd.getTime() - 7 * 86_400_000);
+  const priorStart = new Date(priorEnd.getTime() - span);
 
   /**
    * ACTIVE MEMBERS — distinct members with at least one SETTLED transaction in
@@ -330,10 +356,10 @@ export async function computeMetrics(
   const activeRows = await db.execute(sql`
     SELECT
       count(DISTINCT member_id) FILTER (
-        WHERE created_at >= ${at(windowStart)} AND created_at < ${at(now)}
+        WHERE created_at >= ${at(windowStart)} AND created_at < ${at(windowEnd)}
       ) AS current,
       count(DISTINCT member_id) FILTER (
-        WHERE created_at >= ${at(windowStart)} AND created_at < ${at(now)}
+        WHERE created_at >= ${at(windowStart)} AND created_at < ${at(windowEnd)}
           AND NOT branch_assumed
       ) AS current_recorded,
       count(DISTINCT member_id) FILTER (
@@ -415,6 +441,14 @@ export async function computeMetrics(
    * a caveat on a ratio needs a scale. "62%, and 30 of the 30 visits it rests on
    * were guesses" is actionable; "62%, approximately" is not.
    */
+  /**
+   * THE UPPER BOUND ON THIS WINDOW IS NEW, AND IT WAS A LATENT DEFECT RATHER THAN
+   * A CHANGE. This query had `created_at >= windowStart` and no end at all, which
+   * was harmless for as long as every window ended at `now`: nothing is settled in
+   * the future, so the open end selected nothing extra. A CALENDAR RANGE ENDS IN
+   * THE PAST, and without the bound a merchant asking for March would have had her
+   * repeat rate computed over March-to-today. Found by the range, not by the tile.
+   */
   const repeatRows = await db.execute(sql`
     SELECT
       count(*) AS visitors,
@@ -431,6 +465,7 @@ export async function computeMetrics(
         AND kind = 'charge'
         AND status = 'settled'
         AND created_at >= ${at(windowStart)}
+        AND created_at < ${at(windowEnd)}
         ${atBranch}
       GROUP BY member_id
     ) AS per_member

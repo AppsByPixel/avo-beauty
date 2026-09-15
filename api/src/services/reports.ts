@@ -115,7 +115,16 @@ import { sql } from 'drizzle-orm';
 import { fils, formatFils } from '@avo/types';
 import type { Db } from '../db/client';
 import { badRequest } from '../http/errors';
-import { at, int, PERIOD_DAYS, type Period } from './metrics';
+import { at, int } from './metrics';
+import {
+  periodToken,
+  resolveCompareWindow,
+  resolveWindow,
+  windowsComparable,
+  type Compare,
+  type Period,
+  type PeriodWindow,
+} from './period';
 import { revenueJoin, revenueLeftJoin } from '../money/revenue';
 import type { PermissionName } from '../auth/principal';
 
@@ -328,7 +337,14 @@ export function reportExportAudit(input: {
   salonId: string;
   kind: ReportKind;
   branchId: string | null;
-  period: Period;
+  /**
+   * THE RESOLVED WINDOW, NOT THE `Period` IT CAME FROM. The row has to say which
+   * instants were queried, and a `Period` cannot: `30d` only becomes a window
+   * once a `now` is chosen. Taking the resolved one also removes the possibility
+   * that the audit row describes a window other than the one the export actually
+   * ran against - there is no second resolution to disagree with the first.
+   */
+  window: PeriodWindow;
   rowCount: number;
   via: ReportExportVia;
 }): {
@@ -341,6 +357,7 @@ export function reportExportAudit(input: {
   subjectId: string;
   metadata: Record<string, unknown>;
 } {
+  const window = input.window;
   return {
     salonId: input.salonId,
     /**
@@ -351,14 +368,36 @@ export function reportExportAudit(input: {
     action: 'Report exported',
     detail:
       `${REPORT_TITLE[input.kind]} · ${input.branchId ?? 'all branches'} · ` +
-      `${input.period} · ${input.rowCount} row${input.rowCount === 1 ? '' : 's'} · ${input.via}`,
+      `${window.token} · ${input.rowCount} row${input.rowCount === 1 ? '' : 's'} · ${input.via}`,
     source: 'merchant',
     subjectType: 'report',
     subjectId: input.kind,
     metadata: {
       kind: input.kind,
       branchId: input.branchId,
-      period: input.period,
+      period: window.token,
+      /**
+       * `rolling` OR `calendar`, AND NOT THE TWO INSTANTS THEMSELVES.
+       *
+       * The instants were in this object for one draft, because `30d` only
+       * describes a window in combination with the row's own timestamp while
+       * `2026-03-01_2026-03-31` describes one on its own, and evening out that
+       * asymmetry looked like a kindness to whoever reads `audit_log` in eighteen
+       * months. `reports.test.ts` § "the whole serialised row contains no figure
+       * but the row count" went red, and it was right to: that spec pins the shape
+       * of this object by asserting NO NUMBER appears in it other than the count,
+       * which is the cheapest possible guard against a figure from the export ever
+       * being added here. Two ISO instants are twelve numbers, and defending them
+       * would have meant loosening the one assertion standing between this builder
+       * and the privilege downgrade its header is about.
+       *
+       * Nothing is actually lost. `audit_log` rows carry their own timestamp, so a
+       * rolling window is recoverable from the row exactly as it always was, and a
+       * calendar one is already complete in the token. The basis is the part that
+       * was genuinely not recoverable - a reader had to know this module's grammar
+       * to tell which kind of window `30d` was - and it is a word, not a number.
+       */
+      periodBasis: window.basis,
       rowCount: input.rowCount,
       via: input.via,
     },
@@ -559,18 +598,52 @@ export function toCsv(shape: ReportShape): string {
 }
 
 /**
- * `customers_all-branches_30d.csv` — the design's own filename shape
- * (`<kind>_<branchTag>_<period>`), with the period token being the API's `7d`/`30d`/
- * `90d` rather than the segment's word, so the filename says what was actually
- * requested.
+ * `customers_all-branches_30d.csv`, and now also
+ * `customers_all-branches_2026-03-01_2026-03-31.csv` — the design's own filename
+ * shape (`<kind>_<branchTag>_<period>`), with the period token being the API's own
+ * rather than the segment's word, so the filename says what was actually requested.
+ *
+ * ==========================================================================
+ * A FREE RANGE HAS NO TOKEN - SO THE TOKEN WAS MADE TO CARRY THE RANGE
+ * ==========================================================================
+ * This was the hardest constraint in the range work, and the shape of `Period`
+ * was chosen to satisfy it rather than the other way round. The alternative on
+ * the table was `?from=&to=` as two parameters, which would have left this
+ * function with two values and no name for them - and the natural repairs are
+ * both bad. A filename that drops the range (`customers_all-branches.csv`) makes
+ * two exports of two different questions indistinguishable in a downloads folder.
+ * A hash (`customers_all-branches_a3f1.csv`) distinguishes them and tells the
+ * merchant nothing about either.
+ *
+ * So the range IS the token, and the round-trip property in `services/period.ts`
+ * is what makes that safe: `parsePeriod(periodToken(p))` is `p`, so two distinct
+ * windows cannot produce one filename. `reports.test.ts` drives that property
+ * rather than trusting it.
+ *
+ * THE PERIOD HALF NEEDS NO SANITISING AND IS NOT SANITISED. `periodToken` builds
+ * its output from parsed integers via `padStart`, so it is `[0-9d_-]` by
+ * construction - a caller cannot get a quote or a semicolon into it to break out
+ * of the quoted Content-Disposition parameter. The BRANCH half still is stripped,
+ * because a branch name really is free text a salon typed.
+ *
+ * (The range token contains `_`, which is also the field separator here, so a
+ * calendar filename has four underscore-separated parts rather than three. Nothing
+ * in this codebase parses a report filename - the dashboard reads the
+ * Content-Disposition header and falls back to rebuilding the string - so this is
+ * a cosmetic irregularity rather than an ambiguity, and it is preferred to
+ * inventing a second separator that would then need escaping of its own.)
  */
-export function reportFilename(kind: ReportKind, branchName: string | null, period: Period): string {
+export function reportFilename(
+  kind: ReportKind,
+  branchName: string | null,
+  period: Period,
+): string {
   const tag = branchName ? branchName.toLowerCase().replace(/\s+/g, '-') : 'all-branches';
   // A branch is named by a salon, so it reaches a filename. Anything that is not a
   // safe filename character goes, which also closes the header-injection path into
   // Content-Disposition.
   const safe = tag.replace(/[^a-z0-9-]/g, '');
-  return `${kind}_${safe || 'branch'}_${period}.csv`;
+  return `${kind}_${safe || 'branch'}_${periodToken(period)}.csv`;
 }
 
 // -------------------------------------------------------------- aggregates --
@@ -583,6 +656,81 @@ export interface ReportScope {
   period: Period;
   /** The salon's own zone. See `sales` below; this is not decoration. */
   timezone: string;
+  /**
+   * The second window, or nothing. `services/period.ts` § Compare carries the
+   * argument for why this is an EXPLICIT range rather than an implicit
+   * predecessor, and why `previous` is refused for a calendar period.
+   */
+  compare?: Compare | null;
+  /**
+   * ONE `now` FOR BOTH WINDOWS, threaded rather than taken twice.
+   *
+   * This used to be a bare `new Date()` inside `computeReportBody`. With a
+   * comparison the body runs TWICE, and two `new Date()` calls milliseconds apart
+   * would resolve the period window and its `previous` against two different
+   * instants - so the two windows would fail to abut by exactly that gap, and a
+   * transaction landing in it would be counted by neither. Passing it also makes
+   * every window in the tests deterministic.
+   */
+  now?: Date;
+}
+
+/**
+ * ==========================================================================
+ * WHAT A COMPARED REPORT IS, AND WHERE ITS DELTA COMES FROM
+ * ==========================================================================
+ * TWO FULL RUNS OF ONE AGGREGATE, NEVER A THIRD QUERY. `computeReportBody` is
+ * called once per window with nothing changed but the bounds, so whatever holds
+ * for a window on its own holds for both - `reportsReconciliation.int.test.ts`'s
+ * equality between `sales` and `artist-performance`, the `NOT_VOIDED` exclusion,
+ * the `transaction_revenue` expression, all of it. There is no comparison-only
+ * SQL for a definition to drift into.
+ *
+ * AND THE DELTA IS DERIVED FROM THE TWO FIGURES THAT ARE SERVED, in the one
+ * expression below and nowhere else:
+ *
+ *     delta.value === shape.stat.value - comparison.stat.value
+ *
+ * That is a property, not a convention, and `reports.test.ts` asserts it for
+ * every kind. It matters because this file has already shipped the other shape
+ * twice - DECISIONS.md #81 and #83 were both a number computed independently of
+ * the numbers it claimed to summarise, and both survived review by looking right.
+ * A third figure that can disagree with its own operands is the defect; a
+ * subtraction of two served values cannot.
+ *
+ * THE ROWS OF BOTH WINDOWS ARE SERVED, AND THEY ARE NOT JOINED. A per-row
+ * `previous` column was considered and rejected: `sales` is keyed by DAY, and two
+ * arbitrary windows share no days at all, so five of the six kinds would gain a
+ * column that the sixth could only fill with nulls. A report whose column list
+ * changes shape depending on a query parameter is two reports under one filename.
+ * The card compares the headline; the table shows each window's own rows.
+ */
+export interface ReportComparison {
+  /**
+   * THE RESOLVED WINDOW, NOT ITS WIRE FORM. `serialiseWindow` is applied once, by
+   * the route, on the way out. Returning the wire form from here would force any
+   * caller that needs the actual instants - the audit builder does - to parse the
+   * ISO text back into a `Date`, or to resolve the window a second time; and a
+   * second resolution is a second answer that can disagree with the first.
+   */
+  window: PeriodWindow;
+  rows: ReportBody['rows'];
+  rowCount: number;
+  stat: ReportStat;
+  /**
+   * `stat.value` minus `comparison.stat.value`, signed. Same `label` and `type`
+   * as the stat it is a difference of, so a client cannot render a money delta
+   * as a count.
+   */
+  delta: ReportStat;
+  /** Same basis and same length? `services/period.ts` § windowsComparable. */
+  comparable: boolean;
+}
+
+export interface ReportResult extends ReportShape {
+  /** Resolved, not serialised — see `ReportComparison`. */
+  window: PeriodWindow;
+  comparison: ReportComparison | null;
 }
 
 /**
@@ -641,14 +789,58 @@ const NOT_VOIDED = sql`AND NOT EXISTS (
        WHERE r.reverses_transaction_id = t.id AND r.status = 'settled'
     )`;
 
-export async function computeReport(db: Db, scope: ReportScope): Promise<ReportShape> {
-  const body = await computeReportBody(db, scope);
-  return { ...body, stat: statFor(scope.kind, body.rows) };
+export async function computeReport(db: Db, scope: ReportScope): Promise<ReportResult> {
+  const now = scope.now ?? new Date();
+  const window = resolveWindow(scope.period, scope.timezone, now);
+
+  const body = await computeReportBody(db, scope, window);
+  const stat = statFor(scope.kind, body.rows);
+  const shape: ReportShape = { ...body, stat };
+
+  if (!scope.compare) return { ...shape, window, comparison: null };
+
+  const cmpWindow = resolveCompareWindow(scope.compare, window, scope.timezone, now);
+  /**
+   * THE SAME FUNCTION, THE SAME SCOPE, ONLY THE BOUNDS DIFFER. Every predicate
+   * the period window was measured under applies unchanged to the comparison
+   * window - the branch filter, the void exclusion, the revenue expression.
+   */
+  const cmpBody = await computeReportBody(db, scope, cmpWindow);
+  const cmpStat = statFor(scope.kind, cmpBody.rows);
+
+  return {
+    ...shape,
+    window,
+    comparison: {
+      window: cmpWindow,
+      rows: cmpBody.rows,
+      rowCount: cmpBody.rows.length,
+      stat: cmpStat,
+      /** The one place a delta is computed. See § ReportComparison. */
+      delta: { ...stat, value: stat.value - cmpStat.value },
+      comparable: windowsComparable(window, cmpWindow),
+    },
+  };
 }
 
-async function computeReportBody(db: Db, scope: ReportScope): Promise<ReportBody> {
-  const now = new Date();
-  const from = new Date(now.getTime() - PERIOD_DAYS[scope.period] * 86_400_000);
+async function computeReportBody(
+  db: Db,
+  scope: ReportScope,
+  window: PeriodWindow,
+): Promise<ReportBody> {
+  /**
+   * THE BOUNDS ARE THE WINDOW'S, NOT `now - N days` COMPUTED HERE.
+   *
+   * `now` used to be `new Date()` taken inside this function and `from` derived
+   * from it; both are parameters of the window now, which is what lets the same
+   * body serve a calendar range, and the same body serve a comparison window that
+   * ended months ago. `now` is kept as a local name only because eleven query
+   * templates below read `at(now)` as their upper bound - it is the window's END,
+   * which for a rolling window is the current instant and for a calendar one is
+   * salon midnight after the last day.
+   */
+  const from = window.fromInstant;
+  const now = window.toInstant;
   const b = scope.branchId;
 
   if (scope.kind === 'customers') {
