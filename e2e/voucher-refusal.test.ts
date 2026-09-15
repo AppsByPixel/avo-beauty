@@ -81,7 +81,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { knownBug, precondition } from './support/known-bug.js';
+import { precondition } from './support/known-bug.js';
 import { api, targetKind } from './support/api.js';
 import { VoucherSchema, paginated } from '../packages/types/dist/index.js';
 import {
@@ -451,11 +451,31 @@ const MOCK_TARGET = await targetKind();
  * and this spec goes red asking to be promoted. A plain `it()` asserting the
  * mock's current shape would cement the divergence; a sentence in a report would
  * rot.
+ *
+ * ---------------------------------------------------------------------------
+ * PROMOTED THE SAME DAY — AND “the hour somebody fixes it” WAS LITERAL.
+ * ---------------------------------------------------------------------------
+ * Trunk had written those three mock routes that morning and fixed all three
+ * divergences within the hour of reading this block, so the very next `pnpm
+ * check` went red with the helper's own instruction three times over:
+ *
+ *   This bug appears to be FIXED: “the mock serves POST /v1/vouchers bare…”
+ *   The contract-correct assertion now passes. Promote this knownBug() to a
+ *   plain it() so the behaviour stays locked in.
+ *
+ * Done, verbatim. What is worth keeping is that the mechanism did the whole job
+ * without anybody remembering anything: lane D could not fix the defect (not its
+ * column) and did not merely report it — it left an assertion that FAILED while
+ * the defect stood and DEMANDED ATTENTION the moment it stopped. Decision 104
+ * is the row about cross-lane flags having no expiry; this is what one with an
+ * expiry looks like, closing in a single afternoon.
+ *
+ * The assertions below are unchanged. Only the wrapper is.
  */
 if (MOCK_TARGET === 'mock') {
-  describe('packages/mock serves the voucher routes in a different envelope', () => {
-    knownBug(
-      'the mock serves POST /v1/vouchers bare, so the console\'s own parser throws on it',
+  describe('packages/mock serves the voucher routes in the API\'s envelope', () => {
+    it(
+      'answers POST /v1/vouchers as { voucher }, which is what the console parses',
       async () => {
         const res = await api<any>('POST', '/v1/vouchers', {
           body: { memberId: '8842', amountFils: 5_000, reason: 'lane D envelope probe' },
@@ -473,8 +493,8 @@ if (MOCK_TARGET === 'mock') {
       },
     );
 
-    knownBug(
-      'the mock serves DELETE /v1/vouchers/:id bare, the same way and with the same cost',
+    it(
+      'answers DELETE /v1/vouchers/:id the same way, and for the same reason',
       async () => {
         const created = await api<any>('POST', '/v1/vouchers', {
           body: { memberId: '8842', amountFils: 5_000, reason: 'lane D void envelope probe' },
@@ -497,8 +517,8 @@ if (MOCK_TARGET === 'mock') {
       },
     );
 
-    knownBug(
-      'the mock\'s GET /v1/vouchers does not satisfy paginated(VoucherSchema) — no nextCursor',
+    it(
+      'serves a GET /v1/vouchers that satisfies paginated(VoucherSchema), cursor included',
       async () => {
         const res = await api<any>('GET', '/v1/vouchers');
         precondition(res.status === 200, `the mock refused the list (${res.status})`);
