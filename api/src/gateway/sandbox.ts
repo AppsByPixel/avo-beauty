@@ -26,7 +26,9 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { fils, type Fils } from '@avo/types';
-import { db } from '../db/client';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import { poolOptionsFor } from '../db/poolOptions';
 import { sandboxGatewayPayment } from '../db/schema/sandboxGateway';
 import { env } from '../env';
 import {
@@ -40,6 +42,92 @@ import {
   type GatewayPaymentState,
   type PaymentGateway,
 } from './types';
+
+/**
+ * =========================================================================
+ * THE SANDBOX HAS ITS OWN CONNECTION, BECAUSE IT IS PRETENDING TO BE ANOTHER
+ * SYSTEM AND ANOTHER SYSTEM HAS ITS OWN CONNECTION.
+ * =========================================================================
+ * This used to be `import { db } from '../db/client'` — the APPLICATION pool.
+ * That import is what made `POST /topups` unable to answer on the deployed
+ * demo, and the mechanism is worth stating exactly, because the shape recurs.
+ *
+ * `services/topup.ts` § createTopUp calls `gateway.createPayment` from INSIDE
+ * `db.transaction(...)`, deliberately, so a failed gateway leg rolls the
+ * idempotency key back rather than burning it. A `db.transaction()` RESERVES a
+ * connection for its whole life. So the insert below asked the SAME pool for a
+ * SECOND connection while the first was still held by the caller's own
+ * transaction. Under `DB_POOL_MODE=serverless` — `{ max: 1 }` — there is no
+ * second connection and there never will be, because the only one cannot come
+ * free until a transaction that is itself waiting on this insert commits.
+ *
+ * MEASURED, against a real database, three seconds into the hang:
+ *
+ *     pid  |        state        | wait_event_type | wait_event | xact_age_s
+ *    ------+---------------------+-----------------+------------+-----------
+ *    17406 | idle in transaction | Client          | ClientRead |       3.07
+ *
+ * ONE connection, `idle in transaction`, parked on `ClientRead`, its last
+ * statement the `insert into "topup_intent"` immediately above this call. The
+ * insert below never reached the database at all — it sat in postgres.js's own
+ * queue. That is why POSTGRES NEVER BREAKS IT: there is no lock cycle for the
+ * deadlock detector to find, no `deadlock_detected`, no rollback. From the
+ * database's side one client is simply not talking. `GATEWAY_TIMEOUT_MS` is the
+ * only thing that ends it, which is why the symptom is a flat 8s `502
+ * gateway_unavailable` naming nothing to do with connections.
+ *
+ * WHY A SEPARATE POOL AND NOT THE CALLER'S `tx`. Threading the caller's
+ * executor through `PaymentGateway` is the obvious repair and it is the wrong
+ * one. `gateway/myfatoorah.ts` touches no database whatsoever — it makes an
+ * HTTP call — so it would take a Drizzle executor solely to ignore it, and the
+ * seam would then advertise to the next adapter's author that a processor is
+ * expected to write to OUR database. Worse, it would make the sandbox's payment
+ * atomic with our intent, which is a property NO real processor can offer:
+ * every caller above the seam would be written against an atomicity that
+ * evaporates the day `GATEWAY_DRIVER=myfatoorah` is set. A stand-in that is
+ * more transactional than the thing it stands in for is not a better test
+ * double, it is a worse one.
+ *
+ * So the sandbox keeps its records where a processor keeps them — somewhere
+ * this application's transactions do not reach. Same database and same role
+ * (nothing here escalates privilege); a DIFFERENT pool, so the connection this
+ * insert needs is never the connection the caller is holding.
+ *
+ * SHAPED BY THE SAME KNOB, on purpose. `poolOptionsFor(env.dbPoolMode)` gives
+ * this pool `prepare: false` under `serverless` too — against a transaction-mode
+ * pooler a named prepared statement does not error, it HANGS (db/poolOptions.ts
+ * measured it), and a sandbox that hung would have replaced one 8s timeout with
+ * another. `max: 1` here is harmless where it was fatal there: nothing in this
+ * file opens a transaction, so two concurrent top-ups queue for a moment rather
+ * than starving.
+ *
+ * LAZY, so that selecting `myfatoorah` costs nothing. `gateway/index.ts` imports
+ * this module either way; a pool built at module load would be a second idle
+ * connection in every deployment that does not use the sandbox — and production
+ * is always one of those, since `env.ts` refuses `GATEWAY_DRIVER=sandbox` there.
+ */
+let storeSql: ReturnType<typeof postgres> | null = null;
+let store: ReturnType<typeof drizzle> | null = null;
+
+function sandboxStore(): NonNullable<typeof store> {
+  if (!store) {
+    storeSql = postgres(env.appDatabaseUrl, poolOptionsFor(env.dbPoolMode));
+    store = drizzle(storeSql);
+  }
+  return store;
+}
+
+/**
+ * Release the sandbox's connection. For test teardown and nothing else — a
+ * long-running server holds it for its life, exactly as it holds the app pool.
+ * Safe to call when no pool was ever built, which is the common case.
+ */
+export async function closeSandboxStore(): Promise<void> {
+  const open = storeSql;
+  storeSql = null;
+  store = null;
+  if (open) await open.end({ timeout: 5 });
+}
 
 const OUTCOMES: GatewayOutcome[] = [
   'succeeded',
@@ -108,7 +196,7 @@ export class SandboxGateway implements PaymentGateway {
 
     const pspReference = `SBX-${randomBytes(6).toString('hex').toUpperCase()}`;
 
-    await db.insert(sandboxGatewayPayment).values({
+    await sandboxStore().insert(sandboxGatewayPayment).values({
       pspReference,
       intentId: input.intentId,
       amountFils: input.amountFils,
@@ -132,7 +220,7 @@ export class SandboxGateway implements PaymentGateway {
       await this.setOutcome(pspReference, options.simulate);
     }
 
-    const rows = await db
+    const rows = await sandboxStore()
       .select()
       .from(sandboxGatewayPayment)
       .where(eq(sandboxGatewayPayment.pspReference, pspReference))
@@ -215,7 +303,7 @@ export class SandboxGateway implements PaymentGateway {
 
   /** Drive a payment to an outcome, as a customer completing the hosted page would. */
   async setOutcome(pspReference: string, outcome: GatewayOutcome): Promise<void> {
-    await db
+    await sandboxStore()
       .update(sandboxGatewayPayment)
       .set({ outcome, updatedAt: new Date() })
       .where(eq(sandboxGatewayPayment.pspReference, pspReference));
@@ -224,7 +312,7 @@ export class SandboxGateway implements PaymentGateway {
   async readPayment(
     pspReference: string,
   ): Promise<{ pspReference: string; intentId: string; amountFils: Fils; outcome: string } | null> {
-    const rows = await db
+    const rows = await sandboxStore()
       .select()
       .from(sandboxGatewayPayment)
       .where(eq(sandboxGatewayPayment.pspReference, pspReference))
