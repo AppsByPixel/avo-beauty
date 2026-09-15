@@ -94,9 +94,40 @@ jobs:
       # The compose stack, not a `services:` block — the e2e harness shells out
       # to `docker exec avo-postgres` by name, and a service container would not
       # match it.
+      # `--wait` WAITS FOR THE HEALTHCHECK, AND THE HEALTHCHECK IS NOT ENOUGH.
+      #
+      # `main`'s run of 6055779 failed here while `dev`'s run of the SAME COMMIT
+      # passed, with:
+      #
+      #   psql: error: connection to server on socket
+      #         "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory
+      #
+      # The official postgres image's first boot starts a TEMPORARY server, runs
+      # its init scripts, shuts it down and restarts for real. `pg_isready` can
+      # answer during that window, so `--wait` returns and the very next
+      # `docker exec … psql` lands in the gap where the unix socket is gone.
+      #
+      # This is the failure mode decision 106 is about: a gate that goes red for
+      # a reason with nothing to do with the code teaches people to ignore it,
+      # and this one is worse than a wrong assertion because it is INTERMITTENT —
+      # the same commit was green on the other branch four seconds earlier.
+      #
+      # So the readiness check is repeated against the socket the next command
+      # actually uses, rather than trusted from a different one.
       - name: Start Postgres
         working-directory: api
-        run: docker compose up -d --wait
+        run: |
+          docker compose up -d --wait
+          for i in $(seq 1 60); do
+            if docker exec -i avo-postgres psql -U avo -d postgres -c 'SELECT 1' >/dev/null 2>&1; then
+              echo "postgres answering on the socket after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Postgres never answered on its unix socket within 60s of a healthy --wait." >&2
+          docker logs avo-postgres 2>&1 | tail -40 >&2
+          exit 1
 
       # A MIGRATION SMOKE TEST, not setup for the suites.
       #
