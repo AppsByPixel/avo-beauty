@@ -203,12 +203,31 @@ suite('images on products and services', () => {
   /**
    * Every image row this suite made, removed between specs.
    *
-   * UNSCOPED, and that is safe only because of two facts worth stating rather
-   * than assuming: `vitest.int.config.ts` sets `fileParallelism: false`, so no
-   * other suite is mid-run; and no other int suite touches these two tables.
-   * If either stops being true this needs a salon predicate. It is also why the
-   * suite must never be pointed at anything but a lane database — LANES.md
-   * § "Every lane isolates its own resources".
+   * UNSCOPED, and the justification for that has to be restated because HALF OF
+   * IT HAS GONE STALE. It used to read: safe because of two facts — that
+   * `vitest.int.config.ts` sets `fileParallelism: false`, so no other suite is
+   * mid-run, and that no other int suite touches these two tables.
+   *
+   * THE SECOND FACT IS NO LONGER TRUE. `images/supabaseAttach.int.test.ts`
+   * inserts into `image` (:370), reads it (:227, :249, :295), updates it (:281)
+   * and deletes from both tables (:397-398). It landed after this comment was
+   * written and nothing recomputed the claim.
+   *
+   * The delete is still safe, but it now rests on ONE leg rather than two:
+   * `fileParallelism: false` means files run one at a time, so this `beforeEach`
+   * cannot fire while another file's specs are live, and both suites clean up
+   * after themselves. If file parallelism is ever turned on, this breaks — and
+   * it breaks silently, as a suite that wiped another suite's fixtures mid-run.
+   *
+   * AND THE REMEDY THE OLD COMMENT PROPOSED WOULD NOT WORK. "If either stops
+   * being true this needs a salon predicate" — but `supabaseAttach.int.test.ts`
+   * uses `SAL-AMARA` too (:74), the same salon as this suite (:98), so scoping
+   * these deletes by salon separates them from nothing. Isolating these two
+   * suites means a distinct salon or a per-run id, not a predicate on the one
+   * they share.
+   *
+   * It is also why the suite must never be pointed at anything but a lane
+   * database — LANES.md § "Every lane isolates its own resources".
    */
   beforeEach(async () => {
     await db.delete(imageAttachment);
