@@ -10,6 +10,18 @@
  * provider is connected is a new file in this directory and one environment
  * variable, not the first time any of it executes.
  *
+ * THAT MORNING CAME FOR EMAIL, AND THE PREDICTION WAS NEARLY RIGHT.
+ * `email/` is a directory of new files, one case in `index.ts`, and variables in
+ * `env.ts`. The worker's claim, backoff, retry and audit all ran unchanged and
+ * first time. What the prediction missed is in this file, below: see WHO THE
+ * RECEIPT IS FOR.
+ *
+ * THIS DRIVER REMAINS THE DEFAULT AND IS NOT DEPRECATED BY IT. It is what every
+ * test run, every developer's API and every environment without a mail
+ * credential uses, and WhatsApp is still blocked on template approval, so a
+ * driver that handles both channels is still the only one that leaves nothing
+ * queued.
+ *
  * WHY IT IS NOT ALLOWED TO PRETEND HARDER
  * ---------------------------------------
  * A tempting version of this renders the approved WhatsApp template into the log
@@ -53,6 +65,21 @@ export class LoggingReceiptSender implements ReceiptSender {
   handles(_channel: ReceiptChannel): boolean {
     return true;
   }
+
+  /**
+   * WHO THE RECEIPT IS FOR — a correction to this file's own prediction.
+   *
+   * The comment on the payload below says "The customer's phone number is NOT
+   * here: the driver would look it up." Building the email driver established
+   * that a driver must NOT look it up. A driver that opens a database connection
+   * is not a driver: it makes every adapter depend on Drizzle, and it makes
+   * `receiptSender` — a singleton built at boot — reach for a `Db` the worker is
+   * already holding and already passing through `processJob`.
+   *
+   * So `ReceiptDelivery` gained `ReceiptAddressing` and the WORKER resolves it.
+   * This driver ignores it, on purpose and for the reason the phone number was
+   * kept out in the first place: a log line is not where a mailbox goes.
+   */
 
   async send(delivery: ReceiptDelivery): Promise<ReceiptResult> {
     // eslint-disable-next-line no-console
