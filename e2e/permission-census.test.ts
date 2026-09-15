@@ -488,6 +488,14 @@ describe('the census reads the route table, and the reading is itself checked', 
       'best-selling-services': 'appointments',
       'products-sold': 'shop',
       'artist-performance': 'team',
+      /**
+       * `dashboard`, the same gate as `sales`, because it is the same money
+       * regrouped — the identical per-branch figures already come out of
+       * `sales` at `dashboard`, so a stricter gate here would be theatre.
+       * `team` was tempting for a branch manager's bonus and is wrong: a
+       * branch is a PLACE, and `branch` has no manager column.
+       */
+      'earnings-by-branch': 'dashboard',
     });
 
     // And every kind really became its own probe, with `:kind` substituted.
@@ -777,6 +785,8 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/reports/best-selling-services.csv → appointments',
   'GET /salons/:id/reports/customers → team',
   'GET /salons/:id/reports/customers.csv → team',
+  'GET /salons/:id/reports/earnings-by-branch → dashboard',
+  'GET /salons/:id/reports/earnings-by-branch.csv → dashboard',
   'GET /salons/:id/reports/products-sold → shop',
   'GET /salons/:id/reports/products-sold.csv → shop',
   'GET /salons/:id/reports/sales → dashboard',
@@ -905,6 +915,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /salons/:id/reports/artist-performance/download-url → team',
   'POST /salons/:id/reports/best-selling-services/download-url → appointments',
   'POST /salons/:id/reports/customers/download-url → team',
+  'POST /salons/:id/reports/earnings-by-branch/download-url → dashboard',
   'POST /salons/:id/reports/products-sold/download-url → shop',
   'POST /salons/:id/reports/sales/download-url → dashboard',
   'POST /scans → scanner',
