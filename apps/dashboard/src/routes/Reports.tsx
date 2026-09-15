@@ -1,27 +1,42 @@
 import { useState } from 'react';
 import { fils, formatFils } from '@avo/types';
-import { Button, Card, ErrorState, InfoBanner, InlineError, Money, Segmented, Skeleton } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  InfoBanner,
+  InlineError,
+  Money,
+  Segmented,
+  Skeleton,
+  TextField,
+} from '@avo/ui';
 import {
   downloadReportCsv,
-  PERIOD_CAPTION,
   PERIOD_SEGMENT_LABEL,
+  rangeToken,
   REPORT_DESC,
   REPORT_FULL_TABLE,
   REPORT_KINDS,
   REPORT_PERIODS,
   REPORT_SKELETON,
   useReport,
+  windowLabel,
+  windowPhrase,
   type Report,
   type ReportColumn,
+  type ReportComparison,
   type ReportFilters,
   type ReportKind,
   type ReportPeriod,
+  type ReportWindow,
 } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
 import { ApiError } from '../api/client.js';
-import { isForbidden, SectionError } from './sectionState.js';
+import { badRequestAnswer, isForbidden, SectionError } from './sectionState.js';
 
 /**
  * Merchant → Reports. Five cards off `GET /salons/{id}/reports/{kind}`, each with
@@ -87,7 +102,19 @@ export function Reports() {
    * salon's own branch list below.
    */
   const { selected: branch, select: setBranch } = useBranchScope();
-  const [period, setPeriod] = useState<ReportPeriod>('30d');
+  /*
+   * ONE OBJECT, NOT SIX `useState`s, and it is a value rather than a spread of
+   * them so that the two derivations below and the one reducer in
+   * `selectPeriodSegment` are PURE FUNCTIONS OF IT — testable without a query
+   * client, a router or a session. The controls themselves are
+   * `WindowControls`, which takes this value and gives back the next one: the
+   * screen owns the state, the component owns the markup, and a test can drive
+   * the markup.
+   */
+  const [selection, setSelection] = useState<WindowSelection>(DEFAULT_WINDOW_SELECTION);
+
+  const periodToken = periodTokenOf(selection);
+  const compareToken = compareTokenOf(selection);
 
   /*
    * The branch segment needs the branch NAMES, and `?branch=` takes the ID
@@ -108,7 +135,15 @@ export function Reports() {
   }
 
   const branches = salon.data?.branches ?? [];
-  const filters: ReportFilters = { branch, period };
+  const branchName = branches.find((b) => b.id === branch)?.name ?? null;
+  /*
+   * ONE `filters` OBJECT FOR FIVE CARDS AND FOR THE EXPORT, so the file and the
+   * cards cannot be asking different questions — except for `compare`, which
+   * `api/reports.ts` § exportQuery drops on the way to the file and which
+   * `ExportNote` says out loud.
+   */
+  const filters: ReportFilters | null =
+    periodToken === null ? null : { branch, period: periodToken, compare: compareToken };
 
   return (
     <div className="reports">
@@ -132,21 +167,379 @@ export function Reports() {
             ]}
           />
         )}
-        <Segmented
+        {/*
+          * THE DRAWN THREE, PLUS A FOURTH. `AVO Merchant Dashboard.dc.html:427`
+          * draws Week / Month / Quarter and nothing else; `Dates` is invented.
+          * See § THE FOURTH SEGMENT below for why it is a fourth option on this
+          * control rather than a separate one.
+          */}
+        <Segmented<PeriodSegment>
           label="Period"
-          value={period}
-          onChange={setPeriod}
-          options={REPORT_PERIODS.map((p) => ({ value: p, label: PERIOD_SEGMENT_LABEL[p] }))}
+          value={selection.periodSeg}
+          onChange={(next) => setSelection(selectPeriodSegment(selection, next))}
+          options={[
+            ...REPORT_PERIODS.map((p) => ({ value: p, label: PERIOD_SEGMENT_LABEL[p] })),
+            { value: 'custom' as const, label: 'Dates' },
+          ]}
         />
       </div>
 
-      <div className="reports__grid">
-        {REPORT_KINDS.map((kind) => (
-          <ReportCard key={kind} kind={kind} salonId={salonId} filters={filters} />
-        ))}
-      </div>
+      <WindowControls value={selection} onChange={setSelection} />
+
+      {filters === null ? (
+        /*
+         * THE CARDS ARE NOT LOADING AND THEY ARE NOT EMPTY — nothing has been
+         * asked yet. A skeleton here would promise an answer that is not coming,
+         * and stale cards from the previous window under a half-typed range
+         * would be the worse of the two: figures on screen that no longer
+         * describe the control above them.
+         */
+        <EmptyState
+          title="Name both days"
+          body="Pick a From and a To date and the five reports will load for that window."
+        />
+      ) : (
+        <div className="reports__grid">
+          {REPORT_KINDS.map((kind) => (
+            <ReportCard
+              key={kind}
+              kind={kind}
+              salonId={salonId}
+              filters={filters}
+              branchName={branchName}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+/* ---------------------------------------------------- the window controls -- */
+
+/**
+ * ===========================================================================
+ * § THE FOURTH SEGMENT — NEW WORK. THE DESIGN DRAWS THREE AND NO DATE PICKER.
+ * ===========================================================================
+ * `AVO Merchant Dashboard.dc.html:427` is three buttons — Week, Month, Quarter
+ * — and nothing beside them. Aftab's item 9 is "compare with dates", and dates
+ * are not expressible in three words, so a range control is INVENTED. Said
+ * plainly, the way the vouchers panel and the no-show return window were, so a
+ * later reader does not go looking for it in the bundle. The design's own
+ * sentence on this page — "Filter by branch and period first; the export matches
+ * exactly what you see" — is what constrains the rest of this file.
+ *
+ * WHY A FOURTH SEGMENT RATHER THAN A SEPARATE CONTROL. The period is ONE choice
+ * — a preset or a range, never both — and `Period` on the server is a
+ * discriminated union saying exactly that. Two controls would be two sources for
+ * one value and would need a rule about which wins; this screen already paid for
+ * that mistake once, when the branch filter existed twice (§ THE BRANCH FILTER
+ * IS NO LONGER THIS SCREEN'S OWN STATE). A fourth segment leaves the drawn three
+ * untouched and adds only the case they cannot express.
+ *
+ * WHAT WAS REJECTED
+ *   - A CALENDAR POPOVER. A month grid, a range selection model, focus
+ *     management and its own keyboard contract — a component with no artboard to
+ *     build it against, in a bundle whose interaction spec covers the controls it
+ *     drew. `input[type=date]` is the platform's own picker: it brings the
+ *     locale's format, the keyboard, and the mobile date wheel for free, and it
+ *     is a control every merchant has already used.
+ *   - TWO FREE-TEXT `YYYY-MM-DD` FIELDS. They invite precisely the malformed
+ *     value the server answers `400 invalid_period` to, and turn a typo into a
+ *     round trip. `type=date` constrains the input at the source without this
+ *     screen owning a grammar.
+ *   - REPLACING THE THREE PRESETS WITH A PICKER. It would delete drawn controls
+ *     to make room for an undrawn one — the restyle CLAUDE.md forbids — and
+ *     would make "this month" something a merchant has to spell out every time.
+ *   - A `?from=`/`?to=` PAIR ON THE WIRE. Not this client's to choose: the
+ *     server took a single `period` token so that one value names the window in
+ *     the filename, the audit row and the download record. `rangeToken` composes
+ *     it; nothing here parses one.
+ */
+
+/** The drawn three plus the invented fourth. See § THE FOURTH SEGMENT. */
+export type PeriodSegment = ReportPeriod | 'custom';
+export type CompareSegment = 'none' | 'previous' | 'dates';
+
+/**
+ * Everything the two window controls hold, as ONE value.
+ *
+ * Six `useState`s would have been the obvious shape and would have put the three
+ * rules below — what a half-typed range sends, what `previous` means when the
+ * period is a range, and what happens to `previous` when she switches to one —
+ * inside a component that cannot be rendered without a session, a query client
+ * and a branch scope. As a value with pure functions over it, each rule is a
+ * function a test calls directly, and `WindowControls` is a presentational
+ * component a test can drive with `fireEvent`.
+ */
+export interface WindowSelection {
+  periodSeg: PeriodSegment;
+  /** `YYYY-MM-DD`, or '' for not yet named. */
+  periodFrom: string;
+  periodTo: string;
+  compareSeg: CompareSegment;
+  compareFrom: string;
+  compareTo: string;
+}
+
+/** `30d`, which is what this screen asked for before ranges existed. */
+export const DEFAULT_WINDOW_SELECTION: WindowSelection = {
+  periodSeg: '30d',
+  periodFrom: '',
+  periodTo: '',
+  compareSeg: 'none',
+  compareFrom: '',
+  compareTo: '',
+};
+
+/**
+ * ===========================================================================
+ * AN UNFINISHED RANGE IS NOT A REQUEST, AND IT IS THE ONLY THING THIS SCREEN
+ * WITHHOLDS
+ * ===========================================================================
+ * `null` means "she has picked Dates and has not named both days yet".
+ *
+ * IT IS NOT CLIENT-SIDE VALIDATION OF THE GRAMMAR. Whether the range is the
+ * right way round, and whether it is inside 366 days, is the server's to decide;
+ * it decides it with a sentence written for a merchant — "period starts after it
+ * ends: 2026-03-31 is later than 2026-03-01" — and that sentence renders on the
+ * cards (§ THE REFUSED WINDOW). A second opinion in the browser would be
+ * `services/period.ts`'s grammar written again in another language, and the
+ * first time the two disagreed this screen would refuse a window the server had
+ * already measured.
+ *
+ * What it does withhold is a request the merchant has not finished composing.
+ * `?period=2026-03-01_` is not a question she asked, and five refusals while she
+ * is still reaching for the second field are noise rather than feedback.
+ */
+export function periodTokenOf(s: WindowSelection): string | null {
+  if (s.periodSeg !== 'custom') return s.periodSeg;
+  return s.periodFrom !== '' && s.periodTo !== '' ? rangeToken(s.periodFrom, s.periodTo) : null;
+}
+
+/**
+ * `compare=previous` IS ONLY DEFINED FOR A ROLLING PERIOD, and the reason is the
+ * server's: there is no single "previous" to 1–31 March. February by the name,
+ * 29 January – 28 February by the length, and March of last year by the season
+ * are three defensible answers, so it refuses rather than picking one.
+ *
+ * So this returns null for that combination rather than putting a value on the
+ * wire that is certain to be refused. The refusal is NOT thereby made
+ * unreachable and is not treated as unreachable: `400 invalid_compare` renders
+ * the server's own sentence on the card exactly as `invalid_period` does, and
+ * `reportsWindow.test.tsx` drives that path directly.
+ */
+export function compareTokenOf(s: WindowSelection): string | null {
+  if (s.compareSeg === 'previous') return s.periodSeg === 'custom' ? null : 'previous';
+  if (s.compareSeg !== 'dates') return null;
+  return s.compareFrom !== '' && s.compareTo !== '' ? rangeToken(s.compareFrom, s.compareTo) : null;
+}
+
+/**
+ * Switching the period segment, with the one consequence it has.
+ *
+ * Moving to a range takes `previous` with it rather than leaving a control
+ * selected that the screen is quietly ignoring. A reset that is explained beside
+ * the control is better than a selection whose effect silently disappeared — the
+ * same judgement `AttributionNote` makes about a zero row.
+ */
+export function selectPeriodSegment(s: WindowSelection, next: PeriodSegment): WindowSelection {
+  if (next === 'custom' && s.compareSeg === 'previous') {
+    return { ...s, periodSeg: next, compareSeg: 'none' };
+  }
+  return { ...s, periodSeg: next };
+}
+
+/**
+ * The invented controls, as markup only. `Reports` owns the value; this owns how
+ * it is asked for. See `Reports` § THE FOURTH SEGMENT for why a fourth segment
+ * and not a calendar popover, two text fields, or a replacement for the drawn
+ * three.
+ */
+export function WindowControls({
+  value,
+  onChange,
+}: {
+  value: WindowSelection;
+  onChange: (next: WindowSelection) => void;
+}) {
+  const previousAvailable = value.periodSeg !== 'custom';
+  const compareIncomplete = value.compareSeg === 'dates' && compareTokenOf(value) === null;
+
+  return (
+    <div className="reports__window">
+      {value.periodSeg === 'custom' ? (
+        <div className="reports__dates">
+          <TextField
+            label="From"
+            type="date"
+            value={value.periodFrom}
+            onChange={(e) => onChange({ ...value, periodFrom: e.target.value })}
+          />
+          <TextField
+            label="To"
+            type="date"
+            value={value.periodTo}
+            onChange={(e) => onChange({ ...value, periodTo: e.target.value })}
+          />
+          <p className="reports__hint">
+            Both days are included, in your salon&rsquo;s own time. Up to 366 days.
+          </p>
+        </div>
+      ) : (
+        /*
+         * WHAT A PRESET ACTUALLY MEANS, SAID ONCE — and this is half the answer
+         * to "what can a merchant tell about rolling versus calendar from the
+         * screen alone". The other half is on every card foot, where the window
+         * the SERVER measured is named. This line is about the CONTROL and is
+         * derived from the selection; that one is about the DATA and is derived
+         * from `window.basis`. If the two ever disagreed the card would be the
+         * one telling the truth.
+         */
+        <p className="reports__hint">
+          {PERIOD_SEGMENT_LABEL[value.periodSeg]} is a rolling window — the last{' '}
+          {PERIOD_DAYS_WORD[value.periodSeg]} days ending now, not a calendar{' '}
+          {PERIOD_CALENDAR_WORD[value.periodSeg]}. Pick <b>Dates</b> for a calendar window.
+        </p>
+      )}
+
+      <div className="reports__comparerow">
+        <Segmented<CompareSegment>
+          label="Compare with"
+          value={value.compareSeg}
+          onChange={(next) => onChange({ ...value, compareSeg: next })}
+          options={[
+            { value: 'none', label: 'No comparison' },
+            /*
+             * DISABLED, NOT HIDDEN. `Segmented` keeps a disabled option
+             * focusable for exactly this — the reason below it is reachable
+             * rather than a control silently vanishing from under the merchant.
+             */
+            { value: 'previous', label: 'Previous period', disabled: !previousAvailable },
+            { value: 'dates', label: 'Other dates' },
+          ]}
+        />
+        {value.compareSeg === 'dates' ? (
+          <div className="reports__dates">
+            <TextField
+              label="Compare from"
+              type="date"
+              value={value.compareFrom}
+              onChange={(e) => onChange({ ...value, compareFrom: e.target.value })}
+            />
+            <TextField
+              label="Compare to"
+              type="date"
+              value={value.compareTo}
+              onChange={(e) => onChange({ ...value, compareTo: e.target.value })}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      {previousAvailable ? null : (
+        <p className="reports__hint">
+          &ldquo;Previous period&rdquo; needs a rolling window. There is no single previous to a
+          calendar range — name the second window as dates instead.
+        </p>
+      )}
+      {compareIncomplete ? <p className="reports__hint">Pick both dates to compare.</p> : null}
+    </div>
+  );
+}
+
+const PERIOD_DAYS_WORD: Record<ReportPeriod, string> = { '7d': '7', '30d': '30', '90d': '90' };
+const PERIOD_CALENDAR_WORD: Record<ReportPeriod, string> = {
+  '7d': 'week',
+  '30d': 'month',
+  '90d': 'quarter',
+};
+
+/**
+ * The card's three refusals, in the order they are told apart.
+ *
+ * Extracted from the card so each is a component a test can render with an
+ * `ApiError` and read — `shopRender.test.tsx` § ShopModuleOffNotice set that
+ * shape. The card around it (title, description, `data-refused`) does not change
+ * between them and is not what any of these assertions are about.
+ */
+export function ReportCardRefusal({
+  error,
+  onRetry,
+  retrying,
+}: {
+  error: unknown;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  if (isForbidden(error)) {
+    /*
+     * THE LEDGER RENDERING — explain, no retry (interaction-spec.md §4). The
+     * server's sentence names the permission's own section and who can grant it,
+     * so it is rendered rather than paraphrased. The card stays, titled: a card
+     * that vanishes reads as "this report does not exist" rather than "you are
+     * not allowed this one".
+     */
+    return (
+      <ErrorState
+        title="You don't have access to this report"
+        body={error instanceof Error ? error.message : ''}
+      />
+    );
+  }
+
+  const refusedWindow = badRequestAnswer(error);
+  if (refusedWindow !== null) {
+    /*
+     * =====================================================================
+     * § THE REFUSED WINDOW — AND IT IS A CARD STATE, NOT A SCREEN STATE
+     * =====================================================================
+     * `400 invalid_period` / `400 invalid_compare`. Before this branch existed a
+     * refused window fell into the generic case below and rendered "Something
+     * went wrong on our side" over a server that had answered precisely —
+     * "period starts after it ends: 2026-03-31 is later than 2026-03-01", a
+     * sentence that names the fix. Merchant READ paths had no 400 until this
+     * screen could compose a window; `WriteError` has rendered a 400 verbatim
+     * for exactly this reason since it was written.
+     *
+     * NO RETRY. An identical request produces an identical refusal — the same
+     * argument the 403 above makes.
+     *
+     * WHY IT IS NOT HOISTED TO ONE BANNER OVER THE GRID, even though all five
+     * cards will usually carry the same sentence: `build` in
+     * `api/src/routes/reports.ts` checks the PERMISSION BEFORE IT PARSES THE
+     * PERIOD, deliberately, so a card the merchant may not read answers 403 and
+     * never learns whether the window was valid. One card's 400 is therefore not
+     * a fact about the screen — a front-desk manager with `dashboard` and not
+     * `team` would see a window refusal hoisted over a Customers card that was
+     * refused for an entirely different reason. Each card reports the answer it
+     * actually got.
+     */
+    return <ErrorState title="Check the filters above" body={refusedWindow} />;
+  }
+
+  return (
+    <ErrorState
+      title="Couldn't load this report"
+      body="The workspace didn't answer. The other cards are unaffected."
+      onRetry={onRetry}
+      retrying={retrying}
+    />
+  );
+}
+
+/**
+ * The design's `{{ r.rowCount }} rows · {{ periodLabel }}`.
+ *
+ * THE LABEL NAMES THE WINDOW THE SERVER MEASURED, not the token this client
+ * asked for. It was `PERIOD_CAPTION[r.period]`, which was a total function over
+ * the three presets and became a lookup miss the moment `period` could be a
+ * range: the foot would have read "31 rows · undefined". For the three drawn
+ * presets this is byte-identical to what it printed before — "This week" /
+ * "This month" / "This quarter".
+ */
+export function reportFootCaption(r: Report): string {
+  return `${r.rowCount} row${r.rowCount === 1 ? '' : 's'} · ${windowLabel(r.window)}`;
 }
 
 /* --------------------------------------------------------------------- card -- */
@@ -155,10 +548,13 @@ function ReportCard({
   kind,
   salonId,
   filters,
+  branchName,
 }: {
   kind: ReportKind;
   salonId: string;
   filters: ReportFilters;
+  /** For the export's fallback filename only — `api/reports.ts` § the export. */
+  branchName: string | null;
 }) {
   const report = useReport(kind, filters);
   const [exporting, setExporting] = useState(false);
@@ -184,26 +580,11 @@ function ReportCard({
             <p className="reports__desc">{REPORT_DESC[kind]}</p>
           </div>
         </div>
-        {isForbidden(report.error) ? (
-          /*
-           * THE LEDGER RENDERING — explain, no retry (interaction-spec.md §4).
-           * The server's sentence names the permission's own section and who can
-           * grant it, so it is rendered rather than paraphrased. The card stays,
-           * titled: a card that vanishes reads as "this report does not exist"
-           * rather than "you are not allowed this one".
-           */
-          <ErrorState
-            title="You don't have access to this report"
-            body={report.error instanceof Error ? report.error.message : ''}
-          />
-        ) : (
-          <ErrorState
-            title="Couldn't load this report"
-            body="The workspace didn't answer. The other cards are unaffected."
-            onRetry={() => void report.refetch()}
-            retrying={report.isFetching}
-          />
-        )}
+        <ReportCardRefusal
+          error={report.error}
+          onRetry={() => void report.refetch()}
+          retrying={report.isFetching}
+        />
       </Card>
     );
   }
@@ -214,7 +595,7 @@ function ReportCard({
     setExporting(true);
     setExportError(null);
     try {
-      await downloadReportCsv(salonId, kind, filters);
+      await downloadReportCsv(salonId, kind, filters, branchName);
     } catch (err) {
       setExportError(err);
     } finally {
@@ -259,6 +640,10 @@ function ReportCard({
           )}
         </div>
       </div>
+
+      {r && r.comparison !== null ? (
+        <ComparisonStrip period={r.window} comparison={r.comparison} />
+      ) : null}
 
       <div className="reports__table">
         {report.isPending || !r ? (
@@ -314,8 +699,15 @@ function ReportCard({
                * from the wire — the same distinction the Analytics chart drew:
                * a zero the API answered is information; a zero before data is a lie.
                */
+              /*
+               * THE PHRASE COMES FROM THE WINDOW THE SERVER MEASURED, not from
+               * the token this client asked for — and not through
+               * `.toLowerCase()`, which was safe on "This month" and would have
+               * printed "1 mar 2026 – 31 mar 2026" over a range.
+               * `api/reports.ts` § windowPhrase.
+               */
               <p className="reports__none">
-                Nothing here for {PERIOD_CAPTION[r.period].toLowerCase()}
+                Nothing here for {windowPhrase(r.window)}
                 {r.branchId === 'all' ? '' : ' at this branch'}.
               </p>
             ) : (
@@ -340,7 +732,11 @@ function ReportCard({
           {report.isPending || !r ? (
             <Skeleton width={110} height={11} />
           ) : (
-            `${r.rowCount} row${r.rowCount === 1 ? '' : 's'} · ${PERIOD_CAPTION[r.period]}`
+            /*
+             * The screen's authoritative statement of which window produced the
+             * figures above it — see `reportFootCaption`.
+             */
+            reportFootCaption(r)
           )}
         </span>
         <Button
@@ -353,6 +749,8 @@ function ReportCard({
         </Button>
       </div>
 
+      {r && r.comparison !== null ? <ExportNote window={r.window} /> : null}
+
       {exportError !== null ? (
         <InlineError
           message={
@@ -361,6 +759,136 @@ function ReportCard({
         />
       ) : null}
     </Card>
+  );
+}
+
+/* ------------------------------------------------------- the comparison -- */
+
+/**
+ * ===========================================================================
+ * A DELTA WITHOUT ITS WINDOW IS A NUMBER WITH NO REFERENT
+ * ===========================================================================
+ * This strip exists because `+240.000` on a card answers nothing. More than
+ * what? So the window is in the same sentence as the figure, always, and so is
+ * the figure it is a difference FROM — both of which the server sent.
+ *
+ * WHY A STRIP AND NOT A SECOND STAT COLUMN OR A CHIP
+ *   - A SECOND COLUMN in the stat corner puts two large figures side by side
+ *     with nothing between them saying which is now and which is then. The
+ *     corner is the design's headline slot; two headlines is no headline.
+ *   - A CHIP (`▲ 15%`) is the smallest rendering and the least honest one. It
+ *     has no room for the window, so the referent moves into a tooltip, and a
+ *     `comparable: false` caveat has nowhere to go at all. This screen already
+ *     refuses that trade once, in `AttributionNote`: the sentences the numbers
+ *     cannot say for themselves get room.
+ *   - A FULL SECOND TABLE was rejected by the server before it reached here —
+ *     "the card compares the headline; the table shows each window's own rows"
+ *     (`services/reports.ts`). The comparison's rows ARE on the wire and are
+ *     deliberately not rendered: two arbitrary windows share no days, so five of
+ *     the six kinds would produce two tables whose rows do not correspond, and a
+ *     reader would line them up anyway.
+ *
+ * THE SIGN IS A WORD, NOT A `+`. Prepending "+" to a `<Money>` would put the
+ * sign outside the element that owns the `aria-label`: the screen would read
+ * "+240.000" and a screen reader would say "240.000 Kuwaiti dinars" — the
+ * visible string right and the announced one wrong, which is the exact class
+ * this lane's own mutation proof caught in `moneyRender.test.tsx`. "more" and
+ * "less" are in the text, so both renderings carry the direction, and `<Money>`
+ * formats the magnitude through `formatFils` (#1) with nothing hand-rolled.
+ *
+ * NOTHING HERE SUBTRACTS. `delta` arrives equal to `stat.value -
+ * comparison.stat.value` and carries `stat`'s own `label` and `type`; a second
+ * subtraction in the browser is a second answer, and this screen computes
+ * nothing from rows for the same reason.
+ */
+export function ComparisonStrip({
+  period,
+  comparison,
+}: {
+  period: ReportWindow;
+  comparison: ReportComparison;
+}) {
+  const { delta, stat, window: other, comparable } = comparison;
+  const magnitude = Math.abs(delta.value);
+  const figure =
+    delta.type === 'money' ? (
+      <Money amount={fils(magnitude)} />
+    ) : (
+      magnitude.toLocaleString('en-US')
+    );
+  const against =
+    stat.type === 'money' ? <Money amount={fils(stat.value)} /> : stat.value.toLocaleString('en-US');
+
+  return (
+    <div className="reports__compare" data-direction={deltaDirection(delta.value)}>
+      <p className="reports__compare-line">
+        <span className="reports__compare-arrow" aria-hidden="true">
+          {delta.value > 0 ? '▲' : delta.value < 0 ? '▼' : '—'}
+        </span>{' '}
+        {delta.value === 0 ? (
+          <>
+            No change from {against} in {windowPhrase(other)}.
+          </>
+        ) : (
+          <>
+            {figure} {delta.value > 0 ? 'more' : 'less'} than {against} in {windowPhrase(other)}.
+          </>
+        )}
+      </p>
+      {comparable ? null : (
+        /*
+         * `comparable` IS THE SERVER'S, AND ONLY THE EXPLANATION IS DERIVED.
+         * The boolean decides whether the caveat appears; the two windows'
+         * own `basis` and `days` — both already on the wire — say which of the
+         * two ways they differ. It exists because two windows can be the same
+         * length and still not be the same question, and because calendar June
+         * against calendar May is 30 days against 31: a 3% difference in every
+         * total before anything about the salon has changed.
+         */
+        <p className="reports__compare-caveat">{comparabilityCaveat(period, other)}</p>
+      )}
+    </div>
+  );
+}
+
+function deltaDirection(value: number): 'up' | 'down' | 'flat' {
+  return value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
+}
+
+export function comparabilityCaveat(period: ReportWindow, other: ReportWindow): string {
+  if (period.basis !== other.basis) {
+    return period.basis === 'rolling'
+      ? 'Not like for like: a rolling window against a calendar range.'
+      : 'Not like for like: a calendar range against a rolling window.';
+  }
+  if (period.days !== other.days) {
+    return `Not like for like: ${period.days} days against ${other.days}.`;
+  }
+  /* The server said not comparable and neither field says why — report it as it
+   * is rather than inventing a reason or, worse, dropping the caveat. */
+  return 'Not like for like: these two windows are not the same question.';
+}
+
+/**
+ * THE OTHER HALF OF `api/reports.ts` § exportQuery.
+ *
+ * The banner at the top of this screen promises "the export matches exactly what
+ * you see", and with a comparison on the card that promise needs saying out
+ * loud, because the file cannot keep it: a CSV named for one window cannot
+ * contain two, and the server refuses rather than quietly dropping one
+ * (`400 compare_not_exportable`). This client drops `compare` from the export
+ * URL so the button still works — and then tells her exactly which of the two
+ * windows she is about to download, by name.
+ *
+ * Dropping it silently would have been the same defect the server refused to
+ * commit, moved one layer out.
+ */
+export function ExportNote({ window: w }: { window: ReportWindow }) {
+  return (
+    <p className="reports__exportnote">
+      The file is <b>{windowPhrase(w)}</b> only — a comparison is a figure for this card. Export
+      each window on its own and each file keeps its own name.
+    </p>
   );
 }
 
@@ -507,7 +1035,7 @@ export function AttributionNote({ report }: { report: Report }) {
     <div className="reports__note">
       {report.stat.value === 0 ? (
         <p className="reports__note-empty">
-          Nothing was charged {PERIOD_CAPTION[report.period].toLowerCase()}
+          Nothing was charged {windowPhrase(report.window)}
           {report.branchId === 'all' ? '' : ' at this branch'}, so every row is zero.
         </p>
       ) : null}

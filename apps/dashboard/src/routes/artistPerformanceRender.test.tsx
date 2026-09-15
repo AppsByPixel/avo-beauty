@@ -93,6 +93,23 @@ function report(rows: Report['rows'], statValue: number): Report {
     kind: 'artist-performance',
     title: 'Artist performance',
     period: '30d',
+    /*
+     * The window the server resolved `30d` to. `fromDate`/`toDate` are null
+     * because a rolling window has no calendar days to name — the invariant
+     * `reportsWindow.test.tsx` is about, restated here so this fixture cannot
+     * drift into asserting a shape the API does not send.
+     */
+    window: {
+      token: '30d',
+      basis: 'rolling',
+      from: '2026-08-17T09:00:00.000Z',
+      to: '2026-09-16T09:00:00.000Z',
+      days: 30,
+      fromDate: null,
+      toDate: null,
+      timezone: 'Asia/Kuwait',
+    },
+    comparison: null,
     branchId: 'all',
     columns: COLUMNS,
     rows,

@@ -4368,6 +4368,118 @@ a:hover {
   font-weight: 500;
 }
 
+/* ---- the window controls: the range and the comparison ---- */
+/*
+ * NEW WORK — `Reports.tsx` § THE FOURTH SEGMENT. The design draws two segmented
+ * controls and nothing below them, so this block sits under the drawn row and
+ * changes none of it. Every value is an existing token; no colour literal, and
+ * nothing here puts text on `--avo-brand` (#9).
+ */
+
+.reports__window {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: -6px;
+}
+
+.reports__dates {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* The two date fields sit inline; the field component is a column by default. */
+.reports__dates .avo-field {
+  min-width: 158px;
+}
+
+.reports__comparerow {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* The sentence that says what the control above it means. Muted: it explains,
+   it does not compete with the figures. */
+.reports__hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+  max-width: 62ch;
+}
+
+/* ---- the comparison strip on a card ---- */
+/*
+ * Between the head and the table, full card width, because it is a sentence and
+ * not a figure. `Reports.tsx` § A DELTA WITHOUT ITS WINDOW carries the argument
+ * for why it is not a chip in the stat corner.
+ */
+
+.reports__compare {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: var(--avo-surface-alt);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reports__compare-line {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--avo-ink);
+}
+
+/*
+ * THE ARROW IS DECORATION AND IS `aria-hidden` IN THE MARKUP. The direction is
+ * carried by the words "more" and "less", which is what a screen reader gets and
+ * what colour-blind readers get; this is a third, redundant channel.
+ */
+.reports__compare-arrow {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.reports__compare[data-direction='up'] .reports__compare-arrow {
+  color: var(--avo-positive);
+}
+
+.reports__compare[data-direction='down'] .reports__compare-arrow {
+  color: var(--avo-danger-text);
+}
+
+.reports__compare[data-direction='flat'] .reports__compare-arrow {
+  color: var(--avo-text-muted-soft);
+}
+
+/*
+ * The caveat is not quieter than the figure above it. `comparable: false` is the
+ * statement that the two numbers are not the same question, and a merchant who
+ * reads the delta and not this has read the card wrongly — so it is body-weight
+ * ink rather than the muted grey a footnote would get.
+ */
+.reports__compare-caveat {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--avo-ink);
+}
+
+/* Which of the two windows the Export button is about to hand her. */
+.reports__exportnote {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
 /* ================================================== console · salons list == */
 
 .salons {
