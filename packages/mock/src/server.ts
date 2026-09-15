@@ -710,6 +710,31 @@ app.post('/charges', async (req, reply) => {
     depositReturnedFils: fils(0),
     bookingId: null,
     happyHour: null,
+    /**
+     * A FOURTH KEY, ABSENT FOR THE SAME REASON AND FAILING NOTHING YET — which is
+     * the only interesting thing about it.
+     *
+     * `ChargeResult` (api/src/services/charge.ts:275) carries `customAmount` at
+     * the top level as well as on the transaction row, and its comment there says
+     * why it is never omitted: a client has to be able to tell "this was a menu
+     * price" from "this API is too old to say". The scanner renders the receipt
+     * off this response, and a receipt that cannot distinguish the two is the
+     * customer-facing half of what `transaction.custom_amount` solves for the
+     * merchant.
+     *
+     * Nothing refuses it today: `ChargeResultSchema` does not declare the field,
+     * so zod STRIPS it rather than failing. That is precisely how the three keys
+     * above went missing — a field no consumer demands yet is a field nobody
+     * notices is gone, right up until the schema is widened and every successful
+     * charge starts failing to parse.
+     *
+     * The SAME expression as the row above, deliberately. charge.ts has had this
+     * defect twice (see its comment at :1156): one payload built in two places, so
+     * the row says one thing and the reply says another — and the divergence would
+     * tell the scanner a typed charge came off the menu, on the one screen where
+     * that distinction is the whole feature.
+     */
+    customAmount: wantsCustom,
     loyalty:
       salonFor(req).loyaltyMode === 'stamps'
         ? { mode: 'stamps' as const, stamps: 5, target: salon.stampTarget, rewardReady: false }
