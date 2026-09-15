@@ -27,70 +27,32 @@
  * that does not exist.
  *
  * ═════════════════════════════════════════════════════════════════════════════
- * THE SCHEMA IS DECLARED HERE BECAUSE `packages/types` HAS NO `VoucherSchema`.
- * ═════════════════════════════════════════════════════════════════════════════
- * REPORTED, NOT ADDED — `packages/types` is trunk-owned (CLAUDE.md § Shared
- * packages) and a field rename there is a four-way break. The consequence is
- * named rather than absorbed: `e2e/contract.test.ts`'s drift guard walks the
- * shared schemas, so it cannot see this parser. A server that renamed
- * `balanceAfterFils` would be caught here, at runtime, by one customer — and
+ * THE SCHEMA CAME FROM HERE AND NOW LIVES IN `packages/types`. (trunk, 2026-09-15)
+ *
+ * This file used to declare `VoucherSchema` and `VoucherRedemptionSchema`
+ * itself, and said why it could not move them: `packages/types` is trunk-owned
+ * and a lane may not change it. **Trunk moved them**, for exactly the reason
+ * this block named — `e2e/contract.test.ts`'s drift guard walks the SHARED
+ * schemas, so it could not see a parser declared here, and a server that renamed
+ * `balanceAfterFils` would have been caught at runtime by one customer and
  * nowhere else.
  *
- * It is built out of the shared primitives (`FilsSchema`, `IdSchema`,
- * `DateTimeSchema`) rather than restating `z.number()`, which is the same rule
- * `api/account.ts` follows for its four envelope schemas.
+ * The console has its own reader (`apps/dashboard/src/api/vouchers.ts`,
+ * hand-rolled) and keeps it: that app has no zod dependency at all, so parsing
+ * by hand is its house style there rather than an oversight. Two readers of one
+ * fact is still one more than anybody wants — what changed is that the fact is
+ * now declared somewhere the guard can reach.
  */
 
-import { z } from 'zod';
-import { DateTimeSchema, FilsSchema, IdSchema } from '@avo/types';
+import {
+  VoucherRedemptionSchema,
+  type Voucher,
+  type VoucherRedemption,
+} from '@avo/types';
 import { newIdempotencyKey, postJson } from './client';
 
-/**
- * A voucher row as `serialiseVoucher` writes it.
- *
- * `redeemable` IS THE SERVER'S AND IS NOT RE-DERIVED. The route computes it once
- * from `redeemedAt`, `voidedAt` and `expiresAt` precisely so that no client can
- * disagree with the redeem endpoint about whether a row is live — its own words:
- * "so the console does not reimplement the predicate". The three timestamps are
- * declared below so that a server which stopped sending them fails the parse
- * loudly, and for no other reason: nothing in this app reads them.
- *
- * `code` comes back on the response and is deliberately never rendered. She
- * typed it; echoing it buys nothing and puts a live-looking credential on a
- * screen after it has been spent.
- */
-export const VoucherSchema = z.object({
-  id: IdSchema,
-  code: z.string().min(1),
-  memberId: IdSchema,
-  amountFils: FilsSchema,
-  reason: z.string(),
-  expiresAt: DateTimeSchema.nullable(),
-  createdAt: DateTimeSchema,
-  redeemedAt: DateTimeSchema.nullable(),
-  redeemedTransactionId: IdSchema.nullable(),
-  voidedAt: DateTimeSchema.nullable(),
-  redeemable: z.boolean(),
-});
+export type { Voucher, VoucherRedemption };
 
-export type Voucher = z.infer<typeof VoucherSchema>;
-
-/**
- * What `POST /members/me/vouchers/redeem` answers with on a 200.
- *
- * `balanceAfterFils` IS THE BALANCE. Non-negotiable #2: it is written inside the
- * same transaction as the credit and the ledger pair, so it is the only number
- * on this surface that is safe to show. Adding `creditedFils` to a balance the
- * app happened to be holding would be the client deciding what she has, and it
- * would be wrong the moment a charge settled between the two reads.
- */
-export const VoucherRedemptionSchema = z.object({
-  voucher: VoucherSchema,
-  creditedFils: FilsSchema,
-  balanceAfterFils: FilsSchema,
-});
-
-export type VoucherRedemption = z.infer<typeof VoucherRedemptionSchema>;
 
 /**
  * Redeem a code.

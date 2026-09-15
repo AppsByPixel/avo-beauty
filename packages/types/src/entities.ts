@@ -315,6 +315,72 @@ export const TransactionSchema = z.object({
   reversedByTransactionId: IdSchema.nullable(),
 });
 
+// -------------------------------------------------------------- voucher ----
+
+/**
+ * AN AVO-ISSUED COMPENSATION VOUCHER. (`api/src/routes/vouchers.ts`.)
+ *
+ * WHY THIS IS HERE RATHER THAN IN A CLIENT, which is the whole reason this block
+ * was written: the wallet and the console each grew their OWN reader of this
+ * shape — `apps/wallet/src/api/vouchers.ts` parsed it with zod, and
+ * `apps/dashboard/src/api/vouchers.ts` hand-rolls an `interface` plus per-field
+ * coercion. Two definitions of one fact, neither visible to
+ * `e2e/support/contract-drift.ts`, on a money path. That is the shape of drift
+ * (7), which deleted an entire 15-minute reversal feature between the server and
+ * the screen, and of decision 105's "three readers of one fact is the defect,
+ * not the disagreement they have not had yet".
+ *
+ * THE CONSOLE KEEPS ITS HAND-ROLLED READER, DELIBERATELY. `apps/dashboard` has
+ * **no zod dependency at all** — zero imports, nothing in its package.json — so
+ * hand-rolled parsing is that app's house style rather than an oversight there,
+ * and adding a library to it is a decision with a lockfile and a bundle behind
+ * it, not a rider on a schema move. What this block buys is the thing that was
+ * actually missing: a declaration the drift guard can compare against the wire.
+ *
+ * `redeemable` IS THE SERVER'S ANSWER AND MUST NOT BE RE-DERIVED. The route
+ * computes it once — not redeemed, not voided, not expired — precisely so a
+ * client cannot disagree with the redeem endpoint about whether a row is live.
+ * Both clients already carry that warning; it is restated at the field because
+ * this is now where a third client will read it first.
+ */
+export const VoucherSchema = z.object({
+  id: IdSchema,
+  /** As the server minted it. A client never chooses one — `POST /v1/vouchers` refuses a supplied `code` by name. */
+  code: z.string().min(1),
+  memberId: IdSchema,
+  amountFils: FilsSchema,
+  /** Why it was issued. Required at issue, and the only description this instrument will ever carry. */
+  reason: z.string(),
+  expiresAt: DateTimeSchema.nullable(),
+  createdAt: DateTimeSchema,
+  redeemedAt: DateTimeSchema.nullable(),
+  /** The `adjustment` the redemption wrote. Null until she spends it. */
+  redeemedTransactionId: IdSchema.nullable(),
+  voidedAt: DateTimeSchema.nullable(),
+  /**
+   * The server's single answer to "can this be spent". Computed once, server
+   * side. Do NOT recompute it from the three timestamps above — a client that
+   * does will eventually disagree with the endpoint that actually decides, and
+   * the disagreement will be about money.
+   */
+  redeemable: z.boolean(),
+});
+
+/**
+ * What `POST /members/me/vouchers/redeem` answers on a 200.
+ *
+ * `balanceAfterFils` IS THE BALANCE — written inside the same transaction as the
+ * credit and the ledger pair, so it is the only number on this surface safe to
+ * show. Adding `creditedFils` to a balance the app happened to be holding would
+ * be the client deciding what she has (#2), and it would be wrong the moment a
+ * charge settled between the two reads.
+ */
+export const VoucherRedemptionSchema = z.object({
+  voucher: VoucherSchema,
+  creditedFils: FilsSchema,
+  balanceAfterFils: FilsSchema,
+});
+
 // --------------------------------------------------------------- top-up ----
 
 export const TopUpIntentSchema = z.object({
@@ -1073,3 +1139,5 @@ export type LegalDocumentSet = z.infer<typeof LegalDocumentSetSchema>;
 export type SupportTopic = z.infer<typeof SupportTopicSchema>;
 export type SupportConfig = z.infer<typeof SupportConfigSchema>;
 export type SupportTicket = z.infer<typeof SupportTicketSchema>;
+export type Voucher = z.infer<typeof VoucherSchema>;
+export type VoucherRedemption = z.infer<typeof VoucherRedemptionSchema>;
