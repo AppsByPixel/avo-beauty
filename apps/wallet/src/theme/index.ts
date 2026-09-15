@@ -107,22 +107,48 @@ export type TypeToken = keyof typeof theme.text;
  *   textTransform  — `uppercase` has no effect on Arabic (there is no case), so
  *                    it is dropped rather than left as a no-op that a later
  *                    reader has to reason about.
+ *
+ * THE THIRD ARGUMENT EXISTS BECAUSE `fontWeight` ALONE IS INERT HERE.
+ *
+ * Because this function pins `fontFamily` to a single-weight face, a later
+ * style object in the same array that raises `fontWeight` changes nothing that
+ * can be rendered:
+ *
+ *     StyleSheet.flatten([text('bodyS', 'en'), { fontWeight: '600' }])
+ *       // { fontSize: 12.5, fontWeight: '600', fontFamily: 'Inter_400Regular' }
+ *
+ * — a request for SemiBold pointed at the Regular face. `Inter_600SemiBold` is
+ * loaded (App.tsx) and reachable (`text('label')` selects it), and this style
+ * never asks for it. In Arabic it is worse and it is non-negotiable #12: the
+ * family resolves to `IBMPlexSansArabic_400Regular` while
+ * `IBMPlexSansArabic_600SemiBold` sits loaded and unused, so an emphasis the
+ * design specifies disappears entirely in the language the design calls a
+ * first-class layout rather than a translation pass.
+ *
+ * So a weight that differs from the token's own belongs HERE, where the face is
+ * resolved, and not in a `StyleSheet.create` object — which additionally cannot
+ * hold the right answer, because the right answer depends on `lang`.
  */
-export function text(token: TypeToken, lang: 'en' | 'ar' = 'en'): TextStyle {
+export function text(
+  token: TypeToken,
+  lang: 'en' | 'ar' = 'en',
+  weight?: '400' | '500' | '600' | '700',
+): TextStyle {
   const t = theme.text[token];
+  const w = weight ?? t.fontWeight;
   const style: TextStyle = {
     ...t,
     // The generator emits the weight as a string ("500"); React Native's
     // TextStyle enumerates the legal values. The token file is the authority on
     // which weights exist, so this narrows rather than validates.
-    fontWeight: t.fontWeight as TextStyle['fontWeight'],
-    fontFamily: face(t.fontFamily, t.fontWeight),
+    fontWeight: w as TextStyle['fontWeight'],
+    fontFamily: face(t.fontFamily, w),
   };
   if (lang !== 'ar') return style;
   // Omitted, not set to undefined: `exactOptionalPropertyTypes` treats an
   // explicit undefined as a different thing from an absent key.
   const { letterSpacing: _ls, textTransform: _tt, ...rest } = style;
-  return { ...rest, fontFamily: face(ARABIC_FAMILY, t.fontWeight) };
+  return { ...rest, fontFamily: face(ARABIC_FAMILY, w) };
 }
 
 /**

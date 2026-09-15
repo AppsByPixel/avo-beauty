@@ -380,7 +380,7 @@ function Line({
           testID={`${testID}-retry`}
           style={styles.chipRetry}
         >
-          <Text style={[text('bodyS', lang), styles.chipRetryText]}>{copy.tryAgain}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.chipRetryText]}>{copy.tryAgain}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -445,7 +445,11 @@ const styles = StyleSheet.create({
   chipDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.dangerDot, flexShrink: 0 },
   chipText: { color: color.dangerText, flex: 1 },
   chipRetry: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', flexShrink: 0 },
-  chipRetryText: { color: color.dangerText, fontWeight: '700', textDecorationLine: 'underline' },
+  // design/AVO States.dc.html:103, :137, :224 — every "Try again"/"Retry" in the
+  // bundle is font-weight:600, and the design has no 700 for a text action at
+  // all. The weight now rides on `text()`, which is the only place that can
+  // resolve it to a face in both languages.
+  chipRetryText: { color: color.dangerText, textDecorationLine: 'underline' },
   // A skeleton is a BAR. Never a placeholder value.
   skeletonBar: { height: 11, borderRadius: 4, backgroundColor: color.disabledBg },
 });
