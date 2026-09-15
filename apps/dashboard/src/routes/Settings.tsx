@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { fils, formatFils, type Salon } from '@avo/types';
-import { Button, Card, ErrorState, Pill, Skeleton, Stepper, TextField, Toggle } from '@avo/ui';
+import {
+  Button,
+  Card,
+  ErrorState,
+  Pill,
+  Select,
+  Skeleton,
+  Stepper,
+  TextField,
+  Toggle,
+  type SelectOption,
+} from '@avo/ui';
 import { useSalon } from '../api/salon.js';
 import {
   useAddBranch,
@@ -320,7 +331,130 @@ function ModuleRow({
 
 /* ------------------------------------------------------------------ deposit */
 
-function DepositPanel({ salon, update }: { salon: Salon | undefined; update: Updater }) {
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE NO-SHOW RETURN WINDOW — NEW WORK, AND A LIST RATHER THAN A STEPPER
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Aftab's item 6: "what if they dont have enough payment (sometimes they dont
+ * have money but lock the booking and they dont come) deposit health option for
+ * merchants".
+ *
+ * NEW WORK. THE DESIGN DRAWS NO CONTROL HERE. `AVO Merchant Dashboard
+ * .dc.html:1059` is a static strip — `No-show: deposit returns to the wallet
+ * <b>1 hour</b> after a missed slot.` — with the hour written into the markup
+ * and nothing beside it. The SENTENCE below is the designer's, verbatim and
+ * unchanged; the CONTROL is invented. Said plainly so a later reader does not go
+ * looking for a dropdown in the bundle.
+ *
+ * The gap it closes: `noShowReturnMinutes` has been in `MERCHANT_EDITABLE` since
+ * the route was written and this panel READ it and only displayed it. A merchant
+ * was told a rule about her own customers' money, on a card that changes the
+ * deposit immediately above, and given no way to set it.
+ *
+ * WHAT THIS IS NOT. Forfeiture — the merchant KEEPING the money — is a different
+ * thing, is not built, and is escalated. The bundle's own notification copy
+ * (`AVO Merchant Dashboard.dc.html:1136`, "Deposit is yours to keep or release.")
+ * implies it and contradicts the product description in so many words:
+ * `design/AVO-Beauty-Product-Description-v2.md:45` — "automatically returns to
+ * their wallet. (Money never leaves the ecosystem; the deposit creates
+ * commitment, not punishment.)" Reported as a design copy conflict. No string
+ * here may imply otherwise, and none does.
+ *
+ * ── why a fixed list and not a second Stepper ──────────────────────────────
+ * The deposit above is a `Stepper` with a hard 1–10 KD range the DATABASE states
+ * (`salon_deposit_range`) and the route re-states. This field has no upper bound
+ * anywhere: `parseNoShowReturnMinutes` asks only for "a whole number of minutes
+ * greater than zero" and the CHECK is `salon_no_show_return_positive` — `> 0`.
+ *
+ *   A STEPPER WOULD HAVE TO INVENT `min`, `max` AND `step`, and would then
+ *   ENFORCE the invention: `Stepper` clamps (`Math.min(max, Math.max(min, …))`),
+ *   so a salon already holding a value outside my range would have it quietly
+ *   rewritten the first time anyone touched the control. Those salons exist —
+ *   `e2e/tenancy.test.ts:709` sends 999 and calls it valid. One `step` also
+ *   cannot serve both ends: 15 makes seven days 672 presses, 60 makes 45 minutes
+ *   unreachable.
+ *
+ *   A BOUNDED TEXT INPUT would need its own parse, its own inline error and its
+ *   own refusal path — a second one, beside the screen's — and would still be
+ *   inventing the bound, only less visibly. It also makes the merchant think in
+ *   minutes while the sentence beneath her reads "1 hour".
+ *
+ *   A FIXED LIST INVENTS A CHOICE, NOT A BOUND. It does not clamp — an unlisted
+ *   value is CARRIED as its own option rather than corrected — and every value it
+ *   can produce is enumerable, which is what lets the design's sentence be
+ *   checked at all of them instead of argued about. See
+ *   `settingsNoShowWindow.test.tsx § the sentence and the option agree`.
+ *
+ * ── the five, and why the ends are about the till ──────────────────────────
+ * THIS NUMBER IS TWO WINDOWS, NOT ONE, and that is the whole argument. Besides
+ * deciding when the deposit auto-returns (`booking.no_show_return_due_at =
+ * ends_at + n`), `findApplicableHold` reuses it as the EARLY-ARRIVAL GRACE at the
+ * till: `starts_at <= now + noShowReturnMinutes` decides which held deposit a
+ * charge may consume. So both ends of the range are money at the counter:
+ *
+ *   TOO SHORT and a customer checked in ten minutes before her slot finds her own
+ *   deposit not applicable — she paid, and the till cannot see it. 15 minutes is
+ *   the shortest that clears an ordinary check-in lead.
+ *   TOO LONG and the grace reaches a DIFFERENT appointment. `findApplicableHold`'s
+ *   header describes the failure at length — "A customer with an appointment next
+ *   Tuesday who walks in today for a blow-dry must not have Tuesday's deposit
+ *   spent on it" — and a large enough window re-opens it by configuration rather
+ *   than by code. 4 hours sits inside a salon's own day (morning 10:00–13:00,
+ *   evening 16:00–21:00 in the seeded hours), so the grace cannot reach tomorrow.
+ *
+ * 60 is the anchor: the contract's example, the column default, the seed, the
+ * design's rendered "1 hour", and the product description's stated rule ("if the
+ * customer doesn't arrive within 1 hour of the slot").
+ *
+ * ── THE BOUND ITSELF BELONGS ON THE SERVER, AND IS NOT BUILT HERE ──────────
+ * This list is what the CONTROL offers. It is not a validation, and it must not
+ * be mistaken for one: the endpoint still accepts 1 and still accepts 10080, from
+ * the console's `PATCH /v1/platform/salons/{id}` or from curl. That is
+ * non-negotiable #7's reasoning applied to a range instead of a permission — a
+ * client-side bound is a validation the next client will not have. Reported to
+ * trunk for `api/`, described in the handoff, and pinned from the test file so
+ * the day a ceiling lands someone re-reads this list.
+ */
+const RETURN_WINDOW_PRESETS: readonly number[] = [15, 30, 60, 120, 240];
+
+/**
+ * The window as the merchant reads it — ONE function, used by the select's option
+ * labels AND by the design's sentence, so the two cannot disagree at any value.
+ *
+ * `${n} minutes` FOR n = 1 WAS A REAL DEFECT, not a hypothetical: the old inline
+ * expression rendered "1 minutes", and 1 is storable (`> 0` is the only CHECK).
+ * It never showed because nothing could reach the field; adding a control is what
+ * made it reachable.
+ *
+ * Above an hour, a non-multiple of 60 stays in minutes — "90 minutes", not "1
+ * hour 30 minutes". True, and it invents no copy: the design writes exactly one
+ * form of this phrase and the compound is not it. No preset produces it; only a
+ * value set elsewhere can.
+ */
+export function formatReturnWindow(minutes: number): string {
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+/**
+ * The presets, plus the salon's own value when it is not one of them.
+ *
+ * CARRIED, NOT CLAMPED, AND SORTED INTO PLACE. A salon on 45 minutes sees "45
+ * minutes" selected between 30 and 60 and may leave it there; picking a preset is
+ * then her decision and not a side effect of the panel rendering. This is the
+ * behaviour a `Stepper` could not have had, and the reason the control is a list.
+ */
+function returnWindowOptions(current: number): SelectOption[] {
+  const minutes = RETURN_WINDOW_PRESETS.includes(current)
+    ? [...RETURN_WINDOW_PRESETS]
+    : [...RETURN_WINDOW_PRESETS, current].sort((a, b) => a - b);
+  return minutes.map((m) => ({ value: String(m), label: formatReturnWindow(m) }));
+}
+
+export function DepositPanel({ salon, update }: { salon: Salon | undefined; update: Updater }) {
   const serverValue = salon?.depositFils ?? DEPOSIT_MIN;
   const [value, setValue] = useState<number>(serverValue);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -348,10 +482,39 @@ function DepositPanel({ salon, update }: { salon: Salon | undefined; update: Upd
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   const returnMinutes = salon?.noShowReturnMinutes ?? 60;
-  const returnLabel =
-    returnMinutes % 60 === 0
-      ? `${returnMinutes / 60} hour${returnMinutes === 60 ? '' : 's'}`
-      : `${returnMinutes} minutes`;
+  const returnLabel = formatReturnWindow(returnMinutes);
+
+  /*
+   * THE VALUE THE SELECT SHOWS WHILE A WRITE IS IN THE AIR, WITHOUT A LOCAL COPY.
+   *
+   * `useUpdateSalon` writes nothing optimistically, so rendering `returnMinutes`
+   * alone would snap the select back under the merchant's hand the instant she
+   * picked an option and hold it there until the refetch landed. The stepper
+   * above solves that with `useState` + an effect, which it needs anyway for the
+   * debounce; a select has no intermediate values to debounce, so it can read the
+   * in-flight value off the mutation instead and keep no state of its own. That
+   * also removes a failure the stepper's draft has: after a REFUSED patch the
+   * server value is unchanged, so an effect keyed on it never re-fires and the
+   * draft sits on a number nobody accepted. Here the settled mutation simply
+   * stops being pending and the server's value renders again.
+   *
+   * BOTH HALVES OF THE CONDITION EARN THEIR PLACE, and a third did not.
+   *
+   * `update` is ONE mutation shared by every panel on this screen, so `isPending`
+   * alone is true during a WhatsApp flip too — reading the KEY off `variables` is
+   * what keeps another panel's write off this control. And `isPending` is what
+   * makes the settled state the server's again, refusal included: `variables`
+   * survives a failed mutation, so without it a refused 240 would sit here
+   * forever.
+   *
+   * WHAT IS NOT HERE: an `'noShowReturnMinutes' in update.variables` guard, which
+   * this line carried until a mutation proved it inert — deleting it failed
+   * nothing, because `?? returnMinutes` already answers for a patch that does not
+   * mention the field. A check that cannot fail is not a safeguard, it is a
+   * second statement of a rule that lives one line down.
+   */
+  const pendingWindow = update.isPending ? update.variables?.noShowReturnMinutes : undefined;
+  const shownMinutes = pendingWindow ?? returnMinutes;
 
   return (
     <Card className="settings__card">
@@ -361,26 +524,80 @@ function DepositPanel({ salon, update }: { salon: Salon | undefined; update: Upd
       </p>
 
       {salon === undefined ? (
-        <Skeleton width={220} height={38} />
+        <>
+          <Skeleton width={220} height={38} />
+          {/*
+            The new row skeletons too, and at its real height — interaction-spec
+            §4 asks skeletons to match the layout's shape, and a card that grows
+            a 33px row on load is the reflow `Overview.tsx` was corrected for.
+          */}
+          <div className="settings__window">
+            <span className="settings__window-label">Return window</span>
+            <Skeleton width={104} height={33} radius={10} />
+          </div>
+        </>
       ) : (
-        <div className="settings__deposit">
-          <Stepper
-            label="Booking deposit"
-            value={value}
-            min={DEPOSIT_MIN}
-            max={DEPOSIT_MAX}
-            step={DEPOSIT_STEP}
-            onChange={onChange}
-            // Integer fils in, formatted only here. Never a float.
-            format={(v) => formatFils(fils(v))}
-            valueText={`${formatFils(fils(value))} Kuwaiti dinars`}
-            disabled={update.isPending}
-          />
-          <span className="settings__deposit-unit">KD</span>
-          <span className="settings__deposit-range">1&ndash;10 KD</span>
-        </div>
+        <>
+          <div className="settings__deposit">
+            <Stepper
+              label="Booking deposit"
+              value={value}
+              min={DEPOSIT_MIN}
+              max={DEPOSIT_MAX}
+              step={DEPOSIT_STEP}
+              onChange={onChange}
+              // Integer fils in, formatted only here. Never a float.
+              format={(v) => formatFils(fils(v))}
+              valueText={`${formatFils(fils(value))} Kuwaiti dinars`}
+              disabled={update.isPending}
+            />
+            <span className="settings__deposit-unit">KD</span>
+            <span className="settings__deposit-range">1&ndash;10 KD</span>
+          </div>
+
+          <div className="settings__window">
+            {/*
+              THE VISIBLE CAPTION IS A SUBSTRING OF THE ACCESSIBLE NAME, on
+              purpose — WCAG 2.5.3 "Label in Name". "Return window" is
+              unambiguous inside a card titled Booking deposit and above a
+              sentence that starts "No-show:", while a screen reader that has
+              neither still hears which window this is.
+            */}
+            <span className="settings__window-label">Return window</span>
+            <Select
+              label="No-show return window"
+              labelHidden
+              size="sm"
+              value={String(shownMinutes)}
+              options={returnWindowOptions(shownMinutes)}
+              disabled={update.isPending}
+              /*
+               * NOT DEBOUNCED, and the stepper beside it is — the difference is
+               * the control, not an inconsistency. A stepper passes through 6, 7
+               * and 8 on the way to 9 and each would be its own write; a select
+               * emits one settled choice per interaction. Compared against the
+               * SERVER's value, so re-picking what the salon already holds is not
+               * a write at all.
+               */
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (next !== returnMinutes) update.mutate({ noShowReturnMinutes: next });
+              }}
+            />
+          </div>
+        </>
       )}
 
+      {/*
+        THE DESIGN'S SENTENCE, VERBATIM, AND IT FOLLOWS THE SERVER RATHER THAN THE
+        CONTROL. While a write is in the air the select shows the merchant's
+        choice and this shows the salon's live rule, because the two say different
+        things: one is an intent, the other is a claim about what happens to a
+        CUSTOMER'S money and must never run ahead of the server. `ModuleRow`'s
+        Pill-beside-Toggle carries the same argument. They re-agree the moment the
+        write settles, whichever way it settles; a refusal surfaces in the
+        screen's own `WriteError`.
+      */}
       <div className="settings__foot">
         No-show: deposit returns to the wallet <b>{returnLabel}</b> after a missed slot.
       </div>

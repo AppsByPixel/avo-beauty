@@ -1470,6 +1470,31 @@ a:hover {
   margin-left: auto;
 }
 
+/*
+ * The no-show return window's row. NEW WORK — the design draws no control here
+ * (`AVO Merchant Dashboard.dc.html:1059` is a static strip), so this rule is
+ * invented too. It borrows the deposit row's geometry above it rather than a new
+ * one: the same 10px gap and centred baseline, the control pushed right the way
+ * `.settings__deposit-range` is, and the caption at `.settings__row-body`'s
+ * 12.5px muted so the card gains no new type size.
+ */
+.settings__window {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.settings__window-label {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+/* The control, whether it is the select or its skeleton. */
+.settings__window > :last-child {
+  margin-left: auto;
+}
+
 .settings__foot {
   margin-top: 16px;
   padding-top: 14px;
