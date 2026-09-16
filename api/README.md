@@ -52,12 +52,40 @@ hand looks. It is here now. **DECISIONS.md 108** carries what it cost: a FAIL on
 the one assertion that stands between this product and a ledger that disagrees
 with itself, arriving minutes after a money-moving merge.
 
-The suite is idempotent: it may be run repeatedly against the same database with no
-reset in between, and it deletes nothing. Counts are asserted as **deltas** against
-what each run finds, because `topup_intent` rows are real payment records and a
-suite that truncates them to stay green is a suite that can hide a real charge.
-Measured 2026-08-25 — fresh database `26 passed (26)`, immediate re-run on the same
-database `26 passed (26)`.
+The suite **was** idempotent and **is not any more**: it is green exactly once per
+database reset. Counts are still asserted as **deltas** against what each run
+finds, because `topup_intent` rows are real payment records and a suite that
+truncates them to stay green is a suite that can hide a real charge — and that
+design is not what broke.
+
+Measured 2026-08-25 — fresh database `26 passed (26)`, immediate re-run on the
+same database `26 passed (26)`. **Re-measured 2026-09-16 on 30 files: fresh
+`482 passed (482)`, immediate re-run on the same database `2 failed | 480
+passed`.** Both failures are the same sentence — *"a walk-in is |amount_fils| and
+carries no deposit"*, `expected 10000 to be +0` — in
+`reportsArtist.int.test.ts` and `reportsReconciliation.int.test.ts`.
+
+**The cause is a cleanup that deletes half a fixture.**
+`routes/artistDayVoid.int.test.ts`'s `afterAll` runs
+`DELETE FROM booking WHERE id LIKE 'AV-BK-%'` — because
+`booking_artist_slot_no_overlap` would otherwise collide on the next run. The
+charges those bookings settled are **not** deleted, and they consumed real
+deposits. So a second run finds charges carrying a `deposit_held` leg with no
+booking pointing at them, which is precisely `services/reports.ts`'s definition
+of a **walk-in** — and a walk-in that carries a deposit is the one thing those
+two specs exist to refuse.
+
+Nothing here is wrong about the product: both reports are correct about the rows
+they were given. The fixture manufactured a state the product cannot reach.
+
+**CI does not meet it** — `ci.yml` mints `avo_int_check` fresh on every run — so
+this is a trap for a person running the suite twice by hand, which is exactly
+what this section tells you to do. Reported by the lane that proved it was not
+its own red, with a control run in which its own file was never loaded.
+
+The durable fix is a per-run slot rather than a delete, so nothing needs
+cleaning up: the same move `e2e/support/global-setup.ts` makes with its
+per-run database. Not taken yet.
 
 ---
 
