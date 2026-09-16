@@ -125,7 +125,22 @@ beforeAll(async () => {
       ('${PROBE_PRODUCT_A}',        '${SALON_A}', 'Tenancy probe A',        1000),
       ('${PROBE_PRODUCT_B_PATCH}',  '${SALON_B}', 'Tenancy probe B patch',  1000),
       ('${PROBE_PRODUCT_B_DELETE}', '${SALON_B}', 'Tenancy probe B delete', 1000)
-    ON CONFLICT (id) DO UPDATE SET price_fils = 1000, salon_id = EXCLUDED.salon_id;
+    ON CONFLICT (id) DO UPDATE SET price_fils = 1000, salon_id = EXCLUDED.salon_id,
+    -- \`active = true\` WAS MISSING, AND IT MADE THIS FILE GREEN EXACTLY ONCE PER
+    -- DATABASE. \`DELETE /salons/{id}/products/{pid}\` is a SOFT delete — it sets
+    -- \`active = false\` — so \`PROBE_PRODUCT_B_DELETE\` survives the control call as a
+    -- retired row, this upsert found it by id and reset only the price, and the
+    -- SECOND run's control answered \`404 unknown_product\` where the row pins 204.
+    --
+    -- Measured, not reasoned: two consecutive \`AVO_QA_DB=avo_lane_d\` runs of this
+    -- file, the first 125 passed and the second 124 passed with exactly this spec
+    -- red. It has never fired in CI because the run database is minted per run, which
+    -- is precisely what makes it the kind of defect that waits.
+    --
+    -- The four image-owner rows below already do this and say why in the same words
+    -- ("requireOwnerInSalon filters on it"). This is that line, on the row that
+    -- needed it first.
+        active = true;
 
     -- Only the columns without defaults. The wire field is \`when\` and the COLUMN is
     -- \`send_when\`, which is worth naming: \`"when"\` is a reserved word and writing it
@@ -289,6 +304,144 @@ beforeAll(async () => {
     ]'::jsonb
     WHERE id = '${SALON_B}';
   `);
+
+  /**
+   * THE TWO APPOINTMENTS THE NO-SHOW LEDGER ADDRESSES. The whole argument is above
+   * `PROBE_NOSHOW_MEMBER_A`; what follows is only what each statement is for.
+   *
+   * ITS OWN `psql` CALL, AND WRAPPED IN A TRANSACTION, which the block above is not.
+   * `ledger_entry_balanced` (migration 0001) is a DEFERRABLE INITIALLY DEFERRED
+   * constraint trigger: it sums a transaction's entries at COMMIT and raises if they
+   * do not net to zero. Statement-per-transaction — psql's default — would therefore
+   * refuse the first leg of every pair on its own commit, before the second leg
+   * exists. The BEGIN is what lets a double-entry posting be written at all.
+   */
+  psql(`
+BEGIN;
+
+-- Salon B has no artist of its own, so one is made. Salon A reuses AR-001 rather than
+-- gaining a fifth: its roster is read by three other files.
+INSERT INTO artist (id, salon_id, name, slot_minutes, active)
+VALUES ('${PROBE_ARTIST_B}', '${SALON_B}', 'Tenancy probe artist', 30, true)
+ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, active = true;
+
+-- ONE CUSTOMER PER SALON, AND NOBODY ELSE'S -- a live hold belongs to a member, and
+-- findApplicableHold spends her earliest one on her next charge. DO NOTHING on
+-- conflict: the balance is never reset, because the mark credits it and writes the
+-- matching member_wallet entry together. See the block above PROBE_NOSHOW_MEMBER_A.
+INSERT INTO member (id, salon_id, name, phone, email, email_verified,
+                    password_hash, balance_fils, visits, tier, stamps, policy_version)
+SELECT '${PROBE_NOSHOW_MEMBER_A}', '${SALON_A}', 'Tenancy probe customer A',
+       '${PROBE_NOSHOW_PHONE_A}', NULL, false, s.password_hash, 0, 0, 'bronze', NULL, 3
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO member (id, salon_id, name, phone, email, email_verified,
+                    password_hash, balance_fils, visits, tier, stamps, policy_version)
+SELECT '${PROBE_NOSHOW_MEMBER_B}', '${SALON_B}', 'Tenancy probe customer B',
+       '${PROBE_NOSHOW_PHONE_B}', NULL, false, s.password_hash, 0, 0, 'bronze', NULL, 3
+FROM staff_user s WHERE s.id = '${A_STAFF_FULL}'
+ON CONFLICT (id) DO NOTHING;
+
+-- LAST RUN'S APPOINTMENTS GO, this run's are new. Salon A's is never marked, so it
+-- would hold AR-001's 400-day slot for ever and two runs at the same offset from
+-- now() can overlap -- and booking_artist_slot_no_overlap is an EXCLUSION constraint,
+-- so that is a refused INSERT rather than a wrong answer. Scoped to this file's own
+-- prefixes. The transactions and ledger entries they point at STAY: they are
+-- append-only by design and deleting them would be lying about history to make a test
+-- tidy, which is seedQaMember's rule.
+DELETE FROM booking WHERE salon_id = '${SALON_A}' AND id LIKE '${PROBE_BOOKING_A_PREFIX}%';
+DELETE FROM booking WHERE salon_id = '${SALON_B}' AND id LIKE '${PROBE_BOOKING_B_PREFIX}%';
+
+-- THE MONEY, AS TWO REAL POSTINGS PER SALON.
+--
+-- An opening credit, then the hold that spends it. seed.ts section "the opening
+-- balances" is the pattern and the reasoning is quoted from it: "an opening balance is
+-- a real credit, so it gets a real entry -- a balance with no originating entry is a
+-- hole in that record, not a fixture convenience". kind 'adjustment' rather than
+-- 'topup' for the reason given there too: services/metrics.ts sums kind='topup' for
+-- the merchant's top-up tile and its commission, and this money was never collected
+-- from anyone. gateway_clearing is the counterpart, as it is for a settled top-up.
+--
+-- NET ZERO ON THE WALLET, so member.balance_fils is not touched: she is credited 5.000
+-- and immediately pays it as a deposit. That is what makes the two entries'
+-- balance_after_fils readable straight off the row -- nothing moves it in between.
+INSERT INTO transaction (id, member_id, salon_id, branch_id, kind, amount_fils,
+                         method, status, settled_at)
+VALUES
+  ('${PROBE_NOSHOW_OPEN_A}', '${PROBE_NOSHOW_MEMBER_A}', '${SALON_A}', '${A_BRANCH}',
+   'adjustment', ${PROBE_NOSHOW_DEPOSIT_FILS}, 'wallet', 'settled', now()),
+  ('${PROBE_NOSHOW_HOLD_A}', '${PROBE_NOSHOW_MEMBER_A}', '${SALON_A}', '${A_BRANCH}',
+   'deposit_hold', -${PROBE_NOSHOW_DEPOSIT_FILS}, 'wallet', 'settled', now()),
+  ('${PROBE_NOSHOW_OPEN_B}', '${PROBE_NOSHOW_MEMBER_B}', '${SALON_B}', '${B_BRANCH}',
+   'adjustment', ${PROBE_NOSHOW_DEPOSIT_FILS}, 'wallet', 'settled', now()),
+  ('${PROBE_NOSHOW_HOLD_B}', '${PROBE_NOSHOW_MEMBER_B}', '${SALON_B}', '${B_BRANCH}',
+   'deposit_hold', -${PROBE_NOSHOW_DEPOSIT_FILS}, 'wallet', 'settled', now());
+
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils, balance_after_fils)
+SELECT '${PROBE_NOSHOW_OPEN_A}', '${SALON_A}', m.id, 'member_wallet', 'credit',
+       ${PROBE_NOSHOW_DEPOSIT_FILS}, m.balance_fils + ${PROBE_NOSHOW_DEPOSIT_FILS}
+FROM member m WHERE m.id = '${PROBE_NOSHOW_MEMBER_A}';
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils)
+VALUES ('${PROBE_NOSHOW_OPEN_A}', '${SALON_A}', NULL, 'gateway_clearing', 'debit',
+        ${PROBE_NOSHOW_DEPOSIT_FILS});
+
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils, balance_after_fils)
+SELECT '${PROBE_NOSHOW_HOLD_A}', '${SALON_A}', m.id, 'member_wallet', 'debit',
+       ${PROBE_NOSHOW_DEPOSIT_FILS}, m.balance_fils
+FROM member m WHERE m.id = '${PROBE_NOSHOW_MEMBER_A}';
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils)
+VALUES ('${PROBE_NOSHOW_HOLD_A}', '${SALON_A}', NULL, 'deposit_held', 'credit',
+        ${PROBE_NOSHOW_DEPOSIT_FILS});
+
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils, balance_after_fils)
+SELECT '${PROBE_NOSHOW_OPEN_B}', '${SALON_B}', m.id, 'member_wallet', 'credit',
+       ${PROBE_NOSHOW_DEPOSIT_FILS}, m.balance_fils + ${PROBE_NOSHOW_DEPOSIT_FILS}
+FROM member m WHERE m.id = '${PROBE_NOSHOW_MEMBER_B}';
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils)
+VALUES ('${PROBE_NOSHOW_OPEN_B}', '${SALON_B}', NULL, 'gateway_clearing', 'debit',
+        ${PROBE_NOSHOW_DEPOSIT_FILS});
+
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils, balance_after_fils)
+SELECT '${PROBE_NOSHOW_HOLD_B}', '${SALON_B}', m.id, 'member_wallet', 'debit',
+       ${PROBE_NOSHOW_DEPOSIT_FILS}, m.balance_fils
+FROM member m WHERE m.id = '${PROBE_NOSHOW_MEMBER_B}';
+INSERT INTO ledger_entry (transaction_id, salon_id, member_id, account, direction,
+                          amount_fils)
+VALUES ('${PROBE_NOSHOW_HOLD_B}', '${SALON_B}', NULL, 'deposit_held', 'credit',
+        ${PROBE_NOSHOW_DEPOSIT_FILS});
+
+-- THE TWO APPOINTMENTS.
+--
+-- SALON B started 90 minutes ago, so the time gate lets the mark through.
+-- SALON A is 400 days out, so a guard that ever ran late would take
+-- appointment_not_started rather than return a stranger's deposit.
+-- BOTH deadlines are in the future, so no no-show pass any spec launches -- and no
+-- timer no-show-worker.test.ts starts -- can reach either row.
+INSERT INTO booking (id, salon_id, branch_id, member_id, artist_id, service_id,
+                     starts_at, ends_at, duration_min, deposit_fils, status,
+                     hold_transaction_id, no_show_return_due_at)
+VALUES
+  ('${PROBE_BOOKING_A}', '${SALON_A}', '${A_BRANCH}', '${PROBE_NOSHOW_MEMBER_A}',
+   '${PROBE_ARTIST_A}', '${A_SERVICE}',
+   now() + interval '400 days', now() + interval '400 days' + interval '30 minutes',
+   30, ${PROBE_NOSHOW_DEPOSIT_FILS}, 'deposit_held', '${PROBE_NOSHOW_HOLD_A}',
+   now() + interval '401 days'),
+  ('${PROBE_BOOKING_B}', '${SALON_B}', '${B_BRANCH}', '${PROBE_NOSHOW_MEMBER_B}',
+   '${PROBE_ARTIST_B}', '${B_SERVICE}',
+   now() - interval '90 minutes', now() - interval '60 minutes',
+   30, ${PROBE_NOSHOW_DEPOSIT_FILS}, 'deposit_held', '${PROBE_NOSHOW_HOLD_B}',
+   now() + interval '1 day');
+
+COMMIT;
+`);
 }, 120_000);
 
 afterAll(async () => {
@@ -430,6 +583,24 @@ interface SalonRoute {
    * below post a file to an invented salon on every run.
    */
   controlUpload?: { bytes: Uint8Array; contentType: string };
+  /**
+   * Send an `Idempotency-Key` on the CONTROL half only.
+   *
+   * ONLY the control, and the asymmetry is an assertion rather than an economy.
+   * `POST /salons/{id}/bookings/{bookingId}/no-show` answers 400
+   * `idempotency_key_required` to a caller who omits the header — so if the tenancy
+   * guard ever moved BELOW `readIdempotencyKey`, the cross-salon probe would answer
+   * 400 instead of 403 and this table's first spec would name it. The route's own
+   * registration argues for that ordering in those words ("THE GATE FIRST, before the
+   * key is even read... an unauthorised caller should not learn this endpoint's
+   * vocabulary, not even that it wants a key"), and sending no key on the attack half
+   * is what keeps the claim checked rather than merely commented.
+   *
+   * The key itself is minted per call from `key()`, never a constant: the server
+   * stores a completed key with its response, so a fixed one would REPLAY an earlier
+   * 200 instead of performing this run's mark — green, and hollow.
+   */
+  controlIdempotency?: boolean;
 }
 
 /**
@@ -662,6 +833,120 @@ const B_SOCIAL_HANDLE = '@lumiere.kw';
  * makes the 403 attributable to the principal rather than to the body.
  */
 const SOCIAL_ATTACK_HANDLE = '@stolen.by.another.salon';
+
+/**
+ * THE TWO APPOINTMENTS THE NO-SHOW LEDGER ADDRESSES, and why this row needed more
+ * fixture than anything else in the table.
+ *
+ * `POST /salons/{id}/bookings/{bookingId}/no-show` RETURNS MONEY. The control half
+ * really performs it, so `{bookingId}` has to name a booking at the salon being
+ * addressed that is `deposit_held` AND has already started — otherwise the control
+ * takes 409 `appointment_not_started` or 409 `not_markable` and the ledger reports a
+ * tenancy hole that is really a missing fixture. That is `{tid}`'s rule ("a
+ * `preparing` row at THAT salon") with three constraints `{tid}` does not have.
+ *
+ * ---------------------------------------------------------------------------
+ * 1. IT IS SINGLE-USE, AND THE FIXTURE IS REBUILT RATHER THAN RESET
+ * ---------------------------------------------------------------------------
+ * A marked booking is `no_show_returned`, so a second control call on the same row
+ * is 409 `already_no_show`. WITHIN a run that is not a problem: the control loop
+ * below is the only caller that addresses salon B and it calls each route exactly
+ * once, and the "existence is not disclosed" sweep drives SALON_A and SALON_NOWHERE,
+ * both refused before the booking is read. ACROSS runs it very much is.
+ *
+ * The obvious answer — an `ON CONFLICT DO UPDATE` putting the status back, the way
+ * the shop order's does — is the wrong one HERE, and the reason is the ledger. A
+ * mark debits `deposit_held` and credits `member_wallet`; resetting the booking
+ * without also re-posting the hold would debit that account a second time against a
+ * single credit, and `deposit_held` would go NEGATIVE by one deposit per run. So
+ * every run builds a WHOLE new cycle instead — its own opening credit, its own hold,
+ * its own booking, all keyed on `PROBE_NOSHOW_RUN` — and the previous run's probe
+ * bookings are deleted rather than revived. `PROBE_BRANCH_NAME` is the precedent for
+ * the unique-per-run id; the reason is stronger here because the thing that must not
+ * be reused is a POSTING, not a name.
+ *
+ * Deleting last run's rows is safe against the diary too:
+ * `booking_artist_slot_no_overlap` covers `deposit_held` and `completed` only, so a
+ * marked booking releases its slot — but salon A's is NEVER marked and would hold its
+ * slot for ever, and two runs placing a 30-minute appointment at the same offset from
+ * `now()` can overlap. Only this file's own prefixes are matched.
+ *
+ * ---------------------------------------------------------------------------
+ * 2. IT NEEDS A CLOCK, AND THE DEADLINE IS THE ONE DELIBERATE FICTION
+ * ---------------------------------------------------------------------------
+ * Bookings are made for FUTURE slots, so a started one cannot be created through
+ * `POST /bookings` and left alone. `deposit.test.ts` moves the three clock columns in
+ * SQL for exactly this reason; this seeds them directly for the reason the shop
+ * orders and campaigns are seeded directly — building the ledger's fixture through
+ * the routes the ledger is about would make it depend on the thing under test.
+ *
+ * A real hold stamps `no_show_return_due_at` from `ends_at` plus the salon's window
+ * (60 minutes at salon B), which for an appointment that ended an hour ago is a
+ * deadline in the PAST — and `api/src/jobs/no-show-once.ts` scans
+ * `status = 'deposit_held' AND no_show_return_due_at <= now()` across the WHOLE
+ * database. `deposit.test.ts`, `reports-applied-deposit.test.ts` and
+ * `no-show-worker.test.ts` all drive that scan, the last of them with the timer on.
+ * So the deadline is pushed a day out. It is a legal window
+ * (`parseNoShowReturnMinutes` wants a whole number above zero) and it is also the
+ * honest shape of what this endpoint is FOR: the grace period has not expired, the
+ * customer has not arrived, and a human is marking it early.
+ *
+ * ---------------------------------------------------------------------------
+ * 3. A LIVE HOLD IS NOT AN INERT FIXTURE, SO EACH SALON GETS ITS OWN CUSTOMER
+ * ---------------------------------------------------------------------------
+ * `findApplicableHold` spends a member's earliest live hold on her next charge, and
+ * `POST /scans` reports it to the till as `heldDepositFils`. Hanging this off Dana or
+ * Fatima would have handed a free deposit to whichever spec charged them next, in a
+ * file that would have had no idea where it came from. A member nobody charges cannot
+ * do that, and the `memberId`/`salonId` predicate in `findApplicableHold` is what
+ * makes that a guarantee rather than a hope.
+ *
+ * THEIR BALANCES ARE NEVER RESET, unlike every other member this suite seeds, and the
+ * ledger is why again: a mark credits the wallet AND writes the matching
+ * `member_wallet` entry in one transaction, so the two move together. Putting
+ * `balance_fils` back without deleting the entry is the one edit that would make
+ * `db:verify` invariant 5 count a drift this file caused. Nothing asserts these
+ * balances; they are allowed to grow, and they stay reconciled while they do.
+ */
+const PROBE_NOSHOW_MEMBER_A = '8701';
+const PROBE_NOSHOW_MEMBER_B = '9701';
+const PROBE_NOSHOW_PHONE_A = '+96599007001';
+const PROBE_NOSHOW_PHONE_B = '+96599007002';
+/** One cycle per run. See § 1 above: what must not be reused is a posting. */
+const PROBE_NOSHOW_RUN = String(Date.now());
+const PROBE_BOOKING_A_PREFIX = 'BK-TEN-A-NS-';
+const PROBE_BOOKING_B_PREFIX = 'BK-TEN-B-NS-';
+const PROBE_BOOKING_A = `${PROBE_BOOKING_A_PREFIX}${PROBE_NOSHOW_RUN}`;
+const PROBE_BOOKING_B = `${PROBE_BOOKING_B_PREFIX}${PROBE_NOSHOW_RUN}`;
+const PROBE_NOSHOW_OPEN_A = `TX-TEN-A-NSOPEN-${PROBE_NOSHOW_RUN}`;
+const PROBE_NOSHOW_OPEN_B = `TX-TEN-B-NSOPEN-${PROBE_NOSHOW_RUN}`;
+const PROBE_NOSHOW_HOLD_A = `TX-TEN-A-NSHOLD-${PROBE_NOSHOW_RUN}`;
+const PROBE_NOSHOW_HOLD_B = `TX-TEN-B-NSHOLD-${PROBE_NOSHOW_RUN}`;
+/** 5000 fils is salon B's own `deposit_fils`, and inside `salon_deposit_in_range`. */
+const PROBE_NOSHOW_DEPOSIT_FILS = 5_000;
+/**
+ * Salon A's subject reuses a SEEDED artist; salon B's needs one made.
+ *
+ * `booking_artist_slot_no_overlap` is an EXCLUSION constraint over
+ * `(artist_id, tstzrange(starts_at, ends_at))`, so a diary collision here is not a
+ * wrong answer — it is an INSERT that refuses and a `beforeAll` that throws. The
+ * probe sits 400 days out, an order of magnitude past the furthest anything else
+ * parks: `deposit.test.ts` walks forward from day 20, `no-show-worker.test.ts`
+ * releases at 30.
+ *
+ * `AR-001` AND NOT `AR-004`, which was the first choice and is the quieter diary.
+ * `no-show-worker.test.ts` says in its own header that `AR-004` is its artist and
+ * that "nothing else books her" — a sentence `deposit.test.ts`'s FOURTH_ARTIST has
+ * already dented, and one this row would have made plainly false in a file it must
+ * not edit. Nothing claims `AR-001`, and at 400 days the choice is irrelevant to the
+ * constraint either way.
+ *
+ * Salon A gains no artist: its roster is read by three other files. Salon B has none
+ * at all, and both files that read ITS roster `.find()` their own rows rather than
+ * counting.
+ */
+const PROBE_ARTIST_A = 'AR-001';
+const PROBE_ARTIST_B = 'AR-TEN-B-NOSHOW';
 
 /**
  * Every route that carries a salon id in the path, as registered in
@@ -1090,6 +1375,60 @@ const SALON_ROUTES: SalonRoute[] = [
     template: '/v1/salons/{id}/services/{oid}/image',
     controlStatus: 204,
   },
+
+  /**
+   * LANE A'S "MARK NO-SHOW", arriving with dev `ac39db4`. The gap ledger fired on it
+   * by name in the first `e2e/` run after the merge — and nothing else did, because
+   * the merge was pushed on a green api unit suite, a green `db:verify` and a green
+   * int suite, none of which read this directory.
+   *
+   * AND THE USUAL SENTENCE IS ONLY HALF TRUE HERE. Every group above says the same
+   * thing — "the auto-discovering sibling had already passed, only the hand-written
+   * half was stale" — because those routes are refused on the salon segment whatever
+   * else is in the path. That holds for the REFUSAL here too: the sweep at the foot of
+   * this file drives this route with a literal `:bookingId` and takes its 403.
+   *
+   * What the sweep cannot do is the CONTROL. It only ever addresses salon A, so
+   * nothing in `e2e/` had shown this endpoint answering a legitimate caller at all,
+   * and a 403 from a route that refuses everybody is not tenancy enforcement.
+   *
+   * LANE A HAS ITS OWN CROSS-SALON SPEC AND THIS DOES NOT DUPLICATE IT.
+   * `api/src/routes/noShowMark.int.test.ts § 9` — "another salon in the path is
+   * refused, and the booking is untouched" — is a real refusal with a real
+   * untouched-balance assertion, and it is better than this row at the thing it does:
+   * it reads the money afterwards. Two things it is not. It drives salon A's manager
+   * at salon B's ID, which is the opposite direction from the one this file exists to
+   * ask about — a principal from the OTHER salon, reaching in — and it needs
+   * `AVO_INT_DATABASE_URL`, so `pnpm check` never runs it (decision 101). The gate
+   * that guards `dev` sees this row and not that one.
+   *
+   * THIS IS THE MOST DESTRUCTIVE CONTROL CALL IN THE TABLE, past the branch close.
+   * It moves a customer's money: `returnDeposit` credits her wallet, writes a
+   * `deposit_return`, posts the ledger pair, queues a receipt and stamps
+   * `no_show_returned`. Everything about the subject is arranged above
+   * `PROBE_NOSHOW_MEMBER_A` to make that a self-contained event — its own customer at
+   * its own salon, a deadline no job will reach, and a whole new cycle each run.
+   *
+   * NO BODY, AND THAT IS THE ROUTE'S OWN SHAPE rather than this table's usual
+   * minimum. The booking is the whole request; the handler hashes
+   * `{ salonId, bookingId }` AS the request body precisely because there isn't one,
+   * which is what makes one key name one appointment.
+   *
+   * SALON A'S SUBJECT HAS NOT STARTED YET, DELIBERATELY — the one place this row
+   * departs from `{hid}` and `{pid}`, which give salon A a fixture the control could
+   * have used. The attack half never resolves `{bookingId}`: `requireSameSalon` is the
+   * second statement in the handler and the lookup is many lines below it. So the only
+   * question salon A's id has to answer is "would the handler recognise this", and a
+   * booking 400 days out answers it while making the failure mode safe — if the guard
+   * ever ran late, the worst this suite could do is take a 409
+   * `appointment_not_started`, rather than returning a stranger's deposit as the very
+   * act of testing that it cannot be returned.
+   */
+  {
+    method: 'POST',
+    template: '/salons/{id}/bookings/{bookingId}/no-show',
+    controlIdempotency: true,
+  },
 ];
 
 /**
@@ -1183,6 +1522,19 @@ const campaignFor = (salonId: string): string =>
 const deviceFor = (salonId: string): string =>
   salonId === SALON_B ? PROBE_DEVICE_B_DELETE : PROBE_DEVICE_A;
 
+/**
+ * The appointment the no-show mark addresses, at the salon being addressed.
+ *
+ * Resolved per salon the way `{cid}` and `{deviceId}` are, and for a sharper version
+ * of the same reason: the control half really marks it, so the id has to name a
+ * `deposit_held` booking that HAS ALREADY STARTED at that salon, or the control takes
+ * a 409 and the ledger reports a tenancy hole that is really a missing fixture. The
+ * two rows differ in more than their salon — see the block above
+ * `PROBE_NOSHOW_MEMBER_A` for why salon A's deliberately has not started.
+ */
+const bookingFor = (salonId: string): string =>
+  salonId === SALON_B ? PROBE_BOOKING_B : PROBE_BOOKING_A;
+
 const url = (r: SalonRoute, salonId: string) =>
   r.template
     .replace('{id}', salonId)
@@ -1214,6 +1566,19 @@ const url = (r: SalonRoute, salonId: string) =>
      * duly spent. Every future placeholder must match the registered parameter exactly.
      */
     .replace('{deviceId}', deviceFor(salonId))
+    /**
+     * `{bookingId}` is a held, already-started appointment at the salon being
+     * addressed. See `bookingFor`, and the block above `PROBE_NOSHOW_MEMBER_A` for the
+     * fixture that makes the control's write a self-contained event.
+     *
+     * THE BRACE NAME IS `{bookingId}` BECAUSE IT HAS TO BE, which is the `{deviceId}`
+     * note one paragraph up: the gap-ledger normaliser is the generic
+     * `\{(\w+)\}` to `:$1`, so a placeholder's name IS the fastify parameter's after
+     * substitution. The route registers `/salons/:id/bookings/:bookingId/no-show`, so
+     * a shorter `{bid}`-style name would leave this entry reading as missing from the
+     * table it is sitting in.
+     */
+    .replace('{bookingId}', bookingFor(salonId))
     /**
      * `{oid}` is the image routes' owner — a product or a service, chosen by the
      * template and the verb. See `imageOwnerFor`.
@@ -1261,6 +1626,9 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
       const upload = route.controlUpload;
       const res = await treq(route.method, url(route, SALON_B), {
         token: bDashboard,
+        // A money-moving POST needs its key, and only the control sends one. See
+        // `controlIdempotency` on the interface for why the attack half must not.
+        ...(route.controlIdempotency ? { idempotencyKey: key('noshow') } : {}),
         // A file body and a JSON body are mutually exclusive, and `treq` refuses
         // both together rather than picking one silently.
         ...(upload
@@ -2314,6 +2682,11 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'DELETE /v1/salons/:id/products/:oid/image',
       'POST /v1/salons/:id/services/:oid/image',
       'DELETE /v1/salons/:id/services/:oid/image',
+      // Lane A's "Mark no-show". It belongs in this tripwire for a reason none of the
+      // rows above have: it is the only salon-scoped route in the API that returns
+      // money to a customer, so a scan that stopped seeing it would leave the one
+      // write this table performs across a tenant boundary unprobed by BOTH halves.
+      'POST /salons/:id/bookings/:bookingId/no-show',
     ]) {
       expect(paths, `the route scan lost ${known}`).toContain(known);
     }
