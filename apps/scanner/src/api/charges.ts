@@ -233,6 +233,18 @@ export async function fetchTodaysCharges(
 
 // --------------------------------------------------------------------- void --
 
+/**
+ * The three things that can be said about a voided charge, as the server's ids.
+ *
+ * Typed a FOURTH time here — `VOID_REASON_CODES` in api/src/db/schema/transaction.ts,
+ * migration 0050's CHECK, `copy.voidReasons[].id` in this app, and now this. The
+ * schema's own comment names the durable home as `packages/types` and calls it a
+ * trunk operation; this lane cannot make it and does not, so it is named in the
+ * report instead. Kept adjacent to `voidCharge` so the next edit has all three
+ * client-side copies in one screen.
+ */
+export type VoidReasonCode = 'wrong' | 'dupe' | 'cust';
+
 export const VoidResultSchema = z.object({
   ok: z.boolean(),
   refundedFils: FilsSchema.nonnegative(),
@@ -246,9 +258,36 @@ export type VoidResult = z.infer<typeof VoidResultSchema>;
  * retried void without one is a double refund (non-negotiable #4).
  *
  * Refunds are wallet credit. No cash, no card reversal, ever (#5).
+ *
+ * ---------------------------------------------------------------------------
+ * TWO FIELDS FOR ONE FACT, AND THAT IS THE DESIGN RATHER THAN A DUPLICATE
+ * ---------------------------------------------------------------------------
+ * `reason` is the written label. It becomes `transaction.note` and the audit
+ * log's `detail`, which a merchant and the platform console read as prose.
+ *
+ * `reasonCode` is one of three ids, stored in `transaction.void_reason_code`
+ * (migration 0050) and served back on `GET /artists/me/bookings § voidReason` —
+ * the ONLY route by which the artist whose work was voided learns which of the
+ * three was said. Typed as the union rather than `string` on purpose: the server
+ * validates against `VOID_REASON_CODES` in the handler AND at the database with
+ * `transaction_void_reason_code_valid`, because `POST /voids` used to accept any
+ * non-empty string of any length and `reasonCode: 'she_is_lazy'` returned 200
+ * and moved the money. This type is the client-side third lock, and it means
+ * this app has no value it could send that the server would have to refuse.
+ *
+ * OPTIONAL, MIRRORING THE SERVER. Every client that predates migration 0050
+ * sends only the label and a required field would 400 the till on deploy.
+ * Omitting it stores NULL, which the artist's card renders as nothing — see
+ * `BookingsScreen § voidReasonLine` for why silence is the honest rendering of
+ * a null rather than a gap in the screen.
+ *
+ * IT IS IN THE SERVER'S REQUEST HASH — `hashRequestBody({ transactionId, reason,
+ * reasonCode })` — so a caller that changes the code must mint a new
+ * idempotency key or meet `422 idempotency_key_reused`. `VoidSheet` does exactly
+ * that; `voidSheetKey.test.ts` carries the reproduction.
  */
 export function voidCharge(
-  input: { transactionId: string; reason: string },
+  input: { transactionId: string; reason: string; reasonCode?: VoidReasonCode },
   idempotencyKey: string,
   accessToken: string,
   signal?: AbortSignal,

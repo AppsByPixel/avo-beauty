@@ -120,3 +120,145 @@ describe('chargeVoided survives the parse', () => {
     );
   });
 });
+
+/**
+ * ═════════════════════════════════════════════════════════════════════════════
+ * DRIFT (8) — THE SAME TRAP, ONE FIELD LATER
+ * ═════════════════════════════════════════════════════════════════════════════
+ * `GET /artists/me/bookings` now also sends `voidReason` — `'wrong' | 'dupe' |
+ * 'cust' | null`, the code the till recorded for the reversal (migration 0050,
+ * `transaction.void_reason_code`). The schema above is still a plain zod object,
+ * so until it NAMES the key, `strip` deletes it between the socket and the
+ * screen exactly as it deleted `chargeVoided`, and nothing throws.
+ *
+ * THE FIXTURE IS NOT TRANSCRIBED FROM A COMMENT. It is the body this lane pulled
+ * off `http://localhost:4700/artists/me/bookings` on `avo_lane_b` after driving
+ * the real path: Dana books Hessa, the till charges her against the held
+ * deposit, a manager voids with `reasonCode: 'cust'`, and Hessa signs in on the
+ * scanner. That matters here more than usual — this repo's standing failure is a
+ * fixture that agrees with the prose rather than with the wire.
+ */
+const CUST_WIRE = {
+  id: 'BK-4551443',
+  memberId: '8842',
+  artistId: 'AR-003',
+  branchId: 'BR-KWC',
+  serviceId: 'SV-01',
+  startsAt: '2026-09-16T10:19:19.523Z',
+  endsAt: '2026-09-16T10:49:19.523Z',
+  durationMin: 30,
+  depositFils: 5000,
+  status: 'cancelled',
+  source: 'app',
+  noShowReturnDueAt: '2026-09-16T11:49:19.523Z',
+  changeableUntil: '2026-09-16T09:19:19.523Z',
+  rescheduledCount: 0,
+  calendarSyncState: 'not_applicable',
+  memberName: 'Dana Al-Sabah',
+  memberErased: false,
+  memberPhone: '+96599124408',
+  memberTier: 'silver',
+  serviceName: 'Blow-dry',
+  chargeVoided: true,
+  voidReason: 'cust',
+};
+
+describe('voidReason survives the parse', () => {
+  /**
+   * THE REGRESSION. Before the schema named it this read `undefined`, and the
+   * only screen an artist can open would have gone on saying "Payment voided"
+   * and nothing else while the server was already telling it which of three
+   * things had been said about her work.
+   */
+  it('arrives as the code the till recorded, and is not stripped', () => {
+    const parsed = ArtistBookingSchema.parse(CUST_WIRE);
+    console.log('parsed keys:', Object.keys(parsed).join(','));
+    console.log('voidReason  :', JSON.stringify(parsed.voidReason));
+    expect(parsed).toHaveProperty('voidReason');
+    expect(parsed.voidReason).toBe('cust');
+  });
+
+  /**
+   * The negative control, and it is the one that matters most here. `.default(null)`
+   * below means an absent key ALSO reads null, so an assertion that only ever
+   * sees `null` proves nothing about whether the schema is reading the wire.
+   * These two bodies differ in one key, and the live route emits `voidReason` on
+   * EVERY row — the `null` here is transcribed from the same socket, on the same
+   * booking, before it was voided.
+   */
+  it('arrives as null on a booking whose void recorded no code', () => {
+    expect(ArtistBookingSchema.parse({ ...CUST_WIRE, voidReason: null }).voidReason).toBeNull();
+  });
+
+  it('carries the other two codes verbatim', () => {
+    expect(ArtistBookingSchema.parse({ ...CUST_WIRE, voidReason: 'wrong' }).voidReason).toBe('wrong');
+    expect(ArtistBookingSchema.parse({ ...CUST_WIRE, voidReason: 'dupe' }).voidReason).toBe('dupe');
+  });
+
+  /**
+   * A FOURTH VALUE IS REFUSED RATHER THAN RENDERED.
+   *
+   * `POST /voids` used to accept any non-empty string as a reason, and
+   * `reasonCode: 'she_is_lazy'` returned 200 and moved the money; Lane A closed
+   * that with a handler check AND `transaction_void_reason_code_valid`, so
+   * exactly three values can reach this wire. The enum here is the third lock,
+   * and it is not redundant: it is the one that stops a code this client cannot
+   * translate from reaching `copy.voidReasons.find(...)`, missing, and falling
+   * through to render the RAW CODE on her card. "she_is_lazy" must never be a
+   * string this app is capable of drawing.
+   *
+   * It fails the whole parse rather than degrading to null, which is the correct
+   * direction for a value that is meant to be closed: a null would say "no
+   * reason recorded", which is a different and false statement.
+   */
+  it('refuses a code outside the three, rather than drawing it', () => {
+    const bad = ArtistBookingSchema.safeParse({ ...CUST_WIRE, voidReason: 'she_is_lazy' });
+    console.log('she_is_lazy parse:', bad.success ? 'ACCEPTED' : 'refused');
+    expect(bad.success).toBe(false);
+  });
+
+  /**
+   * WHY `.default(null)` RATHER THAN A REQUIRED FIELD — argued, not inherited.
+   *
+   * A required `z.enum([...]).nullable()` throws inside `fetchMyBookings` the
+   * moment it meets a body without the key, and `fetchMyBookings` has no
+   * per-field recovery: her ENTIRE DAY fails to load. The key is absent on
+   * exactly one kind of server — one rolled back behind migration 0050 — and
+   * trading her whole screen for a distinction is the trade `memberErased` and
+   * `chargeVoided` both already refused above.
+   *
+   * WHAT IT COSTS, stated rather than waved past: `.default(null)` collapses
+   * "this void recorded no code" into "this API is too old to say". The endpoint
+   * comment insists on that distinction and it is real on the wire.
+   *
+   * `.optional()` would have preserved it — `undefined` for absent, `null` for
+   * recorded-nothing — at the same safety, and it was the alternative considered.
+   * It is NOT taken because the two silences render identically and always will:
+   * the screen's answer to both is to say nothing (see `BookingsScreen` §
+   * `voidReasonLine`), the artist cannot see which she is looking at, and there
+   * is nothing she could do differently if she could. A third state in the type
+   * that no reader may act on differently is not information — it is an
+   * invitation to write the sentence "no reason was recorded", which would be
+   * false on a rolled-back server.
+   */
+  it('reads a body that omits it as no-code, rather than failing her whole day', () => {
+    const { voidReason, ...older } = CUST_WIRE;
+    void voidReason;
+    const parsed = ArtistBookingSchema.safeParse(older);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.voidReason).toBeNull();
+  });
+
+  /**
+   * THE IMPLICATION ONLY RUNS ONE WAY, and the parse must not invent the other.
+   * `voidReason` non-null implies `chargeVoided`; `chargeVoided` emphatically
+   * does not imply `voidReason` (api/src/routes/bookings.ts § voidReason). A
+   * voided booking with no code is the ordinary shape of every void taken before
+   * migration 0050, and it must parse.
+   */
+  it('accepts a reversal that carries no code at all', () => {
+    const parsed = ArtistBookingSchema.parse({ ...CUST_WIRE, voidReason: null });
+    expect(parsed.chargeVoided).toBe(true);
+    expect(parsed.voidReason).toBeNull();
+  });
+});

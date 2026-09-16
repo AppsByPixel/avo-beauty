@@ -534,6 +534,48 @@ export const copy = {
    *       here. See `BookingsScreen.tsx` § VOIDED_PILL.
    */
   bookingsStatusVoided: 'Payment voided',
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * AND NOW IT DOES SAY WHY — REPORTED SPEECH, NOT THE SCREEN'S OWN CLAIM
+   * ═══════════════════════════════════════════════════════════════════════════
+   * The paragraph above ends "it does not say why, because the reason lives on
+   * the reversal's audit row, which this account cannot read. Reported to Lane A
+   * rather than guessed at here." Lane A built it: `GET /artists/me/bookings`
+   * serves `voidReason` — one of three codes, never the words.
+   *
+   * THE WORDS ARE OURS ON PURPOSE, and `voidReasons` above already holds them.
+   * The server decides WHICH of three things is true; this file decides how to
+   * say it, because non-negotiable #12 makes Arabic a first-class layout and
+   * `staff_user` carries no locale a server-composed sentence could select on.
+   * So the label is reused verbatim rather than reworded — the same three
+   * strings a manager chose between are the three she reads back.
+   *
+   * WHY A FRAME AT ALL, rather than the bare label. "Customer did not receive
+   * service" standing alone on her card is the SCREEN saying she did not do the
+   * job. It is not the screen's claim; it is somebody's, recorded at the till.
+   * "Reason given:" is the whole difference between reporting and asserting, and
+   * it is doing more work than any other four characters on this card.
+   *
+   * It names no actor, deliberately and for the same reason the pill does not:
+   * `created_by_staff_id` is on the reversal row and Lane A does not select it.
+   * "Reason given" is agentless in English without sounding evasive, which is
+   * exactly the register available here — who did it is a disclosure that
+   * belongs to a surface with an appeal attached, and this one has none.
+   *
+   * ONE FRAME FOR ALL THREE. `cust` is categorically different from `wrong` and
+   * `dupe` — it is the only one that is about her work rather than about the
+   * till — and it is deliberately NOT styled differently. See
+   * `BookingsScreen.tsx § voidReasonLine` for the argument; the short version is
+   * that a screen marking one reason as the bad one is editorialising in both
+   * directions at once, and the words already carry a difference that needs no
+   * colour to land.
+   *
+   * There is no string for `null`. A void that recorded no code renders NOTHING,
+   * because `.default(null)` cannot tell "no code was recorded" from "this API
+   * is too old to say" — and every sentence one could write there would be a
+   * claim about a record this screen has not read.
+   */
+  bookingsVoidReason: (label: string) => `Reason given: ${label}`,
   /** :169-170 */
   bookingsCall: 'Call',
   bookingsWhatsApp: 'WhatsApp',

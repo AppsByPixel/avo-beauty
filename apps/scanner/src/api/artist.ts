@@ -130,6 +130,52 @@ export const ArtistBookingSchema = BookingSchema.extend({
    * "too old to say" distinction that has no consumer on this screen.
    */
   chargeVoided: z.boolean().default(false),
+  /**
+   * WHICH OF THREE THINGS WAS SAID ABOUT HER WORK — and it is a code, never the
+   * words.
+   *
+   * `chargeVoided` above says a manager reversed the charge. It does not say
+   * why, and the three whys are not variations on one another: "Wrong amount or
+   * service" is a correction, "Duplicate charge" is housekeeping, and "Customer
+   * did not receive service" is an assertion that she did not do the job. She
+   * holds neither `perms.void` nor `perms.charges` and `permDashboard` is false
+   * (api/src/db/seed.ts § ST-002), so she can open neither the audit log nor
+   * `GET /charges`. This wire is the only route by which that sentence can reach
+   * the person it is about.
+   *
+   * THE SAME STRIP, ONE FIELD LATER. This schema is a plain zod object, so a key
+   * it does not name is DELETED on arrival and nothing throws — which is exactly
+   * how `chargeVoided` was eaten, recorded at :98 above. `artistBookingWire.test.ts`
+   * pins the ARRIVAL for that reason; a card test cannot see a key that was
+   * removed before the card was called.
+   *
+   * AN ENUM, NOT A STRING, AND THAT IS THE THIRD LOCK RATHER THAN A REDUNDANT
+   * ONE. `POST /voids` accepted any non-empty string of any length until this
+   * session — `reasonCode: 'she_is_lazy'` returned 200 and moved the money — and
+   * Lane A closed it twice, in the handler and at the database with
+   * `transaction_void_reason_code_valid`. The enum here closes the remaining
+   * client-side half: without it an unknown code misses
+   * `copy.voidReasons.find(...)` and the screen falls through to drawing the RAW
+   * CODE on a named artist's card. A fourth value must not be a string this app
+   * is capable of rendering, so it fails the parse rather than degrading to
+   * null — null would say "no reason recorded", which is a different and false
+   * statement.
+   *
+   * `.default(null)`, mirroring the two fields above it, and the trade is argued
+   * in `artistBookingWire.test.ts` rather than assumed here: it collapses the
+   * "server too old to say" distinction this endpoint's own comment insists on,
+   * which is a real loss on the wire — and it is the right trade because a
+   * required field throws inside `fetchMyBookings` and takes her WHOLE DAY down
+   * against a rolled-back API, and because the two silences render identically
+   * (BookingsScreen § `voidReasonLine`). `.optional()` was the alternative that
+   * keeps them apart; it is not taken, for the reason recorded in that test.
+   *
+   * NOT THE ACTOR. `created_by_staff_id` is on the same row and Lane A
+   * deliberately does not select it. Who voided a charge is a different
+   * disclosure from why, and it belongs to a surface with an appeal attached —
+   * which this one is not.
+   */
+  voidReason: z.enum(['wrong', 'dupe', 'cust']).nullable().default(null),
 });
 
 export type ArtistBooking = z.infer<typeof ArtistBookingSchema>;
