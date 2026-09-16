@@ -111,7 +111,7 @@ function TierLadder({ view, salon }: { view: MembershipTiers; salon: Salon }) {
                   <Text style={[text('displayS', lang), styles.rungName]}>{name}</Text>
                   {rung.current ? (
                     <View style={styles.currentPill} testID="membership-current">
-                      <Text style={[text('bodyS', lang), styles.currentPillText]}>
+                      <Text style={[text('bodyS', lang, '600'), styles.currentPillText]}>
                         {copy.current}
                       </Text>
                     </View>
@@ -152,7 +152,7 @@ function StampCard({ view }: { view: MembershipStamps }) {
     <View style={styles.stampCard}>
       <View style={styles.stampHead}>
         <Text style={[text('displayS', lang), styles.stampTitle]}>{copy.stampCardTitle}</Text>
-        <Text style={[text('bodyL', lang), styles.stampCount]}>
+        <Text style={[text('bodyL', lang, '600'), styles.stampCount]}>
           {copy.stampCountOf(view.have, view.target)}
         </Text>
       </View>
@@ -231,7 +231,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   // Brand text on a light surface is brandDeep, never brand. Non-negotiable #9.
-  currentPillText: { color: color.brandDeep, fontWeight: '600', fontSize: 10.5 },
+  currentPillText: { color: color.brandDeep, fontSize: 10.5 },
   rungBonus: {
     fontFamily: moneyFigureFace('400'),
     fontSize: 13.5,
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   },
   stampHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   stampTitle: { color: color.ink, fontSize: 18, flexShrink: 1 },
-  stampCount: { color: color.brandDeep, fontWeight: '600' },
+  stampCount: { color: color.brandDeep },
   dots: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
   dot: {
     width: DOT,

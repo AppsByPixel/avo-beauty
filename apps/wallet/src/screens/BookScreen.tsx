@@ -241,10 +241,10 @@ export function BookScreen({
           testID="book-back"
           style={styles.backButton}
         >
-          <Text style={[text('bodyL', lang), styles.backText]}>{copy.back}</Text>
+          <Text style={[text('bodyL', lang, '600'), styles.backText]}>{copy.back}</Text>
         </Pressable>
         <Text style={[text('displayM', lang), styles.title]}>{copy.bookTitle}</Text>
-        <Text style={[text('body', lang), styles.stepCount]}>
+        <Text style={[text('body', lang, '600'), styles.stepCount]}>
           {/*
             `flow.totalSteps`, NOT `TOTAL_STEPS`. Four at a single-branch salon,
             five where the branch step is real. Printing the constant here is
@@ -717,7 +717,7 @@ function ConfirmFailure({ failure }: { failure: { code: string | null; message: 
 
   return (
     <View style={styles.confirmFailure} accessibilityRole="alert" testID="book-confirm-failure">
-      <Text style={[text('bodyL', lang), styles.confirmFailureTitle]}>{title}</Text>
+      <Text style={[text('bodyL', lang, '600'), styles.confirmFailureTitle]}>{title}</Text>
       <Text style={[text('body', lang), styles.confirmFailureBody]}>{body}</Text>
     </View>
   );
@@ -917,9 +917,9 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   backButton: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', marginVertical: -10 },
-  backText: { color: color.brandDeep, fontWeight: '600' },
+  backText: { color: color.brandDeep },
   title: { color: color.ink },
-  stepCount: { color: color.textMuted, fontWeight: '600' },
+  stepCount: { color: color.textMuted },
 
   rows: { gap: 9 },
   strip: { gap: 9, paddingBottom: 4, paddingHorizontal: 1 },
@@ -951,7 +951,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: color.dangerBg,
   },
-  confirmFailureTitle: { color: color.dangerText, fontWeight: '600' },
+  confirmFailureTitle: { color: color.dangerText },
   confirmFailureBody: { color: color.dangerText, marginTop: 4, lineHeight: 19 },
 
   cta: { marginTop: 22 },

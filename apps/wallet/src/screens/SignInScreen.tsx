@@ -166,7 +166,7 @@ export function SignInScreen({
         testID="signin-forgot"
         style={styles.forgot}
       >
-        <Text style={[text('bodyS', lang), styles.forgotText]}>{copy.signInForgot}</Text>
+        <Text style={[text('bodyS', lang, '600'), styles.forgotText]}>{copy.signInForgot}</Text>
       </Pressable>
 
       {/* design:105 — the inline refusal, not a failure screen. */}
@@ -200,7 +200,7 @@ export function SignInScreen({
           testID="signin-create-account"
           style={styles.footerLink}
         >
-          <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.signInCreateOne}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.footerLinkText]}>{copy.signInCreateOne}</Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -297,7 +297,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     marginTop: 11,
   },
-  forgotText: { color: color.brandDeep, fontWeight: '600' },
+  forgotText: { color: color.brandDeep },
   // design:107 — centred under the button, margin-top 20.
   footer: {
     flexDirection: 'row',
@@ -309,5 +309,5 @@ const styles = StyleSheet.create({
   footerText: { color: color.textMuted },
   footerLink: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 4 },
   // Brand text on a light surface is brandDeep, never brand (#9).
-  footerLinkText: { color: color.brandDeep, fontWeight: '600' },
+  footerLinkText: { color: color.brandDeep },
 });

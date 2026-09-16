@@ -72,7 +72,7 @@ export function LanguageToggle() {
           language currently in force — "العربية" inside an English build still
           needs glyphs Inter does not have.
         */}
-        <Text style={[text('bodyS', next), styles.label]}>{copy.langSwitch}</Text>
+        <Text style={[text('bodyS', next, '600'), styles.label]}>{copy.langSwitch}</Text>
       </Pressable>
       {pendingRestart ? (
         <Pressable
@@ -86,7 +86,7 @@ export function LanguageToggle() {
           testID="language-restart-notice"
           style={styles.restartButton}
         >
-          <Text style={[text('bodyS', lang), styles.restart]}>{copy.restartNeeded}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.restart]}>{copy.restartNeeded}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -107,7 +107,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.surface,
   },
   // Brand text on a light surface is brandDeep, never brand.
-  label: { color: color.brandDeep, fontWeight: '600' },
+  label: { color: color.brandDeep },
   // A control now, so it carries the tap-target floor and reads as one. The
   // warn palette is kept: this is still an unfinished state, not a suggestion.
   restartButton: {
@@ -122,5 +122,5 @@ const styles = StyleSheet.create({
     borderColor: color.warnText,
     backgroundColor: color.warnBg,
   },
-  restart: { color: color.warnText, textAlign: 'center', fontWeight: '600' },
+  restart: { color: color.warnText, textAlign: 'center' },
 });

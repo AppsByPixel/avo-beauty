@@ -108,7 +108,7 @@ export function ServiceRow({
       style={[styles.optionRow, selected && styles.optionRowOn]}
     >
       <View style={styles.optionBody}>
-        <Text style={[text('bodyL', lang), styles.optionName]}>{name}</Text>
+        <Text style={[text('bodyL', lang, '600'), styles.optionName]}>{name}</Text>
       </View>
       <Money amount={service.priceFils} />
     </TappableRow>
@@ -171,7 +171,7 @@ export function ArtistRow({
         </Text>
       </View>
       <View style={styles.optionBody}>
-        <Text style={[text('bodyL', lang), styles.optionName]}>{name}</Text>
+        <Text style={[text('bodyL', lang, '600'), styles.optionName]}>{name}</Text>
         <View style={[styles.badge, live ? styles.badgeLive : styles.badgeSalon]}>
           <View style={[styles.badgeDot, live ? styles.badgeDotLive : styles.badgeDotSalon]} />
           <Text style={[micro(lang), live ? styles.badgeTextLive : styles.badgeTextSalon]}>
@@ -239,7 +239,7 @@ export function BranchChip({
       style={[styles.branchChip, selected && styles.branchChipOn]}
     >
       <Text
-        style={[text('bodyL', lang), selected ? styles.branchNameOn : styles.branchName]}
+        style={[text('bodyL', lang, '600'), selected ? styles.branchNameOn : styles.branchName]}
         numberOfLines={1}
       >
         {label}
@@ -343,7 +343,7 @@ export function ReviewRow({ label, value, last }: { label: string; value: string
   return (
     <View style={[styles.reviewRow, last && styles.reviewRowLast]}>
       <Text style={[text('body', lang), styles.reviewLabel]}>{label}</Text>
-      <Text style={[text('bodyL', lang), styles.reviewValue, { textAlign: alignEnd(lang) }]}>
+      <Text style={[text('bodyL', lang, '600'), styles.reviewValue, { textAlign: alignEnd(lang) }]}>
         {value}
       </Text>
     </View>
@@ -369,7 +369,7 @@ export function DepositCard({
   return (
     <View style={styles.depositCard}>
       <View style={styles.depositTop}>
-        <Text style={[text('bodyL', lang), styles.depositLabel]}>{copy.depositHeld}</Text>
+        <Text style={[text('bodyL', lang, '600'), styles.depositLabel]}>{copy.depositHeld}</Text>
         <Text style={[text('money', lang), styles.depositAmount]}>
           {formatMoney(depositFils as Fils, lang)}
         </Text>
@@ -513,7 +513,7 @@ const styles = StyleSheet.create({
   },
   optionRowOn: { borderColor: color.brand },
   optionBody: { flex: 1, minWidth: 0 },
-  optionName: { color: color.ink, fontWeight: '600' },
+  optionName: { color: color.ink },
   price: { color: color.ink, fontSize: 15 },
 
   avatar: {
@@ -577,8 +577,8 @@ const styles = StyleSheet.create({
     borderColor: color.borderControl,
   },
   branchChipOn: { backgroundColor: onBrandFill.backgroundColor, borderColor: color.brandDeep },
-  branchName: { color: color.ink, fontWeight: '600' },
-  branchNameOn: { color: WHITE, fontWeight: '600' },
+  branchName: { color: color.ink },
+  branchNameOn: { color: WHITE },
 
   dayChip: {
     minWidth: 58,
@@ -634,7 +634,7 @@ const styles = StyleSheet.create({
   },
   reviewRowLast: { borderBottomWidth: 0 },
   reviewLabel: { color: color.textMuted },
-  reviewValue: { color: color.ink, fontWeight: '600', flexShrink: 1 },
+  reviewValue: { color: color.ink, flexShrink: 1 },
 
   depositCard: {
     marginTop: 14,
@@ -650,7 +650,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  depositLabel: { color: color.brandDeeper, fontWeight: '600' },
+  depositLabel: { color: color.brandDeeper },
   depositAmount: { color: color.positive, fontSize: 20 },
   depositNote: { color: color.textMuted, marginTop: 6 },
 

@@ -302,7 +302,7 @@ export function SignUpScreen({
             testID="signup-to-login"
             style={styles.footerLink}
           >
-            <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
+            <Text style={[text('bodyS', lang, '600'), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -350,7 +350,7 @@ export function SignUpScreen({
             testID="signup-to-login"
             style={styles.footerLink}
           >
-            <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
+            <Text style={[text('bodyS', lang, '600'), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -502,7 +502,7 @@ export function SignUpScreen({
               testID={`signup-doc-${doc.id}`}
               style={styles.link}
             >
-              <Text style={[text('bodyS', lang), styles.linkText]}>
+              <Text style={[text('bodyS', lang, '600'), styles.linkText]}>
                 {localiseDoc(doc, lang).title}
               </Text>
             </Pressable>
@@ -543,7 +543,7 @@ export function SignUpScreen({
           testID="signup-to-login"
           style={styles.footerLink}
         >
-          <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.footerLinkText]}>{copy.signUpLogIn}</Text>
         </Pressable>
       </View>
 
@@ -758,7 +758,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.disabledBg,
   },
   // Brand text on a light surface is brandDeep, never brand (#9).
-  linkText: { color: color.brandDeep, fontWeight: '600', textDecorationLine: 'underline' },
+  linkText: { color: color.brandDeep, textDecorationLine: 'underline' },
   submit: { marginTop: 20 },
   footer: {
     flexDirection: 'row',
@@ -769,6 +769,6 @@ const styles = StyleSheet.create({
   },
   footerText: { color: color.textMuted },
   footerLink: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 4 },
-  footerLinkText: { color: color.brandDeep, fontWeight: '600' },
+  footerLinkText: { color: color.brandDeep },
   termsFailed: { marginTop: 40, alignItems: 'stretch' },
 });

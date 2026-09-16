@@ -170,12 +170,12 @@ function ChooseStage({
               </View>
               <View style={styles.methodBody}>
                 <View style={styles.methodNameRow}>
-                  <Text style={[text('bodyL', lang), styles.methodName]}>
+                  <Text style={[text('bodyL', lang, '600'), styles.methodName]}>
                     {copy.payMethod[option.id]}
                   </Text>
                   {option.mostUsed ? (
                     <View style={styles.notePill}>
-                      <Text style={[text('bodyS', lang), styles.noteText]}>{copy.mostUsed}</Text>
+                      <Text style={[text('bodyS', lang, '600'), styles.noteText]}>{copy.mostUsed}</Text>
                     </View>
                   ) : null}
                 </View>
@@ -699,14 +699,14 @@ const styles = StyleSheet.create({
   methodTagText: { color: WHITE, fontSize: 10, fontWeight: '700', fontFamily: 'Inter_700Bold' },
   methodBody: { flex: 1 },
   methodNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
-  methodName: { color: color.ink, fontWeight: '600' },
+  methodName: { color: color.ink },
   notePill: {
     backgroundColor: color.brandTint,
     paddingVertical: 2,
     paddingHorizontal: 8,
     borderRadius: radius.pill,
   },
-  noteText: { color: color.brandDeep, fontWeight: '600' },
+  noteText: { color: color.brandDeep },
   radio: {
     width: 20,
     height: 20,

@@ -166,7 +166,7 @@ export function FulfilmentSection({
               of the four states where there IS something for her to do.
             */
             <View style={styles.empty} testID="fulfil-addresses-empty">
-              <Text style={[text('bodyL', lang), styles.emptyTitle]}>
+              <Text style={[text('bodyL', lang, '600'), styles.emptyTitle]}>
                 {copy.addressEmptyTitle}
               </Text>
               <Text style={[text('bodyS', lang), styles.emptyBody]}>{copy.addressEmptyBody}</Text>
@@ -198,7 +198,7 @@ export function FulfilmentSection({
             testID="address-add"
             style={styles.addRow}
           >
-            <Text style={[text('bodyS', lang), styles.addText]}>+ {copy.addressAddCta}</Text>
+            <Text style={[text('bodyS', lang, '600'), styles.addText]}>+ {copy.addressAddCta}</Text>
           </Pressable>
         </View>
       ) : null}
@@ -240,7 +240,7 @@ function Option({
       {/* The dot is the same 8pt one the cart's chips and the shop's note use. */}
       <View style={[styles.dot, selected ? styles.dotOn : styles.dotOff]} />
       <View style={styles.rowText}>
-        <Text style={[text('bodyL', lang), selected ? styles.titleOn : styles.titleOff]}>
+        <Text style={[text('bodyL', lang, '600'), selected ? styles.titleOn : styles.titleOff]}>
           {title}
         </Text>
         <Text style={[text('bodyS', lang), styles.body]}>{body}</Text>
@@ -303,7 +303,7 @@ function AddressRow({
         <View style={[styles.dot, selected ? styles.dotOn : styles.dotOff]} />
         <View style={styles.rowText}>
           <Text
-            style={[text('bodyL', lang), selected ? styles.titleOn : styles.titleOff]}
+            style={[text('bodyL', lang, '600'), selected ? styles.titleOn : styles.titleOff]}
             numberOfLines={1}
           >
             {address.label}
@@ -325,7 +325,7 @@ function AddressRow({
           testID={`address-edit-${address.id}`}
           style={styles.action}
         >
-          <Text style={[text('bodyS', lang), styles.actionText]}>{copy.addressEdit}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.actionText]}>{copy.addressEdit}</Text>
         </Pressable>
         <Pressable
           onPress={onDelete}
@@ -336,7 +336,7 @@ function AddressRow({
           testID={`address-delete-${address.id}`}
           style={styles.action}
         >
-          <Text style={[text('bodyS', lang), styles.actionDanger]}>{copy.addressDelete}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.actionDanger]}>{copy.addressDelete}</Text>
         </Pressable>
       </View>
     </View>
@@ -414,23 +414,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 8,
   },
-  actionText: { color: color.brandDeep, fontWeight: '600' },
-  actionDanger: { color: color.dangerText, fontWeight: '600' },
+  actionText: { color: color.brandDeep },
+  actionDanger: { color: color.dangerText },
   dot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   dotOn: { backgroundColor: color.brand },
   dotOff: { backgroundColor: color.borderControl },
-  titleOn: { color: color.brandDeeper, fontWeight: '600' },
-  titleOff: { color: color.ink, fontWeight: '600' },
+  titleOn: { color: color.brandDeeper },
+  titleOff: { color: color.ink },
   body: { color: color.textMuted, marginTop: 2 },
   empty: { paddingVertical: 18, paddingHorizontal: 4 },
-  emptyTitle: { color: color.ink, fontWeight: '600' },
+  emptyTitle: { color: color.ink },
   emptyBody: { color: color.textMuted, marginTop: 4 },
   addRow: {
     minHeight: MIN_TAP_TARGET,
     justifyContent: 'center',
     paddingHorizontal: 4,
   },
-  addText: { color: color.brandDeep, fontWeight: '600' },
+  addText: { color: color.brandDeep },
   // The cart's own chip, so a failed read looks like every other refusal here.
   chip: {
     flexDirection: 'row',

@@ -376,7 +376,7 @@ export function HomeScreen({
 
       {offline ? (
         <Pressable onPress={home.retry} accessibilityRole="button" style={styles.offlineRetry}>
-          <Text style={[text('bodyL', lang), styles.offlineRetryText]}>{copy.tryAgain}</Text>
+          <Text style={[text('bodyL', lang, '600'), styles.offlineRetryText]}>{copy.tryAgain}</Text>
         </Pressable>
       ) : null}
 
@@ -453,6 +453,6 @@ const styles = StyleSheet.create({
     borderColor: CONTROL_BORDER,
   },
   // Brand text on a light surface: brandDeep, never brand.
-  offlineRetryText: { color: color.brandDeep, fontWeight: '600' },
+  offlineRetryText: { color: color.brandDeep },
   footerSpace: { height: 24 },
 });

@@ -96,129 +96,65 @@ function weightStyles(src: string): Map<string, { weight: string; namesAFace: bo
  * Every `styles.X` composed after a `text()` / `display()` / `ui()` base, where
  * `X` raises `fontWeight` without naming a face. Keyed `path#styleName`, so a
  * style used from three call sites counts once — the defect is in the style.
+ *
+ * SPLIT FROM THE FILE WALK so the detector can be pointed at a string. With the
+ * recorded list now empty the suite's main assertion is "this returns nothing",
+ * and an assertion of that shape passes just as well when the detector has been
+ * broken as when the code is clean. `the detector can still see one` below feeds
+ * it a source that IS defective and requires it to say so.
  */
+function inertInSource(rel: string, src: string): string[] {
+  const styles = weightStyles(src);
+  if (styles.size === 0) return [];
+  const found = new Set<string>();
+  for (const line of src.split('\n')) {
+    for (const comp of line.matchAll(/\[\s*(?:text|display|ui)\([^)]*\)\s*,([^\]]*)\]/g)) {
+      for (const ref of comp[1]!.matchAll(/styles\.(\w+)/g)) {
+        const s = styles.get(ref[1]!);
+        if (s && !s.namesAFace) found.add(`${rel}#${ref[1]}`);
+      }
+    }
+  }
+  return [...found];
+}
+
 function inertOverrides(): Set<string> {
   const found = new Set<string>();
   for (const file of sourceFiles(SRC)) {
     const src = fs.readFileSync(file, 'utf8');
-    const styles = weightStyles(src);
-    if (styles.size === 0) continue;
-    const rel = path.relative(SRC, file);
-    for (const line of src.split('\n')) {
-      for (const comp of line.matchAll(/\[\s*(?:text|display|ui)\([^)]*\)\s*,([^\]]*)\]/g)) {
-        for (const ref of comp[1]!.matchAll(/styles\.(\w+)/g)) {
-          const s = styles.get(ref[1]!);
-          if (s && !s.namesAFace) found.add(`${rel}#${ref[1]}`);
-        }
-      }
-    }
+    for (const key of inertInSource(path.relative(SRC, file), src)) found.add(key);
   }
   return found;
 }
 
 /**
- * THE STANDING DEBT, FROZEN.
+ * THE STANDING DEBT — PAID, AND THE LIST IS KEPT AS THE GUARD.
  *
- * Eighty-three styles raise a weight that never reaches a face. Every one of
- * them declares the weight the design declares — the SOURCE agrees with the
- * design bundle — so this is a rendering-layer defect, not a fidelity mismatch,
- * and its fix is one mechanical refactor: move the weight onto `text()`'s third
- * argument and drop `fontWeight` from the `StyleSheet` object. It cannot be
- * fixed by putting `fontFamily` in the style object instead, because the correct
- * face depends on `lang` and a `StyleSheet.create` object does not know the
- * language.
+ * It was eighty-three styles that raised a weight which never reached a face.
+ * Every one declared the weight the design declares, so it was never a fidelity
+ * mismatch: it was a rendering-layer defect with one mechanical fix — move the
+ * weight onto `text()`'s third argument and drop `fontWeight` from the
+ * `StyleSheet` object. It could not be fixed by putting `fontFamily` in the
+ * style object instead, because the correct face depends on `lang` and a
+ * `StyleSheet.create` object does not know the language.
  *
- * Reported to trunk 2026-09-15 as its own slice. This list is the work order.
+ * Recorded 2026-09-15, reported to trunk as its own slice, and done: all 83, in
+ * 32 files, with no exception. Every one turned out to be the same shape — a
+ * single-line style object whose every call site was already a
+ * `[text(token, lang), styles.X]` composition — so nothing had to be left
+ * behind. Two things the work order asked to watch for did not bite anywhere and
+ * are recorded so nobody looks for them again: no style object mixed
+ * `fontWeight` with `letterSpacing` or `textTransform` (the two `text()` drops
+ * in Arabic), and no style was shared by two call sites wanting different
+ * weights.
  *
- * The assertion is an equality, not a ceiling: adding one fails, and so does
- * fixing one without striking it off here. A ratchet that only counts up is a
- * ratchet nobody updates.
+ * THE EMPTY LIST STAYS, AND THE ASSERTION STAYS AN EQUALITY. It is what stops
+ * the next one: a new `fontWeight` in a style object composed after `text()` is
+ * a new inert override, and this goes red the day it is written. A ceiling would
+ * not — and a debt list deleted the moment it reaches zero is a debt list that
+ * has to be rediscovered by driving the app, which is how this one was found.
  */
-const KNOWN_INERT = [
-  'components/ActivityFeed.tsx#emptyActionText',
-  'components/ActivityFeed.tsx#moreText',
-  'components/ActivityFeed.tsx#rowTitle',
-  'components/Banners.tsx#staleActionText',
-  'components/BranchEarning.tsx#badgeText',
-  'components/BranchEarning.tsx#chipName',
-  'components/Buttons.tsx#primaryText',
-  'components/Buttons.tsx#secondaryText',
-  'components/CartSheet.tsx#lineName',
-  'components/CartSheet.tsx#stepQty',
-  'components/FailureScreen.tsx#buttonText',
-  'components/FulfilmentSection.tsx#actionDanger',
-  'components/FulfilmentSection.tsx#actionText',
-  'components/FulfilmentSection.tsx#addText',
-  'components/FulfilmentSection.tsx#emptyTitle',
-  'components/FulfilmentSection.tsx#titleOff',
-  'components/FulfilmentSection.tsx#titleOn',
-  'components/HappyHourBanner.tsx#clock',
-  'components/HappyHourBanner.tsx#pillLiveText',
-  'components/HappyHourBanner.tsx#pillNextText',
-  'components/HappyHourBanner.tsx#titleLive',
-  'components/HappyHourBanner.tsx#titleNext',
-  'components/LanguageToggle.tsx#label',
-  'components/LanguageToggle.tsx#restart',
-  'components/MembershipSection.tsx#currentPillText',
-  'components/MembershipSection.tsx#stampCount',
-  'components/OrdersSheet.tsx#snapshotName',
-  'components/OrdersSheet.tsx#statusTextDone',
-  'components/OrdersSheet.tsx#statusTextOpen',
-  'components/PaymentCode.tsx#panelHint',
-  'components/PaymentCode.tsx#unavailableTitle',
-  'components/QrOverlay.tsx#doneText',
-  'components/QrOverlay.tsx#logoInitial',
-  'components/TopUpCard.tsx#badgeText',
-  'components/TopUpCard.tsx#ctaText',
-  'components/TopUpCard.tsx#getLabel',
-  'components/TopUpSheet.tsx#methodName',
-  'components/TopUpSheet.tsx#noteText',
-  'components/UpcomingCard.tsx#actionDangerText',
-  'components/UpcomingCard.tsx#actionText',
-  'components/UpcomingCard.tsx#depositPillText',
-  'components/UpcomingCard.tsx#refusalTitle',
-  'components/WalletCard.tsx#pillText',
-  'components/WalletCard.tsx#unit',
-  'components/account/ChangePasswordSheet.tsx#forgotText',
-  'components/account/ChangePasswordSheet.tsx#showText',
-  'components/account/ContactSheet.tsx#routeChipText',
-  'components/account/ContactSheet.tsx#segmentText',
-  'components/account/ContactSheet.tsx#segmentTextOn',
-  'components/account/DeleteAccountSheet.tsx#confirmText',
-  'components/account/DeleteAccountSheet.tsx#keepText',
-  'components/account/DeletionScheduled.tsx#actionText',
-  'components/account/DeletionScheduled.tsx#title',
-  'components/account/EditProfileSheet.tsx#linkMuted',
-  'components/account/EditProfileSheet.tsx#linkText',
-  'components/account/FollowSalon.tsx#label',
-  'components/account/RedeemVoucherSheet.tsx#balanceValue',
-  'components/booking/BookingParts.tsx#branchName',
-  'components/booking/BookingParts.tsx#branchNameOn',
-  'components/booking/BookingParts.tsx#depositLabel',
-  'components/booking/BookingParts.tsx#optionName',
-  'components/booking/BookingParts.tsx#reviewValue',
-  'screens/AccountScreen.tsx#backText',
-  'screens/AccountScreen.tsx#deleteText',
-  'screens/AccountScreen.tsx#deleteUnknownRetryText',
-  'screens/AccountScreen.tsx#editText',
-  'screens/AccountScreen.tsx#helpTitle',
-  'screens/AccountScreen.tsx#notifRetryText',
-  'screens/BookScreen.tsx#backText',
-  'screens/BookScreen.tsx#confirmFailureTitle',
-  'screens/BookScreen.tsx#stepCount',
-  'screens/ForgotPasswordScreen.tsx#footerLinkText',
-  'screens/HomeScreen.tsx#offlineRetryText',
-  'screens/ShopScreen.tsx#addText',
-  'screens/ShopScreen.tsx#badgeText',
-  'screens/ShopScreen.tsx#ordersText',
-  'screens/ShopScreen.tsx#rowName',
-  'screens/ShopScreen.tsx#rowPrice',
-  'screens/ShopScreen.tsx#stepQty',
-  'screens/SignInScreen.tsx#footerLinkText',
-  'screens/SignInScreen.tsx#forgotText',
-  'screens/SignUpScreen.tsx#footerLinkText',
-  'screens/SignUpScreen.tsx#linkText',
-];
+const KNOWN_INERT: string[] = [];
 
 /** The weight a face name encodes, e.g. `Inter_600SemiBold` -> `600`. */
 function weightOfFace(family: string | undefined): string | undefined {
@@ -290,9 +226,55 @@ describe('the standing inert-override debt', () => {
     expect([...inertOverrides()].sort()).toEqual([...KNOWN_INERT].sort());
   });
 
-  it('records the two this slice removed', () => {
-    const found = inertOverrides();
-    expect(found.has('components/OrdersSheet.tsx#chipRetryText')).toBe(false);
-    expect(found.has('components/FulfilmentSection.tsx#chipRetryText')).toBe(false);
+  /**
+   * THE GUARD ON THE GUARD, AND IT REPLACES A TEST THAT HAD BECOME A TAUTOLOGY.
+   *
+   * `it('records the two this slice removed')` named `OrdersSheet#chipRetryText`
+   * and `FulfilmentSection#chipRetryText` and asserted the scan did not contain
+   * them. That was real evidence while the recorded set had 83 entries — it said
+   * "these two specifically are gone". With the set empty the assertion above
+   * already says no style anywhere is in it, so naming two of them proves
+   * nothing the line before it did not.
+   *
+   * What is worth asserting instead is the thing an empty expectation cannot
+   * say for itself: that the detector still WORKS. `toEqual([])` passes if the
+   * regexes stop matching, if `sourceFiles` returns nothing, if a refactor
+   * quietly inverts a condition — and it would go on passing while inert
+   * overrides piled back up. So the detector is pointed at a source that is
+   * defective on purpose, written in the exact shape the 83 had, and required to
+   * find it and to leave its two innocent neighbours alone.
+   */
+  it('the detector can still see one — the empty set above is a result, not a silence', () => {
+    const defective = [
+      "        <Text style={[text('bodyL', lang), styles.rowName]}>{name}</Text>",
+      "        <Text style={[text('bodyS', lang, '600'), styles.fixedName]}>{name}</Text>",
+      "        <Text style={[text('bodyS', lang), styles.plainName]}>{name}</Text>",
+      'const styles = StyleSheet.create({',
+      "  rowName: { color: color.ink, fontWeight: '600' },",
+      "  fixedName: { color: color.ink },",
+      "  plainName: { color: color.ink },",
+      '});',
+    ].join('\n');
+
+    expect(inertInSource('components/Fixture.tsx', defective)).toEqual([
+      'components/Fixture.tsx#rowName',
+    ]);
+  });
+
+  /**
+   * AND IT DOES NOT FIRE ON A STYLE THAT NAMES ITS OWN FACE. `namesAFace` is the
+   * one legitimate way to carry a weight in a style object, and a detector that
+   * flagged it would push the next author toward a `fontFamily` literal that
+   * cannot know the language — the exact fix the docblock above rules out.
+   */
+  it('leaves a style that names its own face alone', () => {
+    const explicit = [
+      "        <Text style={[text('bodyL', lang), styles.branded]}>{name}</Text>",
+      'const styles = StyleSheet.create({',
+      "  branded: { fontFamily: 'Fraunces_600SemiBold', fontWeight: '600' },",
+      '});',
+    ].join('\n');
+
+    expect(inertInSource('components/Fixture.tsx', explicit)).toEqual([]);
   });
 });

@@ -162,7 +162,7 @@ function OrderRow({ order }: { order: ShopOrder }) {
         <View style={[styles.status, open ? styles.statusOpen : styles.statusDone]}>
           <View style={[styles.statusDot, open ? styles.statusDotOpen : styles.statusDotDone]} />
           <Text
-            style={[text('bodyS', lang), open ? styles.statusTextOpen : styles.statusTextDone]}
+            style={[text('bodyS', lang, '600'), open ? styles.statusTextOpen : styles.statusTextDone]}
             testID={`order-status-${order.transactionId}`}
           >
             {orderStatusLabel(order, copy)}
@@ -187,7 +187,7 @@ function OrderRow({ order }: { order: ShopOrder }) {
             label rendered is the SNAPSHOT's own — never looked up in the live
             address book. See the header.
           */}
-          <Text style={[text('bodyL', lang), styles.snapshotName]} numberOfLines={1}>
+          <Text style={[text('bodyL', lang, '600'), styles.snapshotName]} numberOfLines={1}>
             {snapshot.label}
           </Text>
           {addressLines(snapshot, {
@@ -274,11 +274,11 @@ const styles = StyleSheet.create({
   statusDotOpen: { backgroundColor: color.brand },
   statusDotDone: { backgroundColor: color.textMutedSoft },
   // Brand text on a light surface is brandDeeper, never brand (#9).
-  statusTextOpen: { color: color.brandDeeper, fontWeight: '600' },
-  statusTextDone: { color: color.textMuted, fontWeight: '600' },
+  statusTextOpen: { color: color.brandDeeper },
+  statusTextDone: { color: color.textMuted },
   step: { color: color.textMutedSoft, flexShrink: 0 },
   snapshotLabel: { color: color.textMutedLabel, marginTop: 12, marginBottom: 4 },
-  snapshotName: { color: color.ink, fontWeight: '600' },
+  snapshotName: { color: color.ink },
   body: { color: color.textMuted, marginTop: 2 },
   fixed: { color: color.textMutedSoft, marginTop: 7 },
   empty: { alignItems: 'center', paddingTop: 40, paddingBottom: 30, paddingHorizontal: 10 },

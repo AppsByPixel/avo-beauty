@@ -400,7 +400,7 @@ export function ShopScreen({
               testID="shop-orders-button"
               style={styles.ordersButton}
             >
-              <Text style={[text('bodyS', lang), styles.ordersText]}>{copy.ordersCta}</Text>
+              <Text style={[text('bodyS', lang, '600'), styles.ordersText]}>{copy.ordersCta}</Text>
             </Pressable>
           <Pressable
             onPress={() => setCartOpen(true)}
@@ -424,7 +424,7 @@ export function ShopScreen({
             {shop.count > 0 ? (
               <View style={styles.badge} testID="shop-cart-badge">
                 {/* A count — the copy layer decides the script. */}
-                <Text style={[text('bodyS', lang), styles.badgeText]}>
+                <Text style={[text('bodyS', lang, '700'), styles.badgeText]}>
                   {copy.qtyValue(shop.count)}
                 </Text>
               </View>
@@ -481,7 +481,7 @@ export function ShopScreen({
                       testID={`shop-swatch-${p.id}`}
                     />
                     <View style={styles.rowText}>
-                      <Text style={[text('bodyL', lang), styles.rowName]} numberOfLines={2}>
+                      <Text style={[text('bodyL', lang, '600'), styles.rowName]} numberOfLines={2}>
                         {p.name}
                       </Text>
                       {/*
@@ -491,7 +491,7 @@ export function ShopScreen({
                         MONEY: Western digits in both languages (#12).
                       */}
                       <Text
-                        style={[text('bodyL', lang), styles.rowPrice]}
+                        style={[text('bodyL', lang, '600'), styles.rowPrice]}
                         accessibilityLabel={moneyAriaLabel(fils(p.priceFils), lang)}
                       >
                         {formatMoney(fils(p.priceFils), lang)}
@@ -512,7 +512,7 @@ export function ShopScreen({
                           <Text style={[text('bodyL', lang), styles.stepGhostText]}>−</Text>
                         </Pressable>
                         <Text
-                          style={[text('bodyL', lang), styles.stepQty]}
+                          style={[text('bodyL', lang, '600'), styles.stepQty]}
                           testID={`shop-qty-${p.id}`}
                         >
                           {copy.qtyValue(qty)}
@@ -538,7 +538,7 @@ export function ShopScreen({
                         testID={`shop-add-${p.id}`}
                         style={styles.addButton}
                       >
-                        <Text style={[text('bodyS', lang), styles.addText]}>{copy.shopAdd}</Text>
+                        <Text style={[text('bodyS', lang, '600'), styles.addText]}>{copy.shopAdd}</Text>
                       </Pressable>
                     )}
                   </View>
@@ -708,7 +708,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.chip,
     backgroundColor: color.brandTint,
   },
-  ordersText: { color: color.brandDeep, fontWeight: '600' },
+  ordersText: { color: color.brandDeep },
   title: { color: color.ink },
   sub: { color: color.textMuted, marginBottom: 18 },
   cartButton: {
@@ -734,7 +734,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  badgeText: { color: color.white, fontWeight: '700', fontSize: 11 },
+  badgeText: { color: color.white, fontSize: 11 },
   list: { gap: 11 },
   // design:495 — a white card per product, radius 18.
   row: {
@@ -752,8 +752,8 @@ const styles = StyleSheet.create({
   // the swatch, the letter and the photograph that may cover them.
   swatch: { width: 52, height: 52, borderRadius: 14, flexShrink: 0 },
   rowText: { flex: 1, minWidth: 0, gap: 4 },
-  rowName: { color: color.ink, fontWeight: '600' },
-  rowPrice: { color: color.ink, fontWeight: '600' },
+  rowName: { color: color.ink },
+  rowPrice: { color: color.ink },
   addButton: {
     flexShrink: 0,
     minHeight: MIN_TAP_TARGET,
@@ -763,7 +763,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   // Brand text on a light surface is brandDeep, never brand (#9).
-  addText: { color: color.brandDeep, fontWeight: '600' },
+  addText: { color: color.brandDeep },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 0 },
   stepBtn: {
     minWidth: MIN_TAP_TARGET,
@@ -776,7 +776,7 @@ const styles = StyleSheet.create({
   stepSolid: { backgroundColor: color.brandDeep },
   stepGhostText: { color: color.ink },
   stepSolidText: { color: color.white },
-  stepQty: { minWidth: 16, textAlign: 'center', color: color.ink, fontWeight: '600' },
+  stepQty: { minWidth: 16, textAlign: 'center', color: color.ink },
   note: {
     flexDirection: 'row',
     alignItems: 'center',

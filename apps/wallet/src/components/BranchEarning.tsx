@@ -75,7 +75,7 @@ export function BranchEarning({ salon, promotions }: Props) {
                 `"السالمية"` and `"مدينة الكويت"`. See `branchName` in
                 domain/activity.ts for the whole history and the fallback.
               */}
-              <Text style={[text('bodyL', lang), styles.chipName]} numberOfLines={1}>
+              <Text style={[text('bodyL', lang, '600'), styles.chipName]} numberOfLines={1}>
                 {branchName(branch, lang)}
               </Text>
               <View style={styles.badgeRow}>
@@ -84,7 +84,7 @@ export function BranchEarning({ salon, promotions }: Props) {
                 ) : (
                   badges.map((badge) => (
                     <View key={badge} style={styles.badge}>
-                      <Text style={[text('bodyS', lang), styles.badgeText]}>{badge}</Text>
+                      <Text style={[text('bodyS', lang, '600'), styles.badgeText]}>{badge}</Text>
                     </View>
                   ))
                 )}
@@ -119,7 +119,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 13,
   },
-  chipName: { color: color.ink, fontWeight: '600' },
+  chipName: { color: color.ink },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   badge: {
     backgroundColor: color.brandTint,
@@ -128,7 +128,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
   },
   // Brand-coloured text on a light surface is brandDeep, never brand.
-  badgeText: { color: color.brandDeep, fontWeight: '600' },
+  badgeText: { color: color.brandDeep },
   plain: { color: color.textMutedSoft, paddingVertical: 4 },
   note: {
     marginTop: 11,

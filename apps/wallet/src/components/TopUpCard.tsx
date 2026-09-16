@@ -155,7 +155,7 @@ function PayGetCard({ amount, preview }: { amount: Fils; preview: TopUpPreview }
         </Text>
 
         <View style={styles.payGetSide}>
-          <Text style={[text('bodyS', lang), styles.getLabel]}>{copy.topupGet}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.getLabel]}>{copy.topupGet}</Text>
           <Money
             amount={preview.creditFils}
             color={color.brandDeep}
@@ -194,7 +194,7 @@ export function TopUpCard({
         {heading ? (
           <View style={styles.badge}>
             <View style={styles.badgeDot} />
-            <Text style={[text('bodyS', lang), styles.badgeText]}>{heading.badge}</Text>
+            <Text style={[text('bodyS', lang, '600'), styles.badgeText]}>{heading.badge}</Text>
           </View>
         ) : null}
       </View>
@@ -260,7 +260,7 @@ export function TopUpCard({
         testID="topup-continue"
         style={styles.cta}
       >
-        <Text style={[text('bodyL', lang), styles.ctaText]}>{copy.continuePay}</Text>
+        <Text style={[text('bodyL', lang, '600'), styles.ctaText]}>{copy.continuePay}</Text>
       </Pressable>
     </View>
   );
@@ -294,7 +294,7 @@ const styles = StyleSheet.create({
   },
   // `brand` as a surface: a dot, not a text fill. Non-negotiable #9.
   badgeDot: { width: 6, height: 6, borderRadius: radius.pill, backgroundColor: color.brand },
-  badgeText: { color: color.brandDeep, fontWeight: '600' },
+  badgeText: { color: color.brandDeep },
   explain: { color: color.textMuted, marginBottom: 15 },
 
   grid: { flexDirection: 'row', gap: 9 },
@@ -367,7 +367,7 @@ const styles = StyleSheet.create({
   // unit is not expressible through it. A colour set here would be overridden
   // and would read as a live rule that isn't one, so: size only.
   payUnit: { fontSize: 11.5 },
-  getLabel: { color: color.brandDeeper, fontWeight: '600' },
+  getLabel: { color: color.brandDeeper },
   getFigure: { fontSize: 22, fontWeight: '600' },
   getUnit: { fontSize: 11.5 },
   arrow: { fontSize: 18, color: color.brandDeep, opacity: 0.5 },
@@ -382,5 +382,5 @@ const styles = StyleSheet.create({
     // Non-negotiable #9 — white on brandDeep, never on brand.
     backgroundColor: onBrandFill.backgroundColor,
   },
-  ctaText: { color: onBrandFill.color, fontWeight: '600' },
+  ctaText: { color: onBrandFill.color },
 });

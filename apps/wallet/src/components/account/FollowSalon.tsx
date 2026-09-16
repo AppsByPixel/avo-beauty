@@ -75,7 +75,7 @@ export function FollowSalon({ social }: { social: SocialLink[] }) {
               />
             </Svg>
           </View>
-          <Text numberOfLines={1} style={[text('bodyS', lang), styles.label]}>
+          <Text numberOfLines={1} style={[text('bodyS', lang, '600'), styles.label]}>
             {link.label}
           </Text>
           {/* A handle is a Latin identifier — LTR in both languages (design:468). */}
@@ -113,7 +113,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  label: { color: color.textMutedLabel, fontWeight: '600', fontSize: 10.5, maxWidth: '100%' },
+  label: { color: color.textMutedLabel, fontSize: 10.5, maxWidth: '100%' },
   handle: {
     color: color.textMutedSoft,
     fontSize: 10,
