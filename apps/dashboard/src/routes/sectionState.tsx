@@ -42,7 +42,9 @@ import { ApiError } from '../api/client.js';
  *   ─────────────────────────────────────────────────────────────────────────────────
  *   Overview      /metrics            → perms.dashboard      (none)              none needed
  *                 /charges            → SCANNER perms.charges
- *   Appointments  /bookings           → perms.appointments   (none)              none needed
+ *   Appointments  /bookings           → perms.appointments   no-show → VOID     perms.void
+ *                                                           (the LINK, not the
+ *                                                            section)
  *   Team          /artists            → perms.team           availability → team none needed
  *   Loyalty       /loyalty            → perms.loyalty        PUT /loyalty → loyalty
  *                                                                                none needed
@@ -59,6 +61,21 @@ import { ApiError } from '../api/client.js';
  * Only the last two have the ungated-read/gated-write shape, and both now carry a
  * gate naming the permission the server actually checks. The other seven are
  * deliberately ungated on the client, and that is a decision rather than a gap.
+ *
+ * APPOINTMENTS IS A THIRD SHAPE, AND IT IS THE ONE THIS LEDGER DID NOT HAVE A
+ * COLUMN FOR. Its read IS permission-gated, so by the rule above it needs no
+ * gate — and that was true for as long as the section wrote nothing. "Mark
+ * no-show" is `requireDashboardPerm(req, 'void')`: a gated read AND a gated
+ * write, on DIFFERENT permissions. The read landing therefore says nothing about
+ * the write, and the 403 the rule relies on never arrives until after the click.
+ *
+ * So the test is not "is the read gated" but "does the read's gate IMPLY the
+ * write's". Where it does, the refusal explains itself. Where it does not —
+ * here — the control carries its own gate and the write still renders the
+ * server's refusal, because `perms` is a snapshot from sign-in and a permission
+ * can be revoked while the board is open. The gate is on the LINK and not on the
+ * section: the board itself is still fully readable by someone who cannot mark.
+ * `Appointments.tsx § canMarkNoShow` and `api/bookings.ts § useMarkNoShow`.
  *
  * SHOP IS THE ROW THAT LOOKS LIKE AN EXCEPTION AND IS NOT. `GET
  * /salons/{id}/products` is `requirePrincipal` for a MEMBER and
