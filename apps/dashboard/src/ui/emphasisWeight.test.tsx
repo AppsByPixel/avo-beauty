@@ -57,20 +57,32 @@ afterEach(cleanup);
 
 describe('inline emphasis carries the design weight, not the browser default', () => {
   /**
-   * The verbatim Appointments banner from `AVO Merchant Dashboard.dc.html:169`,
-   * rendered through the real `InfoBanner` the route uses. The emphasised span
-   * is the design's own; only its computed weight is under test.
+   * The Appointments banner from `AVO Merchant Dashboard.dc.html:169`, rendered
+   * through the real `InfoBanner` the route uses. Only the computed weight is
+   * under test here — the cascade, not the copy.
+   *
+   * THE DURATION IS A PARAMETER NOW, AND THE FIXTURE FOLLOWS THE ROUTE. The
+   * design writes `1 hour` into the markup; the route renders the salon's
+   * `noShowReturnMinutes` through `formatReturnWindow`, because Settings gained a
+   * control that can set it and a salon on 4 hours was being told 1. A fixture
+   * frozen at the literal would keep asserting a shape the screen no longer has,
+   * so both a short and a long window are rendered: the emphasis is on whatever
+   * the window is, not on two particular words.
+   *
+   * This file is NOT a line-number ratchet — the `:169` above is a pointer into
+   * the design bundle, and nothing here pins a line in a source file. Checked
+   * before the banner moved, so this change shifts nothing it guards.
    */
-  it('renders <b> in product copy at 600', () => {
+  it.each(['1 hour', '4 hours'])('renders <b> in product copy at 600 — %s', (window) => {
     const { container } = render(
       <InfoBanner>
-        Deposits auto-return to the customer&rsquo;s wallet <b>1 hour</b> after a missed slot — the
-        money never leaves the ecosystem.
+        Deposits auto-return to the customer&rsquo;s wallet <b>{window}</b> after a missed slot —
+        the money never leaves the ecosystem.
       </InfoBanner>,
     );
 
     const emphasis = container.querySelector('b');
-    expect(emphasis?.textContent).toBe('1 hour');
+    expect(emphasis?.textContent).toBe(window);
     expect(getComputedStyle(emphasis!).fontWeight).toBe('600');
   });
 

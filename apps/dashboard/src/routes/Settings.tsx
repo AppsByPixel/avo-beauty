@@ -21,6 +21,7 @@ import {
   type BranchClosure,
 } from '../api/settings.js';
 import { useSession } from '../auth/AuthProvider.js';
+import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
 import { Tills } from './Tills.js';
 
@@ -417,27 +418,16 @@ function ModuleRow({
  */
 const RETURN_WINDOW_PRESETS: readonly number[] = [15, 30, 60, 120, 240];
 
-/**
- * The window as the merchant reads it — ONE function, used by the select's option
- * labels AND by the design's sentence, so the two cannot disagree at any value.
+/*
+ * THE LABEL ITSELF MOVED OUT — `routes/noShowWindow.ts`.
  *
- * `${n} minutes` FOR n = 1 WAS A REAL DEFECT, not a hypothetical: the old inline
- * expression rendered "1 minutes", and 1 is storable (`> 0` is the only CHECK).
- * It never showed because nothing could reach the field; adding a control is what
- * made it reachable.
- *
- * Above an hour, a non-multiple of 60 stays in minutes — "90 minutes", not "1
- * hour 30 minutes". True, and it invents no copy: the design writes exactly one
- * form of this phrase and the compound is not it. No preset produces it; only a
- * value set elsewhere can.
+ * It was exported from here, and that was right while this was the only screen
+ * that could state the window. Appointments states the same rule on the board
+ * where a merchant acts on a no-show, and a route importing a formatter out of a
+ * sibling route would make one screen's copy a library for the other's. One
+ * function still, so the select's option labels and BOTH sentences cannot
+ * disagree at any value; it simply no longer lives in one of the two callers.
  */
-export function formatReturnWindow(minutes: number): string {
-  if (minutes % 60 === 0) {
-    const hours = minutes / 60;
-    return `${hours} hour${hours === 1 ? '' : 's'}`;
-  }
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
 
 /**
  * The presets, plus the salon's own value when it is not one of them.

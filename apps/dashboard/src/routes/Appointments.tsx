@@ -10,6 +10,7 @@ import {
 } from '../api/bookings.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
+import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
 
 /**
@@ -259,11 +260,47 @@ export function Appointments() {
         exist. Naming a button that is not on the screen is worse than trimming
         the copy — it sends a merchant looking for something she cannot find.
         The link is drawn now, so the sentence is whole. Verbatim, both halves.
+
+        AND THE HOUR IS THE SALON'S HOUR, NOT THE DESIGN'S.
+        The design writes `1 hour` into the markup because the bundle has no
+        control that could change it. Settings now has one — the merchant picks
+        15 minutes / 30 minutes / 1 hour / 2 hours / 4 hours, the server holds
+        `noShowReturnMinutes`, and a salon set to 4 hours was still told "1 hour"
+        HERE, on the board where she decides whether to mark a customer. A rule
+        stated wrong on the screen where it is acted on is worse than not stated.
+        `formatReturnWindow` is the SAME function the Settings sentence and its
+        option labels use (`routes/noShowWindow.ts`), so the two screens cannot
+        drift apart at any value — including the values no preset offers.
+
+        WHAT SHOWS BEFORE THE SALON LANDS: NOTHING. NOT A DEFAULT, NOT HALF A
+        SENTENCE.
+        The three candidates, and why this one:
+          · `?? 60` — renders "1 hour" for every salon and then corrects itself.
+            That is the defect this change exists to remove, kept and given a
+            shorter lifetime. A merchant who reads the strip and navigates on has
+            read a wrong claim about her customers' money; that it was going to
+            be right a moment later is no defence.
+          · The sentence with the duration skeletoned — no reflow, but it leaves
+            a screen reader with "…returns to the customer's wallet after a
+            missed slot", a grammatical sentence stating a DIFFERENT rule, and
+            `.avo-skeleton` is `display:block` so it would need an inline variant
+            invented for one word.
+          · Not rendering until `salon.isSuccess` — this. The strip is standing
+            prose, not a data surface: there is no figure to hold a place for,
+            and interaction-spec §4's skeleton rule is about the data a screen
+            waits on. The reflow objection is real but small here — the table
+            below is skeletoned at the same moment, so nothing on the page looks
+            settled yet, which is not the case the Overview reflow fix was about
+            (a card that grew a row AFTER it appeared finished).
+        `salon.isError` never reaches this line: `SectionError` returned above.
       */}
-      <InfoBanner icon={<ClockGlyph />}>
-        Deposits auto-return to the customer&rsquo;s wallet <b>1 hour</b> after a missed slot — the
-        money never leaves the ecosystem. Use <b>Mark no-show</b> only for edge cases.
-      </InfoBanner>
+      {salon.isSuccess ? (
+        <InfoBanner icon={<ClockGlyph />}>
+          Deposits auto-return to the customer&rsquo;s wallet{' '}
+          <b>{formatReturnWindow(salon.data.noShowReturnMinutes)}</b> after a missed slot — the
+          money never leaves the ecosystem. Use <b>Mark no-show</b> only for edge cases.
+        </InfoBanner>
+      ) : null}
 
       {/*
         THE SWITCHED-OFF EMPTY. Its own copy, its own tone, and the one action

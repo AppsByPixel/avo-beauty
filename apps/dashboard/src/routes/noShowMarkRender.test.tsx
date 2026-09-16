@@ -451,31 +451,108 @@ describe('a marked row stops offering the link and says what happened', () => {
   });
 });
 
-/* ====================================== 6 · the banner’s missing half-sentence */
+/* ====================== 6 · the banner — both halves, and the SALON'S window */
+
+/**
+ * THESE USED TO RENDER FROM A PENDING SALON, WHICH IS HOW THE DEFECT HID.
+ *
+ * The banner's duration was written into the markup as `1 hour`, so a spec that
+ * never handed the route a salon could assert the whole sentence and pass — and
+ * did, while a salon set to 4 hours in Settings was being told "1 hour" here. A
+ * fixture with no data cannot catch a value it never supplies. Every banner spec
+ * below now states the window it expects the screen to read.
+ */
+function banner(noShowReturnMinutes: number | undefined) {
+  useSalon.mockReturnValue({
+    data: noShowReturnMinutes === undefined ? undefined : { modules: { booking: true }, noShowReturnMinutes },
+    isPending: noShowReturnMinutes === undefined,
+    isError: false,
+    isSuccess: noShowReturnMinutes !== undefined,
+    isFetching: noShowReturnMinutes === undefined,
+    refetch: vi.fn(),
+  });
+  useSalonBookings.mockReturnValue({
+    data: { items: [], nextCursor: null },
+    isPending: false,
+    isError: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  });
+  const { container } = render(<Appointments />);
+  return {
+    container,
+    text: (container.querySelector('.avo-info__text') ?? container.querySelector('.avo-info'))
+      ?.textContent,
+  };
+}
+
+const SENTENCE = (window: string) =>
+  `Deposits auto-return to the customer’s wallet ${window} after a missed slot — the money ` +
+  'never leaves the ecosystem. Use Mark no-show only for edge cases.';
 
 describe('the banner names the control now that the control exists', () => {
   it('carries both halves of the design’s sentence, verbatim', () => {
-    useSalon.mockReturnValue({ data: undefined, isPending: true, isError: false, isSuccess: false, isFetching: true, refetch: vi.fn() });
-    useSalonBookings.mockReturnValue({ data: undefined, isPending: true, isError: false, isFetching: true, refetch: vi.fn() });
-    const { container } = render(<Appointments />);
-    const banner = container.querySelector('.avo-info__text') ?? container.querySelector('.avo-info');
-    expect(banner!.textContent).toBe(
-      'Deposits auto-return to the customer’s wallet 1 hour after a missed slot — the money ' +
-        'never leaves the ecosystem. Use Mark no-show only for edge cases.',
-    );
+    expect(banner(60).text).toBe(SENTENCE('1 hour'));
+  });
+
+  /**
+   * THE SPEC THAT WOULD HAVE CAUGHT IT, AND THE REASON IT IS NOT A 60 CASE.
+   *
+   * 60 is the column default, the seed, the contract's example and the design's
+   * rendered hour — so a banner hard-coded to "1 hour" passes any spec written
+   * at 60. Only a salon that set something else can tell a rendered rule from a
+   * remembered one. 240 is the top of the Settings list and the value the defect
+   * was actually found on: set to 4 hours in Settings, told 1 hour here.
+   */
+  it.each([
+    [240, '4 hours'],
+    [120, '2 hours'],
+    [30, '30 minutes'],
+    [15, '15 minutes'],
+  ])('states the salon’s own window at %i minutes, not the design’s hour', (minutes, label) => {
+    const { text } = banner(minutes as number);
+    expect(text).toBe(SENTENCE(label as string));
+    expect(text).not.toMatch(/1 hour/);
+  });
+
+  /**
+   * ONE FORMATTER, SO THE TWO SCREENS CANNOT DRIFT. A value no preset offers
+   * still reads the same here as in the Settings sentence beside the control —
+   * `routes/noShowWindow.ts`, pinned at 45 and at the singular 1 that the old
+   * inline expression rendered as "1 minutes".
+   */
+  it.each([
+    [45, '45 minutes'],
+    [1, '1 minute'],
+    [1440, '24 hours'],
+  ])('reads a value the presets do not offer, at %i minutes', (minutes, label) => {
+    expect(banner(minutes as number).text).toBe(SENTENCE(label as string));
+  });
+
+  /**
+   * THE LOADING DECISION, PINNED SO IT IS A DECISION AND NOT AN ACCIDENT.
+   * Appointments.tsx argues it: no default, no half sentence. A `?? 60` here
+   * would be the shipped defect with a shorter life, and it would go green
+   * against the old spec above.
+   */
+  it('says nothing about the window before the salon lands', () => {
+    const { container } = banner(undefined);
+    expect(container.querySelector('.avo-info')).toBeNull();
   });
 
   /**
    * THE EMPHASIS IS THE DESIGN'S 600 AND NOT THE BROWSER'S `bolder`.
    * `emphasisWeight.test.tsx` argues why a `<b>` with no author rule is not
-   * "unstyled"; this pins the new one the second half introduced.
+   * "unstyled"; this pins the new one the second half introduced, and that the
+   * emphasis stays on the DURATION when the duration is no longer a literal.
    */
-  it('emphasises the control’s name at 600, like the hour beside it', () => {
-    useSalon.mockReturnValue({ data: undefined, isPending: true, isError: false, isSuccess: false, isFetching: true, refetch: vi.fn() });
-    useSalonBookings.mockReturnValue({ data: undefined, isPending: true, isError: false, isFetching: true, refetch: vi.fn() });
-    const { container } = render(<Appointments />);
+  it.each([
+    [60, '1 hour'],
+    [240, '4 hours'],
+  ])('emphasises the control’s name at 600, like the %i-minute window beside it', (minutes, label) => {
+    const { container } = banner(minutes as number);
     const bolds = [...container.querySelectorAll('.avo-info b')];
-    expect(bolds.map((b) => b.textContent)).toEqual(['1 hour', 'Mark no-show']);
+    expect(bolds.map((b) => b.textContent)).toEqual([label, 'Mark no-show']);
     for (const b of bolds) expect(getComputedStyle(b).fontWeight).toBe('600');
   });
 });
@@ -485,7 +562,9 @@ describe('the banner names the control now that the control exists', () => {
 describe('one key names one booking, survives a retry, and never travels', () => {
   function board(items: MerchantBooking[]) {
     useSalon.mockReturnValue({
-      data: { modules: { booking: true } },
+      // The banner reads `noShowReturnMinutes` off this now; a fixture without it
+      // renders the rule as "undefined minutes" rather than failing loudly.
+      data: { modules: { booking: true }, noShowReturnMinutes: 60 },
       isPending: false,
       isError: false,
       isSuccess: true,
