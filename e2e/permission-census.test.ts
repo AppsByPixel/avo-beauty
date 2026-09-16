@@ -909,6 +909,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /members/me/policy-acceptance [requireMember]',
   'POST /members/me/vouchers/redeem [requireMember]',
   'POST /orders [requireMember]',
+  'POST /salons/:id/bookings/:bookingId/no-show → void',
   'POST /salons/:id/branches → loyalty',
   'POST /salons/:id/devices → dashboard',
   'POST /salons/:id/products → shop',
