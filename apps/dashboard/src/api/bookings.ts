@@ -1,4 +1,10 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 import type { Booking } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
@@ -136,5 +142,155 @@ export function useSalonBookings(
      * longer a wrong pattern here to copy from.
      */
     networkMode: 'always',
+  });
+}
+
+/* ======================================================= mark a no-show == */
+
+/**
+ * `POST /salons/{id}/bookings/{bookingId}/no-show` — `perms.void`, NOT
+ * `perms.appointments`.
+ *
+ * =========================================================================
+ * THE WRITE'S GATE IS NOT THE BOARD'S GATE, AND THE SEED PROVES WHY
+ * =========================================================================
+ * The list next door is `requireDashboardPerm(req, 'appointments')`. This is
+ * `requireDashboardPerm(req, 'void')` (api/src/routes/bookings.ts § the gate),
+ * and the two are deliberately different authorities rather than an oversight:
+ * `perms.appointments` is a READ gate, and hanging a money-moving write off it
+ * would silently widen what every existing holder can do.
+ *
+ * `db/seed.ts § ST-002` is that holder. Hessa, frontdesk, `appointments: true`
+ * with `void: false` AND `dashboard: false` — so under the board's own gate she
+ * could return a customer's deposit and stamp a no-show against a named person
+ * while unable to open the dashboard at all.
+ *
+ * WHICH IS WHY THIS SCREEN CARRIES A COURTESY GATE AND THE LEDGER ROW MOVED.
+ * `routes/sectionState.tsx § THE COURTESY-GATE LEDGER` had Appointments in the
+ * "none needed" column, correctly, for as long as the section was read-only: a
+ * permission-gated read answers its own 403 and `SectionError` explains it. A
+ * write on a DIFFERENT permission from the read breaks that equivalence — the
+ * read succeeding says nothing about the write, so nothing would refuse the link
+ * until Hessa had already clicked it. #7 is intact either way: the link is a
+ * courtesy and the 403 is the control, and `Appointments.tsx` renders that 403
+ * rather than assuming it is unreachable.
+ *
+ * =========================================================================
+ * `MarkedBooking` IS DELIBERATELY NOT A `MerchantBooking`
+ * =========================================================================
+ * The 200 body's `booking` is `serialiseBooking(row)` — `BookingSchema` plus the
+ * same five computed fields the list carries — and NONE of the join fields the
+ * board draws: no `memberName`, no `serviceName`, no `artistName`, no
+ * `branchAssumed`. That is correct of the endpoint (the join is what
+ * `perms.appointments` gates, and this route does not check it) and it is a trap
+ * for the client: `setQueryData(..., data.booking)` would blank the customer's
+ * name, the service and the artist on the row that just changed — the one row a
+ * merchant is looking at.
+ *
+ * So the type says so — and the guard is narrower than it first reads, which was
+ * worth measuring rather than asserting. `Omit`ting the seven joined fields makes
+ * USING THE RESPONSE AS THE ROW a compile error:
+ *
+ *     items.map((row) => (row.id === bookingId ? data.booking : row))
+ *     → TS2345 … Type 'MarkedBooking' is missing the following properties from
+ *       type 'MerchantBooking': branchAssumed, memberName, memberPhone,
+ *       memberErased, and 3 more.
+ *
+ * It does NOT catch `{ ...row, ...data.booking }`, and that is correct of
+ * TypeScript rather than a hole: spreading a narrower object over a wider one
+ * still has every property, and at runtime the response carries no joined KEY to
+ * overwrite `memberName` with, so today that spread is behaviour-identical to the
+ * one-field patch below. It is still not what this does, for the reason the
+ * narrow patch is written the way it is: the day the endpoint adds a field, a
+ * blanket spread adopts it unread. The type stops the loud mistake; the patch
+ * below is the quiet half, and `api/noShowMark.test.tsx` is what holds it.
+ *
+ * =========================================================================
+ * THE IDEMPOTENCY KEY IS THE CALLER'S, AND IT IS NOT MINTED HERE
+ * =========================================================================
+ * Non-negotiable #4. The key is REQUIRED — 400 `idempotency_key_required`
+ * without one — and the server hashes `{ salonId, bookingId }` into the claim, so
+ * one key names one booking and reusing it on a second is 422
+ * `idempotency_key_reused`.
+ *
+ * Minting it inside this hook would put it on the wrong side of the decision:
+ * `useMutation` would mint per CALL, so a retry after a failure would arrive with
+ * a fresh key and lose the replay. `Appointments.tsx § the armed row` mints it
+ * where the merchant's intent begins, which is the same place
+ * `console/Salons.tsx` mints the onboarding wizard's.
+ */
+export type MarkedBooking = Omit<
+  MerchantBooking,
+  | 'branchAssumed'
+  | 'memberName'
+  | 'memberPhone'
+  | 'memberErased'
+  | 'memberTier'
+  | 'artistName'
+  | 'serviceName'
+>;
+
+export interface MarkNoShowResult {
+  booking: MarkedBooking;
+  /** INTEGER FILS — the deposit that went back. #1. */
+  refundedFils: number;
+  /** INTEGER FILS — her wallet after it. #1. */
+  balanceAfterFils: number;
+  transactionId: string;
+}
+
+export function useMarkNoShow(): UseMutationResult<
+  MarkNoShowResult,
+  unknown,
+  { bookingId: string; idempotencyKey: string }
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ bookingId, idempotencyKey }) =>
+      authedRequest<MarkNoShowResult>(
+        'merchant',
+        `/salons/${salonId}/bookings/${bookingId}/no-show`,
+        { method: 'POST', idempotencyKey },
+      ),
+    /**
+     * ONE FIELD PATCHED, THEN INVALIDATED — and both halves are load-bearing.
+     *
+     * THE PATCH exists because of the trap the type above describes from the
+     * other side. An invalidation alone leaves a window — however short — in
+     * which the row still reads `deposit_held`, still draws "Returns … if
+     * missed", and still offers the link that has just been used. That is the
+     * stale-row-still-offering-the-link failure, and a refetch does not close it,
+     * it only shortens it.
+     *
+     * `status` IS THE ONLY FIELD TAKEN, and taking more would be the defect the
+     * type refuses: `data.booking` has no `memberName`, so spreading it over the
+     * row blanks the customer. Everything else on the row is unchanged by a
+     * no-show anyway — the deposit is the same integer, the slot is the same
+     * slot — so one field is not a shortcut, it is the whole delta.
+     *
+     * THE INVALIDATION exists because the delta is not confined to this row.
+     * `booking_artist_slot_no_overlap` excludes `no_show_returned`, so the artist
+     * is free at that hour the moment this commits and a customer can book it
+     * from the wallet seconds later. The list is the server's answer to "what is
+     * on the board", and after a write that releases a slot it has to be asked
+     * again rather than reasoned about here.
+     */
+    onSuccess: (data, { bookingId }) => {
+      queryClient.setQueriesData<Paginated<MerchantBooking>>(
+        { queryKey: bookingKeys.all },
+        (old) =>
+          old
+            ? {
+                ...old,
+                items: old.items.map((row) =>
+                  row.id === bookingId ? { ...row, status: data.booking.status } : row,
+                ),
+              }
+            : old,
+      );
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
   });
 }

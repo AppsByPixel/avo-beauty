@@ -2356,6 +2356,143 @@ a:hover {
   line-height: 1.4;
 }
 
+/*
+ * "Mark no-show" — `AVO Merchant Dashboard.dc.html:184`, verbatim:
+ * `font-size:12px; color:rgba(28,27,25,0.45)`. That rgba IS
+ * `--avo-text-muted-soft`, which is why this rule names a token rather than
+ * re-typing the hex — the two are the same value and only one of them survives
+ * a palette change.
+ *
+ * THE ELEMENT IS A BUTTON AND HAS TO BE UNDRESSED TO LOOK LIKE THE DESIGN'S
+ * LINK. `Appointments.tsx § the design's link` argues why it is a button;
+ * everything here exists to make that choice invisible. `font-family: inherit`
+ * and not a size alone: a UA button defaults to the SYSTEM font at 13.333px, so
+ * without it the row would carry one control in a different typeface from every
+ * word around it.
+ *
+ * LONGHAND AND NOT THE `font` SHORTHAND, for two reasons and both are real. The
+ * shorthand also resets `font-variant`, `font-stretch` and `line-height`, none
+ * of which this rule wants to decide — and it is then immediately overridden by
+ * the `font-size` below it, which is the shorthand-then-longhand pattern that
+ * reads as a mistake even when it is not. Measured while pinning it: jsdom's
+ * cssstyle drops the longhand that follows the shorthand entirely and computes
+ * 16px, so the guarantee was also untestable in the form it was first written.
+ *
+ * THE UNDERLINE IS ON HOVER AND FOCUS ONLY. The design gives a bare anchor,
+ * which a browser underlines permanently — an underline in every held row turns
+ * the column into a rule. The affordance is the position and the hover, and the
+ * focus ring is the shell's.
+ *
+ * AND THE HOVER DARKENS IT. At rest this is the design's 0.45, which composites
+ * over the card's `--avo-white` to rgb(153,152,152) and measures 2.87:1 — it does
+ * not carry the 4.5:1 the brand rules demand of text, and this is text on a
+ * control rather than beside one. The resting colour is still the design's and is
+ * left alone: `STATUS_PILL` one file over records the only colour deviation this
+ * screen has taken and why it was within a family, and moving a 0.45 to the 0.65
+ * that would clear the bar is a visible change to a value the design states
+ * outright. What is added instead is a hover/focus state on
+ * `--avo-text-muted-strong` — 6.34:1 — so the control is legible the moment it is
+ * being used. Reported to trunk: the design's own value for an INTERACTIVE
+ * element is under the threshold, and that is a decision above a lane.
+ */
+.appts__mark {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.appts__mark:hover,
+.appts__mark:focus-visible {
+  color: var(--avo-text-muted-strong);
+  text-decoration: underline;
+}
+
+/*
+ * THE ARMED STEP, IN THE ROW'S OWN SLOT. It replaces the link rather than
+ * sitting beside it, so the cell does not grow a second control while the first
+ * is still offered — and it keeps the 12px register, because a confirmation that
+ * shouts is a modal with the chrome taken off.
+ */
+.appts__confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.appts__confirm-q {
+  color: var(--avo-text-muted-strong);
+  max-width: 34ch;
+}
+
+.appts__confirm-acts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.appts__confirm-yes,
+.appts__confirm-no {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+/*
+ * THE DESTRUCTIVE HALF IS THE ONE THAT CARRIES COLOUR, and it is the danger
+ * TEXT token rather than the danger dot — the same choice, for the same reason,
+ * that `STATUS_PILL`'s `no_show_returned` entry records: the dot's #B0736F is
+ * about 3.0:1 and this is text.
+ */
+.appts__confirm-yes {
+  font-weight: 600;
+  color: var(--avo-danger-text);
+}
+
+.appts__confirm-no {
+  color: var(--avo-text-muted-strong);
+}
+
+.appts__confirm-yes:hover,
+.appts__confirm-yes:focus-visible,
+.appts__confirm-no:hover,
+.appts__confirm-no:focus-visible {
+  text-decoration: underline;
+}
+
+.appts__confirm-yes:disabled,
+.appts__confirm-no:disabled {
+  cursor: default;
+  opacity: 0.55;
+  text-decoration: none;
+}
+
+/*
+ * `WriteError` INSIDE A ROW, not over the table. Its own rule carries
+ * `margin: 16px 0`, which is right for a banner under a card's heading and
+ * doubles the height of a table row — so the margin is tightened here and
+ * nothing else about it is touched. Scoped to `.appts__status`, so the eight
+ * other screens that render one keep the spacing they were designed with.
+ */
+.appts__status .section-write-error {
+  margin: 4px 0 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+}
+
 .appts__empty {
   padding: 26px 20px;
   text-align: center;
