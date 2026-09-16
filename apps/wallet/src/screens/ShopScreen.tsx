@@ -106,6 +106,7 @@ import { OrdersSheet } from '../components/OrdersSheet';
 import { TopUpSheet } from '../components/TopUpSheet';
 import { TransactionSheet } from '../components/TransactionSheet';
 import { useTopUp } from '../state/useTopUp';
+import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
 import { topUpAmountForShortfall } from '../domain/topup';
 import { useAddresses } from '../state/useAddresses';
 import type { AddressPayload } from '../domain/address';
@@ -119,6 +120,7 @@ import { focusable } from '../theme/focus';
 export function ShopScreen({
   shop,
   balanceFils,
+  memberFetchedAt,
   tier,
   branches,
   onToppedUp,
@@ -130,6 +132,16 @@ export function ShopScreen({
    */
   shop: ShopController;
   balanceFils: number;
+  /**
+   * WHEN the read `balanceFils` came out of landed — `useWalletHome`'s
+   * `fetchedAt`, passed down from the shell that owns the read.
+   *
+   * It is here for one row: the top-up success screen's "New balance". A
+   * balance alone cannot tell "the server has answered since she paid" from
+   * "this is the figure from before the payment", and only the first may carry
+   * that label (#2). See `state/useNewBalanceAfterTopUp.ts`.
+   */
+  memberFetchedAt: number | null;
   /**
    * The tier that funds the bonus, for the top-up sheet's calculation card. A
    * `TierName` and not a rendered label, because Arabic inflects it.
@@ -210,10 +222,21 @@ export function ShopScreen({
    * rendered last so it paints over the cart, which stays mounted underneath —
    * she tops up and is returned to the same cart with the same items.
    */
+  /**
+   * "New balance" for the sheet below. The stamp half lives here because only
+   * this screen knows when ITS top-up settled; the comparison lives in the hook
+   * because Home and Book ask the identical question.
+   */
+  const balance = useNewBalanceAfterTopUp(balanceFils, memberFetchedAt);
+  const markSucceeded = balance.markSucceeded;
+
   const topUp = useTopUp({
     onSucceeded: useCallback(() => {
       // The balance changed, so the owner re-reads the member — #2, and the
-      // reason nothing here touches `balanceFils` itself.
+      // reason nothing here touches `balanceFils` itself. The stamp is what
+      // lets the success screen tell that re-read from the one already on
+      // screen, which is the figure from BEFORE she paid.
+      markSucceeded();
       onToppedUp();
       /*
         AND THE STALE 402 GOES, BUT ONLY THAT ONE.
@@ -228,7 +251,7 @@ export function ShopScreen({
         not something to leave to that guard.
       */
       if (shop.refusal?.kind === 'short') shop.clearRefusal();
-    }, [onToppedUp, shop]),
+    }, [markSucceeded, onToppedUp, shop]),
   });
 
   const book = useAddresses();
@@ -607,15 +630,24 @@ export function ShopScreen({
         form sheet above: both are absolutely positioned overlays at the same
         `zIndex`, so the later one wins and the cart is preserved underneath.
 
-        `newBalanceFils` is null, as it is in the Book flow: the "new balance"
-        row belongs to the top-up's own success screen, which re-reads the member
-        itself. Deriving it here would mean adding `creditFils` to a balance this
-        screen is holding, which is precisely what #2 forbids.
+        `newBalanceFils` USED TO BE A HARD-CODED `null` HERE, under a comment
+        saying the "new balance" row belonged to the top-up's own success screen
+        because that screen re-read the member itself. IT DOES NOT. `TopUpSheet`
+        renders what it is handed, and `null` renders a skeleton bar — so on this
+        screen the one row that tells her the money actually landed was a grey
+        bar, a minute later and forever.
+
+        What goes in now is the shell's member read, admitted only once that read
+        landed AFTER the payment settled — #2, decided once in
+        `state/useNewBalanceAfterTopUp.ts`. The old comment's objection was
+        right as far as it went: nothing here adds `creditFils` to `balanceFils`,
+        and nothing here ever will. It just threw away the server's own answer
+        along with the local sum.
       */}
       <TopUpSheet
         stage={topUp.stage}
         controller={topUp}
-        newBalanceFils={null}
+        newBalanceFils={balance.newBalanceFils}
         tier={tier}
       />
 

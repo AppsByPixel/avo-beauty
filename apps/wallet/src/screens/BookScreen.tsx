@@ -49,6 +49,7 @@ import { FailureScreen } from '../components/FailureScreen';
 import { PrimaryButton } from '../components/Buttons';
 import { TopUpSheet } from '../components/TopUpSheet';
 import { useTopUp } from '../state/useTopUp';
+import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { fils } from '@avo/types';
 import {
@@ -89,6 +90,16 @@ import {
 interface Props {
   salon: Salon;
   member: Member;
+  /**
+   * WHEN the read `member` came out of landed — `useWalletHome`'s `fetchedAt`,
+   * passed down from the shell that owns the read.
+   *
+   * For one row: the top-up success screen's "New balance". `member.balanceFils`
+   * alone cannot tell "the server has answered since she paid" from "this is the
+   * figure from before the payment", and only the first may carry that label
+   * (#2). See `state/useNewBalanceAfterTopUp.ts`.
+   */
+  memberFetchedAt: number | null;
   /** Leave the flow — the bottom nav's Home, or the confirmed screen's button. */
   onHome: () => void;
   /** Re-read the wallet after a deposit moves. Never a locally computed balance. */
@@ -99,10 +110,26 @@ interface Props {
   onToast: (message: string) => void;
 }
 
-export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToast }: Props) {
+export function BookScreen({
+  salon,
+  member,
+  memberFetchedAt,
+  onHome,
+  onBooked,
+  reschedule,
+  onToast,
+}: Props) {
   const { lang, copy } = useLanguage();
   const flow = useBooking({ salon, reschedule, onBooked });
   const [topUpAmount] = useState<Fils>(DEFAULT_TOP_UP_AMOUNT);
+
+  /**
+   * "New balance" for the top-up sheet below. The stamp half is here because
+   * only this screen knows when ITS top-up settled; the comparison is in the
+   * hook because Home and Shop ask the identical question.
+   */
+  const balance = useNewBalanceAfterTopUp(member.balanceFils, memberFetchedAt);
+  const markSucceeded = balance.markSucceeded;
 
   /**
    * The top-up the shortfall banner opens.
@@ -117,9 +144,12 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
     onSucceeded: useCallback(() => {
       // The balance changed. Home re-reads it, and the stale 402 is cleared so
       // the next Confirm is a real attempt rather than a repeat of the refusal.
+      // The stamp is what lets the success screen tell that re-read from the
+      // `member` already in props, which is the figure from BEFORE she paid.
+      markSucceeded();
       onBooked();
       flow.clearShortfall();
-    }, [onBooked, flow]),
+    }, [markSucceeded, onBooked, flow]),
   });
 
   const salonModuleOff = !salon.modules.booking;
@@ -184,9 +214,19 @@ export function BookScreen({ salon, member, onHome, onBooked, reschedule, onToas
         <TopUpSheet
           stage={topUp.stage}
           controller={topUp}
-          // The Book flow never labels a balance "new" — that row belongs to
-          // the top-up's own success screen and it re-reads the member itself.
-          newBalanceFils={null}
+          /*
+            THIS WAS A HARD-CODED `null` under a comment saying the row belonged
+            to the sheet's own success screen because that screen re-read the
+            member itself. It does not — `TopUpSheet` renders what it is handed,
+            and `null` renders a skeleton bar, so the row sat grey forever on the
+            one screen where she tops up precisely to make a deposit clear.
+
+            It is the shell's member read now, admitted only once that read
+            landed AFTER the payment settled. Still never `member.balanceFils`
+            plus `creditFils`: #2 makes the number the server's, and the hook is
+            where that is decided.
+          */
+          newBalanceFils={balance.newBalanceFils}
           tier={member.tier}
         />
       }
