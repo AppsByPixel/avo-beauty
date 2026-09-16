@@ -318,6 +318,13 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
          * tell the two cancellations apart.
          */
         reversesTransactionId: transaction.reversesTransactionId,
+        /**
+         * WHY, when there is a why. On the SAME ROW the discriminator above
+         * comes from — no second join, no audit-log read. The column is on the
+         * reversal (migration 0050) and the reversal is what this left join
+         * already reaches through `settled_transaction_id`.
+         */
+        voidReasonCode: transaction.voidReasonCode,
       })
       .from(booking)
       .innerJoin(member, eq(member.id, booking.memberId))
@@ -426,6 +433,52 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
          * "this was not a reversal" from "this API is too old to say".
          */
         chargeVoided: r.reversesTransactionId !== null,
+        /**
+         * ============================================================
+         * "AND THIS IS WHY" — the field lane B asked for, as a CODE.
+         * ============================================================
+         * Three reasons mean opposite things to the artist reading this row.
+         * "Wrong amount or service" is a correction, "Duplicate charge" is
+         * housekeeping, and "Customer did not receive service" is an assertion
+         * that she did not do the job. She has `permDashboard: false`, so she can
+         * open neither the audit log nor `GET /charges`: this is the ONLY surface
+         * on which she could learn which of the three was said about her work.
+         *
+         * WHY A CODE AND NOT THE STORED WORDS. `transaction.note` on this same
+         * row already holds the reason, and serving it was the cheap option.
+         * Rejected twice over. `POST /voids` accepts any string — today's scanner
+         * sends one of three written labels by choice, not by constraint — so the
+         * column would put an arbitrary client's free text on a named artist's
+         * screen. And DECISIONS.md 107 establishes that the column carries four
+         * unrelated meanings; a field that means four things is not a field. The
+         * code is validated against `VOID_REASON_CODES` in the handler AND by
+         * `transaction_void_reason_code_valid` at the database, so exactly three
+         * values can ever arrive here.
+         *
+         * THE WORDS STAY THE CLIENT'S, and that is the point rather than a
+         * concession — it is what lane B asked for when it asked for an enum.
+         * Non-negotiable #12 makes Arabic a first-class layout, and there is no
+         * locale on `staff_user` for a server-composed sentence to select on.
+         *
+         * NULL IS NOT A FOURTH REASON. It means this void recorded no code —
+         * true of every void taken before migration 0050, and of any client that
+         * does not send one. `chargeVoided` is the separate, older fact and stays
+         * authoritative: `voidReason` non-null implies `chargeVoided`, and
+         * `chargeVoided` emphatically does not imply `voidReason`. A row with
+         * `chargeVoided: true, voidReason: null` is "voided, reason not
+         * recorded", which is exactly what lane B renders today.
+         *
+         * ALWAYS PRESENT, never omitted, for the reason `chargeVoided` gives
+         * above it: a client must be able to tell "no reason was recorded" from
+         * "this API is too old to say".
+         *
+         * WHAT IT DOES NOT DISCLOSE. Not the actor — `created_by_staff_id` is on
+         * this row too and is deliberately not selected. Lane B scoped its ask to
+         * the code for that reason and the scoping is kept: who voided a charge is
+         * a different disclosure from why, and it belongs to a surface with an
+         * appeal attached to it, not to a pill on a day view.
+         */
+        voidReason: r.voidReasonCode,
       })),
       nextCursor: null,
     });
