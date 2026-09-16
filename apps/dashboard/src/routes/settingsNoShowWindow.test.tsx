@@ -411,6 +411,73 @@ describe('the write path — the screen’s one mutation, and its refusal', () =
   });
 });
 
+/* ------------------------------------------- the sentence, before it can speak */
+
+/**
+ * THE SPEC THE `?? 60` SURVIVED, AND THE ASSERTION THAT WOULD HAVE ENDED IT.
+ *
+ * The test above has always been here and has always passed: the CONTROL is
+ * skeletoned when the salon has not loaded. The SENTENCE beside it was not — it
+ * rendered `salon?.noShowReturnMinutes ?? 60` from outside the skeleton branch,
+ * so every merchant on every load was told "1 hour", and a salon set to 4 hours
+ * was told it and then corrected. Nothing was red. The card was half-honest and
+ * no assertion looked at the other half.
+ *
+ * `not.toMatch(/1 hour/)` is the assertion, and it is the same one the
+ * Appointments banner now carries, for the same reason: 60 is the column default,
+ * the seed, the contract's example and the design's rendered hour, so "1 hour" is
+ * exactly what a screen says when it is remembering rather than reading.
+ */
+describe('the foot sentence claims nothing about the window until the salon lands', () => {
+  const foot = (container: HTMLElement) => container.querySelector('.settings__foot');
+
+  it('states no window, and above all not the default one', () => {
+    const { update } = stubUpdate();
+    const { container } = render(<DepositPanel salon={undefined} update={update} />);
+    expect(foot(container)?.textContent).not.toMatch(/1 hour/);
+    // Not half the sentence either — no emphasised phrase, because no phrase.
+    expect(footEmphasis(container)).toBeNull();
+  });
+
+  /**
+   * AND IT HOLDS THE CARD'S SHAPE RATHER THAN VANISHING, which is where this
+   * screen's answer parts company with the Appointments banner's. The rows above
+   * skeleton at their real heights on purpose — `Settings.tsx` § the foot argues
+   * the difference. A line that disappears and comes back is the reflow those
+   * rows are paying to avoid.
+   */
+  it('skeletons the line rather than dropping it', () => {
+    const { update } = stubUpdate();
+    const { container } = render(<DepositPanel salon={undefined} update={update} />);
+    expect(foot(container)).not.toBeNull();
+    expect(foot(container)!.querySelector('.avo-skeleton')).not.toBeNull();
+  });
+
+  /**
+   * THE SKELETON IS NOT ANNOUNCED. `Skeleton` is `aria-hidden`, so a screen
+   * reader on a loading card hears the card's title and its rows and no claim
+   * about the window at all — rather than a sentence with a hole in it, which was
+   * the reason the banner one screen over does not skeleton its duration inline.
+   */
+  it('says nothing to a screen reader either', () => {
+    const { update } = stubUpdate();
+    const { container } = render(<DepositPanel salon={undefined} update={update} />);
+    expect(foot(container)!.textContent).toBe('');
+  });
+
+  /** And the moment it lands it is the design's sentence again, whole. */
+  it('states the salon’s own window as soon as there is one', () => {
+    const { update } = stubUpdate();
+    const { container } = render(
+      <DepositPanel salon={salonWith({ noShowReturnMinutes: 240 })} update={update} />,
+    );
+    expect(foot(container)?.textContent).toBe(
+      'No-show: deposit returns to the wallet 4 hours after a missed slot.',
+    );
+    expect(foot(container)?.textContent).not.toMatch(/1 hour/);
+  });
+});
+
 /* --------------------------------------------------------------- the weight */
 
 /**

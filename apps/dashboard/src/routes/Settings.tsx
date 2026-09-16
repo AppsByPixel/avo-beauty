@@ -471,8 +471,24 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  const returnMinutes = salon?.noShowReturnMinutes ?? 60;
-  const returnLabel = formatReturnWindow(returnMinutes);
+  /*
+   * NO `?? 60`. THE SAME ARGUMENT AS THE APPOINTMENTS BANNER, AND IT LANDS HARDER
+   * HERE.
+   *
+   * This line read `salon?.noShowReturnMinutes ?? 60` and the foot sentence below
+   * rendered outside the `salon === undefined` branch, so every salon was told
+   * "1 hour" for as long as the read took and a salon on 4 hours was then
+   * corrected. That is the defect the banner was just fixed for, on the screen a
+   * merchant opens IN ORDER TO SET THIS VALUE — so it is the reading most likely
+   * to be done carefully, and the claim is about the control she is reaching for.
+   * A card that says "1 hour" to a salon set to 4 is telling her the control does
+   * not hold what it holds.
+   *
+   * The tell was the asymmetry on this card: the select beside the sentence has
+   * been correctly skeletoned since it was built, and the sentence was the one
+   * part of the card still speaking from a default.
+   */
+  const returnMinutes = salon?.noShowReturnMinutes;
 
   /*
    * THE VALUE THE SELECT SHOWS WHILE A WRITE IS IN THE AIR, WITHOUT A LOCAL COPY.
@@ -499,12 +515,18 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
    *
    * WHAT IS NOT HERE: an `'noShowReturnMinutes' in update.variables` guard, which
    * this line carried until a mutation proved it inert — deleting it failed
-   * nothing, because `?? returnMinutes` already answers for a patch that does not
+   * nothing, because the `??` below already answers for a patch that does not
    * mention the field. A check that cannot fail is not a safeguard, it is a
    * second statement of a rule that lives one line down.
+   *
+   * IT TAKES THE LOADED SALON AS AN ARGUMENT rather than reading the optional
+   * `returnMinutes` above, and that is what dropping the `?? 60` costs — one
+   * parameter. The alternative was a fallback the control can never reach (it
+   * renders only in the branch where the salon HAS loaded), and an unreachable
+   * default is worse than a reachable one: nothing can ever prove it wrong.
    */
   const pendingWindow = update.isPending ? update.variables?.noShowReturnMinutes : undefined;
-  const shownMinutes = pendingWindow ?? returnMinutes;
+  const shownMinutes = (loaded: Salon) => pendingWindow ?? loaded.noShowReturnMinutes;
 
   return (
     <Card className="settings__card">
@@ -558,8 +580,8 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
               label="No-show return window"
               labelHidden
               size="sm"
-              value={String(shownMinutes)}
-              options={returnWindowOptions(shownMinutes)}
+              value={String(shownMinutes(salon))}
+              options={returnWindowOptions(shownMinutes(salon))}
               disabled={update.isPending}
               /*
                * NOT DEBOUNCED, and the stepper beside it is — the difference is
@@ -571,7 +593,7 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
                */
               onChange={(event) => {
                 const next = Number(event.target.value);
-                if (next !== returnMinutes) update.mutate({ noShowReturnMinutes: next });
+                if (next !== salon.noShowReturnMinutes) update.mutate({ noShowReturnMinutes: next });
               }}
             />
           </div>
@@ -587,9 +609,46 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
         Pill-beside-Toggle carries the same argument. They re-agree the moment the
         write settles, whichever way it settles; a refusal surfaces in the
         screen's own `WriteError`.
+
+        AND BEFORE THE SALON LANDS IT MAKES NO CLAIM — BUT IT SKELETONS RATHER
+        THAN VANISHING, WHICH IS *NOT* WHAT APPOINTMENTS DOES.
+
+        Same rule, different answer, and the difference is real rather than an
+        inconsistency:
+
+          · THE APPOINTMENTS BANNER IS THE FIRST THING ON A PAGE THAT IS ENTIRELY
+            SKELETONED at that moment, so nothing around it looks settled and a
+            strip appearing costs no confidence. It is also standing prose in an
+            `InfoBanner`, a component with no loading shape of its own.
+          · THIS IS THE LAST LINE OF A BOUNDED CARD WHOSE OTHER ROWS ARE ALREADY
+            SKELETONED at their real heights — deliberately, because "a card that
+            grows a 33px row on load is the reflow `Overview.tsx` was corrected
+            for" (the note on the select's skeleton, two rows up). Omitting this
+            line would shrink the card and then grow it, which is the very thing
+            the rows above pay for.
+
+        THE OBJECTION THAT KILLED THE SKELETON ON APPOINTMENTS DOES NOT APPLY.
+        There it would have meant skeletoning ONE WORD inside a sentence: an
+        `aria-hidden` gap leaves a screen reader a grammatical sentence stating a
+        DIFFERENT rule ("…returns to the customer's wallet after a missed slot"),
+        and `.avo-skeleton` is `display:block`, so an inline variant would have had
+        to be invented for it. Here the whole line is replaced, block with block,
+        no new variant and no half sentence — the line says nothing at all, which
+        is the only honest thing it can say before the value arrives.
+
+        The width is approximate and cannot be otherwise: the sentence's rendered
+        length moves with the label ("15 minutes" is wider than "1 hour"). The
+        HEIGHT is what holds the card's shape, and that is fixed.
       */}
       <div className="settings__foot">
-        No-show: deposit returns to the wallet <b>{returnLabel}</b> after a missed slot.
+        {returnMinutes === undefined ? (
+          <Skeleton width="82%" height={15} />
+        ) : (
+          <>
+            No-show: deposit returns to the wallet <b>{formatReturnWindow(returnMinutes)}</b> after
+            a missed slot.
+          </>
+        )}
       </div>
     </Card>
   );
