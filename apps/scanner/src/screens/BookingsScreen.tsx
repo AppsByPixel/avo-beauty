@@ -143,7 +143,8 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
 
         {tally ? (
           <Text style={[ui(12.5), styles.sub]}>
-            {copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid)} — {copy.bookingsSource}
+            {copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid, tally.voided)} —{' '}
+            {copy.bookingsSource}
           </Text>
         ) : null}
 
@@ -220,16 +221,26 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
  * her screen at 15:00, byte-identical to one she had not touched, and she had to
  * remember which of the morning she had rung up.
  *
- * WHY A MAP RATHER THAN A TERNARY, GIVEN ONLY TWO ARRIVE. The route filters the
- * day to `inArray(booking.status, ['deposit_held', 'completed'])`
- * (api/src/routes/bookings.ts:308), so `cancelled` and `no_show_returned` cannot
- * land here as it stands. Both are one config change away from doing so, and
- * both mean money moved BACK to the customer — a void turns a charged booking
- * into `cancelled` (api/src/routes/charges.ts:736), and the no-show job writes
- * `no_show_returned`. An unhandled status on this card does not render as
- * nothing; it renders as an ordinary live appointment. Four lines buy that away
- * permanently, and `bookingsDoneState.test.ts` fails the day the contract grows
- * a fifth.
+ * WHY A MAP RATHER THAN A TERNARY. Written when only two statuses could arrive;
+ * THREE CAN NOW, and the arm this paragraph called dead is the live one.
+ *
+ * The route used to filter her day to `deposit_held` and `completed` only, so a
+ * void - which sets the booking to `cancelled` - made an appointment she had
+ * just been paid for DISAPPEAR. Lane A fixed the server half: the predicate now
+ * also admits `cancelled`, but ONLY when the settling transaction carries
+ * `reverses_transaction_id` (api/src/routes/bookings.ts § where). So
+ * `cancelled` is reachable today, `no_show_returned` still is not, and the one
+ * `cancelled` case that arrives is always a reversal.
+ *
+ * WHICH IS WHY THE MAP IS NO LONGER THE WHOLE ANSWER - see `pillFor` below. A
+ * neutral grey "Cancelled" at the same visual weight as "Paid" is what this map
+ * alone would now draw, and it is the flat labelling Lane A's fix exists to
+ * avoid. The map stays keyed by status because it is the exhaustiveness ratchet
+ * (`bookingsDoneState.test.ts` fails the day the contract grows a fifth status,
+ * and an unhandled status renders not as nothing but as an ordinary live
+ * appointment), and `cancelled`'s entry stays "Cancelled" because that word is
+ * RIGHT for the customer's own cancellation on the day Lane A widens the
+ * predicate to admit it. `pillFor` intercepts before it.
  *
  * `deposit_held` IS NULL ON PURPOSE. The merchant's Appointments board needs a
  * "Deposit held" pill because it is a table with a status column; this card
@@ -273,6 +284,90 @@ export const STATUS_PILL: Record<
   },
 };
 
+/**
+ * ===========================================================================
+ * THE REVERSAL. NOT A STATUS, SO NOT IN THE MAP ABOVE.
+ * ===========================================================================
+ * `chargeVoided` is the server's answer to a question the booking row cannot
+ * answer: `cancelled` has two writers meaning opposite things, and only the
+ * settling transaction's `reverses_transaction_id` - one writer in the whole
+ * API, behind a unique index - tells them apart. Non-negotiable #2: it is read,
+ * never re-derived. In particular it is NOT inferred from `status ===
+ * 'cancelled'`, which happens to be equivalent today only because the route's
+ * predicate admits no other kind of cancellation, and which Lane A has said it
+ * may widen.
+ *
+ * WHY THIS IS THE ONLY SURFACE THAT CAN CARRY IT. The seeded artist with a login
+ * is a scanner principal with `permDashboard: false`, `permCharges: false` and
+ * `permVoid: false` (api/src/db/seed.ts § ST-002). She cannot open the audit
+ * log, and `Today's charges` draws its padlock for her. If her day does not say
+ * this, nothing she can reach ever will.
+ *
+ * ---------------------------------------------------------------------------
+ * THE WEIGHT, WHICH IS THE HARDER HALF - AND IT IS NOT A FONT WEIGHT
+ * ---------------------------------------------------------------------------
+ * DECISIONS #115 in this file's own reading is ALERT versus DESCRIPTION: inside
+ * this card the deposit, tier and source pills are all 600 and the single 700 is
+ * `NEW`. So: is a reversal an alert?
+ *
+ * It is a DESCRIPTION, and the pill stays 600. `NEW` means "this arrived, look
+ * at it" - it is about her queue and it implies something to do. A void is
+ * finished, it is somebody else's action, and there is no affordance on this
+ * card or anywhere she can reach: she holds neither `perms.void` nor
+ * `perms.charges`. Drawing it at `NEW`'s weight would promise a response she
+ * cannot make, and it would put two 700s in one row's worth of slots, which is
+ * how a frozen set stops meaning anything. `emphasisWeight.test.ts`'s 700 set
+ * still has exactly one member, and that is the proof.
+ *
+ * BUT IT MUST NOT RECEDE, which is the part the pill cannot do on its own. The
+ * settled card deliberately drops off the white lift onto `surfaceAlt` and mutes
+ * its ink, because a finished row should not compete with the next appointment.
+ * A reversed row is NOT finished: it is neither done nor upcoming, it is her
+ * completed work in an unresolved state. So `receded` below is narrower than
+ * `settled` - the reversal keeps the white lift and full ink, and the pill takes
+ * `dangerBg`/`dangerText`, which is this app's existing pair for "money went
+ * BACK to the customer" and already carries `no-show · returned`. Colour and
+ * elevation do the work; the type scale is left alone.
+ *
+ * Using the same pair as `no_show_returned` rather than inventing a third is
+ * deliberate: both mean the customer's money was returned, and a colour
+ * distinction between them would be a semantic nobody defined. The WORDS
+ * separate them.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT IS MISSING, AND IT IS NOT MINE TO INVENT
+ * ---------------------------------------------------------------------------
+ * The void carries a reason - `copy.voidReasons`, three of them - and one of the
+ * three is "Customer did not receive service", which is a claim about THIS
+ * artist's work, recorded against a staff name in an append-only log she has no
+ * permission to read. The other two ("Wrong amount or service", "Duplicate
+ * charge") mean something entirely different to her: a correction and a piece of
+ * housekeeping. `GET /artists/me/bookings` does not serve the reason, so this
+ * pill cannot distinguish them and deliberately says nothing rather than
+ * implying the worst reading. That is an ask for Lane A, written up in the
+ * report; no placeholder is rendered here.
+ */
+const VOIDED_PILL = {
+  label: copy.bookingsStatusVoided,
+  bg: color.dangerBg,
+  text: color.dangerText,
+} as const;
+
+/**
+ * The one place that decides which pill a booking wears.
+ *
+ * Exported for the test. The reversal is checked FIRST and unconditionally: a
+ * future `no_show_returned` that somehow also carried a reversal would say
+ * "Payment voided", because that is the fact about money and the other is a fact
+ * about attendance.
+ */
+export function pillFor(
+  booking: Pick<ArtistBooking, 'status' | 'chargeVoided'>,
+): { label: string; bg: string; text: string } | null {
+  if (booking.chargeVoided) return VOIDED_PILL;
+  return STATUS_PILL[booking.status];
+}
+
 // ------------------------------------------------------------------- a card --
 
 /**
@@ -290,16 +385,25 @@ export const STATUS_PILL: Record<
  * The dashboard has the same defect one step milder, because it only DISPLAYS.
  * Here the card offers to send. `wa.me/990418702935514` is an outbound request
  * built from digits that name nobody, and the only reason it has not fired is
- * that the window is narrow: the query takes `deposit_held` and `completed`
- * since yesterday, and erasure defers while a deposit is in escrow, so the live
- * case is a booking COMPLETED for a member erased inside that window. Narrow is
- * not a fix.
+ * that the window is narrow: the query reaches back twenty-four hours, and
+ * erasure defers while a deposit is in escrow, so the live case is a booking
+ * already SETTLED for a member erased inside that window. Narrow is not a fix -
+ * and it got wider after this was written, because the query now also admits a
+ * settled booking whose charge was voided.
+ *
+ * (It used to say "the query takes `deposit_held` and `completed`". That stopped
+ * being true when Lane A admitted reversed cancellations to her day. The window
+ * is what the argument rests on, not the status list, so the sentence names the
+ * window.)
  *
  * THE GUARD IS `memberErased || memberPhone === null`, not either alone:
  *
- *   the flag   is the contract's answer and the one Lane A is landing. It is
- *              also the only signal that survives if the tombstone format ever
- *              changes — nothing here should be pattern-matching `+990`.
+ *   the flag   is the contract's answer, and it has LANDED —
+ *              `api/src/http/serialise.ts § serialiseMemberContact` computes it
+ *              from `erasedAt` on every item. (It read "the one Lane A is
+ *              landing" long after that merge.) It is also the only signal that
+ *              survives if the tombstone format ever changes — nothing here
+ *              should be pattern-matching `+990`.
  *   the null   is what the payload actually carries, and it catches a tombstone
  *              that arrives while `memberErased` is still defaulting to false
  *              (see `ArtistBookingSchema`). It is also the crash guard: the old
@@ -328,13 +432,27 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
   */
   const phone = booking.memberErased ? null : booking.memberPhone;
   const digits = phone === null ? null : phone.replace(/[^0-9]/g, '');
-  const status = STATUS_PILL[booking.status];
+  const status = pillFor(booking);
   /*
     Settled means the deposit is resolved — charged, returned or cancelled — and
     it is read from the SERVER'S status, never from a timestamp or from a charge
     this device happens to have watched. Non-negotiable #2.
   */
   const settled = booking.status !== 'deposit_held';
+  /*
+    AND RECESSION IS NARROWER THAN SETTLEMENT, which is the whole visual argument
+    for a reversal. `settled` still governs the things that are about the DEPOSIT
+    being resolved — it is what suppresses `NEW` below, and a voided booking must
+    not read NEW either. `receded` governs the things that are about the row
+    being FINISHED: dropping off the white lift onto `surfaceAlt` and muting the
+    ink, so the next appointment wins the eye.
+
+    A reversal is settled and is not finished. Her completed work has been undone
+    and there is nothing she can do about it from any screen she can open, so the
+    row keeps its elevation and its ink and lets the pill's colour carry the
+    fact. See VOIDED_PILL above for why this is elevation rather than weight.
+  */
+  const receded = settled && !booking.chargeVoided;
   /*
     AND IT SUPPRESSES `NEW`, which is not tidiness but a collision this change
     exposed. `isRecent` is `startsAt - now < 12h` with NO LOWER BOUND, so every
@@ -356,10 +474,10 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
   }, []);
 
   return (
-    <View style={[styles.card, settled && styles.cardSettled]} testID={`booking-${booking.id}`}>
+    <View style={[styles.card, receded && styles.cardSettled]} testID={`booking-${booking.id}`}>
       <View style={styles.cardTop}>
         <View style={styles.timeRow}>
-          <Text style={[display(17, '600'), settled && styles.settledInk]}>
+          <Text style={[display(17, '600'), receded && styles.settledInk]}>
             {clockLabel(booking.startsAt)}
           </Text>
           <Text style={[ui(12), styles.dim]}>· {copy.bookingsDuration(booking.durationMin)}</Text>
@@ -395,7 +513,7 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
         </View>
       </View>
 
-      <Text style={[ui(14.5, '600'), styles.service, settled && styles.settledInk]}>
+      <Text style={[ui(14.5, '600'), styles.service, receded && styles.settledInk]}>
         {booking.serviceName}
       </Text>
 
@@ -569,19 +687,36 @@ function isRecent(booking: ArtistBooking): boolean {
  * only the still-held ones is what lets the word keep its meaning, and `paid`
  * names what the rest are instead of hiding them.
  *
+ * `voided` IS THE FOURTH, AND IT EXISTS TO STOP A SILENT DECREMENT. A reversed
+ * booking is `cancelled` on the server, so without this it counts in none of the
+ * other three: a manager voids this morning's charge and "2 paid" becomes "1
+ * paid" while a card she has not seen before appears below, with nothing above
+ * connecting the two. Same defect the `upcoming` fix closed, running the other
+ * way - the line stops lying and starts omitting.
+ *
+ * IT IS COUNTED OFF `chargeVoided`, NOT OFF `status === 'cancelled'`, for the
+ * reason `pillFor` gives: those are equivalent only because of a route predicate
+ * Lane A may widen, and the day it does, a customer's cancellation would start
+ * being counted as a reversal by a header nobody re-read.
+ *
  * Exported for the test, and for nothing else.
  */
 export function dayTally(bookings: ArtistBooking[]): {
   upcoming: number;
   isNew: number;
   paid: number;
+  voided: number;
 } {
   const held = bookings.filter((b) => b.status === 'deposit_held');
   return {
     upcoming: held.length,
     // `isRecent` is only consulted on held rows now — same rule the card uses.
     isNew: held.filter(isRecent).length,
+    // A reversed charge is no longer `completed`, so it leaves `paid` on its
+    // own. That is correct - she was not, in the end, paid for it - and the
+    // segment below is what makes the subtraction visible rather than spooky.
     paid: bookings.filter((b) => b.status === 'completed').length,
+    voided: bookings.filter((b) => b.chargeVoided).length,
   };
 }
 

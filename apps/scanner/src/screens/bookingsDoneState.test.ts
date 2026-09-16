@@ -14,20 +14,23 @@
  * rang up at 11:00 was byte-identical at 15:00 to one she had not touched.
  *
  * ═════════════════════════════════════════════════════════════════════════════
- * TWO STATES ARRIVE; FOUR ARE DEFINED. THIS FILE PINS BOTH HALVES.
+ * THREE STATES ARRIVE NOW; FOUR ARE DEFINED. THIS FILE PINS THE TWO IT NAMED.
  * ═════════════════════════════════════════════════════════════════════════════
- * `api/src/routes/bookings.ts:308` filters the day to
- * `inArray(booking.status, ['deposit_held', 'completed'])`, so `cancelled` and
- * `no_show_returned` CANNOT reach this card today. The brief assumed they could;
- * they cannot, and the filter is quoted above rather than trusted.
+ * WHAT THIS PARAGRAPH USED TO SAY, AND WHY IT STOPPED BEING TRUE. It read that
+ * the route filters the day to `inArray(booking.status, ['deposit_held',
+ * 'completed'])` and that `cancelled` therefore CANNOT reach this card — quoted
+ * from the source, correct when written, and the report it points at asked for
+ * exactly the widening that then happened. Lane A widened it: `cancelled` is now
+ * admitted when the settling transaction carries `reverses_transaction_id`. So
+ * this file's own request is what made its own comment false, which is the only
+ * kind of stale comment that is nobody's oversight.
  *
- * The map is still exhaustive, for a reason that is about money rather than
- * tidiness: `no_show_returned` means a deposit went BACK to the customer, and a
- * void turns a charged booking into `cancelled` (api/src/routes/charges.ts:736).
- * If that filter is ever widened — and it should be, see the report — an
- * unhandled status renders as an ordinary live appointment. The exhaustiveness
- * spec below fails the day `BookingSchema.status` grows a fifth member, which is
- * the only moment anyone would need to be told.
+ * `no_show_returned` still cannot arrive. `cancelled` can, and when it does it
+ * is ALWAYS a reversal — which is `bookingsVoidedState.test.ts`'s subject, not
+ * this file's. The specs here are unchanged in meaning: the map is exhaustive
+ * because an unhandled status renders not as nothing but as an ordinary live
+ * appointment, and this file's exhaustiveness spec fails the day
+ * `BookingSchema.status` grows a fifth member.
  *
  * ═════════════════════════════════════════════════════════════════════════════
  * THE HARNESS IS `bookingsErasedCard.test.ts`'s, AND ITS LIMITS ARE THE SAME
@@ -95,6 +98,13 @@ const { color } = await import('../theme');
 // ------------------------------------------------------------- the fixtures --
 
 /**
+ * NOTE: `wire()` below deliberately OMITS `chargeVoided`, and that is a live
+ * assertion rather than an oversight. `ArtistBookingSchema` declares it
+ * `.default(false)` precisely so an older payload parses, and every fixture in
+ * this file exercising that default is the cheapest proof the default holds.
+ * The field's own specs are in `artistBookingWire.test.ts` and
+ * `bookingsVoidedState.test.ts`.
+ *
  * `startsAt` is two hours in the PAST on purpose. That is the whole case: the
  * 24-hour window keeps this morning's appointment on her screen all afternoon,
  * and it is also what makes `isRecent` say "NEW" about finished work — see the
@@ -347,14 +357,18 @@ describe('the count line', () => {
       ArtistBookingSchema.parse(wire({ id: 'BK-P2', status: 'completed', startsAt: TWO_HOURS_AGO })),
     ]);
     // Three cards on the screen, and only one of them is still ahead of her.
-    expect(tally).toEqual({ upcoming: 1, isNew: 0, paid: 2 });
-    expect(copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid)).toBe('1 upcoming · 2 paid');
+    expect(tally).toEqual({ upcoming: 1, isNew: 0, paid: 2, voided: 0 });
+    expect(copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid, tally.voided)).toBe(
+      '1 upcoming · 2 paid',
+    );
   });
 
   it('is the design line, verbatim, when nothing is finished', () => {
     const tally = dayTally([ArtistBookingSchema.parse(heldWire)]);
-    expect(copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid)).toBe('1 upcoming · 1 new');
-    // And the third segment never appears on a day with nothing charged.
-    expect(copy.bookingsCount(3, 0, 0)).toBe('3 upcoming');
+    expect(copy.bookingsCount(tally.upcoming, tally.isNew, tally.paid, tally.voided)).toBe(
+      '1 upcoming · 1 new',
+    );
+    // And the later segments never appear on a day with nothing charged.
+    expect(copy.bookingsCount(3, 0, 0, 0)).toBe('3 upcoming');
   });
 });
