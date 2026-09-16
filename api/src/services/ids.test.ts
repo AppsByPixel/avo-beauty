@@ -34,22 +34,45 @@ const SRC = new URL('..', import.meta.url).pathname;
 /**
  * The exact shape 0052 and 0053 removed: a numeric id space small enough to
  * collide, drawn with no uniqueness check and no retry.
- *
- * DELIBERATELY NARROWER THAN "no Math.random in a minter". A second family
- * survives in production — `Math.random().toString(36).slice(2, 8)`, six base-36
- * characters, used for `BR-`, `PR-`, `HH-`, `ST-`, `doc-` and `TI-`. That is
- * 36^6 ≈ 2.18e9, where a 50% collision needs ~55,000 rows rather than ~3,531, and
- * every one of those ids is already opaque so none of the readability argument in
- * `ids.ts` applies to them. `TI-` on `topup_intent` is the one worth a decision —
- * the README calls those rows real payment records — and it is REPORTED TO TRUNK
- * rather than swept into this change, because changing an id format on a live
- * payment table is not a thing to do as a side effect of fixing a different bug.
- *
- * If that decision lands, widen this pattern. Until it does, asserting the wider
- * property here would fail on six ids nobody has decided about, and a red suite
- * that everybody knows to ignore is worse than no suite.
  */
 const COLLIDING_MINT = /Math\.floor\(Math\.random\(\)/;
+
+/**
+ * The SECOND family: `Math.random().toString(36).slice(2, 8)`, six base-36
+ * characters. 36^6 = 2.18e9, so a 50% collision needs ~55,000 rows rather than
+ * ~3,531 — 242x the space of the one above, and every id it makes is already
+ * opaque, so none of `ids.ts`'s readability argument applies to them.
+ *
+ * `TI-` LEFT THIS LIST IN 0054 and the other five stay, which is a decision trunk
+ * took on 2026-09-17 rather than a line nobody looked at. `TI-` is on
+ * `topup_intent`, one row per top-up ATTEMPT, and api/README.md calls those real
+ * payment records — a duplicate there is a customer's money, and 55,000 attempts
+ * is reachable. The five below name a staff account, a branch, a product, a happy
+ * hour and a policy document: none is money, and all are low-volume per salon, so
+ * 2.18e9 is not a pressing space for any of them.
+ */
+const BASE36_MINT = /Math\.random\(\)\.toString\(36\)/;
+
+/**
+ * THE PIN, in the shape `e2e/permission-census.test.ts` uses for gates and
+ * `e2e/tenancy.test.ts` for salon-scoped routes, and for their reason: an
+ * aggregate "how many are left" floor cannot tell a REMOVAL from an ADDITION, and
+ * it is the addition that matters. A new base-36 mint on a money path would keep
+ * any count-based assertion green.
+ *
+ * SO AMENDING THIS LIST IS DELIBERATE, BOTH WAYS. Fixing one of these fails this
+ * spec until the line is deleted, which is the prompt to decide whether the rest
+ * should follow. Adding a sixth fails it until somebody writes down why the new
+ * one is allowed to be a dice roll — and if the answer involves money, the answer
+ * is a sequence.
+ */
+const BASE36_PINNED = [
+  'routes/platform.ts',          // HH- happy hour
+  'routes/policies.ts',          // doc- policy document
+  'routes/salons.ts',            // BR- branch, PR- product
+  'routes/staff.ts',             // ST- staff account
+  'services/salonOnboarding.ts', // ST- the owner's own staff row
+] as const;
 
 /**
  * Comment or code. Line-based and therefore approximate: it reads `/*`, `*` and
@@ -117,5 +140,33 @@ describe('no production file mints an id from a small random space', () => {
         'collision and answer "still being processed" for something that never ' +
         'happened. Mint it from a sequence via services/ids.ts instead.',
     ).toEqual([]);
+  });
+
+  /**
+   * See `BASE36_PINNED`. This is the narrowing written down, so that the five ids
+   * still minted from 2.18e9 are a decision with a date on it rather than five
+   * lines nobody has looked at since.
+   */
+  it('pins every file still minting from the 36^6 space, so a sixth is a failing spec', () => {
+    const found = [
+      ...new Set(
+        sourceFiles(SRC)
+          .filter((file) =>
+            readFileSync(file, 'utf8')
+              .split('\n')
+              .some((text) => !isComment(text) && BASE36_MINT.test(text)),
+          )
+          .map((file) => file.slice(SRC.length)),
+      ),
+    ].sort();
+
+    expect(
+      found,
+      'The 36^6 minters moved. An ADDITION is the case this exists for: a new id ' +
+        'drawn from 2.18e9 with no uniqueness check, which is fine for a happy hour ' +
+        'and is a customer\'s money on a payment record — `TI-` was exactly that ' +
+        'until migration 0054. A REMOVAL means one was fixed, and the pin should ' +
+        'lose the line so the next reader sees what is genuinely left.',
+    ).toEqual([...BASE36_PINNED]);
   });
 });

@@ -132,6 +132,24 @@ export async function nextTransactionId(exec: Executor): Promise<string> {
   return `TX-${await draw(exec, sql`SELECT nextval('transaction_number_seq') AS n`)}`;
 }
 
+/**
+ * 'TI-10000042'. The top-up INTENT — one row per attempt, not per success, and
+ * api/README.md calls those real payment records.
+ *
+ * THE SIXTH MINTER, AND A DIFFERENT SHAPE FROM THE OTHER FIVE. This was
+ * `Math.random().toString(36).slice(2, 8).toUpperCase()`, six base-36 characters:
+ * 36^6 = 2.18e9, so a 50% collision needs ~55,000 rows rather than ~3,531. That is
+ * why it did not present the way `CMP-` did, and it is not why it was safe — a
+ * top-up attempt is a frequent event and 55,000 is reachable. Migration 0054.
+ *
+ * Its five siblings in that family — `ST-`, `BR-`, `PR-`, `HH-`, `doc-` — are
+ * deliberately left alone; `ids.test.ts` pins them so the narrowing stays a
+ * decision.
+ */
+export async function nextTopUpIntentId(exec: Executor): Promise<string> {
+  return `TI-${await draw(exec, sql`SELECT nextval('topup_intent_number_seq') AS n`)}`;
+}
+
 /** 'BK-10000042'. The appointment. */
 export async function nextBookingId(exec: Executor): Promise<string> {
   return `BK-${await draw(exec, sql`SELECT nextval('booking_number_seq') AS n`)}`;

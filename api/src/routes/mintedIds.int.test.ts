@@ -1,5 +1,5 @@
 /**
- * EVERY HUMAN-FACING ID THE API MINTS IS UNIQUE UNDER LOAD — ALL FIVE PREFIXES.
+ * EVERY HUMAN-FACING ID THE API MINTS IS UNIQUE UNDER LOAD — ALL SIX PREFIXES.
  *
  * =========================================================================
  * WHAT BROKE
@@ -88,7 +88,7 @@ const MINTS = 1000;
 const DRAWS = 200;
 
 /**
- * Migration 0052 and 0053 start values — each a digit wider than the space its
+ * Migration 0052, 0053 and 0054 start values — each a digit wider than the space its
  * random minter used, so a minted id cannot collide with a row that was already
  * in the table when the migration ran.
  */
@@ -98,6 +98,9 @@ const FLOOR = {
   'TX-': 10_000_000,
   'BK-': 10_000_000,
   'NT-': 10_000_000,
+  /** 0054. Old `TI-` ids are six chars of [0-9A-Z], so an all-digit one tops out
+   *  at 999,999 — this is two digits clear of it. */
+  'TI-': 10_000_000,
 } as const;
 
 function suffix(id: string, prefix: keyof typeof FLOOR): number {
@@ -306,6 +309,18 @@ suite('every minted id comes from a sequence, not a dice roll', () => {
     expectAllDistinct(drawn, 'booking');
     expectStrictlyIncreasing(drawn, 'BK-');
     expectClearsLegacySpace(drawn, 'BK-');
+  });
+
+  it(`draws ${DRAWS} top-up intent ids that strictly increase — a payment record`, async () => {
+    const drawn: string[] = [];
+    await inRollback(async (tx) => {
+      for (let i = 0; i < DRAWS; i += 1) drawn.push(await ids.nextTopUpIntentId(tx));
+    });
+
+    expect(drawn).toHaveLength(DRAWS);
+    expectAllDistinct(drawn, 'top-up intent');
+    expectStrictlyIncreasing(drawn, 'TI-');
+    expectClearsLegacySpace(drawn, 'TI-');
   });
 
   /**

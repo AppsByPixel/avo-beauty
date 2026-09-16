@@ -76,7 +76,7 @@ import { platformCommissionFor } from './platformSettings';
 import { enforceTopUpLimits } from './topupLimit';
 import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
-import { nextTransactionId } from './ids';
+import { nextTopUpIntentId, nextTransactionId } from './ids';
 
 // ------------------------------------------------------------ the machine --
 
@@ -268,9 +268,6 @@ export function serialiseIntentForCustomer(row: TopUpIntentRow): TopUpIntentPubl
   return out as unknown as TopUpIntentPublic;
 }
 
-function intentId(): string {
-  return `TI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-}
 
 /**
  * `defaultBranchId` USED TO LIVE HERE, identical to the copy in
@@ -368,7 +365,8 @@ export async function createTopUp(
 
     const bonus = percentOf(input.amountFils, bonusPercent);
 
-    const id = ctx.failCreate ? `${intentId()}-GWFAIL` : intentId();
+    const minted = await nextTopUpIntentId(tx);
+    const id = ctx.failCreate ? `${minted}-GWFAIL` : minted;
     /**
      * A TOP-UP HAS NO BRANCH TO ESTABLISH — it happens on a phone. So this is an
      * attribution and never anything more, and `branch.established` is ignored
