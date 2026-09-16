@@ -20,10 +20,19 @@
  * module, and this is the same shape. Both routes now import from here, so
  * neither owns the wording of the other's sentence.
  *
- * `${n} minutes` FOR n = 1 WAS A REAL DEFECT, not a hypothetical: the old inline
- * expression in Settings rendered "1 minutes", and 1 is storable (`> 0` is the
- * only CHECK the column carries). It never showed because nothing could reach
- * the field; adding a control is what made it reachable.
+ * THE SINGULAR IS HANDLED, AND SAYING SO PLAINLY IS THE POINT OF THIS PARAGRAPH.
+ * `formatReturnWindow(1)` returns "1 minute". The ternaries on both arms are what
+ * does it, and both are pinned: `settingsNoShowWindow.test.tsx` § 'says "1
+ * minute", not "1 minutes"' and the banner's own `[1, '1 minute']` case in
+ * `noShowMarkRender.test.tsx`.
+ *
+ * The defect the ternaries were written for is HISTORY, not a live gap: the
+ * inline expression this function replaced rendered "1 minutes", and 1 is
+ * storable — `salon_no_show_return_positive` is `> 0`, so the column admits it
+ * and the endpoint accepts it. It never showed on a screen because nothing could
+ * reach the field; adding the Settings control is what made it reachable, and the
+ * control and the function landed together. Written in the past tense on purpose
+ * — a reader should not have to run the function to find out which it is.
  *
  * Above an hour, a non-multiple of 60 stays in minutes — "90 minutes", not "1
  * hour 30 minutes". True, and it invents no copy: the design writes exactly one
