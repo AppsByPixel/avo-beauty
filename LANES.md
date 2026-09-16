@@ -31,6 +31,48 @@ working directory itself, which resets to trunk between commands. Most were
 caught and disclosed by the lane that caused them — which is the standard, and also why this
 rule exists rather than relying on it.
 
+### Before a fresh worktree can run anything at all
+
+Two steps, in this order, and both have cost a lane an hour.
+
+**1. The node your `.nvmrc` names, via `nvm install` — not `brew install node@22`.**
+`.npmrc` sets `engine-strict=true`, so the install is gated by the strictest
+`engines` field in the whole resolved tree, and today that is **jsdom@30.0.1**:
+`^22.22.2 || ^24.15.0 || >=26.0.0`. Two ordinary readings of a `22` pin fail —
+`brew install node@22` gives 22.22.0, two patches short, and a v25 falls in the
+gap between `^24.15.0` and `>=26.0.0` and is excluded outright. `.nvmrc` is
+therefore an **exact** version, and `engines.node` in the root `package.json`
+states that same floor rather than `>=22`, so a refusal names AVO's requirement
+instead of a transitive dev dependency's.
+
+**jsdom is a devDependency of `apps/dashboard` and `apps/wallet` only, and it
+gates lane A anyway** — `pnpm install` resolves all ten workspace projects, so a
+lane with no jsdom in its tree still cannot install without a node that satisfies
+it. CI never meets this: `setup-node` with `node-version: 22` / `24` resolves to
+the latest of each line and clears the floor on both jobs. It bites exactly one
+situation — a fresh worktree on a developer machine, which is what every
+dispatched lane gets.
+
+Do **not** unblock with `--config.engine-strict=false`. `.npmrc` carries measured
+evidence for that setting (six wallet spec files never loading on Node 20, and
+`digits.test.ts` failing non-negotiable #12), and a lane that relaxes it silently
+is reporting green from a runtime nobody validated. If you use the flag to get
+moving, say so in your report, as lane A did.
+
+**2. Build the shared packages before any `api` or `e2e` run.**
+
+```bash
+pnpm --dir /Users/koraspond_developer/dev/avo-<lane>/packages/types run build
+pnpm --dir /Users/koraspond_developer/dev/avo-<lane>/packages/tokens run build
+```
+
+`packages/*/dist` is gitignored, so a rebase brings the source and not the built
+output the apps import. Without it vitest fails with `Failed to resolve entry for
+package @avo/types` across roughly 21 of 27 api unit files — a red that is about
+your worktree and not about your change (decision 103). `--dir` with an absolute
+path, **never `--filter`**: `--filter` resolves against the workspace root and
+builds trunk's copy.
+
 ### Database — one per lane, already created
 
 Trunk has created `avo_lane_a`, `avo_lane_b`, `avo_lane_c`, `avo_lane_d` and `avo_ci`.
