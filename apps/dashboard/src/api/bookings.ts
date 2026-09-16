@@ -38,6 +38,22 @@ import type { Paginated } from './salon.js';
  * against, so widening it is a trunk change rather than a lane one. Flagged in
  * the lane report: these five belong in `BookingSchema`, and the joined fields
  * belong in a `MerchantBookingSchema` beside it.
+ *
+ * ---------------------------------------------------------------------------
+ * HALF OF THAT HAS SINCE HAPPENED, AND THE BLOCK ABOVE DOES NOT KNOW IT.
+ * ---------------------------------------------------------------------------
+ * `BookingSchema` (entities.ts:428) now declares ALL FIVE — `endsAt`,
+ * `changeableUntil`, `noShowReturnDueAt`, `rescheduledCount`,
+ * `calendarSyncState` — so the five lines below are redeclarations of fields
+ * `Booking` already has, and they narrow nothing. Harmless, and left in place
+ * rather than deleted in a slice that is about something else; the point of
+ * writing it down is that the paragraph above reads as a live request and is
+ * not one. The JOINED half is still outstanding: there is no
+ * `MerchantBookingSchema`, and the seven fields under it are still this file's.
+ *
+ * Checked, not assumed — the standing lesson about an absence claim: it is the
+ * one kind of comment that cannot be verified by rereading the file it sits in,
+ * and this one expired without anything noticing.
  */
 export interface MerchantBooking extends Booking {
   endsAt: string;

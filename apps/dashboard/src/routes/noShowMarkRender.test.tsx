@@ -394,7 +394,7 @@ describe('a refused mark is explained in its own row, and says what did not happ
     [409, 'appointment_not_started', 'That appointment has not started yet, so it cannot be marked as a no-show.'],
     [409, 'already_no_show', 'That appointment is already marked as a no-show and the deposit has been returned.'],
     [409, 'not_markable', 'That appointment was charged, so it cannot be marked as a no-show.'],
-    [400, 'idempotency_key_required', 'Idempotency-Key is required.'],
+    [400, 'idempotency_key_required', 'Every money-moving POST needs an Idempotency-Key header.'],
   ])('renders the %s %s sentence verbatim', (status, code, message) => {
     renderRow(HELD, { armed: true, markError: refusal(status as number, code as string, message as string) });
     expect(screen.getByRole('alert').textContent).toContain(message as string);
