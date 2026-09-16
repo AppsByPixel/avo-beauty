@@ -53,22 +53,34 @@ const SALON = 'SAL-AMARA';
 const BRANCH = 'BR-SAL';
 /** Noura — every permission, so she can charge AND void. */
 const MANAGER = 'ST-001';
+const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
+const SVC = `AV-SV-${RUN}`;
+
 /**
- * Hessa — the seeded artist who has her own login (`artist.staff_user_id`), and
- * deliberately the RESTRICTED account: `perms.dashboard`, `perms.charges` and
- * `perms.void` are all OFF (db/seed.ts § ST-002).
+ * THIS RUN'S ARTIST, AND THIS RUN'S ARTIST LOGIN. Created in `beforeAll`, never
+ * deleted — see § THE FIXTURE OWNS ITS OWN SLOT below the `beforeAll`.
  *
- * That is not incidental to this file, it is the argument in it. The audit log is
+ * They used to be the SEEDED pair, `AR-003` / `ST-002`. The link is one-to-one
+ * (`artist_staff_user_uq` is unique where present), so owning the artist means
+ * owning the login too; a per-run artist cannot borrow Hessa's.
+ *
+ * WHAT THE SEEDED PAIR WAS FOR, AND WHY IT SURVIVES THE MOVE. `ST-002` is
+ * deliberately the RESTRICTED account — `perms.dashboard`, `perms.charges` and
+ * `perms.void` all OFF (db/seed.ts § ST-002) — and that is not incidental to this
+ * file, it is the argument in it. The audit log is
  * `requireDashboardPerm(req, 'dashboard')` and `GET /charges` is
  * `requireScannerPerm(req, 'charges')` — she can open NEITHER. Her day is the only
  * surface on which she can learn that her 11:00 was reversed, which is why losing
  * the row from it loses the fact entirely.
+ *
+ * So the insert below spells those three permissions out rather than leaning on
+ * the column defaults, even though every `perm_*` column defaults to false. The
+ * argument this file makes is about what she CANNOT open; a default is not a
+ * statement, and a fixture that got its premise from one would go on passing if
+ * the default ever flipped.
  */
-const ARTIST_STAFF = 'ST-002';
-const ARTIST = 'AR-003';
-
-const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`;
-const SVC = `AV-SV-${RUN}`;
+const ARTIST_STAFF = `AV-ST-${RUN}`;
+const ARTIST = `AV-AR-${RUN}`;
 
 interface DayRow {
   id: string;
@@ -131,7 +143,9 @@ suite('a voided charge leaves the appointment on the artist day, and says it was
    *   findApplicableHold   `starts_at <= now + salon.no_show_return_minutes` (60)
    *                        AND `no_show_return_due_at > now`
    *   the EXCLUDE          `booking_artist_slot_no_overlap` over the real range,
-   *                        so these must not overlap each other or AR-003's seed
+   *                        so these must not overlap EACH OTHER. They cannot
+   *                        overlap anything else: `ARTIST` is this run's own, and
+   *                        the constraint is keyed on `artist_id`.
    *
    * A first run used +200 and the charge quietly settled NO booking: the row
    * stayed `deposit_held` and spec 4 failed on its setup rather than on the
@@ -207,29 +221,103 @@ suite('a voided charge leaves the appointment on the artist day, and says it was
       INSERT INTO service (id, salon_id, name, price_fils)
       VALUES (${SVC}, ${SALON}, ${`AV Int Service ${RUN}`}, 8000)`);
 
+    /**
+     * HER LOGIN. Restricted exactly as `ST-002` is, and said out loud rather than
+     * inherited from the column defaults — see the `ARTIST_STAFF` header.
+     *
+     * `perm_scanner` is ON because the session this file mints is a scanner
+     * session; `GET /artists/me/bookings` itself takes NO permission
+     * (`requireScannerScope` only), which is the endpoint's own decision — "it is
+     * her own day, self-scoped by the URL". `perm_appointments` mirrors ST-002.
+     *
+     * No PIN: `till()` issues the session directly, so nothing here authenticates
+     * by PIN, and `staff_user_pin_is_device_scoped` wants the hash and the device
+     * to be null or non-null together. A fake pair would be two credentials-shaped
+     * columns that no assertion reads.
+     */
+    await exec(sql`
+      INSERT INTO staff_user
+        (id, salon_id, name, handle, role, branch_access_all, branch_access_ids,
+         perm_dashboard, perm_appointments, perm_scanner, perm_charges, perm_void)
+      VALUES (${ARTIST_STAFF}, ${SALON}, 'AV Int Artist', ${`av-artist-${RUN}`}, 'frontdesk',
+              false, ARRAY[${BRANCH}]::text[],
+              false, true, true, false, false)`);
+
+    /**
+     * HER ARTIST ROW. `AR-003`'s shape — manual hours, 30-minute slots, no branch
+     * — so nothing that reads an artist sees a row of a kind the seed does not
+     * already contain. The NAME carries `RUN` because `reports/artist-performance`
+     * lists every artist of the salon by name, and two runs' rows must be two rows.
+     */
+    await exec(sql`
+      INSERT INTO artist (id, salon_id, staff_user_id, name, availability_source, slot_minutes)
+      VALUES (${ARTIST}, ${SALON}, ${ARTIST_STAFF}, ${`AV Int Artist ${RUN}`}, 'manual', 30)`);
+
     managerBearer = await till(MANAGER);
     artistBearer = await till(ARTIST_STAFF);
   });
 
   /**
-   * THIS FILE DELETES ITS OWN BOOKINGS, AND HAS TO.
+   * ===================== THE FIXTURE OWNS ITS OWN SLOT =====================
    *
-   * `booking_artist_slot_no_overlap` is an EXCLUDE over (artist_id, time range),
-   * and every spec here puts AR-003 in a slot a fixed number of minutes from
-   * `now()`. A second run minutes later lands inside the first run's 30-minute
-   * range and the INSERT is refused — which is the constraint working correctly
-   * and the fixture being wrong. Without this the suite passes exactly once per
-   * database reset, which is a suite that will be "flaky" to whoever runs it next.
+   * THIS FILE USED TO DELETE ITS OWN BOOKINGS IN `afterAll`, and that delete was
+   * a defect with a green suite in front of it.
    *
-   * ONLY the bookings. The `transaction` and `ledger_entry` rows stay: the ledger
-   * is append-only at the ROLE level (migration 0038 — a DELETE raises
-   * "ledger_entry is append-only", proved by trying it), and the rows are balanced
-   * anyway, so `db:verify`'s reconciliation invariants hold over them.
+   * The reason it existed was real. `booking_artist_slot_no_overlap` is
+   * `EXCLUDE USING gist (artist_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&)
+   * WHERE status IN ('deposit_held', 'completed')`, and every spec here puts ONE
+   * artist in a slot a fixed number of minutes from `now()`. On the seeded AR-003
+   * a second run landed inside the first run's 30-minute range and the INSERT was
+   * refused — the constraint working correctly and the fixture being wrong.
+   *
+   * WHAT THE DELETE COST. `DELETE FROM booking WHERE id LIKE 'AV-BK-%'` removed
+   * the bookings and left the charges that settled them, because the ledger is
+   * append-only at the ROLE level (migration 0038) and those rows cannot be
+   * deleted. Two of this file's charges survive a run un-voided (spec 2, and spec
+   * 9 whose void is REFUSED), each carrying a 5.000 `deposit_held` leg. With their
+   * bookings gone they matched `services/reports.ts`'s definition of a WALK-IN —
+   * "a settled charge that is not any booking's settling transaction" — and a
+   * walk-in carrying a deposit is the one thing two specs exist to refuse:
+   *
+   *   reportsArtist.int.test.ts        `bucket(rows, 'Walk-in charges').depositAppliedFils` → 0
+   *   reportsReconciliation.int.test.ts `walkin?.depositAppliedFils` → 0
+   *
+   * Both read `expected 10000 to be +0` on the second run against one database —
+   * 2 × 5.000, exactly the two surviving deposits. Nothing was wrong about the
+   * product; this fixture manufactured a state the product cannot reach.
+   *
+   * THE FIX IS A PER-RUN SLOT, NOT A BETTER CLEANUP. The EXCLUDE is keyed on
+   * `artist_id`, so a per-run ARTIST cannot collide with any other run by
+   * construction and there is nothing left to clean up. That is the same move
+   * `bookingsPaging`, `reportsArtist` and `reportsReconciliation` already make,
+   * and the move `e2e/support/global-setup.ts` makes one level up with its per-run
+   * database.
+   *
+   * IT IS ALSO THE MORE HONEST FIXTURE. These charges DID settle an appointment
+   * with an artist behind it. Keeping the booking leaves them attributed to this
+   * run's artist in `artist-performance`, which is what they are; the delete was
+   * turning real appointments into walk-ins and then asking the reports to
+   * reconcile over the result.
+   *
+   * WHAT IT DOES NOT DO: widen anything back to `cancelled` bookings, or reset a
+   * status. Lane D's note on `tenancy.test.ts` is the reason that alternative was
+   * not taken — an `ON CONFLICT` status reset would debit `deposit_held` a second
+   * time against one credit.
+   *
+   * THE COST, STATED: one `artist`, one `staff_user` and one `service` row per
+   * run, plus this run's bookings, members and their ledger, all left in place.
+   * Every assertion downstream of them is additive (`toBeGreaterThanOrEqual`) or
+   * scoped to this run's own ids, which is what makes leaving them safe — and the
+   * rows themselves are what makes the suite re-runnable.
+   */
+
+  /**
+   * NOTHING TO CLEAN UP — see § THE FIXTURE OWNS ITS OWN SLOT above. The rows this
+   * file writes are anchored to `ARTIST`, `ARTIST_STAFF` and `SVC`, all of which
+   * carry `RUN`, so a later run shares no slot with this one and has nothing to
+   * take away from it.
    */
   afterAll(async () => {
-    if (db && sql) {
-      await exec(sql`DELETE FROM booking WHERE id LIKE 'AV-BK-%'`);
-    }
     await app?.close();
   });
 
