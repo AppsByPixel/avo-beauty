@@ -33,13 +33,20 @@ import {
   type ReportWindow,
 } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
+/*
+ * ONE LIST GRAMMAR FOR ONE SENTENCE. `BranchAssumedCaveat` below prints the
+ * wording `AssumedNote` already prints on the Overview, so it joins its clauses
+ * with the same function rather than a second one. See `Overview.tsx §
+ * joinClauses`.
+ */
+import { joinClauses } from './Overview.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
 import { ApiError } from '../api/client.js';
 import { badRequestAnswer, isForbidden, SectionError } from './sectionState.js';
 
 /**
- * Merchant → Reports. Five cards off `GET /salons/{id}/reports/{kind}`, each with
+ * Merchant → Reports. Six cards off `GET /salons/{id}/reports/{kind}`, each with
  * its CSV export — `AVO Merchant Dashboard.dc.html:416` § REPORTS, built to the
  * contract addendum rather than the drawn export where the two differ (the seven
  * departures are the contract now).
@@ -137,7 +144,7 @@ export function Reports() {
   const branches = salon.data?.branches ?? [];
   const branchName = branches.find((b) => b.id === branch)?.name ?? null;
   /*
-   * ONE `filters` OBJECT FOR FIVE CARDS AND FOR THE EXPORT, so the file and the
+   * ONE `filters` OBJECT FOR SIX CARDS AND FOR THE EXPORT, so the file and the
    * cards cannot be asking different questions — except for `compare`, which
    * `api/reports.ts` § exportQuery drops on the way to the file and which
    * `ExportNote` says out loud.
@@ -196,7 +203,7 @@ export function Reports() {
          */
         <EmptyState
           title="Name both days"
-          body="Pick a From and a To date and the five reports will load for that window."
+          body="Pick a From and a To date and the six reports will load for that window."
         />
       ) : (
         <div className="reports__grid">
@@ -505,7 +512,7 @@ export function ReportCardRefusal({
      * NO RETRY. An identical request produces an identical refusal — the same
      * argument the 403 above makes.
      *
-     * WHY IT IS NOT HOISTED TO ONE BANNER OVER THE GRID, even though all five
+     * WHY IT IS NOT HOISTED TO ONE BANNER OVER THE GRID, even though all six
      * cards will usually carry the same sentence: `build` in
      * `api/src/routes/reports.ts` checks the PERMISSION BEFORE IT PARSES THE
      * PERIOD, deliberately, so a card the merchant may not read answers 403 and
@@ -645,87 +652,38 @@ function ReportCard({
         <ComparisonStrip period={r.window} comparison={r.comparison} />
       ) : null}
 
-      <div className="reports__table">
-        {report.isPending || !r ? (
-          <>
-            {/*
-              * THE PLACEHOLDER IS THE SHAPE OF WHAT REPLACES IT. These counts were
-              * the literals 4 and 3, correct for the four original kinds and wrong
-              * for artist-performance's eight columns and six rows: the card drew a
-              * small placeholder and then reflowed into a table twice its size,
-              * which is a worse loading state than none because it promises a
-              * layout and then moves the screen under the reader.
-              * `REPORT_SKELETON` in api/reports.ts carries the per-kind shape and
-              * why it is a hint rather than a contract.
-              */}
-            <div className="reports__cols" aria-hidden="true">
-              {Array.from({ length: REPORT_SKELETON[kind].columns }, (_, c) => (
-                <span className="reports__col" key={c}>
-                  <Skeleton width="70%" height={10} />
-                </span>
-              ))}
-            </div>
-            {Array.from({ length: REPORT_SKELETON[kind].rows }, (_, n) => (
-              <div className="reports__row" key={n} aria-hidden="true">
-                {Array.from({ length: REPORT_SKELETON[kind].columns }, (_, c) => (
-                  <span className="reports__cell" key={c}>
-                    <Skeleton width={`${80 - (c % 4) * 10}%`} height={12} />
-                  </span>
-                ))}
-              </div>
+      {report.isPending || !r ? (
+        <div className="reports__table">
+          {/*
+            * THE PLACEHOLDER IS THE SHAPE OF WHAT REPLACES IT. These counts were
+            * the literals 4 and 3, correct for the four original kinds and wrong
+            * for artist-performance's eight columns and six rows: the card drew a
+            * small placeholder and then reflowed into a table twice its size,
+            * which is a worse loading state than none because it promises a
+            * layout and then moves the screen under the reader.
+            * `REPORT_SKELETON` in api/reports.ts carries the per-kind shape and
+            * why it is a hint rather than a contract.
+            */}
+          <div className="reports__cols" aria-hidden="true">
+            {Array.from({ length: REPORT_SKELETON[kind].columns }, (_, c) => (
+              <span className="reports__col" key={c}>
+                <Skeleton width="70%" height={10} />
+              </span>
             ))}
-          </>
-        ) : (
-          <>
-            <div className="reports__cols">
-              {r.columns.map((c) => (
-                /*
-                 * `data-numeric` ON THE HEADER AS WELL AS THE CELL, so the wide
-                 * card's right-alignment comes from the COLUMN TYPE on both rows
-                 * rather than from a `nth-child` guess about which positions hold
-                 * figures. A reordered or extra column then cannot leave a header
-                 * left-aligned over a right-aligned column of money.
-                 */
-                <span className="reports__col" key={c.key} data-numeric={c.type !== 'text' || undefined}>
-                  {c.header}
+          </div>
+          {Array.from({ length: REPORT_SKELETON[kind].rows }, (_, n) => (
+            <div className="reports__row" key={n} aria-hidden="true">
+              {Array.from({ length: REPORT_SKELETON[kind].columns }, (_, c) => (
+                <span className="reports__cell" key={c}>
+                  <Skeleton width={`${80 - (c % 4) * 10}%`} height={12} />
                 </span>
               ))}
             </div>
-            {REPORT_FULL_TABLE.has(kind) ? (
-              <AttributedRows report={r} />
-            ) : r.rows.length === 0 ? (
-              /*
-               * A REAL EMPTY, named with the filter. The stat above reads a true 0
-               * from the wire — the same distinction the Analytics chart drew:
-               * a zero the API answered is information; a zero before data is a lie.
-               */
-              /*
-               * THE PHRASE COMES FROM THE WINDOW THE SERVER MEASURED, not from
-               * the token this client asked for — and not through
-               * `.toLowerCase()`, which was safe on "This month" and would have
-               * printed "1 mar 2026 – 31 mar 2026" over a range.
-               * `api/reports.ts` § windowPhrase.
-               */
-              <p className="reports__none">
-                Nothing here for {windowPhrase(r.window)}
-                {r.branchId === 'all' ? '' : ' at this branch'}.
-              </p>
-            ) : (
-              r.rows.slice(0, 3).map((row, i) => (
-                <div className="reports__row" key={i}>
-                  {r.columns.map((c) => (
-                    <span className="reports__cell" key={c.key}>
-                      {cellText(row[c.key] ?? null, c.type, c.key)}
-                    </span>
-                  ))}
-                </div>
-              ))
-            )}
-          </>
-        )}
-      </div>
-
-      {r && REPORT_FULL_TABLE.has(kind) ? <AttributionNote report={r} /> : null}
+          ))}
+        </div>
+      ) : (
+        <ReportLoadedBody kind={kind} report={r} />
+      )}
 
       <div className="reports__foot">
         <span className="reports__rowcount">
@@ -762,6 +720,105 @@ function ReportCard({
   );
 }
 
+/**
+ * =========================================================================
+ * EVERYTHING BETWEEN THE STAT AND THE FOOT, ONCE THE WIRE HAS ANSWERED — AND
+ * IT IS A COMPONENT BECAUSE THE ROUTING IN IT IS WHAT BROKE
+ * =========================================================================
+ * Three things in card order: the branch-assumed caveat (ABOVE the table), the
+ * table, and the kind's footnote (BELOW it). The order is the decision — see
+ * `BranchAssumedCaveat` § THE CAVEAT DECISION — and inlined in `ReportCard` it
+ * was decided by JSX nobody could render: `ReportCard` needs a query client, a
+ * session and a branch scope, so every assertion about which renderer a kind
+ * gets, and about where its caveat sits, had to be made by reading the file.
+ *
+ * That is exactly the hole the defect came through. `REPORT_FULL_TABLE.has(kind)`
+ * chose the row renderer while the set had one member and meant two things, and
+ * adding a second member sent the branch table through `AttributedRows` — under
+ * "Artists, ranked by what they earned", with every branch filed as "Revenue with
+ * no artist behind it" and greyed. The source said `REPORT_FULL_TABLE` in both
+ * worlds. Only the tree tells them apart, and nothing could build the tree.
+ *
+ * So the routing is here, it takes a kind and a report and nothing else, and
+ * `earningsByBranchRender.test.tsx` renders it directly.
+ */
+export function ReportLoadedBody({ kind, report }: { kind: ReportKind; report: Report }) {
+  return (
+    <>
+      {/*
+        * ABOVE THE TABLE, AND THE PLACEMENT IS THE DECISION.
+        * `AttributionNote` sits BELOW its table because its sentences explain
+        * figures the reader has already read correctly. This one tells her how to
+        * read an order she has not read yet, and a caveat printed under a ranking
+        * arrives after the conclusion it was meant to qualify.
+        */}
+      {kind === 'earnings-by-branch' ? <BranchAssumedCaveat report={report} /> : null}
+
+      <div className="reports__table">
+        <div className="reports__cols">
+          {report.columns.map((c) => (
+            /*
+             * `data-numeric` ON THE HEADER AS WELL AS THE CELL, so the wide
+             * card's right-alignment comes from the COLUMN TYPE on both rows
+             * rather than from a `nth-child` guess about which positions hold
+             * figures. A reordered or extra column then cannot leave a header
+             * left-aligned over a right-aligned column of money.
+             */
+            <span
+              className="reports__col"
+              key={c.key}
+              data-numeric={c.type !== 'text' || undefined}
+            >
+              {c.header}
+            </span>
+          ))}
+        </div>
+        {/*
+          * THE ROW RENDERER IS KEYED ON THE KIND, NOT ON `REPORT_FULL_TABLE`.
+          * While the set had one member the two questions — "show every row" and
+          * "group the rows by `attribution`" — had the same answer, so one check
+          * served both. `earnings-by-branch` shows every row and has no
+          * `attribution` column at all.
+          */}
+        {kind === 'artist-performance' ? (
+          <AttributedRows report={report} />
+        ) : kind === 'earnings-by-branch' ? (
+          <BranchRows report={report} />
+        ) : report.rows.length === 0 ? (
+          /*
+           * A REAL EMPTY, named with the filter. The stat above reads a true 0
+           * from the wire — the same distinction the Analytics chart drew: a zero
+           * the API answered is information; a zero before data is a lie.
+           *
+           * THE PHRASE COMES FROM THE WINDOW THE SERVER MEASURED, not from the
+           * token this client asked for — and not through `.toLowerCase()`, which
+           * was safe on "This month" and would have printed
+           * "1 mar 2026 – 31 mar 2026" over a range. `api/reports.ts` §
+           * windowPhrase.
+           */
+          <p className="reports__none">
+            Nothing here for {windowPhrase(report.window)}
+            {report.branchId === 'all' ? '' : ' at this branch'}.
+          </p>
+        ) : (
+          report.rows.slice(0, 3).map((row, i) => (
+            <div className="reports__row" key={i}>
+              {report.columns.map((c) => (
+                <span className="reports__cell" key={c.key}>
+                  {cellText(row[c.key] ?? null, c.type, c.key)}
+                </span>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+
+      {kind === 'artist-performance' ? <AttributionNote report={report} /> : null}
+      {kind === 'earnings-by-branch' ? <BranchEarningsNote report={report} /> : null}
+    </>
+  );
+}
+
 /* ------------------------------------------------------- the comparison -- */
 
 /**
@@ -784,9 +841,14 @@ function ReportCard({
  *   - A FULL SECOND TABLE was rejected by the server before it reached here —
  *     "the card compares the headline; the table shows each window's own rows"
  *     (`services/reports.ts`). The comparison's rows ARE on the wire and are
- *     deliberately not rendered: two arbitrary windows share no days, so five of
- *     the six kinds would produce two tables whose rows do not correspond, and a
- *     reader would line them up anyway.
+ *     deliberately not rendered: two arbitrary windows share no days, so the four
+ *     kinds whose rows are keyed on a day or a basket produce two tables whose
+ *     rows do not correspond, and a reader would line them up anyway. (The count
+ *     here read "five of the six" and was an artefact of when it was written:
+ *     `artist-performance` and `earnings-by-branch` key their rows on an ARTIST
+ *     and a BRANCH, which two windows do share. The decision is unchanged — a
+ *     second table doubles the card either way — but the reason does not apply
+ *     to those two and should not be cited as though it did.)
  *
  * THE SIGN IS A WORD, NOT A `+`. Prepending "+" to a `<Money>` would put the
  * sign outside the element that owns the `aria-label`: the screen would read
@@ -967,25 +1029,34 @@ export function AttributedRows({ report }: { report: Report }) {
           attributed to her here.
         </p>
       ) : (
-        artists.map((row, i) => <AttributedRow key={i} row={row} columns={report.columns} />)
+        artists.map((row, i) => <FullTableRow key={i} row={row} columns={report.columns} />)
       )}
 
       <p className="reports__group">
         Revenue with no artist behind it — not part of the ranking
       </p>
       {unattributed.map((row, i) => (
-        <AttributedRow key={i} row={row} columns={report.columns} unattributed />
+        <FullTableRow key={i} row={row} columns={report.columns} unattributed />
       ))}
     </>
   );
 }
 
 /**
- * One row. `data-unattributed` is what the stylesheet quiets, so the two bucket
- * rows read as a different KIND of row rather than as two more competitors — and
- * it is set from the group they were partitioned into, never from their text.
+ * One row of a FULL TABLE — both kinds that draw one, not just the artist card.
+ *
+ * It was `AttributedRow`, private to `AttributedRows`, and the rename is the
+ * whole of what earnings-by-branch needed from it: `data-numeric` off the column
+ * TYPE, every column in the server's order, `cellText` and nothing else touching
+ * a figure. Duplicating those eight lines for a second table would have been two
+ * places for the money path to drift, which is the one property this row has.
+ *
+ * `data-unattributed` is what the stylesheet quiets, so the artist card's two
+ * bucket rows read as a different KIND of row rather than as two more
+ * competitors — and it is set from the group they were partitioned into, never
+ * from their text. The branch table has no such partition and never passes it.
  */
-function AttributedRow({
+function FullTableRow({
   row,
   columns,
   unattributed,
@@ -1051,14 +1122,239 @@ export function AttributionNote({ report }: { report: Report }) {
   );
 }
 
+/* ------------------------------------------- the sixth card's branch table -- */
+
+/**
+ * =========================================================================
+ * EARNINGS BY BRANCH — EVERY BRANCH, IN THE SERVER'S ORDER, NOTHING GROUPED
+ * =========================================================================
+ * The aggregate is `FROM branch LEFT JOIN`, so the rows ARE the salon's branch
+ * list: a branch that took nothing is a 0.000 row and a branch that closed in
+ * March still shows last quarter's money. Both are answers, and an absent row is
+ * not — the same argument `AttributedRows` makes about a zero artist, one report
+ * over.
+ *
+ * WHAT IS DELIBERATELY NOT DONE HERE, and each has already been paid for once on
+ * this screen:
+ *   - NO SLICE. Three rows of a branch list is three branches of however many,
+ *     chosen by a sort the reader cannot see. The other four cards preview a
+ *     file; this one IS the answer.
+ *   - NO RE-SORT. The server orders by gross DESC then name; a second ordering
+ *     in the browser is a second ranking, and the day they disagree the card
+ *     contradicts the CSV built from the same aggregate.
+ *   - NO GROUPING. There is no `attribution` column to partition on and nothing
+ *     to partition into. Routing this kind through `AttributedRows` — which is
+ *     what `REPORT_FULL_TABLE.has(kind)` did before the card started keying on
+ *     the kind — put every branch under "Revenue with no artist behind it".
+ *   - NO TOTAL ROW. Nothing on this screen is computed from rows. The headline
+ *     is the server's sum over exactly these rows, so the merchant can check it.
+ */
+export function BranchRows({ report }: { report: Report }) {
+  return (
+    <>
+      {report.rows.map((row, i) => (
+        <FullTableRow key={i} row={row} columns={report.columns} />
+      ))}
+    </>
+  );
+}
+
+/** A money cell the parse has already guaranteed is an integer, or null. */
+function moneyCell(row: Record<string, string | number | null>, key: string): number | null {
+  const value = row[key];
+  return typeof value === 'number' ? value : null;
+}
+
+/**
+ * =========================================================================
+ * § THE CAVEAT DECISION — AND THE RANKING IS THE PART THAT IS WRONG, NOT THE
+ * FIGURES
+ * =========================================================================
+ * `branch_assumed` does not mean "inferred, and probably right". There is no
+ * inference. `api/src/services/branch.ts` is its only writer: with no enrolled
+ * till it runs `ORDER BY id LIMIT 2` and takes the first row. So every assumed
+ * charge in a salon lands on ONE branch — the lowest id, `BR-KWC` at the seeded
+ * salon — and lane A drove it: a real charge on an un-enrolled scanner moved
+ * Kuwait City's gross by the whole 7.000 and Salmiya's by nothing.
+ *
+ * That is directional bias, not noise. It is also why the server put the doubt
+ * in TWO COLUMNS rather than a footnote: `Assumed KD` beside `Gross KD` says per
+ * branch how much of the figure is an attribution, and it falls to zero on its
+ * own as tills are enrolled.
+ *
+ * WHAT THIS COMPONENT ADDS THAT THE COLUMNS CANNOT. The columns qualify each
+ * FIGURE. Nothing in them qualifies the ORDER, and the order is the one
+ * rendering this bias destroys: the lowest branch id can sit at the top of the
+ * table for want of a scanner, and a merchant reading a league table has no way
+ * to see that. `Overview.tsx § AssumedNote` was written for TILES, where four
+ * figures sit side by side and the reader is not ranking anything, so its
+ * sentence — true, and reused verbatim below — does not cover this. The second
+ * paragraph is the part tiles never needed.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THERE IS NO THRESHOLD, WHICH IS THE QUESTION THAT WAS ASKED
+ * ---------------------------------------------------------------------------
+ * The caveat appears when ANY row has `assumedGrossFils > 0` and never otherwise.
+ * No proportion, no cut-off. Three reasons, in the order they decide it:
+ *
+ *   1. A THRESHOLD ON PROPORTION IS NOT A TEST OF THE THING IN DOUBT. What makes
+ *      the order unsafe is the GAP BETWEEN ADJACENT ROWS, not any row's share of
+ *      its own gross. 100.000 against 99.000 with 2.000 assumed is 2% and the
+ *      order is a coin toss; 100.000 against 3.000 with 50.000 assumed is 50%
+ *      and the order is not in doubt at all. A rule that fires on the second and
+ *      stays quiet on the first is wrong in both directions at once — it is not
+ *      a threshold of anything, it is a decoration.
+ *
+ *   2. THE TEST THAT WOULD ANSWER IT CANNOT BE BUILT HONESTLY. "Would the order
+ *      hold with the assumed money removed" needs a counterfactual table, and
+ *      there is none: the assumed dinars are real dinars that happened at SOME
+ *      branch. Subtracting them understates the true top branch by exactly what
+ *      it overstates the wrong one, and which is which is unknowable here. A
+ *      browser-computed "safe ranking" would be a second aggregate, and a wrong
+ *      one — on a screen whose standing rule is that nothing is computed from
+ *      rows.
+ *
+ *   3. THE MAGNITUDE QUESTION IS ALREADY ANSWERED, AND NOT BY A CUT-OFF.
+ *      `Overview.tsx § assumedClause` faced exactly this and chose the RATIO —
+ *      "2 of 2" where the figure is entirely a guess, "1 of 9" where it is
+ *      barely one — precisely so that no cut-off had to be invented. Here the
+ *      ratio is on the face of the table, per branch, in the two columns the
+ *      server added for it. Inventing a percentage cut-off now would be a third
+ *      answer to a question this codebase has already answered twice the same
+ *      way.
+ *
+ * SO THE STRENGTHENING IS PLACEMENT AND WORDS, NOT A NUMBER. The note is
+ * rendered ABOVE the table rather than under it, because a caveat below a
+ * ranking arrives after the reader has formed the conclusion; and it says what
+ * the reused sentence does not, which is that the ORDER is not a ranking.
+ *
+ * NOTHING IS COMPUTED FROM ROWS HERE EITHER. This reads a PREDICATE off each row
+ * (`assumedGrossFils > 0`) and a NAME, and prints no figure it derived —
+ * `AttributedRows` established that reading rows to make a presentation decision
+ * is a different thing from computing a number the wire did not send.
+ */
+export function BranchAssumedCaveat({ report }: { report: Report }) {
+  const doubted = report.rows.filter((row) => (moneyCell(row, 'assumedGrossFils') ?? 0) > 0);
+  /*
+   * Every dinar on this card was recorded at the branch it says. Say nothing —
+   * and say nothing WITHOUT A CODE CHANGE on the day the tills are enrolled,
+   * which is `AssumedNote`'s deciding property and holds here for the same
+   * reason: the condition is a number that falls to zero, not a flag somebody
+   * has to remember to clear.
+   */
+  if (doubted.length === 0) return null;
+
+  const names = doubted.map((row) => String(row['branch'] ?? '')).filter((n) => n !== '');
+  const salonWide = report.branchId === 'all';
+
+  return (
+    <div className="reports__assumed" role="status">
+      <p>
+        {/*
+          * VERBATIM FROM `Overview.tsx § AssumedNote`, joined with its own
+          * `joinClauses`. Fourth place for this wording — Appointments marks a
+          * booking row with it, Settings uses it in the branch-closure warning,
+          * the Overview prints it under the KPI tiles. A fourth phrasing of one
+          * concept is how a merchant ends up believing there are four concepts.
+          */}
+        Branch assumed on {joinClauses(names)} — treat these branch figures as approximate.
+      </p>
+      <p>
+        {/*
+          * THE SENTENCE TILES NEVER NEEDED. It names the mechanism rather than
+          * calling the figures "approximate" a second time, because the merchant
+          * can act on the mechanism: enrolling the till is the fix, and it is
+          * hers to do.
+          */}
+        Rows are ordered by gross, and that order is not a ranking: a till that is not enrolled
+        to a branch puts its charges on one branch whichever branch they happened at.
+      </p>
+      <p>
+        {salonWide
+          ? 'The total above is unaffected — every one of those dinars is inside it, just possibly under the wrong branch.'
+          : 'The total above is this branch’s own, so it carries the same assumption.'}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The sentences this table cannot say for itself, under it — the counterpart of
+ * `AttributionNote`, and the same three jobs.
+ *
+ * GROSS IS THE VISIT, NOT THE CHARGE ROW. `sales` under-reported by 34.6% by
+ * treating the charge as the value of the visit (DECISIONS.md 81 and 83); an
+ * appointment a held deposit covered outright settles with a wallet charge of
+ * exactly 0.000. This card sums the same `earned_fils` expression, so the
+ * definition travels with it.
+ *
+ * A TOP-UP HAS NO ROW, and this is the card where that will be noticed: a
+ * merchant comparing branch gross against the day's wallet takings is doing
+ * exactly the reconciliation that discovers it. Counting it would double-count —
+ * loaded money becomes revenue on the charge these rows already carry.
+ *
+ * THE ALL-ZERO PERIOD IS NAMED FROM THE SERVER'S STAT, never from a sum of the
+ * rows. A window in which nothing was charged renders as a full table of true
+ * zeros, which is correct and at a glance indistinguishable from a filter
+ * mistake; the sentence says which window and which branch produced it. Added,
+ * not substituted — the branch list is still worth seeing, and a merchant
+ * learning that every branch took nothing this week is the point of the card.
+ */
+export function BranchEarningsNote({ report }: { report: Report }) {
+  return (
+    <div className="reports__note">
+      {report.stat.value === 0 ? (
+        <p className="reports__note-empty">
+          {/*
+            * "EVERY ROW", NOT "EVERY BRANCH". Under a branch filter the table is
+            * one row by construction, so "every branch is zero" would be a claim
+            * about the salon made from a card showing one branch of it.
+            * `AttributionNote` already says "so every row is zero" for the same
+            * reason, one report over.
+            */}
+          Nothing was charged {windowPhrase(report.window)}
+          {report.branchId === 'all' ? '' : ' at this branch'}, so every row is zero.
+        </p>
+      ) : null}
+      <p>
+        <strong>Gross</strong> is what the visits were worth — the wallet charge plus any deposit
+        applied — across charges and shop orders. Top-ups never appear here; loading a wallet is
+        not revenue in a period.
+      </p>
+      <p>
+        <strong>Assumed KD</strong> is how much of the gross beside it was attributed rather than
+        recorded. It falls as tills are enrolled to their branches.
+      </p>
+      {/*
+        * ONLY AT `branch=all`, because it is a claim about the ROW SET and under
+        * a filter the row set is one branch the merchant chose. Telling her
+        * "every branch has a row" over a single-row table invites her to count
+        * her branches against it and conclude the card has lost two.
+        */}
+      {report.branchId === 'all' ? (
+        <p>
+          Every branch has a row, including one that took nothing and one that has since closed —
+          a branch that shut in March still earned last quarter&rsquo;s money.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ helpers -- */
 
 /**
  * The title while the wire has not answered (loading, refused). The same strings
  * the server's `REPORT_TITLE` carries — used only when there is no response to
  * read them from, so a refused card can still say what it is refusing.
+ *
+ * EXPORTED FOR ITS TEST, and the test is about #7 rather than about copy. A 403
+ * card is the permission ledger rendering, and the ONLY thing that names which
+ * report was refused is this function — the wire sent no title, because the wire
+ * refused. A wrong string here mislabels a refusal; a missing case is a compile
+ * error, which is why the switch has no `default`.
  */
-function fallbackTitle(kind: ReportKind): string {
+export function fallbackTitle(kind: ReportKind): string {
   switch (kind) {
     case 'customers':
       return 'Customer information';
@@ -1078,6 +1374,20 @@ function fallbackTitle(kind: ReportKind): string {
      */
     case 'artist-performance':
       return 'Artist performance';
+    /**
+     * "Earnings by branch", the server's own `REPORT_TITLE` — Aftab's words for
+     * the request, not the design's, because the design has no card for it.
+     *
+     * THE COMPILER ASKED FOR THIS LINE AND THAT IS WHY THE SWITCH HAS NO
+     * `default`. Adding `earnings-by-branch` to `REPORT_KINDS` turned this
+     * function red with TS2366 — "Function lacks ending return statement" —
+     * before a single test was written. A `default: return 'Report'` would have
+     * accepted the sixth kind silently and shipped a refused card headed
+     * "Report", which is the one state where this fallback is the only title the
+     * merchant gets.
+     */
+    case 'earnings-by-branch':
+      return 'Earnings by branch';
   }
 }
 

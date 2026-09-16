@@ -13,17 +13,24 @@ import { ApiError } from './client.js';
  * formatting all arrive decided, and money arrives as INTEGER FILS in the JSON
  * (the CSV is where the server formats it, once).
  *
- * EACH KIND IS ITS OWN QUERY, not one query for five cards, because each kind is
+ * EACH KIND IS ITS OWN QUERY, not one query for six cards, because each kind is
  * gated on the permission of the section it EXPORTS:
  *
  *   customers → team          sales → dashboard
  *   best-selling-services → appointments        products-sold → shop
- *   artist-performance → team
+ *   artist-performance → team          earnings-by-branch → dashboard
  *
  * A front-desk manager may hold `dashboard` and not `team`, so Sales loads while
  * Customers answers 403 ON THE SAME SCREEN. That is not an error state — it is
  * the permission ledger rendering — and it is why a single combined query would
- * be wrong twice: one 403 would take down four cards someone is allowed to see.
+ * be wrong twice: one 403 would take down five cards someone is allowed to see.
+ *
+ * `earnings-by-branch` IS `dashboard`, THE SAME GATE AS `sales`, and that is the
+ * server's reasoning rather than this client's convenience: it is the same money
+ * `sales` exports, regrouped, and a branch is a PLACE — a stricter gate over the
+ * same figures would be theatre. It is also NOT audited on export
+ * (`REPORT_AUDITED['earnings-by-branch'] === false`, consistent with `sales`), so
+ * nothing on this card may imply that taking the file is recorded.
  *
  * `artist-performance` IS `team` AND NOT `dashboard`, and the difference is not
  * cosmetic. Its rows name individuals and what each of them earned, which is
@@ -46,16 +53,40 @@ export const REPORT_KINDS = [
   'best-selling-services',
   'products-sold',
   'artist-performance',
+  /**
+   * THE SIXTH KIND, AND IT WAS SERVED BEFORE IT WAS DRAWN. Lane A shipped
+   * `GET /salons/{id}/reports/earnings-by-branch` — gated on `dashboard`, wired
+   * into the download mint, reconciled against `sales` per branch — and this
+   * array still named five, so the dashboard rendered five cards over a server
+   * answering six. Nothing was broken; a report simply had no way to be read.
+   *
+   * ONE ROW PER BRANCH, INCLUDING A CLOSED BRANCH AND ONE THAT TOOK NOTHING
+   * (`FROM branch LEFT JOIN`, `api/src/services/reports.ts`). That shape is why
+   * it is a FULL TABLE below and not a three-row preview, and it is also why its
+   * `rows.length === 0` empty is unreachable: a salon has branches, so the card
+   * always has rows even when every one of them is zero.
+   */
+  'earnings-by-branch',
 ] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 /**
  * The kinds whose rows are not a three-row preview of a file but a TABLE the
- * merchant reads on the card. See `Reports.tsx` for why artist-performance is the
- * only one, and why a preview slice would be wrong there specifically.
+ * merchant reads on the card. See `Reports.tsx` for why a preview slice would be
+ * wrong for each of them specifically.
+ *
+ * TWO MEMBERS NOW, AND THAT IS WHAT THIS SET MAY BE READ FOR AND NOTHING ELSE.
+ * While `artist-performance` was alone, `REPORT_FULL_TABLE.has(kind)` was a
+ * faithful stand-in for "this is the artist card" and `Reports.tsx` used it to
+ * choose the row RENDERER and the footnote as well as the width. It is not that
+ * any more: the two kinds want the same full table and DIFFERENT prose, and a
+ * set that means "render every row" cannot also mean "group these rows by the
+ * `attribution` column". Each of those decisions is keyed on the kind at its own
+ * call site now; this set answers one question.
  */
 export const REPORT_FULL_TABLE: ReadonlySet<ReportKind> = new Set<ReportKind>([
   'artist-performance',
+  'earnings-by-branch',
 ]);
 
 /**
@@ -80,6 +111,15 @@ export const REPORT_SKELETON: Record<ReportKind, { columns: number; rows: number
   'best-selling-services': { columns: 4, rows: 3 },
   'products-sold': { columns: 4, rows: 3 },
   'artist-performance': { columns: 8, rows: 6 },
+  /**
+   * FIVE COLUMNS AND TWO ROWS, and the row count is the one number here that is
+   * a real guess rather than a known shape. The columns are fixed by the server.
+   * The rows are one per branch, so the honest placeholder is "how many branches
+   * does a salon have" — two, which is the seeded salon and the smallest salon
+   * for which this card says anything at all (a single-branch salon's branch is
+   * never assumed and its table is its headline restated).
+   */
+  'earnings-by-branch': { columns: 5, rows: 2 },
 };
 
 /** The design's card descriptions, verbatim. Titles arrive on the wire. */
@@ -108,6 +148,23 @@ export const REPORT_DESC: Record<ReportKind, string> = {
    * wrong end of that question.
    */
   'artist-performance': 'Service and shop revenue, attributed to the artist who performed it',
+  /**
+   * ONE STRING, LIKE EVERY OTHER ENTRY, AND THE BRIEF THAT REACHED THIS LANE
+   * ASKED FOR TWO — "write REPORT_DESC copy in both languages". There is no
+   * second language to write it in. `REPORT_DESC` is `Record<ReportKind,
+   * string>` because the MERCHANT DASHBOARD IS ENGLISH-ONLY BY DECISION
+   * (`design/README.md` Known gaps 1); non-negotiable #12's Arabic is the
+   * CUSTOMER surface. Written down here rather than silently complied with,
+   * because the instruction has now been given in both directions and the file
+   * is the only thing that settles it.
+   *
+   * "INCLUDING BRANCHES THAT TOOK NOTHING" IS A DEFINITION, NOT A BOAST. The
+   * aggregate is `FROM branch LEFT JOIN`, so a zero row is a real answer and a
+   * merchant who counts the rows against her branch list should find them equal.
+   * A description that said only "gross by branch" would leave her to discover
+   * that by counting.
+   */
+  'earnings-by-branch': 'Gross and transactions by branch, including branches that took nothing',
 };
 
 /** `GET /salons/{id}/metrics`' vocabulary, reused by the addendum on purpose. */
@@ -631,18 +688,48 @@ export function useReport(kind: ReportKind, filters: ReportFilters): UseQueryRes
  * cookie, no query token (principal.ts:407). A bare `<a href>` sends no bearer,
  * so "let the browser do the download" cannot authenticate against the API as
  * merged, and would ship a button that saves a JSON error body named sales.csv.
- * Reported to trunk: the endpoint needs a one-time signed download URL (or a
- * cookie the CSV route accepts) — an `api/` change this lane must not make.
+ * ===========================================================================
+ * BOTH THINGS THIS BLOCK ASKED FOR HAVE SHIPPED. THIS FUNCTION HAS NOT MOVED.
+ * ===========================================================================
+ * The paragraph here used to read, in the present tense, "Reported to trunk: the
+ * endpoint NEEDS a one-time signed download URL … an `api/` change this lane must
+ * not make", and the bullet below it said `expose: content-disposition` was "also
+ * reported". Both landed:
  *
- * Until then, the fetch preserves what the brief was protecting:
- *   - THE SERVER STILL NAMES THE FILE. The filename comes from
- *     `content-disposition` when the browser can read it. Cross-origin that
- *     header is not CORS-safelisted and `{ origin: true }` exposes nothing, so
- *     dev reads null — the fallback rebuilds `{kind}_{period}.csv` and says so.
- *     (`expose: content-disposition` is one line in api/app.ts — also reported.)
+ *   `api/src/app.ts:136`  `exposedHeaders: ['content-disposition']` — so the
+ *       server names the file cross-origin and the fallback below is the narrow
+ *       case rather than the everyday one. (The bullet already half-conceded this
+ *       and the paragraph above it still said "reported", so the docblock
+ *       contradicted itself.)
+ *
+ *   `api/src/routes/reports.ts:263`  `POST /salons/:id/reports/:kind/download-url`
+ *       mints a one-time, sixty-second token and answers `/report-downloads/{token}`;
+ *       `:348` redeems it, RE-CHECKS the permission against the staff row as it is
+ *       NOW, refuses a spent or expired token with one uniform `invalid_download`,
+ *       and writes both a `report_download` row and the `report.download` audit
+ *       event with `via: 'download-link'`.
+ *
+ * NEITHER CLIENT CALLS THE MINT. Checked by grep across `apps/dashboard` and
+ * `apps/wallet`: zero references to `download-url` or `report-downloads`. So the
+ * fetch below is no longer a workaround for a missing endpoint — it is a second
+ * way in that nobody chose to keep, and switching to the mint is a slice of its
+ * own (a click handler that mints and then navigates, plus the states for a
+ * refused or expired mint). REPORTED, NOT TAKEN HERE, and written in the past
+ * tense so the next reader does not go looking for an endpoint that exists.
+ *
+ * WHAT IS *NOT* LOST BY NOT HAVING SWITCHED YET: the audit row. `:542` writes
+ * `report.download` with `via: 'csv'` on the direct `.csv` route too, so an
+ * audited export taken this way is still recorded. What the mint adds is the
+ * `report_download` row — who minted which window, when — and a permission
+ * re-check at redeem time rather than at request time.
+ *
+ * Meanwhile the fetch preserves what the brief was protecting:
+ *   - THE SERVER STILL NAMES THE FILE, from `content-disposition`; the fallback
+ *     rebuilds `{kind}_{branchTag}_{token}.csv` only when the header is
+ *     unreadable.
  *   - A REFUSED EXPORT REFUSES VISIBLY. A 403 surfaces the server's sentence on
  *     the card instead of downloading an error file — something the plain anchor
- *     could never do.
+ *     could never do, and something the mint would have to reproduce.
  *
  * The blob is held only long enough to hand to the browser's download manager,
  * and the object URL is revoked immediately after the click.
