@@ -40,17 +40,80 @@ export function VoidSheet({
   // One key per void attempt, stable across a retry of that attempt.
   const attemptKey = useRef(newIdempotencyKey());
 
+  /**
+   * CHANGING THE REASON MINTS A NEW KEY — `MemberScreen.tsx § editReason` solved
+   * this exact shape for the charge and this sheet did not.
+   *
+   * `reasonCode` is in the server's request hash
+   * (`hashRequestBody({ transactionId, reason, reasonCode })`,
+   * api/src/routes/charges.ts), so one key naming two different bodies is a
+   * conflict by design. Without this:
+   *
+   *     pick "wrong" -> confirm -> the response is lost -> pick "dupe" ->
+   *     confirm -> 422 idempotency_key_reused
+   *
+   * Reproduced against a live API before this line existed; the transcript is in
+   * `voidSheetKey.test.ts`'s header. The first confirm has to have COMMITTED for
+   * it to bite — a refusal rolls `claimKey` back with the rest of the
+   * transaction — which is precisely the lost-response case idempotency exists
+   * for.
+   *
+   * AND THE POINT IS NOT THAT THE SECOND CONFIRM NOW SUCCEEDS. It does not: with
+   * a fresh key the server answers `409 already_voided`, "That charge has already
+   * been voided. The customer was refunded to her wallet" — measured. That is the
+   * true answer and the failure panel below already renders it. The 422 it
+   * replaces says "Use a new key", which is a sentence about plumbing addressed
+   * to a person who cannot mint one.
+   *
+   * MINTING ON EVERY CONFIRM WOULD BE THE OPPOSITE DEFECT — a retry of the same
+   * attempt would re-void rather than replay, which is #4's double refund. So it
+   * mints here, on the pick, and nowhere else. `confirm` deliberately does not
+   * touch the key.
+   *
+   * It does not compare against the previous id first. A fresh key costs nothing,
+   * and a comparison would have to know that this id is the whole of what the
+   * server hashes — it is not; `transactionId` and `reason` are in the hash too.
+   */
+  const pickReason = useCallback((next: ReasonId) => {
+    setFailure(null);
+    attemptKey.current = newIdempotencyKey();
+    setReason(next);
+  }, []);
+
   const confirm = useCallback(async () => {
     if (busy) return;
     setBusy(true);
     setFailure(null);
     const label = copy.voidReasons.find((r) => r.id === reason)?.label ?? reason;
     try {
-      // The reason is sent as the written LABEL, not the id: it lands in the
-      // audit log's `detail` and in the customer's notice, where "wrong" would
-      // be meaningless (api/src/routes/charges.ts § performVoid).
+      /**
+       * BOTH, AND THEY ARE NOT THE SAME FACT.
+       *
+       * `reason` is the written LABEL. It lands in `transaction.note` and in the
+       * audit log's `detail` (api/src/routes/charges.ts § performVoid), which a
+       * merchant and the platform console read as a sentence — "wrong" there
+       * would be meaningless.
+       *
+       * (This comment used to add "and in the customer's notice". It was false,
+       * and had been for the life of the file. `performVoid` queues no receipt —
+       * `queueReceipts` has five callers and the void is not one of them — there
+       * is no void payload kind, `NotificationKind` is
+       * `calendar_disconnected | booking_no_show | campaign_held`, and the
+       * customer's own feed masks `note` on an `adjustment` by a database fact
+       * rather than a ternary. Four checks, this lane's own, agreeing with Lane
+       * A's. Note that `voidSheetBody` above tells the staff member "she gets a
+       * WhatsApp notice" — that is design copy, kept verbatim, and it is false
+       * against this API today. Reported, not silently reworded.)
+       *
+       * `reasonCode` is the CODE, and it is what reaches the artist whose work
+       * this is about — `GET /artists/me/bookings § voidReason`, rendered by
+       * `BookingsScreen § voidReasonLine`. It is sent as the id she picked, never
+       * re-derived from the label or from the label's position (#2). Optional on
+       * the server, so omitting it breaks nothing — it just stores NULL, and her
+       * card goes on saying "Payment voided" and nothing else.
+       */
       const result = await voidCharge(
-        { transactionId, reason: label },
+        { transactionId, reason: label, reasonCode: reason },
         attemptKey.current,
         accessToken,
       );
@@ -88,7 +151,7 @@ export function VoidSheet({
               return (
                 <Pressable
                   key={r.id}
-                  onPress={() => setReason(r.id)}
+                  onPress={() => pickReason(r.id)}
                   accessibilityRole="radio"
                   accessibilityState={{ checked: on }}
                   accessibilityLabel={r.label}

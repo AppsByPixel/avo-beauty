@@ -90,7 +90,9 @@ vi.mock('react', async (importOriginal) => {
   return { ...(actual as object), useCallback: (fn: unknown) => fn };
 });
 
-const { BookingCard, STATUS_PILL, pillFor, dayTally } = await import('./BookingsScreen');
+const { BookingCard, STATUS_PILL, pillFor, dayTally, voidReasonLine } = await import(
+  './BookingsScreen'
+);
 const { ArtistBookingSchema } = await import('../api/artist');
 const { copy } = await import('../copy/en');
 const { color } = await import('../theme');
@@ -200,6 +202,15 @@ const voidedWire = wire({
 const paidWire = wire({ id: 'BK-PAID', status: 'completed', startsAt: TWO_HOURS_AGO });
 
 const heldWire = wire({ id: 'BK-HELD' });
+
+/**
+ * The three reasons, as the route serves them. `voidReason` is emitted on every
+ * row (api/src/routes/bookings.ts § voidReason) and is null on a void that
+ * recorded no code — which is every void taken before migration 0050.
+ */
+const custWire = wire({ id: 'BK-CUST', status: 'cancelled', chargeVoided: true, voidReason: 'cust', startsAt: TWO_HOURS_AGO });
+const wrongWire = wire({ id: 'BK-WRONG', status: 'cancelled', chargeVoided: true, voidReason: 'wrong', startsAt: TWO_HOURS_AGO });
+const dupeWire = wire({ id: 'BK-DUPE', status: 'cancelled', chargeVoided: true, voidReason: 'dupe', startsAt: TWO_HOURS_AGO });
 
 // == the word =================================================================
 
@@ -402,5 +413,196 @@ describe('the count line accounts for it', () => {
       ArtistBookingSchema.parse(wire({ id: 'BK-CX', status: 'cancelled', chargeVoided: false })),
     ]);
     expect(tally.voided).toBe(0);
+  });
+});
+
+// == the reason ===============================================================
+
+/**
+ * WHAT A SCREEN OWES SOMEBODY WHO IS BEING TOLD SOMETHING ABOUT HER WORK AND
+ * HAS NO ROUTE TO RESPOND.
+ *
+ * She cannot reply, cannot see who voided it, and cannot open the audit log —
+ * ST-002 holds `permVoid: false`, `permCharges: false`, `permDashboard: false`.
+ * The specs below are the four answers this card gives, and the fourth is a
+ * refusal:
+ *
+ *   TELL HER.        The alternative is that a claim about her work exists, is
+ *                    acted on in conversations she is not in, and is invisible
+ *                    on the one screen she can open. "Payment voided" alone
+ *                    leaves her to guess among three, and the worst of the three
+ *                    is the one a person guesses.
+ *   ATTRIBUTE IT.    "Reason given:" — the screen reports, it does not assert.
+ *   DO NOT RANK IT.  One form for three codes. A screen that draws `cust` louder
+ *                    tells her how to feel before she has read it, and — the
+ *                    half that is easy to miss — makes the other two look
+ *                    exonerating, which is a reassurance it has no standing to
+ *                    give. A void for "wrong amount" is still her money and
+ *                    still contestable.
+ *   PROMISE NOTHING. No dispute control, no "ask a manager" chevron, nothing
+ *                    that opens. There is no endpoint behind any of them, and an
+ *                    affordance that leads nowhere is worse than none: it looks
+ *                    like she has been heard.
+ */
+describe('the reason reaches the person it is about', () => {
+  it('names which of the three, framed as something that was said rather than something true', () => {
+    const cust = render(custWire);
+    console.log('\n--- cust ---\n' + JSON.stringify(cust.text));
+    const line = copy.bookingsVoidReason('Customer did not receive service');
+    expect(cust.text).toContain(line);
+    // The frame is the point, not decoration: the bare label alone would be the
+    // screen making the claim.
+    expect(cust.text).not.toContain('Customer did not receive service');
+    expect(line.startsWith('Reason given')).toBe(true);
+  });
+
+  it('carries the other two in the same words the manager chose between', () => {
+    expect(render(wrongWire).text).toContain(copy.bookingsVoidReason('Wrong amount or service'));
+    expect(render(dupeWire).text).toContain(copy.bookingsVoidReason('Duplicate charge'));
+  });
+
+  /**
+   * THE RAW CODE IS NEVER DRAWN. `voidReason` is `'cust'` on the wire and the
+   * labels are this app's; a lookup miss falling through to the id would put
+   * "cust" on a named artist's card. The enum in `ArtistBookingSchema` makes a
+   * miss impossible, and this asserts the consequence rather than trusting it.
+   */
+  it('never renders the code itself', () => {
+    for (const r of [render(custWire), render(wrongWire), render(dupeWire)]) {
+      for (const t of r.text) {
+        expect(['cust', 'wrong', 'dupe']).not.toContain(t.trim());
+      }
+    }
+  });
+
+  /**
+   * NULL IS SILENCE, AND THE SCHEMA DECIDED IT.
+   *
+   * `voidReason: z.enum([...]).nullable().default(null)` cannot tell "this void
+   * recorded no code" from "this API is too old to say" — both arrive as null.
+   * So every sentence one could write here ("No reason recorded") would be a
+   * claim about a record this screen has not read, and would be false against a
+   * rolled-back server. It says nothing, which is exactly what the card said
+   * before Lane A built the field, and is still the only honest thing to say.
+   */
+  it('says nothing at all when no code came back', () => {
+    const r = render(voidedWire);
+    expect(r.byTestID('booking-void-reason-BK-VOID')).toBeUndefined();
+    expect(r.text.join(' ')).not.toContain('Reason given');
+  });
+
+  /**
+   * SUBORDINATE TO THE PILL, not free-standing. `voidReason` non-null implies
+   * `chargeVoided` and the database enforces it
+   * (`transaction_void_reason_code_is_reversal_only`), so this row cannot arrive
+   * — which is precisely why it is pinned. The same lesson as `status` versus
+   * `chargeVoided` one section up: "cannot happen today" is how the last one
+   * got through. A reason with no "Payment voided" above it is an accusation
+   * with no subject, so the card draws neither rather than the dangling half.
+   */
+  it('draws nothing on a row that carries a reason but is not a reversal', () => {
+    const impossible = render(wire({ id: 'BK-IMP', status: 'completed', chargeVoided: false, voidReason: 'cust' }));
+    expect(impossible.byTestID('booking-void-reason-BK-IMP')).toBeUndefined();
+    expect(impossible.text.join(' ')).not.toContain('Reason given');
+  });
+
+  /** `voidReasonLine` directly, since it is the one place the decision is made. */
+  it('voidReasonLine returns null for every shape that must stay silent', () => {
+    expect(voidReasonLine({ chargeVoided: true, voidReason: 'cust' })).toBe(
+      copy.bookingsVoidReason('Customer did not receive service'),
+    );
+    expect(voidReasonLine({ chargeVoided: true, voidReason: null })).toBeNull();
+    expect(voidReasonLine({ chargeVoided: false, voidReason: 'cust' })).toBeNull();
+    expect(voidReasonLine({ chargeVoided: false, voidReason: null })).toBeNull();
+  });
+});
+
+describe('it does not rank the three', () => {
+  const styleOfLine = (id: string) => {
+    const r = render(
+      wire({ id: `BK-${id}`, status: 'cancelled', chargeVoided: true, voidReason: id as 'cust', startsAt: TWO_HOURS_AGO }),
+    );
+    return stylesOf(r.byTestID(`booking-void-reason-BK-${id}`)!);
+  };
+
+  /**
+   * IDENTICAL STYLE OBJECTS, asserted by value. `cust` is the only one of the
+   * three that is about her work rather than about the till, and the temptation
+   * is to draw it louder. Drawing it louder is the screen taking a position on a
+   * dispute it is not party to — and, worse in the other direction, it would
+   * make "Duplicate charge" read as exonerating. Both are editorial. The words
+   * carry the difference; they need no help.
+   */
+  it('draws all three in exactly the same form', () => {
+    const [c, w, d] = [styleOfLine('cust'), styleOfLine('wrong'), styleOfLine('dupe')];
+    console.log('cust style :', JSON.stringify(c));
+    console.log('wrong style:', JSON.stringify(w));
+    expect(c).toEqual(w);
+    expect(c).toEqual(d);
+  });
+
+  /**
+   * DECISIONS #115 IN THIS FILE'S READING — ALERT VERSUS DESCRIPTION — one level
+   * quieter than the pill. The pill is 600 because a reversal is a description
+   * rather than an alert; the reason is a clause OF that description, so it takes
+   * muted body ink rather than weight. It is emphatically not `dangerText`: red
+   * is the pill's job and saying it twice would turn reporting into alarm, which
+   * is the one thing this line must not do on `cust`.
+   */
+  it('is muted body copy, not a second alarm and not a badge', () => {
+    const s = Object.assign({}, ...styleOfLine('cust')) as Record<string, unknown>;
+    console.log('reason line resolved style:', JSON.stringify(s));
+    expect(s.color).toBe(color.textMutedStrong);
+    expect(s.color).not.toBe(color.dangerText);
+    expect(s.fontFamily).not.toBe('Inter_700Bold');
+  });
+
+  /**
+   * AND IT IS LEGIBLE, WHICH THE FIRST VERSION OF THIS LINE WAS NOT.
+   *
+   * It was written as `styles.dim` — `textMutedSoft`, the phone line's ink —
+   * on the reasoning that it should match the card's existing body treatment.
+   * Measured: rgba(28,27,25,0.45) composites to #999898 and is **2.88:1** on
+   * white. It fails AA, and the token file says so in its own words
+   * (`generated.ts § mutedLabel`: "0.45 measures ~3.3:1 and fails"). The first
+   * version of this spec asserted `toBe(color.textMutedSoft)`, which pinned the
+   * mistake rather than catching it — a test that asserts which token was chosen
+   * proves the choice was made, not that it was right.
+   *
+   * So the assertion is the RATIO. `textMutedStrong` is 0.7 → #605F5E → 6.37:1,
+   * and it is already this card's own muted ink (the source pill, `settledInk`),
+   * so nothing new was invented to fix it.
+   *
+   * The card is `color.white` and stays white here — a reversal does not recede
+   * (see "the weight" above) — so white is the ground this must clear on.
+   */
+  it('clears AA on the white the reversed card keeps', () => {
+    const composite = (rgba: string, bg: [number, number, number]) => {
+      const m = /rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/.exec(rgba)!;
+      const a = Number(m[4]);
+      const mix = [1, 2, 3].map((i) => Math.round(Number(m[i]) * a + Number(bg[i - 1]) * (1 - a)));
+      return '#' + mix.map((x) => x.toString(16).padStart(2, '0')).join('');
+    };
+    const onWhite = composite(color.textMutedStrong, [255, 255, 255]);
+    const ratio = contrastRatio(onWhite, color.white);
+    console.log(`reason line: ${color.textMutedStrong} -> ${onWhite} on white = ${ratio.toFixed(2)}:1`);
+    // The control, and the reason this spec exists: the ink first chosen here.
+    const softOnWhite = composite(color.textMutedSoft, [255, 255, 255]);
+    const softRatio = contrastRatio(softOnWhite, color.white);
+    console.log(`rejected   : ${color.textMutedSoft} -> ${softOnWhite} on white = ${softRatio.toFixed(2)}:1`);
+    expect(softRatio).toBeLessThan(AA_NORMAL_TEXT);
+    expect(ratio).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+  });
+
+  /**
+   * NO AFFORDANCE, asserted rather than assumed. There is no endpoint by which
+   * an artist can contest a void; a Pressable here would be a control that looks
+   * like it was heard and was not. Escalated in the report as a product gap, not
+   * papered over with a button.
+   */
+  it('offers her nothing to press, because there is nothing behind it', () => {
+    const node = render(custWire).nodes.find((n) => n.props.testID === 'booking-void-reason-BK-CUST')!;
+    expect(node.props.onPress).toBeUndefined();
+    expect(node.props.accessibilityRole).toBeUndefined();
   });
 });

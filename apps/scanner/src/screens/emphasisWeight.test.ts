@@ -122,7 +122,11 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
     // trunk-ruled test states its rule is not a thing to do inside the slice
     // that trips it.
     expect(uiCallsAtWeight('700')).toEqual([
-      "screens/BookingsScreen.tsx:486 ui(10,'700')",
+      // The LINE MOVED, the set did not. `voidReasonLine`'s rendering added a
+      // block above this call; `NEW` is still the only 700 in the app, which is
+      // the invariant. (The anchor being a line number means an edit anywhere
+      // above it reports as a weight regression — noted in the lane report.)
+      "screens/BookingsScreen.tsx:589 ui(10,'700')",
     ]);
   });
 });

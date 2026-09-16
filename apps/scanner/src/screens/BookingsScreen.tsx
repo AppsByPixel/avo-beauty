@@ -368,6 +368,108 @@ export function pillFor(
   return STATUS_PILL[booking.status];
 }
 
+/**
+ * ===========================================================================
+ * AND NOW IT SAYS WHICH OF THE THREE. The paragraph above asked for this.
+ * ===========================================================================
+ * `VOIDED_PILL`'s note closes "GET /artists/me/bookings does not serve the
+ * reason, so this pill cannot distinguish them and deliberately says nothing
+ * rather than implying the worst reading. That is an ask for Lane A." Lane A
+ * built it — `voidReason`, one of three codes, never the words — so the silence
+ * that was correct while the field did not exist stops being correct here.
+ *
+ * SAYING NOTHING IS NOT NEUTRAL ONCE THE ANSWER EXISTS. "Payment voided" with no
+ * why leaves her to pick among a correction, a piece of housekeeping, and an
+ * assertion that she did not do the job; the one a person picks when the screen
+ * will not say is the worst one. Two of three reversals are not about her at
+ * all, and she currently has no way to learn that.
+ *
+ * ---------------------------------------------------------------------------
+ * REPORTED, NOT ASSERTED — which is the whole design
+ * ---------------------------------------------------------------------------
+ * `copy.bookingsVoidReason` wraps the label: "Reason given: Customer did not
+ * receive service". The frame is load-bearing. The bare label on her own card is
+ * this SCREEN stating she did not do the job; framed, it is the screen reporting
+ * what was recorded at the till, which is the only thing it actually knows.
+ *
+ * It names no actor. `created_by_staff_id` sits on the same reversal row and
+ * Lane A deliberately does not select it: who voided a charge is a different
+ * disclosure from why, and it belongs to a surface with an appeal attached to
+ * it, which this is not.
+ *
+ * ---------------------------------------------------------------------------
+ * `cust` IS CATEGORICALLY DIFFERENT AND IS DELIBERATELY NOT DRAWN DIFFERENTLY
+ * ---------------------------------------------------------------------------
+ * It is. "Wrong amount or service" and "Duplicate charge" are statements about
+ * the TILL; "Customer did not receive service" is a statement about HER. That
+ * asymmetry is real and it is why this line exists at all.
+ *
+ * It still gets no colour, no weight and no icon of its own, for two reasons and
+ * the second is the one that decides it:
+ *
+ *   A screen that marks one reason as the serious one is taking a position on a
+ *   dispute it is not party to, and telling her how to feel about a sentence
+ *   before she has read it.
+ *
+ *   And the moment `cust` is styled as the bad one, the other two acquire a
+ *   meaning by contrast: "Duplicate charge" in the quiet style reads as
+ *   EXONERATING. It is not. A void for a wrong amount is still her money and
+ *   still contestable. Marking one is editorialising twice, in opposite
+ *   directions, and the second is invisible until somebody relies on it.
+ *
+ * So: one form, three labels. The difference between "Duplicate charge" and
+ * "Customer did not receive service" is not subtle and does not need a colour to
+ * land — which is exactly what Lane A meant by keeping the words client-side.
+ *
+ * ---------------------------------------------------------------------------
+ * NULL IS SILENCE, AND THE SCHEMA IS WHAT DECIDED THAT
+ * ---------------------------------------------------------------------------
+ * `voidReason` is `.default(null)` (api/artist.ts), so `null` means EITHER "this
+ * void recorded no code" — every void before migration 0050, and any client that
+ * sends none — OR "this API is too old to say". The two are indistinguishable
+ * here by construction.
+ *
+ * Which is why nothing is drawn. "No reason recorded" is the sentence one wants,
+ * and it would be false against a rolled-back server; it would also be false in
+ * a subtler way even on a current one, because a reason in WORDS was recorded on
+ * the reversal row — `transaction.note` — and this screen is deliberately not
+ * served it. Silence is not an omission here, it is the only statement that is
+ * true of every null.
+ *
+ * ---------------------------------------------------------------------------
+ * AND IT OFFERS HER NOTHING TO PRESS
+ * ---------------------------------------------------------------------------
+ * She cannot reply, cannot see who, and cannot open the audit log. There is no
+ * endpoint on this API by which an artist contests a void, so there is no
+ * control here — not a chevron, not "ask a manager", not a support deep link.
+ * An affordance with nothing behind it is worse than none: it looks like she has
+ * been heard. The gap is real and it is escalated as a product question, not
+ * filled in with a button that does nothing.
+ */
+export function voidReasonLine(
+  booking: Pick<ArtistBooking, 'chargeVoided' | 'voidReason'>,
+): string | null {
+  /*
+    GATED ON THE REVERSAL, not on the reason alone. `voidReason` non-null implies
+    `chargeVoided` and the database enforces it
+    (`transaction_void_reason_code_is_reversal_only`), so the other row cannot
+    arrive — which is the same "cannot happen today" that let `status` stand in
+    for `chargeVoided` until it could. A reason without "Payment voided" above it
+    is an accusation with no subject; the card draws neither rather than the
+    dangling half.
+  */
+  if (!booking.chargeVoided || booking.voidReason === null) return null;
+  const label = copy.voidReasons.find((r) => r.id === booking.voidReason)?.label;
+  /*
+    NO FALLBACK TO THE CODE. `copy.voidReasons.find(...)` cannot miss — the wire
+    enum and these three ids are the same closed set — but if it ever does, the
+    answer is silence, not "cust". `POST /voids` accepted `she_is_lazy` and
+    returned 200 until this session; the id is a database value and must never be
+    a string this screen is capable of drawing on a named artist's card.
+  */
+  return label === undefined ? null : copy.bookingsVoidReason(label);
+}
+
 // ------------------------------------------------------------------- a card --
 
 /**
@@ -433,6 +535,7 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
   const phone = booking.memberErased ? null : booking.memberPhone;
   const digits = phone === null ? null : phone.replace(/[^0-9]/g, '');
   const status = pillFor(booking);
+  const voidReason = voidReasonLine(booking);
   /*
     Settled means the deposit is resolved — charged, returned or cancelled — and
     it is read from the SERVER'S status, never from a timestamp or from a charge
@@ -512,6 +615,37 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
           </Text>
         </View>
       </View>
+
+      {/*
+        DIRECTLY UNDER THE PILL IT EXPLAINS, above the service name. The pill
+        says "Payment voided"; this is the rest of that sentence, and adjacency
+        to the claim matters more than adjacency to the work. A screen reader
+        reaches it immediately after the pill for the same reason.
+
+        `textMutedStrong`, NOT `styles.dim` — and this is the one place this line
+        departs from the phone line above it, deliberately and by measurement.
+        `textMutedSoft` is rgba(28,27,25,0.45), which composites to #999898 and
+        measures 2.88:1 on white: it FAILS AA, as the token file's own
+        `mutedLabel` note records ("0.45 measures ~3.3:1 and fails"). It is an
+        acceptable treatment for a phone number sitting beside a Call button that
+        renders the same digits; it is not one for the single most consequential
+        sentence on this card, which is a claim about her work that she may be
+        reading upset and cannot get a second opinion on. 0.7 measures 6.37:1 and
+        is already this card's own muted ink — the source pill's text and
+        `settledInk`.
+
+        Not `dangerText`: red is the pill's job, and saying it twice would turn
+        reporting into alarm, which is the one thing this line must not do on
+        `cust`. See `voidReasonLine` above.
+      */}
+      {voidReason === null ? null : (
+        <Text
+          style={[ui(12), styles.voidReason]}
+          testID={`booking-void-reason-${booking.id}`}
+        >
+          {voidReason}
+        </Text>
+      )}
 
       <Text style={[ui(14.5, '600'), styles.service, receded && styles.settledInk]}>
         {booking.serviceName}
@@ -813,6 +947,13 @@ const styles = StyleSheet.create({
     backgroundColor: color.brandTint,
   },
   depositPillText: { color: color.brandDeeper },
+  /*
+    `marginTop` only. Everything else about this line comes from `ui(12)` and
+    `styles.dim`, so it is the same body treatment the phone line has and cannot
+    drift from it — see `voidReasonLine` on why it must not become its own
+    visual thing.
+  */
+  voidReason: { color: color.textMutedStrong, marginTop: 7, lineHeight: 17 },
   service: { color: color.ink, marginTop: 9 },
 
   client: {
