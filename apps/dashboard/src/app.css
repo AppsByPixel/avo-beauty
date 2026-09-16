@@ -4345,6 +4345,50 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/*
+ * THE BRANCH-ASSUMED CAVEAT — `Reports.tsx` § THE CAVEAT DECISION.
+ *
+ * ABOVE the table, not below it, which is the whole placement argument: it tells
+ * the merchant how to read an order she has not read yet. So it is drawn as a
+ * bordered block rather than as `.reports__note`'s quiet footnote text — a
+ * footnote above a table reads as a preamble to skip.
+ *
+ * NO NEW COLOUR, AND THE FIRST DRAFT OF THIS BLOCK NAMED TWO TOKENS THAT DO NOT
+ * EXIST — `--avo-warn-tint` and `--avo-warn-line`, invented by analogy with
+ * `--avo-brand-tint` and `--avo-hairline` and asserted in this very comment as
+ * "the tokens Settings already uses". `packages/tokens` defines `color.warnText`
+ * and `color.warnBg` and nothing else warning-coloured. A CSS custom property
+ * that resolves to nothing fails SILENTLY: the border would simply not have been
+ * drawn and the background would have stayed transparent, on a card that still
+ * looked plausible.
+ *
+ * So this is `--avo-warn-bg` behind `--avo-warn-text`, which is the pair
+ * `.settings__confirm` uses for the branch-closure warning — the same concept
+ * (consequences to read before deciding, not an error that has happened) in the
+ * same colours. Nothing here puts text on `--avo-brand` (#9).
+ */
+.reports__assumed {
+  margin: 10px 0 0;
+  padding: 10px 13px;
+  border-radius: 12px;
+  background: var(--avo-warn-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.reports__assumed p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--avo-warn-text);
+}
+
+/* The reused sentence carries the weight; the two that follow explain it. */
+.reports__assumed p:first-child {
+  font-weight: 600;
+}
+
 .reports__note {
   margin: 12px 0 0;
   padding-top: 12px;

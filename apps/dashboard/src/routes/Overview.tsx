@@ -230,8 +230,18 @@ function assumedClause(assumed: number, total: number, noun: string): string | n
   return `${assumed} of ${total} ${noun}`;
 }
 
-/** "a", "a and b", "a, b and c" — an Oxford-comma-free list, as the copy elsewhere sets. */
-function joinClauses(parts: string[]): string {
+/**
+ * "a", "a and b", "a, b and c" — an Oxford-comma-free list, as the copy elsewhere
+ * sets.
+ *
+ * EXPORTED FOR `Reports.tsx` § BranchAssumedCaveat, which carries the SAME
+ * SENTENCE about the same column ("Branch assumed on {…} — treat these branch
+ * figures as approximate") over a different set of figures. The sentence is
+ * reused rather than reinvented, so its list grammar is too: a second
+ * implementation would drift into an Oxford comma on one screen and not the
+ * other, which is the kind of divergence nobody notices and everybody reads.
+ */
+export function joinClauses(parts: string[]): string {
   if (parts.length <= 1) return parts[0] ?? '';
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
