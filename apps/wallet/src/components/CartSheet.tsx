@@ -171,7 +171,7 @@ export function CartSheet({
                   testID={`cart-swatch-${line.product.id}`}
                 />
                 <View style={styles.lineText}>
-                  <Text style={[text('bodyL', lang), styles.lineName]} numberOfLines={1}>
+                  <Text style={[text('bodyL', lang, '600'), styles.lineName]} numberOfLines={1}>
                     {line.product.name}
                   </Text>
                   {/*
@@ -467,7 +467,7 @@ function Stepper({
         <Text style={[text('bodyL', lang), styles.stepGhostText]}>−</Text>
       </Pressable>
       {/* A COUNT, so Eastern in Arabic — and the copy layer decides that, not this. */}
-      <Text style={[text('bodyL', lang), styles.stepQty]} testID={`${testID}-qty`}>
+      <Text style={[text('bodyL', lang, '600'), styles.stepQty]} testID={`${testID}-qty`}>
         {copy.qtyValue(qty)}
       </Text>
       <Pressable
@@ -529,7 +529,7 @@ const styles = StyleSheet.create({
     borderBottomColor: color.hairline,
   },
   lineText: { flex: 1, minWidth: 0 },
-  lineName: { color: color.ink, fontWeight: '600' },
+  lineName: { color: color.ink },
   lineTotal: { color: color.textMuted, marginTop: 1 },
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   stepBtn: {
@@ -544,7 +544,7 @@ const styles = StyleSheet.create({
   stepBtnSolid: { backgroundColor: color.brandDeep },
   stepGhostText: { color: color.ink },
   stepSolidText: { color: color.white },
-  stepQty: { minWidth: 16, textAlign: 'center', color: color.ink, fontWeight: '600' },
+  stepQty: { minWidth: 16, textAlign: 'center', color: color.ink },
   totals: { marginTop: 14 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
   rowLabel: { color: color.textMuted },

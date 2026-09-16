@@ -75,7 +75,7 @@ export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
               testID="activity-show-more"
               style={styles.more}
             >
-              <Text style={[text('body', lang), styles.moreText]}>{copy.activityShowMore}</Text>
+              <Text style={[text('body', lang, '600'), styles.moreText]}>{copy.activityShowMore}</Text>
             </Pressable>
           ) : null}
         </>
@@ -103,7 +103,7 @@ function Rows({ rows, onOpen }: { rows: ActivityRow[]; onOpen: (id: string) => v
             <View style={[styles.iconDot, row.positive ? styles.iconDotIn : styles.iconDotOut]} />
           </View>
           <View style={styles.rowText}>
-            <Text style={[text('bodyL', lang), styles.rowTitle]}>{row.title}</Text>
+            <Text style={[text('bodyL', lang, '500'), styles.rowTitle]}>{row.title}</Text>
             {/*
               The status suffix is copy, not a literal — it was ' · Pending'
               inline, which is exactly the sort of string an Arabic build renders
@@ -139,7 +139,7 @@ function EmptyActivity({ onTopUp }: { onTopUp: () => void }) {
         style={styles.emptyAction}
         accessibilityLabel={copy.emptyActivityAction}
       >
-        <Text style={[text('body', lang), styles.emptyActionText]}>
+        <Text style={[text('body', lang, '600'), styles.emptyActionText]}>
           {copy.emptyActivityAction}
         </Text>
       </Pressable>
@@ -179,7 +179,7 @@ const styles = StyleSheet.create({
   iconDotIn: { backgroundColor: color.positive },
   iconDotOut: { backgroundColor: color.textMuted },
   rowText: { flex: 1, minWidth: 0 },
-  rowTitle: { color: color.ink, fontWeight: '500' },
+  rowTitle: { color: color.ink },
   rowWhen: { color: color.textMuted, marginTop: 1 },
 
   /**
@@ -198,7 +198,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
-  moreText: { color: color.ink, fontWeight: '600' },
+  moreText: { color: color.ink },
 
   empty: { paddingVertical: 44, paddingHorizontal: 24, alignItems: 'center' },
   emptyIcon: {
@@ -224,5 +224,5 @@ const styles = StyleSheet.create({
     // Non-negotiable #9: a white-text fill is brandDeep, never brand.
     backgroundColor: onBrandFill.backgroundColor,
   },
-  emptyActionText: { color: onBrandFill.color, fontWeight: '600' },
+  emptyActionText: { color: onBrandFill.color },
 });

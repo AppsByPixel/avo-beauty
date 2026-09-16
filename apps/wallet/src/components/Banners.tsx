@@ -27,7 +27,7 @@ export function StaleBanner({ at, onRetry }: { at: number; onRetry: () => void }
       <View style={[styles.dot, styles.staleDot]} />
       <Text style={[text('body', lang), styles.staleText]}>{copy.staleBanner(at)}</Text>
       <Pressable onPress={onRetry} accessibilityRole="button" style={styles.staleAction}>
-        <Text style={[text('bodyS', lang), styles.staleActionText]}>{copy.tryAgain}</Text>
+        <Text style={[text('bodyS', lang, '600'), styles.staleActionText]}>{copy.tryAgain}</Text>
       </Pressable>
     </View>
   );
@@ -69,5 +69,5 @@ const styles = StyleSheet.create({
   staleDot: { backgroundColor: color.warnText },
   staleText: { flex: 1, color: color.warnText },
   staleAction: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 6 },
-  staleActionText: { color: color.warnText, fontWeight: '600', textDecorationLine: 'underline' },
+  staleActionText: { color: color.warnText, textDecorationLine: 'underline' },
 });

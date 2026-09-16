@@ -68,7 +68,7 @@ export function HappyHourBanner({ promotions, salon }: Props) {
       )}
 
       <View style={styles.body}>
-        <Text style={[text('bodyL', lang), live ? styles.titleLive : styles.titleNext]}>
+        <Text style={[text('bodyL', lang, '600'), live ? styles.titleLive : styles.titleNext]}>
           {banner.title}
         </Text>
         <Text style={[text('bodyS', lang), styles.sub]}>{banner.sub}</Text>
@@ -76,7 +76,7 @@ export function HappyHourBanner({ promotions, salon }: Props) {
 
       <View style={styles.trailing}>
         <View style={live ? styles.pillLive : styles.pillNext}>
-          <Text style={[text('bodyS', lang), live ? styles.pillLiveText : styles.pillNextText]}>
+          <Text style={[text('bodyS', lang, '600'), live ? styles.pillLiveText : styles.pillNextText]}>
             {banner.countdown}
           </Text>
         </View>
@@ -86,7 +86,7 @@ export function HappyHourBanner({ promotions, salon }: Props) {
           the whole point on a phone that may be roaming in another zone.
         */}
         {banner.clock ? (
-          <Text style={[text('bodyS', lang), styles.clock]}>{banner.clock}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.clock]}>{banner.clock}</Text>
         ) : null}
       </View>
     </View>
@@ -117,8 +117,8 @@ const styles = StyleSheet.create({
   body: { flex: 1, minWidth: 0 },
   // Brand-coloured text on a light surface is brandDeeper here, matching
   // design:206 — never `brand`.
-  titleLive: { color: color.brandDeeper, fontWeight: '600' },
-  titleNext: { color: color.ink, fontWeight: '600' },
+  titleLive: { color: color.brandDeeper },
+  titleNext: { color: color.ink },
   sub: { color: color.textMuted, marginTop: 2 },
   trailing: { alignItems: 'flex-end', gap: 2, flexShrink: 0 },
   pillLive: {
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   // Non-negotiable #9: white on brandDeep, which is what the filled pill is.
-  pillLiveText: { color: WHITE, fontWeight: '600' },
-  pillNextText: { color: color.textMutedStrong, fontWeight: '600' },
-  clock: { color: color.textMutedSoft, fontWeight: '600' },
+  pillLiveText: { color: WHITE },
+  pillNextText: { color: color.textMutedStrong },
+  clock: { color: color.textMutedSoft },
 });

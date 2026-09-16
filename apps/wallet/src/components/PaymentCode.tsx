@@ -107,7 +107,7 @@ export function PaymentCode({ memberId, view, secondsRemaining, onEnlarge, onRet
   if (view.kind === 'unavailable') {
     const body = (
       <>
-        <Text style={[text('body', lang), styles.unavailableTitle]}>
+        <Text style={[text('body', lang, '600'), styles.unavailableTitle]}>
           {view.reason === 'offline' ? copy.qrOfflineTitle : copy.qrFailedTitle}
         </Text>
         <Text style={[text('bodyS', lang), styles.unavailableBody]}>
@@ -177,7 +177,7 @@ export function PaymentCode({ memberId, view, secondsRemaining, onEnlarge, onRet
         <View style={styles.panelText}>
           <Text style={[text('label', lang), styles.panelLabel]}>{copy.qrTitle}</Text>
           <MemberId memberId={memberId} prefix={copy.memberIdPrefix} />
-          <Text style={[text('bodyS', lang), styles.panelHint]}>
+          <Text style={[text('bodyS', lang, '600'), styles.panelHint]}>
             {copy.qrHint} {seconds}
             {copy.sec} · {copy.tapEnlarge}
           </Text>
@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
   panelText: { flex: 1 },
   panelLabel: { color: color.textMuted },
   panelId: { color: color.ink, marginTop: 3 },
-  panelHint: { color: color.brandDeep, marginTop: 9, fontWeight: '600' },
+  panelHint: { color: color.brandDeep, marginTop: 9 },
 
   unavailable: {
     marginTop: 18,
@@ -252,6 +252,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     alignItems: 'center',
   },
-  unavailableTitle: { color: WHITE, fontWeight: '600', textAlign: 'center' },
+  unavailableTitle: { color: WHITE, textAlign: 'center' },
   unavailableBody: { color: 'rgba(255,255,255,0.85)', marginTop: 5, textAlign: 'center' },
 });

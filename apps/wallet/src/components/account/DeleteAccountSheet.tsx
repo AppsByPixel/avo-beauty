@@ -220,7 +220,7 @@ export function DeleteAccountSheet({
               testID="delete-done"
               style={[styles.action, styles.keep]}
             >
-              <Text style={[text('bodyL', lang), styles.keepText]}>{copy.cSentDone}</Text>
+              <Text style={[text('bodyL', lang, '600'), styles.keepText]}>{copy.cSentDone}</Text>
             </TappableRow>
             <TappableRow
               onPress={() => void cancel()}
@@ -230,7 +230,7 @@ export function DeleteAccountSheet({
               testID="delete-cancel"
               style={[styles.action, styles.confirm, busy && styles.actionBusy]}
             >
-              <Text style={[text('bodyL', lang), styles.confirmText]}>{copy.deleteCancel}</Text>
+              <Text style={[text('bodyL', lang, '600'), styles.confirmText]}>{copy.deleteCancel}</Text>
             </TappableRow>
           </View>
         ) : (
@@ -276,7 +276,7 @@ export function DeleteAccountSheet({
                 testID="delete-keep"
                 style={[styles.action, styles.keep]}
               >
-                <Text style={[text('bodyL', lang), styles.keepText]}>{copy.deleteKeep}</Text>
+                <Text style={[text('bodyL', lang, '600'), styles.keepText]}>{copy.deleteKeep}</Text>
               </TappableRow>
               <TappableRow
                 onPress={() => void submit()}
@@ -291,7 +291,7 @@ export function DeleteAccountSheet({
                   (design:903). Not on `brand` — #9 is about the brand ramp, and
                   this control is deliberately not brand-coloured.
                 */}
-                <Text style={[text('bodyL', lang), styles.confirmText]}>{copy.deleteGo}</Text>
+                <Text style={[text('bodyL', lang, '600'), styles.confirmText]}>{copy.deleteGo}</Text>
               </TappableRow>
             </View>
 
@@ -334,9 +334,9 @@ const styles = StyleSheet.create({
   // "Request deletion" and "Cancel deletion request".
   actionBusy: { opacity: 0.6 },
   keep: { backgroundColor: color.surfaceAlt2 },
-  keepText: { color: color.ink, fontWeight: '600' },
+  keepText: { color: color.ink },
   confirm: { backgroundColor: color.dangerText },
-  confirmText: { color: WHITE, fontWeight: '600' },
+  confirmText: { color: WHITE },
   fine: {
     color: color.textMutedSoft,
     textAlign: 'center',

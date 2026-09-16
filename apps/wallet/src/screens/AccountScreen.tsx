@@ -276,7 +276,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
           testID="profile-edit"
           style={styles.editBtn}
         >
-          <Text style={[text('bodyS', lang), styles.editText]}>{copy.rowEdit}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.editText]}>{copy.rowEdit}</Text>
         </TappableRow>
       </View>
 
@@ -339,7 +339,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
               testID="notification-retry"
               style={styles.notifRetry}
             >
-              <Text style={[text('bodyS', lang), styles.notifRetryText]}>{copy.tryAgain}</Text>
+              <Text style={[text('bodyS', lang, '600'), styles.notifRetryText]}>{copy.tryAgain}</Text>
             </TappableRow>
           </View>
         </SettingsCard>
@@ -414,7 +414,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
               style={styles.helpRow}
             >
               <View style={styles.helpText}>
-                <Text style={[text('body', lang), styles.helpTitle]}>{copy.contactCta}</Text>
+                <Text style={[text('body', lang, '600'), styles.helpTitle]}>{copy.contactCta}</Text>
                 <Text style={[text('bodyS', lang), styles.helpSub]}>{copy.contactCtaSub}</Text>
               </View>
             </TappableRow>
@@ -536,7 +536,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
             testID="deletion-check-retry"
             style={styles.deleteUnknownRetry}
           >
-            <Text style={[text('bodyS', lang), styles.deleteUnknownRetryText]}>
+            <Text style={[text('bodyS', lang, '600'), styles.deleteUnknownRetryText]}>
               {copy.tryAgain}
             </Text>
           </TappableRow>
@@ -554,7 +554,7 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
           testID="delete-open"
           style={styles.deleteBtn}
         >
-          <Text style={[text('bodyS', lang), styles.deleteText]}>{copy.deleteAcct}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.deleteText]}>{copy.deleteAcct}</Text>
         </TappableRow>
       )}
 
@@ -594,7 +594,7 @@ function Shell({
             testID="account-back"
             style={styles.backBtn}
           >
-            <Text style={[text('bodyS', lang), styles.backText]}>{copy.back}</Text>
+            <Text style={[text('bodyS', lang, '600'), styles.backText]}>{copy.back}</Text>
           </TappableRow>
           {memberId ? (
             <Text style={[text('bodyS', lang), styles.memberId]}>
@@ -622,7 +622,7 @@ const styles = StyleSheet.create({
   notifError: { paddingVertical: 16, gap: 4 },
   notifErrorText: { color: color.ink },
   notifRetry: { alignSelf: 'flex-start', minHeight: MIN_TAP_TARGET, justifyContent: 'center' },
-  notifRetryText: { color: color.brandDeep, fontWeight: '600' },
+  notifRetryText: { color: color.brandDeep },
   frame: {
     flex: 1,
     width: '100%',
@@ -638,7 +638,7 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'web' ? 12 : 4,
   },
   backBtn: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingEnd: 8 },
-  backText: { color: color.brandDeep, fontWeight: '600' },
+  backText: { color: color.brandDeep },
   memberId: { color: color.textMutedSoft },
   scroll: { paddingHorizontal: 20, paddingBottom: 40 },
   scrollCentered: { flexGrow: 1, justifyContent: 'center' },
@@ -683,7 +683,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     paddingHorizontal: 15,
   },
-  editText: { color: color.ink, fontWeight: '600' },
+  editText: { color: color.ink },
 
   rowLabel: { color: color.ink },
   helpRow: {
@@ -694,7 +694,7 @@ const styles = StyleSheet.create({
     borderBottomColor: color.hairlineInner,
   },
   helpText: { flex: 1, minWidth: 0 },
-  helpTitle: { color: color.ink, fontWeight: '600' },
+  helpTitle: { color: color.ink },
   helpSub: { color: color.textMuted, marginTop: 2, lineHeight: 18 },
   waRow: {
     flexDirection: 'row',
@@ -714,7 +714,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 13,
   },
-  deleteText: { color: color.dangerText, fontWeight: '600' },
+  deleteText: { color: color.dangerText },
   // The read failed, so neither "Delete my account" nor "Deletion scheduled" can
   // be shown honestly. Same treatment as the notifications failure above.
   deleteUnknown: { marginTop: 14, gap: 4, alignItems: 'center' },
@@ -724,7 +724,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
-  deleteUnknownRetryText: { color: color.brandDeep, fontWeight: '600' },
+  deleteUnknownRetryText: { color: color.brandDeep },
   version: { color: color.textMutedSoft, textAlign: 'center', marginTop: 6, fontSize: 11 },
   footerSpace: { height: 24 },
 });

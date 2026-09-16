@@ -49,7 +49,7 @@ export function DeletionScheduled({
 
   return (
     <View style={styles.card} testID="deletion-scheduled">
-      <Text style={[text('bodyL', lang), styles.title]}>{copy.deleteScheduledTitle}</Text>
+      <Text style={[text('bodyL', lang, '600'), styles.title]}>{copy.deleteScheduledTitle}</Text>
       {/*
         Only when the date is known. The alternative — a sentence with a gap in
         it, or a guessed requestedAt + graceDays — is worse than a shorter card
@@ -67,7 +67,7 @@ export function DeletionScheduled({
         testID="deletion-scheduled-cancel"
         style={styles.action}
       >
-        <Text style={[text('bodyS', lang), styles.actionText]}>{copy.deleteCancel}</Text>
+        <Text style={[text('bodyS', lang, '600'), styles.actionText]}>{copy.deleteCancel}</Text>
       </TappableRow>
     </View>
   );
@@ -81,7 +81,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     marginTop: 18,
   },
-  title: { color: color.dangerText, fontWeight: '600' },
+  title: { color: color.dangerText },
   body: { color: color.dangerText, marginTop: 6, lineHeight: 19 },
   action: {
     marginTop: 14,
@@ -91,5 +91,5 @@ const styles = StyleSheet.create({
     borderRadius: radius.button,
     backgroundColor: color.surface,
   },
-  actionText: { color: color.dangerText, fontWeight: '600' },
+  actionText: { color: color.dangerText },
 });

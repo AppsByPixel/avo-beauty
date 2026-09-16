@@ -67,7 +67,7 @@ export function FailureScreen({ kind, message, reference, onRetry, retrying }: P
           accessibilityState={{ disabled: retrying }}
           style={[styles.button, retrying && styles.buttonBusy]}
         >
-          <Text style={[text('bodyL', lang), styles.buttonText]}>{copy.tryAgain}</Text>
+          <Text style={[text('bodyL', lang, '600'), styles.buttonText]}>{copy.tryAgain}</Text>
         </Pressable>
       ) : null}
 
@@ -113,6 +113,6 @@ const styles = StyleSheet.create({
     backgroundColor: onBrandFill.backgroundColor,
   },
   buttonBusy: { opacity: 0.6 },
-  buttonText: { color: onBrandFill.color, fontWeight: '600' },
+  buttonText: { color: onBrandFill.color },
   reference: { color: color.textMutedSoft, marginTop: 16 },
 });

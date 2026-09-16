@@ -123,7 +123,7 @@ export function ChangePasswordSheet({ open, onClose, onChanged, onForgot }: Prop
             testID="password-visibility"
             style={styles.showBtn}
           >
-            <Text style={[text('bodyS', lang), styles.showText]}>
+            <Text style={[text('bodyS', lang, '600'), styles.showText]}>
               {visible ? copy.pwHide : copy.pwShow}
             </Text>
           </TappableRow>
@@ -200,7 +200,7 @@ export function ChangePasswordSheet({ open, onClose, onChanged, onForgot }: Prop
           testID="password-forgot"
           style={styles.forgot}
         >
-          <Text style={[text('bodyS', lang), styles.forgotText]}>{copy.pwForgot}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.forgotText]}>{copy.pwForgot}</Text>
         </TappableRow>
       </ScrollView>
     </Sheet>
@@ -219,9 +219,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     paddingHorizontal: 14,
   },
-  showText: { color: color.ink, fontWeight: '600' },
+  showText: { color: color.ink },
   hint: { color: color.textMutedSoft, marginTop: 8, marginHorizontal: 2 },
   primary: { marginTop: 20 },
   forgot: { alignSelf: 'center', minHeight: 44, justifyContent: 'center', paddingHorizontal: 8, marginTop: 8 },
-  forgotText: { color: color.brandDeep, fontWeight: '600' },
+  forgotText: { color: color.brandDeep },
 });

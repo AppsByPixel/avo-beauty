@@ -127,7 +127,7 @@ export function QrOverlay({
               أمارا's أ rendered as a substituted glyph that read as "1" on a
               brand-deep square. src/theme/index.ts documents exactly this trap.
             */}
-            <Text style={[text('bodyL', lang), styles.logoInitial]}>{initial}</Text>
+            <Text style={[text('bodyL', lang, '600'), styles.logoInitial]}>{initial}</Text>
           </View>
           <Text style={[text('bodyL', lang), styles.salonName]} numberOfLines={1}>
             {salonLabel}
@@ -175,7 +175,7 @@ export function QrOverlay({
           style={styles.doneButton}
           testID="qr-overlay-done"
         >
-          <Text style={[text('bodyL', lang), styles.doneText]}>{copy.done}</Text>
+          <Text style={[text('bodyL', lang, '600'), styles.doneText]}>{copy.done}</Text>
         </Pressable>
       </Animated.View>
     </View>
@@ -275,7 +275,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoInitial: { color: WHITE, fontWeight: '600' },
+  logoInitial: { color: WHITE },
   salonName: { color: color.textMutedStrong, flexShrink: 1 },
   title: { color: color.ink, textAlign: 'center' },
   sub: { color: color.textMuted, marginTop: 4, textAlign: 'center' },
@@ -302,5 +302,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  doneText: { color: color.ink, fontWeight: '600' },
+  doneText: { color: color.ink },
 });

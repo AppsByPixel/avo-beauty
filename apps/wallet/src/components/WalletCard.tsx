@@ -55,7 +55,7 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
         </Text>
         {pill ? (
           <View style={styles.pill}>
-            <Text style={[text('bodyS', lang), styles.pillText]}>{pill}</Text>
+            <Text style={[text('bodyS', lang, '600'), styles.pillText]}>{pill}</Text>
           </View>
         ) : null}
       </View>
@@ -65,7 +65,7 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
           amount={balance}
           color={WHITE}
           figureStyle={text('displayXL')}
-          unitStyle={[text('bodyL', lang), styles.unit]}
+          unitStyle={[text('bodyL', lang, '500'), styles.unit]}
         />
       </View>
 
@@ -164,11 +164,16 @@ const styles = StyleSheet.create({
     // gradient, ~3:1. Keep it; do not "fix" it to an opaque fill.
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
-  pillText: { color: WHITE, fontWeight: '600' },
+  pillText: { color: WHITE },
   balanceRow: { marginTop: 12, marginBottom: 16 },
   // The unit — "KD" / "د.ك" — takes its family from the language's type scale,
-  // supplied by the caller; only the size and weight are set here.
-  unit: { fontSize: 17, opacity: 0.82, fontWeight: '500' },
+  // supplied by the caller; only the size is set here. THE WEIGHT MOVED OUT and
+  // this comment used to say it lived here: `fontWeight: '500'` in this object
+  // sat behind `text()`'s pinned single-weight family and selected nothing, so
+  // the unit drew at Regular in both languages. It is `text('bodyL', lang,
+  // '500')` at the call site now, which is the only place that can resolve
+  // Inter_500Medium and IBMPlexSansArabic_500Medium.
+  unit: { fontSize: 17, opacity: 0.82 },
   stamp: { color: 'rgba(255,255,255,0.78)', marginTop: -10, marginBottom: 16 },
 
   track: { height: 6, borderRadius: radius.pill, backgroundColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' },

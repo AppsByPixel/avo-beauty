@@ -308,7 +308,7 @@ export function RedeemVoucherSheet({ open, onClose, onRedeemed }: Props) {
                 and would be wrong the moment a charge settled in between (#2).
               */}
               <Text
-                style={[text('bodyL', lang), styles.balanceValue]}
+                style={[text('bodyL', lang, '600'), styles.balanceValue]}
                 accessibilityLabel={moneyAriaLabel(fils(done.balanceAfterFils), lang)}
                 testID="voucher-balance"
               >
@@ -344,6 +344,6 @@ const styles = StyleSheet.create({
     marginTop: 18,
   },
   balanceLabel: { color: color.textMutedLabel },
-  balanceValue: { color: color.ink, fontWeight: '600' },
+  balanceValue: { color: color.ink },
   primary: { marginTop: 20 },
 });

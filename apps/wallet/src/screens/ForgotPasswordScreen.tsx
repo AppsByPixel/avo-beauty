@@ -188,7 +188,7 @@ export function ForgotPasswordScreen({ onBack }: { onBack: () => void }) {
           testID="reset-back-to-login"
           style={styles.footerLink}
         >
-          <Text style={[text('bodyS', lang), styles.footerLinkText]}>{copy.backToLogin}</Text>
+          <Text style={[text('bodyS', lang, '600'), styles.footerLinkText]}>{copy.backToLogin}</Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -288,7 +288,7 @@ const styles = StyleSheet.create({
   footer: { flexDirection: 'row', justifyContent: 'center', marginTop: 20 },
   footerLink: { minHeight: MIN_TAP_TARGET, justifyContent: 'center', paddingHorizontal: 4 },
   // Brand text on a light surface is brandDeep, never brand (#9).
-  footerLinkText: { color: color.brandDeep, fontWeight: '600' },
+  footerLinkText: { color: color.brandDeep },
 
   // ------------------------------------------------------------ sent state --
   sentContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },

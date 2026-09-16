@@ -68,7 +68,7 @@ export function UpcomingCard({
             language along with the figure. A local 'KD' here is exactly how an
             Arabic build ends up reading "5.000 KD".
           */}
-          <Text style={[text('bodyS', lang), styles.depositPillText]}>
+          <Text style={[text('bodyS', lang, '600'), styles.depositPillText]}>
             {copy.upDeposit(formatMoney(booking.depositFils as Fils, lang))}
           </Text>
         </View>
@@ -96,7 +96,7 @@ export function UpcomingCard({
           testID="upcoming-reschedule"
           style={[styles.action, busy && styles.actionBusy]}
         >
-          <Text style={[text('body', lang), styles.actionText]}>{copy.reschedule}</Text>
+          <Text style={[text('body', lang, '600'), styles.actionText]}>{copy.reschedule}</Text>
         </TappableRow>
         <TappableRow
           onPress={onCancel}
@@ -107,7 +107,7 @@ export function UpcomingCard({
           testID="upcoming-cancel"
           style={[styles.action, styles.actionDanger, busy && styles.actionBusy]}
         >
-          <Text style={[text('body', lang), styles.actionDangerText]}>{copy.cancel}</Text>
+          <Text style={[text('body', lang, '600'), styles.actionDangerText]}>{copy.cancel}</Text>
         </TappableRow>
       </View>
 
@@ -116,7 +116,7 @@ export function UpcomingCard({
 
       {failure ? (
         <View style={styles.refusal} accessibilityRole="alert" testID="upcoming-refusal">
-          <Text style={[text('body', lang), styles.refusalTitle]}>
+          <Text style={[text('body', lang, '600'), styles.refusalTitle]}>
             {windowClosed ? copy.changeClosedTitle : copy.errorTitle}
           </Text>
           <Text style={[text('bodyS', lang), styles.refusalBody]}>
@@ -149,7 +149,7 @@ export function NoUpcomingCard({ onBook }: { onBook: () => void }) {
         testID="upcoming-book"
         style={[styles.action, styles.emptyAction]}
       >
-        <Text style={[text('body', lang), styles.actionText]}>{copy.noUpcomingAction}</Text>
+        <Text style={[text('body', lang, '600'), styles.actionText]}>{copy.noUpcomingAction}</Text>
       </TappableRow>
     </View>
   );
@@ -213,7 +213,7 @@ export function UpcomingFailedCard({
           testID="upcoming-retry"
           style={[styles.action, styles.emptyAction]}
         >
-          <Text style={[text('body', lang), styles.actionText]}>{copy.tryAgain}</Text>
+          <Text style={[text('body', lang, '600'), styles.actionText]}>{copy.tryAgain}</Text>
         </TappableRow>
       ) : null}
     </View>
@@ -256,7 +256,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.brandTint,
   },
   // Brand text on a light surface is brandDeep, never brand — #9.
-  depositPillText: { color: color.brandDeep, fontWeight: '600' },
+  depositPillText: { color: color.brandDeep },
   service: { color: color.ink },
   emptyTitle: { color: color.ink, marginTop: 10 },
   meta: { color: color.textMuted, marginTop: 2 },
@@ -283,11 +283,11 @@ const styles = StyleSheet.create({
     borderColor: color.borderControl,
   },
   actionBusy: { opacity: 0.5 },
-  actionText: { color: color.ink, fontWeight: '600' },
+  actionText: { color: color.ink },
   // design:319 — the cancel button carries the danger outline, not a red fill.
   // Returning a deposit is deliberate, not alarming.
   actionDanger: { borderColor: 'rgba(176,115,111,0.4)' },
-  actionDangerText: { color: color.dangerText, fontWeight: '600' },
+  actionDangerText: { color: color.dangerText },
   emptyAction: { flex: 0, alignSelf: 'flex-start', marginTop: 14, paddingHorizontal: 22 },
 
   note: { color: color.textMutedSoft, marginTop: 9, lineHeight: 18 },
@@ -298,7 +298,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: color.dangerBg,
   },
-  refusalTitle: { color: color.dangerText, fontWeight: '600' },
+  refusalTitle: { color: color.dangerText },
   refusalBody: { color: color.dangerText, marginTop: 3, lineHeight: 18 },
 
   bar: { height: 12, borderRadius: 6, backgroundColor: color.surfaceAlt2 },

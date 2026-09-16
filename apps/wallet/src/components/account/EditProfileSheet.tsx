@@ -259,7 +259,7 @@ export function EditProfileSheet({ open, member, onClose, onSaved, onToast }: Pr
               testID="profile-resend"
               style={styles.link}
             >
-              <Text style={[text('bodyS', lang), styles.linkText]}>{copy.vfResend}</Text>
+              <Text style={[text('bodyS', lang, '600'), styles.linkText]}>{copy.vfResend}</Text>
             </TappableRow>
             <TappableRow
               onPress={() => {
@@ -272,7 +272,7 @@ export function EditProfileSheet({ open, member, onClose, onSaved, onToast }: Pr
               testID="profile-back"
               style={styles.link}
             >
-              <Text style={[text('bodyS', lang), styles.linkMuted]}>{copy.vfBack}</Text>
+              <Text style={[text('bodyS', lang, '600'), styles.linkMuted]}>{copy.vfBack}</Text>
             </TappableRow>
           </View>
         </ScrollView>
@@ -289,6 +289,6 @@ const styles = StyleSheet.create({
   cancel: { marginTop: 10, borderColor: 'transparent' },
   links: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 14 },
   link: { paddingVertical: 12, paddingHorizontal: 8, minHeight: 44, justifyContent: 'center' },
-  linkText: { color: color.brandDeep, fontWeight: '600' },
-  linkMuted: { color: color.textMuted, fontWeight: '600' },
+  linkText: { color: color.brandDeep },
+  linkMuted: { color: color.textMuted },
 });

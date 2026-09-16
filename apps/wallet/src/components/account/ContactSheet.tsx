@@ -203,7 +203,7 @@ export function ContactSheet({
                     </Text>
                     {/* Display only. Never posted. */}
                     <View style={styles.routeChip}>
-                      <Text style={[text('bodyS', lang), styles.routeChipText]}>
+                      <Text style={[text('bodyS', lang, '600'), styles.routeChipText]}>
                         {topic.route === 'salon' ? copy.cRouteSalon : copy.cRouteAvo}
                       </Text>
                     </View>
@@ -297,7 +297,7 @@ function Segment({
       style={[styles.segment, on && styles.segmentOn]}
     >
       {/* White on brandDeep when selected — #9. */}
-      <Text style={[text('body', lang), on ? styles.segmentTextOn : styles.segmentText]}>
+      <Text style={[text('body', lang, '600'), on ? styles.segmentTextOn : styles.segmentText]}>
         {label}
       </Text>
     </TappableRow>
@@ -345,7 +345,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 9,
   },
-  routeChipText: { color: color.textMuted, fontWeight: '600', fontSize: 10.5 },
+  routeChipText: { color: color.textMuted, fontSize: 10.5 },
   segments: { flexDirection: 'row', gap: 9 },
   segment: {
     flex: 1,
@@ -359,8 +359,8 @@ const styles = StyleSheet.create({
     backgroundColor: color.surface,
   },
   segmentOn: { backgroundColor: color.brandDeep, borderColor: color.brandDeep },
-  segmentText: { color: color.textMutedLabel, fontWeight: '600' },
-  segmentTextOn: { color: WHITE, fontWeight: '600' },
+  segmentText: { color: color.textMutedLabel },
+  segmentTextOn: { color: WHITE },
   viaValue: {
     color: color.textMutedSoft,
     marginTop: 9,
