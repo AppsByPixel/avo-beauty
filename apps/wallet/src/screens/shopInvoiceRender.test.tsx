@@ -127,6 +127,10 @@ function Screen() {
     <ShopScreen
       shop={shop}
       balanceFils={60000}
+      // When that balance was read. Nothing in this file asserts on the row it
+      // feeds — `cartTopUpBalanceRender.test.tsx` owns that — so it is simply
+      // the shape App.tsx passes.
+      memberFetchedAt={Date.now()}
       tier="silver"
       branches={BRANCHES as never}
       onToppedUp={onToppedUp}

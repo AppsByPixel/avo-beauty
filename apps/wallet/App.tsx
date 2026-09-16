@@ -417,6 +417,14 @@ function Wallet({
             <BookScreen
               salon={snapshot.salon}
               member={snapshot.member}
+              /*
+                WHEN that member read landed. Book already triggered the re-read
+                (`onBooked`) after a top-up; what it could not do was tell the
+                result of that re-read from the `member` it was already holding,
+                so its success sheet's "New balance" row never resolved. #2 —
+                `state/useNewBalanceAfterTopUp.ts`.
+              */
+              memberFetchedAt={home.fetchedAt}
               onHome={goHome}
               onBooked={home.retry}
               reschedule={reschedule ?? undefined}
@@ -442,6 +450,14 @@ function Wallet({
             <ShopScreen
               shop={shop}
               balanceFils={snapshot.member.balanceFils}
+              /*
+                AND WHEN THAT BALANCE WAS READ. The cart's top-up already called
+                `onToppedUp` (below, `home.retry`); without the timestamp the
+                success sheet could not tell the answer to that re-read from the
+                balance already in props, so it showed a bar forever. Same row,
+                same rule, same hook as Home and Book.
+              */
+              memberFetchedAt={home.fetchedAt}
               tier={snapshot.member.tier}
               /*
                 FOR THE INVOICE'S BRANCH ROW — the same argument Home passes

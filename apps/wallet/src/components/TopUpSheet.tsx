@@ -372,6 +372,14 @@ function ResultStage({
                 strong
               />
               <ResultRow label={copy.rMethod} value={copy.payMethod[intent.method]} />
+              {/*
+                THE BAR IS A REAL ANSWER, NOT A LOADING ARTEFACT. `null` means
+                no member read has landed since this payment settled, so the only
+                balance anyone here could print is the one from BEFORE it — and
+                labelling that "New balance" is the lie non-negotiable #2 exists
+                to prevent. The caller decides; see
+                `state/useNewBalanceAfterTopUp.ts`.
+              */}
               <ResultRow
                 label={copy.rBalance}
                 value={newBalanceFils === null ? null : formatMoney(newBalanceFils, lang)}
@@ -380,6 +388,7 @@ function ResultStage({
                   : { valueLabel: moneyAriaLabel(newBalanceFils, lang) })}
                 strong
                 last
+                testID="topup-new-balance"
               />
             </>
           ) : outcome === 'pending' ? (
@@ -449,6 +458,7 @@ function ResultRow({
   mono,
   tone,
   last,
+  testID,
 }: {
   label: string;
   value: string | null;
@@ -457,15 +467,25 @@ function ResultRow({
   mono?: boolean;
   tone?: 'warn' | 'good';
   last?: boolean;
+  /**
+   * Optional, and only the balance row uses it — `CalcRow`'s convention, for
+   * the same reason: the bar and the number are two different renders of one
+   * row, and a test that can only read the sheet's whole text cannot tell
+   * "still waiting" from "the row is missing".
+   */
+  testID?: string;
 }) {
   const { lang } = useLanguage();
   const tint =
     tone === 'warn' ? color.warnText : tone === 'good' ? color.positive : color.ink;
   return (
-    <View style={[styles.resultRow, last && styles.resultRowLast]}>
+    <View style={[styles.resultRow, last && styles.resultRowLast]} testID={testID}>
       <Text style={[text('body', lang), styles.resultRowLabel]}>{label}</Text>
       {value === null ? (
-        <View style={styles.moneySkeleton} />
+        <View
+          style={styles.moneySkeleton}
+          {...(testID === undefined ? {} : { testID: `${testID}-skeleton` })}
+        />
       ) : (
         <Text
           accessibilityLabel={valueLabel}

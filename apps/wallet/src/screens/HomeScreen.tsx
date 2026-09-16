@@ -10,7 +10,7 @@
  * treatments from design/AVO States.dc.html.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native';
 import { fils, formatMoney, type Fils } from '@avo/types';
@@ -23,6 +23,7 @@ import { useBookingLabels } from '../state/useBookingLabels';
 import { nextAppointment } from '../domain/booking';
 import type { BookingView } from '../api/booking';
 import { useTopUp } from '../state/useTopUp';
+import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
 import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
 import { relativeTime, toActivityRow } from '../domain/activity';
 import { salonName } from '../domain/names';
@@ -108,17 +109,22 @@ export function HomeScreen({
   const [openTxId, setOpenTxId] = useState<string | null>(null);
 
   /**
-   * When a top-up succeeded, so the success screen can tell a balance that has
-   * been re-read since from one that has not. Non-negotiable #2: the new balance
-   * is the server's answer to GET /members/me, never the old balance plus
-   * `creditFils`. Until that read lands the row shows a bar, not a number.
+   * "New balance" on the top-up success screen. Non-negotiable #2: it is the
+   * server's answer to GET /members/me read AFTER the payment settled, never the
+   * old balance plus `creditFils`, and until such a read lands the row is a bar.
+   *
+   * The comparison used to be written out here and hard-coded to `null` on the
+   * other two screens that open this sheet. It is one hook now —
+   * `state/useNewBalanceAfterTopUp.ts` argues why. Called before the early
+   * returns below, so the balance is read off the snapshot defensively.
    */
-  const succeededAt = useRef<number | null>(null);
+  const balance = useNewBalanceAfterTopUp(snapshot?.member.balanceFils ?? null, fetchedAt);
   const retry = home.retry;
+  const markSucceeded = balance.markSucceeded;
   const onSucceeded = useCallback(() => {
-    succeededAt.current = Date.now();
+    markSucceeded();
     retry();
-  }, [retry]);
+  }, [markSucceeded, retry]);
 
   const topUp = useTopUp({ onSucceeded });
 
@@ -191,12 +197,6 @@ export function HomeScreen({
 
   const openTx = snapshot.transactions.find((tx) => tx.id === openTxId) ?? null;
 
-  // Only a balance read AFTER the top-up settled may be labelled "New balance".
-  const newBalanceFils =
-    succeededAt.current !== null && fetchedAt !== null && fetchedAt >= succeededAt.current
-      ? fils(member.balanceFils)
-      : null;
-
   return (
     <Shell
       overlay={
@@ -204,7 +204,9 @@ export function HomeScreen({
           <TopUpSheet
             stage={topUp.stage}
             controller={topUp}
-            newBalanceFils={newBalanceFils}
+            // Only a balance read AFTER the top-up settled may be labelled
+            // "New balance" — #2, enforced in the hook, not here.
+            newBalanceFils={balance.newBalanceFils}
             tier={member.tier}
           />
           <TransactionSheet

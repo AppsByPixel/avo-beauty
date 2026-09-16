@@ -48,5 +48,24 @@ export default defineConfig({
     // `.tsx` was absent, so a render test would not merely have failed — it
     // would not have been COLLECTED, and the run would have reported success.
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    /**
+     * 20s, up from vitest's 5s default, and it is about MEASURED cost rather
+     * than slow tests.
+     *
+     * A whole-screen render in this workspace is jsdom plus react-native-web
+     * plus the screen's own async loads, and it lands at 3-5 SECONDS per test
+     * — `shopInvoiceRender`'s first case measured 4981ms in a run where it
+     * passed. Against a 5000ms budget that is not a suite that is too slow, it
+     * is a suite whose result depends on what else the machine is doing:
+     * the same file passed alone and timed out twice in the full parallel run
+     * the moment a second render file (`cartTopUpBalanceRender`) joined it.
+     *
+     * A green that flips to red on machine load is worse than a slow gate,
+     * because the red says "the top-up row is broken" when what happened is
+     * that four workers shared four cores. The ceiling is raised rather than
+     * the tests trimmed: each one is driving a real flow end to end, which is
+     * what makes them worth having.
+     */
+    testTimeout: 20_000,
   },
 });
