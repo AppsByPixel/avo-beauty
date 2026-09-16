@@ -87,6 +87,8 @@ suite('POST /salons/{id}/bookings/{id}/no-show — the merchant marks it by hand
   let sql: (typeof import('drizzle-orm'))['sql'];
   let issueSession: (typeof import('../auth/sessions'))['issueSession'];
   let runNoShowReturnsOnce: (typeof import('../services/noShowWorker'))['runNoShowReturnsOnce'];
+  /** Spec 13's third caller of `returnDeposit` — the customer's own cancel. */
+  let cancelBooking: (typeof import('../services/booking'))['cancelBooking'];
 
   let managerBearer = '';
   let frontdeskBearer = '';
@@ -242,6 +244,7 @@ suite('POST /salons/{id}/bookings/{id}/no-show — the merchant marks it by hand
     sql = (await import('drizzle-orm')).sql;
     issueSession = (await import('../auth/sessions')).issueSession;
     runNoShowReturnsOnce = (await import('../services/noShowWorker')).runNoShowReturnsOnce;
+    cancelBooking = (await import('../services/booking')).cancelBooking;
     app = await (await import('../app')).buildApp();
 
     await exec(sql`
@@ -549,5 +552,173 @@ suite('POST /salons/{id}/bookings/{id}/no-show — the merchant marks it by hand
     expect((res.json() as { message: string }).message).toBe('That salon is not yours.');
     expect(await statusOf(bk)).toBe('deposit_held');
     expect(await balanceOf(m)).toBe(before);
+  });
+
+  // ------------------------------------------------- the screen, not the column --
+
+  /**
+   * ============================================================================
+   * 11-13 · THE LINE A MERCHANT READS, which is where this defect was found and
+   * therefore where it has to be pinned
+   * ============================================================================
+   *
+   * `services/booking.ts § returnDeposit` wrote no `created_by_staff_id` at all.
+   * That was harmless while the worker was the only way a deposit came back, and
+   * became a defect the moment spec 5 above gave the path a human: BOTH feed
+   * handlers branch on `kind === 'deposit_return' && createdByStaffId === null`
+   * to choose the actor AND the sentence, so a mark Noura made by hand rendered
+   * on her own salon's Overview as
+   *
+   *     System · returned 5.000 deposit · <the customer>
+   *
+   * Every suite was green. Specs 1-10 all pass against the broken write, because
+   * not one of them renders the feed — spec 5 asserts the audit row, which was
+   * correct all along, and the ledger, which never had an actor. A spec that
+   * asserted only `created_by_staff_id` would be a weaker proof than these: the
+   * column is a means, and the sentence on the panel is the thing that was wrong.
+   *
+   * So 11 drives the endpoint and then READS THE OVERVIEW, 12 does the same for
+   * the worker to hold the "System" line that is the design's own, and 13 pins
+   * the third caller — whose principal is a MEMBER, and whose id would violate
+   * the FK if the fix had been written as `principal?.id`.
+   */
+
+  interface FeedLine {
+    id: string;
+    who: string;
+    what: string;
+    kind: string;
+    amountFils: number | null;
+  }
+
+  /**
+   * `GET /salons/{id}/activity` as the manager sees it, narrowed to one line.
+   *
+   * `limit=100` is `FEED_MAX_LIMIT` — the feed is salon-wide and ordered by
+   * `created_at DESC`, and this file is not the only one writing to SAL-AMARA.
+   * The row is looked up BY ID rather than by position for the same reason; a
+   * spec that read `items[0]` would pass or fail on another file's timing.
+   */
+  async function feedLine(txId: string): Promise<FeedLine> {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/salons/${SALON}/activity?limit=100`,
+      headers: { authorization: `Bearer ${managerBearer}` },
+    });
+    if (res.statusCode !== 200) {
+      throw new Error(`the Overview feed answered ${res.statusCode}: ${res.body}`);
+    }
+    const { items } = res.json() as { items: FeedLine[] };
+    const line = items.find((i) => i.id === txId);
+    if (!line) {
+      throw new Error(
+        `${txId} is not among the ${items.length} most recent lines of SAL-AMARA's Overview. ` +
+          'Either the feed dropped it or another file pushed 100 rows past it.',
+      );
+    }
+    return line;
+  }
+
+  const staffIdOn = async (txId: string): Promise<string | null> => {
+    const row = one(
+      await exec(sql`SELECT created_by_staff_id FROM "transaction" WHERE id = ${txId}`),
+      'the deposit_return row',
+    ).created_by_staff_id;
+    return row === null || row === undefined ? null : String(row);
+  };
+
+  it('11 · a hand-marked no-show is NOT attributed to System on the merchant Overview', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -480);
+
+    const res = await mark(bk);
+    expect(res.statusCode, res.body).toBe(200);
+    const { transactionId } = res.json() as MarkBody;
+
+    const line = await feedLine(transactionId);
+
+    /**
+     * `who` IS THE CUSTOMER, NOT NOURA, and that is the feed's convention rather
+     * than a second bug. `design/AVO Merchant Dashboard.dc.html:1279-1283` lists
+     * five rows and four of them are the member — "Mona K. paid 12.000" names the
+     * customer even though a staff member rang the charge up. "System" is the one
+     * exception, for the line with no human on either side. The ACTOR lives in the
+     * audit log, which spec 5 asserts, and which the design draws as
+     * "Rana Al-Sabah · Manager".
+     */
+    expect(line.who, 'a deposit Noura returned by hand was attributed to System').toBe(
+      'NS Int Customer',
+    );
+    expect(line.what).toBe('deposit returned 5.000 · No-show · marked on the dashboard');
+    expect(line.kind).toBe('deposit_return');
+    expect(line.amountFils).toBe(5000);
+
+    // And the column underneath the sentence — the means, asserted after the end.
+    expect(await staffIdOn(transactionId)).toBe(MANAGER);
+  });
+
+  it('12 · the worker’s own return still reads as System, phrased by the route', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -720);
+
+    /**
+     * REAL `now`, not spec 8's far-future tick. The worker scans every salon, so
+     * the narrowest clock that makes this fixture due is the one with the smallest
+     * blast radius across the other int files sharing this database.
+     */
+    const tick = await runNoShowReturnsOnce(db, 200, new Date());
+    expect(tick.returned, 'the tick settled nothing at all').toBeGreaterThanOrEqual(1);
+    expect(await statusOf(bk)).toBe('no_show_returned');
+
+    const ret = one(await returnsFor(bk), 'the automatic return');
+    const txId = String(ret.id);
+    expect(await staffIdOn(txId), 'an unattended return must record no actor').toBeNull();
+
+    const line = await feedLine(txId);
+    expect(line.who).toBe('System');
+    /**
+     * THE ROUTE'S OWN SENTENCE, not `describeTransaction`'s. The System branch
+     * composes "returned {amount} deposit · {member}" inline in both handlers —
+     * the design's third feed line — and falling through to the service would
+     * print the note instead of the customer.
+     */
+    expect(line.what).toBe('returned 5.000 deposit · NS Int Customer');
+    expect(line.what).not.toContain('deposit returned');
+  });
+
+  it('13 · a customer cancelling her own booking records no staff id — the FK says so', async () => {
+    const m = await customer();
+    /**
+     * FUTURE, and by more than the change window: `assertChangeWindowOpen` refuses
+     * a cancel inside the last hour, so every other fixture in this file — all of
+     * them in the past — would be answered `change_window_closed`. Eight days out
+     * also clears spec 4's seven-day fixture on the shared artist, whose slot space
+     * is an EXCLUDE constraint.
+     */
+    const bk = await heldBooking(m, 60 * 24 * 8);
+
+    /**
+     * The service directly, with the `MemberPrincipal` the route resolves. The
+     * point of this spec is the TYPE of the principal, not the HTTP path: her id
+     * is a `member.id`, `transaction.created_by_staff_id` references
+     * `staff_user.id` ON DELETE RESTRICT, and the obvious one-line fix —
+     * `createdByStaffId: params.principal?.id` — would not misattribute this
+     * refund, it would VIOLATE THE FK and roll the whole return back. Money that
+     * was contractually going back into a wallet would stop moving, and it would
+     * surface as a 500 on a cancel rather than as a wrong name on a panel.
+     */
+    const out = await cancelBooking(db, bk, {
+      principal: {
+        kind: 'member',
+        id: m,
+        salonId: SALON,
+        scope: 'wallet',
+        sessionId: `ns-cancel-${randomUUID()}`,
+      },
+    });
+
+    expect(out.refundedFils).toBe(5000);
+    expect(await staffIdOn(out.transactionId)).toBeNull();
+    expect(await statusOf(bk)).toBe('cancelled');
   });
 });

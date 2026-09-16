@@ -696,6 +696,46 @@ export async function returnDeposit(
     status: 'settled',
     reference: `AVO-DPR-${txId.slice(3)}`,
     note: params.note,
+    /**
+     * WHO AT THE SALON DID THIS, and null when the answer is "nobody".
+     *
+     * This field was ABSENT, which meant every deposit return ever written said
+     * NULL. That was harmless while the only way a deposit came back was the
+     * worker, and became a defect the moment `markNoShow` gave the path a human:
+     * `routes/activity.ts` and `routes/platformConsole.ts` both branch on
+     * `kind === 'deposit_return' && createdByStaffId === null` to pick BOTH the
+     * actor and the sentence, so a return Noura marked by hand rendered on the
+     * merchant's own Overview as "System returned 5.000 deposit · Dana Al-Sabah"
+     * — on the one screen whose job is to say who did what. The audit row beside
+     * it was right the whole time; the feed was reading a column nobody wrote.
+     *
+     * THE EXPRESSION IS THE AUDIT'S `source` EXPRESSION, narrowed to the one kind
+     * of principal this column can hold. `created_by_staff_id` is an FK to
+     * `staff_user.id` (migration 0000, ON DELETE RESTRICT), so:
+     *
+     *   - `null`              the worker. No human. NULL → "System", the design's
+     *                         own third feed line and what `writeAudit` records
+     *                         for a principal-less write.
+     *   - `MemberPrincipal`   the customer cancelling her own booking. Her id is
+     *                         a `member.id`; writing it here does not merely
+     *                         misattribute, it violates the FK and rolls the
+     *                         refund back. NULL — nobody at the salon did this,
+     *                         and the audit row carries her as the actor with
+     *                         `source: 'wallet'`.
+     *   - `StaffPrincipal`    `markNoShow`. HER ID. The fix.
+     *   - `PlatformPrincipal` AVO acting on a salon. Also not a `staff_user.id`,
+     *                         so also NULL — and no caller passes one today; the
+     *                         case exists because the parameter is `Principal`.
+     *                         If one is ever added, the merchant's feed will call
+     *                         it "System" and that will need a row-level fact
+     *                         about WHO rather than a second reading of this one.
+     *
+     * Written as a `kind === 'staff'` test rather than `principal?.id` for
+     * exactly that reason: the narrowing is the argument, and TypeScript refuses
+     * the bare id, so a future caller cannot quietly launder a non-staff id into
+     * a staff column.
+     */
+    createdByStaffId: params.principal?.kind === 'staff' ? params.principal.id : null,
     createdAt: now,
     settledAt: now,
   });
