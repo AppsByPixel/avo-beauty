@@ -1287,15 +1287,44 @@ describe('receipts — one settled payment, both channels', () => {
         `receipt_job's unique index is: ${uniqueIndexOn('receipt_job')}`,
     ).toBe('email,whatsapp');
 
-    // Two independent jobs, not one row with two destinations: they queue, retry
-    // and back off separately, so a WhatsApp outage cannot hold up an email.
+    /*
+     * TWO INDEPENDENT JOBS — AND THIS USED TO ASSERT THE OPPOSITE OF ITS OWN
+     * COMMENT.
+     *
+     * The sentence is right: two rows, not one row with two destinations, so
+     * they queue, retry and back off separately and a WhatsApp outage cannot
+     * hold up an email. What sat under it was
+     * `count(distinct status) === 1` — that two jobs which retry SEPARATELY are
+     * nevertheless in the SAME state. Independence is exactly the property that
+     * makes their statuses free to differ, so the check contradicted the claim
+     * it was placed to support.
+     *
+     * It passed only by timing. `RECEIPT_WORKER_ENABLED` defaults to '1' in
+     * `support/tenancy-harness.ts:452` and the logging driver `handles()` both
+     * channels, so the worker claims these rows and marks them `sent`. If a tick
+     * lands between the queueing and this read it takes one row and not the
+     * other, and `distinct status` is 2. It went red in CI on 2026-09-16 —
+     * `expected 2 to be 1` — on a commit whose every package suite was green,
+     * and green locally at the same sha. A coin flip dressed as an invariant.
+     *
+     * What actually proves independence is the SHAPE: two rows with their own
+     * ids and their own retry state. `attempts` and `available_at` are per-row
+     * (`db/schema/receipt.ts:64,85`) — that is what "back off separately" means,
+     * and it is true whatever the worker has done to either row by now.
+     */
+    const [rowCount, idCount, retryStateColumns] = [
+      `select count(*) from receipt_job where transaction_id='${txId}'`,
+      `select count(distinct id) from receipt_job where transaction_id='${txId}'`,
+      `select count(*) from information_schema.columns
+        where table_name='receipt_job' and column_name in ('attempts','available_at')`,
+    ].map((q) => Number(scalar(q)));
+
+    expect(rowCount, `expected two jobs for ${txId}, one per channel`).toBe(2);
+    expect(idCount, 'two channels must be two rows, not one row counted twice').toBe(2);
     expect(
-      Number(
-        scalar(
-          `select count(distinct status) from receipt_job where transaction_id='${txId}'`,
-        ),
-      ),
-    ).toBe(1);
+      retryStateColumns,
+      'independence is per-row retry state: receipt_job needs its own attempts and available_at',
+    ).toBe(2);
   });
 
   it('and only the channels the customer can actually receive — no unsendable rows', async () => {
