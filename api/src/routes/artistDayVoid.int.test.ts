@@ -74,6 +74,12 @@ interface DayRow {
   id: string;
   status: string;
   chargeVoided?: boolean;
+  /**
+   * The code, never the words. `undefined` here would mean the API did not send
+   * the key at all, which specs 6-7 distinguish from a sent `null` — the
+   * "too old to say" case the handler's own comment insists on.
+   */
+  voidReason?: 'wrong' | 'dupe' | 'cust' | null;
   serviceName: string;
 }
 
@@ -399,5 +405,275 @@ suite('a voided charge leaves the appointment on the artist day, and says it was
       find(await day(), bk),
       'a pre-visit customer cancellation must NOT appear on the artist day',
     ).toBeUndefined();
+  });
+
+  // ==========================================================================
+  // WHY, not just THAT — specs 6-10.
+  //
+  // `chargeVoided` tells her the charge was reversed. It does not tell her which
+  // of three things was said, and the three mean opposite things TO HER: "wrong
+  // amount or service" is a correction, "duplicate charge" is housekeeping, and
+  // "customer did not receive service" is an assertion that she did not do the
+  // job. She has `permDashboard: false` (see ARTIST_STAFF above) so this endpoint
+  // is the only place she could ever read it.
+  //
+  // The shape served is a CODE, and specs 8 and 10 are the reason. The stored
+  // reason is free text from an authenticated but otherwise unconstrained client,
+  // and the actor's name sits on the same joined row. Both must stay off this
+  // wire, and a spec that only checked the happy path would not notice either
+  // going out.
+  // ==========================================================================
+
+  /** Charge the deposit-held booking, and answer with the charge's transaction id. */
+  async function chargeFor(memberId: string): Promise<string> {
+    const charged = await app.inject({
+      method: 'POST',
+      url: '/charges',
+      headers: {
+        authorization: `Bearer ${managerBearer}`,
+        'idempotency-key': `av-c-${randomUUID()}`,
+      },
+      payload: { memberId, serviceIds: [SVC] },
+    });
+    expect(charged.statusCode, charged.body).toBe(200);
+    return (charged.json() as { transaction: { id: string } }).transaction.id;
+  }
+
+  const voidCall = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: 'POST',
+      url: '/voids',
+      headers: {
+        authorization: `Bearer ${managerBearer}`,
+        'idempotency-key': `av-v-${randomUUID()}`,
+      },
+      payload,
+    });
+
+  it('6 · a void with NO code — the row still says reversed, and the reason is an explicit null', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -180);
+    const txId = await chargeFor(m);
+
+    /**
+     * EXACTLY WHAT TODAY'S SCANNER SENDS — `reason` and nothing else
+     * (`apps/scanner/src/components/VoidSheet.tsx`). This spec is the
+     * back-compatibility guarantee: the field was added without making any
+     * existing client's void 400, and without changing what her screen shows for
+     * one. If this ever goes red, a deploy has broken the till.
+     */
+    const voided = await voidCall({ transactionId: txId, reason: 'Duplicate charge' });
+    expect(voided.statusCode, voided.body).toBe(200);
+
+    const row = find(await day(), bk);
+    expect(row, 'the voided appointment must still be on her day').toBeDefined();
+    expect(row?.chargeVoided, 'the older fact is unchanged by the newer one').toBe(true);
+    /**
+     * NULL, AND PRESENT. Not `undefined`: `'voidReason' in row` is the whole
+     * point of the field being always-emitted. A client has to be able to tell
+     * "no reason was recorded" from "this API is too old to say", and only the
+     * key's presence carries that.
+     */
+    expect(row && 'voidReason' in row, 'voidReason must be emitted, never omitted').toBe(true);
+    expect(row?.voidReason, 'a void that recorded no code reads null, not a fourth reason').toBeNull();
+  });
+
+  it('7 · a void WITH a code — her day carries which of the three was said', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -220);
+    const txId = await chargeFor(m);
+
+    /**
+     * The one that matters. `cust` is "Customer did not receive service" — the
+     * assertion that she did not do the job, and the reason this slice exists
+     * rather than the two that are about the transaction.
+     */
+    const voided = await voidCall({
+      transactionId: txId,
+      reason: 'Customer did not receive service',
+      reasonCode: 'cust',
+    });
+    expect(voided.statusCode, voided.body).toBe(200);
+
+    const row = find(await day(), bk);
+    expect(row?.chargeVoided).toBe(true);
+    expect(row?.voidReason, 'the code the till recorded, served back verbatim').toBe('cust');
+
+    /**
+     * SERVER-DECIDED, PROVED AT THE ROW — non-negotiable #2, and LANES.md's rule
+     * that a plausible API reply is not evidence about the database. The code is
+     * on the REVERSAL, which is the row the endpoint joins through, and it is not
+     * on the charge.
+     */
+    const stored = one(
+      await exec(sql`
+        SELECT r.void_reason_code AS reversal_code,
+               c.void_reason_code AS charge_code,
+               r.note              AS reversal_note
+          FROM "transaction" c
+          JOIN "transaction" r ON r.reverses_transaction_id = c.id
+         WHERE c.id = ${txId}`),
+      'the charge and its reversal',
+    );
+    expect(stored.reversal_code).toBe('cust');
+    expect(stored.charge_code, 'the code belongs to the void, not to the charge').toBeNull();
+    // The words are still recorded — for the audit log, which is a different reader.
+    expect(stored.reversal_note).toBe('Customer did not receive service');
+  });
+
+  it('8 · THE DISCLOSURE BOUND — the stored words never reach her, whatever a client typed', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -260);
+    const txId = await chargeFor(m);
+
+    /**
+     * WHAT AN ARBITRARY CLIENT CAN PUT THERE, and the reason the served field is
+     * a code rather than the column.
+     *
+     * `POST /voids` requires a non-empty string and nothing else — it does NOT
+     * require one of the scanner's three labels, and no client is obliged to use
+     * the scanner. So this is a legal void today: a sentence naming a third party,
+     * chosen to be unmistakable if it ever appears on the wire.
+     */
+    /**
+     * The marker is NOT `RUN`: `serviceName` on the day row is
+     * `AV Int Service ${RUN}`, so a whole-row search for `RUN` would match the
+     * fixture's own service and fail for a reason that has nothing to do with the
+     * disclosure. A first draft did exactly that — recorded because a spec that
+     * fails on its own fixture teaches the next reader to weaken the assertion.
+     */
+    const marker = `SMEAR-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const smear = `Hessa was drunk again, ask ${marker} in reception`;
+    const voided = await voidCall({ transactionId: txId, reason: smear, reasonCode: 'cust' });
+    expect(voided.statusCode, voided.body).toBe(200);
+
+    // It really is stored — this spec is about the wire, not about the column.
+    const stored = one(
+      await exec(sql`
+        SELECT note FROM "transaction" WHERE reverses_transaction_id = ${txId}`),
+      'the reversal row',
+    );
+    expect(stored.note, 'the audit record keeps the words it was given').toBe(smear);
+
+    const row = find(await day(), bk);
+    expect(row?.voidReason, 'the code is served').toBe('cust');
+    /**
+     * THE ASSERTION, OVER THE WHOLE ROW rather than a named field. A future
+     * widening that added `note` — or `serialiseTransactionForMerchant`'s shape,
+     * or an audit `detail` — under any key at all fails here. Naming the field
+     * would only protect the field that exists today.
+     */
+    expect(
+      JSON.stringify(row),
+      'no free text a client typed may render on a named artist screen',
+    ).not.toContain(marker);
+  });
+
+  it('9 · a code outside the three is REFUSED, and nothing was voided', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -300);
+    const txId = await chargeFor(m);
+
+    const refused = await voidCall({
+      transactionId: txId,
+      reason: 'Customer did not receive service',
+      reasonCode: 'she_is_lazy',
+    });
+    expect(refused.statusCode, refused.body).toBe(400);
+    expect((refused.json() as { error: string }).error).toBe('invalid_reason_code');
+
+    /**
+     * A REFUSAL MOVED NO MONEY — the assertion `vitest.int.config.ts` was written
+     * for. Refusing the code after the debit would be worse than accepting it: the
+     * customer refunded and the reason lost.
+     */
+    const after = one(
+      await exec(sql`
+        SELECT (SELECT count(*) FROM "transaction" WHERE reverses_transaction_id = ${txId})::int AS reversals,
+               (SELECT status FROM booking WHERE id = ${bk}) AS booking_status`),
+      'the charge after a refused void',
+    );
+    expect(after.reversals, 'a refused void must not have written a reversal').toBe(0);
+    expect(after.booking_status, 'and must not have cancelled her appointment').toBe('completed');
+
+    // Her day is unchanged: still the completed work, still not a reversal.
+    const row = find(await day(), bk);
+    expect(row?.status).toBe('completed');
+    expect(row?.chargeVoided).toBe(false);
+    expect(row?.voidReason).toBeNull();
+  });
+
+  it('10 · WHY is widened, WHOSE is not — the actor stays off her day', async () => {
+    const m = await customer();
+    const bk = await heldBooking(m, -340);
+    const txId = await chargeFor(m);
+
+    const voided = await voidCall({
+      transactionId: txId,
+      reason: 'Wrong amount or service',
+      reasonCode: 'wrong',
+    });
+    expect(voided.statusCode, voided.body).toBe(200);
+
+    /**
+     * THE ACTOR IS ON THE JOINED ROW AND IS NOT SELECTED. `created_by_staff_id` is
+     * a column of the same reversal this endpoint already reaches, so disclosing
+     * it would cost one word — which is exactly why it needs a spec rather than a
+     * comment. Lane B scoped its ask to the code deliberately: who voided a charge
+     * is a different disclosure from why, and it belongs to a surface with an
+     * appeal attached, not to a pill on a day view.
+     */
+    const stored = one(
+      await exec(sql`
+        SELECT created_by_staff_id FROM "transaction" WHERE reverses_transaction_id = ${txId}`),
+      'the reversal row',
+    );
+    expect(stored.created_by_staff_id, 'the actor IS recorded — against the record').toBe(MANAGER);
+
+    const row = find(await day(), bk);
+    expect(row?.voidReason).toBe('wrong');
+    expect(
+      JSON.stringify(row),
+      'the artist learns WHY, and must not learn WHO from this endpoint',
+    ).not.toContain(MANAGER);
+  });
+
+  it('11 · the free-text reason is capped — it was bounded only by the 256 KiB body limit', async () => {
+    const m = await customer();
+    await heldBooking(m, -380);
+    const txId = await chargeFor(m);
+
+    /**
+     * FOUND WHILE ARGUING ABOUT DISCLOSURE, and it is the reason the argument
+     * came out where it did. `POST /voids` required a non-empty string and
+     * nothing else — `requireString`'s 500-char default was never reached,
+     * because the handler validated `body.reason` by hand. The only bound was
+     * Fastify's `bodyLimit` (`app.ts`: 256 KiB).
+     *
+     * This string is not inert. It lands in `transaction.note`, in the audit
+     * log's `detail`, and — through `services/activityFeed.ts §
+     * describeTransaction` — in the sentence BOTH the merchant's Overview feed
+     * and the platform console's live event feed render. So any client holding a
+     * scanner token could write a quarter of a megabyte into three staff screens.
+     */
+    const tooLong = 'x'.repeat(301);
+    const refused = await voidCall({ transactionId: txId, reason: tooLong });
+    expect(refused.statusCode, refused.body).toBe(400);
+    expect((refused.json() as { error: string }).error).toBe('invalid_request');
+
+    // A refusal moved no money, same as spec 9.
+    const after = one(
+      await exec(sql`
+        SELECT count(*)::int AS n FROM "transaction" WHERE reverses_transaction_id = ${txId}`),
+      'reversals after a refused void',
+    );
+    expect(after.n).toBe(0);
+
+    /**
+     * THE BOUNDARY, BOTH SIDES. A cap nobody tests at the edge is a cap that gets
+     * loosened by the next person who hits it; 300 is accepted, 301 is not.
+     */
+    const accepted = await voidCall({ transactionId: txId, reason: 'y'.repeat(300) });
+    expect(accepted.statusCode, accepted.body).toBe(200);
   });
 });

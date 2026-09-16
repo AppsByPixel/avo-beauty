@@ -351,6 +351,13 @@
       "when": 1789274000000,
       "tag": "0049_a_price_a_manager_typed",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1789360400000,
+      "tag": "0050_why_the_charge_was_voided",
+      "breakpoints": true
     }
   ]
 }

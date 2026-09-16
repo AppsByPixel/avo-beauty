@@ -33,7 +33,11 @@ import { member } from '../db/schema/member';
 import { ledgerEntry } from '../db/schema/ledger';
 import { chargeReversedPosting } from '../money/ledger';
 import { readTransactionRevenue } from '../money/revenue';
-import { transaction } from '../db/schema/transaction';
+import {
+  transaction,
+  VOID_REASON_CODES,
+  type VoidReasonCode,
+} from '../db/schema/transaction';
 import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
 import { badRequest, conflict, notFound } from '../http/errors';
@@ -528,17 +532,70 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
     if (typeof body.reason !== 'string' || body.reason.trim() === '') {
       throw badRequest('reason_required', 'A void needs a reason.');
     }
+    /**
+     * A CAP, ADDED HERE RATHER THAN BY SWITCHING TO `requireString`.
+     *
+     * `requireString` would refuse the empty case as `invalid_request`, and
+     * `reason_required` is pinned by `e2e/permissions.test.ts`,
+     * `e2e/scanner.test.ts` and `packages/mock`. So the empty refusal keeps its
+     * code and the length refusal gets its own.
+     *
+     * WHY A CAP AT ALL. This string lands in `transaction.note`, in the audit
+     * log's `detail`, and — through `describeTransaction` — in the sentence the
+     * merchant's Overview feed and the platform console's live feed both render.
+     * It was bounded only by Fastify's 256 KiB `bodyLimit` (`app.ts`), so any
+     * client holding a scanner token could write a quarter of a megabyte into
+     * three staff screens. 300 is generous for the longest written label the
+     * design offers and short enough to render.
+     */
+    if (body.reason.trim().length > 300) {
+      throw badRequest('invalid_request', 'reason is too long.');
+    }
     const reason = body.reason.trim();
+    /**
+     * THE CODE, AND WHY IT IS OPTIONAL.
+     *
+     * `reason` is what the audit log records in words; `reasonCode` is what an
+     * artist's day renders (`GET /artists/me/bookings` § voidReason). They are
+     * not redundant — see migration 0050 — and this one is optional because
+     * every client that exists today sends only the label, and a required field
+     * would 400 the till on deploy. Absent means NULL, which the screen renders
+     * as nothing, which is what it renders now.
+     *
+     * VALIDATED AGAINST THE CONSTANT, not merely typed. An unknown code is a 400
+     * rather than a stored NULL: silently dropping it would leave a client
+     * believing it had recorded a reason, which is the failure mode this whole
+     * slice exists to close.
+     */
+    let reasonCode: VoidReasonCode | null = null;
+    if (body.reasonCode !== undefined && body.reasonCode !== null) {
+      if (
+        typeof body.reasonCode !== 'string' ||
+        !(VOID_REASON_CODES as readonly string[]).includes(body.reasonCode)
+      ) {
+        throw badRequest(
+          'invalid_reason_code',
+          `reasonCode must be one of ${VOID_REASON_CODES.join(', ')}.`,
+        );
+      }
+      reasonCode = body.reasonCode as VoidReasonCode;
+    }
 
     const idem = {
       scope: principalScope(p),
       endpoint: 'POST /voids',
       key,
-      requestHash: hashRequestBody({ transactionId, reason }),
+      /**
+       * `reasonCode` joins the hash. #4's guarantee is that one key names one
+       * request: a retry that changes the recorded reason is a DIFFERENT void
+       * request, and the conflict is the honest answer rather than silently
+       * replaying the first body's code.
+       */
+      requestHash: hashRequestBody({ transactionId, reason, reasonCode }),
     };
 
     const { status, body: out } = await withIdempotency(idem, () =>
-      performVoid(transactionId, reason, p, req, idem),
+      performVoid(transactionId, reason, reasonCode, p, req, idem),
     );
 
     return reply.code(status).send(out);
@@ -549,6 +606,7 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
 async function performVoid(
   targetId: string,
   reason: string,
+  reasonCode: VoidReasonCode | null,
   principal: StaffPrincipal,
   req: FastifyRequest,
   idem: { scope: string; endpoint: string; key: string; requestHash: string },
@@ -709,6 +767,13 @@ async function performVoid(
       status: 'settled',
       reference: `AVO-VOID-${voidId.slice(3)}`,
       note: reason,
+      /**
+       * The same fact, twice, on purpose: the words for the record and the code
+       * for the screen. `transaction_void_reason_code_is_reversal_only` makes
+       * this the only INSERT in the API that may carry a non-null code, because
+       * it is the only one that sets `reverses_transaction_id`.
+       */
+      voidReasonCode: reasonCode,
       reversesTransactionId: target.id,
       createdByStaffId: principal.id,
       createdAt: now,

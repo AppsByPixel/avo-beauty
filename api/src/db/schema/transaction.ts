@@ -46,6 +46,31 @@ export const transactionStatus = pgEnum('transaction_status', [
 
 export const paymentMethod = pgEnum('payment_method', ['knet', 'card', 'applepay', 'wallet']);
 
+/**
+ * THE THREE THINGS THAT CAN BE SAID ABOUT A VOIDED CHARGE.
+ *
+ * Codes, not words. The words are the scanner's — `copy.voidReasons` in
+ * `apps/scanner`, in both languages — and they must stay there: non-negotiable
+ * #12 makes Arabic a first-class layout rather than a translation pass, and a
+ * server that owned this copy would own it in one language for a reader whose
+ * locale it does not store. `staff_user` has no locale column; neither does
+ * `member`. So the server decides WHICH of three things is true and the client
+ * decides how to say it.
+ *
+ * NOT A `pgEnum`, deliberately. A Postgres enum type is a schema object that a
+ * later value has to be `ALTER TYPE`'d into, and `transaction` already carries
+ * three of them; a CHECK on a `text` column is the same guarantee with a cheaper
+ * migration, and it is the shape the other 84 CHECKs in this schema use. The
+ * list is typed twice — here and in migration 0050 — which DECISIONS.md 57
+ * records as this schema's standing convention and its standing risk.
+ *
+ * TRUNK: these ids are also `copy.voidReasons[].id` in `apps/scanner`, typed a
+ * third time. The durable home is `packages/types`; that is a trunk operation
+ * and it is named in this lane's report rather than done here.
+ */
+export const VOID_REASON_CODES = ['wrong', 'dupe', 'cust'] as const;
+export type VoidReasonCode = (typeof VOID_REASON_CODES)[number];
+
 export const transaction = pgTable(
   'transaction',
   {
@@ -150,7 +175,22 @@ export const transaction = pgTable(
     status: transactionStatus('status').notNull().default('pending'),
     /** Gateway ref, shown to the customer on failure. */
     reference: text('reference').notNull().default(''),
-    /** Void reason, adjustment reason. Shown in the audit log detail column. */
+    /**
+     * Void reason, adjustment reason. Shown in the audit log detail column.
+     *
+     * FREE TEXT, AND INTERNAL. DECISIONS.md 107: this one column carries void
+     * reasons, "Cancelled by the customer", "No-show · deposit returned
+     * automatically" and an owner's adjustment text, and it is kept off the
+     * customer's wire by a single ternary in `serialiseTransactionForCustomer`.
+     * It is a MERCHANT-ROUTE key beside `feeFils`, and it is masked even there
+     * (`note: row.customAmount ? row.note : null`) because only a typed price's
+     * note is a thing a merchant screen is asking about.
+     *
+     * It is also the reason `void_reason_code` below exists rather than being
+     * derived from here: what a client may write into this column is bounded
+     * only by a length cap, so no screen can render it verbatim to a named
+     * person.
+     */
     note: text('note'),
 
     /**
@@ -163,6 +203,21 @@ export const transaction = pgTable(
       (): AnyPgColumn => transaction.id,
       { onDelete: 'restrict' },
     ),
+
+    /**
+     * WHY THE CHARGE WAS VOIDED, as a code — the machine-readable half of
+     * `note`, and the only half any screen renders. Migration 0050 carries the
+     * full argument.
+     *
+     * NULL means "this void recorded no code", which is the truth about every
+     * void taken before 0050 and about any client that does not send one. It is
+     * NOT a fourth reason and it must never be rendered as one; an artist's day
+     * distinguishes it from "not voided" by `chargeVoided`, which is a separate
+     * fact about a separate column.
+     */
+    voidReasonCode: text('void_reason_code', {
+      enum: VOID_REASON_CODES,
+    }),
 
     /**
      * WHAT THIS CHARGE WAS FOR, canonically, so a near-duplicate is answerable.
@@ -353,6 +408,39 @@ export const transaction = pgTable(
     check(
       'transaction_custom_amount_has_note',
       sql`${t.customAmount} = false OR (${t.note} IS NOT NULL AND length(btrim(${t.note})) > 0)`,
+    ),
+    /**
+     * A REASON CODE DESCRIBES A VOID, and can describe nothing else.
+     *
+     * `reverses_transaction_id` is what makes a row a void — one writer in the
+     * whole API (`routes/charges.ts § performVoid`), behind
+     * `transaction_reverses_uq`. Stamping a code on a charge, a top-up or an
+     * owner's adjustment would be meaningless, and the same shape as
+     * `..._custom_amount_is_charge_only`: an endpoint that quietly acquired the
+     * authority is caught here rather than in a report.
+     */
+    check(
+      'transaction_void_reason_code_is_reversal_only',
+      sql`${t.voidReasonCode} IS NULL OR ${t.reversesTransactionId} IS NOT NULL`,
+    ),
+    /**
+     * THE ENUM, AT THE DATABASE.
+     *
+     * `VOID_REASON_CODES` is checked in the handler too, and this is the copy
+     * that cannot be forgotten by a second writer of this table. It matters more
+     * than the usual belt-and-braces argument because of what the column is
+     * FOR: this value renders on a named artist's screen as a statement about
+     * her work. The set of things that can be said about a person's work must
+     * not be extensible by a request body, and a CHECK is the only place that is
+     * true regardless of which handler wrote the row.
+     *
+     * ONE-DIRECTIONAL, like `..._has_basket_hash`: a void may still have NULL,
+     * because every void written before migration 0050 does and because a client
+     * is not obliged to send one.
+     */
+    check(
+      'transaction_void_reason_code_valid',
+      sql`${t.voidReasonCode} IS NULL OR ${t.voidReasonCode} IN ('wrong', 'dupe', 'cust')`,
     ),
     /**
      * The near-duplicate guard's only query: "has this member been charged for this

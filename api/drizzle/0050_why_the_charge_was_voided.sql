@@ -1,0 +1,103 @@
+-- ---------------------------------------------------------------------------
+-- WHY THE CHARGE WAS VOIDED, RECORDED AS A CODE RATHER THAN INFERRED FROM WORDS.
+--
+-- An artist opens her day and sees an appointment she performed, marked as a
+-- reversal (`chargeVoided`, routes/bookings.ts). She cannot open the audit log
+-- and she cannot call `GET /charges` — `permDashboard: false` — so her day is
+-- the only surface on which she could learn WHY. The three reasons the scanner
+-- offers mean opposite things to her: "Wrong amount or service" is a
+-- correction, "Duplicate charge" is housekeeping, and "Customer did not receive
+-- service" is an assertion that she did not do the job, recorded against a staff
+-- name in an append-only log she cannot read.
+--
+-- WHY A COLUMN AND NOT `note`
+-- ---------------------------
+-- `transaction.note` already holds the reason — `POST /voids` writes it there
+-- (routes/charges.ts § performVoid). It cannot be what her screen renders, for
+-- two reasons that are separate and each sufficient.
+--
+--   IT IS FREE TEXT. The handler accepts any non-empty string. Today's scanner
+--   sends one of three written labels, deliberately, so that the audit log's
+--   `detail` column reads in words — but nothing on the wire constrains it, and
+--   nothing ever did. Any client holding a scanner token can put any sentence of
+--   any length into that column, and serving the column would render that
+--   sentence on a named artist's screen. (This migration's sibling change caps
+--   the length; it cannot constrain the content, because the content is the
+--   audit log's to carry in words.)
+--
+--   IT IS THE WRONG LAYER. DECISIONS.md 107 is the standing row about this
+--   column: it is general-purpose and internal — void reasons, "Cancelled by the
+--   customer", "No-show · deposit returned automatically", an owner's free-text
+--   adjustment reason — and it is kept off the customer's wire by a single
+--   ternary. 107 does not forbid a STAFF surface reading it. It does establish
+--   that the column carries four unrelated meanings, and a field on an artist's
+--   day that means four things is not a field, it is a leak with a label.
+--
+-- WHY NOT CLASSIFY THE STORED STRING INSTEAD
+-- ------------------------------------------
+-- Matching `note` against the three canonical labels needs no migration and
+-- works on existing rows, which is why it is tempting. It is rejected because it
+-- degrades SILENTLY and in the direction non-negotiable #12 guarantees will
+-- happen: an Arabic scanner sends Arabic labels, every match fails, and every
+-- void classifies as "other" while the code goes on looking correct. This repo's
+-- recurring defect is a confident sentence with nothing underneath it; a total
+-- lookup over a string somebody else is free to retranslate is that defect
+-- wearing a switch statement.
+--
+-- WHY NULLABLE, AND WHY THERE IS NO BACKFILL
+-- ------------------------------------------
+-- The opposite of 0049's argument, and deliberately so. `custom_amount` could
+-- default `false` because the feature did not exist, so `false` was a FACT about
+-- every historical row. Here the feature DID exist: every void already in this
+-- table was taken for one of these three reasons and nobody recorded which. NULL
+-- is therefore the only true value, and it means "this void recorded no code" —
+-- which is what happened. Deriving one from `note` would be the classification
+-- rejected above, committed to storage where it can never be questioned again.
+--
+-- The screen renders nothing for NULL, which is what it renders today. Nothing
+-- regresses; the new information starts accruing from the first void after this
+-- lands.
+--
+-- THE TWO CONSTRAINTS
+-- -------------------
+--   `..._is_reversal_only`  A reason code describes a VOID. It is meaningless on
+--                           a charge, a top-up or an owner's adjustment, and
+--                           `reverses_transaction_id` is the column that says a
+--                           row is a void — one writer in the whole API, behind
+--                           the unique index `transaction_reverses_uq`. Same
+--                           shape as `..._custom_amount_is_charge_only` and for
+--                           the same reason: an endpoint that quietly acquired
+--                           the ability to stamp a code on something else is
+--                           caught here rather than in a report.
+--
+--   `..._valid`             The enum, at the database. The schema already types
+--                           28 lists twice — once in TypeScript, once in SQL —
+--                           and DECISIONS.md 57 records that none is generated
+--                           from the other. This follows that convention rather
+--                           than inventing a new one, and it is the copy that
+--                           cannot be forgotten by a second writer of this
+--                           table. A fourth reason is a deliberate migration,
+--                           which is the point: the set of things that can be
+--                           said about an artist's work should not be extensible
+--                           by a request body.
+--
+-- ONE-DIRECTIONAL, like `..._has_basket_hash`: a void may have no code, because
+-- every void written before this migration has none and because a client is not
+-- required to send one. What cannot happen is a code on a row that is not a
+-- void, or a code that is not one of the three.
+--
+-- NO INDEX. Nothing queries by reason. The artist's day joins through
+-- `settled_transaction_id` and reads this column off a row it already has in
+-- hand — no extra join, no extra scan. `transaction_revenue` (0042) selects
+-- named columns, so the view is untouched.
+-- ---------------------------------------------------------------------------
+ALTER TABLE "transaction"
+  ADD COLUMN "void_reason_code" text;
+--> statement-breakpoint
+ALTER TABLE "transaction"
+  ADD CONSTRAINT "transaction_void_reason_code_is_reversal_only"
+  CHECK ("void_reason_code" IS NULL OR "reverses_transaction_id" IS NOT NULL);
+--> statement-breakpoint
+ALTER TABLE "transaction"
+  ADD CONSTRAINT "transaction_void_reason_code_valid"
+  CHECK ("void_reason_code" IS NULL OR "void_reason_code" IN ('wrong', 'dupe', 'cust'));
