@@ -92,6 +92,15 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
     // design/tokens/avo-tokens.json has no 700; every 700 in the bundle sits on
     // a badge, pill or tag. `bookingsNew` is the NEW pill at design:155.
     //
+    // MOVED 268 → 368 → 486, AND THE SET STILL DID NOT GROW. The third move is
+    // the reversed-booking pill ("Payment voided"), which took 600 for the same
+    // ALERT-versus-DESCRIPTION reason: a void is finished, is somebody else's
+    // action, and offers the artist no affordance at all — she holds neither
+    // `perms.void` nor `perms.charges` — so drawing it at NEW's weight would
+    // promise a response she cannot make. That row is kept from receding by
+    // elevation and colour instead, which is why the type scale is untouched.
+    // Reasoning at `BookingsScreen.tsx § VOIDED_PILL`.
+    //
     // MOVED 268 → 368, AND THE SET DID NOT GROW. The booking status pill
     // ("Paid", and three siblings) landed in the slot directly below NEW and
     // took 600, so this equality caught the shift and nothing else. That is the
@@ -101,15 +110,19 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
     // finished appointment is the least alerting row on the screen. The
     // reasoning is at `BookingsScreen.tsx § STATUS_PILL`.
     //
-    // REPORTED: pinning the LINE makes this fail on any edit above it, including
-    // a comment — it moved twice inside one slice. The membership is the claim;
+    // REPORTED AGAIN, AND IT IS NOW COSTING MORE THAN IT REPORTS: pinning the
+    // LINE makes this fail on any edit above it, including a comment. It moved
+    // TWICE MORE inside the reversed-booking slice — once for the code and once
+    // for a stale-comment fix three hundred lines above the call site, which is
+    // a red gate for a change that could not possibly affect a font weight.
+    // Four moves, zero membership changes. It moved twice inside one slice. The membership is the claim;
     // the line number is incidental to it. Asserting the call sites without
     // their line numbers, or keying them off a marker comment, would keep the
     // ratchet and drop the noise. Left alone here because changing how a
     // trunk-ruled test states its rule is not a thing to do inside the slice
     // that trips it.
     expect(uiCallsAtWeight('700')).toEqual([
-      "screens/BookingsScreen.tsx:368 ui(10,'700')",
+      "screens/BookingsScreen.tsx:486 ui(10,'700')",
     ]);
   });
 });

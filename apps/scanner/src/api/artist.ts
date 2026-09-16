@@ -81,16 +81,55 @@ export const ArtistBookingSchema = BookingSchema.extend({
   /**
    * `.default(false)`, so this branch is green on BOTH payloads.
    *
-   * Lane A has not merged yet. A required `z.boolean()` here would reject every
-   * booking the API serves TODAY, which trades a future outage for a present
-   * one. Absent means "not erased", which is the truthful reading of the older
-   * payload — and it is safe in the one direction that matters, because the
-   * card's guard is `memberErased || memberPhone === null`: a real tombstone
-   * arriving without the flag is still caught by the null.
+   * LANE A HAS SINCE MERGED — `http/serialise.ts § serialiseMemberContact`
+   * computes it from `erasedAt` and every item carries it — so the original
+   * reason for the default ("a required boolean would reject every booking the
+   * API serves TODAY") is spent. The default STAYS on the reason that outlives
+   * it: a required boolean against a rolled-back API throws inside
+   * `fetchMyBookings` and her entire day fails to load, and absent means "not
+   * erased", which is the truthful reading of the older payload. It is safe in
+   * the one direction that matters, because the card's guard is `memberErased ||
+   * memberPhone === null`: a real tombstone arriving without the flag is still
+   * caught by the null.
    */
   memberErased: z.boolean().default(false),
   memberTier: z.enum(['bronze', 'silver', 'gold', 'black']),
   serviceName: z.string(),
+  /**
+   * "YOU RANG THIS UP AND IT WAS REVERSED" - server-decided, and it was being
+   * DELETED HERE.
+   *
+   * This schema is a plain zod object, so the default `strip` applies: a key it
+   * does not name is dropped on arrival and nothing throws. `GET
+   * /artists/me/bookings` sends `chargeVoided` on every item, and the parse ate
+   * it - the same drift that has cost this repo a whole feature between the
+   * server and the screen more than once. `artistBookingWire.test.ts` pins the
+   * ARRIVAL rather than the rendering, because a card test cannot see a key that
+   * was removed before the card was called.
+   *
+   * WHAT IT MEANS, AND WHY IT IS NOT DERIVABLE HERE. True exactly when the
+   * booking's settling transaction carries `reverses_transaction_id`, which has
+   * exactly ONE writer in the whole API - the void - behind the unique index
+   * `transaction_reverses_uq`. `status` alone says `cancelled`, which has two
+   * writers meaning opposite things: a customer calling off a visit that never
+   * happened, and a manager reversing the charge for work this artist performed.
+   * Nothing on the booking row tells them apart. Non-negotiable #2: this is the
+   * server's answer and the client does not recompute it from a status, a
+   * timestamp, or a charge this device happened to watch.
+   *
+   * (Today the route admits `cancelled` to her day ONLY when that id is
+   * non-null, so every `cancelled` row reaching this parse IS a reversal.
+   * Branching on the status instead of on this field would therefore look
+   * correct and be wrong the moment Lane A widens that predicate to let a
+   * customer's cancellation through - which its own comment says is a live
+   * option, deliberately left open.)
+   *
+   * `.default(false)`, mirroring `memberErased` above, and the trade is argued
+   * in `artistBookingWire.test.ts`: a required boolean against a rolled-back API
+   * throws inside `fetchMyBookings` and takes her ENTIRE DAY down, to preserve a
+   * "too old to say" distinction that has no consumer on this screen.
+   */
+  chargeVoided: z.boolean().default(false),
 });
 
 export type ArtistBooking = z.infer<typeof ArtistBookingSchema>;

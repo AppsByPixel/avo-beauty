@@ -453,11 +453,23 @@ export const copy = {
    * upcoming" over a list where three were. Marking the cards done and leaving
    * this line would have shipped a screen contradicting itself one row higher.
    *
-   * "paid" rather than "done", matching the pill. Both segments drop at zero, so
-   * a day with nothing charged renders the design's own sentence unchanged.
+   * "paid" rather than "done", matching the pill. Every segment after the first
+   * drops at zero, so a day with nothing charged renders the design's own
+   * sentence unchanged.
+   *
+   * `voided` IS A FOURTH SEGMENT RATHER THAN A SILENCE. A reversed booking is
+   * `cancelled` on the server, so it counts in none of the other three: the
+   * moment a manager voids this morning's charge the header's "2 paid" quietly
+   * becomes "1 paid" and a card she has never seen before appears underneath it,
+   * with nothing above connecting the two. That is the same defect the `upcoming`
+   * fix closed, running the other way - the line no longer lies, it just stops
+   * accounting for a row that is on the screen. Naming it is what makes the
+   * decrement legible instead of spooky.
    */
-  bookingsCount: (upcoming: number, isNew: number, paid: number) =>
-    `${upcoming} upcoming${isNew > 0 ? ` · ${isNew} new` : ''}${paid > 0 ? ` · ${paid} paid` : ''}`,
+  bookingsCount: (upcoming: number, isNew: number, paid: number, voided: number) =>
+    `${upcoming} upcoming${isNew > 0 ? ` · ${isNew} new` : ''}${paid > 0 ? ` · ${paid} paid` : ''}${
+      voided > 0 ? ` · ${voided} voided` : ''
+    }`,
   /** :138, verbatim after the em dash. */
   bookingsSource: 'pulled from the AVO app and your Google Calendar.',
   /** :142, verbatim. */
@@ -488,6 +500,40 @@ export const copy = {
   bookingsStatusPaid: 'Paid',
   bookingsStatusNoShow: 'No-show · returned',
   bookingsStatusCancelled: 'Cancelled',
+  /**
+   * THE FIFTH LABEL, AND THE ONLY ONE THAT IS NOT A STATUS.
+   *
+   * A void sets the booking to `cancelled` (api/src/routes/charges.ts), and
+   * until Lane A's fix that row VANISHED from her day. It is back, and the word
+   * `cancelled` carries for it is actively false: she watched this card say
+   * "Paid" ninety seconds ago, and "Cancelled" tells her the customer called off
+   * work she in fact performed. Two writers, opposite meanings, one status - so
+   * the label branches on `chargeVoided`, which is the server's own answer, and
+   * `bookingsStatusCancelled` stays correct for the customer's cancellation on
+   * the day that one is admitted.
+   *
+   * WHY THESE TWO WORDS.
+   *
+   *   "VOIDED", not "reversed", "refunded" or "cancelled". This app already owns
+   *       the verb - `voidSheetTitle`, `voidConfirm`, `voidedAtNote`, and a
+   *       manager saying "I voided it" at the counter. Diverging from the app's
+   *       own word for the app's own action would be inventing a second name for
+   *       one event. "Refunded" is worse than merely different: non-negotiable
+   *       #5 makes every refund wallet credit, and the word would suggest a
+   *       remedy granted to the customer rather than a charge undone.
+   *
+   *   "PAYMENT", and the noun is the load-bearing half. Bare "Voided" beside a
+   *       time reads as the APPOINTMENT being voided - which is the exact
+   *       misreading "Cancelled" produces, in bookkeeping clothes. Naming the
+   *       payment puts the reversal on the money and leaves her work standing.
+   *
+   *   NO ACTOR AND NO REASON. It does not say who, because the payload does not
+   *       carry it and inventing one is worse than the silence; and it does not
+   *       say why, because the reason lives on the reversal's audit row, which
+   *       this account cannot read. Reported to Lane A rather than guessed at
+   *       here. See `BookingsScreen.tsx` § VOIDED_PILL.
+   */
+  bookingsStatusVoided: 'Payment voided',
   /** :169-170 */
   bookingsCall: 'Call',
   bookingsWhatsApp: 'WhatsApp',
