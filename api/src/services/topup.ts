@@ -76,6 +76,7 @@ import { platformCommissionFor } from './platformSettings';
 import { enforceTopUpLimits } from './topupLimit';
 import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
+import { nextTransactionId } from './ids';
 
 // ------------------------------------------------------------ the machine --
 
@@ -269,10 +270,6 @@ export function serialiseIntentForCustomer(row: TopUpIntentRow): TopUpIntentPubl
 
 function intentId(): string {
   return `TI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-}
-
-function transactionId(): string {
-  return `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
 }
 
 /**
@@ -718,7 +715,7 @@ async function creditWallet(
   if (!m) throw notFound('unknown_member', 'No such member.');
 
   const balanceAfter = add(fils(m.balanceFils), intent.creditFils);
-  const txId = transactionId();
+  const txId = await nextTransactionId(tx);
   const reference = intent.reference;
 
   /**

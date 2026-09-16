@@ -1,52 +1,72 @@
 /**
- * THE TWO MERCHANT- AND CUSTOMER-FACING IDS ARE UNIQUE UNDER LOAD.
+ * EVERY HUMAN-FACING ID THE API MINTS IS UNIQUE UNDER LOAD — ALL FIVE PREFIXES.
  *
  * =========================================================================
  * WHAT BROKE
  * =========================================================================
- * `routes/campaigns.ts` minted `CMP-${Math.floor(Math.random() * 9000 + 1000)}`
- * and `routes/support.ts` minted `SUP-${... * 90_000 + 10_000}`, straight into a
- * PRIMARY KEY, with no uniqueness check and no retry. A duplicate is an unhandled
- * 23505 that leaves the handler as a 500 `server_error`, so the merchant is told
- * "Something went wrong on our side" about a campaign that was refused by a dice
- * roll. Observed on dev 2026-09-17 during a full `e2e/` run:
+ * Nine minters across five prefixes drew a PRIMARY KEY from a small random space
+ * with no uniqueness check and no retry. A duplicate is an unhandled 23505.
+ * Observed on dev 2026-09-17 in a full `e2e/` run:
  * `duplicate key value violates unique constraint "campaign_pkey"`,
  * `Key (id)=(CMP-6994) already exists`.
  *
- * Migration 0051 replaced both with a sequence. This file is the spec that would
- * have failed before it.
+ * Migrations 0052 (`CMP-`, `SUP-`) and 0053 (`TX-`, `BK-`, `NT-`) replaced all of
+ * them with sequences, and `services/ids.ts` is the one place they live now.
+ *
+ * `TX-` is the one that matters: a colliding transaction id does NOT surface as a
+ * 500. `routes/orders.ts` and friends read every 23505 as an idempotency-key
+ * collision and answer `409 request_in_progress` — "still being processed" — for a
+ * charge that never happened, on a path whose natural remedy is to charge again.
+ * `services/ids.ts` carries the full argument.
  *
  * =========================================================================
  * WHY THIS CANNOT BE A UNIT SPEC
  * =========================================================================
- * The claim is about a PRIMARY KEY, and a primary key is a database object. A
+ * The claim is about a PRIMARY KEY and a sequence, which are database objects. A
  * mock cannot raise 23505 unless it is taught to, and a mock taught to raise it
- * is asserting the test author's model of the constraint rather than the
- * constraint. The old minter was type-correct, lint-clean and passed every unit
- * spec in this repo for the whole of its life; the only thing that ever
- * disagreed with it was postgres.
+ * asserts the test author's model of the constraint rather than the constraint.
+ * The old minters were type-correct, lint-clean and passed every unit spec in this
+ * repo for the whole of their lives; the only thing that ever disagreed with them
+ * was postgres.
  *
- * `nextval` is also not something a mock has an opinion about. The property under
- * test — "N mints produce N distinct ids" — is a property of the sequence and the
- * index together.
+ * `services/ids.test.ts` is the unit half — a source census that fails if anybody
+ * adds a tenth minter. It runs in `pnpm check`; this does not.
+ *
+ * =========================================================================
+ * TWO PROOFS, BECAUSE THE SPACES DIFFER BY THREE ORDERS OF MAGNITUDE
+ * =========================================================================
+ * BULK INSERT against the real primary key, for `CMP-`, `SUP-` and `NT-`. It is a
+ * birthday problem, so what matters is P(no collision) over N draws from a space
+ * of S, about exp(-N(N-1)/2S):
+ *
+ *   CMP-, S = 9,000,      N = 1000  ->  ~1e-24.  Certain to have failed before.
+ *   SUP-, S = 90,000,     N = 1000  ->  ~0.004.  99.6% certain.
+ *   NT-,  S = 9,000,000,  N = 1000  ->  ~0.95.   NOT decisive on its own.
+ *
+ * MONOTONICITY, for `TX-`, `BK-` and `NT-`, whose old space was 9,000,000. Making
+ * a bulk insert decisive there would need ~6,400 rows of real money fixtures, which
+ * is not a spec, it is a load test. So these assert the property a sequence HAS and
+ * a dice roll cannot: N draws that strictly increase. P(200 random draws arriving
+ * in strictly ascending order) is 1/200!, which is zero in every sense that
+ * matters — so a small N is decisive here where a large N was needed there.
+ *
+ * Both also assert the id clears the space the random minter already used, which
+ * is what makes migrations 0052 and 0053 safe on a live database.
  *
  * =========================================================================
  * WRITES NOTHING THAT SURVIVES
  * =========================================================================
  * Every insert runs inside a transaction that is ROLLED BACK, the shape
- * `campaignAudience.int.test.ts` uses and for its reason: this file makes no
- * claim about the state of the database and leaves none, so it is idempotent
- * across repeat runs by construction rather than by a "reset first" footnote.
- * `api/README.md` records that the int suite as a whole is green exactly once per
- * reset; this file is not part of why.
+ * `campaignAudience.int.test.ts` uses and for its reason: this file makes no claim
+ * about the state of the database and leaves none, so it is idempotent across
+ * repeat runs by construction rather than by a "reset first" footnote.
+ * `api/README.md` records that the int suite is green exactly once per reset; this
+ * file is not part of why.
  *
- * THE SEQUENCE ITSELF IS NOT ROLLED BACK, which is the documented trade — a
- * rolled-back transaction burns the numbers it drew. That is invisible in a
- * campaign id and it is what makes the mint collision-free without a retry loop,
- * so this suite consuming a few thousand values per run is the design working,
- * not a leak.
- *
- * Run it against your own lane database, never a shared one:
+ * THE SEQUENCES THEMSELVES ARE NOT ROLLED BACK, which is the documented trade — a
+ * rolled-back transaction burns the numbers it drew. That is invisible in a receipt
+ * reference and it is what makes the mint collision-free without a retry loop, so
+ * this suite consuming a few thousand values per run is the design working.
  *
  *     ./scripts/lane-db.sh a
  *     export AVO_INT_DATABASE_URL="postgres://avo_app:avo_app_dev_password@localhost:5433/avo_lane_a"
@@ -62,41 +82,32 @@ const suite = INT_URL ? describe : describe.skip;
 const SALON = 'SAL-AMARA';
 const MEMBER = '8842';
 
-/**
- * HOW MANY MINTS MAKE THIS SPEC DECISIVE RATHER THAN LUCKY.
- *
- * It is a birthday problem, so the number that matters is not "how likely is one
- * collision" but "how likely is NO collision across N draws", which is
- * approximately exp(-N(N-1)/2S) for a space of size S.
- *
- *   CMP-, S = 9000,  N = 1000  ->  P(no collision) ~ 1e-24. Certain.
- *   SUP-, S = 90000, N = 1000  ->  P(no collision) ~ 0.004. 99.6% certain.
- *
- * So a green run of this file under the OLD minter was not merely unlikely, it
- * was unreachable for campaigns and a 1-in-250 fluke for tickets. Under a
- * sequence both are exact, not probable, which is the whole point of the change:
- * the number below is chosen to make the old code fail, and it has no bearing on
- * whether the new code passes.
- */
+/** See the header: enough to have failed before, for the spaces where it can be. */
 const MINTS = 1000;
+/** Enough for monotonicity, which needs no margin at all. */
+const DRAWS = 200;
 
-/** `CMP-10000` and up — migration 0051's start value, a digit wider than the
- *  1000..9999 the random minter used, so a minted id cannot collide with a row
- *  that was already in the table when the migration ran. */
-const CAMPAIGN_FLOOR = 10_000;
-/** `SUP-100000` and up, clearing the old 10000..99999 the same way. */
-const TICKET_FLOOR = 100_000;
+/**
+ * Migration 0052 and 0053 start values — each a digit wider than the space its
+ * random minter used, so a minted id cannot collide with a row that was already
+ * in the table when the migration ran.
+ */
+const FLOOR = {
+  'CMP-': 10_000,
+  'SUP-': 100_000,
+  'TX-': 10_000_000,
+  'BK-': 10_000_000,
+  'NT-': 10_000_000,
+} as const;
 
-function suffixes(ids: string[], prefix: string): number[] {
-  return ids.map((id) => {
-    expect(id.startsWith(prefix), `"${id}" does not start with "${prefix}"`).toBe(true);
-    const n = Number(id.slice(prefix.length));
-    expect(Number.isInteger(n), `"${id}" does not end in an integer`).toBe(true);
-    return n;
-  });
+function suffix(id: string, prefix: keyof typeof FLOOR): number {
+  expect(id.startsWith(prefix), `"${id}" does not start with "${prefix}"`).toBe(true);
+  const n = Number(id.slice(prefix.length));
+  expect(Number.isInteger(n), `"${id}" does not end in an integer`).toBe(true);
+  return n;
 }
 
-/** The one assertion this file exists for, said once for both prefixes. */
+/** The one assertion this file exists for, said once for every prefix. */
 function expectAllDistinct(ids: string[], what: string): void {
   const seen = new Map<string, number>();
   for (const id of ids) seen.set(id, (seen.get(id) ?? 0) + 1);
@@ -105,38 +116,61 @@ function expectAllDistinct(ids: string[], what: string): void {
     duplicates,
     `${duplicates.length} of ${ids.length} minted ${what} ids repeated: ` +
       `${duplicates.slice(0, 5).map(([id, n]) => `${id} x${n}`).join(', ')}. ` +
-      `That is the 500 the merchant sees, reproduced.`,
+      `That is the collision, reproduced.`,
   ).toEqual([]);
   expect(seen.size).toBe(ids.length);
 }
 
-suite('a merchant- or customer-facing id is minted from a sequence, not a dice roll', () => {
+function expectClearsLegacySpace(ids: string[], prefix: keyof typeof FLOOR): void {
+  for (const id of ids) {
+    expect(
+      suffix(id, prefix),
+      `${id} landed in the space the random minter already used, so it could ` +
+        `collide with a row that predates the migration`,
+    ).toBeGreaterThanOrEqual(FLOOR[prefix]);
+  }
+}
+
+function expectStrictlyIncreasing(ids: string[], prefix: keyof typeof FLOOR): void {
+  const ns = ids.map((id) => suffix(id, prefix));
+  const breaks = ns
+    .map((n, i) => ({ n, prev: ns[i - 1], i }))
+    .filter(({ n, prev }) => prev !== undefined && n <= prev);
+  expect(
+    breaks,
+    `${breaks.length} of ${ns.length} ${prefix} draws did not increase — e.g. ` +
+      `${breaks.slice(0, 3).map((b) => `#${b.i}: ${b.prev} then ${b.n}`).join(', ')}. ` +
+      `A sequence cannot do that; a random minter almost always does.`,
+  ).toEqual([]);
+}
+
+suite('every minted id comes from a sequence, not a dice roll', () => {
   let db: typeof import('../db/client')['db'];
   let campaign: typeof import('../db/schema/campaign')['campaign'];
   let supportTicket: typeof import('../db/schema/legal')['supportTicket'];
   let supportTopic: typeof import('../db/schema/legal')['supportTopic'];
-  let campaignId: typeof import('./campaigns')['campaignId'];
-  let ticketId: typeof import('./support')['ticketId'];
+  let merchantNotification: typeof import('../db/schema/notification')['merchantNotification'];
+  let ids: typeof import('../services/ids');
 
   beforeAll(async () => {
     db = (await import('../db/client')).db;
     campaign = (await import('../db/schema/campaign')).campaign;
     ({ supportTicket, supportTopic } = await import('../db/schema/legal'));
-    // THE EXPRESSIONS THE ROUTES ACTUALLY USE, imported rather than retyped. A
-    // copy of the SQL here would pass while `POST /campaigns` kept minting at
-    // random, which is the one outcome this file must not be able to have.
-    ({ campaignId } = await import('./campaigns'));
-    ({ ticketId } = await import('./support'));
+    ({ merchantNotification } = await import('../db/schema/notification'));
+    // THE MODULE THE PRODUCTION PATHS USE, imported rather than retyped. A copy of
+    // the SQL here would pass while every route kept minting at random, which is
+    // the one outcome this file must not be able to have.
+    ids = await import('../services/ids');
   });
 
   /**
-   * Rolled back. `tx.rollback()` throws to unwind, so the catch below distinguishes
-   * that from a real failure — anything else, 23505 above all, is the bug.
+   * Rolled back. `tx.rollback()` throws to unwind, so the catch distinguishes that
+   * from a real failure — anything else, 23505 above all, is the bug.
    */
-  async function inRollback(fn: (tx: never) => Promise<void>): Promise<void> {
+  async function inRollback(fn: (tx: typeof db) => Promise<void>): Promise<void> {
     try {
       await db.transaction(async (tx) => {
-        await fn(tx as never);
+        await fn(tx as unknown as typeof db);
         tx.rollback();
       });
     } catch (error) {
@@ -144,15 +178,25 @@ suite('a merchant- or customer-facing id is minted from a sequence, not a dice r
     }
   }
 
-  it(`mints ${MINTS} campaign ids with no duplicate and no 23505`, async () => {
-    let ids: string[] = [];
+  async function seededTopic(): Promise<{ id: string; route: 'salon' | 'avo' }> {
+    const [topic] = await db
+      .select({ id: supportTopic.id, route: supportTopic.route })
+      .from(supportTopic)
+      .limit(1);
+    expect(topic, 'no seeded support topic — run ./scripts/lane-db.sh a').toBeTruthy();
+    return topic as { id: string; route: 'salon' | 'avo' };
+  }
 
+  // ===================================================== the bulk-insert half ==
+
+  it(`mints ${MINTS} campaign ids against campaign_pkey with no duplicate`, async () => {
+    let minted: string[] = [];
     await inRollback(async (tx) => {
-      const rows = await (tx as unknown as typeof db)
+      const rows = await tx
         .insert(campaign)
         .values(
           Array.from({ length: MINTS }, (_, i) => ({
-            id: campaignId,
+            id: ids.campaignId,
             salonId: SALON,
             title: `Minted id probe ${i}`,
             body: 'Rolled back. Nothing here survives the transaction.',
@@ -161,114 +205,168 @@ suite('a merchant- or customer-facing id is minted from a sequence, not a dice r
             reward: 'none',
             reach: 0,
             sendWhen: 'now',
-            // Non-negotiable #8 holds here too: nothing this file writes is
-            // anything but `pending`, and all of it is rolled back regardless.
+            // Non-negotiable #8 holds in the fixture too: nothing this file writes
+            // is anything but `pending`, and all of it is rolled back regardless.
             status: 'pending' as const,
             submittedBy: 'mintedIds.int.test',
             submittedAt: new Date(),
           })),
         )
         .returning({ id: campaign.id });
-      ids = rows.map((r) => r.id);
+      minted = rows.map((r) => r.id);
     });
 
-    expect(ids).toHaveLength(MINTS);
-    expectAllDistinct(ids, 'campaign');
-    for (const n of suffixes(ids, 'CMP-')) {
-      expect(n, 'a minted id landed in the space the random minter already used').toBeGreaterThanOrEqual(
-        CAMPAIGN_FLOOR,
-      );
-    }
+    expect(minted).toHaveLength(MINTS);
+    expectAllDistinct(minted, 'campaign');
+    expectClearsLegacySpace(minted, 'CMP-');
   });
 
-  it(`mints ${MINTS} support ticket ids with no duplicate and no 23505`, async () => {
-    const [topic] = await db
-      .select({ id: supportTopic.id, route: supportTopic.route })
-      .from(supportTopic)
-      .limit(1);
-    expect(topic, 'no seeded support topic — run ./scripts/lane-db.sh a').toBeTruthy();
-
-    let ids: string[] = [];
-
+  it(`mints ${MINTS} support ticket ids against support_ticket_pkey with no duplicate`, async () => {
+    const topic = await seededTopic();
+    let minted: string[] = [];
     await inRollback(async (tx) => {
-      const rows = await (tx as unknown as typeof db)
+      const rows = await tx
         .insert(supportTicket)
         .values(
           Array.from({ length: MINTS }, (_, i) => ({
-            id: ticketId,
+            id: ids.ticketId,
             memberId: MEMBER,
             salonId: SALON,
-            topicId: topic!.id,
-            // Non-negotiable #11: the route is resolved from the TOPIC, never from
-            // the client. This fixture is not the handler, so rather than assert
-            // that it takes the topic's route and then supply its own, it reads
-            // it — a fixture that hardcoded 'avo' would still be green on the day
-            // somebody made the handler hardcode it too.
-            route: topic!.route,
+            topicId: topic.id,
+            // Non-negotiable #11: the route resolves this from the TOPIC, never
+            // from the client. This fixture is not the handler, so rather than
+            // assert that it takes the topic's route and then supply its own, it
+            // reads it — a fixture that hardcoded 'avo' would still be green on the
+            // day somebody made the handler hardcode it too.
+            route: topic.route,
             message: `Minted id probe ${i}. Rolled back.`,
             via: 'email' as const,
           })),
         )
         .returning({ id: supportTicket.id });
-      ids = rows.map((r) => r.id);
+      minted = rows.map((r) => r.id);
     });
 
-    expect(ids).toHaveLength(MINTS);
-    expectAllDistinct(ids, 'support ticket');
-    for (const n of suffixes(ids, 'SUP-')) {
-      expect(n, 'a minted id landed in the space the random minter already used').toBeGreaterThanOrEqual(
-        TICKET_FLOOR,
-      );
-    }
+    expect(minted).toHaveLength(MINTS);
+    expectAllDistinct(minted, 'support ticket');
+    expectClearsLegacySpace(minted, 'SUP-');
+  });
+
+  it(`mints ${MINTS} notification ids against merchant_notification_pkey with no duplicate`, async () => {
+    let minted: string[] = [];
+    await inRollback(async (tx) => {
+      const rows = await tx
+        .insert(merchantNotification)
+        .values(
+          Array.from({ length: MINTS }, (_, i) => ({
+            id: ids.notificationId,
+            salonId: SALON,
+            kind: 'calendar_disconnected' as never,
+            title: 'Minted id probe',
+            body: 'Rolled back. Nothing here survives the transaction.',
+            subjectType: 'mintedIds.int.test',
+            // VARIED ON PURPOSE. `merchant_notification` carries a partial unique
+            // index over (salon, kind, subject) WHERE open — the dedup that stops
+            // one disconnected calendar minting a row per read. A thousand rows
+            // sharing a subject would violate THAT index, and this spec would go
+            // red for a reason that has nothing to do with the id.
+            subjectId: `probe-${i}`,
+          })),
+        )
+        .returning({ id: merchantNotification.id });
+      minted = rows.map((r) => r.id);
+    });
+
+    expect(minted).toHaveLength(MINTS);
+    expectAllDistinct(minted, 'notification');
+    expectClearsLegacySpace(minted, 'NT-');
+  });
+
+  // ===================================================== the monotonic half ==
+
+  it(`draws ${DRAWS} transaction ids that strictly increase — the money path`, async () => {
+    let drawn: string[] = [];
+    await inRollback(async (tx) => {
+      for (let i = 0; i < DRAWS; i += 1) drawn.push(await ids.nextTransactionId(tx));
+    });
+
+    expect(drawn).toHaveLength(DRAWS);
+    expectAllDistinct(drawn, 'transaction');
+    expectStrictlyIncreasing(drawn, 'TX-');
+    expectClearsLegacySpace(drawn, 'TX-');
+  });
+
+  it(`draws ${DRAWS} booking ids that strictly increase`, async () => {
+    let drawn: string[] = [];
+    await inRollback(async (tx) => {
+      for (let i = 0; i < DRAWS; i += 1) drawn.push(await ids.nextBookingId(tx));
+    });
+
+    expect(drawn).toHaveLength(DRAWS);
+    expectAllDistinct(drawn, 'booking');
+    expectStrictlyIncreasing(drawn, 'BK-');
+    expectClearsLegacySpace(drawn, 'BK-');
   });
 
   /**
-   * THE TWO SEQUENCES ARE SEPARATE OBJECTS. Sharing one would still be unique, so
-   * no spec above would notice — and campaign ids would skip in blocks whenever
-   * support was busy. A merchant reading "CMP-10000" and then "CMP-14820" back to
-   * support has been handed a live count of somebody else's tickets, which is the
-   * enumerability 0025 accepted for a salon's own members turned into a leak
-   * across tenants.
+   * A DRAW IS NOT ROLLED BACK, and that is the trade 0025 named rather than a leak.
+   * Asserted because it is the property that makes every other spec here sound: if
+   * a rollback DID return the numbers, two concurrent transactions could be handed
+   * the same id and every uniqueness claim above would hold only for serial runs.
    */
-  it('draws campaign ids and ticket ids from different sequences', async () => {
-    const [topic] = await db
-      .select({ id: supportTopic.id, route: supportTopic.route })
-      .from(supportTopic)
-      .limit(1);
-    expect(topic, 'no seeded support topic — run ./scripts/lane-db.sh a').toBeTruthy();
+  it('keeps a drawn id even when the transaction that drew it rolls back', async () => {
+    let inside = '';
+    await inRollback(async (tx) => {
+      inside = await ids.nextTransactionId(tx);
+    });
+    const after = await ids.nextTransactionId(db);
 
+    expect(suffix(after, 'TX-')).toBeGreaterThan(suffix(inside, 'TX-'));
+  });
+
+  /**
+   * THE FIVE SEQUENCES ARE SEPARATE OBJECTS. Sharing one would still be unique, so
+   * no spec above would notice — and ids would skip in blocks whenever another
+   * prefix was busy. A merchant reading "CMP-10000" and then "CMP-14820" back to
+   * support has been handed a live count of somebody else's transactions, which
+   * turns the enumerability `services/ids.ts` accepts within a tenant into a
+   * disclosure across tenants.
+   */
+  it('draws each prefix from its own sequence', async () => {
+    const topic = await seededTopic();
     let before = 0;
     let after = 0;
 
     await inRollback(async (tx) => {
-      const t = tx as unknown as typeof db;
+      const [a] = await tx.select({ minted: ids.campaignId }).from(supportTopic).limit(1);
 
-      const [a] = await t.select({ minted: campaignId }).from(supportTopic).limit(1);
-
-      // A hundred ticket ids drawn in between. Under one shared sequence the next
-      // campaign id would be 101 further on, not 1.
-      await t.insert(supportTicket).values(
+      // A hundred of every other prefix in between. Under one shared sequence the
+      // next campaign id would be hundreds further on, not one.
+      for (let i = 0; i < 100; i += 1) {
+        await ids.nextTransactionId(tx);
+        await ids.nextBookingId(tx);
+      }
+      await tx.insert(supportTicket).values(
         Array.from({ length: 100 }, (_, i) => ({
-          id: ticketId,
+          id: ids.ticketId,
           memberId: MEMBER,
           salonId: SALON,
-          topicId: topic!.id,
-          route: topic!.route,
+          topicId: topic.id,
+          route: topic.route,
           message: `Sequence separation probe ${i}. Rolled back.`,
           via: 'email' as const,
         })),
       );
 
-      const [b] = await t.select({ minted: campaignId }).from(supportTopic).limit(1);
-
-      before = Number(String(a!.minted).slice('CMP-'.length));
-      after = Number(String(b!.minted).slice('CMP-'.length));
+      const [b] = await tx.select({ minted: ids.campaignId }).from(supportTopic).limit(1);
+      before = suffix(String(a!.minted), 'CMP-');
+      after = suffix(String(b!.minted), 'CMP-');
     });
 
     expect(
       after - before,
-      `a hundred ticket ids moved the campaign sequence by ${after - before}. ` +
-        `Both prefixes are drawing from one sequence.`,
+      `three hundred draws on other prefixes moved the campaign sequence by ` +
+        `${after - before}. The prefixes are sharing a sequence.`,
     ).toBe(1);
   });
 });

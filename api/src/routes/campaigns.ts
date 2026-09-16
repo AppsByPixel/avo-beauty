@@ -23,9 +23,10 @@
  * reviewer deciding a campaign needs to see the cap she is deciding against.
  */
 
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
+import { campaignId } from '../services/ids';
 import {
   campaign,
   platformMessagingPolicy,
@@ -119,26 +120,6 @@ function serialiseCampaign(row: CampaignRow, salonName: string) {
     result: row.result,
   };
 }
-
-/**
- * 'CMP-10000'. FROM A SEQUENCE, NOT `Math.random()` — migration 0051 carries the
- * whole argument, and the short version is that this used to be
- * `CMP-${Math.floor(Math.random() * 9000 + 1000)}`, which is a PRIMARY KEY drawn
- * from 9000 values with no uniqueness check and no retry. A duplicate is an
- * unhandled 23505 that the merchant reads as a 500 `server_error`, and over 9000
- * values the chance of one passes 50% at 112 campaigns — a full `e2e/` run found
- * it, intermittently, which is the worst way to find it.
- *
- * SQL RATHER THAN A JS ROUND TRIP, so the id is minted inside the INSERT that uses
- * it. A `SELECT nextval` followed by an `INSERT` is two statements a reader has to
- * be told are safe to separate; this is one that cannot be got wrong. The caller
- * reads the id back off `.returning()` rather than holding a copy.
- *
- * EXPORTED FOR `mintedIds.int.test.ts`, which mints a thousand of these against
- * the real primary key. That spec imports this expression rather than retyping
- * it — a copy would stay green on the day this line went back to `random()`.
- */
-export const campaignId = sql`'CMP-' || nextval('campaign_number_seq')::text`;
 
 function parseStatuses(raw: unknown): CampaignStatus[] | null {
   if (raw === undefined || raw === null || raw === '') return null;

@@ -65,6 +65,7 @@ import { consumeToken, peekToken, TokenOutsideSalonError } from './walletToken';
 import { claimKey, completeKey, hashRequestBody } from './idempotency';
 import { queueReceipts } from './receipts';
 import { writeAudit } from './audit';
+import { nextTransactionId } from './ids';
 
 /** Voidable for 15 minutes — api-contract.md § StaffUser, "reverse within 15 min". */
 export const VOID_WINDOW_MINUTES = 15;
@@ -292,10 +293,6 @@ export interface ChargeResult {
     creditFils: number;
     minutesRemaining: number;
   } | null;
-}
-
-function transactionId(): string {
-  return `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
 }
 
 export async function performCharge(
@@ -666,7 +663,7 @@ export async function performCharge(
     }
     const balanceAfter = subtract(balance, due);
 
-    const txId = transactionId();
+    const txId = await nextTransactionId(tx);
     /**
      * Two answers, not one, and keeping them apart is the whole point.
      *
@@ -802,7 +799,7 @@ export async function performCharge(
        * happened to be applied first.
        */
       if (depositRemainder > 0) {
-        const returnId = transactionId();
+        const returnId = await nextTransactionId(tx);
         const balanceWithRemainder = add(balanceAfter, depositRemainder);
         depositReturnedFils = depositRemainder;
 
@@ -1014,7 +1011,7 @@ export async function performCharge(
     // already changed.
     let balanceFinal = add(balanceAfter, depositReturnedFils);
     if (earning.creditFils > 0 && earning.happyHourId) {
-      const creditId = transactionId();
+      const creditId = await nextTransactionId(tx);
       // `balanceFinal`, not `balanceAfter`: it already carries any deposit
       // remainder returned at 7a. Recomputing from `balanceAfter` here would
       // silently undo that credit — the two paths can both fire on one charge.

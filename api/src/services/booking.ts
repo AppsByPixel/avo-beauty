@@ -64,6 +64,7 @@ import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
+import { nextBookingId, nextTransactionId } from './ids';
 
 export interface BookingIdempotency {
   scope: string;
@@ -77,14 +78,6 @@ export interface BookingContext {
   idempotency: BookingIdempotency;
   ipAddress?: string | null;
   userAgent?: string | null;
-}
-
-function bookingId(): string {
-  return `BK-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
-}
-
-function transactionId(): string {
-  return `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
 }
 
 const kd = (f: number) => (f / 1000).toFixed(3);
@@ -461,8 +454,8 @@ export async function createBooking(
      */
     const branch = await resolveBranch(tx, m.salonId, a.branchId);
 
-    const txId = transactionId();
-    const bkId = bookingId();
+    const txId = await nextTransactionId(tx);
+    const bkId = await nextBookingId(tx);
 
     await tx
       .update(member)
@@ -665,7 +658,7 @@ export async function returnDeposit(
   const { row, memberRow, now } = params;
   const amount = fils(row.depositFils);
   const balanceAfter = add(fils(memberRow.balanceFils), amount);
-  const txId = transactionId();
+  const txId = await nextTransactionId(tx);
 
   await tx
     .update(member)

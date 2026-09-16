@@ -59,34 +59,12 @@ import {
   encodeCursor,
   parseCursor,
 } from '../services/streamCursor';
+import { ticketId } from '../services/ids';
 import { enforceTicketLimits } from '../services/supportLimit';
 import { db } from '../db/client';
 import { supportConfig, supportTicket, supportTopic } from '../db/schema/legal';
 import { member } from '../db/schema/member';
 import { transaction } from '../db/schema/transaction';
-
-/**
- * "SUP-100000" — api-contract.md § SupportTicket. Shown to the customer verbatim,
- * and rule 4 calls it "the only handle the customer has", which is the reason it
- * is a short quotable string rather than a uuid.
- *
- * FROM A SEQUENCE, NOT `Math.random()`. This returned
- * `SUP-${Math.floor(Math.random() * 90_000 + 10_000)}` — a PRIMARY KEY drawn from
- * 90000 values with no uniqueness check and no retry, so a duplicate is an
- * unhandled 23505 and the customer is told "Something went wrong on our side"
- * about a message she did send. Ten times `CMP-`'s space and exactly the same
- * defect: a birthday collision passes 50% at 354 tickets, which a staffed queue
- * reaches in a month. Migration 0051 carries the full argument and the start value.
- *
- * The handle being the only one she has is what makes this worth fixing rather
- * than retrying: a ticket that fails to be created is a customer with nothing to
- * quote.
- *
- * EXPORTED FOR `mintedIds.int.test.ts`, for the reason `campaigns.ts` gives
- * beside `campaignId`: the spec must mint through this expression, not a copy
- * of it. `queueScope` below is exported on the same argument.
- */
-export const ticketId = sql`'SUP-' || nextval('support_ticket_number_seq')::text`;
 
 /** api-contract.md rule 5: "Deduplicate an identical message inside 5 minutes". */
 const TICKET_DEDUPE_MINUTES = 5;
