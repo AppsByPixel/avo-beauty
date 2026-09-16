@@ -40,10 +40,21 @@ Two steps, in this order, and both have cost a lane an hour.
 `engines` field in the whole resolved tree, and today that is **jsdom@30.0.1**:
 `^22.22.2 || ^24.15.0 || >=26.0.0`. Two ordinary readings of a `22` pin fail —
 `brew install node@22` gives 22.22.0, two patches short, and a v25 falls in the
-gap between `^24.15.0` and `>=26.0.0` and is excluded outright. `.nvmrc` is
-therefore an **exact** version, and `engines.node` in the root `package.json`
-states that same floor rather than `>=22`, so a refusal names AVO's requirement
-instead of a transitive dev dependency's.
+gap between `^24.15.0` and `>=26.0.0` and is excluded outright. `.nvmrc` is therefore an **exact** version.
+
+**`engines.node` stays `>=22` and does NOT mirror jsdom's range — I tried it and
+reverted it inside ten minutes.** Copying `^22.22.2 || ^24.15.0 || >=26.0.0` into
+the root makes AVO *claim* that Node 25 is unsupported, which is false: this
+machine has run every gate on v25.7.0 all week, because `engine-strict` gates
+**install**, not **run**. The tightened range turned every `pnpm` command on a
+v25 machine into `ERR_PNPM_UNSUPPORTED_ENGINE`, including trunk's own
+`pnpm check` — a working checkout refusing to run because of a claim about a
+runtime it was already running on.
+
+It would also churn: every jsdom bump would rewrite the root manifest. jsdom's
+engines field is jsdom's business and pnpm already enforces it at the only moment
+it matters. What was actually missing was not a stricter declaration but this
+paragraph, so the failure is recognisable when it happens.
 
 **jsdom is a devDependency of `apps/dashboard` and `apps/wallet` only, and it
 gates lane A anyway** — `pnpm install` resolves all ten workspace projects, so a
