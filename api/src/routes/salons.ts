@@ -300,11 +300,69 @@ export function parseDepositFils(value: unknown): Fils {
   return n;
 }
 
+/**
+ * THE NO-SHOW RETURN WINDOW HAD NO CEILING, and one number is TWO windows.
+ *
+ * This guard refused only `<= 0`, so `525600` was accepted and stored — one year
+ * is a storable no-show window today, driven against the real API. The CHECK
+ * behind it said the same thing and no more (`salon_no_show_return_positive`,
+ * `> 0`), so nothing anywhere stated an upper bound.
+ *
+ * WHY A BOUND IS NOT MERELY TIDINESS. The column is read in two places that want
+ * opposite things from it:
+ *
+ *   services/booking.ts § markNoShow   stamps `no_show_return_due_at` at
+ *                                      `ends_at + noShowReturnMinutes`. This is
+ *                                      the window the merchant thinks she is
+ *                                      setting: how long a missed slot's deposit
+ *                                      waits before it goes back to the wallet.
+ *
+ *   services/booking.ts § findApplicableHold
+ *                                      reuses it as the EARLY-ARRIVAL GRACE at
+ *                                      the counter: `starts_at <= now +
+ *                                      noShowReturnMinutes` decides which held
+ *                                      deposit a charge may consume.
+ *
+ * So the same integer both delays a refund and widens the set of appointments a
+ * till may spend a deposit against, and the two failure directions are not
+ * symmetric:
+ *
+ *   TOO SHORT  a customer who checks in ten minutes early finds her own deposit
+ *              inapplicable — she paid it, and the till cannot see it.
+ *   TOO LONG   the grace reaches a DIFFERENT appointment. At 525600 every hold
+ *              that member has is "arriving now", so a charge consumes whichever
+ *              one `findApplicableHold` orders first.
+ *
+ * THE BOUND: 5 ≤ n ≤ 1440, which is Lane C's recommendation adopted as-is.
+ *
+ *   1440 is one day, and it is where the grace certainly crosses into another
+ *   day's booking — the same slot next week is still further away, but the same
+ *   slot tomorrow is not. Above a day the second reading stops being a grace and
+ *   becomes "any hold this member has".
+ *
+ *   5 rather than 1, so the till can still see a deposit at check-in. A one-minute
+ *   grace means an appointment at 10:00 is invisible to `findApplicableHold` at
+ *   09:58, which is the TOO SHORT failure above written into the settings screen.
+ *
+ * Neither number is derived from anything the design states — the bundle draws a
+ * static sentence and no control at all (`AVO Merchant Dashboard.dc.html:1059`) —
+ * so they are a CHOICE, recorded here and re-stated by `salon_no_show_return_in_range`
+ * in migration 0051. Widening either end is a migration, deliberately.
+ */
+const NO_SHOW_RETURN_MIN_MINUTES = 5;
+const NO_SHOW_RETURN_MAX_MINUTES = 1_440;
+
 function parseNoShowReturnMinutes(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
     throw badRequest(
       'invalid_no_show_window',
-      'noShowReturnMinutes must be a whole number of minutes greater than zero.',
+      'noShowReturnMinutes must be a whole number of minutes.',
+    );
+  }
+  if (value < NO_SHOW_RETURN_MIN_MINUTES || value > NO_SHOW_RETURN_MAX_MINUTES) {
+    throw badRequest(
+      'invalid_no_show_window',
+      `noShowReturnMinutes must be between ${NO_SHOW_RETURN_MIN_MINUTES} and ${NO_SHOW_RETURN_MAX_MINUTES} minutes.`,
     );
   }
   return value;

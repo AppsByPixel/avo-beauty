@@ -1,0 +1,88 @@
+-- ---------------------------------------------------------------------------
+-- THE NO-SHOW RETURN WINDOW GETS A CEILING — AND A FLOOR ABOVE ONE.
+--
+-- `salon.no_show_return_minutes` was bounded by `salon_no_show_return_positive`
+-- (`> 0`) and by nothing else, and `parseNoShowReturnMinutes` in
+-- routes/salons.ts said the same thing and no more. So `525600` was accepted and
+-- stored: ONE YEAR was a storable no-show window, driven against the real API.
+-- Lane C hit it building the Settings control and could not choose a preset list,
+-- because a client-side range over an unbounded server is a range the next client
+-- will not have.
+--
+-- WHY A BOUND ON THIS COLUMN IS NOT TIDINESS
+-- ------------------------------------------
+-- ONE NUMBER IS TWO WINDOWS. Both readers live in services/booking.ts:
+--
+--   markNoShow           stamps `no_show_return_due_at` at
+--                        `ends_at + no_show_return_minutes`. This is the window
+--                        the merchant believes she is setting: how long a missed
+--                        slot's deposit waits before it returns to the wallet.
+--
+--   findApplicableHold   reuses the SAME integer as the EARLY-ARRIVAL GRACE at
+--                        the counter — `starts_at <= now + no_show_return_minutes`
+--                        decides which held deposit a charge may consume.
+--
+-- So the value both delays a refund and widens the set of appointments a till may
+-- spend a deposit against, and the two directions fail differently:
+--
+--   TOO SHORT  a customer who checks in ten minutes early finds her own deposit
+--              inapplicable. She paid it; the till cannot see it.
+--   TOO LONG   the grace reaches a DIFFERENT appointment. `findApplicableHold`'s
+--              own header states the case it exists to prevent — "a customer with
+--              an appointment next Tuesday who walks in today for a blow-dry must
+--              not have Tuesday's deposit spent on it". At 525600 every hold that
+--              member owns is "arriving now", and the charge consumes whichever
+--              the ordering happens to return first. That is a money defect
+--              reachable BY CONFIGURATION, with no bad code anywhere.
+--
+-- THE NUMBERS, AND THAT THEY ARE A CHOICE
+-- ---------------------------------------
+-- 5 ≤ n ≤ 1440, Lane C's recommendation adopted as it stands.
+--
+--   1440 is one day — where the grace certainly crosses into another day's
+--   booking. Beyond it the second reading stops being a grace at all.
+--   5 rather than 1 keeps the till able to see a deposit at check-in: a
+--   one-minute grace makes a 10:00 appointment invisible at 09:58.
+--
+-- Neither is derived from the design bundle, which draws a static sentence and no
+-- control (`AVO Merchant Dashboard.dc.html:1059`). They are stated here and in
+-- `parseNoShowReturnMinutes`; widening either end is another migration, which is
+-- the point.
+--
+-- WHY THIS REPLACES `salon_no_show_return_positive` RATHER THAN JOINING IT
+-- -----------------------------------------------------------------------
+-- `> 0` alongside `>= 5` can never be the constraint that fires. A constraint
+-- that cannot fire is not a second guarantee, it is a sentence the next reader
+-- has to disprove — and it would leave this column the only bounded integer in
+-- the schema described by two names. `salon_deposit_in_range` (1000–10000) is the
+-- precedent and it is a single check.
+--
+-- WHY THE UPDATE COMES FIRST, AND WHAT IT ADMITS
+-- ----------------------------------------------
+-- Values outside the new range are storable TODAY, so a database may hold one and
+-- `ADD CONSTRAINT` would fail on it — a migration that cannot apply is not a
+-- guarantee. The clamp is therefore part of the change rather than a repair
+-- somebody does afterwards, and it is a REWRITE OF A MERCHANT'S SETTING, said out
+-- loud: a salon holding 525600 gets 1440, a salon holding 1 gets 5.
+--
+-- That is defensible precisely because of the two-readers argument above — a
+-- year-long grace was never a setting anybody chose the second meaning of — but it
+-- is not invisible, and a deployment that has real salons should read the rows it
+-- is about to change before running this:
+--
+--   SELECT id, no_show_return_minutes FROM salon
+--    WHERE no_show_return_minutes NOT BETWEEN 5 AND 1440;
+--
+-- The seed stores 60 and every value in `e2e/` (45, 60, 61, 62, 90, 999) is
+-- already inside the range, so on a developer database the UPDATE touches nothing.
+-- ---------------------------------------------------------------------------
+ALTER TABLE "salon"
+  DROP CONSTRAINT IF EXISTS "salon_no_show_return_positive";
+--> statement-breakpoint
+UPDATE "salon"
+   SET "no_show_return_minutes" = least(greatest("no_show_return_minutes", 5), 1440)
+ WHERE "no_show_return_minutes" NOT BETWEEN 5 AND 1440;
+--> statement-breakpoint
+ALTER TABLE "salon"
+  ADD CONSTRAINT "salon_no_show_return_in_range"
+  CHECK ("no_show_return_minutes" BETWEEN 5 AND 1440);

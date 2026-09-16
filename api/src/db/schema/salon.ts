@@ -173,7 +173,29 @@ export const salon = pgTable(
     check('salon_brand_color_is_hex', sql`${t.brandColor} ~ '^#[0-9A-Fa-f]{6}$'`),
     // api-contract.md: merchant-set booking deposit, 1000–10000 fils.
     check('salon_deposit_in_range', sql`${t.depositFils} BETWEEN 1000 AND 10000`),
-    check('salon_no_show_return_positive', sql`${t.noShowReturnMinutes} > 0`),
+    /**
+     * 5 ≤ n ≤ 1440, and it REPLACES `salon_no_show_return_positive` (`> 0`) rather
+     * than sitting beside it — migration 0051. A `> 0` alongside a `>= 5` can
+     * never be the constraint that fires, and a constraint that cannot fire reads
+     * to the next person as evidence of a lower regime that does not exist.
+     * `salon_deposit_in_range` one line up is the same shape for the same reason:
+     * one named range per bounded column.
+     *
+     * THE CEILING IS THE NEW HALF. `parseNoShowReturnMinutes` refused only `<= 0`
+     * and this CHECK said no more, so `525600` — one year — was a storable
+     * no-show window, driven against the real API. That number is read TWICE:
+     * once as the delay before a missed slot's deposit returns, and once by
+     * `findApplicableHold` as the early-arrival grace that decides which held
+     * deposit a charge may consume. A year-long grace makes every hold a member
+     * owns "arriving now". The argument for both ends is in
+     * `routes/salons.ts § parseNoShowReturnMinutes`.
+     *
+     * IT IS HERE AS WELL AS THERE because the column has two write doors —
+     * `PATCH /salons/{id}` and `PATCH /v1/platform/salons/{id}` — and because a
+     * direct UPDATE is a third. `brandColor`'s comment above records what a guard
+     * on one door and not the other costs.
+     */
+    check('salon_no_show_return_in_range', sql`${t.noShowReturnMinutes} BETWEEN 5 AND 1440`),
     check('salon_timezone_not_blank', sql`length(btrim(${t.timezone})) > 0`),
     /**
      * THE FLOOR, AND IT IS THE CONSTRAINT RATHER THAN A HANDLER. A receipt is "a

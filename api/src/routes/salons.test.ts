@@ -262,6 +262,60 @@ describe('buildSalonPatch, merchant set', () => {
   });
 });
 
+/**
+ * THE NO-SHOW RETURN WINDOW'S RANGE — 5 ≤ n ≤ 1440.
+ *
+ * `parseNoShowReturnMinutes` refused only `<= 0`, so `525600` was a storable
+ * no-show window: one year, accepted by both doors and by the `> 0` CHECK behind
+ * them. The argument for each end is in that function's header and in migration
+ * 0051 — the short form is that ONE NUMBER IS TWO WINDOWS, and
+ * `findApplicableHold` reads it as the early-arrival grace that decides which
+ * held deposit a charge may consume.
+ *
+ * ONE CODE FOR THE WHOLE FIELD, `invalid_no_show_window`, for the reason the
+ * route's `not_editable` comment gives: a client that has to branch on two codes
+ * for one field will branch on one of them and render nothing for the other.
+ *
+ * The EDGES are asserted on both sides. A bound tested only in the middle is a
+ * bound the next person moves by one — `parseDepositFils` has the same shape one
+ * field over, and `noShowWindow.int.test.ts` drives the same four numbers through
+ * the real routes and through the CHECK.
+ */
+describe('parseNoShowReturnMinutes, through buildSalonPatch', () => {
+  const window = (n: unknown) => () => buildSalonPatch({ noShowReturnMinutes: n }, BEFORE, MERCHANT_EDITABLE);
+
+  it('THE REPORTED GAP — one year is refused', () => {
+    expect(refusal(window(525_600)).code).toBe('invalid_no_show_window');
+  });
+
+  it('refuses either side of the range and accepts both edges', () => {
+    expect(refusal(window(1441)).code).toBe('invalid_no_show_window');
+    expect(refusal(window(4)).code).toBe('invalid_no_show_window');
+
+    expect(window(1440)().patch.noShowReturnMinutes).toBe(1440);
+    expect(window(5)().patch.noShowReturnMinutes).toBe(5);
+  });
+
+  it('still refuses zero, a negative, a fraction and a non-number', () => {
+    for (const bad of [0, -60, 30.5, '60', null, undefined]) {
+      expect(refusal(window(bad)).code, `${String(bad)} must be refused`).toBe(
+        'invalid_no_show_window',
+      );
+    }
+  });
+
+  /**
+   * THE SECOND DOOR, and it is the same function rather than a copy of it — which
+   * is the entire safety argument for `PATCH /v1/platform/salons/{id}`. `brandColor`
+   * is the precedent for why this is asserted and not assumed.
+   */
+  it('binds the console door too', () => {
+    expect(
+      refusal(() => buildSalonPatch({ noShowReturnMinutes: 525_600 }, BEFORE, PLATFORM_EDITABLE)).code,
+    ).toBe('invalid_no_show_window');
+  });
+});
+
 describe('buildSalonPatch, platform set', () => {
   it('accepts city and normalises a typed phone number', () => {
     const { patch } = buildSalonPatch(
