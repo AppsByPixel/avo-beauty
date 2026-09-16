@@ -7,6 +7,9 @@
  *   DELETE /bookings/{id}             member — cancel, deposit returns
  *   POST   /bookings/{id}/reschedule  member — deposit carries
  *   GET    /salons/{id}/bookings      perms.appointments (in routes/salons.ts)
+ *   POST   /salons/{id}/bookings/{bookingId}/no-show
+ *                                     dashboard + perms.void, idempotency key —
+ *                                     the merchant marks a missed slot by hand
  *   GET    /artists/me/bookings       scanner — the artist's own day
  *
  * WHY THE CUSTOMER ROUTES ARE `/bookings` AND NOT `/members/me/bookings`
@@ -45,7 +48,12 @@ import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
-import { requireMember, requireScannerScope } from '../auth/principal';
+import {
+  requireDashboardPerm,
+  requireMember,
+  requireSameSalon,
+  requireScannerScope,
+} from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { serialiseMemberContact } from '../http/serialise';
 import { requireString } from '../money/validate';
@@ -54,6 +62,7 @@ import {
   createBooking,
   isExclusionViolation,
   listMemberBookings,
+  markNoShow,
   rescheduleBooking,
   serialiseBooking,
   type BookingRow,
@@ -237,6 +246,136 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
       throw err;
     }
   });
+
+  // ------------------- POST /salons/{id}/bookings/{bookingId}/no-show --
+  /**
+   * "Mark no-show" — `design/AVO Merchant Dashboard.dc.html:184`, the understated
+   * link beside the status pill on every held appointment.
+   *
+   * THE PATH IS UNDER `/salons/{id}` BECAUSE THE BOARD IS. The control is drawn on
+   * `GET /salons/{id}/bookings` (routes/salons.ts), and the tenant segment is what
+   * `requireSameSalon` needs: without it a merchant would address another salon's
+   * appointment by bare id and be refused only by a lookup, which is a 404 doing a
+   * tenancy boundary's job. The handler lives HERE, with the rest of the booking
+   * lifecycle, so the four exits in `services/booking.ts` have their four routes in
+   * one file.
+   *
+   * =======================================================================
+   * THE PERMISSION IS `void`, AND IT IS ARGUED RATHER THAN INHERITED
+   * =======================================================================
+   * The obvious answer was `perms.appointments`, because that is what the board
+   * next door uses. It is the wrong one, and the seed says why out loud.
+   *
+   *   `perms.appointments` IS A READ GATE. It grants the Appointments screen and
+   *   the customer name, tier and phone joined onto it. Hanging a money-moving
+   *   write off it SILENTLY WIDENS WHAT EVERY EXISTING HOLDER CAN DO — which is
+   *   precisely the test DECISIONS.md 109 applied to `perms.void` and a typed
+   *   price, and it fails here for the same reason.
+   *
+   *   AND THE HOLDERS ARE NOT HYPOTHETICAL. `db/seed.ts § ST-002` is Hessa,
+   *   frontdesk: `perm_appointments = true` with `perm_dashboard`, `perm_charges`
+   *   and `perm_void` all false. Under the inherited gate she could return a
+   *   customer's deposit and stamp a no-show against her while remaining unable to
+   *   open the dashboard or even SEE today's charges.
+   *
+   * `perms.void` IS THE NEAREST AUTHORITY THAT ALREADY EXISTS, on both axes this
+   * endpoint has:
+   *
+   *   THE MONEY. Both return money to a customer and neither can send it anywhere
+   *   else — #5. This one is the weaker of the two: it is bounded to one booking's
+   *   published deposit, an amount nobody typed, on a hold the salon was already
+   *   contractually going to release. Anyone trusted to reverse a settled charge is
+   *   by construction trusted to release a hold.
+   *
+   *   THE RECORD. `no_show_returned` is an assertion about a named customer's
+   *   conduct. The authority to record that kind of assertion already lives behind
+   *   `void`: `VOID_REASON_CODES` includes `cust`, "Customer did not receive
+   *   service", written against her by a `perms.void` holder today.
+   *
+   * AND IT IS SENIOR BY CONSTRUCTION. `permsOf` filters `void` through `charges`
+   * and a database CHECK refuses the pair apart, so `void` cannot be held alone.
+   * The design's own banner — "Use Mark no-show only for edge cases" — describes an
+   * exceptional control, and an exceptional control belongs behind the senior
+   * permission rather than the one the front desk holds to see the screen.
+   *
+   * THE COST OF BEING WRONG IS ASYMMETRIC, which settles it. If the front desk
+   * cannot mark, she waits for the automatic return or asks a manager. If she can,
+   * a customer who is sitting in the chair gets a no-show on her record and loses
+   * her slot to the exclusion constraint. The first is an inconvenience; the second
+   * is not reversible by a refund.
+   *
+   * NOT A TENTH PERMISSION. `perms.noShow` would be the most honest gate and it is
+   * a four-way break — a `staff_user` column, `StaffPermsSchema` in trunk-owned
+   * `packages/types`, the Accounts → Team chips, and lane D's census all move
+   * together. DECISIONS.md 109 established that is not a lane's to make. Reported.
+   *
+   * NOT `requireDashboardPerm(req, 'appointments')` AS WELL. Composing the screen
+   * gate with the authority gate was tempting and is wrong twice: non-negotiable #7
+   * says in its own words that the UI hiding a button is a courtesy and not a
+   * control, so folding the SCREEN permission into the server gate conflates the
+   * two; and a conjunctive pair breaks `e2e/permission-census.test.ts`'s granted
+   * mirror, which grants exactly one permission and requires the refusal to stop.
+   *
+   * ONE TRANSACTION — #3's spirit. The key claim, the balance, the ledger pair, the
+   * status transition and the audit row commit together or not at all;
+   * `services/booking.ts § markNoShow` is where that is written.
+   */
+  app.post<{ Params: { id: string; bookingId: string } }>(
+    '/salons/:id/bookings/:bookingId/no-show',
+    async (req, reply) => {
+      /**
+       * THE GATE FIRST, before the key is even read — `routes/adjustments.ts`'s
+       * ordering and `requirePerm`'s own argument: an unauthorised caller should
+       * not learn this endpoint's vocabulary, not even that it wants a key.
+       */
+      const p = requireDashboardPerm(req, 'void');
+      requireSameSalon(p, req.params.id);
+
+      const key = readIdempotencyKey(req);
+      const idem = {
+        scope: principalScope(p),
+        endpoint: 'POST /salons/:id/bookings/:bookingId/no-show',
+        key,
+        /**
+         * The booking is the whole request — there is no body. Hashing it is what
+         * makes one key name one booking, so a client that reuses a key across two
+         * appointments is refused rather than replayed the wrong one.
+         */
+        requestHash: hashRequestBody({ salonId: req.params.id, bookingId: req.params.bookingId }),
+      };
+
+      try {
+        return reply.send(
+          await markNoShow(
+            db,
+            { salonId: req.params.id, bookingId: req.params.bookingId, idempotency: idem },
+            {
+              principal: p,
+              ipAddress: req.ip ?? null,
+              userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+            },
+          ),
+        );
+      } catch (err) {
+        /**
+         * ONLY the key's own index. `returnDeposit` can raise nothing else unique
+         * on this path — its guarantee is a conditional UPDATE's row count, which
+         * throws a 409 rather than a constraint — so any other unique violation is
+         * a genuine surprise and must not be laundered into "request in progress",
+         * which is the defect `services/idempotency.ts § violatedConstraint`
+         * records against the void.
+         */
+        if (!isUniqueViolation(err)) throw err;
+
+        const stored = await awaitCommittedKey(db, idem);
+        if (stored) return reply.code(stored.status).send(stored.body);
+        throw conflict(
+          'request_in_progress',
+          'That request is still being processed. Try again in a moment.',
+        );
+      }
+    },
+  );
 
   // -------------------------------------------------- GET /artists/me/bookings --
   /**

@@ -54,7 +54,7 @@ import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
-import type { MemberPrincipal, Principal } from '../auth/principal';
+import type { MemberPrincipal, Principal, StaffPrincipal } from '../auth/principal';
 import { serialiseTransactionForCustomer } from '../http/serialise';
 import { env } from '../env';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
@@ -651,6 +651,15 @@ export async function returnDeposit(
     principal: Principal | null;
     now: Date;
     note: string;
+    /**
+     * OPTIONAL, and null on the two callers that shipped. The worker has no
+     * request to take them from, and the customer's cancel never passed them.
+     * `markNoShow` does: a staff member moving money out of a salon's hold is the
+     * same class of row as a console adjustment, which records both — and "from
+     * which browser, at which address" is a question a disputed no-show invites.
+     */
+    ipAddress?: string | null;
+    userAgent?: string | null;
   },
 ): Promise<{ transactionId: string; balanceAfterFils: Fils }> {
   const { row, memberRow, now } = params;
@@ -773,14 +782,37 @@ export async function returnDeposit(
     kind: 'money',
     action: params.reason === 'cancelled' ? 'Deposit returned · cancelled' : 'Deposit returned · no-show',
     detail: `${kd(amount)} KD returned to ${memberRow.name} · ${params.note}`,
-    // A no-show return has no actor. `system` is what makes the audit row read
-    // "System · Automatic" rather than attributing an automatic refund to
-    // whoever happened to be signed in.
-    source: params.reason === 'cancelled' ? 'wallet' : 'system',
+    /**
+     * DERIVED FROM THE ACTOR, NOT FROM THE REASON — and the two agreed only until
+     * a `no_show` could have an actor.
+     *
+     * This read `params.reason === 'cancelled' ? 'wallet' : 'system'`, and it was
+     * correct for exactly two callers: the customer's cancel (wallet) and the
+     * no-show worker, which passes no principal at all so the audit row reads
+     * "System · Automatic" rather than attributing an automatic refund to whoever
+     * happened to be signed in. `markNoShow` is a THIRD — reason `no_show`, with a
+     * real staff member standing at a dashboard — and under the old expression its
+     * row would have claimed `system` while `actor_kind` and `actor_name` on that
+     * same row named her. One row, two answers to "who did this".
+     *
+     * Behaviour-identical for both callers that shipped: a `MemberPrincipal` is
+     * the cancel and `null` is the worker. What changes is that the answer now
+     * comes from the field that decides `actor_kind`, so the two cannot disagree.
+     */
+    source:
+      params.principal === null
+        ? 'system'
+        : params.principal.kind === 'member'
+          ? 'wallet'
+          : params.principal.kind === 'platform_admin'
+            ? 'owner_console'
+            : 'merchant',
     subjectType: 'booking',
     subjectId: row.id,
     amountFils: amount,
     metadata: { bookingId: row.id, transactionId: txId, reason: params.reason },
+    ipAddress: params.ipAddress ?? null,
+    userAgent: params.userAgent ?? null,
   });
 
   return { transactionId: txId, balanceAfterFils: balanceAfter };
@@ -876,6 +908,239 @@ export async function cancelBooking(
       balanceAfterFils: returned.balanceAfterFils,
       transactionId: returned.transactionId,
     };
+  });
+}
+
+// ------------------------------- POST /salons/{id}/bookings/{id}/no-show --
+
+/**
+ * MARK NO-SHOW, by hand, from the merchant dashboard.
+ *
+ * `design/AVO Merchant Dashboard.dc.html:184` draws it as a small, understated
+ * link beside the status pill, under a banner that says exactly what it is for:
+ * "Deposits auto-return to the customer's wallet 1 hour after a missed slot — the
+ * money never leaves the ecosystem. **Use Mark no-show only for edge cases.**"
+ *
+ * So `services/noShowWorker.ts` is the normal path and this is the exception, and
+ * this function is written as a THIN CALLER of `returnDeposit` — the same
+ * function the worker calls, already written and already exercised. No new money
+ * mechanics arrive here. What arrives is a set of guards, and which of the
+ * worker's it keeps is the whole of the design.
+ *
+ * ===========================================================================
+ * THE WORKER'S GUARDS: WHICH ONES A MANUAL MARK NEEDS
+ * ===========================================================================
+ *
+ *   LOCK THE MEMBER FIRST, THEN THE BOOKING.  KEPT, and it matters MORE here.
+ *     The global order is member-then-booking because `performCharge` takes the
+ *     member row `FOR UPDATE` as its first statement; a path that took them the
+ *     other way round deadlocks against a charge on the same customer. The
+ *     worker's header calls that case "a customer who is late and then arrives",
+ *     which is not an edge case for THIS function — it is its entire subject
+ *     matter. The manual mark and the charge race by construction.
+ *
+ *   RE-READ THE STATUS UNDER THE LOCK.  KEPT, with a different consequence.
+ *     The worker answers `already` and moves on; it is a batch over rows nobody
+ *     asked about. A manual mark has a caller who must be told BY NAME which of
+ *     the three terminal states it hit, the way `cancelBooking` answers
+ *     `already_cancelled` / `not_cancellable` with copy a client can render.
+ *
+ *   `no_show_return_due_at <= now`.  DELIBERATELY NOT KEPT, and keeping it would
+ *     make this endpoint unreachable. That is the AUTOMATIC rule's own threshold:
+ *     the moment it is satisfied, the worker's next tick takes the row. A manual
+ *     mark exists precisely to act BEFORE it. The worker needs the re-check
+ *     because its candidate scan is unlocked and a reschedule can move the
+ *     deadline between the scan and the lock; this function names one booking by
+ *     id and has no stale scan to defend against.
+ *
+ * ===========================================================================
+ * WHAT REPLACES IT: THE TIME GATE, WHICH THE DESIGN DOES NOT STATE
+ * ===========================================================================
+ * The design gates the link on STATUS ALONE — `canMark: st === 'held'` — so as
+ * drawn a merchant can mark a no-show on next Tuesday's appointment. The server
+ * refuses that, and the reason is not primarily the money:
+ *
+ *   THE MONEY IS CLOSE TO NEUTRAL. The deposit returns to her wallet, and a later
+ *   charge simply takes the full price instead of `price − deposit`.
+ *
+ *   THE RECORD IS NOT. `no_show_returned` is a statement that she did not arrive
+ *   for a slot. Before the slot starts there is no slot she can have failed to
+ *   arrive for, so the statement is not yet CAPABLE of being true, and an
+ *   append-only log should not be able to hold one that is not.
+ *
+ *   AND THE SLOT IS NOT, WHICH IS THE HARM THE ARITHMETIC HIDES.
+ *   `booking_artist_slot_no_overlap` is `EXCLUDE … WHERE status IN
+ *   ('deposit_held', 'completed')` (migration 0013). A booking marked
+ *   `no_show_returned` DROPS OUT of that constraint and its slot becomes bookable
+ *   again. An early mark therefore releases a slot the customer is still expected
+ *   at — she arrives on Tuesday to find her time taken and her artist busy. That
+ *   is a real loss to a customer who did nothing wrong, and no refund answers it.
+ *
+ * THE THRESHOLD IS `starts_at`, NOT `ends_at` AND NOT THE DEADLINE.
+ *   `ends_at` would make the merchant sit out the whole service before recording
+ *   something the front desk knows at the start — three hours for a balayage —
+ *   which pushes the manual control past the point of being useful. The automatic
+ *   rule measures from `ends_at` for a good reason (`db/schema/booking.ts`: so it
+ *   cannot fire while the customer is in the chair), but that rule is blind and
+ *   this one has a human who can see the empty chair. The gate exists to refuse
+ *   the statement that cannot be true, not to second-guess the person standing
+ *   there. No grace period is added on top for the same reason: `noShowReturnMinutes`
+ *   is the merchant's chosen slack for the AUTOMATIC path, and imposing it here
+ *   would again mean the worker always got there first.
+ *
+ * ===========================================================================
+ * `no_show_return_due_at` IS NOT TOUCHED
+ * ===========================================================================
+ * It keeps its original, still-future value. `db/schema/booking.ts` argues the
+ * column is stored rather than computed because "the deadline a customer was
+ * promised is a fact about her booking at the moment she made it" — rewriting it
+ * to `now()` would retroactively edit that promise and erase the one fact an
+ * audit of this endpoint would want, which is that the mark was EARLY. The board
+ * can therefore render "returned 17:10 by Noura · would have returned 18:20",
+ * which a rewritten column could not say.
+ *
+ * A LATER WORKER TICK IS A NO-OP BY STATUS, not by the deadline. The candidate
+ * scan is `status = 'deposit_held' AND no_show_return_due_at <= now`, and
+ * `booking_no_show_due_idx` is PARTIAL on `status = 'deposit_held'` — so the row
+ * is not merely filtered out, it is not in the index the scan reads. Two further
+ * layers stand behind that and neither is reached: the worker's own re-check
+ * under the lock, and `returnDeposit`'s `WHERE status = 'deposit_held'`.
+ *
+ * ===========================================================================
+ * NO MERCHANT NOTIFICATION, AND THAT IS THE DIFFERENCE FROM THE WORKER
+ * ===========================================================================
+ * The worker raises a `booking_no_show` notification because the merchant lost a
+ * slot and money moved while nobody was looking. Here the merchant IS the actor.
+ * Telling her "a deposit was returned automatically" one second after she clicked
+ * the link is false in the notification and noise in her feed. The audit row —
+ * with her name on it, `source: 'merchant'` — is the record.
+ *
+ * NO REASON FIELD. The void requires one and the console adjustment requires one;
+ * this does not, because the design draws a bare link with no dialog behind it,
+ * and a required reason would make the drawn control unbuildable as drawn. The
+ * note is composed by the server so that `transaction.note` distinguishes a
+ * marked return from an automatic one on the merchant's own feed.
+ *
+ * ===========================================================================
+ * AN IDEMPOTENCY KEY IS REQUIRED — #4 — AND `cancelBooking` ARGUES THE OPPOSITE
+ * ===========================================================================
+ * That argument is right and does not transfer. `cancelBooking` reasons that a
+ * transition out of `deposit_held` under `FOR UPDATE` is STRONGER than a key,
+ * because it holds for two different keys as well as for one repeated — and that
+ * is equally true here, which is why spec 7 of the int file gets a clean 409 and
+ * one refund with no key involved. The key buys the OTHER guarantee: that a
+ * caller who lost the response learns WHAT IT DID.
+ *
+ * For a customer cancelling her own appointment those two answers carry the same
+ * information — "your deposit is back" — so the second attempt's
+ * `already_cancelled` loses nothing. A merchant marking a no-show is recording an
+ * act against somebody else's account and is handed a transaction id and a
+ * balance; `already_no_show` does not tell her whether it was her own click, a
+ * colleague's, or the worker's. So the key, and the claim lives inside the same
+ * transaction as the effect so a rolled-back mark releases it.
+ */
+export async function markNoShow(
+  db: Db,
+  params: { salonId: string; bookingId: string; idempotency: BookingIdempotency },
+  ctx: { principal: StaffPrincipal; ipAddress?: string | null; userAgent?: string | null },
+): Promise<{
+  booking: ReturnType<typeof serialiseBooking>;
+  refundedFils: number;
+  balanceAfterFils: number;
+  transactionId: string;
+}> {
+  return db.transaction(async (tx) => {
+    /**
+     * THE CLAIM FIRST, inside the transaction that carries the effect. A second
+     * request holding the same key blocks on `idempotency_key`'s unique index,
+     * and the route replays the stored response rather than computing a new one.
+     */
+    const keyId = await claimKey(tx, params.idempotency);
+
+    /**
+     * UNLOCKED, to learn whose booking this is — `cancelBooking`'s shape, and
+     * `returnDeposit`'s header says why the member has to be locked first.
+     *
+     * SCOPED TO THE SALON IN THE PATH, which `requireSameSalon` has already
+     * checked against the caller's own. Another salon's booking is a 404 rather
+     * than a 403: a 403 would confirm the id names a real appointment somewhere.
+     */
+    const [probe] = await tx
+      .select({ memberId: booking.memberId })
+      .from(booking)
+      .where(and(eq(booking.id, params.bookingId), eq(booking.salonId, params.salonId)))
+      .limit(1);
+    if (!probe) throw notFound('unknown_booking', 'No such appointment.');
+
+    const [m] = await tx
+      .select()
+      .from(member)
+      .where(eq(member.id, probe.memberId))
+      .for('update')
+      .limit(1);
+    if (!m) throw notFound('unknown_member', 'No such member.');
+
+    // NOW the booking, locked, and re-read under that lock.
+    const [row] = await tx
+      .select()
+      .from(booking)
+      .where(eq(booking.id, params.bookingId))
+      .for('update')
+      .limit(1);
+    if (!row) throw notFound('unknown_booking', 'No such appointment.');
+
+    /**
+     * THE THREE TERMINAL STATES, NAMED. `already_no_show` is the one a double
+     * submit with two different keys lands on, and it is separated from the other
+     * two because it means "you already did this" rather than "this is not a
+     * thing you can do".
+     */
+    if (row.status !== 'deposit_held') {
+      throw conflict(
+        row.status === 'no_show_returned' ? 'already_no_show' : 'not_markable',
+        row.status === 'no_show_returned'
+          ? 'That appointment is already marked as a no-show and the deposit has been returned.'
+          : row.status === 'completed'
+            ? 'That appointment was charged, so it cannot be marked as a no-show.'
+            : 'That appointment was cancelled, and the deposit is already back in her wallet.',
+        { status: row.status },
+      );
+    }
+
+    const now = new Date();
+    // The time gate. See the header: the record, and the slot.
+    if (now.getTime() < row.startsAt.getTime()) {
+      throw conflict(
+        'appointment_not_started',
+        'That appointment has not started yet, so it cannot be marked as a no-show.',
+        { startsAt: row.startsAt.toISOString(), now: now.toISOString() },
+      );
+    }
+
+    const returned = await returnDeposit(tx, {
+      row: row as BookingRow,
+      memberRow: m,
+      reason: 'no_show',
+      // A REAL ACTOR, which is the whole difference from the worker's call.
+      principal: ctx.principal,
+      now,
+      note: 'No-show · marked on the dashboard',
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
+    });
+
+    const result = {
+      booking: {
+        ...serialiseBooking(row as BookingRow),
+        status: 'no_show_returned' as const,
+      },
+      refundedFils: row.depositFils,
+      balanceAfterFils: returned.balanceAfterFils,
+      transactionId: returned.transactionId,
+    };
+
+    await completeKey(tx, keyId, { status: 200, body: result }, returned.transactionId);
+    return result;
   });
 }
 
