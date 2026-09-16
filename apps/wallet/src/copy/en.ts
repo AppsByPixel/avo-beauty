@@ -432,6 +432,7 @@ export const en: Copy = {
   txBranchOnline: 'Online',
   txReturnedTo: 'Returned to',
   txAmountRow: 'Amount',
+  txBalanceAfter: 'Balance after', // design:1574
   // A positive `adjustment`. True of all five writers of that kind; see
   // copy/types.ts and domain/activity.ts for why no narrower word is available.
   txAdjustCredit: 'Credit',
@@ -469,6 +470,20 @@ export const en: Copy = {
   cartEmptyBody: 'Add a product to get started.', // design:1237
   cartPayCta: (amount) => `Pay ${amount} from wallet`, // design:1461
   cartTopUpCta: 'Top up to continue', // design:1460
+  /*
+    UNREFERENCED SINCE THE INVOICE REPLACED THE TOAST, AND KEPT DELIBERATELY.
+
+    `ShopScreen` used to fire this on a settled order. It now opens the receipt
+    sheet instead — a toast at zIndex 40 would paint across a sheet at 30, and
+    two acknowledgements of one payment is the divergence this slice exists to
+    prevent.
+
+    The key stays because of its SECOND HALF. "visit added" / "أُضيفت زيارة" is
+    the only design-sourced Arabic in this app for a loyalty credit, and the
+    invoice cannot yet say it: `OrderResult.loyalty` carries a running total and
+    never the delta. When `packages/types` grows that field the row is written
+    from here rather than from somebody's guess at the Arabic. Reported.
+  */
   shopPaidToast: (amount) => `Paid ${amount} from wallet · visit added`, // design:1457
 
   /**

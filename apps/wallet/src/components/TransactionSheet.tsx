@@ -11,6 +11,26 @@
  *     contact form (src/support/contact.ts)
  *
  * Dismissible, unlike the redirect stage: nothing is in flight here.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THIS IS ALSO THE INVOICE SHE SEES THE MOMENT SHE PAYS — same component, same
+ * builder, same rows. `detail` is the only difference.
+ *
+ * Aftab asked for an invoice after a shop checkout (item 5). The temptation is a
+ * second component: a success screen with its own headline, its own row styling
+ * and its own idea of what a receipt says. That is the defect this repository
+ * has paid for repeatedly — one payload built in three places — and it is worse
+ * here than usual, because a THIRD description of a receipt already exists in
+ * `api/src/receipts/email/compose.ts`, which itemises the same order for the
+ * email. Two of the three are now literally one function; the third is held to
+ * it by `domain/receiptEmailParity.test.ts`.
+ *
+ * NOTHING BELOW THIS LINE CHANGED FOR THE INVOICE. The rows render through the
+ * same map, the money keeps the same display face, and the reference footer and
+ * the report button are the same two affordances — which means the invoice
+ * offers "Report a problem with this payment" at the one moment she is most
+ * likely to want it, without a line of new UI.
+ * ═════════════════════════════════════════════════════════════════════════════
  */
 
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -18,7 +38,7 @@ import type { Transaction } from '@avo/types';
 import { color, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { alignEnd } from '../i18n/rtl';
-import { buildReceipt } from '../domain/receipt';
+import { buildReceipt, type ReceiptDetail } from '../domain/receipt';
 import { startPaymentReport } from '../support/contact';
 import { Sheet } from './Sheet';
 import { SecondaryButton } from './Buttons';
@@ -26,6 +46,12 @@ import { SecondaryButton } from './Buttons';
 interface Props {
   transaction: Transaction | null;
   branches: { id: string; name: string }[];
+  /**
+   * The facts only a checkout response carries — `items[]` and the server's own
+   * `balanceAfterFils`. Omitted by the activity feed, which holds a
+   * `Transaction` and nothing else, and the sheet is then exactly what it was.
+   */
+  detail?: ReceiptDetail;
   onClose: () => void;
   /**
    * Navigate to Account → Contact us. The reference has already been recorded by
@@ -34,9 +60,9 @@ interface Props {
   onReport: () => void;
 }
 
-export function TransactionSheet({ transaction, branches, onClose, onReport }: Props) {
+export function TransactionSheet({ transaction, branches, detail, onClose, onReport }: Props) {
   const { lang, copy } = useLanguage();
-  const receipt = transaction ? buildReceipt(transaction, branches, lang, copy) : null;
+  const receipt = transaction ? buildReceipt(transaction, branches, lang, copy, detail) : null;
 
   return (
     <Sheet

@@ -36,6 +36,34 @@
  * AUTHENTICATED, which is not something an `<Image>` handles by itself on every
  * platform.
  *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE INVOICE — Aftab's item 5, the on-screen half.
+ *
+ * She used to get a toast: "Paid 22.000 KD from wallet · visit added"
+ * (design:1457). That is the design's behaviour and it was faithfully built; an
+ * invoice is NEW WORK Aftab asked for, not a fidelity fix.
+ *
+ * It is not a new component. `TransactionSheet` — the sheet the activity feed
+ * already opens — takes a `detail` and grows two things a `Transaction` alone
+ * cannot supply: the itemisation and the server's own balance-after. Both come
+ * off the checkout response, which is a DIFFERENT OBJECT from a list row; see
+ * `domain/receipt.ts` § TWO OF THOSE SIX ARRIVE AT ONE MOMENT.
+ *
+ * IT REPLACES THE TOAST RATHER THAN JOINING IT, and that is forced rather than
+ * chosen. `Toast` is `position:absolute; bottom:40; zIndex:40` and `Sheet` is
+ * `zIndex:30`, so a toast fired alongside the invoice paints ON TOP OF IT, over
+ * the rows. Two acknowledgements of one payment, one physically covering the
+ * other, is not shippable — and two documents of one purchase is the divergence
+ * this slice exists to prevent, in UI form.
+ *
+ * WHAT THE TOAST SAID AND THE INVOICE DOES NOT: "visit added". The response's
+ * `loyalty` carries a RUNNING TOTAL, never the delta, and the delta is 1 only
+ * because `services/order.ts` passes a literal 1 — a literal that same file
+ * reserves the right to change. So the sentence is not transcribed onto a
+ * receipt. It is still on this screen: `copy.shopNote` (design:516) says an
+ * order counts as a visit, above the catalogue, before she pays. REPORTED as
+ * the one thing this slice drops.
+ *
  * THE BALANCE IS A PROP, NOT A FETCH. One `useWalletHome` for the app, read in
  * App.tsx — two would be two balances and the one on screen would be whichever
  * mounted last. After an order this screen asks the owner to re-read rather than
@@ -70,11 +98,13 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { formatMoney, moneyAriaLabel, fils } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import type { ShopController } from '../state/useShop';
-import type { MemberAddress, TierName } from '@avo/types';
+import type { OrderResult } from '../api/shop';
+import type { MemberAddress, Salon, TierName } from '@avo/types';
 import { CartSheet } from '../components/CartSheet';
 import { AddressSheet } from '../components/AddressSheet';
 import { OrdersSheet } from '../components/OrdersSheet';
 import { TopUpSheet } from '../components/TopUpSheet';
+import { TransactionSheet } from '../components/TransactionSheet';
 import { useTopUp } from '../state/useTopUp';
 import { topUpAmountForShortfall } from '../domain/topup';
 import { useAddresses } from '../state/useAddresses';
@@ -90,8 +120,9 @@ export function ShopScreen({
   shop,
   balanceFils,
   tier,
-  onToast,
+  branches,
   onToppedUp,
+  onReport,
 }: {
   /**
    * OWNED BY THE SHELL, not by this screen — see App.tsx. Her cart has to survive
@@ -104,13 +135,28 @@ export function ShopScreen({
    * `TierName` and not a rendered label, because Arabic inflects it.
    */
   tier: TierName | null;
-  onToast: (message: string) => void;
+  /**
+   * The salon's branches, for the invoice's Branch row.
+   *
+   * THE SAME ARGUMENT LIST HOME PASSES `TransactionSheet`, and it is here for
+   * exactly that reason: the invoice and the feed's receipt for one purchase
+   * must name the branch the same way or they are two documents again. Shop is
+   * only rendered once the snapshot has landed (App.tsx), so this is never a
+   * placeholder.
+   */
+  branches: Salon['branches'];
   /**
    * Re-read `GET /members/me` after a successful top-up. The same callback
    * `useShop` gets as `onPaid`, and for the same reason: #2 makes the balance
    * the server's answer, so nothing here adds `creditFils` to what it is holding.
    */
   onToppedUp: () => void;
+  /**
+   * "Report a problem with this payment" -> Account -> Contact us. The same
+   * callback Home hands the same sheet; the reference is recorded by
+   * `startPaymentReport` before the navigation fires.
+   */
+  onReport: () => void;
 }) {
   const { lang, copy } = useLanguage();
   const [cartOpen, setCartOpen] = useState(false);
@@ -123,6 +169,31 @@ export function ShopScreen({
    * mid-transition with the previous address still in it.
    */
   const [addressSheet, setAddressSheet] = useState<{ address: MemberAddress | null } | null>(null);
+
+  /**
+   * THE INVOICE. `null` = no order has been placed on this screen.
+   *
+   * The WHOLE response is held rather than a pre-built receipt, so the document
+   * is composed at render time by the one builder — and so the language toggle
+   * re-composes it. A receipt frozen into strings at checkout would be in
+   * English for the rest of its life.
+   *
+   * IT IS NOT A BALANCE. `useShop` refuses to store `balanceAfterFils` and asks
+   * the wallet to re-read instead (#2); nothing here reads this to decide what
+   * she has. It is the server's statement about ONE transaction, rendered on the
+   * receipt for that transaction, and it is discarded when the sheet closes.
+   *
+   * WHICH IS ALSO THE ANSWER TO "CAN SHE REOPEN IT": no, and not by oversight.
+   * Reopening it later means the itemisation surviving the session, and nothing
+   * on the wire carries it — `Transaction` has no `balanceAfterFils` and
+   * `ShopOrderSchema` has no lines (it carries the fulfilment, the status and the
+   * address snapshot, and no money at all). A cache would hand her a full
+   * document today and a half one tomorrow, which is worse than a document that
+   * is plainly a one-time acknowledgement. The activity feed keeps the durable
+   * record — amount, status, date and the reference support traces by — and the
+   * contract change that would close the gap is named in the report.
+   */
+  const [invoice, setInvoice] = useState<OrderResult | null>(null);
 
   /**
    * THE CART'S TOP-UP, OWNED HERE, FOR THE REASON `BookScreen` OWNS ITS OWN.
@@ -183,13 +254,20 @@ export function ShopScreen({
     if (result === null) return;
     setCartOpen(false);
     /*
-      The toast quotes `totalFils` FROM THE RESPONSE, not the cart's own sum. The
-      two agree today and the server is the authority on what was charged — the
-      design's own toast is the amount paid (:1457), and quoting a locally computed
-      figure is how a receipt and a screen come to disagree.
+      THE WHOLE RESPONSE, HANDED STRAIGHT TO THE RECEIPT BUILDER.
+
+      What was here was `onToast(copy.shopPaidToast(formatMoney(fils(result
+      .totalFils), lang)))` — the design's toast at :1457, and it was right about
+      the one thing that matters: quote the SERVER'S figure, never the cart's own
+      sum. That principle survives intact and is now applied to six figures
+      instead of one. Nothing in this file adds, subtracts or totals anything.
+
+      The toast is gone rather than kept alongside — see the header. `Toast` sits
+      at `zIndex:40` over `Sheet`'s 30, so keeping both would paint the toast
+      across the invoice's rows.
     */
-    onToast(copy.shopPaidToast(formatMoney(fils(result.totalFils), lang)));
-  }, [shop, copy, lang, onToast]);
+    setInvoice(result);
+  }, [shop]);
 
   /**
    * Save, then SELECT WHAT SHE JUST SAVED.
@@ -539,6 +617,44 @@ export function ShopScreen({
         controller={topUp}
         newBalanceFils={null}
         tier={tier}
+      />
+
+      {/*
+        THE INVOICE, LAST, so it paints over every other overlay — same ordering
+        argument as the two sheets above.
+
+        THE SAME COMPONENT THE ACTIVITY FEED OPENS, with `detail` supplied. Not a
+        success screen: a success screen would be a second description of a
+        receipt, and there is already a third in the API's email composer.
+
+        DISMISSIBLE, because nothing is in flight — interaction-spec.md §4's rule
+        for a sheet after a settled outcome, and the same reading
+        `TransactionSheet` already had. What she is dismissing has already
+        happened; there is no attempt to interrupt.
+
+        AND IT NEEDS NO NETWORK. Every figure on it came back with the order, so
+        going offline while it is open changes nothing on the document — there is
+        no refetch to fail and nothing to blank. That is the offline state for
+        this screen, and it is a property of where the data came from rather than
+        a banner.
+      */}
+      <TransactionSheet
+        transaction={invoice?.transaction ?? null}
+        branches={branches}
+        /*
+          THE SERVER'S OWN FIELDS, PASSED THROUGH. If lane A renames one, this
+          line stops compiling — which is the point of taking them off
+          `OrderResult` rather than copying them into a local shape first.
+
+          SPREAD, NOT `detail={... : undefined}`, because `exactOptionalPropertyTypes`
+          is on: the prop is either present with a value or absent, and the
+          absent case is the closed sheet, where there is no transaction either.
+        */
+        {...(invoice
+          ? { detail: { items: invoice.items, balanceAfterFils: invoice.balanceAfterFils } }
+          : {})}
+        onClose={() => setInvoice(null)}
+        onReport={onReport}
       />
     </View>
   );

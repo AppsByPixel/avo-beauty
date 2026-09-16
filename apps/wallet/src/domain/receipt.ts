@@ -21,6 +21,45 @@
  * artist and the visit/stamp credit if the designed receipt is to be built. That
  * is a shared-package change and belongs on trunk.
  *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TWO OF THOSE SIX ARRIVE AT ONE MOMENT, AND `ReceiptDetail` IS THAT MOMENT.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Everything above is true OF A `Transaction`. It is not true of a CHECKOUT
+ * RESPONSE, which is a different object: `POST /orders` answers with
+ * `items[]`, `balanceAfterFils`, `totalFils`, `loyalty` and `voidable`
+ * alongside the transaction. So while she is still looking at the screen she
+ * paid on, the app holds the itemisation and the SERVER'S OWN balance-after —
+ * two of the six rows listed above — and it holds them without deriving
+ * anything.
+ *
+ * `ReceiptDetail` is optional and ADDITIVE. Called without it this function is
+ * byte-for-byte what it was, which is what makes one builder safe rather than
+ * merely tidy: the activity feed opens the same sheet for the same transaction
+ * and its rows do not move because an invoice exists. There is no second
+ * builder, because a second one is "one payload built in three places" — and
+ * the third place is already real (`api/src/receipts/email/compose.ts`).
+ *
+ * WHAT STILL IS NOT HERE, AND WHY IT IS NOT DERIVED:
+ *
+ *   Pickup / Visit credit   `OrderResult.loyalty` carries the RUNNING TOTAL
+ *                           (`visits`, or `stamps` of `target`). The design's
+ *                           row is a DELTA — "+1 visit" (design:1574). The
+ *                           delta is not on the wire. It is 1 today because
+ *                           `services/order.ts` passes a literal 1 to
+ *                           `applyVisits`/`applyStamps`, and that same file
+ *                           reserves the right to change it ("If AVO decides
+ *                           otherwise, the change is `loadPromotionInputs` +
+ *                           `decideEarning` in step 8"). A client constant
+ *                           transcribed from a server literal is exactly the
+ *                           receipt figure that goes quietly wrong. Reported.
+ *
+ *                           Pickup is not on the response at all; it is on
+ *                           `ShopOrder`, a different read.
+ *
+ *   `feeFils`, `note`       merchant-visible-customer-never, and DECISIONS 107.
+ *                           Neither is a field on `ReceiptDetail`, so neither
+ *                           has a route to a row.
+ *
  * The one row the design shows that is deliberately dropped rather than missing
  * is "Processing fee 0.150 KD". That is the AVO commission. api-contract.md
  * § Commission: merchant-visible, customer-never.
@@ -45,6 +84,44 @@ export interface ReceiptRow {
   valueLabel?: string;
   /** Money rows are set in the display face; text rows are not. */
   emphasis?: boolean;
+}
+
+/**
+ * One priced line, as the SERVER priced it.
+ *
+ * STRUCTURAL ON PURPOSE, rather than importing `OrderLine` from `api/shop.ts`.
+ * A `domain/` module that reached into the API client would invert this app's
+ * one dependency rule, and the structural shape still fails to compile at the
+ * call site if lane A renames a field — `OrderLineSchema` is what types the
+ * object being handed in.
+ *
+ * `productId` and `unitPriceFils` are deliberately absent. The unit price is
+ * reconstructible from the line and the quantity and is not a row the wallet's
+ * receipt draws; the product id is not something a customer reads. Narrowing
+ * here is what keeps `feeFils` and `note` unable to arrive by accident.
+ */
+export interface ReceiptLine {
+  name: string;
+  qty: number;
+  lineTotalFils: number;
+}
+
+/**
+ * The facts a CHECKOUT RESPONSE carries and a `Transaction` does not.
+ *
+ * Every field is the server's own number, passed through and formatted. Nothing
+ * here is computed, summed or reconciled by this module — see the header.
+ */
+export interface ReceiptDetail {
+  /** `OrderResult.items`. Absent for kinds that have no itemisation. */
+  items?: readonly ReceiptLine[];
+  /**
+   * `OrderResult.balanceAfterFils` — non-negotiable #2 in one field. It is
+   * OPTIONAL and never defaulted: a missing balance means no row, and a zero
+   * balance means a row saying 0.000, which is a real outcome and the one a
+   * truthiness check would drop.
+   */
+  balanceAfterFils?: number;
 }
 
 export interface Receipt {
@@ -92,6 +169,12 @@ export function buildReceipt(
   branches: (Named & { id: string })[],
   lang: Language,
   copy: Copy,
+  /**
+   * Present only where the caller holds a checkout response. Omitted everywhere
+   * else, including the activity feed, which has a `Transaction` and nothing
+   * more.
+   */
+  detail?: ReceiptDetail,
 ): Receipt {
   // `nameAr ?? name` — the design's Arabic receipt names the branch in Arabic
   // ("الفرع · أمارا السالمية", AVO Wallet Home.dc.html:1582). See `branchName`.
@@ -166,6 +249,37 @@ export function buildReceipt(
   const signed = headline === 0 ? '' : positive ? '+' : '−';
 
   const rows: ReceiptRow[] = [];
+
+  /*
+    THE LINES COME FIRST, which is where design:1574 puts `['Item', 'Repair serum
+    × 1']` — above "Paid from" and above "Balance after".
+
+    WHAT MOVED, AND IT IS THE ONE ADAPTATION IN THIS SLICE. The design draws a
+    SINGLE-item order, so it can afford the label "Item" and put the product in
+    the value column with no money beside it — the headline is the whole price.
+    A three-line order cannot: three rows all labelled "Item" reads as a fault,
+    and each line's own total has to land somewhere or a total that came from a
+    multiplication is unreconcilable. So the design's item STRING becomes the
+    label and the server's `lineTotalFils` becomes the value.
+
+    That is not an invention; it is the other designed receipt's layout. `design/
+    AVO Receipt Email.html` § Line items renders exactly this — the product name
+    with "1 × 14.500" beneath it and the line total right-aligned — and
+    `api/src/receipts/email/compose.ts` already follows it. Two documents of one
+    purchase agreeing on their line block is the point; see
+    `receiptEmailParity.test.ts`, which pins it across the process boundary.
+
+    `copy.qtyValue` decides the script: Eastern in Arabic because a quantity is a
+    count (design:1587 writes 'سيروم إصلاح × ١'), while the money beside it stays
+    Western in both languages (#12). One row, two numbering systems, both correct.
+  */
+  for (const line of detail?.items ?? []) {
+    rows.push({
+      label: `${line.name} × ${copy.qtyValue(line.qty)}`,
+      ...money(line.lineTotalFils, lang),
+      emphasis: true,
+    });
+  }
 
   if (tx.kind === 'topup') {
     if (tx.method) rows.push({ label: copy.txPaidWith, value: copy.txMethod[tx.method] });
@@ -243,6 +357,28 @@ export function buildReceipt(
       rows.push({ label: copy.txPaidFrom, value: copy.txMethod[tx.method] });
     }
     if (branch) rows.push({ label: copy.txBranch, value: branch });
+  }
+
+  /*
+    AND THE BALANCE LAST — design:1574 `['Balance after', '48.500 KD']`,
+    design:1587 `['الرصيد بعدها', '48.500 د.ك']`.
+
+    `!== undefined`, NOT A TRUTHINESS CHECK. She can spend her wallet to exactly
+    nothing, and `balanceAfterFils: 0` is the single value a falsy test would
+    drop — removing the balance row on the one occasion she most needs to read
+    it. The same class of bug as the `−0.000` headline this file already carries
+    a monument to.
+
+    THE REFUSAL AT THE TOP OF THIS FILE IS INTACT. This is not a running balance
+    derived from the current balance minus everything newer; it is the figure the
+    server put in the response to the request that moved the money.
+  */
+  if (detail?.balanceAfterFils !== undefined) {
+    rows.push({
+      label: copy.txBalanceAfter,
+      ...money(detail.balanceAfterFils, lang),
+      emphasis: true,
+    });
   }
 
   const spoken = moneyAriaLabel(abs, lang);

@@ -508,6 +508,7 @@ export const ar: Copy = {
   txBranchOnline: 'عبر التطبيق', // design:1579
   txReturnedTo: 'أُعيد إلى', // design:1585
   txAmountRow: 'المبلغ', // design:1377
+  txBalanceAfter: 'الرصيد بعدها', // design:1581, :1587
   // Both AR GAPS. The design bundle writes no adjustment string in either
   // language -- `txKind.adjustment` was already a gap before these existed -- so
   // there is nothing to lift and nothing is invented.
