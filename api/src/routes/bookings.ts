@@ -37,13 +37,14 @@
  * DIFFERENT keys. services/booking.ts § cancelBooking carries the reasoning.
  */
 
-import { and, asc, eq, gte, inArray } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, or } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { service } from '../db/schema/service';
+import { transaction } from '../db/schema/transaction';
 import { requireMember, requireScannerScope } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { serialiseMemberContact } from '../http/serialise';
@@ -278,8 +279,22 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
       );
     }
 
-    // From the start of today onward. An artist's screen is her day, not her
-    // history; the merchant's Appointments list is where the past lives.
+    /**
+     * A ROLLING 24 HOURS, not "from the start of today".
+     *
+     * That is what this line has always computed, and the comment above it said
+     * the other thing for the whole life of the endpoint — so at 09:00 the screen
+     * shows yesterday morning, which is a different screen from the one the
+     * sentence described. Lane B reported the mismatch; it is corrected here
+     * rather than left as the eleventh confident sentence in this repo that no
+     * code beneath it backs.
+     *
+     * THE ROLLING WINDOW IS KEPT, and the comment moved to it, deliberately. A
+     * midnight boundary would empty an artist's screen mid-shift for any salon
+     * still open past twelve, and `salon.timezone` — not the server's — is the
+     * only clock that could honestly define "today" here. That is a bigger change
+     * than a comment fix and nobody has asked for it.
+     */
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     const rows = await db
@@ -297,15 +312,76 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
         memberErasedAt: member.erasedAt,
         memberTier: member.tier,
         serviceName: service.name,
+        /**
+         * THE DISCRIMINATOR. Null on every row except a cancellation that a VOID
+         * produced — see the `where` below for why this is the only honest way to
+         * tell the two cancellations apart.
+         */
+        reversesTransactionId: transaction.reversesTransactionId,
       })
       .from(booking)
       .innerJoin(member, eq(member.id, booking.memberId))
       .innerJoin(service, eq(service.id, booking.serviceId))
+      /**
+       * LEFT, because `settled_transaction_id` is NULL on precisely the
+       * `deposit_held` rows — `booking_settlement_matches_status` makes that an
+       * equivalence — and an inner join would silently drop every live
+       * appointment from the artist's day. The opposite of the bug being fixed.
+       */
+      .leftJoin(transaction, eq(transaction.id, booking.settledTransactionId))
       .where(
         and(
           eq(booking.artistId, a.id),
           gte(booking.startsAt, since),
-          inArray(booking.status, ['deposit_held', 'completed']),
+          /**
+           * `cancelled` IS ADMITTED, BUT ONLY WHEN IT IS A REVERSAL.
+           *
+           * The bug: a void sets the booking to `cancelled` (routes/charges.ts
+           * § heldBooking) while this filter listed only `deposit_held` and
+           * `completed` — so an appointment the artist had just been paid for
+           * DISAPPEARED from her screen the moment a manager voided the charge.
+           * Not mislabelled. Gone.
+           *
+           * WHY NOT SIMPLY ADD `'cancelled'` TO THE LIST. Because `cancelled` has
+           * two writers that mean opposite things:
+           *
+           *   services/booking.ts   the CUSTOMER cancelled before the visit. The
+           *                         booking was `deposit_held`, was never charged,
+           *                         and the slot is free. Nothing happened.
+           *   routes/charges.ts     a STAFF MEMBER voided the charge after the
+           *                         visit. The booking had been `completed`. The
+           *                         work happened and the money went back.
+           *
+           * Admitting both would put appointments that are not happening onto her
+           * day — a behaviour change nobody asked for, inherited from a bug fix
+           * rather than chosen. So the customer's cancellation stays OFF her day,
+           * and that is a decision rather than an omission: a freed slot is
+           * plausibly information she wants, but it needs its own treatment on the
+           * card and its own window, not a side effect of this predicate.
+           * `artistDayVoid.int.test.ts` spec 5 pins the exclusion so that a later
+           * widening has to be deliberate.
+           *
+           * WHY THIS PREDICATE IS SOUND AND NOT A GUESS. There is no discriminator
+           * on the booking row itself: `settled_transaction_id` is set by both
+           * paths, `completed_at` is null after both (the void explicitly nulls
+           * it), and `cancelled_at` is stamped by both. But there is one exactly
+           * one join away, and it is TOTAL:
+           *
+           *   `booking_settlement_matches_status` guarantees a `cancelled` booking
+           *   has a non-null `settled_transaction_id`, so this left join never
+           *   misses on the rows that matter; and
+           *   `transaction.reverses_transaction_id` has exactly ONE writer in the
+           *   whole API — the void at routes/charges.ts — behind the unique index
+           *   `transaction_reverses_uq`.
+           *
+           * So "this cancellation is a reversal" is a committed fact about rows,
+           * decided on the server. Non-negotiable #2: nothing here is derived from
+           * a timestamp, and no client is trusted to work it out.
+           */
+          or(
+            inArray(booking.status, ['deposit_held', 'completed']),
+            and(eq(booking.status, 'cancelled'), isNotNull(transaction.reversesTransactionId)),
+          ),
         ),
       )
       .orderBy(asc(booking.startsAt))
@@ -325,6 +401,31 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
         ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
         memberTier: r.memberTier,
         serviceName: r.serviceName,
+        /**
+         * "YOU RANG THIS UP AND IT WAS REVERSED" — the half of the fix that makes
+         * the returned row worth returning.
+         *
+         * `status` alone says `cancelled`, which is true and flat. It does not
+         * distinguish an appointment the customer called off from one this artist
+         * PERFORMED and was paid for ninety seconds earlier, and on her screen
+         * those are opposite facts: one is a free slot, the other is her completed
+         * work being undone.
+         *
+         * WHY THIS IS A FIELD AND NOT A FIFTH `status`. A `voided` status would be
+         * the clearer model and it is a four-way break — `BookingSchema` is
+         * trunk-owned in `packages/types`, every surface's exhaustive switch on
+         * `status` stops compiling, and the enum is a Postgres type behind four
+         * CHECK constraints. This endpoint's item is ALREADY `BookingSchema` plus
+         * joined fields (`memberName`, `memberPhone`, `memberErased`, `memberTier`,
+         * `serviceName`), so one more of the same kind widens nothing shared. The
+         * status enum is not the right place to record a fact about the
+         * TRANSACTION that settled the booking.
+         *
+         * ALWAYS PRESENT, never omitted, for the reason `depositReturnedFils` and
+         * `happyHour` on the charge response give: a client has to be able to tell
+         * "this was not a reversal" from "this API is too old to say".
+         */
+        chargeVoided: r.reversesTransactionId !== null,
       })),
       nextCursor: null,
     });
