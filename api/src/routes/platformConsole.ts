@@ -950,6 +950,13 @@ export async function registerPlatformConsoleRoutes(app: FastifyInstance): Promi
              * An automatic deposit return has no staff behind it and the design
              * attributes it to "System" — the same actor `writeAudit` records for a
              * principal-less write.
+             *
+             * The predicate reads "no member of that salon's staff did it"; see
+             * `routes/activity.ts` for why that is not identical to "automatic",
+             * and why the customer's own cancel still lands here. It matters
+             * slightly more on this feed than on the merchant's, because the
+             * reader is AVO rather than the salon — `GET /v1/platform/audit` is
+             * the record, and it names her.
              */
             who:
               t.kind === 'deposit_return' && t.createdByStaffId === null

@@ -149,6 +149,17 @@ export async function registerActivityRoutes(app: FastifyInstance): Promise<void
            * An automatic deposit return has no staff behind it and the design
            * attributes it to "System" — the same actor `writeAudit` records for
            * a principal-less write.
+           *
+           * THE PREDICATE READS "NOBODY AT THIS SALON DID IT", not "a job did
+           * it", and the two were the same sentence only while the job was the
+           * only way a deposit came back. `services/booking.ts § returnDeposit`
+           * now writes the staff id for a hand-marked no-show, so this branch
+           * correctly stops claiming those — but it still covers the CUSTOMER'S
+           * OWN CANCEL, whose actor is a `MemberPrincipal` and therefore not a
+           * `staff_user.id`. For a merchant's Overview that reads true: no one
+           * on her team returned it. Separating "a rule did it" from "the
+           * customer did it" would need a fact on the row that nothing records
+           * today, and `GET /salons/{id}/audit` already carries the actor.
            */
           who:
             t.kind === 'deposit_return' && t.createdByStaffId === null
