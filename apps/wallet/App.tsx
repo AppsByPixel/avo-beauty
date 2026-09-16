@@ -443,7 +443,19 @@ function Wallet({
               shop={shop}
               balanceFils={snapshot.member.balanceFils}
               tier={snapshot.member.tier}
-              onToast={toast.show}
+              /*
+                FOR THE INVOICE'S BRANCH ROW — the same argument Home passes
+                `TransactionSheet`. Shop renders only inside this `snapshot`
+                branch, so it is never a placeholder.
+              */
+              branches={snapshot.salon.branches}
+              /*
+                `onToast` USED TO BE HERE and is gone with the paid toast. The
+                invoice replaced it: `Toast` is zIndex 40 over `Sheet`'s 30, so
+                firing both would paint the toast across the receipt's rows.
+                See `ShopScreen`'s header.
+              */
+              onReport={() => setScreen('account')}
               /*
                 THIS USED TO BE `onTopUp={goHome}`, and that was the whole of the
                 cart's top-up: switch to the Home tab, close the cart, open

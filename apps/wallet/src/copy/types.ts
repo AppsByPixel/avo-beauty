@@ -567,6 +567,19 @@ export interface Copy {
   txReturnedTo: string;
   txAmountRow: string;
   /**
+   * The invoice's closing row -- "Balance after" / the design's Arabic for it.
+   *
+   * design:1574 and design:1587 write it in BOTH languages, so it costs nothing
+   * in `AR_GAPS` despite being a row nothing could render until now.
+   *
+   * IT IS NOT A ROW THE FEED CAN DRAW. `domain/receipt.ts` refuses to derive a
+   * running balance from the current balance and the rows below it -- "a support
+   * call and possibly a dispute" -- and that refusal is untouched. This key is
+   * rendered only where the SERVER has said what the balance became, which is
+   * true of `POST /orders`' response and of nothing on the `Transaction` entity.
+   */
+  txBalanceAfter: string;
+  /**
    * The activity title and receipt title for a POSITIVE `adjustment`.
    *
    * "Adjustment" is a bookkeeping word for a row that is, to her, money arriving.
