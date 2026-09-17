@@ -24,13 +24,41 @@ the failure mode this structure exists to prevent.
 
 ## Every lane isolates its own resources
 
-**Ten** shared mutable resources have now crossed lanes: a Postgres database, the container,
+**Eleven** shared mutable resources have now crossed lanes: a Postgres database, the container,
 the browser pane, a cross-worktree `pnpm --filter`, the turbo cache, the process table, the
 session scratchpad, an abandoned iOS simulator that starved three lanes to death, the
-machine's spare capacity (below), and the working directory itself, which resets to trunk
+drizzle migration sequence, the machine's spare capacity (those two below), and the working
+directory itself, which resets to trunk
 between commands. Most were
 caught and disclosed by the lane that caused them — which is the standard, and also why this
 rule exists rather than relying on it.
+
+### Two lanes holding a migration have a merge-order dependency on each other
+
+`api/drizzle/` is numbered sequentially and `meta/_journal.json` indexes it, so two lanes
+that each write "the next migration" both write **0051** — and the conflict does not look
+like one. It surfaces as a single line in `_journal.json`, which a merge resolves
+"cleanly" by taking either side, and either side is wrong: one drops a migration from the
+journal, the other leaves two entries claiming the same `idx`. Neither fails to merge.
+A `db:migrate` or a `git bisect` at that commit then runs a journal that disagrees with
+the directory.
+
+Measured 2026-09-17: lane A's `0051_the_no_show_window_has_a_ceiling` and a peer session's
+own 0051 collided exactly this way.
+
+**The lane that merges second renumbers**, and renumbering is not just `git mv`. Everything
+that names the file moves with it — the migration header, `services/ids.ts`, the int specs
+that assert a FLOOR, any route comment citing the migration by number, and the commit
+messages. If the lane holds more than one migration, rewrite the intermediate commits
+(cherry-pick + amend) rather than renumbering in a commit on top: an intermediate commit
+carrying a duplicate `idx` is a broken bisect point even though the branch tip is fine.
+
+**Verify with an assertion, not by eye.** The four properties: no duplicate `tag`, no
+duplicate `idx`, no journal entry without a file, no file without an entry. Today that is
+52 entries against `0000`–`0051`.
+
+So: if you are dispatched work that adds a migration while another lane also has one open,
+say so in your report, and expect to be the one who renumbers if you land second.
 
 ### `pnpm check` needs an idle machine, and a red from a busy one is not evidence
 
