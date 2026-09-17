@@ -27,12 +27,19 @@
  * `noShowMarkRender.test.tsx`.
  *
  * The defect the ternaries were written for is HISTORY, not a live gap: the
- * inline expression this function replaced rendered "1 minutes", and 1 is
- * storable — `salon_no_show_return_positive` is `> 0`, so the column admits it
- * and the endpoint accepts it. It never showed on a screen because nothing could
- * reach the field; adding the Settings control is what made it reachable, and the
- * control and the function landed together. Written in the past tense on purpose
- * — a reader should not have to run the function to find out which it is.
+ * inline expression this function replaced rendered "1 minutes". When that was
+ * written, 1 was storable — the CHECK was `> 0` — and this paragraph said so. It
+ * is no longer true. Lane A's ceiling brought a floor with it: the route refuses
+ * anything under 5 and `salon_no_show_return_in_range` refuses it at the column,
+ * so 1 cannot arrive here from any door, and no storable value below 60 reaches
+ * the minute-singular arm at all.
+ *
+ * THE ARM STAYS ANYWAY, and not out of sentiment. This is a formatter over its
+ * whole integer domain rather than over the column's current range; a bound that
+ * moved once can move again, and `${minutes} minutes` is what gets written the
+ * day the arm looks unused. Both pins remain, and both render a PROP rather than
+ * a stored value — which is why neither went red when the floor landed and why
+ * neither may be read as a claim that 1 is reachable.
  *
  * Above an hour, a non-multiple of 60 stays in minutes — "90 minutes", not "1
  * hour 30 minutes". True, and it invents no copy: the design writes exactly one

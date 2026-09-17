@@ -117,13 +117,14 @@ export type SalonPatch = Partial<
      * is the quieter failure because there was no sentence for anyone to
      * re-check. `Settings.tsx § DepositPanel` read it and only displayed it.
      *
-     * THE SERVER STATES A FLOOR AND NO CEILING. `parseNoShowReturnMinutes` wants
-     * "a whole number of minutes greater than zero" and `salon_no_show_return_
-     * positive` is `> 0`. The control this type now serves offers a fixed list
-     * inside that range; the list is a CHOICE, not a validation, and the range
-     * this field needs is reported to `api/` rather than implemented here. See
-     * that panel's header for the argument and the two windows this one number
-     * drives.
+     * THE SERVER STATES A FLOOR AND A CEILING. `parseNoShowReturnMinutes` wants a
+     * whole number of minutes within 5 ≤ n ≤ 1440, and `salon_no_show_return_in_
+     * range` states the same bound at the column (migration 0051, which REPLACED
+     * the old `salon_no_show_return_positive`). The range this field needed was
+     * reported to `api/` rather than implemented here, and `api/` landed it. The
+     * control this type serves offers a fixed list inside that range; the list is
+     * still a CHOICE and not a validation. See that panel's header for the
+     * argument and the two windows this one number drives.
      */
     | 'noShowReturnMinutes'
     | 'businessHours'
