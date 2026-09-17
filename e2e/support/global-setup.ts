@@ -358,8 +358,9 @@ async function removeSessionCache(): Promise<void> {
  *
  * `DOCUMENTED_DRIFTERS` in `support/wallet-census.ts`, one entry per member with
  * the sentence saying why its balance cannot come from a real ledger pair. The
- * cap is that object's size, derived and never written down twice, so it is
- * still 13 and there is no longer a digit anyone can edit to make it 14.
+ * cap is that object's size, derived and never written down twice — 13 when it
+ * landed and 12 since Fatima `9001` was reconciled rather than documented — and
+ * there is no digit anyone can edit to make it one larger.
  *
  * WHY IT MOVED, IN ONE SENTENCE, BECAUSE THE FULL REASONING IS IN THAT FILE: a
  * full run measured exactly 13 against a cap of 13, and a ratchet resting on its
@@ -430,7 +431,7 @@ let censusVerdict: string | null = null;
  *
  * THAT LAST CLAUSE IS NO LONGER TRUE AND IS KEPT SO THE TRADE IS LEGIBLE. There
  * IS a hand-kept list now — `DOCUMENTED_DRIFTERS` in `support/wallet-census.ts`,
- * thirteen ids each with the sentence saying why — and the rot it risks is
+ * twelve ids each with the sentence saying why — and the rot it risks is
  * exactly the rot named above. It was taken on knowingly, for a reason the
  * integer could not answer: a full run measured 13 against a cap of 13, so the
  * cap had ZERO HEADROOM, and at zero headroom nothing in this file made adopting
@@ -439,14 +440,16 @@ let censusVerdict: string | null = null;
  * a name and a reason attached, the way `KNOWN_INERT` and `LANGUAGE_PINNED` do
  * in `apps/wallet/src/theme/typeFidelity.test.ts` — and it lets the failure name
  * WHICH member is new, which the integer never knew and which is the one fact
- * the lane it fires on actually needs. The effective cap is unchanged at 13.
+ * the lane it fires on actually needs. The effective cap was unchanged at 13 when
+ * this landed; it is 12 now, one entry lighter for the best available reason — the
+ * list made a wrong entry legible and the member it named was reconciled instead.
  *
  * AND THE ROT IS BOUNDED, WHICH IS WHY IT WAS ACCEPTABLE AND `DYNAMIC_PERMISSION`
  * WAS NOT. That list rotted by accumulating entries nobody could refute. This one
  * is checked as a SUBSET, not an equality — see the paragraph below, which is the
  * reason an equality is impossible here — so a stale entry cannot fail anything,
  * but it also cannot hide anything: the printed line reports the drifting count
- * AGAINST the list's size, so a full run reading `12 of the documented 13` says
+ * AGAINST the list's size, so a full run reading `11 of the documented 12` says
  * on its own face that one entry is now prunable. The mechanism that caught the
  * original staleness was a number that moved; this is that number, pointed at
  * the list instead of at the fixtures.
@@ -542,13 +545,19 @@ let censusVerdict: string | null = null;
  * SQL, and the SIGN tells you which kind:
  *
  *   POSITIVE — the balance is ahead of the ledger. An opening balance with no
- *       originating entry: the harness's own `9001`, and one per file that
- *       clones a member with a balance (`QA-RES-000{1,2}` 200.000 each,
- *       `QA-DEP-0001`, `QA-NSW-0001`, `QA-ORD-0001`, the four `QA-CMP-000n`).
+ *       originating entry: one per file that clones a member with a balance
+ *       (`QA-RES-000{1,2}` 200.000 each, `QA-DEP-0001`, `QA-NSW-0001`,
+ *       `QA-ORD-0001`, the four `QA-CMP-000n`). The harness's own `9001` was on
+ *       this line too and is not any more: `stopTenancyApi()` reconciles her, so
+ *       the hole `seedSalonB()` opens is paid for in the same file that opens it.
  *       The standing convention in this directory, and a real gap:
  *       `api/src/db/seed.ts` § "the opening balances" settled that an opening
  *       balance is a real credit and gets a real pair, and the convention here
- *       never caught up.
+ *       never caught up. Note what that citation is and is not — it is where the
+ *       RULE was settled, for members `8842` and `8843`, which both get a real
+ *       pair through the builder. It has never been where a drifting fixture's
+ *       balance was written. Reading it as the writer is what put `9001` on this
+ *       list with lane A's name against it for six days.
  *   NEGATIVE — the LEDGER is ahead of the balance, and this is the shape worth
  *       looking at twice. It means wallet legs exist that the balance does not
  *       reflect, which is either a fixture that reset `balance_fils` after the

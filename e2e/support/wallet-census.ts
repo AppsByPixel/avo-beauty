@@ -55,8 +55,9 @@
  * Adding a drifter means adding an id AND the sentence saying why its balance
  * cannot come from a real ledger pair — the conscious act with a name attached
  * that `KNOWN_INERT` and `LANGUAGE_PINNED` get in
- * `apps/wallet/src/theme/typeFidelity.test.ts`. The effective cap is unchanged
- * at 13; it simply cannot be moved by editing a digit any more.
+ * `apps/wallet/src/theme/typeFidelity.test.ts`. The effective cap was unchanged
+ * at 13 when this landed and is 12 now — one entry left the list by being fixed —
+ * but it cannot be moved by editing a digit any more.
  *
  * AND IT IS A SUBSET CHECK, NOT AN EQUALITY, WHICH IS THE ONE PLACE THIS FILE
  * MUST DIVERGE FROM `KNOWN_INERT`. `typeFidelity.test.ts` can assert equality
@@ -80,7 +81,7 @@
  * red on every single-file run, and a gate people disable catches nothing at
  * all. What is done about it instead is cheap and costs no extra query — the
  * printed line reports the drifting count AGAINST the documented size, so a full
- * run that has dropped to `12 of the documented 13` says on its face that one
+ * run that has dropped to `11 of the documented 12` says on its face that one
  * entry below is now prunable. That is the same mechanism that caught the
  * original staleness (a number that moved), pointed at the list instead of at
  * the fixtures.
@@ -97,13 +98,22 @@
  *
  * THIS LIST ONLY EVER GETS SHORTER on its own merits. `reports.test.ts` and
  * `account.test.ts` already reconcile both of their members in `afterAll`, which
- * is why `QA-RPT-0001` and `QA-ACC-0001` are not here and why the count is 13
- * and not 15. Every removal is a file adopting the pattern. An addition is
- * allowed and is sometimes right — but it is an addition to a list of NAMES with
- * REASONS, which is the only way it stays reviewable.
+ * is why `QA-RPT-0001` and `QA-ACC-0001` are not here. Every removal is a file
+ * adopting the pattern. An addition is allowed and is sometimes right — but it is
+ * an addition to a list of NAMES with REASONS, which is the only way it stays
+ * reviewable.
  *
  * Measured 13 on 2026-09-11 twice, and re-measured on 2026-09-17 over the full
- * suite: the same thirteen ids.
+ * suite: the same thirteen ids. IT IS 12 NOW, and the removal is the first one
+ * this mechanism produced rather than recorded. Fatima `9001` was carried here
+ * with a reason that said her opening balance came from `api/src/db/seed.ts` and
+ * that closing it belonged to lane A. That was wrong on both counts and the list
+ * is the reason it got caught: `seed.ts` § `OPENING_BALANCES` covers `8842` and
+ * `8843` only, and both get a real pair through the builder. `9001` is written by
+ * `support/tenancy-harness.ts` § `seedSalonB()` — this column — with a
+ * `balance_fils` literal and no pair, which is precisely the case `overCapVerdict`
+ * below tells a reader to fix rather than document. `stopTenancyApi()` now
+ * reconciles her, for the reasons written at that call.
  *
  * THE SIGN IS PART OF THE READING and the reasons below carry it:
  *
@@ -120,11 +130,6 @@
  *       re-fixtures would be the other thing, and is what this census is for.
  */
 export const DOCUMENTED_DRIFTERS: Record<string, string> = {
-  '9001':
-    'POSITIVE. The harness\'s own seeded member, given an opening balance by ' +
-    '`api/src/db/seed.ts` with no originating ledger pair. She predates the ' +
-    'convention that an opening balance is a real credit; closing this one is a ' +
-    'seed change, not a fixture change, and belongs to lane A.',
   'QA-ADJ-0001':
     'POSITIVE or NEGATIVE, whatever `adjustments.test.ts` § `fund()` last wrote. ' +
     'THE STANDING LEGITIMATE CASE, and the reason this is a list and not an ' +
@@ -132,9 +137,15 @@ export const DOCUMENTED_DRIFTERS: Record<string, string> = {
     'endpoint that produces one, so it is written with SQL on purpose. This ' +
     'member will always drift and should.',
   'QA-ADJ-0002':
-    'POSITIVE or NEGATIVE, the second of `adjustments.test.ts` § `fund()`\'s two ' +
-    'and under the same rule as QA-ADJ-0001: a deliberate SQL balance backing a ' +
-    'shortfall spec, because no endpoint produces a specific balance.',
+    'POSITIVE, 10.000, and she is the ONE ENTRY HERE THAT IS NOT RECONCILABLE AT ' +
+    'ALL. Not a `fund()` member — that helper defaults to QA-ADJ-0001 and is never ' +
+    'called with her; her balance is the literal in `adjustments.test.ts`\'s own ' +
+    'INSERT. What makes her different is the three lines after it: she is walked ' +
+    'request -> due -> erase and left TOMBSTONED, and her single spec asserts that ' +
+    '`POST /members/{id}/adjustments` REFUSES her and moves nothing. Reconciling ' +
+    'her would have the fixture write, in SQL, the exact settled money row the ' +
+    'product refuses to write for her. A balance on a scrubbed record genuinely ' +
+    'cannot come from a real ledger pair; this is what that sentence is for.',
   'QA-CMP-0001':
     'POSITIVE. `campaigns.test.ts` clones a member with an opening balance to ' +
     'have an audience with wallet history; the clone copies `balance_fils` and ' +
@@ -157,8 +168,13 @@ export const DOCUMENTED_DRIFTERS: Record<string, string> = {
     'POSITIVE. `no-show-worker.test.ts`\'s member, cloned with an opening ' +
     'balance so a forfeited deposit has somewhere to come from.',
   'QA-ORD-0001':
-    'POSITIVE. `orders.test.ts`\'s member, cloned with an opening balance so an ' +
-    'order can be paid from the wallet.',
+    'POSITIVE or NEGATIVE, whatever `orders.test.ts` § `fund()` last wrote. SHE IS ' +
+    'A `fund()` CASE, NOT A CLONE CASE — this entry used to say she was "cloned ' +
+    'with an opening balance", and she is cloned with `balance_fils = 0`; every ' +
+    'figure she holds comes from one of twelve `UPDATE member SET balance_fils` ' +
+    'calls, because an order race needs a balance exact to the fil and no endpoint ' +
+    'produces one. Same standing rule as QA-ADJ-0001. Corrected while checking ' +
+    'this list after `9001`\'s reason turned out to name the wrong file.',
   'QA-RES-0001':
     'POSITIVE, 200.000 exactly. `reschedule.test.ts`\'s member, cloned with an ' +
     'opening balance to cover a deposit across a moved booking.',

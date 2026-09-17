@@ -8,13 +8,13 @@
  * `support/wallet-census.ts` rather than a paragraph inside the teardown.
  *
  * WHAT THIS PINS, AND IT IS DELIBERATELY THE WORDING AND NOT THE NUMBER. The
- * number is 13 today and is supposed to fall; a spec that pins it turns every
+ * number is 12 today and is supposed to fall; a spec that pins it turns every
  * file adopting `reconcileWalletLedger` into a red spec, which is the opposite of
  * the point. So the assertions are about the two things the gate exists to do:
  *
- *   1. AT THE CAP, THE GREEN RUN SAYS SO. `all 13 of the documented 13` has to
- *      read as a warning where `13` read as a statistic, because the alternative
- *      is the next lane finding out in teardown after 1373 green tests.
+ *   1. AT THE CAP, THE GREEN RUN SAYS SO. `all 12 of the documented 12` has to
+ *      read as a warning where `12` read as a statistic, because the alternative
+ *      is the next lane finding out in teardown after a suite of green tests.
  *   2. OVER THE CAP, THE MESSAGE NAMES THE RIGHT FIX. Which member is new, that
  *      a fixture wrote a balance with no ledger pair, and `reconcileWalletLedger`
  *      — not "raise the cap", which at zero headroom was the cheaper path and is
@@ -93,7 +93,7 @@ describe('a green run shows the headroom instead of hiding it', () => {
     expect(announcement.startsWith(AT_THE_CAP)).toBe(true);
 
     // And the count is stated AGAINST the permitted count, which is the whole
-    // point — `13` is a statistic, `13 of a documented 13` is a warning.
+    // point — `12` is a statistic, `12 of a documented 12` is a warning.
     expect(announcement).toContain(`ALL ${N} OF THE DOCUMENTED ${N} ARE DRIFTING`);
     expect(announcement).toContain('no spare slot');
     expect(announcement).toContain('reconcileWalletLedger');
@@ -212,7 +212,7 @@ describe('an undocumented drifter fails on its identity, not on the count', () =
   it('reports every undocumented member when more than one arrives at once', () => {
     const { undocumented, verdict } = readCensus(
       censusLine([
-        [DOCUMENTED[0] ?? '9001', 1000],
+        [DOCUMENTED[0] ?? 'QA-ADJ-0001', 1000],
         ['QA-NEW-0001', 200000],
         ['QA-NEW-0002', -4500],
       ]),
@@ -247,10 +247,21 @@ describe('the reading is taken off the printed line and nowhere else', () => {
     expect(drifting).toEqual(['QA-A-0001', 'QA-B-0002']);
   });
 
+  /**
+   * `9001` IS THE RIGHT ID TO DRIVE THIS WITH AND IT IS NO LONGER DOCUMENTED,
+   * WHICH MAKES THE SPEC STRICTLY BETTER. Every other fixture id in this suite
+   * carries a `QA-` prefix, so she is the only member who can show that an id
+   * made entirely of digits is not mistaken for an amount by the split. She used
+   * to be on `DOCUMENTED_DRIFTERS`, so this spec asserted a null verdict; she is
+   * reconciled by `stopTenancyApi()` now, so the honest assertion is the other
+   * one — a numeric id that nobody wrote down is caught BY NAME, which is the
+   * identity property the list replaced the integer to get.
+   */
   it('a purely numeric member id survives the parse — the harness seeds one', () => {
-    expect(readCensus(censusLine([['9001', 25000]])).drifting).toEqual(['9001']);
-    // And it is documented, so it does not fail. If this ever goes red, the seed
-    // member's id changed and the list has to follow it.
-    expect(readCensus(censusLine([['9001', 25000]])).verdict).toBeNull();
+    const reading = readCensus(censusLine([['9001', 25000]]));
+    expect(reading.drifting).toEqual(['9001']);
+    expect(reading.undocumented).toEqual(['9001']);
+    expect(reading.verdict).toContain('9001');
+    expect(reading.verdict).toContain('reconcileWalletLedger');
   });
 });
