@@ -69,13 +69,16 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
           Arabic `text('displayXL', 'ar')` resolves to IBM Plex Sans Arabic, and
           the figure is Western digits in the display face in both languages
           (non-negotiable #12). This call supplies the SIZE. The unit beside it
-          is the half that changes script, and it does take `lang`.
+          is the half that changes script, and `Money` resolves its face from
+          the language itself — this card supplies only the unit's size and
+          weight.
         */}
         <Money
           amount={balance}
           color={WHITE}
           figureStyle={text('displayXL')}
-          unitStyle={[text('bodyL', lang, '500'), styles.unit]}
+          unitStyle={styles.unit}
+          unitWeight="500"
         />
       </View>
 
@@ -177,12 +180,17 @@ const styles = StyleSheet.create({
   pillText: { color: WHITE },
   balanceRow: { marginTop: 12, marginBottom: 16 },
   // The unit — "KD" / "د.ك" — takes its family from the language's type scale,
-  // supplied by the caller; only the size is set here. THE WEIGHT MOVED OUT and
-  // this comment used to say it lived here: `fontWeight: '500'` in this object
-  // sat behind `text()`'s pinned single-weight family and selected nothing, so
-  // the unit drew at Regular in both languages. It is `text('bodyL', lang,
-  // '500')` at the call site now, which is the only place that can resolve
-  // Inter_500Medium and IBMPlexSansArabic_500Medium.
+  // resolved inside `Money`; only the size and opacity are set here. THE WEIGHT
+  // MOVED OUT TWICE, and both moves are worth keeping because they are the same
+  // mistake at two altitudes. First: `fontWeight: '500'` lived in this object,
+  // behind `text()`'s pinned single-weight family, and selected nothing — the
+  // unit drew Regular in both languages. It became `text('bodyL', lang, '500')`
+  // in the `unitStyle` array at the call site. That was correct HERE and was a
+  // rule only this one caller followed; the other three passed a bare size and
+  // drew the OS UI font. So the composition moved into `Money`, and this card
+  // now passes `unitWeight="500"` — the same Inter_500Medium and
+  // IBMPlexSansArabic_500Medium, chosen in the one place every caller goes
+  // through.
   unit: { fontSize: 17, opacity: 0.82 },
   stamp: { color: 'rgba(255,255,255,0.78)', marginTop: -10, marginBottom: 16 },
 

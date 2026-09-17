@@ -22,7 +22,21 @@ interface Props {
   color: string;
   /** Type token for the figure. The unit is sized relative to it by the caller. */
   figureStyle: object;
+  /**
+   * SIZE AND OPACITY FOR THE UNIT — NOT ITS FACE.
+   *
+   * This layers OVER `text('bodyS', lang, unitWeight)`, so a caller that passes
+   * `{ fontSize: 11.5 }` gets the language's face for free. A caller that wants
+   * a different WEIGHT passes `unitWeight`; a `fontWeight` in here would sit
+   * over a single-weight face and do nothing, which is the defect
+   * `theme/typeFidelity.test.ts` exists to catch.
+   */
   unitStyle: object;
+  /**
+   * The unit's weight, resolved to a real face by `text()`. Optional because
+   * three of the four call sites want the token's own 400.
+   */
+  unitWeight?: '400' | '500' | '600' | '700';
 }
 
 /**
@@ -43,7 +57,7 @@ function split(amount: Fils, lang: Language): { figure: string; unit: string } {
  * reader says "twenty-four point five zero zero Kuwaiti dinars" once, rather
  * than reading the number and the letters K D separately.
  */
-export function Money({ amount, color, figureStyle, unitStyle }: Props) {
+export function Money({ amount, color, figureStyle, unitStyle, unitWeight }: Props) {
   const { lang } = useLanguage();
   const { figure, unit } = split(amount, lang);
   return (
@@ -57,11 +71,9 @@ export function Money({ amount, color, figureStyle, unitStyle }: Props) {
         THE FIGURE IS ALWAYS FRAUNCES, IN BOTH LANGUAGES.
 
         The digits are Western in Arabic (non-negotiable #12) and the design
-        system reserves the display face for exactly that. The UNIT is the half
-        that changes script — "KD" or "د.ك" — so it takes whatever face the
-        language's type scale supplies, which in Arabic is IBM Plex Sans Arabic.
-        Set on one node each rather than relying on a font fallback stack, which
-        React Native does not have. See theme/index.ts § moneyFigureFace.
+        system reserves the display face for exactly that. Set on the node
+        rather than relying on a font fallback stack, which React Native does
+        not have. See theme/index.ts § moneyFigureFace.
       */}
       <Text
         style={[figureStyle, { color, fontFamily: moneyFigureFace() }]}
@@ -70,7 +82,40 @@ export function Money({ amount, color, figureStyle, unitStyle }: Props) {
       >
         {figure}
       </Text>
-      <Text style={[unitStyle, { color }]} accessibilityElementsHidden importantForAccessibility="no">
+      {/*
+        THE UNIT IS THE HALF THAT CHANGES SCRIPT — "KD" or "د.ك" — SO THE FACE
+        IS RESOLVED HERE AND IS NOT THE CALLER'S TO SUPPLY.
+
+        This line used to read `[unitStyle, { color }]`, and the comment above
+        it said the unit "takes whatever face the language's type scale
+        supplies". That was a statement about the CALL SITES, and it was true of
+        exactly one of the four: `WalletCard` composed `text('bodyL', lang,
+        '500')` into `unitStyle`, and `TopUpCard`'s two and
+        `DeleteAccountSheet`'s passed a bare `{ fontSize }`. Those three
+        resolved no family at all, so react-native-web emitted the node with no
+        `font-family` and the browser drew both scripts in the OS UI stack
+        (`-apple-system,BlinkMacSystemFont,…` — RNW's own Text base style is
+        `font: '14px System'`).
+
+        Measured: at 11.5px "KD" is 16.00px in that stack against 16.21px in
+        Inter_500Medium — the wrong typeface by a fifth of a pixel, which is why
+        nobody saw it. "د.ك" is 14.24px against 17.78px in
+        IBMPlexSansArabic_500Medium, a 20% narrower face on a 14px line box
+        instead of 17.5px, in a row laid out on the baseline. Non-negotiable #12
+        is the Arabic half; the Latin half is real and very nearly invisible.
+
+        A comment cannot hold that line, because it records what four callers
+        happen to do and the fifth caller has not been written yet. So the base
+        moved here. `unitStyle` now layers over a face the language already
+        chose, and a caller CANNOT reintroduce the defect by passing a bare
+        size. `theme/typeFidelity.test.ts` § "every Text that draws copy
+        resolves a face" is the guard for the same class everywhere else.
+      */}
+      <Text
+        style={[text('bodyS', lang, unitWeight), unitStyle, { color }]}
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      >
         {unit}
       </Text>
     </View>
