@@ -114,8 +114,7 @@ export function TransactionSheet({ transaction, branches, detail, onClose, onRep
               />
               <Text
                 style={[
-                  text('bodyS', lang),
-                  styles.pillText,
+                  text('bodyS', lang, '600'),
                   receipt.statusTone === 'warn'
                     ? styles.pillTextWarn
                     : receipt.statusTone === 'bad'
@@ -207,7 +206,6 @@ const styles = StyleSheet.create({
   pillDotGood: { backgroundColor: color.brand },
   pillDotWarn: { backgroundColor: color.warnText },
   pillDotBad: { backgroundColor: color.dangerDot },
-  pillText: { fontWeight: '600' },
   pillTextGood: { color: color.brandDeep },
   pillTextWarn: { color: color.warnText },
   pillTextBad: { color: color.dangerText },

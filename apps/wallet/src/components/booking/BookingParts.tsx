@@ -339,7 +339,7 @@ export function SlotChip({
     >
       <Text
         style={[
-          text('bodyL', lang),
+          text('bodyL', lang, '600'),
           styles.slotText,
           selected && styles.slotTextOn,
           disabled && styles.slotTextOff,
@@ -557,8 +557,8 @@ const styles = StyleSheet.create({
   badgeDot: { width: 5, height: 5, borderRadius: 3 },
   badgeDotLive: { backgroundColor: color.brand },
   badgeDotSalon: { backgroundColor: AVAIL_SALON_DOT },
-  badgeTextLive: { color: color.brandDeep, fontWeight: '600' },
-  badgeTextSalon: { color: AVAIL_SALON_TEXT, fontWeight: '600' },
+  badgeTextLive: { color: color.brandDeep },
+  badgeTextSalon: { color: AVAIL_SALON_TEXT },
 
   tick: {
     width: 22,
@@ -633,7 +633,7 @@ const styles = StyleSheet.create({
   slotOn: { backgroundColor: onBrandFill.backgroundColor, borderColor: color.brandDeep },
   slotOff: { backgroundColor: color.disabledBg, borderColor: 'transparent' },
   slotSkeleton: { backgroundColor: color.surfaceAlt2, borderColor: 'transparent' },
-  slotText: { color: color.ink, fontWeight: '600' },
+  slotText: { color: color.ink },
   slotTextOn: { color: WHITE },
   // design:1518 — `text-decoration: line-through` on the disabled slot. The
   // strike IS the message; without it a greyed chip reads as "not offered".
