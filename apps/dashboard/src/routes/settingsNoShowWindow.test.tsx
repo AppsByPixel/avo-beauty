@@ -12,7 +12,7 @@
  *
  * `noShowReturnMinutes` has been merchant-editable on the server since the route
  * was written — `MERCHANT_EDITABLE` carries it, `parseNoShowReturnMinutes`
- * validates it, `salon_no_show_return_positive` CHECKs it — and this dashboard
+ * validates it, `salon_no_show_return_in_range` CHECKs it — and this dashboard
  * READ it and only displayed it: `DepositPanel`'s foot sentence rendered
  * `returnLabel` and nothing on the surface could change the number. So the panel
  * told a merchant a rule about her own money and gave her no way to set it,
@@ -41,28 +41,35 @@
  * ----------------------------------------------------------
  * The deposit above it is a `Stepper` with a hard 1–10 KD range that the database
  * states (`salon_deposit_range`) and the route re-states (`parseDepositFils`).
- * The window has NO upper bound anywhere: `parseNoShowReturnMinutes` asks for "a
- * whole number of minutes greater than zero" and the CHECK is `> 0`. A stepper
- * needs `min`, `max` and `step`, so all three numbers would be invented — and
+ * The window's range is the server's and is NOT a range this control may
+ * re-state: `parseNoShowReturnMinutes` holds 5 ≤ n ≤ 1440 and the CHECK
+ * `salon_no_show_return_in_range` holds it again. A stepper would still have to
+ * invent `step`, and would have to MIRROR `min` and `max` — and
  * `Stepper` CLAMPS (`Math.min(max, Math.max(min, next))`), which means a salon
  * holding a value outside an invented range would have it silently rewritten by a
  * client the moment anyone touched the control. `e2e/tenancy.test.ts:709` already
- * sends `noShowReturnMinutes: 999` and calls it valid, so such salons are
- * reachable today.
+ * sends `noShowReturnMinutes: 999` and calls it valid — still true under the new
+ * range, since 999 is inside it — so such salons are reachable today.
  *
  * A fixed option list invents a CHOICE rather than a BOUND, does not clamp, and
  * has one property a stepper cannot have: every value the control can produce is
  * enumerable, so the design's sentence can be checked at all of them rather than
  * argued about. That check is `the sentence and the option agree` below.
  *
- * WHERE THE BOUND BELONGS, PINNED RATHER THAN PAPERED OVER
+ * WHERE THE BOUND BELONGS — AND IT HAS SINCE LANDED THERE
  * -------------------------------------------------------
- * On the server, and it is `api/`'s job — not this lane's. A client bound is a
+ * On the server, and it was `api/`'s job — not this lane's. A client bound is a
  * validation the next client will not have, which is non-negotiable #7's
  * reasoning applied to a range instead of a permission, and the console's
  * `PATCH /v1/platform/salons/{id}` is already a second door onto the same column.
- * The last `it()` in the server section is a tripwire that goes red the day a
- * ceiling lands, and its message says what to do about it.
+ *
+ * That argument is now history rather than a request: lane A landed 5 ≤ n ≤ 1440
+ * in `parseNoShowReturnMinutes` and in migration 0051, which REPLACES the old
+ * `salon_no_show_return_positive`. A tripwire used to sit at the end of the server
+ * section demanding the presets be re-read the day a ceiling arrived; it fired, the
+ * presets were re-read and needed no change, and it is gone. What stands in its
+ * place is `offers no preset the server would refuse`, which checks that agreement
+ * on every run instead of once.
  */
 
 import { readFileSync } from 'node:fs';
@@ -85,6 +92,7 @@ const REPO = join(__dirname, '..', '..', '..', '..');
 const read = (rel: string) => stripComments(readFileSync(join(REPO, rel), 'utf8'));
 
 const SALONS_ROUTE = 'api/src/routes/salons.ts';
+const SETTINGS_ROUTE = 'apps/dashboard/src/routes/Settings.tsx';
 const SALON_SCHEMA = 'api/src/db/schema/salon.ts';
 const BOOKING_SERVICE = 'api/src/services/booking.ts';
 
@@ -117,6 +125,47 @@ function validatorBody(): string {
   return src.slice(open, close);
 }
 
+/**
+ * The two bounds, READ OUT OF `salons.ts` RATHER THAN RETYPED HERE.
+ *
+ * They are module-scope constants ABOVE `parseNoShowReturnMinutes`, so
+ * `validatorBody()` cannot see them — it slices the function. Two numbers copied
+ * into this file would agree with the server exactly until the day someone
+ * retuned one of them, which is the drift the whole file is built to refuse.
+ */
+function serverBounds(): { min: number; max: number } {
+  const src = read(SALONS_ROUTE);
+  const pick = (name: string) => {
+    const found = new RegExp(`const ${name}\\s*=\\s*([\\d_]+)`).exec(src);
+    expect(found?.[1], `${name} not found in ${SALONS_ROUTE}`).toBeTruthy();
+    // `1_440` is how the route writes it; the separator is not part of the value.
+    return Number((found?.[1] ?? '').replace(/_/g, ''));
+  };
+  return {
+    min: pick('NO_SHOW_RETURN_MIN_MINUTES'),
+    max: pick('NO_SHOW_RETURN_MAX_MINUTES'),
+  };
+}
+
+/**
+ * `RETURN_WINDOW_PRESETS`, read out of `Settings.tsx` rather than imported.
+ *
+ * It is not exported, and it should not become exported to serve a test. Reading
+ * the SOURCE is also what makes `offers no preset the server would refuse` mean
+ * what it says: the `PRESETS` table further down is this file's EXPECTATION, and
+ * an expectation checked against itself proves nothing about the shipped list.
+ */
+function returnWindowPresets(): number[] {
+  const src = read(SETTINGS_ROUTE);
+  const open = src.indexOf('const RETURN_WINDOW_PRESETS');
+  expect(open, `RETURN_WINDOW_PRESETS not found in ${SETTINGS_ROUTE}`).toBeGreaterThan(-1);
+  const lhs = src.indexOf('= [', open);
+  expect(lhs).toBeGreaterThan(open);
+  const close = src.indexOf(']', lhs);
+  expect(close).toBeGreaterThan(lhs);
+  return [...src.slice(lhs, close).matchAll(/\d+/g)].map((m) => Number(m[0]));
+}
+
 describe('the server half — what a merchant may set, and what nothing stops her setting', () => {
   /**
    * The day this leaves the set, every change made through the control below
@@ -132,10 +181,36 @@ describe('the server half — what a merchant may set, and what nothing stops he
     expect(read(SALONS_ROUTE)).toContain('noShowReturnMinutes: s.noShowReturnMinutes');
   });
 
-  /** The floor. Zero and negatives are the server's refusal, not the client's. */
-  it('states a floor, in the route and in the database', () => {
-    expect(validatorBody()).toContain('value <= 0');
-    expect(read(SALON_SCHEMA)).toContain('salon_no_show_return_positive');
+  /**
+   * THE RANGE, IN BOTH PLACES THAT STATE IT. Out-of-range is the server's
+   * refusal, not the client's — the name of this spec used to say "a floor",
+   * and there are now two ends to hold.
+   *
+   * THE OLD CONSTRAINT IS GONE, NOT STOOD BESIDE THE NEW ONE, and `not.toContain`
+   * is the assertion that says so. `> 0` next to `>= 5` can never be the CHECK
+   * that fires, so a database carrying both would name a constraint in its error
+   * that no longer describes the rule it broke. Migration 0051 REPLACES.
+   *
+   * THE TWO NUMBERS ARE PINNED LITERALLY, ONCE, AND ON PURPOSE. Everything else
+   * here reads them from source so the route and the column cannot drift apart —
+   * but a range that agrees with itself at 10080 would still pass every one of
+   * those checks, and 10080 is the money defect. 1440 is where the early-arrival
+   * grace certainly crosses into another day's booking; 5 keeps the till able to
+   * see a deposit at check-in. Retuning either is a decision, and a decision
+   * should have to come back through this spec.
+   */
+  it('states a floor and a ceiling, in the route and in the database', () => {
+    const { min, max } = serverBounds();
+    expect([min, max]).toEqual([5, 1440]);
+
+    const body = validatorBody();
+    expect(body).toContain('value < NO_SHOW_RETURN_MIN_MINUTES');
+    expect(body).toContain('value > NO_SHOW_RETURN_MAX_MINUTES');
+
+    const schema = read(SALON_SCHEMA);
+    expect(schema).toContain('salon_no_show_return_in_range');
+    expect(schema).toContain(`BETWEEN ${min} AND ${max}`);
+    expect(schema).not.toContain('salon_no_show_return_positive');
   });
 
   /**
@@ -156,19 +231,37 @@ describe('the server half — what a merchant may set, and what nothing stops he
   });
 
   /**
-   * A TRIPWIRE, NOT AN ALARM. Read the message before treating a red here as a
-   * regression.
+   * EVERY VALUE THE CONTROL CAN EMIT IS ONE THE SERVER WILL TAKE.
+   *
+   * THIS REPLACES A TRIPWIRE. The assertion that stood here asserted the server
+   * had NO ceiling, and its failure message asked whoever saw it red to go and
+   * re-read `RETURN_WINDOW_PRESETS` against the new range. It fired when lane A
+   * landed 5 ≤ n ≤ 1440. The presets were re-read: `[15, 30, 60, 120, 240]` sits
+   * inside the range at both ends, so the list needed no change. A one-shot
+   * instruction that has been carried out is dead weight, so it is gone — but the
+   * agreement it asked for once is worth holding on every run, because the two
+   * halves live in different files owned by different lanes.
+   *
+   * BOTH SIDES ARE READ FROM SOURCE. The list out of `Settings.tsx`, the bounds
+   * out of `salons.ts`. Retyping either side is exactly how they drift: a sixth
+   * preset outside the range must fail HERE, at a lane's own gate, and not as a
+   * 400 under a merchant's hand with the select rendering as though it worked.
+   *
+   * Reading `api/` is a READ. This lane writes only `apps/dashboard/` and
+   * `packages/ui/`, and the specs above already read the same two api files.
    */
-  it('has no ceiling — which is the reported gap, and is why the list below stops short', () => {
-    const body = validatorBody();
-    const hasCeiling = /value\s*>\s*\d/.test(body) || /MAX/.test(body);
-    expect(
-      hasCeiling,
-      'A ceiling has landed on parseNoShowReturnMinutes. That is the reported api/ gap being ' +
-        'closed, and it is good news. Now revisit RETURN_WINDOW_PRESETS in Settings.tsx: its ' +
-        'top option was chosen against an unbounded server and must sit inside the server’s ' +
-        'range, and its bottom must sit above the floor. Then delete this assertion.',
-    ).toBe(false);
+  it('offers no preset the server would refuse', () => {
+    const { min, max } = serverBounds();
+    const presets = returnWindowPresets();
+
+    expect(presets.length, 'no presets parsed — the reader has lost the array').toBeGreaterThan(0);
+    for (const preset of presets) {
+      expect(
+        preset >= min && preset <= max,
+        `preset ${preset} is outside the server's ${min}–${max} range, so the control can emit a ` +
+          'value `parseNoShowReturnMinutes` refuses. Move the preset, or argue the bound in api/.',
+      ).toBe(true);
+    }
   });
 });
 
@@ -284,8 +377,21 @@ describe('the control the design does not draw', () => {
   });
 
   /**
-   * "1 minutes" — the singular the foot sentence got wrong, and it was reachable
-   * from the server the whole time: the CHECK is `> 0`, so 1 is storable.
+   * "1 minutes" — the singular the foot sentence got wrong.
+   *
+   * THIS PINS THE FORMATTER, NOT A REACHABLE SALON, and that distinction is the
+   * whole of this comment. It used to be justified by storability — the CHECK was
+   * `> 0`, so 1 could sit in the column — and that justification is now FALSE: the
+   * floor is 5, and neither the route nor `salon_no_show_return_in_range` will
+   * admit 1 from any door. The minute-singular arm of `formatReturnWindow` is
+   * therefore unreachable from the server today.
+   *
+   * It is still pinned, because this spec renders a PROP rather than a stored
+   * value, and because a naive `${minutes} minutes` is the implementation someone
+   * writes when the arm looks unused. The arm is cheap; re-deriving why it exists
+   * after it is deleted is not. Moving the case to a still-storable non-preset
+   * value — 45, say — would have kept the spec honest about reachability and lost
+   * the singular entirely, since no storable value below 60 produces it.
    */
   it('says "1 minute", not "1 minutes"', () => {
     const { update } = stubUpdate();

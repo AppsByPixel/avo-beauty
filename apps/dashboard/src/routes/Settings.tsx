@@ -363,17 +363,20 @@ function ModuleRow({
  *
  * ── why a fixed list and not a second Stepper ──────────────────────────────
  * The deposit above is a `Stepper` with a hard 1–10 KD range the DATABASE states
- * (`salon_deposit_range`) and the route re-states. This field has no upper bound
- * anywhere: `parseNoShowReturnMinutes` asks only for "a whole number of minutes
- * greater than zero" and the CHECK is `salon_no_show_return_positive` — `> 0`.
+ * (`salon_deposit_range`) and the route re-states. This field is bounded too, as
+ * of lane A's ceiling: `parseNoShowReturnMinutes` holds 5 ≤ n ≤ 1440 and the CHECK
+ * `salon_no_show_return_in_range` holds it again. The list still beats a stepper,
+ * and the reasons barely move — a bound existing is not the same as a bound this
+ * control should re-state.
  *
- *   A STEPPER WOULD HAVE TO INVENT `min`, `max` AND `step`, and would then
- *   ENFORCE the invention: `Stepper` clamps (`Math.min(max, Math.max(min, …))`),
- *   so a salon already holding a value outside my range would have it quietly
- *   rewritten the first time anyone touched the control. Those salons exist —
- *   `e2e/tenancy.test.ts:709` sends 999 and calls it valid. One `step` also
- *   cannot serve both ends: 15 makes seven days 672 presses, 60 makes 45 minutes
- *   unreachable.
+ *   A STEPPER WOULD HAVE TO MIRROR `min` AND `max` AND INVENT `step`, and would
+ *   then ENFORCE the mirror: `Stepper` clamps (`Math.min(max, Math.max(min, …))`),
+ *   so a salon holding a value outside a STALE copy of the range would have it
+ *   quietly rewritten the first time anyone touched the control — and the copy
+ *   goes stale the day api/ retunes either end. Values between the presets exist:
+ *   `e2e/tenancy.test.ts:709` sends 999 and calls it valid, which 5–1440 still
+ *   does. One `step` also cannot serve both ends: 15 makes a full day 96 presses,
+ *   60 makes 45 minutes unreachable.
  *
  *   A BOUNDED TEXT INPUT would need its own parse, its own inline error and its
  *   own refusal path — a second one, beside the screen's — and would still be
@@ -407,14 +410,22 @@ function ModuleRow({
  * design's rendered "1 hour", and the product description's stated rule ("if the
  * customer doesn't arrive within 1 hour of the slot").
  *
- * ── THE BOUND ITSELF BELONGS ON THE SERVER, AND IS NOT BUILT HERE ──────────
- * This list is what the CONTROL offers. It is not a validation, and it must not
- * be mistaken for one: the endpoint still accepts 1 and still accepts 10080, from
- * the console's `PATCH /v1/platform/salons/{id}` or from curl. That is
- * non-negotiable #7's reasoning applied to a range instead of a permission — a
- * client-side bound is a validation the next client will not have. Reported to
- * trunk for `api/`, described in the handoff, and pinned from the test file so
- * the day a ceiling lands someone re-reads this list.
+ * ── THE BOUND ITSELF BELONGS ON THE SERVER, AND NOW LIVES THERE ────────────
+ * This list is what the CONTROL offers. It is not a validation and must not be
+ * mistaken for one — that is non-negotiable #7's reasoning applied to a range
+ * instead of a permission, and a client-side bound is a validation the next
+ * client will not have. It was reported to trunk for `api/`, and `api/` has since
+ * answered: `parseNoShowReturnMinutes` refuses anything outside 5 ≤ n ≤ 1440, and
+ * migration 0051's `salon_no_show_return_in_range` refuses it again at the column,
+ * replacing the old `> 0`. So the console's `PATCH /v1/platform/salons/{id}` and
+ * curl are bounded by the same range this select sits inside — the endpoint no
+ * longer accepts 1, and no longer accepts 10080.
+ *
+ * These five were chosen before that range existed and all five sit inside it, so
+ * nothing here moved. `settingsNoShowWindow.test.tsx § offers no preset the server
+ * would refuse` reads BOTH this array and the route's two constants from source
+ * and checks the containment on every run, so a sixth preset outside the range
+ * fails at the gate rather than as a 400 under a merchant's hand.
  */
 const RETURN_WINDOW_PRESETS: readonly number[] = [15, 30, 60, 120, 240];
 
