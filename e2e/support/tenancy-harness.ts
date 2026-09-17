@@ -2314,6 +2314,40 @@ function signalApiGroup(signal: NodeJS.Signals): void {
  * server that is no longer the one under test.
  */
 export async function stopTenancyApi(): Promise<void> {
+  /*
+   * PAY THE LEDGER WHAT `seedSalonB()` OWES IT, BEFORE ANYTHING ELSE HERE.
+   *
+   * `startTenancyApi()` calls `seedSalonB()`, whose member INSERT writes Fatima
+   * `9001` a `balance_fils` of `B_MEMBER_BALANCE_FILS` in SQL and writes no
+   * `member_wallet` pair behind it — a balance with no originating entry, which
+   * is "a hole in that record, not a fixture convenience" per `api/src/db/seed.ts`
+   * § "the opening balances". It is the same defect `reports.test.ts` and
+   * `account.test.ts` already answer for their own members, and it is the exact
+   * pattern `overCapVerdict` in `support/wallet-census.ts` tells the next lane to
+   * fix. She was carried on `DOCUMENTED_DRIFTERS` instead, with a reason that
+   * named lane A's seed; the seed was never the writer, this file was.
+   *
+   * HERE AND NOT IN `seedSalonB()`, for the rule the over-cap message states: the
+   * census measures the FINAL state of the database, so reconciling LAST leaves a
+   * file free to write her balance with SQL mid-run for a shortfall spec. This
+   * function is the harness's own `afterAll` — every one of the thirty-seven files
+   * that calls `startTenancyApi()` calls this one too — so it is where the reset
+   * that opens the hole is answered.
+   *
+   * BEFORE THE `!child` GUARD, because `no-show-worker.test.ts` stops the API in
+   * its last spec on purpose and its `afterAll` then reaches a `stopTenancyApi()`
+   * that has nothing left to kill. A reconcile behind the guard would be skipped
+   * in exactly that file.
+   *
+   * IT COSTS ONE ROW PER FILE THAT ACTUALLY MOVED HER, NOT ONE PER FILE. After the
+   * first correction her ledger tracks her balance, and charges move both together;
+   * only the next `seedSalonB()` reset re-opens a gap, and only by whatever that
+   * file spent. `WHERE d.diff <> 0` writes nothing for the rest. The rows are
+   * `adjustment`s, which no tile and no report counts, and `account.test.ts`
+   * already posts two of them at this same salon and branch.
+   */
+  reconcileWalletLedger(B_MEMBER, B_BRANCH, 'TENB');
+
   if (!child) return;
   const dying = child;
   const exited = new Promise<void>((r) => dying.once('exit', () => r()));
