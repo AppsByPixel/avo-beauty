@@ -52,40 +52,66 @@ hand looks. It is here now. **DECISIONS.md 108** carries what it cost: a FAIL on
 the one assertion that stands between this product and a ledger that disagrees
 with itself, arriving minutes after a money-moving merge.
 
-The suite **was** idempotent and **is not any more**: it is green exactly once per
-database reset. Counts are still asserted as **deltas** against what each run
-finds, because `topup_intent` rows are real payment records and a suite that
-truncates them to stay green is a suite that can hide a real charge — and that
-design is not what broke.
+The suite is **idempotent**: it is green on a fresh database and green again on the
+same database, with no reset between. Counts are asserted as **deltas** against
+what each run finds, because `topup_intent` rows are real payment records and a
+suite that truncates them to stay green is a suite that can hide a real charge.
 
 Measured 2026-08-25 — fresh database `26 passed (26)`, immediate re-run on the
-same database `26 passed (26)`. **Re-measured 2026-09-16 on 30 files: fresh
-`482 passed (482)`, immediate re-run on the same database `2 failed | 480
-passed`.** Both failures are the same sentence — *"a walk-in is |amount_fils| and
-carries no deposit"*, `expected 10000 to be +0` — in
-`reportsArtist.int.test.ts` and `reportsReconciliation.int.test.ts`.
+same database `26 passed (26)`. **Re-measured 2026-09-17 on 31 files: fresh
+`496 passed (496)`, immediate re-run on the same database `496 passed (496)`.**
 
-**The cause is a cleanup that deletes half a fixture.**
-`routes/artistDayVoid.int.test.ts`'s `afterAll` runs
-`DELETE FROM booking WHERE id LIKE 'AV-BK-%'` — because
-`booking_artist_slot_no_overlap` would otherwise collide on the next run. The
-charges those bookings settled are **not** deleted, and they consumed real
-deposits. So a second run finds charges carrying a `deposit_held` leg with no
-booking pointing at them, which is precisely `services/reports.ts`'s definition
-of a **walk-in** — and a walk-in that carries a deposit is the one thing those
-two specs exist to refuse.
+### It was green exactly once per database reset, and why
 
-Nothing here is wrong about the product: both reports are correct about the rows
-they were given. The fixture manufactured a state the product cannot reach.
+Kept because the defect is instructive and because the shape recurs.
 
-**CI does not meet it** — `ci.yml` mints `avo_int_check` fresh on every run — so
-this is a trap for a person running the suite twice by hand, which is exactly
-what this section tells you to do. Reported by the lane that proved it was not
-its own red, with a control run in which its own file was never loaded.
+Between those two measurements the suite stopped being re-runnable. Measured
+2026-09-16 on 30 files: fresh `482 passed (482)`, immediate re-run on the same
+database `2 failed | 480 passed`. Reproduced 2026-09-17 on the same tree before
+the fix, after `dev` had moved: fresh `485 passed (485)`, immediate re-run
+`2 failed | 483 passed`. The three extra specs are `dev`'s; the two failures are
+the same two. Both are the same sentence — *"a walk-in is |amount_fils| and
+carries no deposit"*, `expected 10000 to be +0` — in `reportsArtist.int.test.ts`
+and `reportsReconciliation.int.test.ts`.
 
-The durable fix is a per-run slot rather than a delete, so nothing needs
-cleaning up: the same move `e2e/support/global-setup.ts` makes with its
-per-run database. Not taken yet.
+**The cause was a cleanup that deleted half a fixture.**
+`routes/artistDayVoid.int.test.ts`'s `afterAll` ran
+`DELETE FROM booking WHERE id LIKE 'AV-BK-%'`, because
+`booking_artist_slot_no_overlap` — an `EXCLUDE` over (`artist_id`, time range) for
+`deposit_held` and `completed` bookings — would otherwise collide on the next run.
+The charges those bookings settled were **not** deleted and could not be: the
+ledger is append-only at the role level (migration 0038). Two of that file's
+charges survive a run un-voided, each carrying a 5.000 `deposit_held` leg, so a
+second run found charges with a deposit and no booking pointing at them — which is
+precisely `services/reports.ts`'s definition of a **walk-in**, and a walk-in
+carrying a deposit is the one thing those two specs exist to refuse. `10000` is
+those two deposits.
+
+Nothing was wrong about the product: both reports were correct about the rows they
+were given. The fixture manufactured a state the product cannot reach.
+
+**CI never met it** — `ci.yml` mints `avo_int_check` fresh on every run — so it was
+a trap for a person running the suite twice by hand, which is exactly what this
+section tells you to do.
+
+**The fix is a per-run slot rather than a delete**, the same move
+`e2e/support/global-setup.ts` makes one level up with its per-run database. The
+`EXCLUDE` is keyed on `artist_id`, so `artistDayVoid.int.test.ts` now mints its own
+artist and her login per run (`AV-AR-<run>` / `AV-ST-<run>`, restricted exactly as
+the seeded `ST-002` is) and deletes nothing. Its bookings stay, which also makes the
+fixture more honest: those charges did settle an appointment with an artist behind
+it, and they are now attributed to that artist in `artist-performance` instead of
+being turned into walk-ins by the cleanup. The file's § THE FIXTURE OWNS ITS OWN
+SLOT carries the whole argument, including why a status reset was **not** the fix —
+an `ON CONFLICT` reset would debit `deposit_held` a second time against one credit.
+
+**What it costs, stated:** one `artist`, one `staff_user`, one `service` row and
+that run's bookings, members and ledger are left behind per run — which is the
+existing house pattern (`bookingsPaging`, `reportsArtist`,
+`reportsReconciliation` already mint per-run artists). It is safe because every
+assertion downstream is additive (`toBeGreaterThanOrEqual`) or scoped to the run's
+own ids. It is also unbounded: a lane database accumulates roughly a dozen artist
+rows per int run and only a `lane-db.sh` reset clears them.
 
 ---
 
