@@ -24,12 +24,52 @@ the failure mode this structure exists to prevent.
 
 ## Every lane isolates its own resources
 
-**Nine** shared mutable resources have now crossed lanes: a Postgres database, the container,
+**Ten** shared mutable resources have now crossed lanes: a Postgres database, the container,
 the browser pane, a cross-worktree `pnpm --filter`, the turbo cache, the process table, the
-session scratchpad, an abandoned iOS simulator that starved three lanes to death, and the
-working directory itself, which resets to trunk between commands. Most were
+session scratchpad, an abandoned iOS simulator that starved three lanes to death, the
+machine's spare capacity (below), and the working directory itself, which resets to trunk
+between commands. Most were
 caught and disclosed by the lane that caused them — which is the standard, and also why this
 rule exists rather than relying on it.
+
+### `pnpm check` needs an idle machine, and a red from a busy one is not evidence
+
+The gate **runs** from a lane worktree — 16m48s, measured — but it boots `packages/mock`,
+mints a per-run Postgres database and saturates the box for a quarter of an hour. Run it
+against anything else heavy and it does not take twice as long; it takes eight hours and
+then fails in a way that looks exactly like a real red.
+
+Measured 2026-09-17, two sessions on one machine:
+
+| | quiet | contended |
+|---|---|---|
+| `e2e` wall time | 1002.21s | **28439.46s** (28×) |
+| slowest *passing* spec | 14587ms | 46872ms |
+| 15-minute load average | — | **367** on twelve cores |
+
+The failures that produced were all time-dependent and none was a logic fault: 25 specs
+answering `401 "Sign in to continue."` where they expected 403, because sessions minted at
+suite start expired *during the run* and the gates they exist to test were never reached;
+a fixture placing a booking at `now() - 24 minutes` colliding with one computed hours
+earlier; an idempotency spec at 12878ms.
+
+**The rule is not "one gate at a time".** That was the first draft and it would have caught
+nothing here, because the dominant load was not a gate: a booted iOS simulator, two Release
+`xcodebuild` runs of the React Native apps, and a Vite dev server. None of those appears in
+`ps aux | grep -E "vitest|tsx|node"`, which is where a session looks when it suspects a peer.
+Device work, builds and dev servers count. **The gate needs an idle box.**
+
+So: before starting a full gate, say so to the other sessions and wait to be told the machine
+is clear — and when you finish device or build work, say *that*, because nobody else can see
+it. `uptime`'s 1-minute average under ~6 is a reasonable green light; the 15-minute average
+stays high long after the box is actually free and should not be used as the gate.
+
+**And the check that settles it: re-run the failing file alone.** A suite that fails under
+load and passes by itself was never evidence either way. Measured the same day —
+`@avo/api#test` failed inside `pnpm check` and then ran **514 passed (514)** on its own,
+same tree, same commit. Do that before you believe a red, and before you tell anyone their
+branch is broken. The contention explanation gets one use per session; if the file fails on
+a quiet box the second time, it is yours.
 
 ### Before a fresh worktree can run anything at all
 

@@ -167,7 +167,24 @@ export const SalonSchema = z.object({
   /** "تصفيف شعر مجاني" — the reward is customer-facing copy, so it needs both. */
   stampRewardAr: z.string().nullable().optional(),
   depositFils: FilsSchema.min(1000).max(10000),
-  noShowReturnMinutes: z.number().int().positive(),
+  /**
+   * 5 ≤ n ≤ 1440, the same bound the API validates and `salon_no_show_return_in_range`
+   * holds on the column (`api/drizzle/0051`). Stated here for the reason
+   * `depositFils` states its own: a bounded column whose shared schema says only
+   * "positive" under-states it, and every surface that parses a Salon then
+   * believes the wider claim.
+   *
+   * THE CEILING IS A MONEY RULE, NOT A TIDINESS ONE. This number is read twice —
+   * `markNoShow` stamps the return deadline with it, and `findApplicableHold`
+   * reuses it as the early-arrival grace (`startsAt <= now + noShowReturnMinutes`)
+   * that decides WHICH held deposit a charge may consume. Set large enough, every
+   * hold a member owns satisfies that predicate and the charge takes whichever the
+   * ordering returns first: the wrong appointment settled, reachable through a
+   * Settings field with no bad code anywhere. 1440 is where the grace certainly
+   * crosses into another day's booking; 5 rather than 1 keeps a till able to see a
+   * deposit at check-in.
+   */
+  noShowReturnMinutes: z.number().int().min(5).max(1440),
   /**
    * IANA zone id — "Asia/Kuwait", not an offset.
    *
