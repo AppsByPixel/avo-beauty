@@ -72,9 +72,18 @@ export const BRAND_BORDER = 'rgba(110,127,108,0.22)';
  * comes off the token and Arabic still resolves to IBM Plex Sans Arabic — the
  * one property that must not be hand-written, because a Latin face on an Arabic
  * string renders as tofu or as a silent system substitution.
+ *
+ * AND THE 600 GOES THROUGH THE SAME CALL, WHICH IT DID NOT USED TO. This read
+ * `{ ...text('bodyS', lang), fontSize: 10.5, fontWeight: '600' }`, and the
+ * paragraph above was true of the family and quietly false of the weight: the
+ * spread had already pinned `*_400Regular`, so the `fontWeight` beside it moved
+ * nothing and every micro-label drew Regular in both languages. `text()`'s third
+ * argument is the only thing that selects a face, for exactly the reason the
+ * family cannot be hand-written — the answer depends on `lang`. See
+ * `theme/typeFidelity.test.ts`; the detector there now covers this shape.
  */
 export function micro(lang: Language): TextStyle {
-  return { ...text('bodyS', lang), fontSize: 10.5, fontWeight: '600' };
+  return { ...text('bodyS', lang, '600'), fontSize: 10.5 };
 }
 
 /** Re-exported so a reader can see the Arabic family is the token's, not a literal. */

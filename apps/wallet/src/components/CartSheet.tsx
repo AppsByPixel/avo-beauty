@@ -393,7 +393,7 @@ function Row({
       <Text
         accessibilityLabel={aria}
         style={[
-          text(emphasis ? 'bodyL' : 'bodyS', lang),
+          text(emphasis ? 'bodyL' : 'bodyS', lang, '600'),
           styles.rowValue,
           { textAlign: alignEnd(lang) },
           tone === 'bad' && styles.rowValueBad,
@@ -548,7 +548,7 @@ const styles = StyleSheet.create({
   totals: { marginTop: 14 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
   rowLabel: { color: color.textMuted },
-  rowValue: { color: color.ink, fontWeight: '600' },
+  rowValue: { color: color.ink },
   rowValueOk: { color: color.brandDeep },
   rowValueBad: { color: color.dangerText },
   chip: {

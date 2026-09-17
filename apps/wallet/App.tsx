@@ -840,11 +840,11 @@ function NavItem({
         */}
         {badge !== undefined && badge > 0 ? (
           <View style={styles.navBadge} testID={`${testID}-badge`}>
-            <Text style={[text('bodyS', lang), styles.navBadgeText]}>{copy.qtyValue(badge)}</Text>
+            <Text style={[text('bodyS', lang, '700'), styles.navBadgeText]}>{copy.qtyValue(badge)}</Text>
           </View>
         ) : null}
       </View>
-      <Text style={[text('bodyS', lang), { color: tint, fontWeight: '600', fontSize: 10.5 }]}>
+      <Text style={[text('bodyS', lang, '600'), { color: tint, fontSize: 10.5 }]}>
         {label}
       </Text>
     </Pressable>
@@ -935,7 +935,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navBadgeText: { color: color.white, fontWeight: '700', fontSize: 9.5 },
+  navBadgeText: { color: color.white, fontSize: 9.5 },
   navItem: {
     minWidth: MIN_TAP_TARGET,
     minHeight: MIN_TAP_TARGET,
