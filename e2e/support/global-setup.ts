@@ -42,6 +42,8 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { readCensus } from './wallet-census.js';
+
 const here = dirname(fileURLToPath(import.meta.url));
 /** e2e/support → e2e → repo root */
 const repoRoot = join(here, '..', '..');
@@ -349,21 +351,27 @@ async function removeSessionCache(): Promise<void> {
   }
 }
 
-/**
- * The most members a FULL run may leave drifting from their wallet ledger.
+/*
+ * THE CAP WAS `MAX_DRIFTING_MEMBERS = 13` AND IT IS NOW A LIST OF NAMES.
+ * (A free-standing note, not a docblock: there is no constant here any more,
+ * and this must not attach itself to `censusVerdict` below.)
  *
- * 13 on 2026-09-11, measured twice: `9001`, both `QA-ADJ-000n`, the four
- * `QA-CMP-000n`, `QA-DEP-0001`, `QA-GW-0001`, `QA-NSW-0001`, `QA-ORD-0001` and
- * both `QA-RES-000n`. Every one has a named cause in the block below.
+ * `DOCUMENTED_DRIFTERS` in `support/wallet-census.ts`, one entry per member with
+ * the sentence saying why its balance cannot come from a real ledger pair. The
+ * cap is that object's size, derived and never written down twice, so it is
+ * still 13 and there is no longer a digit anyone can edit to make it 14.
  *
- * THIS NUMBER ONLY EVER GOES DOWN, one file at a time, as fixtures adopt
- * `reconcileWalletLedger` — `reports.test.ts` and `account.test.ts` are the two
- * that already did, and they are why it is 13 and not 15. Raising it is not
- * forbidden and is sometimes right, but it is a decision that needs a sentence
- * saying which member was added and why its balance cannot come from a real
- * ledger pair. Lowering it when a file adopts the pattern is the whole point.
+ * WHY IT MOVED, IN ONE SENTENCE, BECAUSE THE FULL REASONING IS IN THAT FILE: a
+ * full run measured exactly 13 against a cap of 13, and a ratchet resting on its
+ * stop fires on the next lane to add a fixture rather than on whoever set it
+ * there — so the gate now fails on the IDENTITY of an undocumented drifter, with
+ * a message written for the person it lands on.
+ *
+ * The bound is still on DRIFTERS and it is still a SUBSET check rather than an
+ * equality, for the reason this block has always given: a partial run leaves a
+ * subset of a full run's members, and anything that goes red on
+ * `vitest run one-file.test.ts` is a gate people learn to disable.
  */
-const MAX_DRIFTING_MEMBERS = 13;
 
 /**
  * Set by `reportWalletDrift` when the cap is exceeded, raised by `teardown` only
@@ -393,7 +401,8 @@ let censusVerdict: string | null = null;
  * guaranteed to run after every file and before the database is given back, so
  * this is the only place the question can be asked once about everything.
  *
- * WHY IT WAS A CENSUS AND NOT AN ASSERTION, AND WHY IT IS NOW A CAPPED CENSUS.
+ * WHY IT WAS A CENSUS AND NOT AN ASSERTION, WHY IT BECAME A CAPPED CENSUS, AND
+ * WHY THE CAP IS NOW A NAMED SET RATHER THAN AN INTEGER.
  *
  * THE ORIGINAL DECISION, KEPT VERBATIM BECAUSE IT IS STILL THREE-QUARTERS RIGHT.
  * Drift here is not always a defect. `adjustments.test.ts` § `fund()` sets
@@ -418,6 +427,29 @@ let censusVerdict: string | null = null;
  * not care. Nothing is permanently red for a legitimate technique, and there is
  * no hand-kept list of expected drifters to rot the way `DYNAMIC_PERMISSION`
  * did — one integer, changed deliberately, with the reason in the commit.
+ *
+ * THAT LAST CLAUSE IS NO LONGER TRUE AND IS KEPT SO THE TRADE IS LEGIBLE. There
+ * IS a hand-kept list now — `DOCUMENTED_DRIFTERS` in `support/wallet-census.ts`,
+ * thirteen ids each with the sentence saying why — and the rot it risks is
+ * exactly the rot named above. It was taken on knowingly, for a reason the
+ * integer could not answer: a full run measured 13 against a cap of 13, so the
+ * cap had ZERO HEADROOM, and at zero headroom nothing in this file made adopting
+ * `reconcileWalletLedger` easier than editing one digit. The intended path was
+ * the more expensive one. A list of names makes an addition a conscious act with
+ * a name and a reason attached, the way `KNOWN_INERT` and `LANGUAGE_PINNED` do
+ * in `apps/wallet/src/theme/typeFidelity.test.ts` — and it lets the failure name
+ * WHICH member is new, which the integer never knew and which is the one fact
+ * the lane it fires on actually needs. The effective cap is unchanged at 13.
+ *
+ * AND THE ROT IS BOUNDED, WHICH IS WHY IT WAS ACCEPTABLE AND `DYNAMIC_PERMISSION`
+ * WAS NOT. That list rotted by accumulating entries nobody could refute. This one
+ * is checked as a SUBSET, not an equality — see the paragraph below, which is the
+ * reason an equality is impossible here — so a stale entry cannot fail anything,
+ * but it also cannot hide anything: the printed line reports the drifting count
+ * AGAINST the list's size, so a full run reading `12 of the documented 13` says
+ * on its own face that one entry is now prunable. The mechanism that caught the
+ * original staleness was a number that moved; this is that number, pointed at
+ * the list instead of at the fixtures.
  *
  * A PARTIAL RUN CANNOT FALSELY TRIP IT, which is why the bound is on DRIFTERS
  * and not on reconcilers. `vitest run one-file.test.ts` leaves a SUBSET of the
@@ -472,13 +504,32 @@ let censusVerdict: string | null = null;
  * drifters, because a hand-kept ledger of exceptions is the thing that rotted
  * `DYNAMIC_PERMISSION` in `permission-census.test.ts` within a day.
  *
+ * SUPERSEDED IN ITS LAST SENTENCE ONLY, AND THE FIRST HALF IS WHY THE REPLACEMENT
+ * IS STILL ONE LINE. There is a hand-kept list now, for the zero-headroom reason
+ * above. What did NOT change is that this prints a measurement rather than a
+ * warning, every run, in one line — the line simply now says what the count means
+ * as well as what it is, because `13 of a documented 13` is the warning and `13`
+ * alone was a statistic somebody had to open this file to interpret.
+ *
  * WHAT IT MEASURED WHEN IT LANDED, over the full 38-file suite:
  *
  *     7 of 24 members reconcile to their wallet ledger
  *
- * WHAT IT MEASURES NOW, over the full 41-file suite, twice on 2026-09-11:
+ * WHAT IT MEASURED NEXT, over the full 41-file suite, twice on 2026-09-11:
  *
  *     11 of 24 members reconcile to their wallet ledger
+ *
+ * WHAT IT MEASURES NOW, over the full 42-file suite on 2026-09-17:
+ *
+ *     15 of 28 members reconcile to their wallet ledger
+ *
+ * THE DRIFTER COUNT DID NOT MOVE — it is the same thirteen ids, checked one by
+ * one against that run rather than trusted from this comment, and they are the
+ * thirteen now named in `DOCUMENTED_DRIFTERS`. Four members arrived and all four
+ * reconcile, which is the direction this is supposed to go and is the first time
+ * anything here has been able to say so about a specific set rather than a
+ * count. The signs held too: twelve positive, `QA-GW-0001` negative by exactly
+ * the −239.000 recorded below.
  *
  * THE COUNT WENT UP BY FOUR AND THIS BLOCK WENT STALE BEHIND IT, which is worth
  * recording as plainly as the number: the paragraphs below described the drift
@@ -647,28 +698,22 @@ async function reportWalletDrift(): Promise<void> {
         `exists to break.\n\npsql said:\n${out.trim().slice(0, 600)}`;
       return;
     }
-    announce(line);
-
     /*
      * `11 of 24 members reconcile …; drifting: a by N fils, b by M fils`.
      * The drifters are the comma-separated list after the colon; no colon means
-     * none drifted. Counted off the printed line rather than re-queried, so the
-     * number the gate acts on is provably the number a reader was just shown.
+     * none drifted. Read off the printed line rather than re-queried, so the ids
+     * the gate acts on are provably the ids a reader was just shown — and the
+     * reading is a pure function of that line, which is the whole reason a spec
+     * can drive it (`wallet-census.test.ts`) when this teardown cannot be called.
+     *
+     * ONE `announce` STILL, EVERY RUN. What changed is that the line now carries
+     * what the count MEANS — `all 13 of the documented 13 are drifting` is a
+     * warning where `13` was a statistic — so the headroom is visible on the
+     * green run instead of being discovered on somebody else's red one.
      */
-    const listed = line.split('; drifting: ')[1];
-    const drifting = listed ? listed.split(', ').length : 0;
-    if (drifting > MAX_DRIFTING_MEMBERS) {
-      censusVerdict =
-        `wallet census: ${drifting} members drift from their wallet ledger, and the cap is ` +
-        `${MAX_DRIFTING_MEMBERS}.\n  ${listed}\n\n` +
-        'A fixture wrote `balance_fils` by SQL without the ledger pair that accounts for it — ' +
-        'a balance with no originating entry, per api/src/db/seed.ts § "the opening balances". ' +
-        'Member ids map to files by convention (QA-RPT-… → reports.test.ts), and the fix is a ' +
-        '`reconcileWalletLedger(member, branch, tag)` in that file\'s afterAll, the way ' +
-        'reports.test.ts and account.test.ts do it. If the new drifter is deliberate and its ' +
-        'balance genuinely cannot come from a real ledger pair, raise MAX_DRIFTING_MEMBERS in ' +
-        'support/global-setup.ts and say which member and why.';
-    }
+    const reading = readCensus(line);
+    announce(reading.announcement);
+    censusVerdict = reading.verdict;
   } catch (err) {
     /*
      * WAS A BARE `catch {}` WITH "nothing here is worth failing a run over".
