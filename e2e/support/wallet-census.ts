@@ -163,7 +163,19 @@ export const DOCUMENTED_DRIFTERS: Record<string, string> = {
     'the ledger with the balance wound back behind it. The ledger is right and ' +
     'the balance is the rewind. HER SIGN IS A FUNCTION OF HOW MANY FILES RAN: on ' +
     'a single-file run too few charges have accumulated to outweigh the opening ' +
-    'balance and she reads POSITIVE — same cause, caught earlier.',
+    'balance and she reads POSITIVE — same cause, caught earlier.\n\n' +
+    'SHE IS FATIMA `9001`\'S TWIN AND IS ONE LINE FROM CLOSED. `seedQaMember()` ' +
+    'runs beside `seedSalonB()` in the same `startTenancyApi()`, so the reconcile ' +
+    'that closed `9001` closes her too: a second ' +
+    '`reconcileWalletLedger(QA_MEMBER, ...)` next to the first in ' +
+    '`stopTenancyApi()`. SHE IS LEFT HERE ON PURPOSE, AND THAT IS THE DECISION ' +
+    'THIS SENTENCE EXISTS TO RECORD — she is the only NEGATIVE on a full run, and ' +
+    'the paragraph above leans on that sign as a diagnostic: a negative drift on a ' +
+    'member nobody re-fixtures is the cached-aggregate defect this census was ' +
+    'built to find, and she is the calibration for what that reads like. Closing ' +
+    'her removes the only worked example of the shape worth looking at twice. ' +
+    'That trade deserves its own slice and its own argument; it is not a tidy-up ' +
+    'to be done in passing by whoever next reads this line.',
   'QA-NSW-0001':
     'POSITIVE. `no-show-worker.test.ts`\'s member, cloned with an opening ' +
     'balance so a forfeited deposit has somewhere to come from.',
