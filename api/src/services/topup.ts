@@ -76,6 +76,7 @@ import { platformCommissionFor } from './platformSettings';
 import { enforceTopUpLimits } from './topupLimit';
 import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
+import { nextTopUpIntentId, nextTransactionId } from './ids';
 
 // ------------------------------------------------------------ the machine --
 
@@ -267,13 +268,6 @@ export function serialiseIntentForCustomer(row: TopUpIntentRow): TopUpIntentPubl
   return out as unknown as TopUpIntentPublic;
 }
 
-function intentId(): string {
-  return `TI-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-}
-
-function transactionId(): string {
-  return `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
-}
 
 /**
  * `defaultBranchId` USED TO LIVE HERE, identical to the copy in
@@ -371,7 +365,8 @@ export async function createTopUp(
 
     const bonus = percentOf(input.amountFils, bonusPercent);
 
-    const id = ctx.failCreate ? `${intentId()}-GWFAIL` : intentId();
+    const minted = await nextTopUpIntentId(tx);
+    const id = ctx.failCreate ? `${minted}-GWFAIL` : minted;
     /**
      * A TOP-UP HAS NO BRANCH TO ESTABLISH — it happens on a phone. So this is an
      * attribution and never anything more, and `branch.established` is ignored
@@ -718,7 +713,7 @@ async function creditWallet(
   if (!m) throw notFound('unknown_member', 'No such member.');
 
   const balanceAfter = add(fils(m.balanceFils), intent.creditFils);
-  const txId = transactionId();
+  const txId = await nextTransactionId(tx);
   const reference = intent.reference;
 
   /**

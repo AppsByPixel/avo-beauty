@@ -97,6 +97,7 @@ import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
 import { writeAudit } from './audit';
+import { nextTransactionId } from './ids';
 
 /** One cart line, after validation. */
 export interface OrderLineInput {
@@ -172,10 +173,6 @@ export interface OrderResult {
    * to say".
    */
   voidable: false;
-}
-
-function transactionId(): string {
-  return `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
 }
 
 export async function performOrder(
@@ -303,7 +300,7 @@ export async function performOrder(
      */
     const branch = await resolveBranch(tx, m.salonId, undefined);
     const now = new Date();
-    const txId = transactionId();
+    const txId = await nextTransactionId(tx);
 
     /**
      * ============================================================ 5a. THE DEBIT

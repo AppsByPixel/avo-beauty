@@ -26,6 +26,7 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
+import { campaignId } from '../services/ids';
 import {
   campaign,
   platformMessagingPolicy,
@@ -118,10 +119,6 @@ function serialiseCampaign(row: CampaignRow, salonName: string) {
     note: row.note,
     result: row.result,
   };
-}
-
-function campaignId(): string {
-  return `CMP-${Math.floor(Math.random() * 9000 + 1000)}`;
 }
 
 function parseStatuses(raw: unknown): CampaignStatus[] | null {
@@ -240,11 +237,10 @@ export async function registerCampaignRoutes(app: FastifyInstance): Promise<void
      */
     const reach = await computeReach(db, { salonId: p.salonId, audience: audience as never, now });
 
-    const id = campaignId();
     const [row] = await db
       .insert(campaign)
       .values({
-        id,
+        id: campaignId,
         salonId: p.salonId,
         title,
         body: text,
@@ -272,7 +268,7 @@ export async function registerCampaignRoutes(app: FastifyInstance): Promise<void
       detail: `"${title}" submitted for AVO approval · ${audience} · ${reach} people`,
       source: 'merchant',
       subjectType: 'campaign',
-      subjectId: id,
+      subjectId: row.id,
       metadata: { audience, reach, channel, when: sendWhen, reward },
       ipAddress: req.ip ?? null,
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,

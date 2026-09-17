@@ -512,11 +512,24 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
        *
        * The only unique index this transaction can violate under a race is the
        * idempotency key's: `shop_order_line`'s composite primary key is refused at
-       * the boundary by `parseItems` above, and nothing else here is unique. That
-       * is why this catch does not have to ask WHICH constraint fired the way
-       * routes/charges.ts does — and it is worth saying, because the day another
-       * unique index lands on this path, this comment is wrong and the answer
-       * becomes "still being processed" for something permanent.
+       * the boundary by `parseItems` above, and nothing else here can collide.
+       * That is why this catch does not have to ask WHICH constraint fired the way
+       * routes/charges.ts does.
+       *
+       * THAT SENTENCE WAS FALSE UNTIL MIGRATION 0053, and this paragraph's own
+       * warning — "the day another unique index lands on this path, this comment is
+       * wrong and the answer becomes 'still being processed' for something
+       * permanent" — was describing something already true rather than a risk.
+       * `transaction_pkey` is unique and `services/order.ts` was minting it as
+       * `Math.floor(Math.random() * 9_000_000 + 1_000_000)` INSIDE this very
+       * transaction: 50% collision at ~3,531 orders, and the answer was exactly the
+       * 409 this comment feared, for an order that never happened, to a customer
+       * whose next move is to tap Pay again.
+       *
+       * It is true now because the id comes from a sequence and cannot collide —
+       * `services/ids.ts` carries the argument. The precondition is therefore a
+       * REAL one to maintain: anything that adds a unique index to this path, or
+       * puts a random id back, has to make this catch ask which constraint fired.
        */
       const stored = await awaitCommittedKey(db, idem);
       if (stored) return reply.code(stored.status).send(stored.body);

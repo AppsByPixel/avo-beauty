@@ -355,8 +355,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
             /**
              * The customer-facing member number, from the sequence migration 0025
              * adds. `Math.random()` over four digits — the way `SUP-` and `CMP-`
-             * ids are minted — collides on a PRIMARY KEY within a few thousand
-             * members, and the collision surfaces as a stranger's signup failing.
+             * ids WERE minted, until migration 0052 gave both of them a sequence
+             * for this exact reason — collides on a PRIMARY KEY within a few
+             * thousand members, and the collision surfaces as a stranger's signup
+             * failing.
              *
              * A sequence is not rolled back by a failed transaction, so a refused
              * signup burns a number. That is the correct trade: gaps in a member

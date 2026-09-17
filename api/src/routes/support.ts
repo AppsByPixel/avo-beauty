@@ -59,16 +59,12 @@ import {
   encodeCursor,
   parseCursor,
 } from '../services/streamCursor';
+import { ticketId } from '../services/ids';
 import { enforceTicketLimits } from '../services/supportLimit';
 import { db } from '../db/client';
 import { supportConfig, supportTicket, supportTopic } from '../db/schema/legal';
 import { member } from '../db/schema/member';
 import { transaction } from '../db/schema/transaction';
-
-/** "SUP-48263" — api-contract.md § SupportTicket. Shown to the customer verbatim. */
-function ticketId(): string {
-  return `SUP-${Math.floor(Math.random() * 90_000 + 10_000)}`;
-}
 
 /** api-contract.md rule 5: "Deduplicate an identical message inside 5 minutes". */
 const TICKET_DEDUPE_MINUTES = 5;
@@ -1103,7 +1099,7 @@ export async function registerSupportRoutes(app: FastifyInstance): Promise<void>
     const [row] = await db
       .insert(supportTicket)
       .values({
-        id: ticketId(),
+        id: ticketId,
         memberId: p.id,
         salonId: p.salonId,
         topicId: topic.id,

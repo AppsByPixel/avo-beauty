@@ -1,0 +1,50 @@
+-- ===========================================================================
+-- CMP- AND SUP- IDS COME FROM A SEQUENCE, THE WAY MEMBER NUMBERS ALREADY DO.
+--
+-- `routes/campaigns.ts` minted `CMP-${Math.floor(Math.random() * 9000 + 1000)}`
+-- and `routes/support.ts` minted `SUP-${... * 90_000 + 10_000}`. Both are a
+-- PRIMARY KEY drawn from a small space with no uniqueness check and no retry, so
+-- a collision is an unhandled 23505 that reaches the caller as a 500
+-- `server_error` — a merchant told "Something went wrong on our side" for a
+-- campaign that was refused by a dice roll, and a customer told the same about a
+-- support message.
+--
+-- IT IS A BIRTHDAY PROBLEM, NOT A TAIL. Over 9000 campaign ids the chance of a
+-- duplicate passes 50% at 112 campaigns and 10% at 44; a full `e2e/` run creates
+-- enough to hit it intermittently, and it did — observed 2026-09-17 on dev,
+-- `Key (id)=(CMP-6994) already exists`. `SUP-`'s 90000 is ten times the space and
+-- exactly the same defect: 50% at 354 tickets, which a real queue reaches in a
+-- month.
+--
+-- 0025 already made this call for `member`, and the comment it left names both of
+-- these prefixes as still carrying the bug. This is that sentence being paid off,
+-- not a new idea: same mechanism, same trade, same reasoning about enumerability
+-- (neither id is a credential — a campaign is salon-scoped and permission-gated,
+-- a ticket is scoped to its member or a staffed queue).
+--
+-- A sequence cannot collide, so no retry loop is needed and no `ON CONFLICT`
+-- branch has to be written, tested, and then trusted under concurrency. The id
+-- stays the short quotable string the design asks for — `campaign.id`'s own
+-- comment says "Quoted back to the merchant, so not a uuid" — because a sequence
+-- changes where the digits come from, not what they look like.
+--
+-- START VALUES ARE CHOSEN TO CLEAR THE SPACE THE RANDOM MINTER ALREADY USED.
+-- Existing databases hold `CMP-` rows in 1000..9999 and `SUP-` rows in
+-- 10000..99999, written before this migration. Starting a digit wider than each
+-- of those means a minted id can never equal a row that is already there, so no
+-- backfill and no rename is needed and this migration is safe on a live database.
+-- Ids therefore get one digit longer (CMP-10000, SUP-100000). That is visible to
+-- a merchant reading a campaign id back to support, and it is the cheapest
+-- possible signal that the id space changed.
+--
+-- A FAILED TRANSACTION BURNS A NUMBER, because a sequence is not rolled back.
+-- 0025 accepted that trade for members and it is the same one here: a gap in a
+-- campaign number is invisible, a duplicate is a 500.
+--
+-- `avo_app` gets USAGE via the ALTER DEFAULT PRIVILEGES in 0001, which covers
+-- sequences created later by the migration owner.
+-- ===========================================================================
+
+CREATE SEQUENCE IF NOT EXISTS campaign_number_seq AS bigint START WITH 10000;
+
+CREATE SEQUENCE IF NOT EXISTS support_ticket_number_seq AS bigint START WITH 100000;

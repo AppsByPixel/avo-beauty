@@ -60,6 +60,7 @@ import {
 import { chargeScannerBudget } from '../services/scannerLimit';
 import { writeAudit } from '../services/audit';
 import type { StaffPrincipal } from '../auth/principal';
+import { nextTransactionId } from '../services/ids';
 
 /**
  * Lane D pins the low-balance case with `x-avo-scenario: lowbal`, which the mock
@@ -721,7 +722,7 @@ async function performVoid(
     const refund = worth.earnedFils;
     const balanceAfter = fils(m.balanceFils + refund);
     const now = new Date();
-    const voidId = `TX-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
+    const voidId = await nextTransactionId(tx);
 
     /**
      * The booking the deposit came from, if there was one. Its money is going

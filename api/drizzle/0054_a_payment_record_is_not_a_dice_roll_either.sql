@@ -1,0 +1,36 @@
+-- ===========================================================================
+-- TI- TOP-UP INTENTS GET A SEQUENCE — THE SIXTH MINTER, AND THE LAST MONEY ONE.
+--
+-- 0052 and 0053 fixed nine minters that shared one shape,
+-- `Math.floor(Math.random() * N)`. A SECOND family survived them, with a
+-- different shape and a much larger space:
+--
+--   Math.random().toString(36).slice(2, 8).toUpperCase()   -> 36^6 = 2,176,782,336
+--
+-- A 50% collision needs ~55,000 rows rather than ~3,531, which is why it did not
+-- present the way `CMP-` did. It is still a PRIMARY KEY drawn with no uniqueness
+-- check and no retry, and 55,000 is reachable: `topup_intent` gets a row per
+-- top-up ATTEMPT, not per success, and api/README.md calls those rows real
+-- payment records — "a suite that truncates them to stay green is a suite that
+-- can hide a real charge".
+--
+-- ONLY `TI-` IS MOVED, AND THAT IS A DECISION RATHER THAN THE END OF THE LIST.
+-- The same base-36 mint still names a staff account (`ST-`), a branch (`BR-`), a
+-- product (`PR-`), a happy hour (`HH-`) and a policy document (`doc-`). None of
+-- those is money and every one is low-volume per salon, so 2.18e9 is not a
+-- pressing space for them; `TI-` is the only one where a duplicate is a
+-- customer's money. Trunk took that call on 2026-09-17 and
+-- `services/ids.test.ts` pins the five that stay, so a sixth appearing is a
+-- failing spec rather than a thing nobody notices.
+--
+-- START VALUE. The old ids are six characters from [0-9A-Z], so an all-digit one
+-- like `TI-483920` is possible and its numeric value cannot exceed 999,999.
+-- Starting at 10,000,000 is two digits clear of that, so a minted id can never
+-- equal a row that predates this migration. `-GWFAIL` suffixed ids from the
+-- sandbox failure scenario cannot collide with a bare number at all.
+--
+-- `avo_app` gets USAGE via the ALTER DEFAULT PRIVILEGES in 0001, which covers
+-- sequences created later by the migration owner.
+-- ===========================================================================
+
+CREATE SEQUENCE IF NOT EXISTS topup_intent_number_seq AS bigint START WITH 10000000;

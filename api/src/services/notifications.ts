@@ -22,6 +22,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { merchantNotification } from '../db/schema/notification';
 import type { Executor } from './audit';
+import { notificationId } from './ids';
 
 export type NotificationKind = 'calendar_disconnected' | 'booking_no_show' | 'campaign_held';
 
@@ -35,10 +36,6 @@ export interface RaiseNotificationInput {
   subjectId: string;
   deepLink?: string | null;
   metadata?: Record<string, unknown>;
-}
-
-function notificationId(): string {
-  return `NT-${Math.floor(Math.random() * 9_000_000 + 1_000_000)}`;
 }
 
 /**
@@ -55,7 +52,7 @@ export async function raiseMerchantNotification(
   const rows = await exec
     .insert(merchantNotification)
     .values({
-      id: notificationId(),
+      id: notificationId,
       salonId: input.salonId,
       kind: input.kind,
       severity: input.severity ?? 'warning',
