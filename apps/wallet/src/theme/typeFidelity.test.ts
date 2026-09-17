@@ -195,13 +195,30 @@ function ownerOf(prefix: string): string | undefined {
  * and "it could not look" had been indistinguishable here.
  */
 function weightStyles(src: string): Map<string, { weight: string; namesAFace: boolean }> {
-  const code = stripComments(src);
   const out = new Map<string, { weight: string; namesAFace: boolean }>();
+  for (const [name, body] of styleObjects(stripComments(src))) {
+    const w = DECLARES_WEIGHT.exec(body);
+    if (w) out.set(name, { weight: w[1]!, namesAFace: NAMES_A_FACE.test(body) });
+  }
+  return out;
+}
+
+/**
+ * `name -> body` for every `name: { … }` in a file, read balanced.
+ *
+ * SPLIT OUT OF `weightStyles` SO THERE IS ONE PARSER RATHER THAN THREE. The
+ * faceless-copy scan below needs the same map for a different question — does
+ * this object name a family — and a second copy of this loop would be a second
+ * place to get the multi-line case wrong. `weightStyles` had that bug and it
+ * cost a slice; the fix is not to write it twice.
+ *
+ * Expects source with comments already stripped.
+ */
+function styleObjects(code: string): Map<string, string> {
+  const out = new Map<string, string>();
   const entry = /(\w+)\s*:\s*\{/g;
   for (let m = entry.exec(code); m; m = entry.exec(code)) {
-    const body = readBalanced(code, m.index + m[0].length - 1);
-    const w = DECLARES_WEIGHT.exec(body);
-    if (w) out.set(m[1]!, { weight: w[1]!, namesAFace: NAMES_A_FACE.test(body) });
+    out.set(m[1]!, readBalanced(code, m.index + m[0].length - 1));
   }
   return out;
 }
@@ -1072,5 +1089,520 @@ describe('no site that draws copy pins the script at authoring time', () => {
     expect(src).toContain("const { lang } = useLanguage();");
     expect(src).toContain("text('bodyL', lang, '600')");
     expect(languagePinnedInSource('components/Buttons.tsx', src)).toEqual([]);
+  });
+});
+
+/**
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE THIRD RULE: A TEXT THAT DRAWS COPY AND RESOLVES NO FACE AT ALL.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The two rules above both assume a face was chosen and ask whether it was
+ * chosen WELL — the right weight, the right script. Neither can see a node where
+ * nothing chose one. `styles.payUnit = { fontSize: 11.5 }` declares no weight,
+ * so the weight scan has nothing to look at, and calls no `text()`, so the
+ * language scan has no call to read. It was invisible to both, in the column,
+ * for as long as both have existed.
+ *
+ * WHAT ACTUALLY DRAWS THEN, MEASURED 2026-09-18 AND NOT ASSUMED. react-native-web's
+ * own `Text` base style is `font: '14px System'` (node_modules/react-native-web/
+ * dist/exports/Text/index.js:150), and its compiler rewrites `System` to
+ * `-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`
+ * (StyleSheet/compiler/createReactDOMStyle.js:26). So a style that names no
+ * family does not fall back to Inter and does not render tofu — it renders in
+ * the OS UI font, which is a perfectly legible font that the design never chose.
+ *
+ * THIS IS A DIFFERENT MECHANISM FROM THE ARABIC BUTTONS, AND THE DIFFERENCE IS
+ * WHY IT NEEDED ITS OWN RULE RATHER THAN A WIDENING. The buttons NAMED
+ * `Inter_600SemiBold`, a face carrying exactly one codepoint in any Arabic range,
+ * and the browser's per-character fallback silently supplied something else —
+ * the signature being that the string measured identical to a family that does
+ * not exist. Here nothing is named at all, so there is no substitution to
+ * detect: the stack is a real declared fallback and it resolves to a real font.
+ * Measured against it, "KD" at 11.5px is 16.00px where the design's
+ * Inter_500Medium is 16.21px — NOT the identical-to-nonexistent signature
+ * (16.62px), which is how we know it is resolving rather than substituting.
+ *
+ * AND THE TWO SCRIPTS DO NOT COME OUT THE SAME, WHICH IS THE POINT OF MEASURING
+ * BOTH:
+ *
+ *   "KD"    11.5px  Inter_500Medium 16.21  ·  system stack 16.00  ·  0.2% apart
+ *                   over a 17-character sample: 112.57 vs 112.33.
+ *   "د.ك"  11.5px  IBMPlexSansArabic_500Medium 17.78 w / 17.5 h
+ *                   ·  system stack 14.24 w / 14.0 h  ·  20% narrower, on a
+ *                   line box 3.5px shorter, in a row laid out on the BASELINE.
+ *
+ * So the Latin half is a real defect and a nearly invisible one — two capitals
+ * in a UI grotesque instead of a different UI grotesque. The Arabic half is
+ * non-negotiable #12: a different typeface at a different width and a different
+ * vertical metric, varying by device, next to a Fraunces figure it is supposed
+ * to sit level with. A fix that only mattered in Arabic would still be worth
+ * making; this one matters in both and mostly in one, and the commit says so.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THE DETECTOR DOES NOT TRY TO DECIDE WHAT "COPY" IS.
+ *
+ * The rule as stated is "a Text that renders COPY and resolves no face". The
+ * obvious way to mechanise the first half is to call a Text a glyph when every
+ * child is a string literal with no letters and no digits — `'✓'`, `'←'` — and
+ * exempt it automatically. That was built and then rejected, on evidence:
+ *
+ *   U+2713 ✓  is in Inter AND in IBM Plex Sans Arabic.
+ *   U+2715 ✕  and U+25F7 ◷ are in NONE of the five faces this app loads.
+ *   U+26A0 ⚠  is in Inter and NOT in IBM Plex Sans Arabic.
+ *
+ * "It is a symbol" therefore does not imply "no face was available" — for the
+ * tick a face was available and was not taken, which is a choice; for ✕ and ◷
+ * there is no choice at all. An automatic carve-out would have collapsed those
+ * three different situations into one silent exemption, which is precisely the
+ * shape of comment this slice was dispatched to stop writing.
+ *
+ * So the detector answers only the mechanical question — does anything in this
+ * composition pin a family — and every site it finds is carried below with a
+ * reason a reader can check. The list is four entries against 317 Text nodes in
+ * the column. It is small because the column is nearly clean, and it will grow
+ * by one line per icon; that is the cost, and it buys a human decision at each
+ * one instead of a classifier's guess.
+ *
+ * WHAT IT DOES NOT SEE, stated rather than left to be rediscovered:
+ *   · A `<Text>` nested inside another `<Text>` inherits the outer face, so a
+ *     faceless inner node would be a false positive. There is no nested Text
+ *     anywhere in this column — checked by scanning the tag depth of all 41
+ *     files that contain one — and the day there is, it is a new shape here.
+ *   · A style reached through anything but a `styles.X` member or a bare
+ *     identifier.
+ *   · A family arriving from a component wrapper's own composition. `Money` was
+ *     exactly this shape from the outside and is why the fix went INTO `Money`
+ *     rather than into its four callers: an opaque `unitStyle` prop is
+ *     unresolvable by construction, so the only honest answer is for the
+ *     component to pin the face itself. The detector flags an opaque prop for
+ *     that reason — conservatively, and it found one.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+
+/**
+ * `fontFamily` AS A SHORTHAND PROPERTY, WHICH `NAMES_A_FACE` CANNOT SEE.
+ *
+ * The weight scan's `/fontFamily:/` wants the colon, because it reads style
+ * OBJECT bodies where a family is always assigned. A composition is not that:
+ * `SignedAmount` does `const { fontFamily, fontWeight } = text('money')` and
+ * then writes `style={[{ fontFamily, fontWeight, fontSize, color }]}`, which
+ * pins a face with no colon anywhere near it and no `text(` left in the
+ * expression to find. The first run of this scan reported it, which is the
+ * fixture below and the reason this is a separate regex rather than a widening
+ * of `NAMES_A_FACE` — that one is load-bearing for a different question and
+ * making it looser would quietly make the weight scan more permissive.
+ */
+const SETTLES_A_FACE = /\bfontFamily\b/;
+
+/** Anything that settles a family: a face call, a literal, or a style that has one. */
+function pinsAFace(expr: string, styles: Map<string, string>, bases: Set<string>): boolean {
+  if (SETTLES_A_FACE.test(expr)) return true;
+  if (new RegExp(`\\b(?:${[...bases].join('|')})\\s*\\(`).test(expr)) return true;
+  for (const ref of expr.matchAll(/styles\.(\w+)/g)) {
+    if (SETTLES_A_FACE.test(styles.get(ref[1]!) ?? '')) return true;
+  }
+  return false;
+}
+
+/**
+ * The name to file a finding under. One key per TEXT, not per style in it, so
+ * three Texts sharing `resultGlyph` are one entry rather than three.
+ */
+function facelessKey(expr: string, styles: Map<string, string>): string {
+  const ref = [...expr.matchAll(/styles\.(\w+)/g)].find(
+    (m) => !SETTLES_A_FACE.test(styles.get(m[1]!) ?? ''),
+  );
+  if (ref) return ref[1]!;
+  // An opaque identifier — a prop, most often. The object literals come out
+  // FIRST, because `{ fontWeight, fontSize, color }` is a list of style KEYS
+  // and every one of them reads as a bare identifier otherwise; the shape-seven
+  // fixture keyed itself `prop(fontWeight)` until this line existed.
+  const bare = expr.replace(/\{[^{}]*\}/g, '');
+  const ident = /(?:^|[[\s])([a-z]\w*)(?=\s*(?:,|\]|$))/.exec(bare.trim());
+  return ident ? `prop(${ident[1]})` : 'inline';
+}
+
+/**
+ * Every `<Text>`/`<TextInput>` whose style composition settles no family.
+ *
+ * `<TextInput>` is in because a placeholder and a typed value are copy in
+ * exactly the same way, and because leaving it out would be a hole nobody would
+ * think to look in. All five in this column already pin a face; the scan is
+ * what keeps that a fact.
+ */
+export function facelessTextInSource(rel: string, src: string, bases?: Set<string>): string[] {
+  const code = stripComments(src);
+  const styles = styleObjects(code);
+  const faces = bases ?? faceBases(code).bases;
+  const found = new Set<string>();
+
+  const open = /<Text(Input)?[\s>]/g;
+  for (let m = open.exec(code); m; m = open.exec(code)) {
+    // The attribute list, read to the `>` that is not inside a JSX expression.
+    let depth = 0;
+    let end = m.index;
+    for (let i = m.index; i < code.length; i += 1) {
+      const c = code[i]!;
+      if (c === '{') depth += 1;
+      else if (c === '}') depth -= 1;
+      else if (c === '>' && depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    const tag = code.slice(m.index, end);
+    const attr = /style=\{/.exec(tag);
+    // A Text with no `style` at all resolves no face either, and is keyed so it
+    // cannot pass by being even emptier than the shape we are hunting.
+    if (!attr) {
+      found.add(`${rel}#noStyle`);
+      continue;
+    }
+    const expr = readBalanced(tag, attr.index + attr[0].length - 1);
+    if (!pinsAFace(expr, styles, faces)) found.add(`${rel}#${facelessKey(expr, styles)}`);
+  }
+  return [...found];
+}
+
+/** App-wide, because a face wrapper and the Text using it need not share a file. */
+function facelessText(): Set<string> {
+  const files = allSources().map(
+    (file) => [relativeSource(file), stripComments(fs.readFileSync(file, 'utf8'))] as const,
+  );
+  const bases = new Set<string>();
+  for (const [, code] of files) for (const b of faceBases(code).bases) bases.add(b);
+  const found = new Set<string>();
+  for (const [rel, code] of files) {
+    for (const key of facelessTextInSource(rel, code, bases)) found.add(key);
+  }
+  return found;
+}
+
+/**
+ * EVERY TEXT THAT MAY RESOLVE NO FACE, AND WHY IT MAY.
+ *
+ * The bar for an entry is the one `LANGUAGE_PINNED` sets: not "this looked
+ * deliberate" but "pinning a face here would make the app worse, or is not
+ * available at all". All four below are symbols rather than copy, and the
+ * reasons are codepoint facts rather than impressions, because a reason that
+ * cannot be checked is the thing this file keeps being written to replace.
+ *
+ * None of the four is reachable by a screen reader — each is
+ * `accessibilityElementsHidden` or sits inside a labelled parent — so no entry
+ * here is legitimate only because a sibling pins the face. If one ever is, say
+ * so in its reason: the inheritance it would be resting on is a thing this
+ * detector cannot see.
+ *
+ * AND BEING NON-EMPTY IS ITSELF WORTH SOMETHING, WHICH IS MEASURABLE RATHER
+ * THAN A FEELING ABOUT LISTS. Stubbing `allSources()` to return no files was run
+ * as a mutation: it fails this equality, the language rule's equality and both
+ * walk assertions — and `KNOWN_INERT`'s equality stays GREEN, because an empty
+ * expectation and a scan that read nothing are the same output. A four-entry
+ * list catches a detector that has stopped detecting for free. `KNOWN_INERT`
+ * has to buy the same property with fixtures, and did, after it was wrong by
+ * eight for two days.
+ */
+const FACELESS_OK: Record<string, string> = {
+  'components/TopUpSheet.tsx#resultGlyph':
+    'The top-up result mark — ✓ U+2713, ◷ U+25F7, ✕ U+2715, ⚠ U+26A0. Not a ' +
+    'choice: U+25F7 and U+2715 are in NONE of the five faces this app loads, ' +
+    'and U+26A0 is absent from IBM Plex Sans Arabic. Pinning any app face would ' +
+    'force a substitution for at least two of the four, so the OS repertoire is ' +
+    'the only one that covers the set.',
+  'components/TopUpCard.tsx#arrow':
+    'The Pay→Get arrow, U+2192 / U+2190, chosen by language the way ' +
+    'i18n/rtl.ts § directional glyphs requires. A face IS available — both are ' +
+    'in Inter and in IBM Plex Sans Arabic — and is not taken: the design draws ' +
+    'this as an SVG flipped with scaleX(-1) (design:1889), so no type face is ' +
+    'the design\'s answer here, and the platform glyph is the closer equivalent. ' +
+    'It carries no copy and is accessibilityElementsHidden.',
+  'components/booking/BookingParts.tsx#tickMark':
+    'The selected-slot tick, U+2713, inside a chip whose label is the ' +
+    'accessible name. Inter carries U+2713, so this is a choice rather than a ' +
+    'constraint: it is left on the platform glyph to match resultGlyph, which ' +
+    'has no choice, so the app draws one tick and not two.',
+  'screens/BookScreen.tsx#tickBadgeMark':
+    'The confirmation badge tick, U+2713, on the booking-done screen, with the ' +
+    'heading beside it carrying the meaning. Same glyph and same reasoning as ' +
+    'BookingParts#tickMark.',
+};
+
+describe('every Text that draws copy resolves a face', () => {
+  it('is exactly the allow-list — nothing added, nothing quietly removed', () => {
+    expect([...facelessText()].sort()).toEqual(Object.keys(FACELESS_OK).sort());
+  });
+
+  it('every entry carries a reason, not just a name', () => {
+    for (const [site, why] of Object.entries(FACELESS_OK)) {
+      expect(why.length, site).toBeGreaterThan(40);
+    }
+  });
+
+  /**
+   * THE MONEY UNIT IS NAMED, because it is what this rule was written for and
+   * because the allow-list can only ever say what is ABSENT from it. A reader
+   * asking "did the unit fix survive?" should not have to reason from an
+   * equality to an empty intersection — and `Money` is the one site whose fix
+   * could be silently undone by a caller rather than by an edit to the file.
+   */
+  it('Money resolves the unit face itself, so no caller can omit it', () => {
+    const src = fs.readFileSync(path.join(SRC, 'components/Money.tsx'), 'utf8');
+    expect(src).toContain("style={[text('bodyS', lang, unitWeight), unitStyle, { color }]}");
+    expect(facelessTextInSource('components/Money.tsx', src)).toEqual([]);
+    // And the four callers hand it size and weight, never a family.
+    for (const rel of [
+      'components/WalletCard.tsx',
+      'components/TopUpCard.tsx',
+      'components/account/DeleteAccountSheet.tsx',
+    ]) {
+      const caller = stripComments(fs.readFileSync(path.join(SRC, rel), 'utf8'));
+      expect(/unitStyle=\{[^}]*fontFamily/.test(caller), rel).toBe(false);
+    }
+  });
+});
+
+/**
+ * THE GUARD ON THE GUARD, AND THIS ONE IS NOT OPTIONAL.
+ *
+ * `toEqual(Object.keys(FACELESS_OK))` is a four-entry equality, and it passes
+ * identically whether the column is clean or `facelessTextInSource` has stopped
+ * finding anything. That is not a hypothetical: the inert-override list read
+ * `[]` for two days while eight sites stood in the column, because "found
+ * nothing" and "could not look" are the same output.
+ *
+ * So every shape the scan claims gets a fixture, and every fixture is written
+ * as a PAIR — the defective source, and the same source with the one thing that
+ * settles the face put back. A fixture that only asserts the red half proves
+ * the detector fires; a fixture that only asserts the green half proves it is
+ * quiet. The pair proves it DISCRIMINATES, which is the only property worth
+ * anything here.
+ */
+describe('the faceless-Text scan can still see', () => {
+  it('shape one: a single faceless style reference, and one that names a face', () => {
+    const red = [
+      '        <Text style={styles.glyph}>{copy.label}</Text>',
+      'const styles = StyleSheet.create({',
+      '  glyph: { fontSize: 28, color: WHITE },',
+      '});',
+    ].join('\n');
+    const green = red.replace(
+      '  glyph: { fontSize: 28, color: WHITE },',
+      "  glyph: { fontSize: 28, color: WHITE, fontFamily: 'Fraunces_600SemiBold' },",
+    );
+
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#glyph',
+    ]);
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+  });
+
+  it('shape two: a composition a face call heads, and the same one without it', () => {
+    const green = [
+      "        <Text style={[text('bodyS', lang, '600'), styles.pill]}>{copy.bonus}</Text>",
+      'const styles = StyleSheet.create({',
+      '  pill: { fontSize: 10.5, color: color.brandDeep },',
+      '});',
+    ].join('\n');
+    const red = green.replace("text('bodyS', lang, '600'), ", '');
+
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#pill',
+    ]);
+  });
+
+  it('shape three: an inline object that settles a face, and one that does not', () => {
+    const red = [
+      '        <Text style={[styles.unit, { color }]}>{unit}</Text>',
+      'const styles = StyleSheet.create({',
+      '  unit: { fontSize: 11.5 },',
+      '});',
+    ].join('\n');
+    const green = red.replace(
+      '{ color }',
+      "{ color, fontFamily: moneyFigureFace() }",
+    );
+
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#unit',
+    ]);
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+  });
+
+  /**
+   * SHAPE FOUR — AN OPAQUE PROP, WHICH IS THE SHAPE THE SLICE WAS ABOUT.
+   *
+   * `Money` rendered its unit as `[unitStyle, { color }]`, and `unitStyle` is a
+   * prop: the family, if any, arrives from a call site this file cannot see. The
+   * scan is deliberately conservative here — it reports rather than assumes —
+   * and that report is what made the fix go into `Money` instead of into four
+   * callers plus a comment asking the fifth to remember.
+   */
+  it('shape four: an opaque prop, and the same node with the face pinned under it', () => {
+    const red = '        <Text style={[unitStyle, { color }]}>{unit}</Text>';
+    const green = "        <Text style={[text('bodyS', lang, unitWeight), unitStyle, { color }]}>{unit}</Text>";
+
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#prop(unitStyle)',
+    ]);
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+  });
+
+  /**
+   * SHAPE FIVE — a DERIVED wrapper heads it. `micro()` pins a face exactly as
+   * `text()` does, and `faceBases()` grows the set from the source rather than
+   * being told, so the next wrapper is covered the day it is written. The
+   * mutation renames the helper to one nothing derives, which is what a
+   * hand-listed set of roots would have done to `micro` itself.
+   */
+  it('shape five: a derived face wrapper counts, an undeclared name does not', () => {
+    const green = [
+      'export function micro(lang: Language): TextStyle {',
+      "  return { ...text('bodyS', lang, '600'), fontSize: 10.5 };",
+      '}',
+      '        <Text style={[micro(lang), styles.badge]}>{copy.badge}</Text>',
+      'const styles = StyleSheet.create({',
+      '  badge: { color: color.brandDeep },',
+      '});',
+    ].join('\n');
+    const red = green.replace('[micro(lang), styles.badge]', '[notAFaceHelper(lang), styles.badge]');
+
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#badge',
+    ]);
+  });
+
+  /**
+   * SHAPE SIX — both halves written down the page. This is the blindness that
+   * cost the weight scan eight sites: a per-LINE read cannot see a composition
+   * with three elements or a style object with four properties, which is to say
+   * it cannot see the ordinary way of writing either. The style attribute and
+   * the style object are both multi-line here, and the `fontFamily` that
+   * settles the green half sits on its own line.
+   */
+  it('shape six: the attribute and the style object spread over several lines', () => {
+    const red = [
+      '        <Text',
+      '          style={[',
+      '            styles.resultGlyph,',
+      '            bad && styles.resultGlyphBad,',
+      '          ]}',
+      '        >',
+      '          {copy.outcome}',
+      '        </Text>',
+      'const styles = StyleSheet.create({',
+      '  resultGlyph: {',
+      '    color: WHITE,',
+      '    fontSize: 28,',
+      '    lineHeight: 34,',
+      '  },',
+      '  resultGlyphBad: { color: color.dangerText },',
+      '});',
+    ].join('\n');
+    const green = red.replace('    lineHeight: 34,', "    lineHeight: 34,\n    fontFamily: 'Inter_600SemiBold',");
+
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#resultGlyph',
+    ]);
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+  });
+
+  /**
+   * SHAPE SEVEN — `fontFamily` AS A SHORTHAND PROPERTY, and the one false
+   * positive this scan produced on its first run against the real column.
+   * `SignedAmount` destructures the face off `text('money')` and writes
+   * `{ fontFamily, fontWeight, fontSize, color }`, so there is no colon for
+   * `NAMES_A_FACE` to find and no `text(` left in the composition. It is a real
+   * shape, it pins a real face, and it is why `SETTLES_A_FACE` exists.
+   */
+  it('shape seven: a face arriving as a shorthand property', () => {
+    const green = [
+      "  const { fontFamily, fontWeight } = text('money');",
+      "  const { fontSize } = text('bodyL');",
+      '        <Text style={[{ fontFamily, fontWeight, fontSize, color }]}>{display}</Text>',
+    ].join('\n');
+    const red = green.replace('{ fontFamily, fontWeight, fontSize, color }', '{ fontWeight, fontSize, color }');
+
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#inline',
+    ]);
+  });
+
+  /**
+   * SHAPE EIGHT — `<TextInput>`. A placeholder and a typed value are copy in
+   * the same way a label is, and all five in this column already pin a face; the
+   * scan is what keeps that a fact rather than a thing that was true once.
+   */
+  it('shape eight: a TextInput is scanned too', () => {
+    const red = [
+      '      <TextInput',
+      '        style={styles.input}',
+      '        placeholder={copy.emailPlaceholder}',
+      '      />',
+      'const styles = StyleSheet.create({',
+      '  input: { fontSize: 15, color: color.ink },',
+      '});',
+    ].join('\n');
+    const green = red.replace('style={styles.input}', "style={[text('bodyL', lang), styles.input]}");
+
+    expect(facelessTextInSource('components/Fixture.tsx', red)).toEqual([
+      'components/Fixture.tsx#input',
+    ]);
+    expect(facelessTextInSource('components/Fixture.tsx', green)).toEqual([]);
+  });
+
+  /**
+   * SHAPE NINE — no `style` attribute at all, which resolves no face by the
+   * shortest possible route. Nothing in this column has it; it is keyed so that
+   * a node cannot pass the scan by being emptier than the shape being hunted.
+   */
+  it('shape nine: a Text with no style attribute at all', () => {
+    expect(facelessTextInSource('components/Fixture.tsx', '        <Text>{copy.label}</Text>')).toEqual([
+      'components/Fixture.tsx#noStyle',
+    ]);
+  });
+
+  /**
+   * AND IT DOES NOT READ PROSE. `Money.tsx` now quotes its own former defect —
+   * "This line used to read `[unitStyle, { color }]`" — to explain it, and
+   * `TopUpCard`'s two unit styles carry paragraphs about what they used to be.
+   * A scan that counted those would report sites nobody can fix, and a guard
+   * that reports the unfixable is a guard that gets an exception added to it and
+   * then gets ignored.
+   */
+  it('ignores the same shapes written inside comments', () => {
+    const prose = [
+      '/**',
+      ' * This line used to read `<Text style={[unitStyle, { color }]}>{unit}</Text>`,',
+      ' * and `<Text style={styles.payUnit}>` before that.',
+      ' */',
+      "// also `<Text style={styles.getUnit}>{unit}</Text>` here",
+      "        <Text style={[text('bodyS', lang), styles.clean]}>{copy.label}</Text>",
+      'const styles = StyleSheet.create({',
+      '  clean: { color: color.ink },',
+      '});',
+    ].join('\n');
+
+    expect(facelessTextInSource('components/Fixture.tsx', prose)).toEqual([]);
+  });
+
+  /**
+   * AND THE WALK IS THE SHARED ONE. The weight scan spent two days reading a
+   * different app from the language scan because each had its own file list and
+   * only one of them had been taught about `App.tsx`. Three scans now take
+   * `allSources()`, and this asserts the third one does too rather than trusting
+   * that it was wired up.
+   */
+  it('scans the same files the other two rules do, App.tsx included', () => {
+    const seen = new Set<string>();
+    for (const file of allSources()) seen.add(relativeSource(file));
+    expect(seen.has('App.tsx')).toBe(true);
+    expect(seen.has('components/Money.tsx')).toBe(true);
+    // Every allow-listed site names a file the walk actually reaches.
+    for (const key of Object.keys(FACELESS_OK)) {
+      expect(seen.has(key.split('#')[0]!), key).toBe(true);
+    }
   });
 });

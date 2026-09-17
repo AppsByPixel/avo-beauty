@@ -238,7 +238,7 @@ export function TopUpCard({
               {preview ? (
                 <View style={[styles.bonusPill, on && styles.bonusPillOn]}>
                   <Text
-                    style={styles.bonusPillText}
+                    style={[text('bodyS', lang, '600'), styles.bonusPillText]}
                     testID={`topup-bonus-${amount}`}
                     accessibilityElementsHidden
                     importantForAccessibility="no"
@@ -341,7 +341,25 @@ const styles = StyleSheet.create({
     backgroundColor: color.brandTint,
   },
   bonusPillOn: { backgroundColor: color.surface },
-  bonusPillText: { fontSize: 10.5, fontWeight: '600', color: color.brandDeep },
+  /**
+   * "+0.500" ON THE TOP-UP TILE, AND IT IS INTER, NOT FRAUNCES.
+   *
+   * Its sibling `amountText` is `Fraunces_600SemiBold` and this one is not,
+   * which looks like an oversight and is the design: `AVO Wallet Home.dc.html`
+   * sets the amount with an explicit `font-family:'Fraunces',serif` (:293) and
+   * gives the bonus `bonusStyle` (:1392), which names no family and therefore
+   * inherits the section's `font-family:Inter,…` (:48). So the pair is
+   * deliberately mixed and the tile reads as a figure with a note beside it.
+   *
+   * THE FACE WAS MISSING ENTIRELY UNTIL NOW, though, and this was not one of
+   * the three sites the slice was dispatched for — the new faceless-Text rule
+   * found it. The style carried a size, a weight and a colour and no family, so
+   * it drew in the OS UI font in both languages. The weight has moved to
+   * `text('bodyS', lang, '600')` at the call site, where it can resolve
+   * Inter_600SemiBold; left here it would sit behind a pinned single-weight
+   * face and select nothing.
+   */
+  bonusPillText: { fontSize: 10.5, color: color.brandDeep },
 
   // --- the pay→get card. design:299, `margin-top:15px`.
   payGet: {
@@ -366,9 +384,16 @@ const styles = StyleSheet.create({
   // `Money` applies ONE colour to the figure and its unit, so the design's muted
   // unit is not expressible through it. A colour set here would be overridden
   // and would read as a live rule that isn't one, so: size only.
+  //
+  // SIZE ONLY IS NOW ENOUGH, AND IT WAS NOT BEFORE. `Money` used to render the
+  // unit as `[unitStyle, { color }]`, so a bare `{ fontSize }` here named no
+  // family and "KD" / "د.ك" drew in the OS UI font. `Money` composes
+  // `text('bodyS', lang)` under this now, so the face arrives without this
+  // object having to know the language — which it cannot.
   payUnit: { fontSize: 11.5 },
   getLabel: { color: color.brandDeeper },
   getFigure: { fontSize: 22, fontWeight: '600' },
+  /** Size only, for the reason `payUnit` gives. */
   getUnit: { fontSize: 11.5 },
   arrow: { fontSize: 18, color: color.brandDeep, opacity: 0.5 },
 

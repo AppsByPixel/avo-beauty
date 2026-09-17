@@ -242,6 +242,7 @@ export function DeleteAccountSheet({
                 color={color.dangerText}
                 figureStyle={styles.balanceFigure}
                 unitStyle={styles.balanceUnit}
+                unitWeight="600"
               />
             </View>
 
@@ -319,7 +320,20 @@ const styles = StyleSheet.create({
   },
   balanceLabel: { color: color.dangerText },
   balanceFigure: { fontSize: 17, fontWeight: '600' },
-  balanceUnit: { fontSize: 12, fontWeight: '600' },
+  /**
+   * THE WEIGHT MOVED TO `unitWeight="600"`, AND IT WAS THE ONLY ONE OF THE
+   * THREE FACELESS UNITS THAT WAS ACTUALLY DRAWING ITS WEIGHT.
+   *
+   * That is worth recording, because it is the opposite of the inert-override
+   * defect next door. This object named a weight and no family, so the node
+   * fell back to the OS UI stack — a multi-weight font, which honoured 600
+   * (measured: "KD" at 12px is 16.63px at 400 and 17.20px at 600 in that
+   * stack). The weight was real; the FACE was wrong. Now `text('bodyS', lang,
+   * '600')` resolves Inter_600SemiBold / IBMPlexSansArabic_600SemiBold, which
+   * are single-weight faces — so the `fontWeight` had to leave this object
+   * rather than stay beside the size, or it would become the inert kind.
+   */
+  balanceUnit: { fontSize: 12 },
   actions: { flexDirection: 'row', gap: 10, marginTop: 20 },
   action: {
     flex: 1,
