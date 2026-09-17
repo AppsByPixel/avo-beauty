@@ -11,30 +11,68 @@
  * ring on web from the shared style below (interaction-spec.md §2).
  *
  * ═════════════════════════════════════════════════════════════════════════════
- * THE `'en'` IN `text('bodyL', 'en', '600')` IS NOT A CHOICE — IT IS A GAP,
- * REPORTED AND NOT CLOSED HERE.
+ * THE LANGUAGE COMES FROM `useLanguage()`, NOT FROM A PROP. GAP CLOSED.
  *
- * The weight is the third positional argument, so a call that wants one has to
- * say something about the language. These two calls were `text('bodyL')`, which
- * means they were ALREADY resolving English: this component takes no `lang` and
- * does not read `useLanguage()`, so a button label in Arabic — and every label
- * here is product copy, in both languages — is set in Inter, which has no
- * Arabic glyphs. `'en'` states the behaviour that was already there rather than
- * introducing it; nothing about what is drawn changed on this line except the
- * weight.
+ * This docblock used to carry the gap rather than the fix. The two labels read
+ * `text('bodyL', 'en', '600')`, and the `'en'` was a statement of what was
+ * already happening, not a choice: the calls had been `text('bodyL')`, this
+ * component took no `lang` and never read `useLanguage()`, so every Arabic
+ * button label in the app asked for an Inter face for Arabic text. Every label
+ * here is product copy, in both languages. That is non-negotiable #12 on the
+ * most-tapped text in the app.
  *
- * It is left as it was found because it is a DIFFERENT defect from the inert
- * weight this slice fixes, its fix is a prop or a hook rather than an argument,
- * and folding it in would have hidden it inside 83 mechanical edits. The other
- * language-less `text()` calls in this app are deliberate and documented —
- * `Money`'s figure, `QrOverlay`'s member id, `PaymentCode`'s panel id — because
- * their content is Latin in both languages. A button label is not.
- * ═════════════════════════════════════════════════════════════════════════════
+ * WHAT THE MISSING FACE ACTUALLY DID, MEASURED RATHER THAN ASSUMED. Not tofu.
+ * `Inter_600SemiBold.ttf` carries 2849 codepoints and exactly one of them is in
+ * an Arabic block (U+FEFF, a zero-width mark), so it can draw none of
+ * "العودة للرئيسية". react-native-web emits the family as a bare
+ * `font-family: Inter_600SemiBold` with NO fallback list — verified by rendering
+ * this component and reading the inline style — so the browser's own
+ * per-character fallback is the only thing standing between the customer and a
+ * blank button. It does step in: driven in Chrome against the real ttf, the
+ * Arabic label rendered at exactly the same width (58.94px) as the same string
+ * asking for a family that does not exist at all, and at a different width from
+ * IBM Plex Sans Arabic (54.90px). Identical-to-nonexistent is the signature of a
+ * silent system substitution.
+ *
+ * SO THE SYMPTOM IS "LEGIBLE, AND NOT THE DESIGN'S TYPE" RATHER THAN "BROKEN",
+ * AND THAT IS WHY IT SURVIVED THIS LONG. What the customer got was the OS's
+ * default Arabic face at a browser-synthesised bold, in place of the
+ * `IBMPlexSansArabic_600SemiBold` the app loads at startup and never asked for.
+ * Two things stop that being merely cosmetic. The substitution is the platform's
+ * choice and not ours, so it differs per device and can be absent — an Android
+ * build with no system Arabic face has nothing to fall back TO. And it is not
+ * always benign: `QrOverlay` hit the same bug on a salon initial and the
+ * substituted glyph for أ read as a "1".
+ *
+ * `document.fonts.check('600 17px Inter_600SemiBold', 'العودة للرئيسية')`
+ * returns TRUE, which is worth knowing before anyone reaches for it as a guard.
+ * It reports that a matching font is loaded, not that it covers the string.
+ *
+ * THE HOOK, NOT A PROP. A `lang` prop would be explicit, and there are twenty
+ * call sites in fourteen files that would every one of them pass the same value
+ * — the one they already hold, because they take their label from `copy.*`. A
+ * prop whose only correct argument is the reading language is a prop that adds a
+ * way to be wrong and no way to be right differently. A button label is by
+ * definition in the language being read. `useLanguage()` is what the rest of the
+ * app does, and reading it here means a new call site cannot forget.
+ *
+ * IT IS SAFE TO HOOK BECAUSE THE PROVIDER IS THE ROOT. `App.tsx` wraps `<Gate />`
+ * — everything the app renders after the fonts load — in `<LanguageProvider>`,
+ * and all twenty call sites live under it. `useLanguage()` throws outside a
+ * provider rather than defaulting, which is the behaviour we want: a Button
+ * mounted outside one is a bug and now says so at the point it happens instead
+ * of quietly drawing English type. Every render test that reaches a Button
+ * already wraps in `LanguageProvider`, for the same reason — the components
+ * around it need `copy`.
+ *
+ * `theme/typeFidelity.test.ts` § the language-less-`text()` sweep now holds this
+ * line for the whole app, so it cannot come back here or anywhere else.
  */
 
 import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 import { color, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
+import { useLanguage } from '../i18n/language';
 
 /*
  * THE FOCUS RING IS NOT A STYLE OBJECT. It used to be, and that was a bug: a
@@ -62,6 +100,7 @@ export function PrimaryButton({
   accessibilityLabel,
   style,
 }: ButtonProps) {
+  const { lang } = useLanguage();
   return (
     <Pressable
       onPress={onPress}
@@ -73,7 +112,7 @@ export function PrimaryButton({
       dataSet={focusable}
       style={[styles.base, styles.primary, disabled && styles.disabled, style]}
     >
-      <Text style={[text('bodyL', 'en', '600'), styles.primaryText, disabled && styles.disabledText]}>
+      <Text style={[text('bodyL', lang, '600'), styles.primaryText, disabled && styles.disabledText]}>
         {label}
       </Text>
     </Pressable>
@@ -88,6 +127,7 @@ export function SecondaryButton({
   accessibilityLabel,
   style,
 }: ButtonProps) {
+  const { lang } = useLanguage();
   return (
     <Pressable
       onPress={onPress}
@@ -100,7 +140,7 @@ export function SecondaryButton({
       style={[styles.base, styles.secondary, style]}
     >
       {/* Brand text on a light surface is brandDeep, never brand. */}
-      <Text style={[text('bodyL', 'en', '600'), styles.secondaryText]}>{label}</Text>
+      <Text style={[text('bodyL', lang, '600'), styles.secondaryText]}>{label}</Text>
     </Pressable>
   );
 }

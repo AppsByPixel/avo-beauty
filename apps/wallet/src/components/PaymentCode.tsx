@@ -89,6 +89,11 @@ interface Props {
  * it in an RTL paragraph. U+2066/U+2069 (LRI…PDI) isolate it so it reads the
  * same in both languages — the design does the same thing with `direction:ltr`
  * on its id and phone rows (AVO Wallet Home.dc.html:403, :455).
+ *
+ * `text('displayS')` TAKES NO LANGUAGE FOR THE SAME REASON THE ISOLATION MARKS
+ * ARE THERE: the run inside them is Latin in both languages, so it stays in
+ * Fraunces rather than switching to IBM Plex Sans Arabic with the surrounding
+ * copy. `QrOverlay` renders the same id under the same rule.
  */
 function MemberId({ memberId, prefix }: { memberId: string; prefix: string }) {
   return (

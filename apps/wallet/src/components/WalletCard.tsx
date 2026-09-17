@@ -61,6 +61,16 @@ export function WalletCard({ balanceFils, pill, progress, lastUpdated, children 
       </View>
 
       <View style={styles.balanceRow}>
+        {/*
+          `text('displayXL')` WITH NO LANGUAGE, AND IT HAS TO BE. `Money` draws
+          the figure with `fontFamily: moneyFigureFace()` layered over whatever
+          `figureStyle` carries, so the family here is overwritten either way —
+          but passing `lang` would still be wrong as a statement of intent. In
+          Arabic `text('displayXL', 'ar')` resolves to IBM Plex Sans Arabic, and
+          the figure is Western digits in the display face in both languages
+          (non-negotiable #12). This call supplies the SIZE. The unit beside it
+          is the half that changes script, and it does take `lang`.
+        */}
         <Money
           amount={balance}
           color={WHITE}

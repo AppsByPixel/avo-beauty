@@ -227,7 +227,26 @@ describe('the standing inert-override debt', () => {
   });
 
   /**
-   * THE GUARD ON THE GUARD, AND IT REPLACES A TEST THAT HAD BECOME A TAUTOLOGY.
+   * TWO SITES THE DETECTOR ABOVE CANNOT SEE, FOUND 2026-09-17 AND REPORTED HERE
+ * RATHER THAN FIXED. `inertInSource` only follows a `styles.X` REFERENCE into a
+ * `StyleSheet.create` entry, which was the shape all 83 had. It is blind to the
+ * same defect written any other way, and the language sweep at the foot of this
+ * file turned up two:
+ *
+ *   components/booking/tokens.ts § micro()
+ *       `{ ...text('bodyS', lang), fontSize: 10.5, fontWeight: '600' }` — a
+ *       helper, not a StyleSheet entry. The family stays `*_400Regular` in both
+ *       languages while the weight says 600.
+ *   App.tsx:847 (the tab-bar label)
+ *       `[text('bodyS', lang), { color: tint, fontWeight: '600', fontSize: 10.5 }]`
+ *       — an inline object literal, so there is no `styles.X` to follow.
+ *
+ * Both are the inert-override defect exactly, both are one argument to fix
+ * (`text('bodyS', lang, '600')`), and both change what is drawn — so they belong
+ * in a slice that says so, together with widening the detector to cover the two
+ * shapes. Left named here so the next reader finds them rather than the app.
+ *
+ * THE GUARD ON THE GUARD, AND IT REPLACES A TEST THAT HAD BECOME A TAUTOLOGY.
    *
    * `it('records the two this slice removed')` named `OrdersSheet#chipRetryText`
    * and `FulfilmentSection#chipRetryText` and asserted the scan did not contain
@@ -276,5 +295,236 @@ describe('the standing inert-override debt', () => {
     ].join('\n');
 
     expect(inertInSource('components/Fixture.tsx', explicit)).toEqual([]);
+  });
+});
+
+/**
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THE SECOND HALF OF THE SAME RULE: A FACE IS ONLY RIGHT IF THE LANGUAGE IS.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Everything above asks whether the WEIGHT a style declares reaches a face that
+ * can draw it. This asks the question one step earlier: whether the call knew
+ * which SCRIPT it was drawing.
+ *
+ * `text(token, lang = 'en', weight?)` defaults the language, and the default is
+ * a real choice with no warning attached. `text('bodyL')` and
+ * `text('bodyL', 'en')` are the same call, and both return an Inter face. Point
+ * one at Arabic copy and the app asks Inter to draw Arabic.
+ *
+ * WHAT THAT ACTUALLY DOES, MEASURED 2026-09-17 AND NOT ASSUMED. It is not tofu,
+ * which is why it hid. `Inter_600SemiBold.ttf` carries 2849 codepoints and
+ * exactly one of them lies in any Arabic range — U+FEFF, a zero-width mark — so
+ * it can draw no Arabic letter at all. react-native-web then emits the family as
+ * a bare `font-family: Inter_600SemiBold` with no fallback list (read off a
+ * rendered `PrimaryButton`'s inline style), and the BROWSER's per-character
+ * fallback silently supplies the OS default Arabic face. Driven in Chrome
+ * against the real ttf: "العودة للرئيسية" in `Inter_600SemiBold` measured
+ * 58.94px, the identical string in a family that does not exist at all measured
+ * 58.94px, and in `IBMPlexSansArabic_600SemiBold` — the face App.tsx loads —
+ * 54.90px. Identical-to-nonexistent is the signature of a substitution.
+ *
+ * So the customer gets legible Arabic in the platform's font at a synthesised
+ * bold, instead of the design's. That is non-negotiable #12 — "a first-class
+ * layout, not a translation pass" — and it is worse than cosmetic twice over:
+ * the substitute is the platform's pick, so it varies by device and an Android
+ * build without a system Arabic face has nothing to substitute; and `QrOverlay`
+ * already met a case where the substituted glyph for أ read as a "1".
+ *
+ * WHY THE CHECK IS A SOURCE SCAN AND NOT N RENDER ASSERTIONS. The same argument
+ * this file already makes for the weight, and `contrast.test.ts` for colour:
+ * React Native has no DOM to walk, so a render-time check can only assert one
+ * site at a time and would be a restatement of one rule once per screen. The
+ * rule is "no site that draws copy calls `text()` without a runtime language",
+ * and the honest way to check a rule of that shape is to read every call.
+ *
+ * WHAT COUNTS AS A VIOLATION. Both shapes that pin the script at authoring time:
+ * a call with no language argument at all, and a call whose language argument is
+ * a string LITERAL. `text('bodyS', next, '600')` is fine — `next` is a runtime
+ * value, and `LanguageToggle` deliberately sets its label in the OTHER language.
+ * `text('body', localised.translated ? lang : 'en')` is fine for the same
+ * reason: the expression decides at runtime, and `PolicySheet` has a published
+ * clause that may not be translated.
+ *
+ * THE ALLOW-LIST IS THE POINT. Some sites genuinely must pin the script, because
+ * their content is Latin in BOTH languages and passing `lang` would break them
+ * rather than fix them — a money figure set in IBM Plex Sans Arabic is a
+ * regression, not a translation. Those are named below with the reason, and the
+ * assertion is a frozen equality in `KNOWN_INERT`'s style: a new language-less
+ * call fails, and removing one from the list without removing it from the code
+ * fails too. "We checked once" becomes "it stays checked".
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+
+/** `text(` calls whose language is absent or hard-coded, keyed `path#token[@lit]`. */
+export function languagePinnedInSource(rel: string, src: string): string[] {
+  // Docblocks in this app quote `text('bodyL')` when explaining the trap, and a
+  // scanner that counted prose would be unfixable. Block comments collapse to
+  // their newlines so line-based reasoning elsewhere is unaffected.
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => '\n'.repeat((m.match(/\n/g) ?? []).length))
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+
+  const found = new Set<string>();
+  const call = /\btext\s*\(/g;
+  for (let m = call.exec(code); m; m = call.exec(code)) {
+    // `export function text(` is the declaration, not a call site.
+    if (/\bfunction\s*$/.test(code.slice(0, m.index))) continue;
+
+    let i = m.index + m[0].length;
+    let depth = 1;
+    while (depth > 0 && i < code.length) {
+      const c = code[i]!;
+      if (c === '(') depth += 1;
+      else if (c === ')') depth -= 1;
+      i += 1;
+    }
+    const args: string[] = [];
+    let cur = '';
+    let d = 0;
+    for (const c of code.slice(m.index + m[0].length, i - 1)) {
+      if ('([{'.includes(c)) d += 1;
+      if (')]}'.includes(c)) d -= 1;
+      if (c === ',' && d === 0) {
+        args.push(cur.trim());
+        cur = '';
+      } else cur += c;
+    }
+    args.push(cur.trim());
+
+    // A token held in an expression — `text(emphasis ? 'bodyL' : 'bodyS', lang)`
+    // — still has to be checked, so it is keyed by its source text rather than
+    // skipped. Skipping it would be a hole exactly where a reader is least
+    // likely to look for one.
+    const literalToken = /^'([A-Za-z0-9]+)'$/.exec(args[0] ?? '')?.[1];
+    const token = literalToken ?? (args[0] ?? '').replace(/\s+/g, ' ');
+    const lang = args[1] ?? '';
+    if (lang === '') found.add(`${rel}#${token}`);
+    else {
+      const literal = /^'(en|ar)'$/.exec(lang)?.[1];
+      if (literal) found.add(`${rel}#${token}@${literal}`);
+    }
+  }
+  return [...found];
+}
+
+function languagePinnedSites(): Set<string> {
+  const found = new Set<string>();
+  const files = [...sourceFiles(SRC), path.join(SRC, '..', 'App.tsx')];
+  for (const file of files) {
+    const rel = path.relative(SRC, file).replace(/^\.\.\//, '');
+    for (const key of languagePinnedInSource(rel, fs.readFileSync(file, 'utf8'))) found.add(key);
+  }
+  return found;
+}
+
+/**
+ * EVERY SITE THAT MAY PIN THE SCRIPT, AND WHY IT MAY.
+ *
+ * The test is the keys; the values are what makes the keys reviewable. The bar
+ * for an entry is not "this looked deliberate" — it is "passing `lang` here
+ * would make the app worse", which for all six below is the same fact: the
+ * string is Latin in Arabic too, and the design sets it in Fraunces in both.
+ *
+ * Adding a line to this list is the moment to check that claim, because after
+ * that nothing else will.
+ */
+const LANGUAGE_PINNED: Record<string, string> = {
+  'components/Money.tsx#money':
+    "SignedAmount's activity figure. `text('money')` supplies Fraunces and the " +
+    "weight; `text('money', 'ar')` would return IBM Plex Sans Arabic and set an " +
+    'activity amount in the body face. Money is Western digits in the display ' +
+    'face in both languages — non-negotiable #12.',
+  'components/Money.tsx#bodyL':
+    'The same figure, and only `fontSize` is destructured from it. The design ' +
+    'pairs the display face with body size and no single token names that ' +
+    'pairing; the language cannot reach the rendered style from here at all.',
+  'components/WalletCard.tsx#displayXL':
+    'The balance figure handed to `Money` as `figureStyle`, which layers ' +
+    '`moneyFigureFace()` over it. Same rule as above: this call is the SIZE, and ' +
+    'the unit beside it — the half that changes script — does take `lang`.',
+  'components/PaymentCode.tsx#displayS':
+    'The member id, "AVO-1204". A Latin identifier in both languages, wrapped in ' +
+    'LRI/PDI so bidi cannot reorder it, and set in Fraunces exactly as the panel ' +
+    'around it is.',
+  'components/QrOverlay.tsx#displayM':
+    'The same member id on the enlarged panel, under the same rule. Note that ' +
+    "this file's OTHER initial — the salon's — is NOT here: it comes off the " +
+    'localised name, it was language-less once, and it drew a substituted glyph ' +
+    'that read as "1". It takes `lang`.',
+  'components/booking/BookingParts.tsx#displayS@en':
+    "The artist avatar initial. `artistInitial` is handed `artist.name`, the " +
+    'Latin name — never `artistName(artist, lang)` and never `nameAr` — so the ' +
+    'character is Latin in both languages. This is the one entry whose ' +
+    'justification lives in a fact the scanner cannot see, which is why the call ' +
+    'site carries the same note.',
+};
+
+describe('no site that draws copy pins the script at authoring time', () => {
+  it('is exactly the allow-list — nothing added, nothing quietly removed', () => {
+    expect([...languagePinnedSites()].sort()).toEqual(Object.keys(LANGUAGE_PINNED).sort());
+  });
+
+  it('every entry carries a reason, not just a name', () => {
+    for (const [site, why] of Object.entries(LANGUAGE_PINNED)) {
+      expect(why.length, site).toBeGreaterThan(40);
+    }
+  });
+
+  /**
+   * THE GUARD ON THE GUARD, for the reason the inert-override suite states: an
+   * equality against a fixed list passes just as well when the scanner has
+   * stopped scanning. So it is pointed at a source carrying one of each shape
+   * this rule cares about, and required to separate them.
+   */
+  it('the scanner still sees both shapes — and leaves runtime languages alone', () => {
+    const fixture = [
+      "        <Text style={[text('bodyL'), styles.a]}>{copy.a}</Text>",
+      "        <Text style={[text('bodyS', 'en', '600'), styles.b]}>{copy.b}</Text>",
+      "        <Text style={[text('body', lang), styles.c]}>{copy.c}</Text>",
+      "        <Text style={[text('bodyS', next, '600'), styles.d]}>{copy.d}</Text>",
+      "        <Text style={[text('label', x ? lang : 'en'), styles.e]}>{copy.e}</Text>",
+      // A computed token with no language is still a violation, and is keyed by
+      // its source rather than dropped for having nothing static to name.
+      "        <Text style={[text(big ? 'bodyL' : 'bodyS'), styles.f]}>{copy.f}</Text>",
+    ].join('\n');
+
+    expect(languagePinnedInSource('components/Fixture.tsx', fixture).sort()).toEqual([
+      "components/Fixture.tsx#big ? 'bodyL' : 'bodyS'",
+      'components/Fixture.tsx#bodyL',
+      "components/Fixture.tsx#bodyS@en",
+    ]);
+  });
+
+  /**
+   * AND IT DOES NOT READ PROSE. Three files in this app explain the trap by
+   * quoting the defective call, `Buttons.tsx` at length. A scanner that counted
+   * those would report sites nobody can fix and the list would have to be
+   * padded with comments — which is how a guard becomes noise and then becomes
+   * ignored.
+   */
+  it('ignores the same call written inside a comment', () => {
+    const prose = [
+      '/**',
+      " * These two calls were `text('bodyL')`, which means they were ALREADY",
+      ' * resolving English.',
+      ' */',
+      "// and `text('displayM')` here too",
+      "        <Text style={[text('bodyL', lang), styles.a]}>{copy.a}</Text>",
+    ].join('\n');
+
+    expect(languagePinnedInSource('components/Fixture.tsx', prose)).toEqual([]);
+  });
+
+  /**
+   * THE BUTTONS ARE NAMED, because they are what this suite was written for and
+   * because the allow-list above can only ever say what is ABSENT from it. A
+   * reader asking "did the button fix survive?" should not have to reason from
+   * an equality to an empty intersection.
+   */
+  it('the shared buttons take the reading language from the provider', () => {
+    const src = fs.readFileSync(path.join(SRC, 'components/Buttons.tsx'), 'utf8');
+    expect(src).toContain("const { lang } = useLanguage();");
+    expect(src).toContain("text('bodyL', lang, '600')");
+    expect(languagePinnedInSource('components/Buttons.tsx', src)).toEqual([]);
   });
 });
