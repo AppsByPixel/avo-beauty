@@ -166,6 +166,22 @@ export function ArtistRow({
       style={[styles.optionRow, selected && styles.optionRowOn]}
     >
       <View style={styles.avatar}>
+        {/*
+          `'en'` IS PINNED ON PURPOSE, AND IT IS NOT THE TRAP IT LOOKS LIKE.
+          `QrOverlay`'s salon initial had exactly this shape and WAS the trap:
+          its initial came off the LOCALISED salon label, so in Arabic it was an
+          Arabic letter asking for an Inter face, and it drew a substituted glyph
+          that read as "1". This one is different in the one way that matters —
+          `artistInitial` is handed `artist.name`, the Latin name, never
+          `artistName(artist, lang)` and never `nameAr`. So the character here is
+          Latin in both languages and the face is Fraunces in both, exactly like
+          the money figure and the member id.
+
+          If a later change points this at the localised name, it becomes the
+          QrOverlay bug and the `'en'` becomes the defect. Nothing but this
+          comment says so, because a source scan cannot see where the string
+          came from.
+        */}
         <Text style={[text('displayS', 'en'), styles.avatarInitial]}>
           {artistInitial(artist.name)}
         </Text>
