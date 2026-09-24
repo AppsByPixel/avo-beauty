@@ -39,6 +39,15 @@
  * codepoints against a family that was never declared at all.
  *
  * ═════════════════════════════════════════════════════════════════════════════
+ * THE PAY→GET ARROW IS HERE TOO, AND IT IS THE ODD ONE. Every other node in
+ * this file asserts Inter in English and Plex Arabic in Arabic; that one asserts
+ * Inter in BOTH, because a language-following face would hand the Arabic build a
+ * mark 14% narrower (Inter 1954/2048 em, Plex 820/1000) on a node that sets the
+ * gap between the Pay and Get columns — and the design's own arrow is one
+ * artwork mirrored by a width-preserving `scaleX(-1)`. `TopUpCard.tsx`
+ * § THE ARROW IS A GLYPH is the argument; the identical expectation in both
+ * languages is how it is held.
+ *
  * WHY THE BOOK-CONFIRMED TICK IS NOT HERE. `ConfirmedStage` is internal to
  * `BookScreen`, which loads a salon, a service list, an artist list and an
  * availability window before it can reach the confirmation. `ArtistRow` is the
@@ -49,9 +58,17 @@
 
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fils, type BookableArtist, type TopUpIntentPublic } from '@avo/types';
+import {
+  fils,
+  type BookableArtist,
+  type Member,
+  type PromotionSet,
+  type Salon,
+  type TopUpIntentPublic,
+} from '@avo/types';
 
 import { ArtistRow } from './booking/BookingParts';
+import { TopUpCard } from './TopUpCard';
 import { TopUpSheet } from './TopUpSheet';
 import { LanguageProvider } from '../i18n/language';
 import type { TopUpController, TopUpStage } from '../state/useTopUp';
@@ -157,6 +174,50 @@ const RESULT_ARMS: [string, TopUpStage, string][] = [
   ['gateway failed ✕', GATEWAY_FAILED, '✕'],
 ];
 
+/**
+ * THE PAY→GET ARROW, which is the one node here whose two languages are
+ * expected to agree. Everything above asserts Inter in English and Plex Arabic
+ * in Arabic; this asserts Inter in BOTH, and that difference is the decision
+ * rather than an oversight — `TopUpCard.tsx` § "THE ARROW IS A GLYPH" carries
+ * the reasoning and the widths. No fake timers: the card's 30s interval only
+ * re-resolves happy hours, `ARROW_PROMOTIONS` carries none, and `cleanup()`
+ * unmounts before it could fire.
+ */
+const ARROW_MEMBER = { tier: 'silver' } as Member;
+
+const ARROW_SALON = {
+  loyaltyMode: 'tiers',
+  timezone: 'Asia/Kuwait',
+  tiers: [
+    { name: 'bronze', bonusPercent: 0 },
+    { name: 'silver', bonusPercent: 10 },
+  ],
+} as Salon;
+
+const ARROW_PROMOTIONS: PromotionSet = {
+  boosts: {},
+  boostsPublishedAt: '2026-08-10T06:00:00.000Z',
+  boostsPublishedBy: 'Noura',
+  happy: [],
+};
+
+function renderArrow(lang: 'en' | 'ar') {
+  cleanup();
+  const { container } = render(
+    <LanguageProvider initial={lang}>
+      <TopUpCard
+        member={ARROW_MEMBER}
+        salon={ARROW_SALON}
+        promotions={ARROW_PROMOTIONS}
+        selected={fils(10000)}
+        onSelect={() => {}}
+        onContinue={() => {}}
+      />
+    </LanguageProvider>,
+  );
+  return faceOfGlyph(container, lang === 'ar' ? '←' : '→');
+}
+
 describe('the symbol glyphs resolve one of the app\'s own faces', () => {
   it('the selected-slot tick is Inter in English and Plex Arabic in Arabic', () => {
     // 700, because the style declared `fontWeight: '700'` with no family to
@@ -177,6 +238,17 @@ describe('the symbol glyphs resolve one of the app\'s own faces', () => {
   });
 
   /**
+   * THE ARROW IS THE ONE THAT MUST **NOT** FOLLOW THE LANGUAGE, and asserting
+   * the same value twice is the only way to say so in a way that goes red. A
+   * later reader "correcting" this style to `text('bodyS', lang)` — which is
+   * right at every other Text in that file — fails the Arabic half here.
+   */
+  it('the pay→get arrow is Inter in English AND in Arabic, deliberately', () => {
+    expect(renderArrow('en')).toBe('Inter_400Regular');
+    expect(renderArrow('ar')).toBe('Inter_400Regular');
+  });
+
+  /**
    * THE ONE THAT FAILS ON THE SHAPE THAT ACTUALLY SHIPPED. Every assertion
    * above would still pass if the family were merely the WRONG app face. This
    * one goes red on the regression that matters: a family absent altogether,
@@ -184,7 +256,7 @@ describe('the symbol glyphs resolve one of the app\'s own faces', () => {
    * the OS then resolves.
    */
   it('emits a family at all — the defect was its absence, not its value', () => {
-    const faces = [renderTick('en'), renderTick('ar')];
+    const faces = [renderTick('en'), renderTick('ar'), renderArrow('en'), renderArrow('ar')];
     for (const lang of ['en', 'ar'] as const) {
       for (const [, stage, ch] of RESULT_ARMS) faces.push(renderTopUp(lang, stage, ch));
     }

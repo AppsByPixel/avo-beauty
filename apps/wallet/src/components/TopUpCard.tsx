@@ -127,13 +127,64 @@ function bonusHeading(
  * "11.000 KD" (non-negotiable #12). `Money` already owns that split and the
  * combined screen-reader label.
  *
- * THE ARROW IS A GLYPH, AND IT MIRRORS. The design draws an SVG and flips it
- * with `scaleX(-1)` (design:1889); in this stack the equivalent is the directional
- * character, chosen by language exactly as `tierBonusIllustration` already does
- * for the tier ladder — `10 → 10` in English, `10 ← 10` in Arabic (design:1716 /
- * :1722). i18n/rtl.ts § "directional glyphs" is the rule. The row itself needs
- * no mirroring: `flexDirection: 'row'` is already a logical direction, so Pay
- * and Get swap sides on their own.
+ * THE ARROW IS A GLYPH, IT MIRRORS, AND ITS FACE DOES NOT FOLLOW THE LANGUAGE.
+ * Two decisions, not one, and the second used to be "no face at all".
+ *
+ * DIRECTION, unchanged. The design draws an SVG and flips it with `scaleX(-1)`
+ * (design:303; the transform string itself is `arrowFlip`, design:1889). In this
+ * stack the equivalent is the directional character, chosen by language exactly
+ * as `tierBonusIllustration` does for the tier ladder — `10 → 10` in English,
+ * `10 ← 10` in Arabic (design:1716 / :1722). i18n/rtl.ts § "directional glyphs"
+ * is the rule. The row itself needs no mirroring: `flexDirection: 'row'` is
+ * already a logical direction, so Pay and Get swap sides on their own.
+ *
+ * FACE: `Inter_400Regular` IN BOTH LANGUAGES — which departs from the rule every
+ * other Text in this file follows, and the departure is the whole point.
+ *
+ * THE OLD REASON FOR NO FACE DOES NOT SURVIVE CONTACT. It was that the design's
+ * answer here is an SVG, so no type face is the design's answer and the platform
+ * glyph is "the closer equivalent". That does not follow. A platform glyph is
+ * not closer to a specific SVG than Inter's arrow is; it is whatever the device
+ * happens to ship, which is neither. Nor was leaving it unpinned NEUTRAL: with
+ * the family absent, react-native-web leaves its base `-apple-system,
+ * BlinkMacSystemFont, Segoe UI, …` stack in place — observed, by removing this
+ * `fontFamily` again and reading the computed style — and the
+ * `__AvoNoSuchFamily__` control measures a full em, 34.00 at 34px, so the
+ * unpinned mark advanced 18.00 at this size while every face this app loads
+ * draws it narrower. Declining to name a face selected a wider, device-dependent
+ * glyph; it did not decline to choose.
+ *
+ * SO WHICH FACE, AND WHY NOT THE USUAL ONE. `text('bodyS', lang)` would give
+ * Inter in English and IBM Plex Sans Arabic in Arabic, and their arrows are not
+ * the same width. Read off the real ttfs' `hmtx`, at this style's fontSize 18:
+ *
+ *                 U+2192 →   U+2190 ←
+ *   Inter             17.17      17.17     (1954/2048 em, both)
+ *   Plex Arabic       14.76      14.76     ( 820/1000 em, both)
+ *
+ * — a 14% narrower mark in Arabic, on a node that sits BETWEEN the Pay and Get
+ * columns and therefore sets the gap between them. The design cannot produce
+ * that: `scaleX(-1)` is width-preserving, and `arrowFlip` is ONE transform
+ * string shared by all five arrows in the bundle, so the design's mark is one
+ * artwork at one width in both languages. Inter reproduces that exactly — its
+ * → and ← have identical advance — and a language-following face is the choice
+ * that would break it.
+ *
+ * THE RULE THIS DEPARTS FROM EXISTS SO THAT COPY IS SET IN THE SCRIPT'S OWN
+ * FACE, and nothing here is copy. U+2192 is a script-neutral symbol, not an
+ * Arabic letter; Plex Arabic is not "the Arabic arrow" but a second face that
+ * happens to carry the same codepoint. The node is `accessibilityElementsHidden`
+ * and `importantForAccessibility="no"`, so there is no Arabic reading of it to
+ * serve. And the language has already been consulted once at this site, on the
+ * axis where it decides something — the codepoint. Consulting it again on the
+ * face buys nothing and costs the width. `theme#moneyFigureFace` is the same
+ * shape of exception pointing the other way: a mark whose face is settled by
+ * what it IS rather than by the language around it.
+ *
+ * Because the face does not depend on `lang`, it lives in the static
+ * `StyleSheet.create` object below — which a language-following one could not.
+ * `components/glyphFaceRender.test.tsx` asserts that it arrives, in both
+ * languages, with the same expected value in both. That sameness is the claim.
  */
 function PayGetCard({ amount, preview }: { amount: Fils; preview: TopUpPreview }) {
   const { lang, copy } = useLanguage();
@@ -395,7 +446,9 @@ const styles = StyleSheet.create({
   getFigure: { fontSize: 22, fontWeight: '600' },
   /** Size only, for the reason `payUnit` gives. */
   getUnit: { fontSize: 11.5 },
-  arrow: { fontSize: 18, color: color.brandDeep, opacity: 0.5 },
+  // One face in both languages — see § THE ARROW IS A GLYPH above. It is a
+  // literal rather than `text()` precisely because it must NOT take `lang`.
+  arrow: { fontFamily: 'Inter_400Regular', fontSize: 18, color: color.brandDeep, opacity: 0.5 },
 
   cta: {
     marginTop: 13,
