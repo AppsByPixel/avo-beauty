@@ -1158,10 +1158,14 @@ describe('no site that draws copy pins the script at authoring time', () => {
  *
  * So the detector answers only the mechanical question — does anything in this
  * composition pin a family — and every site it finds is carried below with a
- * reason a reader can check. The list is four entries against 317 Text nodes in
- * the column. It is small because the column is nearly clean, and it will grow
- * by one line per icon; that is the cost, and it buys a human decision at each
- * one instead of a classifier's guess.
+ * reason a reader can check. The list went four → one → zero against the 322
+ * Text and TextInput nodes in this column, spread over 41 of its 126 files: not
+ * because the bar was lowered, but because each reason was checked against the
+ * fonts and none of the four survived. It will grow by one line per icon that
+ * genuinely has no face available; that is the cost, and it buys a human
+ * decision at each one instead of a classifier's guess. Because it is now empty,
+ * the equality over it no longer discriminates on its own — see
+ * § AND AN EMPTY LIST IS WEAKER and `WALK_MUTATIONS`.
  *
  * WHAT IT DOES NOT SEE, stated rather than left to be rediscovered:
  *   · A `<Text>` nested inside another `<Text>` inherits the outer face, so a
@@ -1170,6 +1174,20 @@ describe('no site that draws copy pins the script at authoring time', () => {
  *     files that contain one — and the day there is, it is a new shape here.
  *   · A style reached through anything but a `styles.X` member or a bare
  *     identifier.
+ *   · A FACE THAT IS PINNED BUT DOES NOT CARRY THE GLYPH. This rule answers
+ *     "does anything settle a family", never "does that family have this
+ *     character", and one site in this column is exactly that gap:
+ *     `MembershipSection#rungBonus` draws `copy.tierBonusIllustration`
+ *     — "10 → 11" — under `moneyFigureFace('400')`, and Fraunces carries neither
+ *     U+2192 nor U+2190 (624 codepoints, censused above). The arrow therefore
+ *     falls through to the system stack while the digits beside it draw
+ *     Fraunces. It is NOT A DEFECT under the tick measurement — the cascade runs
+ *     per character, so the pin costs that character nothing — and the face is
+ *     pinned for the DIGITS, which is the right reason. But it does mean "one
+ *     arrow everywhere by construction" is true of `TopUpCard#arrow` and not of
+ *     that node, and the two are the same codepoint. Fixing it means splitting a
+ *     copy string that is assembled in `copy/en.ts` and `copy/ar.ts`, which is a
+ *     copy-contract change rather than a style one. Named here, not built.
  *   · A family arriving from a component wrapper's own composition. `Money` was
  *     exactly this shape from the outside and is why the fix went INTO `Money`
  *     rather than into its four callers: an opaque `unitStyle` prop is
@@ -1264,11 +1282,26 @@ export function facelessTextInSource(rel: string, src: string, bases?: Set<strin
   return [...found];
 }
 
-/** App-wide, because a face wrapper and the Text using it need not share a file. */
-function facelessText(): Set<string> {
-  const files = allSources().map(
-    (file) => [relativeSource(file), stripComments(fs.readFileSync(file, 'utf8'))] as const,
-  );
+/**
+ * App-wide, because a face wrapper and the Text using it need not share a file.
+ *
+ * `patch` EXISTS ONLY SO THIS WALK CAN BE MUTATION-TESTED, and § THE GUARD ON
+ * THE GUARD below is why it had to be. With `FACELESS_OK` empty the equality
+ * over this function is `toEqual([])`, which cannot tell a clean column from a
+ * walk that read nothing. Handing it one real file with one real face removed
+ * is what tells them apart — and it has to go through THIS function over THESE
+ * files, because a fixture passed to `facelessTextInSource` proves only that
+ * the detector works on a string somebody typed.
+ *
+ * It patches the RAW source, before `stripComments`, so a fixture's anchor is
+ * the text a reader sees in the file rather than whatever survives blanking.
+ */
+function facelessText(patch?: (rel: string, raw: string) => string): Set<string> {
+  const files = allSources().map((file) => {
+    const rel = relativeSource(file);
+    const raw = fs.readFileSync(file, 'utf8');
+    return [rel, stripComments(patch ? patch(rel, raw) : raw)] as const;
+  });
   const bases = new Set<string>();
   for (const [, code] of files) for (const b of faceBases(code).bases) bases.add(b);
   const found = new Set<string>();
@@ -1325,38 +1358,134 @@ function facelessText(): Set<string> {
  * for it are in the `Buttons.tsx` docblock — which used to claim it reports
  * loadedness, and no longer does.
  *
- * THE SURVIVOR IS NOT REACHABLE BY A SCREEN READER — it is
- * `accessibilityElementsHidden` — so it is not legitimate only because a sibling
- * pins the face. If a future entry ever is, say so in its reason: the
- * inheritance it would rest on is a thing this detector cannot see.
+ * AND THE LAST ENTRY WENT THE SAME WAY, THOUGH IT TOOK A DIFFERENT ARGUMENT.
+ * `TopUpCard.tsx#arrow` was never an absence case — Inter and IBM Plex Sans
+ * Arabic both carry U+2192 and U+2190, measured. It rested on design intent: the
+ * design draws this arrow as an SVG flipped with `scaleX(-1)`, therefore no type
+ * face was the design's answer and the platform glyph was "the closer
+ * equivalent". Its own reason called that the weaker kind of reason, and it was
+ * weaker than it admitted — it does not follow. A platform glyph is not closer
+ * to a specific SVG than Inter's arrow is; it is whatever the device ships,
+ * which is neither. Nor is leaving a glyph unpinned a refusal to choose: the
+ * `__AvoNoSuchFamily__` control advances a full em, so the unpinned arrow was
+ * drawing WIDER than any face this app loads.
  *
- * AND BEING NON-EMPTY IS ITSELF WORTH SOMETHING, WHICH IS MEASURABLE RATHER
- * THAN A FEELING ABOUT LISTS. Stubbing `allSources()` to return no files was run
- * as a mutation: it fails this equality, the language rule's equality and both
- * walk assertions — and `KNOWN_INERT`'s equality stays GREEN, because an empty
- * expectation and a scan that read nothing are the same output. A one-entry list
- * still buys that for free; an empty one would not, and if this list ever
- * reaches zero the equality has to be replaced by something with a fixture
- * behind it. `KNOWN_INERT` has to buy the same property with fixtures, and did,
- * after it was wrong by eight for two days.
+ * THE SVG PREMISE WAS RIGHT AND POINTED THE WRONG WAY. `scaleX(-1)` preserves
+ * width, and the bundle flips all five of its arrows through ONE shared
+ * transform string, so the design's mark is one artwork at one width in both
+ * languages. What that argues for is ONE FACE in both languages, not none.
+ * Inter's → and ← are both 1954/2048 em; Plex Arabic's are both 820/1000 — so
+ * `text('bodyS', lang)`, right at every other Text in that file, would have
+ * handed the Arabic build a mark 14% narrower than the English one, between the
+ * two columns whose gap it sets. `styles.arrow` therefore pins
+ * `Inter_400Regular` outright, in both languages, and
+ * `components/glyphFaceRender.test.tsx` asserts the SAME value for both. That
+ * sameness is the claim, and it is the assertion a later "correction" to
+ * `text('bodyS', lang)` fails. The full reasoning is in `TopUpCard.tsx`
+ * § THE ARROW IS A GLYPH.
+ *
+ * IF A FUTURE ENTRY IS REACHABLE BY A SCREEN READER, SAY SO IN ITS REASON. Every
+ * entry this list ever held was `accessibilityElementsHidden`, so none of them
+ * was ever legitimate merely because a sibling pinned the face. The day one is,
+ * the inheritance it would rest on is a thing this detector cannot see.
+ *
+ * AND AN EMPTY LIST IS WEAKER THAN A ONE-ENTRY LIST — MEASURED ON THE WAY OUT,
+ * NOT ASSERTED — SO THE EQUALITY NO LONGER STANDS ALONE.
+ *
+ * While this list held one entry, stubbing `allSources()` to return no files
+ * failed this equality: `[]` could not equal `['components/TopUpCard.tsx#arrow']`.
+ * The same stub was re-run against the EMPTY list, and this equality PASSED. It
+ * is now the `KNOWN_INERT` shape exactly — an empty expectation and a scan that
+ * read nothing are the same output — and the entry had been buying that
+ * discrimination for free simply by existing.
+ *
+ * So emptying the list without replacing what the entry was doing would have
+ * re-created a two-day hole on purpose. The replacement is `WALK_MUTATIONS` and
+ * the test that consumes it, immediately after the equality: the same walk, over
+ * the same real files, with one real face removed from each of two of them.
+ *
+ * ITS OWN MUTATION IS THE SHARP ONE, because three other assertions in this file
+ * happen to die when `allSources()` does, which could be mistaken for the walk
+ * already being guarded. Leaving `allSources()` and the detector untouched and
+ * making only `facelessText()` read no files — the precise `KNOWN_INERT` shape,
+ * a live detector over a dead walk — leaves 43 of 44 tests in this file GREEN,
+ * including this equality, all nine shape fixtures, the App.tsx file-list
+ * assertion and the language rule. The one red is the test below. In the other
+ * direction, a `pinsAFace` that always returns false takes the equality with it,
+ * so the pair discriminates both ways.
+ *
+ * And it is not a list of exceptions, so unlike this one it cannot be emptied by
+ * fixing the column.
  */
-const FACELESS_OK: Record<string, string> = {
-  'components/TopUpCard.tsx#arrow':
-    'The Pay→Get arrow, U+2192 / U+2190, chosen by language the way ' +
-    'i18n/rtl.ts § directional glyphs requires. Both codepoints ARE served: ' +
-    'Inter and IBM Plex Sans Arabic both carry them, and measured against the ' +
-    'no-such-family control all three widths differ (Inter 32.45, Plex 400 ' +
-    '27.88, control 34.00), so a face here would reach the glyph. It is still ' +
-    'not taken: the design draws this as an SVG flipped with scaleX(-1) ' +
-    '(design:1889), so no type face is the design\'s answer here and the ' +
-    'platform glyph is the closer equivalent. It carries no copy and is ' +
-    'accessibilityElementsHidden. This is the one entry resting on design ' +
-    'intent rather than on absence, and it is the weaker kind of reason.',
-};
+const FACELESS_OK: Record<string, string> = {};
+
+/**
+ * THE REAL-COLUMN MUTATION THAT STANDS IN FOR THE ENTRY THAT USED TO BE HERE.
+ *
+ * Two anchors in two files, each a composition a face call heads today. The
+ * patch removes the face call and nothing else; the walk must then report that
+ * site, and the unpatched walk must not.
+ *
+ * `App.tsx` IS ONE OF THE TWO ON PURPOSE. It is the file `sourceFiles(SRC)`
+ * never reached — it sits beside `src/`, not inside it — and if that regresses,
+ * this arm is what says so. The other is an ordinary component under `src/`, so
+ * losing the recursive walk says so too.
+ *
+ * Each anchor is asserted to occur EXACTLY ONCE in its file before it is used.
+ * A fixture whose anchor has been refactored away would otherwise patch nothing
+ * and report nothing — which is the failure it exists to detect, wearing a
+ * different hat.
+ */
+const WALK_MUTATIONS: { rel: string; from: string; to: string; key: string }[] = [
+  {
+    rel: 'App.tsx',
+    from: "[text('bodyS', lang, '700'), styles.navBadgeText]",
+    to: '[styles.navBadgeText]',
+    key: 'App.tsx#navBadgeText',
+  },
+  {
+    rel: 'components/TopUpCard.tsx',
+    from: "[text('bodyS', lang), styles.payLabel]",
+    to: '[styles.payLabel]',
+    key: 'components/TopUpCard.tsx#payLabel',
+  },
+];
 
 describe('every Text that draws copy resolves a face', () => {
   it('is exactly the allow-list — nothing added, nothing quietly removed', () => {
     expect([...facelessText()].sort()).toEqual(Object.keys(FACELESS_OK).sort());
+  });
+
+  /**
+   * THE ASSERTION THAT MAKES THE ONE ABOVE MEAN SOMETHING, now that
+   * `FACELESS_OK` is empty and the equality reads `toEqual([])`.
+   *
+   * `toEqual([])` passes when the column is clean AND when the walk read
+   * nothing, and those are not the same fact. This one separates them, and it
+   * separates them the only way that is worth anything: through the SAME
+   * `facelessText()`, over the SAME `allSources()`, reading the SAME files off
+   * disk — with one real face call removed from one real composition. Every
+   * link in that chain has to work for this to go green.
+   *
+   * It is the pair the fixtures below are written as, raised to the whole walk.
+   * The green half is the equality above; the red half is here.
+   */
+  it('and the walk behind that equality can still report — one real face, removed', () => {
+    const clean = facelessText();
+    for (const { rel, from, to, key } of WALK_MUTATIONS) {
+      const file = rel === 'App.tsx' ? APP_ENTRY : path.join(SRC, rel);
+      const raw = fs.readFileSync(file, 'utf8');
+      expect(raw.split(from).length - 1, `${rel}: the anchor must occur exactly once`).toBe(1);
+
+      const found = facelessText((r, src) => (r === rel ? src.replace(from, to) : src));
+      // The site the mutation created is reported …
+      expect([...found], key).toContain(key);
+      // … and it is the ONLY difference, so the walk did not simply start
+      // reporting everything, which would pass a bare `toContain` just as well.
+      expect([...found].filter((k) => !clean.has(k)).sort(), rel).toEqual([key]);
+      // … and it is genuinely absent when the face call is left in place.
+      expect(clean.has(key), `${key} must not be reported unmutated`).toBe(false);
+    }
   });
 
   it('every entry carries a reason, not just a name', () => {
@@ -1485,6 +1614,27 @@ describe('every Text that draws copy resolves a face', () => {
       );
       expect(DECLARES_WEIGHT.test(body ?? ''), `${rel}#${name}`).toBe(false);
     }
+  });
+
+  /**
+   * AND THE ARROW, which is the fix a later reader is most likely to undo,
+   * because undoing it LOOKS like applying the rule. The claim is deliberately
+   * the negative one: the style names a face, and the composition does not call
+   * `text()` — a language-following face is the wrong answer at that node, for
+   * the width reason in `TopUpCard.tsx` § THE ARROW IS A GLYPH.
+   * `glyphFaceRender.test.tsx` asserts the value that arrives, in both
+   * languages; this asserts the source still says it on purpose.
+   */
+  it('the pay→get arrow pins one face in the style, not a language-following one', () => {
+    const rel = 'components/TopUpCard.tsx';
+    const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+    expect(src).toContain(
+      '<Text style={styles.arrow} accessibilityElementsHidden importantForAccessibility="no">',
+    );
+    const body = styleObjects(stripComments(src)).get('arrow');
+    expect(body, 'styles.arrow must be readable at all').toBeDefined();
+    expect(body).toContain("fontFamily: 'Inter_400Regular'");
+    expect(facelessTextInSource(rel, src)).not.toContain(`${rel}#arrow`);
   });
 
   it('Money resolves the unit face itself, so no caller can omit it', () => {
