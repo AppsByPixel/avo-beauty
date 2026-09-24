@@ -93,6 +93,7 @@ import {
   SALON_B,
   pgDb,
   psql,
+  reconcileWalletLedger,
   repoRoot,
   runApiDbScriptResult,
   scalar,
@@ -483,6 +484,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   resetPolicy();
+
+  /*
+   * AND LEAVE THIS FILE'S MEMBERS RECONCILING TO THEIR WALLET LEDGERS.
+   *
+   * The three audience members and the low-balance one are INSERTed with opening
+   * balances that no ledger entry accounts for — the clone copies `balance_fils`
+   * and not the ledger behind it. That is `db:verify` invariant 5, a balance with
+   * no originating entry, and `support/global-setup.ts` § the wallet census is
+   * what measures it. Posted last, because the census reads the FINAL state of
+   * the database and the writes above are what is being answered for.
+   */
+  for (const id of AUD) reconcileWalletLedger(id, 'QACMP');
+  reconcileWalletLedger(LOWBAL, 'QACMPL');
+
   await stopTenancyApi();
 });
 

@@ -53,6 +53,7 @@ import { precondition } from './support/known-bug.js';
 import {
   SALON_A,
   psql,
+  reconcileWalletLedger,
   scalar,
   signInMember,
   startTenancyApi,
@@ -295,6 +296,19 @@ afterAll(async () => {
    * — deleting what can be deleted and leaving the rest — is the cleanup that
    * looks complete and is not.
    */
+
+  /*
+   * AND BOTH MEMBERS ARE RECONCILED TO THEIR WALLET LEDGERS FIRST.
+   *
+   * Same reasoning as the note above, applied to the money rather than the rows:
+   * these two are cloned with a 200.000 opening balance that no ledger entry
+   * accounts for, which is `db:verify` invariant 5 and what
+   * `support/global-setup.ts` § the wallet census measures. The rows stay; the
+   * unexplained balance does not.
+   */
+  reconcileWalletLedger(MEMBER, 'QARES');
+  reconcileWalletLedger(OTHER_MEMBER, 'QARESO');
+
   await stopTenancyApi();
 });
 

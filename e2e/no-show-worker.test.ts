@@ -78,6 +78,7 @@ import {
   bootWithNoShowWorker,
   noShowWorkerIsRunning,
   psql,
+  reconcileWalletLedger,
   scalar,
   signInMember,
   startTenancyApi,
@@ -315,6 +316,24 @@ beforeAll(async () => {
 
 afterAll(async () => {
   reseedMember();
+
+  /*
+   * AND LEAVE THIS FILE'S MEMBER RECONCILING TO HER WALLET LEDGER.
+   *
+   * `reseedMember()` puts `balance_fils` back by SQL after the worker has moved
+   * it, so her balance and her ledger are left telling different stories. That is
+   * `db:verify` invariant 5 and `support/global-setup.ts` § the wallet census is
+   * what measures it. AFTER the reseed, for the reason the helper's own note
+   * gives: the reseed is the write being answered for.
+   *
+   * This file stops the API in its last spec on purpose, so `stopTenancyApi()`
+   * below reaches a harness with nothing left to kill. That costs this call
+   * nothing — `reconcileWalletLedger` talks to Postgres with `psql`, not to the
+   * API — and it is the same reason the harness's own reconciles sit in front of
+   * its `!child` guard rather than behind it.
+   */
+  reconcileWalletLedger(MEMBER, 'QANSW');
+
   await stopTenancyApi();
 });
 

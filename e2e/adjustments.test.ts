@@ -40,6 +40,7 @@ import {
   PLATFORM_OWNER_HANDLE,
   SALON_A,
   psql,
+  reconcileWalletLedger,
   scalar,
   signInPlatform,
   startTenancyApi,
@@ -135,6 +136,40 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  /*
+   * AND LEAVE `QA-ADJ-0001` RECONCILING TO HER WALLET LEDGER.
+   *
+   * `fund()` sets `balance_fils` with SQL on purpose — a shortfall spec needs a
+   * specific balance and no endpoint produces one — so she drifts by whatever it
+   * last funded. That is `db:verify` invariant 5, a balance with no originating
+   * entry, and `support/global-setup.ts` § the wallet census is what measures it.
+   * Posted last, because the census reads the FINAL state of the database and the
+   * twelve SQL writes above are what is being answered for. Reconciling LAST is
+   * exactly what lets this file keep using a SQL balance mid-run.
+   *
+   * She was the census's STANDING EXAMPLE of a member who "will always drift and
+   * should", which was a claim about `fund()` and not about her: nothing makes a
+   * `fund()` member unreconcilable once the funding has stopped, and the same
+   * `afterAll` rule that `account.test.ts` and `reports.test.ts` already follow
+   * closes her too.
+   */
+  reconcileWalletLedger(MEMBER, 'QAADJ');
+
+  /*
+   * `MEMBER_ERASED` IS NOT RECONCILED, AND SHE IS THE ONLY MEMBER IN THIS SUITE
+   * OF WHICH THAT IS TRUE. Do not add her here.
+   *
+   * She is walked request -> due -> erase and left TOMBSTONED, and the spec above
+   * asserts that `POST /members/{id}/adjustments` answers `member_erased` and
+   * moves nothing. Reconciling her would have this fixture write, in SQL, the
+   * exact settled money row the product refuses to write for her — the assertion
+   * and the teardown would be saying opposite things about the same member, and
+   * the teardown would be the one telling the truth about the database.
+   *
+   * Her entry in `support/wallet-census.ts` § `DOCUMENTED_DRIFTERS` is the last
+   * one left, and carries the long form of this.
+   */
+
   await stopTenancyApi();
 });
 

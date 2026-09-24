@@ -2345,8 +2345,40 @@ export async function stopTenancyApi(): Promise<void> {
    * file spent. `WHERE d.diff <> 0` writes nothing for the rest. The rows are
    * `adjustment`s, which no tile and no report counts, and `account.test.ts`
    * already posts two of them at this same salon and branch.
+   *
+   * AND HERE RATHER THAN IN `seedSalonB()`, WHICH IS NOT THE SAME POINT AS THE
+   * ONE ABOVE and has its own evidence. `scanner.test.ts` writes her
+   * `balance_fils` with SQL in the middle of a run — five times, to drive a
+   * shortfall and an over-spend and put her back — so a reconcile at seed time
+   * would be undone by the first of them and the census would measure the
+   * leftover. Reconciling last is not a stylistic preference here; it is the only
+   * placement that survives this suite's own fixtures.
    */
-  reconcileWalletLedger(B_MEMBER, B_BRANCH, 'TENB');
+  reconcileWalletLedger(B_MEMBER, 'TENB');
+
+  /*
+   * AND RANIA `QA-GW-0001` BESIDE HER, FOR THE REASON HER CENSUS ENTRY NAMED.
+   *
+   * `seedQaMember()` runs beside `seedSalonB()` in the same `startTenancyApi()`
+   * and rewinds `balance_fils` to `QA_MEMBER_BALANCE_FILS` once per FILE, while
+   * every charge an earlier file drove through her stays in `ledger_entry` —
+   * correctly; 0024 makes the ledger unerasable. So her ledger is left AHEAD of
+   * her balance, which is the negative half of `db:verify` invariant 5, and she
+   * read −239.000 when the census landed. She was Fatima's twin in every respect
+   * including the fix, and her entry in `support/wallet-census.ts` said so and
+   * asked for a slice of its own. This is that slice.
+   *
+   * SHE WAS KEPT ONCE FOR A REASON THAT DID NOT SURVIVE CHECKING, and it is worth
+   * writing down which one. Not "gateway.test.ts reads deltas off her" — it does,
+   * but from a `before` captured at runtime, and this function does not touch
+   * `balance_fils` at all, so no delta and no balance assertion can see it. The
+   * real reason was that she was the census's only NEGATIVE and so its only
+   * worked example of the shape worth looking at twice. That is now pinned where
+   * a fixture cannot drift it: `wallet-census.test.ts` drives the reader with a
+   * synthetic −239.000 line and asserts the ids split off their amounts signs and
+   * all. A live drift was never what protected the sign logic; a spec is.
+   */
+  reconcileWalletLedger(QA_MEMBER, 'QAGW');
 
   if (!child) return;
   const dying = child;
@@ -3072,6 +3104,30 @@ export function discoverSalonScopedRoutes(): DiscoveredRoute[] {
  * `ledger_entry` is append-only by trigger and has no natural key to conflict
  * on, which is why this must not post a zero pair "for tidiness".
  *
+ * THE BRANCH IS DERIVED, NOT PASSED, AND THE ROW SAYS SO. `transaction.branch_id`
+ * is NOT NULL because the contract has no nullable branch and both clients render
+ * it unconditionally — but for a row that exists only to close a ledger gap the
+ * branch is an attribution and nothing reads it.
+ *
+ * The parameter was worse than redundant. `transaction.branch_id` references
+ * `branch.id` and NOTHING ties it to `transaction.salon_id` — there is no CHECK,
+ * and the FK cannot see a salon. So a caller who passed a branch belonging to
+ * another salon did not get an error at all: the row was written, cross-tenant,
+ * from a teardown, and the suite that exists to catch cross-tenant rows would
+ * have had to find it. Deriving the branch from the member's OWN salon removes
+ * the parameter that could say it, which is the only way a fixture helper can be
+ * made incapable of the mistake.
+ *
+ * THE DERIVATION IS THE HANDLER'S OWN FALLBACK, deliberately: first open branch
+ * by `ORDER BY id LIMIT 1`, closed branches excluded the way `resolveBranch`
+ * excludes them, so a closed branch attracts no new money here either. And
+ * because that is a default rather than knowledge, the row sets
+ * `branch_assumed = true` — the column exists precisely so that "a defaulted row
+ * is indistinguishable from a real one forever" stops being true, and a
+ * reconciliation row is the purest case of a branch that was never established.
+ * Per-branch revenue excludes it on the same WHERE clause that excludes every
+ * other assumed row.
+ *
  * REPEATED RUNS AGAINST A LONG-LIVED DATABASE CONVERGE rather than compound. A
  * run normally mints its own database, but `POSTGRES_DB` is a documented opt-out
  * onto a persistent one; there the second run reads a ledger that already
@@ -3079,7 +3135,7 @@ export function discoverSalonScopedRoutes(): DiscoveredRoute[] {
  * nothing. The transaction id carries `clock_timestamp()` so the rows that DO
  * get written never collide.
  */
-export function reconcileWalletLedger(memberId: string, branchId: string, tag: string): void {
+export function reconcileWalletLedger(memberId: string, tag: string): void {
   psql(`
 WITH d AS (
   SELECT m.id,
@@ -3095,10 +3151,17 @@ WITH d AS (
 ),
 tx AS (
   INSERT INTO "transaction"
-    (id, member_id, salon_id, branch_id, kind, amount_fils, status, reference, note,
-     created_at, settled_at)
+    (id, member_id, salon_id, branch_id, branch_assumed, kind, amount_fils, status,
+     reference, note, created_at, settled_at)
   SELECT 'TX-${tag}-REC-' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISSUS'),
-         d.id, d.salon_id, '${branchId}', 'adjustment', d.diff, 'settled',
+         d.id, d.salon_id,
+         coalesce(
+           (SELECT b.id FROM branch b
+             WHERE b.salon_id = d.salon_id AND b.closed_at IS NULL
+             ORDER BY b.id LIMIT 1),
+           (SELECT b.id FROM branch b WHERE b.salon_id = d.salon_id ORDER BY b.id LIMIT 1)
+         ),
+         true, 'adjustment', d.diff, 'settled',
          'AVO-RECONCILE-' || d.id, 'Fixture ledger reconciliation', now(), now()
     FROM d
    WHERE d.diff <> 0

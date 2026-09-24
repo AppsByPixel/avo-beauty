@@ -60,6 +60,7 @@ import {
   SALON_B,
   apiLogTail,
   psql,
+  reconcileWalletLedger,
   scalar,
   signInMember,
   startTenancyApi,
@@ -170,6 +171,24 @@ afterAll(async () => {
    * minted per run and dropped by `global-setup.ts`; this member's id and phone are
    * unique to this file.
    */
+
+  /*
+   * BUT HER BALANCE IS RECONCILED TO HER LEDGER BEFORE THE FILE LETS GO.
+   *
+   * Leaving the rows behind is right, per the note above; leaving her balance
+   * unexplained is not. Every figure she holds comes from one of twelve
+   * `UPDATE member SET balance_fils` calls — an order race needs a balance exact
+   * to the fil and no endpoint produces one — so she drifts by whatever `fund()`
+   * last wrote. That is `db:verify` invariant 5, measured by
+   * `support/global-setup.ts` § the wallet census.
+   *
+   * This file's own § (4) asserts that invariant against one member and is the
+   * only thing that ever caught an order path moving money without the ledger.
+   * Paying the fixture's own debt is what keeps that assertion about the CODE
+   * rather than about the seed.
+   */
+  reconcileWalletLedger(MEMBER, 'QAORD');
+
   await stopTenancyApi();
 });
 
