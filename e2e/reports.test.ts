@@ -295,15 +295,22 @@ afterAll(async () => {
    * (`support/global-setup.ts`) by exactly their opening balance.
    *
    * Posted in `afterAll` so it cannot reach a single figure this file asserts:
-   * every spec has run by now. The reconciling row is an `adjustment` on this
-   * file's own `BR_RPT`, which is the branch every figure here is closed over —
-   * and an adjustment reversing nothing is counted by no tile and no report,
-   * which is the same reasoning `reports-applied-deposit.test.ts` records for
-   * its opening pair, and which finding 2 below documents as a gap in its own
-   * right.
+   * every spec has run by now — and an adjustment reversing nothing is counted
+   * by no tile and no report anyway, which is the same reasoning
+   * `reports-applied-deposit.test.ts` records for its opening pair, and which
+   * finding 2 below documents as a gap in its own right.
+   *
+   * THE BRANCH IS NO LONGER THIS FILE'S `BR_RPT` AND THAT IS THE IMPROVEMENT.
+   * These two calls used to pass it, and the note here used to justify the choice
+   * by saying `BR_RPT` is the branch every figure above is closed over. That was
+   * true and it was still the wrong thing to assert: it made the helper's branch
+   * look like a decision each caller had to get right, when the rows are posted
+   * after every `?branch=` query has already run and no figure can see them. The
+   * helper now derives the salon's first open branch and marks the row
+   * `branch_assumed`, so the branch says of itself that it was never established.
    */
-  reconcileWalletLedger(MEMBER, BR_RPT, 'QARPT');
-  reconcileWalletLedger(MEMBER_RETURN_ONLY, BR_RPT, 'QARPTR');
+  reconcileWalletLedger(MEMBER, 'QARPT');
+  reconcileWalletLedger(MEMBER_RETURN_ONLY, 'QARPTR');
 
   await stopTenancyApi();
 });

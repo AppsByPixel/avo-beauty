@@ -99,15 +99,47 @@ describe('a green run shows the headroom instead of hiding it', () => {
     expect(announcement).toContain('reconcileWalletLedger');
   });
 
+  /**
+   * DRIVEN WITH A SYNTHETIC SET, BECAUSE THE REAL LIST IS ONE ENTRY LONG AND THIS
+   * BRANCH CANNOT BE REACHED THROUGH IT — a run drifts zero or it drifts her.
+   *
+   * That is the reason `readCensus` takes an optional `documented`, and it is the
+   * only thing the parameter is for: production passes nothing. The branch is not
+   * dead code, it is the branch the list needs the moment it grows back, and the
+   * alternative to driving it synthetically was deleting the spec and discovering
+   * on some later run that the "prunable" message had rotted unwatched. That is
+   * precisely how `DYNAMIC_PERMISSION` went, one file over.
+   */
   it('below the cap it says so, and says which way to read the gap', () => {
+    const four = {
+      'QA-SYN-0001': 'POSITIVE, synthetic.',
+      'QA-SYN-0002': 'POSITIVE, synthetic.',
+      'QA-SYN-0003': 'POSITIVE, synthetic.',
+      'QA-SYN-0004': 'POSITIVE, synthetic.',
+    };
     const { announcement, verdict } = readCensus(
-      censusLine(DOCUMENTED.slice(0, 3).map((id) => [id, 1000])),
+      censusLine(Object.keys(four).slice(0, 3).map((id): [string, number] => [id, 1000])),
+      four,
     );
     expect(verdict).toBeNull();
-    expect(announcement).toContain(`3 drifting, all documented, out of ${N}`);
+    expect(announcement).toContain('3 drifting, all documented, out of 4');
     // A full run that has dropped below the list's size is the list going stale,
     // and nothing else in this design can notice that.
     expect(announcement).toContain('prunable');
+  });
+
+  /**
+   * AND THE CLAIM THE LIST MAKES TODAY, ASSERTED RATHER THAN LEFT TO THE PROSE.
+   *
+   * The gate used to say "twelve known drifters, watch for a thirteenth". It says
+   * "any drift but one tombstoned member is a bug", and the only thing that keeps
+   * that true is that nobody quietly re-adds a reconcilable member to the list.
+   * An addition is still ALLOWED — it is the documented escape hatch — but it can
+   * no longer happen without this spec going red and asking for the argument.
+   */
+  it('the list is down to the one member who cannot be reconciled', () => {
+    expect(DOCUMENTED).toEqual(['QA-ADJ-0002']);
+    expect(DOCUMENTED_DRIFTERS['QA-ADJ-0002']).toContain('TOMBSTONED');
   });
 
   it('prints a line even when nothing drifted at all', () => {
@@ -161,7 +193,7 @@ describe('an undocumented drifter fails on its identity, not on the count', () =
     expect(drifting).toHaveLength(N + 1);
     expect(undocumented).toEqual(['QA-NEW-0001']);
     expect(verdict).toContain('NEW: QA-NEW-0001 by 200000 fils');
-    // The documented thirteen are not paraded as suspects. They are accounted
+    // The documented drifters are not paraded as suspects. They are accounted
     // for, and saying so is what stops the reader auditing them.
     expect(verdict).toContain(`the other ${N} are documented`);
     for (const id of DOCUMENTED) expect(verdict).not.toContain(`NEW: ${id}`);
@@ -180,7 +212,7 @@ describe('an undocumented drifter fails on its identity, not on the count', () =
 
   it('the fix it names is the reconcile, spelled out for the member that failed', () => {
     const { verdict } = readCensus(censusLine([['QA-NEW-0001', 200000]]));
-    expect(verdict).toContain("reconcileWalletLedger('QA-NEW-0001', BRANCH_ID, 'TAG');");
+    expect(verdict).toContain("reconcileWalletLedger('QA-NEW-0001', 'TAG');");
     expect(verdict).toContain('`afterAll`, NOT `beforeAll`');
     expect(verdict).toContain('reports.test.ts');
   });

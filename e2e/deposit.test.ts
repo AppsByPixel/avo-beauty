@@ -69,6 +69,7 @@ import {
   apiLogTail,
   pgDb,
   psql,
+  reconcileWalletLedger,
   runApiDbScriptAsync,
   runApiDbScriptResult,
   scalar,
@@ -508,6 +509,18 @@ beforeAll(async () => {
 
 afterAll(async () => {
   reseedMember();
+
+  /*
+   * AND LEAVE THIS FILE'S MEMBER RECONCILING TO HER WALLET LEDGER.
+   *
+   * `reseedMember()` puts `balance_fils` back by SQL, and the opening balance it
+   * writes is money no entry explains. That is `db:verify` invariant 5, a balance
+   * with no originating entry, and `support/global-setup.ts` § the wallet census
+   * is what measures it. AFTER the reseed, not before: the reseed is the write
+   * being answered for, and a reconcile above it would be undone by it.
+   */
+  reconcileWalletLedger(MEMBER, 'QADEP');
+
   await stopTenancyApi();
 });
 

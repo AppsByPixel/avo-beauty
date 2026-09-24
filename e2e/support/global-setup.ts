@@ -431,7 +431,7 @@ let censusVerdict: string | null = null;
  *
  * THAT LAST CLAUSE IS NO LONGER TRUE AND IS KEPT SO THE TRADE IS LEGIBLE. There
  * IS a hand-kept list now — `DOCUMENTED_DRIFTERS` in `support/wallet-census.ts`,
- * twelve ids each with the sentence saying why — and the rot it risks is
+ * ONE id with the sentence saying why — and the rot it risks is
  * exactly the rot named above. It was taken on knowingly, for a reason the
  * integer could not answer: a full run measured 13 against a cap of 13, so the
  * cap had ZERO HEADROOM, and at zero headroom nothing in this file made adopting
@@ -441,8 +441,10 @@ let censusVerdict: string | null = null;
  * in `apps/wallet/src/theme/typeFidelity.test.ts` — and it lets the failure name
  * WHICH member is new, which the integer never knew and which is the one fact
  * the lane it fires on actually needs. The effective cap was unchanged at 13 when
- * this landed; it is 12 now, one entry lighter for the best available reason — the
- * list made a wrong entry legible and the member it named was reconciled instead.
+ * this landed; it went to 12 when the list made a wrong entry legible and the
+ * member it named was reconciled instead; and it is ONE now, eleven entries
+ * lighter, every one of them removed the same way. The list did what it was taken
+ * on to do faster than the argument for taking it on expected.
  *
  * AND THE ROT IS BOUNDED, WHICH IS WHY IT WAS ACCEPTABLE AND `DYNAMIC_PERMISSION`
  * WAS NOT. That list rotted by accumulating entries nobody could refute. This one
@@ -522,17 +524,16 @@ let censusVerdict: string | null = null;
  *
  *     11 of 24 members reconcile to their wallet ledger
  *
- * WHAT IT MEASURES NOW, over the full 42-file suite on 2026-09-17:
+ * WHAT IT MEASURED OVER THE FULL 42-FILE SUITE ON 2026-09-17:
  *
  *     15 of 28 members reconcile to their wallet ledger
  *
- * THE DRIFTER COUNT DID NOT MOVE — it is the same thirteen ids, checked one by
- * one against that run rather than trusted from this comment, and they are the
- * thirteen now named in `DOCUMENTED_DRIFTERS`. Four members arrived and all four
- * reconcile, which is the direction this is supposed to go and is the first time
- * anything here has been able to say so about a specific set rather than a
- * count. The signs held too: twelve positive, `QA-GW-0001` negative by exactly
- * the −239.000 recorded below.
+ * THE DRIFTER COUNT DID NOT MOVE — it was the same thirteen ids, checked one by
+ * one against that run rather than trusted from this comment. Four members
+ * arrived and all four reconciled, which is the direction this is supposed to go
+ * and was the first time anything here could say so about a specific set rather
+ * than a count. The signs held too: twelve positive, `QA-GW-0001` negative by
+ * exactly the −239.000 recorded below.
  *
  * THE COUNT WENT UP BY FOUR AND THIS BLOCK WENT STALE BEHIND IT, which is worth
  * recording as plainly as the number: the paragraphs below described the drift
@@ -541,45 +542,76 @@ let censusVerdict: string | null = null;
  * noticed, because a printed line with nothing asserting it is read once — see
  * the cap at the bottom of this block, which is the answer to that.
  *
- * Every drifter is a fixture member whose balance was INSERTed or UPDATEd by
- * SQL, and the SIGN tells you which kind:
+ * WHAT IT MEASURES AFTER THIS SLICE, over the full 43-file suite on 2026-09-24:
+ *
+ *     27 of 28 members reconcile to their wallet ledger; drifting: QA-ADJ-0002 by 10000 fils
+ *
+ * 27 OF 28, ONE DRIFTER, AND SHE IS THE TOMBSTONE. The 28 members are unchanged
+ * from the 2026-09-17 run; what moved is the 15 to 27.
+ *
+ * ELEVEN OF THE TWELVE DRIFTERS WERE RECONCILED IN ONE PASS, and the gate's claim
+ * changed shape with them. It used to be "twelve known drifters, watch for a
+ * thirteenth". It is now: ANY MEMBER WHOSE BALANCE DOES NOT RECONCILE TO HER
+ * WALLET LEDGER IS A BUG, EXCEPT `QA-ADJ-0002`. The eleven left by the mechanism
+ * this block recommends — a `reconcileWalletLedger` call in the `afterAll` of the
+ * file that owns the fixture — which is what the count was for and is the first
+ * time it has been able to report the pattern working at scale rather than one
+ * file at a time.
+ *
+ * THE POINT OF DOING IT: the common path for a new fixture is now "call the
+ * helper", not "argue for an exemption". The ratchet is no longer resting on its
+ * stop, because there is no stop left to rest on.
+ *
+ * Every remaining drifter is a fixture member whose balance was INSERTed or
+ * UPDATEd by SQL, and the SIGN tells you which kind:
  *
  *   POSITIVE — the balance is ahead of the ledger. An opening balance with no
- *       originating entry: one per file that clones a member with a balance
- *       (`QA-RES-000{1,2}` 200.000 each, `QA-DEP-0001`, `QA-NSW-0001`,
- *       `QA-ORD-0001`, the four `QA-CMP-000n`). The harness's own `9001` was on
- *       this line too and is not any more: `stopTenancyApi()` reconciles her, so
- *       the hole `seedSalonB()` opens is paid for in the same file that opens it.
- *       The standing convention in this directory, and a real gap:
- *       `api/src/db/seed.ts` § "the opening balances" settled that an opening
- *       balance is a real credit and gets a real pair, and the convention here
- *       never caught up. Note what that citation is and is not — it is where the
- *       RULE was settled, for members `8842` and `8843`, which both get a real
- *       pair through the builder. It has never been where a drifting fixture's
- *       balance was written. Reading it as the writer is what put `9001` on this
- *       list with lane A's name against it for six days.
+ *       originating entry. This was one per file that clones a member with a
+ *       balance — `QA-RES-000{1,2}`, `QA-DEP-0001`, `QA-NSW-0001`, `QA-ORD-0001`,
+ *       the four `QA-CMP-000n` — and the harness's own `9001` besides. Every one
+ *       of them now reconciles in its own file's `afterAll`, so the hole is paid
+ *       for where it is opened. The rule this settles under is
+ *       `api/src/db/seed.ts` § "the opening balances": an opening balance is a
+ *       real credit and gets a real pair. Note what that citation is and is not —
+ *       it is where the RULE was settled, for members `8842` and `8843`, which
+ *       both get a real pair through the builder. It has never been where a
+ *       drifting fixture's balance was written. Reading it as the writer is what
+ *       put `9001` on this list with lane A's name against it for six days.
  *   NEGATIVE — the LEDGER is ahead of the balance, and this is the shape worth
  *       looking at twice. It means wallet legs exist that the balance does not
  *       reflect, which is either a fixture that reset `balance_fils` after the
- *       API had moved it, or a real cached-aggregate defect. Exactly ONE member
- *       is negative today — `QA-GW-0001` by −239.000 — and it has a named cause:
- *       she is `QA_MEMBER`, reset by this harness's own `seedQaMember()`, which
- *       runs once per FILE, so every charge an earlier file drove through her is
- *       still in the ledger with the balance wound back. A negative drift on a
- *       member NOBODY re-fixtures would be the other thing, and is what this
- *       census is for. There is no such member today.
- *   `adjustments.test.ts`'s two, whatever it last funded. LEGITIMATE, per above.
+ *       API had moved it, or a real cached-aggregate defect.
  *
- * TWO MEMBERS LEFT THIS LIST AND THE CORRECTION IS THE POINT OF THE INSTRUMENT.
- * `QA-RPT-0001` was listed above as a positive drifter and `QA-ACC-0001` as a
+ * THERE IS NO LIVE NEGATIVE DRIFTER NOW, AND THE EXPLANATION STAYS ON PURPOSE —
+ * deleting it would leave the reader of a future negative line with nothing. The
+ * negative was `QA-GW-0001` at −239.000: `QA_MEMBER`, rewound by the harness's own
+ * `seedQaMember()` once per FILE, so every charge an earlier file drove through
+ * her stayed in the ledger with the balance wound back behind it.
+ * `stopTenancyApi()` reconciles her now, beside `9001`.
+ *
+ * SO WHERE IS THE SIGN LOGIC PROVEN, NOW THAT NO RUN DEMONSTRATES IT? In a spec,
+ * which is the stronger place and was available all along:
+ * `wallet-census.test.ts` § "the reading is taken off the printed line and
+ * nowhere else" drives `readCensus` with a synthetic line carrying `-239000` and
+ * asserts ids split off their amounts "signs and all", and the multi-member
+ * verdict spec pins `NEW: QA-NEW-0002 by -4500 fils`. Those fail if the parse
+ * ever stops handling a minus sign; a live drifter only ever showed that it
+ * currently did. Keeping a member's balance unexplained in order to demonstrate
+ * what a spec already asserts is paying in the measured quantity for a
+ * demonstration.
+ *
+ * AND A NEGATIVE DRIFT ON A MEMBER NOBODY RE-FIXTURES IS STILL THE THING THIS
+ * CENSUS IS FOR. It is easier to see now, not harder: such a member no longer
+ * arrives among eleven documented neighbours to be skimmed past. She arrives
+ * alone, against a list of one, and the gate names her.
+ *
+ * MEMBERS LEAVE THIS LIST AND THE CORRECTION IS THE POINT OF THE INSTRUMENT.
+ * `QA-RPT-0001` was once listed here as a positive drifter and `QA-ACC-0001` as a
  * negative one, and this block used to end "`reports-applied-deposit.test.ts` is
- * the one file here whose member does NOT drift". All three statements are false
- * now. `reports.test.ts` § `afterAll` calls `reconcileWalletLedger` for both its
- * members (and `account.test.ts` § `afterAll` for both of its own, for the
- * `setBalance` reason the NEGATIVE note used to carry) — so the pattern this
- * block recommends is being adopted one file at a time, exactly as predicted,
- * and the count is how anyone would know it was working. It worked; nothing
- * said so for four members.
+ * the one file here whose member does NOT drift". All three statements were false
+ * within days, and nobody noticed, because a printed line with nothing asserting
+ * it is read once. That is what the cap at the bottom of this block answers, and
+ * this slice is what the answer produced.
  */
 async function reportWalletDrift(): Promise<void> {
   const { psql, pgDb, databaseExists } = await import('./tenancy-harness.js');

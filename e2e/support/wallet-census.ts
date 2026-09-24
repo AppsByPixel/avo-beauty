@@ -56,8 +56,10 @@
  * cannot come from a real ledger pair — the conscious act with a name attached
  * that `KNOWN_INERT` and `LANGUAGE_PINNED` get in
  * `apps/wallet/src/theme/typeFidelity.test.ts`. The effective cap was unchanged
- * at 13 when this landed and is 12 now — one entry left the list by being fixed —
- * but it cannot be moved by editing a digit any more.
+ * at 13 when this landed, was 12 the day Fatima `9001` was reconciled, and is ONE
+ * now — eleven more entries left the list by being fixed, in the slice that also
+ * made the branch a derived value rather than a parameter. It never moved by
+ * editing a digit, which was the whole point of taking the list's risk on.
  *
  * AND IT IS A SUBSET CHECK, NOT AN EQUALITY, WHICH IS THE ONE PLACE THIS FILE
  * MUST DIVERGE FROM `KNOWN_INERT`. `typeFidelity.test.ts` can assert equality
@@ -81,10 +83,18 @@
  * red on every single-file run, and a gate people disable catches nothing at
  * all. What is done about it instead is cheap and costs no extra query — the
  * printed line reports the drifting count AGAINST the documented size, so a full
- * run that has dropped to `11 of the documented 12` says on its face that one
- * entry below is now prunable. That is the same mechanism that caught the
+ * run that had dropped to `11 of the documented 12` would say on its face that
+ * one entry below was prunable. That is the same mechanism that caught the
  * original staleness (a number that moved), pointed at the list instead of at
  * the fixtures.
+ *
+ * AT ONE ENTRY THAT MECHANISM IS IDLE AND THE LIST IS GUARDED DIFFERENTLY. There
+ * is no gap left for the count to report: a full run drifts one, and a run that
+ * drifts zero is a run whose `adjustments.test.ts` did not execute. What keeps
+ * the last entry honest is not a number any more but the sentence it carries —
+ * "this member's balance cannot come from a real ledger pair" — which is
+ * falsifiable by reading her spec, and which stops being true the day that spec
+ * stops asserting the product refuses her.
  */
 
 /**
@@ -96,102 +106,92 @@
  * are about to add, the entry you want is a `reconcileWalletLedger` call in your
  * own file's `afterAll` instead.
  *
- * THIS LIST ONLY EVER GETS SHORTER on its own merits. `reports.test.ts` and
- * `account.test.ts` already reconcile both of their members in `afterAll`, which
- * is why `QA-RPT-0001` and `QA-ACC-0001` are not here. Every removal is a file
- * adopting the pattern. An addition is allowed and is sometimes right — but it is
- * an addition to a list of NAMES with REASONS, which is the only way it stays
- * reviewable.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * IT IS ONE ENTRY NOW, AND THAT CHANGES WHAT THIS GATE CLAIMS
+ * ─────────────────────────────────────────────────────────────────────────────
  *
- * Measured 13 on 2026-09-11 twice, and re-measured on 2026-09-17 over the full
- * suite: the same thirteen ids. IT IS 12 NOW, and the removal is the first one
- * this mechanism produced rather than recorded. Fatima `9001` was carried here
- * with a reason that said her opening balance came from `api/src/db/seed.ts` and
- * that closing it belonged to lane A. That was wrong on both counts and the list
- * is the reason it got caught: `seed.ts` § `OPENING_BALANCES` covers `8842` and
- * `8843` only, and both get a real pair through the builder. `9001` is written by
- * `support/tenancy-harness.ts` § `seedSalonB()` — this column — with a
- * `balance_fils` literal and no pair, which is precisely the case `overCapVerdict`
- * below tells a reader to fix rather than document. `stopTenancyApi()` now
- * reconciles her, for the reasons written at that call.
+ * It measured 13 on 2026-09-11, 13 again on 2026-09-17, and 12 after Fatima
+ * `9001` was reconciled. It is ONE. Eleven members left this list in a single
+ * slice, each by the mechanism the list was built to encourage: a
+ * `reconcileWalletLedger` call in the `afterAll` of the file that owns the
+ * fixture.
  *
- * THE SIGN IS PART OF THE READING and the reasons below carry it:
+ * So the claim is no longer "twelve known drifters, watch for a thirteenth". It
+ * is: ANY MEMBER WHOSE BALANCE DOES NOT RECONCILE TO HER WALLET LEDGER IS A BUG,
+ * EXCEPT ONE TOMBSTONED MEMBER WHO CANNOT BE RECONCILED WITHOUT CONTRADICTING
+ * THE SPEC THAT TOMBSTONED HER. That is a far stronger statement than a count
+ * ever made, and it is worth naming what it buys: the common path for a new
+ * fixture is now "call the helper", not "argue for an exemption". The
+ * zero-headroom problem this file was written to fix — where editing a digit was
+ * cheaper than adopting the pattern — is gone in the other direction. There is
+ * no digit, and the exemption costs a paragraph.
+ *
+ * WHAT IT COSTS, SAID PLAINLY. The reader's "below the cap" branch — `N drifting,
+ * all documented, out of M`, the one that says an entry is prunable — is
+ * unreachable against a one-entry list, because a run either drifts zero or
+ * drifts one. It is not dead code: it is the branch the list needs the moment it
+ * grows back, and `wallet-census.test.ts` drives it through `readCensus`'s
+ * optional `documented` argument rather than letting it rot untested.
+ *
+ * THE SUBSET CHECK IS UNCHANGED AND STILL RIGHT, for the reason below: this
+ * census's input is WHICHEVER FILES RAN, so an equality would go red on every
+ * single-file run. With one entry the subset check is very nearly an equality
+ * anyway — the only passing readings are "nothing drifted" and "she drifted" —
+ * which is the strongest this instrument has ever been without becoming the
+ * floor that teaches people to disable a gate.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE SIGN IS PART OF THE READING, AND WHERE IT IS PROVEN NOW
+ * ─────────────────────────────────────────────────────────────────────────────
  *
  *   POSITIVE — the balance is AHEAD of the ledger. An opening balance with no
- *       originating entry. The standing convention in this directory, and a real
- *       gap: `api/src/db/seed.ts` § "the opening balances" settled that an
- *       opening balance is a real credit and gets a real pair, and the fixtures
- *       here never caught up.
+ *       originating entry. This was the standing convention in this directory
+ *       and a real gap: `api/src/db/seed.ts` § "the opening balances" settled
+ *       that an opening balance is a real credit and gets a real pair, and the
+ *       fixtures here never caught up. They have now; the remaining entry is one.
  *   NEGATIVE — the LEDGER is ahead of the balance, and this is the shape worth
  *       looking at twice: wallet legs exist that the balance does not reflect.
  *       Either a fixture that reset `balance_fils` after the API had moved it,
- *       or a real cached-aggregate defect. Exactly one member is negative today
- *       and it has a named cause. A negative drift on a member NOBODY
- *       re-fixtures would be the other thing, and is what this census is for.
+ *       or a real cached-aggregate defect.
+ *
+ * THERE IS NO LIVE NEGATIVE DRIFTER ANY MORE, AND THE EXPLANATION STAYS BECAUSE
+ * THE SHAPE STILL MATTERS. `QA-GW-0001` was the census's only negative — −239.000
+ * on a full run — and the sentence keeping her here argued that closing her would
+ * remove the only worked example of the shape worth looking at twice. That was
+ * the right thing to weigh and the wrong conclusion, because it confused a
+ * DEMONSTRATION with a TEST.
+ *
+ * WHERE THE SIGN LOGIC IS PROVEN NOW: `wallet-census.test.ts` § "the reading is
+ * taken off the printed line and nowhere else" drives `readCensus` with a
+ * synthetic line carrying `-239000` and asserts that ids split off their amounts
+ * "signs and all"; the same file's multi-member spec pins `NEW: QA-NEW-0002 by
+ * -4500 fils` through the verdict. Those run on every invocation of this suite
+ * and fail if the parse ever stops handling a minus sign. A live negative drifter
+ * proved nothing that those do not, and cost an unexplained balance in the
+ * database to keep saying it. What a live one WOULD still catch — a negative
+ * drift on a member nobody re-fixtures, the cached-aggregate defect this census
+ * exists to find — is caught better now, because such a member is no longer
+ * hiding among eleven documented neighbours. She is the thirteenth name on a
+ * list of one.
  */
 export const DOCUMENTED_DRIFTERS: Record<string, string> = {
-  'QA-ADJ-0001':
-    'POSITIVE or NEGATIVE, whatever `adjustments.test.ts` § `fund()` last wrote. ' +
-    'THE STANDING LEGITIMATE CASE, and the reason this is a list and not an ' +
-    'assertion: a shortfall spec needs a SPECIFIC balance and there is no ' +
-    'endpoint that produces one, so it is written with SQL on purpose. This ' +
-    'member will always drift and should.',
   'QA-ADJ-0002':
-    'POSITIVE, 10.000, and she is the ONE ENTRY HERE THAT IS NOT RECONCILABLE AT ' +
-    'ALL. Not a `fund()` member — that helper defaults to QA-ADJ-0001 and is never ' +
-    'called with her; her balance is the literal in `adjustments.test.ts`\'s own ' +
-    'INSERT. What makes her different is the three lines after it: she is walked ' +
-    'request -> due -> erase and left TOMBSTONED, and her single spec asserts that ' +
-    '`POST /members/{id}/adjustments` REFUSES her and moves nothing. Reconciling ' +
-    'her would have the fixture write, in SQL, the exact settled money row the ' +
-    'product refuses to write for her. A balance on a scrubbed record genuinely ' +
-    'cannot come from a real ledger pair; this is what that sentence is for.',
-  'QA-CMP-0001':
-    'POSITIVE. `campaigns.test.ts` clones a member with an opening balance to ' +
-    'have an audience with wallet history; the clone copies `balance_fils` and ' +
-    'not the ledger behind it.',
-  'QA-CMP-0002': 'POSITIVE. The second `campaigns.test.ts` audience clone, same cause.',
-  'QA-CMP-0003': 'POSITIVE. The third `campaigns.test.ts` audience clone, same cause.',
-  'QA-CMP-0004': 'POSITIVE. The fourth `campaigns.test.ts` audience clone, same cause.',
-  'QA-DEP-0001':
-    'POSITIVE. `deposit.test.ts`\'s member, cloned with an opening balance so a ' +
-    'deposit can be held against it. Same missing pair as the other clones.',
-  'QA-GW-0001':
-    'NEGATIVE on a full run, and the only negative one there. She is ' +
-    '`QA_MEMBER`, reset by the harness\'s own `seedQaMember()`, which runs once ' +
-    'per FILE — so every charge an earlier file drove through her is still in ' +
-    'the ledger with the balance wound back behind it. The ledger is right and ' +
-    'the balance is the rewind. HER SIGN IS A FUNCTION OF HOW MANY FILES RAN: on ' +
-    'a single-file run too few charges have accumulated to outweigh the opening ' +
-    'balance and she reads POSITIVE — same cause, caught earlier.\n\n' +
-    'SHE IS FATIMA `9001`\'S TWIN AND IS ONE LINE FROM CLOSED. `seedQaMember()` ' +
-    'runs beside `seedSalonB()` in the same `startTenancyApi()`, so the reconcile ' +
-    'that closed `9001` closes her too: a second ' +
-    '`reconcileWalletLedger(QA_MEMBER, ...)` next to the first in ' +
-    '`stopTenancyApi()`. SHE IS LEFT HERE ON PURPOSE, AND THAT IS THE DECISION ' +
-    'THIS SENTENCE EXISTS TO RECORD — she is the only NEGATIVE on a full run, and ' +
-    'the paragraph above leans on that sign as a diagnostic: a negative drift on a ' +
-    'member nobody re-fixtures is the cached-aggregate defect this census was ' +
-    'built to find, and she is the calibration for what that reads like. Closing ' +
-    'her removes the only worked example of the shape worth looking at twice. ' +
-    'That trade deserves its own slice and its own argument; it is not a tidy-up ' +
-    'to be done in passing by whoever next reads this line.',
-  'QA-NSW-0001':
-    'POSITIVE. `no-show-worker.test.ts`\'s member, cloned with an opening ' +
-    'balance so a forfeited deposit has somewhere to come from.',
-  'QA-ORD-0001':
-    'POSITIVE or NEGATIVE, whatever `orders.test.ts` § `fund()` last wrote. SHE IS ' +
-    'A `fund()` CASE, NOT A CLONE CASE — this entry used to say she was "cloned ' +
-    'with an opening balance", and she is cloned with `balance_fils = 0`; every ' +
-    'figure she holds comes from one of twelve `UPDATE member SET balance_fils` ' +
-    'calls, because an order race needs a balance exact to the fil and no endpoint ' +
-    'produces one. Same standing rule as QA-ADJ-0001. Corrected while checking ' +
-    'this list after `9001`\'s reason turned out to name the wrong file.',
-  'QA-RES-0001':
-    'POSITIVE, 200.000 exactly. `reschedule.test.ts`\'s member, cloned with an ' +
-    'opening balance to cover a deposit across a moved booking.',
-  'QA-RES-0002':
-    'POSITIVE, 200.000 exactly. `reschedule.test.ts`\'s second member, same cause.',
+    'POSITIVE, 10.000, and she is the ONLY MEMBER IN THIS SUITE THAT IS NOT ' +
+    'RECONCILABLE AT ALL. Not a `fund()` member — that helper defaults to ' +
+    'QA-ADJ-0001 and is never called with her; her balance is the literal in ' +
+    '`adjustments.test.ts`\'s own INSERT. What makes her different is the three ' +
+    'lines after it: she is walked request -> due -> erase and left TOMBSTONED, ' +
+    'and her single spec asserts that `POST /members/{id}/adjustments` REFUSES ' +
+    'her and moves nothing. Reconciling her would have the fixture write, in SQL, ' +
+    'the exact settled money row the product refuses to write for her — the spec ' +
+    'and the teardown would be saying opposite things about the same member. A ' +
+    'balance on a scrubbed record genuinely cannot come from a real ledger pair; ' +
+    'this is what that sentence is for, and she is the last member it is true of. ' +
+    'Her neighbour QA-ADJ-0001 sat here beside her as "the standing legitimate ' +
+    'case" and was reconciled in the same slice that cut this list to one, which ' +
+    'is the difference worth holding on to: `fund()` writing a SQL balance MID-RUN ' +
+    'is legitimate and is answered by reconciling LAST. Only a tombstone survives ' +
+    'that answer.',
 };
 
 /** Derived, never written down twice. There is no cap to raise — only a list to name. */
@@ -225,15 +225,18 @@ export interface CensusReading {
  * recognise at all never reaches here — `reportWalletDrift` fails the run on a
  * missing census line before calling this, for the reason written there.
  */
-export function readCensus(line: string): CensusReading {
+export function readCensus(
+  line: string,
+  documented: Record<string, string> = DOCUMENTED_DRIFTERS,
+): CensusReading {
   const listed = line.split('; drifting: ')[1];
   const entries = listed ? listed.split(', ') : [];
   // `?? e` rather than a non-null assertion: `split` on a separator that is not
   // there yields the whole string, so this only fires on a shape nobody printed,
   // and silently dropping such an entry would be a drifter the gate never saw.
   const drifting = entries.map((e) => e.split(' by ')[0] ?? e);
-  const undocumented = drifting.filter((id) => !(id in DOCUMENTED_DRIFTERS));
-  const n = DOCUMENTED_DRIFTER_COUNT;
+  const undocumented = drifting.filter((id) => !(id in documented));
+  const n = Object.keys(documented).length;
 
   if (undocumented.length > 0) {
     const newOnes = entries.filter((e) => undocumented.includes(e.split(' by ')[0] ?? e));
@@ -244,7 +247,7 @@ export function readCensus(line: string): CensusReading {
         `(${undocumented.join(', ')}). This run fails after teardown; the message says why.`,
       drifting,
       undocumented,
-      verdict: overCapVerdict(newOnes, undocumented, drifting.length),
+      verdict: overCapVerdict(newOnes, undocumented, drifting.length, n),
     };
   }
 
@@ -291,12 +294,17 @@ export function readCensus(line: string): CensusReading {
  * here: say what it means before saying what broke, name the member, name the
  * one-line fix, and make the alternative the visibly heavier one.
  */
-function overCapVerdict(newEntries: string[], newIds: string[], total: number): string {
+function overCapVerdict(
+  newEntries: string[],
+  newIds: string[],
+  total: number,
+  documentedCount: number = DOCUMENTED_DRIFTER_COUNT,
+): string {
   const plural = newIds.length === 1 ? '' : 's';
   return (
     `wallet census: ${newIds.length} member${plural} drift${newIds.length === 1 ? 's' : ''} ` +
     `from the wallet ledger and ${newIds.length === 1 ? 'is' : 'are'} not on the documented ` +
-    `list of ${DOCUMENTED_DRIFTER_COUNT} in e2e/support/wallet-census.ts.\n\n` +
+    `list of ${documentedCount} in e2e/support/wallet-census.ts.\n\n` +
     newEntries.map((e) => `  NEW: ${e}`).join('\n') +
     '\n\n' +
     'EVERY TEST ABOVE MAY HAVE PASSED AND THIS IS STILL RED, and it is very probably NOT a ' +
@@ -310,14 +318,16 @@ function overCapVerdict(newEntries: string[], newIds: string[], total: number): 
     'writes a balance in SQL is a legitimate technique this suite documents and relies on — ' +
     'you did not do anything wrong, you just have one more line to write. In that file\'s ' +
     '`afterAll`, NOT `beforeAll`:\n\n' +
-    `    reconcileWalletLedger('${newIds[0] ?? 'QA-XXX-0001'}', BRANCH_ID, 'TAG');\n\n` +
+    `    reconcileWalletLedger('${newIds[0] ?? 'QA-XXX-0001'}', 'TAG');\n\n` +
     'It posts the adjustment + gateway_clearing pair the balance is missing, it is a no-op ' +
     'for a member who already reconciles, and `reports.test.ts` and `account.test.ts` both ' +
     'do exactly this. Reconciling LAST is what lets the same file keep using a SQL balance ' +
     'mid-run for a shortfall spec.\n\n' +
-    'THE OTHER PATH IS DELIBERATELY THE HEAVIER ONE. If the balance genuinely cannot come ' +
-    'from a real ledger pair — `adjustments.test.ts` § `fund()` is the standing example — ' +
-    'add the member to DOCUMENTED_DRIFTERS in e2e/support/wallet-census.ts WITH the sentence ' +
+    'THE OTHER PATH IS DELIBERATELY THE HEAVIER ONE, AND THE LIST IS DOWN TO ONE NAME. ' +
+    'If the balance genuinely cannot come from a real ledger pair — QA-ADJ-0002 is the only ' +
+    'surviving example, a TOMBSTONED member whose spec asserts the product refuses to write ' +
+    'her the very row a reconcile would write — add the member to DOCUMENTED_DRIFTERS in ' +
+    'e2e/support/wallet-census.ts WITH the sentence ' +
     'saying why, the way every entry there carries one. There is no number to raise: the ' +
     'list is the cap, and that is on purpose, because at zero headroom nothing else made ' +
     'the reconcile the cheaper path. Do not delete the check — it is the only thing ' +

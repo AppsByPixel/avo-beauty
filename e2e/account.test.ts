@@ -46,7 +46,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
   A_STAFF_FULL,
-  B_BRANCH,
   B_SCANNER_DEVICE,
   B_STAFF_HANDLE,
   SALON_B,
@@ -271,8 +270,8 @@ afterAll(async () => {
    * the last thing this file does is post the pair that closes each gap. It runs
    * after the reseeds, because the reseeds are the writes being answered for.
    */
-  reconcileWalletLedger(MEMBER, B_BRANCH, 'QAACC');
-  reconcileWalletLedger(VICTIM, B_BRANCH, 'QAACCV');
+  reconcileWalletLedger(MEMBER, 'QAACC');
+  reconcileWalletLedger(VICTIM, 'QAACCV');
 
   await stopTenancyApi();
 });
