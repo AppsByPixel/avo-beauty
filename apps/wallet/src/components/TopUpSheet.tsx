@@ -351,7 +351,7 @@ function ResultStage({
                 : styles.resultMarkBad,
           ]}
         >
-          <Text style={styles.resultGlyph}>
+          <Text style={[text('bodyS', lang), styles.resultGlyph]}>
             {outcome === 'success' ? '✓' : outcome === 'pending' ? '◷' : '✕'}
           </Text>
         </View>
@@ -532,7 +532,7 @@ function QuoteFailedStage({
   return (
     <View style={styles.centred} testID={offline ? 'topup-quote-offline' : 'topup-quote-failed'}>
       <View style={[styles.resultMark, offline ? styles.resultMarkWait : styles.resultMarkBad]}>
-        <Text style={styles.resultGlyph}>{offline ? '⚠' : '✕'}</Text>
+        <Text style={[text('bodyS', lang), styles.resultGlyph]}>{offline ? '⚠' : '✕'}</Text>
       </View>
       <Text style={[text('displayM', lang), styles.resultTitle]} accessibilityRole="header">
         {offline ? copy.offlineColdTitle : copy.quoteFailedTitle}
@@ -595,7 +595,7 @@ function GatewayFailedStage({
   return (
     <View style={styles.centred} testID="topup-gateway-failed">
       <View style={[styles.resultMark, styles.resultMarkBad]}>
-        <Text style={styles.resultGlyph}>✕</Text>
+        <Text style={[text('bodyS', lang), styles.resultGlyph]}>✕</Text>
       </View>
       <Text style={[text('displayM', lang), styles.resultTitle]} accessibilityRole="header">
         {copy.gatewayFailedTitle}

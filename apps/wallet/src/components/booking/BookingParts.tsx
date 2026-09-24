@@ -196,7 +196,7 @@ export function ArtistRow({
         </View>
       </View>
       <View style={[styles.tick, selected && styles.tickOn]}>
-        {selected ? <Text style={styles.tickMark}>✓</Text> : null}
+        {selected ? <Text style={[text('bodyS', lang, '700'), styles.tickMark]}>✓</Text> : null}
       </View>
     </TappableRow>
   );
@@ -570,7 +570,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tickOn: { backgroundColor: color.brand, borderColor: color.brand },
-  tickMark: { color: WHITE, fontSize: 12, fontWeight: '700', lineHeight: 14 },
+  tickMark: { color: WHITE, fontSize: 12, lineHeight: 14 },
 
   /**
    * The day chip's box, minus the two-line stack. `maxWidth` because a branch
