@@ -44,9 +44,19 @@
  * always benign: `QrOverlay` hit the same bug on a salon initial and the
  * substituted glyph for أ read as a "1".
  *
- * `document.fonts.check('600 17px Inter_600SemiBold', 'العودة للرئيسية')`
- * returns TRUE, which is worth knowing before anyone reaches for it as a guard.
- * It reports that a matching font is loaded, not that it covers the string.
+ * `document.fonts.check` IS NOT A WEAKER GUARD FOR THIS, IT IS NOT A GUARD. It
+ * answers one question — is every face that would draw this string AVAILABLE —
+ * where a system font is always available and a `FontFace` in the set becomes
+ * available once its status is `loaded`, so a family the set has no entry for is
+ * not a failure: it falls through to the system fonts and the answer is true.
+ * Neither coverage nor existence is ever consulted. On a page carrying no
+ * `@font-face` rules at all, `document.fonts.size` is 0 and both
+ * `check('600 17px __AvoNoSuchFamily__', 'العودة للرئيسية')` and
+ * `check('12px zzzz_not_a_font_9184', 'x')` return true. The one thing that
+ * returns false is a family matching a `FontFace` that IS in the set and is not
+ * loaded yet — a question `useFonts` in App.tsx already answers by gating the
+ * whole tree, and one there is no `document` to ask on iOS or Android, so
+ * nothing in this app has a sound use for it.
  *
  * THE HOOK, NOT A PROP. A `lang` prop would be explicit, and there are twenty
  * call sites in fourteen files that would every one of them pass the same value
