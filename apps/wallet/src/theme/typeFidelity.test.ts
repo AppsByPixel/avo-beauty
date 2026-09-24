@@ -1283,48 +1283,74 @@ function facelessText(): Set<string> {
  *
  * The bar for an entry is the one `LANGUAGE_PINNED` sets: not "this looked
  * deliberate" but "pinning a face here would make the app worse, or is not
- * available at all". All four below are symbols rather than copy, and the
- * reasons are codepoint facts rather than impressions, because a reason that
- * cannot be checked is the thing this file keeps being written to replace.
+ * available at all". The reason must be a codepoint fact rather than an
+ * impression, because a reason that cannot be checked is the thing this file
+ * keeps being written to replace.
  *
- * None of the four is reachable by a screen reader — each is
- * `accessibilityElementsHidden` or sits inside a labelled parent — so no entry
- * here is legitimate only because a sibling pins the face. If one ever is, say
- * so in its reason: the inheritance it would be resting on is a thing this
- * detector cannot see.
+ * THIS LIST WAS FOUR AND IS ONE, AND WHAT REMOVED THE OTHER THREE WAS A
+ * MEASUREMENT RATHER THAN A PREFERENCE. Three entries — `TopUpSheet#resultGlyph`
+ * and the two ticks that were left faceless to match it — rested on the premise
+ * that pinning a face the glyph is absent from is WORSE than pinning none. It is
+ * not. Driven in Chrome against the real ttfs, one `<span>` per family at
+ * 34px/700 with the family emitted bare the way react-native-web emits it:
+ *
+ *            U+2713 ✓   U+25F7 ◷   U+2715 ✕   U+26A0 ⚠
+ *   Inter        30.00      20.48      25.92      34.87
+ *   Plex Arabic  31.02      20.48      25.92      34.00
+ *   (no such
+ *    family)     25.67      20.48      25.92      34.00
+ *
+ * `__AvoNoSuchFamily__` is the control the button work used — a family declared
+ * nowhere, so whatever it draws IS the browser's per-character fallback.
+ * U+25F7 and U+2715 measure IDENTICALLY under all three, to the hundredth of a
+ * pixel: naming a face that lacks the codepoint costs exactly nothing, because
+ * the fallback runs per character and the named face never enters the cascade
+ * for that character. U+26A0 shows the same signature in Arabic only (Plex
+ * 34.00 === the control) and is genuinely served by Inter (34.87). And U+2713
+ * differs under all three, which is the finding that mattered: the unpinned
+ * ticks were NOT drawing Inter's tick, they were drawing a narrower system one.
+ *
+ * So pinning `text('bodyS', lang)` on these three was non-worse on every glyph
+ * and better on one, and "one tick everywhere" is now true by construction
+ * rather than by leaving all of them to the OS. The cmap census behind the
+ * table: this app loads TWELVE faces (four Fraunces, four Inter, four Plex
+ * Arabic — App.tsx:99). Fraunces carries 624 codepoints and none of these four.
+ * Inter carries 2849 and has U+2713 and U+26A0. Plex Arabic carries 1032 and has
+ * U+2713 only. U+25F7 and U+2715 are in none of the twelve.
+ *
+ * `document.fonts.check` IS WORSE THAN THE DOCBLOCK IN `Buttons.tsx` SAYS, and
+ * this run is where that turned up. That note records it returning true for a
+ * loaded face that cannot draw the string. It also returns true for
+ * `__AvoNoSuchFamily__`, a family that was never declared at all — true for
+ * every one of the four glyphs. It is not a weak guard, it is not a guard.
+ *
+ * THE SURVIVOR IS NOT REACHABLE BY A SCREEN READER — it is
+ * `accessibilityElementsHidden` — so it is not legitimate only because a sibling
+ * pins the face. If a future entry ever is, say so in its reason: the
+ * inheritance it would rest on is a thing this detector cannot see.
  *
  * AND BEING NON-EMPTY IS ITSELF WORTH SOMETHING, WHICH IS MEASURABLE RATHER
  * THAN A FEELING ABOUT LISTS. Stubbing `allSources()` to return no files was run
  * as a mutation: it fails this equality, the language rule's equality and both
  * walk assertions — and `KNOWN_INERT`'s equality stays GREEN, because an empty
- * expectation and a scan that read nothing are the same output. A four-entry
- * list catches a detector that has stopped detecting for free. `KNOWN_INERT`
- * has to buy the same property with fixtures, and did, after it was wrong by
- * eight for two days.
+ * expectation and a scan that read nothing are the same output. A one-entry list
+ * still buys that for free; an empty one would not, and if this list ever
+ * reaches zero the equality has to be replaced by something with a fixture
+ * behind it. `KNOWN_INERT` has to buy the same property with fixtures, and did,
+ * after it was wrong by eight for two days.
  */
 const FACELESS_OK: Record<string, string> = {
-  'components/TopUpSheet.tsx#resultGlyph':
-    'The top-up result mark — ✓ U+2713, ◷ U+25F7, ✕ U+2715, ⚠ U+26A0. Not a ' +
-    'choice: U+25F7 and U+2715 are in NONE of the five faces this app loads, ' +
-    'and U+26A0 is absent from IBM Plex Sans Arabic. Pinning any app face would ' +
-    'force a substitution for at least two of the four, so the OS repertoire is ' +
-    'the only one that covers the set.',
   'components/TopUpCard.tsx#arrow':
     'The Pay→Get arrow, U+2192 / U+2190, chosen by language the way ' +
-    'i18n/rtl.ts § directional glyphs requires. A face IS available — both are ' +
-    'in Inter and in IBM Plex Sans Arabic — and is not taken: the design draws ' +
-    'this as an SVG flipped with scaleX(-1) (design:1889), so no type face is ' +
-    'the design\'s answer here, and the platform glyph is the closer equivalent. ' +
-    'It carries no copy and is accessibilityElementsHidden.',
-  'components/booking/BookingParts.tsx#tickMark':
-    'The selected-slot tick, U+2713, inside a chip whose label is the ' +
-    'accessible name. Inter carries U+2713, so this is a choice rather than a ' +
-    'constraint: it is left on the platform glyph to match resultGlyph, which ' +
-    'has no choice, so the app draws one tick and not two.',
-  'screens/BookScreen.tsx#tickBadgeMark':
-    'The confirmation badge tick, U+2713, on the booking-done screen, with the ' +
-    'heading beside it carrying the meaning. Same glyph and same reasoning as ' +
-    'BookingParts#tickMark.',
+    'i18n/rtl.ts § directional glyphs requires. Both codepoints ARE served: ' +
+    'Inter and IBM Plex Sans Arabic both carry them, and measured against the ' +
+    'no-such-family control all three widths differ (Inter 32.45, Plex 400 ' +
+    '27.88, control 34.00), so a face here would reach the glyph. It is still ' +
+    'not taken: the design draws this as an SVG flipped with scaleX(-1) ' +
+    '(design:1889), so no type face is the design\'s answer here and the ' +
+    'platform glyph is the closer equivalent. It carries no copy and is ' +
+    'accessibilityElementsHidden. This is the one entry resting on design ' +
+    'intent rather than on absence, and it is the weaker kind of reason.',
 };
 
 describe('every Text that draws copy resolves a face', () => {
@@ -1339,12 +1365,127 @@ describe('every Text that draws copy resolves a face', () => {
   });
 
   /**
+   * NO ALLOW-LISTED STYLE MAY DECLARE A WEIGHT, AND THIS IS THE THIRD SHAPE'S
+   * GUARD RATHER THAN A FOURTH RULE.
+   *
+   * `BookingParts#tickMark` and `BookScreen#tickBadgeMark` each carried
+   * `fontWeight: '700'` with no family, on a BARE `styles.X` — no composition,
+   * no base call. Neither existing scan could see the weight. `inertInSource`
+   * walks compositions a face call HEADS, and there was no face call; that is
+   * not a gap in its regex but the definition of what it checks, which is a
+   * weight raised OVER a face that was already resolved.
+   *
+   * A FOURTH SCAN IS NOT THE ANSWER, because the faceless rule already
+   * subsumes the shape. A weight on a style that pins no face is, necessarily,
+   * a Text that resolves no face — so this rule's equality reports it, and the
+   * only way one survives is by being allow-listed. The allow-list is therefore
+   * the whole hole, and it is one assertion wide rather than one scan wide.
+   * That is what this is.
+   *
+   * It is also the stronger claim of the two. An inert override at least had a
+   * real face present and asked it for a weight it could not supply; a weight
+   * on a faceless style asks NOTHING, because there is no face to ask.
+   *
+   * The shape that neither rule sees and this does not close either: a weight
+   * raised over a face settled by a LITERAL `fontFamily` in a sibling style
+   * rather than by a base call — `[styles.withFamily, styles.weightOnly]`. The
+   * faceless rule is satisfied (a face is resolved) and the weight rule finds no
+   * base call to head the walk. It was scanned for across this column on
+   * 2026-09-25 and occurs zero times, so it is named here rather than built.
+   */
+  it('no allow-listed style declares a weight, which would reach no face at all', () => {
+    for (const site of Object.keys(FACELESS_OK)) {
+      const [rel, name] = site.split('#') as [string, string];
+      const file = rel === 'App.tsx' ? APP_ENTRY : path.join(SRC, rel);
+      const body = styleObjects(stripComments(fs.readFileSync(file, 'utf8'))).get(name);
+      // A key like `#noStyle` or `#prop(x)` names no style object; nothing to check.
+      if (body === undefined) continue;
+      expect(DECLARES_WEIGHT.test(body), site).toBe(false);
+    }
+  });
+
+  /**
+   * AND THE GUARD CAN SEE. `toBe(false)` over a one-entry list passes just as
+   * well when `styleObjects` returns an empty map, which is the failure mode
+   * this file has already been bitten by twice.
+   */
+  it('the weight guard fires on a faceless style that does declare one', () => {
+    const src = [
+      '        <Text style={styles.tickMark}>\u2713</Text>',
+      'const styles = StyleSheet.create({',
+      "  tickMark: { color: WHITE, fontSize: 12, fontWeight: '700', lineHeight: 14 },",
+      '});',
+    ].join('\n');
+    const body = styleObjects(stripComments(src)).get('tickMark');
+    expect(body, 'the fixture style must be readable at all').toBeDefined();
+    expect(DECLARES_WEIGHT.test(body!)).toBe(true);
+    // The same style with the weight moved onto the base call, as the fix did.
+    const fixed = src.replace(", fontWeight: '700'", '');
+    expect(DECLARES_WEIGHT.test(styleObjects(stripComments(fixed)).get('tickMark')!)).toBe(false);
+  });
+
+  /**
    * THE MONEY UNIT IS NAMED, because it is what this rule was written for and
    * because the allow-list can only ever say what is ABSENT from it. A reader
    * asking "did the unit fix survive?" should not have to reason from an
    * equality to an empty intersection — and `Money` is the one site whose fix
    * could be silently undone by a caller rather than by an edit to the file.
    */
+  /**
+   * THE PINNED GLYPH SITES ARE NAMED, for the reason `Money` is named below: an
+   * allow-list can only ever say what is ABSENT from it, and a reader asking
+   * "did the tick fix survive?" should not have to reason from an equality to
+   * an empty intersection.
+   *
+   * `BookScreen#tickBadgeMark` carries the extra weight here. `ArtistRow`'s tick
+   * and all four arms of `resultGlyph` have a RENDER assertion behind them in
+   * `components/glyphFaceRender.test.tsx`; the confirmation badge does not,
+   * because reaching it means driving a whole screen through four loads. This
+   * is the only check that node has, so it names the composition rather than
+   * merely counting the site as absent from `FACELESS_OK`.
+   */
+  it('the pinned glyph sites are named, not just absent from the allow-list', () => {
+    const sites: [string, string, string][] = [
+      [
+        'screens/BookScreen.tsx',
+        'tickBadgeMark',
+        "<Text style={[text('bodyS', lang, '700'), styles.tickBadgeMark]}>",
+      ],
+      [
+        'components/booking/BookingParts.tsx',
+        'tickMark',
+        "<Text style={[text('bodyS', lang, '700'), styles.tickMark]}>",
+      ],
+      [
+        'components/TopUpSheet.tsx',
+        'resultGlyph',
+        "<Text style={[text('bodyS', lang), styles.resultGlyph]}>",
+      ],
+    ];
+    for (const [rel, style, composition] of sites) {
+      const src = fs.readFileSync(path.join(SRC, rel), 'utf8');
+      expect(src, rel).toContain(composition);
+      // The KEY, not the whole file. `facelessTextInSource` takes a per-file
+      // base set, and `BookingParts` composes two badges off `micro()` — a
+      // wrapper declared in `booking/tokens.ts` — so a per-file call reports
+      // them as faceless when the app-wide walk does not. Asserting this site's
+      // own key is absent is the claim being made; the file-wide claim belongs
+      // to the equality above, which uses the shared base set.
+      expect(facelessTextInSource(rel, src), rel).not.toContain(`${rel}#${style}`);
+    }
+    // And the weight came OFF the style objects, rather than being left beside
+    // a face it still could not reach.
+    for (const [rel, name] of [
+      ['screens/BookScreen.tsx', 'tickBadgeMark'],
+      ['components/booking/BookingParts.tsx', 'tickMark'],
+    ] as const) {
+      const body = styleObjects(stripComments(fs.readFileSync(path.join(SRC, rel), 'utf8'))).get(
+        name,
+      );
+      expect(DECLARES_WEIGHT.test(body ?? ''), `${rel}#${name}`).toBe(false);
+    }
+  });
+
   it('Money resolves the unit face itself, so no caller can omit it', () => {
     const src = fs.readFileSync(path.join(SRC, 'components/Money.tsx'), 'utf8');
     expect(src).toContain("style={[text('bodyS', lang, unitWeight), unitStyle, { color }]}");

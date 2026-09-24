@@ -850,7 +850,7 @@ function Confirmed({
   return (
     <View style={styles.confirmed} testID="book-confirmed">
       <View style={styles.tickBadge}>
-        <Text style={styles.tickBadgeMark}>✓</Text>
+        <Text style={[text('bodyS', lang, '700'), styles.tickBadgeMark]}>✓</Text>
       </View>
       <Text style={[text('displayM', lang), styles.confirmedTitle]}>{copy.booked}</Text>
       <Text style={[text('body', lang), styles.confirmedSub]}>
@@ -965,7 +965,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tickBadgeMark: { color: WHITE, fontSize: 34, fontWeight: '700', lineHeight: 40 },
+  tickBadgeMark: { color: WHITE, fontSize: 34, lineHeight: 40 },
   confirmedTitle: { color: color.ink, marginTop: 20, textAlign: 'center' },
   confirmedSub: { color: color.textMuted, marginTop: 6, textAlign: 'center' },
   confirmedCard: {
