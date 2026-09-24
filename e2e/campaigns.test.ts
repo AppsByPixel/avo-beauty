@@ -494,8 +494,18 @@ afterAll(async () => {
    * no originating entry, and `support/global-setup.ts` § the wallet census is
    * what measures it. Posted last, because the census reads the FINAL state of
    * the database and the writes above are what is being answered for.
+   *
+   * A TAG PER MEMBER, NOT ONE FOR THE LOOP. The tag lands in the transaction id —
+   * `TX-<tag>-REC-<clock_timestamp>` — so three members sharing `QACMP` would be
+   * three rows separated only by the microsecond field. Three separate `psql`
+   * processes tens of milliseconds apart make that collision effectively
+   * impossible, and that is the argument this repository has already decided not
+   * to accept: five merchant-facing id minters moved to Postgres sequences
+   * because a `CMP-` collision reached a merchant as a 500, and a colliding `TX-`
+   * would not have surfaced as an error at all — just a wrong answer. An index
+   * costs one line and removes the question rather than bounding it.
    */
-  for (const id of AUD) reconcileWalletLedger(id, 'QACMP');
+  AUD.forEach((id, i) => reconcileWalletLedger(id, `QACMP${i + 1}`));
   reconcileWalletLedger(LOWBAL, 'QACMPL');
 
   await stopTenancyApi();
