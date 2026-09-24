@@ -1318,11 +1318,12 @@ function facelessText(): Set<string> {
  * Inter carries 2849 and has U+2713 and U+26A0. Plex Arabic carries 1032 and has
  * U+2713 only. U+25F7 and U+2715 are in none of the twelve.
  *
- * `document.fonts.check` IS WORSE THAN THE DOCBLOCK IN `Buttons.tsx` SAYS, and
- * this run is where that turned up. That note records it returning true for a
- * loaded face that cannot draw the string. It also returns true for
- * `__AvoNoSuchFamily__`, a family that was never declared at all — true for
- * every one of the four glyphs. It is not a weak guard, it is not a guard.
+ * `document.fonts.check` DOES NOT GUARD ANY OF THIS, and this run is where that
+ * turned up: it returned true for `__AvoNoSuchFamily__`, a family declared
+ * nowhere, on every one of the four glyphs. It is not a weak guard, it is not a
+ * guard. The mechanism, the reproduction, and why nothing in this app has a use
+ * for it are in the `Buttons.tsx` docblock — which used to claim it reports
+ * loadedness, and no longer does.
  *
  * THE SURVIVOR IS NOT REACHABLE BY A SCREEN READER — it is
  * `accessibilityElementsHidden` — so it is not legitimate only because a sibling
