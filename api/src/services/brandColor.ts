@@ -46,11 +46,71 @@
  * the guarantee, this is the explanation.
  */
 
-import { deriveBrandSet } from '@avo/tokens';
+import { deriveBrandSet, tokens } from '@avo/tokens';
 import { badRequest } from '../http/errors';
 
 /** `salon_brand_color_is_hex`, restated. The database is the authority. */
 const HEX = /^#[0-9A-Fa-f]{6}$/;
+
+/**
+ * THE BRAND COLOUR A SALON GETS WHEN SHE HAS NOT PICKED ONE.
+ *
+ * READ FROM `@avo/tokens`, NOT TYPED OUT. This is the one rule this constant
+ * exists to enforce, and it is worth more than the value it currently holds.
+ *
+ * `design/tokens/avo-tokens.json` is the source of truth for what the shipped
+ * brand is; `packages/tokens` generates `tokens.color.brand` from it and
+ * `pnpm tokens` is the only way either moves. A `'#459A3C'` typed here would be
+ * correct on the day it was written and silently wrong on the day the ramp next
+ * changes — which is not hypothetical. That exact failure has now happened five
+ * times in this build: `whiteOnDeep` recorded 4.9 for a hex measuring 5.71,
+ * `lilaLilac` recorded 6.0 for 5.88, `PRESET_HEXES` carrying the old sage while
+ * every spec stayed green, and five `rgba(110,127,108,…)` literals in live
+ * wallet code each documented with a reason the palette change had just
+ * falsified. Migration 0055 exists because this value had been written out a
+ * third and fourth time, in `salonOnboarding.ts` and `db/seed.ts`.
+ *
+ * So there is ONE name, both of those read it, and it follows the token file
+ * without anybody remembering to update it.
+ *
+ * WHY A NAMED CONSTANT RATHER THAN `tokens.color.brand` AT EACH CALL SITE.
+ * The two are the same value and not the same fact. `tokens.color.brand` is
+ * "the brand colour of the default palette"; this is "what we store for a
+ * merchant who expressed no preference". Migration 0055 turns on exactly that
+ * distinction — a row holding this value records an ABSENCE of a choice, which
+ * is why it was safe to rewrite and a chosen hex was not.
+ *
+ * It is deliberately NOT run through `parseBrandColor` here. A module-load-time
+ * throw would take the whole API down on a bad token file, at a point with no
+ * request to answer and no useful log line; `brandColor.test.ts` asserts the
+ * viability instead, where the failure is a red spec naming the hex.
+ */
+export const DEFAULT_BRAND_COLOR: string = tokens.color.brand;
+
+/**
+ * A NOTE FOR WHOEVER DIFFS THE DERIVED RAMP AGAINST THE SHIPPED ONE, because
+ * somebody eventually will and it reads like a bug.
+ *
+ *   deriveBrandSet(DEFAULT_BRAND_COLOR).set.deep   #35752E
+ *   tokens.color.brandDeep                         #34772C
+ *
+ * They differ by construction and neither is wrong. `brandDeep` is the shipped
+ * ramp, authored in `design/tokens/avo-tokens.json` and hand-tuned by the
+ * designer. `deriveBrandSet` computes a ramp for an ARBITRARY tenant hex, inside
+ * a fixed shift budget, so that a white-label salon gets a viable `deep` without
+ * a designer in the loop — and it has to land on the same answer for every hex,
+ * including ones nobody has ever looked at. Applied to the default it therefore
+ * lands NEAR the authored deep rather than on it.
+ *
+ * Nothing renders both: a salon's surfaces come from `applyBrandColor`, which
+ * derives, and the default palette's CSS custom properties come from the token
+ * file. The two never meet in one screen.
+ *
+ * This sentence belongs next to `deriveBrandSet` in `packages/tokens/src/derive.ts`,
+ * which is where somebody comparing the numbers is standing. `packages/tokens` is
+ * shared and trunk-owned (CLAUDE.md § Shared packages), so Lane A may not put it
+ * there; it is here, and it is reported.
+ */
 
 /**
  * A hex a white-label salon can actually be built out of, or a 400.

@@ -56,6 +56,7 @@ import { service } from './schema/service';
 import { staffUser } from './schema/staff';
 import { transaction } from './schema/transaction';
 import { hashSecret } from '../auth/password';
+import { DEFAULT_BRAND_COLOR } from '../services/brandColor';
 import { env } from '../env';
 
 /**
@@ -384,7 +385,20 @@ async function seed(): Promise<void> {
       // design already demonstrates the wallet rendering.
       nameAr: 'أمارا',
       plan: 'growth',
-      brandColor: '#6E7F6C',
+      /**
+       * THE SHIPPED DEFAULT, READ RATHER THAN TYPED — and the reason is not
+       * tidiness. This line held a literal `'#6E7F6C'`, so `db:migrate &&
+       * db:seed` applied migration 0055 and then put the old sage straight back:
+       * every lane reset and the demo database contradicted the migration that
+       * had just run against them. Measured on `avo_lane_a` — migrations applied,
+       * then `SELECT brand_color FROM salon` answered `#6E7F6C` again.
+       *
+       * Amara is the fixture every lane drives, so she is the salon that has NOT
+       * chosen a colour and therefore shows whatever the product currently ships.
+       * SAL-LUMIERE below keeps its own `#7A5C8E`, which is the white-label case
+       * and the one 0055 exists to protect.
+       */
+      brandColor: DEFAULT_BRAND_COLOR,
       /**
        * BOTH MODULES ON, and they are the fields of Amara's configuration this
        * seed changes — booking when booking landed, shop when the shop did, for

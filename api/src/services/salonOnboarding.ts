@@ -99,7 +99,7 @@ import { parseBusinessHours, parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
 import { parseTimeZone } from '../time/zone';
 import { writeAudit } from './audit';
-import { parseBrandColor } from './brandColor';
+import { DEFAULT_BRAND_COLOR, parseBrandColor } from './brandColor';
 import { claimKey, completeKey } from './idempotency';
 import { parseLoyaltyConfig, type LoyaltyConfig } from './loyaltyRules';
 /**
@@ -435,9 +435,19 @@ export function parseOnboardInput(
      * Non-negotiable #9's second clause, on the create door. The refusal carries
      * `deriveBrandSet`'s own reason — see `services/brandColor.ts`. Defaulted to
      * the wizard's own first swatch when absent, which the design pre-selects
-     * (`wBrand: '#6E7F6C'`) and which derives cleanly.
+     * and which derives cleanly.
+     *
+     * THAT SWATCH IS READ, NOT TYPED. This line used to hold a literal
+     * `'#6E7F6C'` and the comment named it, so when the brand ramp got its
+     * saturation back the default stayed sage and every salon created without an
+     * explicit `brandColor` was born on the old palette. Migration 0055 moved the
+     * existing rows and could do nothing at all about the next one — a data
+     * migration cannot fix a constant. `DEFAULT_BRAND_COLOR` follows
+     * `design/tokens/avo-tokens.json`, and `salonOnboarding.test.ts` asserts that
+     * this default IS the token default so the pair cannot drift apart again.
      */
-    brandColor: body.brandColor === undefined ? '#6E7F6C' : parseBrandColor(body.brandColor),
+    brandColor:
+      body.brandColor === undefined ? DEFAULT_BRAND_COLOR : parseBrandColor(body.brandColor),
     timezone: body.timezone === undefined ? 'Asia/Kuwait' : parseTimeZone(body.timezone),
     businessHours: businessHoursOrDefault(body.businessHours),
     ownerName: body.ownerName === undefined ? `${name} owner` : requireString(body.ownerName, 'ownerName', 120),
