@@ -64,8 +64,11 @@ import { SectionError } from '../sectionState.js';
  * THE DOT
  * =========================================================================
  * The design assigns dot colours per row by hand and is not systematic about it —
- * two `rules` rows get two different colours (`#5A6B58` and `#6E7F6C`). So the
- * colour is derived here from the stream and kind instead, reusing the client's
+ * two `rules` rows get two different colours (`AVO Owner Console.dc.html:1275`
+ * and `:1277`, `#5A6B58` and `#6E7F6C`). Those two hexes are the design bundle's
+ * pre-ramp brand-deep and brand; they are quoted as what the mock contains, not
+ * as current tokens, and the mock is unchanged so the observation still holds.
+ * So the colour is derived here from the stream and kind instead, reusing the client's
  * existing answer rather than transcribing an inconsistent mock: money and
  * loyalty are brand, and an audit row takes the tone `Audit.tsx` already gives
  * its kind. One client answer to "what colour is an access row", on both screens.
