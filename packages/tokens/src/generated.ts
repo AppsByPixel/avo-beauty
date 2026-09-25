@@ -72,7 +72,7 @@ export const tokens = {
       "tint": "#EFECF5",
       "cardFrom": "#9587BB",
       "cardTo": "#786A9B",
-      "whiteOnDeep": "6.0:1",
+      "whiteOnDeep": "5.88:1",
       "whiteOnBrand": "3.76:1"
     }
   },
