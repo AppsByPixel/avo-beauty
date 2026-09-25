@@ -33,6 +33,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { InfoBanner } from '@avo/ui';
+import { AA_NORMAL_TEXT, color, contrastWithWhite } from '@avo/tokens';
 
 /** The real stylesheets, read off disk and applied by jsdom's own cascade. */
 function cssFrom(relative: string): string {
@@ -106,7 +107,8 @@ describe('inline emphasis carries the design weight, not the browser default', (
 
 describe('the brand mark is one weight and one colour on all four surfaces', () => {
   /**
-   * The design draws all four of these marks on #5A6B58 at 600:
+   * The design draws all four of these marks on #5A6B58 at 600 — the bundle's own
+   * pre-ramp brand-deep, cited as what the mock contains rather than as a token:
    * `AVO Login.dc.html:67` (merchant sign-in) and `:123` (console sign-in),
    * `AVO Owner Console.dc.html:48` (console sidebar), and the merchant sidebar
    * mark beside it. The two merchant marks are in this list as the CONTROL —
@@ -126,9 +128,16 @@ describe('the brand mark is one weight and one colour on all four surfaces', () 
   /**
    * NON-NEGOTIABLE #9, AND THE ONE ASSERTION HERE THAT IS NOT A COMPUTED VALUE.
    *
-   * `--avo-brand` is #6E7F6C: 4.272:1 against white, which FAILS the 4.5:1 the
-   * rule exists to protect. `--avo-brand-deep` is #5A6B58 at 5.708:1, and is
+   * `--avo-brand` is #459A3C: 3.54:1 against white, which FAILS the 4.5:1 the
+   * rule exists to protect. `--avo-brand-deep` is #34772C at 5.50:1, and is
    * what the design specifies for every one of these marks.
+   *
+   * THOSE FOUR VALUES USED TO BE #6E7F6C / 4.272:1 AND #5A6B58 / 5.708:1, and
+   * they stayed in this comment through the ramp revision because prose has no
+   * way to go red. The conclusion never moved — white still must not sit on
+   * `--avo-brand`, and by a wider margin now — which is why nothing noticed. The
+   * spec below re-derives all four from the token file so the next ramp change
+   * fails here instead of rotting here.
    *
    * This reads the declaration rather than `getComputedStyle` because jsdom
    * does not substitute custom properties — it answers `rgba(0, 0, 0, 0)` for
@@ -136,7 +145,8 @@ describe('the brand mark is one weight and one colour on all four surfaces', () 
    * assertion here would pass on both the right colour and the wrong one. The
    * computed proof for this one lives in a real browser, where the console
    * sign-in mark measured `rgb(110, 127, 108)` before this was fixed and
-   * `rgb(90, 107, 88)` after.
+   * `rgb(90, 107, 88)` after — a record of that session on the pre-ramp palette,
+   * not the values it would read today.
    */
   it.each(['signin__mark', 'dash-sidebar__mark', 'csignin__mark', 'console-sidebar__mark'])(
     'fills the %s mark from --avo-brand-deep, never white on --avo-brand',
@@ -146,4 +156,23 @@ describe('the brand mark is one weight and one colour on all four surfaces', () 
       expect(rule![1]).toMatch(/background:\s*var\(--avo-brand-deep\)/);
     },
   );
+
+  /**
+   * THE COMMENT ABOVE, HELD TO ACCOUNT.
+   *
+   * The two ratios the rule rests on are stated in prose three times across this
+   * app — here, and twice in `app.css`. Every one of them was written against
+   * the 8%-saturation ramp and every one survived the revision unchanged and
+   * wrong. This recomputes both from `@avo/tokens`, so the sentence and the
+   * palette cannot disagree silently again.
+   *
+   * It asserts the PROPERTY, not the numbers: `brand` fails AA for white text
+   * and `brandDeep` clears it. That is the whole of non-negotiable #9, and it is
+   * the part that must hold through any future ramp — pinning 3.54 and 5.50
+   * would only move the staleness one file to the left.
+   */
+  it('keeps #9 true of the shipped ramp: white fails on brand, clears on brandDeep', () => {
+    expect(contrastWithWhite(color.brand)).toBeLessThan(AA_NORMAL_TEXT);
+    expect(contrastWithWhite(color.brandDeep)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+  });
 });

@@ -2989,7 +2989,16 @@ a:hover {
  * console sidebar and the scanner frame with, and `.avo-dark` on the root is what
  * switches the focus ring to `#A9BBA6` — @avo/tokens emits that rule because
  * interaction-spec.md §2 says #6E7F6C "does not carry enough contrast against
- * #1C1B19". Until this shell existed that rule had nothing to apply to.
+ * #1C1B19".
+ *
+ * THAT QUOTATION IS KEPT VERBATIM AND IT DESCRIBES THE PALETTE AT THE TIME IT
+ * WAS WRITTEN. §2's #6E7F6C is the retired sage; the ring token it argues for is
+ * still what ships, but the measurement behind it no longer applies to the
+ * current brand. Today `--avo-brand` (#459A3C) measures 4.87:1 against #1C1B19,
+ * so the spec's reason has weakened even though its instruction has not —
+ * #A9BBA6 is 8.48:1 there and remains the correct ring on dark ground. Read the
+ * sentence as history, not as a live measurement. Until this shell existed that
+ * rule had nothing to apply to.
  *
  * Breakpoints are `[data-bp]` off the same `useBreakpoint`, so the console cannot
  * drift from §1's numbers independently of the merchant workspace.
@@ -3035,10 +3044,16 @@ a:hover {
  * The console's brand mark, matched to its three siblings.
  *
  * `AVO Owner Console.dc.html:48` draws it on #5A6B58 in Fraunces at 600, which
- * is what `.signin__mark` and `.dash-sidebar__mark` already do. This one had
- * drifted to `--avo-brand` at 700 in the UI font. The colour was also a
- * non-negotiable #9 break: white on `--avo-brand` (#6E7F6C) is 4.272:1 and
- * fails 4.5:1, where `--avo-brand-deep` (#5A6B58) is 5.708:1.
+ * is what `.signin__mark` and `.dash-sidebar__mark` already do — that hex is the
+ * design bundle's own brand-deep, drawn before the ramp was revised, and it is
+ * cited here as a reference to the mock rather than as a current token.
+ *
+ * This one had drifted to `--avo-brand` at 700 in the UI font. The colour was
+ * also a non-negotiable #9 break, and the revised ramp makes it a wider one, not
+ * a narrower one: white on `--avo-brand` (#459A3C) is 3.54:1 and fails 4.5:1,
+ * where `--avo-brand-deep` (#34772C) is 5.50:1. The figures here were 4.272:1
+ * and 5.708:1 against the retired sage; the conclusion did not move when the
+ * numbers did, which is exactly why nothing caught them going stale.
  */
 .console-sidebar__mark {
   display: inline-flex;

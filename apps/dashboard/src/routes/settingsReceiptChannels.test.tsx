@@ -182,7 +182,31 @@ const SALON: Salon = {
   nameAr: 'صالون أمارة',
   plan: 'growth',
   city: 'Kuwait City',
-  brandColor: '#6E7F6C',
+  /*
+   * A TENANT'S OWN HEX, DELIBERATELY ARBITRARY AND DELIBERATELY NOT A PRESET.
+   *
+   * This was `'#6E7F6C'`, and unlike the console's swatch list that was not a
+   * transcription bug — `brandColor` is a white-label INPUT, so a fixed literal
+   * is the honest shape for it and nothing here asserts on the value. It is
+   * changed anyway, for a different reason: `#6E7F6C` is no longer a hex a salon
+   * row can hold. Migration 0055 rewrites every occurrence of the retired
+   * shipped default to `#459A3C` (case-insensitively), so after it runs the only
+   * salons on that value are ones the seed re-creates — trunk's open item, not a
+   * state this fixture should stand for.
+   *
+   * NOT READ FROM `brandPresets.amaraSage.brand` EITHER, which would be the
+   * reflex after the swatch fix one directory along. That hex IS the platform
+   * default, and a fixture for "the salon chose its own colour" must not be the
+   * value that means "nobody chose" — the two are indistinguishable at the point
+   * the screen reads the row. It would also tie an unrelated spec to the brand
+   * ramp, so the next revision would silently move an input these tests do not
+   * care about.
+   *
+   * `#7A5C8E` is SAL-LUMIERE's, the salon 0055's own message names as owning its
+   * hex, and it is already what `api/platformSalonDetail.test.ts:42` uses. One
+   * arbitrary tenant colour across the dashboard's fixtures.
+   */
+  brandColor: '#7A5C8E',
   modules: { booking: false, shop: false },
   loyaltyMode: 'tiers',
   tiers: [{ name: 'bronze', minVisits: 0, bonusPercent: 0 }],

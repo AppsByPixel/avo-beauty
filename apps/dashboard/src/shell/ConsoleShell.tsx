@@ -23,6 +23,14 @@ import { UnsupportedWidth } from './UnsupportedWidth.js';
  * interaction-spec.md §2 says `#6E7F6C` "does not carry enough contrast against
  * #1C1B19". That token existed before this shell did and had nothing to apply to.
  *
+ * THE QUOTATION IS §2's, VERBATIM, AND IT IS SUPERSEDED. `#6E7F6C` is the
+ * retired sage — the spec was written against the 8%-saturation ramp. The rule
+ * it justifies is unchanged and still correct (#A9BBA6 is 8.48:1 on #1C1B19),
+ * but the measurement no longer describes the shipped brand, which now reads
+ * 4.87:1 there. Kept as written rather than silently re-hexed: quoting a spec
+ * and quoting it accurately are the same obligation, and `app.css` § owner
+ * console carries the same note beside the same sentence.
+ *
  * THE SIDEBAR HIDES WHAT THE ADMIN CANNOT REACH, AND THAT IS A COURTESY. Every
  * one of the nine sections is enforced by `requirePlatform` server-side, so a
  * hidden item is a convenience and a shown one is not a grant — #7. An analyst

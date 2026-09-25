@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from '@tanstack/react-router';
 import { fils } from '@avo/types';
-import { deriveBrandSet } from '@avo/tokens';
+import { brandPresets, color, deriveBrandSet } from '@avo/tokens';
 import {
   Button,
   Card,
@@ -487,11 +487,18 @@ function StorefrontGlyph() {
  * it lands inline, the wizard stays on step 3, and she picks another.
  *
  * WORTH KNOWING: the design offers exactly three swatches and all three derive
- * cleanly (`#6E7F6C` → deep `#5C6A5A`, `#B08D8D` → `#825A5A`, `#8A7CB0` →
- * `#6A5A95`, checked by running the real function). So the refusal path cannot be
- * reached through the drawn control today. It is wired anyway, because the swatch
- * list is design data and a future palette is one edit away from producing a hex
- * that fails — and an unwired refusal would then surface as a dead Confirm button.
+ * cleanly, so the refusal path cannot be reached through the drawn control today.
+ * It is wired anyway, because the swatch list is design data and a future palette
+ * is one edit away from producing a hex that fails — and an unwired refusal would
+ * then surface as a dead Confirm button.
+ *
+ * THAT PARAGRAPH USED TO TRANSCRIBE THE THREE DERIVED PAIRS, and the first of
+ * them was the retired sage. Restating a derivation beside the values it derives
+ * from is the same failure as restating the swatch list: the ramp moved and the
+ * prose went on describing a palette the product no longer ships. The claim is
+ * now re-derived in `salonsBrandSwatches.test.tsx`, which runs `deriveBrandSet`
+ * over whatever the token file currently holds, so "all three derive cleanly"
+ * goes red when it stops being true instead of quietly reading as history.
  */
 
 /** `AVO Owner Console.dc.html:1154` — planFee and planComm, verbatim. */
@@ -506,8 +513,33 @@ const WIZARD_PLANS = ['Starter', 'Growth', 'Pro'] as const;
 /** Same file, `wizStepLabel`. */
 const STEP_LABELS = ['Salon details', 'Modules & deposit', 'Loyalty & brand', 'Review'] as const;
 
-/** Same file, `wBrands`. Three swatches, and `wBrand: '#6E7F6C'` is preselected. */
-const BRAND_SWATCHES = ['#6E7F6C', '#B08D8D', '#8A7CB0'] as const;
+/**
+ * Same file, `wBrands`. Three swatches, and the platform default is preselected.
+ *
+ * READ OFF `brandPresets`, NOT RE-TYPED. This was the literal list
+ * `['#6E7F6C', '#B08D8D', '#8A7CB0']` with `BRAND_SWATCHES[0]` as the initial
+ * `brandColor` — so when trunk revised the brand ramp, every salon onboarded
+ * through this wizard was still born on the retired sage `#6E7F6C`. That
+ * defeated both the migration that moves shipped-default salons onto the new
+ * hex and the API's own change from a literal to `tokens.color.brand`. Nothing
+ * went red, because no spec here ever asked the list where its values came from.
+ *
+ * The token file already carries these three as structured data — `amaraSage`,
+ * `noorRose`, `lilaLilac`, each with its `brand`, `deep`, `tint` and card
+ * gradient — so the wizard reads them instead of restating them, and the next
+ * ramp change carries the swatches with it.
+ *
+ * THE PRESELECTION IS `color.brand`, NOT `BRAND_SWATCHES[0]`. Those are the same
+ * hex today, but they are different claims: one says "the platform's default
+ * brand", the other says "whichever preset the token file happens to list
+ * first". The first is what the API's create endpoint means when `brandColor` is
+ * absent, so it is what the stepper should agree with. `salonsBrandSwatches.test.tsx`
+ * pins both the list and the membership of the default in it.
+ */
+export const BRAND_SWATCHES: readonly string[] = Object.values(brandPresets).map((p) => p.brand);
+
+/** The hex a salon is born on when nobody picks — the same value the API defaults to. */
+export const BRAND_DEFAULT = color.brand;
 
 /**
  * The design's stepper is drawn in whole KD, 1–10, and the server's CHECK is
@@ -553,7 +585,7 @@ function OnboardWizard({ onClose }: { onClose: () => void }) {
   const [booking, setBooking] = useState(false);
   const [shop, setShop] = useState(false);
   const [loyaltyMode, setLoyaltyMode] = useState<LoyaltyMode>('tiers');
-  const [brandColor, setBrandColor] = useState<string>(BRAND_SWATCHES[0]);
+  const [brandColor, setBrandColor] = useState<string>(BRAND_DEFAULT);
   const [depositTouched, setDepositTouched] = useState(false);
   const [deposit, setDeposit] = useState<number | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
