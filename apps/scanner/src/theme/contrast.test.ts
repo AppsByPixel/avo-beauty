@@ -55,13 +55,30 @@ describe('non-negotiable #9 on the staff surface', () => {
   });
 
   /**
-   * The 4.27:1 this app's own theme header cites, verified rather than trusted.
-   * A figure in a comment is the thing this build keeps finding to be stale.
+   * WHY WHITE MAY NOT SIT ON `brand`, AS A PROPERTY RATHER THAN AS A FIGURE.
+   *
+   * This asserted `ratio.toFixed(2) === '4.27'` — the number the theme header
+   * cited — on the reasoning that a figure in a comment is the thing this build
+   * keeps finding stale. The reasoning was right and the remedy was backwards: it
+   * pinned the stale figure into a spec as well, so when trunk revised the brand
+   * ramp the spec went red while saying nothing about whether #9 still held. It
+   * did hold. Only the number had moved.
+   *
+   * What #9 actually requires is an ORDERING: `brand` is below the AA floor (so
+   * white cannot sit on it), `brandDeep` is above it (so white can), and the fill
+   * the app uses is the latter. All three survive the ramp moving; none of them
+   * needs a hex or a ratio written down. If a future ramp ever put `brand` above
+   * the floor, this goes red and somebody has to say why `brand` may now carry
+   * text — which is the question the old spec only appeared to be asking.
    */
-  it('confirms the 4.27:1 the theme header claims for white on brand', () => {
-    const ratio = contrastRatio(color.white, color.brand);
-    expect(ratio).toBeLessThan(AA_NORMAL_TEXT);
-    expect(ratio.toFixed(2)).toBe('4.27');
+  it('keeps white off `brand` because `brand` is below the AA floor', () => {
+    expect(contrastRatio(color.white, color.brand)).toBeLessThan(AA_NORMAL_TEXT);
+  });
+
+  it('and the fill it uses instead is strictly more legible', () => {
+    expect(contrastRatio(color.white, onBrandFill)).toBeGreaterThan(
+      contrastRatio(color.white, color.brand),
+    );
   });
 });
 
@@ -113,11 +130,13 @@ describe('the dark scan screen — where white on near-black is the normal case'
 describe('the light focus ring', () => {
   /**
    * `brandDeep`, never `brand`. §2 writes the ring as the literal `2px solid
-   * #6E7F6C` — the Amara `brand` value — and that generalises to a FAILING ring
-   * on a rebranded salon: a focus indicator is a non-text graphic, WCAG 1.4.11
-   * asks 3:1 against the adjacent surface, and `brand` measures 2.86:1 on Noor
-   * rose. The generated stylesheet already made this deviation for the web; this
-   * is the native half of it. Per-tenant numbers are in `brand.test.ts`.
+   * #6E7F6C` — the `brand` value of the day, since superseded by the revised ramp
+   * — and that generalises to a FAILING ring on a rebranded salon: a focus
+   * indicator is a non-text graphic, WCAG 1.4.11 asks 3:1 against the adjacent
+   * surface, and `brand` measures 2.86:1 on Noor rose. The generated stylesheet
+   * already made this deviation for the web; this is the native half of it. The
+   * per-tenant property is asserted in `brand.test.ts`, computed rather than
+   * copied.
    */
   it('is brandDeep, not brand', () => {
     expect(FOCUS_RING_LIGHT).toBe(color.brandDeep);

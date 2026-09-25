@@ -29,7 +29,7 @@ import { ApiError } from '../api/client';
 import { lookupMembers, MIN_QUERY_LENGTH, type LookupMember } from '../api/members';
 import { copy } from '../copy/en';
 import { tierLabel } from '../domain/loyalty';
-import { color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme';
+import { BRAND_BORDER, color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme';
 import { LinkButton } from '../components/Buttons';
 import { EmptyState, ErrorState, OfflineBanner, SkeletonRows } from '../components/States';
 import { useSession } from '../state/session';
@@ -289,7 +289,7 @@ const styles = StyleSheet.create({
     gap: 9,
     backgroundColor: color.brandTint2,
     borderWidth: 1,
-    borderColor: 'rgba(110,127,108,0.22)',
+    borderColor: BRAND_BORDER,
     borderRadius: radius.chip,
     paddingVertical: 11,
     paddingHorizontal: 14,

@@ -26,7 +26,7 @@ import {
   type TierName,
   type TopUpIntentPublic,
 } from '@avo/types';
-import { color, MIN_TAP_TARGET, onBrandFill, radius, text, WHITE } from '../theme';
+import { BRAND_BORDER, color, MIN_TAP_TARGET, onBrandFill, radius, text, WHITE, withAlpha } from '../theme';
 import { useCopy, useLanguage } from '../i18n/language';
 import type { Copy } from '../copy/types';
 import { canRetry, PAYMENT_METHODS, type TopUpOutcome } from '../domain/topup';
@@ -645,7 +645,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     backgroundColor: color.brandTint2,
     borderWidth: 1,
-    borderColor: 'rgba(110,127,108,0.22)',
+    borderColor: BRAND_BORDER,
     borderRadius: radius.card,
     paddingHorizontal: 17,
     paddingVertical: 9,
@@ -659,7 +659,7 @@ const styles = StyleSheet.create({
   },
   calcDivider: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(110,127,108,0.3)',
+    borderTopColor: withAlpha(color.brand, 0.3),
     borderStyle: 'dashed',
     marginVertical: 2,
   },
@@ -743,7 +743,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.input,
     backgroundColor: color.brandTint2,
     borderWidth: 1,
-    borderColor: 'rgba(110,127,108,0.22)',
+    borderColor: BRAND_BORDER,
   },
   holdDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: color.brand },
   holdText: { color: color.brandDeeper, flex: 1, lineHeight: 18 },

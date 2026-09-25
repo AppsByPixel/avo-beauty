@@ -9,7 +9,9 @@
  * 2. interaction-spec.md §3 — every control clears the 44pt minimum tap target
  *    from the token file, including the small ones.
  * 3. interaction-spec.md §2 — the focus ring is 2px offset 2px, and on a DARK
- *    surface it is `#A9BBA6`, not `#6E7F6C`. `onDark` switches it.
+ *    surface it takes `dark.focusRing` rather than the light ring. §2 writes the
+ *    pair as `#A9BBA6` and `#6E7F6C`; the second of those is a superseded `brand`
+ *    value, so the rule is stated here by token and `onDark` switches it.
  */
 
 import {

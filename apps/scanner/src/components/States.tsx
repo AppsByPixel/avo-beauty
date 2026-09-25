@@ -20,7 +20,7 @@
 
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
-import { color, display, radius, ui } from '../theme';
+import { BRAND_BORDER, color, display, radius, ui } from '../theme';
 import { copy } from '../copy/en';
 import { PrimaryButton, SecondaryButton } from './Buttons';
 
@@ -315,7 +315,7 @@ const styles = StyleSheet.create({
     gap: 9,
     backgroundColor: color.brandTint2,
     borderWidth: 1,
-    borderColor: 'rgba(110,127,108,0.22)',
+    borderColor: BRAND_BORDER,
     borderRadius: 13,
     paddingVertical: 12,
     paddingHorizontal: 14,

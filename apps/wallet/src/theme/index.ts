@@ -9,7 +9,7 @@
 
 import type { TextStyle } from 'react-native';
 import { theme } from '@avo/tokens/native';
-import { tokens } from '@avo/tokens';
+import { hexToRgb, tokens } from '@avo/tokens';
 import { seal } from './sealed';
 
 /**
@@ -191,6 +191,32 @@ export const onBrandFill = {
   backgroundColor: color.brandDeep,
   color: WHITE,
 } as const;
+
+/**
+ * A palette colour at an alpha, composited rather than typed.
+ *
+ * THE LITERALS THIS REPLACES WERE A LATENT REBRAND BUG. Five style entries
+ * across the two apps carried `rgba(110,127,108,0.22)` (and one at 0.3) with a
+ * comment saying it is "`brand` at 22%, because `hairline` is ink at 8% and
+ * reads grey against the wash rather than green". That was true when written and
+ * stopped being true twice over: once when a salon's hex is applied at boot, and
+ * again when trunk revised the brand ramp, after which the literal was the OLD
+ * brand sitting as a grey-green edge on the new green wash - the exact failure
+ * the comment existed to prevent.
+ *
+ * Deriving it means the edge follows `brand` through both, and there is one
+ * place to read instead of five hand-sampled alphas to keep in step.
+ */
+export function withAlpha(hex: string, alpha: number): string {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/**
+ * The 1px edge on a brand-washed panel - `brand` at 22%, design:591. Used on
+ * every brand-washed panel in the bundle.
+ */
+export const BRAND_BORDER = withAlpha(color.brand, 0.22);
 
 /** Brand-coloured text on a light surface is also `brandDeep`, never `brand`. */
 export const brandTextColor = color.brandDeep;

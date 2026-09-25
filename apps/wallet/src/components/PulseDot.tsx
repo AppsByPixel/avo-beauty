@@ -8,7 +8,9 @@
  *
  * `--avo-brand` is a SURFACE colour, and a dot is exactly the use non-negotiable
  * #9 names as legitimate: "gradients, tints, dots, progress fills". Nothing is
- * written on top of it.
+ * written on top of it. The same holds for the amber the happy-hour banner
+ * passes in: a dot is a non-text graphic, so the floor is WCAG 1.4.11's 3:1, and
+ * `happyHourAccent` on `happyHourBg` measures 4.50:1.
  *
  * design/README.md §192: reduced motion **removes** the pulse rather than
  * shortening it. So under reduce-motion this is a plain, fully-opaque dot — the
@@ -24,9 +26,22 @@ interface Props {
   size: number;
   /** One full cycle. design:203 is 1600ms; design:643 is 1400ms. */
   durationMs: number;
+  /**
+   * The dot's fill. Defaults to `color.brand`, which is what the payment code's
+   * countdown row wants and what both callers wanted when there was only one
+   * brand group on screen.
+   *
+   * It became a prop when the live happy-hour banner moved to the amber group: a
+   * brand-green dot pulsing inside an amber card is the one element still
+   * arguing that happy hour is just more house colour, which is the thing the
+   * move was for. A prop rather than a second component, because the animation,
+   * the reduced-motion rule and the accessibility treatment are all identical —
+   * only the fill differs.
+   */
+  fill?: string;
 }
 
-export function PulseDot({ size, durationMs }: Props) {
+export function PulseDot({ size, durationMs, fill }: Props) {
   const value = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -62,7 +77,11 @@ export function PulseDot({ size, durationMs }: Props) {
       // Decorative: the sentence next to it already says the window is live.
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={[styles.dot, { width: size, height: size, opacity: value }]}
+      style={[
+        styles.dot,
+        { width: size, height: size, opacity: value },
+        fill ? { backgroundColor: fill } : null,
+      ]}
     />
   );
 }
