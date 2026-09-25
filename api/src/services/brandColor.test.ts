@@ -24,31 +24,70 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { deriveBrandSet } from '@avo/tokens';
-import { parseBrandColor } from './brandColor';
+import { deriveBrandSet, tokens } from '@avo/tokens';
+import { DEFAULT_BRAND_COLOR, parseBrandColor } from './brandColor';
 
-/** Migration 0055's two hexes. */
+/**
+ * Migration 0055 moved rows OFF this one. It is a historical value and is
+ * therefore written out: 0055 is immutable history and its hexes do not follow
+ * the token file. `#6E7F6C` must stay STORABLE — a merchant may choose that
+ * sage deliberately after the migration — which is the only claim made about it
+ * below.
+ */
 const OLD_DEFAULT = '#6E7F6C';
-const NEW_DEFAULT = '#459A3C';
 
-describe('the brand colour migration 0055 writes is a storable one', () => {
-  it('derives a full viable set from the new default', () => {
-    const derived = deriveBrandSet(NEW_DEFAULT);
+/**
+ * The CURRENT default, read rather than typed. Writing `'#459A3C'` here would
+ * make this file the sixth stale copy of a value that has already gone stale
+ * five times in this build, and — worse — a spec asserting a hard-coded hex
+ * derives cleanly proves nothing about the hex the product actually ships.
+ */
+const SHIPPED = DEFAULT_BRAND_COLOR;
+
+describe('the brand colour the product ships is a storable one', () => {
+  it('is the token file’s brand, not a value copied beside it', () => {
+    // The constant's entire job. If somebody replaces it with a literal to
+    // "avoid the import", this is what goes red.
+    expect(DEFAULT_BRAND_COLOR).toBe(tokens.color.brand);
+  });
+
+  it('derives a full viable set from the shipped default', () => {
+    const derived = deriveBrandSet(SHIPPED);
 
     expect(derived.ok).toBe(true);
     if (!derived.ok) return; // narrowing; the assertion above is the claim
 
-    expect(derived.set.brand).toBe(NEW_DEFAULT);
+    expect(derived.set.brand).toBe(SHIPPED);
     // The two pairings #9 actually puts text on, both over the 4.5 floor.
     expect(derived.set.whiteOnDeep).toBeGreaterThanOrEqual(4.5);
     expect(derived.set.deepOnTint).toBeGreaterThanOrEqual(4.5);
-    // And the one it never does, recorded rather than asserted away.
-    expect(derived.set.whiteOnBrand).toBeLessThan(4.5);
   });
 
-  it('accepts the new default through the route-facing validator', () => {
+  /**
+   * WHY `whiteOnBrand` IS NOT ASSERTED AGAINST THE FLOOR.
+   *
+   * For today's default it measures 3.54, under 4.5, and that is CORRECT rather
+   * than a defect — non-negotiable #9 puts white on `brand-deep` and treats
+   * `brand` as a surface colour. But `expect(whiteOnBrand).toBeLessThan(4.5)`
+   * would be a guard pointing the wrong way: a future ramp that happened to be
+   * darker would clear 4.5 and red this spec for getting SAFER. A red that means
+   * "nothing is wrong" is how a suite stops being read.
+   *
+   * The structural fact is the one worth pinning, and it is true for every hex:
+   * the deep is darker than the brand, so it always carries white better. That
+   * is #9's reason rather than #9's restatement.
+   */
+  it('always carries white better on the deep than on the brand — #9’s reason', () => {
+    const derived = deriveBrandSet(SHIPPED);
+    expect(derived.ok).toBe(true);
+    if (!derived.ok) return;
+
+    expect(derived.set.whiteOnDeep).toBeGreaterThan(derived.set.whiteOnBrand);
+  });
+
+  it('accepts the shipped default through the route-facing validator', () => {
     // Verbatim, not upper-cased — parseBrandColor stores the merchant's spelling.
-    expect(parseBrandColor(NEW_DEFAULT)).toBe(NEW_DEFAULT);
+    expect(parseBrandColor(SHIPPED)).toBe(SHIPPED);
   });
 
   it('still accepts the old default, which rows may legitimately hold', () => {

@@ -272,6 +272,21 @@ suite('loyalty authority — AVO writes, the merchant reads', () => {
     it('leaves the rest of the Settings screen working — the permission survives', async () => {
       // `perms.loyalty` is narrowed, not retired. If this went red the change
       // would have taken the whole screen out with the ladder.
+      //
+      // IT PUTS THE COLOUR BACK. This spec used to PATCH `brandColor` to
+      // `#8A7CB0` and leave it there, so any lane database drifted off the seed
+      // after a single int run and stayed there until the next `lane-db.sh`
+      // reset. Nothing was red, which is what made it worth fixing: the next
+      // spec to assert anything about a salon's brand colour would have been
+      // mysteriously order-dependent, passing alone and failing in the suite.
+      // The proof here is the 200, not the value, so the value need not survive.
+      const before = await app.inject({
+        method: 'GET',
+        url: `/salons/${SALON}`,
+        headers: { authorization: `Bearer ${manager}` },
+      });
+      const original = JSON.parse(before.body).brandColor as string;
+
       const res = await app.inject({
         method: 'PATCH',
         url: `/salons/${SALON}`,
@@ -279,6 +294,15 @@ suite('loyalty authority — AVO writes, the merchant reads', () => {
         payload: { brandColor: '#8A7CB0' },
       });
       expect(res.statusCode).toBe(200);
+
+      const restored = await app.inject({
+        method: 'PATCH',
+        url: `/salons/${SALON}`,
+        headers: { authorization: `Bearer ${manager}` },
+        payload: { brandColor: original },
+      });
+      expect(restored.statusCode).toBe(200);
+      expect(JSON.parse(restored.body).brandColor).toBe(original);
     });
   });
 

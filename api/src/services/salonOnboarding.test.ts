@@ -28,6 +28,7 @@ import { parseBrandColor } from './brandColor';
 import { parseTiers } from './loyaltyRules';
 import { DEFAULT_LOYALTY, parseOnboardInput } from './salonOnboarding';
 import { fils } from '@avo/types';
+import { tokens } from '@avo/tokens';
 
 /** The platform's Controls default, as `readPlatformSettings` would supply it. */
 const PLATFORM_DEFAULT_DEPOSIT = fils(5000);
@@ -95,10 +96,56 @@ describe('the default tier ladder', () => {
 });
 
 describe('brandColor, non-negotiable #9 second clause', () => {
-  // The design's three swatches in the wizard's step 3. If any of these were
-  // refused, the drawn flow could not be completed.
-  it.each(['#6E7F6C', '#B08D8D', '#8A7CB0'])('accepts the drawn swatch %s', (hex) => {
+  /**
+   * The design's three swatches in the wizard's step 3. If any of these were
+   * refused, the drawn flow could not be completed.
+   *
+   * READ FROM `tokens.brandPresets`, NOT RE-TYPED. This list was the literal
+   * `['#6E7F6C', '#B08D8D', '#8A7CB0']` and it stayed green through the ramp
+   * revision while naming a hex the product no longer ships — the same shape as
+   * `PRESET_HEXES`, and green is exactly what makes it dangerous: a stale list
+   * that passes is a list nobody re-reads.
+   */
+  const SWATCHES = Object.values(tokens.brandPresets).map((p) => p.brand);
+
+  it('reads the swatches from the token file rather than a typed list', () => {
+    // If a fourth preset is drawn, it is covered below without anybody editing
+    // this file. If the ramp moves, these move with it.
+    expect(SWATCHES.length).toBeGreaterThanOrEqual(3);
+    expect(SWATCHES).toContain(tokens.color.brand);
+  });
+
+  it.each(SWATCHES)('accepts the drawn swatch %s', (hex) => {
     expect(parseBrandColor(hex)).toBe(hex);
+  });
+
+  /**
+   * THE GUARD THAT WOULD HAVE CAUGHT THIS THE DAY THE RAMP MOVED.
+   *
+   * `parseOnboardInput` defaulted `brandColor` to a hard-coded `'#6E7F6C'`, so
+   * when `design/tokens/avo-tokens.json` moved to the vivid green every salon
+   * created without an explicit colour was still born on the old sage. Migration
+   * 0055 could move the rows that already existed and could do nothing about the
+   * next one — a data migration cannot fix a constant.
+   *
+   * Asserted against `tokens.color.brand` rather than against any hex written in
+   * this file: a spec that restates the value it is guarding cannot notice the
+   * value changing, which is `api/README.md`'s sentence about the token file one
+   * level up.
+   */
+  it('defaults an unstated brandColor to the SHIPPED brand, not to a constant', () => {
+    const input = parseOnboardInput({ ...MINIMUM_BODY }, PLATFORM_DEFAULT_DEPOSIT);
+    expect(input.brandColor).toBe(tokens.color.brand);
+  });
+
+  it('leaves a stated brandColor exactly as the merchant spelled it', () => {
+    // The other half of migration 0055's decision: a chosen hex is never
+    // normalised toward the default, and never case-folded.
+    const input = parseOnboardInput(
+      { ...MINIMUM_BODY, brandColor: '#7a5c8e' },
+      PLATFORM_DEFAULT_DEPOSIT,
+    );
+    expect(input.brandColor).toBe('#7a5c8e');
   });
 
   it.each(['#FFFF00', '#FFFFFF'])('refuses %s with the deriver’s own reason', (hex) => {
