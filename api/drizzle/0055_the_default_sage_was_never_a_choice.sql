@@ -1,0 +1,79 @@
+-- ===========================================================================
+-- THE BRAND RAMP GOT ITS SATURATION BACK, AND EVERY SALON STILL RENDERS SAGE.
+--
+--   old default   #6E7F6C   the sage the product shipped with
+--   new default   #459A3C   the vivid green `packages/tokens` now ships
+--
+-- WHY A MIGRATION AT ALL, WHEN THE TOKENS ALREADY CHANGED
+-- ------------------------------------------------------
+-- `packages/tokens` is only the DEFAULT palette. The wallet card and every
+-- brand surface are drawn from the salon's own `salon.brand_color`, which
+-- `applyBrandColor` expands into a full ramp through `deriveBrandSet()` at
+-- Boot. So a salon row still holding `#6E7F6C` renders the old sage no matter
+-- what the token file says, and shipping the new ramp without this statement
+-- changes nothing anybody can see.
+--
+-- ONLY THE OLD DEFAULT MOVES. THAT IS THE DECISION.
+-- -------------------------------------------------
+-- A salon sitting on `#6E7F6C` never chose a colour — that hex is what
+-- `services/salonOnboarding.ts` writes when `brandColor` is omitted, so the row
+-- records an absence of a choice rather than a choice. Moving it to the new
+-- default is precisely what "migrate to the new default" means.
+--
+-- A salon that picked its own hex OWNS IT. SAL-LUMIERE is `#7A5C8E`, a purple,
+-- and is `#7A5C8E` after this migration. It is not vivified, not normalised,
+-- not nudged toward the new ramp. The merchant typed that value into her own
+-- Settings screen and it is her brand guide, not our palette.
+--
+-- This is why the statement is not the blanket `UPDATE salon SET brand_color`
+-- that somebody reading "migrate to the new default" would write. A blanket
+-- update is a one-line destruction of every white-label choice this product has
+-- ever stored, and it is indistinguishable in a diff from the correct version
+-- unless the WHERE is read. Someone will find this file in a year and wonder
+-- why it was not simply a blanket update: that is the answer.
+--
+-- MATCHED CASE-INSENSITIVELY, AND THAT IS READ RATHER THAN GUESSED
+-- ---------------------------------------------------------------
+-- `services/brandColor.ts` § parseBrandColor returns the hex **VERBATIM
+-- (trimmed), not normalised to the deriver's upper case** — its own comment
+-- gives the reason, that case-folding would silently rewrite every existing
+-- row's spelling the next time it was touched. `salon_brand_color_is_hex` is
+-- `~ '^#[0-9A-Fa-f]{6}$'`, which admits either case. So `#6e7f6c` IS a storable
+-- row and an exact-match WHERE would walk straight past it, leaving a salon on
+-- the old sage for the reason least likely to be looked for. `upper()` on the
+-- column, a literal already upper-cased.
+--
+-- The value WRITTEN is upper-case `#459A3C`, matching how every other default
+-- and swatch in this repo is spelled.
+--
+-- IDEMPOTENT IN EFFECT, WHICH THE `WHERE` GIVES FOR FREE
+-- -----------------------------------------------------
+-- A second run finds no row on the old default — the first run moved them all —
+-- so it writes nothing and `updated_at` does not move. That matters here more
+-- than it does for a schema change: `db:migrate` is run by hand against lane
+-- databases and a demo, a data migration has no `IF NOT EXISTS` to lean on, and
+-- a statement that re-stamped `updated_at` on every salon each time somebody
+-- re-ran migrations would be indistinguishable from a merchant edit in the
+-- audit trail.
+--
+-- `#459A3C` PASSES BOTH GUARDS ON THE WAY IN — VERIFIED, NOT ASSUMED
+-- -----------------------------------------------------------------
+-- It has to, or every migrated salon would fall back and this file would
+-- achieve nothing.
+--
+--   salon_brand_color_is_hex     six hex digits behind a '#'   -> passes
+--   deriveBrandSet('#459A3C')    ok: true
+--                                deep #35752E  whiteOnDeep 5.62
+--                                tint #E3F4E2  deepOnTint   4.90
+--                                              whiteOnBrand 3.54
+--
+-- `whiteOnBrand` being 3.54 — under 4.5 — is EXPECTED and is not a refusal.
+-- Non-negotiable #9: "White text never goes on `--avo-brand`. Use
+-- `--avo-brand-deep`. `--avo-brand` is a *surface* colour." `deriveBrandSet`
+-- derives the deep and gates on that pairing, which clears the floor at 5.62.
+-- ===========================================================================
+
+UPDATE "salon"
+   SET "brand_color" = '#459A3C',
+       "updated_at" = now()
+ WHERE upper("brand_color") = '#6E7F6C';
