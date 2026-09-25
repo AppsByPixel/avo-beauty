@@ -107,6 +107,34 @@ export const CROSS_GROUP_PAIRS: ReadonlyArray<{
    * JSON's own note counts 154 uses, so it is the single highest-leverage pairing
    * in the file and the one most worth having a machine watch.
    */
+  /*
+   * WHITE ON THE PRIMARY BUTTON, AND IT WAS NOT AUDITED UNTIL THE PALETTE MOVED.
+   *
+   * `theme#onBrandFill` is the single place this pairing is encoded — non-negotiable
+   * #9 — and every primary button in the wallet, the scanner and the dashboard is
+   * drawn from it. `derive.test.ts` guards the pairing for a white-label hex run
+   * through `deriveBrandSet()`, but the SHIPPED default `color.brandDeep` went
+   * through no such check: a hand edit to the token file could drop it under 4.5
+   * and nothing here would have said so. Found while raising the ramp's
+   * saturation, which is exactly the edit that would have done it.
+   */
+  {
+    label: 'white on the primary button fill',
+    textPath: 'color.white',
+    bgPath: 'color.brandDeep',
+    renderedBy: 'PrimaryButton / .avo-btn — theme#onBrandFill',
+  },
+  /*
+   * The happy-hour pill. `happyHourText`/`happyHourBg` pair themselves through
+   * `siblingPairs()` on the Text/Bg convention; the pill inverts to white on the
+   * accent, which no naming convention expresses, so it is declared here.
+   */
+  {
+    label: 'white on the happy-hour accent',
+    textPath: 'color.white',
+    bgPath: 'color.happyHourAccent',
+    renderedBy: 'HappyHourBanner live pill',
+  },
   {
     label: 'muted micro-label on canvas (the darkest surface, the binding case)',
     textPath: 'color.textMutedLabel',
