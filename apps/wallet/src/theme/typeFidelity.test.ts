@@ -69,7 +69,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { StyleSheet } from 'react-native';
-import { text } from './index';
+import { text, type TypeToken } from './index';
+import { theme } from '@avo/tokens/native';
 
 const SRC = path.resolve(__dirname, '..');
 
@@ -1896,5 +1897,197 @@ describe('the faceless-Text scan can still see', () => {
     for (const key of Object.keys(FACELESS_OK)) {
       expect(seen.has(key.split('#')[0]!), key).toBe(true);
     }
+  });
+});
+
+// ═══════════════════════════════════════════════ a box the face can draw in ══
+
+/**
+ * A LINE BOX SMALLER THAN ITS OWN FONT SIZE — THE OTHER WAY A STYLE ASKS FOR
+ * SOMETHING THE FACE CANNOT GIVE.
+ *
+ * Everything above this line is about WEIGHT: a style names a weight, the pinned
+ * single-weight face cannot supply it, nothing warns. This is the same shape of
+ * defect one axis over. A style names a `lineHeight`, the face needs more room
+ * than that, and on React Native the glyphs are CLIPPED rather than allowed to
+ * overflow — so the design's type is not what is drawn, silently, exactly as
+ * with a weight that resolves to the wrong face.
+ *
+ * IT IS NOT HYPOTHETICAL. `displayXL` is `fontSize 52 / lineHeight 47`, a ratio
+ * of 0.900, and it took the top off the wallet balance on a real device. The
+ * token is a faithful reading of the design — in CSS `line-height: 0.9` lets the
+ * glyphs overflow the box and nothing is lost, which is what the designer saw in
+ * the browser mock — and it is trunk-owned besides, so it stays. What is fixed
+ * is the native rendering of it, at the one node that draws it; see
+ * `components/balanceLineBoxRender.test.tsx`.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THE FLOOR IS 1.0 EM AND NOT THE FACE'S NATURAL BOX
+ *
+ * The tempting rule is "a box must be at least the face's natural line box", and
+ * it is the wrong rule HERE, because this scan is face-agnostic by construction
+ * and the three families disagree sharply. Measured from the shipped ttfs:
+ *
+ *     Fraunces               1.233 em
+ *     Inter                  1.210 em
+ *     IBM Plex Sans Arabic   1.500 em
+ *
+ * `text()` swaps every token to Plex Arabic in Arabic, so a natural-box rule
+ * would demand a 1.5 em box around every Arabic label in the app, and would flag
+ * three deliberate tight-leading symbol glyphs — `BookingParts#tickMark` (1.167),
+ * `BookScreen#tickBadgeMark` (1.176), `TopUpSheet#resultGlyph` (1.214) — which
+ * draw `✓ ✕ ⚠` and are fine. Tightening leading below a face's natural box is a
+ * legitimate typographic choice and the design uses it.
+ *
+ * Below 1.0 em it stops being a choice. No real text face has an ascent plus
+ * descent under a single em, so a sub-1.0 box is cutting into glyphs whatever
+ * the family and whatever the language — which makes it the one floor that is
+ * true face-agnostically, and it is the floor the defect actually crossed. A
+ * node that needs the stricter, face-aware floor has to be held to it where the
+ * face is known, which is what the render spec does for the balance figure.
+ */
+
+const MIN_BOX_EM = 1;
+
+/**
+ * THE TOKENS ALLOWED TO DECLARE A BOX SMALLER THAN ONE EM, AND WHY.
+ *
+ * In the shape of `KNOWN_INERT`, `FACELESS_OK` and `LANGUAGE_PINNED` above: the
+ * exception is recorded WITH its reason, so the rule below stays general and a
+ * newly-tight token still goes red. An empty entry is not allowed, because
+ * "displayXL: ''" would be a silencer rather than a decision.
+ */
+const TIGHT_BOX_OK: Record<string, string> = {
+  displayXL:
+    'The design asks for 52/47 (0.900) and is right to: in CSS a sub-em line-height ' +
+    'lets the glyphs overflow rather than clipping them, which is what the browser ' +
+    'mock shows and what the web surfaces reading this token still get. React Native ' +
+    'clips, so the box is raised at the ONE node that draws it — Money.tsx § ' +
+    'fittedFigureBox, proved in components/balanceLineBoxRender.test.tsx — and not ' +
+    'in packages/tokens, which is trunk-owned and correct as it stands.',
+};
+
+describe('no type token asks for a box its own size will not fit', () => {
+  const TOKENS = Object.keys(theme.text) as TypeToken[];
+
+  /** The scale is read, not listed — a token added to the source is scanned. */
+  it('scans the whole scale, and the scale is not empty', () => {
+    expect(TOKENS.length).toBeGreaterThan(0);
+    expect(TOKENS).toContain('displayXL');
+  });
+
+  function tightTokens(lang: 'en' | 'ar'): string[] {
+    return TOKENS.map((token) => ({ token, style: text(token, lang) }))
+      .filter(({ style }) => typeof style.lineHeight === 'number')
+      .filter(({ style }) => style.lineHeight! < (style.fontSize ?? 0) * MIN_BOX_EM)
+      .map(({ token }) => token);
+  }
+
+  /**
+   * BOTH LANGUAGES, because `text()` returns a different family for each and a
+   * box is only ever as good as the face standing in it. The English and Arabic
+   * branches are separate code paths in `text()`; an RTL branch that forked the
+   * line heights would be invisible to an English-only scan.
+   */
+  it.each(['en', 'ar'] as const)(
+    'is exactly the allow-list — nothing added, nothing quietly fixed — %s',
+    (lang) => {
+      expect(tightTokens(lang).sort()).toEqual(Object.keys(TIGHT_BOX_OK).sort());
+    },
+  );
+
+  it('every allowed token carries a reason, not just a name', () => {
+    for (const [token, why] of Object.entries(TIGHT_BOX_OK)) {
+      expect(why.length, token).toBeGreaterThan(40);
+    }
+  });
+
+  /**
+   * THE ALLOW-LIST IS NOT A PLACE TO PARK A REGRESSION.
+   *
+   * `displayXL` is on it because the TOKEN is tight, not because the screen is.
+   * The one component that receives it raises the box, and if that stopped being
+   * true this entry would be hiding a live clip. So the exception is tied to the
+   * fix: the reason names the file that holds it, and that file must exist.
+   */
+  it('points at a live fix, not just at an excuse', () => {
+    expect(TIGHT_BOX_OK.displayXL).toContain('balanceLineBoxRender');
+    expect(fs.existsSync(path.join(SRC, 'components', 'balanceLineBoxRender.test.tsx'))).toBe(true);
+    expect(fs.existsSync(path.join(SRC, 'components', 'Money.tsx'))).toBe(true);
+    expect(fs.readFileSync(path.join(SRC, 'components', 'Money.tsx'), 'utf8')).toContain(
+      'fittedFigureBox',
+    );
+  });
+
+  /**
+   * And the rule has teeth: a token one pixel tighter than its size is caught.
+   * Asserted against the real scale rather than a fixture, so this cannot pass
+   * because the filter looked at nothing.
+   */
+  it('measures the ratio it claims to measure', () => {
+    const raw = theme.text.displayXL;
+    expect(raw.lineHeight).toBeLessThan(raw.fontSize);
+    expect(raw.lineHeight! / raw.fontSize).toBeCloseTo(0.9, 2);
+    expect(tightTokens('en')).toContain('displayXL');
+  });
+});
+
+/**
+ * AND THE SAME FLOOR OVER THE HAND-WRITTEN BOXES.
+ *
+ * The token scale is only half the surface: 37 `StyleSheet` entries across this
+ * column set a `lineHeight` directly, and a dozen set a `fontSize` beside it —
+ * a glyph mark, a tick badge, a result symbol. Those never pass through `text()`
+ * and so nothing above would ever see them.
+ *
+ * This reads only objects that carry BOTH properties, which is what makes it
+ * cheap and false-positive-free: the ratio is self-contained in the object and
+ * needs no token composition to evaluate. An object that sets `lineHeight` alone
+ * is layered over a token whose size lives elsewhere, and is left to the render
+ * specs rather than guessed at here.
+ */
+describe('no hand-written style asks for a box its own size will not fit', () => {
+  const OWN_SIZE = /\bfontSize:\s*([\d.]+)/;
+  const OWN_BOX = /\blineHeight:\s*([\d.]+)/;
+
+  function tightStyles(): string[] {
+    const found: string[] = [];
+    for (const file of allSources()) {
+      const src = stripComments(fs.readFileSync(file, 'utf8'));
+      for (const [name, body] of styleObjects(src)) {
+        const size = OWN_SIZE.exec(body);
+        const box = OWN_BOX.exec(body);
+        if (!size || !box) continue;
+        const [s, b] = [Number(size[1]), Number(box[1])];
+        if (b < s * MIN_BOX_EM) found.push(`${relativeSource(file)}#${name}: ${s}/${b}`);
+      }
+    }
+    return found;
+  }
+
+  it('finds none', () => {
+    expect(tightStyles()).toEqual([]);
+  });
+
+  /**
+   * The scan reaches objects and reads their ratio — asserted on the real ones
+   * rather than a fixture, so "found none" cannot be a parser that found
+   * nothing at all. These three are the tightest boxes in the column and all
+   * three are deliberate.
+   */
+  it('does reach the tight-but-legitimate glyph styles', () => {
+    const seen = new Map<string, number>();
+    for (const file of allSources()) {
+      const src = stripComments(fs.readFileSync(file, 'utf8'));
+      for (const [name, body] of styleObjects(src)) {
+        const size = OWN_SIZE.exec(body);
+        const box = OWN_BOX.exec(body);
+        if (size && box) seen.set(`${relativeSource(file)}#${name}`, Number(box[1]) / Number(size[1]));
+      }
+    }
+    expect(seen.get('components/booking/BookingParts.tsx#tickMark')).toBeCloseTo(14 / 12, 4);
+    expect(seen.get('screens/BookScreen.tsx#tickBadgeMark')).toBeCloseTo(40 / 34, 4);
+    expect(seen.get('components/TopUpSheet.tsx#resultGlyph')).toBeCloseTo(34 / 28, 4);
+    for (const ratio of seen.values()) expect(ratio).toBeGreaterThanOrEqual(MIN_BOX_EM);
   });
 });

@@ -15,7 +15,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { fils, type Fils } from '@avo/types';
-import { cardGradient, radius, shadow, text, WHITE } from '../theme';
+import { cardGradient, frauncesLineHeight, radius, shadow, text, WHITE } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { Money } from './Money';
 import { type LoyaltyProgress } from '../domain/loyalty';
@@ -156,6 +156,30 @@ function Progress({ progress }: { progress: LoyaltyProgress }) {
   );
 }
 
+/**
+ * THE LEADING `Money` HAS TO ADD TO THE BALANCE FIGURE, AND WHAT IT COSTS HERE.
+ *
+ * `displayXL` asks for a 47px box around a 52px figure. Fraunces needs 65px, so
+ * `Money` raises the box (see `Money.tsx` § `fittedFigureBox`) and the figure
+ * stops being clipped. That raise is 18px of extra leading, and a taller line
+ * box would otherwise push the balance DOWN the card and everything under it
+ * down with it — trading a clipped number for a moved one.
+ *
+ * A line box distributes its leading as half-leading: half above the glyphs and
+ * half below. So giving back half of the raise at the top and half at the
+ * bottom leaves the figure's baseline exactly where it is today and the row's
+ * total height unchanged. Nothing moves; the apex simply stops being cut.
+ *
+ * DERIVED, NOT MEASURED ONCE AND TYPED. Every term comes from the token and the
+ * font metric, so if either moves the compensation follows. If `displayXL` ever
+ * stops declaring a `lineHeight`, this falls to 0 on its own — which is right,
+ * because `Money` would have nothing to raise either.
+ */
+const BALANCE_TYPE = text('displayXL');
+const BALANCE_SIZE = BALANCE_TYPE.fontSize ?? 0;
+const BALANCE_HALF_LEADING =
+  Math.max(0, frauncesLineHeight(BALANCE_SIZE) - (BALANCE_TYPE.lineHeight ?? Infinity)) / 2;
+
 const styles = StyleSheet.create({
   card: {
     borderRadius: radius.walletCard,
@@ -178,7 +202,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
   pillText: { color: WHITE },
-  balanceRow: { marginTop: 12, marginBottom: 16 },
+  // 12 / 16 are the design's margins; the subtraction is the half-leading
+  // `Money` adds to make the figure fit its face. See BALANCE_HALF_LEADING.
+  balanceRow: {
+    marginTop: 12 - BALANCE_HALF_LEADING,
+    marginBottom: 16 - BALANCE_HALF_LEADING,
+  },
   // The unit — "KD" / "د.ك" — takes its family from the language's type scale,
   // resolved inside `Money`; only the size and opacity are set here. THE WEIGHT
   // MOVED OUT TWICE, and both moves are worth keeping because they are the same
