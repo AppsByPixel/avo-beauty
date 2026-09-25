@@ -31,12 +31,17 @@
  * NON-NEGOTIABLE #9 IS THE POINT OF THE WHOLE THING
  * =================================================
  * `brand` is a SURFACE colour and white text goes on the derived `deep`. Measured
- * here, not assumed: white on Amara's own `#6E7F6C` is 4.27:1 and would be
- * refused as a fill; on its derived `deep` it is 5.73:1. The same holds for the
+ * here, not assumed: white on the shipped default `brand` is 3.54:1 and would be
+ * refused as a fill; on its derived `deep` it is 5.62:1. The same holds for the
  * other two shipped presets — white-on-brand is 2.98:1 for Noor rose and 3.76:1
- * for Lila lilac, i.e. the rule is not an Amara quirk, it is true of every brand
- * this product has. This module never writes a text colour; it writes a palette,
- * and `onBrandFill` in `./index` is what keeps white off `brand`.
+ * for Lila lilac, i.e. the rule is not a default-preset quirk, it is true of
+ * every brand this product has. This module never writes a text colour; it writes
+ * a palette, and `onBrandFill` in `./index` is what keeps white off `brand`.
+ *
+ * (Those are a snapshot of a ramp that has already moved once — the default read
+ * 4.27:1 before trunk revised it. `brandPresets.*.whiteOnBrand` is the declared
+ * source and `apps/scanner/src/theme/brand.test.ts` recomputes it; the PROPERTY,
+ * for every shipped brand, is asserted in `./brand.test.ts`.)
  *
  * MUTATION, AND WHY IT IS THE RIGHT SHAPE HERE
  * ===========================================
@@ -53,16 +58,17 @@
  * ==================================
  * `brandDeeper` and `brandTint2` are NOT touched, because they are not
  * white-labelled anywhere: `packages/tokens/src/generate.ts:42` white-labels
- * exactly `brand`, `brandDeep` and `brandTint`, and emits the other two as fixed
- * sage on the web surface too. Deriving them here would be inventing a second
- * derivation policy outside the trunk-owned package, which is precisely what
- * "do not invent a second policy" rules out. Measured consequence, so the gap is
- * quantified rather than hand-waved: the fixed `brandDeeper` (#4F5E4C) as text on
- * a themed `tint` clears AA on all three presets (5.81 / 5.67 / 5.60:1), and the
- * themed `deep` on the fixed `brandTint2` clears it too (5.33 / 5.48 / 5.56:1).
- * So it is a visual-fidelity gap — two sage notes in an otherwise rose app — and
- * not an accessibility one. Reported to trunk; it needs fixing in the generator,
- * for both surfaces at once.
+ * exactly `brand`, `brandDeep` and `brandTint`, and emits the other two fixed on
+ * the web surface too. Deriving them here would be inventing a second derivation
+ * policy outside the trunk-owned package, which is precisely what "do not invent
+ * a second policy" rules out. Measured consequence, so the gap is quantified
+ * rather than hand-waved: the fixed `brandDeeper` as text on a themed `tint`
+ * clears AA on all three presets (6.39 / 6.01 / 5.94:1), and the themed `deep` on
+ * the fixed `brandTint2` clears it too (5.32 / 5.58 / 5.66:1). So it is a
+ * visual-fidelity gap — two green notes in an otherwise rose app — and not an
+ * accessibility one. `./brand.test.ts` asserts that floor per preset rather than
+ * relying on these six figures, which move whenever the ramp does. Reported to
+ * trunk; it needs fixing in the generator, for both surfaces at once.
  *
  * A hex changed in the dashboard mid-session takes effect at the NEXT LAUNCH, for
  * the sealing reason above. That is a deliberate limitation and the right one: a

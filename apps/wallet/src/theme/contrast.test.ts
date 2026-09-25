@@ -36,7 +36,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { AA_NORMAL_TEXT, contrastRatio, deriveBrandSet } from '@avo/tokens';
+import { AA_NORMAL_TEXT, brandPresets, contrastRatio, deriveBrandSet } from '@avo/tokens';
 import { color, onBrandFill, brandTextColor, WHITE } from './index';
 
 // --------------------------------------------------------------- the source --
@@ -209,12 +209,19 @@ function rebranded(hex: string): Record<string, string> {
   };
 }
 
-/** The three shipped demo salons, by the hex a salon row carries. */
+/**
+ * The three shipped demo salons, by the hex a salon row carries — read off
+ * `brandPresets` rather than re-typed. The Amara entry was the literal `#6E7F6C`
+ * and silently became a hex the product no longer ships when trunk revised the
+ * brand ramp: the suite stayed green while one of its four tenants was fictional,
+ * which is a worse outcome than going red.
+ */
 const TENANTS: Array<[string, Record<string, string>]> = [
-  ['the shipped sage default', DEFAULT_PALETTE],
-  ['Amara sage #6E7F6C, derived', rebranded('#6E7F6C')],
-  ['Noor rose #B08D8D, derived', rebranded('#B08D8D')],
-  ['Lila lilac #8A7CB0, derived', rebranded('#8A7CB0')],
+  ['the shipped default', DEFAULT_PALETTE],
+  ...Object.entries(brandPresets).map(
+    ([name, p]) =>
+      [`${name} ${p.brand}, derived`, rebranded(p.brand)] as [string, Record<string, string>],
+  ),
 ];
 
 describe('every foreground/background pair stated in one style entry clears AA', () => {

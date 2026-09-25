@@ -4,6 +4,8 @@
  * ═════════════════════════════════════════════════════════════════════════════
  * BUG THIS FIXES. interaction-spec.md §2 asks for "2px solid #6E7F6C, offset
  * 2px, `:focus-visible` rather than `:focus` so a mouse press does not ring."
+ * (That hex is the spec quoted verbatim and is a superseded `brand` value; see
+ * the ring colour's own note below for why the ring is `brandDeep` regardless.)
  * What the app had was a style object —
  *
  *     const focusRing = { outlineColor, outlineWidth: 2, outlineStyle: 'solid' }
@@ -55,11 +57,14 @@ export function installFocusRing(): void {
       `brandDeep`, NOT `brand`, and this is a deviation from the spec's literal
       with the same standing as the one packages/tokens already makes on the web.
 
-      interaction-spec.md §2 writes the ring as `2px solid #6E7F6C`, which is the
-      Amara `brand` value. A focus indicator is a non-text graphic, so WCAG 1.4.11
-      asks 3:1 against the adjacent surface — and measured against `surface`
-      (#FBFAF8), `brand` gives 4.10:1 on Amara, 3.60:1 on Lila lilac and 2.86:1 on
-      Noor rose, which FAILS. The derived `deep` gives 5.49 / 5.74 / 5.66. The
+      interaction-spec.md §2 writes the ring as `2px solid #6E7F6C` — the `brand`
+      value of the day, since superseded by the revised ramp. A focus indicator is
+      a non-text graphic, so WCAG 1.4.11 asks 3:1 against the adjacent surface —
+      and measured against `surface` (#FBFAF8), `brand` gives 3.39:1 on the
+      shipped default, 3.60:1 on Lila lilac and 2.86:1 on Noor rose, which FAILS
+      on the last. The derived `deep` gives 5.39 / 5.74 / 5.66, i.e. it clears on
+      all three. (Those six are a snapshot; the property they illustrate is
+      asserted per preset in `apps/scanner/src/theme/brand.test.ts`, computed.) The
       generated stylesheet already reached this conclusion and says so in the
       `:focus-visible` block: "Same class of bug as non-negotiable #9 — a value
       that holds for the default preset and breaks the white-label promise."

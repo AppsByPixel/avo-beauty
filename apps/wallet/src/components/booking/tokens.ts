@@ -48,15 +48,22 @@ export const AVAIL_SALON_TEXT = '#8A7A55';
 export const AVAIL_SALON_DOT = '#B6A26A';
 
 /**
- * The 1px edge on the brand-washed deposit card — `rgba(110,127,108,0.22)`,
- * design:591. It is `brand` at 22% and the design uses it on every
- * brand-washed panel in the bundle; `hairline` is ink at 8% and reads grey
- * against the wash rather than green.
+ * The 1px edge on the brand-washed deposit card — design:591. It is `brand` at
+ * 22% and the design uses it on every brand-washed panel in the bundle;
+ * `hairline` is ink at 8% and reads grey against the wash rather than green.
  *
- * apps/scanner/src/components/States.tsx carries the same literal with the same
- * citation, which is the second call site and the argument for tokenising it.
+ * IT WAS THE LITERAL `rgba(110,127,108,0.22)` AND THAT WAS THE BUG. Sampled off
+ * the design when `brand` was `#6E7F6C`, it could not follow a salon's hex, and
+ * once trunk revised the brand ramp it was the old brand drawn as a grey-green
+ * edge on the new green wash — which is exactly the "reads grey against the
+ * wash" failure the sentence above exists to rule out. It now derives from the
+ * live `brand`, in `theme/index.ts`, alongside the four other call sites that
+ * carried the same literal across the two apps.
+ *
+ * Re-exported rather than moved so the booking components keep importing their
+ * tokens from one place.
  */
-export const BRAND_BORDER = 'rgba(110,127,108,0.22)';
+export { BRAND_BORDER } from '../../theme';
 
 /**
  * The 10.5px/600 micro-label — the availability badge and the day chip's

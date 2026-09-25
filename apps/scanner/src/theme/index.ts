@@ -16,13 +16,16 @@
  * `focusRing` is deliberately a different value from `accent`
  * (interaction-spec.md §2: "On the dark owner-console sidebar and the dark
  * scanner frame, use #A9BBA6 instead — #6E7F6C does not carry enough contrast
- * against #1C1B19"), which is exactly why they are two tokens and not one.
+ * against #1C1B19"), which is exactly why they are two tokens and not one. The
+ * `#6E7F6C` in that sentence is the spec quoted verbatim and is a superseded
+ * `brand` value; the reason it names survives the ramp change, the hex does not.
  *
  * The white-on-dark overlays below stay local: they are compositing alphas that
  * only mean anything over `dark.surface`, not palette entries.
  */
 
 import type { TextStyle } from 'react-native';
+import { hexToRgb } from '@avo/tokens';
 import { theme } from '@avo/tokens/native';
 import { seal } from './sealed';
 
@@ -53,13 +56,33 @@ export const MIN_TAP_TARGET = theme.control.minTapTarget;
  * NON-NEGOTIABLE #9, MADE STRUCTURAL.
  *
  * The only background this app puts white text on. It is `brandDeep`, never
- * `brand` — even the default sage fails at 4.27:1 white-on-brand
- * (interaction-spec.md §2). Because every filled control reads this constant
+ * `brand` — white on `brand` is 3.54:1 on the shipped default and below the 4.5
+ * floor on every preset this product ships (interaction-spec.md §2; the figures
+ * live on `brandPresets.*.whiteOnBrand` and `theme/brand.test.ts` recomputes them
+ * rather than trusting them). Because every filled control reads this constant
  * instead of naming a colour, there is no prop anywhere in the app that can put
  * white on `brand`. `color.brand` stays available for surfaces: gradients,
  * tints, dots, progress fills, the selected-toggle track.
  */
 export const onBrandFill = color.brandDeep;
+
+/**
+ * A palette colour at an alpha, composited rather than typed.
+ *
+ * Replaces the hand-sampled `rgba(110,127,108,0.22)` that two style entries in
+ * this app carried as "`brand` at 22%". That literal was the OLD brand: after
+ * trunk revised the ramp it was a grey-green edge on the new green wash, which
+ * is the precise thing its own comment said not to do ("`hairline` is ink at 8%
+ * and reads grey against the wash rather than green"). It also could not follow
+ * a salon's hex. Derived, it does both.
+ */
+export function withAlpha(hex: string, alpha: number): string {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** The 1px edge on a brand-washed panel - `brand` at 22%, design:591. */
+export const BRAND_BORDER = withAlpha(color.brand, 0.22);
 
 /** The dark scan surface. Three tokens, plus the alphas that sit on them. */
 export const dark = {
@@ -92,11 +115,18 @@ export const dark = {
  *
  * `brandDeep`, NOT `brand`, and the deviation is the same one the generated
  * stylesheet already makes for the web `:focus-visible` rule. §2 writes the ring
- * as the literal `2px solid #6E7F6C`, i.e. the Amara `brand` value. A focus
- * indicator is a non-text graphic, so WCAG 1.4.11 asks 3:1 against the adjacent
- * surface, and measured against `surface` (#FBFAF8) `brand` gives 4.10:1 on
- * Amara, 3.60:1 on Lila lilac and 2.86:1 on Noor rose — a FAIL. The derived
- * `deep` gives 5.49 / 5.74 / 5.66.
+ * as the literal `2px solid #6E7F6C` — the `brand` value of the day, since
+ * superseded by the revised ramp. A focus indicator is a non-text graphic, so
+ * WCAG 1.4.11 asks 3:1 against the adjacent surface, and measured against
+ * `surface` (#FBFAF8) `brand` gives 3.39:1 on the shipped default, 3.60:1 on Lila
+ * lilac and 2.86:1 on Noor rose — a FAIL on the last. The derived `deep` gives
+ * 5.39 / 5.74 / 5.66, i.e. it clears on all three.
+ *
+ * Those five figures are a snapshot of a ramp that has already moved once.
+ * `theme/brand.test.ts` asserts the PROPERTY they illustrate — `brand` fails the
+ * floor for at least one shipped brand, the derived `deep` clears it for all of
+ * them — computed at run time, so the argument stays checked even when the
+ * numbers here go out of date.
  *
  * packages/tokens' own words for this: "Same class of bug as non-negotiable #9 —
  * a value that holds for the default preset and breaks the white-label promise."
@@ -154,10 +184,16 @@ export type TypeToken = keyof typeof theme.text;
  * generator ever emits a token missing `fontSize`, this line fails to compile,
  * which is the behaviour we want.
  *
- * apps/wallet has not hit this yet only because it still carries its own
- * hand-copied `types/avo-tokens-native.d.ts`, whose ambient `declare module`
- * shadows the package's new types. It will hit it the moment that file is
- * deleted, so the fix belongs in the generator rather than in both apps.
+ * THE PREDICTION THIS COMMENT USED TO MAKE WAS WRONG, AND IS CORRECTED HERE.
+ * It said apps/wallet had escaped the union only because its hand-copied
+ * `types/avo-tokens-native.d.ts` shadowed the package's types, and would hit it
+ * the moment that file was deleted. The file has now been deleted — it had gone
+ * stale and was hiding the happy-hour tokens from the wallet — and the wallet
+ * typechecks clean. Its `text()` annotates the local as `TextStyle` before
+ * reading anything off it, so the union is widened at the assignment and the
+ * three optional fields are never read off the token object directly. That is a
+ * second viable shape for this workaround, not a reprieve: the generator still
+ * emits nine distinct literal types, and fixing it there is still the right fix.
  */
 interface NativeTextStyle {
   fontSize: number;

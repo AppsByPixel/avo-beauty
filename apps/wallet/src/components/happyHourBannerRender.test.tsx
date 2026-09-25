@@ -24,6 +24,7 @@
  * not depend on the machine's zone — the same care `happyHour.test.ts` takes.
  */
 
+import { AA_NORMAL_TEXT, color, contrastRatio, hexToRgb } from '@avo/tokens';
 import type { HappyHour, PromotionSet } from '@avo/types';
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -108,5 +109,175 @@ describe('the banner is computed from the clock, not read off a flag', () => {
     const { container } = renderAt(kuwait('2026-09-03T17:00:00'));
     expect(container.textContent).toContain('Next happy hour');
     expect(container.textContent).not.toContain('Happy hour ·');
+  });
+});
+
+// ------------------------------------------------ the live state is amber --
+
+/**
+ * THE AMBER, MEASURED AT THE NODE.
+ *
+ * The live banner used to be the brand ramp — `brandTint` ground, `brandDeeper`
+ * title, `brandDeep` pill — on a screen where everything else is already the
+ * brand ramp, so the one time-boxed state on it read as another card. It is the
+ * amber group now, and this is what holds it there.
+ *
+ * WHY IT READS COMPUTED STYLE RATHER THAN THE STYLESHEET. A spec that asserted
+ * `styles.bannerLive.backgroundColor === color.happyHourBg` would restate the
+ * source file two lines away and pass whether or not the value reaches the
+ * screen — the same emptiness as a spec that re-states the token file, which is
+ * what this lane spent the morning removing. Everything below renders the
+ * component and reads `getComputedStyle` off the element that actually carries
+ * the colour, in the shape of `glyphFaceRender.test.tsx`.
+ *
+ * AND IT ASSERTS THE ABSENCE AS WELL AS THE PRESENCE. Naming the amber alone
+ * would not go red if someone reintroduced a brand fill alongside it, so each
+ * node is also asserted not to be the brand value it used to hold. Reverting the
+ * ground to `brandTint`, the title to `brandDeeper` or the pill to `brandDeep`
+ * fails here twice over.
+ *
+ * BOTH LANGUAGES. The component renders in Arabic too, and colour is not a
+ * translation concern — which is exactly why it is worth pinning: an RTL branch
+ * that forked the styles would be invisible to an English-only spec.
+ *
+ * The palette is read from `@avo/tokens` rather than from `../theme` on purpose.
+ * The happy-hour group is not white-labelled, so the two agree today; reading
+ * the package means this spec is about the token the design settled on, not
+ * about whatever a tenant's hex left on the themed palette.
+ */
+
+/** `getComputedStyle` normalises to `rgb(r, g, b)`; tokens are hex. */
+function rgbOf(hex: string): string {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * The banner's four text leaves, in DOM order: title, sub, pill countdown,
+ * clock. Order is the JSX's, not the visual one — react-native-web mirrors RTL
+ * with `flexDirection`/`dir` and does not reorder the DOM, so the same indices
+ * hold in Arabic. Asserted below rather than assumed.
+ */
+function textLeaves(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll('*')).filter(
+    (n) => n.children.length === 0 && (n.textContent ?? '').trim() !== '',
+  ) as HTMLElement[];
+}
+
+/**
+ * Throws rather than returning `undefined`, so a banner that stopped rendering
+ * one of its four leaves fails HERE with the count in the message instead of
+ * further down as a confusing colour mismatch against a missing node.
+ */
+function leafAt(root: HTMLElement, index: number, what: string): HTMLElement {
+  const leaves = textLeaves(root);
+  const el = leaves[index];
+  if (!el) throw new Error(`no ${what} at leaf ${index}: found ${leaves.length} text leaves`);
+  return el;
+}
+
+function liveBanner(lang: 'en' | 'ar') {
+  cleanup();
+  const { container } = renderAt(kuwait('2026-08-30T17:00:00'), lang);
+  const root = container.firstElementChild as HTMLElement;
+  // The dot is the only 8×8 box in the tree — `PulseDot size={8}`.
+  const dot = root.querySelector('[style*="width: 8px"]') as HTMLElement;
+  return {
+    root,
+    dot,
+    title: leafAt(root, 0, 'title'),
+    pillText: leafAt(root, 2, 'countdown pill text'),
+    leafCount: textLeaves(root).length,
+  };
+}
+
+describe.each(['en', 'ar'] as const)('the live banner is amber — %s', (lang) => {
+  it('grounds on happyHourBg, never on the brand tint', () => {
+    const { root } = liveBanner(lang);
+    const bg = getComputedStyle(root).backgroundColor;
+    expect(bg).toBe(rgbOf(color.happyHourBg));
+    expect(bg).not.toBe(rgbOf(color.brandTint));
+  });
+
+  /**
+   * The hairline is derived from `happyHourAccent` at the design's 28%, not the
+   * hand-sampled `rgba(110,127,108,0.28)` it used to be — an alpha of a brand
+   * value that no longer exists. Read here as the composited rgba the node
+   * carries, so a re-typed literal of the old colour cannot pass.
+   */
+  it('draws its hairline from the amber at the design’s 28%', () => {
+    const { root } = liveBanner(lang);
+    const { r, g, b } = hexToRgb(color.happyHourAccent);
+    expect(getComputedStyle(root).borderColor).toBe(`rgba(${r}, ${g}, ${b}, 0.28)`);
+  });
+
+  it('titles in happyHourText, never in brandDeeper', () => {
+    const { title } = liveBanner(lang);
+    const c = getComputedStyle(title).color;
+    expect(c).toBe(rgbOf(color.happyHourText));
+    expect(c).not.toBe(rgbOf(color.brandDeeper));
+  });
+
+  it('fills the countdown pill with happyHourAccent, never with brandDeep', () => {
+    const { pillText } = liveBanner(lang);
+    const pill = pillText.parentElement as HTMLElement;
+    const bg = getComputedStyle(pill).backgroundColor;
+    expect(bg).toBe(rgbOf(color.happyHourAccent));
+    expect(bg).not.toBe(rgbOf(color.brandDeep));
+  });
+
+  /**
+   * #9 is untouched by the move — after it the live banner does not use the
+   * brand family at all — but white on a filled pill is still the pairing the
+   * rule is about, so it is checked on the amber the same way.
+   */
+  it('puts white on that pill, and the pairing clears AA', () => {
+    const { pillText } = liveBanner(lang);
+    expect(getComputedStyle(pillText).color).toBe(rgbOf(color.white));
+    expect(contrastRatio(color.white, color.happyHourAccent)).toBeGreaterThanOrEqual(
+      AA_NORMAL_TEXT,
+    );
+  });
+
+  /**
+   * The pulsing dot too. It is a non-text graphic, so the floor is WCAG 1.4.11's
+   * 3:1 against the ground it sits on rather than 4.5:1. A brand-green dot in an
+   * amber card was the one element that would still have argued happy hour is
+   * just more house colour.
+   */
+  it('pulses in amber, not in brand green, and clears the 3:1 non-text floor', () => {
+    const { dot } = liveBanner(lang);
+    const bg = getComputedStyle(dot).backgroundColor;
+    expect(bg).toBe(rgbOf(color.happyHourAccent));
+    expect(bg).not.toBe(rgbOf(color.brand));
+    expect(contrastRatio(color.happyHourAccent, color.happyHourBg)).toBeGreaterThanOrEqual(3);
+  });
+
+  /** The index assumption the helper rests on, stated rather than trusted. */
+  it('renders its four text leaves in the same DOM order in both languages', () => {
+    expect(liveBanner(lang).leafCount).toBe(4);
+  });
+});
+
+/**
+ * AND THE NEXT STATE IS DELIBERATELY UNCHANGED.
+ *
+ * It is the quiet "coming later" rendering — nothing is happening yet, so it has
+ * nothing to announce and spending the amber on it would cost the live state its
+ * contrast with the rest of the screen. It reads on `surface`, and this is what
+ * says that was a decision rather than an omission: colouring it amber to match
+ * fails here.
+ */
+describe.each(['en', 'ar'] as const)('the next-up banner stays quiet — %s', (lang) => {
+  it('grounds on surface with an ink title, and takes no amber', () => {
+    cleanup();
+    // Thursday: HH-01 runs Sun/Mon/Tue, so this is the look-ahead branch.
+    const { container } = renderAt(kuwait('2026-09-03T17:00:00'), lang);
+    const root = container.firstElementChild as HTMLElement;
+    const title = leafAt(root, 0, 'title');
+
+    expect(getComputedStyle(root).backgroundColor).toBe(rgbOf(color.surface));
+    expect(getComputedStyle(root).backgroundColor).not.toBe(rgbOf(color.happyHourBg));
+    expect(getComputedStyle(title).color).toBe(rgbOf(color.ink));
   });
 });

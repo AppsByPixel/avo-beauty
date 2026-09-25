@@ -9,36 +9,74 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { AA_NORMAL_TEXT, contrastRatio, contrastWithWhite, deriveBrandSet } from '@avo/tokens';
+import {
+  AA_NORMAL_TEXT,
+  brandPresets,
+  color as palette,
+  contrastRatio,
+  contrastWithWhite,
+  deriveBrandSet,
+} from '@avo/tokens';
 import { theme } from '@avo/tokens/native';
 import { applyBrandColor } from './brand';
 
 /**
  * The three shipped demo salons, by HEX — the input a salon row actually
- * carries. Not by preset: `deriveBrandSet` derives from the hex, exactly as
- * `apps/dashboard/src/shell/useBrandTheme.ts` does for every salon including
- * Amara's own, so testing against the hand-tuned preset values would be testing
- * a path no surface takes.
+ * carries. The hex is read off each preset but nothing else is: `deriveBrandSet`
+ * derives from the hex, exactly as `apps/dashboard/src/shell/useBrandTheme.ts`
+ * does for every salon including Amara's own, so asserting against the
+ * hand-tuned `deep`/`tint` would be testing a path no surface takes.
+ *
+ * It used to be three literals, the first of them the old sage `#6E7F6C`. When
+ * trunk revised the ramp this list went on exercising a hex the product no
+ * longer ships while every spec below it stayed green — the list was the only
+ * thing they were asking about.
  */
-const PRESET_HEXES = {
-  'Amara sage': '#6E7F6C',
-  'Noor rose': '#B08D8D',
-  'Lila lilac': '#8A7CB0',
-} as const;
+const PRESET_HEXES = Object.fromEntries(
+  Object.entries(brandPresets).map(([name, p]) => [name, p.brand]),
+) as Record<string, string>;
 
 /**
- * The default palette, captured before anything is applied. Read from a fresh
- * derivation rather than remembered from `theme`, because `applyBrandColor`
- * mutates `theme` and a test that captured a reference would compare a value to
- * itself.
+ * The default palette, read off the preset the native theme is generated from
+ * (`packages/tokens/src/generate.ts:218`) rather than remembered from `theme` —
+ * `applyBrandColor` mutates `theme`, and a test that captured a reference would
+ * compare a value to itself.
+ *
+ * NOT RE-TYPED AS LITERALS, which is what it was: `{ brand: '#6E7F6C',
+ * brandDeep: '#5A6B58', brandTint: '#EEF1EC' }`. Restating the token file's
+ * values means the spec goes red when trunk revises the ramp while telling you
+ * nothing about whether the rebrand path still works — it did, and this still
+ * failed. Reading the source keeps the same specs meaningful across a ramp
+ * change, and the cross-check below is what makes the read worth making.
  */
-const DEFAULT_SAGE = { brand: '#6E7F6C', brandDeep: '#5A6B58', brandTint: '#EEF1EC' } as const;
+const DEFAULT_BRAND = {
+  brand: brandPresets.amaraSage.brand,
+  brandDeep: brandPresets.amaraSage.deep,
+  brandTint: brandPresets.amaraSage.tint,
+} as const;
 
 describe('applyBrandColor — the rebrand', () => {
-  it('starts from the sage the token file ships', () => {
-    expect(theme.color.brand).toBe(DEFAULT_SAGE.brand);
-    expect(theme.color.brandDeep).toBe(DEFAULT_SAGE.brandDeep);
-    expect(theme.color.brandTint).toBe(DEFAULT_SAGE.brandTint);
+  /**
+   * The palette is still untouched at this line — the real subject, since
+   * `applyBrandColor` mutates `theme` in place — and the separately generated
+   * `@avo/tokens/native` agrees with the `color` map the rest of the workspace
+   * reads. Both are checkable without naming a colour.
+   */
+  it('starts from the untouched default the token file ships', () => {
+    expect(theme.color.brand).toBe(DEFAULT_BRAND.brand);
+    expect(theme.color.brandDeep).toBe(DEFAULT_BRAND.brandDeep);
+    expect(theme.color.brandTint).toBe(DEFAULT_BRAND.brandTint);
+
+    expect(theme.color.brand).toBe(palette.brand);
+    expect(theme.color.brandDeep).toBe(palette.brandDeep);
+    expect(theme.color.brandTint).toBe(palette.brandTint);
+  });
+
+  /** #9's shape at the default: `deep` carries white, `brand` does not. */
+  it('ships a default whose deep carries white and whose brand does not', () => {
+    expect(theme.color.brandDeep).not.toBe(theme.color.brand);
+    expect(contrastWithWhite(theme.color.brandDeep)).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+    expect(contrastWithWhite(theme.color.brand)).toBeLessThan(AA_NORMAL_TEXT);
   });
 
   it('writes the salon hex and its derived set onto the palette', () => {
@@ -55,9 +93,9 @@ describe('applyBrandColor — the rebrand', () => {
 
     // It actually MOVED. A rebrand that silently no-ops is the defect this
     // whole slice exists to close, so the new values must differ from sage.
-    expect(theme.color.brand).not.toBe(DEFAULT_SAGE.brand);
-    expect(theme.color.brandDeep).not.toBe(DEFAULT_SAGE.brandDeep);
-    expect(theme.color.brandTint).not.toBe(DEFAULT_SAGE.brandTint);
+    expect(theme.color.brand).not.toBe(DEFAULT_BRAND.brand);
+    expect(theme.color.brandDeep).not.toBe(DEFAULT_BRAND.brandDeep);
+    expect(theme.color.brandTint).not.toBe(DEFAULT_BRAND.brandTint);
   });
 
   it('applies the same values the shared package derived, not its own', () => {
@@ -169,11 +207,15 @@ describe('non-negotiable #9 holds for every brand a salon can be given', () => {
       });
 
       /**
-       * The rule's own justification, as a number, for each brand in turn. White
-       * on `brand` fails on all three — 4.27:1, 2.98:1, 3.76:1 — so #9 is a
-       * property of every brand this product has, not an Amara quirk. If a hex
-       * ever arrives where white-on-brand passes, this fails and somebody has to
-       * say why `brand` may now carry text.
+       * The rule's own justification for each brand in turn: white on `brand`
+       * fails on all three, so #9 is a property of every brand this product has,
+       * not an Amara quirk. If a hex ever arrives where white-on-brand passes,
+       * this fails and somebody has to say why `brand` may now carry text.
+       *
+       * The three ratios used to be copied into this sentence and one of them
+       * went stale with the ramp. They live on `brandPresets.*.whiteOnBrand`, and
+       * the scanner's `theme/brand.test.ts` recomputes those declarations rather
+       * than trusting them.
        */
       it('and FAILS it for white on brand, which is why the rule exists', () => {
         if (!result.ok) throw new Error(`${hex} was refused`);

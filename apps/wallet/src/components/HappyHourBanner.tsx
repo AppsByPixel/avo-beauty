@@ -3,8 +3,10 @@
  *
  * Two renderings and an absence:
  *
- *   live     tinted, a pulsing dot, the countdown as a filled pill, and the
- *            salon's wall clock underneath (design:202-214)
+ *   live     an AMBER ground, a pulsing amber dot, the countdown as a filled
+ *            amber pill, and the salon's wall clock underneath (design:202-214).
+ *            The design drew this state as a brand tint; it is amber now, and
+ *            the styles below carry the reason.
  *   next     white, a grey dot, the countdown as a muted pill (design:217-226)
  *   neither  nothing at all. Not a placeholder and not a "no offers today" card:
  *            a salon that has never run a happy hour must not have a
@@ -27,8 +29,9 @@
 
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+
 import type { PromotionSet, Salon } from '@avo/types';
-import { color, radius, text, WHITE } from '../theme';
+import { color, radius, text, WHITE, withAlpha } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { happyBanner } from '../domain/happyHour';
 import { PulseDot } from './PulseDot';
@@ -62,7 +65,7 @@ export function HappyHourBanner({ promotions, salon }: Props) {
       accessibilityRole="summary"
     >
       {live ? (
-        <PulseDot size={8} durationMs={1600} />
+        <PulseDot size={8} durationMs={1600} fill={color.happyHourAccent} />
       ) : (
         <View style={styles.dotIdle} />
       )}
@@ -93,6 +96,21 @@ export function HappyHourBanner({ promotions, salon }: Props) {
   );
 }
 
+/**
+ * The live banner's hairline, DERIVED FROM THE AMBER RATHER THAN TYPED.
+ *
+ * It was the literal `rgba(110,127,108,0.28)` — a 28% alpha of the old brand
+ * `#6E7F6C`, sampled by hand off the design. Two things were wrong with that
+ * even before the ramp moved: it is a re-typed hex, which CLAUDE.md forbids, and
+ * it cannot follow the token it was sampled from. When the live state became
+ * amber it would have been the one green thing left in an amber card.
+ *
+ * `happyHourAccent` at the same 28% keeps the design's weight — a hairline that
+ * reads as a tint of its own ground rather than as a border — while tracking the
+ * token. The alpha is the design's; only the hue it is taken from has moved.
+ */
+const LIVE_BORDER = withAlpha(color.happyHourAccent, 0.28);
+
 const styles = StyleSheet.create({
   banner: {
     flexDirection: 'row',
@@ -104,8 +122,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginBottom: 14,
   },
-  // `brandTint` is a SURFACE use of the brand — non-negotiable #9's own list.
-  bannerLive: { backgroundColor: color.brandTint, borderColor: 'rgba(110,127,108,0.28)' },
+  /*
+    THE LIVE STATE IS AMBER, AND THAT IS THE WHOLE POINT OF IT.
+
+    It was `brandTint` with a `brandDeeper` title and a `brandDeep` pill — the
+    brand ramp, on a screen where everything else is already the brand ramp. A
+    tint of the house colour does not read as "something is happening right now";
+    it reads as another card. Happy hour is the one state on this screen that is
+    time-boxed and that expires while you are looking at it, so it takes the one
+    palette group that is NOT green.
+
+    All three are trunk-owned tokens and the pairings are bounded by the
+    packages/tokens audit: `happyHourText` on `happyHourBg` is 5.38:1 and white
+    on the `happyHourAccent` pill is 5.07:1, both clear of AA. Non-negotiable #9
+    is untouched by this — #9 governs `--avo-brand`, and after this change the
+    live banner does not use the brand family at all.
+
+    The NEXT state stays on `surface` deliberately. It is the quiet "coming
+    later" rendering and it is not a happy hour happening; colouring it amber
+    would spend the alarm on a state that has nothing to announce, and it reads
+    on `surface` rather than on a tint precisely so the live one can be loud.
+  */
+  bannerLive: { backgroundColor: color.happyHourBg, borderColor: LIVE_BORDER },
   bannerNext: { backgroundColor: color.surface, borderColor: color.hairline },
   dotIdle: {
     width: 8,
@@ -115,14 +153,15 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   body: { flex: 1, minWidth: 0 },
-  // Brand-coloured text on a light surface is brandDeeper here, matching
-  // design:206 — never `brand`.
-  titleLive: { color: color.brandDeeper },
+  // The amber title on the amber ground — 5.38:1. design:206 asked for the
+  // deepest brand step on a tint; the amber group's text step is its analogue,
+  // and it is the same "darkest member of the group carries the text" rule.
+  titleLive: { color: color.happyHourText },
   titleNext: { color: color.ink },
   sub: { color: color.textMuted, marginTop: 2 },
   trailing: { alignItems: 'flex-end', gap: 2, flexShrink: 0 },
   pillLive: {
-    backgroundColor: color.brandDeep,
+    backgroundColor: color.happyHourAccent,
     borderRadius: radius.pill,
     paddingVertical: 5,
     paddingHorizontal: 10,
@@ -133,7 +172,9 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     paddingHorizontal: 10,
   },
-  // Non-negotiable #9: white on brandDeep, which is what the filled pill is.
+  // White on `happyHourAccent`, 5.07:1. Nothing about #9 changes here: the pill
+  // no longer touches the brand family at all, and the amber it does use is
+  // audited for white by packages/tokens exactly as `brandDeep` is.
   pillLiveText: { color: WHITE },
   pillNextText: { color: color.textMutedStrong },
   clock: { color: color.textMutedSoft },

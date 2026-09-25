@@ -26,8 +26,11 @@
  * that is branded except for one unread entry is a trap for whoever reads it
  * next.
  *
- * #9 IS WHY `brand` IS NOT ENOUGH ON ITS OWN. White on the default `#6E7F6C` is
- * 4.27:1 and would fail; on its derived `deep` it is 5.73:1. `./index` keeps
+ * #9 IS WHY `brand` IS NOT ENOUGH ON ITS OWN. White on the shipped default
+ * `brand` is 3.54:1 and would fail; on its derived `deep` it is 5.62:1, and the
+ * same gap holds for every preset. Those two figures are a snapshot of a ramp
+ * that has moved before — `theme/brand.test.ts` recomputes the property for every
+ * shipped brand rather than trusting them. `./index` keeps
  * every white-carrying fill on `onBrandFill` (= `brandDeep`), so nothing in this
  * app can put white on `brand` whatever hex a salon supplies.
  *
