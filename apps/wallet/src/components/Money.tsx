@@ -11,9 +11,9 @@
  * explicit that it must read as Kuwaiti dinars.
  */
 
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import { formatFils, formatMoney, moneyAriaLabel, type Fils, type Language } from '@avo/types';
-import { moneyFigureFace, text } from '../theme';
+import { frauncesLineHeight, moneyFigureFace, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 
 interface Props {
@@ -53,6 +53,42 @@ function split(amount: Fils, lang: Language): { figure: string; unit: string } {
 }
 
 /**
+ * A LINE BOX THAT CAN ACTUALLY HOLD THE FACE THIS COMPONENT IMPOSES.
+ *
+ * `Money` pins the figure to Fraunces (`moneyFigureFace()`) regardless of what
+ * the caller's `figureStyle` says. A caller therefore hands over a SIZE without
+ * being able to know the vertical metrics the glyphs will need — so the
+ * component that chooses the face is the component that has to make the box
+ * fit it. Anywhere else and the two facts sit in different files.
+ *
+ * THE BUG THIS CLOSES. `WalletCard` passed `text('displayXL')`, whose token is
+ * `fontSize 52 / lineHeight 47` — a ratio of 0.900. Fraunces' natural box is
+ * 1.233 em, so 52pt needs 65px and was given 47px, 17px short. In CSS a
+ * `line-height` below the content height does not clip, it lets the glyphs
+ * overflow, which is what the designer saw in the browser mock and why 0.9 is
+ * a legitimate reading of the design. React Native CLIPS instead, and took the
+ * top off the balance — a real platform difference, handled the way CLAUDE.md
+ * § "Do not restyle" directs: follow the platform and note it.
+ *
+ * The token is deliberately NOT changed. `packages/tokens` is trunk-owned, and
+ * 0.9 remains correct for the CSS surfaces that read the same token.
+ *
+ * IT ONLY EVER RAISES, AND ONLY WHEN A BOX WAS DECLARED. `displayXL` is the
+ * one token in the scale that declares a `lineHeight` at all; the other three
+ * `Money` call sites (`TopUpCard` ×2, `DeleteAccountSheet`) pass a token with
+ * none, so their box is already `normal` — which IS the natural Fraunces box,
+ * and is already correct. Returning `null` for them keeps this a clamp rather
+ * than a setter, so no layout moves anywhere except where it was broken.
+ */
+function fittedFigureBox(figureStyle: object): TextStyle | null {
+  const flat = StyleSheet.flatten(figureStyle as StyleProp<TextStyle>) ?? {};
+  const { fontSize, lineHeight } = flat;
+  if (typeof fontSize !== 'number' || typeof lineHeight !== 'number') return null;
+  const fitted = frauncesLineHeight(fontSize);
+  return lineHeight < fitted ? { lineHeight: fitted } : null;
+}
+
+/**
  * A figure and its unit, with one accessibility label covering both so the
  * reader says "twenty-four point five zero zero Kuwaiti dinars" once, rather
  * than reading the number and the letters K D separately.
@@ -76,7 +112,13 @@ export function Money({ amount, color, figureStyle, unitStyle, unitWeight }: Pro
         not have. See theme/index.ts § moneyFigureFace.
       */}
       <Text
-        style={[figureStyle, { color, fontFamily: moneyFigureFace() }]}
+        style={[
+          figureStyle,
+          // Raises a declared box that Fraunces cannot fit; a no-op otherwise.
+          // See `fittedFigureBox`.
+          fittedFigureBox(figureStyle),
+          { color, fontFamily: moneyFigureFace() },
+        ]}
         accessibilityElementsHidden
         importantForAccessibility="no"
       >

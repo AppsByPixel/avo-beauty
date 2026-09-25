@@ -171,6 +171,62 @@ export function moneyFigureFace(weight: '400' | '500' | '600' = '600'): string {
 }
 
 /**
+ * THE VERTICAL METRICS OF THE SHIPPED FRAUNCES, READ OUT OF THE TTF.
+ *
+ * Not a taste value and not a guess — these four numbers are the `head` and
+ * `hhea` tables of
+ * `@expo-google-fonts/fraunces/*​/Fraunces_*.ttf` as it ships in this
+ * workspace. All four static faces the app registers (400/500/600, and the
+ * italic) carry the SAME four numbers, so this is a property of the family
+ * rather than of a weight, which is what lets one constant stand for the face
+ * `moneyFigureFace()` picks at any weight.
+ *
+ * `OS/2.fsSelection` sets USE_TYPO_METRICS and the typo metrics equal the hhea
+ * ones, so there is no platform ambiguity about which pair a renderer takes:
+ * iOS, Android and react-native-web all arrive at the same box. (The `usWin*`
+ * pair is larger — 1.4745 em — but nothing in this stack lays out from it.)
+ *
+ * They are kept as the raw table values rather than as a pre-divided ratio so
+ * that the number below is visibly DERIVED, and so `balanceLineBoxRender.test`
+ * can re-read the font off disk and compare all four. A ratio typed here as
+ * `1.233` would be exactly the "stale value beside its source" this lane has
+ * been paying for — a font package bump would move the face and leave the
+ * number behind, silently. The spec is what makes that impossible.
+ */
+export const FRAUNCES_METRICS = {
+  unitsPerEm: 2000,
+  ascent: 1956,
+  descent: -510,
+  lineGap: 0,
+} as const;
+
+/**
+ * Fraunces' natural line box as a multiple of the font size: **1.233 em**.
+ *
+ * This is the height a renderer gives a Fraunces line when no `lineHeight` is
+ * set at all (CSS `line-height: normal`). Ask for less than this in React
+ * Native and the glyphs are CLIPPED rather than allowed to overflow — the
+ * platform difference that `WalletCard`'s balance figure was losing its
+ * apex to. See `frauncesLineHeight` below.
+ */
+export const FRAUNCES_LINE_EM =
+  (FRAUNCES_METRICS.ascent - FRAUNCES_METRICS.descent + FRAUNCES_METRICS.lineGap) /
+  FRAUNCES_METRICS.unitsPerEm;
+
+/**
+ * The smallest whole-pixel line box that can draw Fraunces at `fontSize`
+ * without cutting into it.
+ *
+ * `ceil`, not `round`: at 52 the exact box is 64.116px and rounding would give
+ * 64 — a tenth of a pixel short, which is a clip by the same mechanism, just a
+ * smaller one. Ceiling is the only rounding that keeps the guarantee this
+ * function exists to make.
+ */
+export function frauncesLineHeight(fontSize: number): number {
+  return Math.ceil(fontSize * FRAUNCES_LINE_EM);
+}
+
+/**
  * White — the one colour that is genuinely constant across every white-label
  * brand, so it is a token rather than twenty scattered `'#fff'` literals.
  *
