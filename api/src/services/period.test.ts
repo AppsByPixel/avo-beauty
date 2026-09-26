@@ -23,6 +23,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_RANGE_DAYS,
+  parseCalendarRange,
   parseCompare,
   parsePeriod,
   periodToken,
@@ -376,5 +377,158 @@ describe('comparable — the server says whether the two windows are one questio
 
   it('and a previous window is comparable with its own period', () => {
     expect(windowsComparable(rolling30, resolveCompareWindow({ kind: 'previous' }, rolling30, KUWAIT, NOW))).toBe(true);
+  });
+});
+
+
+/**
+ * ==========================================================================
+ * `?from=` / `?to=` — THE SECOND GRAMMAR, AND WHAT IT HAS TO GUARANTEE
+ * ==========================================================================
+ * `GET /salons/{id}/bookings` takes this pair so lane C's week grid can ask for
+ * a week instead of walking the cursor back through every booking newer than
+ * one. Four claims are load-bearing:
+ *
+ *   NEITHER GIVEN IS `null`, NOT A DEFAULT WINDOW. This is what makes the
+ *       parameter additive: `null` is the caller's signal to add no predicate at
+ *       all, and a parser that quietly returned "this month" would change every
+ *       existing request on the endpoint.
+ *
+ *   IT PRODUCES THE SAME `Period` `?period=` PRODUCES, so `resolveWindow` is the
+ *       only place calendar dates become instants. Asserted by resolving a
+ *       `?from=`/`?to=` range and a `?period=` token to the SAME window — if the
+ *       two grammars ever stop meaning the same thing, that is where it shows.
+ *
+ *   EVERY REFUSAL NAMES ITS FIELD. Two parameters, one concept: a client must be
+ *       able to put the 400 under the right input, which `invalid_range` alone
+ *       does not tell it.
+ *
+ *   THE CEILING IS STATED, NOT IMPLIED. A refusal that says "invalid" leaves the
+ *       caller to binary-search the limit.
+ */
+/** The range, as a `Period`. Narrows away the `null` that "neither given" returns. */
+function range(from: string, to: string): Period {
+  const r = parseCalendarRange(from, to);
+  if (!r) throw new Error('expected a range, got null');
+  return r;
+}
+
+describe('?from= / ?to= — a calendar range as two parameters', () => {
+  it('neither given is null — the signal that adds no filter at all', () => {
+    for (const absent of [undefined, null, '', '   ']) {
+      expect(parseCalendarRange(absent, absent)).toBeNull();
+    }
+  });
+
+  it('both given is a calendar period, inclusive at both ends', () => {
+    expect(parseCalendarRange('2026-03-08', '2026-03-14')).toEqual({
+      basis: 'calendar',
+      from: { year: 2026, month: 3, day: 8 },
+      to: { year: 2026, month: 3, day: 14 },
+    });
+  });
+
+  it('one day is a legal window — a grid may ask for a single column', () => {
+    expect(resolveWindow(range('2026-03-08', '2026-03-08'), KUWAIT, NOW).days).toBe(1);
+  });
+
+  /**
+   * THE REUSE, ASSERTED RATHER THAN ASSUMED. The route derives no instants of its
+   * own; it hands this `Period` to the same `resolveWindow` the reports use. If
+   * somebody later gives the list its own date maths, these two windows stop
+   * being equal and this spec says so.
+   */
+  it('is the SAME window the one-token grammar resolves, instant for instant', () => {
+    const viaPair = resolveWindow(range('2026-03-01', '2026-03-31'), KUWAIT, NOW);
+    const viaToken = resolveWindow(parsePeriod('2026-03-01_2026-03-31'), KUWAIT, NOW);
+    expect(viaPair).toEqual(viaToken);
+  });
+
+  /**
+   * THE OPENNESS, STATED AS INSTANTS. Half-open `[from 00:00, to+1 00:00)` in the
+   * salon's zone — `resolveWindow`'s own convention — which is what makes "Sun to
+   * Sat inclusive" true for a merchant: the last day's 23:59 is in.
+   */
+  it('is half-open in the SALON’s zone, so `to` 23:59 is in and the next 00:00 is not', () => {
+    const week = resolveWindow(range('2026-03-08', '2026-03-14'), KUWAIT, NOW);
+    // Kuwait is UTC+3: 8 March begins at 21:00Z on 7 March.
+    expect(week.fromInstant.toISOString()).toBe('2026-03-07T21:00:00.000Z');
+    expect(week.toInstant.toISOString()).toBe('2026-03-14T21:00:00.000Z');
+
+    const lastMoment = new Date('2026-03-14T20:59:59.999Z'); // 23:59:59.999 Kuwait, 14 March
+    const nextMidnight = new Date('2026-03-14T21:00:00.000Z'); // 00:00 Kuwait, 15 March
+    expect(lastMoment.getTime() < week.toInstant.getTime()).toBe(true);
+    expect(nextMidnight.getTime() < week.toInstant.getTime()).toBe(false);
+  });
+
+  /**
+   * THE NEGATIVE CONTROL, for the same reason the `?period=` block has one: every
+   * assertion above would pass against an implementation that ignored the zone.
+   */
+  it('and the same pair in UTC is three hours away, so the zone is doing the work', () => {
+    const utc = resolveWindow(range('2026-03-08', '2026-03-14'), 'UTC', NOW);
+    expect(utc.fromInstant.toISOString()).toBe('2026-03-08T00:00:00.000Z');
+    expect(utc.toInstant.toISOString()).toBe('2026-03-15T00:00:00.000Z');
+  });
+});
+
+describe('what ?from= / ?to= refuses, and whether the message names the field', () => {
+  it('from without to, and to without from — both, by name', () => {
+    const noTo = refusal(() => parseCalendarRange('2026-03-08', undefined));
+    expect(noTo.error).toBe('invalid_range');
+    expect(noTo.message).toContain('from was given without to');
+
+    const noFrom = refusal(() => parseCalendarRange('', '2026-03-14'));
+    expect(noFrom.error).toBe('invalid_range');
+    expect(noFrom.message).toContain('to was given without from');
+  });
+
+  it('an unparseable date names WHICH of the two it is', () => {
+    const badFrom = refusal(() => parseCalendarRange('8 March', '2026-03-14'));
+    expect(badFrom.error).toBe('invalid_range');
+    expect(badFrom.message).toContain('from is not a calendar date');
+    expect(badFrom.message).toContain('8 March');
+
+    const badTo = refusal(() => parseCalendarRange('2026-03-08', '2026-03-14T00:00:00Z'));
+    expect(badTo.error).toBe('invalid_range');
+    expect(badTo.message).toContain('to is not a calendar date');
+  });
+
+  /** The round trip in `parseDate`, reached through the new wrapper. */
+  it('a date the regex likes and the calendar does not', () => {
+    const r = refusal(() => parseCalendarRange('2026-02-31', '2026-03-14'));
+    expect(r.error).toBe('invalid_range');
+    expect(r.message).toContain('2026-02-31');
+  });
+
+  it('from after to', () => {
+    const r = refusal(() => parseCalendarRange('2026-03-14', '2026-03-08'));
+    expect(r.error).toBe('invalid_range');
+    expect(r.message).toContain('from is after to');
+    expect(r.message).toContain('2026-03-14');
+  });
+
+  /**
+   * THE CEILING, AND THE REFUSAL SAYS WHAT IT IS. `from=2000-01-01` behind a
+   * permission check is a full scan of `booking`; "invalid" would leave the
+   * client to discover the limit by bisection.
+   */
+  it('a range longer than a year states the span AND the limit', () => {
+    const r = refusal(() => parseCalendarRange('2000-01-01', '2026-03-14'));
+    expect(r.error).toBe('invalid_range');
+    expect(r.message).toContain(String(MAX_RANGE_DAYS));
+    expect(r.message).toMatch(/spans \d+ days/);
+  });
+
+  it('366 days is allowed and 367 is not — the boundary, not near it', () => {
+    expect(resolveWindow(range('2028-01-01', '2028-12-31'), KUWAIT, NOW).days).toBe(366);
+    expect(refusal(() => parseCalendarRange('2028-01-01', '2029-01-01')).message).toContain('367 days');
+  });
+
+  it('nothing that is not a calendar date gets through either end', () => {
+    for (const hostile of ['2026-03-08"; DROP TABLE booking', '../../etc/passwd', '2026-03-08\r\nX-Evil: 1']) {
+      expect(refusal(() => parseCalendarRange(hostile, '2026-03-14')).error).toBe('invalid_range');
+      expect(refusal(() => parseCalendarRange('2026-03-08', hostile)).error).toBe('invalid_range');
+    }
   });
 });

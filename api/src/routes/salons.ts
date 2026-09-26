@@ -29,7 +29,7 @@
  */
 
 import { socialUrl, type Fils } from '@avo/types';
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { db } from '../db/client';
 import { artist } from '../db/schema/artist';
@@ -72,7 +72,12 @@ import {
 } from '../services/socialLinks';
 import { serialiseBooking, type BookingRow } from '../services/booking';
 import { computeMetrics } from '../services/metrics';
-import { parsePeriod } from '../services/period';
+import {
+  parseCalendarRange,
+  parsePeriod,
+  resolveWindow,
+  type PeriodWindow,
+} from '../services/period';
 import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
 
@@ -1946,8 +1951,61 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    * future appointments, and a merchant who wants today's has to page or filter.
    * Whether an appointments list should be newest-first at all is a product
    * question about a drawn screen, so it is reported rather than changed here.
+   *
+   * =======================================================================
+   * `?from=` AND `?to=` — AND WHAT THEY DELETE
+   * =======================================================================
+   * Lane C's week grid could not ask for a week. So it walked this cursor
+   * BACKWARDS THROUGH EVERY BOOKING NEWER THAN THE WEEK IT WANTED, and proved it
+   * held the week whole before drawing anything — sound, because the stream is
+   * `starts_at DESC` and a fetched row starting strictly before the window's
+   * first day means nothing in the window is still out there. It cost a page
+   * walk per week and carried a 12-page budget, after which the grid refused to
+   * draw and told the merchant it had stopped short. A date range deletes that
+   * whole mechanism: one page, no proof, no budget, no refusal.
+   *
+   * THEY ARE SALON-LOCAL CALENDAR DATES, NOT INSTANTS, and that is the whole
+   * reason they are not `?after=`/`?before=` ISO timestamps. A grid asks a
+   * CALENDAR question — "Sunday the 8th to Saturday the 14th" — and a client
+   * that had to turn that into instants would be doing offset arithmetic against
+   * a zone it holds a stale copy of. "8 March" at a Kuwait salon begins at 21:00Z
+   * on 7 March; a week resolved in UTC instead moves both ends three hours,
+   * dropping Saturday's last three appointments and picking up the Saturday
+   * before's in their place. The merchant would see a grid she could not
+   * reconcile against her own book at either end, with nothing on the page to say
+   * it was a boundary rather than a cancellation.
+   *
+   * THE INTERVAL IS HALF-OPEN, `[from 00:00, to+1 00:00)` IN THE SALON'S ZONE —
+   * which is `resolveWindow`'s convention, unchanged, because this IS
+   * `resolveWindow`: `parseCalendarRange` returns the same calendar `Period` that
+   * `?period=2026-03-01_2026-03-31` returns and the same function resolves it.
+   * No date arithmetic was written here. What that openness MEANS to the
+   * merchant is both days inclusive — a 23:59 salon-local appointment on `to` is
+   * in the week, a 00:00 one on the day after is not — which is what "Sun–Sat"
+   * means when she says it out loud, and the endpoint should mean what she means.
+   *
+   * THE RANGE IS ANOTHER `AND`, NOT A REPLACEMENT. `?status=` still filters, the
+   * cursor still pages, the order is still `starts_at DESC, id ASC`, and the
+   * tiebreak below is untouched — a range is a CONTIGUOUS SLICE of that same
+   * total order, so a page boundary inside a group of bookings sharing an instant
+   * behaves identically whether or not a window is applied. `nextCursor` still
+   * tells the truth: a range makes 200 rarely binding, but a busy salon's week
+   * can still page and the `+ 1` probe is what decides it, not the range.
+   *
+   * ABSENT IS UNCHANGED, DELIBERATELY AND PROVABLY. `parseCalendarRange` returns
+   * `null` when neither is given, no predicate is added, AND THE SALON ROW IS NOT
+   * READ — so a request without them issues exactly the query it issued before
+   * this parameter existed. Lane C switches to the range when it is ready; until
+   * then both the walk and the window have to work.
+   *
+   * `booking_salon_starts_idx` IS `(salon_id, starts_at DESC)` and already
+   * existed. The range predicate is a bounded scan of the same index the order by
+   * already uses, which is why this is cheap rather than merely correct.
    */
-  app.get<{ Params: { id: string }; Querystring: { status?: string; cursor?: string } }>(
+  app.get<{
+    Params: { id: string };
+    Querystring: { status?: string; cursor?: string; from?: string; to?: string };
+  }>(
     '/salons/:id/bookings',
     async (req, reply) => {
       const p = requireDashboardPerm(req, 'appointments');
@@ -1974,6 +2032,40 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
        * it by name rather than walking a rank that means nothing.
        */
       const cursor = parseCursor(req.query?.cursor, [0]);
+
+      /**
+       * PARSED BEFORE THE SALON IS READ, RESOLVED AFTER — `services/period.ts` §
+       * `parsePeriod` states the split and `routes/reports.ts` orders the same
+       * three calls the same way. Parsing answers "what did she ask for" and
+       * needs no zone; resolving answers "which instants is that" and cannot be
+       * done until the salon row is in hand. Fusing them would force the lookup
+       * ahead of the refusal, and a caller who cleared the gate would learn from
+       * a 404-vs-400 whether the salon exists before her parameters were judged.
+       */
+      const range = parseCalendarRange(req.query?.from, req.query?.to);
+
+      /**
+       * THE LOOKUP HAPPENS ONLY FOR A RANGE, which is how "no params = today's
+       * behaviour" is a fact about the code rather than a hope about it: with no
+       * range there is no second query, no `unknown_salon` path that did not
+       * exist before, and nothing added to the `where`.
+       *
+       * `new Date()` is unread for a calendar window — `resolveWindow` only
+       * consults `now` on the rolling branch — and is passed rather than faked
+       * because the signature is the shared one and a sentinel here would be a
+       * lie a future rolling caller could trip over.
+       */
+      let dateWindow: PeriodWindow | null = null;
+      if (range) {
+        const salonRows = await db
+          .select({ id: salon.id, timezone: salon.timezone })
+          .from(salon)
+          .where(eq(salon.id, req.params.id))
+          .limit(1);
+        const s = salonRows[0];
+        if (!s) throw notFound('unknown_salon', 'No such salon.');
+        dateWindow = resolveWindow(range, s.timezone, new Date());
+      }
 
       const rows = await db
         .select({
@@ -2009,6 +2101,21 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             wanted
               ? inArray(booking.status, wanted as Array<BookingRow['status']>)
               : undefined,
+            /**
+             * HALF-OPEN, `[fromInstant, toInstant)`, on `starts_at` — the column
+             * the order and the cursor are already keyed on, so the window is a
+             * contiguous slice of one total order rather than a second one. A
+             * booking AT `fromInstant` is in; a microsecond before it is out.
+             * `toInstant` is salon midnight at the START of the day after `to`,
+             * so `to`'s 23:59 is in and the next day's 00:00 is not.
+             *
+             * `ends_at` is deliberately not consulted: a grid draws an
+             * appointment on the day it STARTS, and a window on both columns
+             * would pull an appointment that began the previous evening into a
+             * week that does not draw it.
+             */
+            dateWindow ? gte(booking.startsAt, dateWindow.fromInstant) : undefined,
+            dateWindow ? lt(booking.startsAt, dateWindow.toInstant) : undefined,
             afterCursor(cursor, 0, booking.startsAt, booking.id),
           ),
         )
