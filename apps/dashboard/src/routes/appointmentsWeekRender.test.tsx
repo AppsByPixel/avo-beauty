@@ -108,6 +108,9 @@ const KUWAIT = makeZoneClock('Asia/Kuwait') as ZoneClock;
 const BOOKING: MerchantBooking = {
   id: 'BK-001',
   memberId: 'MEM-011',
+  // A member booking names no guest. Exactly one of the two is ever set.
+  guestName: null,
+  guestPhone: null,
   artistId: 'ART-003',
   serviceId: 'SVC-007',
   branchId: 'BR-001',

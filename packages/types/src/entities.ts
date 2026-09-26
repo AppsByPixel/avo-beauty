@@ -442,9 +442,40 @@ export const TopUpIntentPublicSchema = TopUpIntentSchema.omit({ feeFils: true })
 
 // -------------------------------------------------------------- booking ----
 
+/**
+ * THE MEMBER IS NULLABLE BECAUSE A MERCHANT-CREATED APPOINTMENT MAY HAVE NO
+ * CUSTOMER ACCOUNT BEHIND IT.
+ *
+ * Every field on this schema was written for `POST /bookings`: a customer, in
+ * the app, paying a deposit out of her own wallet. A front desk booking a
+ * walk-in by hand has none of that — no member row, no wallet, no deposit — and
+ * the honest way to model it is not to invent a member for her.
+ *
+ * Minting a `member` row for a walk-in would give her a wallet she never opened,
+ * a tier she never earned, a directory entry, and — the part that settles it — an
+ * implied acceptance of a policy set she has never seen (non-negotiable #10).
+ * So a guest appointment carries a NAME AND A PHONE ON THE BOOKING and nothing
+ * else. Exactly one of `memberId` and `guestName` is ever populated; the API
+ * enforces that with a CHECK rather than a convention.
+ *
+ * THERE IS NO AUTOMATIC LINK when that guest later signs up with the same
+ * number. Merging a booking history onto an account on a phone-number match is
+ * an identity claim nobody verified, and the same digits reach a salon from a
+ * shared family phone often enough that it is not hypothetical. Reported, not
+ * built.
+ */
 export const BookingSchema = z.object({
   id: IdSchema,
-  memberId: IdSchema,
+  /** NULL only on a `merchant`-sourced booking for a guest. See above. */
+  memberId: IdSchema.nullable(),
+  /** The walk-in's name. Non-null exactly when `memberId` is null. */
+  guestName: z.string().min(1).nullable(),
+  /**
+   * Optional even for a guest — a front desk that has a name and no number must
+   * still be able to hold the slot, and a required field here would be filled
+   * with `0000000` within a week.
+   */
+  guestPhone: z.string().nullable(),
   artistId: IdSchema,
   branchId: IdSchema,
   serviceId: IdSchema,
@@ -453,8 +484,39 @@ export const BookingSchema = z.object({
   endsAt: DateTimeSchema,
   durationMin: z.number().int().positive(),
   depositFils: FilsSchema.nonnegative(),
+  /**
+   * TWO OF THESE FOUR NAME A MONEY EVENT, AND A ZERO-DEPOSIT BOOKING HAS NONE.
+   *
+   * `deposit_held` means "live" and `no_show_returned` means "missed". On an
+   * `app` booking both are literally true. On a `merchant` booking nothing is
+   * held and nothing is returned, so **a client must render the pill from
+   * `depositFils`, not from this field alone**: at 0 the labels are "Booked" and
+   * "No-show", with no mention of a deposit. A screen that prints
+   * "No-show — deposit returned" over an appointment that never had a deposit is
+   * telling a customer she got money back that she never paid.
+   *
+   * ADDING `booked` AND `no_show` TO THIS ENUM IS THE MORE HONEST SCHEMA and it
+   * is not a lane's to make: the enum is a pg type, this contract, the dashboard
+   * pills, the wallet's appointment card and the scanner's day list, which is the
+   * four-way break DECISIONS.md 109 reserves for trunk. Reported. Containing it
+   * at the display boundary costs one ternary per surface and no migration.
+   */
   status: z.enum(['deposit_held', 'completed', 'no_show_returned', 'cancelled']),
-  source: z.enum(['app', 'google_calendar']),
+  /**
+   * `merchant` — created by hand from the dashboard, for a member or a guest.
+   *
+   * IT IS ALWAYS A ZERO-DEPOSIT BOOKING, and that is a rule about authority, not
+   * a limitation. A merchant-created booking for an EXISTING member could
+   * technically debit her wallet for the deposit, and must not: non-negotiable #2
+   * gives the server the balance, and a merchant who can move a customer's money
+   * by filling in a form is a merchant who can move it without her. The same
+   * reasoning that stops a merchant sending a customer a message (#8) stops one
+   * taking a customer's deposit.
+   *
+   * So `depositFils` is 0 on every `merchant` row, there is no hold transaction
+   * behind it, and cancelling one returns nothing because nothing was taken.
+   */
+  source: z.enum(['app', 'google_calendar', 'merchant']),
 
   /**
    * The one-hour rule, as an instant rather than a rule the client re-derives.

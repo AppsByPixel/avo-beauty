@@ -62,6 +62,9 @@ const BOOKING_ID = 'BK-9d0c1f6a-2b44-4d1e-9f77-5a2e3c8b1d40';
 const ROW: MerchantBooking = {
   id: BOOKING_ID,
   memberId: 'MB-1a2b3c4d5e',
+  // A member booking names no guest. Exactly one of the two is ever set.
+  guestName: null,
+  guestPhone: null,
   artistId: 'AR-1a2b3c4d5e',
   branchId: 'BR-1a2b3c4d5e',
   serviceId: 'SV-1a2b3c4d5e',
@@ -93,6 +96,8 @@ const OK: MarkNoShowResult = {
   booking: {
     id: BOOKING_ID,
     memberId: ROW.memberId,
+    guestName: null,
+    guestPhone: null,
     artistId: ROW.artistId,
     branchId: ROW.branchId,
     serviceId: ROW.serviceId,
