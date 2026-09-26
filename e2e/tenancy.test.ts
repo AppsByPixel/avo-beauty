@@ -1429,6 +1429,44 @@ const SALON_ROUTES: SalonRoute[] = [
     template: '/salons/{id}/bookings/{bookingId}/no-show',
     controlIdempotency: true,
   },
+  /**
+   * ===========================================================================
+   * THE MERCHANT'S CUSTOMER BOOK — `api/src/routes/customers.ts`, lane A. Three
+   * reads, all gated `team`, all three `requireSameSalon` on the SALON in the path.
+   * ===========================================================================
+   * Read from the source rather than taken from the report: the gate is
+   * `requireCustomerDirectory(req)` then `requireSameSalon(p, req.params.id)`, in
+   * that order, as the first two statements of all three handlers. So the attack
+   * half is refused before a member id, a cursor or a date range is looked at, and
+   * the table's standard pair of assertions — 403, `That salon is not yours.`, two
+   * keys and nothing else — describes them exactly.
+   *
+   * `{memberId}` AND NOT `{mid}`, which is the `{deviceId}` and `{bookingId}` rule
+   * and the third time it has had to be written down: the gap-ledger normaliser is
+   * the generic `\{(\w+)\}` → `:$1`, so a placeholder's name IS the fastify
+   * parameter's after substitution. These routes register `:memberId`, so `{mid}`
+   * would normalise to `:mid` and leave two entries reading as missing from the
+   * table they are sitting in.
+   *
+   * IT RESOLVES PER SALON, the way `{cid}` and `{bookingId}` do, and for a reason
+   * that lands on the CONTROL half rather than the attack half. `loadCustomer`
+   * carries the tenant predicate in its `WHERE` — `eq(member.id, id)` AND
+   * `eq(member.salonId, salonId)` — so a single hard-coded id cannot serve both
+   * columns: salon A's Dana is not at Lumière, the control would answer 404
+   * `unknown_member`, and the ledger would report a tenancy hole that is really a
+   * missing fixture. See `memberFor`.
+   *
+   * THE LIST NEEDS NO PLACEHOLDER AND IS STILL THE ONE THAT WOULD LEAK MOST. Its
+   * control half returns salon B's whole book; `expectNoSalonALeak` runs on the
+   * ATTACK half only, which is where this table checks bodies, and the attack half
+   * here is a 403 with two keys in it. The cross-tenant reads of the book's CONTENTS
+   * — one salon's manager asking her own book about another salon's member — are a
+   * second axis this table's shape cannot express at all, and they are driven in
+   * their own describe below.
+   */
+  { method: 'GET', template: '/salons/{id}/customers' },
+  { method: 'GET', template: '/salons/{id}/customers/{memberId}' },
+  { method: 'GET', template: '/salons/{id}/customers/{memberId}/activity' },
 ];
 
 /**
@@ -1535,6 +1573,36 @@ const deviceFor = (salonId: string): string =>
 const bookingFor = (salonId: string): string =>
   salonId === SALON_B ? PROBE_BOOKING_B : PROBE_BOOKING_A;
 
+/**
+ * A CUSTOMER belonging to the salon being addressed — the customer book's two
+ * parameterised reads.
+ *
+ * Resolved per salon for the CONTROL's sake rather than the attack's, which is the
+ * departure from `{hid}` and `{pid}`. Those two give salon A a real row only so the
+ * handler would recognise the id; here the salon-A side is equally decorative — the
+ * gate runs first and the member is never loaded — but the salon-B side is
+ * load-bearing, because `loadCustomer` filters on `(id, salon_id)` and Dana is not
+ * at Lumière. One hard-coded id would make the control answer 404 `unknown_member`
+ * and the ledger would call that a tenancy hole.
+ *
+ * Both are SEEDED members and neither is written by these routes — all three are
+ * reads — so unlike the branch, the product and the booking there is nothing
+ * disposable to arrange and nothing to put back.
+ */
+const memberFor = (salonId: string): string => (salonId === SALON_B ? B_MEMBER : A_MEMBER);
+
+/**
+ * A member id that exists at no salon, for the byte-identity probe below. Local
+ * rather than beside `SALON_NOWHERE` and `STAFF_NOWHERE` in the harness because this
+ * file is its only reader and the harness is shared with the rest of lane D.
+ *
+ * It is not member-id-SHAPED on purpose: the seed's ids are four digits, so a
+ * plausible `9999` is a row somebody may legitimately add one day, and a probe that
+ * silently starts addressing a real customer is a probe that silently stops asking
+ * its question.
+ */
+const MEMBER_NOWHERE = 'MEM-DOES-NOT-EXIST';
+
 const url = (r: SalonRoute, salonId: string) =>
   r.template
     .replace('{id}', salonId)
@@ -1579,6 +1647,11 @@ const url = (r: SalonRoute, salonId: string) =>
      * table it is sitting in.
      */
     .replace('{bookingId}', bookingFor(salonId))
+    /**
+     * `{memberId}` is a customer of the salon being addressed. See `memberFor`, and
+     * the table entry for why the brace name has to be the registered one.
+     */
+    .replace('{memberId}', memberFor(salonId))
     /**
      * `{oid}` is the image routes' owner — a product or a service, chosen by the
      * template and the verb. See `imageOwnerFor`.
@@ -2071,6 +2144,142 @@ describe('existence is not disclosed — a salon that is not yours reads like on
       }
     }
     expect(differing, `these routes distinguish an existing salon from an invented one:\n${differing.join('\n')}`).toEqual([]);
+  });
+});
+
+/**
+ * ===========================================================================
+ * THE CUSTOMER BOOK'S SECOND AXIS — her own salon in the path, a STRANGER'S
+ * MEMBER ID beside it.
+ * ===========================================================================
+ * `SALON_ROUTES` asks one question: is this workspace yours. `requireSameSalon`
+ * answers it with 403 "That salon is not yours." and the table asserts that copy,
+ * which is what makes its 403s attributable rather than merely non-200.
+ *
+ * `/salons/{id}/customers/{memberId}` carries a SECOND id, and the second question
+ * — is that customer in this workspace — is answered somewhere else entirely, by the
+ * tenant term in `loadCustomer`'s `WHERE`. The table cannot ask it: `memberFor`
+ * resolves the member to the salon already in the path, so BOTH halves send a
+ * matched pair — salon A's URL with salon A's member, salon B's with salon B's —
+ * and a spec that only ever pairs them can never catch a predicate that has stopped
+ * joining them.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE USUAL, STRONGER ASSERTION IS NOT AVAILABLE HERE. THAT IS DELIBERATE,
+ * AND IT IS THE POINT OF THE ENDPOINT.
+ * ---------------------------------------------------------------------------
+ * Everywhere else in this file a refusal is pinned to its own copy, because "a
+ * status code says nothing about which guard answered" (DECISIONS.md dcf1e2e). The
+ * natural version of that here would be to assert a distinct refusal for the
+ * wrong-tenant case — and it CANNOT EXIST. `routes/customers.ts` states the rule
+ * and `services/memberSearch.ts § resolveMember` argues it: "a distinct 403 would
+ * confirm that the id is real, which turns this endpoint into an oracle for 'is
+ * 8842 a customer somewhere in AVO' even when it refuses to say more." A merchant
+ * who could tell "not yours" from "no such person" could walk the id space from her
+ * own salon's door and enumerate the platform's customers without ever reading one.
+ *
+ * So 404 `unknown_member` / "No such member." is the ONLY answer, and asserting it
+ * alone would be the weak spec this file exists to avoid: a route that 404s at
+ * everybody — deleted, renamed, broken — passes it, and so does one whose tenant
+ * predicate has been dropped and now 404s only because these two ids happen not to
+ * collide.
+ *
+ * WHAT IS PINNED INSTEAD IS THE PROPERTY THAT ACTUALLY HOLDS — indistinguishability
+ * — asserted the way `existence is not disclosed` asserts it one describe up: the
+ * foreign member and the member who exists nowhere come back BYTE-IDENTICAL. That
+ * is strictly stronger than "404": it fails if either answer ever gains a field,
+ * a code, or a different sentence, which is exactly how an oracle would reopen.
+ *
+ * AND IT IS MADE NON-VACUOUS RATHER THAN LEFT IMPLIED. Byte-identity is satisfied
+ * by a dead route, so the last spec reads salon B's OWN customer through both doors
+ * and requires 200 with her in it. The `SALON_ROUTES` control halves assert the same
+ * 200, and this one is not a duplicate of them: theirs proves the 403 above was
+ * tenancy, this one proves the 404 above was tenancy, and a spec whose meaning
+ * depends on a sibling twelve hundred lines away is a spec that rots quietly.
+ *
+ * THE LIST IS HERE TOO, and it is the one door on this axis that answers 200 — see
+ * its own spec for why an empty page is the whole refusal there and byte-identity
+ * is not the shape to ask for.
+ */
+describe('the customer book — a stranger read through your own salon answers like a stranger', () => {
+  const CARD = (memberId: string) => `/salons/${SALON_B}/customers/${memberId}`;
+  const ACTIVITY = (memberId: string) => `${CARD(memberId)}/activity`;
+
+  it("GET …/customers/{salon A's member} is byte-identical to a member who exists nowhere", async () => {
+    const foreign = await treq('GET', CARD(A_MEMBER), { token: bDashboard });
+    const invented = await treq('GET', CARD(MEMBER_NOWHERE), { token: bDashboard });
+
+    expect(foreign.status, `the foreign member answered ${foreign.status}: ${foreign.raw}`).toBe(
+      404,
+    );
+    expect(foreign.status).toBe(invented.status);
+    expect(foreign.raw).toBe(invented.raw);
+    // Belt and braces on the body itself: 8842 is Dana, and her name, phone and
+    // email are in SALON_A_TELLTALES.
+    expectNoSalonALeak(foreign.raw, `GET ${CARD(A_MEMBER)}`);
+  });
+
+  it("GET …/customers/{salon A's member}/activity is byte-identical to a member who exists nowhere", async () => {
+    /**
+     * THE HISTORY IS PROBED SEPARATELY AND NOT ASSUMED FROM THE CARD, because it
+     * reaches the same refusal by a different route: the card 404s on a `loadCustomer`
+     * miss, and the history had every opportunity to answer an EMPTY FEED instead —
+     * `{ items: [], nextCursor: null }` is a perfectly well-formed 200 for a member
+     * with no transactions. `routes/customers.ts` calls that "a different and softer
+     * lie", told from the same door, and it is a lie only this spec would catch: an
+     * empty feed is not byte-identical to a 404, but it is also not obviously wrong
+     * to a reader skimming the handler.
+     */
+    const foreign = await treq('GET', ACTIVITY(A_MEMBER), { token: bDashboard });
+    const invented = await treq('GET', ACTIVITY(MEMBER_NOWHERE), { token: bDashboard });
+
+    expect(foreign.status, `the foreign member answered ${foreign.status}: ${foreign.raw}`).toBe(
+      404,
+    );
+    expect(foreign.status).toBe(invented.status);
+    expect(foreign.raw).toBe(invented.raw);
+    expectNoSalonALeak(foreign.raw, `GET ${ACTIVITY(A_MEMBER)}`);
+  });
+
+  it("GET …/customers?q= finds salon A's member by neither her id nor her name", async () => {
+    /**
+     * THE LIST IS THE THIRD DOOR ON THIS AXIS AND ITS ANSWER IS A 200, so the
+     * byte-identity shape above does not apply to it — an empty page is the whole
+     * refusal, and it is indistinguishable from "no such customer" for free rather
+     * than by design. What is asserted instead is that the page is empty AND carries
+     * no salon A string anywhere in it, which is what a leak would look like here:
+     * `customerSearchPredicate` matches the id EXACTLY and the name as a substring,
+     * so a dropped `eq(member.salonId, p.salonId)` would put Dana's row — her name,
+     * her phone, her balance — straight into salon B's search results.
+     *
+     * BOTH TERMS, because they take different branches of the predicate's `or`. The
+     * id branch is the enumeration oracle (`lower(id) = lower(q)`, one row or none);
+     * the name branch is the one a merchant actually types.
+     */
+    for (const q of [A_MEMBER, A_MEMBER_NAME]) {
+      const res = await treq<{ items: unknown[]; nextCursor: string | null }>(
+        'GET',
+        `/salons/${SALON_B}/customers?q=${encodeURIComponent(q)}`,
+        { token: bDashboard },
+      );
+      expect(res.status, `q=${q} answered ${res.status}: ${res.raw}`).toBe(200);
+      expect(res.body.items, `q=${q} returned rows from salon A: ${res.raw}`).toEqual([]);
+      expectNoSalonALeak(res.raw, `GET /salons/${SALON_B}/customers?q=${q}`);
+    }
+  });
+
+  it("and salon B's own customer reads 200 through both doors — the 404 was tenancy, not a dead route", async () => {
+    const card = await treq<{ id: string }>('GET', CARD(B_MEMBER), { token: bDashboard });
+    expect(card.status, `the card answered ${card.status}: ${card.raw}`).toBe(200);
+    expect(card.body.id).toBe(B_MEMBER);
+
+    const activity = await treq<{ items: unknown[]; nextCursor: string | null }>(
+      'GET',
+      ACTIVITY(B_MEMBER),
+      { token: bDashboard },
+    );
+    expect(activity.status, `the history answered ${activity.status}: ${activity.raw}`).toBe(200);
+    expect(Array.isArray(activity.body.items)).toBe(true);
   });
 });
 
