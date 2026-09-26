@@ -192,8 +192,19 @@ export function serialiseTransactionForMerchant(
  * `member` for a phone calls this or repeats the bug.
  */
 export interface MemberContactRow {
-  /** `member.phone` — never null in the database, tombstone or not. */
-  phone: string;
+  /**
+   * `member.phone` — never null in the database, tombstone or not.
+   *
+   * NULLABLE HERE SINCE MIGRATION 0056, and only because the callers widened, not
+   * because the column did. A booking may now name a WALK-IN instead of a member,
+   * and the three boards that join a booking to a member do so with a LEFT join:
+   * on a guest row there is no member, so the number that arrives here is
+   * `booking.guest_phone`, which a front desk may not have been given.
+   *
+   * The rule this function applies is unchanged and still the only one: a number
+   * is withheld when, and only when, `erased_at` is non-null. Null in, null out.
+   */
+  phone: string | null;
   /** `member.erased_at`. Non-null is the erasure, and it is the only tell. */
   erasedAt: Date | null;
 }

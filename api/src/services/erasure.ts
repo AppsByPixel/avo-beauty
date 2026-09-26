@@ -179,7 +179,7 @@
  * session's.
  */
 
-import { and, eq, inArray, isNull, isNotNull, lte, asc, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/client';
 import { member, memberPasswordReset } from '../db/schema/member';
@@ -298,10 +298,25 @@ export async function runErasureOnce(
         // ---- the money preconditions: counted and deferred, never decided ----
         if (m.balanceFils > 0) return 'deferred_balance' as const;
 
+        /**
+         * ESCROW, NOT "HAS AN APPOINTMENT". `hold_transaction_id IS NOT NULL` is
+         * the predicate, because since migration 0056 a `deposit_held` row is not
+         * necessarily money: a merchant-created appointment for an existing member
+         * is `deposit_held` with `deposit_fils = 0` and no hold. Deferring an
+         * erasure on one would mean a customer who asked to be deleted stayed in the
+         * database for as long as a salon kept writing appointments for her, on a
+         * `deferred_escrow` reason naming escrow that does not exist.
+         */
         const [held] = await tx
           .select({ id: booking.id })
           .from(booking)
-          .where(and(eq(booking.memberId, m.id), eq(booking.status, 'deposit_held')))
+          .where(
+            and(
+              eq(booking.memberId, m.id),
+              eq(booking.status, 'deposit_held'),
+              isNotNull(booking.holdTransactionId),
+            ),
+          )
           .limit(1);
         if (held) return 'deferred_escrow' as const;
 
