@@ -1220,13 +1220,34 @@ function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
  *
  * WHAT A FAILED PREVIEW DOES: IT BLOCKS THE CLOSE. Argued at the render below.
  */
-function BranchesPanel({ salon }: { salon: Salon | undefined }) {
-  const session = useSession('merchant');
+/*
+ * EXPORTED for `branchResponseParse.test.tsx`, which renders THIS panel rather
+ * than a reproduction of it — the two receipts and the consequence list are the
+ * subject, so a local copy of them would pin the copy in the test against the
+ * copy in the test. `WhatsAppPanel` and `EmailReceiptsPanel` are exported for
+ * the same reason.
+ *
+ * `useSession('merchant')` IS GONE FROM HERE, and it was dead: nothing in this
+ * panel read it. It is a leftover of the client-side closure computation that
+ * `useBranchClosurePreview` replaced, which gated its three reads on
+ * `perms.team` / `perms.appointments` / `perms.dashboard`. Keeping it would have
+ * forced this panel's test rig to stand up a session the panel does not consult,
+ * which is a rig that misdescribes its subject.
+ */
+export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
   const addBranch = useAddBranch();
   const closeBranch = useCloseBranch();
   const [newName, setNewName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [closed, setClosed] = useState<BranchClosure | null>(null);
+  /*
+   * THE BRANCH NAME IS KEPT BESIDE THE RECEIPT, because the degraded receipt
+   * needs one and the body that failed to parse is exactly the body that cannot
+   * be asked for it. This is the name off the branch list she pressed ✕ on,
+   * which is the name she is looking at.
+   */
+  const [closed, setClosed] = useState<{ name: string; closure: BranchClosure | null } | null>(
+    null,
+  );
 
   /*
    * ONE READ, ON THE SAME PERMISSION AS THE ACT, and only while a confirmation is
@@ -1524,7 +1545,7 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
                           {
                             onSuccess: (result) => {
                               setConfirming(null);
-                              setClosed(result);
+                              setClosed({ name: branch.name, closure: result });
                             },
                           },
                         );
@@ -1559,21 +1580,56 @@ function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         `tillsUnenrolled` IS ON THE RECEIPT because it is the consequence she has
         to act on: those counters are dead until somebody enrols them somewhere.
       */}
-      {closed !== null ? (
+      {closed !== null && closed.closure !== null ? (
         <div className="settings__closed" role="status">
-          <b>{closed.name} is closed.</b>{' '}
-          {closed.staffRescoped.length > 0
-            ? `Re-scoped ${closed.staffRescoped.join(', ')}. `
+          <b>{closed.closure.name} is closed.</b>{' '}
+          {closed.closure.staffRescoped.length > 0
+            ? `Re-scoped ${closed.closure.staffRescoped.join(', ')}. `
             : 'No staff needed re-scoping. '}
-          {closed.staffLeftWithNoBranch.length > 0
-            ? `${closed.staffLeftWithNoBranch.join(', ')} now ${closed.staffLeftWithNoBranch.length === 1 ? 'has' : 'have'} no branch access — fix that in Accounts → Team. `
+          {closed.closure.staffLeftWithNoBranch.length > 0
+            ? `${closed.closure.staffLeftWithNoBranch.join(', ')} now ${closed.closure.staffLeftWithNoBranch.length === 1 ? 'has' : 'have'} no branch access — fix that in Accounts → Team. `
             : ''}
-          {closed.tillsUnenrolled.length > 0
-            ? `Unenrolled ${closed.tillsUnenrolled.join(', ')} — set ${closed.tillsUnenrolled.length === 1 ? 'it' : 'them'} up again at another branch under Tills. `
+          {closed.closure.tillsUnenrolled.length > 0
+            ? `Unenrolled ${closed.closure.tillsUnenrolled.join(', ')} — set ${closed.closure.tillsUnenrolled.length === 1 ? 'it' : 'them'} up again at another branch under Tills. `
             : ''}
-          {closed.depositHeldBookings > 0
-            ? `${closed.depositHeldBookings} appointment${closed.depositHeldBookings === 1 ? '' : 's'} still hold a deposit here.`
+          {closed.closure.depositHeldBookings > 0
+            ? `${closed.closure.depositHeldBookings} appointment${closed.closure.depositHeldBookings === 1 ? '' : 's'} still hold a deposit here.`
             : ''}
+        </div>
+      ) : null}
+
+      {/*
+        THE DEGRADED RECEIPT — the close committed and its summary could not be
+        read. `api/settings.ts § useCloseBranch` carries the argument; what it
+        comes to here is that this is the ONLY place in the product that will
+        ever name the staff member who lost branch access, so silence is not the
+        safe degradation it was for a booking whose status a refetch re-surfaces.
+
+        THREE PROPERTIES, AND EACH ONE IS LOAD-BEARING:
+
+        1. IT OPENS WITH THE FACT. "X is closed." — first, unqualified, in the
+           same words as the receipt above it. Whatever else she does not learn,
+           she must not leave this screen unsure whether the close happened.
+
+        2. NO FAILURE LANGUAGE. `WriteError`'s sentences ("Something went wrong
+           on our side.", "We couldn't reach the workspace.") and this panel's
+           own reassurance ("That branch is still open.") are all false here, and
+           the last one invites her to close it again. `role="status"`, not
+           `role="alert"`: the same politeness level as the full receipt,
+           because the outcome is the same outcome.
+
+        3. IT SENDS HER WHERE THE TRUTH STILL IS. `useCloseBranch` invalidates
+           `staffKeys.list` and `deviceKeys.list`, so Accounts → Team and Tills
+           WILL show the real state on their next read — but only if she knows
+           to look, which is precisely what the sentence she did not get would
+           have told her. "may have" rather than "has": we did not read the
+           body, so naming a consequence as certain would be inventing one.
+      */}
+      {closed !== null && closed.closure === null ? (
+        <div className="settings__closed" role="status">
+          <b>{closed.name} is closed.</b> We couldn&rsquo;t read the summary of what that
+          changed. Check Accounts → Team for staff who may have been left with no branch
+          access, and Tills below for counters that may have been unenrolled.
         </div>
       ) : null}
 

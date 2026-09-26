@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 
 /**
- * `PATCH /salons/{id}` — the body, checked before it reaches the cache the shell
- * reads.
+ * `PATCH /salons/{id}` AND `GET /salons/{id}` — the body, checked before it
+ * reaches the cache the shell reads.
+ *
+ * BOTH DOORS, ONE SERIALISER, ONE PARSER. `serialiseSalon` ends both routes —
+ * `api/src/routes/salons.ts` says so of itself — so the two write the same shape
+ * into the same cache entry. `useUpdateSalon` has parsed it since this file was
+ * written; `useSalon`, the SHELL-WIDE read, was deliberately left a cast on the
+ * argument that a parser wrong about one field takes every screen down at once.
+ * That argument aged: the parser it would have been running is the one the PATCH
+ * has been exercising on every settings change since. The specs at the bottom of
+ * this file are the ones that close it, and they drive THE HOOK in BOTH LOYALTY
+ * MODES, because the mode-dependent half is the only half the PATCH had not
+ * already proven.
  *
  * WHY THIS FILE EXISTS
  * --------------------
@@ -131,39 +142,44 @@ describe('the wire’s salon, not the schema’s', () => {
 });
 
 /* ========================================================================== */
+/*
+ * FIVE KEYS MAY BE ABSENT, FOR THREE DIFFERENT REASONS, AND THE LIST IS
+ * WRITTEN DOWN RATHER THAN DISCOVERED. Removing a field from this set is then a
+ * visible edit in a diff, instead of a case that quietly stopped being covered.
+ *
+ *   tiers, stampTarget, stampReward   the DORMANT loyalty mode. Absent and null
+ *                                     both mean "this salon is not in that
+ *                                     mode", which is the whole reason
+ *                                     `parseSalon` folds one into the other.
+ *   stampRewardAr                     `.optional()` in the shared schema: a
+ *                                     reward with no Arabic copy is a real
+ *                                     salon, not a broken response.
+ *   timezone                          `.default('Asia/Kuwait')` in the shared
+ *                                     schema, so an omitted key is DEFAULTED
+ *                                     and not refused. Trunk's decision, left
+ *                                     alone — overriding it here would be this
+ *                                     surface disagreeing with the contract.
+ *                                     Named so nobody mistakes the default for
+ *                                     a check.
+ *
+ * AT MODULE SCOPE, because `useSalon`'s table at the bottom of this file reads
+ * the SAME list. Two copies of "which keys may be missing" is two chances for
+ * the read door and the write door to disagree about the contract they share.
+ */
+const ABSENCE_IS_LEGAL = new Set([
+  'tiers',
+  'stampTarget',
+  'stampReward',
+  'stampRewardAr',
+  'timezone',
+]);
+
+/* ========================================================================== */
 /**
  * TABLE-DRIVEN OFF THE BODY, so a twenty-first key added to `serialiseSalon` is
  * covered the day this fixture learns about it.
  */
 describe('a body missing any required key is a failed write', () => {
-  /*
-   * FIVE KEYS MAY BE ABSENT, FOR THREE DIFFERENT REASONS, AND THE LIST IS
-   * WRITTEN DOWN RATHER THAN DISCOVERED. Removing a field from this set is then a
-   * visible edit in a diff, instead of a case that quietly stopped being covered.
-   *
-   *   tiers, stampTarget, stampReward   the DORMANT loyalty mode. Absent and null
-   *                                     both mean "this salon is not in that
-   *                                     mode", which is the whole reason
-   *                                     `parseSalon` folds one into the other.
-   *   stampRewardAr                     `.optional()` in the shared schema: a
-   *                                     reward with no Arabic copy is a real
-   *                                     salon, not a broken response.
-   *   timezone                          `.default('Asia/Kuwait')` in the shared
-   *                                     schema, so an omitted key is DEFAULTED
-   *                                     and not refused. Trunk's decision, left
-   *                                     alone — overriding it here would be this
-   *                                     surface disagreeing with the contract.
-   *                                     Named so nobody mistakes the default for
-   *                                     a check.
-   */
-  const ABSENCE_IS_LEGAL = new Set([
-    'tiers',
-    'stampTarget',
-    'stampReward',
-    'stampRewardAr',
-    'timezone',
-  ]);
-
   for (const key of Object.keys(SALON_BODY).filter((k) => !ABSENCE_IS_LEGAL.has(k))) {
     it(`refuses a salon with no ${key}`, () => {
       expect(() => parseSalon(without(SALON_BODY, key))).toThrow();
@@ -286,5 +302,145 @@ describe('the saved salon goes into the cache, and an unreadable one does not', 
      * would turn a write whose result is unreadable into one that looks fine.
      */
     expect(gets()).toBe(getsBefore);
+  });
+});
+
+/* ========================================================================== */
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `useSalon` — THE READ EVERY SCREEN MAKES
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHAT A REFUSAL COSTS, so the blast radius is stated and not discovered: every
+ * section of the dashboard observes `salonKeys.detail(salonId)`. An unparsable
+ * `GET /salons/{id}` is therefore a FAILED READ ON EVERY SCREEN AT ONCE — the
+ * shell header, Settings, the Loyalty editor, the branch scope selector. It is
+ * not an error boundary (TanStack turns a thrown `queryFn` into `isError`, which
+ * each section renders), but it is the whole dashboard, and that is the price of
+ * finding out at the door instead of at the first dereference.
+ *
+ * THE FIXTURES ARE THE TWO AT THE TOP OF THIS FILE AND ARE NOT COMPOSED HERE.
+ * They are `serialiseSalon`'s twenty keys with the DORMANT mode's loyalty fields
+ * as JSON `null`, which is the shape `SalonSchema` alone refuses. This file's own
+ * header states the rule they exist for: "a test written from the schema instead
+ * of from the wire would have passed and shipped a hook that throws on contact
+ * with the API." That sentence is the spec for these specs.
+ */
+function readRig() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  const { result } = renderHook(() => useSalon(), { wrapper });
+  return { client, result };
+}
+
+describe('the shell-wide read is parsed, in both loyalty modes', () => {
+  /**
+   * BOTH MODES, BECAUSE THE MODE-DEPENDENT FIELDS ARE THE WHOLE RISK. A tiers
+   * salon sends `stampTarget: null`; a stamps salon sends `tiers: null`. Either
+   * one is a bare `SalonSchema.parse` away from taking the entire dashboard down
+   * on sign-in, and only `SalonWireSchema`'s three `.nullish()` fields stop it.
+   */
+  it('accepts a TIERS salon whose stamp fields arrive null', async () => {
+    authedRequest.mockResolvedValue(SALON_BODY);
+    const { result } = readRig();
+    // Settled, THEN asserted — a `waitFor(isSuccess)` turns a refusal into a
+    // timeout instead of naming which body the parser would not take.
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(result.current.error ?? null, 'the parser refused the wire body').toBeNull();
+    expect(result.current.isSuccess).toBe(true);
+
+    expect(result.current.data?.loyaltyMode).toBe('tiers');
+    expect(result.current.data?.tiers).toHaveLength(2);
+    // Folded to `undefined`, which is how the rest of the dashboard spells it.
+    expect(result.current.data?.stampTarget).toBeUndefined();
+    expect(result.current.data?.stampReward).toBeUndefined();
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('accepts a STAMPS salon whose tier ladder arrives null', async () => {
+    authedRequest.mockResolvedValue(STAMPS_BODY);
+    const { result } = readRig();
+    // Settled, THEN asserted — a `waitFor(isSuccess)` turns a refusal into a
+    // timeout instead of naming which body the parser would not take.
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(result.current.error ?? null, 'the parser refused the wire body').toBeNull();
+    expect(result.current.isSuccess).toBe(true);
+
+    expect(result.current.data?.loyaltyMode).toBe('stamps');
+    expect(result.current.data?.tiers).toBeUndefined();
+    expect(result.current.data?.stampTarget).toBe(8);
+    expect(result.current.data?.stampReward).toBe('Free blow-dry');
+    expect(result.current.isError).toBe(false);
+  });
+
+  /**
+   * THE REQUEST IS `unknown`, NOT `Salon`. A cast that still compiled would pass
+   * every assertion above, so this reads the call the hook actually made: the
+   * path, and that nothing else was sent alongside it.
+   */
+  it('reads GET /salons/{id} and nothing else', async () => {
+    authedRequest.mockResolvedValue(SALON_BODY);
+    const { result } = readRig();
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    expect(authedRequest).toHaveBeenCalledTimes(1);
+    expect(authedRequest.mock.calls[0]![0]).toBe('merchant');
+    expect(authedRequest.mock.calls[0]![1]).toBe('/salons/SAL-AMARA');
+  });
+
+  /**
+   * THE BLAST RADIUS, ASSERTED. A body that is not a salon must not reach the
+   * cache — because the cache is what every section renders from, and a half-read
+   * salon there is the crash this slice exists to remove (`salon.branches[0]`,
+   * on a raw Drizzle row, on every settings change).
+   */
+  it('a body that is not a salon fails the read and does not reach the cache', async () => {
+    authedRequest.mockResolvedValue(without(SALON_BODY, 'branches'));
+    const { client, result } = readRig();
+    /*
+     * SETTLED FIRST, THEN ASSERTED — and that ordering is the spec, not a style.
+     * `waitFor(() => expect(isError).toBe(true))` passes identically but FAILS as
+     * a five-second timeout when the parse is removed, which says "something did
+     * not happen" and names nothing. Waiting for the query to stop being pending
+     * and asserting afterwards makes the regression an assertion: `isError` was
+     * false, because the cast let the body through.
+     */
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+
+    expect(result.current.isError).toBe(true);
+    expect(result.current.data).toBeUndefined();
+    expect(client.getQueryData(salonKeys.detail('SAL-AMARA'))).toBeUndefined();
+  });
+
+  /**
+   * TABLE-DRIVEN OVER THE WIRE BODY'S OWN KEYS, AT THE HOOK. The parser has its
+   * own table higher up this file; this one exists because a parser table cannot
+   * tell you whether the HOOK calls the parser. Reverting `useSalon` to
+   * `authedRequest<Salon>` leaves the parser table green and turns every case
+   * here red — which is the property being bought.
+   *
+   * The exemptions are the module-scope `ABSENCE_IS_LEGAL` — the same list the
+   * parser table reads, not a second copy: the three dormant-mode fields,
+   * `stampRewardAr`, and `timezone`, whose
+   * `.default()` in the shared schema makes an omission a default and not a
+   * refusal. Stated at the parser table above; not re-argued here.
+   */
+  const REQUIRED = Object.keys(SALON_BODY).filter((k) => !ABSENCE_IS_LEGAL.has(k));
+
+  it('covers every required key of the wire body', () => {
+    // A filter that silently matched nothing would make the table below hollow.
+    expect(REQUIRED.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it.each(REQUIRED)('a 200 with no `%s` fails the read', async (key) => {
+    authedRequest.mockResolvedValue(without(SALON_BODY, key));
+    const { client, result } = readRig();
+    // Settle, then assert — see the spec above for why this is not `waitFor(isError)`.
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(result.current.isError).toBe(true);
+    expect(client.getQueryData(salonKeys.detail('SAL-AMARA'))).toBeUndefined();
   });
 });

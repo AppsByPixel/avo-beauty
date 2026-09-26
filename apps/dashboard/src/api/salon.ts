@@ -77,7 +77,39 @@ export function useSalon(enabled = true): UseQueryResult<Salon> {
   const salonId = useSalonId();
   return useQuery({
     queryKey: salonKeys.detail(salonId),
-    queryFn: ({ signal }) => authedRequest<Salon>('merchant', `/salons/${salonId}`, { signal }),
+    /*
+     * PARSED, AND THE PARSER IS THE ONE `useUpdateSalon` ALREADY RUNS.
+     *
+     * This cast was left standing on purpose when `parseSalon` landed, and the
+     * reason was written down: this is THE shell-wide read, so a parser wrong
+     * about one field takes every screen down at once rather than one panel.
+     * That argument was right and is now weaker than it was, for a reason that
+     * is about evidence rather than about appetite.
+     *
+     * `serialiseSalon` (api/src/routes/salons.ts) ends BOTH routes — the PATCH
+     * and this GET — and `api/settings.ts § useUpdateSalon` has been running
+     * `parseSalon` over its output on every settings change since that slice
+     * landed. So this is not a new parser meeting the wire for the first time;
+     * it is an already-exercised one being pointed at the same serialiser's
+     * other door. The half that was genuinely still unproven is the
+     * MODE-DEPENDENT half — the dormant loyalty mode's fields, which is exactly
+     * what forced `SalonWireSchema`'s `.nullish()` above — and
+     * `salonParse.test.tsx` now drives THIS HOOK against real bodies in both
+     * modes rather than composing one from the schema.
+     *
+     * WHAT A REFUSAL COSTS, STATED RATHER THAN LEFT TO BE DISCOVERED. Every
+     * section of the dashboard reads this query, so an unparsable
+     * `GET /salons/{id}` is a failed read on all of them simultaneously: the
+     * shell's own header, Settings, the Loyalty editor, the branch scope
+     * selector. It does NOT reach an error boundary — TanStack turns a thrown
+     * `queryFn` into `isError`, which each section already renders — but the
+     * blast radius is the whole dashboard, and that is the price of finding out
+     * loudly rather than crashing on the first dereference. The alternative the
+     * cast bought was not safety; it was the same failure arriving later, in a
+     * component, as a TypeError.
+     */
+    queryFn: async ({ signal }) =>
+      parseSalon(await authedRequest<unknown>('merchant', `/salons/${salonId}`, { signal })),
     enabled,
     /*
      * No `retry` here, and the measurement that used to justify one is now the
