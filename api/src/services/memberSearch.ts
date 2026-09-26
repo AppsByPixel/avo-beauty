@@ -220,8 +220,14 @@ function last4(phone: string): string {
  * Escape the LIKE metacharacters so a query of `%` is a search for a percent
  * sign rather than a request for the entire customer book. The minimum-length
  * rule above would not have caught `%_` on its own.
+ *
+ * EXPORTED, for `services/customerDirectory.ts` — the merchant's Accounts §
+ * Customers list. That is a different surface with its own permission, its own
+ * ceiling and no minimum length at all, but the same LIKE. A second copy of this
+ * one-line escape is a second place for it to be wrong, and the failure it prevents
+ * is silent: an unescaped `%` does not throw, it returns the book.
  */
-function likeLiteral(q: string): string {
+export function likeLiteral(q: string): string {
   return q.replace(/([\\%_])/g, '\\$1');
 }
 
