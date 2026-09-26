@@ -991,7 +991,62 @@ const PINNED_COVERAGE: string[] = [
   'POST /members/me/policy-acceptance [requireMember]',
   'POST /members/me/vouchers/redeem [requireMember]',
   'POST /orders [requireMember]',
+  /**
+   * =======================================================================
+   * LANE A'S FIVE MANUAL-APPOINTMENT DOORS — item 5 and 6, dev `6a6bebc`. The
+   * census named all five on the first run after the merge.
+   * =======================================================================
+   * FOUR `appointments` AND ONE `void`, AND THE ASYMMETRY IS THE WHOLE POINT OF
+   * THESE FIVE LINES. Read as a block they look like a copy-paste slip — five
+   * sibling routes on one resource, four gated one way and the fifth another —
+   * and the tempting "tidy-up" is to put `cancel` on `appointments` with its
+   * neighbours. IT IS DELIBERATE, it is argued in `routes/bookings.ts` above the
+   * handler and in `DECISIONS.md § "Manual appointments"`, and the reason is
+   * money: booking, moving and completing an appointment is the front desk's
+   * job, and CANCELLING RETURNS A DEPOSIT. `cancelByMerchant` calls
+   * `returnDeposit` on an `app` booking — it credits a wallet, writes a
+   * `deposit_return` and posts the ledger pair — which is the same authority
+   * `POST …/no-show` needs one line below, gated the same way for the same
+   * reason.
+   *
+   * VERIFIED FROM THIS CENSUS'S OWN OUTPUT RATHER THAN FROM THE BRIEF, which is
+   * the rule the seven address-book lines state and it earned its keep here: the
+   * brief that dispatched this slice named the split correctly, and a hand-copied
+   * ledger line is exactly what this pin exists to stop anyone trusting. The
+   * census read `→ void` off `requireDashboardPerm(req, 'void')` at
+   * `routes/bookings.ts:709` and `→ appointments` off the other four. If a future
+   * run ever shows all five under one gate, THAT IS A DEFECT IN `api/` AND NOT IN
+   * THIS LEDGER — do not repin it, report it.
+   *
+   * THE STRONGER HALF IS BEHAVIOURAL AND IS ALREADY GREEN ABOVE: the generated
+   * probes revoke each permission, require a 403 carrying that permission's own
+   * copy, then grant it alone and require the refusal to stop. So `cancel` is
+   * driven with `void` off AND with `appointments` on, which is the only way to
+   * tell a real `void` gate from a conjunctive pair.
+   *
+   * `POST /salons/:id/bookings` ALSO TAKES AN `Idempotency-Key`, AND THAT IS NOT
+   * A CATEGORY THIS LEDGER HAS. Checked rather than invented: the census's format
+   * is `route → permission` and nothing else, and the #4 ledger — every
+   * money-moving POST requires a key — lives in `money.test.ts` and enumerates
+   * top-ups, charges and voids. This route does NOT belong there, and the handler
+   * says so in as many words: "the key here buys a correct ANSWER rather than a
+   * correct effect… it is the one place in this API where a key is not
+   * load-bearing for money, and a future reader should not conclude money is
+   * moving here." A merchant appointment is always zero-deposit
+   * (`booking_merchant_is_zero_deposit`), so adding it to the #4 ledger would
+   * assert the exact conclusion that comment warns against.
+   *
+   * What IS worth having is the ORDER — gate before key — and it is pinned in
+   * `tenancy.test.ts`: the create's row sends its key on the control half only,
+   * so a guard that ever moved below `readIdempotencyKey` would answer 400
+   * `idempotency_key_required` where that table requires 403.
+   */
+  'POST /salons/:id/bookings → appointments',
+  'POST /salons/:id/bookings/:bookingId/cancel → void',
+  'POST /salons/:id/bookings/:bookingId/complete → appointments',
   'POST /salons/:id/bookings/:bookingId/no-show → void',
+  'POST /salons/:id/bookings/:bookingId/reassign → appointments',
+  'POST /salons/:id/bookings/:bookingId/reschedule → appointments',
   'POST /salons/:id/branches → loyalty',
   'POST /salons/:id/devices → dashboard',
   'POST /salons/:id/products → shop',

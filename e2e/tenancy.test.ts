@@ -322,7 +322,8 @@ BEGIN;
 -- Salon B has no artist of its own, so one is made. Salon A reuses AR-001 rather than
 -- gaining a fifth: its roster is read by three other files.
 INSERT INTO artist (id, salon_id, name, slot_minutes, active)
-VALUES ('${PROBE_ARTIST_B}', '${SALON_B}', 'Tenancy probe artist', 30, true)
+VALUES ('${PROBE_ARTIST_B}', '${SALON_B}', 'Tenancy probe artist', 30, true),
+       ('${PROBE_ARTIST_B_SECOND}', '${SALON_B}', 'Tenancy probe artist two', 30, true)
 ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, active = true;
 
 -- ONE CUSTOMER PER SALON, AND NOBODY ELSE'S -- a live hold belongs to a member, and
@@ -440,6 +441,58 @@ VALUES
    30, ${PROBE_NOSHOW_DEPOSIT_FILS}, 'deposit_held', '${PROBE_NOSHOW_HOLD_B}',
    now() + interval '1 day');
 
+-- LANE A'S FIVE MANUAL-APPOINTMENT ROUTES: four disposable subjects at salon B,
+-- one per verb. See the block above PROBE_BK_B_RESCHEDULE for why each verb needs
+-- its own row, and why all four are merchant-sourced zero-deposit guest rows.
+--
+-- ON CONFLICT DO UPDATE PUTS THE WHOLE ROW BACK, not just the status, and every
+-- column in the SET list is there because a control call moves it:
+--   cancel     -> status, cancelled_at
+--   complete   -> status, completed_at
+--   reschedule -> starts_at, ends_at, rescheduled_count, rescheduled_at
+--   reassign   -> artist_id, branch_id, branch_assumed
+-- booking_cancelled_at_matches_status and its two siblings tie each timestamp to
+-- its status, and booking_rescheduled_at_matches_count ties that pair, so these
+-- have to be reset TOGETHER or the upsert writes a row Postgres refuses. This is
+-- the products-row lesson at four times the surface: reset only the obvious column
+-- and the file is green exactly once per database.
+INSERT INTO booking (id, salon_id, branch_id, member_id, guest_name, artist_id, service_id,
+                     starts_at, ends_at, duration_min, deposit_fils, status, source,
+                     hold_transaction_id, no_show_return_due_at)
+VALUES
+  ('${PROBE_BK_B_RESCHEDULE}', '${SALON_B}', '${B_BRANCH}', NULL, '${PROBE_GUEST_NAME}',
+   '${PROBE_ARTIST_B}', '${B_SERVICE}',
+   now() + interval '500 days', now() + interval '500 days' + interval '30 minutes',
+   30, 0, 'deposit_held', 'merchant', NULL, now() + interval '501 days'),
+  ('${PROBE_BK_B_REASSIGN}', '${SALON_B}', '${B_BRANCH}', NULL, '${PROBE_GUEST_NAME}',
+   '${PROBE_ARTIST_B}', '${B_SERVICE}',
+   now() + interval '501 days', now() + interval '501 days' + interval '30 minutes',
+   30, 0, 'deposit_held', 'merchant', NULL, now() + interval '502 days'),
+  ('${PROBE_BK_B_CANCEL}', '${SALON_B}', '${B_BRANCH}', NULL, '${PROBE_GUEST_NAME}',
+   '${PROBE_ARTIST_B}', '${B_SERVICE}',
+   now() + interval '502 days', now() + interval '502 days' + interval '30 minutes',
+   30, 0, 'deposit_held', 'merchant', NULL, now() + interval '503 days'),
+  ('${PROBE_BK_B_COMPLETE}', '${SALON_B}', '${B_BRANCH}', NULL, '${PROBE_GUEST_NAME}',
+   '${PROBE_ARTIST_B}', '${B_SERVICE}',
+   now() + interval '503 days', now() + interval '503 days' + interval '30 minutes',
+   30, 0, 'deposit_held', 'merchant', NULL, now() + interval '504 days'),
+  -- SALON A'S ZERO-DEPOSIT ROW. The one subject a cross-tenant complete could
+  -- actually act on -- see the block above PROBE_BK_A_COMPLETE. On AR-002 at 400
+  -- days, which is PROBE_BOOKING_A's distance but a different artist, so the two
+  -- cannot collide on booking_artist_slot_no_overlap.
+  ('${PROBE_BK_A_COMPLETE}', '${SALON_A}', '${A_BRANCH}', NULL, '${PROBE_GUEST_NAME}',
+   '${PROBE_ARTIST_A_SECOND}', '${A_SERVICE}',
+   now() + interval '400 days', now() + interval '400 days' + interval '30 minutes',
+   30, 0, 'deposit_held', 'merchant', NULL, now() + interval '401 days')
+ON CONFLICT (id) DO UPDATE SET
+  salon_id = EXCLUDED.salon_id, branch_id = EXCLUDED.branch_id,
+  artist_id = EXCLUDED.artist_id, branch_assumed = false,
+  starts_at = EXCLUDED.starts_at, ends_at = EXCLUDED.ends_at,
+  no_show_return_due_at = EXCLUDED.no_show_return_due_at,
+  status = 'deposit_held', cancelled_at = NULL, completed_at = NULL, returned_at = NULL,
+  rescheduled_count = 0, rescheduled_at = NULL,
+  settled_transaction_id = NULL;
+
 -- THE TWO BELL ROWS. See the block above PROBE_NOTIFICATION_A for why salon A's
 -- must still be unread when the second axis runs, and why salon B's is reset.
 INSERT INTO merchant_notification
@@ -483,6 +536,40 @@ afterAll(async () => {
    * made.
    */
   retireBranches(SALON_B, branchIdsNamed(SALON_B, PROBE_BRANCH_PREFIX));
+
+  /**
+   * THE APPOINTMENT THE CREATE CONTROL MADE, REMOVED.
+   *
+   * `POST /salons/{id}/bookings`'s control half performs a real write, so from the
+   * moment that route started working this file began adding an appointment to
+   * salon B on every run. Unlike the probe BRANCH two lines up, this row can be
+   * DELETED rather than merely retired: it is a guest booking with no member, no
+   * deposit, no hold and no ledger entry, so nothing references it and no money
+   * history is rewritten. The branch could not be deleted precisely because
+   * charges had been attributed to it.
+   *
+   * AND IT HAS TO GO, not merely ought to. `booking_artist_slot_no_overlap` spans
+   * `deposit_held` rows, `inDays()` resolves to very nearly the same instant on
+   * every run, and `createMerchantBooking` mints a fresh id each time — so the
+   * SECOND run against one database would try to put a different booking in the
+   * same artist's slot and take 409 `slot_taken`. The control would report a
+   * tenancy hole that is really last run's litter, which is the products row's
+   * defect exactly.
+   *
+   * Matched on this file's own guest name AND salon AND artist, so it can only
+   * ever find rows this file made. The four disposable fixtures are matched by id
+   * in `beforeAll` and are deliberately NOT swept here — they are reset, not
+   * re-created, so a run that dies mid-way leaves them recoverable.
+   */
+  psql(`
+    DELETE FROM booking
+     WHERE salon_id = '${SALON_B}'
+       AND artist_id = '${PROBE_ARTIST_B_SECOND}'
+       AND guest_name = '${PROBE_GUEST_NAME}'
+       AND id NOT IN ('${PROBE_BK_B_RESCHEDULE}', '${PROBE_BK_B_REASSIGN}',
+                      '${PROBE_BK_B_CANCEL}', '${PROBE_BK_B_COMPLETE}');
+  `);
+
   await stopTenancyApi();
 });
 
@@ -965,6 +1052,142 @@ const PROBE_NOSHOW_DEPOSIT_FILS = 5_000;
  */
 const PROBE_ARTIST_A = 'AR-001';
 const PROBE_ARTIST_B = 'AR-TEN-B-NOSHOW';
+
+/**
+ * ===========================================================================
+ * LANE A'S FIVE MANUAL-APPOINTMENT ROUTES — `api/src/routes/bookings.ts`, item
+ * 5 and 6, dev `6a6bebc`. Their subjects at salon B.
+ * ===========================================================================
+ * FOUR DISPOSABLE BOOKINGS, ONE PER VERB, AND THAT IS `productFor`'S SPLIT FOR A
+ * HARDER REASON. Three of the four control halves are TERMINAL — cancel and
+ * complete both leave a row that `lockLiveBooking` will refuse for ever after
+ * (`status <> 'deposit_held'` is a 409 naming the state it hit), and reschedule
+ * moves the one thing the next control would have addressed. Sharing one row
+ * would make these four specs pass or fail BY TABLE ORDER, which is the
+ * shared-fixture trap this file exists to avoid and which the products rows
+ * already paid for once.
+ *
+ * ALL FOUR ARE `merchant`-SOURCED, ZERO-DEPOSIT, GUEST APPOINTMENTS, and every
+ * word of that is load-bearing:
+ *
+ *   ZERO-DEPOSIT because the cancel control REALLY CANCELS. On a deposit-bearing
+ *   row `cancelByMerchant` calls `returnDeposit`, which credits a wallet, writes
+ *   a `deposit_return`, posts the ledger pair and queues a receipt — money moving
+ *   once per run, for ever, to prove a 403. `booking_merchant_is_zero_deposit`
+ *   makes the moneyless path the only one a merchant row can take, and the
+ *   moneyless branch of `cancelByMerchant` is a status flip and an audit row.
+ *
+ *   GUEST because a guest names no member, so nothing here can hand a free
+ *   deposit to whichever spec charges that customer next — the hazard the block
+ *   above `PROBE_NOSHOW_MEMBER_A` had to arrange a whole customer around. A
+ *   `member_wallet` this file never touches cannot drift, and `db:verify`
+ *   invariant 5 never has to hear about these four rows at all.
+ *
+ *   `merchant` because `booking_guest_requires_merchant_source` requires it, and
+ *   because complete REFUSES anything else: `completeBooking` answers
+ *   `deposit_completed_at_the_counter` on a row with a hold, by design — an app
+ *   booking is completed at the till by the charge that consumes its deposit.
+ *
+ * THE COMPLETE CONTROL IS THEREFORE THE ONE THAT WOULD SILENTLY STOP ASKING ITS
+ * QUESTION if these rows ever gained a deposit: it would take a 409 rather than a
+ * 200, and the ledger would report a tenancy hole that is really a fixture drift.
+ *
+ * FOUR NON-OVERLAPPING WINDOWS ON ONE ARTIST. `booking_artist_slot_no_overlap` is
+ * an EXCLUSION constraint over `(artist_id, tstzrange(starts_at, ends_at))` for
+ * live and completed rows, so a collision is not a wrong answer — it is an INSERT
+ * that refuses and a `beforeAll` that throws. They sit 500+ days out, past the 400
+ * the no-show probe parks at, which is itself an order of magnitude past anything
+ * else in the suite.
+ */
+const PROBE_BK_B_RESCHEDULE = 'BK-TEN-B-RESCHED';
+const PROBE_BK_B_REASSIGN = 'BK-TEN-B-REASSIGN';
+const PROBE_BK_B_CANCEL = 'BK-TEN-B-CANCEL';
+const PROBE_BK_B_COMPLETE = 'BK-TEN-B-COMPLETE';
+/**
+ * A SECOND ARTIST AT SALON B, FOR THE REASSIGN CONTROL AND ONLY FOR IT.
+ *
+ * `reassignArtist` refuses `same_artist` by name before it does anything else, so
+ * the control cannot name the artist the fixture is already with — and a spec
+ * whose control takes a 400 is a spec that never reaches the boundary it exists to
+ * test, which is the rule this table's header states for every body in it.
+ *
+ * It also receives the booking the CREATE control makes, on a window of its own.
+ * Both are deliberate: `PROBE_ARTIST_B`'s diary is four occupied slots, and the
+ * two routes that add to a diary rather than move within one get the empty one.
+ */
+const PROBE_ARTIST_B_SECOND = 'AR-TEN-B-SECOND';
+/**
+ * A SECOND SALON A ARTIST, FOR THE REASSIGN PROBE, AND IT REPLACED SALON B'S.
+ *
+ * MEASURED, NOT REASONED, and the first guess was wrong in the way that matters.
+ * This body named `PROBE_ARTIST_B_SECOND` — salon B's own artist — on the
+ * reasoning that "if the guard ever fell, that is the attempt that would hand a
+ * stranger's appointment to a stranger's artist". It would not. With
+ * `requireSameSalon` removed from all five handlers, reassign answered
+ * `404 unknown_artist`: `artistForSalon` filters the artist by the salon it was
+ * handed, so a foreign artist id is refused by the LOOKUP before the booking is
+ * ever written. The spec went red on the status, correctly, but it was reporting
+ * a missing artist and not a moved appointment — a probe that never reaches the
+ * thing it claims to be about.
+ *
+ * `AR-002` is a seeded, active salon A artist and is NOT the one
+ * `PROBE_BOOKING_A` is with (`AR-001`), which is the second half of the same
+ * requirement: `reassignArtist` refuses `same_artist` by name before it looks
+ * anything up, so naming the current artist is the other way to be turned back
+ * before reaching the row. With `AR-002` a fallen guard really does move salon A's
+ * appointment — and its branch with it — which is what the describe below then
+ * proves did not happen.
+ *
+ * Nothing is written to `AR-002` by this file in the healthy case: the reassign is
+ * refused at the boundary, so her diary is never touched.
+ */
+const PROBE_ARTIST_A_SECOND = 'AR-002';
+/**
+ * SALON A'S ZERO-DEPOSIT APPOINTMENT, AND IT EXISTS FOR EXACTLY ONE SPEC.
+ *
+ * MEASURED THE SAME WAY, AND THE SAME LESSON. The complete probe pointed at
+ * `PROBE_BOOKING_A`, which carries a 5,000-fil hold — so under the mutation that
+ * removed every `requireSameSalon`, complete answered
+ * `409 deposit_completed_at_the_counter` rather than completing anything.
+ * `completeBooking` refuses a deposit-bearing row BY DESIGN, because a completed
+ * booking with a hold must name the charge that consumed it. So that spec's claim
+ * — "the appointment is not marked done" — was being satisfied by the deposit and
+ * not by the tenancy guard, and would have gone on passing with the boundary wide
+ * open.
+ *
+ * A merchant-sourced zero-deposit guest row is the only kind `completeBooking`
+ * will act on, so it is the only subject that can make the cross-tenant complete a
+ * REAL risk and the refusal a real assertion. Live, 400 days out on salon A's
+ * second artist, and never completed by anything in the healthy case.
+ */
+const PROBE_BK_A_COMPLETE = 'BK-TEN-A-COMPLETE';
+/**
+ * The walk-in's name on all four, and the prefix `afterAll` sweeps the CREATE
+ * control's row by.
+ *
+ * The create mints its own id — `createMerchantBooking` does, this file cannot
+ * predict it — so the row it leaves behind is findable only by something this
+ * file chose. `PROBE_BRANCH_NAME` is the precedent and the reason is the same:
+ * the control performs a real write on every run, and an uncleaned one is what
+ * took `dev` to fifteen failures.
+ */
+const PROBE_GUEST_NAME = 'Tenancy probe walk-in';
+/** The slot the reschedule control moves its booking TO. Nobody else's window. */
+/**
+ * An ISO instant N days out, for the two bodies that name a time.
+ *
+ * COMPUTED ONCE AT MODULE LOAD, which is what keeps the attack half and the
+ * control half of the reschedule row naming the SAME instant — a body that drifted
+ * between the two calls would be one more thing that could explain a refusal.
+ * `createMerchantBooking` takes the duration from the artist's `slotMinutes` and
+ * does not validate the instant against the availability grid or against `now()`,
+ * so a date this far out is legal as well as collision-free.
+ */
+const inDays = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString();
+
+const PROBE_RESCHEDULE_TARGET_DAYS = 510;
+/** The slot the create control books. On the second artist, past everything else. */
+const PROBE_CREATE_TARGET_DAYS = 520;
 
 /**
  * ===========================================================================
@@ -1512,6 +1735,145 @@ const SALON_ROUTES: SalonRoute[] = [
     template: '/salons/{id}/bookings/{bookingId}/no-show',
     controlIdempotency: true,
   },
+
+  /**
+   * ===========================================================================
+   * LANE A'S FIVE MANUAL-APPOINTMENT ROUTES — item 5 and 6, dev `6a6bebc`. The
+   * gap ledger fired on all five by name in the first `e2e/` run after the merge.
+   * ===========================================================================
+   * THESE ARE THE FIRST ROWS IN THIS TABLE WHOSE TENANCY GUARD IS THE ONLY TENANT
+   * TERM THERE IS, and that is the sentence a reader most needs. Every group above
+   * says some version of "the handler also scopes its SQL on `p.salonId`, so even
+   * a guard that somehow passed could not address another salon's rows" — the
+   * doubling `routes/customers.ts`, `routes/audit.ts`, the fulfilment board and
+   * the merchant bell all practise. THESE FIVE DO NOT DOUBLE UP. Every one of them
+   * passes `salonId: req.params.id` — the PATH — into the service, and
+   * `lockLiveBooking`, `cancelByMerchant`'s probe and `createMerchantBooking` all
+   * filter on exactly that. `requireSameSalon` is the whole of the boundary.
+   *
+   * So the usual reassurance does not apply here and the 403 is load-bearing in a
+   * way it has not been since the loyalty write left this table. Written down
+   * because the difference is invisible at the call site: the two lines at the top
+   * of each handler look identical to the bell's, and only the argument passed
+   * three lines lower says which kind of route this is.
+   *
+   * AND THE SWEEP AT THE FOOT OF THIS FILE CANNOT STAND IN FOR THE CONTROL HALF,
+   * which is the `POST …/no-show` row's argument one entry up and is stronger for
+   * five routes than it was for one: the sweep only ever addresses salon A, so a
+   * 403 from a route that refuses EVERYBODY reads exactly like tenancy
+   * enforcement. Four of these five did not exist a day ago.
+   *
+   * WHAT THE TABLE STILL CANNOT ASSERT is what did NOT happen to salon A's
+   * appointment while it was being refused — a status, an artist, a balance. A 403
+   * with two keys in it is compatible with a write that already landed. That is
+   * driven in its own describe below, and for `cancel` it is the difference
+   * between an information leak and salon B refunding salon A's customer.
+   */
+  {
+    method: 'POST',
+    template: '/salons/{id}/bookings',
+    /**
+     * THE ATTACK BODY NAMES SALON A'S OWN ARTIST AND SERVICE — the body a real
+     * cross-tenant attempt would carry, and the `POST …/devices` row's rule: a
+     * body that could be rejected on its own merits would mask whether the gate
+     * ran. Neither is ever resolved; `artistForSalon` is many lines below
+     * `requireSameSalon`.
+     *
+     * A GUEST AND NOT A `memberId`, on both halves. The handler refuses
+     * `identity_required` unless EXACTLY one of the two is present, so the choice
+     * is forced — and a guest is the half that names nobody, so the control's real
+     * booking cannot hand a deposit or a visit to a member another file reads.
+     *
+     * 201, because `createMerchantBooking` answers `created`. Guessed as 200 first
+     * and corrected by the control, which is the third time this table has paid
+     * for that guess — see the `POST …/campaigns` row.
+     */
+    body: {
+      artistId: PROBE_ARTIST_A,
+      serviceId: A_SERVICE,
+      startsAt: inDays(PROBE_CREATE_TARGET_DAYS),
+      guestName: PROBE_GUEST_NAME,
+    },
+    controlBody: {
+      artistId: PROBE_ARTIST_B_SECOND,
+      serviceId: B_SERVICE,
+      startsAt: inDays(PROBE_CREATE_TARGET_DAYS),
+      guestName: PROBE_GUEST_NAME,
+    },
+    /**
+     * THE KEY ON THE CONTROL ONLY, and the asymmetry is an assertion exactly as it
+     * is on the no-show row. `readIdempotencyKey` answers 400
+     * `idempotency_key_required` to a caller who omits it — so if the tenancy guard
+     * ever moved BELOW it, the attack half would answer 400 instead of 403 and the
+     * first spec here would name it. The handler argues for that ordering in those
+     * words: "The gate first, before the key is even read — an unauthorised caller
+     * should not learn this endpoint's vocabulary, not even that it wants a key."
+     */
+    controlIdempotency: true,
+    controlStatus: 201,
+  },
+  {
+    method: 'POST',
+    template: '/salons/{id}/bookings/{bookingId}/reschedule',
+    /**
+     * A DIFFERENT INSTANT FROM THE ONE THE FIXTURE IS AT, because
+     * `rescheduleByMerchant` refuses `same_slot` by name before it does anything
+     * else. `PROBE_RESCHEDULE_TARGET_DAYS` is a window nothing else in this file
+     * occupies — `booking_artist_slot_no_overlap` would answer 409 `slot_taken`
+     * against another probe's, and a control that 409s reads as a tenancy hole
+     * that is really a diary collision.
+     *
+     * Both halves send the same body: the attack half never reaches
+     * `parseInstant`, and a body that differed would be one more thing that could
+     * explain a refusal.
+     */
+    body: { startsAt: inDays(PROBE_RESCHEDULE_TARGET_DAYS) },
+  },
+  {
+    method: 'POST',
+    template: '/salons/{id}/bookings/{bookingId}/reassign',
+    /**
+     * EACH HALF NAMES AN ARTIST OF THE SALON IT IS ADDRESSING, and both have to,
+     * for the same reason from opposite directions: `artistForSalon` filters the
+     * artist by the salon it was handed, so a cross-salon artist id is refused as
+     * `unknown_artist` — a 404 in place of a 403, refused for a reason that is not
+     * tenancy. Measured under mutation; see `PROBE_ARTIST_A_SECOND`.
+     *
+     * AND NEITHER MAY NAME THE ARTIST ITS BOOKING IS ALREADY WITH, because
+     * `reassignArtist` answers `same_artist` before it looks anything up. So the
+     * attack half names salon A's SECOND artist and the control names salon B's.
+     */
+    body: { artistId: PROBE_ARTIST_A_SECOND },
+    controlBody: { artistId: PROBE_ARTIST_B_SECOND },
+  },
+  {
+    /**
+     * THE ONE GATED `perms.void` RATHER THAN `perms.appointments`, and the census
+     * is where that is recorded — see `permission-census.test.ts`. It matters here
+     * because it is the only one of the five that can move money: on an `app`
+     * booking `cancelByMerchant` calls `returnDeposit`. Salon B's subject is a
+     * merchant zero-deposit row so the control takes the moneyless branch; salon
+     * A's carries a real 5,000-fil hold so the REFUSAL is about money, and the
+     * describe below reads the balance back to prove it.
+     *
+     * NO BODY. The appointment is the whole request.
+     */
+    method: 'POST',
+    template: '/salons/{id}/bookings/{bookingId}/cancel',
+  },
+  {
+    /**
+     * ZERO-DEPOSIT ONLY, BY DESIGN — `completeBooking` answers
+     * `deposit_completed_at_the_counter` on a row with a hold, because a completed
+     * booking that had a deposit must name the charge that CONSUMED it and
+     * `POST /charges` is the only writer of that transaction. Salon B's subject is
+     * a merchant row precisely so this control can answer 200 at all; if these
+     * fixtures ever gained a deposit this is the spec that would go red first, and
+     * it would be reporting a fixture drift rather than a tenancy hole.
+     */
+    method: 'POST',
+    template: '/salons/{id}/bookings/{bookingId}/complete',
+  },
   /**
    * ===========================================================================
    * THE MERCHANT'S CUSTOMER BOOK — `api/src/routes/customers.ts`, lane A. Three
@@ -1715,8 +2077,46 @@ const deviceFor = (salonId: string): string =>
  * two rows differ in more than their salon — see the block above
  * `PROBE_NOSHOW_MEMBER_A` for why salon A's deliberately has not started.
  */
-const bookingFor = (salonId: string): string =>
-  salonId === SALON_B ? PROBE_BOOKING_B : PROBE_BOOKING_A;
+function bookingFor(route: SalonRoute, salonId: string): string {
+  /**
+   * SALON A IS ONE ROW FOR ALL FIVE, AND THAT IS NOT LAZINESS.
+   *
+   * The attack half never resolves `{bookingId}` — `requireSameSalon` is the
+   * second statement in every one of these handlers and the lookup is inside the
+   * service below it — so salon A's id only has to be one the handler WOULD
+   * recognise. `PROBE_BOOKING_A` already is: a live `deposit_held` app booking
+   * with a real hold behind it, 400 days out, that nothing in this suite ever
+   * marks.
+   *
+   * AND IT IS THE RIGHT ROW RATHER THAN MERELY A SUFFICIENT ONE, because the
+   * describe that reads it back afterwards wants the stake to be real. It carries
+   * a DEPOSIT, so "salon B could not cancel it" is a claim about 5,000 fils and a
+   * customer's balance and not only about a status column. A zero-deposit row
+   * would have satisfied the 403 and proved the cheaper half.
+   */
+  if (salonId !== SALON_B) {
+    /**
+     * COMPLETE GETS THE ZERO-DEPOSIT ROW EVEN AT SALON A, which is the one place
+     * the salon-A side of this table stops being decorative. See the block above
+     * `PROBE_BK_A_COMPLETE`: `completeBooking` refuses a deposit-bearing booking
+     * on its own merits, so pointing the complete probe at `PROBE_BOOKING_A`
+     * would give it a subject the handler would turn back even with the tenancy
+     * guard removed — and the table header's rule is that no body in it may be
+     * refusable for a reason other than tenancy.
+     */
+    return route.template.endsWith('/complete') ? PROBE_BK_A_COMPLETE : PROBE_BOOKING_A;
+  }
+  /**
+   * SALON B IS ONE ROW PER VERB. Three of the four control halves are terminal
+   * and the fourth moves its subject — see the block above
+   * `PROBE_BK_B_RESCHEDULE`. The no-show mark keeps the row it has always had.
+   */
+  if (route.template.endsWith('/reschedule')) return PROBE_BK_B_RESCHEDULE;
+  if (route.template.endsWith('/reassign')) return PROBE_BK_B_REASSIGN;
+  if (route.template.endsWith('/cancel')) return PROBE_BK_B_CANCEL;
+  if (route.template.endsWith('/complete')) return PROBE_BK_B_COMPLETE;
+  return PROBE_BOOKING_B;
+}
 
 /**
  * A CUSTOMER belonging to the salon being addressed — the customer book's two
@@ -1791,7 +2191,7 @@ const url = (r: SalonRoute, salonId: string) =>
      * a shorter `{bid}`-style name would leave this entry reading as missing from the
      * table it is sitting in.
      */
-    .replace('{bookingId}', bookingFor(salonId))
+    .replace('{bookingId}', bookingFor(r, salonId))
     /**
      * `{memberId}` is a customer of the salon being addressed. See `memberFor`, and
      * the table entry for why the brace name has to be the registered one.
@@ -2657,6 +3057,221 @@ describe('the merchant bell — another salon\'s notification named in your own 
         'the last time the panel was opened rather than the first',
     ).toBe(first);
   });
+});
+
+/**
+ * ===========================================================================
+ * THE FOUR TRANSITIONS — REFUSED, AND SALON A'S APPOINTMENT IS EXACTLY AS IT WAS.
+ * ===========================================================================
+ * `SALON_ROUTES` asserts the 403, its copy, and that the body carries nothing
+ * else. For a READ that is the whole property: a refusal that disclosed nothing
+ * IS the boundary, and the customer book's describe above can stop there.
+ *
+ * THESE FOUR ARE WRITES, AND A 403 IS COMPATIBLE WITH A WRITE THAT ALREADY
+ * LANDED. Nothing in the table's two assertions would notice a handler that
+ * cancelled the appointment and then threw, or one whose guard moved below the
+ * service call — the status line and the two-key body would be identical. That is
+ * not a hypothetical ordering: `requireSameSalon` is the SECOND statement in each
+ * handler today, and these five are the only rows in this table whose service
+ * filters on `req.params.id` rather than on `p.salonId`, so there is no second
+ * predicate underneath to catch it.
+ *
+ * ---------------------------------------------------------------------------
+ * AND ON `cancel` THE DIFFERENCE IS NOT AN INFORMATION LEAK.
+ * ---------------------------------------------------------------------------
+ * `PROBE_BOOKING_A` is an `app` booking with a live 5,000-fil hold, so a cancel
+ * that got through would call `returnDeposit`: it credits a member of ANOTHER
+ * SALON, writes a `deposit_return`, posts the ledger pair and releases her slot.
+ * Salon B would have refunded salon A's customer. Nothing in the response would
+ * say so — the caller gets a 403 either way — and `db:verify` invariant 5 would
+ * still reconcile, because the credit and its `member_wallet` entry are written in
+ * one transaction. The money would simply have moved, correctly bookkept, at the
+ * wrong salon's instruction.
+ *
+ * So the assertion is on the ROW AND THE BALANCE, read straight out of Postgres,
+ * which is the technique the bell's cross-tenant write established: a response
+ * body cannot fake a `SELECT`.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE SNAPSHOT, FOUR CALLS, ONE COMPARISON — and the shape is deliberate.
+ * ---------------------------------------------------------------------------
+ * Each verb gets its own spec, because a single spec driving four routes reports
+ * the FIRST failure and says nothing about the other three. But all four read the
+ * same row, and the row must be untouched at the end of all of them, so the
+ * snapshot is taken once in `beforeAll` and each spec compares against it. A spec
+ * that took its own "before" reading would be blind to damage a PREVIOUS spec did
+ * — it would snapshot the already-cancelled row and find it unchanged.
+ */
+describe("the four merchant transitions — refused across tenants, and salon A's appointment is untouched", () => {
+  const BK = (id: string) => `/salons/${SALON_A}/bookings/${id}`;
+
+  /**
+   * TWO SUBJECTS, NOT ONE, AND THE SPLIT IS THE RESULT OF A MUTATION RATHER THAN
+   * A PREFERENCE.
+   *
+   * Three of the four verbs address `PROBE_BOOKING_A` — salon A's deposit-bearing
+   * app booking — because that is where the stake is: a cross-tenant cancel there
+   * returns 5,000 fils to a customer of another salon.
+   *
+   * `complete` CANNOT USE IT. `completeBooking` refuses a deposit-bearing row by
+   * design (`deposit_completed_at_the_counter`), so with the guard removed the
+   * probe took a 409 and the spec's claim — "the appointment is not marked done" —
+   * was being kept by the deposit rather than by tenancy. It gets
+   * `PROBE_BK_A_COMPLETE`, the zero-deposit merchant row, which is the only kind
+   * of appointment this verb will act on and therefore the only subject on which
+   * its refusal is worth asserting.
+   */
+  /** The columns a successful transition would move, as one comparable string. */
+  const bookingState = (id: string): string =>
+    scalar(
+      `select status || '|' || artist_id || '|' || branch_id || '|' ||
+              extract(epoch from starts_at)::bigint || '|' ||
+              rescheduled_count || '|' ||
+              coalesce(cancelled_at::text,'-') || '|' ||
+              coalesce(completed_at::text,'-') || '|' ||
+              coalesce(settled_transaction_id,'-')
+         from booking where id='${id}'`,
+    );
+
+  /** Her balance, and the count of deposit returns standing against her. */
+  const balance = (): string =>
+    scalar(`select balance_fils::text from member where id='${PROBE_NOSHOW_MEMBER_A}'`);
+  const returns = (): string =>
+    scalar(
+      `select count(*)::text from "transaction" ` +
+        `where member_id='${PROBE_NOSHOW_MEMBER_A}' and kind='deposit_return'`,
+    );
+
+  let before = '';
+  let beforeComplete = '';
+  let beforeBalance = '';
+  let beforeReturns = '';
+
+  beforeAll(() => {
+    before = bookingState(PROBE_BOOKING_A);
+    beforeComplete = bookingState(PROBE_BK_A_COMPLETE);
+    beforeBalance = balance();
+    beforeReturns = returns();
+    /**
+     * THE SNAPSHOT HAS TO BE OF A LIVE APPOINTMENT, or every "unchanged" below is
+     * a claim about a row that was already terminal and could not have been moved
+     * by anything. `PROBE_BOOKING_A` is seeded `deposit_held` 400 days out and
+     * this file's own no-show row deliberately never marks it — but the no-show
+     * CONTROL marks salon B's, and a future edit that pointed it at salon A's
+     * would empty this entire describe of meaning while leaving it green.
+     */
+    precondition(
+      before.startsWith('deposit_held|'),
+      `${PROBE_BOOKING_A} is not deposit_held before these specs run (${before}), so ` +
+        '"unchanged" says nothing — a terminal booking is one no transition could have moved.',
+    );
+    precondition(
+      beforeComplete.startsWith('deposit_held|'),
+      `${PROBE_BK_A_COMPLETE} is not deposit_held before these specs run (${beforeComplete}).`,
+    );
+  });
+
+  /**
+   * THE REFUSAL IS PINNED TO ITS COPY, NOT TO ITS STATUS, and that is what makes
+   * these four 403s attributable rather than merely non-200.
+   * `That salon is not yours.` is `requireSameSalon`'s sentence and nothing else
+   * in the API says it — a missing permission answers with the permission's own
+   * copy, an unknown booking is a 404 `unknown_booking`, and a route that did not
+   * register is a 404 from fastify. So a dead path cannot satisfy this, which is
+   * the non-vacuity question a describe full of "nothing happened" assertions has
+   * to answer. That each verb really does answer 200 at salon B is the
+   * `SALON_ROUTES` control half's claim, five rows of it, in this same file;
+   * repeating it here would be a duplicate rather than a second guard.
+   */
+  const refused = async (id: string, path: string, body?: unknown) => {
+    const res = await treq<{ error: string; message: string }>('POST', `${BK(id)}${path}`, {
+      token: bDashboard,
+      ...(body === undefined ? {} : { body }),
+    });
+    expect(res.status, `POST ${path} answered ${res.status}: ${res.raw}`).toBe(403);
+    expect(res.body.error).toBe('forbidden');
+    expect(res.body.message).toBe('That salon is not yours.');
+    expect(Object.keys(res.body).sort()).toEqual(['error', 'message']);
+    expectNoSalonALeak(res.raw, `POST ${path} at salon A`);
+    return res;
+  };
+
+  it('reschedule is refused, and the appointment is still at the hour it was', async () => {
+    await refused(PROBE_BOOKING_A, '/reschedule', {
+      startsAt: inDays(PROBE_RESCHEDULE_TARGET_DAYS),
+    });
+    expect(
+      bookingState(PROBE_BOOKING_A),
+      "salon B's manager moved salon A's appointment. `rescheduleByMerchant` filters on the " +
+        'salonId it is HANDED, which is `req.params.id` — so `requireSameSalon` is the only ' +
+        'thing between a foreign session and this row.',
+    ).toBe(before);
+  });
+
+  it('reassign is refused, and the appointment is still with the artist it was', async () => {
+    await refused(PROBE_BOOKING_A, '/reassign', { artistId: PROBE_ARTIST_A_SECOND });
+    /**
+     * SALON A'S OWN SECOND ARTIST IN THE BODY, AND IT WAS SALON B'S UNTIL A
+     * MUTATION SAID OTHERWISE. Naming salon B's artist looked like the sharper
+     * probe — a stranger's appointment handed to a stranger's artist — and it is
+     * not a probe at all: `artistForSalon` refuses a foreign artist as
+     * `unknown_artist` before the booking is written, so with the guard removed
+     * this spec reported a 404 and salon A's row was never at risk from it.
+     * `AR-002` is a real salon A artist that this booking is not already with, so
+     * a fallen guard really does move it — and `reassignArtist` moves `branch_id`
+     * with the artist, so the appointment would also land in another reporting
+     * bucket. Both columns are in the snapshot.
+     */
+    expect(
+      bookingState(PROBE_BOOKING_A),
+      "salon B's manager reassigned salon A's appointment, and the branch moved with it",
+    ).toBe(before);
+  });
+
+  it('complete is refused, and the appointment is not marked done', async () => {
+    /**
+     * THE ZERO-DEPOSIT ROW, NOT `PROBE_BOOKING_A` — see the note on the two
+     * subjects above. On a deposit-bearing booking this verb refuses itself, so
+     * asserting its refusal there would have been asserting `completeBooking`'s
+     * own design and calling it tenancy.
+     */
+    await refused(PROBE_BK_A_COMPLETE, '/complete');
+    expect(
+      bookingState(PROBE_BK_A_COMPLETE),
+      "salon B's manager marked salon A's appointment done. This is the merchant zero-deposit " +
+        'row, the one kind `completeBooking` will act on, so nothing but the tenancy guard was ' +
+        'standing between a foreign session and a completed appointment on another salon\'s day.',
+    ).toBe(beforeComplete);
+  });
+
+  it('cancel is refused, and no deposit came back — the row, the balance and the ledger', async () => {
+    await refused(PROBE_BOOKING_A, '/cancel');
+
+    expect(
+      bookingState(PROBE_BOOKING_A),
+      "salon B's manager cancelled salon A's appointment and released her slot",
+    ).toBe(before);
+
+    /**
+     * THE MONEY HALF, AND IT IS A SEPARATE ASSERTION FROM THE STATUS.
+     * `returnDeposit` credits the wallet and stamps the booking in ONE
+     * transaction, so in practice they move together — but they are two different
+     * facts, and a partial failure that credited her and then refused to flip the
+     * status would leave the row looking untouched. The balance is the thing the
+     * customer would see.
+     */
+    expect(
+      balance(),
+      `salon A's customer was refunded ${Number(balance()) - Number(beforeBalance)} fils by a ` +
+        'session at another salon. This is the assertion that separates an information leak ' +
+        'from salon B moving salon A\'s money.',
+    ).toBe(beforeBalance);
+    expect(
+      returns(),
+      'a `deposit_return` was written against salon A\'s customer by a salon B session',
+    ).toBe(beforeReturns);
+  });
+
 });
 
 // ------------------------------------------------------ the wallet token --
