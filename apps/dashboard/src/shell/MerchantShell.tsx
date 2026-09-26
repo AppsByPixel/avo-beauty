@@ -8,6 +8,7 @@ import { SCOPES } from '../auth/scopes.js';
 import { BranchScopeProvider } from './BranchScope.js';
 import { BranchSelector } from './BranchSelector.js';
 import { Header } from './Header.js';
+import { NotificationBell } from './NotificationBell.js';
 import { Sidebar } from './Sidebar.js';
 import { UnsupportedWidth } from './UnsupportedWidth.js';
 import { navItemFor } from './navItems.js';
@@ -254,6 +255,17 @@ function SignedInShell() {
               subtitle={subtitle}
               salonName={salonName}
               branch={<BranchSelector />}
+              /*
+               * ONE BELL FOR THE WHOLE WORKSPACE, mounted here for the reason
+               * `BranchScopeProvider` is mounted here: the chrome outlives the
+               * route. A bell inside `<Outlet>` would remount on every
+               * navigation, restart its 60s poll, and reset a badge while the
+               * merchant walks from Overview to Team.
+               *
+               * It sits below the `!session` early return with everything else
+               * that reads the session, so a signed-out shell issues no request.
+               */
+              bell={<NotificationBell />}
               menuOpen={drawerOpen}
               onSignOut={onSignOut}
               {...(breakpoint === 'tablet'

@@ -22,6 +22,19 @@ export interface HeaderProps {
    * inventing a scope. See `BranchSelector.tsx` § the four states.
    */
   branch: ReactNode;
+  /**
+   * THE NOTIFICATION BELL, AS A NODE FOR `branch`'s REASON.
+   *
+   * The bell polls, reads the session's salon id and decides what a reader may
+   * be told - none of which this component should learn in order to draw a
+   * header. `MerchantShell` passes `<NotificationBell />`; the slot stays a
+   * `ReactNode` so the chrome keeps knowing nothing about permissions.
+   *
+   * OPTIONAL, and the omission is a real case rather than defensive typing: a
+   * test rendering this header does not need a query client, and the header
+   * itself must not require one.
+   */
+  bell?: ReactNode;
   /** Rendered only at the `tablet` breakpoint, where the sidebar is a drawer. */
   onOpenMenu?: () => void;
   menuOpen?: boolean;
@@ -41,6 +54,7 @@ export function Header({
   subtitle,
   salonName,
   branch,
+  bell,
   onOpenMenu,
   menuOpen = false,
   onSignOut,
@@ -75,6 +89,13 @@ export function Header({
 
       <div className="dash-header__right">
         <span className="dash-header__date">{todayLabel()}</span>
+        {/*
+          Between the date and the rule, which is where the design puts it
+          (AVO Merchant Dashboard.dc.html:88-95) - and it stays when the date
+          and the rule are hidden at the narrower breakpoints, because a bell
+          that disappears on a small window is a worklist nobody is reading.
+        */}
+        {bell}
         <span className="dash-header__rule" aria-hidden="true" />
         {/*
           Two nodes where there was one interpolated span. The salon is a fact
