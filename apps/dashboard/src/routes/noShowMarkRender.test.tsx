@@ -81,10 +81,36 @@ const perms = { void: true } as StaffPerms;
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('../api/salon.js', () => ({ useSalon: () => useSalon() }));
-vi.mock('../api/bookings.js', () => ({
-  useSalonBookings: () => useSalonBookings(),
-  useMarkNoShow: () => ({ mutate, reset, ...markState }),
-}));
+/**
+ * THE FOUR OTHER WRITE HOOKS ARE STUBBED IDLE.
+ *
+ * `vi.mock` REPLACES the module, so a hook `Appointments` now calls and this
+ * factory does not return is a hard "No export is defined" at render — not a
+ * silent undefined. That is the right failure and it is why they are listed
+ * rather than spread: a fifth write arriving on this board should break this
+ * file loudly and be classified here, not be absorbed.
+ *
+ * `isSlotTaken` IS THE REAL ONE, deliberately. It is a pure predicate over an
+ * `ApiError`, and stubbing it `() => false` would make the refusal branch in the
+ * cell unreachable from this file without anyone noticing.
+ */
+const idleWrite = () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null });
+vi.mock('../api/bookings.js', async () => {
+  const real = await vi.importActual<typeof import('../api/bookings.js')>('../api/bookings.js');
+  return {
+    isSlotTaken: real.isSlotTaken,
+    useSalonBookings: () => useSalonBookings(),
+    useMarkNoShow: () => ({ mutate, reset, ...markState }),
+    useRescheduleBooking: idleWrite,
+    useReassignArtist: idleWrite,
+    useCancelBooking: idleWrite,
+    useCompleteBooking: idleWrite,
+  };
+});
+/** The roster the reassign step would read. Never opened in this file. */
+vi.mock('../api/artists.js', () => ({ useBookableArtists: () => ({ data: undefined }) }));
+/** The form is never opened here; stubbing it keeps its three reads out of this realm. */
+vi.mock('./AppointmentForm.js', () => ({ AppointmentForm: () => null }));
 vi.mock('../auth/AuthProvider.js', () => ({ useSession: () => ({ perms }) }));
 
 const { Appointments, BookingRow, canMarkNoShow } = await import('./Appointments.js');
@@ -178,12 +204,39 @@ const SECOND: MerchantBooking = {
 
 const noop = () => {};
 
+/**
+ * THE FOUR OTHER CONTROLS, ALL OFF.
+ *
+ * `BookingRow` gained a `controls` prop when the board gained change-date,
+ * reassign, cancel and mark-done. Every guarantee in THIS file is about the
+ * no-show link and nothing else, so the four are held off here — which is also
+ * the state that proves they do not interfere with it: the link, the armed step
+ * and the refusal below are asserted with no other control drawn in the cell.
+ *
+ * `appointmentControls.test.tsx` is where the four are driven.
+ */
+const NO_CONTROLS: Parameters<typeof BookingRow>[0]['controls'] = {
+  can: { reschedule: false, reassign: false, cancel: false, complete: false },
+  open: null,
+  pending: false,
+  error: null,
+  artists: [],
+  timezone: 'Asia/Kuwait',
+  onOpen: noop,
+  onDismiss: noop,
+  onReschedule: noop,
+  onReassign: noop,
+  onCancel: noop,
+  onComplete: noop,
+};
+
 function renderRow(booking: MerchantBooking, over: Partial<Parameters<typeof BookingRow>[0]> = {}) {
   return render(
     <table>
       <tbody>
         <BookingRow
           booking={booking}
+          controls={NO_CONTROLS}
           canMark={canMarkNoShow(booking, perms, NOW)}
           armed={false}
           marking={false}

@@ -243,12 +243,40 @@ export const customerKeys = {
  * of the offline answer `SectionError` exists to give. `api/bookings.ts` records
  * the same trap being hit against a real 403.
  */
+/**
+ * ===========================================================================
+ * `enabled` — AND IT IS NOT A PERFORMANCE PARAMETER. A REFUSED READ OF THIS
+ * ENDPOINT WRITES A RISK ROW AGAINST THE PERSON WHO ASKED.
+ * ===========================================================================
+ * `api/src/routes/customers.ts § requireCustomerDirectory` gates the book on
+ * `perms.team`, and on a refusal it does not merely 403 — it writes an audit row
+ * with `kind: 'risk'` reading "Attempted to open the customer book without team
+ * authority", against a named staff account.
+ *
+ * `db/seed.ts § ST-002` is Hessa: frontdesk, `appointments: true`,
+ * `team: false`. The appointment form is hers by design — she is the front desk
+ * — and a form that fires this query on mount would stamp a risk row on her
+ * record every time she opened it, and another every 300ms while she typed. The
+ * salon's own security log would fill with a receptionist doing her job, which
+ * is `memberSearch.ts`'s exact complaint about a manufactured lookup: a client
+ * generating them is "poisoning the one signal the salon has".
+ *
+ * So the caller gates the request on the permission it holds, the form offers
+ * the walk-in branch instead, and nothing asks a question it is not allowed to
+ * ask. #7 is intact: the server still refuses, and this is a courtesy that
+ * happens also to protect the audit log.
+ *
+ * DEFAULTS TO TRUE, so `Customers.tsx` — a screen whose own courtesy gate is
+ * already `perms.team` — is unchanged.
+ */
 export function useCustomerBook(
   q: string,
+  enabled = true,
 ): UseInfiniteQueryResult<InfiniteData<Paginated<CustomerListItem>>> {
   const salonId = useSalonId();
   const query = q.trim();
   return useInfiniteQuery({
+    enabled,
     queryKey: customerKeys.book(salonId, query),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam, signal }) => {
