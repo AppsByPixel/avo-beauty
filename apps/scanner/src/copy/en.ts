@@ -501,6 +501,25 @@ export const copy = {
   bookingsStatusNoShow: 'No-show · returned',
   bookingsStatusCancelled: 'Cancelled',
   /**
+   * AND THE NO-SHOW AGAIN, FOR A BOOKING THAT NEVER HELD A DEPOSIT.
+   *
+   * NEW COPY — the design bundle draws no status pill at all here, and it
+   * predates merchant-created appointments besides. It is `bookingsStatusNoShow`
+   * with its second word removed, and nothing else.
+   *
+   * `BookingSchema` § status is explicit that the enum's four values are not
+   * all statements of fact: `no_show_returned` means "missed", and on a
+   * `merchant` booking — always zero-deposit — nothing was held and nothing came
+   * back. The contract names this label itself: "at 0 the labels are 'Booked'
+   * and 'No-show'".
+   *
+   * The artist is the reader who most needs it right. "No-show · returned" tells
+   * her a deposit moved, and if she is looking at a front-desk booking for a
+   * regular who did not arrive, the money it describes does not exist — which
+   * she has no other screen to check against (`permDashboard: false`).
+   */
+  bookingsStatusNoShowNoDeposit: 'No-show',
+  /**
    * THE FIFTH LABEL, AND THE ONLY ONE THAT IS NOT A STATUS.
    *
    * A void sets the booking to `cancelled` (api/src/routes/charges.ts), and
@@ -612,9 +631,39 @@ export const copy = {
   /** :693 — the group headings. Dates, so they are formatted rather than fixed. */
   bookingsToday: 'Today',
   bookingsTomorrow: 'Tomorrow',
-  /** :713-714 — where the booking came from. */
+  /**
+   * :713-714 — where the booking came from, and there are THREE of them now.
+   *
+   * `bookingsSrcMerchant` is NEW COPY: `BookingSchema` § source grew a third
+   * value when the dashboard gained manually-created appointments, and the
+   * bundle draws two pills because there were two sources when it was made.
+   *
+   * "FRONT DESK", NOT "MANUAL" OR "DASHBOARD". The pill answers one question for
+   * the artist reading her day — who put this here — and the three answers are a
+   * customer, her calendar, and a person at the salon. "Manual" describes how it
+   * was entered and "Dashboard" names a screen she cannot open; neither names
+   * anybody. The distinction is worth getting right because it changes what she
+   * does next: a front-desk booking is one she can ask a colleague about.
+   *
+   * Merchant surfaces are English-only (design/README.md, Known gap 1), so this
+   * is one string rather than two.
+   */
   bookingsSrcApp: 'AVO app',
   bookingsSrcGcal: 'Google Calendar',
+  bookingsSrcMerchant: 'Front desk',
+  /**
+   * The name line when there is no member behind the booking at all.
+   *
+   * NEW COPY. A `merchant` booking may name a GUEST — `memberId` null,
+   * `guestName` set — and a walk-in has no tier, so the pill that normally sits
+   * beside the name has nothing to say. This goes in its place.
+   *
+   * It is a fact about the RECORD, in the same register as
+   * `bookingsPhoneErased` above: not "not a member", which is a statement about
+   * the person standing in front of her, and not nothing, which would leave the
+   * artist reading a name with no account behind it and no sign of that.
+   */
+  bookingsGuest: 'Guest',
   /** The duration, off the booking's own `durationMin`. design:693-699. */
   bookingsDuration: (minutes: number) =>
     minutes < 60

@@ -650,10 +650,47 @@ export const en: Copy = {
   viewHome: 'View on home', // design:1244
   cancelPolicy:
     'Free to cancel up to 24h before — the deposit returns to your wallet automatically.', // design:1245
+  /*
+    ===========================================================================
+    FOUR OF THESE FIVE ARE THE DESIGN'S OWN STRING WITH ITS MONEY CLAUSE CUT
+    ===========================================================================
+    The bundle draws no zero-deposit booking - a front desk could not create an
+    appointment when it was made - so there is no written variant to lift. What
+    there is, in every case, is a design sentence whose FIRST half is true of
+    both kinds of booking and whose second half is a statement about a deposit.
+
+    So these are truncations, not rewrites: not one word is added, reordered or
+    softened. That is the smallest edit that can be honest, it keeps the
+    designer's voice exactly, and it makes the diff reviewable by a client who
+    only has to agree that the deleted clause is the false one.
+
+    The exception is `upBooked`, which is a new word and is flagged as such.
+
+    Every one of them still needs the client's eye - a truncation is still a
+    copy decision - and all five are in the lane report. The Arabic side is the
+    same operation on the same design strings; see ar.ts.
+
+    This one: design:1245 keeps its first clause. `cancelPolicy` promises the
+    deposit "returns to your wallet automatically", which on a `merchant`
+    booking is a promise about money that was never taken.
+  */
+  cancelPolicyNoDeposit: 'Free to cancel up to 24h before.',
 
   bookedToast: (deposit) => `Booked · ${deposit} deposit held`, // design:1547
   rescheduleToast: 'Pick a new time — your deposit carries over', // design:1773
   cancelledToast: (deposit) => `Appointment cancelled · ${deposit} deposit returned`, // design:1774
+  /*
+    design:1773 and design:1774, each cut at its money clause.
+
+    `cancelledToast` interpolates the SERVER's `refundedFils`, so on a booking
+    that never held a deposit it renders "Appointment cancelled · 0.000 KD
+    deposit returned" — a receipt for money she never paid, handed to her at the
+    exact moment she is looking for one. `rescheduleToast` promises the deposit
+    "carries over"; on a zero-deposit row nothing carries because nothing was
+    taken.
+  */
+  rescheduleToastNoDeposit: 'Pick a new time',
+  cancelledToastNoDeposit: 'Appointment cancelled',
 
   bookEmptyDayTitle: 'Nothing on this day',
   bookEmptyDayBody: 'This artist is not working then. Try another day.',
@@ -669,13 +706,40 @@ export const en: Copy = {
 
   upcomingLabel: 'Upcoming', // design:1178
   upDeposit: (deposit) => `${deposit} held`, // design:1179
+  /*
+    THE ONE GENUINELY NEW STRING IN THIS GROUP, and the only one with no design
+    sentence behind it — because it stands where a FIGURE stood, not where a
+    sentence did.
+
+    The word is not chosen here either: `BookingSchema` § status names it, "at 0
+    the labels are 'Booked' and 'No-show'". Rendering nothing was the
+    alternative and it is worse — a card with an empty slot where every other
+    card carries a pill reads as an amount that failed to load, which is the
+    same defect `UpcomingFailedCard` exists to stop the section committing.
+  */
+  upBooked: 'Booked',
   upWith: (artist) => `with ${artist}`, // design:1178
   reschedule: 'Reschedule', // design:1180
   cancel: 'Cancel', // design:1179
   reschedNote: 'Free until an hour before. After that the deposit stays with the salon.', // design:1180
+  /*
+    design:1180, first sentence, verbatim. Its second — "After that the deposit
+    stays with the salon" — is a statement about a deposit that does not exist.
+
+    Writing a replacement second sentence was tried and abandoned. Every version
+    said something true and unasked-for about money ("nothing is held from your
+    wallet"), and the note sits directly under a Cancel button on an appointment
+    she did not make: raising the deposit there, even to deny it, is the screen
+    starting a conversation the booking has no part in. The rule is the whole
+    point of the line, and the rule survives the cut intact.
+  */
+  reschedNoteNoDeposit: 'Free until an hour before.',
   changeClosedTitle: 'Too close to the appointment',
   changeClosedBody:
     'An appointment can be changed free until an hour before it starts. After that the deposit stays with the salon.',
+  /* The server's own refusal sentence, first half, verbatim. */
+  changeClosedBodyNoDeposit:
+    'An appointment can be changed free until an hour before it starts.',
   noUpcomingTitle: 'No appointment booked',
   noUpcomingBody: 'Book a service and your wallet holds the deposit.',
   noUpcomingAction: 'Book',

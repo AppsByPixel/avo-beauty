@@ -59,7 +59,50 @@ export const ArtistBookingSchema = BookingSchema.extend({
   changeableUntil: z.string().datetime(),
   rescheduledCount: z.number().int().nonnegative(),
   calendarSyncState: z.enum(['not_applicable', 'pending', 'synced', 'failed']),
-  memberName: z.string(),
+  /**
+   * =========================================================================
+   * `.default(null)` ON TWO FIELDS THE SERVER DOES NOT SEND YET, AND THE DAY
+   * THIS IS MISSING IS A DAY WITH NO APPOINTMENTS ON IT
+   * =========================================================================
+   * `BookingSchema` grew `guestName` and `guestPhone` in trunk 637ff38, both
+   * `.nullable()` and NEITHER `.optional()`. `serialiseBooking`
+   * (api/src/services/booking.ts:128) does not emit either one, so as the
+   * contract and the API stand right now EVERY booking the server serves fails
+   * `.parse()` on two `"Required"` errors — inside `fetchMyBookings`, which
+   * means the artist's WHOLE DAY fails to load rather than one card rendering
+   * oddly.
+   *
+   * REPORTED TO TRUNK, because the real fix is one word on the schema and it is
+   * not a lane's to make: a field the server has never sent is optional on
+   * arrival, not merely nullable. The same break is live on the wallet's
+   * `GET /bookings` and on the dashboard.
+   *
+   * The default is the house pattern in this very file and the argument is
+   * `memberErased`'s, three fields down, unchanged: a required field against an
+   * API that does not send it throws in the fetch and takes down the surface,
+   * and `null` is the truthful reading of its absence — "no guest", which is
+   * what every booking that exists today is.
+   *
+   * It stays after Lane A serves the field, for the reason `chargeVoided`'s note
+   * gives: it is the tolerance that survives a rollback, not a stand-in for one.
+   */
+  guestName: z.string().min(1).nullable().default(null),
+  guestPhone: z.string().nullable().default(null),
+  /**
+   * NULLABLE BECAUSE A GUEST BOOKING HAS NO MEMBER ROW TO JOIN.
+   *
+   * `GET /artists/me/bookings` fills this from `member.name` through an INNER
+   * join on `booking.memberId`, so today a guest row cannot reach here at all —
+   * it is dropped from the artist's day entirely, which is its own defect and
+   * Lane A's. When that join is relaxed, the name on the row comes from
+   * `guestName` and this is null.
+   *
+   * Declared `z.string()`, the day the API starts serving guests is the day a
+   * guest appointment throws and the artist's whole day fails to load — the same
+   * schema-shaped outage `memberPhone` below records. `.nullable()` lands first
+   * for the same reason. `clientName` in BookingsScreen resolves the two.
+   */
+  memberName: z.string().nullable(),
   /**
    * NULL WHEN SHE HAS BEEN ERASED, and this parse is the urgent half of the fix.
    *
@@ -93,7 +136,18 @@ export const ArtistBookingSchema = BookingSchema.extend({
    * caught by the null.
    */
   memberErased: z.boolean().default(false),
-  memberTier: z.enum(['bronze', 'silver', 'gold', 'black']),
+  /**
+   * NULL ON A GUEST, for the same reason `memberName` is: a walk-in has no
+   * member row, so she has no tier. She is also not `bronze` — the lowest rung
+   * is something a member has EARNED by opening an account, and rendering it for
+   * somebody who has not would put a loyalty claim on her card that no row
+   * behind it supports.
+   *
+   * `tierStyles[booking.memberTier]` is an unguarded index, so a null here is an
+   * undefined style object and a crash on `.pillBg` rather than a blank pill.
+   * See `BookingsScreen` § the client block.
+   */
+  memberTier: z.enum(['bronze', 'silver', 'gold', 'black']).nullable(),
   serviceName: z.string(),
   /**
    * "YOU RANG THIS UP AND IT WAS REVERSED" - server-decided, and it was being

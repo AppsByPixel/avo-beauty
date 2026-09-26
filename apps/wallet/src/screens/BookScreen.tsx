@@ -82,6 +82,7 @@ import {
   artistName,
   formatWhen,
   hasGrid,
+  holdsDeposit,
   isFullyTaken,
   serviceName,
   splitRuns,
@@ -196,9 +197,18 @@ export function BookScreen({
           artistLabel={flow.selectedArtist ? artistName(flow.selectedArtist, lang) : '—'}
           rescheduled={flow.rescheduling}
           onDone={() => {
+            /*
+              A RESCHEDULE NOW REACHES THIS SCREEN FOR A BOOKING THAT HOLDS
+              NOTHING. `rescheduleToast` says "your deposit carries over", which
+              on a merchant-created appointment describes a transfer that did not
+              happen. `bookedToast` needs no variant: it fires only on a booking
+              this app created, which always holds the salon's deposit.
+            */
             onToast(
               flow.rescheduling
-                ? copy.rescheduleToast
+                ? holdsDeposit(flow.result!.booking)
+                  ? copy.rescheduleToast
+                  : copy.rescheduleToastNoDeposit
                 : copy.bookedToast(formatMoney(flow.result!.booking.depositFils as Fils, lang)),
             );
             onHome();
@@ -847,6 +857,8 @@ function Confirmed({
   onDone: () => void;
 }) {
   const { lang, copy } = useLanguage();
+  /* One derivation for the row and both policy lines. See domain/booking.ts. */
+  const held = holdsDeposit({ depositFils });
   return (
     <View style={styles.confirmed} testID="book-confirmed">
       <View style={styles.tickBadge}>
@@ -858,12 +870,33 @@ function Confirmed({
       </Text>
 
       <View style={styles.confirmedCard}>
-        <ReviewRow label={copy.whenRow} value={formatWhen(startsAt, salon.timezone, lang)} />
         <ReviewRow
-          label={copy.depositHeld}
-          value={formatMoney(depositFils as Fils, lang)}
-          last={rescheduled}
+          label={copy.whenRow}
+          value={formatWhen(startsAt, salon.timezone, lang)}
+          last={rescheduled && !held}
         />
+        {/*
+          THE DEPOSIT ROW IS DROPPED ENTIRELY WHEN THERE IS NO DEPOSIT, rather
+          than rendered as "Deposit held · 0.000 KD".
+
+          This screen is reached on a RESCHEDULE as well as on a new booking, and
+          a merchant-created appointment can be rescheduled from the Upcoming
+          card like any other. A row labelled "Deposit held" against a zero is
+          the same false statement as the pill on that card, with more authority:
+          it sits inside the confirmation, next to the time, formatted as money.
+
+          A row is the right thing to drop where the pill was not. The pill is
+          the ONLY state this card carries and its slot would read as a failure;
+          this is one row among several, and "Deposit held" is not a question a
+          customer is left asking when the appointment never had one.
+        */}
+        {held ? (
+          <ReviewRow
+            label={copy.depositHeld}
+            value={formatMoney(depositFils as Fils, lang)}
+            last={rescheduled}
+          />
+        ) : null}
         {/*
           design:610 — the WhatsApp confirmation line.
 
@@ -879,8 +912,18 @@ function Confirmed({
         ) : null}
       </View>
 
-      <Text style={[text('bodyS', lang), styles.policy]}>{copy.cancelPolicy}</Text>
-      <Text style={[text('bodyS', lang), styles.policy]}>{copy.reschedNote}</Text>
+      {/*
+        Both policy lines name the deposit, and both are cut at that clause when
+        there is none. See copy/en.ts § cancelPolicyNoDeposit — the 24h/1h
+        contradiction the block above records is inherited by the variants
+        unchanged, deliberately, rather than quietly resolved by this lane.
+      */}
+      <Text style={[text('bodyS', lang), styles.policy]} testID="book-policy">
+        {held ? copy.cancelPolicy : copy.cancelPolicyNoDeposit}
+      </Text>
+      <Text style={[text('bodyS', lang), styles.policy]} testID="book-resched-note">
+        {held ? copy.reschedNote : copy.reschedNoteNoDeposit}
+      </Text>
 
       <PrimaryButton label={copy.viewHome} onPress={onDone} style={styles.cta} testID="book-done" />
     </View>

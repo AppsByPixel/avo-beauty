@@ -986,11 +986,37 @@ export interface Copy {
    * left verbatim in both places rather than quietly edited. Reported.
    */
   cancelPolicy: string;
+  /**
+   * =========================================================================
+   * THE SAME SENTENCE FOR AN APPOINTMENT THAT NEVER TOOK A DEPOSIT
+   * =========================================================================
+   * NEW COPY - there is no design source, because the bundle predates
+   * merchant-created appointments and every booking it draws holds a deposit.
+   * Needs the client's eye; flagged in the lane report and in `AR_UNVERIFIED`.
+   *
+   * `cancelPolicy` above promises the deposit "returns to your wallet
+   * automatically", which on a `merchant` booking is a promise about money that
+   * was never taken. This is the shortest honest version: the cancellation is
+   * still free, and nothing is being returned because nothing was held.
+   */
+  cancelPolicyNoDeposit: string;
 
   // book — toasts, design:1547, 1773-1774
   bookedToast(deposit: string): string;
   rescheduleToast: string;
   cancelledToast(deposit: string): string;
+  /**
+   * The two toasts again, for a zero-deposit booking. NEW COPY, no design
+   * source - see `cancelPolicyNoDeposit`.
+   *
+   * Neither takes an amount, and that is the point rather than a convenience:
+   * `rescheduleToast` says the deposit "carries over" and `cancelledToast`
+   * interpolates the returned figure, so on a `merchant` row the first describes
+   * a transfer that did not happen and the second renders "0.000 KD deposit
+   * returned" - a receipt for money she never paid.
+   */
+  rescheduleToastNoDeposit: string;
+  cancelledToastNoDeposit: string;
 
   // book — the states the design bundle has no Arabic for
   bookEmptyDayTitle: string;
@@ -1011,15 +1037,36 @@ export interface Copy {
   upcomingLabel: string;
   /** "5.000 KD held" / "عربون 5.000 د.ك" — money, formatted by the caller. */
   upDeposit(deposit: string): string;
+  /**
+   * WHAT STANDS IN THE DEPOSIT PILL'S PLACE WHEN THERE IS NO DEPOSIT.
+   *
+   * NEW COPY, no design source - see `cancelPolicyNoDeposit`. The pill is the
+   * card's only statement of the booking's state, so it is not simply dropped:
+   * a card with an empty slot where every other card carries a pill reads as a
+   * figure that failed to load. `BookingSchema` § status names this label
+   * itself - "at 0 the labels are 'Booked' and 'No-show'".
+   */
+  upBooked: string;
   /** "with Rana" / "مع رنا" — design:1178, 1285. */
   upWith(artist: string): string;
   reschedule: string;
   cancel: string;
   /** The one-hour rule, stated inline. design:1180, 1287. */
   reschedNote: string;
+  /**
+   * The one-hour rule WITHOUT the second sentence about the deposit staying
+   * with the salon. NEW COPY, no design source - see `cancelPolicyNoDeposit`.
+   *
+   * The rule itself is unchanged and still true on a zero-deposit booking: the
+   * server's change window does not care what was held. Only the consequence
+   * differs, and on a `merchant` row there is none to state.
+   */
+  reschedNoteNoDeposit: string;
   /** 409 change_window_closed — the server refused, and says when it closed. */
   changeClosedTitle: string;
   changeClosedBody: string;
+  /** The same refusal with no deposit clause. NEW COPY - see above. */
+  changeClosedBodyNoDeposit: string;
   /** The empty state where the Upcoming card would be. */
   noUpcomingTitle: string;
   noUpcomingBody: string;

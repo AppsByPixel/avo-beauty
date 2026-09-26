@@ -72,8 +72,49 @@ import { deleteJson, getJson, postJson } from './client';
  * the base grows the same key: it silently overrides, so the "duplicate field
  * becomes a compile error" this file was counting on would never have fired.
  * Deleting the extension is the only thing that actually collapses the two.
+ *
+ * ════════════════════════════════════════════════════════════════════════════
+ * AND THE EXTENSION IS BACK, FOR EXACTLY TWO KEYS AND FOR A REASON THE
+ * PARAGRAPH ABOVE ARGUES FOR RATHER THAN AGAINST
+ * ════════════════════════════════════════════════════════════════════════════
+ * `BookingSchema` grew `guestName` and `guestPhone` in trunk 637ff38 — a
+ * merchant may now book a walk-in who has no member row — and both are
+ * `.nullable()` and NEITHER is `.optional()`. `serialiseBooking`
+ * (api/src/services/booking.ts:128) emits neither. So as the contract and the
+ * API stand right now, every booking the server sends fails `.parse()` on two
+ * `"Required"` errors, and this is not a card rendering oddly:
+ *
+ *   GET  /bookings            Home's Upcoming section resolves to its FAILURE
+ *                             card for every customer with an appointment.
+ *   POST /bookings            the Book flow throws at the confirm step, after
+ *                             the server has taken the deposit.
+ *   DELETE /bookings/{id}     the cancel throws after the refund has landed.
+ *
+ * The last two are the ones that decide this. The write has already happened
+ * when the parse runs, so a customer whose deposit has just moved is shown a
+ * failure — which is the precise lie `UpcomingFailedCard`'s own note describes:
+ * "it says her money went somewhere and bought nothing".
+ *
+ * REPORTED TO TRUNK. The real fix is one word on the shared schema and it is
+ * not a lane's to make; a field the server has never sent is optional on
+ * arrival, not merely nullable. The same break is live on the scanner and the
+ * dashboard.
+ *
+ * WHY AN EXTENSION IS THE RIGHT SHAPE HERE AND WAS THE WRONG ONE BEFORE. What
+ * the paragraph above warns about is a SECOND OPINION — fields restated
+ * identically, silently overriding the base, and drifting from it unnoticed.
+ * These two override the base deliberately and in one direction only: they
+ * WIDEN what arrives, and they cannot narrow it, so the failure the old
+ * extension had (a local shape quietly narrower than the wire) is not available
+ * to this one. It is the same tolerance the scanner's `ArtistBookingSchema`
+ * carries on `memberErased`, `chargeVoided` and `voidReason`, with the same
+ * argument, and it stays after Lane A serves the field for the same reason: it
+ * is what survives a rollback, not a stand-in for one.
  */
-export const BookingViewSchema = BookingSchema;
+export const BookingViewSchema = BookingSchema.extend({
+  guestName: BookingSchema.shape.guestName.default(null),
+  guestPhone: BookingSchema.shape.guestPhone.default(null),
+});
 
 export type BookingView = Booking;
 
