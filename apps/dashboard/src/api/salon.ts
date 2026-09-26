@@ -1,5 +1,5 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { SalonMetricsSchema, type Salon, type SalonMetrics } from '@avo/types';
+import { SalonMetricsSchema, SalonSchema, type Salon, type SalonMetrics } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 
@@ -125,6 +125,102 @@ export function useSalon(enabled = true): UseQueryResult<Salon> {
  */
 export function parseMetricsResponse(raw: unknown): SalonMetrics {
   return SalonMetricsSchema.parse(raw);
+}
+
+/**
+ * ===========================================================================
+ * A SALON, PARSED — the slice `api/settings.ts § useUpdateSalon` named.
+ * ===========================================================================
+ * That hook has been paying a round trip to avoid this. It declares its PATCH
+ * response `unknown`, refuses to `setQueryData` from it and invalidates instead,
+ * and says exactly why:
+ *
+ *   "nothing here parses that body, and a cast is not a check —
+ *    `authedRequest<Salon>` would compile whatever arrives, which is exactly how
+ *    the crash above got in. `platformSalons.ts` may trust its PATCH response
+ *    because it owns `parsePlatformSalonDetail` and runs it; this file has no
+ *    parser, and adding one is the slice that would also let this hook
+ *    `setQueryData`."
+ *
+ * The crash it is guarding against is on the record: a PATCH body that was a raw
+ * Drizzle row went into this cache, `salon.branches[0]` threw, and the whole
+ * dashboard went to its error boundary on every settings change. Lane A fixed the
+ * serialiser; this is the other half, so the defence can stop costing a request.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY IT IS `SalonSchema` AND NOT A HAND-WRITTEN MIRROR
+ * ---------------------------------------------------------------------------
+ * `parseMetricsResponse` above settled this for the same situation: where
+ * `packages/types` owns the shape, the parse is the shared schema and nothing
+ * else. A second spelling of "a salon" in this file is how two surfaces start
+ * disagreeing about one, and this module already deleted a 22-line local mirror
+ * for exactly that reason.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE ONE PLACE THE SHARED SCHEMA DOES NOT MATCH THE WIRE
+ * ---------------------------------------------------------------------------
+ * `SalonSchema.parse` ON A REAL SALON THROWS, and it would have thrown on every
+ * settings change had this been written as a bare `.parse`. The four loyalty
+ * fields are `.optional()` in the schema, and `serialiseSalon` (api/src/routes/
+ * salons.ts) emits them straight off the row — so the DORMANT mode's fields
+ * arrive as JSON `null`, not absent:
+ *
+ *     stampTarget: Expected number, received null      (on a tiers salon)
+ *     stampReward: Expected string, received null
+ *
+ * `platformSalons.ts § parsePlatformSalonDetail` hit this first, wrote it down,
+ * and REPORTED IT TO TRUNK rather than working around it: `.nullable()` in
+ * `packages/types` is a four-surface change and not a lane C edit. This is the
+ * same report, from the second file to need it.
+ *
+ * So the divergence is declared HERE, narrowly and visibly, instead of being
+ * absorbed by a looser parse. `.nullish()` on exactly those four, then null
+ * folded back to `undefined` so the value this returns is the `Salon` the rest of
+ * the dashboard already believes in. Every other field keeps the shared schema's
+ * own rule — including `depositFils`, whose `FilsSchema.min(1000).max(10000)` is
+ * the money bound (#1) and is not this file's to relax.
+ *
+ * ONE PROPERTY WORTH NAMING BEFORE SOMEBODY RELIES ON IT: `timezone` carries a
+ * `.default('Asia/Kuwait')` in the shared schema, so a response that OMITS it is
+ * defaulted rather than refused. That is trunk's decision and is left alone —
+ * overriding it here would be this file disagreeing with the contract in the
+ * direction the paragraph above refuses. Stated so the next reader does not
+ * mistake a default for a check.
+ */
+/*
+ * DERIVED FROM THE SHARED SHAPE, NOT RESTATED. `SalonSchema.shape.X.nullish()`
+ * keeps every rule trunk wrote — `.int().positive()` on the stamp target, the
+ * tier enum inside the ladder — and widens exactly one thing: whether null is an
+ * accepted spelling of absent. Retyping those rules here to add `.nullish()`
+ * would be the duplicate this file's own header refuses, and it would go stale
+ * the day trunk lands the `.nullable()` that makes this wrapper unnecessary.
+ *
+ * `zod` IS NOT IMPORTED. It is not a dependency of `@avo/dashboard` and is not
+ * being made one for three fields; the combinators hang off the schemas
+ * `@avo/types` already exports.
+ */
+const SalonWireSchema = SalonSchema.extend({
+  tiers: SalonSchema.shape.tiers.nullish(),
+  stampTarget: SalonSchema.shape.stampTarget.nullish(),
+  stampReward: SalonSchema.shape.stampReward.nullish(),
+});
+
+export function parseSalon(raw: unknown): Salon {
+  const s = SalonWireSchema.parse(raw);
+  /*
+   * NULL AND ABSENT MEAN THE SAME THING FOR THESE THREE AND ONLY THESE THREE:
+   * "this salon is not in that loyalty mode". `Salon` spells that `undefined`, the
+   * wire spells it `null`, and the fold happens once, here, rather than at every
+   * reader. `stampRewardAr` is untouched — the shared schema already admits null
+   * for it, because the Arabic reward copy is a real nullable field and not a
+   * dormant-mode marker.
+   */
+  return {
+    ...s,
+    tiers: s.tiers ?? undefined,
+    stampTarget: s.stampTarget ?? undefined,
+    stampReward: s.stampReward ?? undefined,
+  };
 }
 
 /**
