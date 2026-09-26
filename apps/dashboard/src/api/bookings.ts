@@ -9,6 +9,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 import type { Booking } from '@avo/types';
+import { ApiError } from './client.js';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import type { Paginated } from './salon.js';
@@ -309,13 +310,38 @@ export type MarkedBooking = Omit<
   | 'serviceName'
 >;
 
+/**
+ * ===========================================================================
+ * TWO OF THESE FOUR WENT NULLABLE UNDER THIS CLIENT, AND NOTHING BROKE — WHICH
+ * IS THE PART WORTH WRITING DOWN
+ * ===========================================================================
+ * Lane A ruled that a no-show is a fact about ATTENDANCE rather than about
+ * money, so a hand-written appointment is markable too. On that branch there is
+ * no wallet behind the booking: `refundedFils` is 0, and `balanceAfterFils` and
+ * `transactionId` are `null` — PRESENT on both branches, never omitted, so a
+ * client can tell "no money moved" from "this API is too old to say"
+ * (`services/booking.ts § markNoShow`).
+ *
+ * THIS INTERFACE SAID `number` AND `string` AND THE DASHBOARD DID NOT NOTICE,
+ * because `authedRequest<MarkNoShowResult>` is a CAST and not a parse. Nothing
+ * threw, nothing rendered wrongly, and the two fields have no render site today
+ * — so the break was silent in both directions, which is worse than a loud one
+ * and is exactly why the types are widened BEFORE a render site exists. The next
+ * person who reaches for `balanceAfterFils` here gets `number | null` from the
+ * compiler and has to decide about the moneyless branch, instead of drawing
+ * "0.000 KD" over an appointment that never had a deposit.
+ *
+ * The same shape, for the same reason, on `CancelResult` below. Two endpoints
+ * answering differently about the same kind of row would be the worse outcome.
+ */
 export interface MarkNoShowResult {
   booking: MarkedBooking;
-  /** INTEGER FILS — the deposit that went back. #1. */
+  /** INTEGER FILS — the deposit that went back, 0 where none was held. #1. */
   refundedFils: number;
-  /** INTEGER FILS — her wallet after it. #1. */
-  balanceAfterFils: number;
-  transactionId: string;
+  /** INTEGER FILS — her wallet after it, or `null` where no wallet was touched. #1. */
+  balanceAfterFils: number | null;
+  /** `null` where no money moved, so there is no ledger row to name. */
+  transactionId: string | null;
 }
 
 /**
@@ -411,6 +437,371 @@ export function useMarkNoShow(): UseMutationResult<
      * on the board", and after a write that releases a slot it has to be asked
      * again rather than reasoned about here.
      */
+    onSuccess: (data, { bookingId }) => {
+      queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
+        patchBookingStatus(old, bookingId, data.booking.status),
+      );
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
+  });
+}
+
+/* ================================= the five hand-written-appointment writes == */
+
+/**
+ * ===========================================================================
+ * THE PATH PREFIX, CHECKED RATHER THAN ASSUMED
+ * ===========================================================================
+ * This API registers about thirty routes under a literal `/v1/…` and about
+ * seventy bare, `api/src/app.ts` passes no `prefix` to any `register*Routes`
+ * call, and `API_BASE_URL` adds nothing — so the prefix is whatever the route
+ * file typed. All five of these are registered bare, in
+ * `api/src/routes/bookings.ts`:
+ *
+ *   app.post('/salons/:id/bookings'
+ *   app.post('/salons/:id/bookings/:bookingId/reschedule'
+ *   app.post('/salons/:id/bookings/:bookingId/reassign'
+ *   app.post('/salons/:id/bookings/:bookingId/cancel'
+ *   app.post('/salons/:id/bookings/:bookingId/complete'
+ *
+ * `useMarkNoShow` above is bare for the same reason and against the same file.
+ * A wrong guess is not a compile error and not a visible bug in a mocked test —
+ * it is a 404 in production — so `merchantScopeGates.test.ts § resolves every
+ * merchant call to a registered route` is what actually holds it: it reads both
+ * sides off disk and fails the call that matches no route.
+ *
+ * ===========================================================================
+ * WHAT EACH ONE IS GATED ON, WHICH IS NOT ALL THE SAME PERMISSION
+ * ===========================================================================
+ *   create, reschedule, reassign, complete   `perms.appointments`
+ *   cancel                                   `perms.void`
+ *
+ * `api/src/routes/bookings.ts § THE PERMISSION IS appointments` argues the
+ * split at length, and the seeded account it is about is ST-002 Hessa —
+ * frontdesk, `appointments: true`, `void: false`, `dashboard: false`. She is
+ * exactly who should be able to write a walk-in down, move a 16:45 and hand it
+ * to another artist, and exactly who must not be able to return a deposit.
+ *
+ * Every one of these is drawn behind a courtesy gate on the screen AND refused
+ * independently by the server. #7: the hidden button is the courtesy, the 403 is
+ * the control, and the reachable path is a mid-session revocation — `perms` is
+ * the snapshot taken at sign-in.
+ *
+ * ===========================================================================
+ * ONLY THE CREATE TAKES AN `Idempotency-Key`, AND THAT IS THE SERVER'S SHAPE
+ * ===========================================================================
+ * The route header says why in its own words: a POST that succeeds twice makes
+ * two appointments, and the exclusion constraint answers the second `slot_taken`
+ * — "a confusing and slightly alarming thing to show someone who pressed the
+ * button once". With a key the double submit replays the first response and the
+ * front desk sees the appointment it just made. The other four name ONE resource
+ * with ONE live state and rely on `FOR UPDATE`; a second request re-reads a
+ * status that is no longer `deposit_held` and is answered `already_cancelled` /
+ * `already_completed` / `not_changeable`, which holds for two DIFFERENT keys as
+ * well as for one repeated.
+ *
+ * SO THE KEY IS NOT MINTED HERE, exactly as `useMarkNoShow` is not. A key minted
+ * inside `useMutation` is minted per CALL, so a retry after a failure arrives
+ * with a fresh key and loses the replay the header exists for — which is the
+ * whole point of the header. `AppointmentForm.tsx § the submission key` mints it
+ * where the merchant's intent begins and holds it across retries of that same
+ * submission.
+ */
+
+/**
+ * A booking as the five write endpoints answer with it: `serialiseBooking(row)`
+ * — `BookingSchema` plus the five computed fields — and NOT ONE JOINED FIELD.
+ *
+ * `MarkedBooking` is already exactly that shape, for exactly that reason, and
+ * the alias is deliberate rather than a second `Omit`: one definition means the
+ * compile error that stops `items.map(row => data.booking)` cannot be true of
+ * the no-show response and false of the cancel's. The name says what the shape
+ * IS rather than which endpoint produced it.
+ */
+export type WrittenBooking = MarkedBooking;
+
+/**
+ * `POST /salons/{id}/bookings` — the front desk writes one down.
+ *
+ * EXACTLY ONE OF `memberId` AND `guestName` REACHES THE WIRE, and the route
+ * refuses the other two arrangements BY NAME rather than guessing:
+ * `identity_required`, "Name an existing customer or a walk-in, not both." The
+ * body is therefore built rather than spread — see `createBookingBody`.
+ */
+export interface CreateBookingInput {
+  artistId: string;
+  serviceId: string;
+  /** An ISO instant. The server parses it and refuses `invalid_starts_at`. */
+  startsAt: string;
+  /** Set for an existing member; `null` for a walk-in. Never both with `guestName`. */
+  memberId: string | null;
+  /** Set for a walk-in; `null` for a member. Never both with `memberId`. */
+  guestName: string | null;
+  /** A walk-in's number, optional even for her. `null` or `''` sends nothing. */
+  guestPhone: string | null;
+  /** Minted by the form, held across retries of the SAME submission. #4. */
+  idempotencyKey: string;
+}
+
+/**
+ * ===========================================================================
+ * THE GUEST FIELDS ARE OMITTED ON A MEMBER BOOKING, NOT SENT AS NULL
+ * ===========================================================================
+ * The route reads `hasGuest = body.guestName !== undefined && !== null`, so
+ * `guestName: null` beside a `memberId` would in fact be accepted today. It is
+ * still omitted, for two reasons that outlive today's handler:
+ *
+ *   `guestPhone` IS NOT MERELY IGNORED on a member booking — it is 400
+ *   `guest_phone_without_guest`, "An existing customer's number is on her
+ *   account, not on the appointment." A body that carries the guest half at all
+ *   is one field away from that refusal.
+ *
+ *   AND THE REQUEST HASH IS THE IDEMPOTENCY CLAIM. The route hashes
+ *   `{ salonId, artistId, serviceId, startsAt, memberId, guestName, guestPhone }`
+ *   into the key's claim; a body whose null-vs-absent shape drifts between a
+ *   first attempt and its retry is a DIFFERENT request under the same key, which
+ *   is 422 rather than the replay. Building the body from one function is what
+ *   makes the retry byte-identical.
+ *
+ * Exported so the rule is assertable without a network.
+ */
+export function createBookingBody(input: CreateBookingInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    artistId: input.artistId,
+    serviceId: input.serviceId,
+    startsAt: input.startsAt,
+  };
+
+  if (input.memberId !== null) {
+    body.memberId = input.memberId;
+    return body;
+  }
+
+  body.guestName = input.guestName;
+  /*
+   * ABSENT RATHER THAN EMPTY. The route only reaches `parseE164` when the key is
+   * present, not null and not `''` — so sending `''` is harmless, and sending
+   * nothing is the shape that cannot become harmful when that guard moves.
+   */
+  if (input.guestPhone !== null && input.guestPhone !== '') {
+    body.guestPhone = input.guestPhone;
+  }
+  return body;
+}
+
+/**
+ * `slot_taken` — 409, from the create, the reschedule and the reassign.
+ *
+ * THE CONSTRAINT SPANS BOTH KINDS OF APPOINTMENT, deliberately: a hand-written
+ * booking lives in the same `booking` table as an app one so that
+ * `booking_artist_slot_no_overlap` can see both. So this is not a rare race — it
+ * is the ordinary answer when a customer took that hour from her phone while the
+ * front desk was typing, and it is RECOVERABLE: pick another time, or another
+ * artist, and the same submission goes through.
+ *
+ * A REFUSAL A MERCHANT CAN ACT ON IS NOT THE SAME OBJECT AS AN ERROR, which is
+ * why this is a predicate and not a message. The server's sentence — "That
+ * artist already has an appointment then." — is a correct statement of fact and
+ * says nothing about what to do next; the screen adds that half, and it differs
+ * by control (a reassign's way out is a different artist, a reschedule's is a
+ * different time).
+ */
+export function isSlotTaken(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.code === 'slot_taken';
+}
+
+export function useCreateBooking(): UseMutationResult<
+  { booking: WrittenBooking },
+  unknown,
+  CreateBookingInput
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (input) =>
+      authedRequest<{ booking: WrittenBooking }>('merchant', `/salons/${salonId}/bookings`, {
+        method: 'POST',
+        body: createBookingBody(input),
+        idempotencyKey: input.idempotencyKey,
+      }),
+    /*
+     * INVALIDATE, AND DO NOT PATCH. Every other write here changes a row the
+     * cache already holds; this one makes a row it does not. The response is
+     * `serialiseBooking` and carries no `memberName`, no `serviceName` and no
+     * `artistName`, so an optimistic insert would put a row with three blank
+     * columns at the top of the board — and `GET /salons/{id}/bookings` is
+     * `starts_at DESC`, so it would not even be the row's real position.
+     */
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
+  });
+}
+
+/**
+ * `POST /salons/{id}/bookings/{bookingId}/reschedule` — move the date and time.
+ *
+ * `depositCarriedFils` IS INTEGER FILS AND IS NOT A REFUND. #1 and #5 both. A
+ * reschedule CARRIES a hold rather than spending or returning it: the same money
+ * still sits against the same row at a new hour, so the service writes a `rules`
+ * audit row rather than a `money` one. On a hand-written booking it is 0,
+ * because nothing was ever held.
+ */
+export interface RescheduleResult {
+  booking: WrittenBooking;
+  /** INTEGER FILS — the hold that moved with the appointment. #1. */
+  depositCarriedFils: number;
+}
+
+export function useRescheduleBooking(): UseMutationResult<
+  RescheduleResult,
+  unknown,
+  { bookingId: string; startsAt: string }
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ bookingId, startsAt }) =>
+      authedRequest<RescheduleResult>(
+        'merchant',
+        `/salons/${salonId}/bookings/${bookingId}/reschedule`,
+        { method: 'POST', body: { startsAt } },
+      ),
+    /*
+     * ===================================================================
+     * NO OPTIMISTIC PATCH ON THIS ONE, AND THE OMISSION IS THE DECISION
+     * ===================================================================
+     * `patchBookingStatus` exists because a marked row must stop offering the
+     * link it has just used, and `status` is the whole delta of a no-show. It is
+     * NOT the delta here: a reschedule changes `startsAt`, `endsAt`,
+     * `noShowReturnDueAt`, `changeableUntil` and `rescheduledCount`, and the
+     * status does not move at all.
+     *
+     * A wider patch is available and is the wrong thing. The row would then read
+     * the new hour immediately — and on the WEEK GRID that means the chip jumps
+     * to a column computed from a response the server has not yet reconciled
+     * against `booking_artist_slot_no_overlap` for any other row. The refetch is
+     * one round trip and is the server's answer about the whole board, which is
+     * what a slot move actually changes.
+     */
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
+  });
+}
+
+/**
+ * `POST /salons/{id}/bookings/{bookingId}/reassign` — hand it to another artist.
+ *
+ * THE BRANCH MOVES WITH THE ARTIST — `services/booking.ts § reassignArtist`:
+ * reassigning to an artist at Salmiya makes it a Salmiya appointment, because a
+ * booking's branch is a fact about who performs it. So `branchId` and
+ * `branchAssumed` change too, and `artistName` — a JOINED field the response
+ * does not carry — is the one a merchant is looking at. Invalidation only, for
+ * `useRescheduleBooking`'s reason and more sharply: a patch here could only
+ * write the id and would leave the OLD artist's name drawn beside it.
+ */
+export function useReassignArtist(): UseMutationResult<
+  { booking: WrittenBooking },
+  unknown,
+  { bookingId: string; artistId: string }
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ bookingId, artistId }) =>
+      authedRequest<{ booking: WrittenBooking }>(
+        'merchant',
+        `/salons/${salonId}/bookings/${bookingId}/reassign`,
+        { method: 'POST', body: { artistId } },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
+  });
+}
+
+/**
+ * `POST /salons/{id}/bookings/{bookingId}/cancel` — `perms.void`.
+ *
+ * THE THREE MONEY FIELDS ARE NULLABLE AND THAT IS THE WHOLE ZERO-DEPOSIT STORY
+ * IN A TYPE. Cancelling an APP booking returns a real deposit to a real wallet;
+ * cancelling a hand-written one returns nothing, because nothing was taken —
+ * `refundedFils` is 0 and there is no transaction and no balance to report. The
+ * gate does NOT vary by amount (`api/src/routes/bookings.ts § CANCEL IS void`):
+ * a conditional gate has no single permission to grant and would break
+ * `e2e/permission-census.test.ts`'s granted mirror.
+ */
+export interface CancelResult {
+  booking: WrittenBooking;
+  /** INTEGER FILS — 0 on a booking that never held one. #1. */
+  refundedFils: number;
+  /** INTEGER FILS, or `null` where no wallet was touched. #1. */
+  balanceAfterFils: number | null;
+  /** `null` where no money moved, so there is no ledger row to name. */
+  transactionId: string | null;
+}
+
+export function useCancelBooking(): UseMutationResult<
+  CancelResult,
+  unknown,
+  { bookingId: string }
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ bookingId }) =>
+      authedRequest<CancelResult>('merchant', `/salons/${salonId}/bookings/${bookingId}/cancel`, {
+        method: 'POST',
+      }),
+    /*
+     * PATCHED THEN INVALIDATED, exactly as the no-show is, and for its reason:
+     * `status` IS the whole delta a client can safely draw, and a row still
+     * reading `deposit_held` still offers Cancel, Reassign and Mark — every one
+     * of which is now a 409. The invalidation follows because the delta is not
+     * confined to this row: `booking_artist_slot_no_overlap` excludes
+     * `cancelled`, so the artist is free at that hour the moment this commits.
+     */
+    onSuccess: (data, { bookingId }) => {
+      queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
+        patchBookingStatus(old, bookingId, data.booking.status),
+      );
+      void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
+    },
+  });
+}
+
+/**
+ * `POST /salons/{id}/bookings/{bookingId}/complete` — ZERO-DEPOSIT ONLY.
+ *
+ * THE RESTRICTION IS THE SERVER'S AND IT IS NOT A LIMITATION. Completing a
+ * deposit-bearing booking has to name the charge that CONSUMED the hold, and
+ * that happens at the scanner through `POST /charges` — `completed` is written
+ * in exactly one place in the whole API, inside the charge transaction. A second
+ * path to the status would mark an appointment done without the bill that made
+ * it done. The endpoint refuses one with 409 `deposit_completed_at_the_counter`
+ * and a sentence that names the remedy; the screen hides the control on those
+ * rows as a courtesy and renders that sentence when it is reached anyway (#7).
+ */
+export function useCompleteBooking(): UseMutationResult<
+  { booking: WrittenBooking },
+  unknown,
+  { bookingId: string }
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ bookingId }) =>
+      authedRequest<{ booking: WrittenBooking }>(
+        'merchant',
+        `/salons/${salonId}/bookings/${bookingId}/complete`,
+        { method: 'POST' },
+      ),
     onSuccess: (data, { bookingId }) => {
       queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
         patchBookingStatus(old, bookingId, data.booking.status),

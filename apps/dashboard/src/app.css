@@ -3065,7 +3065,267 @@ a:hover {
 
 .appts__views {
   margin-top: 18px;
-  display: inline-flex;
+  /*
+   * A ROW RATHER THAN AN `inline-flex` SHRINK-WRAP, because "+ Add appointment"
+   * joined the view switch here. `Accounts.tsx`'s `.accounts__count-row` is the
+   * precedent: the list's own controls on the left, the affordance that adds to
+   * it pushed to the right, wrapping rather than scrolling at narrow.
+   */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* --------------------------------------- appointments · the row's controls -- */
+
+/*
+ * The four controls sit in the status cell beside the no-show link and wear its
+ * exact register — `.appts__mark` is the class, unchanged, so there is one
+ * definition of what a control in this cell looks like. This only lays them out.
+ *
+ * `row-gap` SMALLER THAN `column-gap`: wrapped links read as a list when the
+ * vertical rhythm is tighter than the horizontal, and this cell wraps at narrow
+ * on every row that offers all four.
+ */
+.appts__acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 3px;
+}
+
+/* The in-row step: the same slot the links were in, same 12px register. */
+.appts__step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+  /*
+   * WIDER THAN THE CONFIRMATION AND STILL BOUNDED. Two native date/time inputs
+   * need room the confirmation's 34ch does not; an unbounded cell would let the
+   * status column take the table's whole scroll width on one open row.
+   */
+  max-width: 30ch;
+}
+
+.appts__step-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/*
+ * The fields are `@avo/ui`'s own, shrunk in place rather than restyled: the
+ * padding and the label size are the only things a 12px in-row step changes,
+ * and both are scoped to this cell so the eight other screens keep theirs.
+ */
+.appts__step-fields .avo-field {
+  min-width: 128px;
+}
+
+.appts__step-fields .avo-input,
+.appts__step-fields .avo-select {
+  padding: 7px 9px;
+  font-size: 12.5px;
+  border-radius: 9px;
+}
+
+.appts__step-error {
+  color: var(--avo-danger-text);
+  max-width: 34ch;
+}
+
+/*
+ * `slot_taken` — A REFUSAL A MERCHANT ACTS ON, NOT A FAILURE SHE ABSORBS.
+ *
+ * It gets the danger TINT and not the danger DOT, which is the rule this file
+ * keeps: `--avo-danger-dot` is about 3.0:1 and this is text. Boxed rather than
+ * left as a bare sentence because it is the one refusal in this cell that names
+ * a next step, and a box is what separates "do this" from the row's own quiet
+ * captions two lines above it.
+ */
+.appts__slot,
+.new-appt__slot {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 44ch;
+}
+
+.appts__slot {
+  margin-top: 4px;
+  max-width: 34ch;
+}
+
+/* ============================================ appointments · the new form == */
+
+/*
+ * `Accounts.tsx § NewAccountForm`'s card, copied deliberately rather than
+ * reinterpreted: the brand hairline that marks "this is being added", 20px
+ * padding, the 2-up grid that collapses at tablet, the actions row, the muted
+ * note. Nothing here is a new colour, a new radius or a new type size.
+ */
+.new-appt {
+  border: 1.5px solid var(--avo-brand);
+  padding: 20px;
+  margin-top: 18px;
+  max-width: 980px;
+}
+
+.new-appt__title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.new-appt__who {
+  margin-bottom: 14px;
+}
+
+.new-appt__search {
+  margin-bottom: 14px;
+}
+
+.new-appt__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 13px;
+  margin-bottom: 14px;
+}
+
+.dash[data-bp='narrow'] .new-appt__grid,
+.dash[data-bp='tablet'] .new-appt__grid {
+  grid-template-columns: 1fr;
+}
+
+.new-appt__hint {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-text-muted-soft);
+}
+
+/*
+ * THE RESULT LIST IS SHORT ON PURPOSE. Six rows, then the merchant narrows the
+ * search — a scrolling directory inside a form is a second screen, and
+ * `Customers.tsx` is where a salon browses its book.
+ */
+.new-appt__results {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.new-appt__result {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-hairline);
+  border-radius: 11px;
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-appt__result:hover,
+.new-appt__result:focus-visible {
+  border-color: var(--avo-brand);
+}
+
+.new-appt__result[aria-selected='true'] {
+  border-color: var(--avo-brand);
+  background: var(--avo-brand-tint2);
+}
+
+.new-appt__result-name {
+  font-weight: 500;
+}
+
+.new-appt__result-sub {
+  font-size: 12px;
+  color: var(--avo-text-muted-soft);
+}
+
+/* The chosen customer, and the way back out of the choice. */
+.new-appt__chosen {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--avo-brand);
+  border-radius: 11px;
+  background: var(--avo-brand-tint2);
+  font-size: 13px;
+}
+
+.new-appt__chosen-name {
+  font-weight: 500;
+}
+
+.new-appt__clear {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--avo-text-muted-strong);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.new-appt__clear:hover,
+.new-appt__clear:focus-visible {
+  text-decoration: underline;
+}
+
+.new-appt__error {
+  margin-top: 14px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: var(--avo-danger-bg);
+  font-size: 12.5px;
+  color: var(--avo-danger-text);
+}
+
+.new-appt__slot {
+  margin-top: 14px;
+}
+
+.new-appt__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+/*
+ * THE DEPOSIT SENTENCE. `.new-account__note`'s exact register — 12px,
+ * `--avo-text-muted-soft`, 1.55 — and deliberately NOT a warning colour.
+ * `AppointmentForm.tsx § NO_DEPOSIT_NOTE` argues it: this is a true statement
+ * about how a hand-written appointment works, not an alarm, and dressing a
+ * standing fact as an alarm is how merchants learn to stop reading it.
+ */
+.new-appt__note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--avo-text-muted-soft);
 }
 
 .apweek {

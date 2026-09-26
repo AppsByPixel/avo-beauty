@@ -65,6 +65,70 @@ export function useArtists(): UseQueryResult<Paginated<DashboardArtist>> {
 }
 
 /**
+ * ===========================================================================
+ * `GET /salons/{id}/artists/bookable` — AND THE REASON IT IS A SECOND HOOK
+ * RATHER THAN A PARAMETER ON THE ONE ABOVE IS A PERMISSION, NOT A FIELD SET
+ * ===========================================================================
+ * `GET /salons/{id}/artists` is `requireDashboardPerm(req, 'team')`
+ * (api/src/routes/artists.ts:576). THIS one is `requireSalonScoped` — "any
+ * authenticated principal of this salon", and the route's own comment says why:
+ * "the same gate `GET /salons/{id}/services` uses, and for the same reason:
+ * gating the list a customer books from on a merchant permission gates booking".
+ *
+ * WHICH IS EXACTLY THE HOLE THE APPOINTMENT FORM FELL INTO. Creating a booking
+ * is `perms.appointments`, and `db/seed.ts § ST-002` is Hessa — frontdesk,
+ * `appointments: true`, `team: false`. She is the person the feature was asked
+ * for, and against the team roster she is a 403: she could be offered a form she
+ * is authorised to submit and given no way to name an artist in it. Caught by
+ * reading the guards rather than by a failing test, because a mocked roster
+ * answers whoever asks.
+ *
+ * IT IS ALSO THE RIGHT LIST ON THE MERITS, not merely the reachable one. It
+ * serves `active` artists only, and `reassignArtist` refuses an inactive one by
+ * name — 409 `artist_not_bookable`, "That artist is not taking bookings." So the
+ * team roster would offer choices the write endpoint rejects, and this one
+ * cannot.
+ *
+ * `enabled` BECAUSE THE REASSIGN STEP NEEDS IT AND THE BOARD DOES NOT. A table
+ * of 25 rows draws itself without the roster; asking on mount would make every
+ * visit to Appointments a second request for a list nobody opened.
+ */
+export const bookableArtistKeys = {
+  all: ['artists', 'bookable'] as const,
+  list: (salonId: string) => [...bookableArtistKeys.all, salonId] as const,
+};
+
+export interface BookableArtistRow {
+  id: string;
+  salonId: string;
+  name: string;
+  nameAr: string | null;
+  availabilitySource: string;
+}
+
+export function useBookableArtists(enabled = true): UseQueryResult<Paginated<BookableArtistRow>> {
+  const salonId = useSalonId();
+  return useQuery({
+    queryKey: bookableArtistKeys.list(salonId),
+    queryFn: ({ signal }) =>
+      authedRequest<Paginated<BookableArtistRow>>(
+        'merchant',
+        `/salons/${salonId}/artists/bookable`,
+        { signal },
+      ),
+    enabled,
+    /*
+     * `networkMode: 'always'` — TanStack's default PAUSES a fetch offline rather
+     * than failing it, and a paused query sits `pending` forever, which the form
+     * would paint as a permanently skeletoned artist field instead of saying
+     * why. `api/bookings.ts § useSalonBookings` records the same trap hit
+     * against a real 403.
+     */
+    networkMode: 'always',
+  });
+}
+
+/**
  * The availability write.
  *
  * `availabilitySource` and `windows` may travel together, and usually do: the

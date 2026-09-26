@@ -51,6 +51,25 @@ const read = (name: string) => readFileSync(join(here, name), 'utf8');
 const SECTION_SCREENS = [
   'Overview.tsx',
   'Appointments.tsx',
+  /**
+   * Merchant → Appointments → "Add appointment". A PANEL INSIDE A SCREEN, here
+   * for `Tills.tsx`'s exact reason: it owns its own fetches against guards its
+   * host does not pass.
+   *
+   * `Appointments.tsx` reads `GET /salons/{id}/bookings`, `perms.appointments`.
+   * This reads THREE more — `GET /salons/{id}/artists` (`perms.team`),
+   * `GET /salons/{id}/services` (`requireSalonScoped`) and
+   * `GET /salons/{id}/customers` (`perms.customers`) — so a merchant who can see
+   * the board is not thereby someone whose form can be filled. Three independent
+   * guards means three independent failures, and a `SectionError` here is its own
+   * answer rather than a drifting copy of its host's. Nothing hands it a loading
+   * state either: the board's read landing says nothing about whether the roster
+   * has.
+   *
+   * It is not routed, and the router assertion below does not require it to be —
+   * `censusNames` only has to CONTAIN what the router mounts.
+   */
+  'AppointmentForm.tsx',
   'Team.tsx',
   'Loyalty.tsx',
   'Settings.tsx',

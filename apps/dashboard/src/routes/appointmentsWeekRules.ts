@@ -56,6 +56,64 @@ export const STATUS_PILL: Record<BookingStatus, { label: string; tone: PillTone 
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
+ * AND TWO OF THOSE FOUR LABELS NAME A MONEY EVENT THAT A HAND-WRITTEN
+ * APPOINTMENT NEVER HAD
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `BookingSchema § status` is explicit, and it asks every client for exactly
+ * this: "`deposit_held` means 'live' and `no_show_returned` means 'missed'. On a
+ * `merchant` booking nothing is held and nothing is returned, so a client must
+ * render the pill from `depositFils`, not from this field alone: at 0 the labels
+ * are 'Booked' and 'No-show', with no mention of a deposit."
+ *
+ * WHY IT MATTERS MORE HERE THAN ANYWHERE. "No-show · returned" over an
+ * appointment that never took a deposit tells a merchant that money went back to
+ * a customer. She is the one person on the board who will act on that — at the
+ * counter, to a named woman standing in front of her, about a refund that does
+ * not exist. The customer hears it second-hand and has no screen to check it
+ * against.
+ *
+ * SO IT BRANCHES ON `depositFils`, NOT ON `source`. The contract's own sentence
+ * names the amount, and it is the amount that is true: `source === 'merchant'`
+ * implies zero today (`booking_merchant_is_zero_deposit`), but a `google_calendar`
+ * row with no hold would read the same way and the deposit column is what the
+ * claim is actually about. A predicate over the money cannot drift from the money.
+ *
+ * THE OTHER TWO LABELS ARE UNTOUCHED. "Completed" and "Cancelled" assert nothing
+ * about a deposit, so there is nothing to withdraw; inventing a second word for
+ * them would be a restyle rather than a containment.
+ *
+ * THE TONE IS UNTOUCHED TOO, deliberately, which is the scanner's decision taken
+ * unchanged (`apps/scanner/src/screens/BookingsScreen.tsx § pillFor`): `danger`
+ * is about the missed appointment, which happened either way. Only the claim
+ * about the money is withdrawn. Restyling it would turn a copy fix into a visual
+ * change on a surface whose colours are settled.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE WORDS ARE LANE B's, NOT A THIRD VOCABULARY
+ * ═══════════════════════════════════════════════════════════════════════════
+ * "Booked" is `apps/wallet/src/copy/en.ts § upBooked`; "No-show" is
+ * `apps/scanner/src/copy/en.ts § bookingsStatusNoShowNoDeposit`, which is that
+ * file's own note — "`bookingsStatusNoShow` with its second word removed, and
+ * nothing else". Three surfaces describing one row three ways is the failure
+ * mode a shared contract exists to prevent, and this is the third surface.
+ *
+ * THE HONEST FIX IS STILL `booked` AND `no_show` ON THE ENUM, and it is still
+ * not a lane's to make — DECISIONS.md 109 reserves a four-way break for trunk.
+ * Containing it at the display boundary costs one branch per surface and no
+ * migration. Reported.
+ */
+export function pillFor(
+  booking: Pick<MerchantBooking, 'status' | 'depositFils'>,
+): { label: string; tone: PillTone } {
+  const pill = STATUS_PILL[booking.status];
+  if (booking.depositFils !== 0) return pill;
+  if (booking.status === 'deposit_held') return { ...pill, label: 'Booked' };
+  if (booking.status === 'no_show_returned') return { ...pill, label: 'No-show' };
+  return pill;
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
  * A STATUS IS NOT DECORATION, AND ON A GRID IT IS LOAD-BEARING IN A WAY IT IS
  * NOT IN A LIST
  * ═══════════════════════════════════════════════════════════════════════════
@@ -197,6 +255,128 @@ function readStamp(fmt: Intl.DateTimeFormat, instant: Date): LocalStamp | null {
      */
     minutes: (h % 24) * 60 + m,
   };
+}
+
+/* ================================================ the clock, run backwards == */
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A MERCHANT TYPES A WALL CLOCK. `POST /salons/{id}/bookings` TAKES AN INSTANT.
+ * SOMETHING HAS TO DO THE CONVERSION, AND `new Date('2026-09-20T16:45')` IS NOT
+ * IT.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * That expression parses in the BROWSER's zone. A manager in London writing down
+ * a 16:45 at a Kuwait salon would book 19:45 Kuwait time — a real appointment, at
+ * a real hour, three hours from the one she typed, with no error anywhere. The
+ * grid would then draw it at 19:45 and she would have no way to tell the screen
+ * from the mistake.
+ *
+ * `makeZoneClock` above converts an instant INTO the salon's wall clock, and the
+ * whole file exists because that direction matters. This is the same conversion
+ * run backwards, and it is the direction a form needs.
+ *
+ * THE ALGORITHM IS GUESS-THEN-CORRECT, WHICH IS THE ONLY ONE THAT IS RIGHT AT A
+ * DST BOUNDARY. `Intl` can tell you a zone's offset AT AN INSTANT; it cannot be
+ * asked "what offset applies to this wall clock", because that is the question
+ * being answered. So: assume the wall clock is UTC, read the offset the zone had
+ * at that instant, subtract it to get a candidate instant, then read the offset
+ * AGAIN at the candidate and subtract from the original wall clock. The second
+ * pass is what fixes a time within an hour of a transition, where the first
+ * guess lands on the wrong side of the change.
+ *
+ * KUWAIT HAS NO DST AND THE SECOND PASS IS FREE THERE. It is written anyway
+ * because `salon.timezone` is a per-salon IANA id — the white-label case is a
+ * salon somewhere else, and a rule that is right only for the seeded tenant is a
+ * rule that fails on the first onboarding.
+ *
+ * NULL RATHER THAN A FALLBACK, on an unusable zone or an unparseable field, for
+ * `makeZoneClock`'s stated reason: the tempting rescue is to drop the zone and
+ * use the browser's, which is the silent wrong answer this whole docblock is
+ * about. The caller renders a state instead of sending a time it guessed.
+ */
+function zoneOffsetMs(instantMs: number, fmt: Intl.DateTimeFormat): number | null {
+  const stamp = readStamp(fmt, new Date(instantMs));
+  if (!stamp) return null;
+  const [year, month, day] = stamp.date.split('-').map(Number);
+  if (year === undefined || month === undefined || day === undefined) return null;
+  const asUtc = Date.UTC(year, month - 1, day, 0, stamp.minutes, 0, 0);
+  return asUtc - instantMs;
+}
+
+/**
+ * `('2026-09-20', '16:45', 'Asia/Kuwait')` → `'2026-09-20T13:45:00.000Z'`.
+ *
+ * The two strings are exactly what `<input type="date">` and `<input type="time">`
+ * produce, which is why they are taken separately rather than as one
+ * `datetime-local`: the two native controls are what the dashboard's field idiom
+ * already draws, and `datetime-local`'s rendering varies enough between engines
+ * that a merchant would be typing into a different control per browser.
+ */
+export function instantFromSalonLocal(
+  date: string,
+  time: string,
+  timezone: string,
+): string | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const t = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!d || !t) return null;
+
+  const [year, month, day] = [Number(d[1]), Number(d[2]), Number(d[3])];
+  const [hour, minute] = [Number(t[1]), Number(t[2])];
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
+
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    });
+  } catch {
+    return null;
+  }
+
+  const wall = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  /*
+   * A DATE THE CALENDAR DOES NOT HAVE IS REFUSED RATHER THAN ROLLED OVER.
+   * `Date.UTC(2026, 1, 31)` is 3 March, silently — so "31 February" would become
+   * a real appointment on a day the merchant did not pick. Checked by reading
+   * the parts back rather than by a month-length table.
+   */
+  const rolled = new Date(wall);
+  if (rolled.getUTCMonth() !== month - 1 || rolled.getUTCDate() !== day) return null;
+
+  const first = zoneOffsetMs(wall, fmt);
+  if (first === null) return null;
+  const second = zoneOffsetMs(wall - first, fmt);
+  if (second === null) return null;
+
+  const at = new Date(wall - second);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+}
+
+/**
+ * The inverse, for seeding the reschedule step with the hour it is moving FROM.
+ *
+ * A step that opened on a blank date is a step that asks a merchant to retype
+ * something the row already knows — and, worse, makes "move it fifteen minutes"
+ * a two-field transcription with a chance of getting the DAY wrong.
+ */
+export function salonLocalFields(
+  iso: string,
+  timezone: string,
+): { date: string; time: string } | null {
+  const clock = makeZoneClock(timezone);
+  if (!clock) return null;
+  const stamp = clock.at(new Date(iso));
+  if (!stamp) return null;
+  const hh = String(Math.floor(stamp.minutes / 60)).padStart(2, '0');
+  const mm = String(stamp.minutes % 60).padStart(2, '0');
+  return { date: stamp.date, time: `${hh}:${mm}` };
 }
 
 /* ============================================================== the window == */
