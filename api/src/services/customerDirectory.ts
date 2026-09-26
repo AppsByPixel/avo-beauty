@@ -137,6 +137,7 @@
 import { and, eq, gte, ilike, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { auditLog } from '../db/schema/audit';
+import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import type { StaffPrincipal } from '../auth/principal';
 import { tooManyRequests } from '../http/errors';
@@ -397,6 +398,12 @@ export interface CustomerDetail extends CustomerListItem {
   emailVerified: boolean;
   /** Null at a tiers salon, a count at a stamps salon. Never defaulted. */
   stamps: number | null;
+  /**
+   * HOW MANY OF HER APPOINTMENTS ENDED IN A RETURNED DEPOSIT — a count, beside
+   * `visits`, and nothing else. `countMemberNoShows` below is the whole of the
+   * reasoning, including what this field is forbidden to become.
+   */
+  noShowCount: number;
 }
 
 /** The columns both shapes read. One select list, so the two cannot drift apart. */
@@ -421,12 +428,90 @@ export function serialiseCustomerListItem(m: CustomerRow): CustomerListItem {
   };
 }
 
-export function serialiseCustomerDetail(m: CustomerRow): CustomerDetail {
+/**
+ * TAKES THE COUNT RATHER THAN FETCHING IT, and takes it as a REQUIRED positional
+ * argument rather than an optional field with a `0` default.
+ *
+ * A default would make "she has never missed an appointment" and "this caller
+ * forgot to ask" the same number, on a field about a named woman's conduct. The
+ * required parameter makes the omission a compile error instead, which is the
+ * only version of that rule that survives the next caller.
+ */
+export function serialiseCustomerDetail(m: CustomerRow, noShowCount: number): CustomerDetail {
   return {
     ...serialiseCustomerListItem(m),
     salonId: m.salonId,
     email: m.email,
     emailVerified: m.emailVerified,
     stamps: m.stamps,
+    noShowCount,
   };
+}
+
+/**
+ * ==========================================================================
+ * HER NO-SHOW COUNT — AND THE CONSTRAINT IS THE POINT OF THE FUNCTION
+ * ==========================================================================
+ * The client's framing is about customers who repeatedly lock a slot and do not
+ * come, and the easy build is the wrong one: a score, a risk band, a flag, a
+ * "3+ no-shows" threshold, a directory sorted worst-first. Every one of those
+ * ships a SERVER-MADE CLAIM ABOUT A PERSON — and a claim nobody can appeal,
+ * because there is no screen on which a customer can see it, dispute it, or
+ * learn it exists.
+ *
+ * SO: AN INTEGER, BESIDE `visits`, AND NOTHING ELSE.
+ *
+ *   No score.      A number derived from her behaviour by a formula she cannot
+ *                  see is a judgement wearing a statistic's clothes.
+ *   No flag.       A boolean has already decided where the line is. Two
+ *                  no-shows out of forty visits and two out of two are the same
+ *                  `true`, and they are not the same customer.
+ *   No threshold.  The moment a number becomes a label it stops being evidence.
+ *   No ordering.   The directory is NOT sorted by this and takes no `?sort=` for
+ *                  it. A list ranked by no-shows is a leaderboard of women to
+ *                  distrust, and it would be read as one on the first day.
+ *
+ * The merchant reads two numbers — five visits and one no-show, or one visit and
+ * one no-show — and uses her own judgement about her own customer, which is a
+ * judgement she is entitled to make and we are not.
+ *
+ * IT IS ON THE DETAIL AND NOT ON THE LIST, deliberately. The list is the customer
+ * BOOK; a column of no-show counts down a page of names is a ranking whether or
+ * not anything sorts by it, because the eye sorts it. The detail is one customer
+ * a merchant has already chosen to open, which is the moment the question "does
+ * she do this often" is actually being asked.
+ *
+ * `no_show_returned` IS THE ONLY STATUS COUNTED, and it is the honest one. It
+ * means the deposit went back — either `services/noShowWorker.ts` returned it
+ * when the deadline passed, or a merchant marked it by hand. `cancelled` is
+ * excluded because cancelling IS the considerate thing to do and counting it
+ * would punish exactly the behaviour the salon wants; `deposit_held` past its
+ * slot is excluded because it has not resolved into anything yet —
+ * `services/depositHealth.ts` is where that set is answerable, and it is a
+ * question about today rather than about her history.
+ *
+ * SALON-SCOPED IN THE PREDICATE, NOT ONLY IN THE PATH. Nothing in the schema
+ * ties `booking.salon_id` to `member.salon_id`, so a booking row naming this
+ * member under another salon's id is representable. The route already calls
+ * `requireSameSalon` and `loadCustomer` already filters the member by salon;
+ * this is the third, and it is the one that is a fact about the COUNT rather
+ * than about the lookup that produced the id. `routes/activity.ts` and
+ * `routes/audit.ts` practise the same doubling.
+ */
+export async function countMemberNoShows(
+  db: Db,
+  salonId: string,
+  memberId: string,
+): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(booking)
+    .where(
+      and(
+        eq(booking.salonId, salonId),
+        eq(booking.memberId, memberId),
+        eq(booking.status, 'no_show_returned'),
+      ),
+    );
+  return Number(rows[0]?.n ?? 0);
 }

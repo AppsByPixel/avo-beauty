@@ -97,6 +97,7 @@ import {
   customerSearchPredicate,
   enforceCustomerDirectoryLimit,
   normaliseCustomerQuery,
+  countMemberNoShows,
   serialiseCustomerDetail,
   serialiseCustomerListItem,
 } from '../services/customerDirectory';
@@ -357,7 +358,18 @@ export async function registerCustomerRoutes(app: FastifyInstance): Promise<void
       });
 
       if (!m) throw notFound('unknown_member', 'No such member.');
-      return reply.send(serialiseCustomerDetail(m));
+      /**
+       * AFTER THE 404, so an id that is not in this salon issues no second query
+       * — and, more to the point, cannot be probed for a count. The audit row
+       * above is already written either way, which is the property that matters
+       * on a directory walk.
+       *
+       * `services/customerDirectory.ts § countMemberNoShows` carries the whole
+       * argument for why this is a bare integer and never a score, a flag or an
+       * ordering.
+       */
+      const noShowCount = await countMemberNoShows(db, p.salonId, m.id);
+      return reply.send(serialiseCustomerDetail(m, noShowCount));
     },
   );
 
