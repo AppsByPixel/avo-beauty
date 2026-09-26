@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { OrderStatus, ShopOrder } from '@avo/types';
+import { ShopOrderSchema, type OrderStatus, type ShopOrder } from '@avo/types';
 import { ApiError } from './client.js';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
@@ -266,21 +266,75 @@ export interface MoveOrderInput {
  * the better shape, and the next consumer of this endpoint should be told rather
  * than left to find it the way this one did.
  */
+/**
+ * ===========================================================================
+ * THE MOVED ROW, READ RATHER THAN ASSERTED — AND `null` IS NOT AN ERROR
+ * ===========================================================================
+ * `authedRequest<{ order: ShopOrder }>` is an unchecked assertion over
+ * `unknown` JSON, and this hook dereferenced it twice on the far side of a
+ * committed PATCH: `body.order` in the `mutationFn`, and then `updated.status`
+ * and `updated.transactionId` inside `writeRow`, from `onSuccess`.
+ *
+ * NEITHER POSITION IS SAFE TO THROW FROM, and that is not obvious about the
+ * first one. A throw in `mutationFn` is the ordinary way a write reports
+ * failure — but by the time this body is being read the UPDATE has already
+ * committed, the audit row is written, and the order really is `ready`. A throw
+ * in `onSuccess` is no better: `Mutation#execute` catches it, runs `onError`
+ * and dispatches `{ type: 'error' }`, so it arrives at the screen as the same
+ * failure. Either way `ShopOrders.tsx` draws, verbatim:
+ *
+ *     "Something went wrong on our side. The status shown is still the real one."
+ *
+ * The second sentence is exactly backwards: the pill is showing `preparing`
+ * BECAUSE this hook is not optimistic, and the server has it at `ready`. The
+ * screen would be telling a merchant that a stale pill is the truth, and the
+ * control beside it still offers the move she has already made.
+ *
+ * SO THE PARSE NEVER THROWS AND `TData` IS HONEST: `ShopOrder | null`, where
+ * `null` reads "the move committed and we could not read what came back". The
+ * caller's `onSuccess` invalidates instead of patching; nothing renders an
+ * error. `api/bookings.ts § parseWrittenBooking` is the same decision for the
+ * three booking writes, argued at length there.
+ *
+ * `ShopOrderSchema` IS RUN BARE, checked against the serialiser rather than
+ * assumed: `serialiseShopOrder` (api/src/routes/orders.ts:84) emits exactly the
+ * schema's seven keys — `transactionId`, `fulfilment`, `status`, the nullable
+ * `address` snapshot, `createdAt`, and the nullable `readyAt`/`closedAt`. Zod
+ * strips unknown keys, so a server that adds one is not refused by this; a
+ * server that DROPS one is, which is what a required field is for.
+ *
+ * AND THE JOIN IS DELIBERATELY NOT IN THIS SHAPE. The PATCH answers a bare
+ * `ShopOrder` with no `memberName`, `memberPhone` or `memberErased` — the
+ * asymmetry the header above records as having cost a defect — so `writeRow`
+ * MERGES rather than replaces. Parsing against `MerchantShopOrder` would refuse
+ * every correct response this endpoint has ever sent.
+ */
+export function parseMovedOrder(response: unknown): ShopOrder | null {
+  /*
+   * A 200 with a body of `null` is the case that makes `response.order` throw
+   * before any schema is consulted, so `typeof null === 'object'` is excluded
+   * by name.
+   */
+  if (typeof response !== 'object' || response === null) return null;
+  const parsed = ShopOrderSchema.safeParse((response as { order?: unknown }).order);
+  return parsed.success ? parsed.data : null;
+}
+
 export function useMoveOrder(
   status: OrderStatus | null = null,
-): UseMutationResult<ShopOrder, unknown, MoveOrderInput> {
+): UseMutationResult<ShopOrder | null, unknown, MoveOrderInput> {
   const salonId = useSalonId();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ transactionId, status: next }) => {
-      const body = await authedRequest<{ order: ShopOrder }>(
-        'merchant',
-        `/v1/salons/${salonId}/orders/${encodeURIComponent(transactionId)}`,
-        { method: 'PATCH', body: { status: next } },
-      );
-      return body.order;
-    },
+    mutationFn: async ({ transactionId, status: next }) =>
+      parseMovedOrder(
+        await authedRequest<unknown>(
+          'merchant',
+          `/v1/salons/${salonId}/orders/${encodeURIComponent(transactionId)}`,
+          { method: 'PATCH', body: { status: next } },
+        ),
+      ),
     /*
      * The 200 body is `{ order }` — the row as STORED, with `readyAt`/`closedAt`
      * stamped by the server's clock. Patched in place rather than invalidated,
@@ -295,6 +349,17 @@ export function useMoveOrder(
      * "Ready" row under a heading that says these are preparing.
      */
     onSuccess: (updated) => {
+      if (updated === null) {
+        /*
+         * THE MOVE COMMITTED AND THE ANSWER WAS UNREADABLE. There is no row to
+         * patch and no basis to guess which board this order now belongs to, so
+         * EVERY board is invalidated — including the one being looked at, which
+         * `writeRow`'s predicate deliberately excludes when there IS a row.
+         * A refetch of four cached lists is the price of not inventing a status.
+         */
+        void queryClient.invalidateQueries({ queryKey: orderKeys.all });
+        return;
+      }
       writeRow(queryClient, salonId, status, updated);
     },
     /*
