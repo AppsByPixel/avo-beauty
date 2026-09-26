@@ -8,7 +8,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { Booking } from '@avo/types';
+import { BookingSchema, type Booking } from '@avo/types';
 import { ApiError } from './client.js';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
@@ -374,6 +374,25 @@ export interface MarkNoShowResult {
  * something tidier. A third shape appearing under this prefix should lose an
  * optimistic patch and get the invalidation's refetch a moment later, not have
  * its cache entry overwritten by a guess.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE OTHER HALF OF THAT LESSON SAT UNAPPLIED ON THE SAME EXPRESSION FOR
+ * AS LONG AS THIS BLOCK HAS EXISTED.
+ * ---------------------------------------------------------------------------
+ * Everything above hardens the `cached` argument — the CACHE side, which this
+ * client owns. The third argument came from `data.booking.status`, where `data`
+ * is `authedRequest<MarkNoShowResult>`, a CAST over `unknown` JSON. So one call
+ * read an untrusted `old` defensively and an untrusted `data` by assertion, in
+ * one statement, and the paragraph arguing for the first is three lines above
+ * the second.
+ *
+ * `parseWrittenBooking` below is that half. It matters more, not less: the body
+ * arrives AFTER the server committed, so a TypeError here does not fail a write
+ * — @tanstack/query-core's `Mutation#execute` catches a throw from `onSuccess`,
+ * runs `onError` and dispatches `{ type: 'error' }` — it reports a write that
+ * SUCCEEDED as one that failed. On the no-show and the cancel that produced,
+ * verbatim, "Something went wrong on our side. The deposit is still held." over
+ * a deposit that had just gone back to the customer.
  */
 export function patchBookingStatus(
   cached: unknown,
@@ -397,6 +416,79 @@ export function patchBookingStatus(
   }
 
   return cached;
+}
+
+/**
+ * ===========================================================================
+ * THE RESPONSE BODY, READ RATHER THAN ASSERTED — AND `null` IS NOT AN ERROR
+ * ===========================================================================
+ * `authedRequest<T>` is an unchecked assertion over `unknown` JSON, so every
+ * `data.booking.status` in this file was a TypeError waiting for a body without
+ * a `booking`. Three of them sit in `onSuccess`, which is to say AFTER the
+ * server has committed: on the no-show and the cancel, after a deposit has
+ * already left the salon and reached a customer's wallet.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS RETURNS `null` INSTEAD OF THROWING, WHICH IS THE WHOLE POINT
+ * ---------------------------------------------------------------------------
+ * A throw from `onSuccess` does not merely crash — `Mutation#execute` catches
+ * it, runs `onError`, and dispatches `{ type: 'error' }`. The mutation then
+ * reports `isError`, and `Appointments.tsx` draws `WriteError` with the
+ * reassurance the row's deposit state selects:
+ *
+ *     "Something went wrong on our side. The deposit is still held."
+ *
+ * Every word after the full stop is false. The refund has happened, the
+ * appointment is cancelled, and the sentence the merchant has been handed is a
+ * confident instruction to do it again. A CRASH is visibly broken and she asks
+ * someone; a FALSE FAILURE is acted on. So an unreadable body must not reach the
+ * screen as a failure — it is a successful write whose answer we could not read.
+ *
+ * The honest degradation is therefore: DROP THE OPTIMISTIC PATCH, KEEP THE
+ * INVALIDATION. The patch is a guess about one field; the invalidation is the
+ * server being asked again. Losing the guess costs one refetch of staleness on
+ * one row. Keeping it on an unread body would write a status nobody received.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PARSE IS `BookingSchema`, RUN BARE — `parseStaffUser`'s rule
+ * ---------------------------------------------------------------------------
+ * `api/staff.ts § parseStaffUser` settled this: where `packages/types` owns the
+ * shape, the parse IS the shared schema, because a second spelling of "a
+ * booking" in this file is how two surfaces start disagreeing about one.
+ *
+ * AND UNLIKE `parseSalon`, THERE IS NO DIVERGENCE TO DECLARE — checked against
+ * the serialiser rather than inferred from the name. `serialiseBooking`
+ * (api/src/services/booking.ts:131) emits seventeen keys and `BookingSchema`
+ * (entities.ts) declares the same seventeen, field for field: the contract's
+ * twelve plus `endsAt`, `changeableUntil`, `noShowReturnDueAt`,
+ * `rescheduledCount` and `calendarSyncState`, which trunk landed and which the
+ * header of this file already records as having arrived. `guestName`,
+ * `guestPhone` and a nullable `memberId` are on the schema too, so a
+ * hand-written walk-in parses on the same path as an app booking. No wrapper,
+ * no `.nullish()`, nothing added.
+ *
+ * `WrittenBooking` IS THE DECLARED RETURN AND NOT `Booking`, deliberately.
+ * `WrittenBooking` is `Omit<MerchantBooking, …the seven joined…>`, which is
+ * `Booking` plus five fields `Booking` now already has — so this annotation
+ * compiles only while that equivalence holds, and stops compiling on the day
+ * either side drifts. It is the cheapest available assertion that the shared
+ * schema still describes what these endpoints answer with.
+ *
+ * A NARROWED PARSE — reading only `status` — WAS THE OTHER OPTION AND IS WORSE.
+ * The whole body failing is the signal that the client and the server disagree
+ * about what a booking is; a reader that takes one field from an otherwise
+ * unrecognisable object is a client that has stopped checking. The cost of
+ * being strict is one refetch, and the invalidation was going to fire anyway.
+ */
+export function parseWrittenBooking(response: unknown): WrittenBooking | null {
+  /*
+   * THE ENVELOPE IS CHECKED BEFORE THE FIELD IS REACHED FOR. A 200 with a body
+   * of `null` is the case that makes `response.booking` itself throw, before any
+   * schema is consulted — so `typeof null === 'object'` is excluded by name.
+   */
+  if (typeof response !== 'object' || response === null) return null;
+  const parsed = BookingSchema.safeParse((response as { booking?: unknown }).booking);
+  return parsed.success ? parsed.data : null;
 }
 
 export function useMarkNoShow(): UseMutationResult<
@@ -438,9 +530,18 @@ export function useMarkNoShow(): UseMutationResult<
      * again rather than reasoned about here.
      */
     onSuccess: (data, { bookingId }) => {
-      queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
-        patchBookingStatus(old, bookingId, data.booking.status),
-      );
+      /*
+       * THE PATCH IS CONDITIONAL AND THE INVALIDATION IS NOT — see
+       * `parseWrittenBooking`. An unreadable body loses the guess about one
+       * field and keeps the refetch that supplies the truth; it must NOT reach
+       * the screen as a failed write, because the server has already committed.
+       */
+      const written = parseWrittenBooking(data);
+      if (written !== null) {
+        queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
+          patchBookingStatus(old, bookingId, written.status),
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
     },
   });
@@ -767,9 +868,18 @@ export function useCancelBooking(): UseMutationResult<
      * `cancelled`, so the artist is free at that hour the moment this commits.
      */
     onSuccess: (data, { bookingId }) => {
-      queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
-        patchBookingStatus(old, bookingId, data.booking.status),
-      );
+      /*
+       * THE PATCH IS CONDITIONAL AND THE INVALIDATION IS NOT — see
+       * `parseWrittenBooking`. An unreadable body loses the guess about one
+       * field and keeps the refetch that supplies the truth; it must NOT reach
+       * the screen as a failed write, because the server has already committed.
+       */
+      const written = parseWrittenBooking(data);
+      if (written !== null) {
+        queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
+          patchBookingStatus(old, bookingId, written.status),
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
     },
   });
@@ -803,9 +913,18 @@ export function useCompleteBooking(): UseMutationResult<
         { method: 'POST' },
       ),
     onSuccess: (data, { bookingId }) => {
-      queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
-        patchBookingStatus(old, bookingId, data.booking.status),
-      );
+      /*
+       * THE PATCH IS CONDITIONAL AND THE INVALIDATION IS NOT — see
+       * `parseWrittenBooking`. An unreadable body loses the guess about one
+       * field and keeps the refetch that supplies the truth; it must NOT reach
+       * the screen as a failed write, because the server has already committed.
+       */
+      const written = parseWrittenBooking(data);
+      if (written !== null) {
+        queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
+          patchBookingStatus(old, bookingId, written.status),
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
     },
   });
