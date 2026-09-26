@@ -7666,3 +7666,443 @@ a:hover {
 .orders .avo-state__body {
   max-width: 46ch;
 }
+
+/* ================================================ accounts · customers === */
+
+/*
+ * `AVO Merchant Dashboard.dc.html:547` § CUSTOMERS — the book, and one
+ * customer's card. The design's detail wrapper is 920px; the list runs to the
+ * same width so switching between the two does not reflow the page under the
+ * merchant.
+ *
+ * NOTHING HERE IS A HEX. Every value resolves through an `--avo-*` custom
+ * property, and `ui/cssTokenRefs.test.ts` fails on one this file invents —
+ * written because this lane shipped `--avo-warn-tint` and `--avo-warn-line`,
+ * which do not exist and which drop silently rather than erroring.
+ */
+.cust {
+  max-width: 920px;
+}
+
+.cust__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 18px 0 14px;
+  flex-wrap: wrap;
+}
+
+.cust__search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 340px;
+  border-radius: var(--avo-radius-input);
+  padding: 11px 14px;
+}
+
+.cust__count {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+.cust__card {
+  overflow: hidden;
+}
+
+/*
+ * interaction-spec.md §1: "Data tables never drop columns responsively… Scroll
+ * the table, keep the header row sticky." Six columns; the min-width moves with
+ * the column count, which is the half `.accounts-console__table` had to correct
+ * after the fact.
+ */
+.cust__table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.cust__table thead th {
+  background: var(--avo-surface-alt);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 13px 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.cust__table tbody td {
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: middle;
+}
+
+.cust__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.cust__ident {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.cust__avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 15px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.cust__name {
+  font-weight: 500;
+}
+
+/*
+ * The design draws the phone in the display face because its own column there
+ * was a `@handle`. Digits, so tabular figures keep the column from jittering as
+ * the book pages in.
+ */
+.cust__phone {
+  color: var(--avo-text-muted-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * AN ERASED CUSTOMER'S CONTACT LINE. Italic and muted, in the same register as
+ * `.orders__contact-erased` one board over — it is the same sentence about the
+ * same fact, and two registers would read as two different kinds of thing.
+ * `--avo-text-muted-strong` rather than the softer muted: this is a statement,
+ * not a de-emphasised value, and it still has to clear AA.
+ */
+.cust__contact-erased,
+.cust__contact-none {
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--avo-text-muted-strong);
+}
+
+.cust__wallet {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cust__joined {
+  color: var(--avo-text-muted);
+  white-space: nowrap;
+}
+
+.cust__open {
+  text-align: right;
+}
+
+.cust__open .avo-btn {
+  padding: 8px 13px;
+  font-size: 12.5px;
+}
+
+.cust__empty {
+  padding: 34px 20px;
+  text-align: center;
+}
+
+.cust .avo-state {
+  align-items: center;
+  text-align: center;
+}
+
+.cust .avo-state__body {
+  max-width: 46ch;
+}
+
+.cust__more {
+  margin-top: 14px;
+}
+
+/*
+ * THE TIER CHIP, ON THE `--avo-tier-*` TOKENS.
+ *
+ * Unlike `Pill`'s `neutral` and `warn` — which borrow tier and plan tokens for
+ * things that are neither, and say so — this IS a loyalty tier, so the tokens
+ * named for one are the correct ones and nothing is substituted.
+ *
+ * `member` IS THE NULL TIER AND NOT A FALLBACK COLOUR. A stamps salon runs no
+ * ladder, so every one of its customers is this swatch; `--avo-tier-member-*`
+ * exists for exactly that row.
+ */
+.cust__tier {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--avo-radius-pill);
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--avo-tier-member-pill-bg);
+  color: var(--avo-tier-member-pill-text);
+}
+
+.cust__tier[data-tier='bronze'] {
+  background: var(--avo-tier-bronze-pill-bg);
+  color: var(--avo-tier-bronze-pill-text);
+}
+
+.cust__tier[data-tier='silver'] {
+  background: var(--avo-tier-silver-pill-bg);
+  color: var(--avo-tier-silver-pill-text);
+}
+
+.cust__tier[data-tier='gold'] {
+  background: var(--avo-tier-gold-pill-bg);
+  color: var(--avo-tier-gold-pill-text);
+}
+
+.cust__tier[data-tier='black'] {
+  background: var(--avo-tier-black-pill-bg);
+  color: var(--avo-tier-black-pill-text);
+}
+
+/* ---- one customer's card ---- */
+
+.cust-card {
+  max-width: 920px;
+}
+
+/*
+ * The design's "‹ All customers". A button and not a link: it changes what this
+ * section is showing and pushes no history entry, so a real `<a href>` would
+ * promise a URL that does not exist.
+ */
+.cust-card__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  cursor: pointer;
+  padding: 0;
+  margin: 18px 0 16px;
+}
+
+.cust-card__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.cust-card__avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--avo-radius-card);
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--avo-font-display);
+  font-size: 24px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.cust-card__ident {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cust-card__name {
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.cust-card__since {
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+}
+
+.cust-card__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+/* One column below the design's two-up breakpoint, rather than two squeezed. */
+@media (max-width: 900px) {
+  .cust-card__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cust-card__panel {
+  padding: 18px 20px;
+}
+
+.cust-card__panel-title {
+  font-size: 17px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+
+.cust-card__info {
+  margin: 0;
+}
+
+.cust-card__info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 13.5px;
+}
+
+.cust-card__info-row dt {
+  color: var(--avo-text-muted-strong);
+}
+
+.cust-card__info-row dd {
+  margin: 0;
+  font-weight: 500;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cust-card__balance {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--avo-font-display);
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.cust-card__unit {
+  font-family: var(--avo-font-ui);
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--avo-text-muted);
+}
+
+/*
+ * THE STAMP COUNT WITHOUT THE DOTS. The design draws eight circles under "6 of 8
+ * · free blow-dry at 8"; the target and the reward name live on the loyalty
+ * config behind a different permission, so what is drawn is the count this
+ * endpoint actually serves. `Customers.tsx § THE STAMP COUNT` has the argument.
+ */
+.cust-card__stamps {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.cust-card__stamps-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--avo-text-muted-strong);
+}
+
+/*
+ * THE PANEL THAT NAMES WHAT IS MISSING. Tinted rather than white so it does not
+ * read as a fifth data panel — it is a note about the card, not a part of it.
+ */
+.cust-card__panel--unserved {
+  background: var(--avo-surface-alt);
+}
+
+.cust-card__unserved {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--avo-text-muted-strong);
+}
+
+.cust-card__unserved li + li {
+  margin-top: 10px;
+}
+
+/* ---- her history ---- */
+
+.cust-card__feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cust-card__feed-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.cust-card__feed-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: var(--avo-brand);
+}
+
+/*
+ * A tier climb is not a charge, and the design colours the two differently. The
+ * dot is decoration — `aria-hidden`, and the sentence beside it carries the whole
+ * meaning — so nothing depends on telling these two apart by colour.
+ */
+.cust-card__feed-dot[data-stream='loyalty'] {
+  background: var(--avo-tier-gold-dot);
+}
+
+.cust-card__feed-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cust-card__feed-what {
+  font-size: 13.5px;
+}
+
+.cust-card__feed-when {
+  font-size: 11.5px;
+  color: var(--avo-text-muted);
+}
+
+.cust-card__more {
+  margin-top: 12px;
+}

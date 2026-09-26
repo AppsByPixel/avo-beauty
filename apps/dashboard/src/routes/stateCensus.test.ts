@@ -147,6 +147,40 @@ const SECTION_SCREENS = [
    */
   'AppointmentsWeek.tsx',
   'Accounts.tsx',
+  /**
+   * Merchant → Accounts → Customers. The customer book, one customer's card, and
+   * her history.
+   *
+   * A TAB INSIDE A SECTION, in THIS list rather than as a subview of `Accounts.tsx`,
+   * for `ShopOrders.tsx`' reason exactly: it owns its own fetches. Its host reads
+   * `GET /salons/{id}/staff`; this reads `/customers`, `/customers/{memberId}` and
+   * `/customers/{memberId}/activity`. Nothing hands it a pending state — the host's
+   * staff read landing says nothing about whether any of these has — so a
+   * `SectionError` here is its own answer and not a drifting copy.
+   *
+   * SAME GATE, WHICH IS NOT THE SAME THING AS ONE READ — the distinction
+   * `ShopOrders.tsx` records, and this entry is the second to turn on it. All four
+   * routes are `perms.team`, so like that tab this one has no second guard to point
+   * at, and it still owns four states because a shared permission does not make
+   * four endpoints fail together.
+   *
+   * WHAT IS NEW HERE IS THAT THE HOST'S REFUSAL ARRIVES FIRST. `Accounts.tsx`
+   * returns its `SectionError` above the `Segmented`, so a session without `team`
+   * never reaches this tab. That makes the 403 below reachable SECOND rather than
+   * never — `perms` is a sign-in snapshot and `team` can be revoked while the tab
+   * is open — and it is the reason the classification is worth stating rather than
+   * assuming: an unreachable state is one nobody maintains.
+   *
+   * IT HAS THREE EMPTIES, NOT ONE, and `AVO States.dc.html:199` is explicit that
+   * two of them must not share copy: a salon with no customers, and a search that
+   * matched none ("Echo the query back and offer the escape. Distinct from 'no data
+   * at all'."). The third is one customer's history with nothing settled in it.
+   *
+   * Not routed — `Accounts.tsx` mounts it behind the Team/Customers control — so
+   * the routed-component assertion below will not see it, exactly as it does not
+   * see `Tills.tsx`, `AppointmentsWeek.tsx` or `ShopOrders.tsx`.
+   */
+  'Customers.tsx',
   'AuditLog.tsx',
   'Reports.tsx',
   /**
