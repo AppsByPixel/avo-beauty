@@ -1921,3 +1921,76 @@ modules, Expo Go becomes viable again and the dev-client step can go. Neither is
 **Also unblocked by this:** `platform/gateway.ts` declined `expo-web-browser` on the grounds that a
 lockfile change was outside a lane's column. That precedent is now broken — the in-app-browser
 gateway deviation it records can be revisited, but it needs its own decision, not a drive-by.
+
+### Manual appointments: a merchant may hold a slot, and may not take a deposit
+
+**Decided in trunk, 2026-09-26, on Aftab's direct instruction to build items 5 and 6 of the
+merchant list without asking.** Recorded because six calls were made here and none of them is in
+`design/`.
+
+The client asked for two things: create appointments by hand for existing *or non-existing*
+customers, and mark / cancel / change date / reassign them. Neither is in the design bundle and
+neither is a Known gap, so this is new scope with no drawn screen behind it — which is exactly the
+case that needs its reasoning written down rather than inferred later from a migration.
+
+**1. There is no walk-in `member` row.** The obvious way to satisfy "non-existing customer" is to
+mint a member and book against her. It is wrong: it hands a woman who has never opened the app a
+wallet, a tier, a directory entry, and — the part that settles it — an implied acceptance of a
+published policy set she has never seen (#10). A guest appointment carries a name and an optional
+phone **on the booking** and nothing else. The phone is optional on purpose; a required one gets
+filled with `0000000` inside a week and then it is worse than absent, because it looks like data.
+
+**2. No automatic link when that guest later signs up on the same number.** Merging a booking
+history onto an account on a phone-number match is an identity claim nobody verified, and a shared
+family handset reaches a salon often enough that it is not a hypothetical. Reported, not built.
+
+**3. A merchant-created booking is always zero-deposit — member or guest.** This is the one that
+matters. For an *existing* member the system could take the deposit out of her wallet, and must
+not. Non-negotiable #2 gives the server the balance; a merchant who can move a customer's money by
+filling in a form is a merchant who can move it without her. It is the same shape as #8, which
+stops a merchant sending a customer a message — the customer's side of the relationship is not the
+merchant's to operate. Cancelling a merchant booking therefore returns nothing, because nothing
+was taken.
+
+**4. The schema was relaxed source-aware, not loosened.** `booking` had four constraints that each
+assume a deposit exists. Every one of them still binds exactly as hard as it did for a row that has
+money; only moneyless rows are let through, and the new CHECKs are tighter than what they replace
+(exactly one of member/guest, guest identity only on `source = 'merchant'`, and money present iff a
+hold exists). **The exclusion constraint still spans both kinds**, which is the whole reason this is
+one table and not two: a manual appointment that can double-book an artist against an app booking
+is worse than a paper diary.
+
+**5. The status enum was not extended, and that is the weakest call here.** `deposit_held` means
+"live" and `no_show_returned` means "missed"; on a zero-deposit row nothing is held and nothing is
+returned. `booked` / `no_show` is the honest schema and it is a four-way break — the pg type, the
+contract, the dashboard pills, the wallet's appointment card and the scanner's day list all move
+together, which DECISIONS 109 reserves for trunk rather than a lane. Contained at the display
+boundary instead: clients render the pill from `depositFils`, one ternary per surface, no
+migration. **The risk this leaves is a screen telling a customer "No-show — deposit returned" over
+an appointment she never paid for**, which is why it is a named brief item on the wallet rather
+than a comment.
+
+**6. The permissions are argued in opposite directions, deliberately.** Create, reschedule and
+reassign are `perms.appointments`; cancel is `perms.void`. The existing no-show route argues at
+length that hanging a write off `perms.appointments` — a *read* gate — silently widens what every
+holder can do, and names `db/seed.ts § ST-002` Hessa, front desk, as the person it would widen it
+for. That argument is right for no-show and **inverts here**: booking appointments is Hessa's job,
+and these three move no money and record no assertion about a customer's conduct. Cancel goes the
+other way because cancelling an *app* booking returns a real deposit; a gate that varied by
+`depositFils` would break `e2e/permission-census.test.ts`'s one-permission granted mirror as well
+as being unreadable.
+
+**7. The one-hour change window does not apply to the merchant.** It refuses a customer inside the
+last hour because after that the deposit stays with the salon. It protects the salon's claim
+against the customer — the salon does not need protecting from itself, and a front desk moving a
+16:45 at 16:30 because the artist is running late is the normal case rather than the abuse.
+
+**8. `complete` is only available on a zero-deposit booking.** Completing a deposit-bearing one has
+to name the charge that consumed the hold, and that already happens at the scanner through
+`POST /charges`. A second path to it would be a second way for the ledger and the booking to
+disagree.
+
+**To reverse:** items 3 and 5 are the ones worth revisiting. If the client wants a merchant to be
+able to take a deposit by phone, that is a customer-consent question before it is an engineering
+one. If the pill ternary starts appearing in a fourth place, the enum break has become cheaper than
+the containment and should be taken as a single trunk slice.
