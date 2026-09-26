@@ -155,8 +155,8 @@ suite('GET /salons/:id/bookings pages honestly', () => {
     items: Array<{ id: string; startsAt: string }>;
     nextCursor: string | null;
   }
-  async function fetchPage(cursor?: string | null): Promise<Page> {
-    const qs = new URLSearchParams({ status: 'deposit_held' });
+  async function fetchPage(cursor?: string | null, extra?: Record<string, string>): Promise<Page> {
+    const qs = new URLSearchParams({ status: 'deposit_held', ...(extra ?? {}) });
     if (cursor) qs.set('cursor', cursor);
     const res = await app.inject({
       method: 'GET',
@@ -168,11 +168,11 @@ suite('GET /salons/:id/bookings pages honestly', () => {
   }
 
   /** Every page, to exhaustion, with a hard stop so a broken cursor cannot hang. */
-  async function walk(): Promise<string[]> {
+  async function walk(extra?: Record<string, string>): Promise<string[]> {
     const ids: string[] = [];
     let cursor: string | null = null;
     for (let i = 0; i < 20; i++) {
-      const page: Page = await fetchPage(cursor);
+      const page: Page = await fetchPage(cursor, extra);
       ids.push(...page.items.map((b) => b.id));
       cursor = page.nextCursor;
       if (!cursor) return ids;
@@ -245,4 +245,89 @@ suite('GET /salons/:id/bookings pages honestly', () => {
     const body = JSON.parse(res.body) as Page;
     expect(body.items.every((b) => !b.id.includes(RUN))).toBe(true);
   });
+
+  /**
+   * =======================================================================
+   * AND IT STILL PAGES HONESTLY WHEN A DATE RANGE IS APPLIED
+   * =======================================================================
+   * `?from=`/`?to=` makes 200 rarely binding — a week is not 200 appointments
+   * for most salons — but "rarely" is not "never", and the failure mode a range
+   * would reintroduce is the ORIGINAL one: a client that stops at the first page
+   * because a busy week fit in 200 rows on the day it was tested.
+   *
+   * THIS FIXTURE IS ALREADY THE HARD CASE. 207 rows, `starts_at DESC`, and two
+   * of them sharing an instant to the microsecond across the page-1 boundary —
+   * the case the `(starts_at, id)` tiebreak exists for. Rebuilding that under a
+   * window would be a second 207-row insert to ask a question this one already
+   * sets up, so the range is laid OVER it: a window wide enough to hold every
+   * row must reproduce the unwindowed walk exactly, row for row.
+   *
+   * THE DATES ARE READ BACK FROM THE ROWS, not hardcoded. The fixture is
+   * `now() + n hours`, so which salon-local days it spans depends on when the
+   * suite runs; `AT TIME ZONE` asks Postgres the same question the route asks
+   * `wallClockInstant`, from the other side.
+   */
+  describe('with ?from= and ?to= laid over the same 207 rows', () => {
+    let span: { from: string; to: string };
+
+    beforeAll(async () => {
+      const [row] = await exec(sql`
+        SELECT min((starts_at AT TIME ZONE 'Asia/Kuwait')::date)::text AS from_day,
+               max((starts_at AT TIME ZONE 'Asia/Kuwait')::date)::text AS to_day
+          FROM booking
+         WHERE salon_id = ${SALON} AND id LIKE ${`%${RUN}%`}`);
+      span = { from: String(row?.from_day), to: String(row?.to_day) };
+    });
+
+    it('page one is still capped and still does NOT claim to be the last', async () => {
+      const first = await fetchPage(null, span);
+      expect(first.items.length).toBe(PAGE);
+      expect(first.nextCursor).not.toBeNull();
+    });
+
+    /**
+     * THE COMPOSITION, STATED AS AN EQUALITY. A window that holds everything must
+     * not change the walk — same rows, same count, same order. A range that
+     * replaced the cursor rather than composing with it would return page one
+     * again on the second request and this would be 200 ids, not 207.
+     */
+    it('a window holding every row reproduces the unwindowed walk exactly', async () => {
+      const windowed = (await walk(span)).filter((id) => id.includes(RUN));
+      const unwindowed = (await walk()).filter((id) => id.includes(RUN));
+      expect(windowed).toEqual(unwindowed);
+      expect(windowed.length).toBe(TOTAL + 2);
+      expect(new Set(windowed).size).toBe(windowed.length);
+    });
+
+    /** The tie, across the page boundary, with the range applied. */
+    it('the two bookings sharing an instant survive the boundary under a range too', async () => {
+      const found = (await walk(span)).filter((id) => id === TIE_A || id === TIE_B);
+      expect(found.sort()).toEqual([TIE_A, TIE_B].sort());
+    });
+
+    /**
+     * AND THE WINDOW REALLY IS BOUNDING. Without this the block above would pass
+     * against a route that parsed `?from=`/`?to=` and threw them away.
+     */
+    it('a window one day short of the last day drops that day and nothing else', async () => {
+      const [row] = await exec(sql`
+        SELECT count(*)::int AS n FROM booking
+         WHERE salon_id = ${SALON} AND id LIKE ${`%${RUN}%`}
+           AND (starts_at AT TIME ZONE 'Asia/Kuwait')::date = ${span.to}::date`);
+      const onLastDay = Number(row?.n);
+      expect(onLastDay).toBeGreaterThan(0);
+
+      const shorter = (await walk({ from: span.from, to: shiftDay(span.to, -1) })).filter((id) =>
+        id.includes(RUN),
+      );
+      expect(shorter.length).toBe(TOTAL + 2 - onLastDay);
+    });
+  });
 });
+
+/** `2026-09-26` ± n days, as a calendar date. UTC arithmetic, so DST-free. */
+function shiftDay(day: string, delta: number): string {
+  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
+  const t = new Date(Date.UTC(y, m - 1, d + delta));
+  return t.toISOString().slice(0, 10);
+}

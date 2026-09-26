@@ -3,6 +3,13 @@
  * one or a CALENDAR one, which is the distinction this whole module exists to
  * keep visible.                                          (Aftab, item 9, half 1)
  *
+ * IT IS ALSO THE WINDOW A LIST IS FILTERED BY, since `?from=`/`?to=` arrived on
+ * `GET /salons/{id}/bookings`. Two grammars, one vocabulary: see
+ * `parseCalendarRange` below for why a list filter spells its range as two
+ * parameters and a report spells the same range as one token, and why both end
+ * up in the same `Period` so that `resolveWindow` is the only place instants are
+ * derived from calendar dates.
+ *
  * This vocabulary used to be four lines at the top of `services/metrics.ts`:
  * three presets, a day count, and a parser. It has moved here because it is no
  * longer a metrics detail — `services/reports.ts`, `routes/reports.ts` and
@@ -216,6 +223,113 @@ export function parsePeriod(value: unknown): Period {
     return { basis: 'rolling', preset: raw as PeriodPreset };
   }
   return { basis: 'calendar', ...parseRange(raw, 'period') };
+}
+
+/**
+ * ==========================================================================
+ * THE SAME CALENDAR RANGE, SPELLED AS TWO PARAMETERS: `?from=` AND `?to=`.
+ * ==========================================================================
+ * `?period=2026-03-01_2026-03-31` is one token because a report's window is one
+ * thing that has to round-trip through a filename, an audit line and a `text`
+ * column — see the header. A LIST FILTER has none of those obligations and is
+ * asked by a client that already holds two dates: the merchant dashboard's week
+ * grid knows its Sunday and its Saturday, and joining them into a token for the
+ * server to split again is ceremony with a parser on each end of it.
+ *
+ * SO IT IS A SECOND GRAMMAR FOR THE SAME VOCABULARY, and it lives here rather
+ * than in the route for the reason this module exists at all: "a shared concept
+ * living inside one of its consumers is how the consumer's header ends up
+ * describing something it does not own". The two grammars share `parseDate`, the
+ * ordering refusal, `calendarDays` and `MAX_RANGE_DAYS`, and what they produce is
+ * the SAME `Period` — so `resolveWindow` resolves a `?from=`/`?to=` range with no
+ * new date arithmetic anywhere. That reuse is the point. A list endpoint that
+ * derived its own instants from its own offset maths would be the second
+ * definition of when a salon's day begins, and the first one to drift.
+ *
+ * WHAT IT DOES NOT SHARE IS THE ERROR CODE. `parsePeriod` refuses with
+ * `invalid_period` because one parameter should have one error code; there are
+ * two parameters here and one concept, so the code is `invalid_range` and every
+ * message NAMES THE FIELD it is about. A client handling a 400 must be able to
+ * put the refusal under the right input.
+ *
+ * BOTH ENDS OR NEITHER, and this is the decision worth arguing. A `from` with no
+ * `to` has two readings — "to the end of the records" and "to today" — and they
+ * are different windows. It is also the unbounded half of an unbounded scan: the
+ * span ceiling below can only be applied to a range that has two ends. This is
+ * the same refusal `parseCompare` makes for `compare=previous` on a calendar
+ * period, for the same reason: a client that demonstrably knows one date knows
+ * the other, and refusing beats guessing.
+ *
+ * THE CEILING IS `MAX_RANGE_DAYS`, REUSED RATHER THAN RE-CHOSEN. Its own comment
+ * carries the argument verbatim for this caller — an unbounded range is an
+ * unbounded scan behind one GET, and a window longer than a year is far more
+ * likely to be a typo in a year digit than a question. The refusal states the
+ * limit and the span, because "invalid" tells a client nothing it can act on.
+ */
+export type CalendarPeriod = Extract<Period, { basis: 'calendar' }>;
+
+/** Absent, null or blank — the three ways a query parameter is not given. */
+function unset(value: unknown): boolean {
+  return value === undefined || value === null || String(value).trim() === '';
+}
+
+/**
+ * One end of a `?from=`/`?to=` range. `parseDate` already does the work including
+ * the round trip that catches "2026-02-31"; its `invalid_date` is re-wrapped for
+ * the one-code reason above, and nothing is lost in the swallow — its only
+ * failure mode is "that is not a real date", which the message below says with
+ * the offending token and the field name in it.
+ */
+function rangeEnd(token: string, field: 'from' | 'to'): CalendarDate {
+  try {
+    return parseDate(token, field);
+  } catch {
+    throw badRequest(
+      'invalid_range',
+      `${field} is not a calendar date: ${token}. Use a date like "2026-03-01" — the salon's own day, not an instant.`,
+    );
+  }
+}
+
+/**
+ * `?from=`/`?to=` → a calendar `Period`, or `null` when NEITHER was given.
+ *
+ * `null` is the load-bearing return: it is what lets a caller add this filter
+ * without changing a single thing about the request that does not use it.
+ */
+export function parseCalendarRange(fromValue: unknown, toValue: unknown): CalendarPeriod | null {
+  const noFrom = unset(fromValue);
+  const noTo = unset(toValue);
+  if (noFrom && noTo) return null;
+
+  if (noFrom || noTo) {
+    const given = noFrom ? 'to' : 'from';
+    const missing = noFrom ? 'from' : 'to';
+    throw badRequest(
+      'invalid_range',
+      `${given} was given without ${missing}. Name both ends of the window: "${missing}" has no single obvious default, and a range with one open end has no bound to check against the ${MAX_RANGE_DAYS}-day limit.`,
+    );
+  }
+
+  const from = rangeEnd(String(fromValue).trim(), 'from');
+  const to = rangeEnd(String(toValue).trim(), 'to');
+
+  if (utcMidnight(to) < utcMidnight(from)) {
+    throw badRequest(
+      'invalid_range',
+      `from is after to: ${ymd(from)} is later than ${ymd(to)}. Both are inclusive salon-local days, so from must not be later than to.`,
+    );
+  }
+
+  const days = calendarDays(from, to);
+  if (days > MAX_RANGE_DAYS) {
+    throw badRequest(
+      'invalid_range',
+      `from ${ymd(from)} to ${ymd(to)} spans ${days} days; the longest window is ${MAX_RANGE_DAYS} days. Ask for a shorter range.`,
+    );
+  }
+
+  return { basis: 'calendar', from, to };
 }
 
 /** The serialised form. See the header: this round-trips through `parsePeriod`. */
