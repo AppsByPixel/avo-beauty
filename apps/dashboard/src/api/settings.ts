@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { Branch, Salon } from '@avo/types';
+import type { Branch, Salon, SocialLink } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import { deviceKeys } from './devices.js';
@@ -190,6 +190,77 @@ export function useUpdateSalon(): UseMutationResult<unknown, unknown, SalonPatch
      * the server still holds 5 is the same class of lie as a half-published
      * ladder. The control owns its own in-flight value — see Settings.tsx.
      */
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: salonKeys.detail(salonId) });
+    },
+  });
+}
+
+/* ------------------------------------------------------------ social links -- */
+
+/**
+ * `PATCH /v1/salons/{id}/social/{linkId}` — `perms.loyalty`.
+ *
+ * ONE LINK PER REQUEST, AND THE WHOLE-ARRAY DOOR IS NOT USED BY THIS CLIENT.
+ * `social` is in `MERCHANT_EDITABLE`, so `useUpdateSalon` above could carry the
+ * four links in one PATCH, and that is precisely the write the per-link endpoint
+ * exists to stop this dashboard making. `api/src/services/socialLinks.ts` states
+ * the failure: "a manager typing an Instagram handle [becomes] a writer of the
+ * WhatsApp number a colleague is editing in the next tab." The array read out of
+ * `useSalon()` is a snapshot, and sending it back is sending a colleague's row
+ * back with it.
+ *
+ * So `SalonPatch` above deliberately does NOT list `social`. The type is the
+ * guard: reaching for the bulk door from this screen is a compile error rather
+ * than a race nobody sees until two managers are in Settings at once.
+ *
+ * WHICH PERMISSION, AND THE ROUTE SAYS THE NAME IS WRONG. `perms.loyalty`, and
+ * `api/src/routes/salons.ts:14` flags its own choice: "perms.loyalty — and that
+ * name is wrong". The route's argument, summarised so this client is not thought
+ * to have picked one: social links are a Settings concern, the nine permissions
+ * in the contract have no `settings` among them, and every other write on this
+ * screen is already `loyalty`. A weaker gate would let someone who cannot change
+ * the deposit repoint the salon's public Instagram, which is the salon's identity
+ * in every customer's app. `perms.settings` is the honest name and adding it is a
+ * four-way break, so it is escalated to trunk and not invented here.
+ *
+ * THE RESPONSE IS NOT WRITTEN INTO THE CACHE, for `useUpdateSalon`'s reason
+ * exactly: nothing here parses it, and a cast is not a check. The body is
+ * `{ …link, url, links }` — richer than what a refetch costs — and the day this
+ * file grows a parser is the day it may be trusted. Until then, invalidate.
+ */
+export interface SocialLinkPatch {
+  id: SocialLink['id'];
+  /**
+   * `''` CLEARS IT, and that is a value rather than an omission —
+   * `parseSocialHandle` admits the empty string on purpose so that emptying the
+   * box and flipping the switch stay independent operations. `undefined` means
+   * "this request is not about the handle".
+   */
+  handle?: string;
+  on?: boolean;
+}
+
+export function useUpdateSocialLink(): UseMutationResult<unknown, unknown, SocialLinkPatch> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    /*
+     * THE HANDLE IS NOT VALIDATED HERE, AND THE FOUR FORMATS ARE NOT RESTATED.
+     * `parseSocialHandle` in `api/src/services/socialLinks.ts` is the one parser
+     * both server doors share, explicitly so the two "cannot disagree about what
+     * a handle is". A third copy in this column would be a client that keeps
+     * explaining a refusal the API stopped giving — the mistake
+     * `settingsReceiptChannels.test.ts` pins for the receipt floor. What the
+     * screen does instead is SAY which format each network wants, before she
+     * types; the refusal, if one comes, is the server's own sentence.
+     */
+    mutationFn: ({ id, ...patch }) =>
+      authedRequest<unknown>('merchant', `/v1/salons/${salonId}/social/${id}`, {
+        method: 'PATCH',
+        body: patch,
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: salonKeys.detail(salonId) });
     },
