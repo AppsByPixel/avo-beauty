@@ -652,6 +652,273 @@ a:hover {
   padding-right: 22px;
 }
 
+/* =================================================== notification bell == */
+
+/*
+ * The bell, its badge and its panel. AVO Merchant Dashboard.dc.html:88-115 for
+ * the geometry; every colour resolves through a token, so a white-label build
+ * moves the tint and the dot with the brand and nothing here is a literal.
+ *
+ * WHERE THIS DEPARTS FROM THE DESIGN'S HEXES, AND WHY - all three are contrast,
+ * not taste. The design was drawn in Amara's sage and its muted greys are the
+ * ones this dashboard uses everywhere for labels, which is fine at 13px over a
+ * card and is not fine for the panel's 12px body and 11.5px timestamp:
+ *
+ *   body / timestamp   rgba(28,27,25,0.5) and 0.38 measure 3.29:1 and lower on
+ *                      --avo-surface. Small text owes 4.5:1, so the body takes
+ *                      --avo-text-muted-strong (5.9:1) and the secondary lines
+ *                      --avo-text-muted-label (5.3:1). The hierarchy is carried
+ *                      by size and weight instead of by a failing grey.
+ *   the badge          #A0503F is not a token. --avo-danger-dot is, and white on
+ *                      it measures 3.8:1 - short of AA for 10px bold digits. So
+ *                      the fill is --avo-danger-text (5.4:1 against white),
+ *                      which is non-negotiable #9's move applied to the danger
+ *                      ramp rather than the brand one: the darker member of the
+ *                      pair is the one white sits on.
+ *   the dots           severity-driven rather than kind-driven, because the API
+ *                      sends severity and the design's five-kind hue map does
+ *                      not match the three-kind enum. Both tones and the
+ *                      resolved grey clear 3:1 against --avo-surface as
+ *                      non-text.
+ */
+
+.dash-bell {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.dash-bell__button {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--avo-radius-chip);
+  border: 1px solid var(--avo-ui-ink-10);
+  background: var(--avo-white);
+  color: var(--avo-text-muted-strong);
+  cursor: pointer;
+}
+
+.dash-bell__button[data-open='true'] {
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+}
+
+/*
+ * `aria-hidden`: the count is in the button's accessible name already
+ * ("Notifications, 3 unread"), and a bare digit read out after it would
+ * announce the number twice.
+ */
+.dash-bell__badge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: var(--avo-radius-pill);
+  background: var(--avo-danger-text);
+  color: var(--avo-white);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* The design's ring, which is what keeps the pill legible over the glyph. */
+  border: 2px solid var(--avo-surface);
+}
+
+.dash-bell__pop {
+  position: absolute;
+  top: 46px;
+  right: 0;
+  width: 340px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-ui-ink-10);
+  border-radius: var(--avo-radius-card);
+  box-shadow: var(--avo-ui-shadow-pop);
+  z-index: 30;
+  overflow: hidden;
+  text-align: left;
+}
+
+.dash-bell__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+}
+
+.dash-bell__heading {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.dash-bell__markall {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--avo-brand-deep);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--avo-radius-chip);
+}
+
+.dash-bell__list {
+  max-height: 340px;
+  overflow: auto;
+}
+
+/* One row. A `div` when it goes nowhere, a `button` when it does - same box. */
+.dash-bell__row {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 16px;
+  border: none;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  font-family: inherit;
+  color: var(--avo-ink);
+  background: transparent;
+  text-align: left;
+}
+
+.dash-bell__row--link {
+  cursor: pointer;
+}
+
+.dash-bell__row[data-unread='true'] {
+  background: var(--avo-surface);
+}
+
+.dash-bell__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9px;
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: var(--avo-neutral-dot);
+}
+
+.dash-bell__dot[data-tone='warning'] {
+  background: var(--avo-danger-dot);
+}
+
+.dash-bell__dot[data-tone='info'] {
+  background: var(--avo-brand-deep);
+}
+
+/* A resolved row demands nothing, whatever severity raised it. */
+.dash-bell__dot[data-tone='resolved'] {
+  background: var(--avo-neutral-dot);
+}
+
+.dash-bell__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-bell__title {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+/*
+ * The strike. Paired in the markup with a visually-hidden "Resolved." because
+ * `text-decoration` is invisible to a screen reader, and "this is over" is the
+ * whole content of the distinction.
+ */
+.dash-bell__title[data-resolved='true'] {
+  text-decoration: line-through;
+  color: var(--avo-text-muted-label);
+}
+
+.dash-bell__body {
+  display: block;
+  font-size: 12px;
+  color: var(--avo-text-muted-strong);
+  margin-top: 2px;
+}
+
+.dash-bell__when {
+  display: block;
+  font-size: 11.5px;
+  color: var(--avo-text-muted-label);
+  margin-top: 4px;
+}
+
+/* The narrowing disclosure. Above the rows, not only over an empty panel. */
+.dash-bell__scope {
+  margin: 0;
+  padding: 11px 16px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--avo-text-muted-label);
+  background: var(--avo-surface-alt);
+  border-bottom: 1px solid var(--avo-hairline-inner);
+}
+
+.dash-bell__empty {
+  padding: 26px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--avo-text-muted-label);
+}
+
+.dash-bell__more {
+  margin: 0;
+  padding: 11px 16px;
+  font-size: 11.5px;
+  color: var(--avo-text-muted-label);
+  text-align: center;
+}
+
+.dash-bell__state {
+  padding: 8px 12px 14px;
+}
+
+.dash-bell__loading .dash-bell__row--skeleton {
+  align-items: flex-start;
+}
+
+.dash-bell__loading .dash-bell__text > .avo-skeleton {
+  display: block;
+}
+
+.dash-bell__loading .dash-bell__text > .avo-skeleton + .avo-skeleton {
+  margin-top: 6px;
+}
+
+.dash-bell__foot {
+  padding: 11px 16px;
+  border-top: 1px solid var(--avo-hairline-inner);
+  font-size: 11.5px;
+  color: var(--avo-text-muted-label);
+}
+
+/*
+ * A 340px panel anchored to the right edge fits inside the header at every
+ * supported width, but the states it borrows from the sections are built for a
+ * card. Keep them from forcing the panel wider than itself.
+ */
+.dash-bell__pop .avo-state,
+.dash-bell__pop .avo-stale {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 /* =============================================================== overview == */
 
 .overview__kpis {
