@@ -737,6 +737,50 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/bookings → appointments',
   'GET /salons/:id/branches/:bid/closure-preview → loyalty',
   /**
+   * THE MERCHANT'S CUSTOMER BOOK — `api/src/routes/customers.ts`, dev `e046e7b`.
+   *
+   * `→ team` IS READ FROM SOURCE AND CONFIRMED BY REQUEST, and the two are worth
+   * keeping apart the way the device doors' note keeps them apart. Lane A reported
+   * `team` on all three; what makes it true here is that all three handlers open
+   * `await requireCustomerDirectory(req)`, whose only gate path is
+   * `requireDashboardPerm(req, 'team')`. The stronger half is behavioural and is
+   * already green above: the generated probes revoke `team`, require a 403 carrying
+   * `team`'s own copy, then grant `team` alone and require the refusal to stop.
+   *
+   * THE WRAPPER IS THE INTERESTING PART, because these three lines exist only
+   * because the census resolves one. `requireCustomerDirectory` is
+   * `requireDirectoryScanner`'s shape exactly — check the surface, return early on
+   * the happy path, write the refusal audit row, then `return` the canonical guard —
+   * and this file's own header records that a name-based reading reported
+   * `requireDirectoryScanner`'s routes as UNGATED, "a customer-directory read and a
+   * shopfront read, reported as open, by the very check meant to find that".
+   *
+   * The same misreading here would be worse than a wrong permission. The three
+   * handler bodies name exactly two helpers, `requireCustomerDirectory` and
+   * `requireSameSalon`, and NEITHER is in the census's vocabulary — not a gate, and
+   * not one of the seven scope guards either. So a census that did not resolve
+   * wrappers would not have printed `[requireStaff]`; it would have found no
+   * authentication at all and demanded these three be added to `ANONYMOUS` with a
+   * reason, which is the one ledger in this file whose entries say "this route lets
+   * anybody in, on purpose".
+   *
+   * ONE LINE EACH AND NOT TWO. The wrapper is not disjunctive in
+   * `requireLoyaltyReader`'s sense: its early `return p` is a PASS rather than a
+   * second gate path, and every refusal — wrong surface or missing permission —
+   * funnels into the single `requireDashboardPerm(req, 'team')` at the bottom.
+   *
+   * THE SALON BOUNDARY IS NOT IN THESE LINES AND CANNOT BE. `requireSameSalon` is a
+   * tenancy check, not a permission gate, so `→ team` is byte-identical whether it
+   * is there or not — the header's `[requireMember]` caveat about a `WHERE` clause,
+   * one door along. All three are probed for it by name in `tenancy.test.ts §
+   * SALON_ROUTES`, and the second axis — her own salon, a stranger's member id — in
+   * that file's `the customer book` describe, because that one answers 404 rather
+   * than 403 on purpose and no census line could tell.
+   */
+  'GET /salons/:id/customers → team',
+  'GET /salons/:id/customers/:memberId → team',
+  'GET /salons/:id/customers/:memberId/activity → team',
+  /**
    * THE THREE DEVICE-ENROLMENT DOORS, on dev `45a60a1`, closing decision 82.
    *
    * `→ dashboard` IS CONFIRMED, AND NOT BY THIS LINE. Lane A reports the census

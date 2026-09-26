@@ -1276,6 +1276,69 @@ const UNMODELLED: Record<string, string> = {
     'one, because the property that matters is not its shape but its IDENTITY with the close\'s ' +
     'own report — both are built by `branchClosureImpact` and scanner-style deep equality is a ' +
     'stronger guard than two schemas would be. Asserted in configuration.test.ts.',
+  /**
+   * THE MERCHANT'S CUSTOMER BOOK, arriving with lane A's `customers.ts` on dev
+   * `e046e7b` — and this census named all three on the first run after the merge,
+   * the way it named the devices slice above.
+   *
+   * IT IS ALSO THE THIRD PINNED LEDGER THIS SLICE GREW, AND THE BRIEF NAMED TWO.
+   * The dispatch listed `tenancy.test.ts § SALON_ROUTES` and
+   * `permission-census.test.ts § PINNED_COVERAGE`; this file's GET census is the one
+   * nobody counted, and it goes red the same way — by name, at merge, on a number
+   * and a list rather than on anything about the routes. Recorded here because "the
+   * consuming lane will be told which ledgers moved" is exactly the assumption these
+   * ledgers exist to stop anyone relying on.
+   *
+   * ALL THREE UNMODELLED RATHER THAN PROBED, because `packages/types` declares
+   * nothing for any of them. Grepped rather than assumed: `Customer`,
+   * `CustomerListItem` and `CustomerDetail` appear nowhere under
+   * `packages/types/src`; the two row types are declared in
+   * `api/src/services/customerDirectory.ts` and live only there. A probe here would
+   * be a binding to a schema that does not exist.
+   *
+   * AND THE LIST AND THE CARD ARE NOT A `Member` LIST WEARING A WRAPPER, which is
+   * the tempting reading and the wrong one. `MemberSchema` carries the customer's own
+   * record; these rows are `serialiseMemberContact`-treated — `memberErased` and a
+   * NULLABLE `memberPhone`, DECISIONS.md #100 — so the erased tombstone cannot leave
+   * through a field the wire calls a phone number. That is the same three-field
+   * contract the two booking rows above carry, arriving on the merchant reads that
+   * join `member` for a phone after them, and it is the part a future schema must
+   * not lose: an optional `memberPhone` would tolerate the server that forgot to
+   * send it. The ACTIVITY row is the exception and carries no phone at all, which is
+   * why its entry below names a different family.
+   *
+   * Their gates are driven by the generated sweep in `permission-census.test.ts`
+   * (`→ team`, all three, through `requireCustomerDirectory`) and their tenancy
+   * boundary — both axes of it — in `tenancy.test.ts`.
+   */
+  'GET /salons/:id/customers':
+    'the merchant Customers tab — one row per member of this salon, `{id, name, ' +
+    'memberErased, memberPhone, tier, balanceFils, visits, joinedAt}` under ' +
+    '`{items, nextCursor}`. No schema in packages/types. NARROWER THAN MemberSchema ' +
+    'and deliberately so: no email, no stamps, no salonId on a list that is already ' +
+    'salon-scoped by its URL. `memberPhone` is NULLABLE exactly when `memberErased` ' +
+    'is true (DECISIONS.md #100) and the two are read together — a client branching ' +
+    'on the null alone cannot tell "erased" from "the join forgot". The page size is ' +
+    'FIXED by the server, so `nextCursor` is a real cursor here rather than the ' +
+    'hardcoded null the devices list serves.',
+  'GET /salons/:id/customers/:memberId':
+    'one customer\'s card — the list row plus `salonId`, `email`, `emailVerified` and ' +
+    '`stamps`. No schema in packages/types. It is the list row BY CONSTRUCTION — ' +
+    '`serialiseCustomerDetail` spreads `serialiseCustomerListItem` — so a future ' +
+    'CustomerDetail schema should extend a CustomerListItem one rather than restate ' +
+    'it, or the erased-contact contract gets a second copy to disagree with. Refuses ' +
+    'a member outside this salon with 404 `unknown_member`, byte-identical to one ' +
+    'that does not exist, which is a disclosure decision rather than a shape and is ' +
+    'asserted in tenancy.test.ts.',
+  'GET /salons/:id/customers/:memberId/activity':
+    'one customer\'s history — the shared FeedItem sentence rows of ' +
+    '`services/activityFeed.ts`, narrowed to one member, under `{items, nextCursor}`. ' +
+    'A view and not an entity, the same family as `GET /salons/:id/activity` above ' +
+    'and unmodelled for the same reason: the union of the transaction and loyalty ' +
+    'streams has no schema. `amountFils` is the stored column, signed as stored, and ' +
+    '`feeFils` is deliberately absent — commission is merchant-visible and belongs on ' +
+    'the settlement report. `?from=`/`?to=` are salon-local calendar dates, not ' +
+    'instants.',
   'GET /members/:id':
     'the scanner\'s member RESOLVE, and it serves the `POST /scans` ENVELOPE rather than a bare ' +
     'Member — member plus the counter state the charge screen needs. Unmodelled because that ' +
@@ -2145,9 +2208,11 @@ describe('and no schema is narrower than the wire', () => {
  * registration's method. The drop itself is now reported by
  * `ambiguousRegistrations()`, which the old reader had no equivalent of.
  *
- * The 55-path GET set does NOT move across this change: measured set-identical,
- * old reader and new, so `toBe(55)` below is green either way and is not part of
- * this proof.
+ * The GET set does NOT move across this change: measured set-identical, old
+ * reader and new, so the exact count below is green either way and is not part of
+ * this proof. It was 55 paths when that was measured and is 58 now — lane A's
+ * customer book — which is the count moving with the ROUTES, exactly as the note
+ * beside the assertion asks it to, and not this proof going stale.
  */
 describe("the GET reader is the census's reader, not a fourth regex", () => {
   /** The shape every path in `api/src/routes/` has today. The baseline both readers pass. */
@@ -2257,7 +2322,7 @@ describe('census — every GET the API registers is either probed or explicitly 
       expect(paths, `the GET scan lost ${known}`).toContain(known);
     }
     /**
-     * PINNED EXACTLY, REPLACING A FLOOR OF 25 AGAINST 55 REAL GETs.
+     * PINNED EXACTLY, REPLACING A FLOOR OF 25 AGAINST THE 55 REAL GETs OF THE DAY.
      *
      * `>= 25` was not a floor, it was thirty routes of slack. Weakness 2 of the
      * old reader — a `const`-lifted path leaving the census with both consumers
@@ -2266,8 +2331,8 @@ describe('census — every GET the API registers is either probed or explicitly 
      * is nominally guarding, and the routes it would have lost are the ones a
      * refactor touched, not a random thirty.
      *
-     * PINNED RATHER THAN RAISED, and rather than restated as a 55-path set
-     * literal, for a maintenance reason that is worth writing down:
+     * PINNED RATHER THAN RAISED, and rather than restated as a set literal of
+     * every path, for a maintenance reason that is worth writing down:
      *
      *   - A set literal here would be a SECOND pin of the same fact.
      *     `permission-census.test.ts` § `PINNED_COVERAGE` already pins every
@@ -2275,8 +2340,8 @@ describe('census — every GET the API registers is either probed or explicitly 
      *     paste-ready line on failure. That pin now covers THIS scan too, which
      *     it did not before — the two files read `api/src/routes/` through one
      *     reader as of this change, so a GET that vanishes from `registrationsIn`
-     *     vanishes from both and is named there. Duplicating 55 paths here would
-     *     mean two files to edit per route and would add nothing.
+     *     vanishes from both and is named there. Duplicating every path here
+     *     would mean two files to edit per route and would add nothing.
      *   - An exact count costs no maintenance this file does not already impose.
      *     A new GET must be added to `probes()` or `UNMODELLED` regardless — the
      *     unclassified spec below sees to that — so it is already an edit here.
@@ -2288,12 +2353,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 55 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 58 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(55);
+    ).toBe(58);
   });
 
   it('no GET route is left unclassified', () => {
