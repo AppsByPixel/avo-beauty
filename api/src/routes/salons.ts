@@ -83,6 +83,21 @@ import { loyaltyConfigOf } from './loyalty';
 
 /** api-contract.md § Booking — the four statuses, and the merchant's status pills. */
 const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
+/**
+ * `?source=` on `GET /salons/{id}/bookings`. The same four-line grammar as
+ * `?status=` beside it, deliberately: same split, same trim, same
+ * `Unknown booking <thing>: x. One of a, b, c.` refusal. A second parameter with
+ * its own spelling of "invalid" is how one endpoint comes to have two error
+ * vocabularies, and a client has to learn both.
+ *
+ * WHY IT IS WORTH HAVING AT ALL. Since migration 0056 this board mixes `app`
+ * bookings a customer made and paid a deposit on with `merchant` ones a
+ * receptionist wrote in, and they are different objects to the person reading
+ * the screen: one has money behind it and a customer who can cancel it, the
+ * other is a line in a diary. "Show me only the ones we wrote in" is the first
+ * question a manager asks of a mixed list.
+ */
+const BOOKING_SOURCES = ['app', 'google_calendar', 'merchant'] as const;
 
 /** Fields a merchant may edit. Anything else in the body is refused, not ignored. */
 /**
@@ -2004,7 +2019,13 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
    */
   app.get<{
     Params: { id: string };
-    Querystring: { status?: string; cursor?: string; from?: string; to?: string };
+    Querystring: {
+      status?: string;
+      source?: string;
+      cursor?: string;
+      from?: string;
+      to?: string;
+    };
   }>(
     '/salons/:id/bookings',
     async (req, reply) => {
@@ -2022,6 +2043,35 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           throw badRequest(
             'invalid_status',
             `Unknown booking status: ${unknown.join(', ')}. One of ${BOOKING_STATUSES.join(', ')}.`,
+          );
+        }
+      }
+
+      /**
+       * `?source=` — THE SAME FOUR LINES, ON PURPOSE. Not factored into a shared
+       * helper: the two parameters are four lines each and a `parseCsvEnum(raw,
+       * ALLOWED, 'status')` would put the error CODE behind a parameter, which is
+       * how `invalid_status` and `invalid_source` become one code that means two
+       * things. `routes/bookings.ts § parseStatuses` is a third copy of this
+       * grammar for the same reason.
+       *
+       * ABSENT IS UNCHANGED, exactly as the range parameter's own comment
+       * requires: `null` adds no predicate, so a request without `?source=`
+       * issues the query it issued before this parameter existed.
+       */
+      const rawSource = req.query?.source;
+      const wantedSources =
+        typeof rawSource === 'string' && rawSource.trim() !== ''
+          ? rawSource.split(',').map((s) => s.trim()).filter(Boolean)
+          : null;
+      if (wantedSources) {
+        const unknown = wantedSources.filter(
+          (s) => !(BOOKING_SOURCES as readonly string[]).includes(s),
+        );
+        if (unknown.length > 0) {
+          throw badRequest(
+            'invalid_source',
+            `Unknown booking source: ${unknown.join(', ')}. One of ${BOOKING_SOURCES.join(', ')}.`,
           );
         }
       }
@@ -2115,6 +2165,16 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             eq(booking.salonId, req.params.id),
             wanted
               ? inArray(booking.status, wanted as Array<BookingRow['status']>)
+              : undefined,
+            /**
+             * ANOTHER `AND`, NOT A REPLACEMENT — the range parameter's own rule.
+             * `?status=` still filters, the cursor still pages, the order and the
+             * tiebreak are untouched, and a `source` filter is a SUBSET of the
+             * same total order rather than a second one, so a page boundary
+             * inside a group sharing an instant behaves identically.
+             */
+            wantedSources
+              ? inArray(booking.source, wantedSources as Array<BookingRow['source']>)
               : undefined,
             /**
              * HALF-OPEN, `[fromInstant, toInstant)`, on `starts_at` — the column

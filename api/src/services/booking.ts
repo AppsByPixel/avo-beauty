@@ -1009,6 +1009,12 @@ export async function cancelBooking(
  *     the three terminal states it hit, the way `cancelBooking` answers
  *     `already_cancelled` / `not_cancellable` with copy a client can render.
  *
+ *   THE DEPOSIT IS A BRANCH, NOT A PRECONDITION.  A hand-written appointment is
+ *     `deposit_held` with `deposit_fils = 0` and no hold, and it can be marked
+ *     like any other: a no-show is a fact about ATTENDANCE, and the walk-in who
+ *     did not turn up is a no-show in the sense the salon means. The money path
+ *     below is entered only when there is money. See the branch in the body.
+ *
  *   `no_show_return_due_at <= now`.  DELIBERATELY NOT KEPT, and keeping it would
  *     make this endpoint unreachable. That is the AUTOMATIC rule's own threshold:
  *     the moment it is satisfied, the worker's next tick takes the row. A manual
@@ -1110,8 +1116,18 @@ export async function markNoShow(
 ): Promise<{
   booking: ReturnType<typeof serialiseBooking>;
   refundedFils: number;
-  balanceAfterFils: number;
-  transactionId: string;
+  /**
+   * NULLABLE SINCE THE ZERO-DEPOSIT MARK, and PRESENT rather than omitted on
+   * both branches. A hand-written appointment has no wallet behind it, so there
+   * is no balance to report and no transaction to name; `cancelByMerchant`
+   * returns the same shape for the same reason, and the two endpoints answering
+   * differently about the same kind of row would be the worse outcome. A client
+   * must be able to tell "no money moved" from "this API is too old to say",
+   * which is the argument `chargeVoided` and `depositReturnedFils` make on their
+   * own responses.
+   */
+  balanceAfterFils: number | null;
+  transactionId: string | null;
 }> {
   return db.transaction(async (tx) => {
     /**
@@ -1137,38 +1153,69 @@ export async function markNoShow(
     if (!probe) throw notFound('unknown_booking', 'No such appointment.');
 
     /**
-     * A NO-SHOW IS A DEPOSIT COMING BACK, AND A ZERO-DEPOSIT BOOKING HAS NONE.
+     * ==================================================================
+     * A NO-SHOW IS A FACT ABOUT ATTENDANCE, NOT ABOUT MONEY.
+     * ==================================================================
+     * A walk-in the front desk wrote in who does not turn up is a no-show in
+     * exactly the sense the salon cares about. The only thing that ever argued
+     * otherwise is that the status value is spelled `no_show_returned` — and that
+     * naming problem is already contained at the display boundary rather than
+     * fixed with a four-way enum break: `packages/types § BookingSchema` says a
+     * client renders the pill from `depositFils`, and the scanner and wallet both
+     * say "No-show" rather than "No-show · returned" at 0.
      *
-     * This endpoint shipped before `booking.member_id` and `hold_transaction_id`
-     * could be null (migration 0056), so it has always been able to assume both.
-     * A hand-written merchant appointment is `deposit_held` with neither, and it
-     * would reach `returnDeposit`, which credits a wallet by 0, writes a
-     * `deposit_return` transaction for money nobody held and an unbalanced ledger
-     * pair behind it — or, on a GUEST row, finds no member to lock at all.
+     * So the deposit is a BRANCH here, not a precondition. Two paths out of one
+     * transition:
      *
-     * REFUSED RATHER THAN QUIETLY HANDLED, and the refusal is narrow on purpose:
-     * "a merchant appointment can be marked as a no-show without any money
-     * moving" is a real product question with a status enum behind it (the
-     * contract renders "No-show" from `deposit_fils = 0`), and answering it here
-     * would be this lane deciding it in a guard clause. Reported.
+     *   hold_transaction_id IS NOT NULL   `returnDeposit` — the money path this
+     *                                     endpoint has always had, untouched.
+     *   hold_transaction_id IS NULL       the status transition ALONE. No
+     *                                     transaction, no ledger entry, no touch
+     *                                     of any balance, and no member row
+     *                                     required — which is what lets a GUEST
+     *                                     booking be marked at all.
+     *
+     * The conditional `booking_settlement_matches_status` from migration 0056
+     * already permits exactly this shape: a row with no hold keeps
+     * `settled_transaction_id` NULL through every status, so `no_show_returned`
+     * needs nothing to point at. That the constraint permitted it without being
+     * touched is the sign it was written around the right question.
+     *
+     * THE MEMBER LOCK IS TAKEN ONLY ON THE MONEY PATH. `returnDeposit`'s header
+     * fixes the global order as member-then-booking because `performCharge` takes
+     * the member row `FOR UPDATE` first and a path that took them the other way
+     * round deadlocks against a charge on the same customer. The moneyless branch
+     * reads no balance and writes none, so it has nothing for a lock to
+     * serialise — and a guest has no member row to lock in the first place.
      */
-    if (probe.holdTransactionId === null || probe.memberId === null) {
-      throw conflict(
-        'no_deposit_to_return',
-        'That appointment was written down at the salon and has no deposit held ' +
-          'against it, so there is nothing to return. Cancel it instead.',
-        { bookingId: params.bookingId },
-      );
+    let m: typeof member.$inferSelect | null = null;
+    if (probe.holdTransactionId !== null) {
+      if (probe.memberId === null) {
+        /**
+         * UNREACHABLE, AND SAID RATHER THAN ASSUMED — this is the one case the
+         * old blanket refusal was right about, kept and narrowed to it.
+         * `booking_deposit_matches_hold` + `booking_merchant_is_zero_deposit` +
+         * `booking_guest_requires_merchant_source` together mean a row with a hold
+         * is an `app` row and therefore names a member. A row that has both a hold
+         * and no member was written by something no writer in this API can be, so
+         * it is refused rather than marked without the lock the money path needs.
+         */
+        throw conflict(
+          'not_markable',
+          'That appointment cannot be marked as a no-show.',
+          { bookingId: params.bookingId },
+        );
+      }
+      const probeMemberId = probe.memberId;
+      const [locked] = await tx
+        .select()
+        .from(member)
+        .where(eq(member.id, probeMemberId))
+        .for('update')
+        .limit(1);
+      if (!locked) throw notFound('unknown_member', 'No such member.');
+      m = locked;
     }
-    const probeMemberId = probe.memberId;
-
-    const [m] = await tx
-      .select()
-      .from(member)
-      .where(eq(member.id, probeMemberId))
-      .for('update')
-      .limit(1);
-    if (!m) throw notFound('unknown_member', 'No such member.');
 
     // NOW the booking, locked, and re-read under that lock.
     const [row] = await tx
@@ -1186,13 +1233,26 @@ export async function markNoShow(
      * thing you can do".
      */
     if (row.status !== 'deposit_held') {
+      /**
+       * AND THE COPY NO LONGER PROMISES A REFUND THAT NEVER HAPPENED. Two of
+       * these three sentences named a deposit coming back, which on a
+       * hand-written appointment is the salon telling a customer she got money
+       * she never paid — the exact failure `BookingSchema`'s status comment
+       * describes for the pills. The deposit half of each sentence is now
+       * conditional on there having been one.
+       */
+      const hadDeposit = row.holdTransactionId !== null;
       throw conflict(
         row.status === 'no_show_returned' ? 'already_no_show' : 'not_markable',
         row.status === 'no_show_returned'
-          ? 'That appointment is already marked as a no-show and the deposit has been returned.'
+          ? hadDeposit
+            ? 'That appointment is already marked as a no-show and the deposit has been returned.'
+            : 'That appointment is already marked as a no-show.'
           : row.status === 'completed'
             ? 'That appointment was charged, so it cannot be marked as a no-show.'
-            : 'That appointment was cancelled, and the deposit is already back in her wallet.',
+            : hadDeposit
+              ? 'That appointment was cancelled, and the deposit is already back in her wallet.'
+              : 'That appointment was cancelled.',
         { status: row.status },
       );
     }
@@ -1207,29 +1267,107 @@ export async function markNoShow(
       );
     }
 
-    const returned = await returnDeposit(tx, {
-      row: row as BookingRow,
-      memberRow: m,
-      reason: 'no_show',
-      // A REAL ACTOR, which is the whole difference from the worker's call.
-      principal: ctx.principal,
-      now,
-      note: 'No-show · marked on the dashboard',
+    // -------------------------------------------- the deposit-bearing one --
+    if (m) {
+      const returned = await returnDeposit(tx, {
+        row: row as BookingRow,
+        memberRow: m,
+        reason: 'no_show',
+        // A REAL ACTOR, which is the whole difference from the worker's call.
+        principal: ctx.principal,
+        now,
+        note: 'No-show · marked on the dashboard',
+        ipAddress: ctx.ipAddress ?? null,
+        userAgent: ctx.userAgent ?? null,
+      });
+
+      const result = {
+        booking: {
+          ...serialiseBooking(row as BookingRow),
+          status: 'no_show_returned' as const,
+        },
+        refundedFils: row.depositFils,
+        balanceAfterFils: returned.balanceAfterFils,
+        transactionId: returned.transactionId,
+      };
+
+      await completeKey(tx, keyId, { status: 200, body: result }, returned.transactionId);
+      return result;
+    }
+
+    // ------------------------------------------------ the moneyless one --
+    /**
+     * THE STATUS TRANSITION ALONE. Nothing else happens here, and the emptiness
+     * is the specification: no `nextTransactionId`, no `transaction` insert, no
+     * `ledgerEntry`, no `member` update and no `queueReceipts` — a receipt for a
+     * refund that did not happen is the same lie as the pill that says one did.
+     */
+    const [marked] = await tx
+      .update(booking)
+      .set({ status: 'no_show_returned', returnedAt: now, updatedAt: now })
+      /**
+       * `status = 'deposit_held'` AND `hold_transaction_id IS NULL` BOTH IN THE
+       * WHERE. The first is `returnDeposit`'s own lesson — lane D replaced the
+       * caller's status check with `if (false)` and the suite stayed green, so the
+       * transition belongs in the statement. The second is the branch's own
+       * invariant: a hold that appeared between the probe and here would leave a
+       * `no_show_returned` row with a live deposit still sitting in the
+       * `deposit_held` ledger account and nothing pointing at it.
+       */
+      .where(
+        and(
+          eq(booking.id, row.id),
+          eq(booking.status, 'deposit_held'),
+          sql`${booking.holdTransactionId} IS NULL`,
+        ),
+      )
+      .returning();
+    if (!marked) {
+      throw conflict('not_markable', 'That appointment cannot be marked as a no-show.', {
+        bookingId: row.id,
+      });
+    }
+
+    /**
+     * `rules`, NOT `money`, and this is the whole difference from the branch
+     * above. `returnDeposit` writes a `money` audit row because money moved.
+     * Nothing moved here, and a `money` row with a zero amount would be a line in
+     * the Money filter that a merchant reading a reconciliation has to skip past
+     * — the question `rescheduleBooking` and `createMerchantBooking` both settled
+     * the same way.
+     *
+     * THE ACTOR IS STILL RECORDED. `no_show_returned` is an assertion about a
+     * named person's conduct whether or not a deposit was attached to it, so who
+     * made it, from which address and on which booking is exactly as much of a
+     * fact as it is on the money path.
+     */
+    await writeAudit(tx, ctx.principal, {
+      salonId: row.salonId,
+      kind: 'rules',
+      action: 'No-show · no deposit',
+      detail: `${row.guestName ?? row.memberId} · ${row.startsAt.toISOString()} · nothing to return`,
+      source: 'merchant',
+      subjectType: 'booking',
+      subjectId: row.id,
+      metadata: {
+        bookingId: row.id,
+        startsAt: row.startsAt.toISOString(),
+        /** The NAME, never the number. A guest's phone is not audit-log material. */
+        guest: row.guestName !== null,
+      },
       ipAddress: ctx.ipAddress ?? null,
       userAgent: ctx.userAgent ?? null,
     });
 
     const result = {
-      booking: {
-        ...serialiseBooking(row as BookingRow),
-        status: 'no_show_returned' as const,
-      },
-      refundedFils: row.depositFils,
-      balanceAfterFils: returned.balanceAfterFils,
-      transactionId: returned.transactionId,
+      booking: serialiseBooking(marked as BookingRow),
+      refundedFils: 0,
+      balanceAfterFils: null,
+      transactionId: null,
     };
 
-    await completeKey(tx, keyId, { status: 200, body: result }, returned.transactionId);
+    /** No transaction to bind the key to, because there is no transaction. */
+    await completeKey(tx, keyId, { status: 200, body: result }, null);
     return result;
   });
 }

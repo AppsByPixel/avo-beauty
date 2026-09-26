@@ -34,6 +34,9 @@
  *  23-25  THE RELAXED CHECKS STILL BIND AN `app` ROW: the state machine, the
  *         positive deposit, the member, and a merchant row that can never carry
  *         money. Driven at the database, because that is where the claim lives.
+ *  26-28  the ZERO-DEPOSIT NO-SHOW: a hand-written appointment can be marked,
+ *         for a member and for a guest, and marking it moves no money at all
+ *  29     `?source=` on the board, and its refusal
  *
  * THE APP BOOKING IN SPECS 6, 7, 10, 16 AND 18 IS A FIXTURE INSERT, not a call
  * to `POST /bookings`, and that is deliberate rather than a shortcut. The real
@@ -167,6 +170,17 @@ suite('the merchant writes an appointment down, and then changes it', () => {
     ).toISOString();
 
   /**
+   * The same, in the PAST. The no-show specs need it: `markNoShow`'s time gate
+   * refuses a mark before the slot has started, and that gate is kept for a
+   * zero-deposit booking because it was never about the money — before the slot
+   * starts there is no slot she can have failed to attend.
+   */
+  const ago = (dayOffset: number, minuteOffset = 0): string =>
+    new Date(
+      Date.now() - (DAY_BASE + dayOffset) * 86_400_000 - minuteOffset * 60_000,
+    ).toISOString();
+
+  /**
    * A REAL `app` BOOKING: the `deposit_hold` transaction, the balanced ledger
    * pair, the wallet debit and the row pointing at the hold. The same row
    * `services/booking.ts § createBooking` writes. See the file header for why it
@@ -236,6 +250,21 @@ suite('the merchant writes an appointment down, and then changes it', () => {
       url: `/salons/${opts.salonId ?? SALON}/bookings/${bookingId}/${verb}`,
       headers: { authorization: `Bearer ${opts.bearer ?? managerBearer}` },
       ...(body ? { payload: body } : {}),
+    });
+  }
+
+  /**
+   * `POST .../no-show`. Separate from `act` because it is the one merchant
+   * transition that takes an idempotency key — it can move money.
+   */
+  function noShow(bookingId: string, opts: { bearer?: string; salonId?: string } = {}) {
+    return app.inject({
+      method: 'POST',
+      url: `/salons/${opts.salonId ?? SALON}/bookings/${bookingId}/no-show`,
+      headers: {
+        authorization: `Bearer ${opts.bearer ?? managerBearer}`,
+        'idempotency-key': `mb-ns-${randomUUID()}`,
+      },
     });
   }
 
@@ -917,6 +946,205 @@ suite('the merchant writes an appointment down, and then changes it', () => {
 
     expect(Number((await rowOf(bk.booking.id)).deposit_fils)).toBe(0);
     expect((await rowOf(bk.booking.id)).hold_transaction_id).toBeNull();
+  });
+
+
+  // ============================== THE ZERO-DEPOSIT NO-SHOW — attendance, not money ==
+  /**
+   * A NO-SHOW IS A FACT ABOUT ATTENDANCE. A walk-in the front desk wrote in who
+   * does not turn up is a no-show in exactly the sense the salon means, and the
+   * only thing that argued otherwise was that the status value is spelled
+   * `no_show_returned` — a naming problem already contained at the display
+   * boundary rather than fixed with a four-way enum break.
+   *
+   * These three specs are the server half of that containment. What they are
+   * really pinning is an ABSENCE: the transition happens and NOTHING ELSE DOES.
+   */
+
+  it('26 · a zero-deposit booking for a MEMBER can be marked, and no money moves', async () => {
+    const m = await customer();
+    // In the past, because the time gate is kept: before the slot starts there is
+    // no slot she can have failed to attend, deposit or no deposit.
+    const made = await create({
+      artistId: ARTIST_A,
+      serviceId: SVC,
+      startsAt: ago(1),
+      memberId: m,
+    });
+    expect(made.statusCode, made.body).toBe(201);
+    const id = (made.json() as Created).booking.id;
+
+    const balanceBefore = await balanceOf(m);
+    const txBefore = await txCountFor(m);
+
+    const res = await noShow(id);
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json() as {
+      refundedFils: number;
+      balanceAfterFils: number | null;
+      transactionId: string | null;
+      booking: { status: string };
+    };
+
+    expect(body.booking.status).toBe('no_show_returned');
+    expect(body.refundedFils).toBe(0);
+    /** PRESENT AND NULL on both, never omitted — `cancelByMerchant`'s shape. */
+    expect(body.transactionId).toBeNull();
+    expect(body.balanceAfterFils).toBeNull();
+
+    /** THE TWO ASSERTIONS THE SPEC EXISTS FOR, the way spec 8 makes them. */
+    expect(await balanceOf(m)).toBe(balanceBefore);
+    expect(await txCountFor(m)).toBe(txBefore);
+
+    const row = await rowOf(id);
+    expect(String(row.status)).toBe('no_show_returned');
+    expect(row.returned_at).not.toBeNull();
+    /** Nothing settled it, because there was nothing to settle. */
+    expect(row.settled_transaction_id).toBeNull();
+    expect(row.hold_transaction_id).toBeNull();
+
+    /**
+     * AND NO LEDGER ENTRY. The balance and the count would both survive a
+     * balanced pair that credited her wallet 0 and debited `deposit_held` 0 —
+     * which is precisely what `returnDeposit` would have written on this row, so
+     * it is asserted rather than inferred from the two numbers above.
+     */
+    expect(
+      Number(
+        one(
+          await exec(sql`
+            SELECT count(*)::int AS n FROM ledger_entry
+             WHERE member_id = ${m} AND account = 'deposit_held'`),
+          'the deposit_held postings',
+        ).n,
+      ),
+    ).toBe(0);
+
+    /** A second mark says so, WITHOUT promising a refund that never happened. */
+    const again = await noShow(id);
+    expect(again.statusCode, again.body).toBe(409);
+    expect((again.json() as { error: string }).error).toBe('already_no_show');
+    expect((again.json() as { message: string }).message).toBe(
+      'That appointment is already marked as a no-show.',
+    );
+  });
+
+  it('27 · a GUEST booking can be marked — the handler must not assume a member', async () => {
+    /**
+     * THE SPEC THAT NEEDED THE BRANCH. A guest row has `member_id IS NULL`, so
+     * the old path did not merely write a bad transaction — it had no member to
+     * lock at all, and `eq(member.id, null)` matches nothing. Nothing here can be
+     * asserted about a balance, which is the point: there is no wallet.
+     */
+    const name = `Walk-in ${randomUUID().slice(0, 6)}`;
+    const made = await create({
+      artistId: ARTIST_A,
+      serviceId: SVC,
+      startsAt: ago(2),
+      guestName: name,
+    });
+    expect(made.statusCode, made.body).toBe(201);
+    const id = (made.json() as Created).booking.id;
+
+    const txBefore = Number(
+      one(
+        await exec(sql`SELECT count(*)::int AS n FROM "transaction" WHERE salon_id = ${SALON}`),
+        'the salon transaction count',
+      ).n,
+    );
+
+    const res = await noShow(id);
+    expect(res.statusCode, res.body).toBe(200);
+    const body = res.json() as { refundedFils: number; transactionId: string | null };
+    expect(body.refundedFils).toBe(0);
+    expect(body.transactionId).toBeNull();
+
+    const row = await rowOf(id);
+    expect(String(row.status)).toBe('no_show_returned');
+    expect(row.member_id).toBeNull();
+    expect(row.guest_name).toBe(name);
+    expect(row.settled_transaction_id).toBeNull();
+
+    /** NOT ONE TRANSACTION ROW ANYWHERE IN THE SALON. There is no member_id to
+     * scope the count by, so it is scoped by salon — which is the stronger
+     * assertion anyway: a `deposit_return` written against the wrong member would
+     * be caught by this and not by a per-member count. */
+    expect(
+      Number(
+        one(
+          await exec(sql`SELECT count(*)::int AS n FROM "transaction" WHERE salon_id = ${SALON}`),
+          'the salon transaction count',
+        ).n,
+      ),
+    ).toBe(txBefore);
+  });
+
+  it('28 · the time gate is kept — a walk-in cannot be a no-show before her slot', async () => {
+    /**
+     * THE GUARD THAT SURVIVED THE RELAXATION, and it is worth pinning separately
+     * so that "the deposit is no longer a precondition" is not read as "there are
+     * no preconditions". `no_show_returned` is an assertion about a named
+     * person's conduct whether or not money was attached to it.
+     */
+    const bk = await guestBooking(at(28));
+    const res = await noShow(bk.booking.id);
+    expect(res.statusCode, res.body).toBe(409);
+    expect((res.json() as { error: string }).error).toBe('appointment_not_started');
+    expect(String((await rowOf(bk.booking.id)).status)).toBe('deposit_held');
+  });
+
+  // ====================================================== ?source= ON THE BOARD ==
+
+  it('29 · the board filters by source, and refuses an unknown one in the house grammar', async () => {
+    const m = await customer();
+    const merchantId = (await guestBooking(at(29))).booking.id;
+    const appId = await appBooking(m, ARTIST_A, at(30), 30);
+
+    const board = async (qs: string) => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/salons/${SALON}/bookings${qs}`,
+        headers: { authorization: `Bearer ${managerBearer}` },
+      });
+      return res;
+    };
+    const ids = (res: Awaited<ReturnType<typeof board>>) =>
+      (res.json() as { items: Array<{ id: string }> }).items.map((i) => i.id);
+
+    const onlyMerchant = await board('?source=merchant');
+    expect(onlyMerchant.statusCode, onlyMerchant.body).toBe(200);
+    expect(ids(onlyMerchant)).toContain(merchantId);
+    expect(ids(onlyMerchant)).not.toContain(appId);
+
+    const onlyApp = await board('?source=app');
+    expect(ids(onlyApp)).toContain(appId);
+    expect(ids(onlyApp)).not.toContain(merchantId);
+
+    /** A comma list, the same grammar `?status=` takes. */
+    const both = await board('?source=app,merchant');
+    expect(ids(both)).toContain(appId);
+    expect(ids(both)).toContain(merchantId);
+
+    /**
+     * ABSENT IS UNCHANGED — the assertion that keeps this parameter from being a
+     * behaviour change for every client that does not send it.
+     */
+    const none = await board('');
+    expect(ids(none)).toContain(appId);
+    expect(ids(none)).toContain(merchantId);
+
+    /** THE REFUSAL, in `?status=`'s vocabulary rather than a second one. */
+    const bad = await board('?source=walk_in');
+    expect(bad.statusCode, bad.body).toBe(400);
+    expect((bad.json() as { error: string }).error).toBe('invalid_source');
+    expect((bad.json() as { message: string }).message).toBe(
+      'Unknown booking source: walk_in. One of app, google_calendar, merchant.',
+    );
+
+    /** And the two filters compose rather than replacing one another. */
+    const composed = await board('?source=merchant&status=deposit_held');
+    expect(ids(composed)).toContain(merchantId);
+    expect(ids(composed)).not.toContain(appId);
   });
 
   it('21 · a double-submitted create REPLAYS rather than answering slot_taken', async () => {
