@@ -209,7 +209,7 @@ export function Accounts() {
                   }
                   resetting={sendReset.isPending && sendReset.variables?.staffId === account.id}
                   onToggle={(key, next) => {
-                    const before = account.perms as StaffPerms;
+                    const before = account.perms;
                     const after = applyPermissionRules(before, key, next);
                     const diff = changedPerms(before, after);
                     if (Object.keys(diff).length === 0) return;
@@ -305,7 +305,7 @@ function AccountCard({
   onReset,
   onRemove,
 }: AccountCardProps) {
-  const perms = account.perms as StaffPerms;
+  const perms = account.perms;
   /*
    * Two confirmations, both for actions whose consequence lands on somebody
    * else's phone before the merchant sees any feedback. Held in the card rather

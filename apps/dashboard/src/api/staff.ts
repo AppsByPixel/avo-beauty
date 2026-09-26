@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { StaffUser } from '@avo/types';
+import { StaffUserSchema, type StaffUser } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import type { Paginated } from './salon.js';
@@ -167,6 +167,107 @@ export function roleOptionsFor(currentRole: string): ReadonlyArray<{
  * local mirror here.
  */
 
+/* ========================================================================== */
+/*                            parsed, not cast                                */
+/* ========================================================================== */
+
+/**
+ * WHAT THIS ROSTER IS, AND WHY A CAST ON IT IS WORSE THAN A CAST ELSEWHERE.
+ *
+ * Every read and write in this file was `authedRequest<StaffUser>` or
+ * `authedRequest<Paginated<StaffUser>>`, and `api/client.ts` ends in
+ * `await response.json() as T` — an assertion, which cannot fail. Five casts,
+ * nothing checked.
+ *
+ * ===========================================================================
+ * IT IS NOT AN AUTHORITY BYPASS, AND SAYING SO IS PART OF THE FIX.
+ * ===========================================================================
+ * The permissions that gate this dashboard's own UI come from `session.perms`,
+ * which arrives through `auth/session.ts § isStoredSession` and IS validated.
+ * Nothing here feeds a gate. Non-negotiable #7 is intact either way: every route
+ * in this file is `perms.team`, checked server-side as the first statement of the
+ * handler, and would refuse with the client deleted.
+ *
+ * ===========================================================================
+ * WHERE IT BITES IS THAT THIS IS SOMEBODY ELSE'S PERMISSIONS, DISPLAYED AND EDITED
+ * ===========================================================================
+ * `routes/Accounts.tsx` is the Team screen, and it reads these rows two levels
+ * deep on every render:
+ *
+ *   :97   (items ?? []).filter((a) => a.active && a.perms.team === true)
+ *   :212  const before = account.perms;   → applyPermissionRules → changedPerms
+ *
+ * The first throws outright on a row with no `perms` — the screen, not the app,
+ * because `Accounts` is a section under `<Outlet>` and not chrome. The second is
+ * the one worth the parse. `before` is the LEFT SIDE OF A DIFF: a malformed row
+ * renders a permission as off, a manager toggles it believing that, and
+ * `changedPerms` computes the write from a state that was never true. The request
+ * that goes out is then a considered decision about an authority nobody actually
+ * read.
+ *
+ * "HESSA HOLDS NOTHING" AND "WE COULD NOT READ WHAT HESSA HOLDS" ARE DIFFERENT
+ * SENTENCES, and only one of them is safe to act on. A defaulted `perms` would
+ * draw nine chips all off — a complete, confident, editable picture of an
+ * authority this client never received. So an unreadable row is a FAILED READ and
+ * the screen's error state carries it, the same call `api/notifications.ts`
+ * makes for the same reason.
+ *
+ * ===========================================================================
+ * THE PARSE IS `StaffUserSchema`, WITH NOTHING ADDED
+ * ===========================================================================
+ * `parseMetricsResponse` in `api/salon.ts` set the rule — where `packages/types`
+ * owns the shape, the parse IS the shared schema — and this file's own header
+ * already insists on the same thing for the type: "`StaffUser` from `@avo/types`
+ * IS the wire shape — there is no local widening", written after a local mirror
+ * drifted fourteen commits behind the schema it duplicated. A hand-rolled parser
+ * here would be that mirror again, in verb form.
+ *
+ * AND UNLIKE `parseSalon`, THERE IS NO DIVERGENCE TO DECLARE. That parser wraps
+ * `SalonSchema` because `serialiseSalon` emits four dormant-mode fields as null
+ * against an `.optional()` schema. `serialiseStaff` (api/src/routes/staff.ts) is
+ * field-for-field `StaffUserSchema` — `branchAccess` is `'all'` or an id array,
+ * `deactivatedAt` is `.toISOString() ?? null` against a `.nullable()`, `perms` is
+ * `permsOf(row)` — so the schema is run bare. Checked against the serialiser
+ * rather than assumed from the type's name.
+ */
+export function parseStaffUser(raw: unknown): StaffUser {
+  return StaffUserSchema.parse(raw);
+}
+
+/**
+ * The roster. `Paginated<T>` is `api/salon.ts`' shared envelope and has no schema
+ * of its own, so the two keys are checked here and the rows go through the schema.
+ *
+ * A BAD ROW FAILS THE WHOLE PAGE rather than being dropped, and that is the
+ * decision this screen needs. Skipping it would remove a colleague from the Team
+ * list silently — and the list is also what `soleTeamAdminId` is counted from, so
+ * a dropped row could make the screen offer to revoke the last `perms.team` it
+ * can see. `customers.ts § tier` takes the opposite line for a LABEL it cannot
+ * recognise; this is not a label, it is the record.
+ */
+export function parseStaffPage(raw: unknown): Paginated<StaffUser> {
+  const where = 'GET /staff';
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${where} was not an object.`);
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.items)) throw new Error(`${where}.items was not an array.`);
+  if (r.nextCursor !== null && typeof r.nextCursor !== 'string') {
+    throw new Error(`${where}.nextCursor was neither a string nor null.`);
+  }
+  return {
+    items: r.items.map((row, i) => {
+      try {
+        return parseStaffUser(row);
+      } catch (cause) {
+        // The index is what makes a nine-row roster's failure findable.
+        throw new Error(`${where}.items[${i}] was not a staff account: ${String(cause)}`);
+      }
+    }),
+    nextCursor: r.nextCursor,
+  };
+}
+
 export const staffKeys = {
   list: (salonId: string) => ['staff', salonId] as const,
 };
@@ -185,7 +286,8 @@ export function useStaff(enabled = true): UseQueryResult<Paginated<StaffUser>> {
   const salonId = useSalonId();
   return useQuery({
     queryKey: staffKeys.list(salonId),
-    queryFn: ({ signal }) => authedRequest<Paginated<StaffUser>>('merchant', '/staff', { signal }),
+    queryFn: async ({ signal }) =>
+      parseStaffPage(await authedRequest<unknown>('merchant', '/staff', { signal })),
     enabled,
   });
 }
@@ -266,11 +368,13 @@ export function useUpdateStaff(): UseMutationResult<
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ staffId, patch }) =>
-      authedRequest<StaffUser>('merchant', `/staff/${staffId}`, {
-        method: 'PATCH',
-        body: patch,
-      }),
+    mutationFn: async ({ staffId, patch }) =>
+      parseStaffUser(
+        await authedRequest<unknown>('merchant', `/staff/${staffId}`, {
+          method: 'PATCH',
+          body: patch,
+        }),
+      ),
     /*
      * The response IS the updated staff row through the same `serialiseStaff`
      * the list uses — checked, unlike PATCH /salons/{id}, which returns a raw
@@ -316,8 +420,10 @@ export function useCreateStaff(): UseMutationResult<StaffUser, unknown, CreateSt
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input) =>
-      authedRequest<StaffUser>('merchant', '/staff', { method: 'POST', body: input }),
+    mutationFn: async (input) =>
+      parseStaffUser(
+        await authedRequest<unknown>('merchant', '/staff', { method: 'POST', body: input }),
+      ),
     /*
      * Appended rather than refetched, for the same reason the patch is applied
      * in place: the 201 body is the serialised row. `invalidateQueries` would
@@ -354,8 +460,10 @@ export function useDeactivateStaff(): UseMutationResult<
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ staffId }) =>
-      authedRequest<StaffUser>('merchant', `/staff/${staffId}`, { method: 'DELETE' }),
+    mutationFn: async ({ staffId }) =>
+      parseStaffUser(
+        await authedRequest<unknown>('merchant', `/staff/${staffId}`, { method: 'DELETE' }),
+      ),
     onSuccess: (updated) => patchRow(queryClient, salonId, updated),
   });
 }
@@ -388,16 +496,61 @@ export interface PasswordResetAccepted {
   reactivating: boolean;
 }
 
+/**
+ * THE SIXTH CAST IN THIS FILE, AND THE ONLY ONE THAT DOES NOT THROW.
+ *
+ * `expiresAt` arriving `undefined` is silent: `Accounts.tsx:226` writes it into
+ * `resetSent[account.id]`, the card reads it back as absent, and the
+ * "Link sent · expires …" line simply never appears. The screen looks exactly as
+ * it did before the click.
+ *
+ * WHICH MATTERS HERE MORE THAN A MISSING LINE USUALLY WOULD, because of what this
+ * file already records two paragraphs up: "Issuing a second link SPENDS the
+ * first, server-side." So the failure mode is a manager who sees no confirmation,
+ * presses Reset again, and invalidates the link a colleague is already walking to
+ * a desk with. A blank that costs something is not a blank.
+ *
+ * `PasswordResetAccepted` is a LOCAL interface — the 202 envelope is not in
+ * `packages/types`, and `api/notifications.ts § THE SHAPES ARE DECLARED HERE`
+ * argues that case at length for the same situation. So this one is hand-rolled
+ * rather than schema'd, and it reads all four keys including the three nothing
+ * draws: non-negotiable #6 is the reason the envelope is this small, and a server
+ * that started sending a fifth thing should be noticed here.
+ */
+function parseResetAccepted(raw: unknown): PasswordResetAccepted {
+  const where = 'POST /staff/{id}/password-reset';
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${where} was not an object.`);
+  }
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown, key: string): string => {
+    if (typeof v !== 'string') throw new Error(`${where}.${key} was not a string.`);
+    return v;
+  };
+  const bool = (v: unknown, key: string): boolean => {
+    if (typeof v !== 'boolean') throw new Error(`${where}.${key} was not a boolean.`);
+    return v;
+  };
+  return {
+    staffId: str(r.staffId, 'staffId'),
+    expiresAt: str(r.expiresAt, 'expiresAt'),
+    delivered: bool(r.delivered, 'delivered'),
+    reactivating: bool(r.reactivating, 'reactivating'),
+  };
+}
+
 export function useSendPasswordReset(): UseMutationResult<
   PasswordResetAccepted,
   unknown,
   { staffId: string }
 > {
   return useMutation({
-    mutationFn: ({ staffId }) =>
-      authedRequest<PasswordResetAccepted>('merchant', `/staff/${staffId}/password-reset`, {
-        method: 'POST',
-      }),
+    mutationFn: async ({ staffId }) =>
+      parseResetAccepted(
+        await authedRequest<unknown>('merchant', `/staff/${staffId}/password-reset`, {
+          method: 'POST',
+        }),
+      ),
     /*
      * No cache write. A reset link changes nothing on the staff row — the
      * account keeps whatever credential state it had, and a deactivated one

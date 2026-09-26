@@ -9,7 +9,7 @@ import type { Branch, Salon, SocialLink } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import { deviceKeys } from './devices.js';
-import { salonKeys } from './salon.js';
+import { parseSalon, salonKeys } from './salon.js';
 import { staffKeys } from './staff.js';
 
 /**
@@ -165,33 +165,63 @@ export type SalonPatch = Partial<
  *   PATCH /salons/SAL-AMARA → 19 keys, `branches` and `modules` present,
  *                             `moduleBooking` absent — the documented Salon.
  *
- * SO WHY STILL `unknown`, AND STILL A REFETCH? Because nothing here parses that
- * body, and a cast is not a check — `authedRequest<Salon>` would compile whatever
- * arrives, which is exactly how the crash above got in. `platformSalons.ts` may
- * trust its PATCH response because it owns `parsePlatformSalonDetail` and runs it;
- * this file has no parser, and adding one is the slice that would also let this
- * hook `setQueryData`. Until then the cheap round trip stays: it costs one request
- * and cannot put a shape the shell does not expect into the cache.
+ * IT USED TO ASK "SO WHY STILL `unknown`, AND STILL A REFETCH?" and answer its
+ * own question: "nothing here parses that body, and a cast is not a check —
+ * `authedRequest<Salon>` would compile whatever arrives, which is exactly how the
+ * crash above got in … adding [a parser] is the slice that would also let this
+ * hook `setQueryData`."
+ *
+ * THAT SLICE IS DONE. `api/salon.ts § parseSalon` is the parser, built on
+ * `SalonSchema` for `parseMetricsResponse`'s reason — where `packages/types` owns
+ * the shape, the parse is the shared schema and not a second spelling of it. So
+ * the defence can stop costing a request: the body is parsed, and the parsed value
+ * goes straight into the cache the shell reads.
+ *
+ * IT LIVES IN `salon.ts` AND NOT HERE, for two reasons that agree. That module
+ * owns `salonKeys`, `useSalon` and the `Salon` re-export, so it is where a reader
+ * looking for "how this dashboard reads a salon" arrives; and this file already
+ * imports from it, so the parser could not live here without a cycle.
+ *
+ * A PARSE FAILURE IS A FAILED WRITE, AND IS NOT CAUGHT. There is deliberately no
+ * fall-back to `invalidateQueries` on a body this cannot read: that would restore
+ * the old round trip while claiming the parser had replaced it, and it would
+ * report a write whose result is unreadable as a write that succeeded. The throw
+ * lands in `mutation.isError`, and `Settings.tsx` already renders `WriteError`
+ * with its own reassurance about what did not change.
+ *
+ * STILL NO OPTIMISTIC WRITE, and that rule is untouched. Parsing the RESPONSE is
+ * not writing from the REQUEST. `depositFils` is money — it decides what is held
+ * from a customer's wallet at booking — and a stepper showing 7 KD while the
+ * server holds 5 is the lie that rule exists to prevent. What goes into the cache
+ * here is what the server said it stored, after something checked that it is a
+ * salon.
  */
-export function useUpdateSalon(): UseMutationResult<unknown, unknown, SalonPatch> {
+export function useUpdateSalon(): UseMutationResult<Salon, unknown, SalonPatch> {
   const salonId = useSalonId();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (patch) =>
-      authedRequest<unknown>('merchant', `/salons/${salonId}`, { method: 'PATCH', body: patch }),
+    mutationFn: async (patch) =>
+      parseSalon(
+        await authedRequest<unknown>('merchant', `/salons/${salonId}`, {
+          method: 'PATCH',
+          body: patch,
+        }),
+      ),
     /*
-     * INVALIDATE, do not `setQueryData` from the response. Until the PATCH
-     * serialises like the GET, its body cannot be trusted to be a Salon, and the
-     * cheap round trip is worth more than the crash above.
+     * WRITTEN INTO THE CACHE, not invalidated. `serialiseSalon` ends both the GET
+     * and the PATCH — "The SAME shape `GET` answers" (salons.ts:870) — and
+     * `parseSalon` has now checked that claim on this particular body rather than
+     * trusting it. So this is the freshest salon anybody has, from the transaction
+     * that wrote it, and a refetch would put a round trip between the save and the
+     * screen agreeing with it.
      *
-     * No optimistic write either. `depositFils` is money: it decides what is
-     * held from a customer's wallet at booking, and a stepper showing 7 KD while
-     * the server still holds 5 is the same class of lie as a half-published
-     * ladder. The control owns its own in-flight value — see Settings.tsx.
+     * `setQueryData` and not `setQueryData(prev => ...)`: the response is the
+     * WHOLE salon, not a patch of one, so merging it over a previous value would
+     * let a field the server dropped survive in the cache as if it were still set.
      */
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: salonKeys.detail(salonId) });
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Salon>(salonKeys.detail(salonId), updated);
     },
   });
 }
