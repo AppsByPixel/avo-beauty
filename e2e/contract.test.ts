@@ -171,6 +171,39 @@ const A_ARTIST = 'AR-001';
 /** Hessa, AR-003. Nothing in this file books her, so her `subtracted` stays empty. */
 const A_QUIET_ARTIST = 'AR-003';
 
+/**
+ * THE MERCHANT BELL'S SAMPLE ROW.
+ *
+ * `merchant_notification` has been written to since phase 6, but the SEED creates
+ * no rows and `api/src/db/seed.ts` truncates the table outright — so
+ * `GET /v1/salons/:id/notifications` serves `{ items: [] }` on every fresh
+ * database. `wireShape` collapses an empty array to the single leaf `$.items[]`,
+ * which would pin the ENVELOPE and say nothing whatever about the row inside it:
+ * exactly the green `ProductSchema is UNWITNESSED` was written to refuse, and
+ * exactly what the pin on this route is FOR — the dashboard reads nine fields off
+ * each row and `packages/types` declares none of them.
+ *
+ * So a row is made, in SQL, for the reason the `nextAppointmentAt` fixture at the
+ * foot of this file gives: the value under test is this route's READ, and building
+ * the sample through the workers that raise notifications (`availability.ts`,
+ * `noShowWorker.ts`, `campaign.ts`) would make the pin depend on three things it is
+ * not about.
+ *
+ * `read_at` AND `resolved_at` BOTH NULL, AND THAT IS PART OF THE SAMPLE RATHER THAN
+ * A DEFAULT. Both serialise as `null` either way, so the key set is the same — but a
+ * row that is read and resolved is one `unreadCount` does not count, and a pin taken
+ * against a zero badge would not notice the day `unreadCount` stopped being served
+ * at all. `deep_link` IS SET for the sharper version of the same point:
+ * `safeDeepLink` serialises a REFUSED link as `null`, so a sample with no link at all
+ * cannot tell "the key is gone" from "the link was rejected".
+ *
+ * `AR-CONTRACT-BELL` as the subject, and its own id: three files count rows in this
+ * table and all three narrow by `subject_id`, so a probe row is invisible to them
+ * only while its subject is its own.
+ */
+const BELL_NOTIFICATION = 'MN-CONTRACT-BELL';
+const BELL_NOTIFICATION_SUBJECT = 'AR-CONTRACT-BELL';
+
 let n = 0;
 const key = (label: string) => `contract-${label}-${Date.now()}-${n++}`;
 
@@ -1339,6 +1372,47 @@ const UNMODELLED: Record<string, string> = {
     '`feeFils` is deliberately absent — commission is merchant-visible and belongs on ' +
     'the settlement report. `?from=`/`?to=` are salon-local calendar dates, not ' +
     'instants.',
+  /**
+   * THE MERCHANT BELL'S FEED — `api/src/routes/merchantNotifications.ts`, dev
+   * `9648ae1`. The unclassified check named it on the first run after the merge,
+   * the sixth new surface this census has caught arriving.
+   *
+   * UNMODELLED *AND* WIRE-PINNED, which is the `GET /members/me/notifications`
+   * treatment and is chosen over a bare UNMODELLED line for the reason that entry
+   * gives: "unmodelled" would be the WHOLE of the guard on a shape a client is
+   * already built against. `apps/dashboard/src/api/notifications.ts` declares
+   * `MerchantNotification` and `NotificationFeed` LOCALLY and says why — the wire
+   * shape is `NotificationView` in the API only, `packages/types` is trunk-owned,
+   * and lane C took `api/artists.ts § DashboardArtist`'s precedent of declaring it
+   * locally and reporting it rather than reaching across the column boundary.
+   *
+   * SO THERE ARE TWO HAND-WRITTEN TRANSCRIPTIONS OF ONE SHAPE AND NO SCHEMA
+   * BETWEEN THEM, and nothing in this repository compares them. A field the bell
+   * renders — `severity` drives the dot, `deepLink` makes the row clickable —
+   * could stop arriving and the dashboard would read `undefined`, draw the default
+   * and be unable to tell that from a value the server chose not to send. That is
+   * the wire pin's stated failure mode word for word, so the pin is at the bottom
+   * of this file.
+   *
+   * THE THREE KEYS BESIDE `items` ARE THE PART A SCHEMA WOULD MOST EASILY LOSE.
+   * `unreadCount` is an aggregate over the whole visible set and is NOT the length
+   * of `items` and NOT page-dependent; `visibleKinds` is the per-reader filter
+   * declared on the wire, without which "You're all caught up." cannot be told
+   * apart from "the things waiting are things you may not see"; `nextCursor` is a
+   * real cursor here rather than the hardcoded null the devices list serves.
+   * Worth a schema.
+   */
+  'GET /v1/salons/:id/notifications':
+    'the merchant bell\'s feed — {items, nextCursor, unreadCount, visibleKinds}, the row ' +
+    'being `NotificationView` from services/merchantNotifications.ts. No schema in ' +
+    'packages/types and none in the dashboard\'s own imports either: lane C transcribed ' +
+    'the interface into apps/dashboard/src/api/notifications.ts, so one shape has two ' +
+    'hand-written copies and nothing compares them. WIRE-PINNED at the bottom of this ' +
+    'file, in both directions, against a sample with a real row in it — the seed makes no ' +
+    'notifications, so the row is arranged in beforeAll and its own spec refuses the pin ' +
+    'if the feed came back empty. `metadata`, ' +
+    '`subjectType` and `subjectId` are deliberately NOT served (service header) and so ' +
+    'are deliberately not in the pin. Worth a schema.',
   'GET /members/:id':
     'the scanner\'s member RESOLVE, and it serves the `POST /scans` ENVELOPE rather than a bare ' +
     'Member — member plus the counter state the charge screen needs. Unmodelled because that ' +
@@ -1694,6 +1768,32 @@ beforeAll(async () => {
   }
   captured.set('GET /v1/salons/:id/orders', board);
 
+  /**
+   * ---- the merchant bell, whose row has to be made before it can be read -------
+   * See `BELL_NOTIFICATION`. `ST-001` holds all nine permissions, so `visibleKinds`
+   * is all three kinds and the feed is not narrowed out from under this sample —
+   * which is itself worth pinning, because the same request from a reader holding
+   * none of them is a legitimate EMPTY 200 and would silently reduce this pin to
+   * its envelope.
+   */
+  psql(`
+    INSERT INTO merchant_notification
+      (id, salon_id, kind, severity, title, body, subject_type, subject_id, deep_link)
+    VALUES
+      ('${BELL_NOTIFICATION}', '${SALON_A}', 'calendar_disconnected', 'warning',
+       'Contract probe bell row', 'Reconnect the calendar.', 'artist',
+       '${BELL_NOTIFICATION_SUBJECT}', '/settings/calendar')
+    ON CONFLICT (id) DO UPDATE SET read_at = NULL, resolved_at = NULL;
+  `);
+
+  const bell = await treq<any>('GET', `/v1/salons/${SALON_A}/notifications`, {
+    token: dashboard,
+  });
+  if (bell.status !== 200) {
+    throw new Error(`GET /v1/salons/:id/notifications: ${bell.status} ${bell.raw}`);
+  }
+  captured.set('GET /v1/salons/:id/notifications', bell);
+
   const notifications = await treq<any>('GET', '/members/me/notifications', { token: pinMember });
   if (notifications.status !== 200) {
     throw new Error(`GET /members/me/notifications: ${notifications.status} ${notifications.raw}`);
@@ -2014,6 +2114,15 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  /**
+   * THE BELL ROW GOES BACK. It is this file's, by id and by subject, and nothing
+   * after this run needs it — but `merchant_notification_open_uq` spans unresolved
+   * rows and the table is one three other files count in, so a probe row left
+   * standing is a row somebody else's arithmetic eventually has to be told about.
+   * The `nextAppointmentAt` fixture's `finally` is the precedent and the reason:
+   * its slot reservation cost four no-show specs before it was returned.
+   */
+  psql(`DELETE FROM merchant_notification WHERE id = '${BELL_NOTIFICATION}';`);
   await stopTenancyApi();
 });
 
@@ -2210,9 +2319,10 @@ describe('and no schema is narrower than the wire', () => {
  *
  * The GET set does NOT move across this change: measured set-identical, old
  * reader and new, so the exact count below is green either way and is not part of
- * this proof. It was 55 paths when that was measured and is 58 now — lane A's
- * customer book — which is the count moving with the ROUTES, exactly as the note
- * beside the assertion asks it to, and not this proof going stale.
+ * this proof. It was 55 paths when that was measured, 58 after lane A's customer
+ * book and is 59 now — the merchant bell's feed — which is the count moving with
+ * the ROUTES, exactly as the note beside the assertion asks it to, and not this
+ * proof going stale.
  */
 describe("the GET reader is the census's reader, not a fourth regex", () => {
   /** The shape every path in `api/src/routes/` has today. The baseline both readers pass. */
@@ -2353,12 +2463,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 58 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 59 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(58);
+    ).toBe(59);
   });
 
   it('no GET route is left unclassified', () => {
@@ -2597,8 +2707,89 @@ const POLICY_ACCEPTANCE_WIRE = {
   upToDate: true,
 };
 
+/**
+ * THE MERCHANT BELL'S FEED, AS SERVED.
+ *
+ * FOUR KEYS AT THE TOP AND NINE ON THE ROW, and the nine are precisely what
+ * `apps/dashboard/src/api/notifications.ts` transcribed by hand off an API
+ * interface no schema mediates.
+ *
+ * THE SEED MAKES NO NOTIFICATIONS — `api/src/db/seed.ts` truncates the table — so
+ * `beforeAll` makes the row this is taken against. Not because an empty feed would
+ * pass: `wireShape` collapses `[]` to `$.items[]` and the pin goes red naming all
+ * nine. Because of what the red says. It reads as the API having dropped nine
+ * fields, and the cheap way to silence it is to edit the nine out of THIS
+ * constant. See the sample spec in the describe below, which is what stands
+ * between that red and that edit.
+ *
+ * `severity` AND `deepLink` ARE THE TWO WORTH NAMING. `severity` drives the dot the
+ * design draws and nothing else reads it, so a client that lost it would render a
+ * plausible bell with the wrong urgency on every row. `deepLink` is serialised
+ * through `safeDeepLink`, which answers `null` for anything that is not a
+ * single-leading-slash site-relative path — so the key going missing and the link
+ * being REFUSED look the same to a client and must not look the same here. The
+ * sample carries a link that passes, which is why `$.items[].deepLink` is a pinned
+ * leaf rather than an absent one.
+ *
+ * `readAt` AND `resolvedAt` ARE PINNED NULL AND ARE STILL REAL KEYS. `read_at` is
+ * salon-wide rather than per-staff and `resolved_at` is the condition clearing on
+ * its own — a resolved row STAYS in the feed and leaves `unreadCount`. An API that
+ * omitted either until it was set would serve an identical-looking panel and a
+ * different contract.
+ *
+ * `unreadCount` IS NOT `items.length` AND IS NOT PAGE-DEPENDENT — it is an aggregate
+ * over the whole visible set, identical on page four (route header). `visibleKinds`
+ * is the per-reader filter DECLARED ON THE WIRE, and it is the key this shape would
+ * most plausibly lose to a tidy-up: it looks redundant beside a feed that has
+ * already been filtered, and without it an empty `items` cannot be told from "the
+ * things waiting for this salon are things you may not see". `nextCursor` is a real
+ * cursor rather than the hardcoded null the devices list serves.
+ *
+ * VALUES ARE READ FOR SHAPE ONLY, and are written truthfully anyway: this is what
+ * `beforeAll` inserts, read back through `serialiseNotification`.
+ */
+const MERCHANT_BELL_WIRE = {
+  items: [
+    {
+      id: 'MN-CONTRACT-BELL',
+      kind: 'calendar_disconnected',
+      severity: 'warning',
+      title: 'Contract probe bell row',
+      body: 'Reconnect the calendar.',
+      deepLink: '/settings/calendar',
+      createdAt: '2026-09-26T06:00:00.000Z',
+      readAt: null,
+      resolvedAt: null,
+    },
+  ],
+  nextCursor: null,
+  unreadCount: 1,
+  /**
+   * A one-element sample, because `wireShape` takes an array's FIRST element and a
+   * list of strings is a list of leaves either way. WHICH kinds a reader is served
+   * is a permission question, not a shape one, and it is asserted where it belongs
+   * — `permission-census.test.ts § PINNED_COVERAGE` records that these two routes
+   * carry no perm gate by design, and `tenancy.test.ts` drives the boundary.
+   */
+  visibleKinds: ['calendar_disconnected'],
+};
+
 function wirePins(): WirePin[] {
   return [
+    {
+      label: 'GET /v1/salons/:id/notifications',
+      wire: MERCHANT_BELL_WIRE,
+      why:
+        'the merchant bell, which is chrome on every dashboard screen and the ONLY surface in ' +
+        'the product that can read `merchant_notification` — rows the API has been writing ' +
+        'since phase 6. There is no schema in packages/types and the dashboard transcribed ' +
+        'the API\'s `NotificationView` into a local interface, so one shape has two ' +
+        'hand-written copies and this pin is the only thing that compares them to the wire. ' +
+        'A lost `severity` draws the wrong dot; a lost `deepLink` makes every row unclickable ' +
+        'and indistinguishable from a link `safeDeepLink` refused; a lost `visibleKinds` turns ' +
+        '"You\'re all caught up." into a sentence the client cannot tell from "the things ' +
+        'waiting for this salon are things you may not see".',
+    },
     {
       label: 'GET /members/me/policy-acceptance',
       wire: POLICY_ACCEPTANCE_WIRE,
@@ -2697,6 +2888,49 @@ describe('wire pins — the served shape of what packages/types does not model y
   }
 
   /**
+   * THE BELL'S PIN IS THE ONLY ONE OVER A LIST, SO IT IS THE ONLY ONE WHOSE SAMPLE
+   * CAN STOP CARRYING THE SHAPE IT PINS.
+   *
+   * WHAT THIS DOES *NOT* GUARD, said first, because the obvious reading of it is
+   * wrong and I wrote the wrong one before measuring. An empty `items` does NOT
+   * slip past the pin: `wireShape` collapses `[]` to the single leaf `$.items[]`,
+   * the declared side is a hand-written constant that still carries all nine row
+   * keys, and the pin goes RED naming every one of them. Measured — with salon A's
+   * rows deleted before the capture, the pin reported `NO LONGER SERVES
+   * $.items[].body, $.items[].createdAt, $.items[].deepLink, $.items[].id,
+   * $.items[].kind, $.items[].readAt, $.items[].resolvedAt, $.items[].severity,
+   * $.items[].title`.
+   *
+   * WHAT IT GUARDS IS WHAT HAPPENS NEXT, and that is the whole of its value. That
+   * failure message blames the API for removing nine fields when the truth is that
+   * the FIXTURE stopped producing a row — and the cheapest way to make it green
+   * is to edit `MERCHANT_BELL_WIRE` down to `items: []`, at which point both
+   * directions really do pass and the nine fields the dashboard is built on are
+   * pinned by nothing. This spec reads the LIVE response rather than the pin, so
+   * it cannot be satisfied that way, and it says which of the two things went
+   * wrong before anyone reaches for the constant.
+   *
+   * The feed can empty for three unrelated reasons — the seed truncates the table,
+   * the reader's `visibleKinds` narrows it, and a row can resolve out of it — so
+   * this is a live hazard rather than a hypothetical one.
+   */
+  it('the bell sample carries a real row — an empty feed would pin the envelope and nothing else', () => {
+    const res = response('GET /v1/salons/:id/notifications');
+    expect(res.status, `the bell answered ${res.status}: ${res.raw.slice(0, 300)}`).toBe(200);
+    expect(
+      (res.body.items as unknown[]).length,
+      'GET /v1/salons/:id/notifications served an empty `items`, so the pin above declares ' +
+        '`$.items[]` and says nothing about the nine fields on a row. Fix the fixture in ' +
+        '`beforeAll` — do not relax the pin.',
+    ).toBeGreaterThan(0);
+    expect(
+      (res.body.visibleKinds as unknown[]).length,
+      'the reader was served no visible kinds, so the feed is empty for a permission reason ' +
+        'and the sample cannot witness a row whatever the fixture does',
+    ).toBeGreaterThan(0);
+  });
+
+  /**
    * ONE SCREEN, TWO ROUTES, AND THE WALLET BINDS THE SAME STATE TO BOTH.
    *
    * Asserted against each other rather than only against the pin, because the pin
@@ -2785,9 +3019,21 @@ describe('wire pins — the served shape of what packages/types does not model y
    * hand-maintained and a probe is not, so leaving both would mean the weaker
    * guard is the one still being edited.
    */
-  it('and neither shape has a schema yet — the day one does, delete its pin and add a probe', async () => {
+  it('and no pinned shape has a schema yet — the day one does, delete its pin and add a probe', async () => {
     const types: Record<string, unknown> = await import('../packages/types/dist/index.js');
     const arrived = [
+      /**
+       * THE MERCHANT BELL'S CANDIDATES. `NotificationView` is the API-side name and
+       * `MerchantNotification` / `NotificationFeed` are what lane C called the two
+       * halves locally in `apps/dashboard/src/api/notifications.ts`, so all three are
+       * names a trunk schema would plausibly arrive under. The whole point of this
+       * spec is that the day one lands, the two hand-written transcriptions stop
+       * being the contract — and the weaker guard must not be the one still being
+       * maintained.
+       */
+      'MerchantNotificationSchema',
+      'NotificationFeedSchema',
+      'NotificationViewSchema',
       'NotificationPreferencesSchema',
       'NotificationSettingsSchema',
       'MemberNotificationsSchema',
