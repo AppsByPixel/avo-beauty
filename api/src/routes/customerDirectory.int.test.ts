@@ -103,6 +103,105 @@ const OTHER_STAFF = id('ST');
 
 /**
  * ============================================================================
+ * THE PAGE BOUNDARY, MINTED — because it cannot be borrowed.
+ * ============================================================================
+ * `orders newest member first, across a page boundary and not only inside one`
+ * used to assert `all.length > CUSTOMER_PAGE_SIZE` over whatever `SAL-AMARA`
+ * happened to contain. That is two separate failures wearing one red.
+ *
+ *   IT FAILED ON A CLEAN DATABASE. This run mints three members and the seed adds
+ *       two, so the walk returned 4 and the assertion read
+ *       `expected 4 to be greater than 25`.
+ *
+ *   IT PASSED ON A DIRTY ONE FOR A REASON UNRELATED TO ITS CLAIM, which is worse
+ *       than the red. Every integration run in this suite's history leaves members
+ *       behind; once enough had accumulated the walk crossed a boundary, and the
+ *       spec went green on OTHER SUITES' litter. On a clean database there is no
+ *       boundary at all, so a spec whose entire title is "across a page boundary
+ *       and not only inside one" was not testing the thing it names — and the day
+ *       it started passing had nothing to do with the cursor being right.
+ *
+ *       That is the same class as the defect the `%`-escape and the incidental-digit
+ *       specs below were each rewritten to remove: a spec that is falsifiable on
+ *       some runs and not others is not a spec.
+ *
+ * SO THE BOUNDARY IS BUILT, AND IT IS BUILT WHERE IT HURTS.
+ *
+ * THIRTY MEMBERS SHARING ONE MICROSECOND. Not thirty with distinct stamps — that
+ * would produce a boundary and prove almost nothing, because `joined_at DESC`
+ * alone already orders distinct stamps and a broken tiebreak would never show.
+ * With all thirty on ONE instant, `joined_at` orders none of them and the walk is
+ * held together entirely by `services/streamCursor.ts`' second term, `id ASC`.
+ * Thirty is chosen against `CUSTOMER_PAGE_SIZE` (25): the group CANNOT fit on one
+ * page, so a boundary necessarily falls INSIDE the tie, which is the one place a
+ * cursor can repeat a row or drop one.
+ *
+ * IT IS ALSO THE EXACT CONDITION THAT PRODUCED THE BUG streamCursor.ts RECORDS —
+ * four support tickets sharing `16:00:00.123456`, a cursor truncated to
+ * milliseconds, and a ten-row queue that paged eight while reporting ten. The
+ * instant below carries SIX fractional digits for that reason. Note what the WIRE
+ * does with it: `serialiseCustomerListItem` uses `Date.toISOString()`, which emits
+ * milliseconds, so all thirty rows serialise `joinedAt` as `…10:00:00.123Z` and
+ * are indistinguishable to a client. Only the cursor's `to_char(… 'US')` can tell
+ * them apart, and that asymmetry is the whole reason the cursor does not reuse the
+ * serialised field.
+ *
+ * PLACED BELOW THE EXISTING THREE, AT 2027-03, DELIBERATELY. The fixture's
+ * documented invariant is that this run's members sit in the prefix because their
+ * `joined_at` is in the FUTURE relative to any real row, and that the Lumière
+ * member at 2027-04-03 is the NEWEST of the three — which is what keeps the
+ * tenancy spec falsifiable, since a deleted salon predicate puts her at the very
+ * top where that spec looks. Minting the bulk NEWER than her would have moved her
+ * out from under her own spec. Older keeps every existing claim exactly as it was
+ * and still lands the whole group inside `PREFIX_PAGES`.
+ *
+ * ============================================================================
+ * THREE INVERSIONS, AND THE ONE THAT MATTERS MOST IS THE GREEN ONE.
+ * ============================================================================
+ *   A. `asc(member.id)` REMOVED from the list's ORDER BY in `routes/customers.ts`.
+ *      -> 2 red. The walk serves 37 rows of which 34 are distinct: THREE MEMBERS
+ *         ARRIVE TWICE. And the group comes back led by `AC-BULK-29-...` where
+ *         `AC-BULK-00-...` belongs, in an order Postgres chose rather than one
+ *         anybody specified.
+ *
+ *      AND THE OLD ASSERTIONS WERE RUN AGAINST THAT SAME BREAK, verbatim, as a
+ *      temporary fourth spec. THEY PASSED. `all.length > 25` is satisfied by 37,
+ *      and `[...stamps].sort().reverse()).toEqual(stamps)` is satisfied because
+ *      the duplicated rows share the tie instant and so cannot disturb a sort on
+ *      stamps. The pre-fix spec certified a customer list that served three
+ *      members twice.
+ *
+ *      That measurement is what this fixture exists for, and it is why the
+ *      rewrite asserts an exact id SEQUENCE rather than a sorted-ness property:
+ *      sorted-ness has many satisfying answers and this endpoint has one correct
+ *      one.
+ *
+ *   B. THE CURSOR'S TIEBREAK LOOSENED, `${idColumn}::text > ${cursor.id}` to
+ *      `>=`, in `services/streamCursor.ts` — a one-character change.
+ *      -> 2 red. One row repeats across the boundary: `expected 34 to be 35`.
+ *
+ *   C. THE TIE CLAUSE DROPPED ENTIRELY, so `afterCursor` returns the bare
+ *      `at < stamp`. This is `streamCursor.ts`' own recorded failure reproduced —
+ *      "the page came back EMPTY... and three rows were simply gone".
+ *      -> 3 red, and the loudest: `the tie group was not walked in full: expected
+ *         23 to be 30`. SEVEN of the thirty vanish, the walk terminates normally,
+ *         and the endpoint reports no error at all. The precondition spec catches
+ *         it independently, because page two then begins outside the tie group.
+ */
+const BULK_COUNT = 30;
+const BULK_AT = '2027-03-15T10:00:00.123456Z';
+const BULK_IDS = Array.from({ length: BULK_COUNT }, (_, i) =>
+  id(`BULK-${String(i).padStart(2, '0')}`),
+);
+/**
+ * `id ASC` over a zero-padded index is numeric order, so the expected sequence is
+ * simply `BULK_IDS` as written. Zero-padding is load-bearing: `AC-BULK-9-…` sorts
+ * before `AC-BULK-10-…` and the expectation would be wrong rather than the code.
+ */
+const BULK_EXPECTED_ORDER = [...BULK_IDS];
+
+/**
+ * ============================================================================
  * A PER-RUN MANAGER, AND SHE IS NOT A CONVENIENCE.
  * ============================================================================
  * This file used the seeded `ST-001` and the inversion run is what exposed the
@@ -245,6 +344,30 @@ suite('the merchant customer directory', () => {
          '2027-04-02T10:00:00Z', '2027-05-02T10:00:00Z', '2027-05-02T10:00:00Z')`);
 
     /**
+     * THE TIE GROUP. One INSERT, thirty rows, one instant — see `BULK_COUNT`.
+     *
+     * `${BULK_AT}::timestamptz` is written once and reused for every row rather
+     * than being defaulted or computed per row, because the claim these rows exist
+     * to support is that the instants are IDENTICAL TO THE MICROSECOND. Thirty
+     * calls to `now()` would be thirty different instants and the tiebreak would
+     * never be reached.
+     */
+    await db.execute(sql`
+      INSERT INTO member
+        (id, salon_id, name, phone, email, email_verified, password_hash,
+         balance_fils, visits, tier, policy_version, joined_at)
+      VALUES ${sql.join(
+        BULK_IDS.map(
+          (bid, i) =>
+            sql`(${bid}, ${SALON}, ${`AC Bulk ${String(i).padStart(2, '0')} ${RUN}`},
+                 ${`+9659${String(i).padStart(2, '0')}${digits}`},
+                 ${`ac.bulk.${i}.${RUN}@example.test`}, true, 'x',
+                 0, 0, 'bronze', 1, ${BULK_AT}::timestamptz)`,
+        ),
+        sql`, `,
+      )}`);
+
+    /**
      * TWO MANAGERS, ONE PER SALON, BOTH MINTED FOR THIS RUN. The Amara one for the
      * reason above; the Lumiere one so that "a merchant cannot read another salon's
      * customer" is proved against a real staff row with `perm_team` ON — her
@@ -331,6 +454,12 @@ suite('the merchant customer directory', () => {
        */
       await db.execute(sql`DELETE FROM staff_user WHERE id IN (${MANAGER}, ${OTHER_STAFF})`);
       await db.execute(sql`DELETE FROM member WHERE id IN (${LIVE}, ${ERASED}, ${OTHER_MEMBER})`);
+      /**
+       * The tie group goes too. Leaving thirty members behind would hand the NEXT
+       * run the accumulated-litter boundary this fixture exists to replace — the
+       * suite would go green for the old wrong reason and nobody would see it.
+       */
+      await db.execute(sql`DELETE FROM member WHERE id LIKE ${`AC-BULK-%${RUN}`}`);
     }
     await app?.close();
   });
@@ -384,6 +513,28 @@ suite('the merchant customer directory', () => {
       if (!cursor) break;
     }
     return found;
+  }
+
+  /**
+   * The same walk, but keeping the PAGES rather than flattening them.
+   *
+   * `walkList` cannot answer the question the boundary specs ask. A flat array of
+   * rows is identical whether it came back as one page of 30 or two of 25 and 5,
+   * so a spec built on it cannot tell "the cursor crossed a boundary correctly"
+   * from "there was no boundary to cross" — which is precisely how the ordering
+   * spec came to pass on a clean database while proving nothing.
+   */
+  async function walkPages(token: string, q?: string, pages = PREFIX_PAGES): Promise<ListRow[][]> {
+    const out: ListRow[][] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < pages; i++) {
+      const url = listUrl(SALON, q) + (cursor ? `${q === undefined ? '?' : '&'}cursor=${cursor}` : '');
+      const page = (await get(url, token)).body as { items: ListRow[]; nextCursor: string | null };
+      out.push(page.items);
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+    return out;
   }
 
   /** The same prefix, narrowed to what this run put there. */
@@ -891,23 +1042,113 @@ suite('the merchant customer directory', () => {
   // ======================================================================
   describe('the list', () => {
     /**
+     * ======================================================================
+     * THE CONTROL: THERE IS A BOUNDARY, AND IT FALLS INSIDE THE TIE.
+     * ======================================================================
+     * Every claim in the two specs below is a claim about what happens AT a page
+     * boundary, and each of them is vacuously true if no boundary was crossed. So
+     * the precondition is asserted first and on its own, where a failure says
+     * "the fixture stopped producing a boundary" rather than "the cursor is
+     * broken" — the two have entirely different fixes and the old spec could not
+     * distinguish them.
+     */
+    it('the fixture really does straddle a page boundary, inside one instant', async () => {
+      const pages = await walkPages(managerToken);
+
+      expect(pages.length, 'the walk returned a single page — there is no boundary').toBeGreaterThan(
+        1,
+      );
+      expect(
+        pages[0]!.length,
+        'the first page is not full, so the boundary is the end of the data rather than a page edge',
+      ).toBe(CUSTOMER_PAGE_SIZE);
+
+      /**
+       * AND THE BOUNDARY IS INSIDE THE TIE GROUP, which is the part that makes the
+       * rest worth asserting. Thirty rows share one instant and a page holds
+       * twenty-five, so the last row of page one and the first row of page two are
+       * both members of the group — the cursor is comparing equal `joined_at`
+       * values and breaking the tie on `id` alone.
+       */
+      const lastOfFirst = pages[0]![CUSTOMER_PAGE_SIZE - 1]!;
+      const firstOfSecond = pages[1]![0]!;
+      expect(BULK_IDS, 'page one does not end inside the tie group').toContain(lastOfFirst.id);
+      expect(BULK_IDS, 'page two does not begin inside the tie group').toContain(firstOfSecond.id);
+      expect(
+        firstOfSecond.joinedAt,
+        'the two rows either side of the boundary do not share an instant, so no tiebreak is exercised',
+      ).toBe(lastOfFirst.joinedAt);
+    });
+
+    /**
      * THE CURSOR'S ONE REAL PROPERTY: a page boundary neither repeats a row nor
-     * drops one. Asserted over the prefix rather than the book, which is enough —
-     * `services/streamCursor.ts`' tiebreak is what makes the order total, and a
-     * broken tiebreak shows up at the FIRST boundary, not the fortieth.
+     * drops one — and now it is asserted over a boundary that falls in the middle
+     * of thirty rows the database cannot order without the tiebreak.
+     *
+     * WHAT THIS USED TO BE. `walkList` plus "no duplicate ids, and LIVE and ERASED
+     * appear once each". On a clean database that walk was ONE page of four rows,
+     * so it asserted that a list of four has no duplicates — true of any list the
+     * endpoint could possibly return, including one served by a cursor that drops
+     * every row after the first page. It shared the ordering spec's defect and
+     * only the ordering spec went red, because a hollow assertion does not
+     * announce itself.
      */
     it('pages without repeating a row, and yields each of this run’s members once', async () => {
       const all = await walkList(managerToken);
       expect(new Set(all.map((r) => r.id)).size).toBe(all.length);
       expect(all.filter((r) => r.id === LIVE)).toHaveLength(1);
       expect(all.filter((r) => r.id === ERASED)).toHaveLength(1);
+
+      /**
+       * THE THIRTY, EACH EXACTLY ONCE. This is the assertion the old one could not
+       * make: they straddle the boundary, so a cursor that repeats the boundary row
+       * yields 31 and one that skips it yields 29. Both are the failure
+       * `streamCursor.ts` records against a truncated instant, and neither is
+       * visible in a four-row walk.
+       */
+      const seen = all.map((r) => r.id).filter((x) => BULK_IDS.includes(x));
+      expect(new Set(seen).size, 'the tie group was not walked in full').toBe(BULK_COUNT);
+      expect(seen.length, 'a row on the page boundary was served twice').toBe(BULK_COUNT);
     });
 
+    /**
+     * ======================================================================
+     * THE ORDER IS TOTAL, AND THE SECOND TERM IS WHAT CARRIES IT HERE.
+     * ======================================================================
+     * `joined_at DESC, id ASC`. The first term orders nothing within the tie group
+     * — all thirty instants are equal — so this spec fails if and only if the
+     * TIEBREAK breaks, which is what it was always supposed to be about.
+     *
+     * The old assertion was `[...stamps].sort().reverse()).toEqual(stamps)` over
+     * whatever came back. Against distinct stamps that is satisfied by
+     * `ORDER BY joined_at DESC` with no tiebreak at all, and against a four-row
+     * single page it is satisfied by almost anything. Asserting the exact id
+     * sequence is what makes the claim falsifiable: there is one correct answer and
+     * every other permutation is red.
+     */
     it('orders newest member first, across a page boundary and not only inside one', async () => {
       const all = await walkList(managerToken);
       expect(all.length).toBeGreaterThan(CUSTOMER_PAGE_SIZE);
+
+      // The outer order still holds across the whole prefix.
       const stamps = all.map((r) => r.joinedAt);
       expect([...stamps].sort().reverse()).toEqual(stamps);
+
+      /**
+       * AND THE INNER ORDER, WHICH IS THE POINT. The thirty must arrive contiguously
+       * and in `id ASC`, spanning the boundary. Contiguity is asserted as well as
+       * sequence: a cursor that served the group in the right order but interleaved
+       * a stranger from the middle of the book would have lost the walk's place.
+       */
+      const ids = all.map((r) => r.id);
+      const positions = BULK_IDS.map((b) => ids.indexOf(b));
+      expect(positions, 'a member of the tie group is missing from the walk').not.toContain(-1);
+
+      const first = Math.min(...positions);
+      expect(
+        ids.slice(first, first + BULK_COUNT),
+        'the tie group is neither contiguous nor in id order across the page boundary',
+      ).toEqual(BULK_EXPECTED_ORDER);
     });
 
     it('finds a customer by name, by phone digits and by exact member id', async () => {
