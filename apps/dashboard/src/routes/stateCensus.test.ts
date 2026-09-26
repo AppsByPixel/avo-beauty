@@ -109,6 +109,43 @@ const SECTION_SCREENS = [
    * below will not see it, exactly as it does not see `Tills.tsx`.
    */
   'SalesTrend.tsx',
+  /**
+   * Merchant → Appointments → Week. NEW WORK; there is no calendar view in the
+   * design bundle (`routes/appointmentsWeekRules.ts` carries the disclosure —
+   * every "calendar" in the merchant artboard is Google Calendar as an
+   * AVAILABILITY SOURCE, not a view of appointments).
+   *
+   * A VIEW INSIDE A SCREEN, in this list rather than in a host/subview pair, and
+   * it needs both halves of the argument `SalesTrend.tsx` needs.
+   *
+   * IT OWNS ITS OWN READS, PLURAL, AND ONE OF THEM IS A DIFFERENT QUERY ON THE
+   * SAME ENDPOINT. `Appointments.tsx` reads ONE page of
+   * `GET /salons/{id}/bookings`; this walks the cursor through it with its own
+   * `useInfiniteQuery` under its own key, and reads `GET /salons/{id}` besides,
+   * for the time zone that decides which COLUMN a booking is drawn in. Two cache
+   * entries on one route still fail independently — a paused page or a mid-walk
+   * 503 is this view's answer and not its host's — and nothing hands it a
+   * pending state, because the list's read landing says nothing about the walk.
+   *
+   * SAME GATE, WHICH IS NOT THE SAME THING AS ONE READ — `ShopOrders.tsx`'s
+   * distinction, applied to the strongest case for it yet: the two reads share
+   * `perms.appointments` AND the same URL, and are still two independent
+   * failures.
+   *
+   * IT CARRIES A FIFTH THING THAT IS NOT ONE OF THE FOUR, and it is the reason
+   * the view exists in the shape it does: `GET /salons/{id}/bookings` caps a
+   * page at 200 with no date range, so a week grid drawn from one page shows
+   * hours nobody checked as free. This view REFUSES TO DRAW a week it cannot
+   * prove it has whole — see the capped-list describe at the foot of this file,
+   * which pins that refusal the way `ShopOrders`' truncation notice is pinned.
+   * It also carries the unusable-time-zone refusal `SalesTrend.tsx` carries, for
+   * the same field and the same reason.
+   *
+   * Not routed — `Appointments.tsx` mounts it behind the List/Week control — so
+   * the routed-component assertion below will not see it, exactly as it does not
+   * see `Tills.tsx` or `SalesTrend.tsx`.
+   */
+  'AppointmentsWeek.tsx',
   'Accounts.tsx',
   'AuditLog.tsx',
   'Reports.tsx',
@@ -569,5 +606,44 @@ describe('a capped list does not report itself as complete', () => {
    */
   it('ShopOrders.tsx does not page on the always-null nextCursor', () => {
     expect(stripComments(read('ShopOrders.tsx'))).not.toContain('nextCursor');
+  });
+
+  /**
+   * THE SAME CLASS, ON A SURFACE WHERE SAYING SO IS NOT ENOUGH.
+   *
+   * `ShopOrders.tsx` renders its cap as a NOTICE over a board that is still
+   * useful truncated — a list of the most recent 200 orders reads as exactly
+   * that. A week grid cannot do the same trick: a notice above a grid missing
+   * its Thursday afternoon does not stop the Thursday afternoon looking free,
+   * because nothing on the grid distinguishes "nobody booked this hour" from
+   * "we did not read this hour". So the week REFUSES TO DRAW, and these pin that
+   * the refusal is wired rather than merely written down.
+   *
+   * The render test asserts the refusal's CONTENT and mutation-checks the rule
+   * itself; what a source scan adds is that no future edit reaches the grid
+   * without passing the check first.
+   */
+  it('AppointmentsWeek.tsx consults the coverage rule before it draws', () => {
+    const src = stripComments(read('AppointmentsWeek.tsx'));
+    expect(src).toContain('windowCoverage');
+    expect(src).toMatch(/coverage\.kind === 'walking'/);
+    expect(src).toMatch(/coverage\.kind === 'short'/);
+    // Both incomplete arms return BEFORE the grid is reached.
+    expect(src.indexOf('<WeekGrid')).toBeGreaterThan(src.indexOf("coverage.kind === 'short'"));
+    expect(src.indexOf("coverage.kind === 'short'")).toBeGreaterThan(-1);
+  });
+
+  /**
+   * EXHAUSTION IS A FACT ON THE WIRE, NOT A DERIVED FLAG. TanStack's
+   * `hasNextPage` is false before the first page lands, so reading it as "the
+   * stream ran out" makes a pending screen claim a complete window — "Nothing
+   * booked this week" painted over a week nobody has looked at. Asserts on where
+   * the value COMES FROM rather than on its spelling, per this file's standing
+   * correction.
+   */
+  it('AppointmentsWeek.tsx reads exhaustion off the payload, not off hasNextPage', () => {
+    const src = stripComments(read('AppointmentsWeek.tsx'));
+    expect(src).toMatch(/exhausted:[^,\n]*nextCursor/);
+    expect(src).not.toMatch(/exhausted:[^,\n]*hasNextPage/);
   });
 });

@@ -1,15 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { parseFils, type StaffPerms } from '@avo/types';
-import { Card, EmptyState, InfoBanner, Money, Pill, Skeleton, type PillTone } from '@avo/ui';
-import {
-  useMarkNoShow,
-  useSalonBookings,
-  type BookingStatus,
-  type MerchantBooking,
-} from '../api/bookings.js';
+import { Card, EmptyState, InfoBanner, Money, Pill, Segmented, Skeleton } from '@avo/ui';
+import { useMarkNoShow, useSalonBookings, type MerchantBooking } from '../api/bookings.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
+import { AppointmentsWeek } from './AppointmentsWeek.js';
+import { STATUS_PILL } from './appointmentsWeekRules.js';
 import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
 
@@ -40,26 +37,15 @@ import { SectionError, WriteError } from './sectionState.js';
  */
 
 /**
- * The status pills, verbatim from the design's `stat` map.
+ * THE STATUS PILLS MOVED TO `appointmentsWeekRules.ts`, WITH THEIR ARGUMENT INTACT.
  *
- * TOKEN NOTE — `no_show_returned` is the only one that needs a colour the design
- * names and the tokens do: #F6EAE8 on #B0736F is `--avo-danger-bg` on
- * `--avo-danger-dot`. `Pill`'s `danger` tone pairs `--avo-danger-bg` with
- * `--avo-danger-text` (#8f5a56), which is the same family a shade darker and
- * carries more contrast than the design's own value. Taken deliberately: the
- * design's #B0736F on #F6EAE8 is about 3.0:1, under the 4.5:1 the brand rules
- * demand of text, and this pill is text.
- *
- * `cancelled` has no designed pill at all — the dashboard mock never renders one
- * — but the API can return the status, so it gets the quiet tone rather than an
- * unlabelled row. Reported to trunk: a cancelled booking needs designed copy.
+ * They were defined here for as long as this screen was the only view of a
+ * booking. The week grid labels the same four statuses, and two views of one
+ * board that call `no_show_returned` different things are worse than one view —
+ * so the table has one home and both views import it. The colour-deviation note
+ * and the `cancelled` disclosure travelled with it; nothing about the pills
+ * themselves changed.
  */
-const STATUS_PILL: Record<BookingStatus, { label: string; tone: PillTone }> = {
-  deposit_held: { label: 'Deposit held', tone: 'brand' },
-  completed: { label: 'Completed', tone: 'quiet' },
-  no_show_returned: { label: 'No-show · returned', tone: 'danger' },
-  cancelled: { label: 'Cancelled', tone: 'quiet' },
-};
 
 /**
  * "Today · 4:30 PM", "Tomorrow · 11:00 AM", "9 Jul · 7:00 PM".
@@ -220,18 +206,60 @@ export function Appointments() {
    */
   const [armed, setArmed] = useState<{ id: string; key: string } | null>(null);
 
+  /**
+   * =========================================================================
+   * LIST OR WEEK — AN INVENTED CONTROL, AND THE LIST IS THE DEFAULT
+   * =========================================================================
+   * THE CONTROL IS INVENTED. The design draws one view of this screen and no
+   * view switch; `appointmentsWeekRules.ts` carries the disclosure that there is no
+   * calendar anywhere in the bundle. Named here so nobody goes looking for a
+   * segmented control on the Appointments artboard.
+   *
+   * IT JOINS RATHER THAN REPLACES, because the two views answer different
+   * questions with different equipment. The list has the DEPOSIT column and
+   * MARK NO-SHOW — a `perms.void` write with a confirmation and an idempotency
+   * key — and a grid chip that is sometimes fifteen minutes tall has room for
+   * neither. The grid answers "what does this week look like", which the list
+   * answers badly: `GET /salons/{id}/bookings` is `starts_at DESC`, so the list
+   * opens on the FURTHEST-FUTURE bookings and today is somewhere below.
+   *
+   * AND THE LIST IS THE DEFAULT, WHICH IS THE PART WORTH ARGUING. The grid can
+   * decline to draw — an unusable time zone, or a book so far forward that the
+   * cursor walk stops before it reaches this week — and both refusals are
+   * correct (`appointmentsWeekRules.ts § THE 200 CAP`). A section whose DEFAULT view
+   * can answer "not yet" is a section that sometimes greets a merchant with an
+   * explanation instead of her appointments. The list has no preconditions: one
+   * request, always something on the screen. So the reliable view is the one the
+   * door opens on, the richer view is one labelled click away, and every state
+   * the grid cannot draw names the list as the way through.
+   */
+  const [view, setView] = useState<'list' | 'week'>('list');
+
   /*
    * The module flag decides WHETHER TO ASK, not just what to draw. A salon with
    * booking off has no bookings by construction; asking would answer with an
    * empty list, which is the other empty's evidence. See useSalonBookings().
+   *
+   * AND THE VIEW GATES IT TOO. The week reads its own paged query, so a merchant
+   * who opens the grid should not also pay for a list she is not looking at —
+   * and `AppointmentsWeek` is gated the same way from the other side.
    */
   const bookingOn = salon.data?.modules.booking ?? false;
-  const bookings = useSalonBookings(null, salon.isSuccess && bookingOn);
+  const listOn = salon.isSuccess && bookingOn && view === 'list';
+  const bookings = useSalonBookings(null, listOn);
 
-  // The salon read gates the module question, so its failure is this section's
-  // failure — a 403 on `GET /salons/{id}` is still "you can't", and rendering
-  // the table shell around an unknown module state would be a guess.
-  const failed = salon.isError ? salon : bookings.isError ? bookings : null;
+  /*
+   * The salon read gates the module question, so its failure is this section's
+   * failure — a 403 on `GET /salons/{id}` is still "you can't", and rendering
+   * the table shell around an unknown module state would be a guess.
+   *
+   * THE LIST'S FAILURE IS ONLY THIS SECTION'S FAILURE WHILE THE LIST IS SHOWN.
+   * A disabled query keeps whatever it last errored with, so an unguarded read
+   * of `bookings.isError` would let a failure the merchant already navigated
+   * away from replace a grid that is loading perfectly well. The week owns its
+   * own `SectionError` for its own read.
+   */
+  const failed = salon.isError ? salon : view === 'list' && bookings.isError ? bookings : null;
   if (failed) {
     return (
       <SectionError
@@ -247,7 +275,7 @@ export function Appointments() {
     );
   }
 
-  const loading = salon.isPending || (bookingOn && bookings.isPending);
+  const loading = salon.isPending || (listOn && bookings.isPending);
   const rows = bookings.data?.items ?? [];
 
   return (
@@ -303,6 +331,31 @@ export function Appointments() {
       ) : null}
 
       {/*
+        THE VIEW SWITCH, AND IT IS NOT DRAWN OVER THE SWITCHED-OFF EMPTY.
+        A salon with `modules.booking` off has no bookings in either shape, so
+        offering a choice of two ways to look at none of them is a control with
+        nothing behind it — and it would sit above copy whose whole job is to
+        name the ONE action that resolves the state.
+
+        It IS drawn while the salon is still loading, so the row does not appear
+        underneath a card that already looks settled — the Overview's reflow
+        lesson, applied to a control rather than to a figure.
+      */}
+      {salon.isSuccess && !bookingOn ? null : (
+        <div className="appts__views">
+          <Segmented
+            label="Appointments view"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'list', label: 'List' },
+              { value: 'week', label: 'Week' },
+            ]}
+          />
+        </div>
+      )}
+
+      {/*
         THE SWITCHED-OFF EMPTY. Its own copy, its own tone, and the one action
         that resolves it. It replaces the table rather than sitting inside it:
         an empty table with headers says "we looked and found none", which is
@@ -316,6 +369,13 @@ export function Appointments() {
             action={{ label: 'Open Settings', onClick: () => void navigate({ to: '/settings' }) }}
           />
         </Card>
+      ) : view === 'week' ? (
+        /*
+          The grid owns its own reads, its own four states and its own refusal to
+          draw a week it cannot vouch for. `onShowList` is the way back that
+          every one of those refusals offers — the list has no preconditions.
+        */
+        <AppointmentsWeek onShowList={() => setView('list')} />
       ) : (
         <Card className="appts__card" flush>
           <div className="appts__scroll">
