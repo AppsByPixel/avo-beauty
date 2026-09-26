@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { Branch, Salon, SocialLink } from '@avo/types';
+import { BranchSchema, type Branch, type Salon, type SocialLink } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import { deviceKeys } from './devices.js';
@@ -300,6 +300,119 @@ export function useUpdateSocialLink(): UseMutationResult<unknown, unknown, Socia
 /* ---------------------------------------------------------------- branches -- */
 
 /**
+ * ===========================================================================
+ * THREE BRANCH ENDPOINTS ANSWER BODIES THIS FILE USED TO CAST, AND THE THREE
+ * FAIL DIFFERENTLY
+ * ===========================================================================
+ * `POST …/branches`, `GET …/branches/{bid}/closure-preview` and
+ * `DELETE …/branches/{bid}` each arrived through `authedRequest<T>`, which is an
+ * assertion and not a check. What a wrong assertion COSTS is different at each
+ * of the three, so the three degrade differently rather than uniformly:
+ *
+ *   POST      nothing committed is at stake for the screen — the branch list is
+ *             re-read from the salon — so an unreadable 201 loses a value
+ *             nothing reads. SAFE PARSE, `null`, invalidation supplies truth.
+ *   PREVIEW   pre-commit. An ordinary failed read, and `Settings.tsx` already
+ *             blocks the close on one. THROW.
+ *   DELETE    POST-COMMIT, and the response is a ONE-SHOT RECEIPT. `null`, and
+ *             the screen renders a degraded but true receipt. See below.
+ *
+ * ---------------------------------------------------------------------------
+ * THE BRANCH HALF IS `BranchSchema` AND THE REST IS HAND-ROLLED, AND THAT SPLIT
+ * IS NOT LAZINESS
+ * ---------------------------------------------------------------------------
+ * `BranchClosurePreview` and `BranchClosure` both `extend Branch`, and both
+ * bodies are literally `{ ...serialiseBranch(row), …extras }` on the server
+ * (`api/src/routes/salons.ts`). So the four Branch fields are parsed by the
+ * shared schema — `api/staff.ts § parseStaffUser`'s rule, and restating
+ * `id`/`salonId`/`name`/`nameAr` here would be the duplicate this column keeps
+ * deleting.
+ *
+ * The extras are NOT in `packages/types`, and they cannot be written as
+ * `BranchSchema.extend({ … })` because **`zod` is not a dependency of
+ * `@avo/dashboard`** and `@avo/types` does not re-export `z` — the constraint
+ * `api/salon.ts § SalonWireSchema` records. `.extend()` needs a schema per key,
+ * and the only way to get a `z.boolean()` without the import is to reach across
+ * to an unrelated entity's field (`SocialLinkSchema.shape.on`), which couples
+ * `closable` to a social toggle and would break the day trunk touches one. The
+ * derivation `SalonWireSchema` does is legitimate because it derives from the
+ * SAME schema's own shape; this would not be.
+ *
+ * So the extras use the local-helper pattern this file family already has for a
+ * shape `packages/types` does not own — `api/salon.ts § parseActivityFeed`,
+ * `api/staff.ts § parseStaffPage`. REPORTED TO TRUNK rather than worked around:
+ * `BranchClosurePreview` and `BranchClosure` belong in
+ * `packages/types/src/entities.ts` beside `BranchSchema`, at which point both
+ * parsers here collapse to a `.parse` and this paragraph goes with them. Lane C
+ * does not widen `packages/types`.
+ */
+function strList(v: unknown, where: string): string[] {
+  if (!Array.isArray(v)) throw new Error(`${where} was not an array.`);
+  return v.map((x, i) => {
+    if (typeof x !== 'string') throw new Error(`${where}[${i}] was not a string.`);
+    return x;
+  });
+}
+
+/** A non-negative integer count. `2.5 appointments` is a broken server, not a rounding. */
+function count(v: unknown, where: string): number {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+    throw new Error(`${where} was not a non-negative integer.`);
+  }
+  return v;
+}
+
+function bool(v: unknown, where: string): boolean {
+  if (typeof v !== 'boolean') throw new Error(`${where} was not a boolean.`);
+  return v;
+}
+
+function nullableStr(v: unknown, where: string): string | null {
+  if (v === null) return null;
+  if (typeof v !== 'string') throw new Error(`${where} was neither a string nor null.`);
+  return v;
+}
+
+/**
+ * THE SIX FIELDS THE PREVIEW AND THE RECEIPT SHARE, parsed once.
+ *
+ * The API chose those names deliberately — "so the preview and the outcome are
+ * comparable rather than merely similar" — so two parsers for them would be two
+ * chances for the comparison the screen invites to be a comparison of two
+ * different readings.
+ *
+ * `BranchSchema.parse` RUNS FIRST AND IS WHAT MAKES THE CAST BELOW SAFE: it
+ * refuses a non-object, `null` and an array by name, so `raw as Record` is
+ * reached only once `raw` is known to be an object.
+ */
+function parseClosureShape(
+  raw: unknown,
+  where: string,
+): Branch & {
+  closedAt: string | null;
+  staffRescoped: string[];
+  staffLeftWithNoBranch: string[];
+  depositHeldBookings: number;
+  depositHeldBookingsBranchAssumed: number;
+  tillsUnenrolled: string[];
+} {
+  const branch = BranchSchema.parse(raw);
+  const r = raw as Record<string, unknown>;
+  return {
+    ...branch,
+    closedAt: nullableStr(r.closedAt, `${where}.closedAt`),
+    staffRescoped: strList(r.staffRescoped, `${where}.staffRescoped`),
+    staffLeftWithNoBranch: strList(r.staffLeftWithNoBranch, `${where}.staffLeftWithNoBranch`),
+    depositHeldBookings: count(r.depositHeldBookings, `${where}.depositHeldBookings`),
+    depositHeldBookingsBranchAssumed: count(
+      r.depositHeldBookingsBranchAssumed,
+      `${where}.depositHeldBookingsBranchAssumed`,
+    ),
+    tillsUnenrolled: strList(r.tillsUnenrolled, `${where}.tillsUnenrolled`),
+  };
+}
+
+/**
  * `POST /salons/{id}/branches` — `perms.loyalty`. A salon opens a second location.
  *
  * NAME ONLY. THE SERVER MINTS THE ID.
@@ -323,16 +436,46 @@ export function useUpdateSocialLink(): UseMutationResult<unknown, unknown, Socia
  * and non-negotiable #12 calls Arabic a first-class layout rather than a copy of
  * the English. Null is honest and the wallet can fall back. Reported to trunk.
  */
-export function useAddBranch(): UseMutationResult<Branch, unknown, { name: string }> {
+/**
+ * `Branch | null`, AND THE `null` IS THE POINT OF THE SLICE.
+ *
+ * `BranchSchema` IS RUN BARE — `parseStaffUser`'s rule, no wrapper, no
+ * `.nullish()`, no restatement. `serialiseBranch` (api/src/routes/salons.ts:550)
+ * emits `{ id, salonId, name, nameAr }` and `BranchSchema` declares those four
+ * and nothing else, checked against the serialiser rather than inferred from the
+ * name. Unlike `parseSalon` there is no divergence to declare.
+ *
+ * WHAT IS NOT BARE IS THE CALL, and the difference is the lesson the previous
+ * slice landed. `.parse` inside a `mutationFn` turns an unreadable body into a
+ * REJECTED MUTATION, and `Settings.tsx` renders that as
+ *
+ *     "Something went wrong on our side. **No branch was added.**"
+ *
+ * over a branch the server had already created — the same false-failure this
+ * column removed from `bookings.ts` and `orders.ts`, and the action it invites
+ * is a second POST and a duplicate branch. The 201 is a COMMIT; a client that
+ * cannot read it has learnt nothing about whether it happened.
+ *
+ * So: `safeParse`, `null` on failure, and the `invalidateQueries` below is what
+ * supplies the truth — exactly `parseWrittenBooking`'s shape, and for exactly
+ * its reason. Nothing reads this value today; the parse exists so that the
+ * declared type stops being an assertion, and so the first reader to want the
+ * new branch's id finds a checked value rather than a cast.
+ */
+export function useAddBranch(): UseMutationResult<Branch | null, unknown, { name: string }> {
   const salonId = useSalonId();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ name }) =>
-      authedRequest<Branch>('merchant', `/salons/${salonId}/branches`, {
-        method: 'POST',
-        body: { name },
-      }),
+    mutationFn: async ({ name }) => {
+      const parsed = BranchSchema.safeParse(
+        await authedRequest<unknown>('merchant', `/salons/${salonId}/branches`, {
+          method: 'POST',
+          body: { name },
+        }),
+      );
+      return parsed.success ? parsed.data : null;
+    },
     // Invalidate rather than append: the branch list lives on the Salon object
     // that the whole shell reads, and the 201 is a Branch, not a Salon.
     onSuccess: () => {
@@ -463,6 +606,22 @@ export interface BranchClosurePreview extends Branch {
 }
 
 /**
+ * ORDER MATTERS AND IS NOT INCIDENTAL: the spread runs first, so
+ * `parseClosureShape`'s `BranchSchema.parse` has refused a non-object before any
+ * `r.<key>` is read. The cast is a type assertion and touches nothing.
+ */
+export function parseBranchClosurePreview(raw: unknown): BranchClosurePreview {
+  const where = 'GET /salons/{id}/branches/{bid}/closure-preview';
+  const r = raw as Record<string, unknown>;
+  return {
+    ...parseClosureShape(raw, where),
+    closable: bool(r.closable, `${where}.closable`),
+    blockedReason: nullableStr(r.blockedReason, `${where}.blockedReason`),
+    openBranchCount: count(r.openBranchCount, `${where}.openBranchCount`),
+  };
+}
+
+/**
  * Fetched only while a confirmation is open — `branchId` is null the rest of the
  * time and the query is disabled.
  *
@@ -485,11 +644,36 @@ export function useBranchClosurePreview(
   const salonId = useSalonId();
   return useQuery({
     queryKey: [...salonKeys.detail(salonId), 'closure-preview', branchId ?? 'none'] as const,
-    queryFn: ({ signal }) =>
-      authedRequest<BranchClosurePreview>(
-        'merchant',
-        `/salons/${salonId}/branches/${branchId!}/closure-preview`,
-        { signal },
+    /*
+     * PARSED, AND A PARSE FAILURE IS AN ORDINARY FAILED READ — which on THIS
+     * query means the close is blocked. Nothing has committed, so the existing
+     * error vocabulary is the right one and `Settings.tsx § WHAT A FAILED
+     * PREVIEW DOES` already argues the block at length.
+     *
+     * THE DISTINCTION THIS BUYS IS BETWEEN "NO CONSEQUENCES" AND "WE COULD NOT
+     * READ THE CONSEQUENCES", and it is the whole reason the cast could not
+     * stay. `impact.staffRescoped.length` on an unparsed body throws inside
+     * render, which is a crash; but the shapes that DON'T throw are worse. A
+     * body whose `staffRescoped` arrived as `[]` because the key was absent and
+     * something defaulted it, or whose `depositHeldBookings` arrived as a
+     * string, renders the reassuring branch of every one of those ternaries:
+     *
+     *     "No staff are scoped to this branch."
+     *     "No appointment here is holding a deposit."
+     *     "No till stands at this branch."
+     *
+     * — three confident sentences, under a live Close button, over consequences
+     * nobody checked. An empty list and an unreadable list are different, and
+     * only the first of them is permission to proceed. Throwing is what makes
+     * them different to the screen.
+     */
+    queryFn: async ({ signal }) =>
+      parseBranchClosurePreview(
+        await authedRequest<unknown>(
+          'merchant',
+          `/salons/${salonId}/branches/${branchId!}/closure-preview`,
+          { signal },
+        ),
       ),
     enabled: branchId !== null,
     staleTime: 0,
@@ -525,8 +709,56 @@ export interface BranchClosure extends Branch {
   tillsUnenrolled: string[];
 }
 
+/**
+ * ===========================================================================
+ * `BranchClosure | null` — AND THE `null` IS A WORSE CASE THAN THE REFUND WAS
+ * ===========================================================================
+ * `null` means: the close COMMITTED and the receipt could not be read.
+ *
+ * THIS IS NOT A HYPOTHETICAL BODY. `api/src/routes/salons.ts:1330` answers a
+ * close of an already-closed branch with `reply.send(serialiseBranch(current))`
+ * — the four Branch fields and NOTHING ELSE. No `closedAt`, no `staffRescoped`,
+ * no `tillsUnenrolled`. That is the correct idempotent answer and it is not
+ * `BranchClosure`; `authedRequest<BranchClosure>` asserted it was. The race is
+ * real: the preview says `closable`, another manager closes the branch, the
+ * DELETE lands on the idempotent path, and `Settings.tsx:1565` reads
+ * `closed.staffRescoped.length` off a body that has no such key.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE RULE FROM THE LAST SLICE DOES NOT TRANSFER UNCHANGED
+ * ---------------------------------------------------------------------------
+ * `bookings.ts § parseWrittenBooking` degrades by DROPPING the optimistic patch
+ * and letting `invalidateQueries` supply the truth. That is right there because
+ * a refetch RE-SURFACES the row: the booking's real status is one `GET` away and
+ * the screen will show it.
+ *
+ * There is no refetch that re-surfaces THIS. The receipt is the only place in
+ * the product that will ever say
+ *
+ *     "Noura Al-Rashid now has no branch access — fix that in Accounts → Team."
+ *
+ * — a named person who cannot work until somebody notices. It is computed from
+ * the UPDATE's own RETURNING, so it describes this close and not the salon's
+ * state; nothing re-derives it afterwards, and the audit row is not a place a
+ * merchant looks. Silence here is not the safe degradation it was there.
+ *
+ * WHAT THE INVALIDATIONS BELOW DO AND DO NOT RECOVER, checked rather than
+ * assumed. `staffKeys.list(salonId)` IS invalidated, so the Team screen will
+ * show the truth — a staff member with an empty branch list — on its next read.
+ * `deviceKeys.list(salonId)` likewise, so the unenrolled tills simply leave the
+ * list. But both require her to GO AND LOOK, and the one screen that would have
+ * told her to is the one that broke. `depositHeldBookings` is recoverable from
+ * nothing at all: the branch is closed, so its held deposits are no longer
+ * reachable from a branch filter.
+ *
+ * So the degradation is a DEGRADED BUT TRUE RECEIPT, rendered at
+ * `Settings.tsx § the closed receipt`: the close succeeded, the summary could
+ * not be read, and here is where to look. Still no failure language — the close
+ * committed, `That branch is still open.` would be false, and a retry is not
+ * what she needs.
+ */
 export function useCloseBranch(): UseMutationResult<
-  BranchClosure,
+  BranchClosure | null,
   unknown,
   { branchId: string }
 > {
@@ -534,10 +766,26 @@ export function useCloseBranch(): UseMutationResult<
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ branchId }) =>
-      authedRequest<BranchClosure>('merchant', `/salons/${salonId}/branches/${branchId}`, {
-        method: 'DELETE',
-      }),
+    mutationFn: async ({ branchId }) => {
+      const raw = await authedRequest<unknown>(
+        'merchant',
+        `/salons/${salonId}/branches/${branchId}`,
+        { method: 'DELETE' },
+      );
+      /*
+       * CAUGHT HERE AND NOT ALLOWED OUT. query-core's `Mutation#execute` awaits
+       * `mutationFn` and `onSuccess` inside one try, so a throw from either
+       * dispatches `{ type: 'error' }` — and the screen would then draw
+       * "Something went wrong on our side. That branch is still open." over a
+       * branch that is closed. The whole point of returning `null` is that this
+       * mutation must stay `isSuccess`.
+       */
+      try {
+        return parseClosureShape(raw, 'DELETE /salons/{id}/branches/{bid}');
+      } catch {
+        return null;
+      }
+    },
     onSuccess: () => {
       /*
        * Both the salon AND the staff list. `array_remove` rewrote
