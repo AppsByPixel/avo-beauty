@@ -18,6 +18,7 @@ import {
 } from '../api/staff.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
+import { Customers } from './Customers.js';
 import { SectionError, WriteError } from './sectionState.js';
 
 /**
@@ -109,17 +110,41 @@ export function Accounts() {
           ]}
         />
         <span className="accounts__hint">
+          {/*
+            THE CUSTOMERS HINT IS THE DESIGN'S SENTENCE WITH TWO CLAUSES REMOVED,
+            NOT A PARAPHRASE OF IT. The design writes "Open a customer to see their
+            profile, activity and purchases — or gift and reimburse them." Purchases
+            is a `shop`/`appointments` join this card cannot make, and gift and
+            reimburse are money-moving writes not in this release — see
+            `Customers.tsx § THREE PANELS`. `console/Accounts.tsx` hit the identical
+            shape on its own banner and settled the rule: keep the true clauses WORD
+            FOR WORD and drop the unbuilt ones rather than blurring the whole
+            sentence into something vaguer. A header promising what the screen below
+            does not do is a false claim whoever wrote it.
+          */}
           {tab === 'team'
             ? 'Create sign-ins for your staff and control what each can do.'
-            : 'Open a customer to see their profile, activity and purchases — or gift and reimburse them.'}
+            : 'Open a customer to see their profile and activity.'}
         </span>
       </div>
 
       {tab === 'customers' ? (
-        <EmptyState
-          title="Customer profiles aren't built yet"
-          body="Gift, reimburse and the customer activity feed are a later phase. Staff access is on the Team tab."
-        />
+        /*
+         * THE CUSTOMER BOOK, WHICH OWNS ITS OWN FOUR STATES — it reads three
+         * routes of its own (`/customers`, `/customers/{id}`, `.../activity`) and
+         * `Customers.tsx` explains why a shared PERMISSION is not a shared
+         * FAILURE. Nothing is handed down from here.
+         *
+         * THE `staff.isError` EARLY RETURN ABOVE STILL FIRES FIRST, AND ON THIS
+         * TAB THAT IS CORRECT RATHER THAN A LEAK OF ONE SECTION INTO ANOTHER:
+         * `GET /staff` and all three customer routes are `perms.team`, so a
+         * session refused the team list is a session refused the book, and the
+         * refusal she reads is the server's own sentence either way. What it does
+         * mean is that the book's 403 is reachable SECOND rather than never —
+         * `perms` is a snapshot from sign-in and `team` can be revoked while this
+         * tab is open.
+         */
+        <Customers />
       ) : staff.isPending ? (
         <div className="accounts__list">
           {[0, 1, 2].map((n) => (
