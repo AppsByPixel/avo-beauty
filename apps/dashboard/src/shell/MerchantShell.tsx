@@ -5,6 +5,7 @@ import { ROLE_LABEL } from '../api/staff.js';
 import { useAuth, useSession } from '../auth/AuthProvider.js';
 import type { StaffRole } from '../auth/session.js';
 import { SCOPES } from '../auth/scopes.js';
+import { signInSearchFor } from '../auth/signInSearch.js';
 import { BranchScopeProvider } from './BranchScope.js';
 import { BranchSelector } from './BranchSelector.js';
 import { Header } from './Header.js';
@@ -45,12 +46,78 @@ export function authorityLabel(role: StaffRole | null): string | null {
  * a normal transient state rather than a throw into the router's CatchBoundary.
  */
 export function MerchantShell() {
-  const session = useAuth().sessionFor('merchant');
+  const { sessionFor, endedReasonFor } = useAuth();
+  const session = sessionFor('merchant');
   const navigate = useNavigate();
+  /*
+   * READ WHILE IT IS STILL TRUE. The effect below runs before the redirect it
+   * issues, so `location.pathname` here is still the section she was looking at
+   * — `/appointments`, not `/signin`.
+   */
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
 
+  /*
+   * THE SECTION SHE WAS ON, REMEMBERED WHILE IT IS STILL HERS — AND THE FIRST
+   * VERSION OF THIS FIX READ IT LIVE AND LOST IT.
+   *
+   * The redirect effect ran TWICE. Once on the commit that dropped the session,
+   * correctly carrying `/appointments`; then again one commit later, because
+   * `pathname` was in its dependency list and had just become `/signin` — and
+   * `/signin` is not a section, so the second navigation replaced the search
+   * with one that had no `from` at all. The cause survived and the destination
+   * did not, which is the ORIGINAL DEFECT with two thirds of the fix in front
+   * of it.
+   *
+   * Caught by `sessionExpiryCause.test.tsx` asserting the SEARCH and not only
+   * the landing path. A spec that checked "lands on /signin" was green
+   * throughout.
+   *
+   * A ref rather than state: the value is not rendered, and writing it must not
+   * cause a render of its own. The recorder is skipped once the session is
+   * gone, which is what makes this the last SIGNED-IN section rather than
+   * wherever the router has moved to since.
+   */
+  const lastSection = useRef(pathname);
   useEffect(() => {
-    if (!session) void navigate({ to: SCOPES.merchant.signIn });
-  }, [session, navigate]);
+    if (session) lastSection.current = pathname;
+  }, [session, pathname]);
+
+  /*
+   * ==================================================================
+   * THE REDIRECT NOW CARRIES A CAUSE AND A DESTINATION
+   * ==================================================================
+   * What stood here was `if (!session) void navigate({ to: SCOPES.merchant.signIn })`
+   * and it was causeless and destinationless. Three materially different events
+   * — a deliberate Sign out, an expiry past refresh, and a sign-out in another
+   * tab, which the comment twenty lines above already named as distinct — all
+   * landed a merchant on a bare sign-in screen with no sentence explaining why
+   * and on a page she did not ask for. The front desk mid-walk-in at
+   * `/appointments` came back to `/overview`.
+   *
+   * Both halves go through the URL rather than through React state, for the same
+   * reason: this component UNMOUNTS on the navigation it is issuing. `/signin`
+   * is a sibling of the merchant layout route, not a child of it, so anything
+   * held here is gone before the screen that needs it renders. A search param
+   * survives that, survives a full reload, and is the router's own convention
+   * for exactly this — `router.tsx` declares the shape on the route.
+   *
+   * NEITHER HALF IS A CONTROL (#7). `reason` reaches one `InlineError` message
+   * and nothing else; `from` is re-derived against this shell's own nav table
+   * before anything navigates to it, so a value that arrives through the URL
+   * cannot choose a destination — see `returnPathFor`.
+   *
+   * AND NEITHER CAN CARRY A SECRET (#6). The cause is one of two words compiled
+   * into `signInSearch.ts`; the destination is one of the ten literals in
+   * `navItems.tsx`. There is no path by which a token, a status code or the name
+   * of the call that failed reaches this URL.
+   */
+  useEffect(() => {
+    if (session) return;
+    void navigate({
+      to: SCOPES.merchant.signIn,
+      search: signInSearchFor('merchant', lastSection.current, endedReasonFor('merchant')),
+    });
+  }, [session, endedReasonFor, navigate]);
 
   // Render nothing for the tick before the redirect lands, rather than a shell
   // with no user in it. Returning null also unmounts <Outlet>, so the section

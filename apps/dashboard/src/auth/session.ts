@@ -303,13 +303,30 @@ export function clearSession(scope: AuthScope, options: { silent?: boolean } = {
  * machine share `localStorage`; signing out in one leaves the other rendering a
  * shell for a session that no longer exists until its next request 401s.
  */
-type Listener = (scope: AuthScope) => void;
+/**
+ * WHICH TAB THE CHANGE CAME FROM, and it is not bookkeeping.
+ *
+ * (3) above is the only session change this tab did not cause, and that is the
+ * one fact separating two sentences a merchant needs told apart: "your session
+ * expired" and "you were signed out in another tab". `AuthProvider` cannot
+ * recover it downstream — by the time it re-reads the store, a session cleared
+ * by a 401 in this tab and a session cleared by a sign-out next door look
+ * identical, because they ARE identical: an absent key.
+ *
+ * So the distinction is carried from where it is still known. It costs one
+ * argument, and it is the whole of non-negotiable-#6-safe cause reporting: the
+ * cause is a CATEGORY derived from WHICH LISTENER FIRED, never from a token, a
+ * status code or the call that failed.
+ */
+export type SessionChangeOrigin = 'this-tab' | 'other-tab';
+
+type Listener = (scope: AuthScope, origin: SessionChangeOrigin) => void;
 
 const listeners = new Set<Listener>();
 const ALL_SCOPES = Object.keys(SCOPES) as AuthScope[];
 
 function notify(scope: AuthScope): void {
-  for (const listener of [...listeners]) listener(scope);
+  for (const listener of [...listeners]) listener(scope, 'this-tab');
 }
 
 export function subscribeToSessions(listener: Listener): () => void {
@@ -318,11 +335,11 @@ export function subscribeToSessions(listener: Listener): () => void {
   const onStorage = (event: StorageEvent) => {
     // `key === null` is storage.clear() in another tab — every scope is suspect.
     if (event.key === null) {
-      for (const scope of ALL_SCOPES) listener(scope);
+      for (const scope of ALL_SCOPES) listener(scope, 'other-tab');
       return;
     }
     for (const scope of ALL_SCOPES) {
-      if (SCOPES[scope].storageKey === event.key) listener(scope);
+      if (SCOPES[scope].storageKey === event.key) listener(scope, 'other-tab');
     }
   };
 

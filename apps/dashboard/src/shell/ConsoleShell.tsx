@@ -1,10 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Link, Outlet, useNavigate, useRouterState } from '@tanstack/react-router';
 import { Button } from '@avo/ui';
 import { useAuth, useSession } from '../auth/AuthProvider.js';
 import { ROLE_LABEL } from '../api/platformAdmins.js';
 import { CONSOLE_NAV_ITEMS, consoleNavItemFor } from './consoleNavItems.js';
 import { SCOPES } from '../auth/scopes.js';
+import { signInSearchFor } from '../auth/signInSearch.js';
 import { useBreakpoint } from './useBreakpoint.js';
 import { UnsupportedWidth } from './UnsupportedWidth.js';
 
@@ -64,12 +65,49 @@ import { UnsupportedWidth } from './UnsupportedWidth.js';
  * that `useSalonId`'s header warns about.
  */
 export function ConsoleShell() {
-  const session = useAuth().sessionFor('owner');
+  const { sessionFor, endedReasonFor } = useAuth();
+  const session = sessionFor('owner');
   const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
 
+  // `MerchantShell`'s recorder, for its stated reason: reading the pathname live
+  // let a second run of the effect overwrite the destination with `/signin`.
+  const lastSection = useRef(pathname);
   useEffect(() => {
-    if (!session) void navigate({ to: SCOPES.owner.signIn });
-  }, [session, navigate]);
+    if (session) lastSection.current = pathname;
+  }, [session, pathname]);
+
+  /*
+   * THE CONSOLE HAD THE SAME DEFECT AS THE MERCHANT SHELL, WORD FOR WORD.
+   *
+   * It was checked rather than assumed, and the check is the point: this shell
+   * is a SIBLING of `MerchantShell` and its header already records what that
+   * costs — it was written as one and "did not copy the one structural thing
+   * that comment exists to explain", which shipped a CatchBoundary on every
+   * console sign-out. The redirect line had been copied exactly, causeless and
+   * destinationless included, so an admin's session expiring on
+   * `/console/approvals` put her back on `/console/approvals` only by the
+   * coincidence that it is also `SCOPES.owner.home`. From `/console/audit` it
+   * did not.
+   *
+   * The two are fixed together and share `signInSearch.ts` — its vocabulary, its
+   * copy and its one path gate. Two sign-in screens telling the same story two
+   * ways is the divergence this lane keeps finding one level up; there is no
+   * version of this fix that lands on one surface.
+   *
+   * `signInSearchFor` takes the scope, so the console's return path is looked up
+   * in `CONSOLE_NAV_ITEMS` and the merchant's in `NAV_ITEMS`. The confinement
+   * falls out of that: `/console/audit` matches nothing in the merchant table and
+   * `/audit` matches nothing in the console's, so neither shell can bounce
+   * somebody at the other one's door.
+   */
+  useEffect(() => {
+    if (session) return;
+    void navigate({
+      to: SCOPES.owner.signIn,
+      search: signInSearchFor('owner', lastSection.current, endedReasonFor('owner')),
+    });
+  }, [session, endedReasonFor, navigate]);
 
   /*
    * Nothing for the tick before the redirect lands, rather than a console with no

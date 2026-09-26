@@ -1,9 +1,14 @@
 import { useEffect, useId, useState } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Button, InlineError, TextField } from '@avo/ui';
 import { ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { SCOPES } from '../auth/scopes.js';
+import {
+  SESSION_ENDED_COPY,
+  returnPathFor,
+  sessionEndReasonFrom,
+} from '../auth/signInSearch.js';
 
 /**
  * AVO Login.dc.html 5b — the DARK console sign-in. Copy is verbatim.
@@ -35,6 +40,21 @@ export function ConsoleSignIn() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const errorId = useId();
+
+  /*
+   * WHY SHE IS HERE, AND WHERE SHE WAS — the merchant door's block, verbatim in
+   * shape, because the two doors must not diverge on this. `SignIn.tsx` carries
+   * the full argument; the only difference is the scope handed to
+   * `returnPathFor`, which is what confines the lookup to `CONSOLE_NAV_ITEMS`.
+   */
+  const location = useRouterState({ select: (state) => state.location });
+  const search: unknown = location.search;
+  const cause = sessionEndReasonFrom(search);
+  const destination = returnPathFor('owner', (search as { from?: unknown } | null)?.from);
+  // `SignIn.tsx` § A DOOR ONLY NAVIGATES WHILE IT IS THE DOOR. The transitional
+  // render carries the NEXT route's search, and acting on it sends an admin to
+  // the default she was just rescued from.
+  const onDoor = location.pathname === SCOPES.owner.signIn;
 
   /*
    * THE REDIRECT IS AN EFFECT, NOT A LINE IN THE SUBMIT HANDLER, AND THAT IS THE
@@ -83,8 +103,12 @@ export function ConsoleSignIn() {
    */
   const signedIn = sessionFor('owner') !== null;
   useEffect(() => {
-    if (signedIn) void navigate({ to: SCOPES.owner.home });
-  }, [signedIn, navigate]);
+    // `destination` rather than `SCOPES.owner.home`: an admin whose session ended
+    // on `/console/audit` comes back to `/console/audit`. The value is re-derived
+    // from `CONSOLE_NAV_ITEMS` inside `returnPathFor`, so what is navigated to
+    // here is a literal from that table and never a string off the URL.
+    if (signedIn && onDoor) void navigate({ to: destination });
+  }, [signedIn, onDoor, navigate, destination]);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -129,6 +153,17 @@ export function ConsoleSignIn() {
             <span className="csignin__brandsub">Owner console</span>
           </span>
         </div>
+
+        {/*
+          The merchant door's notice, in the same place and with the same copy.
+          `SignIn.tsx` carries the reasoning for both — why `InlineError` and not
+          the sections' `ErrorState`, and why it does not clear on a keystroke.
+
+          No wrapper: `.csignin__card` is a flex column with its own gap, where
+          `.signin__card` is not and needs `.signin__error` for the margin. That
+          is the only thing about this that differs between the two surfaces.
+        */}
+        {cause ? <InlineError message={SESSION_ENDED_COPY[cause]} /> : null}
 
         <h1 className="csignin__title avo-display">Sign in</h1>
         <p className="csignin__lede">The super-admin view above every salon.</p>
