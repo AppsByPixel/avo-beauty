@@ -162,7 +162,31 @@ export function HomeScreen({
       // a toast saying "deposit returned" for a 409 would be a lie the customer
       // acts on.
       if (refunded !== null) {
-        onToast(copy.cancelledToast(formatMoney(fils(refunded), lang)));
+        /*
+          =====================================================================
+          AND A SUCCESSFUL CANCEL THAT RETURNED NOTHING IS THE OTHER HALF OF
+          THAT LIE, WHICH THIS LINE WAS TELLING
+          =====================================================================
+          A front desk can now create an appointment on an existing member's
+          account, and `BookingSchema` § source makes it always zero-deposit.
+          Cancelling one answered `refundedFils: 0` and this toast rendered
+          "Appointment cancelled · 0.000 KD deposit returned" — a receipt, in
+          her own language, for money that never left her wallet.
+
+          THE TEST IS `refunded`, NOT `booking.depositFils`, and that is the one
+          place in this slice where the server's number beats the booking's.
+          Both are 0 on a merchant booking, so they agree today; they are not the
+          same question. `depositFils` is what the appointment was WORTH, and
+          `refundedFils` is what the cancellation actually MOVED — and it is the
+          second one this sentence is a receipt for. Non-negotiable #2: the
+          server decides what came back, and the toast reports it rather than
+          predicting it from a field beside it.
+        */
+        onToast(
+          refunded > 0
+            ? copy.cancelledToast(formatMoney(fils(refunded), lang))
+            : copy.cancelledToastNoDeposit,
+        );
       }
     },
     [upcoming, onToast, copy, lang],

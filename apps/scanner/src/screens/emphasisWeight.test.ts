@@ -122,11 +122,18 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
     // trunk-ruled test states its rule is not a thing to do inside the slice
     // that trips it.
     expect(uiCallsAtWeight('700')).toEqual([
-      // The LINE MOVED, the set did not. `voidReasonLine`'s rendering added a
-      // block above this call; `NEW` is still the only 700 in the app, which is
-      // the invariant. (The anchor being a line number means an edit anywhere
-      // above it reports as a weight regression — noted in the lane report.)
-      "screens/BookingsScreen.tsx:589 ui(10,'700')",
+      // THE LINE MOVED AGAIN — FIFTH TIME, STILL ZERO MEMBERSHIP CHANGES. The
+      // zero-deposit and three-source slice added `SOURCE_PILL`, `clientName`
+      // and their comment blocks above this call. `NEW` is still the only 700
+      // in the app, which is the invariant this spec actually holds.
+      //
+      // Reported for the fifth time, and the count is now the argument: every
+      // move has been a false red, and a reader who sees this fail learns
+      // nothing about font weights. The fix is one line — strip `:NNN` before
+      // comparing — and it is still not taken here, because rewriting how a
+      // trunk-ruled test states its rule inside the slice that trips it is how
+      // a ratchet gets quietly loosened by the person it caught.
+      "screens/BookingsScreen.tsx:704 ui(10,'700')",
     ]);
   });
 });

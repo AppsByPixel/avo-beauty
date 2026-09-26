@@ -731,10 +731,38 @@ export const ar: Copy = {
    * rule alongside this line so the customer is not told only the wrong number.
    */
   cancelPolicy: 'الإلغاء مجاني حتى ٢٤ ساعة قبل الموعد — يُعاد العربون لمحفظتك تلقائياً.', // design:1352
+  /**
+   * ===========================================================================
+   * THE ZERO-DEPOSIT VARIANTS ARE CUTS, NOT TRANSLATIONS
+   * ===========================================================================
+   * A `merchant` booking holds no deposit, so every design sentence that names
+   * the عربون is false on one. Rather than write Arabic for the variant —
+   * which this file's header forbids on principle, and which would put an
+   * unreviewed sentence in front of a customer being told about her own money —
+   * each variant is the DESIGNER'S OWN ARABIC with the deposit clause removed
+   * and nothing else touched. No word is added, reordered or re-inflected, so
+   * the register, the feminine address and the digit rule all survive by
+   * construction.
+   *
+   * That is why these carry `design:NNNN` markers and are NOT in `AR_GAPS`
+   * (they render Arabic) and NOT in `AR_UNVERIFIED` (no word here was invented).
+   * The one exception is `upBooked`, which is a new word in both languages and
+   * IS in `AR_UNVERIFIED`.
+   *
+   * The client still has to agree that the deleted clause is the false one, in
+   * both languages. That is in the lane report.
+   *
+   * design:1352, cut at the dash. The ٢٤/٣ contradiction flagged above is
+   * inherited unchanged and deliberately not resolved here either.
+   */
+  cancelPolicyNoDeposit: 'الإلغاء مجاني حتى ٢٤ ساعة قبل الموعد.', // design:1352, truncated
 
   bookedToast: (deposit) => `تم الحجز · حُجز عربون ${deposit}`, // design:1547
   rescheduleToast: 'اختاري موعداً جديداً — العربون محفوظ', // design:1773
   cancelledToast: (deposit) => `أُلغي الموعد · أُعيد العربون ${deposit}`, // design:1774
+  /* design:1773 cut at the dash; design:1774 cut at the interpunct. */
+  rescheduleToastNoDeposit: 'اختاري موعداً جديداً', // design:1773, truncated
+  cancelledToastNoDeposit: 'أُلغي الموعد', // design:1774, truncated
 
   bookEmptyDayTitle: en.bookEmptyDayTitle, // AR GAP
   bookEmptyDayBody: en.bookEmptyDayBody, // AR GAP
@@ -750,12 +778,24 @@ export const ar: Copy = {
 
   upcomingLabel: 'موعدك القادم', // design:1285
   upDeposit: (deposit) => `عربون ${deposit}`, // design:1286
+  /**
+   * 'محجوز' — UNVERIFIED, and the only invented word in this group.
+   *
+   * It stands where a FIGURE stood, so there is no design sentence to cut. The
+   * masculine passive participle agrees with موعد (masculine), which is the
+   * noun the design's own `upcomingLabel` uses — so the agreement is read off a
+   * design string even though the word is not. Listed in `AR_UNVERIFIED`.
+   */
+  upBooked: 'محجوز', // UNVERIFIED
   upWith: (artist) => `مع ${artist}`, // design:1285
   reschedule: 'تغيير الموعد', // design:1287
   cancel: 'إلغاء', // design:1286
   reschedNote: 'مجاناً حتى ساعة قبل الموعد. بعدها يبقى العربون للصالون.', // design:1287
+  /* design:1287, first sentence only. The second names the عربون. */
+  reschedNoteNoDeposit: 'مجاناً حتى ساعة قبل الموعد.', // design:1287, truncated
   changeClosedTitle: en.changeClosedTitle, // AR GAP
   changeClosedBody: en.changeClosedBody, // AR GAP
+  changeClosedBodyNoDeposit: en.changeClosedBodyNoDeposit, // AR GAP
   noUpcomingTitle: en.noUpcomingTitle, // AR GAP
   noUpcomingBody: en.noUpcomingBody, // AR GAP
   noUpcomingAction: 'احجزي', // design:1340 — the nav label, the same word.
@@ -1043,6 +1083,7 @@ export const AR_GAPS = [
   'bookingOffBody',
   'changeClosedTitle',
   'changeClosedBody',
+  'changeClosedBodyNoDeposit',
   'noUpcomingTitle',
   'noUpcomingBody',
   // ---- account. Same pattern again: the design's Account prototype has no
@@ -1098,6 +1139,14 @@ export const AR_UNVERIFIED = [
   'tierBonusExplain(bronze)',
   'tierBonusExplain(gold)',
   'tierBonusExplain(black)',
+  /**
+   * The zero-deposit appointment pill. The other five zero-deposit strings are
+   * NOT here and that is deliberate: they are the designer's own Arabic with a
+   * clause cut, so nothing in them was written by this lane. This one stands
+   * where a money figure stood and had to be a word. See the block above
+   * `cancelPolicyNoDeposit` in `ar`.
+   */
+  'upBooked',
   // Membership. The subject substitution decision 86 ruled on, plus the three
   // strings where a per-salon value replaced a phrase the design had fitted to
   // one hardcoded reward.

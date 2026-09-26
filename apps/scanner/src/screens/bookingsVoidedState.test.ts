@@ -266,13 +266,22 @@ describe('a reversed appointment does not say the customer cancelled', () => {
 
   /** `pillFor` directly, since it is the one place the decision is made. */
   it('pillFor checks the reversal before the status map, for every status', () => {
+    /*
+      `depositFils` is now part of the decision — `no_show_returned` withdraws
+      its "returned" claim at 0 — so it has to be supplied here. Non-zero
+      throughout THIS spec deliberately: it is about the reversal beating the
+      status, and a 0 would quietly change which branch two of these take.
+      The zero-deposit half is `bookingsZeroDeposit.test.ts`.
+    */
     for (const status of ArtistBookingSchema.shape.status.options) {
-      expect(pillFor({ status, chargeVoided: true })?.label).toBe(copy.bookingsStatusVoided);
+      expect(pillFor({ status, chargeVoided: true, depositFils: 5000 })?.label).toBe(
+        copy.bookingsStatusVoided,
+      );
     }
-    expect(pillFor({ status: 'cancelled', chargeVoided: false })?.label).toBe(
+    expect(pillFor({ status: 'cancelled', chargeVoided: false, depositFils: 5000 })?.label).toBe(
       copy.bookingsStatusCancelled,
     );
-    expect(pillFor({ status: 'deposit_held', chargeVoided: false })).toBeNull();
+    expect(pillFor({ status: 'deposit_held', chargeVoided: false, depositFils: 5000 })).toBeNull();
   });
 
   /**

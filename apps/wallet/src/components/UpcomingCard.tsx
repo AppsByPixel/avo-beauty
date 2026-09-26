@@ -28,7 +28,7 @@ import { useLanguage } from '../i18n/language';
 import { focusable } from '../theme/focus';
 import { TappableRow } from './Buttons';
 import type { BookingView } from '../api/booking';
-import { formatWhen } from '../domain/booking';
+import { formatWhen, holdsDeposit } from '../domain/booking';
 import { failureCopy, type LoadFailure } from '../domain/loadFailure';
 
 interface Props {
@@ -57,19 +57,46 @@ export function UpcomingCard({
 }: Props) {
   const { lang, copy } = useLanguage();
   const windowClosed = failure?.code === 'change_window_closed';
+  /*
+    ONE DERIVATION, READ BY THREE PLACES BELOW: the pill, the note under the
+    buttons, and the refused-change body. Splitting the check across the three
+    is how one of them survives the next edit still promising a refund.
+
+    `depositFils`, never `source`, and never `status` — see
+    `domain/booking.ts` § holdsDeposit.
+  */
+  const held = holdsDeposit(booking);
 
   return (
     <View style={styles.card} testID="upcoming-card">
       <View style={styles.head}>
         <Text style={[text('label', lang), styles.headLabel]}>{copy.upcomingLabel}</Text>
-        <View style={styles.depositPill}>
-          {/*
-            The deposit, through `formatMoney` — the unit changes with the
-            language along with the figure. A local 'KD' here is exactly how an
-            Arabic build ends up reading "5.000 KD".
-          */}
-          <Text style={[text('bodyS', lang, '600'), styles.depositPillText]}>
-            {copy.upDeposit(formatMoney(booking.depositFils as Fils, lang))}
+        {/*
+          ===================================================================
+          THE PILL SAYS WHAT IS HELD, AND ON A MERCHANT BOOKING NOTHING IS
+          ===================================================================
+          A front desk can now create an appointment on an existing member's
+          account, and `BookingSchema` § source makes it ALWAYS zero-deposit.
+          This pill rendered `upDeposit` unconditionally, so that appointment
+          arrived in her app wearing "0.000 KD held" — a figure that is not
+          wrong so much as meaningless, sitting in the one slot on the card
+          that is supposed to tell her where her money is.
+
+          So at zero it says what the contract says it should say: "Booked".
+          Not nothing — an empty slot where every other card carries a pill
+          reads as an amount that failed to load, and this section already has
+          a card whose whole existence is about not making that mistake
+          (`UpcomingFailedCard`).
+
+          The deposit still goes through `formatMoney` — the unit changes with
+          the language along with the figure. A local 'KD' here is exactly how
+          an Arabic build ends up reading "5.000 KD".
+        */}
+        <View style={held ? styles.depositPill : styles.statePill} testID="upcoming-pill">
+          <Text
+            style={[text('bodyS', lang, '600'), held ? styles.depositPillText : styles.statePillText]}
+          >
+            {held ? copy.upDeposit(formatMoney(booking.depositFils as Fils, lang)) : copy.upBooked}
           </Text>
         </View>
       </View>
@@ -111,8 +138,18 @@ export function UpcomingCard({
         </TappableRow>
       </View>
 
-      {/* design:321 — the rule, stated inline, in the designer's own words. */}
-      <Text style={[text('bodyS', lang), styles.note]}>{copy.reschedNote}</Text>
+      {/*
+        design:321 — the rule, stated inline, in the designer's own words.
+
+        AND ITS SECOND SENTENCE IS DROPPED WHEN THERE IS NO DEPOSIT. "After that
+        the deposit stays with the salon" is the cancellation consequence, and on
+        a merchant-created appointment there is no deposit to stay anywhere. The
+        first sentence — the rule itself — is true either way and is the
+        designer's own, unedited. See copy/en.ts § reschedNoteNoDeposit.
+      */}
+      <Text style={[text('bodyS', lang), styles.note]} testID="upcoming-note">
+        {held ? copy.reschedNote : copy.reschedNoteNoDeposit}
+      </Text>
 
       {failure ? (
         <View style={styles.refusal} accessibilityRole="alert" testID="upcoming-refusal">
@@ -120,7 +157,16 @@ export function UpcomingCard({
             {windowClosed ? copy.changeClosedTitle : copy.errorTitle}
           </Text>
           <Text style={[text('bodyS', lang), styles.refusalBody]}>
-            {windowClosed ? copy.changeClosedBody : failure.message}
+            {/*
+              The refusal carries the same clause, and the same cut. A server
+              that refuses a change on a zero-deposit booking is refusing the
+              CHANGE; it is not keeping a deposit, because there is none.
+            */}
+            {windowClosed
+              ? held
+                ? copy.changeClosedBody
+                : copy.changeClosedBodyNoDeposit
+              : failure.message}
           </Text>
         </View>
       ) : null}
@@ -257,6 +303,24 @@ const styles = StyleSheet.create({
   },
   // Brand text on a light surface is brandDeep, never brand — #9.
   depositPillText: { color: color.brandDeep },
+  /*
+    THE ZERO-DEPOSIT PILL IS NEUTRAL, NOT BRANDED, and the geometry is identical
+    so the card does not move when the pill changes word.
+
+    The brand tint is this card's way of pointing at money — it is the same
+    treatment the balance and the top-up tiles wear. "Booked" is a state, not an
+    amount, and dressing it in the money colour would make a merchant-created
+    appointment look like it carries a figure the customer has not read yet.
+    `surfaceAlt2` + `textMutedStrong` is the pair the scanner's own source pill
+    uses and it is already measured against AA.
+  */
+  statePill: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: color.surfaceAlt2,
+  },
+  statePillText: { color: color.textMutedStrong },
   service: { color: color.ink },
   emptyTitle: { color: color.ink, marginTop: 10 },
   meta: { color: color.textMuted, marginTop: 2 },

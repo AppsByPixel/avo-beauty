@@ -337,3 +337,34 @@ export function nextAppointment<T extends { startsAt: string; status: string }>(
       .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())[0] ?? null
   );
 }
+
+// ------------------------------------------------- the zero-deposit booking --
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * IS THERE MONEY BEHIND THIS APPOINTMENT AT ALL?
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A front desk can now create an appointment by hand, for a guest OR for an
+ * existing member, and `BookingSchema § source` settles what that means for the
+ * money: a `merchant` booking is ALWAYS zero-deposit. Nothing is held when it is
+ * made and nothing is returned when it ends, because non-negotiable #2 gives the
+ * server the balance and a merchant who can move a customer's money by filling
+ * in a form is a merchant who can move it without her.
+ *
+ * WHY THE PREDICATE IS `depositFils`, NOT `source`. Two of the four `status`
+ * values name a money event — `deposit_held` and `no_show_returned` — and the
+ * contract is explicit that on a zero-deposit row they mean "live" and "missed"
+ * and nothing more. A screen keyed off `source === 'merchant'` would be right
+ * today and wrong the moment a salon sets `depositFils: 0` for its own app
+ * bookings, which is a settings value and not a schema change. The amount is the
+ * fact; the source is one way of arriving at it.
+ *
+ * WHAT IT IS FOR. Every sentence the wallet says about holding, returning,
+ * carrying over or keeping a deposit is false on a row where this is false, and
+ * the specific failure it exists to prevent is telling a customer she is getting
+ * money back that she never paid. See `UpcomingCard`, `BookScreen § Confirmed`
+ * and `HomeScreen § onCancel`.
+ */
+export function holdsDeposit(booking: { depositFils: number }): boolean {
+  return booking.depositFils > 0;
+}

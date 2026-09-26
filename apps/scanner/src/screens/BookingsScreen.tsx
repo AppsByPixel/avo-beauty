@@ -362,10 +362,98 @@ const VOIDED_PILL = {
  * about attendance.
  */
 export function pillFor(
-  booking: Pick<ArtistBooking, 'status' | 'chargeVoided'>,
+  booking: Pick<ArtistBooking, 'status' | 'chargeVoided' | 'depositFils'>,
 ): { label: string; bg: string; text: string } | null {
   if (booking.chargeVoided) return VOIDED_PILL;
+  /*
+    ===========================================================================
+    AND `no_show_returned` DOES NOT MEAN "RETURNED" WHEN THERE WAS NOTHING TO
+    RETURN
+    ===========================================================================
+    `BookingSchema` § status: two of the four values name a money event, and a
+    zero-deposit booking has none. On an `app` booking "No-show · returned" is
+    literally true. On a `merchant` booking — always zero-deposit — nothing was
+    held and nothing came back, and the contract asks every client to render the
+    pill from `depositFils` rather than from the status alone.
+
+    The COLOUR is unchanged, deliberately. `dangerBg`/`dangerText` is about the
+    missed appointment, which happened either way; only the claim about the money
+    is withdrawn. Restyling it would turn a copy fix into a visual change on a
+    surface whose colours are settled.
+  */
+  if (booking.status === 'no_show_returned' && booking.depositFils === 0) {
+    return { ...STATUS_PILL.no_show_returned!, label: copy.bookingsStatusNoShowNoDeposit };
+  }
   return STATUS_PILL[booking.status];
+}
+
+/**
+ * ===========================================================================
+ * WHERE THE BOOKING CAME FROM — A MAP, BECAUSE A TERNARY WAS A LIE
+ * ===========================================================================
+ * This was `source === 'google_calendar' ? gcal : app`: a two-armed ternary over
+ * what is now a THREE-value enum. `BookingSchema` grew `merchant` when the
+ * dashboard gained manually-created appointments, and the falsy arm swallowed
+ * it — so an appointment the front desk typed in rendered as "AVO app", which
+ * says the customer booked it herself.
+ *
+ * The artist reading her day is the person that distinction is FOR. It is the
+ * difference between a slot she can ask a colleague about and one she cannot,
+ * and it failed silently: no error, no blank, a confident wrong word.
+ *
+ * A `Record` KEYED OFF THE ENUM, so a fourth value does not compile. That is the
+ * actual fix here — the wrong label was a symptom, and any shape with a default
+ * arm reproduces it on the next source the contract adds. It is the same ratchet
+ * `STATUS_PILL` already uses for `status`, and for the reason that map's note
+ * gives: an unhandled value must fail at the compiler, not render as the
+ * majority case.
+ *
+ * `merchant` takes the NEUTRAL pair rather than a third colour. The tint is the
+ * screen's way of pointing at the calendar integration; a front-desk booking is
+ * an ordinary booking that a person entered, and the word carries it.
+ */
+export const SOURCE_PILL: Record<
+  ArtistBooking['source'],
+  { label: string; bg: string; text: string }
+> = {
+  app: { label: copy.bookingsSrcApp, bg: color.surfaceAlt2, text: color.textMutedStrong },
+  google_calendar: {
+    label: copy.bookingsSrcGcal,
+    bg: color.brandTint,
+    // Brand text on a light surface is brandDeep, never brand — #9.
+    text: color.brandDeep,
+  },
+  merchant: {
+    label: copy.bookingsSrcMerchant,
+    bg: color.surfaceAlt2,
+    text: color.textMutedStrong,
+  },
+};
+
+/**
+ * WHOSE APPOINTMENT THIS IS, WHEN IT MAY NOT BE A MEMBER'S.
+ *
+ * `BookingSchema`: exactly one of `memberId` and `guestName` is ever populated,
+ * because a front desk booking a walk-in by hand has no member row to point at
+ * and minting one would give her a wallet she never opened and an implied
+ * acceptance of a policy set she has never seen (non-negotiable #10).
+ *
+ * `memberName` is the joined member's; on a guest row it is null and the name is
+ * on the booking itself. The fallback is `'—'` rather than an empty string
+ * because the card draws an AVATAR INITIAL from this, and `''.charAt(0)` is `''`
+ * — an empty circle, which reads as a card that failed to load rather than as a
+ * row with no name. Nothing here invents a name.
+ *
+ * NOT YET REACHABLE, and written to the contract anyway. `GET
+ * /artists/me/bookings` still INNER JOINs `member` on `booking.memberId`
+ * (api/src/routes/bookings.ts:469), so a guest row is dropped from the artist's
+ * day entirely rather than served with a null — which is Lane A's to relax and
+ * is in this lane's report. The day it is relaxed, this is what renders.
+ */
+export function clientName(
+  booking: Pick<ArtistBooking, 'memberName' | 'guestName'>,
+): string {
+  return booking.memberName ?? booking.guestName ?? '—';
 }
 
 /**
@@ -526,15 +614,42 @@ export function voidReasonLine(
  * Nothing outside this file renders it.
  */
 export function BookingCard({ booking }: { booking: ArtistBooking }) {
-  const tier = tierStyles[booking.memberTier];
+  /*
+    ===========================================================================
+    THE CLIENT MAY NOT BE A MEMBER, so neither the tier nor the name can be read
+    straight off a member field any more.
+    ===========================================================================
+    `tierStyles[booking.memberTier]` was an unguarded index into a four-key map.
+    On a guest row `memberTier` is null, so it returned `undefined` and the very
+    next line — `tier.pillBg` — threw, taking the whole day's list down with it
+    rather than rendering one card oddly.
+
+    Null tier and null name travel together (`BookingSchema`: exactly one of
+    `memberId` and `guestName` is set), but they are derived separately rather
+    than from one `isGuest` flag: the tier pill's absence is about a rung she has
+    not earned, the name's fallback is about which field carries it, and
+    collapsing them would make the next edit to either one silently move both.
+  */
+  const tier = booking.memberTier === null ? null : tierStyles[booking.memberTier];
+  const name = clientName(booking);
   /*
     One derivation, read by three places below: the phone line, the Call button
     and the WhatsApp button. Splitting the check across the three is how one of
     them survives the next edit.
+
+    `guestPhone` IS ADMITTED HERE AND THE ERASURE GUARD STILL COMES FIRST. A
+    walk-in's number is on the booking, not on a member row, so it cannot be
+    erased by `services/erasure.ts` — which scrubs `member` — and
+    `memberErased` is false on every guest row. The guard is kept ahead of the
+    coalesce anyway rather than relied upon to be irrelevant: an erased member
+    whose booking somehow also carried a guest number would otherwise have the
+    tombstone replaced by a live one, which is the exact disclosure the null
+    exists to stop.
   */
-  const phone = booking.memberErased ? null : booking.memberPhone;
+  const phone = booking.memberErased ? null : (booking.memberPhone ?? booking.guestPhone);
   const digits = phone === null ? null : phone.replace(/[^0-9]/g, '');
   const status = pillFor(booking);
+  const src = SOURCE_PILL[booking.source];
   const voidReason = voidReasonLine(booking);
   /*
     Settled means the deposit is resolved — charged, returned or cancelled — and
@@ -608,12 +723,23 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
           is the mistake the skill file names — and on this surface it would be
           worse than on the wallet, because the scanner has no language switch
           to reveal it.
+
+          AND IT IS NOT DRAWN AT ALL AT ZERO. A merchant-created appointment
+          holds nothing (`BookingSchema` § source), so this rendered
+          "Deposit 0.000" — a figure that is not wrong so much as noise, in the
+          slot the artist reads to know whether money is already on this booking.
+          Nothing stands in its place: unlike the wallet's Upcoming card, where
+          the pill is the only state on screen, this row already carries a time,
+          a duration and a status pill, so the absence reads as "no deposit"
+          rather than as a value that failed to load.
         */}
-        <View style={styles.depositPill}>
-          <Text style={[ui(11, '600'), styles.depositPillText]}>
-            {copy.bookingsDeposit(formatFils(booking.depositFils as Fils))}
-          </Text>
-        </View>
+        {booking.depositFils > 0 ? (
+          <View style={styles.depositPill} testID={`booking-deposit-${booking.id}`}>
+            <Text style={[ui(11, '600'), styles.depositPillText]}>
+              {copy.bookingsDeposit(formatFils(booking.depositFils as Fils))}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       {/*
@@ -654,17 +780,39 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
       <View style={styles.client}>
         <View style={styles.avatar}>
           <Text style={[display(15, '600'), styles.avatarInitial]}>
-            {booking.memberName.trim().charAt(0).toUpperCase()}
+            {name.trim().charAt(0).toUpperCase()}
           </Text>
         </View>
         <View style={styles.clientBody}>
           <View style={styles.nameRow}>
-            <Text style={[ui(13.5, '600')]} numberOfLines={1}>
-              {booking.memberName}
+            <Text style={[ui(13.5, '600')]} numberOfLines={1} testID={`booking-name-${booking.id}`}>
+              {name}
             </Text>
-            <View style={[styles.tierPill, { backgroundColor: tier.pillBg }]}>
-              <Text style={[ui(10, '600'), { color: tier.pillText }]}>{tierLabel(booking.memberTier)}</Text>
-            </View>
+            {/*
+              THE TIER PILL, OR THE WORD THAT EXPLAINS WHY THERE ISN'T ONE.
+
+              A walk-in has no tier, and `bronze` is not the honest stand-in:
+              the lowest rung is something a member earned by opening an
+              account, and printing it for somebody who has not would put a
+              loyalty claim on her card that no row behind it supports.
+
+              "Guest" goes in the same slot, in the neutral pair, because the
+              slot's job is to say what kind of client this is and on a guest row
+              that answer exists — it just is not a tier. Leaving it empty would
+              read as a tier that failed to load, which is the one thing this
+              position must not say on a card that also shows money.
+            */}
+            {tier === null ? (
+              <View style={[styles.tierPill, styles.guestPill]}>
+                <Text style={[ui(10, '600'), styles.guestPillText]}>{copy.bookingsGuest}</Text>
+              </View>
+            ) : (
+              <View style={[styles.tierPill, { backgroundColor: tier.pillBg }]}>
+                <Text style={[ui(10, '600'), { color: tier.pillText }]}>
+                  {tierLabel(booking.memberTier!)}
+                </Text>
+              </View>
+            )}
           </View>
           {/*
             `styles.dim` either way, deliberately: the sentence sits exactly
@@ -677,20 +825,16 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
           </Text>
         </View>
         {/*
-          design:166 — where the booking came from. `source` is on the entity,
-          so this is read rather than guessed: `google_calendar` means the event
-          came off her calendar and was mirrored in, and it is the difference
-          between a deposit AVO is holding and one it is not.
+          design:166 — where the booking came from. `source` is on the entity, so
+          this is read rather than guessed. Three values, through `SOURCE_PILL`
+          above — which is a map rather than a ternary so that the next value the
+          contract adds fails to compile instead of rendering as "AVO app".
         */}
-        <View style={[styles.srcPill, booking.source === 'google_calendar' && styles.srcPillGcal]}>
-          <Text
-            style={[
-              ui(10.5, '600'),
-              booking.source === 'google_calendar' ? styles.srcTextGcal : styles.srcText,
-            ]}
-          >
-            {booking.source === 'google_calendar' ? copy.bookingsSrcGcal : copy.bookingsSrcApp}
-          </Text>
+        <View
+          style={[styles.srcPill, { backgroundColor: src.bg }]}
+          testID={`booking-source-${booking.id}`}
+        >
+          <Text style={[ui(10.5, '600'), { color: src.text }]}>{src.label}</Text>
         </View>
       </View>
 
@@ -699,7 +843,7 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
           <Pressable
             onPress={() => open(`tel:${digits}`)}
             accessibilityRole="button"
-            accessibilityLabel={`${copy.bookingsCall} ${booking.memberName}`}
+            accessibilityLabel={`${copy.bookingsCall} ${name}`}
             testID={`booking-call-${booking.id}`}
             style={[styles.action, styles.actionCall]}
           >
@@ -708,7 +852,7 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
           <Pressable
             onPress={() => open(`https://wa.me/${digits}`)}
             accessibilityRole="button"
-            accessibilityLabel={`${copy.bookingsWhatsApp} ${booking.memberName}`}
+            accessibilityLabel={`${copy.bookingsWhatsApp} ${name}`}
             testID={`booking-wa-${booking.id}`}
             style={[styles.action, styles.actionWa]}
           >
@@ -854,7 +998,16 @@ export function dayTally(bookings: ArtistBooking[]): {
   };
 }
 
-function tierLabel(tier: ArtistBooking['memberTier']): string {
+/**
+ * NON-NULL, and the caller's `tier === null` branch is what guarantees it.
+ *
+ * `memberTier` is nullable now — a guest booking has no member row and so no
+ * tier — and widening this to accept null would mean inventing a word for the
+ * absence here, at the bottom of the file, where the pill's colour is not in
+ * scope. The card answers that question in the one place that can also drop the
+ * pill's background: see `BookingCard` § the tier pill.
+ */
+function tierLabel(tier: NonNullable<ArtistBooking['memberTier']>): string {
   return tier.charAt(0).toUpperCase() + tier.slice(1);
 }
 
@@ -983,9 +1136,21 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: color.surfaceAlt2,
   },
-  srcPillGcal: { backgroundColor: color.brandTint },
+  /*
+    `srcPillGcal` / `srcTextGcal` are gone: the pair moved onto `SOURCE_PILL`
+    when the two-armed ternary became a three-key map, so the colours live
+    beside the label they belong to rather than being re-selected at the call
+    site by a second copy of the same condition.
+  */
   srcText: { color: color.textMutedStrong },
-  srcTextGcal: { color: color.brandDeep },
+  /*
+    The guest pill borrows the source pill's neutral pair rather than inventing
+    a fifth tier colour — "Guest" is the absence of a tier, and dressing it in
+    one of the four would be the claim the null exists to avoid. Measured
+    against AA already: it is the pair `srcPill`/`srcText` uses on this card.
+  */
+  guestPill: { backgroundColor: color.surfaceAlt2 },
+  guestPillText: { color: color.textMutedStrong },
 
   actions: { flexDirection: 'row', gap: 9, marginTop: 13 },
   action: {
