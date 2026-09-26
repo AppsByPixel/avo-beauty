@@ -39,6 +39,7 @@ import { registerAddressRoutes } from './routes/addresses';
 import { registerLoyaltyRoutes } from './routes/loyalty';
 import { registerAuditRoutes } from './routes/audit';
 import { registerActivityRoutes } from './routes/activity';
+import { registerCustomerRoutes } from './routes/customers';
 import { registerPlatformRoutes } from './routes/platform';
 import { registerPlatformAdminRoutes } from './routes/platformAdmins';
 import { registerPlatformConsoleRoutes } from './routes/platformConsole';
@@ -180,6 +181,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerLoyaltyRoutes(app);
   await registerAuditRoutes(app);
   await registerActivityRoutes(app);
+  await registerCustomerRoutes(app);
   await registerPlatformRoutes(app);
   await registerPlatformAdminRoutes(app);
   await registerPlatformConsoleRoutes(app);
