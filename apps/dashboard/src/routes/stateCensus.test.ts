@@ -77,6 +77,38 @@ const SECTION_SCREENS = [
    * mounts this, so the routed-component assertion below will not see it.
    */
   'Tills.tsx',
+  /**
+   * Merchant → Overview → Gross by day. NEW WORK; there is no chart in the
+   * design bundle (`routes/salesTrendRules.ts` carries the disclosure).
+   *
+   * A PANEL INSIDE A SCREEN, in this list for the pair of reasons `Tills.tsx`
+   * and `ShopOrders.tsx` are — and it needs both of them, because on its own
+   * each entry's argument would exclude it.
+   *
+   * IT OWNS ITS OWN READS, PLURAL. `Overview.tsx` reads
+   * `GET /salons/{id}/metrics` and `GET /salons/{id}/activity`; this reads
+   * `GET /salons/{id}` (for the salon's time zone, which decides WHICH DAYS to
+   * ask for) and `GET /salons/{id}/reports/sales`. Four endpoints, four
+   * independent failures — and the first of those two is the one that makes
+   * this entry unavoidable: a salon load that fails leaves this card with no
+   * window at all while the tiles above it are perfectly fine, which is a state
+   * nothing in `Overview.tsx` can answer for.
+   *
+   * SAME GATE, WHICH IS NOT THE SAME THING AS ONE READ — `ShopOrders.tsx`'s
+   * distinction, and it applies verbatim. `sales` is `requireDashboardPerm(req,
+   * 'dashboard')`, the same guard the metrics beside it hold, and a shared
+   * permission does not make two endpoints fail together.
+   *
+   * IT CARRIES TWO THINGS THAT ARE NOT ONE OF THE FOUR, both refusals of a
+   * payload rather than merchant situations: a time zone `Intl` does not
+   * recognise (no window can be composed), and a window that came back rolling
+   * rather than calendar (no days can be named). Each explains and offers no
+   * retry, because retrying returns the same answer. See `SalesTrend.tsx`.
+   *
+   * Not routed — `Overview.tsx` mounts it — so the routed-component assertion
+   * below will not see it, exactly as it does not see `Tills.tsx`.
+   */
+  'SalesTrend.tsx',
   'Accounts.tsx',
   'AuditLog.tsx',
   'Reports.tsx',

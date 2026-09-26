@@ -18,6 +18,7 @@ import {
   type SalonMetrics,
 } from '../api/salon.js';
 import { useBranchScope } from '../shell/BranchScope.js';
+import { SalesTrendCard } from './SalesTrend.js';
 
 /**
  * Merchant → Overview.
@@ -119,7 +120,26 @@ export function Overview() {
       */}
       <AssumedNote metrics={metrics.data} />
 
+      {/*
+        ===========================================================================
+        TWO PANELS, NOT ONE — AND THE FEED READING AS "HUGE" WAS A LAYOUT FACT
+        ===========================================================================
+        This grid had exactly one child: the activity card, at full width. Under
+        four tiles and the assumed-note it was the only thing on the page, so five
+        short rows owned the entire lower half of the Overview. That is not a
+        row-count problem and shortening the feed would not have fixed it — the
+        feed is already disclosed at five (§ FEED_VISIBLE). It needed something
+        beside it.
+
+        THE CHART TAKES THE WIDER COLUMN because fourteen bars need width to be a
+        shape and five `who what when` lines do not. It is FIRST IN THE DOM so
+        that the stacked narrow and tablet layouts put the trend above the feed
+        rather than below it — the complaint was that the feed dominates, and
+        reading order is half of dominating.
+      */}
       <div className="overview__grid">
+        <SalesTrendCard />
+
         <Card className="overview__activity" flush>
           {/*
             THE FEED IS SALON-WIDE AND SAYS SO WHEN THAT MATTERS.

@@ -667,10 +667,169 @@ a:hover {
   grid-template-columns: repeat(2, 1fr);
 }
 
+/*
+ * TWO COLUMNS ON A REAL SCREEN, ONE WHEN THERE IS NOT ROOM.
+ *
+ * This was a one-column grid with a single child, which is why the activity
+ * card owned the whole lower half of the Overview — see routes/Overview.tsx.
+ * The trend takes the wider track: fourteen bars need width before they are a
+ * shape, five feed rows do not.
+ *
+ * `minmax(0, …)` on both tracks rather than a bare fraction: a grid item's
+ * default `min-width: auto` is its content, and the chart's fourteen day
+ * numbers would hold the column open wider than its share and push the feed off
+ * a tablet. The bars are percentage-height inside a flexible track, so the
+ * chart is free to be as narrow as the layout wants once that floor is removed.
+ */
 .overview__grid {
   display: grid;
   grid-template-columns: 1fr;
   gap: 18px;
+  align-items: start;
+}
+
+.dash[data-bp='base'] .overview__grid,
+.dash[data-bp='wide'] .overview__grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+}
+
+/* ============================================================ sales trend == */
+
+/*
+ * "Gross by day" — NEW WORK, there is no chart in the design bundle. The card
+ * borrows the Overview's own head (`.overview__card-title`, and the same
+ * `.overview__card-scope` qualifier the activity card prints) so the two panels
+ * beside each other read as one pair rather than two designs.
+ */
+.trend-card {
+  padding: 8px 20px 14px;
+}
+
+.trend-card__caption {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
+.trend-card__state {
+  padding: 4px 0 8px;
+}
+
+.trend-card__foot {
+  margin-top: 12px;
+}
+
+.trend-card__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
+.trend-card__foot .avo-stale {
+  margin-bottom: 8px;
+}
+
+.trend__plot {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/*
+ * The scale, in two ticks. `aria-hidden` — the sr-only sentence above the plot
+ * states it in words, because two bare numbers read aloud are noise.
+ */
+.trend__axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  /* The tick type sits on the bar row only; the day numbers below are the list's. */
+  height: 132px;
+  padding-bottom: 1px;
+}
+
+.trend__axis-tick {
+  font-family: var(--avo-font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--avo-text-muted-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.trend__days {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trend__day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/*
+ * THE TRACK IS THE FULL HEIGHT AND THE BAR IS A PERCENTAGE OF IT. That is the
+ * whole scaling mechanism: `routes/salesTrendRules.ts § barPermille` hands down an
+ * integer permille of the tallest day and nothing here does arithmetic on
+ * money. A fixed track height is what makes the percentage mean anything.
+ */
+.trend__track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 132px;
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
+/*
+ * `--avo-brand` IS THE RIGHT TOKEN AND NOT A NEAR MISS. Non-negotiable #9 makes
+ * it a SURFACE colour — "gradients, tints, dots, progress fills" — and forbids
+ * white text on it. A bar is a progress fill and carries no text, so the rule is
+ * satisfied by construction rather than by a measurement somebody has to repeat.
+ * `--avo-brand-deep` would be the token if a label ever sat inside a bar.
+ */
+.trend__bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--avo-brand);
+}
+
+/*
+ * A DAY THAT TOOK NOTHING. Every bar floors at 2px so that a tiny day is still
+ * visible, which means a zero day and a one-fils day are the same height — so
+ * the zero is told apart by COLOUR instead. Hairline, not brand: it reads as the
+ * baseline continuing, which is what actually happened.
+ */
+.trend__bar[data-zero='true'] {
+  background: var(--avo-hairline);
+}
+
+.trend__day-num {
+  font-family: var(--avo-font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--avo-text-muted-label);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Loading: the same three parts in the same three places. See § TrendSkeleton. */
+.trend__days--loading .trend__track {
+  align-items: stretch;
 }
 
 .overview__activity {
