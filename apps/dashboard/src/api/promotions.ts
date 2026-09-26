@@ -5,6 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
+import { RewardKeySchema } from '@avo/types';
 import type { Campaign, HappyHour, PromotionSet, RewardKey } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
@@ -297,12 +298,97 @@ export const HAPPY_REWARDS: RewardKey[] = [
   'x2visit',
 ];
 
-/** Campaign rewards. A campaign can attach no reward; a happy hour cannot. */
-export const CAMPAIGN_REWARDS: Array<{ value: RewardKey | 'none'; label: string }> = [
-  { value: 'none', label: 'No reward — message only' },
-  { value: 'x2stamp', label: 'Double stamps on the next visit' },
-  { value: 'topup10', label: '+10% on the next top-up' },
-  { value: 'credit3', label: '3 KD credit into the wallet' },
+/**
+ * Campaign reward copy — ONE LINE PER KEY THE CONTRACT DEFINES.
+ *
+ * `Record<RewardKey, string>` rather than an array of literals, so the compiler
+ * is the thing that notices a new reward. Add a seventh key to
+ * `RewardKeySchema` and this object stops compiling until it has been given a
+ * sentence; it cannot be added and silently left unofferable.
+ *
+ * =========================================================================
+ * THE DEFECT THIS REPLACES
+ * =========================================================================
+ * `CAMPAIGN_REWARDS` was four hand-written literals — `none`, `x2stamp`,
+ * `topup10`, `credit3` — transcribed from the four `<option>` tags in
+ * `design/AVO Merchant Dashboard.dc.html:768`. The contract defines SIX,
+ * `rewardEffect()` implements all six with real effects, and
+ * `api/src/routes/campaigns.ts:182` validates against the full enum and would
+ * have accepted any of them. So `x3stamp`, `x2visit` and `topup20` were
+ * implemented end to end and unreachable from the only screen that offers a
+ * reward — including `x2visit`, which the design's OWN seed campaign `c-1004`
+ * uses ("every visit counts double"). The design file could show a campaign the
+ * design file's select could not create.
+ *
+ * NOTHING WENT RED, AND THAT IS THE POINT. Every spec that touched this control
+ * asked questions ABOUT the list; a spec that only ever consults the list cannot
+ * notice the list disagreeing with its source. Same shape as the
+ * `BRAND_SWATCHES` sage and the `PRESET_HEXES` retired hex, and closed the same
+ * way: derive, do not transcribe.
+ *
+ * =========================================================================
+ * THE WORDING IS READ OFF `rewardEffect()`, NOT OFF THE KEY NAME
+ * =========================================================================
+ * `x2visit` is the one that punishes guessing. The name reads "two visits";
+ * what `rewardEffect` returns is `visitMultiplier: 2`, which `charge.ts` passes
+ * to `applyVisits` as the visit INCREMENT, and only on the tiers branch. It buys
+ * tier progress, not a second appointment, so the line says so rather than
+ * promising a visit that never happens.
+ *
+ * `x3stamp` is `stampMultiplier: 3` — three stamps for the one visit, not a
+ * third stamp added — so it is "Triple stamps", parallel to the x2 line above
+ * it. `topup20` is `topupBonusPercent: 20`, the same effect as `topup10` at a
+ * different rate, so it is the same sentence at a different number.
+ *
+ * `credit3` is `creditFils: 3000` — integer fils, non-negotiable #1 — and the
+ * shipped line already reads "3 KD", which is that value at the display
+ * boundary. It is left exactly as written.
+ */
+const CAMPAIGN_REWARD_LABEL: Record<RewardKey, string> = {
+  x2stamp: 'Double stamps on the next visit',
+  x3stamp: 'Triple stamps on the next visit',
+  x2visit: 'Double visit credit toward the next tier',
+  topup10: '+10% on the next top-up',
+  topup20: '+20% on the next top-up',
+  credit3: '3 KD credit into the wallet',
+};
+
+/**
+ * `none` IS NOT A REWARD KEY, AND IT IS KEPT WHERE IT CANNOT BECOME ONE.
+ *
+ * The contract already draws this line: `CampaignSchema.reward` is
+ * `z.union([RewardKeySchema, z.literal('none')])`. A campaign can attach no
+ * reward and a happy hour cannot, which is a fact about campaigns — not a
+ * seventh thing a salon can grant. Folding it into `CAMPAIGN_REWARD_LABEL`
+ * would put it inside every `RewardKey` iteration in this file and hand it to
+ * `rewardEffect()`, which has no case for it and would return `undefined`
+ * through a function typed to return an effect.
+ *
+ * So it is a separate export, the way `BRAND_DEFAULT` is separate from
+ * `BRAND_SWATCHES`: the list is derived from the enum, the absence sits beside
+ * it, and the offered list below is the only place the two are joined.
+ */
+export const CAMPAIGN_NO_REWARD: { value: 'none'; label: string } = {
+  value: 'none',
+  label: 'No reward — message only',
+};
+
+/**
+ * What the select offers: the absence, then every key the contract defines.
+ *
+ * ORDER IS `RewardKeySchema`'S ORDER, chosen rather than defaulted to. The enum
+ * is already grouped by effect and ascending inside each group — stamps (x2,
+ * x3), visits (x2), top-ups (+10%, +20%), credit — so any grouping worth
+ * writing by hand is the one it already has, and re-stating it here would
+ * re-introduce the second copy this change exists to delete.
+ *
+ * It also costs nothing on a screen that is already signed off: `none, x2stamp,
+ * topup10, credit3` is a SUBSEQUENCE of the enum, so every option Aftab has
+ * seen keeps its position and the three new ones land between them.
+ */
+export const CAMPAIGN_REWARDS: ReadonlyArray<{ value: RewardKey | 'none'; label: string }> = [
+  CAMPAIGN_NO_REWARD,
+  ...RewardKeySchema.options.map((value) => ({ value, label: CAMPAIGN_REWARD_LABEL[value] })),
 ];
 
 export const AUDIENCES: Array<{ value: Campaign['audience']; label: string }> = [
