@@ -62,6 +62,27 @@
  * a 45-minute booking at 16:00 and a 30-minute one at 16:15 overlap and would
  * both be accepted. `EXCLUDE USING gist` over the real time range is the
  * constraint that means what the screen means. See migration 0013.
+ *
+ * AND IT SPANS BOTH KINDS OF APPOINTMENT, WHICH IS WHY THERE IS ONE TABLE.
+ * Migration 0056 let moneyless, hand-written appointments into this table rather
+ * than giving them one of their own, for a reason that is a single line: an
+ * exclusion constraint cannot span two tables. A `manual_appointment` table
+ * would leave `booking` pristine and let a walk-in and a customer who paid a
+ * deposit arrive at 16:45 for the same chair with nothing in the database
+ * saying so - which makes hand-entry worse than the paper diary it replaces,
+ * because the diary at least has one page per artist.
+ *
+ * The predicate did NOT have to change to cover merchant rows. It is
+ * `status IN ('deposit_held','completed')`, and a live merchant booking is
+ * `deposit_held` - the contract keeps four status values and renders
+ * "Booked"/"No-show" from `deposit_fils = 0` at the display boundary, precisely
+ * so no enum widening is needed here. Nothing about overlap detection is
+ * conditional on `source`, and that is the one guarantee this feature must not
+ * make source-aware.
+ *
+ * A MONEY ROW WITH A CALENDAR ATTACHED IS STILL WHAT AN `app` ROW IS. Every
+ * relaxation in 0056 is hold-aware or source-aware, so a row that HAS a hold is
+ * governed by exactly the constraint set it was governed by before.
  */
 
 import { sql } from 'drizzle-orm';
@@ -90,7 +111,15 @@ export const bookingStatus = pgEnum('booking_status', [
   'cancelled',
 ]);
 
-export const bookingSource = pgEnum('booking_source', ['app', 'google_calendar']);
+/**
+ * `merchant` - written by hand from the dashboard, for a member or a walk-in.
+ *
+ * IT IS ALWAYS A ZERO-DEPOSIT ROW, which `booking_merchant_is_zero_deposit`
+ * below makes a database fact rather than a handler's good intention. See
+ * `packages/types § BookingSchema`: a merchant who can debit a customer's wallet
+ * by filling in a form can do it without her (#2), the same shape as #8.
+ */
+export const bookingSource = pgEnum('booking_source', ['app', 'google_calendar', 'merchant']);
 
 /**
  * How a booking's write-back to the artist's calendar went.
@@ -134,9 +163,33 @@ export const booking = pgTable(
       .references(() => branch.id, { onDelete: 'restrict' }),
     branchAssumed: boolean('branch_assumed').notNull().default(false),
 
-    memberId: text('member_id')
-      .notNull()
-      .references(() => member.id, { onDelete: 'restrict' }),
+    /**
+     * NULL ON A GUEST APPOINTMENT, and on nothing else.
+     * `booking_identity_exactly_one` and `booking_guest_requires_merchant_source`
+     * together still say "an `app` booking names a member", which is what the
+     * dropped NOT NULL said. Migration 0056.
+     */
+    memberId: text('member_id').references(() => member.id, { onDelete: 'restrict' }),
+    /**
+     * THE WALK-IN, WRITTEN DOWN RATHER THAN INVENTED AS A MEMBER.
+     *
+     * Minting a `member` row for her would give her a wallet she never opened, a
+     * tier she never earned, a directory entry, and an implied acceptance of a
+     * policy set she has never seen (#10). So a guest appointment carries a name
+     * and a phone on the booking and nothing else.
+     */
+    guestName: text('guest_name'),
+    /**
+     * Optional even for a guest - a front desk with a name and no number must
+     * still be able to hold the slot, and a required field here would be filled
+     * with `0000000` within a week.
+     *
+     * A CUSTOMER'S PERSONAL DATA IN A SALON'S DATABASE. It is not indexed and
+     * nothing searches it by digit-substring; `services/memberSearch.ts` has a
+     * reported bug where `LIKE '%78%'` over a phone matches a member id, and this
+     * column deliberately has no lookup in which to repeat that shape.
+     */
+    guestPhone: text('guest_phone'),
     artistId: text('artist_id')
       .notNull()
       .references(() => artist.id, { onDelete: 'restrict' }),
@@ -167,10 +220,17 @@ export const booking = pgTable(
     status: bookingStatus('status').notNull().default('deposit_held'),
     source: bookingSource('source').notNull().default('app'),
 
-    /** The `deposit_hold` transaction. Written in the same database transaction. */
-    holdTransactionId: text('hold_transaction_id')
-      .notNull()
-      .references((): AnyPgColumn => transaction.id, { onDelete: 'restrict' }),
+    /**
+     * The `deposit_hold` transaction. Written in the same database transaction.
+     *
+     * NULL ONLY ON A ZERO-DEPOSIT ROW, which `booking_deposit_matches_hold` makes
+     * an equivalence: money and the hold are the same fact, so an `app` booking
+     * still cannot exist without the hold that paid for it. Migration 0056.
+     */
+    holdTransactionId: text('hold_transaction_id').references(
+      (): AnyPgColumn => transaction.id,
+      { onDelete: 'restrict' },
+    ),
     /**
      * Where the held money ended up: the charge that consumed it, or the
      * `deposit_return` that gave it back. NULL only while `deposit_held`.
@@ -218,19 +278,89 @@ export const booking = pgTable(
 
     check('booking_duration_positive', sql`${t.durationMin} > 0`),
     check('booking_ends_after_starts', sql`${t.endsAt} > ${t.startsAt}`),
-    // A booking with no deposit is a note in a diary, not a commitment. The
-    // salon range is 1000-10000 fils; this only refuses the absurd.
-    check('booking_deposit_positive', sql`${t.depositFils} > 0`),
+
     /**
-     * THE STATE MACHINE, as a constraint.
+     * WHO THE APPOINTMENT IS FOR. Exactly one of the two, never both, never
+     * neither - `packages/types § BookingSchema` states the rule and this is
+     * where it is enforced, "with a CHECK rather than a convention".
+     */
+    check('booking_identity_exactly_one', sql`num_nonnulls(${t.memberId}, ${t.guestName}) = 1`),
+    /**
+     * AN `app` BOOKING ALWAYS NAMES A MEMBER. A guest can only ever be written by
+     * hand, which is what carries forward the `member_id NOT NULL` that migration
+     * 0056 dropped: with this and the constraint above, `source <> 'merchant'`
+     * implies `member_id IS NOT NULL`.
+     */
+    check(
+      'booking_guest_requires_merchant_source',
+      sql`${t.guestName} IS NULL OR ${t.source}::text = 'merchant'`,
+    ),
+    /** A phone with no name attached is an orphan piece of somebody's personal data. */
+    check(
+      'booking_guest_phone_requires_guest_name',
+      sql`${t.guestPhone} IS NULL OR ${t.guestName} IS NOT NULL`,
+    ),
+
+    /**
+     * THE FLOOR, RE-STATED SEPARATELY FROM THE EQUIVALENCE BELOW.
+     *
+     * `booking_deposit_positive` (`deposit_fils > 0`) used to be the only floor.
+     * The equivalence that replaces it would accept a NEGATIVE deposit on a
+     * hold-less row - `-5000 > 0` is false, and so is `hold IS NOT NULL`, so the
+     * biconditional holds - which is exactly the hole a relaxation quietly opens.
+     */
+    check('booking_deposit_non_negative', sql`${t.depositFils} >= 0`),
+    /**
+     * MONEY AND THE HOLD ARE THE SAME FACT.
+     *
+     * On any row WITH a hold - every `app` booking - this and the floor above
+     * together force `deposit_fils > 0`, which is the dropped
+     * `booking_deposit_positive` unchanged. What is newly permitted is only the
+     * other side: a zero deposit, and then only with no hold behind it.
+     */
+    check(
+      'booking_deposit_matches_hold',
+      sql`(${t.depositFils} > 0) = (${t.holdTransactionId} IS NOT NULL)`,
+    ),
+    /**
+     * NON-NEGOTIABLE #2, AS A DATABASE FACT.
+     *
+     * A merchant-created booking for an EXISTING member could technically debit
+     * her wallet for the deposit, and must not: a merchant who can move a
+     * customer's money by filling in a form is a merchant who can move it without
+     * her. The handler refuses it too; this is the layer that holds when someone
+     * edits the handler.
+     */
+    check(
+      'booking_merchant_is_zero_deposit',
+      sql`${t.source}::text <> 'merchant' OR ${t.depositFils} = 0`,
+    ),
+
+    /**
+     * THE STATE MACHINE, as a constraint - NOW WITH THE ANTECEDENT SAID OUT LOUD.
      *
      * Held ⟺ nothing settled it. Every terminal status names the transaction
      * that resolved the money. A handler that marks a booking completed and
      * forgets to link the charge does not commit.
+     *
+     * The `THEN` branch is that sentence, character for character, and EVERY ROW
+     * WITH A HOLD TAKES IT. The condition is not a weakening: it was previously
+     * implied by `hold_transaction_id NOT NULL`, which made it vacuously true of
+     * every row, and is now written because that NOT NULL is gone. An `app`
+     * booking still cannot be completed without naming the charge that consumed
+     * the hold, and still cannot be cancelled without naming the refund.
+     *
+     * The `ELSE` branch is a NEW PROHIBITION on rows that could not exist before:
+     * a settled transaction may never appear on a row that had no hold. There is
+     * no money to have settled, so a pointer to one would be a claim about a
+     * ledger that says nothing.
      */
     check(
       'booking_settlement_matches_status',
-      sql`(${t.status} = 'deposit_held') = (${t.settledTransactionId} IS NULL)`,
+      sql`CASE WHEN ${t.holdTransactionId} IS NOT NULL
+            THEN (${t.status} = 'deposit_held') = (${t.settledTransactionId} IS NULL)
+            ELSE ${t.settledTransactionId} IS NULL
+          END`,
     ),
     check(
       'booking_completed_at_matches_status',

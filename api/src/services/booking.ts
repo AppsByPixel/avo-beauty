@@ -43,7 +43,7 @@
  * it is a copy decision, and copy is settled by the design, not by this lane.
  */
 
-import { and, asc, eq, gt, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { add, fils, subtract, type Fils } from '@avo/types';
 import type { Db } from '../db/client';
 import { artist } from '../db/schema/artist';
@@ -97,7 +97,10 @@ export function isExclusionViolation(err: unknown): boolean {
 
 export interface BookingRow {
   id: string;
-  memberId: string;
+  /** NULL on a guest appointment, and on nothing else. Migration 0056. */
+  memberId: string | null;
+  guestName: string | null;
+  guestPhone: string | null;
   artistId: string;
   branchId: string;
   serviceId: string;
@@ -106,7 +109,7 @@ export interface BookingRow {
   durationMin: number;
   depositFils: number;
   status: 'deposit_held' | 'completed' | 'no_show_returned' | 'cancelled';
-  source: 'app' | 'google_calendar';
+  source: 'app' | 'google_calendar' | 'merchant';
   noShowReturnDueAt: Date;
   rescheduledCount: number;
   calendarSyncState: 'not_applicable' | 'pending' | 'synced' | 'failed';
@@ -130,23 +133,16 @@ export function serialiseBooking(row: BookingRow) {
     id: row.id,
     memberId: row.memberId,
     /**
-     * LITERAL NULLS, AND ONLY UNTIL THE COLUMNS EXIST.
+     * PRESENT ON EVERY BOOKING, NOT ONLY ON A GUEST'S.
      *
-     * `BookingSchema` declares these `.nullable()` — required on the wire,
-     * permitted to be null — which is this contract's house shape and the right
-     * one: `changeableUntil` records at length what a schema narrower than the
-     * wire costs. But trunk landed the schema before `api/` had the columns, and
-     * a serialiser that omits a required key does not degrade, it FAILS
-     * `.parse()` — so for a few minutes every booking body the API served was
-     * rejected by both mobile clients, including the reply to a POST that had
-     * already taken the deposit.
-     *
-     * Every row in the table today is a member booking, so `null` is not a
-     * placeholder here, it is the true answer. Lane A replaces these with
-     * `row.guestName` / `row.guestPhone` when migration lands the columns.
+     * `BookingSchema` declares both `.nullable()`, which is REQUIRED-BUT-MAY-BE-NULL
+     * and not optional. A serialiser that omitted them on an `app` row would fail
+     * the client's own contract parse - which is the exact defect `changeableUntil`
+     * records a few lines below, found by lane B when Zod silently stripped a field
+     * the server was sending.
      */
-    guestName: null,
-    guestPhone: null,
+    guestName: row.guestName,
+    guestPhone: row.guestPhone,
     artistId: row.artistId,
     branchId: row.branchId,
     serviceId: row.serviceId,
@@ -277,6 +273,19 @@ export async function findApplicableHold(
          * everything else; the POSITION changed, not the operand.
          */
         gt(booking.noShowReturnDueAt, params.now),
+        /**
+         * AND THERE HAS TO BE A HOLD TO APPLY.
+         *
+         * A merchant-created appointment is `deposit_held` with `deposit_fils = 0`
+         * and no hold transaction (migration 0056) - it means "Booked", not "money
+         * is sitting in escrow". Without this line a walk-in written down by the
+         * front desk would be picked as the applicable hold ahead of the customer's
+         * real one (earliest `starts_at` wins), and the till would offer a 0.000
+         * credit line against a deposit she actually paid. `hold_transaction_id`
+         * rather than `deposit_fils > 0` because `booking_deposit_matches_hold`
+         * makes them the same fact and the hold is the thing being consumed.
+         */
+        isNotNull(booking.holdTransactionId),
       ),
     )
     // Earliest APPLICABLE appointment: the one she is most plausibly settling.
@@ -909,12 +918,16 @@ export async function cancelBooking(
       .limit(1);
     // Scoped to the caller's own bookings. Someone else's appointment is not
     // something a customer gets to probe, so this is a 404 rather than a 403.
-    if (!probe) throw notFound('unknown_booking', 'No such appointment.');
+    // `member_id` became nullable in 0056, and the `where` above is what makes it
+    // non-null here: a row matched on `member_id = <her id>` has a member by
+    // construction. Narrowed rather than asserted, so the compiler carries it.
+    if (!probe?.memberId) throw notFound('unknown_booking', 'No such appointment.');
+    const probeMemberId = probe.memberId;
 
     const [m] = await tx
       .select()
       .from(member)
-      .where(eq(member.id, probe.memberId))
+      .where(eq(member.id, probeMemberId))
       .for('update')
       .limit(1);
     if (!m) throw notFound('unknown_member', 'No such member.');
@@ -1117,16 +1130,42 @@ export async function markNoShow(
      * than a 403: a 403 would confirm the id names a real appointment somewhere.
      */
     const [probe] = await tx
-      .select({ memberId: booking.memberId })
+      .select({ memberId: booking.memberId, holdTransactionId: booking.holdTransactionId })
       .from(booking)
       .where(and(eq(booking.id, params.bookingId), eq(booking.salonId, params.salonId)))
       .limit(1);
     if (!probe) throw notFound('unknown_booking', 'No such appointment.');
 
+    /**
+     * A NO-SHOW IS A DEPOSIT COMING BACK, AND A ZERO-DEPOSIT BOOKING HAS NONE.
+     *
+     * This endpoint shipped before `booking.member_id` and `hold_transaction_id`
+     * could be null (migration 0056), so it has always been able to assume both.
+     * A hand-written merchant appointment is `deposit_held` with neither, and it
+     * would reach `returnDeposit`, which credits a wallet by 0, writes a
+     * `deposit_return` transaction for money nobody held and an unbalanced ledger
+     * pair behind it — or, on a GUEST row, finds no member to lock at all.
+     *
+     * REFUSED RATHER THAN QUIETLY HANDLED, and the refusal is narrow on purpose:
+     * "a merchant appointment can be marked as a no-show without any money
+     * moving" is a real product question with a status enum behind it (the
+     * contract renders "No-show" from `deposit_fils = 0`), and answering it here
+     * would be this lane deciding it in a guard clause. Reported.
+     */
+    if (probe.holdTransactionId === null || probe.memberId === null) {
+      throw conflict(
+        'no_deposit_to_return',
+        'That appointment was written down at the salon and has no deposit held ' +
+          'against it, so there is nothing to return. Cancel it instead.',
+        { bookingId: params.bookingId },
+      );
+    }
+    const probeMemberId = probe.memberId;
+
     const [m] = await tx
       .select()
       .from(member)
-      .where(eq(member.id, probe.memberId))
+      .where(eq(member.id, probeMemberId))
       .for('update')
       .limit(1);
     if (!m) throw notFound('unknown_member', 'No such member.');
@@ -1310,7 +1349,7 @@ export async function rescheduleBooking(
       // Not `unknown_booking`: the row was found and locked twenty lines up. A
       // zero row count here can only mean the status moved, which is the same
       // fact the handler's check reports and deserves the same code.
-      throw conflict('not_reschedulable', 'That appointment can no longer be changed.', {
+      throw conflict('not_changeable', 'That appointment can no longer be changed.', {
         bookingId: row.id,
       });
     }
@@ -1347,8 +1386,17 @@ export async function rescheduleBooking(
     return {
       booking: serialiseBooking(updated as BookingRow),
       depositCarriedFils: row.depositFils,
-      /** The hold is unchanged, and saying so is the point of the endpoint. */
-      holdTransactionId: row.holdTransactionId,
+      /**
+       * The hold is unchanged, and saying so is the point of the endpoint.
+       *
+       * `?? ''` IS UNREACHABLE AND IS NOT A DEFAULT. `hold_transaction_id` became
+       * nullable in 0056, but this is the CUSTOMER's reschedule: the row was
+       * matched on `member_id = <her id>` and `status = 'deposit_held'`, and
+       * `booking_deposit_matches_hold` plus `booking_guest_requires_merchant_source`
+       * make a member-owned `app` row one that has a hold. Written rather than
+       * asserted so the compiler carries the narrowing instead of a reader.
+       */
+      holdTransactionId: row.holdTransactionId ?? '',
     };
   });
 }
@@ -1371,4 +1419,735 @@ export async function listMemberBookings(
     .orderBy(asc(booking.startsAt))
     .limit(100);
   return rows.map((r) => serialiseBooking(r as BookingRow));
+}
+
+// =========================================================================
+// THE MERCHANT'S OWN APPOINTMENTS — client asks 5 and 6
+// =========================================================================
+/**
+ * "Admin can create appointments manually, for existing or non-existing
+ * customers", and "mark / cancel / change date / reassign employee".
+ *
+ * Five functions, all of them on the same table and the same exclusion
+ * constraint as `POST /bookings`. That is the design: db/schema/booking.ts
+ * carries the argument for one table rather than two, and it comes down to a
+ * single line — an `EXCLUDE USING gist` cannot span two tables, so a walk-in in
+ * a `manual_appointment` table and a customer who paid a deposit could be sold
+ * the same chair with nothing in the database saying so.
+ *
+ * ---------------------------------------------------------------------
+ * A MERCHANT BOOKING MOVES NO MONEY. NOT EVEN FOR AN EXISTING MEMBER.
+ * ---------------------------------------------------------------------
+ * No transaction row, no ledger entry, no touch of `member.balance_fils`. A
+ * merchant-created booking for an EXISTING member could technically debit her
+ * wallet for the salon's deposit, and must not: non-negotiable #2 gives the
+ * server the balance, and a merchant who can move a customer's money by filling
+ * in a form is a merchant who can move it without her. The same reasoning that
+ * stops a merchant sending a customer a message (#8).
+ *
+ * `booking_merchant_is_zero_deposit` and `booking_deposit_matches_hold` make
+ * that a database fact rather than this file's good intention.
+ *
+ * ---------------------------------------------------------------------
+ * THE CHANGE WINDOW DOES NOT APPLY TO THE SALON
+ * ---------------------------------------------------------------------
+ * `assertChangeWindowOpen` refuses a CUSTOMER inside the last hour because
+ * "after that the deposit stays with the salon". That window protects the
+ * SALON'S claim against the CUSTOMER. The salon does not need protecting from
+ * itself: a front desk moving a 16:45 at 16:30 because the artist is running
+ * late is the normal case, and refusing it makes the feature useless at exactly
+ * the moment it is needed. So none of the functions below call it, and a reader
+ * looking for the call will find this paragraph where it would have been.
+ *
+ * ---------------------------------------------------------------------
+ * AND NEITHER DOES THE AVAILABILITY GRID
+ * ---------------------------------------------------------------------
+ * `createBooking` validates `startsAt` against `computeAvailability` because a
+ * CUSTOMER naming her own slot could book at 03:00 or inside a sliver of the
+ * grid. The grid is the salon's PUBLICATION of when it will see customers, and
+ * three of the four things it encodes are not a rule about the salon's own
+ * diary: the working window (the artist staying late for a regular), the slot
+ * alignment (a 16:50 squeeze-in), and closed days. The fourth — "that time is
+ * taken" — is the one that matters, and it is not enforced by the grid here but
+ * by `booking_artist_slot_no_overlap`, which is strictly stronger: the grid is a
+ * read that can go stale between the check and the insert, and the constraint
+ * cannot. A front desk refused a walk-in because the published grid says 16:45
+ * and the customer is standing there at 16:50 would go back to the paper diary,
+ * which is the outcome this feature exists to prevent.
+ *
+ * SO THE DOUBLE-BOOK GUARANTEE IS THE CONSTRAINT AND NOTHING ELSE, on every path
+ * below. `isExclusionViolation` is what each route turns into `slot_taken`.
+ *
+ * ---------------------------------------------------------------------
+ * NOT MODULE-GATED, and that is `assertBookingReadable`'s own rule rather than
+ * an omission: it returns early for every staff principal because "staff set a
+ * roster and its hours before the salon opens for appointments", and
+ * `GET /salons/{id}/bookings` — the board these controls are drawn on — is
+ * ungated for the same reason. A gate here and not there would be a control on
+ * the write with no screen behind it.
+ */
+
+export interface MerchantBookingContext {
+  principal: StaffPrincipal;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
+/** The duration of a hand-written appointment: the artist's own slot length. */
+async function artistForSalon(
+  tx: Executor,
+  artistId: string,
+  salonId: string,
+): Promise<typeof artist.$inferSelect> {
+  const [a] = await (tx as Db)
+    .select()
+    .from(artist)
+    .where(and(eq(artist.id, artistId), eq(artist.salonId, salonId)))
+    .limit(1);
+  // Same 404 for "no such artist" and "not in your salon" — another salon's
+  // roster is not something a caller gets to probe by status code.
+  if (!a) throw notFound('unknown_artist', 'No such artist.');
+  if (!a.active) throw conflict('artist_not_bookable', 'That artist is not taking bookings.');
+  return a;
+}
+
+function parseInstant(raw: string, field: string): Date {
+  const at = new Date(raw);
+  if (Number.isNaN(at.getTime())) {
+    throw badRequest('invalid_starts_at', `${field} must be an ISO instant.`);
+  }
+  return at;
+}
+
+export interface CreateMerchantBookingInput {
+  salonId: string;
+  artistId: string;
+  serviceId: string;
+  startsAt: string;
+  /** Exactly one of these two halves. The route has already refused both/neither. */
+  memberId: string | null;
+  guestName: string | null;
+  guestPhone: string | null;
+  idempotency: BookingIdempotency;
+}
+
+/** POST /salons/{id}/bookings — the front desk writes one down. */
+export async function createMerchantBooking(
+  db: Db,
+  input: CreateMerchantBookingInput,
+  ctx: MerchantBookingContext,
+) {
+  return db.transaction(async (tx) => {
+    // The key first, inside the transaction that carries the effect — the same
+    // ordering `createBooking` and `markNoShow` use.
+    const keyId = await claimKey(tx, input.idempotency);
+
+    const [s] = await tx.select().from(salon).where(eq(salon.id, input.salonId)).limit(1);
+    if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+    const a = await artistForSalon(tx, input.artistId, input.salonId);
+
+    const [svc] = await tx
+      .select()
+      .from(service)
+      .where(
+        and(
+          eq(service.id, input.serviceId),
+          eq(service.salonId, input.salonId),
+          eq(service.active, true),
+        ),
+      )
+      .limit(1);
+    if (!svc) throw notFound('unknown_service', 'No such service.');
+
+    /**
+     * THE MEMBER, WHEN THERE IS ONE — and she must be one of this salon's.
+     *
+     * NOT LOCKED. `returnDeposit`'s header fixes the global lock order as member
+     * then booking precisely because money paths take both; this path takes no
+     * money, reads no balance and writes none, so there is nothing for a lock to
+     * serialise. The row is read only to establish that she exists and is this
+     * salon's customer.
+     */
+    let memberRow: typeof member.$inferSelect | null = null;
+    if (input.memberId) {
+      const [m] = await tx
+        .select()
+        .from(member)
+        .where(and(eq(member.id, input.memberId), eq(member.salonId, input.salonId)))
+        .limit(1);
+      if (!m) throw notFound('unknown_member', 'No such customer.');
+      /**
+       * AN ERASED MEMBER IS NOT BOOKABLE. `services/erasure.ts` scrubbed her name
+       * to a tombstone and her phone to a `+990` placeholder at her own request;
+       * hanging a future appointment off that row would be the salon re-acquiring
+       * a customer who asked to be forgotten. The front desk can write her down as
+       * a guest if she is standing there, which is a new fact she just gave them.
+       */
+      if (m.erasedAt !== null) {
+        throw conflict('member_erased', 'That customer account has been deleted.');
+      }
+      memberRow = m;
+    }
+
+    const startsAt = parseInstant(input.startsAt, 'startsAt');
+    const now = new Date();
+
+    /**
+     * THE LENGTH IS THE ARTIST'S SLOT, not a number the client sends.
+     *
+     * `computeAvailability` builds the customer's grid out of `artist.slotMinutes`
+     * and `createBooking` takes its `endsAt` from that grid, so this is the same
+     * number arrived at without the grid. A client-supplied duration would be a
+     * client sizing its own exclusion range — a five-minute appointment that
+     * overlaps nothing, written over the top of a real one.
+     */
+    const durationMin = a.slotMinutes;
+    const endsAt = new Date(startsAt.getTime() + durationMin * 60_000);
+
+    // From the artist, exactly as `createBooking` resolves it. One artist belongs
+    // to one branch, so where the appointment is is a fact about who performs it.
+    const branch = await resolveBranch(tx, input.salonId, a.branchId);
+
+    /**
+     * STAMPED EVEN THOUGH NOTHING WILL EVER READ IT ON THIS ROW. The column is NOT
+     * NULL and means "when the deposit is due back"; on a zero-deposit row there
+     * is no deposit, and `services/noShowWorker.ts` now filters on
+     * `hold_transaction_id IS NOT NULL` so the job never sees it. Stamped with the
+     * same arithmetic anyway rather than with a sentinel, so the column means one
+     * thing on every row.
+     */
+    const noShowReturnDueAt = new Date(endsAt.getTime() + s.noShowReturnMinutes * 60_000);
+
+    const bkId = await nextBookingId(tx);
+
+    const [row] = await tx
+      .insert(booking)
+      .values({
+        id: bkId,
+        salonId: input.salonId,
+        branchId: branch.branchId,
+        branchAssumed: !branch.established,
+        memberId: input.memberId,
+        guestName: input.guestName,
+        guestPhone: input.guestPhone,
+        artistId: a.id,
+        serviceId: svc.id,
+        startsAt,
+        endsAt,
+        durationMin,
+        /**
+         * ZERO, AND THERE IS NO HOLD BEHIND IT. Not a default being relied on —
+         * written, because this literal is non-negotiable #2 at the only place a
+         * merchant could have taken a customer's money by filling in a form.
+         */
+        depositFils: fils(0),
+        holdTransactionId: null,
+        status: 'deposit_held',
+        source: 'merchant',
+        noShowReturnDueAt,
+        calendarSyncState: 'not_applicable',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    if (!row) throw new Error('booking insert returned no row');
+
+    /**
+     * `rules`, NOT `money`. Nothing moved, and a `money` row with a zero amount
+     * would be a line in the Money filter that a merchant reading a
+     * reconciliation has to skip past — `rescheduleBooking` settled the same
+     * question the same way.
+     */
+    await writeAudit(tx, ctx.principal, {
+      salonId: input.salonId,
+      kind: 'rules',
+      action: 'Appointment created',
+      detail:
+        `${memberRow ? memberRow.name : input.guestName} · ${svc.name} with ${a.name} · ` +
+        `${startsAt.toISOString()}`,
+      source: 'merchant',
+      subjectType: 'booking',
+      subjectId: bkId,
+      metadata: {
+        bookingId: bkId,
+        memberId: input.memberId,
+        /** The NAME, never the number. A guest's phone is not audit-log material. */
+        guest: input.guestName !== null,
+        artistId: a.id,
+        serviceId: svc.id,
+        startsAt: startsAt.toISOString(),
+        endsAt: endsAt.toISOString(),
+        branchAssumed: !branch.established,
+      },
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
+    });
+
+    const result = { booking: serialiseBooking(row as BookingRow) };
+    await completeKey(tx, keyId, { status: 201, body: result });
+    return result;
+  });
+}
+
+/**
+ * The row this endpoint is about, locked, with its status re-read under the
+ * lock. Shared by reschedule, reassign and complete — the three that move no
+ * money and therefore need no member lock, so the whole lock-order question
+ * (`returnDeposit` § THE LOCK ORDER IS MEMBER, THEN BOOKING) does not arise.
+ *
+ * SCOPED TO THE SALON IN THE PATH, which `requireSameSalon` has already checked
+ * against the caller's own. Another salon's booking is a 404 rather than a 403:
+ * a 403 would confirm the id names a real appointment somewhere.
+ */
+async function lockLiveBooking(
+  tx: Executor,
+  salonId: string,
+  bookingId: string,
+  /**
+   * THE REFUSAL IS A FUNCTION OF THE STATUS IT HIT, not one sentence for three
+   * different facts. `markNoShow` established the shape: a caller must be told BY
+   * NAME which terminal state it landed on, because "you already did this" and
+   * "this is not a thing you can do" are different answers and a client renders
+   * them differently.
+   */
+  refusal: (status: BookingRow['status']) => { code: string; message: string },
+): Promise<typeof booking.$inferSelect> {
+  const [row] = await (tx as Db)
+    .select()
+    .from(booking)
+    .where(and(eq(booking.id, bookingId), eq(booking.salonId, salonId)))
+    .for('update')
+    .limit(1);
+  if (!row) throw notFound('unknown_booking', 'No such appointment.');
+  if (row.status !== 'deposit_held') {
+    const { code, message } = refusal(row.status);
+    throw conflict(code, message, { status: row.status });
+  }
+  return row;
+}
+
+/** The three sentences the four merchant transitions share, keyed on `verb`. */
+function terminalRefusal(
+  verb: 'changed' | 'cancelled' | 'marked as completed',
+): (status: BookingRow['status']) => { code: string; message: string } {
+  const code =
+    verb === 'cancelled' ? 'not_cancellable' : verb === 'changed' ? 'not_changeable' : 'not_completable';
+  return (status) => {
+    if (status === 'cancelled') {
+      return verb === 'cancelled'
+        ? { code: 'already_cancelled', message: 'That appointment was already cancelled.' }
+        : { code, message: `That appointment was cancelled, so it cannot be ${verb}.` };
+    }
+    if (status === 'completed') {
+      return verb === 'marked as completed'
+        ? { code: 'already_completed', message: 'That appointment is already marked as completed.' }
+        : { code, message: `That appointment has already happened, so it cannot be ${verb}.` };
+    }
+    return {
+      code,
+      message: `That appointment was marked as a no-show, so it cannot be ${verb}.`,
+    };
+  };
+}
+
+/** POST /salons/{id}/bookings/{id}/reschedule — move the date and time. */
+export async function rescheduleByMerchant(
+  db: Db,
+  params: { salonId: string; bookingId: string; startsAt: string },
+  ctx: MerchantBookingContext,
+): Promise<{
+  booking: ReturnType<typeof serialiseBooking>;
+  /**
+   * `number`, NOT `Fils`, EXACTLY AS `rescheduleBooking` DECLARES IT. The brand
+   * lives in `@avo/types`'s dist and cannot be named from an inferred return
+   * type here; more to the point, this is a wire value on its way out through
+   * `reply.send`, and the branded type's job is to stop arithmetic, which ended
+   * the moment the number was read off the row.
+   */
+  depositCarriedFils: number;
+}> {
+  return db.transaction(async (tx) => {
+    const row = await lockLiveBooking(tx, params.salonId, params.bookingId, terminalRefusal('changed'));
+
+    const startsAt = parseInstant(params.startsAt, 'startsAt');
+    if (startsAt.getTime() === row.startsAt.getTime()) {
+      throw badRequest('same_slot', 'That is the time the appointment is already at.');
+    }
+
+    const [s] = await tx.select().from(salon).where(eq(salon.id, row.salonId)).limit(1);
+    if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+    /**
+     * THE LENGTH IS CARRIED, NOT RECOMPUTED. This endpoint moves an appointment;
+     * it does not resize one. Recomputing from `artist.slotMinutes` would silently
+     * change the length of every existing booking the moment a merchant edited
+     * that setting, which is a different edit than the one she asked for.
+     */
+    const endsAt = new Date(startsAt.getTime() + row.durationMin * 60_000);
+    const noShowReturnDueAt = new Date(endsAt.getTime() + s.noShowReturnMinutes * 60_000);
+    const now = new Date();
+
+    const [updated] = await tx
+      .update(booking)
+      .set({
+        startsAt,
+        endsAt,
+        // Recomputed, not carried: on a deposit-bearing booking the promise is
+        // about the NEW slot. `rescheduleBooking` settles this the same way.
+        noShowReturnDueAt,
+        rescheduledCount: row.rescheduledCount + 1,
+        rescheduledAt: now,
+        updatedAt: now,
+      })
+      /**
+       * `status = 'deposit_held'` IN THE WHERE, for `rescheduleBooking`'s reason:
+       * lane D removed that handler's status check and the suite stayed green, so
+       * the guard belongs in the write and not only above it.
+       */
+      .where(and(eq(booking.id, row.id), eq(booking.status, 'deposit_held')))
+      .returning();
+    if (!updated) {
+      throw conflict('not_reschedulable', 'That appointment can no longer be changed.', {
+        bookingId: row.id,
+      });
+    }
+
+    await writeAudit(tx, ctx.principal, {
+      salonId: row.salonId,
+      kind: 'rules',
+      action: 'Appointment rescheduled',
+      detail: `${row.startsAt.toISOString()} → ${startsAt.toISOString()}`,
+      source: 'merchant',
+      subjectType: 'booking',
+      subjectId: row.id,
+      metadata: {
+        bookingId: row.id,
+        from: row.startsAt.toISOString(),
+        to: startsAt.toISOString(),
+        /**
+         * ON A DEPOSIT-BEARING BOOKING THE DEPOSIT CARRIES, exactly as it does on
+         * the customer's own reschedule: no transaction, no ledger entry, the same
+         * hold against the same row. 0 when there was nothing to carry.
+         */
+        depositCarriedFils: row.depositFils,
+        noShowReturnDueAt: noShowReturnDueAt.toISOString(),
+      },
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
+    });
+
+    return {
+      booking: serialiseBooking(updated as BookingRow),
+      depositCarriedFils: row.depositFils,
+    };
+  });
+}
+
+/** POST /salons/{id}/bookings/{id}/reassign — a different artist takes it. */
+export async function reassignArtist(
+  db: Db,
+  params: { salonId: string; bookingId: string; artistId: string },
+  ctx: MerchantBookingContext,
+) {
+  return db.transaction(async (tx) => {
+    const row = await lockLiveBooking(tx, params.salonId, params.bookingId, terminalRefusal('changed'));
+
+    if (row.artistId === params.artistId) {
+      throw badRequest('same_artist', 'That is the artist the appointment is already with.');
+    }
+
+    const a = await artistForSalon(tx, params.artistId, params.salonId);
+
+    /**
+     * THE BRANCH MOVES WITH THE ARTIST, because `createBooking` established that a
+     * booking's branch is a fact about who performs it rather than a client
+     * assertion. Reassigning to an artist at Salmiya makes the appointment a
+     * Salmiya appointment, and leaving `branch_id` pointing at Kuwait City would
+     * put it in a reporting bucket where nobody is performing it.
+     *
+     * A DEPOSIT-BEARING BOOKING KEEPS ITS HOLD'S BRANCH ON THE LEDGER, which is
+     * the honest split rather than an inconsistency: `returnDeposit` inherits the
+     * branch from the hold transaction ("claiming `false` here would launder a
+     * guessed branch into an established one"), so the money stays attributed
+     * where it was taken and the appointment moves where it will happen. The same
+     * shape as a customer who books at Salmiya and pays at Kuwait City.
+     */
+    const branch = await resolveBranch(tx, params.salonId, a.branchId);
+    const now = new Date();
+
+    const [updated] = await tx
+      .update(booking)
+      .set({
+        artistId: a.id,
+        branchId: branch.branchId,
+        branchAssumed: !branch.established,
+        updatedAt: now,
+      })
+      .where(and(eq(booking.id, row.id), eq(booking.status, 'deposit_held')))
+      .returning();
+    if (!updated) {
+      throw conflict('not_changeable', 'That appointment can no longer be changed.', {
+        bookingId: row.id,
+      });
+    }
+
+    await writeAudit(tx, ctx.principal, {
+      salonId: row.salonId,
+      kind: 'rules',
+      action: 'Appointment reassigned',
+      detail: `${row.artistId} → ${a.name}`,
+      source: 'merchant',
+      subjectType: 'booking',
+      subjectId: row.id,
+      metadata: {
+        bookingId: row.id,
+        fromArtistId: row.artistId,
+        toArtistId: a.id,
+        branchId: branch.branchId,
+        branchAssumed: !branch.established,
+      },
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
+    });
+
+    return { booking: serialiseBooking(updated as BookingRow) };
+  });
+}
+
+/**
+ * POST /salons/{id}/bookings/{id}/complete — mark it done.
+ *
+ * ONLY ON A ZERO-DEPOSIT BOOKING, and the refusal is the design rather than a
+ * limitation. Completing a deposit-bearing booking has to name the charge that
+ * CONSUMED the hold — `booking_settlement_matches_status` requires
+ * `settled_transaction_id` on a `completed` row that has a hold, and there is
+ * exactly one place that transaction is written: `POST /charges`, at the
+ * scanner, where `findApplicableHold` turns the deposit into a credit line
+ * against the real price. A second path to `completed` would either invent a
+ * transaction for money it did not move, or strand a held deposit in a
+ * `deposit_held` ledger account with no booking left pointing at it.
+ *
+ * So a merchant booking is completed here and an app booking is completed at the
+ * counter, and this function says which by refusing rather than by guessing.
+ */
+export async function completeBooking(
+  db: Db,
+  params: { salonId: string; bookingId: string },
+  ctx: MerchantBookingContext,
+) {
+  return db.transaction(async (tx) => {
+    const row = await lockLiveBooking(
+      tx,
+      params.salonId,
+      params.bookingId,
+      terminalRefusal('marked as completed'),
+    );
+
+    if (row.holdTransactionId !== null) {
+      throw conflict(
+        'deposit_completed_at_the_counter',
+        'That appointment has a deposit held against it. Ringing up the charge at ' +
+          'the counter completes it and applies the deposit to the bill.',
+        { bookingId: row.id, depositFils: row.depositFils },
+      );
+    }
+
+    const now = new Date();
+    const [updated] = await tx
+      .update(booking)
+      .set({ status: 'completed', completedAt: now, updatedAt: now })
+      /**
+       * `hold_transaction_id IS NULL` IS IN THE WHERE AS WELL AS ABOVE, because
+       * the check above is the one a reader deletes and this is the one that holds
+       * when they do. Without it a completed app booking would carry
+       * `settled_transaction_id IS NULL` and be refused by
+       * `booking_settlement_matches_status` — a 500 where a 409 belongs.
+       */
+      .where(
+        and(
+          eq(booking.id, row.id),
+          eq(booking.status, 'deposit_held'),
+          sql`${booking.holdTransactionId} IS NULL`,
+        ),
+      )
+      .returning();
+    if (!updated) {
+      throw conflict('not_completable', 'That appointment can no longer be marked as completed.', {
+        bookingId: row.id,
+      });
+    }
+
+    await writeAudit(tx, ctx.principal, {
+      salonId: row.salonId,
+      kind: 'rules',
+      action: 'Appointment completed',
+      detail: `${row.startsAt.toISOString()} · no deposit`,
+      source: 'merchant',
+      subjectType: 'booking',
+      subjectId: row.id,
+      metadata: { bookingId: row.id, startsAt: row.startsAt.toISOString() },
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
+    });
+
+    return { booking: serialiseBooking(updated as BookingRow) };
+  });
+}
+
+/**
+ * POST /salons/{id}/bookings/{id}/cancel — call it off.
+ *
+ * TWO PATHS, ONE ENDPOINT, AND THE ROW DECIDES WHICH. On an app booking a real
+ * deposit goes back to a real wallet through `returnDeposit` — the same function
+ * the worker, the customer's own cancel and `markNoShow` all call. On a merchant
+ * booking nothing was taken, so nothing is returned and the row simply becomes
+ * `cancelled`.
+ *
+ * THE PERMISSION IS `void` FOR BOTH, AND THAT IS ARGUED. A gate that varied by
+ * `deposit_fils` would be horrible to reason about and would break
+ * `e2e/permission-census.test.ts`'s granted mirror, which grants exactly one
+ * permission and requires the refusal to stop — a conjunctive or conditional gate
+ * has no single permission to grant. So it is `void` for every cancel, which is
+ * where `markNoShow` already sits and for the same two reasons: cancelling an app
+ * booking returns money to a customer, and a cancellation is a record about a
+ * slot the salon had committed to.
+ *
+ * NO IDEMPOTENCY KEY, for `cancelBooking`'s reason: this names one resource with
+ * one live state, and the transition out of `deposit_held` happens under
+ * `FOR UPDATE` inside this transaction. A second cancel blocks on the row lock,
+ * re-reads a status that is no longer `deposit_held`, and is answered
+ * `already_cancelled`. That holds for two DIFFERENT keys as well as for one
+ * repeated, which a key does not.
+ */
+export async function cancelByMerchant(
+  db: Db,
+  params: { salonId: string; bookingId: string },
+  ctx: MerchantBookingContext,
+): Promise<{
+  booking: ReturnType<typeof serialiseBooking>;
+  refundedFils: number;
+  balanceAfterFils: number | null;
+  transactionId: string | null;
+}> {
+  return db.transaction(async (tx) => {
+    /**
+     * UNLOCKED, to learn whether there is money and whose it is. `returnDeposit`'s
+     * header says why the member row has to be locked FIRST when there is one: the
+     * global order is member then booking, and a cancel that locked the booking
+     * first would deadlock against a charge on the same customer. The re-check
+     * under the lock below is what makes this probe safe.
+     */
+    const [probe] = await tx
+      .select({ memberId: booking.memberId, holdTransactionId: booking.holdTransactionId })
+      .from(booking)
+      .where(and(eq(booking.id, params.bookingId), eq(booking.salonId, params.salonId)))
+      .limit(1);
+    if (!probe) throw notFound('unknown_booking', 'No such appointment.');
+
+    let memberRow: typeof member.$inferSelect | null = null;
+    if (probe.holdTransactionId !== null && probe.memberId !== null) {
+      const [m] = await tx
+        .select()
+        .from(member)
+        .where(eq(member.id, probe.memberId))
+        .for('update')
+        .limit(1);
+      if (!m) throw notFound('unknown_member', 'No such member.');
+      memberRow = m;
+    }
+
+    const row = await lockLiveBooking(
+      tx,
+      params.salonId,
+      params.bookingId,
+      terminalRefusal('cancelled'),
+    );
+
+    const now = new Date();
+
+    // ------------------------------------------------ the deposit-bearing one --
+    if (row.holdTransactionId !== null) {
+      if (!memberRow) {
+        /**
+         * UNREACHABLE, and said rather than assumed. `booking_deposit_matches_hold`
+         * plus `booking_merchant_is_zero_deposit` plus
+         * `booking_guest_requires_merchant_source` together mean a row with a hold
+         * is an `app` row and therefore names a member. If the probe saw no hold
+         * and the locked row has one, something changed the row under us in a way
+         * no writer in this API can — refuse rather than proceed without the lock
+         * the money path requires.
+         */
+        throw conflict('not_cancellable', 'That appointment can no longer be cancelled.', {
+          bookingId: row.id,
+        });
+      }
+      const returned = await returnDeposit(tx, {
+        row: row as BookingRow,
+        memberRow,
+        reason: 'cancelled',
+        principal: ctx.principal,
+        now,
+        note: 'Cancelled at the salon',
+        ipAddress: ctx.ipAddress ?? null,
+        userAgent: ctx.userAgent ?? null,
+      });
+      return {
+        booking: { ...serialiseBooking(row as BookingRow), status: 'cancelled' as const },
+        refundedFils: row.depositFils,
+        balanceAfterFils: returned.balanceAfterFils,
+        transactionId: returned.transactionId,
+      };
+    }
+
+    // ---------------------------------------------------- the moneyless one --
+    const [updated] = await tx
+      .update(booking)
+      .set({ status: 'cancelled', cancelledAt: now, updatedAt: now })
+      /**
+       * `hold_transaction_id IS NULL` in the WHERE for `completeBooking`'s reason:
+       * a hold that appeared between the branch above and this statement would
+       * otherwise leave a cancelled booking with no `settled_transaction_id` and a
+       * deposit still sitting in the `deposit_held` account.
+       */
+      .where(
+        and(
+          eq(booking.id, row.id),
+          eq(booking.status, 'deposit_held'),
+          sql`${booking.holdTransactionId} IS NULL`,
+        ),
+      )
+      .returning();
+    if (!updated) {
+      throw conflict('not_cancellable', 'That appointment can no longer be cancelled.', {
+        bookingId: row.id,
+      });
+    }
+
+    await writeAudit(tx, ctx.principal, {
+      salonId: row.salonId,
+      kind: 'rules',
+      action: 'Appointment cancelled',
+      detail: `${row.startsAt.toISOString()} · no deposit to return`,
+      source: 'merchant',
+      subjectType: 'booking',
+      subjectId: row.id,
+      metadata: { bookingId: row.id, startsAt: row.startsAt.toISOString() },
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
+    });
+
+    /**
+     * `refundedFils: 0` AND `transactionId: null`, PRESENT RATHER THAN OMITTED.
+     * The two shapes this endpoint returns have to be distinguishable by a client
+     * without it guessing from which keys are missing — the same argument
+     * `chargeVoided` and `depositReturnedFils` make on their own responses.
+     */
+    return {
+      booking: serialiseBooking(updated as BookingRow),
+      refundedFils: 0,
+      balanceAfterFils: null,
+      transactionId: null,
+    };
+  });
 }

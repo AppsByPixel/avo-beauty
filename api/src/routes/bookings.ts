@@ -7,6 +7,14 @@
  *   DELETE /bookings/{id}             member — cancel, deposit returns
  *   POST   /bookings/{id}/reschedule  member — deposit carries
  *   GET    /salons/{id}/bookings      perms.appointments (in routes/salons.ts)
+ *   POST   /salons/{id}/bookings      perms.appointments, idempotency key —
+ *                                     the front desk writes one down, for an
+ *                                     existing member OR a walk-in guest
+ *   POST   /salons/{id}/bookings/{bookingId}/reschedule   perms.appointments
+ *   POST   /salons/{id}/bookings/{bookingId}/reassign     perms.appointments
+ *   POST   /salons/{id}/bookings/{bookingId}/cancel       perms.void
+ *   POST   /salons/{id}/bookings/{bookingId}/complete     perms.appointments,
+ *                                     zero-deposit only
  *   POST   /salons/{id}/bookings/{bookingId}/no-show
  *                                     dashboard + perms.void, idempotency key —
  *                                     the merchant marks a missed slot by hand
@@ -56,14 +64,20 @@ import {
 } from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { serialiseMemberContact } from '../http/serialise';
+import { parseE164 } from '../http/fields';
 import { requireString } from '../money/validate';
 import {
   cancelBooking,
+  cancelByMerchant,
+  completeBooking,
   createBooking,
+  createMerchantBooking,
   isExclusionViolation,
   listMemberBookings,
   markNoShow,
+  reassignArtist,
   rescheduleBooking,
+  rescheduleByMerchant,
   serialiseBooking,
   type BookingRow,
 } from '../services/booking';
@@ -377,6 +391,359 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
     },
   );
 
+
+  // ==================================================================
+  // THE MERCHANT'S OWN APPOINTMENTS — client asks 5 and 6
+  // ==================================================================
+  /**
+   *   POST /salons/{id}/bookings                     perms.appointments, key
+   *   POST /salons/{id}/bookings/{id}/reschedule     perms.appointments
+   *   POST /salons/{id}/bookings/{id}/reassign       perms.appointments
+   *   POST /salons/{id}/bookings/{id}/cancel         perms.void
+   *   POST /salons/{id}/bookings/{id}/complete       perms.appointments
+   *
+   * ALL UNDER `/salons/{id}` for the reason the no-show route above argues at
+   * length: the board these controls are drawn on is `GET /salons/{id}/bookings`,
+   * and the tenant segment is what `requireSameSalon` needs. Without it a merchant
+   * would address another salon's appointment by bare id and be refused only by a
+   * lookup, which is a 404 doing a tenancy boundary's job.
+   *
+   * =====================================================================
+   * THE PERMISSION IS `appointments`, WHICH IS THE INVERSE OF THE ARGUMENT
+   * THE NO-SHOW ROUTE MAKES — SO IT IS MADE HERE RATHER THAN ASSUMED
+   * =====================================================================
+   * No-show sits behind `perms.void` because of two things it does: it MOVES
+   * MONEY (a real deposit returns to a real wallet) and it RECORDS AN ASSERTION
+   * ABOUT A CUSTOMER'S CONDUCT (`no_show_returned` says she did not turn up).
+   * That route's own header says the trap is "hanging a money-moving write off a
+   * READ gate silently widens what every existing holder can do".
+   *
+   * CREATE, RESCHEDULE AND REASSIGN DO NEITHER, and the absence is structural
+   * rather than incidental:
+   *
+   *   A merchant-created booking moves no money BY CONSTRUCTION. Non-negotiable
+   *   #2 and `booking_merchant_is_zero_deposit` mean `deposit_fils = 0` with no
+   *   hold — there is no wallet for this endpoint to reach into, on a member's
+   *   booking or a guest's.
+   *
+   *   A reschedule CARRIES a deposit rather than spending it. No transaction, no
+   *   ledger entry; the same hold still holds the same money against the same
+   *   row. `rescheduleBooking` — the CUSTOMER's version of this endpoint — writes
+   *   a `rules` audit row rather than a `money` one for exactly that reason.
+   *
+   *   A reassign changes who performs the service. The hold keeps the branch it
+   *   was taken at; nothing about the money is touched.
+   *
+   *   And none of the three asserts anything about a customer. "You have an
+   *   appointment at 17:15 with Shaikha" is not a claim about her conduct.
+   *
+   * AND BOOKING APPOINTMENTS IS LITERALLY THE FRONT DESK'S JOB. `db/seed.ts
+   * § ST-002` is Hessa, frontdesk: `perm_appointments = true` with
+   * `perm_dashboard`, `perm_charges` and `perm_void` all false. She is precisely
+   * who should be able to write down a walk-in, move a 16:45 and hand it to
+   * another artist, and she is precisely who must NOT be able to return a
+   * deposit. The two gates are opposite because the two acts are.
+   *
+   * THE COST OF BEING WRONG IS ALSO INVERTED, which is what settles it. If the
+   * front desk cannot write an appointment down, the feature the client asked for
+   * does not exist for the person it was asked for. If she can, an artist's diary
+   * gains a row a manager can move or cancel — recoverable in one click, against
+   * a customer who never lost money.
+   *
+   * CANCEL IS `void`, AND IT DOES NOT VARY BY AMOUNT. Cancelling an APP booking
+   * returns a real deposit to a real wallet, so it is a money-moving write by the
+   * same definition no-show is. A gate that read `perms.appointments` for a
+   * zero-deposit row and `perms.void` for a deposit-bearing one would be horrible
+   * to reason about AND would break `e2e/permission-census.test.ts`'s granted
+   * mirror, which grants exactly one permission and requires the refusal to stop:
+   * a conditional gate has no single permission to grant. So `void` for all
+   * cancels, consistent with no-show, and `services/booking.ts § cancelByMerchant`
+   * carries the longer version.
+   *
+   * COMPLETE IS `appointments` AND ONLY ON A ZERO-DEPOSIT BOOKING. Completing a
+   * deposit-bearing booking has to name the charge that consumed the hold, and
+   * that happens at the scanner through `POST /charges`. There is deliberately no
+   * second path to it — see `completeBooking`.
+   *
+   * NOT `requireDashboardPerm(req, 'appointments')` AS WELL ON THE CANCEL. The
+   * no-show route's argument applies unchanged: folding the SCREEN permission into
+   * the authority gate conflates a courtesy with a control (#7), and a conjunctive
+   * pair breaks the permission census.
+   *
+   * =====================================================================
+   * IDEMPOTENCY — REQUIRED ON THE CREATE, DELIBERATELY ABSENT ON THE OTHER FOUR
+   * =====================================================================
+   * Non-negotiable #4 asks for a key on every MONEY-MOVING post, and a merchant
+   * create moves no money. It takes one anyway, and the reason is not the money:
+   *
+   *   A POST that succeeds twice creates two appointments, which is two hours of
+   *   one artist's day and one customer. The exclusion constraint DOES refuse the
+   *   second — and answers `slot_taken`, which is a confusing and slightly
+   *   alarming thing to show someone who pressed the button once. With a key the
+   *   double submit replays the first response and the front desk sees the
+   *   appointment it just made.
+   *
+   *   So the key here buys a correct ANSWER rather than a correct effect. The
+   *   effect was already safe; the constraint saw to that. Worth saying, because
+   *   it is the one place in this API where a key is not load-bearing for money,
+   *   and a future reader should not conclude money is moving here.
+   *
+   * THE OTHER FOUR NAME ONE RESOURCE WITH ONE LIVE STATE, and rely on
+   * `FOR UPDATE` the way `cancelBooking` argues: a second request blocks on the
+   * row lock, re-reads a status that is no longer `deposit_held`, and is answered
+   * `already_cancelled` / `already_completed` / `not_changeable`. That is stronger
+   * than a key, because it holds for two DIFFERENT keys as well as for one
+   * repeated.
+   */
+
+  // ------------------------------------------- POST /salons/{id}/bookings --
+  app.post<{ Params: { id: string } }>('/salons/:id/bookings', async (req, reply) => {
+    // The gate first, before the key is even read — `routes/adjustments.ts`'s
+    // ordering: an unauthorised caller should not learn this endpoint's
+    // vocabulary, not even that it wants a key.
+    const p = requireDashboardPerm(req, 'appointments');
+    requireSameSalon(p, req.params.id);
+    const key = readIdempotencyKey(req);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const artistId = requireString(body.artistId, 'artistId', 100);
+    const serviceId = requireString(body.serviceId, 'serviceId', 100);
+    const startsAt = requireString(body.startsAt, 'startsAt', 40);
+
+    /**
+     * NEITHER `branchId` NOR `depositFils`, and both are refused by name rather
+     * than ignored — `POST /bookings` established the shape. A branch is resolved
+     * from the artist; a deposit on a merchant booking is 0 and is not a field.
+     */
+    if ('branchId' in body) {
+      throw badRequest(
+        'branch_not_client_supplied',
+        "A booking's branch is resolved by the server, not sent by the client.",
+      );
+    }
+    if ('depositFils' in body) {
+      throw badRequest(
+        'deposit_not_client_supplied',
+        'A merchant-created appointment never takes a deposit, so it has no amount to send.',
+      );
+    }
+
+    /**
+     * EXACTLY ONE OF `memberId` AND `guestName`, refused here rather than left to
+     * `booking_identity_exactly_one` — a constraint violation is a 500 wearing the
+     * wrong message, and "which of the two did you mean" is a question the form
+     * can answer.
+     */
+    const hasMember = body.memberId !== undefined && body.memberId !== null;
+    const hasGuest = body.guestName !== undefined && body.guestName !== null;
+    if (hasMember === hasGuest) {
+      throw badRequest(
+        'identity_required',
+        hasMember
+          ? 'Name an existing customer or a walk-in, not both.'
+          : 'Name an existing customer with memberId, or a walk-in with guestName.',
+      );
+    }
+
+    const memberId = hasMember ? requireString(body.memberId, 'memberId', 100) : null;
+    const guestName = hasGuest ? requireString(body.guestName, 'guestName', 120) : null;
+    /**
+     * THE PHONE IS OPTIONAL AND ONLY MEANS ANYTHING ON A GUEST. Through
+     * `parseE164`, which is the same function `member.phone` goes through and the
+     * same shape `member_phone_is_e164` enforces — so the board's one-tap Call
+     * does not have to guess whether a guest's number is dialable, and a salon's
+     * database holds one kind of phone number rather than two.
+     *
+     * NOT SEARCHABLE. There is no index on it and no endpoint looks a guest up by
+     * digits. `services/memberSearch.ts` has a reported bug where a phone-digit
+     * `LIKE '%78%'` also matches a member id; the fix for that is not to add a
+     * second search with the same shape.
+     */
+    let guestPhone: string | null = null;
+    if (body.guestPhone !== undefined && body.guestPhone !== null && body.guestPhone !== '') {
+      if (!hasGuest) {
+        throw badRequest(
+          'guest_phone_without_guest',
+          "An existing customer's number is on her account, not on the appointment.",
+        );
+      }
+      guestPhone = parseE164(body.guestPhone);
+    }
+
+    const idem = {
+      scope: principalScope(p),
+      endpoint: 'POST /salons/:id/bookings',
+      key,
+      requestHash: hashRequestBody({
+        salonId: req.params.id,
+        artistId,
+        serviceId,
+        startsAt,
+        memberId,
+        guestName,
+        guestPhone,
+      }),
+    };
+
+    try {
+      const result = await createMerchantBooking(
+        db,
+        {
+          salonId: req.params.id,
+          artistId,
+          serviceId,
+          startsAt,
+          memberId,
+          guestName,
+          guestPhone,
+          idempotency: idem,
+        },
+        {
+          principal: p,
+          ipAddress: req.ip ?? null,
+          userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+        },
+      );
+      return reply.code(201).send(result);
+    } catch (err) {
+      /**
+       * THE EXCLUSION CONSTRAINT, SPANNING BOTH KINDS OF APPOINTMENT. This is the
+       * whole reason a hand-written appointment lives in `booking` rather than in
+       * a table of its own — see db/schema/booking.ts. A merchant create that
+       * overlaps an APP booking lands here, and so does the reverse.
+       *
+       * CHECKED BEFORE the unique violation, for `POST /bookings`'s reason: an
+       * exclusion violation is not an idempotency replay, and searching for a
+       * stored response under this key would find nothing and report a transient
+       * condition for a permanent one.
+       */
+      if (isExclusionViolation(err)) {
+        throw conflict('slot_taken', 'That artist already has an appointment then.');
+      }
+      if (!isUniqueViolation(err)) throw err;
+
+      const stored = await awaitCommittedKey(db, idem);
+      if (stored) return reply.code(stored.status).send(stored.body);
+      throw conflict(
+        'request_in_progress',
+        'That request is still being processed. Try again in a moment.',
+      );
+    }
+  });
+
+  // -------------------------- POST /salons/{id}/bookings/{id}/reschedule --
+  app.post<{ Params: { id: string; bookingId: string } }>(
+    '/salons/:id/bookings/:bookingId/reschedule',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'appointments');
+      requireSameSalon(p, req.params.id);
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const startsAt = requireString(body.startsAt, 'startsAt', 40);
+
+      try {
+        return reply.send(
+          await rescheduleByMerchant(
+            db,
+            { salonId: req.params.id, bookingId: req.params.bookingId, startsAt },
+            {
+              principal: p,
+              ipAddress: req.ip ?? null,
+              userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+            },
+          ),
+        );
+      } catch (err) {
+        // The same constraint, on an UPDATE. Moving into a taken slot is the same
+        // race as booking one.
+        if (isExclusionViolation(err)) {
+          throw conflict('slot_taken', 'That artist already has an appointment then.');
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ---------------------------- POST /salons/{id}/bookings/{id}/reassign --
+  app.post<{ Params: { id: string; bookingId: string } }>(
+    '/salons/:id/bookings/:bookingId/reassign',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'appointments');
+      requireSameSalon(p, req.params.id);
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const artistId = requireString(body.artistId, 'artistId', 100);
+
+      try {
+        return reply.send(
+          await reassignArtist(
+            db,
+            { salonId: req.params.id, bookingId: req.params.bookingId, artistId },
+            {
+              principal: p,
+              ipAddress: req.ip ?? null,
+              userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+            },
+          ),
+        );
+      } catch (err) {
+        /**
+         * THE SAME CONSTRAINT AGAIN, and this is the direction most worth naming:
+         * handing a 16:45 to an artist who already has a 16:45 is a double-book
+         * that no status check and no availability read would catch, because
+         * nothing about the booking being MOVED has changed. Only the index knows.
+         */
+        if (isExclusionViolation(err)) {
+          throw conflict('slot_taken', 'That artist already has an appointment then.');
+        }
+        throw err;
+      }
+    },
+  );
+
+  // ------------------------------ POST /salons/{id}/bookings/{id}/cancel --
+  /** `perms.void` — an app booking's deposit comes back. See the header. */
+  app.post<{ Params: { id: string; bookingId: string } }>(
+    '/salons/:id/bookings/:bookingId/cancel',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'void');
+      requireSameSalon(p, req.params.id);
+
+      return reply.send(
+        await cancelByMerchant(
+          db,
+          { salonId: req.params.id, bookingId: req.params.bookingId },
+          {
+            principal: p,
+            ipAddress: req.ip ?? null,
+            userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+          },
+        ),
+      );
+    },
+  );
+
+  // ---------------------------- POST /salons/{id}/bookings/{id}/complete --
+  app.post<{ Params: { id: string; bookingId: string } }>(
+    '/salons/:id/bookings/:bookingId/complete',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'appointments');
+      requireSameSalon(p, req.params.id);
+
+      return reply.send(
+        await completeBooking(
+          db,
+          { salonId: req.params.id, bookingId: req.params.bookingId },
+          {
+            principal: p,
+            ipAddress: req.ip ?? null,
+            userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+          },
+        ),
+      );
+    },
+  );
+
   // -------------------------------------------------- GET /artists/me/bookings --
   /**
    * api-contract.md § Operations: "Staff | Own bookings | GET /artists/me/bookings".
@@ -466,7 +833,18 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
         voidReasonCode: transaction.voidReasonCode,
       })
       .from(booking)
-      .innerJoin(member, eq(member.id, booking.memberId))
+      /**
+       * LEFT, AND THIS ONE WAS AN `innerJoin` UNTIL MIGRATION 0056 MADE IT A BUG.
+       *
+       * `booking.member_id` is nullable now: a hand-written appointment for a
+       * walk-in names a guest instead. An inner join on a nullable column drops
+       * every one of those rows, so an artist's own day would silently lose every
+       * appointment the front desk booked for somebody without an account — the
+       * screen the feature exists for, missing exactly the appointments the
+       * feature created. Not mislabelled. Gone. The same shape as the void bug
+       * this endpoint's `where` clause already records.
+       */
+      .leftJoin(member, eq(member.id, booking.memberId))
       .innerJoin(service, eq(service.id, booking.serviceId))
       /**
        * LEFT, because `settled_transaction_id` is NULL on precisely the
@@ -543,8 +921,34 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
          * their target, and `memberErased` is what tells the client to draw
          * something truthful in their place instead of a dead `tel:`.
          */
-        memberName: r.memberName,
-        ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
+        /**
+         * THE GUEST'S NAME IS WHAT `memberName` SERVES FOR A GUEST ROW.
+         *
+         * The field is what every client already draws at the top of the card, and
+         * on a guest row the honest answer to "who is this appointment for" is the
+         * name the front desk wrote down. Falling back keeps one field meaning one
+         * thing — "who is coming" — rather than adding a second the scanner would
+         * have to learn about before it could render a row it is already sent.
+         *
+         * THE TOMBSTONE CONTRACT IS UNTOUCHED FOR A REAL MEMBER: `r.memberName` is
+         * "Deleted account" on an erased row and the `??` never fires, because an
+         * erased member still HAS a name. The fallback can only be reached when
+         * `member_id` is null, and `booking_identity_exactly_one` guarantees
+         * `guest_name` is non-null exactly then.
+         */
+        memberName: r.memberName ?? r.b.guestName,
+        /**
+         * AND THE CONTACT CONTRACT IS UNTOUCHED TOO. `serialiseMemberContact` is
+         * still the only thing that decides whether a number may be dialled, and it
+         * still answers on `erased_at`. A guest has no member row, so `erasedAt` is
+         * null and her own number — the one she just gave the front desk — is what
+         * `guest_phone` holds. `memberErased: false` is the truth about a guest:
+         * there is no account, so there is no erased account.
+         */
+        ...serialiseMemberContact({
+          phone: r.memberPhone ?? r.b.guestPhone,
+          erasedAt: r.memberErasedAt,
+        }),
         memberTier: r.memberTier,
         serviceName: r.serviceName,
         /**

@@ -52,7 +52,7 @@
  * being charged at about the moment this job wants her booking.
  */
 
-import { and, asc, eq, lte } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, lte } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
@@ -92,7 +92,31 @@ export async function runNoShowReturnsOnce(
   const candidates = await db
     .select({ id: booking.id, memberId: booking.memberId })
     .from(booking)
-    .where(and(eq(booking.status, 'deposit_held'), lte(booking.noShowReturnDueAt, now)))
+    .where(
+      and(
+        eq(booking.status, 'deposit_held'),
+        lte(booking.noShowReturnDueAt, now),
+        /**
+         * ONLY ROWS THAT HAVE A DEPOSIT TO RETURN.
+         *
+         * `deposit_held` stopped meaning "money is in escrow" when migration 0056
+         * let hand-written appointments into this table: a merchant row is
+         * `deposit_held` with `deposit_fils = 0` and no hold, because the contract
+         * keeps four status values and renders "Booked" from the amount.
+         *
+         * Without this predicate the job would pick up every walk-in the front desk
+         * ever wrote down, and for a merchant booking made for an EXISTING member it
+         * would go further than picking it up: `returnDeposit` would credit her
+         * wallet 0 fils, write a `deposit_return` transaction and an unbalanced
+         * ledger pair for an amount nobody ever held, and flip a live appointment to
+         * `no_show_returned` - stamping a no-show on a customer who has not been
+         * marked by anybody. The guest rows would fail more loudly (no member to
+         * lock) and be counted as `skipped`, which is a job quietly failing on every
+         * tick forever.
+         */
+        isNotNull(booking.holdTransactionId),
+      ),
+    )
     .orderBy(asc(booking.noShowReturnDueAt))
     .limit(limit);
 
@@ -111,7 +135,16 @@ export async function runNoShowReturnsOnce(
         const [m] = await tx
           .select()
           .from(member)
-          .where(eq(member.id, candidate.memberId))
+          /**
+           * NON-NULL BY THE SCAN'S OWN PREDICATE. `member_id` became nullable in
+           * 0056, and the `hold_transaction_id IS NOT NULL` filter above is what
+           * keeps it non-null here: a row with a hold is an `app` row, and an `app`
+           * row names a member (`booking_guest_requires_merchant_source`). Narrowed
+           * rather than asserted, so nothing silently becomes `member.id = NULL` —
+           * which matches no row and would make this job skip every booking
+           * forever, quietly, on every tick.
+           */
+          .where(eq(member.id, candidate.memberId ?? ''))
           .for('update')
           .limit(1);
         if (!m) return 'skipped' as const;

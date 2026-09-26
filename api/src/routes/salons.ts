@@ -2092,7 +2092,22 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           serviceName: service.name,
         })
         .from(booking)
-        .innerJoin(member, eq(member.id, booking.memberId))
+        /**
+         * LEFT, AND THIS WAS AN `innerJoin` UNTIL MIGRATION 0056 MADE IT A BUG.
+         *
+         * `booking.member_id` became nullable so that a hand-written appointment
+         * can name a WALK-IN instead of a member. An inner join on a nullable
+         * column drops every row where it is null — so every guest appointment
+         * would vanish from THE MERCHANT'S OWN BOARD, which is the one screen the
+         * feature exists for. The front desk would write an appointment down and
+         * watch it not appear.
+         *
+         * Worse than a missing row, too: `nextCursor` is minted from the page's
+         * last surviving row, so guests disappearing mid-page would silently
+         * shorten pages and the cursor walk would step over them without ever
+         * reporting a gap.
+         */
+        .leftJoin(member, eq(member.id, booking.memberId))
         .innerJoin(artist, eq(artist.id, booking.artistId))
         .innerJoin(service, eq(service.id, booking.serviceId))
         .where(
@@ -2146,8 +2161,30 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
            * `GET /v1/salons/{id}/orders` and `GET /artists/me/bookings`, applied
            * through the same function so the three cannot drift apart.
            */
-          memberName: r.memberName,
-          ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
+          /**
+           * A GUEST ROW SERVES THE NAME THE FRONT DESK WROTE DOWN. One field, one
+           * meaning — "who is this appointment for" — rather than a second field
+           * every client would have to learn before it could draw a row it is
+           * already being sent. `booking_identity_exactly_one` makes the fallback
+           * total: `guest_name` is non-null exactly when `member_id` is null.
+           *
+           * THE TOMBSTONE IS UNAFFECTED. An erased member still has a name — the
+           * "Deleted account" string `services/erasure.ts` scrubbed it to — so
+           * `r.memberName` is non-null and `??` never fires on a member row.
+           */
+          memberName: r.memberName ?? r.b.guestName,
+          /**
+           * AND SO IS THE ERASURE CONTRACT. `serialiseMemberContact` is still the
+           * only thing that decides whether a number may be shown, and it still
+           * decides on `erased_at`. A guest has no member row and therefore no
+           * `erased_at`, so her number is served and `memberErased` is false —
+           * which is the truth about her: there is no account, so there is no
+           * erased account.
+           */
+          ...serialiseMemberContact({
+            phone: r.memberPhone ?? r.b.guestPhone,
+            erasedAt: r.memberErasedAt,
+          }),
           memberTier: r.memberTier,
           artistName: r.artistName,
           serviceName: r.serviceName,
