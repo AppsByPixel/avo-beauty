@@ -323,6 +323,40 @@ wrongly required. **Do not narrow a response to match a schema — widen the sch
 
 ---
 
+## Aftab's punch list — the client's own numbered items
+
+**This list lived only in a chat transcript until 2026-09-27, when a session had to excavate
+it from a 275 MB JSONL after a compaction dropped items 1-9 out of context.** It is written
+down here so that cannot happen twice. Add to it when the client gives a numbered point; tick
+it when the flow has been driven, not when the screen renders.
+
+There is no 10 or 11 — the client's own numbering jumped from 9 to 12.
+
+| # | What he asked for | State |
+|---|---|---|
+| 1 | Activity feed is huge — put a show-more button | **Done.** `Overview.tsx:782`, `Show {hidden} more`. |
+| 2 | Check all bold/styled text against the design | **Done.** |
+| 3 | Other payment options in cart | **Done.** |
+| 4 | Items get cut off scrolling to the bottom of cart | **Done.** |
+| 5 | Invoice after payment, sent to email | **Done.** `5cdeb0a`. |
+| 6 | *"what if they dont have enough payment (sometimes they dont have money but lock the booking and they dont come) deposit health option for merchants"* | **OPEN — the only one.** The mechanism exists (auto-return, Mark no-show, zero-deposit rows markable). What does not exist is a merchant-facing VIEW of deposit health: what is held, what is at risk, who repeatedly locks a slot and does not arrive. |
+| 7 | Earnings by branch | **Done.** `services/reportsBranch.int.test.ts`. |
+| 8 | Show booking marked done if the payment is done | **Done.** `completed` is written inside the charge transaction. |
+| 9 | Compare by dates, download dashboard to CSV | **Done.** `GET /salons/{id}/reports/{kind}.csv?branch=&period=`. |
+| 12 | Graphs on merchant dashboard; activity huge there too | **Done**, driven live. |
+| 13 | Appointments in a calendar-like view | **Done**, driven live. |
+
+**The second list, given 2026-09-26 as six bullets for the merchant dashboard** — attach a
+reward (another option in the list), customer accounts with history, social linking in
+Settings, notification bell top-right, create appointments by hand for existing *or
+non-existing* customers, and mark/cancel/change-date/reassign. **All six done and promoted**;
+5 and 6 carry six trunk decisions recorded in `DECISIONS.md` under "Manual appointments".
+
+**Rows 2, 3, 4 and 8 are ticked from commit evidence rather than from a session driving them.**
+That is weaker than the rest of this table and is said out loud rather than smoothed over.
+
+---
+
 ## Open, and waiting on the client
 
 Full list with reasoning in `DECISIONS.md`. The two that gate a launch:
