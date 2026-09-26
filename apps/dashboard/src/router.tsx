@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router';
 import type { AuthState } from './auth/AuthProvider.js';
 import { SCOPES, type AuthScope } from './auth/scopes.js';
+import { isSessionEndReason, signInSearchFor, type SignInSearch } from './auth/signInSearch.js';
 import { Accounts } from './routes/Accounts.js';
 import { ConsoleAccounts } from './routes/console/Accounts.js';
 import { Activity } from './routes/console/Activity.js';
@@ -49,10 +50,64 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
  * router, a second session store or a second sign-in flow. ADR-0001.
  */
 function requireScope(scope: AuthScope) {
-  return ({ context }: { context: RouterContext }) => {
+  return ({ context, location }: { context: RouterContext; location: { pathname: string } }) => {
     if (!context.auth.sessionFor(scope)) {
-      throw redirect({ to: SCOPES[scope].signIn });
+      /*
+       * ==============================================================
+       * THE GUARD'S BOUNCE CARRIES A DESTINATION TOO
+       * ==============================================================
+       * This was a bare `redirect({ to: signIn })`, and it is the ONE DOOR THE
+       * SHELL CANNOT COVER. `MerchantShell` preserves the section she was on by
+       * reading it as it redirects — but a merchant who opens a bookmarked
+       * `/appointments` with no session never mounts the shell at all, because
+       * this runs first and refuses. However good that redirect gets, this path
+       * would still have landed her on `/overview`.
+       *
+       * So it is rebuilt HERE from the same function the shells use, which means
+       * the two paths cannot disagree about where she came from or how the
+       * search is spelled. `location.pathname` is the route being entered.
+       *
+       * `endedReasonFor` is read off the context this guard was handed, so a
+       * session that ended while a section was mounted still explains itself if
+       * the guard happens to be what notices. On a cold arrival it is null and
+       * nothing is claimed — a bookmark is not an expiry, and telling somebody
+       * who simply opened a link that her session ran out would be a sentence
+       * about an event that did not happen.
+       *
+       * The path is gated by `returnPathFor` inside `signInSearchFor` — the same
+       * closed set as everywhere else, so a `/appointments` typed by anyone is
+       * still resolved to this app's own literal before it reaches a URL.
+       */
+      throw redirect({
+        to: SCOPES[scope].signIn,
+        search: signInSearchFor(scope, location.pathname, context.auth.endedReasonFor(scope)),
+      });
     }
+  };
+}
+
+/**
+ * WHAT A SIGN-IN SCREEN ACCEPTS IN ITS QUERY STRING, declared once for both doors.
+ *
+ * `from` is the section the shell was showing when the session ended and
+ * `reason` is why, as a category. Both are written by `signInSearchFor` and read
+ * back by the screen — see `auth/signInSearch.ts` for the whole argument.
+ *
+ * THIS PARSER IS NOT THE SECURITY GATE, AND SAYING SO IS THE POINT. `reason` is
+ * narrowed to the two words here because an unknown one has no meaning to carry
+ * and no screen would render it. `from` is deliberately passed through as a
+ * plain string: the check that matters — that a destination is one of this
+ * shell's own sections — lives at the point of navigation, where it cannot be
+ * bypassed by a caller that assembles the search some other way.
+ *
+ * Two gates would be worse than one. The rule drifts between the copies, and a
+ * spec that exercises the gate it is not aiming at passes for the wrong reason —
+ * which is precisely the failure the return-path specs mutate to rule out.
+ */
+function validateSignInSearch(search: Record<string, unknown>): SignInSearch {
+  return {
+    ...(typeof search['from'] === 'string' ? { from: search['from'] } : {}),
+    ...(isSessionEndReason(search['reason']) ? { reason: search['reason'] } : {}),
   };
 }
 
@@ -60,6 +115,7 @@ const signInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: SCOPES.merchant.signIn,
   component: SignIn,
+  validateSearch: validateSignInSearch,
 });
 
 /**
@@ -139,6 +195,9 @@ const consoleSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: SCOPES.owner.signIn,
   component: ConsoleSignIn,
+  // The same shape as the merchant door's, from the same function. The two
+  // sign-in screens must not diverge on how a session ending is explained.
+  validateSearch: validateSignInSearch,
 });
 
 const consoleRoute = createRoute({

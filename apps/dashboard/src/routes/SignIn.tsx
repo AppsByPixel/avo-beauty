@@ -1,10 +1,15 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
 import { Button, InlineError, TextField, Toggle } from '@avo/ui';
 import { ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthProvider.js';
 import { displayNameFor } from '../auth/api.js';
 import { SCOPES } from '../auth/scopes.js';
+import {
+  SESSION_ENDED_COPY,
+  returnPathFor,
+  sessionEndReasonFrom,
+} from '../auth/signInSearch.js';
 import { rememberWorkspace, suggestedWorkspace } from '../config.js';
 
 /** AVO Login.dc.html 5a. Copy is verbatim; do not paraphrase it. */
@@ -38,6 +43,68 @@ export function SignIn() {
   const { signIn, sessionFor } = useAuth();
   const errorId = useId();
 
+  /*
+   * ================================================================
+   * WHY SHE IS HERE, AND WHERE SHE WAS
+   * ================================================================
+   * Read off the location rather than through a typed route handle, and the type
+   * is `unknown` on purpose: this is a query string, so it is whatever anybody
+   * typed into the address bar. `sessionEndReasonFrom` and `returnPathFor` are
+   * the two functions that turn it back into something this screen may act on,
+   * and both of them are total — there is no input either one throws on and none
+   * that either one passes through unexamined.
+   *
+   * `location.search` and not `signInRoute.useSearch()`: `router.tsx` imports
+   * this component, so importing the route back would be a cycle. The hook is
+   * the one the shells already use.
+   */
+  const location = useRouterState({ select: (state) => state.location });
+  const search: unknown = location.search;
+  /*
+   * A DOOR ONLY NAVIGATES WHILE IT IS THE DOOR, AND THIS GUARD IS A FIX FOR AN
+   * OBSERVED FAILURE RATHER THAN CAUTION.
+   *
+   * `location.search` belongs to WHEREVER THE ROUTER IS, not to this screen.
+   * On the navigation out of here, this component renders once more with the
+   * search of the route being entered — and `/appointments` carries none. So
+   * `destination` recomputed to the default, the effect below re-ran because
+   * `destination` is in its dependency list, and it navigated a second time:
+   *
+   *   [EFFECT] navigating to /appointments
+   *   [render] search {} -> destination /overview
+   *   [EFFECT] navigating to /overview
+   *
+   * The merchant was put back on `/overview` by the second hop of the very fix
+   * meant to stop that. Traced, not guessed — the sequence above is the log.
+   *
+   * Checking the pathname makes the transitional render inert: `onDoor` is
+   * false, both effects return, and the destination decided while the search was
+   * still ours stands. It is the same correction `MerchantShell` needed at the
+   * other end of this flow, which is the honest summary of both — a value read
+   * live from the router is only true for the render it was read in.
+   */
+  const onDoor = location.pathname === SCOPES.merchant.signIn;
+
+  /*
+   * THE CAUSE. `null` for a deliberate sign-out, for a cold arrival, and for any
+   * word that is not one of the two — all three want silence, and none of them
+   * is distinguishable from the others by anything on this screen, which is
+   * exactly why they render the same nothing.
+   */
+  const cause = sessionEndReasonFrom(search);
+
+  /*
+   * THE DESTINATION, AND THIS CALL IS THE SECURITY GATE.
+   *
+   * Everything it returns is either `SCOPES.merchant.home` or an `item.to` out of
+   * `NAV_ITEMS` — literals compiled into this app. A hostile `?from=` cannot
+   * produce a string that is not already in that table, so an absolute URL, a
+   * protocol-relative `//evil.example` and a path this shell does not serve all
+   * arrive at the same place a missing parameter does. `signInSearch.ts` carries
+   * the argument for why that is a closed set rather than a filter.
+   */
+  const destination = returnPathFor('merchant', (search as { from?: unknown } | null)?.from);
+
   // The workspace pre-fill: the last workspace that signed in successfully on
   // this browser, else the host's subdomain label (config.ts states the order
   // and why). A default, never a verdict — the field carrying it is always
@@ -51,17 +118,26 @@ export function SignIn() {
   const [submitting, setSubmitting] = useState(false);
   const [welcome, setWelcome] = useState<string | null>(null);
 
-  // Already signed in — skip the form entirely.
+  /*
+   * Already signed in — skip the form entirely.
+   *
+   * `destination`, NOT `SCOPES.merchant.home`, AND BOTH EFFECTS HAD TO CHANGE.
+   * This is the one that actually lands after a successful sign-in: `sessionFor`
+   * changes identity the moment `adopt` commits, so this effect fires before the
+   * welcome timer below ever expires. Fixing only the timer would have left the
+   * return path working nowhere.
+   */
   useEffect(() => {
-    if (sessionFor('merchant')) void navigate({ to: SCOPES.merchant.home });
-  }, [navigate, sessionFor]);
+    if (!onDoor) return;
+    if (sessionFor('merchant')) void navigate({ to: destination });
+  }, [onDoor, navigate, sessionFor, destination]);
 
   // The signed-in landing holds for a beat, then opens the dashboard.
   useEffect(() => {
-    if (welcome === null) return;
-    const timer = window.setTimeout(() => void navigate({ to: SCOPES.merchant.home }), 900);
+    if (welcome === null || !onDoor) return;
+    const timer = window.setTimeout(() => void navigate({ to: destination }), 900);
     return () => window.clearTimeout(timer);
-  }, [welcome, navigate]);
+  }, [welcome, onDoor, navigate, destination]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -151,6 +227,33 @@ export function SignIn() {
             <span className="signin__scope">Merchant workspace</span>
           </span>
         </div>
+
+        {/*
+          THE SENTENCE THAT WAS MISSING, ABOVE THE TITLE BECAUSE IT IS THE REASON
+          SHE IS READING THE TITLE. She did not ask for this screen.
+
+          `InlineError` IS THIS DOOR'S OWN VOCABULARY — the `AVO Login.dc.html`
+          banner, already the way this screen says something to the person in
+          front of it. Deliberately NOT the sections' `ErrorState`:
+          `stateCensus.test.ts` § DOORS rules that a sign-in screen "must NOT
+          render the sections' error vocabulary", and borrowing it here to
+          announce a session would be the fourth way of telling somebody
+          something went wrong that §4 exists to prevent.
+
+          `role="alert"` comes with it, which is the half that matters on arrival:
+          she was moved here by something she did not do, so the explanation is
+          announced rather than left to be noticed.
+
+          IT IS NOT WIRED INTO `setError('')` LIKE THE FORM'S OWN BANNER BELOW.
+          This is a statement about how she got here, not a complaint about what
+          she typed, so it does not clear on the first keystroke — and it does not
+          occupy the slot a wrong password needs a moment later.
+        */}
+        {cause ? (
+          <div className="signin__error">
+            <InlineError message={SESSION_ENDED_COPY[cause]} />
+          </div>
+        ) : null}
 
         <h1 className="signin__title avo-display">Sign in to your salon</h1>
         <p className="signin__sub">Enter the credentials for your salon workspace.</p>

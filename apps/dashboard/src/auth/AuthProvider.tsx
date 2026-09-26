@@ -16,6 +16,7 @@ import {
   type Credentials,
 } from './api.js';
 import { AUTH_SCOPES, type AuthScope } from './scopes.js';
+import type { SessionEndReason } from './signInSearch.js';
 import {
   readSession,
   subscribeToSessions,
@@ -30,6 +31,21 @@ export interface AuthState {
   /** Sessions by scope. A merchant session and an owner session can coexist. */
   sessions: Partial<Record<AuthScope, Session>>;
   sessionFor: (scope: AuthScope) => Session | null;
+  /**
+   * WHY THIS SCOPE'S SESSION ENDED, IF IT IS WORTH TELLING HER.
+   *
+   * `null` for the two cases that want silence, and they are different cases:
+   * she pressed Sign out (she knows), or there was no session to lose in the
+   * first place (she is simply arriving). Both render nothing, so neither needs
+   * a word of its own — see `signInSearch.ts` for that argument.
+   *
+   * READ BY THE TWO SHELLS AND BY NOTHING ELSE. It is the argument to the
+   * redirect, not a fact any screen consults: non-negotiable #7 means nothing
+   * about a cause may become the basis for an access decision, and the way to
+   * keep that true is for the value to have exactly one destination -
+   * `InlineError`'s `message`, via the URL.
+   */
+  endedReasonFor: (scope: AuthScope) => SessionEndReason | null;
   /*
    * Returns the MEMBER of the union, not the union. A caller that has just signed
    * a merchant in knows it holds a merchant session, and `SignIn.tsx` reads
@@ -55,17 +71,90 @@ export interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
-function hydrate(): Partial<Record<AuthScope, Session>> {
-  const next: Partial<Record<AuthScope, Session>> = {};
+/**
+ * ====================================================================
+ * WHY THE SESSIONS AND THE REASONS ARE ONE PIECE OF STATE
+ * ====================================================================
+ * The reason is not a fact about a session. It is a fact about a TRANSITION -
+ * "this scope had one a moment ago and now does not, and here is which of the
+ * three things happened". A transition can only be read where the before and
+ * the after are both in hand, which is inside one updater over one object.
+ *
+ * Two `useState`s would mean deciding the reason outside an updater, from a
+ * `sessions` value that may already be stale, or — worse — calling `setEnded`
+ * from inside `setSessions`, which is a side effect in a function React is
+ * allowed to invoke twice. Under StrictMode it IS invoked twice.
+ *
+ * So: one object, one updater per event, and every updater stays pure.
+ */
+interface SessionState {
+  sessions: Partial<Record<AuthScope, Session>>;
+  /**
+   * Why each scope's session ended, WHERE THERE IS SOMETHING TO SAY. A
+   * deliberate sign-out is the absence of an entry.
+   *
+   * =====================================================================
+   * WHAT KEEPS A DELIBERATE SIGN-OUT SILENT, AND WHAT DOES NOT
+   * =====================================================================
+   * A sign-out passes through the same store clear as an expiry. The click's
+   * handler drops the session from this state first ("the shell must leave
+   * immediately"), and `auth/api.ts`'s `signOut` then calls `clearSession` in
+   * its `finally`, which notifies exactly the way a 401-driven clear does.
+   * Nothing downstream of that notification can tell the two apart.
+   *
+   * WHAT TELLS THEM APART IS THAT THE REASON IS READ ONCE, ON THE CLICK'S OWN
+   * COMMIT, AND THEN LEAVES REACT ALTOGETHER. `signOut` drops the session
+   * synchronously; the shell's effect runs on that commit, finds no entry here,
+   * and writes a sign-in URL with no `reason` in it. `signOutRequest` is still
+   * awaiting a network round trip at that point, so the `clearSession` in its
+   * `finally` lands afterwards — against a shell that has unmounted and a URL
+   * that is already fixed. The screen renders from the URL, so a late write
+   * here has nothing left to reach.
+   *
+   * ============ TWO THINGS THIS COMMENT USED TO CLAIM, AND DID NOT DO =========
+   * Both were removed because MUTATING THEM CHANGED NOTHING, which is the only
+   * evidence that settles a claim like this:
+   *
+   *   A THIRD VALUE, `'signed-out'`, written on the click. The comment called it
+   *   "the load-bearing part of this whole file". Deleting the write turned no
+   *   spec red. Gone.
+   *
+   *   THE EARLY RETURN in the subscription below, which the replacement comment
+   *   then called "the whole of the distinction". Deleting THAT turned no spec
+   *   red either, for the reason above: by the time it would matter, the
+   *   sentence has already been decided. It is kept — it predates this change,
+   *   it correctly refuses to write a reason for a scope nobody was holding, and
+   *   it is the thing that would matter if the shell were still mounted — but
+   *   it is NOT what the deliberate-sign-out spec is testing, and no spec in
+   *   this repo currently distinguishes it from its absence. Said plainly here
+   *   rather than asserted as a mechanism for a third time.
+   */
+  ended: Partial<Record<AuthScope, SessionEndReason>>;
+}
+
+function hydrate(): SessionState {
+  const sessions: Partial<Record<AuthScope, Session>> = {};
   for (const scope of AUTH_SCOPES) {
     const session = readSession(scope);
-    if (session) next[scope] = session;
+    if (session) sessions[scope] = session;
   }
-  return next;
+  /*
+   * NO REASON ON A COLD START, and this is the case that makes the reason
+   * transient state rather than something stored beside the session.
+   *
+   * `readSession` drops — and `removeItem`s — an entry whose refresh token is
+   * past its expiry. A merchant opening the dashboard after a month away is
+   * therefore indistinguishable, at this point, from one who has never signed in
+   * on this machine. Telling the second one "your session expired" is a sentence
+   * about somebody else, so neither is told anything: nobody was signed out
+   * while looking at the screen, which is the event the sentence describes.
+   */
+  return { sessions, ended: {} };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [sessions, setSessions] = useState<Partial<Record<AuthScope, Session>>>(hydrate);
+  const [state, setState] = useState<SessionState>(hydrate);
+  const sessions = state.sessions;
   const queryClient = useQueryClient();
 
   /*
@@ -80,14 +169,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * "expired refresh token" and "corrupt entry" mean the same thing: no session.
    */
   useEffect(() => {
-    return subscribeToSessions((scope) => {
-      setSessions((current) => {
+    return subscribeToSessions((scope, origin) => {
+      setState((current) => {
         const session = readSession(scope);
-        if (session === null && !(scope in current)) return current;
-        const next = { ...current };
-        if (session) next[scope] = session;
-        else delete next[scope];
-        return next;
+        const had = scope in current.sessions;
+        if (session === null && !had) return current;
+
+        const sessions = { ...current.sessions };
+        const ended = { ...current.ended };
+        if (session) {
+          sessions[scope] = session;
+          // A live session has not ended. Clearing the reason here is what stops
+          // a sentence about the last sign-out surviving into the next one.
+          delete ended[scope];
+        } else {
+          delete sessions[scope];
+          /*
+           * THE THREE CAUSES RESOLVE HERE, AND THIS LINE IS TWO OF THEM.
+           *
+           *   other-tab  the `storage` event. Nothing in this tab did it, so it
+           *              is the second-tab sign-out MerchantShell's comment has
+           *              named as a distinct case since before it had one.
+           *   this-tab   a `clearSession` from `authedRequest`'s rotate-retry or
+           *              from `refresh.ts`. Both mean the same thing to the
+           *              merchant — the refresh would not mint, and the session
+           *              is finished.
+           *
+           * The third — the deliberate click — does not depend on this
+           * branch being skipped. It is already on its way to a URL with no
+           * `reason` in it before `signOut`'s `finally` gets here; see
+           * `SessionState.ended` for what is and is not load-bearing about
+           * that, and for the two mutations that settled it.
+           *
+           * The spec is a real click on the real header button, through the
+           * real `auth/api.ts`, reading the rendered screen —
+           * `sessionExpiryCause.test.tsx`. Making the cause unconditional on
+           * either door turns it red.
+           */
+          ended[scope] = origin === 'other-tab' ? 'elsewhere' : 'expired';
+        }
+        return { sessions, ended };
       });
     });
   }, []);
@@ -113,7 +234,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <T extends Session>(session: T, keepSignedIn: boolean): T => {
       queryClient.clear();
       writeSession(session, keepSignedIn);
-      setSessions((current) => ({ ...current, [session.scope]: session }));
+      setState((current) => {
+        const ended = { ...current.ended };
+        // She signed in. Whatever ended the last session is answered, and the
+        // sentence must not outlive it — see the `storage` arm above.
+        delete ended[session.scope];
+        return { sessions: { ...current.sessions, [session.scope]: session }, ended };
+      });
       return session;
     },
     [queryClient],
@@ -149,10 +276,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // server round-trip can take a second on a bad connection and a dashboard
       // that stays up after the click looks like the click did nothing.
       // `signOutRequest` reads the token from the store, which still holds it.
-      setSessions((current) => {
-        const next = { ...current };
-        delete next[scope];
-        return next;
+      setState((current) => {
+        const sessions = { ...current.sessions };
+        delete sessions[scope];
+        /*
+         * NO REASON IS RECORDED, AND NONE NEEDS TO BE. The shell reads the
+         * reason on this very commit and puts the answer in a URL; the
+         * `clearSession` inside `signOutRequest` below arrives after that, with
+         * nowhere to land. `SessionState.ended` has the full argument and the
+         * two mutations that corrected it.
+         */
+        return { sessions, ended: current.ended };
       });
       queryClient.clear();
       await signOutRequest(scope);
@@ -160,15 +294,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
+  const ended = state.ended;
   const value = useMemo<AuthState>(
     () => ({
       sessions,
       sessionFor: (scope) => sessions[scope] ?? null,
+      /*
+       * The shells ask "is there a sentence for this", and `null` is the answer
+       * for both ways of saying no — she signed herself out, or she was never
+       * signed in on this machine at all. Neither is distinguishable on the
+       * screen and neither needs to be.
+       */
+      endedReasonFor: (scope) => ended[scope] ?? null,
       signIn,
       signInToConsole,
       signOut,
     }),
-    [sessions, signIn, signInToConsole, signOut],
+    [sessions, ended, signIn, signInToConsole, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
