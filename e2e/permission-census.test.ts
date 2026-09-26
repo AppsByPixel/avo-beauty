@@ -855,6 +855,44 @@ const PINNED_COVERAGE: string[] = [
   'GET /v1/platform/support [requirePrincipal]',
   'GET /v1/salons/:id/campaigns → marketing',
   'GET /v1/salons/:id/messaging-policy → marketing',
+  /**
+   * =======================================================================
+   * THE MERCHANT BELL'S TWO DOORS — `api/src/routes/merchantNotifications.ts`,
+   * dev `9648ae1`. The census named both on the first run after the merge.
+   * =======================================================================
+   * `[requireDashboardScope]` WITH NO PERMISSION IS DELIBERATE AND IS NOT AN
+   * OVERSIGHT. This ledger's own header says a `[scopeGuard]` line is
+   * "legitimate for a customer's own record or a shared catalog read, and a bug
+   * for a merchant write" — and the POST below is a merchant write, so a reader
+   * applying that rule to these two lines would reach for a permission gate.
+   * That would be the wrong fix, and this note is here so it is never made.
+   *
+   * THE FEED IS NARROWED PER READER, NOT GATED. Each of the three kinds sits
+   * behind the permission that opens the screen it points at —
+   * `KIND_PERMISSION` in `services/merchantNotifications.ts`:
+   * `calendar_disconnected → team`, `booking_no_show → appointments`,
+   * `campaign_held → marketing` — and `visibleKinds(p.perms)` resolves that per
+   * request, from `staff_user` rather than from a token claim. A reader holding
+   * none of the three is served an EMPTY FEED with `visibleKinds: []`, not a
+   * 403: she is legitimately signed in to the dashboard, the bell is chrome on
+   * every screen, and `visibleKinds` is what distinguishes "nothing is waiting"
+   * from "the things waiting are things you may not see".
+   *
+   * THE WRITE TAKES THE SAME FILTER AS THE READ, which is what makes it safe
+   * without a gate: `read_at` is salon-wide rather than per-staff, so without the
+   * filter a front desk holding `appointments` alone could press "Mark all read"
+   * and clear the marketing manager's `campaign_held` badge. You may only mark
+   * read what you could have read.
+   *
+   * SO THE PROBE THIS CENSUS GENERATES FOR A `→ permission` LINE CANNOT EXIST
+   * HERE, and these two lines are the register that the doors exist rather than
+   * the evidence they are bolted — the same split the customer book's three
+   * lines make below. The behavioural half is the tenancy boundary, which is the
+   * whole of the boundary on these two routes, and it is driven in
+   * `tenancy.test.ts`: both are in `SALON_ROUTES`, and the write's cross-tenant
+   * `{ ids: [...] }` axis has its own describe there.
+   */
+  'GET /v1/salons/:id/notifications [requireDashboardScope]',
   'GET /v1/salons/:id/orders → shop',
   'GET /v1/salons/:id/promotions [requireSalonScoped]',
   'GET /v1/support/tickets → dashboard',
@@ -977,6 +1015,8 @@ const PINNED_COVERAGE: string[] = [
   'POST /v1/platform/salons → salons',
   'POST /v1/platform/support/topics → policies',
   'POST /v1/salons/:id/campaigns → marketing',
+  /** The bell's write. No perm gate BY DESIGN — see the GET's note above. */
+  'POST /v1/salons/:id/notifications/read [requireDashboardScope]',
   'POST /v1/salons/:id/products/:oid/image → shop',
   'POST /v1/salons/:id/promotions/happy-hours → marketing',
   'POST /v1/salons/:id/services/:oid/image → appointments',

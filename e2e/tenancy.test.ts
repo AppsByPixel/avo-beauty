@@ -440,6 +440,24 @@ VALUES
    30, ${PROBE_NOSHOW_DEPOSIT_FILS}, 'deposit_held', '${PROBE_NOSHOW_HOLD_B}',
    now() + interval '1 day');
 
+-- THE TWO BELL ROWS. See the block above PROBE_NOTIFICATION_A for why salon A's
+-- must still be unread when the second axis runs, and why salon B's is reset.
+INSERT INTO merchant_notification
+  (id, salon_id, kind, severity, title, body, subject_type, subject_id, deep_link)
+VALUES
+  ('${PROBE_NOTIFICATION_A}', '${SALON_A}', 'calendar_disconnected', 'warning',
+   '${PROBE_NOTIFICATION_A_TITLE}', 'Reconnect the calendar.', 'artist',
+   'AR-TEN-PROBE-A', '/settings/calendar'),
+  ('${PROBE_NOTIFICATION_A_SECOND}', '${SALON_A}', 'calendar_disconnected', 'warning',
+   '${PROBE_NOTIFICATION_A_TITLE}', 'Reconnect the calendar.', 'artist',
+   'AR-TEN-PROBE-A2', '/settings/calendar'),
+  ('${PROBE_NOTIFICATION_B}', '${SALON_B}', 'calendar_disconnected', 'warning',
+   'Tenancy probe: salon B bell row', 'Reconnect the calendar.', 'artist',
+   'AR-TEN-PROBE-B', '/settings/calendar')
+ON CONFLICT (id) DO UPDATE SET
+  salon_id = EXCLUDED.salon_id, title = EXCLUDED.title,
+  read_at = NULL, resolved_at = NULL;
+
 COMMIT;
 `);
 }, 120_000);
@@ -947,6 +965,71 @@ const PROBE_NOSHOW_DEPOSIT_FILS = 5_000;
  */
 const PROBE_ARTIST_A = 'AR-001';
 const PROBE_ARTIST_B = 'AR-TEN-B-NOSHOW';
+
+/**
+ * ===========================================================================
+ * THE MERCHANT BELL'S TWO DOORS — `api/src/routes/merchantNotifications.ts`.
+ * ===========================================================================
+ * ONE ROW PER SALON, AND THE TWO ARE NOT SYMMETRICAL. Salon B's is what the
+ * `POST …/read` control marks, so it is disposable and reset below. Salon A's is
+ * the SUBJECT of the second axis further down — the row salon B's manager names
+ * in the body of a request to her own bell — so it must still be unread when that
+ * describe runs, and nothing in this file ever marks it.
+ *
+ * `calendar_disconnected` AND A SUBJECT ID NOBODY ELSE USES. Three files count
+ * rows in this table — `artist-availability-source.test.ts`,
+ * `booking-calendar-notification.test.ts` and `campaigns.test.ts` — and all three
+ * narrow by `subject_id` as well as by kind, so a probe row is invisible to them
+ * only for as long as its subject is its own. `AR-TEN-PROBE-*` is not an artist id
+ * that exists; `subject_id` is a bare text column with no foreign key, and the
+ * routes under test never resolve it.
+ *
+ * `read_at = NULL` ON CONFLICT, AND THAT IS THE `DELETE …/devices` LESSON RATHER
+ * THAN TIDINESS. The control half of `POST …/notifications/read` really marks, and
+ * the write's own predicate is `read_at IS NULL` — so a second run against one
+ * database would match no rows, and the second-axis specs below, which read
+ * `unreadCount` and assert a row is still unread, would be comparing zero against
+ * zero and passing on nothing. The products row four blocks up records the same
+ * defect costing this file a green run per database.
+ *
+ * BOTH ARE `resolved_at IS NULL`, so they are in `unreadCount` as well as in the
+ * feed. See the service header: the badge is unread AND unresolved.
+ */
+const PROBE_NOTIFICATION_A = 'MN-TEN-A-BELL';
+/**
+ * A SECOND SALON A ROW, FOR THE BYTE-IDENTITY SPEC ALONE, AND IT IS NOT SPARE
+ * FIXTURE.
+ *
+ * The two specs that name a foreign id both need that id to be UNREAD, and under
+ * a broken tenant predicate the first one MARKS IT — which is exactly the failure
+ * it is there to report. Sharing one row would then make the second spec pass for
+ * a reason that has nothing to do with the property it claims: the foreign row is
+ * now read, so it answers `marked: 0`, byte-identically to an id that exists
+ * nowhere, and the oracle assertion goes green in the middle of a run that has
+ * just proved the boundary is open. Measured, not reasoned — with the tenant term
+ * removed from the UPDATE, the pair reported 1 failed and 1 passed in file order
+ * and 1 failed in isolation.
+ *
+ * So each spec gets a subject it is the only reader of. That is `productFor`'s
+ * per-verb split, for the same reason a verb away: a destructive control cannot be
+ * allowed to decide whether a later spec is asking its question.
+ */
+const PROBE_NOTIFICATION_A_SECOND = 'MN-TEN-A-BELL-2';
+const PROBE_NOTIFICATION_B = 'MN-TEN-B-BELL';
+/**
+ * Salon A's row wears a string salon B must never be served. It is asserted by
+ * NAME rather than left to `expectNoSalonALeak`, whose telltales are the seed's
+ * people and would not notice a notification this file invented.
+ */
+const PROBE_NOTIFICATION_A_TITLE = 'Tenancy probe: salon A bell row';
+/**
+ * A notification id that exists at no salon, for the byte-identity probe on the
+ * write. Deliberately not `MN-`-shaped the way the real ids are — `MEMBER_NOWHERE`
+ * argues it: a plausible id is one somebody may legitimately create one day, and a
+ * probe that silently starts addressing a real row silently stops asking its
+ * question.
+ */
+const NOTIFICATION_NOWHERE = 'NO-SUCH-NOTIFICATION';
 
 /**
  * Every route that carries a salon id in the path, as registered in
@@ -1467,6 +1550,68 @@ const SALON_ROUTES: SalonRoute[] = [
   { method: 'GET', template: '/salons/{id}/customers' },
   { method: 'GET', template: '/salons/{id}/customers/{memberId}' },
   { method: 'GET', template: '/salons/{id}/customers/{memberId}/activity' },
+
+  /**
+   * ===========================================================================
+   * THE MERCHANT BELL'S TWO DOORS — `api/src/routes/merchantNotifications.ts`,
+   * lane A, dev `9648ae1`. The gap ledger fired on both by name in the first
+   * `e2e/` run after the merge, which is the seventh time it has caught a surface
+   * arriving; `contract.test.ts`'s GET census and `permission-census.test.ts`'s
+   * `PINNED_COVERAGE` fired on the same run, which is the usual three.
+   * ===========================================================================
+   * NEITHER CARRIES A PERMISSION GATE, AND THAT IS NOT AN OVERSIGHT — it is the
+   * one thing a reader of this table most needs told, because every other salon
+   * row above is `requireDashboardPerm` + `requireSameSalon` and these two are
+   * `requireDashboardScope` + `requireSameSalon` alone. The feed is NARROWED per
+   * reader rather than gated: `visibleKinds(p.perms)` keeps each of the three
+   * kinds behind the permission that opens the screen it points at, and a reader
+   * holding none of the three is served an empty feed with `visibleKinds: []`
+   * rather than a 403. Refusing her outright would be the wrong answer — she is
+   * legitimately signed in to the dashboard and the bell is chrome on every
+   * screen. `services/merchantNotifications.ts` argues it in full, and
+   * `permission-census.test.ts § PINNED_COVERAGE` carries the same note against
+   * its two `[requireDashboardScope]` lines.
+   *
+   * SO THE TENANCY GUARD IS THE WHOLE OF THE BOUNDARY HERE, which makes these two
+   * rows carry more than their neighbours do rather than less. Both handlers open
+   * `requireDashboardScope(req)` then `requireSameSalon(p, req.params.id)`, and
+   * both then scope their SQL on `p.salonId` rather than on `req.params.id` — the
+   * doubling the fulfilment board's rows above check for, and the same belt and
+   * braces.
+   *
+   * WHAT THIS TABLE STILL CANNOT ASK, AND WHERE IT IS ASKED INSTEAD. `POST
+   * …/read` names rows IN ITS BODY, so it has the customer book's second axis:
+   * her own salon in the path, another salon's notification ids beside it. The
+   * table sends a matched pair on both halves and can never catch a predicate
+   * that has stopped joining them. That is driven in its own describe below.
+   */
+  { method: 'GET', template: '/v1/salons/{id}/notifications' },
+  {
+    method: 'POST',
+    template: '/v1/salons/{id}/notifications/read',
+    /**
+     * `{ ids: [...] }` AND NOT `{ all: true }`, and the choice is the branch-close
+     * row's argument in a quieter key. The control half really marks, and `all`
+     * would clear every unread row at salon B on every run — including rows
+     * `artist-availability-source.test.ts` raises there and counts. Naming one
+     * disposable id touches exactly the row this file owns.
+     *
+     * The body is deliberately VALID on the attack half too, per the table header:
+     * `{}` and `{ all: true, ids: [...] }` are both 400 `selection_required`, and a
+     * 400 in place of a 403 would mean the probe never reached the boundary it
+     * exists to test. It names SALON A'S OWN ROW when addressing salon A, which is
+     * the body a real cross-tenant attempt would carry — and it is never resolved,
+     * because `requireSameSalon` is the second statement in the handler.
+     *
+     * NO `Idempotency-Key`. Non-negotiable #4 is about money-moving POSTs and this
+     * moves none; the route's own header records that it is idempotent by
+     * predicate instead (`SET read_at = now() WHERE read_at IS NULL`), so a repeat
+     * answers `marked: 0` rather than 400. `controlIdempotency` is deliberately
+     * absent for that reason and not by omission.
+     */
+    body: { ids: [PROBE_NOTIFICATION_A] },
+    controlBody: { ids: [PROBE_NOTIFICATION_B] },
+  },
 ];
 
 /**
@@ -2280,6 +2425,237 @@ describe('the customer book — a stranger read through your own salon answers l
     );
     expect(activity.status, `the history answered ${activity.status}: ${activity.raw}`).toBe(200);
     expect(Array.isArray(activity.body.items)).toBe(true);
+  });
+});
+
+/**
+ * ===========================================================================
+ * THE BELL'S SECOND AXIS — her own salon in the path, ANOTHER SALON'S
+ * NOTIFICATION IDS IN THE BODY.
+ * ===========================================================================
+ * `SALON_ROUTES` asks one question of these two routes: is this workspace yours.
+ * `requireSameSalon` answers it, and the table asserts the 403 and its copy.
+ *
+ * `POST …/notifications/read` carries a SECOND set of ids, and the second question
+ * — are those rows in this workspace — is answered somewhere else entirely, by
+ * `eq(merchantNotification.salonId, p.salonId)` in the UPDATE's own `WHERE`. The
+ * table cannot ask it: `controlBody` names salon B's row and `body` names salon
+ * A's, so BOTH halves send a matched pair, and a spec that only ever pairs them can
+ * never catch a predicate that has stopped joining them. This is the customer
+ * book's second axis one describe up, on a WRITE rather than a read.
+ *
+ * ---------------------------------------------------------------------------
+ * AND THE WRITE IS WHERE IT MATTERS MORE, WHICH IS WORTH SAYING PLAINLY.
+ * ---------------------------------------------------------------------------
+ * A dropped tenant term on the customer card LEAKS. A dropped tenant term here
+ * MUTATES: salon B's front desk clears salon A's bell, the badge that was standing
+ * over a disconnected calendar goes quiet at a salon nobody at salon B has ever
+ * heard of, and `read_at` records the moment it happened as though somebody there
+ * had looked. Nothing in the response would say so — `marked` counts rows, not
+ * salons — and the route is deliberately not audited (route header), so there is no
+ * second record to reconcile against either.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT IS ASSERTED, AND WHY `marked: 0` ALONE WOULD BE THE HOLLOW VERSION.
+ * ---------------------------------------------------------------------------
+ * `marked: 0` is what a correct handler answers, and it is ALSO what a dead route,
+ * a typo in the id, and a row that was already read all answer. Three things are
+ * pinned with it so that the zero means something:
+ *
+ *   1. SALON A'S ROW IS READ OUT OF THE DATABASE AFTERWARDS and is still
+ *      `read_at IS NULL`. This is the assertion the brief this lane was dispatched
+ *      with asks for by name — "you can show it marked nothing" — and it is the
+ *      only one here that a response body cannot fake.
+ *   2. THE FOREIGN ID IS BYTE-IDENTICAL TO ONE THAT EXISTS NOWHERE, the shape
+ *      `existence is not disclosed` uses and the route's own header argues for: "a
+ *      404 on an unmatched id would distinguish *does not exist* from *another
+ *      salon's* from *a kind you may not see*". A merchant who could tell those
+ *      apart could walk the id space from her own bell.
+ *   3. SALON B'S OWN ROW REALLY MARKS, in the same describe, through the same
+ *      door. Without it every assertion above is satisfied by an endpoint that
+ *      marks nothing for anybody — which is exactly the green the customer list
+ *      that served three members twice was reported with.
+ */
+describe('the merchant bell — another salon\'s notification named in your own bell\'s body', () => {
+  const READ = `/v1/salons/${SALON_B}/notifications/read`;
+
+  /** `read_at` as the database holds it, for the row whichever salon owns it. */
+  const readAtOf = (id: string): string =>
+    scalar(`select coalesce(read_at::text, 'NULL') from merchant_notification where id='${id}'`);
+
+  beforeAll(() => {
+    /**
+     * SALON B'S ROW IS PUT BACK TO UNREAD, and this hook is load-bearing rather
+     * than defensive. `SALON_ROUTES`'s control half for this very route ran
+     * earlier in this file and really marked it — that is what a control half is —
+     * so by the time the non-vacuity spec below fires, `read_at IS NULL` no longer
+     * holds and the write would answer `marked: 0` for a reason that has nothing to
+     * do with tenancy. The spec would then be asserting the same zero it asserts
+     * for the foreign row, and the two would be indistinguishable in the one
+     * direction that has to stay distinguishable.
+     *
+     * Salon A's row is deliberately NOT touched here. `beforeAll` at the top of the
+     * file left it unread and nothing between there and here may have marked it —
+     * which is the claim spec 1 makes, and resetting it would be this file quietly
+     * granting itself the answer.
+     */
+    psql(`UPDATE merchant_notification SET read_at = NULL WHERE id = '${PROBE_NOTIFICATION_B}';`);
+  });
+
+  it("names salon A's notification in salon B's bell — marks nothing, and salon A's row is untouched", async () => {
+    precondition(
+      readAtOf(PROBE_NOTIFICATION_A) === 'NULL',
+      `${PROBE_NOTIFICATION_A} was already read before this spec ran, so "still unread" ` +
+        'afterwards would prove nothing. Something between the seed and here marked it.',
+    );
+
+    const res = await treq<{ marked: number; unreadCount: number }>('POST', READ, {
+      token: bDashboard,
+      body: { ids: [PROBE_NOTIFICATION_A] },
+    });
+
+    expect(res.status, `the write answered ${res.status}: ${res.raw}`).toBe(200);
+    /**
+     * A 200 AND NOT A 404, deliberately — see the route header. An id that matches
+     * nothing is not an error, because a 404 here would separate "no such row" from
+     * "another salon's" from "a kind you may not see", and that last one turns this
+     * endpoint into a probe for "does this salon have a held campaign".
+     */
+    expect(
+      res.body.marked,
+      `salon B's manager marked ${res.body.marked} row(s) by naming salon A's notification id. ` +
+        'The UPDATE has stopped filtering on the principal\'s salon: one salon can now clear ' +
+        "another salon's bell, and `read_at` will record it as though somebody there had looked.",
+    ).toBe(0);
+
+    expect(
+      readAtOf(PROBE_NOTIFICATION_A),
+      `${PROBE_NOTIFICATION_A} is now read. The response said \`marked: 0\` and the database ` +
+        'disagrees, which is worse than either alone — the count and the write have come apart.',
+    ).toBe('NULL');
+
+    expectNoSalonALeak(res.raw, `POST ${READ} naming salon A's notification`);
+    expect(
+      res.raw,
+      "the refusal carries salon A's notification title, so the response is an oracle for " +
+        'what another salon\'s bell is saying',
+    ).not.toContain(PROBE_NOTIFICATION_A_TITLE);
+  });
+
+  it("and it answers byte-identically to an id that exists at no salon", async () => {
+    /**
+     * `PROBE_NOTIFICATION_A_SECOND`, NOT the row the spec above names — see the
+     * block on that constant. Under a broken predicate the spec above marks its
+     * own subject, and a shared row would hand this one a green for the wrong
+     * reason on the very run the boundary came open.
+     */
+    precondition(
+      scalar(
+        `select coalesce(read_at::text, 'NULL') from merchant_notification ` +
+          `where id='${PROBE_NOTIFICATION_A_SECOND}'`,
+      ) === 'NULL',
+      `${PROBE_NOTIFICATION_A_SECOND} was already read, so a foreign id and an invented one ` +
+        'are indistinguishable for a reason that is not the one this spec asserts.',
+    );
+
+    const foreign = await treq('POST', READ, {
+      token: bDashboard,
+      body: { ids: [PROBE_NOTIFICATION_A_SECOND] },
+    });
+    const invented = await treq('POST', READ, {
+      token: bDashboard,
+      body: { ids: [NOTIFICATION_NOWHERE] },
+    });
+
+    expect(foreign.status).toBe(invented.status);
+    expect(
+      foreign.raw,
+      'naming another salon\'s notification answers differently from naming one that exists ' +
+        'nowhere, so this endpoint tells a merchant which ids are real. Point it at ids until ' +
+        'one answers differently and you have enumerated the platform\'s bells.',
+    ).toBe(invented.raw);
+  });
+
+  it("the feed never carries salon A's row — the id predicate is not the only tenant term", async () => {
+    /**
+     * THE READ IS PROBED SEPARATELY AND NOT INFERRED FROM THE WRITE. They are two
+     * handlers with two `WHERE` clauses, and the table above only ever asks the GET
+     * a matched question (salon B's token, salon B's path, salon B's rows). A GET
+     * that had lost `eq(salonId, p.salonId)` would still answer 200 to the control
+     * half and 403 to the attack half — both green — while serving salon A's bell
+     * to salon B on every poll.
+     */
+    const res = await treq<{ items: Array<{ id: string; title: string }> }>(
+      'GET',
+      `/v1/salons/${SALON_B}/notifications`,
+      { token: bDashboard },
+    );
+    expect(res.status, `the feed answered ${res.status}: ${res.raw}`).toBe(200);
+
+    const ids = res.body.items.map((i) => i.id);
+    expect(
+      ids,
+      `salon B's feed carries salon A's notification: ${res.raw.slice(0, 600)}`,
+    ).not.toContain(PROBE_NOTIFICATION_A);
+    expect(
+      ids,
+      `salon B's feed carries salon A's second notification: ${res.raw.slice(0, 600)}`,
+    ).not.toContain(PROBE_NOTIFICATION_A_SECOND);
+    expect(res.raw).not.toContain(PROBE_NOTIFICATION_A_TITLE);
+    expectNoSalonALeak(res.raw, `GET /v1/salons/${SALON_B}/notifications`);
+
+    /**
+     * NON-VACUOUS: the feed is not empty. Without this the assertions above are
+     * satisfied by a bell that serves nobody anything, which is the shape
+     * `expectNoSalonALeak` cannot tell from a working one.
+     */
+    expect(
+      ids,
+      "salon B's own bell row is missing from her own feed, so \"salon A's is absent\" is a " +
+        'claim about an empty list',
+    ).toContain(PROBE_NOTIFICATION_B);
+  });
+
+  it("and salon B's own notification really marks through the same door — the 0 above was tenancy", async () => {
+    precondition(
+      readAtOf(PROBE_NOTIFICATION_B) === 'NULL',
+      `${PROBE_NOTIFICATION_B} is already read, so \`marked: 1\` is unreachable and this ` +
+        "spec cannot tell a working endpoint from a dead one. The describe's beforeAll " +
+        'should have reset it.',
+    );
+
+    const res = await treq<{ marked: number; unreadCount: number }>('POST', READ, {
+      token: bDashboard,
+      body: { ids: [PROBE_NOTIFICATION_B] },
+    });
+
+    expect(res.status, `the write answered ${res.status}: ${res.raw}`).toBe(200);
+    expect(
+      res.body.marked,
+      'salon B cannot mark her OWN notification read, so every `marked: 0` above is a dead ' +
+        `route rather than a tenancy boundary: ${res.raw}`,
+    ).toBe(1);
+    expect(readAtOf(PROBE_NOTIFICATION_B)).not.toBe('NULL');
+
+    /**
+     * AND THE SECOND CALL IS THE IDEMPOTENCE THE ROUTE CLAIMS — `SET read_at = now()
+     * WHERE read_at IS NULL`, so a repeat matches no rows and the first call's
+     * timestamp survives. Asserted here because it is the one place in this file
+     * where a `marked: 0` is expected for a reason that is NOT tenancy, and keeping
+     * the two side by side is what stops a future reader reading every zero in this
+     * describe as the same fact.
+     */
+    const first = readAtOf(PROBE_NOTIFICATION_B);
+    const again = await treq<{ marked: number }>('POST', READ, {
+      token: bDashboard,
+      body: { ids: [PROBE_NOTIFICATION_B] },
+    });
+    expect(again.body.marked, `a second mark answered ${again.raw}`).toBe(0);
+    expect(
+      readAtOf(PROBE_NOTIFICATION_B),
+      'the second call overwrote the first call\'s timestamp, so "when was this seen" is now ' +
+        'the last time the panel was opened rather than the first',
+    ).toBe(first);
   });
 });
 
