@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { fils, formatFils, type Salon } from '@avo/types';
+import { useEffect, useId, useRef, useState } from 'react';
+import {
+  fils,
+  formatFils,
+  socialUrl,
+  visibleSocialLinks,
+  type Salon,
+  type SocialLink,
+} from '@avo/types';
 import {
   Button,
   Card,
@@ -18,7 +25,9 @@ import {
   useBranchClosurePreview,
   useCloseBranch,
   useUpdateSalon,
+  useUpdateSocialLink,
   type BranchClosure,
+  type SocialLinkPatch,
 } from '../api/settings.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { formatReturnWindow } from './noShowWindow.js';
@@ -35,9 +44,19 @@ import { Tills } from './Tills.js';
  * reach the second one cannot do what Aftab's item 11 asks. See § receipt
  * channels for what the extra row may and may not say.
  *
- * NOT BUILT HERE, DELIBERATELY: the brand kit (logo upload, palette,
+ * SOCIAL LINKS ARE BUILT HERE NOW, and this header said they were not.
+ *
+ * It read: "NOT BUILT HERE, DELIBERATELY: the brand kit (logo upload, palette,
  * typography), social links, and Your plan & invoices. The first two are a
- * separate slice; the third has no endpoint of any kind — there is no invoice,
+ * separate slice". That was true when it was written; `SocialLinksPanel` below is
+ * that slice, against `PATCH /v1/salons/{id}/social/{linkId}`. The sentence is
+ * corrected rather than left standing, because a header claiming a shipped panel
+ * does not exist is the stale "not built" claim this dashboard has now found
+ * seven of — see `api/salon.ts` and `api/settings.ts`, which each keep their own.
+ *
+ * STILL NOT BUILT HERE, DELIBERATELY: the brand kit (logo upload, palette,
+ * typography), and Your plan & invoices. The first is a separate slice; the
+ * second has no endpoint of any kind — there is no invoice,
  * plan-price or payment-method shape in the API or in the contract, and the
  * design's figures ("45.000 KD a month plus 3%", "Next invoice 118.500 KD") are
  * prototype fixtures. Rendering them would put invented money on a merchant's
@@ -88,7 +107,24 @@ export function Settings() {
   const session = useSession('merchant');
   const salonQuery = useSalon();
   const update = useUpdateSalon();
+  /*
+   * ITS OWN MUTATION, NOT `update`. `PATCH /v1/salons/{id}/social/{linkId}` is a
+   * different endpoint with a different body, and keeping it separate is also
+   * what lets each screen's banner say which write failed: `DepositPanel` already
+   * has to read `update.variables` to keep another panel's in-flight write off its
+   * select, and a fourth writer on that one mutation would widen that problem
+   * rather than share anything.
+   */
+  const social = useUpdateSocialLink();
   const salon = salonQuery.data;
+
+  /*
+   * WHICH LINK THE ONE IN-FLIGHT WRITE IS ABOUT. `variables` survives a settled
+   * mutation, so `isPending` / `isSuccess` / `isError` is what makes each of these
+   * the CURRENT state rather than a stale echo of the last one — `DepositPanel`
+   * § BOTH HALVES OF THE CONDITION EARN THEIR PLACE.
+   */
+  const socialId = social.variables?.id ?? null;
 
   if (salonQuery.isError) {
     return (
@@ -157,6 +193,25 @@ export function Settings() {
     <div className="settings">
       {canEditSalon ? (
         <>
+          {/*
+            FIRST, BECAUSE THE DESIGN PUTS IT ABOVE Optional modules and the two
+            cards it draws between them — the brand kit and the customer-app
+            preview — are not built. `SocialLinksPanel` § WHAT THE DESIGN DRAWS.
+
+            INSIDE THE `perms.loyalty` GATE, with the other five salon panels,
+            because its endpoint carries the same guard. That is a COURTESY and
+            not the control: `requireDashboardPerm(req, 'loyalty')` refuses the
+            PATCH with this check deleted, and if the permission is revoked while
+            the screen is open the row's own `WriteError` renders the server's
+            403 verbatim. Non-negotiable #7.
+          */}
+          <SocialLinksPanel
+            salon={salon}
+            saving={social.isPending ? socialId : null}
+            saved={social.isSuccess ? socialId : null}
+            failed={social.isError && socialId !== null ? { id: socialId, error: social.error } : null}
+            onSave={(patch: SocialLinkPatch) => social.mutate(patch)}
+          />
           <ModulesPanel salon={salon} update={update} />
           <div className="settings__pair">
             <DepositPanel salon={salon} update={update} />
@@ -213,6 +268,426 @@ export function Settings() {
         <WriteError error={update.error} reassurance="That setting is unchanged." />
       ) : null}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------- social links */
+
+/**
+ * ==========================================================================
+ * Merchant → Settings → Social links.
+ * ==========================================================================
+ * WHAT THE DESIGN DRAWS, AND WHERE. `design/AVO Merchant Dashboard.dc.html:1019`
+ * — a white card between the customer-app preview and Optional modules, titled
+ * "Social links", with the sub-line rendered verbatim below, then four rows
+ * repeated over `socialRows` (`:1025`, `hint-placeholder-count="4"`). Each row is
+ * an icon tile, a fixed-width name, a text input and a bare switch:
+ *
+ *     [icon 36]  Instagram   [ @handle …………………… ]   ( o)
+ *
+ * and the handler pair at `:2068` is `API.setSocial(so.id, { handle })` on input
+ * and `API.setSocial(so.id, { on })` on the switch — ONE LINK PER WRITE, which is
+ * the endpoint this panel calls. The placeholders at `:2066` are the design's
+ * own: `@handle`, and `+965 ····` for WhatsApp.
+ *
+ * IT SITS FIRST ON THE SCREEN RATHER THAN THIRD, and that is the design's order
+ * rather than a departure from it: everything the artboard draws above this card
+ * — the brand kit and the customer-app preview — is the slice that is still not
+ * built, so this is the topmost panel that exists. The cards below it keep the
+ * order they had.
+ *
+ * ONE THING IS ADDED TO THE DRAWN ROW: the caption under each input, which names
+ * whether the customer app is showing that channel and where the icon points.
+ * The design has no such line, and it is added deliberately rather than by
+ * oversight — `api/src/routes/salons.ts` sends `url` back with every write for
+ * exactly this, "so the merchant screen can show where the icon now points
+ * without reimplementing the four rules", and a handle box with no feedback
+ * cannot tell a merchant that a switch left On is showing nothing because the
+ * handle beside it is empty. Reported to trunk as an addition to the artboard.
+ *
+ * THE COPY IN THE CAPTIONS IS THIS LANE'S and is reported as needing a writer.
+ * The bundle has no string for an empty channel or a saved one. "Shown" and
+ * "Hidden" are not invented: they are the API's own words for these two states —
+ * `routes/salons.ts` writes the audit detail as `… · shown` / `… · hidden`.
+ */
+
+/**
+ * THE FOUR IDS IN THE CONTRACT'S ORDER — `SocialLinkSchema`'s enum, and
+ * `SOCIAL_IDS` on the server, which derives from the same enum.
+ *
+ * THE ROWS ARE DRAWN FROM THIS LIST AND NOT FROM `salon.social`. A salon
+ * onboarded through the wizard starts with `social: []` (the column default), and
+ * the design draws four rows always; `applySocialPatch` creates a link the salon
+ * does not have rather than answering 404, precisely so that a new salon can set
+ * its first handle. Rendering the server's array would show that salon an empty
+ * card with nothing to type into.
+ */
+const SOCIAL_IDS: readonly SocialLink['id'][] = ['instagram', 'tiktok', 'snapchat', 'whatsapp'];
+
+/**
+ * THE FALLBACK LABEL, for a row the salon does not have yet.
+ *
+ * `label` IS DERIVED SERVER-SIDE AND IS NEVER SENT — `SOCIAL_LABELS` in
+ * `api/src/services/socialLinks.ts`, because the string renders under the icons
+ * in the customer app and "a merchant-settable string there is arbitrary copy in
+ * the wallet with no review path". So this map is not a second source of truth
+ * for the label; it is what a row with no server record yet is called. Where the
+ * salon HAS the link, its own `label` renders.
+ */
+const SOCIAL_LABEL: Record<SocialLink['id'], string> = {
+  instagram: 'Instagram',
+  tiktok: 'TikTok',
+  snapchat: 'Snapchat',
+  whatsapp: 'WhatsApp',
+};
+
+/**
+ * ==========================================================================
+ * FOUR NETWORKS, FOUR HANDLE FORMATS, AND THE SCREEN SAYS WHICH BEFORE SHE TYPES
+ * ==========================================================================
+ * `parseSocialHandle` accepts an `@name` for three networks and E.164 for
+ * WhatsApp, and refuses a pasted URL by name on all four. One box that takes
+ * anything and fails on save is the shape worth avoiding, so the format is stated
+ * twice per row: as the design's placeholder, and as the field's accessible name
+ * — "WhatsApp number", not "WhatsApp handle", because a phone number is what it
+ * wants and a screen-reader user gets the placeholder read as a value, not as a
+ * spec.
+ *
+ * WHAT IS DELIBERATELY NOT HERE IS A CLIENT-SIDE COPY OF THE FOUR RULES.
+ * `api/src/services/socialLinks.ts` is emphatic that ONE parser serves both
+ * server doors "so the two cannot disagree about what a handle is"; a third copy
+ * in this column would be the client explaining a refusal the API stopped giving
+ * — the receipt-floor mistake `settingsReceiptChannels.test.ts` pins. Saying what
+ * is wanted is a courtesy; deciding what is valid is the server's, and the
+ * refusal renders verbatim with the network named.
+ */
+const SOCIAL_PLACEHOLDER: Record<SocialLink['id'], string> = {
+  instagram: '@handle',
+  tiktok: '@handle',
+  snapchat: '@handle',
+  /* The design's own string, `…dc.html:2066` — four dots, not a real number. */
+  whatsapp: '+965 ····',
+};
+
+const SOCIAL_FIELD_LABEL: Record<SocialLink['id'], string> = {
+  instagram: 'Instagram handle',
+  tiktok: 'TikTok handle',
+  snapchat: 'Snapchat handle',
+  whatsapp: 'WhatsApp number',
+};
+
+/**
+ * The four icons, as the design's reference implementation draws them —
+ * `design/avo-promotions.js:524`. Path data only: the tile around them is CSS
+ * here rather than the inline style the prototype carries.
+ */
+const SOCIAL_ICON: Record<SocialLink['id'], string> = {
+  instagram:
+    'M7 3.5h10a3.5 3.5 0 0 1 3.5 3.5v10a3.5 3.5 0 0 1-3.5 3.5H7A3.5 3.5 0 0 1 3.5 17V7A3.5 3.5 0 0 1 7 3.5ZM12 8.2a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6ZM17.1 6.7h.01',
+  tiktok: 'M14 3.5v10.2a3.4 3.4 0 1 1-2.7-3.33M14 3.5c.45 2.3 1.95 3.6 4.1 3.8',
+  snapchat:
+    'M12 3.2c3 0 4.6 2 4.6 4.6 0 .9-.1 1.7.3 2 .5.4 1.4 0 1.7.5.3.6-.9 1.2-1.7 1.6-.5.3.4 1.9 2 2.4.5.2.3.8-.4 1-1 .3-1.6.2-1.9.6-.2.3-.1.9-.7.9-1 0-1.8-.4-2.8.3-.8.6-1.4 1.1-2.6 1.1s-1.8-.5-2.6-1.1c-1-.7-1.8-.3-2.8-.3-.6 0-.5-.6-.7-.9-.3-.4-.9-.3-1.9-.6-.7-.2-.9-.8-.4-1 1.6-.5 2.5-2.1 2-2.4-.8-.4-2-1-1.7-1.6.3-.5 1.2-.1 1.7-.5.4-.3.3-1.1.3-2C7.4 5.2 9 3.2 12 3.2Z',
+  whatsapp:
+    'M20 12a8 8 0 0 1-11.9 7L4 20l1.1-4A8 8 0 1 1 20 12ZM9.2 8.9c.4-.2.9 0 1 .4l.6 1.3-.7.9c.5 1 1.3 1.8 2.3 2.2l.9-.7 1.3.6c.4.2.6.6.4 1-.3.8-1.2 1.2-2 1-2.4-.6-4.3-2.5-4.9-4.9-.2-.8.3-1.6 1.1-1.8Z',
+};
+
+/** How long the handle box waits after the last keystroke before it writes. */
+const SOCIAL_SAVE_DELAY = 550;
+
+export interface SocialLinksPanelProps {
+  salon: Salon | undefined;
+  /** The link a write is in flight for. */
+  saving: SocialLink['id'] | null;
+  /** The link whose last write landed. */
+  saved: SocialLink['id'] | null;
+  /** The link whose last write was refused, and the server's answer. */
+  failed: { id: SocialLink['id']; error: unknown } | null;
+  onSave: (patch: SocialLinkPatch) => void;
+}
+
+export function SocialLinksPanel({ salon, saving, saved, failed, onSave }: SocialLinksPanelProps) {
+  const links = salon?.social;
+
+  /**
+   * WHICH CHANNELS THE CUSTOMER APP IS ACTUALLY SHOWING, BY THE SHARED RULE.
+   *
+   * `visibleSocialLinks` is `on && a handle that derives a URL` — and the second
+   * half is the part a row cannot infer from its switch. A link left On with an
+   * empty handle renders NOTHING in the wallet, so `link.on ? 'Shown' : 'Hidden'`
+   * would tell a merchant her Instagram is live while every customer sees three
+   * icons. Re-deriving the predicate here is the drift `packages/types/src/rules.ts`
+   * exists to prevent; this asks it.
+   */
+  const shown = new Set((links ? visibleSocialLinks(links) : []).map((l) => l.id));
+
+  /**
+   * THE EMPTY STATE: not a salon with no ROWS — there are always four — but a
+   * salon with no handle on any of them, which is every salon on the day it is
+   * onboarded. The rows stay editable; what is added is a sentence saying what
+   * the customer app is doing meanwhile, because a card of four blank boxes does
+   * not say "nothing is being shown" to anyone who has not been told.
+   */
+  const nothingSetYet = links !== undefined && links.every((l) => l.handle.trim() === '');
+
+  return (
+    <Card className="settings__card">
+      <h2 className="settings__title avo-display">Social links</h2>
+      {/* Verbatim, `AVO Merchant Dashboard.dc.html:1024`. It is also the panel's
+          own statement that the switch is not a delete, which is why it is the
+          one line here that may not be reworded. */}
+      <p className="settings__sub">
+        Shown as icons in the customer app under Help. Off hides the icon but keeps the handle.
+      </p>
+
+      {nothingSetYet ? (
+        <p className="settings__social-empty">
+          No handles yet — the customer app shows no social icons for this salon.
+        </p>
+      ) : null}
+
+      <div className="settings__social">
+        {SOCIAL_IDS.map((id) => (
+          <SocialRow
+            key={id}
+            id={id}
+            link={links?.find((l) => l.id === id)}
+            loading={links === undefined}
+            visible={shown.has(id)}
+            saving={saving === id}
+            saved={saved === id}
+            onSave={onSave}
+          />
+        ))}
+      </div>
+
+      {/*
+        THE FAILURE NAMES ITS NETWORK, and that is the whole reason this banner is
+        here rather than folded into the screen-level one at the foot. Four rows
+        write through one mutation; "That setting is unchanged." under a card with
+        four boxes in it does not say which box. `WriteError` renders the server's
+        own sentence — including the 403 a merchant gets if `loyalty` was revoked
+        while this screen was open, and including `handle_is_a_url`, which names
+        the fix.
+      */}
+      {failed !== null ? (
+        <WriteError
+          error={failed.error}
+          reassurance={`${SOCIAL_LABEL[failed.id]} is unchanged.`}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+interface SocialRowProps {
+  id: SocialLink['id'];
+  link: SocialLink | undefined;
+  loading: boolean;
+  /** `visibleSocialLinks` said the wallet renders this one. */
+  visible: boolean;
+  saving: boolean;
+  saved: boolean;
+  onSave: (patch: SocialLinkPatch) => void;
+}
+
+function SocialRow({ id, link, loading, visible, saving, saved, onSave }: SocialRowProps) {
+  const serverHandle = link?.handle ?? '';
+  const [draft, setDraft] = useState(serverHandle);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const captionId = useId();
+
+  /*
+   * The server's value wins whenever it changes underneath — a colleague editing
+   * this row in the next tab, or this row's own write coming back normalised:
+   * `parseE164` stores "+965 2233 4455" as it canonicalises it, so the box has to
+   * be able to show her what was actually kept.
+   *
+   * AFTER A REFUSED WRITE THE DRAFT DELIBERATELY SURVIVES. The server value did
+   * not change, so this effect does not re-fire, and what she typed stays in the
+   * box beside the sentence explaining it. That is the same mechanism
+   * `DepositPanel` records as a FLAW in a stepper — a number nobody accepted
+   * sitting under the merchant's hand — and it is the right behaviour for a text
+   * field, where the refused value is the thing she now has to edit.
+   */
+  useEffect(() => setDraft(serverHandle), [serverHandle]);
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  /*
+   * DEBOUNCED, FOR `DepositPanel`'s REASON AND NOT THE DESIGN'S. The prototype
+   * writes on every keystroke (`onInput` → `API.setSocial`), which against a real
+   * API is a PATCH and an audit row per character — and `writeAudit` stamps every
+   * one of them, so a merchant typing "@amara.kw" would leave nine "Social link
+   * changed" rows in a log another merchant reads. The last value wins and the
+   * request carries the settled string.
+   */
+  function onType(next: string) {
+    setDraft(next);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      if (next !== serverHandle) onSave({ id, handle: next });
+    }, SOCIAL_SAVE_DELAY);
+  }
+
+  /*
+   * THE SWITCH WRITES IMMEDIATELY AND SENDS ONLY `on`. One key per control, the
+   * same rule the module toggles follow: sending the handle with it would make a
+   * flip a write of whatever is in the box, including a draft mid-edit.
+   *
+   * IT ALSO SENDS NO HANDLE *BECAUSE THE HANDLE IS KEPT* — this is the control
+   * that must not read as a delete. `applySocialPatch` copies `handle` through
+   * untouched when the patch does not mention it, so turning Snapchat off and on
+   * again returns the same handle, which is the property the contract states and
+   * `settingsSocialLinks.test.tsx` pins.
+   */
+  function onToggle(next: boolean) {
+    onSave({ id, on: next });
+  }
+
+  const name = link?.label || SOCIAL_LABEL[id];
+  /*
+   * DERIVED, NEVER STORED AND NEVER SPELLED OUT HERE — api-contract.md § SocialLink:
+   * "Store the handle, derive the URL. Never persist a URL: a salon that edits its
+   * handle would leave the icon pointing at a dead profile." `socialUrl` is the one
+   * implementation, shared with the wallet and with the API's own response, so a
+   * network that changes its domain changes it in one place.
+   *
+   * FROM THE SERVER'S HANDLE, NOT THE DRAFT. This line is a claim about where the
+   * icon points in the customer app right now, and a draft has not been stored. A
+   * URL built from half-typed text would be a claim about a profile that nobody
+   * outside this browser can reach.
+   */
+  const url = socialUrl(id, serverHandle);
+
+  return (
+    <div className="settings__social-row">
+      <span className="settings__social-icon" aria-hidden="true">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+          <path
+            d={SOCIAL_ICON[id]}
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+      <span className="settings__social-name">{name}</span>
+
+      {loading ? (
+        <>
+          {/* At the control's real height, so the card does not reflow when the
+              salon lands — interaction-spec.md §4. */}
+          <span className="settings__social-field">
+            <Skeleton height={37} radius={10} />
+          </span>
+          <Skeleton width={40} height={24} radius={999} />
+        </>
+      ) : (
+        <>
+          <span className="settings__social-field">
+            <TextField
+              label={SOCIAL_FIELD_LABEL[id]}
+              labelHidden
+              value={draft}
+              placeholder={SOCIAL_PLACEHOLDER[id]}
+              /* A phone keypad for the one field that wants a number. */
+              inputMode={id === 'whatsapp' ? 'tel' : 'text'}
+              autoComplete="off"
+              spellCheck={false}
+              describedBy={captionId}
+              onChange={(e) => onType(e.target.value)}
+            />
+            <span className="settings__social-caption" id={captionId}>
+              <SocialCaption
+                url={url}
+                visible={visible}
+                saving={saving}
+                saved={saved}
+              />
+            </span>
+          </span>
+
+          {/*
+            NOT A DELETE, AND THE ACCESSIBLE NAME IS WHERE THAT IS SAID. "Show
+            Instagram in the customer app" is a visibility control in words; "Remove
+            Instagram" is what the same switch would be called if it were the other
+            thing. The handle stays in the box beside it either way, the caption
+            keeps printing the link it still points at, and the panel's sub-line
+            says so in the design's own sentence. Three statements of one property,
+            because the control itself is a switch and switches are ambiguous.
+
+            `labelHidden` for `WhatsAppPanel`'s reason — the row already draws the
+            name, and `Toggle` would otherwise paint it twice.
+          */}
+          <Toggle
+            checked={link?.on ?? false}
+            onChange={onToggle}
+            label={`Show ${name} in the customer app`}
+            labelHidden
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The line under the box. One slot, four things it can say, in the order that
+ * matters most to someone who has just typed.
+ *
+ * `Saving…` and `Saved` are the write states. They report the mutation rather
+ * than a local flag: `Saved` therefore stays until the next write, which is
+ * honest — the last thing that happened to this row IS a successful save — rather
+ * than fading on a timer that would have to be a second source of truth about
+ * whether the server has the value.
+ *
+ * A FAILURE DOES NOT SPEAK HERE. It says `Not saved` and the sentence goes to the
+ * banner at the foot of the card, because the server's copy is a full sentence
+ * naming a fix ("Enter just the Instagram handle, not the link…") and this slot
+ * is one line under an input.
+ */
+function SocialCaption({
+  url,
+  visible,
+  saving,
+  saved,
+}: {
+  url: string | null;
+  visible: boolean;
+  saving: boolean;
+  saved: boolean;
+}) {
+  if (saving) return <>Saving…</>;
+
+  /*
+   * `url === null` IS THE EMPTY HANDLE, and the route asks for it to be rendered
+   * rather than hidden: "null when the handle is empty, which is a fact the form
+   * should render rather than hide." It is also the state a switch cannot show —
+   * On with nothing to point at.
+   */
+  if (url === null) {
+    return <>{saved ? 'Saved · ' : ''}Not set — nothing shows in the customer app.</>;
+  }
+
+  return (
+    <>
+      {saved ? 'Saved · ' : ''}
+      {visible ? 'Shown' : 'Hidden'} ·{' '}
+      <a
+        className="settings__social-link"
+        href={url}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        {url}
+      </a>
+    </>
   );
 }
 

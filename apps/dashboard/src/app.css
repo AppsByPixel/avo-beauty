@@ -1612,6 +1612,119 @@ a:hover {
   margin-top: 2px;
 }
 
+/*
+ * -------------------------------------------------------------- social links
+ * `AVO Merchant Dashboard.dc.html:1025` — icon tile, fixed-width name, input,
+ * switch, on a hairline-divided row. The design's literals are #EEF1EC on
+ * #5A6B58, which is the PRE-RAMP brand tint and brand-deep; the tokens file says
+ * so itself (`darkSurfaces`: "#5A6B58 ... is brandDeep"). So the ramped pair is
+ * the faithful port, not a reinterpretation, and it measures 4.86:1 — AA for text
+ * and comfortably over the 3:1 a graphic wants.
+ */
+.settings__social {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings__social-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 13px 0;
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.settings__social-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--avo-brand-tint);
+  color: var(--avo-brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.settings__social-name {
+  width: 82px;
+  flex-shrink: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  /* Aligned to the input beside it rather than to the top of the row, now that
+     the row is two lines tall. */
+  line-height: 37px;
+}
+
+.settings__social-field {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The row's own control height, so a skeleton and a real input occupy the same
+   space and the card does not reflow when the salon lands. */
+.settings__social-field .avo-input {
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+/*
+ * THE LINE THE ARTBOARD DOES NOT DRAW. See `Settings.tsx § SocialLinksPanel`
+ * for why it is here: `url` comes back with every write precisely so this can be
+ * said, and a switch left On over an empty box is otherwise silent about showing
+ * nothing.
+ */
+.settings__social-caption {
+  display: block;
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  /*
+   * `--avo-text-muted-label` (0.65) AND NOT `--avo-text-muted` (0.5), WHICH THE
+   * SUB-LINE TWO RULES UP USES.
+   *
+   * This line is not decoration. It is the only place the screen says whether the
+   * customer app is showing a channel, and whether the last write landed — so it
+   * has to be readable at 11.5px by someone it is telling something. Flattened on
+   * `--avo-surface` the two measure 3.26:1 and 5.26:1; only the second is AA.
+   *
+   * The 0.5 muted is left alone on the rules that already use it, including
+   * `.settings__sub`. That those measure 3.26:1 at 12.5px is a REAL and
+   * pre-existing finding across this stylesheet, reported rather than fixed here:
+   * it is every card on the screen and several screens over, which is a sweep and
+   * not a line in a social-links slice.
+   */
+  color: var(--avo-text-muted-label);
+  /* A long handle must not widen the row and push the switch off the card. */
+  overflow-wrap: anywhere;
+}
+
+.settings__social-link {
+  color: var(--avo-brand-deep);
+}
+
+.settings__social-empty {
+  font-size: 12.5px;
+  line-height: 1.5;
+  /* A state, not a caption — same argument as `.settings__social-caption`. */
+  color: var(--avo-text-muted-label);
+  margin: -8px 0 0;
+}
+
+/* The switch sits on the input's line, not on the caption's. */
+.settings__social-row .avo-toggle {
+  margin-top: 7px;
+  flex-shrink: 0;
+}
+
+.dash[data-bp='narrow'] .settings__social-row {
+  flex-wrap: wrap;
+}
+
+.dash[data-bp='narrow'] .settings__social-name {
+  line-height: 1.4;
+}
+
 .settings__deposit {
   display: flex;
   align-items: center;
