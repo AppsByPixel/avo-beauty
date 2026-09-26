@@ -129,6 +129,24 @@ export function serialiseBooking(row: BookingRow) {
   return {
     id: row.id,
     memberId: row.memberId,
+    /**
+     * LITERAL NULLS, AND ONLY UNTIL THE COLUMNS EXIST.
+     *
+     * `BookingSchema` declares these `.nullable()` — required on the wire,
+     * permitted to be null — which is this contract's house shape and the right
+     * one: `changeableUntil` records at length what a schema narrower than the
+     * wire costs. But trunk landed the schema before `api/` had the columns, and
+     * a serialiser that omits a required key does not degrade, it FAILS
+     * `.parse()` — so for a few minutes every booking body the API served was
+     * rejected by both mobile clients, including the reply to a POST that had
+     * already taken the deposit.
+     *
+     * Every row in the table today is a member booking, so `null` is not a
+     * placeholder here, it is the true answer. Lane A replaces these with
+     * `row.guestName` / `row.guestPhone` when migration lands the columns.
+     */
+    guestName: null,
+    guestPhone: null,
     artistId: row.artistId,
     branchId: row.branchId,
     serviceId: row.serviceId,
