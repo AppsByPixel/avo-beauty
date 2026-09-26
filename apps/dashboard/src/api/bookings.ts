@@ -1,7 +1,10 @@
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
@@ -98,7 +101,9 @@ export interface MerchantBooking extends Booking {
  * `cancelled` is the fourth status and the design draws no pill for it — the
  * dashboard mock only ever renders held/done/noshow. It is included here because
  * the API can return it and a row the UI cannot label is worse than a plain one.
- * See STATUS_PILL in routes/Appointments.tsx.
+ * See STATUS_PILL in routes/appointmentsWeekRules.ts — it moved out of
+ * `Appointments.tsx` when the week grid arrived, so that the list and the grid
+ * cannot label one status two ways.
  */
 export const BOOKING_STATUSES = [
   'deposit_held',
@@ -113,6 +118,16 @@ export const bookingKeys = {
   all: ['bookings'] as const,
   list: (salonId: string, status: BookingStatus | null) =>
     [...bookingKeys.all, salonId, status ?? 'any'] as const,
+  /**
+   * The week grid's cursor walk. `'stream'` cannot collide with a `list` key:
+   * the third element there is a `BookingStatus` or the literal `'any'`, and the
+   * server refuses any other status by name.
+   *
+   * UNDER `all` ON PURPOSE, so `invalidateQueries({ queryKey: bookingKeys.all })`
+   * after a no-show reaches the grid as well as the list. That prefix is also
+   * what made `patchBookingStatus` below necessary — see its docblock.
+   */
+  stream: (salonId: string) => [...bookingKeys.all, salonId, 'stream'] as const,
 };
 
 /**
@@ -157,6 +172,54 @@ export function useSalonBookings(
      * api/retryPolicy.ts as the only `retry` in the dashboard, so there is no
      * longer a wrong pattern here to copy from.
      */
+    networkMode: 'always',
+  });
+}
+
+/**
+ * ===========================================================================
+ * THE SAME ENDPOINT, WALKED. `GET /salons/{id}/bookings?cursor=…`
+ * ===========================================================================
+ * `useSalonBookings` above reads ONE page and the list it feeds is honestly a
+ * list of one page. The week grid cannot be: a page that stops short of a day
+ * draws that day as free, and a free Thursday afternoon is a thing a salon
+ * ACTS on. `routes/appointmentsWeekRules.ts § THE 200 CAP` has the argument and the
+ * proof that a descending walk can be shown to have covered a window.
+ *
+ * TWO QUERIES ON ONE ENDPOINT RATHER THAN ONE SHARED. The list would be changed
+ * by sharing — it would silently grow to whatever the grid had walked, so what
+ * "newest 200" means on that screen would depend on which view was opened first.
+ * Two cache entries cost one extra request when both views are visited in a
+ * session, and buy each view an answer that does not depend on the other.
+ *
+ * NO `status` PARAMETER, AND THAT IS THE GRID'S REQUIREMENT RATHER THAN AN
+ * OMISSION. `booking_artist_slot_no_overlap` excludes `no_show_returned` and
+ * `cancelled`, so those are exactly the slots that came BACK — a grid filtered
+ * to `deposit_held` would draw a released hour as free without ever saying that
+ * something had been there. All four statuses, drawn differently.
+ *
+ * `networkMode: 'always'` for `useSalonBookings`'s stated reason: TanStack's
+ * default PAUSES a fetch offline rather than failing it, and a paused query sits
+ * pending forever, which this screen would paint as a permanent skeleton instead
+ * of the offline answer `SectionError` is there to give.
+ */
+export function useSalonBookingStream(
+  enabled = true,
+): UseInfiniteQueryResult<InfiniteData<Paginated<MerchantBooking>>> {
+  const salonId = useSalonId();
+  return useInfiniteQuery({
+    queryKey: bookingKeys.stream(salonId),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      authedRequest<Paginated<MerchantBooking>>(
+        'merchant',
+        `/salons/${salonId}/bookings${
+          pageParam === null ? '' : `?cursor=${encodeURIComponent(pageParam)}`
+        }`,
+        { signal },
+      ),
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
     networkMode: 'always',
   });
 }
@@ -255,6 +318,61 @@ export interface MarkNoShowResult {
   transactionId: string;
 }
 
+/**
+ * ===========================================================================
+ * ONE FIELD, IN WHICHEVER SHAPE THE CACHE ENTRY HAS — AND THE SECOND SHAPE IS
+ * A TRAP THIS FUNCTION EXISTS TO HAVE ALREADY SPRUNG
+ * ===========================================================================
+ * `setQueriesData({ queryKey: bookingKeys.all })` matches BY PREFIX, so it hands
+ * its updater every cache entry under `['bookings']`. Until the week grid there
+ * was exactly one shape under that prefix — `Paginated<MerchantBooking>` — and
+ * the updater was written as `{ ...old, items: old.items.map(…) }`.
+ *
+ * `useSalonBookingStream` puts a SECOND shape there: an infinite query caches
+ * `{ pages, pageParams }` and has no `items` at all. The old updater would have
+ * read `old.items.map` off it and thrown a TypeError inside `onSuccess` — on the
+ * one path in this section that moves a customer's money, AFTER the server had
+ * committed. The mark would have succeeded and the screen would have broken.
+ *
+ * Found by adding the query, not by the type system: the updater was generic on
+ * `Paginated<MerchantBooking>` and `setQueriesData` was perfectly happy to claim
+ * that every matching entry had that type. A prefix key is a runtime contract
+ * that a type parameter can only assert.
+ *
+ * THE NARROW PATCH IS UNCHANGED AND IS STILL THE WHOLE DELTA. `status` is the
+ * only field taken, for the reason `MarkedBooking` is an `Omit`: the response
+ * carries none of the joined fields, so anything wider blanks the customer's
+ * name on the one row the merchant is looking at.
+ *
+ * AN UNRECOGNISED SHAPE IS RETURNED UNTOUCHED rather than replaced with
+ * something tidier. A third shape appearing under this prefix should lose an
+ * optimistic patch and get the invalidation's refetch a moment later, not have
+ * its cache entry overwritten by a guess.
+ */
+export function patchBookingStatus(
+  cached: unknown,
+  bookingId: string,
+  status: BookingStatus,
+): unknown {
+  if (cached === null || typeof cached !== 'object') return cached;
+
+  const patchPage = (page: Paginated<MerchantBooking>): Paginated<MerchantBooking> => ({
+    ...page,
+    items: page.items.map((row) => (row.id === bookingId ? { ...row, status } : row)),
+  });
+
+  if ('pages' in cached && Array.isArray((cached as InfiniteData<unknown>).pages)) {
+    const infinite = cached as InfiniteData<Paginated<MerchantBooking>>;
+    return { ...infinite, pages: infinite.pages.map(patchPage) };
+  }
+
+  if ('items' in cached && Array.isArray((cached as Paginated<MerchantBooking>).items)) {
+    return patchPage(cached as Paginated<MerchantBooking>);
+  }
+
+  return cached;
+}
+
 export function useMarkNoShow(): UseMutationResult<
   MarkNoShowResult,
   unknown,
@@ -294,17 +412,8 @@ export function useMarkNoShow(): UseMutationResult<
      * again rather than reasoned about here.
      */
     onSuccess: (data, { bookingId }) => {
-      queryClient.setQueriesData<Paginated<MerchantBooking>>(
-        { queryKey: bookingKeys.all },
-        (old) =>
-          old
-            ? {
-                ...old,
-                items: old.items.map((row) =>
-                  row.id === bookingId ? { ...row, status: data.booking.status } : row,
-                ),
-              }
-            : old,
+      queryClient.setQueriesData({ queryKey: bookingKeys.all }, (old: unknown) =>
+        patchBookingStatus(old, bookingId, data.booking.status),
       );
       void queryClient.invalidateQueries({ queryKey: bookingKeys.all });
     },

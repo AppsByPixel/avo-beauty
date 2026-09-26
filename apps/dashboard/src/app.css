@@ -2546,9 +2546,10 @@ a:hover {
  * over the card's `--avo-white` to rgb(153,152,152) and measures 2.87:1 — it does
  * not carry the 4.5:1 the brand rules demand of text, and this is text on a
  * control rather than beside one. The resting colour is still the design's and is
- * left alone: `STATUS_PILL` one file over records the only colour deviation this
- * screen has taken and why it was within a family, and moving a 0.45 to the 0.65
- * that would clear the bar is a visible change to a value the design states
+ * left alone: `STATUS_PILL` (routes/appointmentsWeekRules.ts, where it moved when
+ * the week grid arrived) records the only colour deviation this screen has taken
+ * and why it was within a family, and moving a 0.45 to the 0.65 that would clear
+ * the bar is a visible change to a value the design states
  * outright. What is added instead is a hover/focus state on
  * `--avo-text-muted-strong` — 6.34:1 — so the control is legible the moment it is
  * being used. Reported to trunk: the design's own value for an INTERACTIVE
@@ -2670,6 +2671,489 @@ a:hover {
 
 .appts .avo-state__body {
   max-width: 42ch;
+}
+
+/* ------------------------------------------------- appointments · the week -- */
+
+/*
+ * NEW WORK; THERE IS NO CALENDAR VIEW IN THE DESIGN BUNDLE. Every "calendar" in
+ * `AVO Merchant Dashboard.dc.html` is Google Calendar as an availability source.
+ * `routes/appointmentsWeekRules.ts` carries the disclosure and the rules; nothing
+ * below invents a COLOUR - every value resolves through an `--avo-*` token, and
+ * `ui/cssTokenRefs.test.ts` is what holds that.
+ */
+
+.appts__views {
+  margin-top: 18px;
+  display: inline-flex;
+}
+
+.apweek {
+  margin-top: 14px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.apweek__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
+.apweek__title {
+  font-family: var(--avo-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--avo-ink);
+}
+
+.apweek__range {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  /*
+   * `--avo-text-muted-label`, NOT `--avo-text-muted`. Every text pair this view
+   * introduces clears 4.5:1 against the surface it sits on, and `muted` at 0.5
+   * measures 3.28:1 on `--avo-surface`. Measured, not assumed - the values are
+   * in the lane report.
+   */
+  color: var(--avo-text-muted-label);
+}
+
+.apweek__nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.apweek__navbtn,
+.apweek__today {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--avo-border-control);
+  background: var(--avo-surface);
+  color: var(--avo-text-muted-strong);
+  border-radius: var(--avo-radius-button);
+  cursor: pointer;
+}
+
+.apweek__navbtn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.apweek__today {
+  height: 32px;
+  padding: 0 12px;
+  font-family: var(--avo-font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.apweek__navbtn:hover,
+.apweek__today:hover:not(:disabled) {
+  border-color: var(--avo-brand-deep);
+  color: var(--avo-brand-deep);
+}
+
+.apweek__navbtn:focus-visible,
+.apweek__today:focus-visible {
+  outline: 2px solid var(--avo-border-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * The only pair in this block under 4.5:1, and it is the one WCAG 1.4.3 exempts
+ * by name — text on a disabled control. It is exempt rather than overlooked:
+ * "Today" is disabled precisely when the week it names is already on screen, so
+ * nothing is being hidden behind the lower contrast.
+ */
+.apweek__today:disabled {
+  background: var(--avo-disabled-bg);
+  color: var(--avo-text-muted-soft);
+  cursor: default;
+}
+
+/* interaction-spec.md §1: a dense data surface scrolls, it never drops a column. */
+.apweek__scroll {
+  overflow-x: auto;
+  padding: 0 20px 18px;
+}
+
+.apweek__grid {
+  /*
+   * The ruler, then seven equal days. `--apweek-rows` is set per render from the
+   * hour count the ruler actually spans, so the grid is exactly as tall as the
+   * salon's day plus whatever sits outside it.
+   */
+  --apweek-row-h: 56px;
+  --apweek-head-h: 44px;
+  /*
+   * DECLARED HERE AND OVERRIDDEN INLINE, NOT ONLY INLINE. `AppointmentsWeek.tsx`
+   * sets this per render from the hour count the ruler actually spans. The
+   * default is what makes the rule survive if that inline style ever goes away -
+   * an unresolvable custom property is not an error, it silently drops the whole
+   * declaration, which here would collapse the grid to nothing.
+   * `ui/cssTokenRefs.test.ts` exists because this lane already shipped that
+   * defect once, and it caught this one.
+   */
+  --apweek-rows: 10;
+  display: grid;
+  grid-template-columns: 50px repeat(7, minmax(124px, 1fr));
+  min-width: 918px;
+  padding-top: 4px;
+}
+
+.apweek__ruler {
+  display: flex;
+  flex-direction: column;
+  /* Aligns the first hour mark with the top of the first slot row. */
+  padding-top: var(--apweek-head-h);
+}
+
+.apweek__hour {
+  height: var(--apweek-row-h);
+  font-size: 11px;
+  line-height: 1;
+  /*
+   * THE CHART'S AXIS TOKEN, AND FOR ITS REASON. `.trend__axis` sets 11px in
+   * `--avo-text-muted-label` (5.25:1); `--avo-text-muted-soft`, which the list's
+   * sub-labels use, measures 2.85:1 and is under AA for text this size.
+   */
+  color: var(--avo-text-muted-label);
+  /* Straddles the hairline it names, rather than sitting under it. */
+  transform: translateY(-4px);
+  white-space: nowrap;
+}
+
+.apweek__col {
+  min-width: 0;
+  border-left: 1px solid var(--avo-hairline);
+}
+
+.apweek__colhead {
+  height: var(--apweek-head-h);
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 5px;
+  font-family: var(--avo-font-ui);
+  font-weight: 500;
+}
+
+.apweek__colday {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /*
+   * The table head one screen over uses `--avo-ui-label`, which measures 4.46:1
+   * - just under AA. Not changed there (that is a shipped surface and a separate
+   * decision, reported); not repeated here either.
+   */
+  color: var(--avo-text-muted-label);
+}
+
+.apweek__colnum {
+  font-family: var(--avo-font-display);
+  font-size: 16px;
+  color: var(--avo-ink);
+}
+
+/*
+ * TODAY IS MARKED BY A TINT AND A WEIGHT, NOT BY COLOUR ALONE. The column head
+ * carries the brand's deep green - `--avo-brand` is a surface colour and never
+ * takes text (non-negotiable #9) - over the tint that fills the column.
+ */
+.apweek__col--today {
+  background: var(--avo-brand-tint2);
+}
+
+.apweek__col--today .apweek__colnum,
+.apweek__col--today .apweek__colday {
+  color: var(--avo-brand-deeper);
+  font-weight: 600;
+}
+
+.apweek__slots {
+  position: relative;
+  height: calc(var(--apweek-rows) * var(--apweek-row-h));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* One hairline per hour, drawn by the background so it costs no elements. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--avo-hairline-inner) 0,
+    var(--avo-hairline-inner) 1px,
+    transparent 1px,
+    transparent var(--apweek-row-h)
+  );
+}
+
+.apweek__chip {
+  position: absolute;
+  box-sizing: border-box;
+  /*
+   * The floor a fifteen-minute appointment needs to stay legible. It can make a
+   * very short slot LOOK a little longer than it is; the times on the chip and
+   * in its accessible name are exact. `AppointmentsWeek.tsx § Chip` says so.
+   */
+  min-height: 40px;
+  padding: 3px 5px;
+  border-radius: 7px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+/* The live booking: the only filled chip on the grid. */
+.apweek__chip--held {
+  background: var(--avo-brand-tint);
+  border: 1px solid color-mix(in srgb, var(--avo-brand) 34%, transparent);
+  color: var(--avo-brand-deeper);
+}
+
+/* It happened. Quiet, solid, and the word on the chip says which. */
+.apweek__chip--completed {
+  background: var(--avo-surface-alt);
+  border: 1px solid var(--avo-hairline);
+  color: var(--avo-text-muted-strong);
+}
+
+/*
+ * THE SLOT CAME BACK - `no_show_returned` and `cancelled`.
+ * `booking_artist_slot_no_overlap` excludes both, so the artist IS bookable at
+ * this hour and a chip that read as booked would hide free time. Hollow, dashed
+ * and struck through, so the difference survives with no colour at all.
+ */
+.apweek__chip--released {
+  background: transparent;
+  border: 1px dashed var(--avo-border-control);
+  color: var(--avo-text-muted-strong);
+}
+
+.apweek__chip--released .apweek__chip-who {
+  text-decoration: line-through;
+}
+
+.apweek__chip--loading {
+  background: transparent;
+  border: none;
+  padding: 0;
+  min-height: 0;
+}
+
+/*
+ * THE LINE NO CHIP IS TOO SHORT FOR. The time and the status share it so that
+ * `chipDensity`, which drops whole lines from the bottom up, can never drop the
+ * status - see `appointmentsWeekRules.ts § HOW MUCH A CHIP CAN SAY`.
+ */
+.apweek__chip-line {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/*
+ * BOTH HALVES OF THE FIRST LINE SHRINK AND BOTH ELLIPSIZE, BUT NOT EQUALLY.
+ *
+ * A day with three artists at ten o'clock is three lanes, which is about thirty
+ * pixels of text each - and `flex: none` there does not keep the time, it lets
+ * the parent cut it through the glyphs ("10:0" hard against the lane edge).
+ * Shrinking to "10:0…" is the same information, visibly abbreviated rather than
+ * visibly broken.
+ *
+ * THE STATUS GIVES WAY FIRST, at sixty times the rate, because on an equal
+ * shrink a long status ("No-show · returned") ate the time on chips that had
+ * room for it - a one-lane Thursday reading "6:… No-show · retu…" when "6:30
+ * No-show…" fits. The time is the one thing on the line that the position only
+ * approximates; the status is the one thing the border style also says.
+ */
+.apweek__chip-time {
+  font-weight: 600;
+  flex: 0 1 auto;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.apweek__chip-who {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apweek__chip-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /*
+   * NO `opacity` HERE, AND IT WAS THE FIRST DRAFT. 0.85 over a 0.7 token is an
+   * effective 0.595, which measures 4.39:1 - a pair pushed under AA by a
+   * decoration, which is the way an accessible palette most often gets lost.
+   * The chip's hierarchy is carried by weight instead.
+   */
+}
+
+/*
+ * NOT UPPERCASE, AND THAT IS A CORRECTION FROM LOOKING AT IT. Set in caps it
+ * shouted over the customer's name on every released chip - the status is the
+ * qualifier on the appointment, not the headline. `STATUS_PILL`'s own label,
+ * verbatim, so the grid and the list say the same words.
+ */
+.apweek__chip-status {
+  font-size: 10.5px;
+  font-weight: 600;
+  flex: 0 1 auto;
+  flex-shrink: 60;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * THE DENSITY BUCKETS. A chip drops WHOLE LINES, never part of one.
+ * ----------------------------------------------------------------------------
+ * `--apweek-row-h` ABOVE IS HALF OF THIS RULE and `appointmentsWeekRules.ts`
+ * holds the other half in `APWEEK_ROW_PX`. The render test reads this file and
+ * asserts the two agree, because a row height changed here alone would put the
+ * mid-glyph clipping back with nothing to notice it.
+ */
+.apweek__chip--tiny .apweek__chip-what,
+.apweek__chip--tiny .apweek__chip-assumed,
+.apweek__chip--tiny .apweek__chip-sync,
+.apweek__chip--roomy .apweek__chip-assumed,
+.apweek__chip--roomy .apweek__chip-sync {
+  display: none;
+}
+
+/* The branch was a guess. The same marker the list draws, at the grid's scale. */
+.apweek__chip-assumed,
+.apweek__chip-sync {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.apweek__chip-assumed {
+  color: var(--avo-warn-text);
+}
+
+.apweek__chip-sync {
+  color: var(--avo-danger-text);
+}
+
+/* --------------------------------------------------- the week's own states -- */
+
+.apweek__walking,
+.apweek__notice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 20px 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--avo-surface-alt);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--avo-text-muted-strong);
+}
+
+.apweek__walking-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--avo-brand);
+  transform: translateY(-1px);
+}
+
+.apweek__notice-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--avo-brand-deep);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.apweek__notice-link:focus-visible {
+  outline: 2px solid var(--avo-border-focus);
+  outline-offset: 2px;
+}
+
+.apweek__state {
+  padding: 26px 20px 28px;
+  text-align: center;
+}
+
+.apweek__state-acts {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.apweek__state-go,
+.apweek__state-alt {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--avo-radius-button);
+  font-family: var(--avo-font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/*
+ * WHITE TEXT ON `--avo-brand-deep`, NEVER ON `--avo-brand` - non-negotiable #9.
+ */
+.apweek__state-go {
+  border: 1px solid transparent;
+  background: var(--avo-brand-deep);
+  color: var(--avo-white);
+}
+
+.apweek__state-alt {
+  border: 1px solid var(--avo-border-control);
+  background: var(--avo-surface);
+  color: var(--avo-text-muted-strong);
+}
+
+.apweek__state-go:focus-visible,
+.apweek__state-alt:focus-visible {
+  outline: 2px solid var(--avo-border-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * The week's states are centred like the list's two, for the reason recorded
+ * there: `AVO States.dc.html` centres this screen's empties where the shared
+ * `.avo-state` is left-aligned.
+ */
+.apweek .avo-state {
+  align-items: center;
+  text-align: center;
+}
+
+.apweek .avo-state__body {
+  max-width: 52ch;
 }
 
 /* ================================================================ marketing == */

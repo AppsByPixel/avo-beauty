@@ -171,7 +171,7 @@ import { whenLabel } from './AuditLog.js';
 /**
  * The three statuses, as pills. NEW COPY — the bundle draws none of these.
  *
- * TONES, and the reasoning is `Appointments.tsx § STATUS_PILL`'s: the pill is
+ * TONES, and the reasoning is `appointmentsWeekRules.ts § STATUS_PILL`'s: the pill is
  * TEXT, so its pair has to clear 4.5:1, and no token names "an order is on the
  * counter". So the nearest semantically honest tone is used rather than a new
  * colour invented at this call site.
