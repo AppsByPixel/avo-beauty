@@ -47,7 +47,14 @@ import { FailureScreen } from '../components/FailureScreen';
 import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { SecondaryButton, TappableRow } from '../components/Buttons';
 import { Toast, useToast } from '../components/Toast';
-import { CardNote, SectionLabel, SettingsCard, SettingsRow, ToggleRow } from '../components/account/Rows';
+import {
+  CardNote,
+  ContactRow,
+  SectionLabel,
+  SettingsCard,
+  SettingsRow,
+  ToggleRow,
+} from '../components/account/Rows';
 import { PolicySheet } from '../components/account/PolicySheet';
 import { ContactSheet } from '../components/account/ContactSheet';
 import { EditProfileSheet } from '../components/account/EditProfileSheet';
@@ -405,19 +412,8 @@ export function AccountScreen({ onBack, onLogOut, onForgotPassword }: Props) {
         <>
           <SectionLabel>{copy.acctHelp}</SectionLabel>
           <SettingsCard testID="help-rows">
-            <TappableRow
-              onPress={openContact}
-              accessibilityRole="button"
-              accessibilityLabel={copy.contactCta}
-              accessibilityHint={copy.contactCtaSub}
-              testID="contact-open"
-              style={styles.helpRow}
-            >
-              <View style={styles.helpText}>
-                <Text style={[text('body', lang, '600'), styles.helpTitle]}>{copy.contactCta}</Text>
-                <Text style={[text('bodyS', lang), styles.helpSub]}>{copy.contactCtaSub}</Text>
-              </View>
-            </TappableRow>
+            {/* The design's icon-and-chevron row — see Rows.tsx § ContactRow. */}
+            <ContactRow onPress={openContact} testID="contact-open" />
             <View style={styles.waRow}>
               <Text style={[text('body', lang), styles.rowLabel]}>{copy.cViaWa}</Text>
               {/* E.164, LTR in both languages — api-contract.md § SupportConfig. */}
@@ -686,16 +682,6 @@ const styles = StyleSheet.create({
   editText: { color: color.ink },
 
   rowLabel: { color: color.ink },
-  helpRow: {
-    minHeight: MIN_TAP_TARGET,
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: color.hairlineInner,
-  },
-  helpText: { flex: 1, minWidth: 0 },
-  helpTitle: { color: color.ink },
-  helpSub: { color: color.textMuted, marginTop: 2, lineHeight: 18 },
   waRow: {
     flexDirection: 'row',
     alignItems: 'center',
