@@ -340,7 +340,7 @@ There is no 10 or 11 — the client's own numbering jumped from 9 to 12.
 | 4 | Items get cut off scrolling to the bottom of cart | **Done.** |
 | 5 | Invoice after payment, sent to email | **Done.** `5cdeb0a`. |
 | 6 | *"what if they dont have enough payment (sometimes they dont have money but lock the booking and they dont come) deposit health option for merchants"* | **OPEN — the only one.** The mechanism exists (auto-return, Mark no-show, zero-deposit rows markable). What does not exist is a merchant-facing VIEW of deposit health: what is held, what is at risk, who repeatedly locks a slot and does not arrive. |
-| 7 | Earnings by branch | **Done.** `services/reportsBranch.int.test.ts`. |
+| 7 | Earnings by branch | **Done — on the merchant DASHBOARD**, a Reports card (salon revenue per branch), `services/reportsBranch.int.test.ts`. **Not to be confused with the customer app's Home section also titled "Earning by branch"**, which is a separate, designed feature (`AVO Wallet Home.dc.html:264`, built 2026-08-16) showing the CUSTOMER her own loyalty rate per branch, never salon revenue. Aftab confirmed 2026-09-27 that it stays. Do not remove it as a misplaced item 7. |
 | 8 | Show booking marked done if the payment is done | **Done.** `completed` is written inside the charge transaction. |
 | 9 | Compare by dates, download dashboard to CSV | **Done.** `GET /salons/{id}/reports/{kind}.csv?branch=&period=`. |
 | 12 | Graphs on merchant dashboard; activity huge there too | **Done**, driven live. |
