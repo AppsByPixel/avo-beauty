@@ -1265,6 +1265,35 @@ const NOTIFICATION_NOWHERE = 'NO-SUCH-NOTIFICATION';
 const SALON_ROUTES: SalonRoute[] = [
   { method: 'GET', template: '/salons/{id}' },
   { method: 'GET', template: '/salons/{id}/metrics' },
+  /**
+   * DEPOSIT HEALTH — `routes/deposits.ts`, arriving on dev `18be114`, and found
+   * here by the gap ledger below rather than by anybody remembering to add it.
+   *
+   * NO BODY AND NO `?branch=`, AND BOTH HALVES OF THAT ARE DELIBERATE.
+   *
+   * No body because it is a GET. No `?branch=` because `resolveBranchFilter` runs
+   * AFTER `requireSameSalon` and answers 404 `unknown_branch` for a branch that
+   * belongs to another salon — so a probe carrying salon A's branch id would be
+   * indistinguishable from a probe carrying nonsense, and, worse, if the two
+   * calls were ever reordered the attack half would start answering 404 where it
+   * wants 403 and this row would report a tenancy hole that is really an argument
+   * about ordering. The route's own comment states that ordering and gives the
+   * oracle reason for it ("a caller who is not this salon's staff would learn
+   * from a 404-vs-200 whether a branch id exists here"), and sending no branch at
+   * all is what keeps this row asking the one question it is for.
+   *
+   * THE CONTROL HALF IS A REAL READ, not an empty one. Salon B holds her own
+   * bookings in this suite, so the 200 she gets back is a populated answer — which
+   * matters, because `SALON_ROUTES`'s control half is the only thing standing
+   * between "the tenancy guard fires" and "the endpoint is broken for everybody".
+   * What the control CANNOT say is that her answer contains none of salon A's
+   * money: this table asserts a status and the absence of salon A's telltales in
+   * the body, and the figures — counts, sums, `oldestStartedAt` — are a separate
+   * question driven in `deposit-health.test.ts` § "salon B's own answer carries
+   * none of salon A's money", because a leak in an AGGREGATE carries no telltale
+   * string for `expectNoSalonALeak` to find.
+   */
+  { method: 'GET', template: '/salons/{id}/deposits' },
   { method: 'GET', template: '/salons/{id}/products' },
   { method: 'GET', template: '/salons/{id}/bookings' },
   { method: 'GET', template: '/salons/{id}/services' },

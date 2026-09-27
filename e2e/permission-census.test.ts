@@ -781,6 +781,36 @@ const PINNED_COVERAGE: string[] = [
   'GET /salons/:id/customers/:memberId → team',
   'GET /salons/:id/customers/:memberId/activity → team',
   /**
+   * DEPOSIT HEALTH, arriving with lane A's `routes/deposits.ts` on dev `18be114`.
+   * The census named it on the first run after the merge, which is the half of
+   * this pin that works without anybody remembering to do anything.
+   *
+   * `→ appointments` AND NOT `→ void`, AND THAT IS THE LINE WORTH READING RATHER
+   * THAN PASTING. The neighbouring WRITE — `POST /salons/:id/bookings/:bid/no-show`
+   * — is `→ void`, because marking a no-show returns a customer's deposit: it
+   * moves money and mints a transaction. This route records nothing and moves
+   * nothing, and `GET /salons/:id/bookings` two lines up already serves every
+   * booking it serves, with the same names, phones and `depositFils`, under
+   * `appointments`. So a stricter gate here would be a gate the holder walks
+   * around one card to the left — which this suite has already ruled worse than
+   * no gate, because it reads as a control.
+   *
+   * THE PERMISSION HALF IS DRIVEN, not merely pinned: the generated sweep below
+   * revokes `appointments` and requires a 403 carrying `appointments`'s own copy,
+   * then grants it back and requires the refusal to stop. The seed makes the
+   * positive case a real one — Hessa (`ST-002`) holds `appointments` and NOT
+   * `void`, which is the shape of a real front desk and is the person the client
+   * asked for.
+   *
+   * WHAT THIS LINE CANNOT SAY is that the answer is salon-scoped. `requireSameSalon`
+   * is a separate call and a `→ appointments` line is byte-identical with or
+   * without it, so the cross-tenant read is driven by request in
+   * `tenancy.test.ts` (the `SALON_ROUTES` row) and in `deposit-health.test.ts`
+   * § "salon B's own answer carries none of salon A's money", which asserts the
+   * PERMITTED call as well as the refused one.
+   */
+  'GET /salons/:id/deposits → appointments',
+  /**
    * THE THREE DEVICE-ENROLMENT DOORS, on dev `45a60a1`, closing decision 82.
    *
    * `→ dashboard` IS CONFIRMED, AND NOT BY THIS LINE. Lane A reports the census
