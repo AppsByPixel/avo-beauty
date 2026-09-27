@@ -209,12 +209,11 @@ export interface ChargeInput {
    * So what makes it safe is not that the number is derived. It is that naming it
    * is an AUTHORITY, held server-side and checked before anything is read:
    *
-   *   `routes/charges.ts` requires `perms.void` — the senior scanner write — on
-   *   the PRESENCE of the field, not on the branch taken. That distinction is the
-   *   load-bearing one: a handler that IGNORED an unauthorised `amountFils` and
-   *   priced the basket instead would charge a different number from the one the
-   *   staff member typed, with nobody told. Refusing is the only safe reading of
-   *   an authority the caller does not hold.
+   *   `routes/charges.ts` requires `perms.scanner` — the permission to charge at
+   *   all. It required `perms.void` until the client widened it on 2026-09-28
+   *   (DECISIONS #109; the argument and the safeguards that stay are in the
+   *   route). The reason, the ceiling, the marked row and its audit action are
+   *   what bound it now, and a void of it still needs `perms.void`.
    *
    * `Fils`, not `number`, so a float cannot reach here — non-negotiable #1. The
    * route parses it through `parseAmountFils`, which refuses a fraction with a
@@ -409,7 +408,7 @@ export async function performCharge(
      *
      * `input.custom` is a price an authorised staff principal typed — see
      * `ChargeInput.custom` for why that is not a client naming its own price, and
-     * `routes/charges.ts` for the `perms.void` gate and the ceiling that make it
+     * `routes/charges.ts` for the `perms.scanner` gate and the ceiling that make it
      * true. Here it is simply the gross: there is no catalogue row to read, so
      * there is no query, and `rows` stays empty.
      *

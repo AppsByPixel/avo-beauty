@@ -68,6 +68,7 @@ export * from './receipt';
 export * from './topup';
 export * from './booking';
 export * from './notification';
+export * from './memberNotification';
 export * from './legal';
 export * from './platformAdmin';
 export * from './platformSettings';

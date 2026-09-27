@@ -125,6 +125,11 @@ export const receiptJob = pgTable(
     index('receipt_job_claim_idx')
       .on(t.availableAt)
       .where(sql`status IN ('queued', 'failed', 'sending')`),
+    /**
+     * The customer bell's receipt stream — "her rows, newest first". Migration
+     * 0057; services/memberNotifications.ts.
+     */
+    index('receipt_job_member_created_idx').on(t.memberId, t.createdAt.desc()),
     check('receipt_job_attempts_non_negative', sql`${t.attempts} >= 0`),
     check('receipt_job_sent_at_matches_status', sql`(${t.status} = 'sent') = (${t.sentAt} IS NOT NULL)`),
   ],

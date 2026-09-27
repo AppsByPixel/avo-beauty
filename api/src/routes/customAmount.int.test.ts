@@ -1,31 +1,34 @@
 /**
  * A PRICE A MANAGER TYPED — proved against a real database and the real handler.
  *
- * The scanner could only ever charge what was on the service menu. Aftab ruled
- * the authority to type a figure to MANAGERS. Two things therefore have to be
- * true, and this file exists because neither can be proved without rows:
+ * The scanner could only ever charge what was on the service menu. Aftab first
+ * ruled the authority to type a figure to managers (`perms.void`), and on
+ * 2026-09-28 WIDENED IT, on DECISIONS.md #109: anyone who can charge — anyone
+ * holding `perms.scanner` — may type a custom amount. `routes/charges.ts` carries
+ * the argument, the widening it accepts, and the safeguards he was told stay.
+ * So three things have to be true, and none can be proved without rows:
  *
- *   THE GATE REFUSES, AND IT REFUSES BECAUSE OF THE PERMISSION. Non-negotiable
- *   #7 is explicit: "Every gated endpoint needs a test that calls it directly
- *   with the permission off." So the refusal is asserted against a REAL frontdesk
- *   PIN session for ST-002 (`perms.void = false`, seeded that way deliberately),
- *   and — the half that makes it evidence rather than a coincidence — the
- *   IDENTICAL body is then sent by ST-001 and must succeed. A suite with only the
- *   refusal passes just as happily against an endpoint that is broken for
- *   everybody.
+ *   THE GATE REFUSES, AND IT REFUSES BECAUSE OF THE PERMISSION. Non-negotiable #7:
+ *   "Every gated endpoint needs a test that calls it directly with the permission
+ *   off." The permission is now `scanner`, so the refusal is ST-002 with
+ *   `perm_scanner` switched OFF — and the IDENTICAL body from ST-002 with it ON
+ *   must succeed. A suite with only the refusal passes just as happily against an
+ *   endpoint that is broken for everybody.
  *
- *   A REFUSED CUSTOM AMOUNT MOVED NO MONEY. Every refusal here asserts the
- *   balance is untouched and no `transaction` row exists, for the reason
+ *   THE WIDENING HAPPENED. ST-002 is a frontdesk: `scanner` on, `charges` and
+ *   `void` off, seeded that way deliberately. She was refused a typed price
+ *   before the ruling; she must be served one after it. If the old `void` gate
+ *   ever comes back, that spec goes red.
+ *
+ *   THE SAFEGUARDS HELD FOR THE PEOPLE THE RULING LET IN. The reason is required,
+ *   the ceiling holds, the row is marked, and a void still needs `perms.void` —
+ *   pinned against ST-002 specifically, not only against the manager, because she
+ *   is the population the ruling widened to.
+ *
+ *   A REFUSED CUSTOM AMOUNT MOVED NO MONEY. Every refusal asserts the balance is
+ *   untouched and no `transaction` row exists, for the reason
  *   `scannerLimit.int.test.ts` gives: a control that fires after the debit is
  *   worse than no control, because it refuses the customer AND charges her.
- *
- * WHY `perms.void` AND NOT `perms.charges` — the long argument is in
- * `routes/charges.ts`. The short one, and the reason ST-002 is the right fixture:
- * `charges: false, void: false` is a frontdesk, and `charges: true, void: false`
- * is the supervisor shape — trusted to READ the till, not to move money. Both
- * must be refused, and the second is the case a `charges`-based gate would let
- * through. ST-002 proves the first directly; `the supervisor shape` spec below
- * proves the second by granting `charges` and leaving `void` off.
  *
  * A FRESH MEMBER PER TEST, minted here rather than reusing the seeded 8842.
  * These specs debit real balances and write real audit rows; sharing a fixture
@@ -50,7 +53,7 @@ const suite = INT_URL ? describe : describe.skip;
 const SALON = 'SAL-AMARA';
 /** Noura — manager, every permission, `void` included. */
 const MANAGER = 'ST-001';
-/** Hessa — frontdesk. `charges: false, void: false`, seeded that way on purpose. */
+/** Hessa — frontdesk. `scanner: true, charges: false, void: false`, seeded that way on purpose. */
 const FRONTDESK = 'ST-002';
 /** 8.000 KD, the design's blow-dry. The control for "a menu charge is unchanged". */
 const SERVICE = 'SV-01';
@@ -162,7 +165,51 @@ suite('POST /charges — a custom amount', () => {
   // ------------------------------------------------------------- the gate ----
 
   describe('the permission is enforced server-side', () => {
-    it('refuses a frontdesk PIN holder — perms.void is off', async () => {
+    /**
+     * `perm_scanner` OFF on ST-002 for the length of `work`, restored in a
+     * `finally` — ST-002 is a shared seeded fixture other specs read.
+     */
+    const withoutScanner = async (work: () => Promise<void>) => {
+      const set = (on: boolean) =>
+        db.update(staffUser).set({ permScanner: on }).where(orm.eq(staffUser.id, FRONTDESK));
+      await set(false);
+      try {
+        await work();
+      } finally {
+        await set(true);
+      }
+    };
+
+    it('refuses a PIN holder whose perms.scanner is off — the one gate on a typed price', async () => {
+      await withoutScanner(async () => {
+        const bearer = await sessionFor(FRONTDESK);
+        const m = await customer();
+
+        const res = await post(bearer, {
+          memberId: m,
+          amountFils: 25_000,
+          reason: 'bridal package',
+        });
+
+        expect(res.statusCode).toBe(403);
+        /**
+         * THE COPY, not only the status — `PERMISSION_COPY.scanner`. A spec that
+         * checked 403 alone would pass against a refusal for the WRONG reason, the
+         * failure mode `scannerLimit.int.test.ts` § THE CODE, NOT THE STATUS names.
+         */
+        expect(JSON.parse(res.body).message).toBe(
+          "You don't have permission to scan and charge. A manager can grant it.",
+        );
+        await assertNothingMoved(m, 150_000);
+      });
+    });
+
+    it('THE RULING: a scanner holder WITHOUT void — the frontdesk — can now type a price', async () => {
+      /**
+       * THE CASE THAT USED TO BE REFUSED, and the reason this file changed.
+       * ST-002 holds `scanner` and neither `charges` nor `void`. Before 2026-09-28
+       * this body was a 403 with the void copy; after it, a settled custom charge.
+       */
       const bearer = await sessionFor(FRONTDESK);
       const m = await customer();
 
@@ -172,51 +219,53 @@ suite('POST /charges — a custom amount', () => {
         reason: 'bridal package',
       });
 
-      expect(res.statusCode).toBe(403);
-      /**
-       * THE COPY, not only the status. `PERMISSION_COPY.void` is design copy from
-       * the scanner's locked state and four surfaces assert on it verbatim; a spec
-       * that checked 403 alone would pass against a refusal for the WRONG reason —
-       * a surface mismatch, a missing member, an unrelated gate — which is the
-       * failure mode `scannerLimit.int.test.ts` § THE CODE, NOT THE STATUS names.
-       */
-      expect(JSON.parse(res.body).message).toBe(
-        "You don't have permission to void a charge. A manager can grant it.",
-      );
-      await assertNothingMoved(m, 150_000);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(JSON.parse(res.body).customAmount).toBe(true);
+      expect(await balanceOf(m)).toBe(125_000);
     });
 
-    it('refuses the supervisor shape too — charges on, void off', async () => {
-      /**
-       * THE SPEC THAT RULES OUT `perms.charges` AS THE GATE.
-       *
-       * `charges` is the "senior permission" and the tempting one to reuse. It is
-       * a READ — api-contract.md § StaffUser, "can open Today's charges on the
-       * scanner" — and someone trusted to read the till is not thereby trusted to
-       * invent a price. Granting `charges` and leaving `void` off is exactly that
-       * person, and if the gate ever moves to `charges` this spec goes red.
-       *
-       * The grant is restored in a `finally`, because ST-002 is a shared seeded
-       * fixture that other specs read.
-       */
-      const restore = async (charges: boolean) => {
-        await db
-          .update(staffUser)
-          .set({ permCharges: charges })
-          .where(orm.eq(staffUser.id, FRONTDESK));
-      };
-      await restore(true);
-      try {
-        const bearer = await sessionFor(FRONTDESK);
-        const m = await customer();
+    it('the safeguards hold for her too: no reason is refused, the ceiling is refused', async () => {
+      const bearer = await sessionFor(FRONTDESK);
 
-        const res = await post(bearer, { memberId: m, amountFils: 25_000, reason: 'x' });
+      const noReason = await customer();
+      const r1 = await post(bearer, { memberId: noReason, amountFils: 25_000 });
+      expect(r1.statusCode).toBe(400);
+      expect(JSON.parse(r1.body).message).toBe('reason is required.');
+      await assertNothingMoved(noReason, 150_000);
 
-        expect(res.statusCode).toBe(403);
-        await assertNothingMoved(m, 150_000);
-      } finally {
-        await restore(false);
-      }
+      const rich = await customer(900_000);
+      const r2 = await post(bearer, {
+        memberId: rich,
+        amountFils: charge.CUSTOM_AMOUNT_MAX_FILS + 1,
+        reason: 'an extra zero',
+      });
+      expect(r2.statusCode).toBe(400);
+      expect(JSON.parse(r2.body).error).toBe('amount_above_ceiling');
+      await assertNothingMoved(rich, 900_000);
+    });
+
+    it('a junior makes it, a senior reverses it: voiding her custom charge still needs perms.void', async () => {
+      const junior = await sessionFor(FRONTDESK);
+      const m = await customer();
+      const made = await post(junior, { memberId: m, amountFils: 12_000, reason: 'colour correction' });
+      expect(made.statusCode).toBe(200);
+      const txId = JSON.parse(made.body).transaction.id as string;
+
+      const voidAs = (bearer: string) =>
+        app.inject({
+          method: 'POST',
+          url: '/voids',
+          headers: { authorization: `Bearer ${bearer}`, 'idempotency-key': `int-custom-void-${randomUUID()}` },
+          payload: { transactionId: txId, reason: 'typed the wrong figure' },
+        });
+
+      const refused = await voidAs(junior);
+      expect(refused.statusCode).toBe(403);
+      expect(await balanceOf(m)).toBe(138_000);
+
+      const reversed = await voidAs(await sessionFor(MANAGER));
+      expect(reversed.statusCode, reversed.body).toBe(200);
+      expect(await balanceOf(m)).toBe(150_000);
     });
 
     it('the control: the identical body from a manager succeeds', async () => {
@@ -240,33 +289,37 @@ suite('POST /charges — a custom amount', () => {
       expect(await balanceOf(m)).toBe(125_000);
     });
 
-    it('refuses rather than ignores: an unauthorised amountFils never falls back to the menu', async () => {
+    it('refuses rather than ignores: an amountFils never falls back to the menu', async () => {
       /**
-       * ===================================================================
-       * THE SPEC THIS WHOLE FEATURE IS SHAPED AROUND.
-       * ===================================================================
-       * The dangerous implementation is not one that forgets the gate. It is one
-       * that checks the permission INSIDE the custom branch, so an unauthorised
-       * `amountFils` is silently dropped and the basket is priced instead. The
-       * staff member types 40.000, the server charges the menu's 8.000, and the
-       * response says the charge succeeded — a different number moved and nobody
-       * was told. That is the silent money bug api-contract.md's idempotency
-       * addendum rules against in a different costume.
-       *
-       * So the gate is on the PRESENCE of the field. A frontdesk sending both a
-       * basket and a figure is refused; her customer is not charged 8.000.
+       * THE SPEC THIS WHOLE FEATURE WAS SHAPED AROUND, restated for the new gate.
+       * The dangerous implementation drops an `amountFils` it does not like and
+       * prices the basket instead — 40.000 typed, 8.000 charged, "success". With
+       * `scanner` off that body is refused outright; with it on, a basket beside a
+       * figure is `ambiguous_pricing`. In neither case is she charged the menu.
        */
+      await withoutScanner(async () => {
+        const bearer = await sessionFor(FRONTDESK);
+        const m = await customer();
+        const res = await post(bearer, {
+          memberId: m,
+          serviceIds: [SERVICE],
+          amountFils: 40_000,
+          reason: 'nope',
+        });
+        expect(res.statusCode).toBe(403);
+        await assertNothingMoved(m, 150_000);
+      });
+
       const bearer = await sessionFor(FRONTDESK);
       const m = await customer();
-
       const res = await post(bearer, {
         memberId: m,
         serviceIds: [SERVICE],
         amountFils: 40_000,
         reason: 'nope',
       });
-
-      expect(res.statusCode).toBe(403);
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).error).toBe('ambiguous_pricing');
       await assertNothingMoved(m, 150_000);
     });
 
@@ -286,17 +339,19 @@ suite('POST /charges — a custom amount', () => {
        * The check is hoisted above it in `routes/charges.ts`. This is what stops
        * it drifting back down, which nothing else in the suite would notice.
        */
-      const t = await tillFor(FRONTDESK);
-      const m = await customer();
+      await withoutScanner(async () => {
+        const t = await tillFor(FRONTDESK);
+        const m = await customer();
 
-      const res = await post(t.bearer, { memberId: m, amountFils: 25_000, reason: 'r' });
-      expect(res.statusCode).toBe(403);
+        const res = await post(t.bearer, { memberId: m, amountFils: 25_000, reason: 'r' });
+        expect(res.statusCode).toBe(403);
 
-      const [row] = await db
-        .select({ n: orm.sql<number>`count(*)::int` })
-        .from(scannerAttempt)
-        .where(orm.eq(scannerAttempt.deviceId, t.deviceId));
-      expect(row?.n).toBe(0);
+        const [row] = await db
+          .select({ n: orm.sql<number>`count(*)::int` })
+          .from(scannerAttempt)
+          .where(orm.eq(scannerAttempt.deviceId, t.deviceId));
+        expect(row?.n).toBe(0);
+      });
     });
   });
 

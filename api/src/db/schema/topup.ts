@@ -40,6 +40,17 @@ import { happyHour } from './promotion';
 import { branch, salon } from './salon';
 import { paymentMethod, transaction } from './transaction';
 
+/**
+ * What she asked for when she chose to pay a shop order by card — `order_request`,
+ * migration 0058. NO PRICES: the order is re-priced at settlement from `product`,
+ * exactly as `POST /orders` prices it, and refused if the total moved.
+ */
+export interface OrderPaymentRequest {
+  items: Array<{ productId: string; qty: number }>;
+  fulfilment: 'pickup' | 'delivery';
+  addressId: string | null;
+}
+
 /** api-contract.md § TopUpIntent, `status`. */
 export const topUpStatus = pgEnum('topup_status', [
   'created',
@@ -129,6 +140,20 @@ export const topUpIntent = pgTable(
       onDelete: 'restrict',
     }),
 
+    /**
+     * A SHOP ORDER PAID BY CARD — migration 0058. The intent is a top-up sized to
+     * the order; settlement credits it and places the order in one transaction,
+     * or credits it and records why the order was refused. `services/topup.ts §
+     * creditWallet` and `services/orderPayment.ts`.
+     */
+    orderRequest: jsonb('order_request').$type<OrderPaymentRequest>(),
+    orderTransactionId: text('order_transaction_id').references(() => transaction.id, {
+      onDelete: 'restrict',
+    }),
+    orderRefusalCode: text('order_refusal_code'),
+    orderRefusalMessage: text('order_refusal_message'),
+    orderResult: jsonb('order_result').$type<Record<string, unknown>>(),
+
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     settledAt: timestamptz('settled_at'),
@@ -139,6 +164,29 @@ export const topUpIntent = pgTable(
     uniqueIndex('topup_intent_psp_reference_uq')
       .on(t.pspReference)
       .where(sql`psp_reference IS NOT NULL`),
+    uniqueIndex('topup_intent_order_transaction_uq')
+      .on(t.orderTransactionId)
+      .where(sql`order_transaction_id IS NOT NULL`),
+    check(
+      'topup_intent_order_outcome_needs_request',
+      sql`${t.orderRequest} IS NOT NULL OR (${t.orderTransactionId} IS NULL AND ${t.orderRefusalCode} IS NULL AND ${t.orderResult} IS NULL)`,
+    ),
+    check(
+      'topup_intent_order_placed_or_refused',
+      sql`${t.orderTransactionId} IS NULL OR ${t.orderRefusalCode} IS NULL`,
+    ),
+    check(
+      'topup_intent_order_refusal_is_whole',
+      sql`(${t.orderRefusalCode} IS NULL) = (${t.orderRefusalMessage} IS NULL)`,
+    ),
+    check(
+      'topup_intent_order_result_matches_placement',
+      sql`(${t.orderResult} IS NULL) = (${t.orderTransactionId} IS NULL)`,
+    ),
+    check(
+      'topup_intent_settled_order_is_answered',
+      sql`${t.orderRequest} IS NULL OR (${t.status} = 'succeeded') = (${t.orderTransactionId} IS NOT NULL OR ${t.orderRefusalCode} IS NOT NULL)`,
+    ),
     // One credit per intent, as an index rather than as a promise.
     uniqueIndex('topup_intent_transaction_uq')
       .on(t.transactionId)

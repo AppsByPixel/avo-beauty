@@ -50,6 +50,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   add,
+  formatFils,
   percentOf,
   fils,
   TopUpIntentPublicSchema,
@@ -63,7 +64,7 @@ import { salon } from '../db/schema/salon';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
 import { topUpSettledPosting } from '../money/ledger';
-import { gatewayEvent, topUpIntent } from '../db/schema/topup';
+import { gatewayEvent, topUpIntent, type OrderPaymentRequest } from '../db/schema/topup';
 import { queueReceipts } from './receipts';
 import type { MemberPrincipal } from '../auth/principal';
 import { ApiError, badRequest, conflict, notFound } from '../http/errors';
@@ -77,6 +78,7 @@ import { enforceTopUpLimits } from './topupLimit';
 import { writeAudit, type Executor } from './audit';
 import { resolveBranch } from './branch';
 import { nextTopUpIntentId, nextTransactionId } from './ids';
+import { placeOrder, type OrderResult } from './order';
 
 // ------------------------------------------------------------ the machine --
 
@@ -161,6 +163,16 @@ export interface TopUpIntentRow {
   provider: string;
   pspReference: string | null;
   transactionId: string | null;
+  /**
+   * A card-paid shop order (migration 0058). Optional on the TYPE only so that a
+   * hand-built row in a unit spec need not spell five nulls; every row read from the
+   * table carries all five.
+   */
+  orderRequest?: OrderPaymentRequest | null;
+  orderTransactionId?: string | null;
+  orderRefusalCode?: string | null;
+  orderRefusalMessage?: string | null;
+  orderResult?: Record<string, unknown> | null;
 }
 
 /**
@@ -338,178 +350,13 @@ export async function createTopUp(
      */
     await enforceTopUpLimits(tx, ctx.principal);
 
-    const memberRows = await tx
-      .select()
-      .from(member)
-      .where(eq(member.id, ctx.principal.id))
-      .limit(1);
-    const m = memberRows[0];
-    if (!m) throw notFound('unknown_member', 'No such member.');
-
-    const salonRows = await tx.select().from(salon).where(eq(salon.id, m.salonId)).limit(1);
-    const s = salonRows[0];
-    if (!s) throw notFound('unknown_salon', 'No such salon.');
-
-    // ---------------------------------------------------- money, all server --
-    // Non-negotiable #2. A client-supplied bonusFils / creditFils / feeFils is
-    // not read anywhere in this function; a patched client that sends
-    // `creditFils: 999999` tops up exactly what it paid for.
-    //
-    // The tier bonus DOES NOT EXIST in stamps mode: a stamps salon has no tier
-    // ladder to read a percentage off, and inventing one would hand out credit
-    // the merchant never agreed to fund.
-    const bonusPercent =
-      s.loyaltyMode === 'stamps'
-        ? 0
-        : (s.tiers?.find((t) => t.name === m.tier)?.bonusPercent ?? 0);
-
-    const bonus = percentOf(input.amountFils, bonusPercent);
-
-    const minted = await nextTopUpIntentId(tx);
-    const id = ctx.failCreate ? `${minted}-GWFAIL` : minted;
-    /**
-     * A TOP-UP HAS NO BRANCH TO ESTABLISH — it happens on a phone. So this is an
-     * attribution and never anything more, and `branch.established` is ignored
-     * here rather than consulted: even a one-branch salon did not host this
-     * top-up, it merely has only one candidate to name.
-     *
-     * The promotion read below passes `null` for the same reason, and the
-     * settled transaction is written `branch_assumed = true` in every case. That
-     * is the honest reading and it costs the customer nothing: the branch
-     * boost's `topup` points were already skipped on this path before this
-     * change, deliberately, so nothing she earns moves.
-     */
-    const branch = await resolveBranch(tx, s.id);
-    const branchId = branch.branchId;
-
-    /**
-     * ------------------------------- the promotion bonus, decided server-side --
-     *
-     * A live `topup10` / `topup20` window adds percentage points ON TOP OF the
-     * tier bonus — packages/types/src/rules.ts says so in as many words, and
-     * that is why they are two columns rather than one: both are merchant-funded
-     * but one is owed to the customer's standing and the other to a campaign,
-     * and a single `bonus_fils` could never be split back apart at
-     * reconciliation. That was the second schema obstacle flagged before this
-     * was built, and this is it resolved.
-     *
-     * LOCKED AT CREATION, not at settlement. The customer tapped Pay against the
-     * number she was shown; a top-up settles minutes later and possibly after
-     * the window has closed, and re-deciding at settlement would take back an
-     * offer she acted on. The tier bonus was already locked here for the same
-     * reason, and settlement credits `creditFils` verbatim.
-     *
-     * BRANCH: `null`, not `branchId`, and unconditionally — this is the one
-     * place that does NOT consult `branch.established`. A wallet top-up happens
-     * on a phone, not at a branch, so there is nothing to establish; the
-     * resolver above names a branch purely so the NOT NULL column has an
-     * attribution. Paying a per-branch percentage on that basis would make a
-     * customer's bonus depend on branch-id sort order. So the branch boost's
-     * `topup` points and any branch-scoped window are skipped; an `all`-scoped
-     * happy hour has no ambiguity to resolve and applies. services/promotions.ts
-     * § PromotionInputs carries the reasoning and the flag.
-     */
-    const promoInputs = await loadPromotionInputs(tx, s.id, null);
-    const promoPercent =
-      promoInputs && s.loyaltyMode !== 'stamps'
-        ? decideEarning(promoInputs, new Date())
-        : null;
-
-    const promoBonus = promoPercent
-      ? percentOf(input.amountFils, promoPercent.topupBonusPercent)
-      : fils(0);
-    const credit = add(add(input.amountFils, bonus), promoBonus);
-
-    /**
-     * AVO's cut. Recorded on the intent and later on the transaction; never
-     * deducted from what lands in the wallet.
-     *
-     * READ FROM `platform_settings`, NOT FROM `DEFAULT_COMMISSION`. This line was
-     * `commissionFor(input.amountFils, input.method)` — the two-argument form,
-     * which takes the compiled-in default. `DEFAULT_COMMISSION`'s own comment says
-     * the rates are "Configurable per platform in Owner → Controls", and
-     * api-contract.md § Commission says the same; nothing made them so. The owner
-     * console's fee steppers would have written a row that no charge ever read.
-     *
-     * INSIDE `tx`, so the rate that priced this intent is the rate that was live
-     * when the row was written, and LOCKED HERE rather than re-read at settlement
-     * — settlement replays `intent.feeFils` verbatim (see `settleFromGatewayRead`),
-     * so a rate change landing while she is on the hosted page cannot reprice a
-     * top-up she has already paid for. Exactly the reasoning the tier bonus and the
-     * promotion bonus are locked at creation for, applied to the other party's
-     * side of the same transaction.
-     *
-     * The defaults in migration 0032 are `DEFAULT_COMMISSION` field for field, so
-     * this change moves no money until somebody deliberately moves a stepper.
-     */
-    const fee = await platformCommissionFor(tx, input.amountFils, input.method);
-
-    await tx.insert(topUpIntent).values({
-      id,
-      memberId: m.id,
-      salonId: s.id,
-      branchId,
+    const row = await openIntent(tx, {
+      principal: ctx.principal,
       amountFils: input.amountFils,
-      bonusFils: bonus,
-      promoBonusFils: promoBonus,
-      promotionId: promoBonus > 0 ? promoPercent?.happyHourId ?? null : null,
-      creditFils: credit,
-      feeFils: fee,
       method: input.method,
-      status: 'created',
-      failureReason: null,
-      redirectUrl: '',
-      reference: `AVO-TOP-${id.slice(3)}`,
-      provider: gateway.provider,
-      pspReference: null,
+      failCreate: ctx.failCreate ?? false,
+      orderRequest: null,
     });
-
-    let created;
-    try {
-      created = await withGatewayTimeout(`${gateway.provider}.createPayment`, () =>
-        gateway.createPayment({
-          intentId: id,
-          memberId: m.id,
-          amountFils: input.amountFils,
-          method: input.method,
-          returnUrl: `${env.topupReturnUrl}?intent=${encodeURIComponent(id)}`,
-        }),
-      );
-    } catch (err) {
-      if (err instanceof GatewayUnavailableError) {
-        // Rolls the key back with everything else. The client retries the same
-        // attempt with the same key rather than being answered with a cached
-        // failure forever.
-        //
-        // `cause`, and it is not decoration. The customer gets one sentence by
-        // design; the operator needs the processor's own words, and without this
-        // they were discarded — a wrong MYFATOORAH_API_KEY and a rejected
-        // `CallBackUrl` both surfaced as nothing but `code: gateway_unavailable`.
-        // The 5xx branch of the error handler is what prints it.
-        throw new ApiError(
-          502,
-          'gateway_unavailable',
-          'We could not reach the payment provider. Try again in a moment.',
-          {},
-          { cause: err },
-        );
-      }
-      throw err;
-    }
-
-    // created → redirected. She is being handed the hosted page.
-    const [row] = await tx
-      .update(topUpIntent)
-      .set({
-        pspReference: created.pspReference,
-        redirectUrl: created.redirectUrl,
-        status: 'redirected',
-        updatedAt: new Date(),
-      })
-      .where(and(eq(topUpIntent.id, id), inArray(topUpIntent.status, predecessorsOf('redirected'))))
-      .returning();
-
-    if (!row) throw conflict('topup_not_open', 'That top-up is no longer open.');
 
     /**
      * THE CUSTOMER SHAPE — AND THE STORED REPLAY BODY IS THE SAME OBJECT.
@@ -524,10 +371,211 @@ export async function createTopUp(
      * replay are `TopUpIntentPublicSchema` by construction rather than by two
      * call sites agreeing.
      */
-    const view = serialiseIntentForCustomer(row as TopUpIntentRow);
+    const view = serialiseIntentForCustomer(row);
     await completeKey(tx, keyId, { status: 200, body: view });
     return view;
   });
+}
+
+export interface OpenIntentInput {
+  principal: MemberPrincipal;
+  amountFils: Fils;
+  method: PaymentMethod;
+  failCreate: boolean;
+  /** A card-paid shop order, or `null` for an ordinary top-up. Migration 0058. */
+  orderRequest: OrderPaymentRequest | null;
+}
+
+/**
+ * Price the intent, insert it, and ask the gateway for the hosted page — inside the
+ * CALLER'S transaction, after the caller has claimed its key and checked the limits.
+ *
+ * Extracted from `createTopUp` so that a card-paid shop order
+ * (`services/orderPayment.ts`) opens its intent through EXACTLY this code: the same
+ * bonus lock, the same promotion read, the same commission read, the same gateway
+ * timeout, and the same rule that a failed gateway leg throws and so rolls back the
+ * caller's key. A second copy of this function is the second gateway path this whole
+ * design exists not to have.
+ */
+export async function openIntent(
+  tx: Parameters<Parameters<Db['transaction']>[0]>[0],
+  input: OpenIntentInput,
+): Promise<TopUpIntentRow> {
+  const memberRows = await tx
+    .select()
+    .from(member)
+    .where(eq(member.id, input.principal.id))
+    .limit(1);
+  const m = memberRows[0];
+  if (!m) throw notFound('unknown_member', 'No such member.');
+
+  const salonRows = await tx.select().from(salon).where(eq(salon.id, m.salonId)).limit(1);
+  const s = salonRows[0];
+  if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+  // ---------------------------------------------------- money, all server --
+  // Non-negotiable #2. A client-supplied bonusFils / creditFils / feeFils is
+  // not read anywhere in this function; a patched client that sends
+  // `creditFils: 999999` tops up exactly what it paid for.
+  //
+  // The tier bonus DOES NOT EXIST in stamps mode: a stamps salon has no tier
+  // ladder to read a percentage off, and inventing one would hand out credit
+  // the merchant never agreed to fund.
+  const bonusPercent =
+    s.loyaltyMode === 'stamps'
+      ? 0
+      : (s.tiers?.find((t) => t.name === m.tier)?.bonusPercent ?? 0);
+
+  const bonus = percentOf(input.amountFils, bonusPercent);
+
+  const minted = await nextTopUpIntentId(tx);
+  const id = input.failCreate ? `${minted}-GWFAIL` : minted;
+  /**
+   * A TOP-UP HAS NO BRANCH TO ESTABLISH — it happens on a phone. So this is an
+   * attribution and never anything more, and `branch.established` is ignored
+   * here rather than consulted: even a one-branch salon did not host this
+   * top-up, it merely has only one candidate to name.
+   *
+   * The promotion read below passes `null` for the same reason, and the
+   * settled transaction is written `branch_assumed = true` in every case. That
+   * is the honest reading and it costs the customer nothing: the branch
+   * boost's `topup` points were already skipped on this path before this
+   * change, deliberately, so nothing she earns moves.
+   */
+  const branch = await resolveBranch(tx, s.id);
+  const branchId = branch.branchId;
+
+  /**
+   * ------------------------------- the promotion bonus, decided server-side --
+   *
+   * A live `topup10` / `topup20` window adds percentage points ON TOP OF the
+   * tier bonus — packages/types/src/rules.ts says so in as many words, and
+   * that is why they are two columns rather than one: both are merchant-funded
+   * but one is owed to the customer's standing and the other to a campaign,
+   * and a single `bonus_fils` could never be split back apart at
+   * reconciliation. That was the second schema obstacle flagged before this
+   * was built, and this is it resolved.
+   *
+   * LOCKED AT CREATION, not at settlement. The customer tapped Pay against the
+   * number she was shown; a top-up settles minutes later and possibly after
+   * the window has closed, and re-deciding at settlement would take back an
+   * offer she acted on. The tier bonus was already locked here for the same
+   * reason, and settlement credits `creditFils` verbatim.
+   *
+   * BRANCH: `null`, not `branchId`, and unconditionally — this is the one
+   * place that does NOT consult `branch.established`. A wallet top-up happens
+   * on a phone, not at a branch, so there is nothing to establish; the
+   * resolver above names a branch purely so the NOT NULL column has an
+   * attribution. Paying a per-branch percentage on that basis would make a
+   * customer's bonus depend on branch-id sort order. So the branch boost's
+   * `topup` points and any branch-scoped window are skipped; an `all`-scoped
+   * happy hour has no ambiguity to resolve and applies. services/promotions.ts
+   * § PromotionInputs carries the reasoning and the flag.
+   */
+  const promoInputs = await loadPromotionInputs(tx, s.id, null);
+  const promoPercent =
+    promoInputs && s.loyaltyMode !== 'stamps'
+      ? decideEarning(promoInputs, new Date())
+      : null;
+
+  const promoBonus = promoPercent
+    ? percentOf(input.amountFils, promoPercent.topupBonusPercent)
+    : fils(0);
+  const credit = add(add(input.amountFils, bonus), promoBonus);
+
+  /**
+   * AVO's cut. Recorded on the intent and later on the transaction; never
+   * deducted from what lands in the wallet.
+   *
+   * READ FROM `platform_settings`, NOT FROM `DEFAULT_COMMISSION`. This line was
+   * `commissionFor(input.amountFils, input.method)` — the two-argument form,
+   * which takes the compiled-in default. `DEFAULT_COMMISSION`'s own comment says
+   * the rates are "Configurable per platform in Owner → Controls", and
+   * api-contract.md § Commission says the same; nothing made them so. The owner
+   * console's fee steppers would have written a row that no charge ever read.
+   *
+   * INSIDE `tx`, so the rate that priced this intent is the rate that was live
+   * when the row was written, and LOCKED HERE rather than re-read at settlement
+   * — settlement replays `intent.feeFils` verbatim (see `settleFromGatewayRead`),
+   * so a rate change landing while she is on the hosted page cannot reprice a
+   * top-up she has already paid for. Exactly the reasoning the tier bonus and the
+   * promotion bonus are locked at creation for, applied to the other party's
+   * side of the same transaction.
+   *
+   * The defaults in migration 0032 are `DEFAULT_COMMISSION` field for field, so
+   * this change moves no money until somebody deliberately moves a stepper.
+   */
+  const fee = await platformCommissionFor(tx, input.amountFils, input.method);
+
+  await tx.insert(topUpIntent).values({
+    id,
+    memberId: m.id,
+    salonId: s.id,
+    branchId,
+    amountFils: input.amountFils,
+    bonusFils: bonus,
+    promoBonusFils: promoBonus,
+    promotionId: promoBonus > 0 ? promoPercent?.happyHourId ?? null : null,
+    creditFils: credit,
+    feeFils: fee,
+    method: input.method,
+    status: 'created',
+    orderRequest: input.orderRequest,
+    failureReason: null,
+    redirectUrl: '',
+    reference: `AVO-TOP-${id.slice(3)}`,
+    provider: gateway.provider,
+    pspReference: null,
+  });
+
+  let created;
+  try {
+    created = await withGatewayTimeout(`${gateway.provider}.createPayment`, () =>
+      gateway.createPayment({
+        intentId: id,
+        memberId: m.id,
+        amountFils: input.amountFils,
+        method: input.method,
+        returnUrl: `${env.topupReturnUrl}?intent=${encodeURIComponent(id)}`,
+      }),
+    );
+  } catch (err) {
+    if (err instanceof GatewayUnavailableError) {
+      // Rolls the key back with everything else. The client retries the same
+      // attempt with the same key rather than being answered with a cached
+      // failure forever.
+      //
+      // `cause`, and it is not decoration. The customer gets one sentence by
+      // design; the operator needs the processor's own words, and without this
+      // they were discarded — a wrong MYFATOORAH_API_KEY and a rejected
+      // `CallBackUrl` both surfaced as nothing but `code: gateway_unavailable`.
+      // The 5xx branch of the error handler is what prints it.
+      throw new ApiError(
+        502,
+        'gateway_unavailable',
+        'We could not reach the payment provider. Try again in a moment.',
+        {},
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+
+  // created → redirected. She is being handed the hosted page.
+  const [row] = await tx
+    .update(topUpIntent)
+    .set({
+      pspReference: created.pspReference,
+      redirectUrl: created.redirectUrl,
+      status: 'redirected',
+      updatedAt: new Date(),
+    })
+    .where(and(eq(topUpIntent.id, id), inArray(topUpIntent.status, predecessorsOf('redirected'))))
+    .returning();
+
+  if (!row) throw conflict('topup_not_open', 'That top-up is no longer open.');
+
+  return row as TopUpIntentRow;
 }
 
 // --------------------------------------------------------------- settling --
@@ -886,6 +934,11 @@ async function creditWallet(
     },
   });
 
+  // ----------------------------------------------- a card-paid shop order ---
+  const order = intent.orderRequest
+    ? await placeAttachedOrder(tx, intent, m, txId)
+    : null;
+
   /**
    * The intent's own move, conditional on it still being open.
    *
@@ -918,12 +971,126 @@ async function creditWallet(
       transactionId: txId,
       settledAt: now,
       updatedAt: now,
+      /**
+       * IN THE SAME STATEMENT as `succeeded`, because
+       * `topup_intent_settled_order_is_answered` is an equivalence: a settled
+       * order request with no outcome is refused by the database, so the answer
+       * cannot be written a statement later.
+       */
+      ...(order
+        ? {
+            orderTransactionId: order.placed?.transaction.id ?? null,
+            orderResult: (order.placed as unknown as Record<string, unknown>) ?? null,
+            orderRefusalCode: order.refusal?.code ?? null,
+            orderRefusalMessage: order.refusal?.message ?? null,
+          }
+        : {}),
     })
     .where(and(eq(topUpIntent.id, intent.id), inArray(topUpIntent.status, predecessorsOf('succeeded'))))
     .returning();
 
   if (!next) throw conflict('topup_already_settled', 'That top-up has already settled.');
   return next as TopUpIntentRow;
+}
+
+/**
+ * THE ORDER A CARD PAID FOR, PLACED IN THE TRANSACTION THAT CREDITED THE CARD.
+ *
+ * Called by `creditWallet` after every credit write — balance, `topup` transaction,
+ * ledger pair, receipt, audit — and before the intent's own move. So the order sees
+ * the credited balance under the member lock `creditWallet` already holds, and the
+ * credit and the debit commit together (#3's spirit; migration 0058's header).
+ *
+ * =========================================================================
+ * THE RACE — WHAT HAPPENS WHEN THE ORDER CAN NO LONGER BE PLACED
+ * =========================================================================
+ * Minutes pass on the hosted page. By the time the gateway confirms, a product may
+ * be retired, a price may have moved, the salon may have switched the shop module
+ * off, or she may have deleted the delivery address. The card has ALREADY been
+ * charged — the gateway's confirmation is the event we are handling — so refusing
+ * the whole settlement would leave her paid and uncredited: the naive
+ * implementation's lost money.
+ *
+ * So the order runs inside a SAVEPOINT (`tx.transaction` on a transaction is a
+ * savepoint in drizzle). `placeOrder` refuses exactly as `POST /orders` does, by
+ * throwing, and the throw rolls back to the savepoint: the order's transaction row,
+ * ledger pair, lines, loyalty tick, shop receipt and audit row vanish. THE CREDIT
+ * ABOVE THE SAVEPOINT DOES NOT. Her wallet holds the money, the intent records the
+ * refusal's code and sentence, a `money` audit row says what happened,
+ * and `GET /orders/payments/{id}` tells her. The money is exactly where a top-up
+ * would have left it, and #5 is intact: it is wallet credit, spendable, and nothing
+ * was reversed to a card.
+ *
+ * AN UNEXPECTED ERROR IS A REFUSAL TOO, not a rollback of the settlement. A bug in
+ * the order path must not turn into a paid-and-uncredited customer; it becomes
+ * `order_failed`, logged with its cause, and the money is in her wallet. The one
+ * thing that still rolls the whole settlement back is a failure OUTSIDE the
+ * savepoint, which is the credit's own failure — and that was already true.
+ *
+ * THE PRICE IS RE-CHECKED, not re-decided. `expectedTotalFils` is what the card was
+ * charged; a basket that now prices differently is refused with `price_changed`
+ * before any debit, rather than debited at a figure she did not pay.
+ */
+async function placeAttachedOrder(
+  tx: Parameters<Parameters<Db['transaction']>[0]>[0],
+  intent: TopUpIntentRow,
+  m: { id: string; name: string },
+  topupTransactionId: string,
+): Promise<{ placed: OrderResult | null; refusal: { code: string; message: string } | null }> {
+  const request = intent.orderRequest as OrderPaymentRequest;
+  try {
+    const placed = await tx.transaction((sp) =>
+      placeOrder(
+        sp,
+        {
+          items: request.items,
+          fulfilment: request.fulfilment,
+          addressId: request.addressId ?? undefined,
+        },
+        {
+          memberId: m.id,
+          actor: { kind: 'member', id: m.id, name: m.name, role: 'Customer' },
+          ipAddress: null,
+          userAgent: null,
+          expectedTotalFils: intent.amountFils,
+        },
+      ),
+    );
+    return { placed, refusal: null };
+  } catch (err) {
+    const refusal =
+      err instanceof ApiError
+        ? { code: err.code, message: err.message }
+        : {
+            code: 'order_failed',
+            message:
+              'We could not place your order. The payment is in your wallet — you can pay for the basket from your balance.',
+          };
+    if (!(err instanceof ApiError)) {
+      console.error(`[order-payment] ${intent.id}: order placement failed unexpectedly`, err);
+    }
+    await writeAudit(tx, null, {
+      salonId: intent.salonId,
+      kind: 'money',
+      action: 'Card-paid order refused',
+      detail:
+        `${formatFils(intent.creditFils)} KD stays in ${m.name}'s wallet · ` +
+        `order not placed: ${refusal.code}`,
+      source: 'system',
+      subjectType: 'topup_intent',
+      subjectId: intent.id,
+      amountFils: intent.creditFils,
+      metadata: {
+        refusalCode: refusal.code,
+        topupTransactionId,
+        request: {
+          items: request.items,
+          fulfilment: request.fulfilment,
+        },
+      },
+    });
+    return { placed: null, refusal };
+  }
 }
 
 // ------------------------------------------------------- the two entry points --
