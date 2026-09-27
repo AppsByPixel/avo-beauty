@@ -130,23 +130,16 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     /**
-     * SECOND, AND ABOVE THE BUDGET: is this caller allowed to NAME A PRICE?
+     * WHO MAY NAME A PRICE: ANYONE WHO MAY CHARGE — the `scanner` gate at the top
+     * of this handler is the whole gate, and there is deliberately no second check.
      *
-     * `wantsCustom` is read here, before `chargeScannerBudget`, because that call
-     * WRITES — a `scanner_attempt` row, which is the whole point of it
-     * (services/scannerLimit.ts: "a refusal is an attempt"). Non-negotiable #7
-     * wants authority decided before any work, and a permission gate that sits
-     * after a write is a gate that lets an unauthorised caller spend the till's
-     * shared budget. Reading `req.body` costs nothing: fastify has already parsed
-     * it, and this line does not touch the database.
-     *
-     * The gate itself, and the whole argument for `perms.void` over `perms.charges`
-     * and `perms.scanner`, is at `custom` below.
+     * Until 2026-09-28 this line was `requireScannerPerm(req, 'void')`. The client
+     * overruled that on DECISIONS.md #109; the argument, what the ruling widens, and
+     * the safeguards that stay are at `custom` below. `wantsCustom` is still read
+     * here, above `chargeScannerBudget`, because it decides which pricing path runs
+     * and the budget call writes.
      */
     const wantsCustom = 'amountFils' in body;
-    if (wantsCustom) {
-      requireScannerPerm(req, 'void');
-    }
 
     /**
      * The till's budget — BEFORE any transaction is opened. See
@@ -164,76 +157,58 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
      * ========================================================================
      * The scanner could only ever charge what was on the service menu. A salon
      * doing something the menu does not name had no way to take the money
-     * through AVO at all. Aftab ruled the authority to type a figure to
-     * MANAGERS; what follows is the shape of it.
+     * through AVO at all. First ruled to MANAGERS (`perms.void`); widened by the
+     * client on 2026-09-28 to anyone who can charge — see the gate section below.
      *
      * ------------------------------------------------------------------------
-     * THE GATE IS ON THE PRESENCE OF THE FIELD, NOT ON THE BRANCH TAKEN.
+     * AN `amountFils` IS NEVER IGNORED.
      * ------------------------------------------------------------------------
-     * This is the single most important line in the feature and it is easy to
-     * write the other way round. The tempting version checks the permission
-     * inside the `if (custom)` branch, or — worse — ignores `amountFils` when the
-     * caller lacks authority and prices the basket instead. Both are wrong, and
-     * the second is a silent money bug of exactly the class the idempotency
-     * addendum rules against: a staff member types 40.000, the server charges the
-     * menu's 8.000, and the response says the charge succeeded. She has no way to
-     * learn that a different number moved.
-     *
-     * So an `amountFils` in the body is a CLAIM OF AUTHORITY, and it is answered
-     * before it is read. `'amountFils' in body` — not a truthiness test — so a
-     * `null`, a `0` and a string all reach the refusal rather than being dropped.
+     * When this was gated on `void`, the gate sat on the PRESENCE of the field so
+     * that an unauthorised `amountFils` was refused rather than dropped — a handler
+     * that silently priced the basket instead would charge the menu's 8.000 when
+     * the staff member typed 40.000, and say it succeeded. The gate has moved to
+     * `scanner`, which every caller who reaches this line already holds, but the
+     * rule survives in its other form: `'amountFils' in body` (not a truthiness
+     * test) selects the custom path, and a basket sent beside it is refused below
+     * rather than preferred.
      *
      * ------------------------------------------------------------------------
-     * WHY `perms.void`, AND WHY NOT THE OTHER TWO.
+     * THE GATE IS `perms.scanner` — A CLIENT DECISION, 2026-09-28 (DECISIONS #109).
      * ------------------------------------------------------------------------
-     *   `scanner` is the base permission every artist on the floor holds — it is
-     *       what "can scan & charge" means, and gating on it would be no gate.
+     * This feature shipped gated on `perms.void`, and the argument for that was
+     * sound: `void` is the senior scanner WRITE, and a custom amount is the same
+     * authority pointed the other way — a void decides a visit was worth nothing,
+     * a custom amount decides it was worth 25.000. `charges` was ruled out as a
+     * READ (Today's charges), and `scanner` as "no gate", because every artist on
+     * the floor holds it.
      *
-     *   `charges` is a READ. api-contract.md § StaffUser: "can open Today's
-     *       charges ON THE SCANNER". It is senior because the day's takings and
-     *       every customer's name are on that screen, but it moves no money.
-     *       Reusing a read to grant a write is precisely the overload
-     *       `auth/principal.ts § StaffPerms.loyalty` spends forty lines
-     *       apologising for — a permission whose name stopped describing what it
-     *       controls, now unrenameable without a four-way break. Doing it
-     *       deliberately a second time to save a migration would be repeating a
-     *       mistake this codebase has already written down. It is also concretely
-     *       wrong: `charges: true, void: false` is the supervisor shape — trusted
-     *       to read the till, not to move money — and it is exactly the person
-     *       who must not be able to invent a price.
+     * AVO's client was shown that trade-off in plain terms and chose the other side
+     * of it: *anyone who can charge may type a custom amount* — which is his own
+     * original ask, "scan: make sure they can put a custom amount". "Anyone who can
+     * charge" is `perms.scanner` (the gate on `POST /charges` itself), NOT
+     * `perms.charges`, which is the senior read. So the extra check is REMOVED
+     * rather than replaced: the effective gate on a typed price is now exactly the
+     * gate on a menu charge, and a second `scanner` check would be a line that
+     * could only ever agree with the one above it.
      *
-     *   `void` is the senior scanner WRITE: "can reverse a charge within 15 min",
-     *       and it implies `charges` both in `permsOf` and at the database. It is
-     *       a staff member's own judgement substituted for what the menu said,
-     *       moving money outside the catalogue. A custom amount is structurally
-     *       the same authority pointed the other way — a void decides this visit
-     *       was worth nothing, a custom amount decides it was worth 25.000 — and
-     *       it is operationally "manager", which is the ruling.
+     * THE WIDENING IS REAL AND IT IS DELIBERATE. Every existing `scanner` holder —
+     * every artist with a PIN — can now type any price up to the ceiling. That was
+     * the point being argued against, and it was overruled, which is a different
+     * thing from being wrong. A reader should not conclude it was an accident.
      *
-     * ------------------------------------------------------------------------
-     * THE COST OF NOT ADDING A TENTH PERMISSION, STATED RATHER THAN BURIED.
-     * ------------------------------------------------------------------------
-     * A void is BOUNDED — it can only return what was already taken, only within
-     * fifteen minutes. A custom amount is unbounded and forward-looking. So
-     * `void` is strictly LESS authority than what it is now gating, and granting
-     * it today silently widens what every existing holder can do tomorrow.
+     * WHAT STAYS, BECAUSE HE WAS TOLD IT WOULD:
+     *   - the written REASON is required on every custom charge (below, and
+     *     `transaction_custom_amount_has_note` in migration 0049);
+     *   - it is a MARKED row (`custom_amount = true`) with its OWN audit action;
+     *   - the CEILING, `CUSTOM_AMOUNT_MAX_FILS` — 200.000 KD;
+     *   - the FIFTEEN-MINUTE VOID WINDOW, and voiding still needs `perms.void`.
      *
-     * That is a real consequence and the alternative is a tenth permission —
-     * `perms.customAmount` — which would be the honest gate and is a four-way
-     * break a lane may not make: `PERMISSION_NAMES`, `PERM_COLUMN`, a
-     * `staff_user` column, `StaffPermsSchema` in trunk-owned `packages/types`,
-     * `PERMISSION_COPY`, the Accounts → Team chips in Lane C's column and Lane
-     * D's permission census all move together. Escalated, not done.
+     * So a junior can make a custom charge and a senior can reverse it — the same
+     * split the menu charge has always had, which is consistent rather than a gap.
+     * A tenth permission (`perms.customAmount`) remains the honest way to narrow
+     * this again if the client ever wants to; it is a four-way break across
+     * `PERMISSION_NAMES`, `staff_user`, `StaffPermsSchema` and the Team chips.
      *
-     * What makes the widening survivable in the meantime is that it is not
-     * silent where it matters: every custom charge is a `custom_amount = true`
-     * row with a required reason, its own audit action, and a fifteen-minute
-     * void window.
-     *
-     * THE CHECK ITSELF IS HOISTED, twenty lines up, above `chargeScannerBudget`.
-     * It has to be: that call writes a `scanner_attempt` row, and an authority
-     * decided after a write is decided too late. The argument lives here, beside
-     * the field it is about; the statement lives where it can be first.
      */
 
     /**
