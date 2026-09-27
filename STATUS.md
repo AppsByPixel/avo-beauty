@@ -352,6 +352,19 @@ Settings, notification bell top-right, create appointments by hand for existing 
 non-existing* customers, and mark/cancel/change-date/reassign. **All six done and promoted**;
 5 and 6 carry six trunk decisions recorded in `DECISIONS.md` under "Manual appointments".
 
+**THE THIRD LIST, given 2026-09-28 — six for the wallet, one for the staff scanner.**
+Checked against the code before anything was built; several were not what they read as.
+
+| # | What he asked for | What was actually true | State |
+|---|---|---|---|
+| W1 | Branch selection missing | Booking and shop pick-up already have a picker; the design draws no other. | **Parked by Aftab** ("move onto the next one"). Open — ask where. |
+| W2 | Payment methods in the shop | Orders were **wallet-only** — `services/order.ts` hard-codes `method: 'wallet'`. A real gap and a new money path. | In progress — lane A (reuse the top-up gateway path; no second one). |
+| W3 | Invoice sent after a product purchase | The on-screen invoice already appears. Email sending is **built but off**: `RECEIPT_DRIVER` defaults to `logging` and is unset on Vercel; transport is Resend. | **Held by Aftab ("not yet")** — needs his Resend account, a verified domain, and the AVO-vs-per-salon domain decision. |
+| W4 | Notification bell in the wallet | Only notification **preferences** existed; no feed a customer can open. | In progress — lane A (API), then lane B. |
+| W5 | "Contact us" should look clickable | Exists in three places. | In progress — lane B. |
+| W6 | Activity "show more" cannot be shortened again | "Show less" was **omitted on purpose** — the design has no such string. Now authorised new copy. | In progress — lane B. |
+| S7 | Scanner: custom amount | **Already existed**, but only for `perms.void` holders — why he could not find it. | In progress — gate moves to `perms.scanner` (DECISIONS #109, answered). |
+
 **Rows 2, 3, 4 and 8 are ticked from commit evidence rather than from a session driving them.**
 That is weaker than the rest of this table and is said out loud rather than smoothed over.
 
