@@ -546,18 +546,25 @@ app.post('/charges', async (req, reply) => {
    * `'amountFils' in body` — not a truthiness test — so `null`, `0` and a string
    * all reach the refusal rather than being silently dropped.
    *
-   * The 403 copy is the VOID refusal verbatim, because `perms.void` is the
-   * permission the real API checks: `requireScannerPerm(req, 'void')`. If that
-   * ruling changes, this string and `/voids` change together.
+   * THERE IS NO CUSTOM-AMOUNT GATE HERE ANY MORE, AND THAT IS THE RULING.
+   *
+   * This used to refuse `amountFils` under `noperms` with the VOID refusal,
+   * mirroring the real API's `requireScannerPerm(req, 'void')`. On 2026-09-28
+   * Aftab answered DECISIONS #109: anyone who can charge may type a custom
+   * amount. The real API now gates it on `perms.scanner` — the same permission
+   * an ordinary charge needs — with no extra check (`routes/charges.ts`).
+   *
+   * Rewording this to the scanner refusal would have been WRONG, not merely
+   * stale. `noperms` is Hessa, ST-002: scanner ON, charges and void OFF
+   * (`e2e/permissions.test.ts`). She can scan and charge, so under the new rule
+   * she CAN type a price. A mock that still refused her would show a scanner
+   * built against it a refusal the real API never sends.
+   *
+   * The reason field and the 200.000 KD ceiling below are unchanged — they were
+   * the safeguards the ruling kept.
    */
   const asRecord = (req.body ?? {}) as Record<string, unknown>;
   const wantsCustom = 'amountFils' in asRecord;
-  if (wantsCustom && has(req, 'noperms')) {
-    return reply.code(403).send({
-      error: 'forbidden',
-      message: "You don't have permission to void a charge. A manager can grant it.",
-    });
-  }
   if (wantsCustom && body.serviceIds !== undefined) {
     return reply.code(400).send({
       error: 'ambiguous_pricing',
