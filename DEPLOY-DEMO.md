@@ -83,9 +83,15 @@ Hit the URL a minute before showing it to anybody.
 
 | | | |
 |---|---|---|
-| Dashboard | Render static site | free, no spin-down, CDN |
-| API | Render web service | free, spins down when idle |
-| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **provisioned 2026-09-13, migrated to 0049, seeded, 103/103 verified 2026-09-14** |
+| Dashboard | **Vercel** — project `avo-dashboard` → `avo-dashboard-coral.vercel.app` | static Vite build |
+| API | **Vercel** — project `avo-api` → `avo-api.vercel.app` | serverless function, `api/index.ts` |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0056 on 2026-09-27** |
+
+**HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
+for two weeks after both services were live on Vercel. `render.yaml` still
+exists and is not what serves anything. Deployed state as of 2026-09-27: both
+projects on `main` @ `62ccbd1`, deployed by hand from the CLI — **neither
+project auto-deploys from git**, so a push to `main` changes nothing live.
 
 Postgres is **not on Render** deliberately: its own free database has
 historically been time-limited, and a demo database that expires a month later
@@ -114,9 +120,21 @@ yours — I can prepare everything else, and have.
 ### 1 · Database — **already done**
 
 Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
-is migrated (through `0049`), is seeded, and passes all **103** invariants —
-re-verified 2026-09-14. Both connection strings are in the scratchpad file named
-in the handover note, not in this repo.
+is migrated (through `0056`, applied 2026-09-27), is seeded, and passed all
+**103** invariants on 2026-09-14.
+
+**THE OWNER PASSWORD IS IN AFTAB'S PASSWORD MANAGER, AND NOWHERE ELSE.** This
+paragraph used to say the connection strings were "in the scratchpad file named
+in the handover note". That file lived under `/private/tmp`, which the OS
+clears, and it was gone by the next deploy. Vercel's copy is no substitute:
+every variable on both projects is marked **Sensitive**, so it can never be
+read back — not in the dashboard, not by `vercel env pull`. The password was
+reset on 2026-09-27 as a result. **Never keep a credential in a scratchpad.**
+
+Resetting the owner (`postgres`) password does not affect the running API: it
+connects as `avo_app` via `APP_DATABASE_URL` (`api/src/db/client.ts:25`), and
+only migrations and seeding use the owner login. **Vercel's `DATABASE_URL` still
+holds the pre-reset password**; nothing at runtime reads it, but update it.
 
 **Run the invariants against it with `psql` directly, NOT with `pnpm run
 db:verify`:**
@@ -309,6 +327,46 @@ is the default.
   here came from grepping for `/health` and not for `/_health`, which is a
   search that answers a slightly different question than the one asked. Use it
   for any platform health check.
+
+**Found deploying `62ccbd1` on 2026-09-27 — each one cost real time:**
+
+- **Order is migrate → API → dashboard, and it is not optional.** Neither build
+  runs migrations. The API on `main` reads columns later migrations add, so an
+  API deployed ahead of its schema 500s on every booking read; a dashboard
+  deployed ahead of its API calls routes that 404. The second one happened: the
+  dashboard was deployed 8h ahead of a 12-day-old API, and the bell, Customers
+  and Deposits 404'd in production.
+- **The direct host is IPv6-only.** `db.ndzmbfeyymvyiwpbjxfk.supabase.co` has no
+  A record, and a network with no IPv6 route gets `EHOSTUNREACH` before any
+  password is checked. Migrate through the **session pooler** instead —
+  `aws-0-eu-central-1.pooler.supabase.com:5432`, user
+  `postgres.ndzmbfeyymvyiwpbjxfk`. Port **5432**, never the 6543 transaction
+  pooler: `migrate.ts` opens a plain `postgres()` connection with prepared
+  statements, which the transaction pooler cannot carry.
+- **Stage a production deploy before it takes traffic.**
+  `vercel deploy --prod --skip-domain` builds with the Production variables but
+  leaves the domain on the old deployment. A plain preview is useless here —
+  every variable is Production-scoped, so a preview boots with no database.
+- **Staged URLs sit behind Vercel deployment protection.** Plain `curl` gets
+  Vercel's own `401 Protected deployment`, not the API. Use
+  `vercel curl <path> --deployment <url>`, which authenticates through the
+  logged-in CLI. `GET /v1/platform/policies` is the unauthenticated read that
+  proves the API reached the database.
+- **`vercel promote` then read past the edge cache.** For about a minute after a
+  promote, the domain served the old deployment's cached 404s. `vercel inspect
+  <domain>` is the authority for which deployment the alias names; add a
+  `?cb=<timestamp>` to see what it actually serves.
+- **Deploy the dashboard by project ID, do not relink.** The repo root is linked
+  to `avo-api`. `VERCEL_ORG_ID=team_etcYGwyZWgoHaBFOqnhGQX9g
+  VERCEL_PROJECT_ID=prj_T9nM2gg645o0FoPodzgHM7hYvrLz vercel deploy …` targets
+  `avo-dashboard` without moving that link, which would break the next API deploy.
+- **A CLI `ETIMEDOUT` is not a failed deploy.** It is the CLI's status poll
+  losing its connection. `vercel inspect <deployment-id>` said `Ready`. Deploying
+  again would have raced two builds for one domain.
+- **Check the bundle before promoting the dashboard.** `VITE_AVO_API_URL` is
+  inlined at build and `config.ts:4` falls back to `http://localhost:4000`. Grep
+  the served `index-*.js` for `avo-api.vercel.app` and for the absence of
+  `localhost:4000`.
 
 ---
 
