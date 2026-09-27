@@ -1,6 +1,11 @@
 /**
  * `POST /orders` — the shop checkout, api-contract.md § Operations.
  *
+ * AND `POST /orders/payments` + `GET /orders/payments/{id}` — the same checkout
+ * paid by KNET, card or Apple Pay (client ask 2, migration 0058). Not a second
+ * gateway path: a top-up intent sized to the order, with the order placed by the
+ * settlement. `services/orderPayment.ts` carries the design and the fee question.
+ *
  * The customer's own money-moving POST, so it looks like `POST /bookings` rather
  * than like `POST /charges`: `requireMember` first, then the key, then the body.
  * The one transaction that does the work is services/order.ts, which carries the
@@ -23,7 +28,12 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
-import { requireDashboardPerm, requireMember, requireSameSalon } from '../auth/principal';
+import {
+  hasScenario,
+  requireDashboardPerm,
+  requireMember,
+  requireSameSalon,
+} from '../auth/principal';
 import { badRequest, conflict, notFound } from '../http/errors';
 import { serialiseMemberContact } from '../http/serialise';
 import { requireString } from '../money/validate';
@@ -117,6 +127,10 @@ import {
   readIdempotencyKey,
 } from '../services/idempotency';
 import { performOrder, type OrderLineInput } from '../services/order';
+import { createOrderPayment, readOrderPayment } from '../services/orderPayment';
+import { parseMethod } from '../services/topup';
+import { env } from '../env';
+import { simulationHint } from './topups';
 
 /** A cart's ceiling. Wider than any drawn catalog, narrow enough to bound a body. */
 const MAX_LINES = 50;
@@ -180,6 +194,88 @@ function parseItems(raw: unknown): OrderLineInput[] {
   });
 }
 
+/**
+ * The body of a checkout, validated — shared by `POST /orders` (pay from the
+ * wallet) and `POST /orders/payments` (pay by card), so the two cannot come to
+ * disagree about what a basket is. Every refusal is the one `POST /orders` has
+ * always given, in the order it has always given them.
+ */
+function parseOrderBody(body: Record<string, unknown>): {
+  items: OrderLineInput[];
+  fulfilment: 'pickup' | 'delivery';
+  addressId: string | undefined;
+} {
+  /**
+   * NO PRICES, AND THEY ARE REFUSED RATHER THAN IGNORED.
+   *
+   * `POST /bookings` refuses `depositFils` and `branchId` by name for this
+   * reason, and it is the stronger treatment where money is concerned: a
+   * client that sent `unitPriceFils` believed it was setting the price, and
+   * silently ignoring it means the customer is charged an amount her app never
+   * showed her. A `status` on a campaign is ignored because the field is not
+   * the client's to have an opinion about; a price is one it might act on.
+   */
+  for (const field of ['priceFils', 'unitPriceFils', 'totalFils', 'amountFils'] as const) {
+    if (field in body) {
+      throw badRequest(
+        'price_not_client_supplied',
+        `A product's price comes from the salon's catalog, not from ${field} in the request.`,
+      );
+    }
+  }
+  /** The server resolves the branch. services/branch.ts § "the fix that must not be taken". */
+  if ('branchId' in body) {
+    throw badRequest(
+      'branch_not_client_supplied',
+      "An order's branch is resolved by the server, not sent by the client.",
+    );
+  }
+
+  const items = parseItems(body.items);
+
+  /**
+   * THE FORK (PRIOR-ART.md § Lean's shop). Lean keeps pickup and delivery both
+   * live, so this is a choice and not a migration off collection.
+   *
+   * OMITTED IS PICKUP — the behaviour that shipped before the field existed.
+   * An unknown value is REFUSED BY NAME rather than falling back to pickup: a
+   * client that sent `"DELIVERY"` believed it had chosen delivery, and quietly
+   * collecting instead is the shape of wrong answer that reads as working.
+   *
+   * NO FEE, so this changes no amount and adds no money path. `POST /orders`
+   * keeps its idempotency key because it debits a wallet for the GOODS, which
+   * it already did.
+   */
+  const rawFulfilment = body.fulfilment;
+  if (rawFulfilment !== undefined && rawFulfilment !== 'pickup' && rawFulfilment !== 'delivery') {
+    throw badRequest(
+      'invalid_fulfilment',
+      'fulfilment must be "pickup" or "delivery", or omitted for pickup.',
+    );
+  }
+  const fulfilment = (rawFulfilment ?? 'pickup') as 'pickup' | 'delivery';
+  const addressId =
+    body.addressId === undefined || body.addressId === null
+      ? undefined
+      : requireString(body.addressId, 'addressId', 100);
+
+  /**
+   * THE ADDRESS IS AN ID, NEVER THE FIELDS. A client posting `block`/`street`
+   * here would be writing an address into an order that never entered her book
+   * — unreviewable, unreusable, and the door through which Lean's four-fields-
+   * from-one-input arrives. Refused by name, like a price and a branch.
+   */
+  for (const field of ['block', 'street', 'building', 'address'] as const) {
+    if (field in body) {
+      throw badRequest(
+        'address_not_client_supplied',
+        `A delivery address comes from your saved addresses as addressId, not from ${field}.`,
+      );
+    }
+  }
+
+  return { items, fulfilment, addressId };
+}
 export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
   /**
    * `GET /members/me/orders` — HER side of the three statuses.
@@ -402,75 +498,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
     const key = readIdempotencyKey(req);
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-
-    /**
-     * NO PRICES, AND THEY ARE REFUSED RATHER THAN IGNORED.
-     *
-     * `POST /bookings` refuses `depositFils` and `branchId` by name for this
-     * reason, and it is the stronger treatment where money is concerned: a
-     * client that sent `unitPriceFils` believed it was setting the price, and
-     * silently ignoring it means the customer is charged an amount her app never
-     * showed her. A `status` on a campaign is ignored because the field is not
-     * the client's to have an opinion about; a price is one it might act on.
-     */
-    for (const field of ['priceFils', 'unitPriceFils', 'totalFils', 'amountFils'] as const) {
-      if (field in body) {
-        throw badRequest(
-          'price_not_client_supplied',
-          `A product's price comes from the salon's catalog, not from ${field} in the request.`,
-        );
-      }
-    }
-    /** The server resolves the branch. services/branch.ts § "the fix that must not be taken". */
-    if ('branchId' in body) {
-      throw badRequest(
-        'branch_not_client_supplied',
-        "An order's branch is resolved by the server, not sent by the client.",
-      );
-    }
-
-    const items = parseItems(body.items);
-
-    /**
-     * THE FORK (PRIOR-ART.md § Lean's shop). Lean keeps pickup and delivery both
-     * live, so this is a choice and not a migration off collection.
-     *
-     * OMITTED IS PICKUP — the behaviour that shipped before the field existed.
-     * An unknown value is REFUSED BY NAME rather than falling back to pickup: a
-     * client that sent `"DELIVERY"` believed it had chosen delivery, and quietly
-     * collecting instead is the shape of wrong answer that reads as working.
-     *
-     * NO FEE, so this changes no amount and adds no money path. `POST /orders`
-     * keeps its idempotency key because it debits a wallet for the GOODS, which
-     * it already did.
-     */
-    const rawFulfilment = body.fulfilment;
-    if (rawFulfilment !== undefined && rawFulfilment !== 'pickup' && rawFulfilment !== 'delivery') {
-      throw badRequest(
-        'invalid_fulfilment',
-        'fulfilment must be "pickup" or "delivery", or omitted for pickup.',
-      );
-    }
-    const fulfilment = (rawFulfilment ?? 'pickup') as 'pickup' | 'delivery';
-    const addressId =
-      body.addressId === undefined || body.addressId === null
-        ? undefined
-        : requireString(body.addressId, 'addressId', 100);
-
-    /**
-     * THE ADDRESS IS AN ID, NEVER THE FIELDS. A client posting `block`/`street`
-     * here would be writing an address into an order that never entered her book
-     * — unreviewable, unreusable, and the door through which Lean's four-fields-
-     * from-one-input arrives. Refused by name, like a price and a branch.
-     */
-    for (const field of ['block', 'street', 'building', 'address'] as const) {
-      if (field in body) {
-        throw badRequest(
-          'address_not_client_supplied',
-          `A delivery address comes from your saved addresses as addressId, not from ${field}.`,
-        );
-      }
-    }
+    const { items, fulfilment, addressId } = parseOrderBody(body);
 
     const idem = {
       scope: principalScope(p),
@@ -539,5 +567,65 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
         'That request is still being processed. Try again in a moment.',
       );
     }
+  });
+
+  // ------------------------------------------------------ POST /orders/payments --
+  /**
+   * PAY FOR THIS BASKET BY KNET, CARD OR APPLE PAY. Client ask 2.
+   * `services/orderPayment.ts` carries the design — a top-up intent sized to the
+   * order, with the order attached, placed by the server when the money arrives.
+   *
+   * THE SAME DOOR DISCIPLINE AS `POST /orders`: `requireMember` first, then the key
+   * (#4 — this moves money), then the body through the SAME `parseOrderBody`, so a
+   * client price, a client branch and a client address are refused here exactly as
+   * they are there. 201 with `{ intent, order }`; the wallet opens
+   * `intent.redirectUrl`, and on return reads `GET /orders/payments/{id}`.
+   */
+  app.post('/orders/payments', async (req, reply) => {
+    const p = requireMember(req);
+    const key = readIdempotencyKey(req);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { items, fulfilment, addressId } = parseOrderBody(body);
+    const method = parseMethod(body.method);
+
+    const idem = {
+      scope: principalScope(p),
+      endpoint: 'POST /orders/payments',
+      key,
+      requestHash: hashRequestBody({ items, fulfilment, addressId: addressId ?? null, method }),
+    };
+
+    try {
+      const view = await createOrderPayment(
+        db,
+        { order: { items, fulfilment, addressId }, method },
+        {
+          principal: p,
+          idempotency: idem,
+          failCreate: env.gatewayDriver === 'sandbox' && hasScenario(req, 'gateway_create_error'),
+        },
+      );
+      return reply.code(201).send(view);
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const stored = await awaitCommittedKey(db, idem);
+      if (stored) return reply.code(stored.status).send(stored.body);
+      throw conflict(
+        'request_in_progress',
+        'That request is still being processed. Try again in a moment.',
+      );
+    }
+  });
+
+  // -------------------------------------------------- GET /orders/payments/:id --
+  /**
+   * The authoritative read on her return — `GET /topups/{id}`'s rule: an open intent
+   * is settled from OUR read of the gateway, never from the URL she came back with.
+   * For this intent, settling is what places the order.
+   */
+  app.get<{ Params: { id: string } }>('/orders/payments/:id', async (req, reply) => {
+    const p = requireMember(req);
+    return reply.send(await readOrderPayment(db, p, req.params.id, simulationHint(req)));
   });
 }

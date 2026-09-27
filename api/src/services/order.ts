@@ -96,7 +96,7 @@ import { memberAddress, shopOrder } from '../db/schema/delivery';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
-import { writeAudit } from './audit';
+import { writeAudit, type AuditActor } from './audit';
 import { nextTransactionId } from './ids';
 
 /** One cart line, after validation. */
@@ -186,515 +186,635 @@ export async function performOrder(
     // rather than after money has moved, and the caller replays the winner.
     const keyId = await claimKey(tx, ctx.idempotency);
 
-    // ------------------------------------------------------------- 2. member --
-    // FOR UPDATE serialises this against a concurrent charge, top-up or booking
-    // on the same wallet, so the balance read is the balance debited.
-    const [m] = await tx
-      .select()
-      .from(member)
-      .where(eq(member.id, ctx.principal.id))
-      .for('update')
-      .limit(1);
-    if (!m) throw notFound('unknown_member', 'No such member.');
-
-    const [s] = await tx.select().from(salon).where(eq(salon.id, m.salonId)).limit(1);
-    if (!s) throw notFound('unknown_salon', 'No such salon.');
-
-    /**
-     * ------------------------------------------------------- 3. module gate --
-     *
-     * `modules.shop` defaults OFF — AVO-Beauty-Product-Description-v2.md
-     * § Settings, and the dashboard's own toggle copy says "Default off". A
-     * wallet that hides the Shop tab for a salon with the module off is a
-     * courtesy; non-negotiable #7 says a courtesy is not a control, and this
-     * endpoint takes money out of a wallet. `POST /bookings` has the identical
-     * gate for the identical reason.
-     */
-    if (!s.moduleShop) {
-      throw conflict('shop_not_enabled', 'This salon does not sell products through AVO.');
-    }
-
-    // ------------------------------------------------------------- 4. basket --
-    const ids = input.items.map((i) => i.productId);
-    const rows = await tx
-      .select({ id: product.id, name: product.name, priceFils: product.priceFils })
-      .from(product)
-      .where(
-        and(
-          inArray(product.id, ids),
-          // HER OWN SALON. Another salon's product is not priceable here — the
-          // same tenant boundary `POST /charges` puts on a service id, and the
-          // case lane D has written down as owed for the shop.
-          eq(product.salonId, m.salonId),
-          eq(product.active, true),
-        ),
-      );
-
-    /**
-     * An unknown or retired id must not silently price at 0 and settle a real
-     * transaction for goods that do not exist — the defect lane D found on the
-     * mock's charge path. Named, not counted: a client cannot fix "one of your
-     * items is unavailable".
-     */
-    const priced = new Map(rows.map((r) => [r.id, r]));
-    const unknown = ids.filter((id) => !priced.has(id));
-    if (unknown.length > 0) {
-      throw badRequest(
-        'invalid_products',
-        `Unknown or unavailable product: ${unknown.join(', ')}.`,
-        { unknown },
-      );
-    }
-
-    /**
-     * Priced from the database, line by line. A price in the request body is a
-     * client that can buy a 12.000 KD mask for 0.001 — non-negotiable #2, and the
-     * same rule that keeps `service.price_fils` the only source of a basket total.
-     *
-     * INTEGER FILS THROUGHOUT: `qty` is a validated integer, `priceFils` is a
-     * `bigint` column typed `Fils`, and the accumulation goes through `add` from
-     * @avo/types. `qty * priceFils` is the only multiplication of money anywhere
-     * in this API, and `shop_order_line_total_matches_qty` re-checks it in the
-     * database, so a float reaching it does not commit.
-     */
-    const lines: OrderLineResult[] = input.items.map((i) => {
-      const p = priced.get(i.productId);
-      // Unreachable — the `unknown` check above threw — but the map lookup is
-      // typed optional and a `!` here would be the one assertion in this file.
-      if (!p) throw badRequest('invalid_products', `Unknown product: ${i.productId}.`);
-      const unit = fils(p.priceFils);
-      return {
-        productId: p.id,
-        name: p.name,
-        qty: i.qty,
-        unitPriceFils: unit,
-        lineTotalFils: fils(unit * i.qty),
-      };
-    });
-
-    const total = lines.reduce<Fils>((sum, l) => add(sum, fils(l.lineTotalFils)), fils(0));
-
-    // -------------------------------------------------------------- 5. debit --
-    const balance = fils(m.balanceFils);
-    if (total > balance) {
-      // Nothing else happened: this throw rolls the transaction back, so the
-      // idempotency key is untouched and she can retry after topping up. The
-      // wallet's cart already renders the shortfall — "Balance too low by …" —
-      // from the 402's `shortfallFils`.
-      throw insufficientBalance(total, balance);
-    }
-    const balanceAfter = subtract(balance, total);
-
-    /**
-     * The branch, resolved by the SERVER, exactly as a booking's is. A customer
-     * placing an order has not told us where she is and must not be asked: a
-     * client naming its own branch is a client choosing its own reporting bucket
-     * — services/branch.ts § "the fix that must not be taken". A single-branch
-     * salon is `established`; a multi-branch one is an attribution and the row
-     * says so through `branch_assumed`.
-     *
-     * Nothing here reads `established`, because nothing here pays out on the
-     * branch — see the header on promotions. It is carried onto the row so
-     * per-branch shop revenue is filterable rather than indistinguishable from a
-     * figure that was known.
-     */
-    const branch = await resolveBranch(tx, m.salonId, undefined);
-    const now = new Date();
-    const txId = await nextTransactionId(tx);
-
-    /**
-     * ============================================================ 5a. THE DEBIT
-     * A CONDITIONAL, RELATIVE UPDATE WHOSE ROW COUNT DECIDES — the second guard,
-     * and the answer to trunk's question about whether this path needed one.
-     *
-     * IT DOES. The measurement that settled it: with `FOR UPDATE` removed from step
-     * 2, five concurrent orders of 9.000 KD against a 15.250 balance ALL settled,
-     * every one of them reported `balanceAfterFils: 6250`, and `member.balance_fils`
-     * ended 36000 fils apart from the ledger. Every CHECK in the schema was
-     * satisfied throughout — including both non-negative balance constraints,
-     * because each writer wrote the same plausible number — and only invariant 5's
-     * reconciliation could see it.
-     *
-     * "Is the reconciliation enough?" No, and the reason is what reconciliation IS:
-     * it runs later, on demand, and it reports a discrepancy after five customers
-     * have received goods for the price of one. `db:verify` is a net, not a control.
-     * A charge has two layers precisely so that one failing is survivable, and
-     * money-out through a self-service endpoint deserves the same.
-     *
-     * THIS IS THE IDIOM ALREADY TRUSTED HERE, not a new mechanism.
-     * `services/walletToken.ts § consumeToken` is one conditional UPDATE whose row
-     * count decides, and its header says exactly why a read-then-write cannot do
-     * the job: "Two scanners racing the same code both read `consumed_at IS NULL`,
-     * both decide they may proceed, and both debit. With the conditional UPDATE the
-     * second statement blocks on the row lock the first holds; when the first
-     * commits, the second re-evaluates its WHERE against the committed row, matches
-     * nothing, and returns zero rows." Substitute "balance" for "consumed_at" and
-     * the paragraph is about this statement.
-     *
-     * BOTH HALVES ARE LOAD-BEARING, and the relative SET is the half that is easy
-     * to leave out:
-     *
-     *   WHERE balance_fils >= total   is what refuses the loser.
-     *   SET   balance_fils - total    is what makes the winner's arithmetic happen
-     *                                 IN the database.
-     *
-     * A conditional WHERE with `SET balance_fils = <precomputed 6250>` would still
-     * write the stale number, so the lost update would survive the guard. The
-     * subtraction has to be the database's.
-     *
-     * `RETURNING balance_fils` because the ledger's `balance_after_fils` must be
-     * what actually landed, not what this transaction predicted. Under the lock in
-     * step 2 those agree; the point of a second layer is to be right when the first
-     * one is not there.
-     *
-     * A ZERO ROW COUNT IS A 402, NOT A 500. The only way the predicate fails is a
-     * balance that moved between the read and the write, which means she cannot
-     * afford it after all — the same answer the read-time check gives, for the same
-     * reason, and the shortfall is recomputed from the row that refused.
-     */
-    const debited = await tx
-      .update(member)
-      .set({
-        balanceFils: sql`${member.balanceFils} - ${total}`,
-        updatedAt: now,
-      })
-      .where(and(eq(member.id, m.id), gte(member.balanceFils, total)))
-      .returning({ balanceFils: member.balanceFils });
-
-    const landed = debited[0];
-    if (!landed) {
-      /**
-       * Re-read to report the truth rather than the stale figure. Unreachable while
-       * step 2 holds the row — which is the point: this is the layer that speaks
-       * when the other one is gone.
-       */
-      const [fresh] = await tx
-        .select({ balanceFils: member.balanceFils })
-        .from(member)
-        .where(eq(member.id, m.id))
-        .limit(1);
-      throw insufficientBalance(total, fils(fresh?.balanceFils ?? 0));
-    }
-    /**
-     * The database's answer, not this transaction's prediction. They agree under the
-     * lock, and asserting the agreement rather than assuming it is what would have
-     * caught the lost update at the moment it happened instead of at the next
-     * `db:verify`.
-     */
-    if (landed.balanceFils !== balanceAfter) {
-      throw new Error(
-        `order debit landed at ${landed.balanceFils} but this transaction computed ` +
-          `${balanceAfter}. The wallet moved under an open transaction, which means ` +
-          `the FOR UPDATE in step 2 is not holding.`,
-      );
-    }
-
-    /**
-     * ------------------------------------------------ 5b. the fulfilment --
-     *
-     * Resolved BEFORE the transaction row is written, so a delivery to an
-     * address that is not hers refuses before any money moves. The lookup is
-     * scoped to `member_id`, so another customer's address id is a 404 rather
-     * than a 403 — a 403 would confirm it exists.
-     *
-     * NOTHING HERE TOUCHES AN AMOUNT. There is no delivery fee (PRIOR-ART.md
-     * § Lean: no `deliveryCharge`, `deliveryFee` or `shippingFee` anywhere), so
-     * choosing delivery cannot change `total`, and this whole feature stays off
-     * the money path. If a fee is ever added, that is a separate decision and
-     * this comment is the thing it has to argue with.
-     */
-    const fulfilment = input.fulfilment ?? 'pickup';
-    let address: typeof memberAddress.$inferSelect | null = null;
-    if (fulfilment === 'delivery') {
-      if (!input.addressId) {
-        throw badRequest('address_required', 'A delivery needs one of your saved addresses.');
-      }
-      const [row] = await tx
-        .select()
-        .from(memberAddress)
-        .where(
-          and(
-            eq(memberAddress.id, input.addressId),
-            eq(memberAddress.memberId, m.id),
-            isNull(memberAddress.deletedAt),
-          ),
-        )
-        .limit(1);
-      if (!row) throw notFound('unknown_address', 'No such address.');
-      address = row;
-    } else if (input.addressId) {
-      throw badRequest(
-        'address_not_for_pickup',
-        'A pickup order takes no address. Choose delivery, or omit the address.',
-      );
-    }
-
-    // ------------------------------------------------- 6. transaction record --
-    await tx.insert(transaction).values({
-      id: txId,
-      memberId: m.id,
-      salonId: m.salonId,
-      branchId: branch.branchId,
-      branchAssumed: !branch.established,
-      kind: 'shop',
-      // Negative: the sign CHECK on `transaction` says a `shop` row debits, and
-      // `product_price_positive` is what stops it being zero.
-      amountFils: fils(-total),
-      method: 'wallet',
-      status: 'settled',
-      // "AVO-SH-76888" — the reference the design's transaction detail sheet
-      // renders for a shop order, `AVO Wallet Home.dc.html:1573`.
-      reference: `AVO-SH-${txId.slice(3)}`,
-      /**
-       * NO COMMISSION. `fee_fils` defaults to 0 and is left there, matching the
-       * charge path: AVO's commission is taken when money ENTERS the ecosystem
-       * through a PSP, and this purchase moves an existing balance from a wallet
-       * to a salon with no gateway involved. `commissionFor` is a top-up concept.
-       */
-      createdAt: now,
-      settledAt: now,
-    });
-
-    // ------------------------------------------------------------- 7. ledger --
-    // Double entry, balanced per transaction. The DEFERRABLE constraint trigger
-    // from migration 0001 checks the pair at COMMIT.
-    // "Value delivered by the salon: services rendered, PRODUCTS SOLD" —
-    // db/schema/ledger.ts already names this case on the account it belongs to,
-    // and it is the same posting the counter charge makes, so it is the same
-    // function: `walletSpendPosting`.
-    await tx.insert(ledgerEntry).values(
-      walletSpendPosting({
-        transactionId: txId,
-        salonId: m.salonId,
-        memberId: m.id,
-        amountFils: total,
-        balanceAfterFils: balanceAfter,
-      }),
-    );
-
-    // -------------------------------------------------------- 7a. the lines --
-    await tx.insert(shopOrderLine).values(
-      lines.map((l) => ({
-        transactionId: txId,
-        productId: l.productId,
-        name: l.name,
-        qty: l.qty,
-        unitPriceFils: fils(l.unitPriceFils),
-        lineTotalFils: fils(l.lineTotalFils),
-      })),
-    );
-
-    /**
-     * ---------------------------------------------------- 8. loyalty + tier --
-     *
-     * ONE visit per ORDER, not per item and not per bottle. "A purchase earns a
-     * visit/stamp" (api-contract.md § Product) and "Shop purchases count as a
-     * visit toward your next tier" (the wallet's own copy) are both singular, and
-     * a cart of five products is one purchase. Counting per line would let a
-     * customer buy five scrunchies and climb a tier, which is a ladder measured
-     * in items pretending to be a ladder measured in visits.
-     *
-     * No multiplier is consulted. See the header.
-     */
-    let loyalty: LoyaltyOutcome;
-    if (s.loyaltyMode === 'stamps') {
-      const wasReady = (m.stamps ?? 0) >= (s.stampTarget ?? 0);
-      loyalty = applyStamps(s.stampTarget ?? 0, m.stamps ?? 0, 1);
-      await tx.update(member).set({ stamps: loyalty.stamps }).where(eq(member.id, m.id));
-
-      // Only the purchase that FILLS the card, or every later one announces the
-      // same reward again — services/charge.ts § 9.
-      if (loyalty.rewardReady && !wasReady) {
-        await tx.insert(loyaltyEvent).values({
-          salonId: m.salonId,
-          memberId: m.id,
-          transactionId: txId,
-          kind: 'stamp_reward_ready',
-          stampsAfter: loyalty.stamps,
-          stampTarget: loyalty.target,
-        });
-      }
-    } else {
-      loyalty = applyVisits(s.tiers ?? [], m.visits, m.tier ?? null, 1);
-      await tx
-        .update(member)
-        .set({ visits: loyalty.visits, tier: loyalty.tier })
-        .where(eq(member.id, m.id));
-
-      // "Reem S. reached Gold tier" in the Overview feed. `member.tier` holds the
-      // current rung; only this row holds the move. db/schema/loyaltyEvent.ts.
-      if (loyalty.climbed && loyalty.tier !== null) {
-        await tx.insert(loyaltyEvent).values({
-          salonId: m.salonId,
-          memberId: m.id,
-          transactionId: txId,
-          kind: 'tier_climb',
-          fromTier: m.tier ?? null,
-          toTier: loyalty.tier,
-        });
-      }
-    }
-
-    // ------------------------------------------------ 9. queue the receipts --
-    // Rows, not network calls, inside this transaction — so the receipts are
-    // queued if and only if the money moved. services/receipts.ts.
-    /**
-     * ------------------------------------------------ 7b. the fulfilment row --
-     *
-     * IN THE SAME TRANSACTION as the order, so an order with no fulfilment is
-     * not a state that exists — nobody can be handed a paid order they cannot
-     * find out where to send. `transaction_id` is `shop_order`'s primary key, so
-     * a second fulfilment for one order is refused by the schema rather than by
-     * this handler remembering.
-     *
-     * The address is SNAPSHOTTED, not only referenced. `shop_order_line` already
-     * snapshots the product name and unit price for the reason its header gives,
-     * and an address is worse: she can edit or delete it after ordering, and the
-     * driver needs what she typed when she ordered. `address_id` rides along for
-     * provenance and may later point at a soft-deleted row.
-     */
-    await tx.insert(shopOrder).values({
-      transactionId: txId,
-      salonId: m.salonId,
-      memberId: m.id,
-      fulfilment,
-      // `preparing` is the column default; named here so the lifecycle's start
-      // is legible at the only place that creates one.
-      status: 'preparing',
-      addressId: address?.id ?? null,
-      addressLabel: address?.label ?? null,
-      block: address?.block ?? null,
-      street: address?.street ?? null,
-      building: address?.building ?? null,
-      floor: address?.floor ?? null,
-      apartment: address?.apartment ?? null,
-      area: address?.area ?? null,
-      governorate: address?.governorate ?? null,
-      instructions: address?.instructions ?? null,
-      latitude: address?.latitude ?? null,
-      longitude: address?.longitude ?? null,
-    });
-
-    await queueReceipts(tx, m, txId, {
-      kind: 'shop',
-      transactionId: txId,
-      amountFils: total,
-      /**
-       * The lines, with quantities. A charge's receipt payload carries
-       * `services`; a shop receipt has to carry `qty` too or the customer cannot
-       * reconcile a total that came from a multiplication.
-       */
-      items: lines,
-      balanceAfterFils: balanceAfter,
-      /**
-       * THE FULFILMENT SHE ACTUALLY CHOSE, not the one the shop had when it was
-       * drawn. This read `pickup: true`, hardcoded, with a comment explaining
-       * that nothing was being delivered — true of every order until item 7's
-       * delivery half landed, and false for half of them afterwards. The value
-       * is resolved in step 5b and written to `shop_order` in step 7b; taking it
-       * from anywhere else was the whole defect.
-       *
-       * IT WAS LATENT, WHICH IS WHY NOTHING CAUGHT IT. Nothing in `api/src`
-       * reads this field and `RECEIPT_DRIVER=logging` sends nothing, so the wrong
-       * value was persisted into `receipt_job.payload` and consulted by nobody —
-       * the exact shape of DECISIONS.md #88 (`whatsapp_enabled`: stored, served,
-       * consulted by nothing) and #82. Stored-and-wrong is still wrong: the row
-       * is the frozen evidence of what she bought (db/schema/receipt.ts), and a
-       * renderer written next month would have read it and believed it.
-       *
-       * AND IT CARRIES NO SENTENCE. The design bundle has no delivery receipt
-       * copy — `whatsapp-templates.md` § 3 has no pickup or delivery variable at
-       * all — so this is the fact, truthfully, and what a receipt SAYS about a
-       * delivery is left open rather than invented here. See
-       * `services/receipts.ts` § ShopReceiptPayload.
-       */
-      fulfilment,
-    });
-
-    // ------------------------------------------------------------ 10. audit --
-    await writeAudit(tx, ctx.principal, {
-      salonId: m.salonId,
-      kind: 'money',
-      action: 'Shop order paid',
-      /**
-       * `· to collect` USED TO BE UNCONDITIONAL, which put a false sentence in
-       * the salon's own audit log for every delivery order — and unlike the
-       * receipt payload above, this one is NOT latent: the dashboard renders the
-       * audit log today, so a merchant reading a delivery order's money row was
-       * told to hand the bag over the counter.
-       *
-       * The two words are the dashboard's own vocabulary rather than a new
-       * coinage: `ShopOrders.tsx` renders the fulfilment as a `Pickup` /
-       * `Delivery` pill, and the design's shop copy is "pick up at the salon"
-       * (`AVO Wallet Home.dc.html:1234`, `AVO Merchant Dashboard.dc.html:299`).
-       * The design bundle specifies no shape for an audit detail — this whole
-       * sentence is merchant-facing operational text this file already authors,
-       * not product copy, so making it true is a data fix and not a copy change.
-       */
-      detail: `${(total / 1000).toFixed(3)} KD from ${m.name}'s wallet · ${lines
-        .map((l) => `${l.qty}× ${l.name}`)
-        .join(', ')} · ${fulfilment === 'delivery' ? 'for delivery' : 'to collect'}`,
-      /**
-       * `wallet`, not `merchant` or `scanner`. The customer took this action from
-       * her own app; no staff member was involved, and attributing it to the
-       * salon would put a row in the merchant's audit log claiming one of her
-       * team did something nobody did.
-       */
-      source: 'wallet',
-      subjectType: 'transaction',
-      subjectId: txId,
-      amountFils: -total,
-      metadata: {
-        items: lines.map((l) => ({
-          productId: l.productId,
-          qty: l.qty,
-          unitPriceFils: l.unitPriceFils,
-        })),
-        totalFils: total,
-        branchAssumed: !branch.established,
-      },
+    const result = await placeOrder(tx, input, {
+      memberId: ctx.principal.id,
+      actor: ctx.principal,
       ipAddress: ctx.ipAddress ?? null,
       userAgent: ctx.userAgent ?? null,
     });
 
-    const result: OrderResult = {
-      transaction: serialiseTransactionForCustomer(
-        {
-          id: txId,
-          memberId: m.id,
-          branchId: branch.branchId,
-          kind: 'shop',
-          amountFils: -total,
-          bonusFils: 0,
-          // Not emitted by the serialiser — merchant-visible, customer-never —
-          // and 0 is what was written to the row.
-          feeFils: 0,
-          method: 'wallet',
-          status: 'settled',
-          reference: `AVO-SH-${txId.slice(3)}`,
-          createdAt: now,
-          // A shop order is priced from the catalogue, and `custom_amount` is
-          // CHECKed charge-only at the database (0049), so `false` here is not a
-          // choice this code is making.
-          customAmount: false,
-          note: null,
-        },
-        // No reversal is possible: nothing voids a `shop` row. Stated, because
-        // the parameter is required precisely so a caller that COULD have one
-        // cannot forget to look.
-        null,
-      ),
-      balanceAfterFils: balanceAfter,
-      totalFils: total,
-      items: lines,
-      loyalty,
-      voidable: false,
-    };
-
     // ------------------------------------------------ 11. store the response --
     // Same transaction, so the key and its answer commit with the money.
-    await completeKey(tx, keyId, { status: 201, body: result }, txId);
+    await completeKey(tx, keyId, { status: 201, body: result }, result.transaction.id);
 
     return result;
   });
+}
+
+/** A transaction, or a savepoint inside one — both are what `db.transaction` hands you. */
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+export interface PlaceOrderContext {
+  /** Whose wallet. From the principal on `POST /orders`; from the intent at settlement. */
+  memberId: string;
+  /**
+   * Who the audit row names. Her session on `POST /orders`; at settlement there is
+   * no session (the webhook may be what observed the payment), so the caller names
+   * her from the member row — she tapped Pay, and the system is not the actor of a
+   * purchase she chose.
+   */
+  actor: AuditActor;
+  ipAddress: string | null;
+  userAgent: string | null;
+  /**
+   * SET ONLY BY A CARD-PAID ORDER'S SETTLEMENT. The total she was charged for at
+   * the gateway. The basket is re-priced here from `product` as always, and if the
+   * total moved the order is refused with `price_changed` BEFORE any debit — the
+   * card charge has already landed in her wallet, so the refusal costs her nothing,
+   * and debiting a different figure than the one she paid is the one thing that
+   * must not happen. `services/topup.ts § creditWallet`.
+   */
+  expectedTotalFils?: Fils;
+}
+
+/**
+ * Steps 2–10: the order itself, inside the CALLER'S transaction. `POST /orders`
+ * wraps it in the idempotency key; a card-paid order's settlement wraps it in a
+ * SAVEPOINT inside the top-up credit, so a refusal here rolls back the order and
+ * leaves the credit standing. Every refusal is a throw, as it always was.
+ */
+export async function placeOrder(
+  tx: Tx,
+  input: OrderInput,
+  ctx: PlaceOrderContext,
+): Promise<OrderResult> {
+  // ------------------------------------------------------------- 2. member --
+  // FOR UPDATE serialises this against a concurrent charge, top-up or booking
+  // on the same wallet, so the balance read is the balance debited.
+  const [m] = await tx
+    .select()
+    .from(member)
+    .where(eq(member.id, ctx.memberId))
+    .for('update')
+    .limit(1);
+  if (!m) throw notFound('unknown_member', 'No such member.');
+
+  const [s] = await tx.select().from(salon).where(eq(salon.id, m.salonId)).limit(1);
+  if (!s) throw notFound('unknown_salon', 'No such salon.');
+
+  /**
+   * ------------------------------------------------------- 3. module gate --
+   *
+   * `modules.shop` defaults OFF — AVO-Beauty-Product-Description-v2.md
+   * § Settings, and the dashboard's own toggle copy says "Default off". A
+   * wallet that hides the Shop tab for a salon with the module off is a
+   * courtesy; non-negotiable #7 says a courtesy is not a control, and this
+   * endpoint takes money out of a wallet. `POST /bookings` has the identical
+   * gate for the identical reason.
+   */
+  requireShopModule(s);
+
+  // ------------------------------------------------------------- 4. basket --
+  const { lines, total } = await priceBasket(tx, m.salonId, input.items);
+
+  /**
+   * A CARD-PAID ORDER'S PRICE CHECK. See `PlaceOrderContext.expectedTotalFils`:
+   * refused before the debit, so the card money stays as wallet credit.
+   */
+  if (ctx.expectedTotalFils !== undefined && total !== ctx.expectedTotalFils) {
+    throw conflict(
+      'price_changed',
+      'A price in your basket changed while you were paying. The payment is in your wallet — check the basket and pay from your balance.',
+      { paidFils: ctx.expectedTotalFils, totalFils: total },
+    );
+  }
+
+  // -------------------------------------------------------------- 5. debit --
+  const balance = fils(m.balanceFils);
+  if (total > balance) {
+    // Nothing else happened: this throw rolls the transaction back, so the
+    // idempotency key is untouched and she can retry after topping up. The
+    // wallet's cart already renders the shortfall — "Balance too low by …" —
+    // from the 402's `shortfallFils`.
+    throw insufficientBalance(total, balance);
+  }
+  const balanceAfter = subtract(balance, total);
+
+  /**
+   * The branch, resolved by the SERVER, exactly as a booking's is. A customer
+   * placing an order has not told us where she is and must not be asked: a
+   * client naming its own branch is a client choosing its own reporting bucket
+   * — services/branch.ts § "the fix that must not be taken". A single-branch
+   * salon is `established`; a multi-branch one is an attribution and the row
+   * says so through `branch_assumed`.
+   *
+   * Nothing here reads `established`, because nothing here pays out on the
+   * branch — see the header on promotions. It is carried onto the row so
+   * per-branch shop revenue is filterable rather than indistinguishable from a
+   * figure that was known.
+   */
+  const branch = await resolveBranch(tx, m.salonId, undefined);
+  const now = new Date();
+  const txId = await nextTransactionId(tx);
+
+  /**
+   * ============================================================ 5a. THE DEBIT
+   * A CONDITIONAL, RELATIVE UPDATE WHOSE ROW COUNT DECIDES — the second guard,
+   * and the answer to trunk's question about whether this path needed one.
+   *
+   * IT DOES. The measurement that settled it: with `FOR UPDATE` removed from step
+   * 2, five concurrent orders of 9.000 KD against a 15.250 balance ALL settled,
+   * every one of them reported `balanceAfterFils: 6250`, and `member.balance_fils`
+   * ended 36000 fils apart from the ledger. Every CHECK in the schema was
+   * satisfied throughout — including both non-negative balance constraints,
+   * because each writer wrote the same plausible number — and only invariant 5's
+   * reconciliation could see it.
+   *
+   * "Is the reconciliation enough?" No, and the reason is what reconciliation IS:
+   * it runs later, on demand, and it reports a discrepancy after five customers
+   * have received goods for the price of one. `db:verify` is a net, not a control.
+   * A charge has two layers precisely so that one failing is survivable, and
+   * money-out through a self-service endpoint deserves the same.
+   *
+   * THIS IS THE IDIOM ALREADY TRUSTED HERE, not a new mechanism.
+   * `services/walletToken.ts § consumeToken` is one conditional UPDATE whose row
+   * count decides, and its header says exactly why a read-then-write cannot do
+   * the job: "Two scanners racing the same code both read `consumed_at IS NULL`,
+   * both decide they may proceed, and both debit. With the conditional UPDATE the
+   * second statement blocks on the row lock the first holds; when the first
+   * commits, the second re-evaluates its WHERE against the committed row, matches
+   * nothing, and returns zero rows." Substitute "balance" for "consumed_at" and
+   * the paragraph is about this statement.
+   *
+   * BOTH HALVES ARE LOAD-BEARING, and the relative SET is the half that is easy
+   * to leave out:
+   *
+   *   WHERE balance_fils >= total   is what refuses the loser.
+   *   SET   balance_fils - total    is what makes the winner's arithmetic happen
+   *                                 IN the database.
+   *
+   * A conditional WHERE with `SET balance_fils = <precomputed 6250>` would still
+   * write the stale number, so the lost update would survive the guard. The
+   * subtraction has to be the database's.
+   *
+   * `RETURNING balance_fils` because the ledger's `balance_after_fils` must be
+   * what actually landed, not what this transaction predicted. Under the lock in
+   * step 2 those agree; the point of a second layer is to be right when the first
+   * one is not there.
+   *
+   * A ZERO ROW COUNT IS A 402, NOT A 500. The only way the predicate fails is a
+   * balance that moved between the read and the write, which means she cannot
+   * afford it after all — the same answer the read-time check gives, for the same
+   * reason, and the shortfall is recomputed from the row that refused.
+   */
+  const debited = await tx
+    .update(member)
+    .set({
+      balanceFils: sql`${member.balanceFils} - ${total}`,
+      updatedAt: now,
+    })
+    .where(and(eq(member.id, m.id), gte(member.balanceFils, total)))
+    .returning({ balanceFils: member.balanceFils });
+
+  const landed = debited[0];
+  if (!landed) {
+    /**
+     * Re-read to report the truth rather than the stale figure. Unreachable while
+     * step 2 holds the row — which is the point: this is the layer that speaks
+     * when the other one is gone.
+     */
+    const [fresh] = await tx
+      .select({ balanceFils: member.balanceFils })
+      .from(member)
+      .where(eq(member.id, m.id))
+      .limit(1);
+    throw insufficientBalance(total, fils(fresh?.balanceFils ?? 0));
+  }
+  /**
+   * The database's answer, not this transaction's prediction. They agree under the
+   * lock, and asserting the agreement rather than assuming it is what would have
+   * caught the lost update at the moment it happened instead of at the next
+   * `db:verify`.
+   */
+  if (landed.balanceFils !== balanceAfter) {
+    throw new Error(
+      `order debit landed at ${landed.balanceFils} but this transaction computed ` +
+        `${balanceAfter}. The wallet moved under an open transaction, which means ` +
+        `the FOR UPDATE in step 2 is not holding.`,
+    );
+  }
+
+  /**
+   * ------------------------------------------------ 5b. the fulfilment --
+   *
+   * Resolved BEFORE the transaction row is written, so a delivery to an
+   * address that is not hers refuses before any money moves. The lookup is
+   * scoped to `member_id`, so another customer's address id is a 404 rather
+   * than a 403 — a 403 would confirm it exists.
+   *
+   * NOTHING HERE TOUCHES AN AMOUNT. There is no delivery fee (PRIOR-ART.md
+   * § Lean: no `deliveryCharge`, `deliveryFee` or `shippingFee` anywhere), so
+   * choosing delivery cannot change `total`, and this whole feature stays off
+   * the money path. If a fee is ever added, that is a separate decision and
+   * this comment is the thing it has to argue with.
+   */
+  const { fulfilment, address } = await resolveFulfilment(tx, m.id, input);
+
+  // ------------------------------------------------- 6. transaction record --
+  await tx.insert(transaction).values({
+    id: txId,
+    memberId: m.id,
+    salonId: m.salonId,
+    branchId: branch.branchId,
+    branchAssumed: !branch.established,
+    kind: 'shop',
+    // Negative: the sign CHECK on `transaction` says a `shop` row debits, and
+    // `product_price_positive` is what stops it being zero.
+    amountFils: fils(-total),
+    method: 'wallet',
+    status: 'settled',
+    // "AVO-SH-76888" — the reference the design's transaction detail sheet
+    // renders for a shop order, `AVO Wallet Home.dc.html:1573`.
+    reference: `AVO-SH-${txId.slice(3)}`,
+    /**
+     * NO COMMISSION. `fee_fils` defaults to 0 and is left there, matching the
+     * charge path: AVO's commission is taken when money ENTERS the ecosystem
+     * through a PSP, and this purchase moves an existing balance from a wallet
+     * to a salon with no gateway involved. `commissionFor` is a top-up concept.
+     */
+    createdAt: now,
+    settledAt: now,
+  });
+
+  // ------------------------------------------------------------- 7. ledger --
+  // Double entry, balanced per transaction. The DEFERRABLE constraint trigger
+  // from migration 0001 checks the pair at COMMIT.
+  // "Value delivered by the salon: services rendered, PRODUCTS SOLD" —
+  // db/schema/ledger.ts already names this case on the account it belongs to,
+  // and it is the same posting the counter charge makes, so it is the same
+  // function: `walletSpendPosting`.
+  await tx.insert(ledgerEntry).values(
+    walletSpendPosting({
+      transactionId: txId,
+      salonId: m.salonId,
+      memberId: m.id,
+      amountFils: total,
+      balanceAfterFils: balanceAfter,
+    }),
+  );
+
+  // -------------------------------------------------------- 7a. the lines --
+  await tx.insert(shopOrderLine).values(
+    lines.map((l) => ({
+      transactionId: txId,
+      productId: l.productId,
+      name: l.name,
+      qty: l.qty,
+      unitPriceFils: fils(l.unitPriceFils),
+      lineTotalFils: fils(l.lineTotalFils),
+    })),
+  );
+
+  /**
+   * ---------------------------------------------------- 8. loyalty + tier --
+   *
+   * ONE visit per ORDER, not per item and not per bottle. "A purchase earns a
+   * visit/stamp" (api-contract.md § Product) and "Shop purchases count as a
+   * visit toward your next tier" (the wallet's own copy) are both singular, and
+   * a cart of five products is one purchase. Counting per line would let a
+   * customer buy five scrunchies and climb a tier, which is a ladder measured
+   * in items pretending to be a ladder measured in visits.
+   *
+   * No multiplier is consulted. See the header.
+   */
+  let loyalty: LoyaltyOutcome;
+  if (s.loyaltyMode === 'stamps') {
+    const wasReady = (m.stamps ?? 0) >= (s.stampTarget ?? 0);
+    loyalty = applyStamps(s.stampTarget ?? 0, m.stamps ?? 0, 1);
+    await tx.update(member).set({ stamps: loyalty.stamps }).where(eq(member.id, m.id));
+
+    // Only the purchase that FILLS the card, or every later one announces the
+    // same reward again — services/charge.ts § 9.
+    if (loyalty.rewardReady && !wasReady) {
+      await tx.insert(loyaltyEvent).values({
+        salonId: m.salonId,
+        memberId: m.id,
+        transactionId: txId,
+        kind: 'stamp_reward_ready',
+        stampsAfter: loyalty.stamps,
+        stampTarget: loyalty.target,
+      });
+    }
+  } else {
+    loyalty = applyVisits(s.tiers ?? [], m.visits, m.tier ?? null, 1);
+    await tx
+      .update(member)
+      .set({ visits: loyalty.visits, tier: loyalty.tier })
+      .where(eq(member.id, m.id));
+
+    // "Reem S. reached Gold tier" in the Overview feed. `member.tier` holds the
+    // current rung; only this row holds the move. db/schema/loyaltyEvent.ts.
+    if (loyalty.climbed && loyalty.tier !== null) {
+      await tx.insert(loyaltyEvent).values({
+        salonId: m.salonId,
+        memberId: m.id,
+        transactionId: txId,
+        kind: 'tier_climb',
+        fromTier: m.tier ?? null,
+        toTier: loyalty.tier,
+      });
+    }
+  }
+
+  // ------------------------------------------------ 9. queue the receipts --
+  // Rows, not network calls, inside this transaction — so the receipts are
+  // queued if and only if the money moved. services/receipts.ts.
+  /**
+   * ------------------------------------------------ 7b. the fulfilment row --
+   *
+   * IN THE SAME TRANSACTION as the order, so an order with no fulfilment is
+   * not a state that exists — nobody can be handed a paid order they cannot
+   * find out where to send. `transaction_id` is `shop_order`'s primary key, so
+   * a second fulfilment for one order is refused by the schema rather than by
+   * this handler remembering.
+   *
+   * The address is SNAPSHOTTED, not only referenced. `shop_order_line` already
+   * snapshots the product name and unit price for the reason its header gives,
+   * and an address is worse: she can edit or delete it after ordering, and the
+   * driver needs what she typed when she ordered. `address_id` rides along for
+   * provenance and may later point at a soft-deleted row.
+   */
+  await tx.insert(shopOrder).values({
+    transactionId: txId,
+    salonId: m.salonId,
+    memberId: m.id,
+    fulfilment,
+    // `preparing` is the column default; named here so the lifecycle's start
+    // is legible at the only place that creates one.
+    status: 'preparing',
+    addressId: address?.id ?? null,
+    addressLabel: address?.label ?? null,
+    block: address?.block ?? null,
+    street: address?.street ?? null,
+    building: address?.building ?? null,
+    floor: address?.floor ?? null,
+    apartment: address?.apartment ?? null,
+    area: address?.area ?? null,
+    governorate: address?.governorate ?? null,
+    instructions: address?.instructions ?? null,
+    latitude: address?.latitude ?? null,
+    longitude: address?.longitude ?? null,
+  });
+
+  await queueReceipts(tx, m, txId, {
+    kind: 'shop',
+    transactionId: txId,
+    amountFils: total,
+    /**
+     * The lines, with quantities. A charge's receipt payload carries
+     * `services`; a shop receipt has to carry `qty` too or the customer cannot
+     * reconcile a total that came from a multiplication.
+     */
+    items: lines,
+    balanceAfterFils: balanceAfter,
+    /**
+     * THE FULFILMENT SHE ACTUALLY CHOSE, not the one the shop had when it was
+     * drawn. This read `pickup: true`, hardcoded, with a comment explaining
+     * that nothing was being delivered — true of every order until item 7's
+     * delivery half landed, and false for half of them afterwards. The value
+     * is resolved in step 5b and written to `shop_order` in step 7b; taking it
+     * from anywhere else was the whole defect.
+     *
+     * IT WAS LATENT, WHICH IS WHY NOTHING CAUGHT IT. Nothing in `api/src`
+     * reads this field and `RECEIPT_DRIVER=logging` sends nothing, so the wrong
+     * value was persisted into `receipt_job.payload` and consulted by nobody —
+     * the exact shape of DECISIONS.md #88 (`whatsapp_enabled`: stored, served,
+     * consulted by nothing) and #82. Stored-and-wrong is still wrong: the row
+     * is the frozen evidence of what she bought (db/schema/receipt.ts), and a
+     * renderer written next month would have read it and believed it.
+     *
+     * AND IT CARRIES NO SENTENCE. The design bundle has no delivery receipt
+     * copy — `whatsapp-templates.md` § 3 has no pickup or delivery variable at
+     * all — so this is the fact, truthfully, and what a receipt SAYS about a
+     * delivery is left open rather than invented here. See
+     * `services/receipts.ts` § ShopReceiptPayload.
+     */
+    fulfilment,
+  });
+
+  // ------------------------------------------------------------ 10. audit --
+  await writeAudit(tx, ctx.actor, {
+    salonId: m.salonId,
+    kind: 'money',
+    action: 'Shop order paid',
+    /**
+     * `· to collect` USED TO BE UNCONDITIONAL, which put a false sentence in
+     * the salon's own audit log for every delivery order — and unlike the
+     * receipt payload above, this one is NOT latent: the dashboard renders the
+     * audit log today, so a merchant reading a delivery order's money row was
+     * told to hand the bag over the counter.
+     *
+     * The two words are the dashboard's own vocabulary rather than a new
+     * coinage: `ShopOrders.tsx` renders the fulfilment as a `Pickup` /
+     * `Delivery` pill, and the design's shop copy is "pick up at the salon"
+     * (`AVO Wallet Home.dc.html:1234`, `AVO Merchant Dashboard.dc.html:299`).
+     * The design bundle specifies no shape for an audit detail — this whole
+     * sentence is merchant-facing operational text this file already authors,
+     * not product copy, so making it true is a data fix and not a copy change.
+     */
+    detail: `${(total / 1000).toFixed(3)} KD from ${m.name}'s wallet · ${lines
+      .map((l) => `${l.qty}× ${l.name}`)
+      .join(', ')} · ${fulfilment === 'delivery' ? 'for delivery' : 'to collect'}`,
+    /**
+     * `wallet`, not `merchant` or `scanner`. The customer took this action from
+     * her own app; no staff member was involved, and attributing it to the
+     * salon would put a row in the merchant's audit log claiming one of her
+     * team did something nobody did.
+     */
+    source: 'wallet',
+    subjectType: 'transaction',
+    subjectId: txId,
+    amountFils: -total,
+    metadata: {
+      items: lines.map((l) => ({
+        productId: l.productId,
+        qty: l.qty,
+        unitPriceFils: l.unitPriceFils,
+      })),
+      totalFils: total,
+      branchAssumed: !branch.established,
+    },
+    ipAddress: ctx.ipAddress ?? null,
+    userAgent: ctx.userAgent ?? null,
+  });
+
+  const result: OrderResult = {
+    transaction: serialiseTransactionForCustomer(
+      {
+        id: txId,
+        memberId: m.id,
+        branchId: branch.branchId,
+        kind: 'shop',
+        amountFils: -total,
+        bonusFils: 0,
+        // Not emitted by the serialiser — merchant-visible, customer-never —
+        // and 0 is what was written to the row.
+        feeFils: 0,
+        method: 'wallet',
+        status: 'settled',
+        reference: `AVO-SH-${txId.slice(3)}`,
+        createdAt: now,
+        // A shop order is priced from the catalogue, and `custom_amount` is
+        // CHECKed charge-only at the database (0049), so `false` here is not a
+        // choice this code is making.
+        customAmount: false,
+        note: null,
+      },
+      // No reversal is possible: nothing voids a `shop` row. Stated, because
+      // the parameter is required precisely so a caller that COULD have one
+      // cannot forget to look.
+      null,
+    ),
+    balanceAfterFils: balanceAfter,
+    totalFils: total,
+    items: lines,
+    loyalty,
+    voidable: false,
+  };
+
+  return result;
+}
+
+
+// ------------------------------------------------------------- the pieces --
+/**
+ * The three checks a basket must pass before any money moves, as functions so
+ * that a card-paid order can run them BEFORE the card is charged
+ * (`quoteOrder`) and again, unchanged, when the payment settles (`placeOrder`).
+ * One copy of each rule — the second copy of a pricing rule is the one that
+ * prices a retired product.
+ */
+
+/** Step 3. */
+function requireShopModule(s: { moduleShop: boolean }): void {
+
+  if (!s.moduleShop) {
+    throw conflict('shop_not_enabled', 'This salon does not sell products through AVO.');
+  }
+}
+
+/** Step 4: priced from `product`, never from the request. */
+async function priceBasket(
+  tx: Tx,
+  salonId: string,
+  items: OrderLineInput[],
+): Promise<{ lines: OrderLineResult[]; total: Fils }> {
+  const ids = items.map((i) => i.productId);
+  const rows = await tx
+    .select({ id: product.id, name: product.name, priceFils: product.priceFils })
+    .from(product)
+    .where(
+      and(
+        inArray(product.id, ids),
+        // HER OWN SALON. Another salon's product is not priceable here — the
+        // same tenant boundary `POST /charges` puts on a service id, and the
+        // case lane D has written down as owed for the shop.
+        eq(product.salonId, salonId),
+        eq(product.active, true),
+      ),
+    );
+
+  /**
+   * An unknown or retired id must not silently price at 0 and settle a real
+   * transaction for goods that do not exist — the defect lane D found on the
+   * mock's charge path. Named, not counted: a client cannot fix "one of your
+   * items is unavailable".
+   */
+  const priced = new Map(rows.map((r) => [r.id, r]));
+  const unknown = ids.filter((id) => !priced.has(id));
+  if (unknown.length > 0) {
+    throw badRequest(
+      'invalid_products',
+      `Unknown or unavailable product: ${unknown.join(', ')}.`,
+      { unknown },
+    );
+  }
+
+  /**
+   * Priced from the database, line by line. A price in the request body is a
+   * client that can buy a 12.000 KD mask for 0.001 — non-negotiable #2, and the
+   * same rule that keeps `service.price_fils` the only source of a basket total.
+   *
+   * INTEGER FILS THROUGHOUT: `qty` is a validated integer, `priceFils` is a
+   * `bigint` column typed `Fils`, and the accumulation goes through `add` from
+   * @avo/types. `qty * priceFils` is the only multiplication of money anywhere
+   * in this API, and `shop_order_line_total_matches_qty` re-checks it in the
+   * database, so a float reaching it does not commit.
+   */
+  const lines: OrderLineResult[] = items.map((i) => {
+    const p = priced.get(i.productId);
+    // Unreachable — the `unknown` check above threw — but the map lookup is
+    // typed optional and a `!` here would be the one assertion in this file.
+    if (!p) throw badRequest('invalid_products', `Unknown product: ${i.productId}.`);
+    const unit = fils(p.priceFils);
+    return {
+      productId: p.id,
+      name: p.name,
+      qty: i.qty,
+      unitPriceFils: unit,
+      lineTotalFils: fils(unit * i.qty),
+    };
+  });
+
+  const total = lines.reduce<Fils>((sum, l) => add(sum, fils(l.lineTotalFils)), fils(0));
+  return { lines, total };
+}
+
+/** Step 5b. */
+async function resolveFulfilment(
+  tx: Tx,
+  memberId: string,
+  input: Pick<OrderInput, 'fulfilment' | 'addressId'>,
+): Promise<{ fulfilment: 'pickup' | 'delivery'; address: typeof memberAddress.$inferSelect | null }> {
+  const fulfilment = input.fulfilment ?? 'pickup';
+  let address: typeof memberAddress.$inferSelect | null = null;
+  if (fulfilment === 'delivery') {
+    if (!input.addressId) {
+      throw badRequest('address_required', 'A delivery needs one of your saved addresses.');
+    }
+    const [row] = await tx
+      .select()
+      .from(memberAddress)
+      .where(
+        and(
+          eq(memberAddress.id, input.addressId),
+          eq(memberAddress.memberId, memberId),
+          isNull(memberAddress.deletedAt),
+        ),
+      )
+      .limit(1);
+    if (!row) throw notFound('unknown_address', 'No such address.');
+    address = row;
+  } else if (input.addressId) {
+    throw badRequest(
+      'address_not_for_pickup',
+      'A pickup order takes no address. Choose delivery, or omit the address.',
+    );
+  }
+  return { fulfilment, address };
+}
+
+/**
+ * A card-paid order's PRE-FLIGHT: the gate, the basket and the fulfilment, with no
+ * debit, run inside `createOrderPayment`'s transaction BEFORE the gateway is asked
+ * for anything. The common refusals — shop off, a retired product, an address that
+ * is not hers — therefore answer before her card is charged, and the key rolls back
+ * with them. Returns the total the card will be charged.
+ *
+ * Settlement runs `placeOrder` again regardless: minutes pass on the hosted page, and
+ * what was true here is only a prediction of what will be true there.
+ */
+export async function quoteOrder(
+  tx: Tx,
+  memberId: string,
+  input: OrderInput,
+): Promise<{ totalFils: Fils; lines: OrderLineResult[] }> {
+  const [m] = await tx.select().from(member).where(eq(member.id, memberId)).limit(1);
+  if (!m) throw notFound('unknown_member', 'No such member.');
+  const [s] = await tx.select().from(salon).where(eq(salon.id, m.salonId)).limit(1);
+  if (!s) throw notFound('unknown_salon', 'No such salon.');
+  requireShopModule(s);
+  const { lines, total } = await priceBasket(tx, m.salonId, input.items);
+  await resolveFulfilment(tx, m.id, input);
+  return { totalFils: total, lines };
 }

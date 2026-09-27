@@ -407,6 +407,13 @@
       "when": 1789965200000,
       "tag": "0057_what_was_sent_to_her",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790051600000,
+      "tag": "0058_an_order_paid_by_card_passes_through_the_wallet",
+      "breakpoints": true
     }
   ]
 }

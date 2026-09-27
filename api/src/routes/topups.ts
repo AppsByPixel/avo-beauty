@@ -77,7 +77,7 @@ import { createTopUp, parseMethod, readTopUp } from '../services/topup';
  * only ever offered when the sandbox driver is configured, and env.ts refuses
  * that driver in production.
  */
-function simulationHint(req: FastifyRequest): GatewayOutcome | undefined {
+export function simulationHint(req: FastifyRequest): GatewayOutcome | undefined {
   if (env.gatewayDriver !== 'sandbox') return undefined;
   for (const name of ['declined', 'cancelled', 'pending', 'gateway_error'] as const) {
     if (hasScenario(req, name) && isGatewayOutcome(name)) return name;
