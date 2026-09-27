@@ -16,7 +16,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { ACTIVITY_VISIBLE, discloseActivity } from './activity';
+import {
+  ACTIVITY_VISIBLE,
+  COLLAPSE_SCROLL_MARGIN,
+  collapseScrollTarget,
+  discloseActivity,
+} from './activity';
 
 const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `TX-${i}` }));
 
@@ -31,12 +36,55 @@ describe('discloseActivity — how many she sees before she asks', () => {
     expect(d.hidden).toBe(5);
   });
 
-  it('reveals the rest once asked, and then has nothing left to offer', () => {
+  it('reveals the rest once asked — nothing left to reveal, and a way back', () => {
     const d = discloseActivity(rows(9), true);
     expect(d.visible).toHaveLength(9);
-    // The control is drawn from `hidden`, so it disappears of its own accord
-    // rather than needing a second string the bundle does not have.
     expect(d.hidden).toBe(0);
+    // Until 2026-09-28 this asserted the control disappeared here. The client
+    // asked for the list to shorten again, so the expanded list offers "less".
+    expect(d.control).toBe('less');
+  });
+
+  it('offers "more" while rows are held back', () => {
+    expect(discloseActivity(rows(9), false).control).toBe('more');
+  });
+
+  it('folding is the collapsed view again, row for row', () => {
+    const open = discloseActivity(rows(9), true);
+    const folded = discloseActivity(rows(9), false);
+    expect(open.visible).toHaveLength(9);
+    expect(folded.visible.map((r) => r.id)).toEqual(['TX-0', 'TX-1', 'TX-2', 'TX-3']);
+  });
+});
+
+describe('discloseActivity — no control where there is nothing to fold either', () => {
+  it('four rows, expanded or not, draws nothing', () => {
+    expect(discloseActivity(rows(4), false).control).toBeNull();
+    // A list that shrank to four under an expanded feed (a refresh) must not
+    // keep a "show less" that folds nothing.
+    expect(discloseActivity(rows(4), true).control).toBeNull();
+  });
+
+  it('five rows is the first that can fold', () => {
+    expect(discloseActivity(rows(5), true).control).toBe('less');
+  });
+});
+
+describe('collapseScrollTarget — folding must not strand her past the end of Home', () => {
+  const SECTION_TOP = 900;
+
+  it('scrolls back to the section when she is below its top', () => {
+    // Deep in an expanded feed, pressing "Show less" at its foot.
+    expect(collapseScrollTarget(1600, SECTION_TOP)).toBe(SECTION_TOP - COLLAPSE_SCROLL_MARGIN);
+  });
+
+  it('stays put when the section top is still on screen', () => {
+    expect(collapseScrollTarget(0, SECTION_TOP)).toBeNull();
+    expect(collapseScrollTarget(SECTION_TOP - COLLAPSE_SCROLL_MARGIN, SECTION_TOP)).toBeNull();
+  });
+
+  it('never asks for a negative offset', () => {
+    expect(collapseScrollTarget(5, 4)).toBe(0);
   });
 });
 

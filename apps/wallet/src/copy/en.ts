@@ -210,8 +210,11 @@ export const en: Copy = {
   // activity
   activityLabel: 'Activity',
   // INVENTED. The design renders the whole list with no control beneath it.
-  // Countless on purpose — see copy/types.ts. AR GAP.
+  // Countless on purpose — see copy/types.ts.
   activityShowMore: 'Show more',
+  // NEW COPY, NO DESIGN SOURCE — asked for by Aftab 2026-09-28 (the list could
+  // not be shortened again). The pair to `activityShowMore`. Client to review.
+  activityShowLess: 'Show less',
   emptyActivityTitle: 'Nothing here yet',
   emptyActivityBody: 'Top-ups, visits and purchases will appear here.',
   emptyActivityAction: 'Top up your wallet',

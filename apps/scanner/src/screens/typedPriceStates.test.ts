@@ -55,27 +55,30 @@ const cardCode = code(card);
 
 // ──────────────────────────────────────────────── the gate, and its limits ──
 
-describe('the entry control is gated on the permission the server gates on', () => {
+describe('the entry control is gated on the permission a charge needs', () => {
   /**
    * ONE READ OF AUTHORITY, REUSED. `useSession().can` is the only way this app
    * asks what a staff member may do — `ChargesScreen`'s void button and
    * `HomeScreen`'s padlocked tiles both go through it, and it is re-fetched by
    * `refreshPerms()` on foreground. A second mechanism here would be a second
-   * thing to keep in sync with a permission that changes mid-shift.
+   * thing to keep in sync with a permission that changes mid-shift. The rule is
+   * passed that `can`, and is proved against perms fixtures in
+   * domain/customAmount.test.ts § canTypeCustomAmount.
    */
-  it("reads perms through useSession().can, not a second mechanism", () => {
-    expect(memberScreen).toContain("const canTypeAmount = can('void');");
+  it('reads perms through useSession().can, via the tested rule', () => {
+    expect(memberScreen).toContain('const canTypeAmount = canTypeCustomAmount(can);');
     expect(memberScreen).toMatch(/const \{[^}]*\bcan\b[^}]*\} = useSession\(\);/);
   });
 
   /**
-   * `void`, because that is what the SERVER gates `amountFils` on. Gating the
-   * control on `charges` — the read permission, and the supervisor shape
-   * `charges: true, void: false` — would draw a button whose every use is a 403.
+   * `scanner` since 2026-09-28 — Aftab: anyone who can charge. It was `void`,
+   * which hid the control from the front desk. Neither the old gate nor the
+   * senior `charges` read permission may creep back in as an inline read.
    */
-  it('gates on void rather than charges or scanner', () => {
-    expect(memberScreen).not.toContain("canTypeAmount = can('charges')");
-    expect(memberScreen).not.toContain("canTypeAmount = can('scanner')");
+  it('does not gate on void or charges inline', () => {
+    expect(memberCode).not.toMatch(/canTypeAmount\s*=\s*can\(/);
+    expect(memberCode).not.toContain("can('void')");
+    expect(memberCode).not.toContain("can('charges')");
   });
 
   /**

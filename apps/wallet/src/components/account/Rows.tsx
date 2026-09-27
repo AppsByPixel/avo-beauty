@@ -55,7 +55,12 @@ export function CardNote({ children, testID }: { children: string; testID?: stri
   );
 }
 
-function Chevron({ rtl }: { rtl: boolean }) {
+/**
+ * The "this goes somewhere" glyph. Exported so every row that navigates draws
+ * the same one — `SettingsRow` and `ContactRow` both — rather than a second copy
+ * that could forget the mirror.
+ */
+export function Chevron({ rtl, testID }: { rtl: boolean; testID?: string }) {
   return (
     <Svg
       width={7}
@@ -65,6 +70,7 @@ function Chevron({ rtl }: { rtl: boolean }) {
       opacity={0.3}
       // design:413 — mirrored in Arabic, because it points at the reading edge.
       style={rtl ? styles.chevronRtl : undefined}
+      {...(testID ? { testID } : {})}
     >
       <Path
         d="M1 1l5 5-5 5"
@@ -122,6 +128,69 @@ export function SettingsRow({
         ) : null}
         <Chevron rtl={rtl} />
       </View>
+    </TappableRow>
+  );
+}
+
+/**
+ * "Contact us" — the Help card's one control, drawn the way design:445-452
+ * draws it: a brand-tinted icon tile, the title over its one-line explanation,
+ * and the chevron every other navigating row on this screen ends with.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * WHY THIS EXISTS (2026-09-28). Aftab: "contact us button — make it clearer
+ * that it's clickable." It was not clear because the wallet had dropped both of
+ * the design's cues: the row rendered two lines of text and nothing else, so
+ * beside the WhatsApp row under it — also plain text, and NOT tappable —
+ * nothing on it said "press me" except a heavier title.
+ *
+ * The fix is the design's own drawing, not a new idiom. The chevron is the one
+ * this screen already uses to mean "this navigates" (`SettingsRow`, the policy
+ * rows, the profile rows), so Contact us now reads as a member of that family;
+ * the icon tile is design:446 verbatim — `brandTint` ground, `brandDeep` stroke.
+ * No white text and no fill, so non-negotiable #9 does not arise: the stroke is
+ * a graphic on a tint, 4.87:1 by `contrastRatio(brandDeep, brandTint)`.
+ *
+ * THE CHEVRON IS THE SHARED ONE, AT THE DESIGN'S 0.3 — and that measures 1.92:1
+ * against the card (`ink` at 0.3 composited on `surface`), under WCAG 1.4.11's
+ * 3:1 for a UI cue. It is not raised here, because raising it on one row makes
+ * Contact us look unlike every other chevron row; raising it on all of them is
+ * restyling the Account screen, which was not asked for. Reported to the client
+ * with the measured alternative (0.5 → 3.26:1). The row does not rest on the
+ * chevron alone: the icon tile, the weight and the role all say "control".
+ *
+ * `accessibilityRole="button"` so a screen reader announces it as actionable,
+ * with the sub-line as its hint rather than folded into its name. The Arabic
+ * layout mirrors the row through flexbox and the chevron through `Chevron`; the
+ * speech-bubble glyph is NOT mirrored, and neither is it in the design.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export function ContactRow({ onPress, testID }: { onPress: () => void; testID?: string }) {
+  const { lang, rtl, copy } = useLanguage();
+  return (
+    <TappableRow
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={copy.contactCta}
+      accessibilityHint={copy.contactCtaSub}
+      {...(testID ? { testID } : {})}
+      style={styles.contactRow}
+    >
+      <View style={styles.contactIcon}>
+        <Svg width={18} height={18} viewBox="0 0 20 20" fill="none">
+          <Path
+            d="M3 5.5h14v9H8.5L5 17.5V14.5H3z"
+            stroke={color.brandDeep}
+            strokeWidth={1.7}
+            strokeLinejoin="round"
+          />
+        </Svg>
+      </View>
+      <View style={styles.contactText}>
+        <Text style={[text('body', lang, '600'), styles.contactTitle]}>{copy.contactCta}</Text>
+        <Text style={[text('bodyS', lang), styles.contactSub]}>{copy.contactCtaSub}</Text>
+      </View>
+      <Chevron rtl={rtl} {...(testID ? { testID: `${testID}-chevron` } : {})} />
     </TappableRow>
   );
 }
@@ -282,6 +351,30 @@ const styles = StyleSheet.create({
   rowValue: { color: color.textMutedSoft, flexShrink: 1 },
   ltr: { writingDirection: 'ltr' },
   chevronRtl: { transform: [{ scaleX: -1 }] },
+  // design:445 — gap 13, padding 14/0, a hairline under it (the WhatsApp row
+  // follows inside the same card).
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 13,
+    minHeight: MIN_TAP_TARGET,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: color.hairlineInner,
+  },
+  // design:446 — 36×36, radius 11, the brand tint.
+  contactIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: color.brandTint,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  contactText: { flex: 1, minWidth: 0 },
+  contactTitle: { color: color.ink },
+  contactSub: { color: color.textMuted, marginTop: 2, lineHeight: 18 },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',

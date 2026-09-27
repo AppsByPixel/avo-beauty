@@ -314,9 +314,15 @@ export const ar: Copy = {
 
   // -------------------------------------------------------------- activity --
   activityLabel: 'النشاط', // design:1339
-  // AR GAP. The design draws no disclosure control in either language, so
-  // there is nothing to lift — see copy/types.ts § activityShowMore.
-  activityShowMore: en.activityShowMore, // AR GAP
+  // NEW COPY, NO DESIGN SOURCE — both halves of the disclosure. The design
+  // draws no such control in either language. `activityShowMore` was an AR GAP
+  // until 2026-09-28; it is translated now because its pair is, and a control
+  // that reads English one way and Arabic the other in one Arabic layout is
+  // worse than either. REGISTER: the masdar, ungendered — the design's own
+  // show/hide toggle is `إظهار` / `إخفاء` (design:1810), not an imperative.
+  // Native-speaker review wanted on both. See copy/types.ts § activityShowLess.
+  activityShowMore: 'عرض المزيد',
+  activityShowLess: 'عرض أقل',
   emptyActivityTitle: en.emptyActivityTitle, // AR GAP
   emptyActivityBody: en.emptyActivityBody, // AR GAP
   emptyActivityAction: en.emptyActivityAction, // AR GAP
@@ -999,6 +1005,11 @@ export const ar: Copy = {
  * nineteen: 86 -> 105. The seventeen voucher keys are a whole surface the design
  * bundle does not draw, so they are the largest single addition this list has
  * taken; `txAdjustCredit` and `txAddedTo` are the other two.
+ *
+ * Recounted again on 2026-09-28: the array held 106 when the disclosure slice
+ * opened it, so the "105" above had drifted by one in the meantime, and removing
+ * `activityShowMore` (now translated) brings it back to 105 by coincidence
+ * rather than by maintenance. Run the command.
  */
 export const AR_GAPS = [
   'qrAria',
@@ -1008,7 +1019,6 @@ export const AR_GAPS = [
   'gatewayFailedTitle',
   'gatewayFailedBody',
   'gatewayFailedRetry',
-  'activityShowMore',
   'emptyActivityTitle',
   'emptyActivityBody',
   'emptyActivityAction',

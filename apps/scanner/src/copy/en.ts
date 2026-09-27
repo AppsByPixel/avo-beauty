@@ -281,12 +281,17 @@ export const copy = {
 
   /**
    * The 403's companion line. The server's own sentence is rendered above it
-   * verbatim and names VOIDING, because the gate really is `perms.void` — the
-   * API concedes `perms.customAmount` would be the honest gate and is a
-   * four-way break a lane may not make. This line closes the gap between what
-   * she did and what the refusal calls it, without overwriting the refusal.
+   * verbatim and names whichever permission the server refused. This line says
+   * what she was doing, without overwriting the refusal.
+   *
+   * REWRITTEN 2026-09-28 — NEW COPY, NO DESIGN SOURCE. It read "Typing a price
+   * needs the same authority as voiding one", true while the control was gated
+   * on `perms.void`. The client moved the control to `perms.scanner` (anyone
+   * who can charge), which made that sentence false, so it no longer names a
+   * permission at all. Mirrors `customAmountRefusal`'s hint in
+   * domain/customAmount.ts, which is the one rendered.
    */
-  typedPriceForbiddenHint: 'Typing a price needs the same authority as voiding one.',
+  typedPriceForbiddenHint: 'Typing a price was refused for your account.',
   /**
    * The 422, and it is NOT "nothing happened".
    *

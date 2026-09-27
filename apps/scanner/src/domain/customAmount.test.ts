@@ -10,13 +10,77 @@
 import { describe, expect, it } from 'vitest';
 import { fils, formatMoney } from '@avo/types';
 import { ApiError } from '../api/client';
+import type { StaffPerms } from '../api/staff';
 import {
   CUSTOM_AMOUNT_MAX_FILS,
+  CUSTOM_AMOUNT_PERM,
   REASON_MAX_CHARS,
+  canTypeCustomAmount,
   customAmountRefusal,
   parseTypedKd,
   typedChargeReady,
 } from './customAmount';
+
+// ─────────────────────────────────────────── who sees the control (item 7) ──
+
+/**
+ * AFTAB, 2026-09-28: "make sure they can put a custom amount as well" — and he
+ * chose the rule: anyone who can charge. That is `perms.scanner` ("Can scan &
+ * charge"), NOT `perms.charges` (Today's charges, a senior read permission) and
+ * no longer `perms.void`. The fixtures are the real permission SHAPES a salon
+ * issues, because the defect this replaces was exactly a shape — the front
+ * desk, `scanner: true, void: false` — that the old gate hid the control from.
+ *
+ * `can` is built from the fixture the same way `useSession().can` is built from
+ * the session (`perms[perm] === true`), so this calls the rule the screen calls.
+ */
+const NONE: StaffPerms = {
+  dashboard: false,
+  appointments: false,
+  shop: false,
+  loyalty: false,
+  team: false,
+  scanner: false,
+  charges: false,
+  void: false,
+  marketing: false,
+};
+const canFrom = (perms: StaffPerms) => (perm: keyof StaffPerms) => perms[perm] === true;
+
+describe('canTypeCustomAmount — anyone who can charge may type the price', () => {
+  it('is the charge permission, by name', () => {
+    expect(CUSTOM_AMOUNT_PERM).toBe('scanner');
+  });
+
+  it('shows the control to a front-desk artist: scanner, and neither void nor charges', () => {
+    expect(canTypeCustomAmount(canFrom({ ...NONE, scanner: true }))).toBe(true);
+  });
+
+  it('hides it from someone who cannot charge, however senior her other permissions', () => {
+    // A supervisor who reviews and voids but does not take payments.
+    expect(canTypeCustomAmount(canFrom({ ...NONE, charges: true, void: true }))).toBe(false);
+    expect(canTypeCustomAmount(canFrom(NONE))).toBe(false);
+  });
+
+  it('shows it to a manager who holds everything', () => {
+    expect(canTypeCustomAmount(canFrom({ ...NONE, scanner: true, charges: true, void: true }))).toBe(true);
+  });
+
+  /**
+   * THE GATE MOVED; THE MONEY RULES DID NOT. Widening who sees the field must
+   * not widen what it sends: a scanner-only artist still cannot send a figure
+   * without a reason, and still cannot type past the 200.000 KD ceiling.
+   */
+  it('widening the gate leaves the reason and the ceiling exactly where they were', () => {
+    expect(canTypeCustomAmount(canFrom({ ...NONE, scanner: true }))).toBe(true);
+    expect(typedChargeReady(parseTypedKd('18.5'), '')).toBe(false);
+    expect(typedChargeReady(parseTypedKd('18.5'), '   ')).toBe(false);
+    expect(typedChargeReady(parseTypedKd('18.5'), 'Colour correction, quoted at the desk')).toBe(true);
+    expect(parseTypedKd('200.001').state).toBe('above-ceiling');
+    expect(typedChargeReady(parseTypedKd('200.001'), 'A reason')).toBe(false);
+    expect(CUSTOM_AMOUNT_MAX_FILS).toBe(200_000);
+  });
+});
 
 // ───────────────────────────────────────────────────────── the field is KD ──
 
@@ -186,9 +250,10 @@ const refusal = (status: number, code: string, message: string, details = {}) =>
 describe('customAmountRefusal — every refusal this endpoint can give is a sentence', () => {
   /**
    * THE PERMISSION-OFF CASE. The control is hidden from a staff member without
-   * `perms.void`, and that hiding is a courtesy (non-negotiable #7). A cached
-   * `perms.void: true` against a server that has revoked it puts a typed figure
-   * on the wire and gets this back — so the sentence has to exist.
+   * `perms.scanner` (it was `perms.void` until 2026-09-28), and that hiding is a
+   * courtesy (non-negotiable #7). A cached permission against a server that
+   * disagrees puts a typed figure on the wire and gets this back — so the
+   * sentence has to exist.
    *
    * The server's copy is rendered VERBATIM. It names `void`, not "custom
    * amount", because the gate really is `perms.void` — the API's own comment
@@ -197,12 +262,25 @@ describe('customAmountRefusal — every refusal this endpoint can give is a sent
    * actually refused; the scanner adds a line naming what she was doing instead.
    */
   it('renders the 403 verbatim and says what was refused', () => {
+    // The server's sentence while it still gates on `void` — the changeover
+    // case: a scanner-only artist is shown the control and the server refuses.
     const out = customAmountRefusal(
       refusal(403, 'forbidden', "You don't have permission to void a charge. A manager can grant it."),
     );
     expect(out.body).toBe("You don't have permission to void a charge. A manager can grant it.");
-    expect(out.hint).toBe('Typing a price needs the same authority as voiding one.');
+    expect(out.hint).toBe('Typing a price was refused for your account.');
     expect(out.rereadPerms).toBe(true);
+  });
+
+  /**
+   * The hint must stay true whichever gate the server is running, so it names
+   * no permission. The old line equated typing with voiding — false on this side
+   * since 2026-09-28.
+   */
+  it('the 403 hint claims no permission equivalence', () => {
+    const out = customAmountRefusal(refusal(403, 'forbidden', 'Forbidden.'));
+    expect(out.hint).not.toMatch(/void/i);
+    expect(out.hint).not.toMatch(/scanner|charges/i);
   });
 
   it('renders the ceiling refusal with the server figures, not a recomputed one', () => {

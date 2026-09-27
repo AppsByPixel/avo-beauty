@@ -288,8 +288,8 @@ export function clockTime(epochMs: number, lang: Language = 'en'): string {
  * `design/AVO Wallet Home.dc.html:328` sizes the list's own placeholder at
  * `hint-placeholder-count="4"`, which is the designer's idea of how tall that
  * card sits on the home screen. The bundle draws no disclosure — the prototype's
- * list is however long its fixture is — so the CONTROL is new and its label is
- * an AR GAP. See `copy/en.ts § activityShowMore`.
+ * list is however long its fixture is — so the CONTROL is new and both of its
+ * labels are new copy. See `copy/types.ts § activityShowMore`.
  */
 export const ACTIVITY_VISIBLE = 4;
 
@@ -297,25 +297,47 @@ export interface ActivityDisclosure<T> {
   /** The rows to render. */
   visible: T[];
   /**
-   * How many rows the control would reveal. ZERO MEANS NO CONTROL — which is
-   * what makes the two ends of this rule one branch rather than two: a
-   * three-row account and an already-expanded twelve-row account both report 0
-   * and both draw nothing.
+   * How many rows the control would reveal. Zero for a three-row account and
+   * for an already-expanded twelve-row one alike — but since 2026-09-28 zero no
+   * longer means "no control": the expanded list has one, to fold it away. Read
+   * `control` for whether anything is drawn.
    */
   hidden: number;
+  /**
+   * Which control, if any, sits under the list. `'more'` while rows are held
+   * back, `'less'` once they are all showing, and `null` when the account has
+   * four rows or fewer — there is nothing to reveal and nothing to fold away,
+   * and a control that does neither reads as broken.
+   *
+   * Decided HERE rather than in the JSX for the reason `hidden` is: the boundary
+   * (`> ACTIVITY_VISIBLE`) is one expression, and a second statement of it at
+   * the call site is where the two would disagree.
+   */
+  control: 'more' | 'less' | null;
 }
 
 /**
- * Four rows, then a control that reveals the rest.
+ * Four rows, then a control that reveals the rest — and, once revealed, folds
+ * it away again.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * IT DISCLOSES ONCE AND DOES NOT RE-COLLAPSE
+ * IT RE-COLLAPSES NOW. IT DID NOT UNTIL 2026-09-28, AND THAT WAS DELIBERATE
  * ═══════════════════════════════════════════════════════════════════════════
- * `hidden` is 0 after expanding, so the control withdraws itself. That is not
- * an omission of a "show less": the bundle has no such string in either
- * language, and inventing a second one to undo the first is a worse trade than
- * a list that stays open for as long as she is on the screen. The feed is
- * remounted on every return to Home, so it opens collapsed again.
+ * This used to disclose once: `hidden` went to 0 on expanding and the control
+ * withdrew itself, because the bundle has no "show less" string in either
+ * language and inventing a second string to undo the first looked like a worse
+ * trade than a list that stayed open. That was the copy-verbatim rule applied
+ * correctly at the time.
+ *
+ * Aftab then asked for it in so many words — "activity now shows more but when
+ * I want to shorten the list again I can't" — so the second string is
+ * authorised new copy (`copy/types.ts § activityShowLess`), and `control`
+ * carries the choice. `hidden` keeps its old meaning exactly: how many rows the
+ * control would REVEAL, which is 0 once everything is showing.
+ *
+ * WHAT DID NOT CHANGE: the list still opens collapsed on every return to Home,
+ * because `expanded` is view state in `ActivityFeed` and the feed remounts.
+ * A way back to four is not a reason to remember that she once asked for all.
  *
  * THE BOUNDARY IS `>` AND NOT `>=`, and it is the whole near-empty case: at
  * exactly four there is nothing beneath the fourth row, so a control there
@@ -327,6 +349,48 @@ export function discloseActivity<T>(
   rows: readonly T[],
   expanded: boolean,
 ): ActivityDisclosure<T> {
-  if (expanded || rows.length <= ACTIVITY_VISIBLE) return { visible: [...rows], hidden: 0 };
-  return { visible: rows.slice(0, ACTIVITY_VISIBLE), hidden: rows.length - ACTIVITY_VISIBLE };
+  if (rows.length <= ACTIVITY_VISIBLE) return { visible: [...rows], hidden: 0, control: null };
+  if (expanded) return { visible: [...rows], hidden: 0, control: 'less' };
+  return {
+    visible: rows.slice(0, ACTIVITY_VISIBLE),
+    hidden: rows.length - ACTIVITY_VISIBLE,
+    control: 'more',
+  };
+}
+
+/**
+ * Where Home scrolls to when the feed folds back to four — or `null` to stay put.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHY FOLDING NEEDS A SCROLL AT ALL
+ * ═══════════════════════════════════════════════════════════════════════════
+ * "Show less" sits UNDER the list, so she reaches it at the bottom of a long
+ * expanded feed. Folding removes everything past the fourth row from above her
+ * finger in one frame. The page's content gets shorter than her scroll offset,
+ * the scroll view clamps to its new end, and she is left looking at Membership
+ * or the footer with no sight of the list she just shortened — the control she
+ * pressed has jumped hundreds of points up and out of view. A collapse that
+ * strands her is exactly the disorientation the request was about.
+ *
+ * So after folding, the screen brings the top of the Activity section back into
+ * view: the label, the four rows and the control she just pressed, now reading
+ * "Show more". That is where her attention already is.
+ *
+ * ONLY WHEN THE SECTION'S TOP IS ABOVE THE VIEWPORT. If she expanded a six-row
+ * feed and never scrolled, the section's top is still on screen, nothing is
+ * lost under her, and scrolling anyway would be a jump she did not cause. That
+ * is the `null` branch, and `activityDisclosure.test.ts` asserts both sides.
+ *
+ * `scrollY` is her offset at the press, before the fold; `sectionTop` is the
+ * section measured against Home's scroll CONTENT at the press, so both are
+ * content offsets and the fold cannot move either. (Not `onLayout` — on the web
+ * build that only fires on resize, so it goes stale when a card above settles;
+ * see `ActivityFeed § onCollapse`.) The margin keeps the section label off the
+ * very top edge rather than flush against it.
+ */
+export const COLLAPSE_SCROLL_MARGIN = 12;
+
+export function collapseScrollTarget(scrollY: number, sectionTop: number): number | null {
+  const target = Math.max(0, sectionTop - COLLAPSE_SCROLL_MARGIN);
+  return scrollY > target ? target : null;
 }

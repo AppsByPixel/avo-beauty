@@ -72,9 +72,12 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
   // AVO Staff Scanner.dc.html:354 (the held-deposit chip) and :364 (the
   // shortfall line). Both are product copy inside a tinted chip, not the
   // developer-addressed banner prose that the other bare <b>s are.
+  // MOVED 402 → 408 and 475 → 482 on 2026-09-28: the typed-price gate's
+  // docblock above them grew when the client moved that gate to `scanner`.
+  // Same two calls, nothing added between them.
   it.each([
-    ['screens/MemberScreen.tsx', 402, 'the held-deposit figure'],
-    ['screens/MemberScreen.tsx', 475, 'the shortfall figure'],
+    ['screens/MemberScreen.tsx', 408, 'the held-deposit figure'],
+    ['screens/MemberScreen.tsx', 482, 'the shortfall figure'],
   ])('%s:%d — %s is drawn at 600', (rel, line) => {
     const src = fs.readFileSync(path.join(SRC, rel), 'utf8').split('\n');
     expect(src[line - 1]).toContain("ui(12.5, '600')");

@@ -66,6 +66,7 @@ import {
   customAmountRefusal,
   parseTypedKd,
   typedChargeReady,
+  canTypeCustomAmount,
   type CustomAmountRefusal,
 } from '../domain/customAmount';
 import { loyaltyPill, memberSubtitle } from '../domain/loyalty';
@@ -107,27 +108,32 @@ export function MemberScreen({
 
   /**
    * ═══════════════════════════════════════════════════════════════════════════
-   * A PRICE A MANAGER TYPED.
+   * A PRICE STAFF TYPED.
    * ═══════════════════════════════════════════════════════════════════════════
-   * `can('void')` — `useSession().can`, the SAME read the void button on
-   * ChargesScreen and the padlocked tiles on HomeScreen use, and the only read of
-   * authority this app has. It is `session.staff.perms[perm]`, re-fetched by
-   * `refreshPerms()` whenever the app foregrounds, so a manager granting the
-   * permission mid-shift takes effect without a sign-out.
+   * `canTypeCustomAmount(can)` — `perms.scanner`, "Can scan & charge": anyone who
+   * can charge may type the price. Read through `useSession().can`, the SAME
+   * read the void button on ChargesScreen and the padlocked tiles on HomeScreen
+   * use, and the only read of authority this app has. It is
+   * `session.staff.perms[perm]`, re-fetched by `refreshPerms()` whenever the app
+   * foregrounds, so a manager granting the permission mid-shift takes effect
+   * without a sign-out. The rule itself lives in `domain/customAmount.ts`, where
+   * a test can call it.
    *
-   * WHY `void` AND NOT SOMETHING OF THIS SCREEN'S OWN: the server gates
-   * `amountFils` on `perms.void`, on the PRESENCE of the field rather than the
-   * branch taken. Gating the control on anything else would draw a button whose
-   * every use is a 403. The API's own comment concedes `perms.customAmount` would
-   * be the honest gate and is a four-way break a lane may not make.
+   * THE CLIENT MOVED IT, 2026-09-28. This read `can('void')` until then, on the
+   * argument that the server gated `amountFils` on `perms.void` and anything
+   * else would draw a button whose every use is a 403. That hid the control from
+   * most of the staff who take payments. Aftab decided who may use it — anyone
+   * who can charge — and lane A is moving the server gate to `scanner` to match.
+   * Until that lands, a scanner-only staff member who types a price gets a 403,
+   * and this screen renders it as itself; that is the changeover, not a bug.
    *
    * AND IT DECIDES NOTHING (non-negotiable #7). Hiding the control is a courtesy
    * to a staff member who cannot use it, not the thing that stops her: a cached
-   * `perms.void: true` against a server that has revoked it puts the figure on
-   * the wire and gets a 403, and rendering that refusal well is this screen's
-   * actual job. Nothing below depends on the gate for correctness.
+   * permission against a server that disagrees puts the figure on the wire and
+   * gets a 403, and rendering that refusal well is this screen's actual job.
+   * Nothing below depends on the gate for correctness.
    */
-  const canTypeAmount = can('void');
+  const canTypeAmount = canTypeCustomAmount(can);
   const [typing, setTyping] = useState(false);
   const [typedRaw, setTypedRaw] = useState('');
   const [reason, setReason] = useState('');
@@ -406,8 +412,9 @@ export function MemberScreen({
 
         {/*
           THE DISCLOSURE, AND IT IS THE ONLY THING `canTypeAmount` DECIDES.
-          Hidden without `perms.void`, which is a courtesy to a staff member who
-          cannot use it — never the control. Non-negotiable #7.
+          Hidden without `perms.scanner` (since 2026-09-28; it was `void`), a
+          courtesy to a staff member who cannot use it — never the control.
+          Non-negotiable #7.
         */}
         {canTypeAmount && (
           <View style={styles.modeRow}>
@@ -498,8 +505,8 @@ export function MemberScreen({
 
             Four of them reach here and each says a different thing:
               403  the server's own sentence, verbatim, plus a line naming what
-                   she was doing — it speaks of VOIDING because the gate really
-                   is `perms.void`;
+                   she was doing — the server's sentence names the permission it
+                   refused, which is `void` until lane A's gate move lands;
               400 amount_above_ceiling / invalid_amount  the server's figures,
                    not a recomputed pair;
               422 idempotency_key_reused  replaced, because "use a new key" is

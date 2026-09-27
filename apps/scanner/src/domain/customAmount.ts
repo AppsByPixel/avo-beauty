@@ -1,6 +1,6 @@
 /**
- * A price a manager typed: what the field accepts, and what the server's
- * refusals say.
+ * A price staff typed: who may type one, what the field accepts, and what the
+ * server's refusals say.
  *
  * ═════════════════════════════════════════════════════════════════════════════
  * THE FIELD IS KD. THE WIRE IS FILS. NO FLOAT CROSSES BETWEEN THEM.
@@ -45,6 +45,7 @@
 
 import { fils, type Fils } from '@avo/types';
 import { ApiError } from '../api/client';
+import type { StaffPerms } from '../api/staff';
 
 /**
  * 200.000 KD — a MIRROR of `CUSTOM_AMOUNT_MAX_FILS` in
@@ -63,6 +64,34 @@ import { ApiError } from '../api/client';
  * change, not a lane B one.
  */
 export const CUSTOM_AMOUNT_MAX_FILS: Fils = fils(200_000);
+
+/**
+ * WHO SEES THE TYPED-PRICE CONTROL: anyone who can charge.
+ *
+ * `perms.scanner` — "Can scan & charge" — the permission an ordinary charge is
+ * gated on server-side (`requireScannerPerm(req, 'scanner')`,
+ * api/src/routes/charges.ts:125). NOT `perms.charges`, which is "Can open
+ * Today's charges", a senior read permission, and not `perms.void` any more.
+ *
+ * DECIDED BY THE CLIENT, 2026-09-28. This was `void` until then, argued from
+ * the server gating `amountFils` on `perms.void`, and it hid the control from
+ * most of the staff who take payments. Aftab asked for staff to be able to put
+ * a custom amount, and chose the rule: the same permission a charge needs.
+ * Lane A moves the server gate to match, in parallel; until that lands on the
+ * server a scanner-only staff member who types a price gets the server's 403,
+ * which `customAmountRefusal` below renders as itself. That is expected during
+ * the changeover, not a defect in this rule.
+ *
+ * A COURTESY, NOT A CONTROL (non-negotiable #7). This decides whether the
+ * disclosure is drawn and nothing else; the server decides whether the charge
+ * happens. It takes `can` rather than a perms object so the screen keeps the
+ * app's one read of authority (`useSession().can`, re-fetched on foreground).
+ */
+export const CUSTOM_AMOUNT_PERM = 'scanner' satisfies keyof StaffPerms;
+
+export function canTypeCustomAmount(can: (perm: keyof StaffPerms) => boolean): boolean {
+  return can(CUSTOM_AMOUNT_PERM);
+}
 
 /** Mirror of `requireString(body.reason, 'reason', 300)` in the charge route. */
 export const REASON_MAX_CHARS = 300;
@@ -187,23 +216,25 @@ export function customAmountRefusal(err: ApiError): CustomAmountRefusal {
 
   /**
    * THE PERMISSION-OFF CASE — the whole point of non-negotiable #7 on this
-   * control. The entry control is hidden from a staff member whose session does
-   * not carry `perms.void`, and that hiding decides nothing: a cached
-   * `perms.void: true` against a server that has since revoked it sends the
-   * figure and gets this back.
+   * control. The entry control is drawn from the session's cached perms
+   * (`canTypeCustomAmount`), and that decides nothing: a cached permission
+   * against a server that disagrees sends the figure and gets this back.
    *
-   * VERBATIM, AND IT NAMES THE WRONG CAPABILITY ON PURPOSE. The sentence is
-   * `PERMISSION_COPY.void` — "You don't have permission to VOID a charge" —
-   * because the gate genuinely is `perms.void`. The API's own comment concedes
-   * `perms.customAmount` would be the honest gate and is a four-way break a lane
-   * may not make. Rewriting it here would hide which permission was refused from
-   * the person who has to go ask for it, so the scanner adds a line rather than
-   * replacing one.
+   * THE SERVER'S SENTENCE, VERBATIM — it names the permission the server
+   * actually refused, which is what the person has to go and ask a manager for.
+   * While lane A's move of the server gate from `perms.void` to
+   * `perms.scanner` (2026-09-28) has not landed, that sentence is still
+   * `PERMISSION_COPY.void`, and a scanner-only staff member will see it.
+   *
+   * THE HINT NO LONGER NAMES A PERMISSION. It used to read "Typing a price needs
+   * the same authority as voiding one", which the client's decision made false
+   * on this side the moment the control moved to `scanner`. It now says only
+   * what she was doing, which is true whichever gate the server is running.
    */
   if (err.status === 403) {
     return {
       ...base,
-      hint: 'Typing a price needs the same authority as voiding one.',
+      hint: 'Typing a price was refused for your account.',
       rereadPerms: true,
     };
   }
