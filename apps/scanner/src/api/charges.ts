@@ -115,10 +115,12 @@ export type ChargePricing =
   /** What the customer picked off the menu. The ordinary path. */
   | { kind: 'basket'; serviceIds: string[] }
   /**
-   * A price a manager typed, with the words that justify it. Gated on
-   * `perms.void` server-side, on the PRESENCE of the field rather than on the
-   * branch taken — so sending this without the authority is a 403, never a
-   * silent fall back to pricing the basket.
+   * A price staff typed, with the words that justify it. Gated server-side on
+   * the PRESENCE of the field rather than on the branch taken — so sending this
+   * without the authority is a 403, never a silent fall back to pricing the
+   * basket. The gate was `perms.void`; the client decided on 2026-09-28 that it
+   * is `perms.scanner`, the permission any charge needs, and lane A is moving
+   * the server to match (see domain/customAmount.ts § canTypeCustomAmount).
    */
   | { kind: 'custom'; amountFils: Fils; reason: string };
 
