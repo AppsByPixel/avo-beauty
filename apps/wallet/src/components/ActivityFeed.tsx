@@ -25,9 +25,32 @@
  * persisted, and it does not belong on `useWalletHome`: the feed remounts on
  * every return to Home and opens collapsed again, which is the behaviour a
  * disclosure should have. Nothing about it reaches the server.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * AND IT FOLDS BACK — ONE CONTROL, TWO LABELS (2026-09-28)
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Aftab: "activity now shows more but when I want to shorten the list again I
+ * can't." The control used to withdraw once pressed. It now stays and reads
+ * "Show less", and pressing it returns the list to four. The opens-collapsed
+ * rule above is untouched — a way back does not make the open state sticky.
+ *
+ * THE SAME ELEMENT IN BOTH STATES, NOT TWO. One `Pressable` whose label and
+ * state change, rather than a "more" button unmounting and a "less" button
+ * mounting in its place: a screen reader's focus stays on the control she just
+ * activated instead of falling back to the top of the document, and a keyboard
+ * user can press it again without hunting for it.
+ *
+ * ITS STATE IS EXPOSED, NOT ONLY ITS LABEL. `accessibilityState.expanded` for
+ * native and `aria-expanded` for the web build — both, for the reason `Toggle`
+ * in account/Rows.tsx gives: react-native-web does not map the state object to
+ * ARIA, measured there on `checked` and again here on `expanded`.
+ *
+ * FOLDING SCROLLS HER BACK TO THE LIST. See `domain/activity.ts §
+ * collapseScrollTarget` for why and when; this component hands Home its own
+ * view, and Home, which owns the scroll view, measures and decides.
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { color, MICRO_LABEL_COLOR, MIN_TAP_TARGET, onBrandFill, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
@@ -40,15 +63,41 @@ interface Props {
   onTopUp: () => void;
   /** Every row opens the detail sheet — design/AVO Wallet Home.dc.html. */
   onOpen: (id: string) => void;
+  /**
+   * Called as the list folds back to four, with the section's own view. Home
+   * measures it against the scroll content it owns and brings it back into view
+   * — see `domain/activity.ts § collapseScrollTarget`.
+   *
+   * THE VIEW, NOT A NUMBER. This first passed the section's `onLayout` y, and
+   * driving the web build showed it landing 26pt off: react-native-web fires
+   * `onLayout` from a ResizeObserver, so it reports a SIZE change and never a
+   * pure MOVE — and the section moves without resizing whenever a card above it
+   * settles (Upcoming's skeleton giving way to the real card). The number was
+   * the section's first position, not its current one. Measuring at the press
+   * is the only reading that cannot be stale.
+   */
+  onCollapse?: (section: View | null) => void;
 }
 
-export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
+export function ActivityFeed({ rows, onTopUp, onOpen, onCollapse }: Props) {
   const { lang, copy } = useLanguage();
   const [expanded, setExpanded] = useState(false);
-  const { visible, hidden } = discloseActivity(rows, expanded);
+  const { visible, control } = discloseActivity(rows, expanded);
+  const sectionRef = useRef<View>(null);
+
+  const toggle = () => {
+    if (control === 'less') {
+      setExpanded(false);
+      onCollapse?.(sectionRef.current);
+    } else {
+      setExpanded(true);
+    }
+  };
+  const label = control === 'less' ? copy.activityShowLess : copy.activityShowMore;
+  const isExpanded = control === 'less';
 
   return (
-    <View style={styles.section}>
+    <View ref={sectionRef} style={styles.section}>
       <Text style={[text('label', lang), styles.sectionLabel]}>{copy.activityLabel}</Text>
       {rows.length === 0 ? (
         <EmptyActivity onTopUp={onTopUp} />
@@ -62,20 +111,24 @@ export function ActivityFeed({ rows, onTopUp, onOpen }: Props) {
             Outside, it reads as an action on the card rather than an entry in
             it — which is what it is.
 
-            It withdraws once pressed because `hidden` is then 0. There is no
-            "show less": the bundle has no such string in either language, and
-            `activityShowMore` is already an invented one.
+            It no longer withdraws once pressed. It used to, and this note said
+            there was no "show less" because the bundle has no such string —
+            true, and the right call until the client asked for one. See the
+            header. `control` is null only when there is nothing to fold or
+            reveal, i.e. four rows or fewer.
           */}
-          {hidden > 0 ? (
+          {control ? (
             <Pressable
-              onPress={() => setExpanded(true)}
+              onPress={toggle}
               accessibilityRole="button"
-              accessibilityLabel={copy.activityShowMore}
+              accessibilityLabel={label}
+              accessibilityState={{ expanded: isExpanded }}
+              aria-expanded={isExpanded}
               dataSet={focusable}
-              testID="activity-show-more"
+              testID="activity-disclosure"
               style={styles.more}
             >
-              <Text style={[text('body', lang, '600'), styles.moreText]}>{copy.activityShowMore}</Text>
+              <Text style={[text('body', lang, '600'), styles.moreText]}>{label}</Text>
             </Pressable>
           ) : null}
         </>

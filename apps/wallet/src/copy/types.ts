@@ -220,9 +220,26 @@ export interface Copy {
    * and countless on purpose: "Show more" carries no number, which keeps it out
    * of the digit rule and out of Arabic's counted-noun agreement, so the
    * native-speaker review gets to answer one question rather than three.
-   * Arabic holds the English, listed in `AR_GAPS`. Reported to Aftab.
+   * Arabic held the English, listed in `AR_GAPS`, until 2026-09-28 — see
+   * `activityShowLess` for why it is translated now.
    */
   activityShowMore: string;
+  /**
+   * The same control once the list is open — folds it back to four.
+   *
+   * ⚠️ NEW COPY WITH NO DESIGN SOURCE, IN BOTH LANGUAGES. Aftab asked for it on
+   * 2026-09-28 ("when I want to shorten the list again I can't"), which is what
+   * authorises inventing it; the wording is still ours and wants his eye. Flat
+   * and countless for the reason `activityShowMore` is.
+   *
+   * Arabic is written, not transcribed, and so is `activityShowMore`'s now: a
+   * pair where one half renders English inside an Arabic layout would read as a
+   * bug in the new half. Both use the masdar (`عرض`), the ungendered register
+   * the design itself uses for its only other show/hide pair (design:1810,
+   * `إظهار` / `إخفاء`). An alternative for the reviewer is `إظهار المزيد` /
+   * `إظهار أقل`, which keeps the design's exact verb.
+   */
+  activityShowLess: string;
   emptyActivityTitle: string;
   emptyActivityBody: string;
   emptyActivityAction: string;

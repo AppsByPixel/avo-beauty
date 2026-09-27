@@ -10,8 +10,16 @@
  * treatments from design/AVO States.dc.html.
  */
 
-import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 import { SafeAreaView } from 'react-native';
 import { fils, formatMoney, type Fils } from '@avo/types';
 import { color, CONTROL_BORDER, MIN_TAP_TARGET, radius, text } from '../theme';
@@ -25,7 +33,7 @@ import type { BookingView } from '../api/booking';
 import { useTopUp } from '../state/useTopUp';
 import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
 import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
-import { relativeTime, toActivityRow } from '../domain/activity';
+import { collapseScrollTarget, relativeTime, toActivityRow } from '../domain/activity';
 import { salonName } from '../domain/names';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { WalletCard } from '../components/WalletCard';
@@ -107,6 +115,40 @@ export function HomeScreen({
 
   const [amount, setAmount] = useState<Fils>(DEFAULT_TOP_UP_AMOUNT);
   const [openTxId, setOpenTxId] = useState<string | null>(null);
+
+  /**
+   * FOLDING THE ACTIVITY FEED MUST NOT STRAND HER. "Show less" sits at the
+   * bottom of an expanded feed; folding shortens the page under her finger, so
+   * Home brings the section's top back into view when — and only when — it has
+   * scrolled above the viewport. The rule is `collapseScrollTarget`; this is the
+   * scroll view it acts on. Refs, not state: the offset changes every frame and
+   * nothing renders from it.
+   */
+  const scrollRef = useRef<ScrollView>(null);
+  const scrollY = useRef(0);
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollY.current = e.nativeEvent.contentOffset.y;
+  }, []);
+  const onFeedCollapse = useCallback((section: View | null) => {
+    const scroll = scrollRef.current;
+    const content = scroll ? innerContent(scroll) : null;
+    if (!section || !scroll || !content) return;
+    // Where she was when she pressed — read NOW, before the fold re-lays the
+    // page out and the scroll view clamps to its shorter end.
+    const from = scrollY.current;
+    // Against the scroll CONTENT, so the answer is a content offset that the
+    // fold cannot move (everything above the section is unchanged by it).
+    section.measureLayout(
+      content,
+      (_x, sectionTop) => {
+        const y = collapseScrollTarget(from, sectionTop);
+        if (y !== null) scroll.scrollTo({ y, animated: true });
+      },
+      () => {
+        // Unmeasurable (unmounted mid-fold): staying put is the safe answer.
+      },
+    );
+  }, []);
 
   /**
    * "New balance" on the top-up success screen. Non-negotiable #2: it is the
@@ -223,6 +265,8 @@ export function HomeScreen({
 
   return (
     <Shell
+      scrollRef={scrollRef}
+      onScroll={onScroll}
       overlay={
         <>
           <TopUpSheet
@@ -388,6 +432,7 @@ export function HomeScreen({
         rows={rows}
         onTopUp={() => topUp.open(amount)}
         onOpen={setOpenTxId}
+        onCollapse={onFeedCollapse}
       />
 
       {/*
@@ -410,6 +455,29 @@ export function HomeScreen({
 }
 
 /**
+ * The scroll view's content container, as something `measureLayout` accepts.
+ *
+ * `getInnerViewRef`, NOT `getInnerViewNode`. Under the new architecture (this
+ * app is RN 0.86) `measureLayout` refuses a numeric node handle — it logs "must
+ * be called with a ref to a native component" and never calls back — and a
+ * handle is exactly what `getInnerViewNode` returns. `getInnerViewRef` returns
+ * the host instance on native and the DOM node on react-native-web; both
+ * implement it (ScrollView.js:870 in react-native, and the web ScrollView).
+ *
+ * THE ONE CAST, AND WHY IT IS NOT A GREEN BOUGHT WITH ONE: `ScrollView.d.ts`
+ * lags its own source and declares only `getInnerViewNode` (d.ts:891), while
+ * `ScrollView.js:142` types `getInnerViewRef` on the imperative methods. The
+ * cast adds the method the runtime has; it asserts nothing about its result
+ * beyond what `measureLayout` takes, and a missing method returns null here,
+ * which Home treats as "stay put".
+ */
+function innerContent(scroll: ScrollView): Parameters<View['measureLayout']>[0] | null {
+  const withRef = scroll as unknown as { getInnerViewRef?: () => unknown };
+  const inner = withRef.getInnerViewRef?.() ?? null;
+  return (inner as Parameters<View['measureLayout']>[0] | null) ?? null;
+}
+
+/**
  * `overlay` is a sibling of the ScrollView, not a child of it. A sheet rendered
  * inside the scroll content would scroll away with the page and be clipped by
  * the content container — it has to sit on the frame.
@@ -418,15 +486,25 @@ function Shell({
   children,
   centered,
   overlay,
+  scrollRef,
+  onScroll,
 }: {
   children: React.ReactNode;
   centered?: boolean;
   overlay?: React.ReactNode;
+  /** Home's loaded state only — the skeleton and failure shells have no feed. */
+  scrollRef?: React.RefObject<ScrollView | null>;
+  onScroll?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
 }) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.frame}>
         <ScrollView
+          ref={scrollRef}
+          onScroll={onScroll}
+          // Only the offset at the moment of a fold is read, so a coarse
+          // throttle is plenty and costs the JS thread nothing worth measuring.
+          scrollEventThrottle={64}
           contentContainerStyle={[styles.scroll, centered && styles.scrollCentered]}
           showsVerticalScrollIndicator={false}
         >
