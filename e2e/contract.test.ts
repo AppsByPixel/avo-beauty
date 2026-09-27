@@ -1086,6 +1086,44 @@ const UNMODELLED: Record<string, string> = {
    * tenancy gap ledger caught their salon scope). Three independent tripwires, one new
    * surface, three catches: the property all three were built for.
    */
+  /**
+   * DEPOSIT HEALTH, arriving with lane A's `routes/deposits.ts` on dev `18be114` —
+   * the sixth new surface this census has named on arrival, by name and with the
+   * file it came from, in the same run that tripped the permission ledger and the
+   * tenancy gap ledger. Three independent tripwires, one new surface, three
+   * catches.
+   *
+   * UNMODELLED, AND THE REASON IS CHECKED RATHER THAN ASSUMED. `packages/types`
+   * declares nothing for this shape: `grep -rn deposit packages/types/src` reaches
+   * `entities.ts` (`BookingSchema.depositFils`) and `money.test.ts` and no further.
+   * There is no `DepositHealthSchema`, no `DepositRowSchema`, and `BookingSchema`
+   * would be the WRONG shape rather than a missing one — a `DepositRow` is a
+   * booking JOINED to its member's contact pair, its artist, its service and its
+   * branch, plus three fields that exist nowhere else (`state`, `overdueMinutes`,
+   * `returnOverdueMinutes`) and are computed against `now` rather than stored.
+   *
+   * NOT WIRE-PINNED HERE, AND THAT IS A DELIBERATE DIFFERENCE FROM THE FOUR
+   * MEMBER ROUTES BELOW. Those are pinned in this file because a client is
+   * already built against them and "unmodelled" was the whole of the guard. This
+   * one has a spec of its own — `deposit-health.test.ts` — which drives the three
+   * states against rows in each, the money identities, the 200-row cap and the
+   * `starts_at ASC` ordering through the real endpoint. A wire pin here would be
+   * a second, weaker statement of a shape that file asserts field by field, and
+   * the two would drift.
+   *
+   * WORTH A SCHEMA. `packages/types` is trunk-owned, so this lane pins and
+   * reports rather than adding one — the note is in the lane report.
+   */
+  'GET /salons/:id/deposits':
+    'deposit health — what a salon is holding right now and what never resolved. ' +
+    '{asOf, held, scheduled, overdue:{awaitingArrival, returnOverdue, unclosed}, rows, ' +
+    'rowsTruncated, branchId, branchName}, every money figure INTEGER FILS, behind ' +
+    'requireDashboardPerm(appointments) + requireSameSalon. No schema in packages/types: ' +
+    'DepositHealth and DepositRow live in api/src/services/depositHealth.ts only, and ' +
+    'BookingSchema is the wrong shape rather than a missing one — a row is a booking ' +
+    'joined to four tables plus three fields computed against `now`. A STOCK and not a ' +
+    'flow, which is why it takes ?branch= and refuses to mean anything by ?period=. ' +
+    'Driven end to end in deposit-health.test.ts. Worth a schema.',
   'GET /salons/:id/reports/:kind':
     'the Reports card aggregate — INTEGER FILS in JSON, behind requireDashboardPerm ' +
     'of the section each kind exports (REPORT_PERMISSION, services/reports.ts). No ' +
@@ -2463,12 +2501,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 59 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 60 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(59);
+    ).toBe(60);
   });
 
   it('no GET route is left unclassified', () => {
