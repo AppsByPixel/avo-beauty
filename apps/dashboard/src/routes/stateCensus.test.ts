@@ -165,6 +165,45 @@ const SECTION_SCREENS = [
    * see `Tills.tsx` or `SalesTrend.tsx`.
    */
   'AppointmentsWeek.tsx',
+  /**
+   * Merchant → Appointments → Deposits. NEW SCOPE; there is no designed screen
+   * (`routes/depositHealthRules.ts` carries the disclosure and the client's
+   * request verbatim).
+   *
+   * A VIEW INSIDE A SCREEN, in this list rather than in a host/subview pair, and
+   * it needs the same two halves `AppointmentsWeek.tsx` needs.
+   *
+   * IT OWNS ITS OWN READ. `Appointments.tsx` reads
+   * `GET /salons/{id}/bookings`; this reads `GET /salons/{id}/deposits` — a
+   * different route with a different response, so a 503 here is this view's
+   * answer and not its host's, and nothing hands it a pending state because the
+   * list's read landing says nothing about whether this one has. It is also
+   * scoped by the shell's branch selection, so it has a cache entry per branch
+   * that its host does not.
+   *
+   * SAME GATE, WHICH IS NOT THE SAME THING AS ONE READ — `ShopOrders.tsx`'s
+   * distinction, and this is the fourth entry to turn on it. Both routes are
+   * `requireDashboardPerm(req, 'appointments')`; a shared permission does not
+   * make two endpoints fail together. The 403 arm is reachable by a mid-session
+   * revocation, which is the case non-negotiable #7 is about.
+   *
+   * ITS EMPTY IS THE ONE EMPTY IN THIS DASHBOARD THAT IS GOOD NEWS, and it has
+   * TWO of them. "No deposits on hold" is a quiet salon or a branch filter that
+   * matched nothing; "Nothing overdue" is a salon whose deposit book is healthy.
+   * Sharing copy between those would report a well-run salon as an absence of
+   * data — `AVO States.dc.html`'s two-empties rule, applied to a pair nobody drew.
+   *
+   * IT CARRIES A FIFTH THING THAT IS NOT ONE OF THE FOUR: the 200-row cap.
+   * `overdue.bookings` is the authority and `rows` is the evidence, so a section
+   * can legitimately show fewer rows than its own heading counts. The notice is
+   * pinned in the capped-list describe at the foot of this file, beside
+   * `ShopOrders`' and the week's.
+   *
+   * Not routed — `Appointments.tsx` mounts it behind the List/Week/Deposits
+   * control — so the routed-component assertion below will not see it, exactly as
+   * it does not see `Tills.tsx`, `AppointmentsWeek.tsx` or `ShopOrders.tsx`.
+   */
+  'DepositHealth.tsx',
   'Accounts.tsx',
   /**
    * Merchant → Accounts → Customers. The customer book, one customer's card, and
@@ -694,6 +733,44 @@ describe('a capped list does not report itself as complete', () => {
    * the value COMES FROM rather than on its spelling, per this file's standing
    * correction.
    */
+  /**
+   * THE SAME CLASS AGAIN, AND HERE THE TWO FIGURES SIT ON ONE SCREEN.
+   *
+   * `GET /salons/{id}/deposits` serves EXACT counts and a row list capped at 200,
+   * and says so: "`overdue.bookings` is the authority on how many there are,
+   * `rows` is what they were, and `rowsTruncated` says when the two legitimately
+   * differ." A merchant can therefore read "14 bookings" beside a list of 9.
+   *
+   * A client that dropped `rowsTruncated` would make the shorter list read as a
+   * correction of the count above it — the believed-null defect from the other
+   * side, which this lane has already paid for once on the branch-closure
+   * preview. So: the field is consulted, and it drives something drawn.
+   */
+  it('DepositHealth.tsx reads `rowsTruncated` and draws the discrepancy', () => {
+    const src = stripComments(read('DepositHealth.tsx'));
+    expect(src).toContain('rowsTruncated');
+    // It reaches the section that can actually show both figures.
+    expect(src).toMatch(/truncated=\{health\.rowsTruncated\}/);
+    // …and the section renders the two numbers rather than only the rows it has.
+    expect(src).toMatch(/truncated && hidden > 0/);
+  });
+
+  /**
+   * A SECTION IS DRAWN FROM THE SERVER'S COUNT, NEVER FROM `rows.length`.
+   *
+   * The sibling of the assertion above and the one that would fail first: with
+   * the cap reached, a state whose rows all sit past row 200 has a positive count
+   * and an empty row list. Keying the section on `rows.length` would delete it
+   * from the screen while the tile above still counted its bookings — two figures
+   * disagreeing, which the API's single-query aggregate exists to prevent and
+   * which the client would have reintroduced.
+   */
+  it('DepositHealth.tsx keys its sections on the count, not on the rows in hand', () => {
+    const src = stripComments(read('DepositHealth.tsx'));
+    expect(src).toContain('if (group.bookings === 0) return null;');
+    expect(src).not.toMatch(/group\.rows\.length === 0\) return null/);
+  });
+
   it('AppointmentsWeek.tsx reads exhaustion off the payload, not off hasNextPage', () => {
     const src = stripComments(read('AppointmentsWeek.tsx'));
     expect(src).toMatch(/exhausted:[^,\n]*nextCursor/);

@@ -18,6 +18,8 @@ import { useSession } from '../auth/AuthProvider.js';
 import { AppointmentForm } from './AppointmentForm.js';
 import { AppointmentsWeek } from './AppointmentsWeek.js';
 import { instantFromSalonLocal, pillFor, salonLocalFields } from './appointmentsWeekRules.js';
+import { whenLabel } from './appointmentWhen.js';
+import { DepositHealth } from './DepositHealth.js';
 import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
 
@@ -59,30 +61,16 @@ import { SectionError, WriteError } from './sectionState.js';
  */
 
 /**
- * "Today · 4:30 PM", "Tomorrow · 11:00 AM", "9 Jul · 7:00 PM".
+ * `whenLabel` MOVED TO `routes/appointmentWhen.ts`, WITH ITS ARGUMENT INTACT.
  *
- * The API sends an ISO instant on purpose — the relative phrasing depends on the
- * reader's clock, and non-negotiable #12 makes the Arabic dashboard a real
- * layout rather than a string swap. Appointments look forward as well as back,
- * so this carries "Tomorrow", which the audit log's past-only equivalent does
- * not.
+ * It was private to this file for as long as the list was the only view that
+ * named a slot. The deposit queue names the same slots — the overdue subset of
+ * this same board — and two views of one booking that phrase its time
+ * differently are worse than one view. `DepositHealth.tsx` importing it out of
+ * this route would also be a cycle, since this file mounts that component. Same
+ * shape and same reason as `noShowWindow.ts`; nothing about the formatter itself
+ * changed.
  */
-function whenLabel(iso: string): string {
-  const at = new Date(iso);
-  const time = at.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-
-  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((midnight(at) - midnight(new Date())) / 86_400_000);
-
-  if (days === 0) return `Today · ${time}`;
-  if (days === -1) return `Yesterday · ${time}`;
-  if (days === 1) return `Tomorrow · ${time}`;
-  return `${at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${time}`;
-}
 
 /**
  * ===========================================================================
@@ -402,8 +390,28 @@ export function Appointments() {
    * request, always something on the screen. So the reliable view is the one the
    * door opens on, the richer view is one labelled click away, and every state
    * the grid cannot draw names the list as the way through.
+   *
+   * -------------------------------------------------------------------------
+   * AND NOW A THIRD: DEPOSITS. IT IS A VIEW OF THIS BOARD AND NOT A SECTION.
+   * -------------------------------------------------------------------------
+   * `GET /salons/{id}/deposits` is `requireDashboardPerm(req, 'appointments')` —
+   * the gate this screen has already passed — and it serves a NARROWER READ of
+   * the set the list is showing: the held bookings whose slot has come and gone.
+   * `DepositHealth.tsx` carries the full argument for why it lives here rather
+   * than on Overview (a different permission, and the front desk holds this one
+   * and not that one) or in the sidebar (`router.tsx` derives routes from
+   * `NAV_ITEMS`, and the shell's ten items are the design's).
+   *
+   * IT JOINS RATHER THAN REPLACES, for the week's reason. The list answers "what
+   * is on the book"; this answers "what never resolved, and whose problem is
+   * each one" — three framings over three states, which a column in a table
+   * cannot carry. The list keeps the Deposit COLUMN and every control; this view
+   * writes nothing at all.
+   *
+   * STILL NOT THE DEFAULT. Same argument, and it survives a third option: the
+   * door opens on the view with no preconditions.
    */
-  const [view, setView] = useState<'list' | 'week'>('list');
+  const [view, setView] = useState<'list' | 'week' | 'deposits'>('list');
 
   /*
    * The module flag decides WHETHER TO ASK, not just what to draw. A salon with
@@ -520,6 +528,7 @@ export function Appointments() {
             options={[
               { value: 'list', label: 'List' },
               { value: 'week', label: 'Week' },
+              { value: 'deposits', label: 'Deposits' },
             ]}
           />
           {/*
@@ -595,6 +604,15 @@ export function Appointments() {
           every one of those refusals offers — the list has no preconditions.
         */
         <AppointmentsWeek onShowList={() => setView('list')} />
+      ) : view === 'deposits' ? (
+        /*
+          Owns its own read, its own four states and its own branch scoping. It
+          is mounted INSIDE the `bookingOn` branch on purpose: a salon with
+          `modules.booking` off has no bookings by construction, so it has no
+          deposits either, and "no deposits on hold" shown to a salon where
+          nobody can book is the switched-off empty's sentence told wrong.
+        */
+        <DepositHealth />
       ) : (
         <Card className="appts__card" flush>
           <div className="appts__scroll">

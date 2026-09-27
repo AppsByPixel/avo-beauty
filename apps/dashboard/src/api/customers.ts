@@ -108,6 +108,31 @@ export interface CustomerDetail extends CustomerListItem {
   emailVerified: boolean;
   /** A count at a stamps salon, null at a tiers salon. Never defaulted to 0. */
   stamps: number | null;
+  /**
+   * ==========================================================================
+   * HOW MANY OF HER APPOINTMENTS ENDED IN A RETURNED DEPOSIT — AND THE
+   * CONSTRAINT IS THE POINT OF THE FIELD
+   * ==========================================================================
+   * SERVED ON THE CARD AND NEVER ON THE LIST, which is why it is declared HERE
+   * and not on `CustomerListItem` above. `services/customerDirectory.ts §
+   * countMemberNoShows` argues it and this client holds the line — Lane A's
+   * sentence, endorsed by trunk: *a column of counts down a page of names is a
+   * ranking whether or not anything sorts by it.*
+   *
+   * So: an integer, beside `visits`, on a card a merchant has already chosen to
+   * open about one person. No score, no flag, no threshold, no ordering, no
+   * colour, no warning glyph, and no sentence that characterises her. The
+   * merchant's own judgement, given two numbers.
+   *
+   * IT IS NOT OPTIONAL AND IT IS NOT DEFAULTED. The server refuses to default it
+   * for a stated reason — a `0` default would make "she has never missed an
+   * appointment" and "this caller forgot to ask" the same number, on a field
+   * about a named woman's conduct. The parse below is the client half of that:
+   * `int` throws on a missing key rather than substituting a zero, so a server
+   * that stopped sending it fails loudly instead of quietly exonerating
+   * everybody.
+   */
+  noShowCount: number;
 }
 
 /* ------------------------------------------------------------------ parsing -- */
@@ -191,6 +216,13 @@ export function parseCustomerDetail(raw: unknown): CustomerDetail {
     email: nullableStr(c.email, `${where}.email`),
     emailVerified: bool(c.emailVerified, `${where}.emailVerified`),
     stamps: nullableInt(c.stamps, `${where}.stamps`),
+    /*
+     * `int`, NOT `nullableInt` AND NOT `?? 0`. See the field's own comment: the
+     * absence of this key and a count of zero are opposite facts about a named
+     * person, and the only reading of them that stays honest is the one that
+     * refuses to guess.
+     */
+    noShowCount: int(c.noShowCount, `${where}.noShowCount`),
   };
 }
 

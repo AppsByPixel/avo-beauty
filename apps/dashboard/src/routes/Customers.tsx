@@ -521,7 +521,7 @@ export function CustomerProfile({ customer }: { customer: CustomerDetail }) {
               kept in the design's own words.
             */}
             member since {monthYear(customer.joinedAt)} · {customer.visits}{' '}
-            {customer.visits === 1 ? 'visit' : 'visits'}
+            {customer.visits === 1 ? 'visit' : 'visits'} · <NoShowCount customer={customer} />
           </div>
         </div>
         <TierPill tier={customer.tier} />
@@ -585,6 +585,51 @@ export function CustomerProfile({ customer }: { customer: CustomerDetail }) {
           )}
         </Card>
       </div>
+    </>
+  );
+}
+
+/**
+ * ===========================================================================
+ * HER NO-SHOW COUNT — TWO NUMBERS AND THE MERCHANT'S OWN JUDGEMENT
+ * ===========================================================================
+ * The client's request that produced the deposit queue is about customers who
+ * repeatedly lock a slot and do not come, and the easy build is the wrong one.
+ * `api/src/services/customerDirectory.ts § countMemberNoShows` refuses to serve a
+ * score, a risk band, a flag or a threshold, and refuses to sort the directory by
+ * this: "every one of those ships a SERVER-MADE CLAIM ABOUT A PERSON — and a
+ * claim nobody can appeal, because there is no screen on which a customer can see
+ * it, dispute it, or learn it exists."
+ *
+ * THE RENDERING OWES THE SAME RESTRAINT, and it is easier to break here than on
+ * the wire. So, deliberately:
+ *
+ *   IT SITS BESIDE `visits`, in the same line, in the same weight, in the same
+ *   colour. Two counts about the same person, rendered identically, is the whole
+ *   design. `14 visits · 2 no-shows` invites a comparison a merchant is
+ *   competent to make; `2 no-shows` in red beside a triangle makes it for her.
+ *
+ *   NO TONE, NO GLYPH, NO PILL. It is text in the `.cust-card__since` line and
+ *   `app.css` gives it no rule of its own — there is nothing to colour.
+ *
+ *   IT RENDERS AT ZERO, AND THAT IS THE LOAD-BEARING DECISION. Hiding it at 0
+ *   would make its PRESENCE the flag: every card that showed the line would be a
+ *   card about someone with a record, which is exactly the boolean this field is
+ *   forbidden to become — and a worse version of it, because nothing would be
+ *   labelled. `0 no-shows` is the honest baseline and the reason the number reads
+ *   as a fact rather than an accusation.
+ *
+ *   NOWHERE ELSE. Not in the book's table, not in the deposit queue, not in the
+ *   appointment board. `noShowCountConfinement.test.tsx` asserts its absence from
+ *   every list rather than trusting that nobody adds it.
+ *
+ * ONLY THE CARD CAN DRAW IT AT ALL: `parseCustomerListItem` has no such field, so
+ * a row of the book could not render one without a second request per row.
+ */
+export function NoShowCount({ customer }: { customer: Pick<CustomerDetail, 'noShowCount'> }) {
+  return (
+    <>
+      {customer.noShowCount} {customer.noShowCount === 1 ? 'no-show' : 'no-shows'}
     </>
   );
 }
