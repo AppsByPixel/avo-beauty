@@ -57,6 +57,15 @@
  *                           TIME, name and all; `last_error` can echo a
  *                           provider's view of the destination. The money each
  *                           was about is the transaction row, which stays.
+ *   member_notification_read DELETED — which bell items she opened, and when
+ *                           (migration 0057). A reading history is "the rest of
+ *                           your account data" with no ambiguity, and nothing
+ *                           financial references it. The bell's other sources go
+ *                           with her too: `receipt_job` above, and her campaign
+ *                           stream stops being served because
+ *                           `services/memberNotifications.ts § feedScope` refuses
+ *                           a tombstone — `campaign_send` itself cannot be
+ *                           deleted (below).
  *   support_ticket          DELETED — `message` is her own correspondence, the
  *                           clearest possible "rest of your account data".
  *                           FLAGGED to trunk rather than silently decided: a
@@ -186,6 +195,7 @@ import { member, memberPasswordReset } from '../db/schema/member';
 import { booking } from '../db/schema/booking';
 import { memberAddress, shopOrder } from '../db/schema/delivery';
 import { merchantNotification } from '../db/schema/notification';
+import { memberNotificationRead } from '../db/schema/memberNotification';
 import { phoneChangeChallenge } from '../db/schema/phoneChange';
 import { receiptJob } from '../db/schema/receipt';
 import { session } from '../db/schema/session';
@@ -369,6 +379,12 @@ export async function runErasureOnce(
         );
         await del('receiptJobs', () =>
           tx.delete(receiptJob).where(eq(receiptJob.memberId, m.id)).returning({ id: receiptJob.id }),
+        );
+        await del('bellReadMarks', () =>
+          tx
+            .delete(memberNotificationRead)
+            .where(eq(memberNotificationRead.memberId, m.id))
+            .returning({ id: memberNotificationRead.memberId }),
         );
         await del('supportTickets', () =>
           tx

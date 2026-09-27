@@ -42,6 +42,7 @@ import { registerAuditRoutes } from './routes/audit';
 import { registerActivityRoutes } from './routes/activity';
 import { registerCustomerRoutes } from './routes/customers';
 import { registerMerchantNotificationRoutes } from './routes/merchantNotifications';
+import { registerMemberNotificationRoutes } from './routes/memberNotifications';
 import { registerPlatformRoutes } from './routes/platform';
 import { registerPlatformAdminRoutes } from './routes/platformAdmins';
 import { registerPlatformConsoleRoutes } from './routes/platformConsole';
@@ -186,6 +187,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerActivityRoutes(app);
   await registerCustomerRoutes(app);
   await registerMerchantNotificationRoutes(app);
+  await registerMemberNotificationRoutes(app);
   await registerPlatformRoutes(app);
   await registerPlatformAdminRoutes(app);
   await registerPlatformConsoleRoutes(app);
