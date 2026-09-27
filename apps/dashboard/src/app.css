@@ -3796,6 +3796,222 @@ a:hover {
   max-width: 52ch;
 }
 
+/* ------------------------------------------ appointments · deposit health -- */
+
+/*
+ * NEW SCOPE; THERE IS NO DESIGNED SCREEN FOR THIS VIEW. `routes/depositHealthRules.ts`
+ * carries the disclosure. Every value below is an existing token or an existing
+ * measurement lifted from the list and the week beside it — nothing here invents a
+ * colour, and `ui/cssTokenRefs.test.ts` is what holds that.
+ */
+
+.deposits {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/*
+ * The Overview KPI row's grid, reused rather than re-derived: three `StatCard`s
+ * on one line, collapsing to a column at the shell's narrow breakpoint. The tiles
+ * are `@avo/ui`'s own and are not restyled here; this only lays them out.
+ */
+.deposits__tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--avo-space-grid-gap);
+}
+
+@media (max-width: 900px) {
+  .deposits__tiles {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The branch-assumed caveat, in the Overview's own register. */
+.deposits__note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-soft);
+}
+
+.deposits__card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/*
+ * THE HEALTHY EMPTY GETS THE TINTED CARD, and it is the one place in this
+ * dashboard where that tint means "good" rather than "explanatory". The list's
+ * switched-off empty uses the same silhouette for the same structural reason
+ * (`.appts__off`): two empties that must never share copy should not share a
+ * surface either — here the two are "nothing is held" and "nothing is overdue",
+ * and only the second is a salon doing well.
+ */
+.deposits__card--clear {
+  background: var(--avo-brand-tint2);
+  border-color: color-mix(in srgb, var(--avo-brand) 22%, transparent);
+}
+
+.deposits .avo-state {
+  align-items: center;
+  text-align: center;
+}
+
+.deposits .avo-state__body {
+  max-width: 52ch;
+}
+
+/* ------------------------------------------------ deposit health · a section */
+
+/*
+ * A SECTION PER STATE. No `data-state` selector paints anything: the three are
+ * deliberately identical surfaces, because a section tinted by how bad it is
+ * would rank the three — and one of them is AVO's own fault, one is the salon's
+ * book-keeping, and only one is about a customer at all. The attribute is on the
+ * element for the render test to select by, not for the cascade.
+ */
+.deposits__section {
+  border: 1px solid var(--avo-hairline);
+  border-radius: var(--avo-radius-card);
+  background: var(--avo-surface);
+  padding: var(--avo-space-card-padding);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.deposits__section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.deposits__section-title {
+  margin: 0;
+  font-size: var(--avo-type-display-s-size);
+  font-weight: var(--avo-type-display-s-weight);
+  color: var(--avo-ink);
+}
+
+.deposits__section-body {
+  margin: 0;
+  /*
+   * MEASURED, NOT FULL-BLEED. These three paragraphs are the feature — each one
+   * says whose problem its rows are — so they get a reading measure rather than
+   * the card's width, which at 1000px would run to well over 100 characters.
+   */
+  max-width: 68ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--avo-text-muted-strong);
+}
+
+/*
+ * THE CAP, SAID OUT LOUD. `ShopOrders.tsx`'s truncation notice register: quiet,
+ * but not a footnote — it sits directly under the count it qualifies so a
+ * merchant reads both without looking for the other.
+ */
+.deposits__capped {
+  margin: 0;
+  max-width: 68ch;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-soft);
+}
+
+/* ------------------------------------------------- deposit health · the rows */
+
+/* interaction-spec.md §1: a data table scrolls, it never drops a column. */
+.deposits__scroll {
+  overflow-x: auto;
+  max-height: 520px;
+  overflow-y: auto;
+  margin: 0 calc(-1 * var(--avo-space-card-padding))
+    calc(-1 * var(--avo-space-card-padding));
+}
+
+.deposits__table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.deposits__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--avo-surface);
+  border-bottom: 1px solid var(--avo-hairline);
+  padding: 11px var(--avo-space-card-padding);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avo-ui-label);
+  white-space: nowrap;
+}
+
+.deposits__table tbody td {
+  padding: 13px var(--avo-space-card-padding);
+  border-bottom: 1px solid var(--avo-hairline-inner);
+  vertical-align: top;
+}
+
+.deposits__table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.deposits__customer {
+  font-weight: 500;
+}
+
+.deposits__guest {
+  margin-top: 4px;
+}
+
+.deposits__phone,
+.deposits__contact-erased,
+.deposits__branch {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--avo-text-muted-soft);
+  margin-top: 3px;
+}
+
+.deposits__muted {
+  color: var(--avo-text-muted-strong);
+}
+
+.deposits__when {
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+}
+
+/* The design sets money in Fraunces — money reads as money everywhere. */
+.deposits__deposit {
+  font-family: var(--avo-font-display);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/*
+ * THE ELAPSED FIGURE IS NOT COLOURED, and the restraint is deliberate on all
+ * three sections. A red "3d 4h" beside a named woman is a judgement the data does
+ * not support — on `return_overdue` it would be AVO's own lateness painted onto
+ * her row, and on `unclosed` there is nothing late at all.
+ */
+.deposits__elapsed {
+  white-space: nowrap;
+  color: var(--avo-text-muted-strong);
+}
+
 /* ================================================================ marketing == */
 
 .mk {

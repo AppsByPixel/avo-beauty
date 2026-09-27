@@ -109,6 +109,16 @@ const DETAIL = {
   email: 'latifa.a@example.com',
   emailVerified: true,
   stamps: null,
+  /*
+   * SERVED ON THE CARD AND NEVER ON THE LIST — `LATIFA` above deliberately does
+   * NOT carry it, because `serialiseCustomerListItem` does not send it and a
+   * fixture that did would let the book's row render a figure the wire has never
+   * carried. The absence here is the contract, not an omission.
+   *
+   * TWO, NOT ZERO. A fixture of 0 would pass every assertion below while a
+   * component that rendered the literal string "0" unconditionally also passed.
+   */
+  noShowCount: 2,
 };
 
 const HISTORY = {
@@ -566,6 +576,7 @@ describe('one customer’s card', () => {
         email: null,
         emailVerified: false,
         stamps: null,
+        noShowCount: 0,
       },
       '/customers': page([ERASED]),
     });
