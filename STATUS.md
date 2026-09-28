@@ -352,6 +352,14 @@ Settings, notification bell top-right, create appointments by hand for existing 
 non-existing* customers, and mark/cancel/change-date/reassign. **All six done and promoted**;
 5 and 6 carry six trunk decisions recorded in `DECISIONS.md` under "Manual appointments".
 
+**Item 1 was built to the wrong reading, corrected 2026-09-28.** "Another option in the list"
+was taken as *expose the three preset rewards the dropdown was missing* (6513a6f), which is
+done but was not the ask. Aftab: *"the merchant should be able to add a custom option in the
+dropdown."* So: a per-salon list of free-text rewards the merchant writes, picked like a
+preset, snapshotted onto the campaign at submission. A label only, like every campaign reward
+today: nothing applies a campaign reward as an earning effect, preset or custom. Lane A
+(`campaign_reward`, migration 0064) → trunk types → lanes C and D. **In progress.**
+
 **THE THIRD LIST, given 2026-09-28 — six for the wallet, one for the staff scanner.**
 Checked against the code before anything was built; several were not what they read as.
 
