@@ -1005,6 +1005,22 @@ const PINNED_COVERAGE: string[] = [
    */
   'GET /v1/salons/:id/notifications [requireDashboardScope]',
   'GET /v1/salons/:id/orders → shop',
+  /**
+   * THE OVERVIEW ANALYTICS — `api/src/routes/overview.ts`, lane A's `7fc27fc`. Pasted
+   * from the census's own output on the first run after the merge.
+   *
+   * ONE LINE, AND THE FIVE SECOND PERMISSIONS BEHIND IT ARE NOT HERE BY DESIGN. The
+   * route gates `dashboard` at the door; `topServices` and `upcoming.next` need
+   * `appointments`, `artists` needs `team`, `shop` needs `shop` and `campaigns` needs
+   * `marketing`, and each of those is decided INSIDE the 200 as a block served
+   * `{status:'withheld', reason:'permission', permission}` rather than as a refusal.
+   * The census reads guards, not payloads, so no line can say a block is withheld —
+   * a service that served `artists` to a `dashboard`-only reader would leave this
+   * line byte-identical. That half is driven by request in
+   * `overview-analytics.test.ts`, one block at a time, with each permission off and
+   * then on.
+   */
+  'GET /v1/salons/:id/overview/analytics → dashboard',
   'GET /v1/salons/:id/promotions [requireSalonScoped]',
   'GET /v1/support/tickets → dashboard',
   'GET /v1/support/tickets → policies',
