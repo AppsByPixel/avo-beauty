@@ -189,6 +189,18 @@ beforeAll(async () => {
     ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, price_fils = 1000, active = true;
     DELETE FROM artist_service WHERE service_id = '${PROBE_SERVICE_B_ASSIGN}';
 
+    -- THE CAMPAIGN-REWARD SUBJECTS (migration 0064). See PROBE_REWARD_A. The DELETE
+    -- control archives, so archived_at is reset; and the POST control's row from an
+    -- interrupted run is removed first, or this run's POST meets duplicate_reward.
+    DELETE FROM campaign_reward
+     WHERE salon_id = '${SALON_B}' AND label = '${PROBE_REWARD_POST_LABEL}'
+       AND id NOT IN (SELECT custom_reward_id FROM campaign WHERE custom_reward_id IS NOT NULL);
+    INSERT INTO campaign_reward (id, salon_id, label, created_by) VALUES
+      ('${PROBE_REWARD_A}',        '${SALON_A}', 'Tenancy probe reward A',        'Tenancy'),
+      ('${PROBE_REWARD_B_DELETE}', '${SALON_B}', 'Tenancy probe reward B delete', 'Tenancy')
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, label = EXCLUDED.label,
+                                   archived_at = NULL;
+
     -- THE POST CONTROL'S SLOT IS EMPTIED, not assumed empty. It really uploads and
     -- really attaches, so without this a second run against one database would find
     -- last run's picture there and get 200-replaced where the row pins 201-created.
@@ -603,6 +615,15 @@ afterAll(async () => {
      WHERE salon_id = '${SALON_B}'
        AND name = '${PROBE_SERVICE_POST_NAME}'
        AND id ~ '^SV-[0-9]+$';
+
+    -- THE REWARD THE POST /v1/salons/{id}/campaign-rewards CONTROL SAVED. Same
+    -- reasoning as the service above: a minted id, named by this file's own label,
+    -- referenced by no campaign — and it must go, or the next run's POST meets
+    -- duplicate_reward. Matched on the minted shape so a fixture row cannot match.
+    DELETE FROM campaign_reward
+     WHERE salon_id = '${SALON_B}'
+       AND label = '${PROBE_REWARD_POST_LABEL}'
+       AND id ~ '^CRW-[0-9]+$';
   `);
 
   await stopTenancyApi();
@@ -923,6 +944,32 @@ const PROBE_SERVICE_B_DELETE = 'SV-TEN-B-SVC-DEL';
 const PROBE_SERVICE_B_ASSIGN = 'SV-TEN-B-SVC-ASSIGN';
 /** What the POST control names its new service, so `afterAll` can find exactly that. */
 const PROBE_SERVICE_POST_NAME = 'Tenancy probe service (POST control)';
+
+/**
+ * THE SALON'S OWN CAMPAIGN REWARDS — `routes/campaignRewards.ts`, migration 0064.
+ *
+ * ONE AT SALON A, AND IT IS A REAL ROW for `happyHourFor`'s reason: the cross-salon
+ * DELETE must be refused by `requireSameSalon` before `{rewardId}` is looked up, and
+ * an id that existed nowhere would answer the same 404 a late tenancy check hides
+ * behind. The attack half never resolves it; the control half never sees it.
+ *
+ * ONE AT SALON B FOR THE DELETE ALONE, because its control really archives. The
+ * fixture below UN-archives it on every run — `archived_at = NULL` — or the second
+ * run against one database would take 404 `unknown_reward` where the row pins 204,
+ * the products row's "green exactly once per database" defect one table over.
+ *
+ * AND THE POST CONTROL REALLY SAVES A REWARD, so its label is this file's own and
+ * `afterAll` deletes exactly that row. It has to go rather than merely ought to: the
+ * same words cannot be saved twice (`campaign_reward_active_label_uq`), so a second
+ * run would take 409 `duplicate_reward` where the row pins 201. Nothing references
+ * it — no campaign names it — so it is deleted, not archived.
+ *
+ * `CRW-TEN-*` and not the minted `CRW-<sequence>` shape, so neither fixture can ever
+ * collide with a reward the API mints.
+ */
+const PROBE_REWARD_A = 'CRW-TEN-A';
+const PROBE_REWARD_B_DELETE = 'CRW-TEN-B-DEL';
+const PROBE_REWARD_POST_LABEL = 'Tenancy probe reward (POST control)';
 
 /**
  * The two blobs the DELETE controls detach, SEEDED IN SQL AND NOT THROUGH THE ENDPOINT.
@@ -1472,6 +1519,35 @@ const SALON_ROUTES: SalonRoute[] = [
   {
     method: 'DELETE',
     template: '/v1/salons/{id}/campaigns/{cid}',
+    controlStatus: 204,
+  },
+  /**
+   * THE SALON'S OWN CAMPAIGN REWARDS — migration 0064, dev `44cf899`. The gap ledger
+   * fired on all three on the first run after the merge, and so did the other two
+   * censuses (PINNED_COVERAGE and contract.test.ts's unclassified GET).
+   *
+   * All three open `requireDashboardPerm(req, 'marketing')` then `requireSameSalon`,
+   * and `bDashboard` holds `marketing`, so the attack half reaches the tenancy gate
+   * and nothing earlier. The POST's body is VALID per the table header — a real
+   * label — so a guard that fell would save a reward at salon A rather than answer
+   * 400, and the leak sweep would see it. `{rewardId}` resolves per salon; see
+   * `rewardFor` and PROBE_REWARD_A.
+   *
+   * WHAT THIS TABLE DOES NOT ASK is the second axis: her OWN salon in the path and
+   * salon A's reward id beside it, on the DELETE and on `POST …/campaigns` with
+   * `customRewardId`. That answers 404 / 400 on purpose rather than 403, and is
+   * driven with the rows read back in `campaigns.test.ts § custom campaign rewards`.
+   */
+  { method: 'GET', template: '/v1/salons/{id}/campaign-rewards' },
+  {
+    method: 'POST',
+    template: '/v1/salons/{id}/campaign-rewards',
+    body: { label: PROBE_REWARD_POST_LABEL },
+    controlStatus: 201,
+  },
+  {
+    method: 'DELETE',
+    template: '/v1/salons/{id}/campaign-rewards/{rewardId}',
     controlStatus: 204,
   },
   /**
@@ -2180,6 +2256,13 @@ const campaignFor = (salonId: string): string =>
   salonId === SALON_B ? PROBE_CAMPAIGN_B : PROBE_CAMPAIGN_A;
 
 /**
+ * A campaign reward belonging to the salon being addressed. Only the DELETE carries
+ * `{rewardId}`, so salon B's is the disposable one. See PROBE_REWARD_A.
+ */
+const rewardFor = (salonId: string): string =>
+  salonId === SALON_B ? PROBE_REWARD_B_DELETE : PROBE_REWARD_A;
+
+/**
  * An ENROLLED device belonging to the salon being addressed. Only DELETE uses it.
  *
  * No per-verb split, unlike `productFor`: the DELETE is the only verb carrying `{deviceId}`,
@@ -2278,6 +2361,11 @@ const url = (r: SalonRoute, salonId: string) =>
     /** `{sid}` — the Services tab's subject. See `serviceFor`. */
     .replace('{sid}', serviceFor(r, salonId))
     .replace('{cid}', campaignFor(salonId))
+    /**
+     * `{rewardId}` — the brace name is the registered parameter, per the
+     * `{deviceId}` note below. See `rewardFor`.
+     */
+    .replace('{rewardId}', rewardFor(salonId))
     /**
      * `{tid}` is a shop order at the salon being addressed, resolved the way `{cid}`
      * is: the control half really performs the transition, so the id has to name a
@@ -3985,6 +4073,10 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       // six when they merged; the auto-discovered sibling assertion drives them too.
       'GET /v1/salons/:id/campaigns',
       'DELETE /v1/salons/:id/campaigns/:cid',
+      // The salon's own campaign rewards, migration 0064. The ledger fired on all three.
+      'GET /v1/salons/:id/campaign-rewards',
+      'POST /v1/salons/:id/campaign-rewards',
+      'DELETE /v1/salons/:id/campaign-rewards/:rewardId',
       'GET /v1/salons/:id/messaging-policy',
       'POST /salons/:id/products',
       'PATCH /salons/:id/products/:pid',
