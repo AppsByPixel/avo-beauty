@@ -1569,8 +1569,6 @@ a:hover {
 .ovw-heat table {
   border-collapse: separate;
   border-spacing: 3px;
-  width: 100%;
-  table-layout: fixed;
 }
 
 .ovw-heat th {
@@ -1586,14 +1584,22 @@ a:hover {
   height: 14px;
 }
 
-.ovw-heat tbody th {
+.ovw-heat tbody th,
+.ovw-heat__corner {
   width: 34px;
   padding-right: 4px;
 }
 
-.ovw-heat td {
+/*
+ * A FIXED CELL, NOT A SHARE OF THE CARD. The hours are trimmed to the ones that
+ * saw a visit, so a quiet week can be two columns wide; stretched to the card
+ * those two would read as two long bars. At 24 hours the grid is 744px and the
+ * wrapper scrolls inside the card at the 1-up widths (interaction-spec §1).
+ */
+.ovw-heat tbody td {
+  width: 28px;
+  min-width: 28px;
   height: 20px;
-  min-width: 14px;
   border-radius: 3px;
   background: var(--avo-surface-alt);
 }

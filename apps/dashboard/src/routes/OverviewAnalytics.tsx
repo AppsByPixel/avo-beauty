@@ -626,10 +626,11 @@ export function BusiestTimesCard({
                   </caption>
                   <thead>
                     <tr>
-                      <td />
-                      {grid.hours.map((h) => (
+                      <td className="ovw-heat__corner" />
+                      {grid.hours.map((h, i) => (
                         <th key={h} scope="col">
-                          <span aria-hidden="true">{h % 3 === 0 ? String(h) : ''}</span>
+                          {/* Every third hour, and always the first, so a two-column week is still labelled. */}
+                          <span aria-hidden="true">{h % 3 === 0 || i === 0 ? String(h) : ''}</span>
                           <span className="avo-sr-only">{hourLabel(h)}</span>
                         </th>
                       ))}
@@ -919,6 +920,15 @@ export function VisitorsCard({
 
 const TIER_TONES = new Set(['bronze', 'silver', 'gold', 'black']);
 
+/**
+ * The ladder's names arrive as the salon stores them (`bronze`), and the book's
+ * tier chip already prints them capitalised (`Customers.tsx § TierPill`). An
+ * unknown name is printed as served, that component's rule.
+ */
+function tierName(tier: string): string {
+  return TIER_TONES.has(tier.toLowerCase()) ? tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase() : tier;
+}
+
 export function LoyaltyCard({ view, data }: { view: CardView; data: OverviewAnalytics | undefined }) {
   const stamps = data?.loyaltyMode === 'stamps';
   return (
@@ -934,7 +944,7 @@ export function LoyaltyCard({ view, data }: { view: CardView; data: OverviewAnal
         (block) => {
           if (block.mode === 'tiers') {
             const rows = [
-              ...block.tiers.map((t) => ({ name: t.tier, members: t.members })),
+              ...block.tiers.map((t) => ({ name: tierName(t.tier), members: t.members })),
               ...(block.untiered > 0 ? [{ name: 'No tier', members: block.untiered }] : []),
             ];
             if (rows.every((r) => r.members === 0)) {

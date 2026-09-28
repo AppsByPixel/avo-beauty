@@ -127,9 +127,9 @@ const FULL_RAW = {
     status: 'ok',
     mode: 'tiers',
     tiers: [
-      { tier: 'Bronze', members: 8 },
-      { tier: 'Silver', members: 3 },
-      { tier: 'Gold', members: 1 },
+      { tier: 'bronze', members: 8 },
+      { tier: 'silver', members: 3 },
+      { tier: 'gold', members: 1 },
     ],
     untiered: 2,
   },
@@ -329,7 +329,7 @@ describe('with every module and permission on', () => {
     expect(card('upcoming')!.textContent).toContain('9');
   });
 
-  it('draws members by tier, with the untiered as their own bar', () => {
+  it('draws members by tier — served lowercase, printed as the book prints them — with the untiered as their own bar', () => {
     mount({ data: FULL });
     const c = within(card('loyalty')!);
     expect(c.getByText('Bronze: 8 members')).toBeTruthy();
