@@ -309,17 +309,64 @@ export interface CancellationOutcome {
  * milliseconds against the server's clock, never the device's. Rules are stored
  * earliest cut-off first, so the first match is the most generous one she still
  * qualifies for. Later than every threshold returns 0%.
+ *
+ * =========================================================================
+ * `capPercent` — THE RESCHEDULE LOOPHOLE (trunk, 2026-09-29; migration 0067)
+ * =========================================================================
+ * Moving a booking must not buy back a return she had already lost. Under
+ * 48h→100% / 24h→50%, a booking 30 hours out returns 50%; moved to next week it
+ * would be 100% again. So each of HER reschedules locks in what a cancel would
+ * have returned at that instant (`returnPercentAt` against the slot she left,
+ * folded by `lockInCap`), and a cancel returns the SMALLER of that cap and what
+ * the rules give against the CURRENT slot.
+ *
+ * WHY A CAP AND NOT "MEASURE EVERY CUT-OFF FROM THE FIRST SLOT FOR EVER". The
+ * two agree on the case trunk named — a late move followed by a cancel returns
+ * the original slot's percent. They part company only once the ORIGINAL slot's
+ * time has gone by, and there the first-slot reading takes money she never
+ * lost: she moves a booking from the 5th to the 20th with ten days' notice (100%
+ * at the move), then cancels on the 10th, ten days before the appointment that
+ * now exists — measured from the 5th, which has passed, that is 0% and the salon
+ * keeps the whole deposit. The cap keeps her 100% there and still refuses the
+ * buy-back. Reported to trunk.
+ *
+ * When the cap binds, `rule` is the stamped rule whose percent the cap equals
+ * (the one that applied at the move), or null when the cap is below every rule
+ * — she moved it later than every threshold.
  */
 export function cancellationOutcome(
   rules: readonly CancellationRule[],
   startsAt: Date,
   now: Date,
   deposit: Fils,
+  capPercent: number | null = null,
 ): CancellationOutcome {
   const aheadMs = startsAt.getTime() - now.getTime();
-  const rule = rules.find((r) => aheadMs >= r.hoursBefore * 3_600_000) ?? null;
-  const returnPercent = rule ? rule.returnPercent : 0;
-  return { rule, returnPercent, ...splitDeposit(deposit, returnPercent) };
+  const matched = rules.find((r) => aheadMs >= r.hoursBefore * 3_600_000) ?? null;
+  const byRules = matched ? matched.returnPercent : 0;
+  if (capPercent === null || capPercent >= byRules) {
+    return { rule: matched, returnPercent: byRules, ...splitDeposit(deposit, byRules) };
+  }
+  const rule = rules.find((r) => r.returnPercent === capPercent) ?? null;
+  return { rule, returnPercent: capPercent, ...splitDeposit(deposit, capPercent) };
+}
+
+/** What a cancel at `now` would return, in percent, against the slot at `startsAt`. */
+export function returnPercentAt(
+  rules: readonly CancellationRule[],
+  startsAt: Date,
+  now: Date,
+  capPercent: number | null = null,
+): number {
+  return cancellationOutcome(rules, startsAt, now, fils(0), capPercent).returnPercent;
+}
+
+/**
+ * The cap after one more of her moves: never higher than it was, never higher
+ * than what she had at the moment she moved. `least()` across every move.
+ */
+export function lockInCap(existing: number | null, atMove: number): number {
+  return existing === null ? atMove : Math.min(existing, atMove);
 }
 
 /** The no-show rule as a split. `keep` keeps everything, `return` returns everything. */

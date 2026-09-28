@@ -82,7 +82,9 @@ import { assertArtistPerformsService, assertBookedPairAssigned } from './artistS
 import { resolveBranch } from './branch';
 import {
   cancellationOutcome,
+  lockInCap,
   noShowOutcome,
+  returnPercentAt,
   readPublishedPolicy,
   type CancellationRule,
   type NoShowRule,
@@ -146,6 +148,8 @@ export interface BookingRow {
   policyCancellationRules: CancellationRule[] | null;
   policyTextEn: string | null;
   policyTextAr: string | null;
+  /** The return her own late reschedule locked in (migration 0067). NULL: none. */
+  policyReturnCapPercent: number | null;
   /** Where the deposit went when it left escrow other than by a charge. */
   settledReturnedFils: number | null;
   settledKeptFils: number | null;
@@ -250,6 +254,16 @@ export function serialiseBooking(row: BookingRow) {
      * back to `en` at the display boundary.
      */
     policy: stampedPolicyOf(row),
+    /**
+     * THE RETURN HER OWN RESCHEDULE LOCKED IN (migration 0067), or null when she
+     * has never moved it (and always on a LEGACY booking). A cancel returns the
+     * smaller of this and what `policy.cancellation` gives against `startsAt` —
+     * services/bookingPolicy.ts § cancellationOutcome. PRESENT on every row, for
+     * `policy`'s reason: a wallet previewing "cancel now returns X" from the
+     * rules alone would promise a 100% the server will not pay after a late move.
+     * Not yet in `BookingSchema`; reported to trunk.
+     */
+    returnCapPercent: row.policyId === null ? null : row.policyReturnCapPercent,
     /** `{ returnedFils, keptFils }` once the deposit has left escrow, else null. */
     settlement: settlementOf(row),
   };
@@ -1362,7 +1376,14 @@ export async function cancelBooking(
           { startsAt: row.startsAt.toISOString() },
         );
       }
-      split = cancellationOutcome(stamped.cancellation, row.startsAt, now, deposit);
+      // Against the CURRENT slot, capped by what her own late moves locked in.
+      split = cancellationOutcome(
+        stamped.cancellation,
+        row.startsAt,
+        now,
+        deposit,
+        row.policyReturnCapPercent,
+      );
     }
 
     const settled = await settleDeposit(tx, {
@@ -1919,6 +1940,27 @@ export async function rescheduleBooking(
     const endsAt = new Date(slot.endsAt);
     const noShowReturnDueAt = automaticSettleAt(row as BookingRow, endsAt, s.noShowReturnMinutes);
 
+    /**
+     * THE RESCHEDULE LOOPHOLE (trunk, 2026-09-29; migration 0067). On a POLICY
+     * booking, what a cancel would return RIGHT NOW against the slot she is
+     * leaving is locked in as a ceiling for every later cancel. A move 30 hours
+     * out under 48h→100% / 24h→50% locks in 50%; the new slot a week away cannot
+     * buy the other half back. Measured against `row.startsAt` — the current slot,
+     * before the move — and folded with any earlier cap, so a chain of moves
+     * only ever narrows. LEGACY: nothing to cap; it returns the whole deposit.
+     *
+     * Consistent with `changeableUntil`: `assertChangeWindowOpen` above has
+     * already refused a move inside the last hour, against the same current slot.
+     */
+    const stamped = stampedPolicyOf(row as BookingRow);
+    const returnCapPercent =
+      stamped === null
+        ? null
+        : lockInCap(
+            row.policyReturnCapPercent,
+            returnPercentAt(stamped.cancellation, row.startsAt, now, row.policyReturnCapPercent),
+          );
+
     const [updated] = await tx
       .update(booking)
       .set({
@@ -1927,6 +1969,7 @@ export async function rescheduleBooking(
         durationMin: Math.round((endsAt.getTime() - startsAt.getTime()) / 60_000),
         // Recomputed, not carried: the promise is about the new slot.
         noShowReturnDueAt,
+        policyReturnCapPercent: returnCapPercent,
         rescheduledCount: row.rescheduledCount + 1,
         rescheduledAt: now,
         updatedAt: now,
@@ -1975,6 +2018,8 @@ export async function rescheduleBooking(
         depositCarriedFils: row.depositFils,
         holdTransactionId: row.holdTransactionId,
         noShowReturnDueAt: noShowReturnDueAt.toISOString(),
+        returnCapPercent,
+        previousReturnCapPercent: row.policyReturnCapPercent,
       },
       ipAddress: ctx.ipAddress ?? null,
       userAgent: ctx.userAgent ?? null,
