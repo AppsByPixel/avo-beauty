@@ -137,6 +137,8 @@ const ORDER_ROW: MerchantShopOrder = {
   fulfilment: 'pickup',
   status: 'preparing',
   address: null,
+  // A hand-built ShopOrder must say it: `.nullable()` is required on the wire (0060).
+  pickupBranch: null,
   createdAt: '2026-09-17T09:30:00.000Z',
   readyAt: null,
   closedAt: null,
@@ -151,6 +153,8 @@ const MOVED_ORDER: Record<string, unknown> = {
   fulfilment: 'pickup',
   status: 'ready',
   address: null,
+  // A hand-built ShopOrder must say it: `.nullable()` is required on the wire (0060).
+  pickupBranch: null,
   createdAt: ORDER_ROW.createdAt,
   readyAt: '2026-09-17T09:47:00.000Z',
   closedAt: null,

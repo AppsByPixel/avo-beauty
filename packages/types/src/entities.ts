@@ -853,6 +853,40 @@ export const ShopOrderSchema = z.object({
    * rather than about the order.
    */
   address: MemberAddressSchema.omit({ createdAt: true }).nullable(),
+  /**
+   * WHERE SHE COLLECTS IT — her choice, and distinct from the attribution branch.
+   *
+   * Added 2026-09-28 (migration 0060), for the client's "Collect it is good, but
+   * from which branch if they have multiple". The client still never names the
+   * ATTRIBUTION branch — `POST /orders` refuses `branchId` by name — because a
+   * branch can drive per-branch boosts and a client that names it picks the one
+   * that pays. A pickup location is a different fact: where she will physically
+   * go. So it is its own field, validated server-side as an OPEN branch of HER
+   * salon.
+   *
+   * NULL MEANS TWO THINGS, and the fulfilment tells them apart:
+   *   `delivery`            → null always; there is nowhere to collect.
+   *   `pickup` before 0060  → null at a multi-branch salon, because she was
+   *                           never asked. Do not render it as "the salon".
+   *
+   * `closed` is served INLINE rather than looked up in `salon.branches`, on
+   * purpose: that list carries open branches only, so an order waiting at a
+   * branch that has since closed would resolve to nothing and vanish from the
+   * board. The order stays, and says the branch closed.
+   *
+   * `.nullable()`, NOT `.optional()`: required on the wire, permitted to be null.
+   * Every serialiser that emits a ShopOrder already sends it. A reader that
+   * builds one by hand — a test fixture — must now say `pickupBranch: null`.
+   */
+  pickupBranch: z
+    .object({
+      id: IdSchema,
+      name: z.string().min(1),
+      /** Arabic name. Falls back to `name`. See BranchSchema.nameAr. */
+      nameAr: z.string().nullable(),
+      closed: z.boolean(),
+    })
+    .nullable(),
   createdAt: DateTimeSchema,
   readyAt: DateTimeSchema.nullable(),
   closedAt: DateTimeSchema.nullable(),

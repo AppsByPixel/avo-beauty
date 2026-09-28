@@ -83,6 +83,8 @@ const DELIVERY: MerchantShopOrder = {
   fulfilment: 'delivery',
   status: 'preparing',
   address: ADDRESS,
+  // A hand-built ShopOrder must say it: `.nullable()` is required on the wire (0060).
+  pickupBranch: null,
   createdAt: '2026-09-09T14:46:21.658Z',
   readyAt: null,
   closedAt: null,
@@ -102,6 +104,8 @@ const PICKUP: MerchantShopOrder = {
    * order whose "pickup" is indistinguishable from "field not sent".
    */
   address: null,
+  // A hand-built ShopOrder must say it: `.nullable()` is required on the wire (0060).
+  pickupBranch: null,
   createdAt: '2026-09-09T14:46:21.835Z',
   readyAt: null,
   closedAt: null,
@@ -152,6 +156,8 @@ const ERASED_DELIVERY: MerchantShopOrder = {
   fulfilment: 'delivery',
   status: 'closed',
   address: null,
+  // A hand-built ShopOrder must say it: `.nullable()` is required on the wire (0060).
+  pickupBranch: null,
   createdAt: '2026-07-28T09:12:04.117Z',
   readyAt: '2026-07-28T10:41:55.402Z',
   closedAt: '2026-07-28T13:08:19.660Z',

@@ -98,6 +98,8 @@ function order(over: Partial<ShopOrder> = {}): ShopOrder {
     fulfilment: 'pickup',
     status: 'preparing',
     address: null,
+    // A hand-built ShopOrder must say it: `.nullable()` is required on the wire (0060).
+    pickupBranch: null,
     createdAt: '2026-09-10T09:00:00.000Z',
     readyAt: null,
     closedAt: null,
