@@ -8,6 +8,7 @@ import {
   usePlatformCampaigns,
   useUpdateMessagingPolicy,
 } from '../../api/platform.js';
+import { campaignRewardLabel } from '../../api/promotions.js';
 import { SectionError, WriteError } from '../sectionState.js';
 
 /**
@@ -283,6 +284,17 @@ function PendingCard({
    */
   const quietWindow = quietFrom !== null && quietTo !== null ? `${quietFrom}–${quietTo}` : null;
 
+  /*
+   * THE REWARD, AMONG THE FACTS — README.md's Approvals lists it ("audience,
+   * reach, branch, reward and send time") and the console design draws it in
+   * this row. It matters more now than it did: a `custom` reward is free text the
+   * salon WROTE, and a reviewer has to read those words before releasing them to
+   * a customer's phone. So it is `customReward` verbatim — the server's snapshot,
+   * resolved from the salon's saved list, never a label the request carried.
+   * No chip for no reward.
+   */
+  const reward = campaignRewardLabel(c);
+
   return (
     <Card className="approvals__card">
       <div className="approvals__cardtop">
@@ -302,6 +314,7 @@ function PendingCard({
         <span>{AUDIENCE_LABELS[c.audience]}</span>
         <span>{c.reach.toLocaleString('en-US')} people</span>
         <span>{c.branchId === 'all' ? 'All branches' : c.branchId}</span>
+        {reward !== null ? <span>{reward}</span> : null}
         <span>{scheduled}</span>
       </div>
 
