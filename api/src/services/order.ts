@@ -92,6 +92,8 @@ import type { MemberPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { serialiseTransactionForCustomer } from '../http/serialise';
 import { resolveBranch } from './branch';
+import { resolveBranchHours, type BusinessHoursSource } from './branchHours';
+import type { BusinessHours } from '../db/schema/salon';
 import { memberAddress, shopOrder } from '../db/schema/delivery';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
 import { claimKey, completeKey } from './idempotency';
@@ -146,6 +148,22 @@ export interface PickupBranchView {
   name: string;
   nameAr: string | null;
   closed: boolean;
+  /**
+   * WHEN SHE CAN COLLECT — migration 0063. The branch's own hours, or the
+   * salon's when it has none (`services/branchHours.ts`), with which one it is.
+   * The wallet's "please collect during the branch's working hours" line and its
+   * "closed now — collect tomorrow" are drawn from these.
+   */
+  businessHours: BusinessHours;
+  businessHoursSource: BusinessHoursSource;
+  /**
+   * `salon.timezone`, INLINE, because "open now" has to be decided in the
+   * SALON's zone and an order is read on screens (her order list, the receipt
+   * sheet) that do not otherwise hold the salon. The hours are naive wall clock;
+   * without this a phone in another zone would call a branch open or closed by
+   * its own clock.
+   */
+  timezone: string;
 }
 
 export interface OrderContext {
@@ -919,15 +937,14 @@ async function resolvePickupBranch(
 ): Promise<PickupBranchView> {
   if (supplied) {
     const [row] = await tx
-      .select({
-        id: branchTable.id,
-        name: branchTable.name,
-        nameAr: branchTable.nameAr,
-        closedAt: branchTable.closedAt,
-      })
+      .select({ ...pickupColumns, closedAt: branchTable.closedAt })
       .from(branchTable)
+      .innerJoin(salon, eq(salon.id, branchTable.salonId))
       .where(and(eq(branchTable.id, supplied), eq(branchTable.salonId, salonId)))
-      .for('share')
+      // The BRANCH row only. The salon is joined for its hours and zone, and a
+      // share lock on it would make every order at the salon queue behind any
+      // salon-row writer for no protection this function needs.
+      .for('share', { of: branchTable })
       .limit(1);
     if (!row) {
       throw notFound(
@@ -942,16 +959,17 @@ async function resolvePickupBranch(
         { pickupBranchId: row.id },
       );
     }
-    return { id: row.id, name: row.name, nameAr: row.nameAr, closed: false };
+    return pickupView(row);
   }
 
   // LIMIT 2: the second row is the whole question, as in `resolveBranch`.
   const open = await tx
-    .select({ id: branchTable.id, name: branchTable.name, nameAr: branchTable.nameAr })
+    .select(pickupColumns)
     .from(branchTable)
+    .innerJoin(salon, eq(salon.id, branchTable.salonId))
     .where(and(eq(branchTable.salonId, salonId), isNull(branchTable.closedAt)))
     .orderBy(branchTable.id)
-    .for('share')
+    .for('share', { of: branchTable })
     .limit(2);
   const only = open[0];
   if (!only) throw notFound('no_branch', 'That salon has no open branch.');
@@ -961,7 +979,36 @@ async function resolvePickupBranch(
       'This salon has more than one branch. Choose the branch you will collect your order from.',
     );
   }
-  return { id: only.id, name: only.name, nameAr: only.nameAr, closed: false };
+  return pickupView(only);
+}
+
+/** What `resolvePickupBranch` reads: the branch, and its salon's hours and zone. */
+const pickupColumns = {
+  id: branchTable.id,
+  name: branchTable.name,
+  nameAr: branchTable.nameAr,
+  branchHours: branchTable.businessHours,
+  salonHours: salon.businessHours,
+  timezone: salon.timezone,
+};
+
+/** Always open: a closed branch was refused above, before this is reached. */
+function pickupView(row: {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  branchHours: BusinessHours | null;
+  salonHours: BusinessHours;
+  timezone: string;
+}): PickupBranchView {
+  return {
+    id: row.id,
+    name: row.name,
+    nameAr: row.nameAr,
+    closed: false,
+    ...resolveBranchHours(row.branchHours, row.salonHours),
+    timezone: row.timezone,
+  };
 }
 
 /**

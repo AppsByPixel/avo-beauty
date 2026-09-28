@@ -81,6 +81,7 @@ import {
 import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
 import { serialiseServices } from './services';
+import { resolveBranchHours, type BusinessHoursSource } from '../services/branchHours';
 
 /** api-contract.md § Booking — the four statuses, and the merchant's status pills. */
 const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
@@ -486,6 +487,15 @@ export interface BranchView {
   salonId: string;
   name: string;
   nameAr: string | null;
+  /**
+   * The hours this branch keeps — its own override, or the salon's when it has
+   * none (migration 0063). ALWAYS PRESENT, never null: a client asking "when can
+   * she collect here" always gets an answer, and does not have to know the
+   * fallback rule to find it. Naive wall clock in `SalonView.timezone`.
+   */
+  businessHours: SalonRow['businessHours'];
+  /** `'branch'` when the branch has its own hours, `'salon'` when it follows the salon's. */
+  businessHoursSource: BusinessHoursSource;
 }
 
 export function serialiseSalon(
@@ -539,7 +549,7 @@ export function serialiseSalon(
      */
     timezone: s.timezone,
     businessHours: s.businessHours,
-    branches: branches.map(serialiseBranch),
+    branches: branches.map((b) => serialiseBranch(b, s.businessHours)),
     social: s.social,
     whatsappEnabled: s.whatsappEnabled,
     /** Served alongside its twin, so a client can render the real three states. */
@@ -547,9 +557,22 @@ export function serialiseSalon(
   };
 }
 
-/** api-contract.md § Branch. `nameAr` for the reason db/schema/salon.ts gives. */
-function serialiseBranch(b: typeof branch.$inferSelect): BranchView {
-  return { id: b.id, salonId: b.salonId, name: b.name, nameAr: b.nameAr };
+/**
+ * api-contract.md § Branch. `nameAr` for the reason db/schema/salon.ts gives.
+ *
+ * `salonHours` IS REQUIRED, not looked up here: a branch's hours cannot be
+ * resolved without its salon's, and a serialiser that quietly fell back to
+ * "no hours" when a caller forgot them would serve a branch as never open.
+ * `services/branchHours.ts` is the rule.
+ */
+function serialiseBranch(b: typeof branch.$inferSelect, salonHours: SalonRow['businessHours']): BranchView {
+  return {
+    id: b.id,
+    salonId: b.salonId,
+    name: b.name,
+    nameAr: b.nameAr,
+    ...resolveBranchHours(b.businessHours ?? null, salonHours),
+  };
 }
 
 /** The open branches of a salon, in a stable order. Exported with `serialiseSalon`. */
@@ -1083,7 +1106,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>('/salons/:id/branches', async (req, reply) => {
     const p = requireDashboardPerm(req, 'loyalty');
     requireSameSalon(p, req.params.id);
-    await loadSalon(req.params.id);
+    const s = await loadSalon(req.params.id);
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const rejected = Object.keys(body).filter((k) => k !== 'name' && k !== 'nameAr');
@@ -1136,10 +1159,23 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
     });
 
     if (!row) throw conflict('branch_not_created', 'That branch could not be created.');
-    return reply.code(201).send(serialiseBranch(row));
+    return reply.code(201).send(serialiseBranch(row, s.businessHours));
   });
 
-  /** perms.loyalty. Rename a branch, in either language. */
+  /**
+   * perms.loyalty. Rename a branch, in either language — and, since migration
+   * 0063, give it its own hours.
+   *
+   * `businessHours` IS THE OVERRIDE, and `null` CLEARS it back to "the salon's".
+   * Validated by `parseBusinessHours`, the function `PATCH /salons/{id}` uses for
+   * the salon's own, so the two cannot disagree about what counts as hours. Same
+   * gate as the salon's hours, and as the rest of this route: branch settings
+   * are Settings, and Settings is `perms.loyalty` (see the block comment above).
+   *
+   * The response is the branch with its RESOLVED hours and `businessHoursSource`,
+   * so a client that clears the override sees the salon's hours come back in the
+   * same response rather than a null it has to resolve itself.
+   */
   app.patch<{ Params: { id: string; bid: string } }>(
     '/salons/:id/branches/:bid',
     async (req, reply) => {
@@ -1149,7 +1185,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const keys = Object.keys(body);
       if (keys.length === 0) throw badRequest('invalid_request', 'Nothing to change.');
-      const rejected = keys.filter((k) => k !== 'name' && k !== 'nameAr');
+      const rejected = keys.filter((k) => k !== 'name' && k !== 'nameAr' && k !== 'businessHours');
       if (rejected.length > 0) {
         throw badRequest(
           'not_editable',
@@ -1158,10 +1194,19 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const current = await loadBranch(req.params.id, req.params.bid);
+      const { businessHours: salonHours } = await loadSalon(req.params.id);
 
       const patch: Record<string, unknown> = { updatedAt: new Date() };
       if ('name' in body) patch.name = requireString(body.name, 'name', 120);
       if ('nameAr' in body) patch.nameAr = normaliseArabic('nameAr', body.nameAr);
+      if ('businessHours' in body) {
+        patch.businessHours =
+          body.businessHours === null ? null : parseBusinessHours(body.businessHours);
+      }
+      const renamed = 'name' in body || 'nameAr' in body;
+      const rehoured =
+        'businessHours' in body &&
+        JSON.stringify(patch.businessHours ?? null) !== JSON.stringify(current.businessHours ?? null);
 
       if (typeof patch.name === 'string' && patch.name !== current.name) {
         const clash = await db
@@ -1184,22 +1229,42 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           .where(eq(branch.id, current.id))
           .returning();
 
+        /**
+         * "Branch renamed" stays the action for a rename, byte for byte — the
+         * audit filters and lane D's specs read it. An hours change is its own
+         * sentence, and a request carrying both says both.
+         */
+        const hoursDetail = rehoured
+          ? patch.businessHours === null
+            ? 'hours: back to the salon’s'
+            : `hours: ${(patch.businessHours as { morning: string[] }).morning.join('–')}, ` +
+              `${(patch.businessHours as { evening: string[] }).evening.join('–')}`
+          : '';
         await writeAudit(tx, p, {
           salonId: p.salonId,
           kind: 'rules',
-          action: 'Branch renamed',
-          detail: `${current.name} → ${(patch.name as string | undefined) ?? current.name}`,
+          action: renamed ? 'Branch renamed' : 'Branch hours changed',
+          detail: renamed
+            ? `${current.name} → ${(patch.name as string | undefined) ?? current.name}` +
+              (hoursDetail ? ` · ${hoursDetail}` : '')
+            : `${current.name} · ${hoursDetail || 'hours unchanged'}`,
           source: 'merchant',
           subjectType: 'branch',
           subjectId: current.id,
-          metadata: { before: serialiseBranch(current), changed: keys },
+          metadata: {
+            before: serialiseBranch(current, salonHours),
+            changed: keys,
+            ...(('businessHours' in body)
+              ? { hoursBefore: current.businessHours ?? null, hoursAfter: patch.businessHours ?? null }
+              : {}),
+          },
           ...clientMeta(req),
         });
         return updated;
       });
 
       if (!row) throw notFound('unknown_branch', 'No such branch.');
-      return reply.send(serialiseBranch(row));
+      return reply.send(serialiseBranch(row, salonHours));
     },
   );
 
@@ -1284,6 +1349,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       requireSameSalon(p, req.params.id);
 
       const current = await loadBranch(req.params.id, req.params.bid);
+      const { businessHours: salonHours } = await loadSalon(req.params.id);
       const open = await openBranchesOf(req.params.id);
       const impact = await branchClosureImpact(db, req.params.id, current.id);
 
@@ -1291,7 +1357,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const lastOpen = !alreadyClosed && open.length <= 1;
 
       return reply.send({
-        ...serialiseBranch(current),
+        ...serialiseBranch(current, salonHours),
         /** Whether the DELETE would go through, and why not when it would not. */
         closable: !alreadyClosed && !lastOpen,
         blockedReason: alreadyClosed
@@ -1331,10 +1397,11 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       requireSameSalon(p, req.params.id);
 
       const current = await loadBranch(req.params.id, req.params.bid);
+      const { businessHours: salonHours } = await loadSalon(req.params.id);
 
       // Idempotent: closing a closed branch is not an error, and must not write
       // a second audit row claiming it happened twice.
-      if (current.closedAt) return reply.send(serialiseBranch(current));
+      if (current.closedAt) return reply.send(serialiseBranch(current, salonHours));
 
       const open = await openBranchesOf(req.params.id);
       if (open.length <= 1) {
@@ -1486,7 +1553,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
           subjectType: 'branch',
           subjectId: current.id,
           metadata: {
-            branch: serialiseBranch(current),
+            branch: serialiseBranch(current, salonHours),
             staffRescoped: affected.map((s) => ({
               id: s.id,
               name: s.name,
@@ -1513,7 +1580,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
        * what its own request did, which is the defect `PATCH /salons/{id}` had.
        */
       return reply.send({
-        ...serialiseBranch(row),
+        ...serialiseBranch(row, salonHours),
         closedAt: row.closedAt?.toISOString() ?? null,
         /**
          * What the close actually touched — read from the UPDATE's own
