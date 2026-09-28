@@ -2177,3 +2177,21 @@ Aftab asked for.**
 - Arabic counts use Eastern digits. Western digits are for money only (`digits.test.ts`).
 - Arabic plural forms for two or more visits, and every stamp form, are in `AR_UNVERIFIED`
   waiting for native review.
+
+**Booking policy: trunk's calls on lane A's build (54308ea)**
+- **When a no-show settles.** A no-show settles **60 minutes after the slot ends**
+  (`BOOKING_SETTLE_GRACE_MINUTES`, server-only), or immediately when staff mark it. Settling at
+  the exact end, which trunk ruled earlier, was wrong. She pays at the till after her service, so
+  under `keep` she would lose her deposit and also pay in full. The 60 minutes matches what the
+  old default gave.
+- **Rescheduling.** A rescheduled booking's cancellation cut-offs are measured from its
+  **original** slot. Otherwise, moving it later would buy back a return she had already lost.
+- **Revenue.** Kept deposits count as salon revenue in Sales and in the Overview, as their own
+  "Kept deposits" line.
+- **Legacy bookings.** A booking made before 0066, or at a salon with no published policy, keeps
+  today's behaviour exactly: a full return on her cancel, on a no-show, and on a salon cancel.
+- **Salon cancels.** A salon's cancellation always returns the full deposit.
+- **Permission.** The policy is edited under `perms.loyalty`, the same permission that gates the
+  deposit settings. The no-show window is console-only now.
+- **Rounding.** Percent returns round down to the fil. `percentOf` in `@avo/types` rounds half
+  up, so the API floors in its own integer maths. A shared `percentOfFloor` is owed.
