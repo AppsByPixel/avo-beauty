@@ -28,6 +28,7 @@ import { useReducedMotion } from '../motion/useReducedMotion';
 import { color, display, radius, ui } from '../theme';
 import { DangerButton, PrimaryButton } from '../components/Buttons';
 import { LoyaltyLine } from '../components/LoyaltyLine';
+import { resultPill } from '../domain/loyalty';
 import { Money, moneyOf } from '../components/Money';
 import type { ChargeAttempt } from './MemberScreen';
 
@@ -86,7 +87,8 @@ export function ResultScreen({
         {settledByDeposit ? copy.chargedNothing : copy.charged(moneyOf(chargedFils))}
       </Text>
       <Text style={[ui(13.5), styles.sub]}>
-        {memberName} · {loyaltyPillText}
+        {/* After a climb, the tier she has NOW — a deviation from design:381. See resultPill. */}
+        {memberName} · {resultPill(loyaltyPillText, result.loyalty)}
       </Text>
 
       <View style={styles.panel}>
