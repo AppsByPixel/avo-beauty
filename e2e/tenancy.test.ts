@@ -175,6 +175,20 @@ beforeAll(async () => {
       ('${PROBE_SERVICE_B_IMAGE_DELETE}', '${SALON_B}', 'Tenancy probe B image delete', 1000)
     ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, active = true;
 
+    -- THE SERVICES TAB'S THREE SUBJECTS AT SALON B (migration 0061), one per verb for
+    -- productFor's reason: the DELETE control really retires, and would otherwise take
+    -- the PATCH's and the PUT's subject with it. Price and active are RESET, because the
+    -- PATCH control really reprices and the DELETE really retires -- the products'
+    -- "green exactly once per database" lesson, applied before it could be learned
+    -- again. The PUT's assignment is emptied so its control is a real change every
+    -- run, not a no-op that answers 200 having written nothing.
+    INSERT INTO service (id, salon_id, name, price_fils) VALUES
+      ('${PROBE_SERVICE_B_PATCH}',  '${SALON_B}', 'Tenancy probe B service patch',  1000),
+      ('${PROBE_SERVICE_B_DELETE}', '${SALON_B}', 'Tenancy probe B service delete', 1000),
+      ('${PROBE_SERVICE_B_ASSIGN}', '${SALON_B}', 'Tenancy probe B service assign', 1000)
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, price_fils = 1000, active = true;
+    DELETE FROM artist_service WHERE service_id = '${PROBE_SERVICE_B_ASSIGN}';
+
     -- THE POST CONTROL'S SLOT IS EMPTIED, not assumed empty. It really uploads and
     -- really attaches, so without this a second run against one database would find
     -- last run's picture there and get 200-replaced where the row pins 201-created.
@@ -325,6 +339,16 @@ INSERT INTO artist (id, salon_id, name, slot_minutes, active)
 VALUES ('${PROBE_ARTIST_B}', '${SALON_B}', 'Tenancy probe artist', 30, true),
        ('${PROBE_ARTIST_B_SECOND}', '${SALON_B}', 'Tenancy probe artist two', 30, true)
 ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id, active = true;
+
+-- BOTH DO SV-B01 (migration 0061). The seed and 0062 assign every EXISTING artist to
+-- every EXISTING service, and these two are created after both ran -- so without
+-- these rows they are assigned nothing, and the create, reschedule and reassign
+-- controls are refused 409 artist_not_assigned: the new rule working, read by this
+-- table as a tenancy hole. DO NOTHING, not DO UPDATE: the pair is the whole row.
+INSERT INTO artist_service (artist_id, service_id, salon_id)
+VALUES ('${PROBE_ARTIST_B}', '${B_SERVICE}', '${SALON_B}'),
+       ('${PROBE_ARTIST_B_SECOND}', '${B_SERVICE}', '${SALON_B}')
+ON CONFLICT DO NOTHING;
 
 -- ONE CUSTOMER PER SALON, AND NOBODY ELSE'S -- a live hold belongs to a member, and
 -- findApplicableHold spends her earliest one on her next charge. DO NOTHING on
@@ -568,6 +592,17 @@ afterAll(async () => {
        AND guest_name = '${PROBE_GUEST_NAME}'
        AND id NOT IN ('${PROBE_BK_B_RESCHEDULE}', '${PROBE_BK_B_REASSIGN}',
                       '${PROBE_BK_B_CANCEL}', '${PROBE_BK_B_COMPLETE}');
+
+    -- THE SERVICE THE POST /salons/{id}/services CONTROL ADDED. It mints a fresh
+    -- sequence id every run, so each run would otherwise leave one more active row on
+    -- salon B's menu. Nothing references it — it is assigned nobody, so it can have
+    -- no booking, and nothing in this file charges it — so it is DELETED, not retired.
+    -- Matched on salon AND this file's own name AND the minted-id shape, so a fixture
+    -- row (SV-TEN-*) or anyone else's service can never match.
+    DELETE FROM service
+     WHERE salon_id = '${SALON_B}'
+       AND name = '${PROBE_SERVICE_POST_NAME}'
+       AND id ~ '^SV-[0-9]+$';
   `);
 
   await stopTenancyApi();
@@ -877,6 +912,17 @@ const PROBE_PRODUCT_B_IMAGE_POST = 'PR-TEN-B-IMG-POST';
 const PROBE_PRODUCT_B_IMAGE_DELETE = 'PR-TEN-B-IMG-DEL';
 const PROBE_SERVICE_B_IMAGE_POST = 'SV-TEN-B-IMG-POST';
 const PROBE_SERVICE_B_IMAGE_DELETE = 'SV-TEN-B-IMG-DEL';
+/**
+ * THE SERVICES TAB'S SUBJECTS — `routes/services.ts`, migration 0061. One per verb at
+ * salon B (see the fixture). At salon A the probe addresses the seed's `SV-01`: the
+ * cross-salon call is refused by `requireSameSalon` before `{sid}` is ever loaded, and
+ * a new active service at salon A would change a list three other files read.
+ */
+const PROBE_SERVICE_B_PATCH = 'SV-TEN-B-SVC-PATCH';
+const PROBE_SERVICE_B_DELETE = 'SV-TEN-B-SVC-DEL';
+const PROBE_SERVICE_B_ASSIGN = 'SV-TEN-B-SVC-ASSIGN';
+/** What the POST control names its new service, so `afterAll` can find exactly that. */
+const PROBE_SERVICE_POST_NAME = 'Tenancy probe service (POST control)';
 
 /**
  * The two blobs the DELETE controls detach, SEEDED IN SQL AND NOT THROUGH THE ENDPOINT.
@@ -1427,6 +1473,41 @@ const SALON_ROUTES: SalonRoute[] = [
     method: 'DELETE',
     template: '/v1/salons/{id}/campaigns/{cid}',
     controlStatus: 204,
+  },
+  /**
+   * LANE A'S SERVICES TAB — migration 0061. Add, reprice and retire behind
+   * `perms.loyalty`; who does it behind `perms.team`. `bDashboard` is salon B's
+   * full-permission manager, so both halves reach the tenancy gate, which is the
+   * second statement in all four handlers.
+   *
+   * EVERY BODY IS VALID for the salon it addresses, per the header: the POST and the
+   * PATCH send a real name and price, and the PUT's attack half names salon A's own
+   * seeded artist — the body a real cross-tenant attempt would carry — while the
+   * control names salon B's. A PUT naming a salon-B artist at salon A would be refused
+   * `unknown_artist` if the guard ever fell, a 404 for a reason that is not tenancy.
+   */
+  {
+    method: 'POST',
+    template: '/salons/{id}/services',
+    body: { name: PROBE_SERVICE_POST_NAME, priceFils: 1000 },
+    controlStatus: 201,
+  },
+  {
+    method: 'PATCH',
+    template: '/salons/{id}/services/{sid}',
+    body: { priceFils: 9999 },
+    controlBody: { priceFils: 1500 },
+  },
+  {
+    method: 'DELETE',
+    template: '/salons/{id}/services/{sid}',
+    controlStatus: 204,
+  },
+  {
+    method: 'PUT',
+    template: '/salons/{id}/services/{sid}/artists',
+    body: { artistIds: ['AR-001'] },
+    controlBody: { artistIds: [PROBE_ARTIST_B] },
   },
   // Added by trunk when lane A's five new routes merged. The ledger fired
   // correctly on the merge — that is what it is for. Its sibling assertion,
@@ -2049,6 +2130,17 @@ function productFor(route: SalonRoute, salonId: string): string {
 }
 
 /**
+ * A service belonging to the salon being addressed, for the Services tab's three
+ * `{sid}` routes. Salon B gets one disposable row per verb — `productFor`'s reason.
+ */
+function serviceFor(route: SalonRoute, salonId: string): string {
+  if (salonId !== SALON_B) return A_SERVICE;
+  if (route.method === 'DELETE') return PROBE_SERVICE_B_DELETE;
+  if (route.method === 'PUT') return PROBE_SERVICE_B_ASSIGN;
+  return PROBE_SERVICE_B_PATCH;
+}
+
+/**
  * The product or service an image route hangs a picture on.
  *
  * FOUR DISPOSABLE ROWS AT SALON B, one per (owner kind, verb) — see the note above
@@ -2183,6 +2275,8 @@ const url = (r: SalonRoute, salonId: string) =>
     .replace('{hid}', happyHourFor(r, salonId))
     .replace('{bid}', branchFor(salonId))
     .replace('{pid}', productFor(r, salonId))
+    /** `{sid}` — the Services tab's subject. See `serviceFor`. */
+    .replace('{sid}', serviceFor(r, salonId))
     .replace('{cid}', campaignFor(salonId))
     /**
      * `{tid}` is a shop order at the salon being addressed, resolved the way `{cid}`
@@ -3895,6 +3989,12 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'POST /salons/:id/products',
       'PATCH /salons/:id/products/:pid',
       'DELETE /salons/:id/products/:pid',
+      // Lane A's Services tab (migration 0061): three `{sid}` writes and one with a
+      // third path segment after the parameter, the shape a naive regex loses.
+      'POST /salons/:id/services',
+      'PATCH /salons/:id/services/:sid',
+      'DELETE /salons/:id/services/:sid',
+      'PUT /salons/:id/services/:sid/artists',
       // Lane A's phase-4 branch writes. These are what closed the phase-4
       // criterion — a salon can open, rename and close a location without an
       // engineer — so a scan that stops seeing them is a scan that would let the

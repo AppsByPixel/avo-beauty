@@ -702,6 +702,11 @@ const PINNED_COVERAGE: string[] = [
   'DELETE /salons/:id/branches/:bid → loyalty',
   'DELETE /salons/:id/devices/:deviceId → dashboard',
   'DELETE /salons/:id/products/:pid → shop',
+  // Lane A's Services tab (migration 0061). Add, reprice and retire are `loyalty` —
+  // the price is salon configuration that sets what a customer pays, the deposit's
+  // class. Assignment is `team`, below, as roster administration. The split is
+  // driven at runtime in `services-assignment.test.ts` § the permission split.
+  'DELETE /salons/:id/services/:sid → loyalty',
   'DELETE /staff/:id → team',
   'DELETE /v1/platform/admins/:id → admins',
   'DELETE /v1/platform/policies/draft/:docId → policies',
@@ -974,6 +979,7 @@ const PINNED_COVERAGE: string[] = [
   'PATCH /salons/:id → loyalty',
   'PATCH /salons/:id/branches/:bid → loyalty',
   'PATCH /salons/:id/products/:pid → shop',
+  'PATCH /salons/:id/services/:sid → loyalty',
   'PATCH /staff/:id → team',
   'PATCH /v1/platform/admins/:id → admins',
   'PATCH /v1/platform/messaging-policy → approvals',
@@ -1123,6 +1129,7 @@ const PINNED_COVERAGE: string[] = [
   'POST /salons/:id/branches → loyalty',
   'POST /salons/:id/devices → dashboard',
   'POST /salons/:id/products → shop',
+  'POST /salons/:id/services → loyalty',
   'POST /salons/:id/reports/artist-performance/download-url → team',
   'POST /salons/:id/reports/best-selling-services/download-url → appointments',
   'POST /salons/:id/reports/customers/download-url → team',
@@ -1252,6 +1259,7 @@ const PINNED_COVERAGE: string[] = [
   'PUT /artists/:id/branch → team',
   'PUT /artists/me/availability [requireScannerScope]',
   'PUT /members/me/addresses/:id [requireMember]',
+  'PUT /salons/:id/services/:sid/artists → team',
   /**
    * `→ salons`, AND IT WAS `→ loyalty` UNTIL DECISION 79 — a line that MOVED rather
    * than one that arrived, which is the amendment this ledger is least able to

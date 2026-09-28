@@ -454,6 +454,16 @@ beforeAll(async () => {
     ON CONFLICT (id) DO UPDATE SET name = excluded.name,
                                    price_fils = excluded.price_fils,
                                    active = true;
+    -- EACH SEEDED ARTIST DOES HER FIXTURE SERVICE (migration 0061). These services are
+    -- created after the seed and 0062 assigned every existing artist to every existing
+    -- service, so they are assigned nobody, and bookFuture's POST /bookings is refused
+    -- 409 artist_not_assigned before any hold exists — the new rule working, which
+    -- this file read as a beforeAll crash. Exactly the three pairs it books.
+    INSERT INTO artist_service (artist_id, service_id, salon_id)
+    VALUES ('${ARTIST_PART}',  '${SV_PART}',  '${SALON_A}'),
+           ('${ARTIST_WHOLE}', '${SV_WHOLE}', '${SALON_A}'),
+           ('${ARTIST_MISS}',  '${SV_MISS}',  '${SALON_A}')
+    ON CONFLICT DO NOTHING;
     INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
                         balance_fils, visits, tier, stamps, policy_version)
     SELECT '${MEMBER}', '${SALON_A}', 'Applied Deposit QA', '${MEMBER_PHONE}', NULL, false,

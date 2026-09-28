@@ -502,6 +502,16 @@ beforeAll(async () => {
 
     INSERT INTO service (id, salon_id, name, price_fils)
     VALUES ('${SERVICE}', '${SALON_A}', 'QA DH Service ${RUN}', 8000);
+
+    -- SHE DOES IT (migration 0061). This artist and this service are both created
+    -- after the seed and 0062 assigned everyone to everything, so they are linked to
+    -- nothing — and the write-path spec's POST /salons/{id}/bookings is refused
+    -- 409 artist_not_assigned, which is the new rule working rather than a deposit
+    -- regression. Only the one pair the API books; the SQL-inserted rows below never
+    -- pass the check and CAP_ARTIST is never booked through the API. The row goes with
+    -- the artist in afterAll: artist_service cascades from both sides.
+    INSERT INTO artist_service (artist_id, service_id, salon_id)
+    VALUES ('${ARTIST}', '${SERVICE}', '${SALON_A}');
   `);
 
   awaitMember = customer(`DH-QA-AWAIT-${RUN}`, NAME_AWAIT, 150_000);
