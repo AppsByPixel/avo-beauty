@@ -41,6 +41,11 @@
  *
  * WHAT STILL IS NOT HERE, AND WHY IT IS NOT DERIVED:
  *
+ *   Visit credit            NOW BUILT, for a charge: `Transaction.loyalty`
+ *                           (migration 0065) is the count the server recorded.
+ *                           See `earnedLabel`. What follows is still true of a
+ *                           SHOP ORDER, whose `loyalty` is null on the wire:
+ *
  *   Pickup / Visit credit   `OrderResult.loyalty` carries the RUNNING TOTAL
  *                           (`visits`, or `stamps` of `target`). The design's
  *                           row is a DELTA — "+1 visit" (design:1574). The
@@ -75,7 +80,7 @@ import {
 } from '@avo/types';
 import type { Copy } from '../copy/types';
 import type { BusinessHours } from './pickupHours';
-import { dateLocale } from './activity';
+import { dateLocale, earnedLabel } from './activity';
 import { branchName, type Named } from './names';
 
 export interface ReceiptRow {
@@ -391,6 +396,15 @@ export function buildReceipt(
     }
     if (branch) rows.push({ label: copy.txBranch, value: branch });
   }
+
+  /*
+    WHAT THE VISIT EARNED — design:1568 `['Visit credit', '+1 visit']`, after
+    "Paid from" and "Branch" and before "Balance after", where the design puts
+    it. From `Transaction.loyalty` (migration 0065) through the same
+    `earnedLabel` the activity row uses; null draws no row, never a guess.
+  */
+  const earned = earnedLabel(tx, copy);
+  if (earned) rows.push({ label: copy.txVisitCredit, value: earned });
 
   /*
     W7 — WHERE SHE COLLECTS IT, from the checkout response. `closed` is always

@@ -30,6 +30,7 @@ const PLACED = {
         id: 'TX-10000001', kind: 'shop', method: 'wallet', status: 'settled', branchId: 'BR-KWC',
         memberId: '8842', voidedAt: null, bonusFils: 0, createdAt: '2026-09-28T08:38:19.014Z',
         reference: 'AVO-SH-10000001', amountFils: -8500, customAmount: false, reversedByTransactionId: null,
+        loyalty: null,
       },
       balanceAfterFils: 25350,
     },

@@ -10,7 +10,14 @@
  */
 
 import { z } from 'zod';
-import { DateTimeSchema, FilsSchema, IdSchema, TransactionSchema, type Fils } from '@avo/types';
+import {
+  DateTimeSchema,
+  FilsSchema,
+  IdSchema,
+  TierNameSchema,
+  TransactionSchema,
+  type Fils,
+} from '@avo/types';
 import { getJson, postMoney } from './client';
 
 // ------------------------------------------------------------------ loyalty --
@@ -21,36 +28,39 @@ import { getJson, postMoney } from './client';
  * is why this is a discriminated union and not one object with nullable halves.
  *
  * ---------------------------------------------------------------------------
- * `visitsEarned` / `stampsEarned` — HOW MANY THIS CHARGE ADDED. NOT SENT YET.
+ * `visitsEarned` / `stampsEarned` — HOW MANY THIS CHARGE ADDED. REQUIRED.
  * ---------------------------------------------------------------------------
  * DECISIONS.md § "The fourth list": after a scan the screen says what she
- * gained, "+1 visit · 2 more to Gold". The outcome carries the state AFTER the
- * charge and nothing about the increment, and the increment cannot be read off
- * anything else on this response:
+ * gained, "+1 visit · 2 more to Gold". The increment cannot be read off
+ * anything else on this response — `happyHour` is null under a branch boost
+ * that still doubled the visit, and subtracting the scan's count from `visits`
+ * is the client deciding what the server awarded (non-negotiable #2) — so it is
+ * the server's to state, and since lane A's eefccb1 it does, on every charge:
+ * `services/loyalty.ts § applyVisits / applyStamps` always set it, and
+ * migration 0065 records the same number on the charge row so a void can take
+ * back exactly that.
  *
- *   - `happyHour` is null whenever no WINDOW moved the rate, but a branch boost
- *     moves it without a window (services/promotions.ts § decideEarning sets the
- *     multiplier and leaves `happyHourId` null). So "no happy hour, therefore
- *     +1" is false at exactly the enrolled tills a boost pays at.
- *   - The member's count before the charge is on the scan, but subtracting it
- *     from `visits` is the client deciding what the server awarded
- *     (non-negotiable #2), and it is wrong the moment two tills charge her.
+ * Required, like `happyHour`. It was optional while "absent" meant "this API is
+ * too old to say", and the result line fell back to the design's "Visit added".
+ * That API no longer exists, so a body without the count is now a contract
+ * failure, not a sentence to soften.
  *
- * So the count is the server's to state, and lane A is asked for exactly these
- * two names (see the lane B report of 2026-09-29). OPTIONAL UNTIL THEN, which is
- * the one place this file tolerates absence: today "absent" really does mean
- * "this API is too old to say", and `domain/loyalty.ts § loyaltyGain` renders
- * that as the design's "Visit added" / "Stamp added" rather than a number. When
- * the server sends them this should tighten to required, like `happyHour`.
+ * NOT `TransactionLoyaltySchema`. `@avo/types` now has a loyalty record, but it
+ * is the TRANSACTION's (`transaction.loyalty`: count, `tierAfter`, `climbed`,
+ * `rewardReady`) — the charge response's outcome is a different, larger shape
+ * (the after-state `visits` / `nextTier` / `visitsToNext` / `stamps` / `target`
+ * the progress clause needs), and the shared package has no schema for it. The
+ * record arrives here anyway, on `ChargeResultSchema.transaction`, because that
+ * field is `TransactionSchema` itself. The tier enum IS shared, and is used.
  */
 export const TiersOutcomeSchema = z.object({
   mode: z.literal('tiers'),
   visits: z.number().int().nonnegative(),
-  tier: z.enum(['bronze', 'silver', 'gold', 'black']).nullable(),
-  nextTier: z.enum(['bronze', 'silver', 'gold', 'black']).nullable(),
+  tier: TierNameSchema.nullable(),
+  nextTier: TierNameSchema.nullable(),
   visitsToNext: z.number().int().nullable(),
   climbed: z.boolean().optional(),
-  visitsEarned: z.number().int().nonnegative().optional(),
+  visitsEarned: z.number().int().nonnegative(),
 });
 
 export const StampsOutcomeSchema = z.object({
@@ -58,7 +68,7 @@ export const StampsOutcomeSchema = z.object({
   stamps: z.number().int().nonnegative(),
   target: z.number().int().positive(),
   rewardReady: z.boolean(),
-  stampsEarned: z.number().int().nonnegative().optional(),
+  stampsEarned: z.number().int().nonnegative(),
 });
 
 export const LoyaltyOutcomeSchema = z.discriminatedUnion('mode', [

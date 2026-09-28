@@ -45,6 +45,19 @@ const WIRE = {
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    // Migration 0065 (lane A, edcb0f0): what the charge earned, recorded on its
+    // own row. The charge response's transaction goes through
+    // `serialiseTransactionForCustomer`, so it carries `loyaltyColumnsFor(outcome)`
+    // in `serialiseTransactionLoyalty`'s shape — the SAME outcome as `loyalty`
+    // below: +1 visit, silver after, no climb. `rewardReady` is always false in
+    // tiers mode (services/charge.ts § loyaltyColumnsFor).
+    loyalty: {
+      mode: 'tiers',
+      visitsEarned: 1,
+      tierAfter: 'silver',
+      climbed: false,
+      rewardReady: false,
+    },
   },
   balanceAfterFils: 16500,
   depositAppliedFils: 5000,
@@ -57,6 +70,7 @@ const WIRE = {
     nextTier: 'gold',
     visitsToNext: 4,
     climbed: false,
+    visitsEarned: 1,
   },
   voidableUntil: '2026-08-18T10:35:31.000Z',
   happyHour: null,
@@ -185,5 +199,46 @@ describe('the void state the wire must carry', () => {
     const parsed = ChargeResultSchema.parse(voided);
     expect(parsed.transaction.voidedAt).toBe('2026-08-18T10:31:00.000Z');
     expect(parsed.transaction.reversedByTransactionId).toBe('TX-9802920');
+  });
+});
+
+describe('what the charge earned', () => {
+  /**
+   * TWO PLACES, ONE OUTCOME. `loyalty` on the response is the after-state the
+   * result line draws; `transaction.loyalty` is the record 0065 wrote on the
+   * charge row, which her wallet reads and a void takes back. Both are the
+   * server's; neither is derived here (non-negotiable #2).
+   */
+  it('keeps the count on the response — the "+1 visit" the result line prints', () => {
+    const parsed = ChargeResultSchema.parse(WIRE);
+    expect(parsed.loyalty.mode).toBe('tiers');
+    if (parsed.loyalty.mode !== 'tiers') return;
+    expect(parsed.loyalty.visitsEarned).toBe(1);
+  });
+
+  it('refuses a response that does not say how many were earned', () => {
+    // Required since lane A sends it on every charge. A body without it is an
+    // API older than this client, and the line no longer has a fallback for it.
+    const { visitsEarned: _v, ...noVisits } = WIRE.loyalty;
+    expect(ChargeResultSchema.safeParse({ ...WIRE, loyalty: noVisits }).success).toBe(false);
+
+    const stamps = { mode: 'stamps', stamps: 5, target: 8, rewardReady: false };
+    expect(ChargeResultSchema.safeParse({ ...WIRE, loyalty: stamps }).success).toBe(false);
+    expect(
+      ChargeResultSchema.safeParse({ ...WIRE, loyalty: { ...stamps, stampsEarned: 1 } }).success,
+    ).toBe(true);
+  });
+
+  it("keeps the transaction's record, with nothing stripped", () => {
+    const parsed = ChargeResultSchema.parse(WIRE);
+    expect(parsed.transaction.loyalty).toEqual(WIRE.transaction.loyalty);
+    expect(Object.keys(parsed.transaction).sort()).toEqual(Object.keys(WIRE.transaction).sort());
+  });
+
+  it('refuses a transaction that omits loyalty rather than reading it as null', () => {
+    // `.nullable()`, not `.optional()`: null is "nothing was recorded", and a
+    // missing key is a serialiser that forgot it.
+    const { loyalty: _dropped, ...omitted } = WIRE.transaction;
+    expect(ChargeResultSchema.safeParse({ ...WIRE, transaction: omitted }).success).toBe(false);
   });
 });

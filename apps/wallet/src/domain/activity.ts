@@ -83,7 +83,10 @@ function when(
   const head = dayAndTime(new Date(tx.createdAt), lang, copy, timeZone);
   const branch = branchLabel(tx, branches, lang);
   // A top-up has no branch a customer would recognise; a charge always does.
-  const withBranch = branch && tx.kind !== 'topup' ? `${head} · ${branch}` : head;
+  const placed = branch && tx.kind !== 'topup' ? `${head} · ${branch}` : head;
+  // "Yesterday · 4:30 pm · Amara Salmiya · +1 visit" — see `earnedLabel`.
+  const earned = earnedLabel(tx, copy);
+  const withBranch = earned ? `${placed} · ${earned}` : placed;
 
   // The status suffix used to be an inline ' · Pending' in the component, which
   // is the shape of string an Arabic build silently ships in English.
@@ -92,6 +95,37 @@ function when(
     return `${withBranch} · ${copy.rowFailed}`;
   }
   return withBranch;
+}
+
+/**
+ * "+1 visit" / "+2 stamps" — WHAT THIS CHARGE EARNED, as the server recorded it.
+ *
+ * `Transaction.loyalty` (migration 0065): the increment the charge actually
+ * applied, after any boost or happy-hour multiplier, written on the charge's own
+ * row. The activity row appends it to its sub-line and the receipt draws it as
+ * the design's "Visit credit" row (design:1568), both from this one function so
+ * the two cannot answer differently for one transaction.
+ *
+ * NULL MEANS NOTHING IS SAID, and never "+1". `loyalty` is null on every kind but
+ * `charge`, and on a charge made before 0065 — which DID earn a visit, and nobody
+ * wrote down how many. Guessing one would be the client deciding what the
+ * server awarded (non-negotiable #2), so that row reads exactly as it did.
+ *
+ * AND NOTHING ON A VOIDED CHARGE. The record stays on the row, but `POST /voids`
+ * took back exactly that count; "+1 visit" beside a charge whose visit has been
+ * removed is a sentence that is no longer true. `voidedAt` is the server's own
+ * void state (the bell reads it the same way), so this is not a derivation — it
+ * is declining to repeat a claim the server has since reversed.
+ */
+export function earnedLabel(
+  tx: Pick<Transaction, 'loyalty' | 'voidedAt'>,
+  copy: Pick<Copy, 'txVisitsEarned' | 'txStampsEarned'>,
+): string | null {
+  const earned = tx.loyalty;
+  if (earned === null || tx.voidedAt !== null) return null;
+  return earned.mode === 'tiers'
+    ? copy.txVisitsEarned(earned.visitsEarned)
+    : copy.txStampsEarned(earned.stampsEarned);
 }
 
 /**

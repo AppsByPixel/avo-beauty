@@ -440,6 +440,10 @@ export const en: Copy = {
   txReturnedTo: 'Returned to',
   txAmountRow: 'Amount',
   txBalanceAfter: 'Balance after', // design:1574
+  txVisitCredit: 'Visit credit', // design:1568, :1574
+  txVisitsEarned: (n) => `+${n} ${n === 1 ? 'visit' : 'visits'}`, // design:1568 '+1 visit'
+  // NEW COPY — the stamps twin of the line above; the design samples no stamps receipt.
+  txStampsEarned: (n) => `+${n} ${n === 1 ? 'stamp' : 'stamps'}`,
   // A positive `adjustment`. True of all five writers of that kind; see
   // copy/types.ts and domain/activity.ts for why no narrower word is available.
   txAdjustCredit: 'Credit',

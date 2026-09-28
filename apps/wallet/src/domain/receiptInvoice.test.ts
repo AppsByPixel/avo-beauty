@@ -50,6 +50,7 @@ function shopTx(totalFils: number): Transaction {
     createdAt: '2026-09-06T13:20:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   } as Transaction;
 }
 

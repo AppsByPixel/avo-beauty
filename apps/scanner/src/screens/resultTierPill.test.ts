@@ -45,8 +45,36 @@ const BASE = {
   happyHour: null,
 };
 
+/**
+ * `transaction.loyalty` as the server writes it for a given outcome —
+ * `services/charge.ts § loyaltyColumnsFor` through `serialiseTransactionLoyalty`.
+ * Fixture construction only: it keeps each case's two copies of the one outcome
+ * agreeing, the way the real response's do. No screen reads this function.
+ */
+function recorded(o: Record<string, unknown>) {
+  return o['mode'] === 'stamps'
+    ? {
+        mode: 'stamps',
+        stampsEarned: o['stampsEarned'],
+        tierAfter: null,
+        climbed: false,
+        rewardReady: o['rewardReady'],
+      }
+    : {
+        mode: 'tiers',
+        visitsEarned: o['visitsEarned'],
+        tierAfter: o['tier'],
+        climbed: o['climbed'] ?? false,
+        rewardReady: false,
+      };
+}
+
 function loyaltyOf(loyalty: Record<string, unknown>) {
-  return ChargeResultSchema.parse({ ...BASE, loyalty }).loyalty;
+  return ChargeResultSchema.parse({
+    ...BASE,
+    transaction: { ...BASE.transaction, loyalty: recorded(loyalty) },
+    loyalty,
+  }).loyalty;
 }
 
 /** What MemberScreen computed from the scan, before the charge. */
@@ -74,6 +102,7 @@ describe('after a charge that climbed a tier', () => {
       nextTier: null,
       visitsToNext: null,
       climbed: true,
+      visitsEarned: 1,
     });
     expect(resultPill('Gold', loyalty)).toBe('Black');
   });
@@ -88,6 +117,7 @@ describe('every other charge keeps the pill as it was', () => {
       nextTier: 'gold',
       visitsToNext: 2,
       climbed: false,
+      visitsEarned: 1,
     });
     expect(resultPill(SILVER_BEFORE, loyalty)).toBe('Silver');
   });
@@ -99,12 +129,19 @@ describe('every other charge keeps the pill as it was', () => {
       tier: 'gold',
       nextTier: 'black',
       visitsToNext: 15,
+      visitsEarned: 1,
     });
     expect(resultPill(SILVER_BEFORE, loyalty)).toBe('Silver');
   });
 
   it('a stamps salon', () => {
-    const loyalty = loyaltyOf({ mode: 'stamps', stamps: 5, target: 8, rewardReady: false });
+    const loyalty = loyaltyOf({
+      mode: 'stamps',
+      stamps: 5,
+      target: 8,
+      rewardReady: false,
+      stampsEarned: 1,
+    });
     expect(resultPill('4 / 8', loyalty)).toBe('4 / 8');
   });
 });

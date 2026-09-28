@@ -524,6 +524,30 @@ export const ar: Copy = {
   txReturnedTo: 'أُعيد إلى', // design:1585
   txAmountRow: 'المبلغ', // design:1377
   txBalanceAfter: 'الرصيد بعدها', // design:1581, :1587
+  txVisitCredit: 'احتساب الزيارة', // design:1582, :1588
+  /*
+    design:1582 writes ONE visit as a word — `+زيارة واحدة` — and that is lifted.
+    Every other count is this lane's, and in AR_UNVERIFIED: the dual as a word
+    (`+زيارتان`, the form a double-visit happy hour produces, and the reason 2
+    can no longer be skipped the way `visitsNoun` skips it), then Eastern digits
+    with the counted noun `visitsNoun` already applies (3–10 plural, 11+
+    singular). A COUNT, NOT MONEY, so Eastern — the digit rule at the top of
+    this file, and `digits.test.ts` asserts it.
+  */
+  txVisitsEarned: (n) =>
+    n === 1 ? '+زيارة واحدة' : n === 2 ? '+زيارتان' : `+${ea(n)} ${visitsNoun(n)}`,
+  /*
+    NEW COPY in both languages — the design has no stamps receipt. Built from the
+    bundle's own stamp words: `ختم واحد` (design:1368), `ختمان` (design's x2stamp
+    `ختمان بدل ختم`), `أختام` (x3stamp `ثلاثة أختام`), and `ختماً` for 11+, the
+    form `stampsExplain` (design:1367) uses. AR_UNVERIFIED.
+  */
+  txStampsEarned: (n) =>
+    n === 1
+      ? '+ختم واحد'
+      : n === 2
+        ? '+ختمان'
+        : `+${ea(n)} ${n >= 3 && n <= 10 ? 'أختام' : 'ختماً'}`,
   // Both AR GAPS. The design bundle writes no adjustment string in either
   // language -- `txKind.adjustment` was already a gap before these existed -- so
   // there is nothing to lift and nothing is invented.
@@ -1265,6 +1289,12 @@ export const AR_UNVERIFIED = [
   // one hardcoded reward.
   'tierFine',
   'tierRequirement(11+)',
+  /*
+    What a visit earned (migration 0065). `txVisitCredit` and the single visit
+    are design:1582; the rest were composed here from the bundle's own nouns.
+  */
+  'txVisitsEarned(2+)',
+  'txStampsEarned',
   'stampsGoal',
   'stampRule3',
   /**

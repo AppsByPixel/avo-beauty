@@ -54,6 +54,12 @@ const ORDER_201 = {
     voidedAt: null,
     reversedByTransactionId: null,
     /*
+      THE FOURTEENTH KEY, api migration 0065. `serialiseTransactionLoyalty`
+      returns null for every kind but `charge`, so a shop row always carries
+      `loyalty: null` — present, never omitted.
+    */
+    loyalty: null,
+    /*
       NO `branchAssumed` HERE, AND ITS REMOVAL IS THE POINT. This fixture carried
       `branchAssumed: false` and the real wire does not send it:
       `serialiseTransactionForCustomer` emits exactly the twelve keys asserted in
@@ -174,9 +180,10 @@ describe('the real responses parse with nothing lost', () => {
    * `transaction` was invisible to it — and `branchAssumed: false` sat there,
    * a field `serialiseTransactionForCustomer` does not emit.
    *
-   * Twelve keys, captured from a real 201 on avo_lane_b. `feeFils` is deliberately
+   * Fourteen keys — captured from a real 201 on avo_lane_b, then `customAmount`
+   * (0049) and `loyalty` (0065) as the serialiser grew them. `feeFils` is deliberately
    * absent: it is merchant-visible and customer-never, and the serialiser has its
-   * own comment saying so. If the schema ever grows a required thirteenth, this
+   * own comment saying so. If the schema ever grows a required fifteenth, this
    * fails here rather than on every real response in production.
    */
   it("the transaction's key set is the wire's, with no phantom field", () => {
@@ -191,6 +198,7 @@ describe('the real responses parse with nothing lost', () => {
       'customAmount',
       'id',
       'kind',
+      'loyalty',
       'memberId',
       'method',
       'reference',

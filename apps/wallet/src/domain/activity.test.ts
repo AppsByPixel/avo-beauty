@@ -51,6 +51,7 @@ function tx(over: Partial<Transaction>): Transaction {
     createdAt: '2026-08-19T06:16:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
     ...over,
   } as Transaction;
 }

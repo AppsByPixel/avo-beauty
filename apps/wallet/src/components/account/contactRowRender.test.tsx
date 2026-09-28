@@ -161,6 +161,7 @@ const TOPUP = {
   createdAt: '2026-08-25T21:38:22.862Z',
   voidedAt: null,
   reversedByTransactionId: null,
+  loyalty: null,
 } as Transaction;
 
 describe('Home and Shop → the receipt hands off to Contact us through a real button', () => {
