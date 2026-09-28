@@ -326,6 +326,10 @@ const otherChannel = alias(receiptJob, 'rj_other');
  * THE RECEIPT STREAM'S WHERE, shared by the page, the count and the mark — one
  * definition, so the badge, the panel and "mark all" cannot disagree about what a
  * receipt item is.
+ *
+ * Migration 0059 (the launch backfill: history opens read) restates this and
+ * `campaignStreamWhere` in SQL, because a migration cannot import them.
+ * `memberNotificationsBackfill.int.test.ts` pins the two as equal item for item.
  */
 function receiptStreamWhere(db: Db, memberId: string): SQL {
   return and(
