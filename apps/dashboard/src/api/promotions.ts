@@ -5,9 +5,10 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import { RewardKeySchema } from '@avo/types';
-import type { Campaign, HappyHour, PromotionSet, RewardKey } from '@avo/types';
+import { CampaignRewardSchema, RewardKeySchema } from '@avo/types';
+import type { Campaign, CampaignReward, HappyHour, PromotionSet, RewardKey } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
+import { ApiError } from './client.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 
 /**
@@ -29,6 +30,8 @@ import { useSalonId } from '../auth/AuthProvider.js';
 export const promotionKeys = {
   set: (salonId: string) => ['promotions', salonId] as const,
   campaigns: (salonId: string) => ['campaigns', salonId] as const,
+  /** The salon's own saved campaign rewards. Salon-scoped like every key here. */
+  campaignRewards: (salonId: string) => ['campaign-rewards', salonId] as const,
 };
 
 export function usePromotions(): UseQueryResult<PromotionSet> {
@@ -203,7 +206,18 @@ export interface CampaignDraft {
   channel: Campaign['channel'];
   audience: Campaign['audience'];
   branchId: string;
-  reward: RewardKey | 'none';
+  reward: RewardKey | 'none' | 'custom';
+  /**
+   * ONLY ON `reward: 'custom'`, AND IT IS AN ID, NEVER WORDS.
+   *
+   * The server resolves the label from the id and snapshots it onto the
+   * campaign (api/src/routes/campaigns.ts). There is deliberately no field on
+   * this draft that could carry a label: the words a reviewer approves are the
+   * words the salon SAVED, not whatever a request said. And it is absent rather
+   * than empty on every other reward, because the API refuses a `customRewardId`
+   * beside a preset (`custom_reward_not_allowed`).
+   */
+  customRewardId?: string;
   when: 'now' | 'later';
   scheduledAt: string;
 }
@@ -230,6 +244,107 @@ export function useSubmitCampaign(): UseMutationResult<Campaign, unknown, Campai
         body: draft,
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: promotionKeys.campaigns(salonId) }),
+  });
+}
+
+// ------------------------------------------------------ campaign rewards --
+
+/** api/src/routes/campaignRewards.ts — `CAMPAIGN_REWARD_LABEL_MAX`. */
+export const CAMPAIGN_REWARD_LABEL_MAX = 60;
+
+function parseCampaignRewards(raw: unknown): CampaignReward[] {
+  if (typeof raw !== 'object' || raw === null || !Array.isArray((raw as { items?: unknown }).items)) {
+    throw new Error('GET /v1/salons/{id}/campaign-rewards did not return an { items: [] } envelope.');
+  }
+  return (raw as { items: unknown[] }).items.map((item) => CampaignRewardSchema.parse(item));
+}
+
+/**
+ * The salon's own rewards — the ones she wrote — for "Attach a reward".
+ *
+ * A LABEL AND NOTHING ELSE. A saved reward moves no money and applies no
+ * earning effect; the salon honours it at the counter. So nothing here feeds
+ * `rewardEffect()`, and happy hours never see this list.
+ *
+ * Active only, oldest first — the order she added them, which is the order the
+ * select lists them. PARSED, not trusted, as `usePlatformCampaigns` is.
+ */
+export function useCampaignRewards(): UseQueryResult<CampaignReward[]> {
+  const salonId = useSalonId();
+  return useQuery({
+    queryKey: promotionKeys.campaignRewards(salonId),
+    queryFn: async ({ signal }) =>
+      parseCampaignRewards(
+        await authedRequest<unknown>('merchant', `/v1/salons/${salonId}/campaign-rewards`, {
+          signal,
+        }),
+      ),
+    networkMode: 'always',
+  });
+}
+
+/**
+ * Save one. The label is trimmed here only so the empty check and the server
+ * agree; the server trims again and owns every rule (60 characters, a
+ * case-insensitive duplicate, 20 active). Its refusal is rendered verbatim.
+ *
+ * The cache is written from the server's row, never from what she typed, so the
+ * option she sees selected is the one the server stored.
+ */
+export function useAddCampaignReward(): UseMutationResult<CampaignReward, unknown, string> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (label) =>
+      CampaignRewardSchema.parse(
+        await authedRequest<unknown>('merchant', `/v1/salons/${salonId}/campaign-rewards`, {
+          method: 'POST',
+          body: { label: label.trim() },
+        }),
+      ),
+    onSuccess: (row) => {
+      queryClient.setQueryData<CampaignReward[]>(promotionKeys.campaignRewards(salonId), (prev) =>
+        prev ? [...prev.filter((r) => r.id !== row.id), row] : [row],
+      );
+      void queryClient.invalidateQueries({ queryKey: promotionKeys.campaignRewards(salonId) });
+    },
+  });
+}
+
+/**
+ * Take one off her list. A campaign already submitted with it keeps its own
+ * snapshot of the words (`customReward`), so this touches nothing in the queue.
+ *
+ * A 404 `unknown_reward` IS THE OUTCOME SHE ASKED FOR — a colleague removed it a
+ * moment earlier — so it settles as a success rather than telling her something
+ * went wrong on our side about a reward that is, correctly, gone.
+ */
+export function useRemoveCampaignReward(): UseMutationResult<void, unknown, string> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (rewardId) => {
+      try {
+        await authedRequest<void>(
+          'merchant',
+          `/v1/salons/${salonId}/campaign-rewards/${encodeURIComponent(rewardId)}`,
+          { method: 'DELETE' },
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404 && error.code === 'unknown_reward') {
+          return;
+        }
+        throw error;
+      }
+    },
+    onSuccess: (_done, rewardId) => {
+      queryClient.setQueryData<CampaignReward[]>(promotionKeys.campaignRewards(salonId), (prev) =>
+        prev?.filter((r) => r.id !== rewardId),
+      );
+      void queryClient.invalidateQueries({ queryKey: promotionKeys.campaignRewards(salonId) });
+    },
   });
 }
 
@@ -390,6 +505,25 @@ export const CAMPAIGN_REWARDS: ReadonlyArray<{ value: RewardKey | 'none'; label:
   CAMPAIGN_NO_REWARD,
   ...RewardKeySchema.options.map((value) => ({ value, label: CAMPAIGN_REWARD_LABEL[value] })),
 ];
+
+/** The last option in "Attach a reward". Not a reward: it opens the field that writes one. */
+export const CAMPAIGN_ADD_CUSTOM_LABEL = '+ Add a custom reward…';
+
+/**
+ * A campaign's reward as words, wherever the dashboard names it — the merchant's
+ * queue and the owner console's approval card.
+ *
+ * `custom` is the server's snapshot, VERBATIM: the salon wrote it, and AVO's
+ * reviewer approves exactly those words. A preset reads as it did in the select
+ * she picked it from. `null` for no reward, and for a `custom` that somehow
+ * arrived without its words — the caller then renders nothing rather than a
+ * sentence this client made up about a reward it cannot name.
+ */
+export function campaignRewardLabel(c: Pick<Campaign, 'reward' | 'customReward'>): string | null {
+  if (c.reward === 'none') return null;
+  if (c.reward === 'custom') return c.customReward;
+  return CAMPAIGN_REWARD_LABEL[c.reward];
+}
 
 export const AUDIENCES: Array<{ value: Campaign['audience']; label: string }> = [
   { value: 'all', label: 'Everyone' },
