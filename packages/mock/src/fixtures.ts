@@ -391,6 +391,7 @@ export const campaigns: Campaign[] = [
     audience: 'lapsed',
     branchId: 'all',
     reward: 'credit3',
+    customReward: null,
     reach: 612,
     when: 'now',
     scheduledAt: '',

@@ -40,6 +40,7 @@ import {
   percentOf,
   subtract,
   walletTokenUri,
+  type CampaignReward,
   type Fils,
   type TopUpIntent,
   type Transaction,
@@ -879,13 +880,84 @@ app.put('/v1/salons/:id/promotions/boosts', async (req, reply) => {
   };
 });
 
+/**
+ * The salon's own campaign rewards. In memory and per mock process, which is all a
+ * consumer lane needs to drive save → pick → remove. The real rules (60 chars,
+ * case-insensitive duplicates, 20 active, perms.marketing) live in
+ * api/src/routes/campaignRewards.ts; the mock keeps the refusals a form renders.
+ */
+const campaignRewards: CampaignReward[] = [];
+let campaignRewardSeq = 10000000;
+
+app.get('/v1/salons/:id/campaign-rewards', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  return { items: campaignRewards };
+});
+
+app.post('/v1/salons/:id/campaign-rewards', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  const label = String((req.body as { label?: unknown } | null)?.label ?? '').trim();
+  if (label.length < 1 || label.length > 60) {
+    return reply
+      .code(400)
+      .send({ error: 'invalid_label', message: 'Write the reward, up to 60 characters.' });
+  }
+  if (campaignRewards.some((r) => r.label.toLowerCase() === label.toLowerCase())) {
+    return reply
+      .code(409)
+      .send({ error: 'duplicate_reward', message: 'You already have a reward with that name.' });
+  }
+  if (campaignRewards.length >= 20) {
+    return reply
+      .code(409)
+      .send({
+        error: 'reward_limit',
+        message: 'You can save up to 20 rewards. Remove one to add another.',
+      });
+  }
+  const row: CampaignReward = {
+    id: `CRW-${campaignRewardSeq++}`,
+    salonId: SALON_ID,
+    label,
+    createdAt: new Date().toISOString(),
+  };
+  campaignRewards.push(row);
+  return reply.code(201).send(row);
+});
+
+app.delete('/v1/salons/:id/campaign-rewards/:rewardId', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  const { rewardId } = req.params as { rewardId: string };
+  const at = campaignRewards.findIndex((r) => r.id === rewardId);
+  if (at < 0) return reply.code(404).send({ error: 'unknown_reward', message: 'No such reward.' });
+  campaignRewards.splice(at, 1);
+  return reply.code(204).send();
+});
+
 /** A merchant cannot send. This only ever creates `pending`. */
 app.post('/v1/salons/:id/campaigns', async (req, reply) => {
   if (await intercept(req, reply)) return;
-  const body = req.body as Partial<(typeof campaigns)[number]>;
+  const body = req.body as Partial<(typeof campaigns)[number]> & { customRewardId?: string };
+  // The server resolves the words from the id, as the real API does; a label the
+  // client sends is ignored.
+  let customReward: string | null = null;
+  if (body.reward === 'custom') {
+    const found = campaignRewards.find((r) => r.id === body.customRewardId);
+    if (!found) {
+      return reply
+        .code(400)
+        .send({
+          error: 'invalid_custom_reward',
+          message: 'That reward is not one of your saved rewards. Choose another, or save it first.',
+        });
+    }
+    customReward = found.label;
+  }
+  const { customRewardId: _id, ...rest } = body;
   return {
     ...campaigns[0],
-    ...body,
+    ...rest,
+    customReward,
     id: `CMP-${Math.floor(Math.random() * 900 + 100)}`,
     salonId: SALON_ID,
     status: 'pending',

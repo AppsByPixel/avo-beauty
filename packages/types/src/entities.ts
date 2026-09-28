@@ -1098,6 +1098,19 @@ export const PromotionSetSchema = z.object({
 
 // -------------------------------------------------------------- campaign ---
 
+/**
+ * A reward the salon wrote itself, for "Attach a reward" on a campaign. A LABEL,
+ * like every campaign reward: nothing applies it as an earning effect, and it
+ * moves no money. The salon honours it at the counter. Happy hours do not take
+ * one; their reward is applied by rewardEffect(), so their list stays closed.
+ */
+export const CampaignRewardSchema = z.object({
+  id: IdSchema,
+  salonId: IdSchema,
+  label: z.string(),
+  createdAt: DateTimeSchema,
+});
+
 export const CampaignSchema = z.object({
   id: IdSchema,
   salonId: IdSchema,
@@ -1107,7 +1120,14 @@ export const CampaignSchema = z.object({
   channel: z.enum(['push', 'wa', 'both']),
   audience: z.enum(['all', 'lapsed', 'lowbal', 'gold', 'new']),
   branchId: z.string(),
-  reward: z.union([RewardKeySchema, z.literal('none')]),
+  reward: z.union([RewardKeySchema, z.literal('none'), z.literal('custom')]),
+  /**
+   * The words of a `custom` reward as they were when the campaign was submitted,
+   * resolved by the server from `customRewardId` (a client-sent label is ignored).
+   * A snapshot, so removing the reward from the salon's list does not rewrite a
+   * campaign already in the queue. `null` on every other reward.
+   */
+  customReward: z.string().nullable(),
   /** Server-computed. NEVER trusted from the client. */
   reach: z.number().int().nonnegative(),
   when: z.enum(['now', 'later', 'recurring']),
@@ -1291,6 +1311,7 @@ export type HappyHour = z.infer<typeof HappyHourSchema>;
 export type PromotionSet = z.infer<typeof PromotionSetSchema>;
 export type RewardKey = z.infer<typeof RewardKeySchema>;
 export type Campaign = z.infer<typeof CampaignSchema>;
+export type CampaignReward = z.infer<typeof CampaignRewardSchema>;
 export type PlatformMessagingPolicy = z.infer<typeof PlatformMessagingPolicySchema>;
 export type LegalDoc = z.infer<typeof LegalDocSchema>;
 export type LegalDocumentSet = z.infer<typeof LegalDocumentSetSchema>;
