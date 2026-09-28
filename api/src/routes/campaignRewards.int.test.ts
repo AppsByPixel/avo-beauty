@@ -6,6 +6,7 @@
  *     on GET, POST and DELETE of campaign-rewards and on POST campaigns with a
  *     custom reward, and nothing was written; the same GET with the permission on
  *     (ST-001, Noura) answers 200, so the 403 was the gate and not a missing route;
+ *     and a till's PIN session is refused on all three whatever its holder may do;
  *   - a saved reward is trimmed, served in exactly four fields, listed oldest
  *     first, and audited;
  *   - empty, blank and 61-character labels are 400 `invalid_label`, 60 code points
@@ -198,6 +199,30 @@ suite('a reward the salon wrote', () => {
       refused(await remove(seedReward, hessa, SEED_SALON));
       const [row] = await exec(sql`SELECT archived_at FROM campaign_reward WHERE id = ${seedReward}`);
       expect(row?.archived_at).toBeNull();
+    });
+
+    it('a PIN session is refused on all three, even for a manager holding perms.marketing', async () => {
+      // `requireDashboardPerm` checks the SURFACE before the permission: a till's
+      // PIN session never reaches a dashboard endpoint, whatever its holder may do.
+      const till = (
+        await issue(db, {
+          principalKind: 'staff',
+          staffId: id('ST-MGR'),
+          salonId: SALON,
+          scope: 'scanner',
+          deviceId: `DEV-CR-${RUN}`,
+        })
+      ).accessToken;
+      const before = await rewardCount(SALON);
+      const own = await save(`CR till probe ${RUN}`);
+      expect(own.status).toBe(201);
+      expect((await call('GET', rewardsUrl(SALON), till)).status).toBe(403);
+      expect((await save(`CR till ${RUN}`, till)).status).toBe(403);
+      expect((await remove(own.body.id, till)).status).toBe(403);
+      expect(await rewardCount(SALON)).toBe(before + 1);
+      const [row] = await exec(sql`SELECT archived_at FROM campaign_reward WHERE id = ${own.body.id}`);
+      expect(row?.archived_at).toBeNull();
+      expect((await remove(own.body.id)).status).toBe(204);
     });
 
     it('POST campaigns with a custom reward is 403 and submits nothing', async () => {
