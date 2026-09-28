@@ -919,6 +919,67 @@ export const en: Copy = {
     )}. You can cancel any time before then.`,
   deleteCheckFailed: "We couldn't check whether your account is scheduled for deletion.",
 
+  // ─────────────────────────────────────────── the bell — client ask W4 ──
+  // NEW COPY, NO DESIGN SOURCE, CLIENT TO REVIEW — except the five marked
+  // `whatsapp-templates.md`, which are the design's own template sentences.
+  bellAria: (n) => (n === 0 ? 'Notifications' : `Notifications, ${n} unread`),
+  bellBadge: (n) => (n > 99 ? '99+' : `${n}`),
+  bellUnread: 'Unread',
+  bellEmptyTitle: "You're all caught up",
+  bellEmptyBody: 'Payments, top-ups and bookings will show up here.',
+  bellOffersOff: "Salon offers are switched off, so they don't appear here.",
+  bellOffersOffCta: 'Notification settings',
+  bellLoadFailed: "We couldn't load your notifications.",
+  bellMarkAll: 'Mark all as read',
+  bellTopupBonus: (bonus) => `Includes a ${bonus} bonus`,
+  bellChargeCustom: 'Amount entered at the salon',
+  bellChargeVoided: 'Voided — the amount is back in your wallet',
+  bellShopLine: (name, qty) => (qty > 1 ? `${name} × ${qty}` : name),
+  bellPickup: 'Pickup',
+  bellDelivery: 'Delivery',
+  bellBookingTitle: (salon) => `Your booking at ${salon} is confirmed.`, // whatsapp-templates.md § 1
+  bellBookingWith: (service, artist) => `${service} with ${artist}`, // whatsapp-templates.md § 1
+  bellBookingAt: (day, time) => `${day} at ${time}`, // whatsapp-templates.md § 1
+  bellNoShowTitle: (salon) => `${salon} — your deposit is back.`, // whatsapp-templates.md § 4
+  bellNoShowBody: (service, day) => `We missed you at ${service} on ${day}.`, // whatsapp-templates.md § 4
+  bellNoShowBare: 'Your deposit has returned to your wallet.', // whatsapp-templates.md § 4, amount cut
+  bellCancelledReturn: 'You cancelled, and your deposit is back in your wallet.',
+  bellCardOrder: (method) => `Paid by ${method}`,
+  bellCardOrderBonus: (bonus) => `${bonus} bonus added to your wallet`,
+  bellUnknownTitle: 'New notification',
+  bellUnknownBody: 'Update the app to read this one.',
+
+  // ───────────────────────────── the shop, paid by card — client ask W2 ──
+  // NEW COPY, NO DESIGN SOURCE, CLIENT TO REVIEW.
+  cartPayWith: (amount, method) => `Pay ${amount} with ${method}`,
+  cardOrderOpen: 'A card payment for this basket is still being confirmed. Check it before paying again.',
+  cardOrderCheck: 'Check the payment',
+  cardOrderStartFailedTitle: "We couldn't start the payment",
+  cardOrderStartFailedBody: 'Nothing was charged. Try again in a moment.',
+  cardOrderGatewayFailedTitle: 'The payment page did not open',
+  cardOrderGatewayFailedBody:
+    'Nothing was charged and your payment is still waiting. Open the payment page again.',
+  cardOrderOpenPage: 'Open the payment page',
+  cardOrderDeclined: 'Your bank declined the payment. Nothing was charged and no order was placed.',
+  cardOrderCancelled: 'You cancelled the payment. Nothing was charged and no order was placed.',
+  cardOrderPending:
+    'This can take up to a minute. Do not pay again — your order is placed as soon as the bank confirms.',
+  cardOrderAttemptOpen:
+    'A payment for this basket has already started. Check it before paying another way.',
+  cardOrderRefusedTitle: 'Your money is in your wallet',
+  cardOrderRefusedBody: (amount) =>
+    `${amount} is in your wallet. Your payment arrived, but the order did not go through.`,
+  cardOrderRefusal: {
+    price_changed: 'A price in your basket changed while you were paying. Check the basket and pay from your balance.',
+    shop_not_enabled: 'The salon stopped taking shop orders while you were paying.',
+    invalid_products: 'Something in your basket is no longer available.',
+    unknown_address: 'The delivery address you chose was removed.',
+    address_required: 'The order needed a delivery address.',
+    other: "We couldn't place the order on our side.",
+  },
+  cardOrderInWallet: 'In your wallet',
+  cardOrderBackToCart: 'Back to your basket',
+
   // design/AVO Wallet Home.dc.html:1232 — the English build offers Arabic.
   langSwitch: 'العربية',
   restartNeeded: 'Restart the app to switch direction',

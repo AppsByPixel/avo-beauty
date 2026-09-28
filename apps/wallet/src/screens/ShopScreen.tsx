@@ -100,7 +100,10 @@ import { useLanguage } from '../i18n/language';
 import type { ShopController } from '../state/useShop';
 import type { OrderResult } from '../api/shop';
 import type { MemberAddress, Salon, TierName } from '@avo/types';
-import { CartSheet } from '../components/CartSheet';
+import { CartSheet, type CheckoutMethod } from '../components/CartSheet';
+import { CardOrderSheet } from '../components/CardOrderSheet';
+import { useCardCheckout } from '../state/useCardCheckout';
+import { fulfilmentBody } from '../domain/fulfilment';
 import { AddressSheet } from '../components/AddressSheet';
 import { OrdersSheet } from '../components/OrdersSheet';
 import { TopUpSheet } from '../components/TopUpSheet';
@@ -271,6 +274,29 @@ export function ShopScreen({
     if (book.addresses === null) return;
     shop.reconcileAddresses(book.addresses.map((a) => a.id));
   }, [book.addresses, shop]);
+
+  /*
+    W2 — THE CARD RAIL. How she pays is her choice, always visible in the cart;
+    `wallet` is the default and is the path this screen has always had.
+
+    `placed` opens the SAME invoice a wallet-paid order opens, from the server's
+    `OrderResult`, after `placedByServer` has emptied the basket and asked the
+    wallet to re-read. `refused` re-reads the wallet (the money landed there) and
+    KEEPS the basket — she can pay it from the balance now.
+  */
+  const [method, setMethod] = useState<CheckoutMethod>('wallet');
+  const card = useCardCheckout({
+    lines: shop.orderLines,
+    fulfilment: () => fulfilmentBody(shop.fulfilment),
+    onPlaced: (result) => {
+      shop.placedByServer();
+      setCartOpen(false);
+      setMethod('wallet');
+      if (result) setInvoice(result);
+    },
+    onCredited: onToppedUp,
+    onRefused: shop.showRefusal,
+  });
 
   const checkout = useCallback(async () => {
     const result = await shop.checkout();
@@ -599,6 +625,21 @@ export function ShopScreen({
           setAddressSheet({ address });
         }}
         onDeleteAddress={(address) => void deleteAddress(address)}
+        method={method}
+        onMethod={(m) => {
+          setMethod(m);
+          /*
+            ONLY THE SHORTFALL GOES. Choosing a card resolves exactly one wallet
+            refusal: "balance too low". Clearing unconditionally re-armed the
+            card button over an `offline`/`failed` wallet order — one whose debit
+            may have SETTLED — which is a second payment for one basket.
+            Found by cardCheckoutRender.test.tsx going red, not by reading.
+          */
+          if (shop.refusal?.kind === 'short') shop.clearRefusal();
+        }}
+        onPayCard={card.pay}
+        cardOpen={card.openAttempt}
+        onCheckCard={card.check}
       />
 
       {/*
@@ -650,6 +691,9 @@ export function ShopScreen({
         newBalanceFils={balance.newBalanceFils}
         tier={tier}
       />
+
+      {/* W2 — over the cart, under the invoice. Same ordering argument as above. */}
+      <CardOrderSheet card={card} />
 
       {/*
         THE INVOICE, LAST, so it paints over every other overlay — same ordering

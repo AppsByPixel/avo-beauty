@@ -101,7 +101,7 @@ import { ApiError, newIdempotencyKey, type FailureKind } from '../api/client';
 import { toLoadFailure, type LoadFailure } from '../domain/loadFailure';
 // The salon is configuration, not a request — see config/salon.ts.
 import { SALON_ID as SALON_FROM_CONFIG } from '../config/salon';
-import { getProducts, placeOrder, type OrderResult, type Product } from '../api/shop';
+import { getProducts, placeOrder, type CartLine, type OrderResult, type Product } from '../api/shop';
 import {
   affordable,
   cartCount,
@@ -205,6 +205,11 @@ export interface ShopState {
   busy: boolean;
   refusal: CheckoutRefusal | null;
   /**
+   * The body lines for THIS cart, `{ productId, qty }` only — what both rails
+   * send and what the card rail's key is derived from (`domain/cardCheckout`).
+   */
+  orderLines: CartLine[];
+  /**
    * Collect or deliver, and the address a delivery names.
    *
    * IT IS NOT DERIVED FROM THE ADDRESS BOOK. A customer with one saved address
@@ -246,6 +251,20 @@ export interface ShopActions {
   reconcileAddresses: (addressIds: readonly string[]) => void;
   /** Resolves with the order on success, null on any refusal. */
   checkout: () => Promise<OrderResult | null>;
+  /**
+   * W2 — THE CARD RAIL'S TWO DOORS INTO THIS STATE. Neither touches `checkout`,
+   * its key, or anything the wallet path sends.
+   *
+   * `showRefusal` puts a refusal the card PRE-FLIGHT answered (a retired
+   * product, a missing or deleted address) into the same chip the wallet path
+   * draws, so one fact reads as one sentence whichever rail found it.
+   *
+   * `placedByServer` is called only after `GET /orders/payments/{id}` says
+   * `placed`: the SERVER placed the order, so the basket is emptied and the
+   * wallet re-read exactly as a wallet-paid order does (#2 — no figure carried).
+   */
+  showRefusal: (refusal: CheckoutRefusal) => void;
+  placedByServer: () => void;
 }
 
 /** What the shell owns and the screen renders. */
@@ -456,9 +475,21 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
     */
   }, [busy, cart, products, fulfilment, onPaid]);
 
+  const orderLines = useMemo(() => toOrderLines(cart, products ?? []), [cart, products]);
+  const showRefusal = useCallback((r: CheckoutRefusal) => setRefusal(r), []);
+  const placedByServer = useCallback(() => {
+    // The same three lines the wallet path runs on success, for the same reasons.
+    setCart({});
+    setChoice(PICKUP);
+    onPaid();
+  }, [onPaid]);
+
   return {
     status,
     products,
+    orderLines,
+    showRefusal,
+    placedByServer,
     failure,
     fetchedAt,
     cart,

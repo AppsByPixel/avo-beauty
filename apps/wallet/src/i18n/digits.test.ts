@@ -219,6 +219,29 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   stampCountOf: [4, 8],
   stampsGoal: [4, 'Free blow-dry'],
   stampRule3: ['Free blow-dry'],
+
+  // --- the bell (W4). The unread count and a line quantity are COUNTS, so
+  // Eastern in Arabic; two digits so a partial conversion shows.
+  bellAria: [12],
+  bellBadge: [12],
+  bellShopLine: ['Repair mask', 12],
+  // Already-formatted money. See MONEY_ARG_KEYS.
+  bellTopupBonus: [MONEY_SAMPLE],
+  bellCardOrderBonus: [MONEY_SAMPLE],
+  // Names and already-resolved dates. `domain/bell.ts` formats the day and the
+  // time for the reading language before they reach these sentences, so the
+  // samples carry no digits of their own — the `lastUpdated` reasoning.
+  bellBookingTitle: ['Amara'],
+  bellBookingWith: ['Blow-dry', 'Rana'],
+  bellBookingAt: ['—', '—'],
+  bellNoShowTitle: ['Amara'],
+  bellNoShowBody: ['Blow-dry', '—'],
+  // The payment method's own label (`txMethod`), a word.
+  bellCardOrder: ['KNET'],
+
+  // --- the shop paid by card (W2). Already-formatted money, plus a method word.
+  cartPayWith: [MONEY_SAMPLE, 'KNET'],
+  cardOrderRefusedBody: [MONEY_SAMPLE],
 };
 
 /**
@@ -292,6 +315,19 @@ const MONEY_ARG_KEYS = new Set([
     script and this harness never sees them.
   */
   'topupTileBonus',
+  /*
+    The bell's two bonus lines. Each takes ONE `formatMoney` argument and the
+    sentence around it has no other number — the ordinary case for this set.
+  */
+  'bellTopupBonus',
+  'bellCardOrderBonus',
+  /*
+    The card checkout's two amounts (W2). `cartPayWith` takes a second argument,
+    the method's WORD, which carries no digit — so the sentence still holds
+    exactly one number, and it is money.
+  */
+  'cartPayWith',
+  'cardOrderRefusedBody',
 ]);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */

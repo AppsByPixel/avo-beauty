@@ -963,6 +963,72 @@ export const ar: Copy = {
   deleteScheduledBody: en.deleteScheduledBody, // AR GAP
   deleteCheckFailed: en.deleteCheckFailed, // AR GAP
 
+  // ─────────────────────────────────────────── the bell — client ask W4 ──
+  // WRITTEN ARABIC, FEMININE ADDRESS, NO DESIGN SOURCE — every key without a
+  // `whatsapp-templates.md` marker is in AR_UNVERIFIED for the native-speaker
+  // review, the delivery slice's treatment of a surface the bundle never drew.
+  // Not AR_GAPS: the bell is a whole surface, and English rows inside an Arabic
+  // bell would be the half-translated screen #12 forbids.
+  //
+  // The five marked keys are the designer's own template Arabic
+  // (whatsapp-templates.md § 1 and § 4), variables and all.
+  bellAria: (n) => (n === 0 ? 'الإشعارات' : `الإشعارات، ${ea(n)} غير مقروءة`),
+  bellBadge: (n) => (n > 99 ? `${ea(99)}+` : ea(n)),
+  bellUnread: 'غير مقروء',
+  bellEmptyTitle: 'لا جديد لديكِ',
+  bellEmptyBody: 'ستظهر هنا مدفوعاتكِ وعمليات الشحن وحجوزاتكِ.',
+  bellOffersOff: 'عروض الصالون مغلقة، لذلك لا تظهر هنا.',
+  bellOffersOffCta: 'إعدادات الإشعارات',
+  bellLoadFailed: 'تعذّر تحميل إشعاراتكِ.',
+  bellMarkAll: 'تحديد الكل كمقروء',
+  bellTopupBonus: (bonus) => `يشمل مكافأة ${bonus}`,
+  bellChargeCustom: 'مبلغ أُدخل في الصالون',
+  bellChargeVoided: 'أُلغيت العملية ورجع المبلغ لمحفظتكِ',
+  bellShopLine: (name, qty) => (qty > 1 ? `${name} × ${ea(qty)}` : name),
+  bellPickup: 'استلام من الصالون',
+  bellDelivery: 'توصيل',
+  bellBookingTitle: (salon) => `تم تأكيد حجزكِ في ${salon}.`, // whatsapp-templates.md § 1
+  bellBookingWith: (service, artist) => `${service} مع ${artist}`, // whatsapp-templates.md § 1
+  bellBookingAt: (day, time) => `${day} الساعة ${time}`, // whatsapp-templates.md § 1
+  bellNoShowTitle: (salon) => `${salon} — رجع عربونكِ.`, // whatsapp-templates.md § 4
+  bellNoShowBody: (service, day) => `افتقدناكِ في موعد ${service} يوم ${day}.`, // whatsapp-templates.md § 4
+  bellNoShowBare: 'رجع عربونكِ إلى محفظتكِ.', // whatsapp-templates.md § 4, amount cut
+  bellCancelledReturn: 'ألغيتِ الحجز ورجع العربون لمحفظتكِ.',
+  bellCardOrder: (method) => `دُفع عبر ${method}`,
+  bellCardOrderBonus: (bonus) => `أُضيفت مكافأة ${bonus} إلى محفظتكِ`,
+  bellUnknownTitle: 'إشعار جديد',
+  bellUnknownBody: 'حدّثي التطبيق لقراءة هذا الإشعار.',
+
+  // ───────────────────────────── the shop, paid by card — client ask W2 ──
+  // WRITTEN ARABIC, FEMININE ADDRESS, NO DESIGN SOURCE — all in AR_UNVERIFIED.
+  // Not AR_GAPS: the race screen is the one sentence in this flow that must be
+  // understood, and English there would tell an Arabic reader nothing about
+  // where her money is.
+  cartPayWith: (amount, method) => `ادفعي ${amount} عبر ${method}`,
+  cardOrderOpen: 'ما زال دفع هذه السلة بالبطاقة بانتظار التأكيد. تحقّقي منه قبل الدفع مرة أخرى.',
+  cardOrderCheck: 'تحقّقي من الدفع',
+  cardOrderStartFailedTitle: 'تعذّر بدء الدفع',
+  cardOrderStartFailedBody: 'لم يُخصم أي مبلغ. حاولي مرة أخرى بعد قليل.',
+  cardOrderGatewayFailedTitle: 'لم تُفتح صفحة الدفع',
+  cardOrderGatewayFailedBody: 'لم يُخصم أي مبلغ ودفعتكِ ما زالت بانتظاركِ. افتحي صفحة الدفع مرة أخرى.',
+  cardOrderOpenPage: 'افتحي صفحة الدفع',
+  cardOrderDeclined: 'رفض البنك الدفع. لم يُخصم أي مبلغ ولم يُسجَّل أي طلب.',
+  cardOrderCancelled: 'ألغيتِ الدفع. لم يُخصم أي مبلغ ولم يُسجَّل أي طلب.',
+  cardOrderPending: 'قد تستغرق دقيقة. لا تعيدي الدفع — يُسجَّل طلبكِ فور تأكيد البنك.',
+  cardOrderAttemptOpen: 'بدأ دفع لهذه السلة بالفعل. تحقّقي منه قبل الدفع بطريقة أخرى.',
+  cardOrderRefusedTitle: 'مبلغكِ في محفظتكِ',
+  cardOrderRefusedBody: (amount) => `${amount} في محفظتكِ. وصلت دفعتكِ، لكن الطلب لم يكتمل.`,
+  cardOrderRefusal: {
+    price_changed: 'تغيّر سعر في سلتكِ أثناء الدفع. راجعي السلة وادفعي من رصيدكِ.',
+    shop_not_enabled: 'توقف الصالون عن استقبال طلبات المتجر أثناء الدفع.',
+    invalid_products: 'أحد المنتجات في سلتكِ لم يعد متوفراً.',
+    unknown_address: 'حُذف عنوان التوصيل الذي اخترتِه.',
+    address_required: 'احتاج الطلب إلى عنوان توصيل.',
+    other: 'تعذّر علينا إتمام الطلب.',
+  },
+  cardOrderInWallet: 'في محفظتكِ',
+  cardOrderBackToCart: 'العودة إلى سلتكِ',
+
   langSwitch: 'EN', // design:1339
   restartNeeded: en.restartNeeded, // AR GAP
 };
@@ -1258,4 +1324,61 @@ export const AR_UNVERIFIED = [
   'orderAddressFixed',
   'orderCollectAt',
   'orderTruncated',
+  /**
+   * THE BELL — client ask W4. A surface the wallet design never drew, so every
+   * key the bell added is here EXCEPT the five lifted from
+   * `design/whatsapp-templates.md` (bellBookingTitle, bellBookingWith,
+   * bellBookingAt, bellNoShowTitle, bellNoShowBody) and `bellNoShowBare`, which
+   * is § 4's own sentence with the amount cut — the zero-deposit precedent
+   * above. Read first: `bellEmptyTitle` (it sets the register), `bellOffersOff`
+   * (the one sentence about consent), and `bellChargeVoided` (money came back).
+   */
+  'bellAria',
+  'bellBadge',
+  'bellUnread',
+  'bellEmptyTitle',
+  'bellEmptyBody',
+  'bellOffersOff',
+  'bellOffersOffCta',
+  'bellLoadFailed',
+  'bellMarkAll',
+  'bellTopupBonus',
+  'bellChargeCustom',
+  'bellChargeVoided',
+  'bellShopLine',
+  'bellPickup',
+  'bellDelivery',
+  'bellCancelledReturn',
+  'bellCardOrder',
+  'bellCardOrderBonus',
+  'bellUnknownTitle',
+  'bellUnknownBody',
+  /**
+   * THE SHOP PAID BY CARD — client ask W2. Nothing in the bundle draws a card
+   * checkout for an order. Read first: `cardOrderRefusedTitle` and
+   * `cardOrderRefusedBody` (the race screen — the sentence that has to tell her
+   * she did NOT lose her money) and the six `cardOrderRefusal` reasons.
+   */
+  'cartPayWith',
+  'cardOrderOpen',
+  'cardOrderCheck',
+  'cardOrderStartFailedTitle',
+  'cardOrderStartFailedBody',
+  'cardOrderGatewayFailedTitle',
+  'cardOrderGatewayFailedBody',
+  'cardOrderOpenPage',
+  'cardOrderDeclined',
+  'cardOrderCancelled',
+  'cardOrderPending',
+  'cardOrderAttemptOpen',
+  'cardOrderRefusedTitle',
+  'cardOrderRefusedBody',
+  'cardOrderRefusal.price_changed',
+  'cardOrderRefusal.shop_not_enabled',
+  'cardOrderRefusal.invalid_products',
+  'cardOrderRefusal.unknown_address',
+  'cardOrderRefusal.address_required',
+  'cardOrderRefusal.other',
+  'cardOrderInWallet',
+  'cardOrderBackToCart',
 ] as const;

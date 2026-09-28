@@ -20,6 +20,7 @@
  */
 
 import type { PaymentMethod, RewardKey, TierName, Transaction } from '@avo/types';
+import type { CardRefusalReason } from '../domain/cardCheckout';
 
 export interface Copy {
   // header
@@ -1317,6 +1318,149 @@ export interface Copy {
    * this with a retry instead of picking one.
    */
   deleteCheckFailed: string;
+
+  // ─────────────────────────────────────────── the bell — client ask W4 ──
+  /**
+   * THE CUSTOMER BELL. `domain/bell.ts` composes every row from these, one
+   * kind at a time, off the STRUCTURED items `GET /members/me/notifications/feed`
+   * serves — lane A deliberately sends kind + integer fils + ISO instants +
+   * stored names, never text (`services/memberNotifications.ts` § DECISION 4).
+   *
+   * WHERE THE WORDS CAME FROM, because none of this is drawn in the wallet
+   * design:
+   *
+   *   · The row TITLES for top-up, service and shop order are the activity
+   *     row's own (`txKind`, `txMethod`, design:1577-1587), not new copy.
+   *   · Booking confirmation and the no-show return are LIFTED from
+   *     `design/whatsapp-templates.md` § 1 and § 4, which give EN and AR — the
+   *     one bilingual source for these two events in the bundle.
+   *   · Everything else is NEW, has no design source in either language, and
+   *     is flagged for the client's review; the Arabic is in `AR_UNVERIFIED`.
+   *
+   * MONEY NEVER COMES THROUGH A COUNT-BEARING KEY. An amount is either its own
+   * node (the row's figure column, off `formatMoney`) or the ONE argument of a
+   * key in `MONEY_ARG_KEYS` (digits.test.ts) — so no sentence here mixes an
+   * Eastern count with a Western amount.
+   *
+   * Dates and names arrive ALREADY RESOLVED for the reading language
+   * (`domain/bell.ts § dayLabel`). That is safe here where it is not for
+   * `staleBanner`, because every key below is translated in both languages: no
+   * key here holds English inside an Arabic layout, so a date formatted for
+   * Arabic can never land inside an English sentence.
+   */
+  /** The bell control's spoken name. The count is unread, and a count. */
+  bellAria(unread: number): string;
+  /** The badge on the bell. A count — Eastern in Arabic — capped at 99+. */
+  bellBadge(unread: number): string;
+  /** Spoken on an unread row's dot. */
+  bellUnread: string;
+  /** EMPTY IS A GOOD OUTCOME, and the words say so — not "no data". */
+  bellEmptyTitle: string;
+  bellEmptyBody: string;
+  /**
+   * `visibleKinds` lacks `campaign`: her offers consent is off, so salon offers
+   * are filtered out of the bell. Said, and pointed at the EXISTING switch —
+   * the settings are not rebuilt here.
+   */
+  bellOffersOff: string;
+  bellOffersOffCta: string;
+  /** A failed read — including a body that failed the contract. Never empty. */
+  bellLoadFailed: string;
+  /** The ONE control that sends `{ all: true }`. */
+  bellMarkAll: string;
+  /** A top-up row's second line, when a bonus landed. One money argument. */
+  bellTopupBonus(bonus: string): string;
+  /** A charge whose price was typed at the salon, with no catalogue lines. */
+  bellChargeCustom: string;
+  /**
+   * A charge the Home transaction list shows as VOIDED. The bell item itself
+   * carries no void flag (lane A's reported limit); `domain/bell.ts` reads the
+   * void off `GET /members/me/transactions` when that row is on the page.
+   */
+  bellChargeVoided: string;
+  /** "Repair mask × 2" — the qty is a count. Qty 1 is the name alone. */
+  bellShopLine(name: string, qty: number): string;
+  bellPickup: string;
+  bellDelivery: string;
+  /** whatsapp-templates.md § 1 — "Your booking at {{1}} is confirmed." */
+  bellBookingTitle(salon: string): string;
+  /** whatsapp-templates.md § 1 — "{{2}} with {{3}}". */
+  bellBookingWith(service: string, artist: string): string;
+  /** whatsapp-templates.md § 1 — "{{4}} at {{5}}". Both already formatted. */
+  bellBookingAt(day: string, time: string): string;
+  /** whatsapp-templates.md § 4 — "{{1}} — your deposit is back." */
+  bellNoShowTitle(salon: string): string;
+  /** whatsapp-templates.md § 4 — "We missed you at {{2}} on {{3}}." */
+  bellNoShowBody(service: string, day: string): string;
+  /**
+   * whatsapp-templates.md § 4's second sentence with the amount cut — the
+   * amount is the row's own figure. Used when the booking join found nothing.
+   */
+  bellNoShowBare: string;
+  /** A deposit returned because SHE cancelled. No template covers it. */
+  bellCancelledReturn: string;
+  /**
+   * THE TWO-RECEIPT PAIR. A shop order paid by card writes a `topup` receipt
+   * and a `shop` receipt in one transaction; `domain/bell.ts § pairCardOrders`
+   * folds them into ONE row, and this is the line that says how she paid.
+   */
+  bellCardOrder(method: string): string;
+  /** The pair's bonus line — a card-paid order is priced as a top-up. */
+  bellCardOrderBonus(bonus: string): string;
+  /** A kind this build does not know. Drawn neutral, never crashed on. */
+  bellUnknownTitle: string;
+  bellUnknownBody: string;
+
+  // ───────────────────────────── the shop, paid by card — client ask W2 ──
+  /**
+   * PAYING FOR A BASKET BY KNET, CARD OR APPLE PAY IN ONE STEP. The method
+   * list reuses the top-up's own labels (`methodLabel`, `payMethod`,
+   * `txMethod.wallet`) and the redirect reuses `payRedirectTitle`/`Sub` and
+   * `payDontClose` — design:1371-1372 — so nothing about leaving for the bank
+   * reads differently from a top-up. Everything below is NEW, has no design
+   * source in either language, and is flagged for review (AR_UNVERIFIED).
+   *
+   * NO FEE LINE ANYWHERE. A card fee is an open business question and the
+   * merchant bears it today; the customer projection carries no fee, so there
+   * is no key for one.
+   */
+  /** The card CTA — "Pay 8.500 KD with KNET". One money argument, one method word. */
+  cartPayWith(amount: string, method: string): string;
+  /**
+   * A card attempt for this basket has not resolved, so BOTH pay buttons are
+   * held until she checks it. A second payment beside a pending one is the
+   * double charge this lock exists to prevent.
+   */
+  cardOrderOpen: string;
+  cardOrderCheck: string;
+  /** The POST failed or its answer was lost. Nothing moves until the bank page. */
+  cardOrderStartFailedTitle: string;
+  cardOrderStartFailedBody: string;
+  cardOrderGatewayFailedTitle: string;
+  cardOrderGatewayFailedBody: string;
+  cardOrderOpenPage: string;
+  /** not_paid. "…and no order was placed" is what a top-up's words cannot say. */
+  cardOrderDeclined: string;
+  cardOrderCancelled: string;
+  cardOrderPending: string;
+  /** 422 `idempotency_key_reused` on this path: an attempt is already open. */
+  cardOrderAttemptOpen: string;
+  /**
+   * THE RACE. Paid, credited, and the order refused. The TITLE says where her
+   * money is before anything else, because the one wrong reading of this
+   * screen is "I lost money" — and she did not.
+   */
+  cardOrderRefusedTitle: string;
+  /** One money argument: `intent.creditFils`, what landed in her wallet. */
+  cardOrderRefusedBody(amount: string): string;
+  /**
+   * WHY the order did not go through — rendered from `order.refusal.code`,
+   * NEVER from the server's English `message`. `other` covers `order_failed`
+   * and any code this build does not know.
+   */
+  cardOrderRefusal: Record<CardRefusalReason, string>;
+  cardOrderInWallet: string;
+  cardOrderBackToCart: string;
 
   // the language switch itself
   langSwitch: string;
