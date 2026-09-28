@@ -154,7 +154,14 @@ export const MERCHANT_EDITABLE = new Set([
    * forget, because the endpoint everyone thinks of is `PUT /salons/{id}/loyalty`.
    */
   'depositFils',
-  'noShowReturnMinutes',
+  /**
+   * `noShowReturnMinutes` WAS HERE, AND THE MERCHANT CAN NO LONGER WRITE IT.
+   * DECISIONS.md § the fourth list: "the merchant-configurable no-show return
+   * window goes away" — the salon's booking policy (`PUT /salons/{id}/booking-policy`)
+   * decides what a no-show does instead. A PATCH that names it is now refused
+   * `not_editable` rather than ignored, so a stale Settings control fails loudly.
+   * See `PLATFORM_ONLY_EDITABLE` for where it went and why it still exists.
+   */
   /**
    * Editable, and validated as an IANA id rather than stored verbatim.
    *
@@ -224,6 +231,19 @@ const PLATFORM_ONLY_EDITABLE = new Set([
   'stampTarget',
   'stampReward',
   'stampRewardAr',
+  /**
+   * THE OLD NO-SHOW WINDOW, MOVED HERE FROM `MERCHANT_EDITABLE` (migration 0066).
+   *
+   * The column survives because two things still read it: the stamped deadline
+   * of LEGACY bookings (made before 0066, or at a salon with no published policy),
+   * and `findApplicableHold`'s early-arrival grace at the counter — the second
+   * reading `parseNoShowReturnMinutes`'s header describes. Neither is the
+   * merchant's to tune any more, and a knob nobody can turn would freeze the
+   * counter grace for ever. So AVO keeps it, through the console door the loyalty
+   * fields already use, with the same 5–1440 bound. Existing values are kept as
+   * they are: nothing rewrites a salon's last setting.
+   */
+  'noShowReturnMinutes',
 ]);
 
 /**

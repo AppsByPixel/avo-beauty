@@ -92,17 +92,32 @@ describe('the two allow-lists', () => {
    * set — the regression `PUT /salons/{id}/loyalty`'s own gate cannot detect,
    * because that second door is a different route.
    */
-  it('differ by city, ownerPhone, and the five console-only loyalty fields', () => {
+  it('differ by city, ownerPhone, the five console-only loyalty fields and the old no-show window', () => {
     const extra = [...PLATFORM_EDITABLE].filter((k) => !MERCHANT_EDITABLE.has(k));
     expect(extra.sort()).toEqual([
       'city',
       'loyaltyMode',
+      'noShowReturnMinutes',
       'ownerPhone',
       'stampReward',
       'stampRewardAr',
       'stampTarget',
       'tiers',
     ]);
+  });
+
+  /**
+   * MIGRATION 0066. "The merchant-configurable no-show return window goes away":
+   * the salon's booking policy decides a no-show now. The merchant door refuses the
+   * field by name; the console keeps it, because the counter's early-arrival grace
+   * and every legacy booking's deadline still read the column.
+   */
+  it('refuses the no-show window on the merchant door and keeps it on the console door', () => {
+    expect(MERCHANT_EDITABLE.has('noShowReturnMinutes')).toBe(false);
+    expect(refusal(() => buildSalonPatch({ noShowReturnMinutes: 60 }, BEFORE, MERCHANT_EDITABLE)).code).toBe(
+      'not_editable',
+    );
+    expect(buildSalonPatch({ noShowReturnMinutes: 60 }, BEFORE, PLATFORM_EDITABLE).patch.noShowReturnMinutes).toBe(60);
   });
 
   it('keeps the loyalty fields OUT of the merchant set and IN the console set', () => {
@@ -258,7 +273,7 @@ describe('buildSalonPatch, merchant set', () => {
     // loyaltyRules.ts § the narrower rule — a salon holding a pre-rules ladder
     // must not be locked out of editing everything else.
     const legacy: SalonRow = { ...BEFORE, tiers: [{ name: 'bronze', minVisits: 0, bonusPercent: 0 }] };
-    expect(() => buildSalonPatch({ noShowReturnMinutes: 45 }, legacy, MERCHANT_EDITABLE)).not.toThrow();
+    expect(() => buildSalonPatch({ depositFils: 4000 }, legacy, MERCHANT_EDITABLE)).not.toThrow();
   });
 });
 
@@ -282,7 +297,8 @@ describe('buildSalonPatch, merchant set', () => {
  * the real routes and through the CHECK.
  */
 describe('parseNoShowReturnMinutes, through buildSalonPatch', () => {
-  const window = (n: unknown) => () => buildSalonPatch({ noShowReturnMinutes: n }, BEFORE, MERCHANT_EDITABLE);
+  // The console door since 0066 — the merchant door refuses the field outright.
+  const window = (n: unknown) => () => buildSalonPatch({ noShowReturnMinutes: n }, BEFORE, PLATFORM_EDITABLE);
 
   it('THE REPORTED GAP — one year is refused', () => {
     expect(refusal(window(525_600)).code).toBe('invalid_no_show_window');

@@ -139,53 +139,23 @@ suite('the no-show return window is bounded at every door onto the column', () =
 
   // ------------------------------------------------- the merchant's own door --
 
-  describe('PATCH /salons/{id} — the Settings screen', () => {
-    it('THE REPORTED GAP — a year is refused, and nothing was stored', async () => {
+  describe('PATCH /salons/{id} — the Settings screen no longer writes it (migration 0066)', () => {
+    /**
+     * DECISIONS.md § the fourth list: "the merchant-configurable no-show return
+     * window goes away" — the salon's booking policy decides a no-show now. So the
+     * merchant door refuses the field by NAME, in range or not, and stores nothing.
+     * A refusal rather than a silent drop: a stale Settings control that still
+     * sends it must fail where somebody can see it.
+     */
+    it('refuses the field outright — in range, out of range — and nothing is stored', async () => {
       const before = await stored();
-
-      const res = await merchantPatch(525_600);
-      expect(res.statusCode, res.body).toBe(400);
-      expect((res.json() as { error: string }).error).toBe('invalid_no_show_window');
-
-      /**
-       * THE HALF THAT MATTERS. A refusal that had already written the column would
-       * be worse than no refusal: the merchant is told no and the till's grace is
-       * a year wide anyway. Read off the ROW, not off the reply.
-       */
-      expect(await stored(), 'a refused window must not have been stored').toBe(before);
-    });
-
-    it('refuses one minute past the ceiling and accepts the ceiling itself', async () => {
-      const over = await merchantPatch(CEILING + 1);
-      expect(over.statusCode, over.body).toBe(400);
-      expect((over.json() as { error: string }).error).toBe('invalid_no_show_window');
-
-      /**
-       * BOTH SIDES OF THE EDGE. A bound nobody tests AT the edge is a bound the
-       * next person loosens by one on a hunch — `artistDayVoid`'s 300/301 cap is
-       * the same assertion one field over.
-       */
-      const at = await merchantPatch(CEILING);
-      expect(at.statusCode, at.body).toBe(200);
-      expect(await stored()).toBe(CEILING);
-    });
-
-    it('refuses one minute below the floor and accepts the floor itself', async () => {
-      const under = await merchantPatch(FLOOR - 1);
-      expect(under.statusCode, under.body).toBe(400);
-      expect((under.json() as { error: string }).error).toBe('invalid_no_show_window');
-
-      const at = await merchantPatch(FLOOR);
-      expect(at.statusCode, at.body).toBe(200);
-      expect(await stored()).toBe(FLOOR);
-    });
-
-    it('still refuses zero, a negative and a fraction — the old floor did not move', async () => {
-      for (const bad of [0, -60, 30.5]) {
-        const res = await merchantPatch(bad);
-        expect(res.statusCode, `${bad}: ${res.body}`).toBe(400);
-        expect((res.json() as { error: string }).error).toBe('invalid_no_show_window');
+      for (const minutes of [60, CEILING, FLOOR, 525_600]) {
+        const res = await merchantPatch(minutes);
+        expect(res.statusCode, `${minutes}: ${res.body}`).toBe(400);
+        expect((res.json() as { error: string }).error).toBe('not_editable');
       }
+      // Read off the ROW, not off the reply.
+      expect(await stored(), 'the merchant door must not have written the window').toBe(before);
     });
   });
 
@@ -212,6 +182,36 @@ suite('the no-show return window is bounded at every door onto the column', () =
       const res = await consolePatch(90);
       expect(res.statusCode, res.body).toBe(200);
       expect(await stored()).toBe(90);
+    });
+
+    /**
+     * THE EDGES, moved here from the merchant door with the field. A bound nobody
+     * tests AT the edge is a bound the next person loosens by one on a hunch.
+     */
+    it('refuses one minute past the ceiling and accepts the ceiling itself', async () => {
+      const over = await consolePatch(CEILING + 1);
+      expect(over.statusCode, over.body).toBe(400);
+      expect((over.json() as { error: string }).error).toBe('invalid_no_show_window');
+      const at = await consolePatch(CEILING);
+      expect(at.statusCode, at.body).toBe(200);
+      expect(await stored()).toBe(CEILING);
+    });
+
+    it('refuses one minute below the floor and accepts the floor itself', async () => {
+      const under = await consolePatch(FLOOR - 1);
+      expect(under.statusCode, under.body).toBe(400);
+      expect((under.json() as { error: string }).error).toBe('invalid_no_show_window');
+      const at = await consolePatch(FLOOR);
+      expect(at.statusCode, at.body).toBe(200);
+      expect(await stored()).toBe(FLOOR);
+    });
+
+    it('still refuses zero, a negative and a fraction', async () => {
+      for (const bad of [0, -60, 30.5]) {
+        const res = await consolePatch(bad);
+        expect(res.statusCode, `${bad}: ${res.body}`).toBe(400);
+        expect((res.json() as { error: string }).error).toBe('invalid_no_show_window');
+      }
     });
   });
 
