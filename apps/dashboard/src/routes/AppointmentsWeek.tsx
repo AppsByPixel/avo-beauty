@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Card, EmptyState, ErrorState, Skeleton } from '@avo/ui';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { parseFils } from '@avo/types';
+import { Card, EmptyState, ErrorState, Money, Skeleton } from '@avo/ui';
 import { useSalonBookingStream, type MerchantBooking } from '../api/bookings.js';
 import { formatWindowDay } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
+import { whenLabel } from './appointmentWhen.js';
 import { SectionError } from './sectionState.js';
 import {
   STATUS_PILL,
@@ -48,9 +50,13 @@ import {
  * 12px destructive link in a chip that is sometimes fifteen minutes tall is a
  * worse one.
  *
- * SO THIS VIEW IS READ-ONLY, deliberately, and a merchant who needs to mark
- * switches to List — which every state below that cannot draw also tells her,
- * because the list has no preconditions this view has.
+ * SO THE CHIP HOLDS NO CONTROL — BUT IT OPENS ONE (2026-09-29). Aftab: "The
+ * calendar view things should be clickable". The grid body is still no place
+ * for a destructive link, so a chip is a `<button>` that opens `BookingPopover`,
+ * and the popover renders the LIST'S OWN `BookingActions` through the host's
+ * `actions` prop — the same predicates, the same confirmations, the same no-show
+ * key. Every state below that cannot draw still names the List as the way
+ * through, because the list has no preconditions this view has.
  *
  * ===========================================================================
  * IT OWNS ITS OWN READ, WHICH IS WHY IT OWNS ITS OWN FOUR STATES
@@ -64,9 +70,58 @@ import {
  * a booking is in — `appointmentsWeekRules.ts § makeZoneClock` argues why that cannot
  * be the `Asia/Kuwait` pin the Overview uses for display.
  */
-export function AppointmentsWeek({ onShowList }: { onShowList: () => void }) {
+/**
+ * THE BOOKING'S CONTROLS, HANDED IN BY THE HOST. `Appointments.tsx` owns every
+ * write, the one-open-step rule and the no-show's armed key; the grid only says
+ * WHICH booking was opened. Optional so the grid still renders read-only where
+ * no host provides them (the render specs mount it bare).
+ */
+export interface WeekActions {
+  render: (booking: MerchantBooking) => ReactNode;
+  /** Called as the popover closes, so a half-open step does not outlive it. */
+  reset: () => void;
+}
+
+export function AppointmentsWeek({
+  onShowList,
+  actions,
+}: {
+  onShowList: () => void;
+  actions?: WeekActions;
+}) {
   const salon = useSalon();
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffsetRaw] = useState(0);
+
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * THE OPEN BOOKING. Aftab, 2026-09-29: "The calendar view things should be
+   * clickable".
+   * ═════════════════════════════════════════════════════════════════════════
+   * The id, not the booking: the row is looked up in the stream on every render,
+   * so a status the server changed after a write is what the popover shows,
+   * rather than the copy that was clicked.
+   *
+   * THE TRIGGER IS REMEMBERED so focus goes back to the chip that opened it —
+   * interaction-spec.md §2 — and a keyboard user is not dropped at the top of
+   * the page after Escape.
+   */
+  const [selected, setSelected] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
+
+  const close = useCallback(() => {
+    setSelected(null);
+    actions?.reset();
+    trigger.current?.focus();
+  }, [actions]);
+
+  const setOffset = (next: number) => {
+    // A popover about a booking on the week she just left is about nothing on screen.
+    if (selected !== null) {
+      setSelected(null);
+      actions?.reset();
+    }
+    setOffsetRaw(next);
+  };
 
   /**
    * THE BUDGET IS STATE BECAUSE THE MERCHANT CAN RAISE IT. `WALK_BUDGET` pages
@@ -198,6 +253,8 @@ export function AppointmentsWeek({ onShowList }: { onShowList: () => void }) {
   const drawn = columns.reduce((n, column) => n + column.items.length, 0);
   const today = (clock as ZoneClock).at(new Date())?.date ?? null;
 
+  const open = selected === null ? null : (rows.find((b) => b.id === selected) ?? null);
+
   return (
     <WeekShell window={window} offset={offset} onOffset={setOffset}>
       {unplaceable > 0 ? <UnplaceableNotice count={unplaceable} onShowList={onShowList} /> : null}
@@ -211,9 +268,124 @@ export function AppointmentsWeek({ onShowList }: { onShowList: () => void }) {
           count={drawn}
           from={window.from}
           to={window.to}
+          selectedId={selected}
+          onOpen={
+            actions
+              ? (booking, button) => {
+                  if (selected !== null && selected !== booking.id) actions.reset();
+                  trigger.current = button;
+                  setSelected(booking.id);
+                }
+              : undefined
+          }
         />
       )}
+      {open !== null && actions ? (
+        <BookingPopover booking={open} timezone={zone} onClose={close}>
+          {actions.render(open)}
+        </BookingPopover>
+      ) : null}
     </WeekShell>
+  );
+}
+
+/* ============================================================== the popover == */
+
+/**
+ * ONE BOOKING, OPENED FROM ITS CHIP: what it is, and what can be done about it.
+ *
+ * THE CONTROLS ARE THE LIST'S, NOT A COPY. `children` is `BookingActions` from
+ * `Appointments.tsx`, built by the same `actionsFor` the list's rows use — the
+ * same permission predicates (#7), the same one-open-step rule, the same in-row
+ * confirmations and the same no-show key discipline. This component adds only a
+ * frame and the facts a chip is too small to carry.
+ *
+ * A POPOVER, NOT A MODAL — `NotificationBell.tsx`' ruling, for its reason. The
+ * grid behind it stays live, nothing is inert, and `aria-modal` would be a
+ * promise to a screen reader that is simply false. Focus MOVES IN on open and
+ * RETURNS to the chip on close; Escape closes; a pointer outside closes. There is
+ * no focus trap because there is nothing to trap focus away from.
+ *
+ * EXPORTED for the render test.
+ */
+export function BookingPopover({
+  booking,
+  timezone,
+  onClose,
+  children,
+}: {
+  booking: MerchantBooking;
+  timezone: string | null;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const pop = useRef<HTMLDivElement>(null);
+  const titleId = `apweek-pop-${booking.id}`;
+
+  useEffect(() => {
+    pop.current?.focus();
+  }, [booking.id]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    function onPointerDown(event: PointerEvent) {
+      const root = pop.current;
+      if (!(event.target instanceof Element) || root === null) return;
+      if (root.contains(event.target)) return;
+      // Another chip is a different booking, not an outside click: it opens that one.
+      if (event.target.closest('.apweek__chip-btn')) return;
+      onClose();
+    }
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={pop}
+      className="apweek__pop"
+      role="dialog"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+    >
+      <div className="apweek__pop-head">
+        <h3 className="apweek__pop-title" id={titleId}>
+          {booking.memberName}
+        </h3>
+        <button type="button" className="apweek__pop-close" aria-label="Close" onClick={onClose}>
+          <span aria-hidden="true">✕</span>
+        </button>
+      </div>
+      <dl className="apweek__pop-facts">
+        <div>
+          <dt>Service</dt>
+          <dd>{booking.serviceName}</dd>
+        </div>
+        <div>
+          <dt>Artist</dt>
+          <dd>{booking.artistName}</dd>
+        </div>
+        <div>
+          <dt>When</dt>
+          <dd>
+            <time dateTime={booking.startsAt}>{whenLabel(booking.startsAt, timezone)}</time>
+          </dd>
+        </div>
+        <div>
+          <dt>Deposit</dt>
+          <dd>
+            <Money amount={parseFils(booking.depositFils)} withUnit />
+          </dd>
+        </div>
+      </dl>
+      <div className="apweek__pop-acts">{children}</div>
+    </div>
   );
 }
 
@@ -337,6 +509,8 @@ export function WeekGrid({
   count,
   from,
   to,
+  selectedId = null,
+  onOpen,
 }: {
   columns: DayColumn[];
   hours: Parameters<typeof rulerRange>[1];
@@ -344,6 +518,10 @@ export function WeekGrid({
   count: number;
   from: string;
   to: string;
+  /** The booking whose popover is open, so its chip can say `aria-expanded`. */
+  selectedId?: string | null;
+  /** Absent: the grid is read-only, as it was before chips opened anything. */
+  onOpen?: ((booking: MerchantBooking, trigger: HTMLButtonElement) => void) | undefined;
 }) {
   const range = rulerRange(columns, hours);
   const marks = rulerHours(range);
@@ -381,7 +559,13 @@ export function WeekGrid({
             </h3>
             <ol className="apweek__slots">
               {column.items.map((item) => (
-                <Chip key={item.booking.id} item={item} range={range} />
+                <Chip
+                  key={item.booking.id}
+                  item={item}
+                  range={range}
+                  expanded={selectedId === item.booking.id}
+                  onOpen={onOpen}
+                />
               ))}
             </ol>
           </section>
@@ -407,24 +591,82 @@ export function WeekGrid({
  * `appointmentsWeekRules.ts § ChipShape` for why a released slot drawn as a booked
  * one is the same class of lie as a missing chip.
  */
-export function Chip({ item, range }: { item: PlacedBooking; range: { startMin: number; endMin: number } }) {
+export function Chip({
+  item,
+  range,
+  expanded = false,
+  onOpen,
+}: {
+  item: PlacedBooking;
+  range: { startMin: number; endMin: number };
+  expanded?: boolean;
+  onOpen?: ((booking: MerchantBooking, trigger: HTMLButtonElement) => void) | undefined;
+}) {
   const box = chipBox(item, range);
   const shape = chipShape(item.booking.status);
   const density = chipDensity(item.startMin, item.endMin);
   const b = item.booking;
+  const label = chipLabel(item);
+  const style = {
+    top: `${box.top}%`,
+    height: `${box.height}%`,
+    left: `${box.left}%`,
+    width: `${box.width}%`,
+  };
+  const content = <ChipContent booking={b} item={item} shape={shape} />;
+
+  /*
+   * CLICKABLE: A REAL `<button>` FILLING THE CHIP, and the accessible name moves
+   * onto it. The `<li>` keeps the list semantics and the position; the button is
+   * what a keyboard reaches with Tab and what a screen reader announces as
+   * "button, 10:00 to 11:00, Dana …, collapsed". `aria-haspopup="dialog"` because
+   * that is what it opens.
+   */
+  if (onOpen) {
+    return (
+      <li
+        className={`apweek__chip apweek__chip--${shape} apweek__chip--${density} apweek__chip--button`}
+        style={style}
+      >
+        <button
+          type="button"
+          className="apweek__chip-btn"
+          aria-label={label}
+          title={label}
+          aria-haspopup="dialog"
+          aria-expanded={expanded}
+          onClick={(event) => onOpen(b, event.currentTarget)}
+        >
+          {content}
+        </button>
+      </li>
+    );
+  }
 
   return (
     <li
       className={`apweek__chip apweek__chip--${shape} apweek__chip--${density}`}
-      style={{
-        top: `${box.top}%`,
-        height: `${box.height}%`,
-        left: `${box.left}%`,
-        width: `${box.width}%`,
-      }}
-      aria-label={chipLabel(item)}
-      title={chipLabel(item)}
+      style={style}
+      aria-label={label}
+      title={label}
     >
+      {content}
+    </li>
+  );
+}
+
+/** What a chip draws, shared by the read-only and the clickable chip. */
+function ChipContent({
+  booking: b,
+  item,
+  shape,
+}: {
+  booking: MerchantBooking;
+  item: PlacedBooking;
+  shape: ReturnType<typeof chipShape>;
+}) {
+  return (
+    <>
       {/*
         THE FIRST LINE IS THE ONE NO CHIP IS EVER TOO SHORT FOR, which is why the
         STATUS is on it rather than under the service. `chipDensity` drops whole
@@ -464,7 +706,7 @@ export function Chip({ item, range }: { item: PlacedBooking; range: { startMin: 
           Not on their calendar
         </span>
       ) : null}
-    </li>
+    </>
   );
 }
 

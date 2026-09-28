@@ -2073,6 +2073,21 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/* Settings → Business hours: the scope selector and the Edit button (2026-09-29). */
+.settings__hours-scope {
+  max-width: 260px;
+  margin-bottom: 10px;
+}
+
+.settings__note.settings__hours-source {
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+
+.settings__hours-actions {
+  margin-top: 12px;
+}
+
 .settings__note {
   margin-top: 10px;
   font-size: 12px;
@@ -2946,63 +2961,13 @@ a:hover {
 }
 
 /*
- * "Mark no-show" — `AVO Merchant Dashboard.dc.html:184`, verbatim:
- * `font-size:12px; color:rgba(28,27,25,0.45)`. That rgba IS
- * `--avo-text-muted-soft`, which is why this rule names a token rather than
- * re-typing the hex — the two are the same value and only one of them survives
- * a palette change.
- *
- * THE ELEMENT IS A BUTTON AND HAS TO BE UNDRESSED TO LOOK LIKE THE DESIGN'S
- * LINK. `Appointments.tsx § the design's link` argues why it is a button;
- * everything here exists to make that choice invisible. `font-family: inherit`
- * and not a size alone: a UA button defaults to the SYSTEM font at 13.333px, so
- * without it the row would carry one control in a different typeface from every
- * word around it.
- *
- * LONGHAND AND NOT THE `font` SHORTHAND, for two reasons and both are real. The
- * shorthand also resets `font-variant`, `font-stretch` and `line-height`, none
- * of which this rule wants to decide — and it is then immediately overridden by
- * the `font-size` below it, which is the shorthand-then-longhand pattern that
- * reads as a mistake even when it is not. Measured while pinning it: jsdom's
- * cssstyle drops the longhand that follows the shorthand entirely and computes
- * 16px, so the guarantee was also untestable in the form it was first written.
- *
- * THE UNDERLINE IS ON HOVER AND FOCUS ONLY. The design gives a bare anchor,
- * which a browser underlines permanently — an underline in every held row turns
- * the column into a rule. The affordance is the position and the hover, and the
- * focus ring is the shell's.
- *
- * AND THE HOVER DARKENS IT. At rest this is the design's 0.45, which composites
- * over the card's `--avo-white` to rgb(153,152,152) and measures 2.87:1 — it does
- * not carry the 4.5:1 the brand rules demand of text, and this is text on a
- * control rather than beside one. The resting colour is still the design's and is
- * left alone: `STATUS_PILL` (routes/appointmentsWeekRules.ts, where it moved when
- * the week grid arrived) records the only colour deviation this screen has taken
- * and why it was within a family, and moving a 0.45 to the 0.65 that would clear
- * the bar is a visible change to a value the design states
- * outright. What is added instead is a hover/focus state on
- * `--avo-text-muted-strong` — 6.34:1 — so the control is legible the moment it is
- * being used. Reported to trunk: the design's own value for an INTERACTIVE
- * element is under the threshold, and that is a decision above a lane.
+ * `.appts__mark` — THE DESIGN'S QUIET 12px LINK — IS GONE (2026-09-29).
+ * "Mark no-show" (`AVO Merchant Dashboard.dc.html:184`, `--avo-text-muted-soft`)
+ * and the four controls beside it wore it; it measured 2.87:1 at rest. Aftab
+ * asked for the status actions to be "more visible like icons", so all five are
+ * `@avo/ui`'s `IconButton` now (`.avo-iconbtn` in ui.css), with cancel and
+ * no-show in its danger tone. A deliberate, client-requested restyle.
  */
-.appts__mark {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--avo-text-muted-soft);
-  text-decoration: none;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.appts__mark:hover,
-.appts__mark:focus-visible {
-  color: var(--avo-text-muted-strong);
-  text-decoration: underline;
-}
 
 /*
  * THE ARMED STEP, IN THE ROW'S OWN SLOT. It replaces the link rather than
@@ -3127,23 +3092,68 @@ a:hover {
   flex-wrap: wrap;
 }
 
+/* ------------------------------------------ appointments · the date filter -- */
+
+/*
+ * `Reports.tsx`' period control in shape, and `.reports__dates` / `.reports__hint`
+ * in value: the same 12px gap, the same 158px field floor, the same 11.5px muted
+ * sentence. Restated under this screen's prefix rather than borrowed across
+ * screens, so a change to Reports' layout cannot move this one.
+ */
+.appts__filter {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.appts__dates {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.appts__dates .avo-field {
+  min-width: 158px;
+}
+
+.appts__hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  /* `muted-label`, not `muted`: 0.5 measures 3.28:1 on the page surface. */
+  color: var(--avo-text-muted-label);
+  max-width: 62ch;
+}
+
+.appts__hint--error {
+  color: var(--avo-danger-text);
+}
+
+/* More matched than one page holds. `ShopOrders`' truncation notice, in this card. */
+.appts__capped {
+  margin: 0;
+  padding: 10px 16px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--avo-warn-text);
+  background: var(--avo-warn-bg);
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
 /* --------------------------------------- appointments · the row's controls -- */
 
 /*
- * The four controls sit in the status cell beside the no-show link and wear its
- * exact register — `.appts__mark` is the class, unchanged, so there is one
- * definition of what a control in this cell looks like. This only lays them out.
- *
- * `row-gap` SMALLER THAN `column-gap`: wrapped links read as a list when the
- * vertical rhythm is tighter than the horizontal, and this cell wraps at narrow
- * on every row that offers all four.
+ * The four controls sit in the status cell as `IconButton`s — one definition of
+ * what a control in this cell looks like, in `@avo/ui`. This only lays them out,
+ * wrapping at narrow on every row that offers all four.
  */
 .appts__acts {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  column-gap: 12px;
-  row-gap: 3px;
+  gap: 6px;
 }
 
 /* The in-row step: the same slot the links were in, same 12px register. */
@@ -3382,6 +3392,8 @@ a:hover {
   margin-top: 14px;
   padding: 0;
   overflow: hidden;
+  /* The booking popover is positioned against the card. */
+  position: relative;
 }
 
 .apweek__head {
@@ -3746,6 +3758,131 @@ a:hover {
 
 .apweek__chip-sync {
   color: var(--avo-danger-text);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * THE CLICKABLE CHIP. The `<li>` keeps its box and its status shape; a real
+ * `<button>` fills it and carries the content and the accessible name. The
+ * padding moves onto the button so the whole chip is the hit area.
+ * ----------------------------------------------------------------------------
+ */
+.apweek__chip--button {
+  padding: 0;
+}
+
+.apweek__chip-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  box-sizing: border-box;
+  padding: 3px 5px;
+  margin: 0;
+  background: none;
+  border: none;
+  border-radius: inherit;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.apweek__chip-btn:hover {
+  background: color-mix(in srgb, var(--avo-ink) 5%, transparent);
+}
+
+/*
+ * THE TOKEN RING, DRAWN INSIDE. The chip clips its overflow (a fifteen-minute
+ * box cannot grow), so the shell's outside ring would be cut off by the `<li>`.
+ * Same colour and width; only the offset is turned inward.
+ */
+.apweek__chip-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+.apweek__chip-btn[aria-expanded='true'] {
+  box-shadow: inset 0 0 0 2px var(--avo-brand-deep);
+}
+
+/*
+ * ----------------------------------------------------------------------------
+ * THE BOOKING POPOVER. `.dash-bell__pop`'s card: white, the 10% ink hairline,
+ * the pop shadow, the card radius. Pinned to the card's top right, under the
+ * week head, and full-width minus the gutter on a phone.
+ * ----------------------------------------------------------------------------
+ */
+.apweek__pop {
+  position: absolute;
+  top: 64px;
+  right: 16px;
+  width: min(380px, calc(100% - 32px));
+  max-height: calc(100% - 80px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  background: var(--avo-white);
+  border: 1px solid var(--avo-ui-ink-10);
+  border-radius: var(--avo-radius-card);
+  box-shadow: var(--avo-ui-shadow-pop);
+  z-index: 30;
+}
+
+.apweek__pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apweek__pop-title {
+  margin: 0;
+  font-family: var(--avo-font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--avo-ink);
+}
+
+.apweek__pop-close {
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--avo-text-muted-strong);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.apweek__pop-close:hover {
+  color: var(--avo-ink);
+}
+
+.apweek__pop-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 12px 0 0;
+}
+
+.apweek__pop-facts dt {
+  font-size: 11px;
+  color: var(--avo-text-muted-label);
+}
+
+.apweek__pop-facts dd {
+  margin: 1px 0 0;
+  font-size: 13px;
+  color: var(--avo-ink);
+}
+
+.apweek__pop-acts {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--avo-hairline-inner);
 }
 
 /* --------------------------------------------------- the week's own states -- */
@@ -9211,4 +9348,9 @@ a:hover {
 
 .cust-card__more {
   margin-top: 12px;
+  /* The fold and "Show more" side by side when both are offered. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }

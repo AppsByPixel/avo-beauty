@@ -115,10 +115,38 @@ export const BOOKING_STATUSES = [
 
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 
+/**
+ * `?from=` / `?to=` — SALON-LOCAL CALENDAR DAYS, BOTH INCLUSIVE, `YYYY-MM-DD`.
+ *
+ * `api/src/routes/salons.ts § ?from= AND ?to=` is the contract: the server
+ * resolves the two dates against the salon's own zone, half-open at the salon's
+ * midnight after `to`, as another `AND` beside `?status=` and the cursor. So the
+ * range is a question the SERVER answers — never a filter this client runs over
+ * a page it happened to receive, which is the defect `salons.ts § IT PAGES NOW`
+ * records: a capped page filtered in the browser silently drops rows, and the
+ * rows it drops first are the ones starting soonest.
+ *
+ * Both ends or neither — the server refuses one open end by name
+ * (`invalid_range`), so the type does not let a caller build one.
+ */
+export interface BookingRange {
+  from: string;
+  to: string;
+}
+
 export const bookingKeys = {
   all: ['bookings'] as const,
-  list: (salonId: string, status: BookingStatus | null) =>
-    [...bookingKeys.all, salonId, status ?? 'any'] as const,
+  /**
+   * NO RANGE IS THE KEY IT ALWAYS WAS, so the no-show and write specs that seed
+   * `bookingKeys.list(salonId, null)` still address the list they mean. A range
+   * appends ONE element; the prefix under `all` is unchanged, so every
+   * `invalidateQueries({ queryKey: bookingKeys.all })` after a write reaches a
+   * filtered list as well.
+   */
+  list: (salonId: string, status: BookingStatus | null, range: BookingRange | null = null) =>
+    range === null
+      ? ([...bookingKeys.all, salonId, status ?? 'any'] as const)
+      : ([...bookingKeys.all, salonId, status ?? 'any', `${range.from}_${range.to}`] as const),
   /**
    * The week grid's cursor walk. `'stream'` cannot collide with a `list` key:
    * the third element there is a `BookingStatus` or the literal `'any'`, and the
@@ -132,6 +160,21 @@ export const bookingKeys = {
 };
 
 /**
+ * The query string for one page of the list. No parameters is exactly the
+ * request this hook made before the range existed.
+ */
+export function bookingsSearch(status: BookingStatus | null, range: BookingRange | null): string {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (range) {
+    params.set('from', range.from);
+    params.set('to', range.to);
+  }
+  const search = params.toString();
+  return search === '' ? '' : `?${search}`;
+}
+
+/**
  * `enabled` is how the Booking-module-off empty avoids a pointless request.
  *
  * A salon with `modules.booking === false` has no bookings by construction, and
@@ -143,14 +186,15 @@ export const bookingKeys = {
 export function useSalonBookings(
   status: BookingStatus | null = null,
   enabled = true,
+  range: BookingRange | null = null,
 ): UseQueryResult<Paginated<MerchantBooking>> {
   const salonId = useSalonId();
   return useQuery({
-    queryKey: bookingKeys.list(salonId, status),
+    queryKey: bookingKeys.list(salonId, status, range),
     queryFn: ({ signal }) =>
       authedRequest<Paginated<MerchantBooking>>(
         'merchant',
-        `/salons/${salonId}/bookings${status ? `?status=${status}` : ''}`,
+        `/salons/${salonId}/bookings${bookingsSearch(status, range)}`,
         { signal },
       ),
     enabled,
