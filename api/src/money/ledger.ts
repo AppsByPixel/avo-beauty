@@ -392,6 +392,58 @@ export function depositReleasedPosting(refs: WalletRefs & { amountFils: Fils }):
 }
 
 /**
+ * A held deposit the salon KEEPS under its booking policy (migration 0066): a
+ * no-show under `keep`, or the unreturned share of a late cancellation.
+ *
+ * `deposit_held` DEBIT + `salon_revenue` CREDIT — the same two accounts
+ * `depositAppliedPosting` uses, and for the same reason: escrow the salon had
+ * not earned becomes money it has. Nothing else is a candidate. `member_wallet`
+ * would be refunding her the money she lost; `avo_commission` would be AVO
+ * taking a cancellation fee the salon set; `merchant_bonus_funding` is money
+ * the salon SPENDS, and this is money it receives.
+ *
+ * A SEPARATE BUILDER FROM `depositAppliedPosting` ALTHOUGH THE LEGS MATCH, which
+ * is the opposite of this module's consolidation rule and deliberately so. That
+ * rule is for one posting written twice. This is a different event that
+ * happens to post to the same pair: a visit settled a deposit there, a policy
+ * forfeited one here, and a correction to how a forfeit posts (say, a future
+ * `cancellation_fee` account) must not silently move every completed visit's
+ * revenue with it.
+ *
+ * NAMES NOBODY, for `depositAppliedPosting`'s reason (DECISIONS.md #64): neither
+ * leg moves her spendable balance, so the per-member ledger net of a forfeit is
+ * zero — which is the truth, because the money left her wallet when the deposit
+ * was HELD. Her `transaction.amount_fils` on the forfeit is 0 for the same
+ * reason (0066 § 3).
+ *
+ * With a partial cancellation this and `depositReleasedPosting` together debit
+ * `deposit_held` by exactly the deposit, so the escrow account nets to zero for
+ * the booking: hold C D, return D r, forfeit D k, r + k = D.
+ */
+export function depositForfeitedPosting(
+  refs: PostingRefs & { amountFils: Fils },
+): LedgerPosting[] {
+  return [
+    {
+      transactionId: refs.transactionId,
+      salonId: refs.salonId,
+      memberId: null,
+      account: 'deposit_held',
+      direction: 'debit',
+      amountFils: refs.amountFils,
+    },
+    {
+      transactionId: refs.transactionId,
+      salonId: refs.salonId,
+      memberId: null,
+      account: 'salon_revenue',
+      direction: 'credit',
+      amountFils: refs.amountFils,
+    },
+  ];
+}
+
+/**
  * A happy-hour credit into the wallet, funded by the merchant who advertised it.
  *
  * `merchant_bonus_funding`, the SAME account a tier bonus debits on a top-up, so

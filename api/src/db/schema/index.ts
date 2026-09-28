@@ -70,6 +70,7 @@ export * from './walletToken';
 export * from './receipt';
 export * from './topup';
 export * from './booking';
+export * from './bookingPolicy';
 export * from './notification';
 export * from './memberNotification';
 export * from './legal';

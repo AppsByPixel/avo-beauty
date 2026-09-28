@@ -36,6 +36,18 @@ export const transactionKind = pgEnum('transaction_kind', [
   'deposit_return',
   'shop',
   'adjustment',
+  /**
+   * Migration 0066. Held deposit money the salon KEEPS under its booking policy
+   * — a no-show under `keep`, or the unreturned share of a late cancellation.
+   * `amount_fils` is exactly 0: her wallet does not move (the money left it when
+   * the deposit was held). The magnitude is the `deposit_held` debit leg, as an
+   * applied deposit's is on a charge. money/ledger.ts § depositForfeitedPosting.
+   *
+   * NOT YET IN `TransactionKindSchema` (packages/types, trunk's). Until it is,
+   * no customer-facing transaction list serves a row of this kind: the feeds
+   * filter on `FEED_KINDS` and `GET /members/me/transactions` excludes it.
+   */
+  'deposit_forfeit',
 ]);
 
 export const transactionStatus = pgEnum('transaction_status', [
@@ -326,7 +338,8 @@ export const transaction = pgTable(
       sql`(${t.kind} IN ('topup', 'deposit_return') AND ${t.amountFils} > 0)
           OR (${t.kind} = 'charge' AND ${t.amountFils} <= 0)
           OR (${t.kind} IN ('deposit_hold', 'shop') AND ${t.amountFils} < 0)
-          OR (${t.kind} = 'adjustment' AND ${t.amountFils} <> 0)`,
+          OR (${t.kind} = 'adjustment' AND ${t.amountFils} <> 0)
+          OR (${t.kind}::text = 'deposit_forfeit' AND ${t.amountFils} = 0)`,
     ),
     // A bonus is a top-up concept. Nothing else has one, and it is never negative.
     check('transaction_bonus_non_negative', sql`${t.bonusFils} >= 0`),

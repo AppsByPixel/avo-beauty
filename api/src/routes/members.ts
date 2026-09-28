@@ -9,7 +9,7 @@
  */
 
 import { randomInt } from 'node:crypto';
-import { and, desc, eq, gte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { walletTokenUri } from '@avo/types';
@@ -27,7 +27,11 @@ import {
 import { revokeOtherSessions } from '../auth/sessions';
 import { badRequest, conflict, notFound, tooManyRequests, unauthorized } from '../http/errors';
 import { parseE164, parseEmail } from '../http/fields';
-import { serialiseTransactionForCustomer } from '../http/serialise';
+import {
+  asWireRow,
+  serialiseTransactionForCustomer,
+  WIRE_TRANSACTION_KINDS,
+} from '../http/serialise';
 import { requireString } from '../money/validate';
 import { writeAudit } from '../services/audit';
 import { marketingConsentOf, recordConsent } from '../services/consent';
@@ -1012,14 +1016,27 @@ export async function registerMemberRoutes(app: FastifyInstance): Promise<void> 
       .select({ tx: transaction, reversal })
       .from(transaction)
       .leftJoin(reversal, eq(reversal.reversesTransactionId, transaction.id))
-      .where(eq(transaction.memberId, p.id))
+      .where(
+        and(
+          eq(transaction.memberId, p.id),
+          /**
+           * THE KINDS HER CONTRACT KNOWS, and no other. A `deposit_forfeit`
+           * (migration 0066) names her, moves nothing in her wallet, and is not in
+           * `TransactionKindSchema` yet — served here it would fail the wallet's
+           * parse of the whole list, which is the Home-screen outage the header
+           * above describes. What she kept or lost on a booking is on the booking
+           * (`settlement`); this list is what moved in her wallet.
+           */
+          inArray(transaction.kind, [...WIRE_TRANSACTION_KINDS]),
+        ),
+      )
       .orderBy(desc(transaction.createdAt))
       .limit(50);
 
     return reply.send({
       // No `as TransactionRow` here either. The row satisfies the interface
       // structurally; the cast was only ever hiding whether it did.
-      items: rows.map(({ tx, reversal: v }) => serialiseTransactionForCustomer(tx, v)),
+      items: rows.map(({ tx, reversal: v }) => serialiseTransactionForCustomer(asWireRow(tx), v)),
       nextCursor: null,
     });
   });

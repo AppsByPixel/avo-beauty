@@ -57,7 +57,9 @@ import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
 import { env } from '../env';
-import { returnDeposit, type BookingRow } from './booking';
+import { fils, formatFils } from '@avo/types';
+import { settleDeposit, stampedPolicyOf, type BookingRow } from './booking';
+import { noShowOutcome } from './bookingPolicy';
 import { raiseMerchantNotification } from './notifications';
 
 export interface NoShowTickResult {
@@ -65,6 +67,9 @@ export interface NoShowTickResult {
   candidates: number;
   /** Deposits actually returned by THIS pass. */
   returned: number;
+  /** Deposits KEPT by the salon under a `keep` policy by THIS pass. Migration 0066. */
+  kept: number;
+  keptFils: number;
   /** Rows another pass had already taken. The proof that a re-run is a no-op. */
   alreadySettled: number;
   /** Rows that failed and will be retried next pass. */
@@ -123,6 +128,8 @@ export async function runNoShowReturnsOnce(
   const result: NoShowTickResult = {
     candidates: candidates.length,
     returned: 0,
+    kept: 0,
+    keptFils: 0,
     alreadySettled: 0,
     failed: 0,
     returnedFils: 0,
@@ -175,45 +182,76 @@ export async function runNoShowReturnsOnce(
         if (row.status !== 'deposit_held') return 'already' as const;
         if (row.noShowReturnDueAt > now) return 'already' as const;
 
-        await returnDeposit(tx, {
-          row: row as BookingRow,
+        /**
+         * THE STAMPED NO-SHOW RULE (migration 0066) — the same function
+         * `markNoShow` applies to the same stamp, so the slot-end settle and a
+         * manual mark cannot disagree about the outcome. `keep` forfeits the
+         * deposit to the salon; `return`, and every LEGACY booking, returns it.
+         */
+        const bookingRow = row as BookingRow;
+        const stamped = stampedPolicyOf(bookingRow);
+        const split = stamped
+          ? noShowOutcome(stamped.noShow, fils(row.depositFils))
+          : { returnedFils: fils(row.depositFils), keptFils: fils(0) };
+        const keptIt = split.keptFils > 0;
+
+        await settleDeposit(tx, {
+          row: bookingRow,
           memberRow: m,
           reason: 'no_show',
+          ...split,
           // NO PRINCIPAL. services/audit.ts writes "System · Automatic" for a
           // null actor, which is the truth: attributing an automatic refund to
           // whoever happened to be signed in is a lie in an append-only log.
           principal: null,
           now,
-          note: 'No-show · deposit returned automatically',
+          note: keptIt
+            ? `No-show · deposit kept automatically under booking policy v${stamped?.version}`
+            : 'No-show · deposit returned automatically',
         });
 
         /**
          * The merchant is told, once per booking. She lost a slot and the money
-         * went back; that is a fact about her day, and the appointment list's
-         * "No-show · returned" pill is the other half of it.
+         * went somewhere; that is a fact about her day, and the appointment list's
+         * pill is the other half of it.
          *
-         * Inside the same transaction as the return, so a notification about a
-         * refund that rolled back cannot exist.
+         * Inside the same transaction as the settle, so a notification about money
+         * that rolled back cannot exist.
          */
+        // The display boundary, through the shared formatter (#1), not a hand-built toFixed.
+        const kdAmount = formatFils(fils(row.depositFils));
         await raiseMerchantNotification(tx, {
           salonId: row.salonId,
           kind: 'booking_no_show',
           severity: 'info',
-          title: 'A deposit was returned automatically',
-          body:
-            `${m.name} did not arrive for her appointment, and the ` +
-            `${(row.depositFils / 1000).toFixed(3)} KD deposit has been returned to her wallet.`,
+          title: keptIt
+            ? 'A deposit was kept under your booking policy'
+            : 'A deposit was returned automatically',
+          body: keptIt
+            ? `${m.name} did not arrive for her appointment, and the ${kdAmount} KD deposit ` +
+              'has been kept under your booking policy.'
+            : `${m.name} did not arrive for her appointment, and the ` +
+              `${kdAmount} KD deposit has been returned to her wallet.`,
           subjectType: 'booking',
           subjectId: row.id,
           deepLink: `/merchant/appointments/${row.id}`,
-          metadata: { bookingId: row.id, memberId: m.id, depositFils: row.depositFils },
+          metadata: {
+            bookingId: row.id,
+            memberId: m.id,
+            depositFils: row.depositFils,
+            returnedFils: split.returnedFils,
+            keptFils: split.keptFils,
+          },
         });
 
-        return { returnedFils: row.depositFils } as const;
+        return { returnedFils: split.returnedFils as number, keptFils: split.keptFils as number } as const;
       });
 
       if (outcome === 'already' || outcome === 'skipped') result.alreadySettled += 1;
-      else {
+      else if (outcome.keptFils > 0) {
+        result.kept += 1;
+        result.keptFils += outcome.keptFils;
+      } else {
         result.returned += 1;
         result.returnedFils += outcome.returnedFils;
       }

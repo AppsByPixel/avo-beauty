@@ -17,12 +17,47 @@
 
 import type { Transaction } from '@avo/types';
 
+/**
+ * THE KINDS `TransactionKindSchema` CARRIES — the only ones a wire transaction may
+ * name. The database has one more, `deposit_forfeit` (migration 0066), which the
+ * contract does not know yet; a client's `z.enum` parse would reject a row naming
+ * it and take the whole list down with it. So `TransactionRow.kind` stays this
+ * narrow set on purpose, the compiler refuses a raw row, and `asWireRow` is the one
+ * door: a list that could see a forfeit filters on this set in SQL first.
+ * Widen this in the same commit that trunk widens `TransactionKindSchema`.
+ */
+export const WIRE_TRANSACTION_KINDS = [
+  'topup',
+  'charge',
+  'deposit_hold',
+  'deposit_return',
+  'shop',
+  'adjustment',
+] as const;
+export type WireTransactionKind = (typeof WIRE_TRANSACTION_KINDS)[number];
+
+export function isWireTransactionKind(kind: string): kind is WireTransactionKind {
+  return (WIRE_TRANSACTION_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * Narrow a row read from `transaction` to one the wire may carry. Throws rather
+ * than serialising a kind the contract cannot parse: a 500 on one read is a
+ * smaller failure than a body that breaks every client's parse of the list.
+ */
+export function asWireRow<T extends { kind: string }>(row: T): T & { kind: WireTransactionKind } {
+  if (!isWireTransactionKind(row.kind)) {
+    throw new Error(`transaction kind ${row.kind} is not in TransactionKindSchema yet`);
+  }
+  return row as T & { kind: WireTransactionKind };
+}
+
 /** The columns a customer transaction row actually has. */
 export interface TransactionRow {
   id: string;
   memberId: string;
   branchId: string;
-  kind: 'topup' | 'charge' | 'deposit_hold' | 'deposit_return' | 'shop' | 'adjustment';
+  kind: WireTransactionKind;
   amountFils: number;
   bonusFils: number;
   feeFils: number;

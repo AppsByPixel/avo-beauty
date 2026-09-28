@@ -718,6 +718,8 @@ suite('POST /salons/{id}/bookings/{id}/no-show — the merchant marks it by hand
     });
 
     expect(out.refundedFils).toBe(5000);
+    // A legacy booking returns in full, so there is always a return to name.
+    if (out.transactionId === null) throw new Error('a legacy cancel wrote no deposit_return');
     expect(await staffIdOn(out.transactionId)).toBeNull();
     expect(await statusOf(bk)).toBe('cancelled');
   });

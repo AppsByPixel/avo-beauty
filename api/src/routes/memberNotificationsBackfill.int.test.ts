@@ -263,7 +263,18 @@ suite('0059 — the bell opens on her history, read', () => {
     const unread: Array<[string, number]> = [];
     for (const r of live) {
       const n = await bell.unreadCountFor(db, await bell.feedScope(db, String(r.id)));
-      if (n > 0) unread.push([String(r.id), n]);
+      /**
+       * MINUS HER BOOKING-POLICY NOTICES (migration 0066). They are a stream 0059
+       * never saw — the table did not exist at launch — so each one is by
+       * construction written AFTER launch, and unread is exactly right for it.
+       * Another int file publishing a policy for its own salon must not read as
+       * this backfill having missed something.
+       */
+      const [pn] = await exec(sql`
+        SELECT count(*)::int AS n FROM member_policy_notice
+         WHERE member_id = ${String(r.id)} AND read_at IS NULL`);
+      const atLaunch = n - Number(pn?.n ?? 0);
+      if (atLaunch > 0) unread.push([String(r.id), atLaunch]);
     }
     expect(live.length).toBeGreaterThan(5);
     expect(unread).toEqual([]);

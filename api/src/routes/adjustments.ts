@@ -99,7 +99,7 @@ import {
   readIdempotencyKey,
 } from '../services/idempotency';
 import { writeAudit } from '../services/audit';
-import { serialiseTransactionForMerchant } from '../http/serialise';
+import { asWireRow, serialiseTransactionForMerchant } from '../http/serialise';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -244,7 +244,7 @@ export async function registerAdjustmentRoutes(app: FastifyInstance): Promise<vo
 
         const [row] = await tx.select().from(transaction).where(eq(transaction.id, adjId)).limit(1);
         const result = {
-          transaction: serialiseTransactionForMerchant(row!, null),
+          transaction: serialiseTransactionForMerchant(asWireRow(row!), null),
           balanceAfterFils: balanceAfter,
         };
 
