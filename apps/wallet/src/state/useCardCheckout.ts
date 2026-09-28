@@ -59,6 +59,7 @@ import { gatewayOpenLog } from '../domain/gateway';
 import { toLoadFailure, type LoadFailure } from '../domain/loadFailure';
 import { KEY_REUSED, orderRefusal, type CheckoutRefusal } from '../domain/orderRefusal';
 import { basketSignature, cardOutcome, keyForBasket, type BasketKey } from '../domain/cardCheckout';
+import type { FulfilmentBody } from '../domain/fulfilment';
 
 export type CardMethod = Exclude<PaymentMethod, 'wallet'>;
 
@@ -96,8 +97,13 @@ export interface CardCheckoutController {
 export interface CardCheckoutOptions {
   /** The basket's `{ productId, qty }` lines — `useShop.orderLines`. */
   lines: CartLine[];
-  /** `fulfilmentBody(choice)`, read at call time and NOT part of the key. */
-  fulfilment: () => { fulfilment?: 'delivery'; addressId?: string };
+  /**
+   * `fulfilmentBody(choice, branches)` — `useShop.orderFulfilment` — read at
+   * call time and NOT part of the key. Carries `pickupBranchId` for a pickup at
+   * a multi-branch salon (W7); see `domain/cardCheckout` for why a branch
+   * changed under a held key is a 422 and not a new key.
+   */
+  fulfilment: () => FulfilmentBody;
   /** `placed` — the server's receipt, for the invoice. */
   onPlaced: (result: OrderResult | null) => void;
   /** `refused` — the money is in her wallet; re-read the balance. */
@@ -115,6 +121,24 @@ const MAX_READ_FAILURES = 6;
 const MAX_READS_AFTER_RETURN = 30;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The refusals the card PRE-FLIGHT can answer that the cart already has a
+ * sentence for. All are made inside `createOrderPayment`'s transaction before
+ * the gateway is asked for anything, so nothing was charged and the key is not
+ * burned. The three pickup-branch kinds are W7's: `quoteOrder` resolves the
+ * branch before the card is charged, so a closed branch is refused HERE rather
+ * than after she has paid — and must read as the cart's "that branch has
+ * closed", not as "we couldn't start the payment".
+ */
+const PREFLIGHT_REFUSALS: ReadonlySet<CheckoutRefusal['kind']> = new Set([
+  'stale',
+  'noAddress',
+  'addressGone',
+  'pickupRequired',
+  'pickupUnknown',
+  'pickupClosed',
+]);
 
 /** Whether the bank page may be shown for this view. See the header, #2. */
 function pageMayOpen(view: OrderPaymentView): boolean {
@@ -282,7 +306,7 @@ export function useCardCheckout(options: CardCheckoutOptions): CardCheckoutContr
             because a refusal rolls the transaction back.
           */
           const refusal = orderRefusal(err);
-          if (refusal.kind === 'stale' || refusal.kind === 'noAddress' || refusal.kind === 'addressGone') {
+          if (PREFLIGHT_REFUSALS.has(refusal.kind)) {
             opts.current.onRefused(refusal);
             setStage({ name: 'closed' });
             return;

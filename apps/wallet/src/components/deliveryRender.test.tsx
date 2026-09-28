@@ -154,7 +154,7 @@ describe('there is no fee line, in either mode or either language', () => {
   for (const lang of ['en', 'ar'] as const) {
     for (const [name, choice] of [
       ['pickup', PICKUP],
-      ['delivery', { mode: 'delivery' as const, addressId: 'ADR-1' }],
+      ['delivery', { mode: 'delivery' as const, addressId: 'ADR-1', pickupBranchId: null }],
     ] as const) {
       it(`${lang} ${name} renders no fee word and no money at all`, () => {
         const { container } = section(lang, choice);
@@ -189,7 +189,7 @@ describe('there is no fee line, in either mode or either language', () => {
 // ══════════════════════════════════════════ the four address-book states ══
 
 describe('the address list has four distinct states', () => {
-  const DELIVERING: FulfilmentChoice = { mode: 'delivery', addressId: null };
+  const DELIVERING: FulfilmentChoice = { mode: 'delivery', addressId: null, pickupBranchId: null };
 
   it('paints skeleton rows while loading, and no empty-state call to action', () => {
     section('en', DELIVERING, book({ status: 'loading', addresses: null }));
@@ -347,16 +347,25 @@ describe("an order's address is text and never a control", () => {
     expect(body.match(/Home/g)).toHaveLength(1);
   });
 
-  /** A pickup order shows the salon and NO branch — there is no branch field. */
-  it('shows the salon and no branch for a pickup order', () => {
+  /**
+   * ⚠️ THIS SPEC USED TO PIN "Collect at the salon" FOR A PICKUP, because there
+   * was no branch field. Since 0060 there is, and `pickup` + `pickupBranch:
+   * null` means a legacy order at a multi-branch salon — she was never asked —
+   * which ShopOrderSchema says must NOT render as "the salon". The fixture is
+   * that case, so the assertion is now its honest sentence. The branch cases
+   * are pinned in `pickupBranchRender.test.tsx`.
+   */
+  it('a pickup with no recorded branch says so, and names neither a branch nor the salon', () => {
     sheet([order({ fulfilment: 'pickup' })]);
-    expect(screen.getByTestId('order-pickup-TX-1').textContent).toContain(
-      'Collect at the salon',
+    expect(screen.getByTestId('order-branch-unrecorded-TX-1').textContent).toBe(
+      en.orderBranchNotRecorded,
     );
     expect(screen.queryByTestId('order-address-TX-1')).toBeNull();
-    for (const branch of ['Salmiya', 'Kuwait City', 'Branch', 'branch']) {
-      expect(screen.getByTestId('order-row-TX-1').textContent).not.toContain(branch);
-    }
+    const row = screen.getByTestId('order-row-TX-1').textContent ?? '';
+    expect(row).not.toContain(en.orderCollectAt);
+    // It may tell her to ASK the salon; it must not say she collects AT it.
+    expect(row).not.toMatch(/(collect|pick it up) at the salon/i);
+    for (const branch of ['Salmiya', 'Kuwait City']) expect(row).not.toContain(branch);
   });
 });
 

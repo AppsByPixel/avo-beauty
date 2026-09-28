@@ -32,11 +32,20 @@
  * what she typed WHEN SHE ORDERED, deliberately, so a delivered order stays
  * answerable, and `orderAddressFixed` says so on the row in her own language.
  *
- * A PICKUP ORDER SHOWS NO ADDRESS AND NO BRANCH. `ShopOrder.address` is null for
- * pickup, and `POST /orders` never took a pickup branch — so the row says
- * "Collect at the salon" and claims no location. See `domain/fulfilment.ts` §
- * THE PICKUP BRANCH; showing a branch here would be inventing the answer to the
- * question that slice reported.
+ * A PICKUP ORDER SHOWS ITS BRANCH — W7. This paragraph used to say "NO
+ * BRANCH", because `POST /orders` took none and the row said "Collect at the
+ * salon". Since migration 0060 every order read carries `pickupBranch`, served
+ * INLINE with its name, and `domain/shopOrders.ts § pickupLocation` decides the
+ * four answers: the branch; the branch CLOSED while she is still waiting
+ * (said plainly, with what to do — never drawn as a normal pickup); a legacy
+ * pickup that was never asked (NOT "the salon" and NOT a branch — "not
+ * recorded"); and a delivery, which has none. The branch is never looked up in
+ * `salon.branches`: that list is open-only, so a closed branch would vanish.
+ *
+ * THE ROW NOW SWITCHES ON `fulfilment`, NOT ON `address === null`. The old
+ * test read a null address as pickup, which `ShopOrderSchema.address` warns
+ * against by name — an ERASED delivery is null too. That case draws no
+ * location line at all rather than "Collect at the salon".
  *
  * NO CANCEL, NO UNDO, NO "MARK COLLECTED". Advancing a status is the MERCHANT's
  * transition, behind `perms.shop` on the fulfilment board, and there is no
@@ -65,7 +74,9 @@ import {
   orderIsOpen,
   orderStatusLabel,
   orderStatusStep,
+  pickupLocation,
 } from '../domain/shopOrders';
+import { branchName } from '../domain/names';
 import type { OrdersController } from '../state/useOrders';
 import { Sheet } from './Sheet';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
@@ -174,11 +185,11 @@ function OrderRow({ order }: { order: ShopOrder }) {
         </Text>
       </View>
 
-      {snapshot === null ? (
-        /* Pickup. The salon, and no branch — see the header. */
-        <Text style={[text('bodyS', lang), styles.body]} testID={`order-pickup-${order.transactionId}`}>
-          {copy.orderCollectAt}
-        </Text>
+      {order.fulfilment === 'pickup' ? (
+        <PickupLine order={order} />
+      ) : snapshot === null ? (
+        /* An ERASED delivery — no address is held. Nothing to say about where. */
+        null
       ) : (
         <View testID={`order-address-${order.transactionId}`}>
           <Text style={[text('label', lang), styles.snapshotLabel]}>{copy.orderDeliveringTo}</Text>
@@ -214,6 +225,57 @@ function OrderRow({ order }: { order: ShopOrder }) {
           </Text>
         </View>
       )}
+    </View>
+  );
+}
+
+/**
+ * Where a pickup order is collected — `pickupLocation`'s four answers, drawn.
+ * The same label-then-value shape as the delivery snapshot ("Going to · Home"),
+ * so a pickup and a delivery row read alike.
+ */
+function PickupLine({ order }: { order: ShopOrder }) {
+  const { lang, copy } = useLanguage();
+  const where = pickupLocation(order);
+  const id = order.transactionId;
+  if (where === null) return null;
+
+  if (where.kind === 'notRecorded') {
+    return (
+      <View testID={`order-pickup-${id}`}>
+        <Text style={[text('bodyS', lang), styles.body]} testID={`order-branch-unrecorded-${id}`}>
+          {copy.orderBranchNotRecorded}
+        </Text>
+      </View>
+    );
+  }
+
+  const name = branchName(where.branch, lang);
+  return (
+    <View testID={`order-pickup-${id}`}>
+      <Text style={[text('label', lang), styles.snapshotLabel]}>{copy.pickupFrom}</Text>
+      <Text
+        style={[text('bodyL', lang, '600'), styles.snapshotName]}
+        numberOfLines={1}
+        testID={`order-branch-${id}`}
+      >
+        {where.branch.closed ? copy.pickupClosedName(name) : name}
+      </Text>
+      {where.kind === 'closedWaiting' ? (
+        /*
+          CLOSED WHILE SHE WAITS. The danger chip rather than a muted line: she
+          may be about to travel to a shut counter, and this is the sentence
+          that stops her.
+        */
+        <View
+          style={styles.chip}
+          accessibilityRole="alert"
+          testID={`order-branch-closed-${id}`}
+        >
+          <View style={styles.chipDot} />
+          <Text style={[text('bodyS', lang), styles.chipText]}>{copy.orderBranchClosed}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }

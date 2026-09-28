@@ -23,9 +23,14 @@
  *         held — that is what makes "Check the payment" resume the same intent
  *         rather than open a second one.
  *
- * The METHOD and the FULFILMENT are NOT in the signature, for the reason
- * `useShop § THE KEY IS KEYED ON THE CART` walks: a new key on a switched
- * method would be a second intent beside a first whose outcome is unknown.
+ * The METHOD, the FULFILMENT and — since W7 — the PICKUP BRANCH are NOT in the
+ * signature, for the reason `useShop § THE KEY IS KEYED ON THE CART` walks: a
+ * new key on a switched method, destination or counter would be a second intent
+ * beside a first whose outcome is unknown. The API hashes `pickupBranchId`
+ * (routes/orders.ts), so a branch changed under a held key is answered 422 —
+ * "a payment for this basket has already started" — and a branch changed after
+ * a PRE-FLIGHT refusal goes through under the same key, because the refusal
+ * rolled back and burned nothing.
  * Under the held key the server answers 422 `idempotency_key_reused` instead,
  * and `useCardCheckout` renders that as "a payment for this basket is already
  * open" — never as a failure, and never by minting its way around it.
@@ -89,6 +94,15 @@ export const CARD_REFUSAL_REASONS = [
   'invalid_products',
   'unknown_address',
   'address_required',
+  /*
+    W7 — the settlement re-validates the branch she chose on the cart
+    (`OrderPaymentRequest.pickupBranchId`, services/topup.ts). A manager can
+    close it while she is on the bank's page; a salon can open a second branch
+    under a request stored before 0060. Either way she was PAID AND CREDITED.
+  */
+  'pickup_branch_closed',
+  'pickup_branch_required',
+  'unknown_pickup_branch',
   'other',
 ] as const;
 

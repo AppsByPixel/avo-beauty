@@ -46,6 +46,14 @@
  * server refuses the same case by name (`address_required`) and #7 makes that the
  * authority — and `useShop.checkout` re-checks it, so a caller that ignored
  * `block` still cannot send an unsubmittable order.
+ *
+ * W7 ADDS A SECOND BLOCK AND THREE REFUSALS. `noPickupBranch` — a pickup at a
+ * salon with several open branches and none chosen — holds Pay the same way,
+ * mirroring `pickup_branch_required`. And the three pickup-branch refusals
+ * (`pickup_branch_required`, `unknown_pickup_branch`, `pickup_branch_closed`)
+ * each draw their own chip from the code and hold BOTH pay buttons until she
+ * chooses again, because the branch she is holding is the one just refused.
+ * All three were made before the debit: the basket stays, nothing was charged.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -59,7 +67,12 @@ import { Sheet } from './Sheet';
 import { FulfilmentSection } from './FulfilmentSection';
 import { PrimaryButton } from './Buttons';
 import type { AddressBookController } from '../state/useAddresses';
-import type { CheckoutBlock, Fulfilment, FulfilmentChoice } from '../domain/fulfilment';
+import type {
+  CheckoutBlock,
+  Fulfilment,
+  FulfilmentChoice,
+  PickupBranchOption,
+} from '../domain/fulfilment';
 import { PAYMENT_METHODS } from '../domain/topup';
 import type { CardMethod } from '../state/useCardCheckout';
 import { color, MIN_TAP_TARGET, radius, text, WHITE } from '../theme';
@@ -80,7 +93,7 @@ interface Props {
   refusal: CheckoutRefusal | null;
   /** Collect or deliver, and the address a delivery names. */
   fulfilment: FulfilmentChoice;
-  /** Why Pay cannot be tapped. Today: delivery with no address chosen. */
+  /** Why Pay cannot be tapped: no address for a delivery, no branch for a pickup. */
   block: CheckoutBlock | null;
   /** The address book, for the chooser under Delivery. */
   book: AddressBookController;
@@ -109,6 +122,30 @@ interface Props {
   /** A card attempt for this basket is unresolved: BOTH pay buttons are held. */
   cardOpen?: boolean;
   onCheckCard?: () => void;
+  /**
+   * W7 — the salon's open branches and her choice of one. OPTIONAL, defaulting
+   * to none, for `method`'s reason: the specs that mount this sheet directly
+   * predate the picker and get the sheet they pinned.
+   */
+  pickupBranches?: readonly PickupBranchOption[];
+  onChoosePickupBranch?: (branchId: string) => void;
+}
+
+const NO_BRANCHES: readonly PickupBranchOption[] = [];
+
+/**
+ * W7 — the three pickup-branch refusals. Each HOLDS BOTH PAY BUTTONS until she
+ * chooses again (choosing clears the refusal): the branch she is holding is
+ * the one the server just refused, and tapping Pay over it would be the same
+ * refusal a second time. Nothing moved, so this is a hold and not the
+ * unknown-outcome lock `offline`/`failed` are.
+ */
+function pickupRefused(refusal: CheckoutRefusal | null): boolean {
+  return (
+    refusal?.kind === 'pickupRequired' ||
+    refusal?.kind === 'pickupUnknown' ||
+    refusal?.kind === 'pickupClosed'
+  );
 }
 
 export type CheckoutMethod = 'wallet' | CardMethod;
@@ -142,6 +179,8 @@ export function CartSheet({
   onPayCard = () => undefined,
   cardOpen = false,
   onCheckCard = () => undefined,
+  pickupBranches = NO_BRANCHES,
+  onChoosePickupBranch = () => undefined,
 }: Props) {
   const { lang, copy } = useLanguage();
   const empty = lines.length === 0;
@@ -172,7 +211,9 @@ export function CartSheet({
   const walletHeld =
     busy ||
     blocked ||
-    block === 'noAddress' ||
+    // Either block — no address for a delivery, no branch for a pickup (W7).
+    block !== null ||
+    pickupRefused(refusal) ||
     refusal?.kind === 'offline' ||
     refusal?.kind === 'failed' ||
     refusal?.kind === 'alreadyPlaced';
@@ -274,6 +315,8 @@ export function CartSheet({
               onAdd={onAddAddress}
               onEdit={onEditAddress}
               onDelete={onDeleteAddress}
+              pickupBranches={pickupBranches}
+              onChoosePickupBranch={onChoosePickupBranch}
             />
 
             <MethodChoice method={method} balanceFils={balanceFils} onMethod={onMethod} />
@@ -348,6 +391,30 @@ export function CartSheet({
               <Chip lang={lang} testID="cart-no-address" text={copy.cartNoAddress} />
             ) : null}
 
+            {/*
+              W7 — NO BRANCH CHOSEN at a multi-branch salon. The client-side
+              hold, suppressed while a pickup REFUSAL is showing: that refusal is
+              the more specific sentence ("that branch has just closed"), and two
+              chips for one missing choice would be one too many.
+            */}
+            {block === 'noPickupBranch' && !pickupRefused(refusal) ? (
+              <Chip lang={lang} testID="cart-no-pickup-branch" text={copy.cartNoPickupBranch} />
+            ) : null}
+            {/*
+              THE THREE PICKUP REFUSALS, EACH FROM ITS CODE — never the server's
+              English `message`, in either language. All three were made before
+              the debit, so the basket above is intact and nothing was charged.
+            */}
+            {refusal?.kind === 'pickupRequired' ? (
+              <Chip lang={lang} testID="cart-pickup-required" text={copy.cartPickupRequired} />
+            ) : null}
+            {refusal?.kind === 'pickupUnknown' ? (
+              <Chip lang={lang} testID="cart-pickup-unknown" text={copy.cartPickupUnknown} />
+            ) : null}
+            {refusal?.kind === 'pickupClosed' ? (
+              <Chip lang={lang} testID="cart-pickup-closed" text={copy.cartPickupClosed} />
+            ) : null}
+
             {/* The address she chose is gone — deleted on another device. */}
             {refusal?.kind === 'addressGone' ? (
               <Chip lang={lang} testID="cart-address-gone" text={copy.addressGoneBody} />
@@ -418,6 +485,9 @@ export function CartSheet({
                     is satisfied by the server rather than by this line.
                   */
                   block === 'noAddress' ||
+                  // W7 — no branch chosen, or the one chosen was just refused.
+                  block === 'noPickupBranch' ||
+                  pickupRefused(refusal) ||
                   refusal?.kind === 'offline' ||
                   refusal?.kind === 'failed' ||
                   /*

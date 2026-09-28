@@ -27,7 +27,7 @@ describe('the default', () => {
    */
   it('is pickup, with no address', () => {
     expect(DEFAULT_FULFILMENT).toBe('pickup');
-    expect(PICKUP).toEqual({ mode: 'pickup', addressId: null });
+    expect(PICKUP).toEqual({ mode: 'pickup', addressId: null, pickupBranchId: null });
   });
 });
 
@@ -48,8 +48,8 @@ describe('fulfilmentBody — pickup sends nothing', () => {
    * ═══════════════════════════════════════════════════════════════════════════
    */
   it('contributes no keys for pickup', () => {
-    expect(fulfilmentBody(PICKUP)).toEqual({});
-    expect(Object.keys(fulfilmentBody(PICKUP))).toEqual([]);
+    expect(fulfilmentBody(PICKUP, [])).toEqual({});
+    expect(Object.keys(fulfilmentBody(PICKUP, []))).toEqual([]);
   });
 
   /**
@@ -63,13 +63,13 @@ describe('fulfilmentBody — pickup sends nothing', () => {
    * `orderRefusal` deliberately does not classify it.
    */
   it('drops the address on pickup even when one is selected', () => {
-    const body = fulfilmentBody({ mode: 'pickup', addressId: 'ADR-1' });
+    const body = fulfilmentBody({ mode: 'pickup', addressId: 'ADR-1', pickupBranchId: null }, []);
     expect(body).toEqual({});
     expect('addressId' in body).toBe(false);
   });
 
   it('sends fulfilment and addressId for a delivery', () => {
-    expect(fulfilmentBody({ mode: 'delivery', addressId: 'ADR-1' })).toEqual({
+    expect(fulfilmentBody({ mode: 'delivery', addressId: 'ADR-1', pickupBranchId: null }, [])).toEqual({
       fulfilment: 'delivery',
       addressId: 'ADR-1',
     });
@@ -82,7 +82,7 @@ describe('fulfilmentBody — pickup sends nothing', () => {
    * would turn a blocked form into a crash.
    */
   it('omits addressId rather than throwing for a delivery with none', () => {
-    expect(fulfilmentBody({ mode: 'delivery', addressId: null })).toEqual({
+    expect(fulfilmentBody({ mode: 'delivery', addressId: null, pickupBranchId: null }, [])).toEqual({
       fulfilment: 'delivery',
     });
   });
@@ -95,8 +95,8 @@ describe('fulfilmentBody — pickup sends nothing', () => {
    */
   it('carries no amount, no fee and no branch, on either path', () => {
     for (const body of [
-      fulfilmentBody(PICKUP) as Record<string, unknown>,
-      fulfilmentBody({ mode: 'delivery', addressId: 'ADR-1' }) as Record<string, unknown>,
+      fulfilmentBody(PICKUP, []) as Record<string, unknown>,
+      fulfilmentBody({ mode: 'delivery', addressId: 'ADR-1', pickupBranchId: null }, []) as Record<string, unknown>,
     ]) {
       for (const forbidden of [
         'branchId',
@@ -118,23 +118,23 @@ describe('fulfilmentBody — pickup sends nothing', () => {
 
 describe('checkoutBlock', () => {
   it('blocks a delivery with no address chosen', () => {
-    expect(checkoutBlock({ mode: 'delivery', addressId: null })).toBe('noAddress');
+    expect(checkoutBlock({ mode: 'delivery', addressId: null, pickupBranchId: null }, [])).toBe('noAddress');
   });
 
   it('does not block a delivery with an address', () => {
-    expect(checkoutBlock({ mode: 'delivery', addressId: 'ADR-1' })).toBeNull();
+    expect(checkoutBlock({ mode: 'delivery', addressId: 'ADR-1', pickupBranchId: null }, [])).toBeNull();
   });
 
   /** Pickup is never blocked, address or no address. */
   it('never blocks a pickup', () => {
-    expect(checkoutBlock(PICKUP)).toBeNull();
-    expect(checkoutBlock({ mode: 'pickup', addressId: 'ADR-1' })).toBeNull();
+    expect(checkoutBlock(PICKUP, [])).toBeNull();
+    expect(checkoutBlock({ mode: 'pickup', addressId: 'ADR-1', pickupBranchId: null }, [])).toBeNull();
   });
 });
 
 describe('reconcileChoice — a lost address loses the selection', () => {
   it('keeps a selection that still exists', () => {
-    const choice = { mode: 'delivery' as const, addressId: 'ADR-1' };
+    const choice = { mode: 'delivery' as const, addressId: 'ADR-1', pickupBranchId: null };
     expect(reconcileChoice(choice, ['ADR-1', 'ADR-2'])).toEqual(choice);
   });
 
@@ -153,7 +153,7 @@ describe('reconcileChoice — a lost address loses the selection', () => {
    * ═══════════════════════════════════════════════════════════════════════════
    */
   it('loses a deleted selection rather than choosing a different address', () => {
-    const next = reconcileChoice({ mode: 'delivery', addressId: 'ADR-GONE' }, ['ADR-1', 'ADR-2']);
+    const next = reconcileChoice({ mode: 'delivery', addressId: 'ADR-GONE', pickupBranchId: null }, ['ADR-1', 'ADR-2']);
     expect(next.addressId).toBeNull();
     expect(next.addressId).not.toBe('ADR-1');
     expect(next.addressId).not.toBe('ADR-2');
@@ -161,17 +161,19 @@ describe('reconcileChoice — a lost address loses the selection', () => {
 
   /** The mode survives. She still wants it delivered; she just has to choose again. */
   it('keeps the delivery mode when the selection is lost', () => {
-    expect(reconcileChoice({ mode: 'delivery', addressId: 'ADR-GONE' }, [])).toEqual({
+    expect(reconcileChoice({ mode: 'delivery', addressId: 'ADR-GONE', pickupBranchId: null }, [])).toEqual({
       mode: 'delivery',
       addressId: null,
+      pickupBranchId: null,
     });
   });
 
   it('leaves a null selection alone', () => {
     expect(reconcileChoice(PICKUP, [])).toEqual(PICKUP);
-    expect(reconcileChoice({ mode: 'delivery', addressId: null }, ['ADR-1'])).toEqual({
+    expect(reconcileChoice({ mode: 'delivery', addressId: null, pickupBranchId: null }, ['ADR-1'])).toEqual({
       mode: 'delivery',
       addressId: null,
+      pickupBranchId: null,
     });
   });
 
@@ -182,9 +184,10 @@ describe('reconcileChoice — a lost address loses the selection', () => {
    * switches back to delivery.
    */
   it('drops a stale selection held behind a pickup', () => {
-    expect(reconcileChoice({ mode: 'pickup', addressId: 'ADR-GONE' }, ['ADR-1'])).toEqual({
+    expect(reconcileChoice({ mode: 'pickup', addressId: 'ADR-GONE', pickupBranchId: null }, ['ADR-1'])).toEqual({
       mode: 'pickup',
       addressId: null,
+      pickupBranchId: null,
     });
   });
 });

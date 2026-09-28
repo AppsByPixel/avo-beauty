@@ -48,40 +48,46 @@
  * somebody later "fixes" by putting a number in it.
  *
  * ═════════════════════════════════════════════════════════════════════════════
- * THE PICKUP BRANCH: A QUESTION THIS MODULE REFUSES TO ANSWER.
+ * THE PICKUP BRANCH — W7, "Collect it is good, but from which branch if they
+ * have multiple".
  *
- * My own branch-picker report raised it and it has to be answered here or not at
- * all: if she collects, collect at WHICH branch? Amara has two open branches.
+ * ⚠️ THIS SECTION USED TO SAY THE OPPOSITE, AND IT WAS TRUE WHEN WRITTEN. It
+ * read "A QUESTION THIS MODULE REFUSES TO ANSWER": `POST /orders` took no pickup
+ * branch, so the three ways to fake one (reuse `branchChoice`, send `branchId`,
+ * show a picker and drop the value) were all refused and the tile said "the
+ * salon". Migration 0060 changed the contract, and the reasoning that refused
+ * the fakes is exactly what shapes the real thing:
  *
- * The answer is that `POST /orders` TAKES NO PICKUP BRANCH TODAY, and more than
- * that: it refuses `branchId` by name (`branch_not_client_supplied`) and
- * `services/order.ts` resolves the branch itself through `resolveBranch`,
- * writing `branch_assumed = true` at a multi-branch salon. There is no field to
- * carry her choice.
+ *   ITS OWN FIELD, `pickupBranchId`. Never `branchId`, which is still refused BY
+ *   NAME — that one is the ATTRIBUTION branch, and a client that named it would
+ *   be picking which branch's boost pays. Where she will physically go is a
+ *   different fact, validated server-side as an OPEN branch of HER salon.
  *
- * So this module does not offer one, and — the part that matters — it does not
- * SIMULATE one. The three ways to fake it were all available and all rejected:
+ *   NOT `branchChoice`. That is still a view filter over an artist list; this
+ *   reaches the server. They share nothing but the branch list.
  *
- *   REUSE `branchChoice`.  The booking screen's strip. Refused outright, and
- *   this is the specific thing I warned about in that slice: `branchChoice` is a
- *   VIEW FILTER over an artist list that never reaches the server, and a pickup
- *   branch would reach the server. One value cannot be both a filter and an
- *   assertion; wiring them together would make a filter silently load-bearing.
+ *   ONLY WHEN THERE IS A CHOICE. `salon.branches` (GET /salons/{id}) lists OPEN
+ *   branches only. With one, there is nowhere else she could mean: no picker,
+ *   NOTHING SENT, and the server uses that branch — so the request is
+ *   byte-identical to the one that shipped. With several, she must choose, and
+ *   Pay is blocked (`noPickupBranch`) until she has. Omitting it at a
+ *   multi-branch salon is `pickup_branch_required`, a 400.
  *
- *   SEND IT ANYWAY as `branchId`. A 400 by name. Correct behaviour by the API.
+ *   NO PRESELECTION. Not the first branch, not the one she last booked at. A
+ *   branch she did not notice being chosen is a bag waiting at the wrong
+ *   counter, and the server refuses to guess for exactly that reason ("picking
+ *   one for her is the alphabetical guess this whole column exists to
+ *   replace", services/order.ts). One tap is the cheaper failure.
  *
- *   SHOW A PICKER AND DROP THE VALUE. The worst of the three. She believes she
- *   chose Salmiya, the row records an assumed branch, and nothing on screen ever
- *   said the location was not settled — the "SHOW THEM UNDER EVERY BRANCH" lie
- *   `branchPicker.ts` already rejected, in a costume where the cost is a customer
- *   standing in the wrong salon.
+ *   NEVER ON A DELIVERY. `pickup_branch_not_for_delivery` is a 400 by name, so
+ *   the delivery body drops a selected branch the way the pickup body drops a
+ *   selected address — and for the same reason the address is kept in state:
+ *   switching back must not lose what she chose.
  *
- * WHAT THE UI DOES INSTEAD: the pickup option says the salon, not a branch, and
- * says nothing it cannot keep. `copy.fulfilPickupBody` is one sentence and it
- * claims no location. REPORTED as a gap rather than filled: if a pickup branch
- * is wanted it is a contract change on `POST /orders` plus a column on
- * `shop_order`, which is lane A's, and a decision about whether a customer may
- * assert a reporting bucket, which is Aftab's.
+ *   NOT IN THE IDEMPOTENCY KEY. See `useShop` § THE KEY IS KEYED ON THE CART:
+ *   a branch changed under a held key is either a 422 (the first attempt
+ *   committed — one order, one debit) or a fresh placement (it rolled back and
+ *   burned nothing). A key re-minted on the branch would be the double charge.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -103,18 +109,60 @@ export const DEFAULT_FULFILMENT: Fulfilment = 'pickup';
 export interface FulfilmentChoice {
   mode: Fulfilment;
   addressId: string | null;
+  /**
+   * The branch she chose to collect from, or null for NONE CHOSEN. Null is the
+   * resting state and the only state at a single-branch salon, where there is
+   * no picker and nothing is sent. Kept across a switch to delivery, and never
+   * sent on one — see the header.
+   */
+  pickupBranchId: string | null;
 }
 
-export const PICKUP: FulfilmentChoice = { mode: 'pickup', addressId: null };
+export const PICKUP: FulfilmentChoice = { mode: 'pickup', addressId: null, pickupBranchId: null };
+
+/** An open branch she could collect from — `Salon.branches`, narrowed. */
+export interface PickupBranchOption {
+  id: string;
+  name: string;
+  nameAr: string | null;
+}
 
 /**
- * The fields this choice contributes to the `POST /orders` body.
+ * Is there a choice to make? MORE THAN ONE open branch. One is not a choice and
+ * none cannot take an order at all (`no_branch`). The one predicate the picker,
+ * the block and the body all read, so they cannot disagree about a salon.
+ */
+export function pickupPickerApplies(branches: readonly { id: string }[]): boolean {
+  return branches.length > 1;
+}
+
+/**
+ * The branch the pickup tile may NAME without a picker — the salon's only open
+ * branch — or null. Null at a multi-branch salon (the tile names her choice
+ * instead, once she has made one) and at a salon with none.
+ */
+export function onlyPickupBranch<B extends { id: string }>(branches: readonly B[]): B | null {
+  return branches.length === 1 ? branches[0]! : null;
+}
+
+/** The chosen branch, resolved against the list, or null. Never a fallback. */
+export function chosenPickupBranch<B extends { id: string }>(
+  choice: FulfilmentChoice,
+  branches: readonly B[],
+): B | null {
+  if (!pickupPickerApplies(branches) || choice.pickupBranchId === null) return null;
+  return branches.find((b) => b.id === choice.pickupBranchId) ?? null;
+}
+
+/**
+ * The fields this choice contributes to the `POST /orders` and
+ * `POST /orders/payments` bodies — both rails, one function.
  *
- * `{}` for pickup — see the header. Returning an object with no keys rather than
- * `null` means the caller spreads unconditionally and has no second branch to
- * forget:
+ * `{}` for a pickup at a single-branch salon — see the header. Returning an
+ * object with no keys rather than `null` means the caller spreads
+ * unconditionally and has no second branch to forget:
  *
- *     const body = { items, ...fulfilmentBody(choice) };
+ *     const body = { items, ...fulfilmentBody(choice, branches) };
  *
  * PICKUP CARRIES NO `addressId` EVEN IF ONE IS SET, and that is not defensive
  * tidying: `services/order.ts` REFUSES pickup-with-an-address by name
@@ -122,15 +170,36 @@ export const PICKUP: FulfilmentChoice = { mode: 'pickup', addressId: null };
  * `shop_order_delivery_has_an_address` makes it unstorable. A customer who picks
  * delivery, chooses an address, then switches back to pickup would otherwise
  * have her order refused for a field she cannot see.
+ *
+ * DELIVERY CARRIES NO `pickupBranchId` EVEN IF ONE IS SET — the mirror image,
+ * refused by name as `pickup_branch_not_for_delivery`.
+ *
+ * `pickupBranchId` IS SENT ONLY WHEN THE PICKER APPLIES AND HER CHOICE IS ON
+ * THE LIST. `branches` is REQUIRED, not defaulted: a caller that forgot it
+ * would silently send nothing, and although the server would refuse that
+ * (`pickup_branch_required`) rather than guess, the place to catch a missing
+ * argument is the compiler. A chosen id no longer on the list is not sent —
+ * `reconcilePickupBranch` has already cleared it and `checkoutBlock` holds Pay.
  */
 export function fulfilmentBody(
   choice: FulfilmentChoice,
-): { fulfilment?: 'delivery'; addressId?: string } {
-  if (choice.mode === 'pickup') return {};
+  branches: readonly { id: string }[],
+): FulfilmentBody {
+  if (choice.mode === 'pickup') {
+    const chosen = chosenPickupBranch(choice, branches);
+    return chosen === null ? {} : { pickupBranchId: chosen.id };
+  }
   // Delivery with no address is not submittable — `checkoutBlock` stops the
   // button — but this stays total rather than throwing on a money path.
   if (choice.addressId === null) return { fulfilment: 'delivery' };
   return { fulfilment: 'delivery', addressId: choice.addressId };
+}
+
+/** What `fulfilmentBody` may put on the wire. Never `branchId`. */
+export interface FulfilmentBody {
+  fulfilment?: 'delivery';
+  addressId?: string;
+  pickupBranchId?: string;
 }
 
 /**
@@ -142,10 +211,25 @@ export function fulfilmentBody(
  * same relationship the stale-product check already has with `invalid_products`:
  * the client check is a courtesy and the server's is the control (#7).
  */
-export type CheckoutBlock = 'noAddress';
+export type CheckoutBlock = 'noAddress' | 'noPickupBranch';
 
-export function checkoutBlock(choice: FulfilmentChoice): CheckoutBlock | null {
+/**
+ * `noPickupBranch` mirrors `pickup_branch_required` the way `noAddress` mirrors
+ * `address_required`: a pickup at a salon with several open branches and none
+ * chosen. A courtesy; the server's 400 is the control (#7).
+ */
+export function checkoutBlock(
+  choice: FulfilmentChoice,
+  branches: readonly { id: string }[],
+): CheckoutBlock | null {
   if (choice.mode === 'delivery' && choice.addressId === null) return 'noAddress';
+  if (
+    choice.mode === 'pickup' &&
+    pickupPickerApplies(branches) &&
+    chosenPickupBranch(choice, branches) === null
+  ) {
+    return 'noPickupBranch';
+  }
   return null;
 }
 
@@ -169,5 +253,28 @@ export function reconcileChoice(
 ): FulfilmentChoice {
   if (choice.addressId === null) return choice;
   if (addressIds.includes(choice.addressId)) return choice;
-  return { mode: choice.mode, addressId: null };
+  return { ...choice, addressId: null };
+}
+
+/**
+ * Her pickup branch after the branch list changed underneath it — the address
+ * rule, for the same reason. A branch that closed drops out of
+ * `salon.branches`, and a selection pointing at it would be refused as
+ * `pickup_branch_closed`. So a chosen id no longer on the list, or a list that
+ * no longer offers a choice, LOSES THE SELECTION.
+ *
+ * IT DOES NOT FALL BACK TO ANOTHER BRANCH. Moving her order to a counter she
+ * did not choose because the one she chose closed is the exact outcome this
+ * picker exists to prevent. Returns `choice` itself when nothing changed, so a
+ * refetch of an unchanged list does not re-render.
+ */
+export function reconcilePickupBranch(
+  choice: FulfilmentChoice,
+  branches: readonly { id: string }[],
+): FulfilmentChoice {
+  if (choice.pickupBranchId === null) return choice;
+  if (pickupPickerApplies(branches) && branches.some((b) => b.id === choice.pickupBranchId)) {
+    return choice;
+  }
+  return { ...choice, pickupBranchId: null };
 }

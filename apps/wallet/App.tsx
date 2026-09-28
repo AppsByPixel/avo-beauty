@@ -95,6 +95,9 @@ type Screen = 'home' | 'book' | 'shop' | 'account';
 // exists before the first control paints. Idempotent and a no-op off web.
 installFocusRing();
 
+/** One stable empty list, so the shop's reconcile does not re-run per render. */
+const NO_BRANCHES: readonly never[] = [];
+
 export default function App() {
   const [fontsLoaded] = useFonts({
     Fraunces_400Regular,
@@ -285,7 +288,22 @@ function Wallet({
    * only feeds the CTA label, and `ShopScreen` is not rendered without a snapshot
    * anyway — so no button is ever labelled against a balance we do not have.
    */
-  const shop = useShop(snapshotBalance(home.snapshot), home.retry);
+  const shop = useShop(
+    snapshotBalance(home.snapshot),
+    home.retry,
+    /*
+      W7 — WHERE SHE CAN COLLECT: `GET /salons/{id}`'s branches, OPEN ONLY, off
+      the same snapshot everything else here reads. Empty before the snapshot
+      lands, which means "no picker" — and Shop is not rendered until it has.
+    */
+    home.snapshot?.salon.branches ?? NO_BRANCHES,
+    /*
+      A pickup-branch refusal means that list is out of date (a branch closed,
+      or a second one opened). `home.retry` re-reads the salon with the rest of
+      the snapshot, and `useShop` then drops a selection that closed.
+    */
+    home.retry,
+  );
 
   /**
    * THE PAYMENT CODE LIVES IN THE SHELL, FOR THE SAME REASON THE CART DOES.

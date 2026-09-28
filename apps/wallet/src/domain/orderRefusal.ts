@@ -40,7 +40,8 @@
  * money with ONE concurrency guard where a charge has two, so a client that could
  * not read the response does not know whether the money moved. `short`, `stale`,
  * `noAddress` and `addressGone` are refusals the server demonstrably made BEFORE
- * debiting — driven, see the test — and only those four keep a button.
+ * debiting — driven, see the test — and only those four keep a button. The
+ * three pickup-branch kinds (W7) join them, on the same evidence.
  * `alreadyPlaced` gets no retry either, for the opposite reason: retrying it
  * would be asking for a second order.
  * ═════════════════════════════════════════════════════════════════════════════
@@ -102,6 +103,32 @@ export type CheckoutRefusal =
    * re-minting the key when the fulfilment changes — is a double charge.
    */
   | { kind: 'alreadyPlaced' }
+  /**
+   * THE THREE PICKUP-BRANCH REFUSALS — W7, migration 0060. All three are thrown
+   * by `resolvePickupBranch` in step 5b, inside the transaction and BEFORE the
+   * debit, so a refusal rolls everything back: nothing moved, the key is not
+   * burned, and the basket is kept. Each is its own sentence because each asks
+   * her for something different.
+   *
+   *   `pickupRequired`  400 `pickup_branch_required`. She sent no branch and the
+   *                     salon has several. Normally `checkoutBlock` stops the
+   *                     button first, so reaching this means the branch list on
+   *                     screen was STALE — it said one branch and the salon now
+   *                     has two. The sentence says the salon has more than one.
+   *   `pickupUnknown`   404 `unknown_pickup_branch`. The id is not one of her
+   *                     salon's branches at all.
+   *   `pickupClosed`    409 `pickup_branch_closed`. The branch was open when she
+   *                     chose it and a manager closed it before she paid. The
+   *                     sentence tells her to pick another; the basket stays.
+   *
+   * `pickup_branch_not_for_delivery` is deliberately absent, for
+   * `address_not_for_pickup`'s reason: `fulfilmentBody` drops the branch on the
+   * delivery path, so it is unreachable by construction and `failed` is the
+   * honest name for a client bug.
+   */
+  | { kind: 'pickupRequired' }
+  | { kind: 'pickupUnknown' }
+  | { kind: 'pickupClosed' }
   | { kind: 'offline' }
   | { kind: 'failed' };
 
@@ -121,6 +148,17 @@ export const INVALID_PRODUCTS = 'invalid_products';
 export const ADDRESS_REQUIRED = 'address_required';
 export const UNKNOWN_ADDRESS = 'unknown_address';
 export const KEY_REUSED = 'idempotency_key_reused';
+
+/**
+ * The pickup-branch codes, verbatim from `resolvePickupBranch`
+ * (api/src/services/order.ts, migration 0060):
+ *   `pickup_branch_required`  400
+ *   `unknown_pickup_branch`   404
+ *   `pickup_branch_closed`    409
+ */
+export const PICKUP_BRANCH_REQUIRED = 'pickup_branch_required';
+export const UNKNOWN_PICKUP_BRANCH = 'unknown_pickup_branch';
+export const PICKUP_BRANCH_CLOSED = 'pickup_branch_closed';
 
 /**
  * The ids `invalid_products` names, read off the error body.
@@ -194,6 +232,15 @@ export function orderRefusal(err: unknown): CheckoutRefusal {
   */
   if (err.code === ADDRESS_REQUIRED) return { kind: 'noAddress' };
   if (err.code === UNKNOWN_ADDRESS) return { kind: 'addressGone' };
+
+  /*
+    THE PICKUP BRANCH, on the same evidence as the two above: step 5b, before
+    the debit, rolled back. Matched on the CODE — `pickup_branch_closed` is a
+    409, and a status switch would put it beside every other conflict.
+  */
+  if (err.code === PICKUP_BRANCH_REQUIRED) return { kind: 'pickupRequired' };
+  if (err.code === UNKNOWN_PICKUP_BRANCH) return { kind: 'pickupUnknown' };
+  if (err.code === PICKUP_BRANCH_CLOSED) return { kind: 'pickupClosed' };
 
   /*
     ALREADY PLACED — the opposite of every other case in this function.

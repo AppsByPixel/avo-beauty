@@ -50,6 +50,18 @@
  *    not a case a customer can produce. A pair split across a page boundary is
  *    drawn as two rows; a card payment whose order was REFUSED writes no shop
  *    receipt and is drawn as the top-up it became.
+ *
+ * 3. A SHOP ITEM CARRIES NO PICKUP BRANCH — found by W7, not reported by lane
+ *    A. The item is projected from `receipt_job.payload`
+ *    (api/src/services/memberNotifications.ts), and that payload carries the
+ *    fulfilment but not where she collects. Every ORDER read does carry
+ *    `pickupBranch` (migration 0060), so the row is joined by `transactionId`
+ *    against `GET /members/me/orders` — the same move as the void in 1 — and
+ *    `domain/shopOrders § pickupLocation` decides the words, so the bell and
+ *    the orders list cannot disagree. When the order is NOT on that page
+ *    (the read failed, is in flight, or is past its cap of 200) the row says
+ *    "Pickup" and nothing about where, which claims no location. REPORTED: the
+ *    fix is `pickupBranch` on the shop item, which is lane A's.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -59,10 +71,13 @@ import {
   formatMoney,
   moneyAriaLabel,
   type Language,
+  type ShopOrder,
   type Transaction,
 } from '@avo/types';
 import type { Copy } from '../copy/types';
 import type { BellItem, KnownBellItem } from '../api/bell';
+import { branchName } from './names';
+import { pickupLocation } from './shopOrders';
 import { dateLocale, dayAndTime } from './activity';
 
 const KUWAIT_TIME_ZONE = 'Asia/Kuwait';
@@ -113,6 +128,11 @@ export interface BellContext {
    * limit 1. Only `id` and `voidedAt` are read.
    */
   transactions: readonly Pick<Transaction, 'id' | 'voidedAt'>[];
+  /**
+   * `GET /members/me/orders`, for WHERE a pickup is collected — see the header,
+   * limit 3. Optional: absent or empty, a pickup row names no branch.
+   */
+  orders?: readonly Pick<ShopOrder, 'transactionId' | 'fulfilment' | 'status' | 'pickupBranch'>[];
   now?: Date;
 }
 
@@ -184,14 +204,26 @@ function base(item: BellItem, ctx: BellContext) {
   };
 }
 
-function shopLines(
-  item: Extract<KnownBellItem, { kind: 'shop' }>,
-  lang: Language,
-  copy: Copy,
-): string[] {
+function shopLines(item: Extract<KnownBellItem, { kind: 'shop' }>, ctx: BellContext): string[] {
+  const { lang, copy } = ctx;
   const goods = item.items.map((l) => copy.bellShopLine(l.name, l.qty)).join(listSeparator(lang));
-  const where = item.fulfilment === 'delivery' ? copy.bellDelivery : copy.bellPickup;
+  const where = item.fulfilment === 'delivery' ? copy.bellDelivery : pickupWords(item, ctx);
   return [goods === '' ? where : `${goods} · ${where}`];
+}
+
+/**
+ * Where a pickup is collected, joined from her orders — header, limit 3. The
+ * ORDER's fulfilment is read, not the item's, so the two cannot be crossed:
+ * `pickupLocation` returns null for a delivery and the row falls back.
+ */
+function pickupWords(item: Extract<KnownBellItem, { kind: 'shop' }>, ctx: BellContext): string {
+  const { lang, copy } = ctx;
+  const order = ctx.orders?.find((o) => o.transactionId === item.transactionId);
+  const where = order ? pickupLocation(order) : null;
+  if (where === null) return copy.bellPickup;
+  if (where.kind === 'notRecorded') return copy.bellPickupUnrecorded;
+  const name = branchName(where.branch, lang);
+  return where.kind === 'closedWaiting' ? copy.bellPickupClosed(name) : copy.bellPickupAt(name);
 }
 
 /**
@@ -246,7 +278,7 @@ export function bellRow(item: BellItem, ctx: BellContext): BellRow {
         ...b,
         kind: 'shop',
         title: copy.txKind.shop,
-        lines: shopLines(item, lang, copy),
+        lines: shopLines(item, ctx),
         amount: outflow(item.amountFils, lang, copy),
         markable: true,
         verbatim: false,
@@ -363,7 +395,7 @@ export function bellRows(items: readonly BellItem[], ctx: BellContext): BellRow[
           kind: 'card_order',
           title: `${copy.txKind.shop} · ${method}`,
           lines: [
-            ...shopLines(shop, lang, copy),
+            ...shopLines(shop, ctx),
             copy.bellCardOrder(method),
             ...(topup.bonusFils > 0
               ? [copy.bellCardOrderBonus(formatMoney(fils(topup.bonusFils), lang))]

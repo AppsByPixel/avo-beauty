@@ -83,6 +83,7 @@ import {
   TransactionSchema,
 } from '@avo/types';
 import { getJson, postJson } from './client';
+import type { FulfilmentBody } from '../domain/fulfilment';
 
 // ------------------------------------------------------------------- loyalty --
 
@@ -182,6 +183,19 @@ export const OrderResultSchema = z.object({
   totalFils: FilsSchema.nonnegative(),
   items: z.array(OrderLineSchema),
   loyalty: LoyaltyOutcomeSchema,
+  /**
+   * WHERE SHE COLLECTS IT, as the SERVER settled it — migration 0060. `null` on
+   * a delivery; on a pickup always a branch, because a pickup that could not
+   * resolve one was refused rather than placed. This is what lets the
+   * confirmation name the branch at a single-branch salon, where she sent none.
+   *
+   * `.optional()` AS WELL AS `.nullable()`, and only here: `ShopOrderSchema`
+   * makes it required, and so does a fresh `POST /orders`. But a card-paid
+   * order's result is a STORED body (`topup_intent.order_result`), and one
+   * settled before 0060 has no such key. Absent means "not told", which renders
+   * no row — never "the salon".
+   */
+  pickupBranch: ShopOrderSchema.shape.pickupBranch.optional(),
   /** A literal. See the header — `false` is a statement, not a default. */
   voidable: z.literal(false),
 });
@@ -233,12 +247,16 @@ export function placeOrder(
    * It defaults to `{}` so every existing call site — and there is one, plus its
    * tests — keeps compiling and keeps sending exactly what it sent.
    *
+   * W7 ADDS `pickupBranchId`, for a pickup at a salon with several open
+   * branches — its own field, NEVER `branchId`, which the route still refuses
+   * by name. Absent at a single-branch salon, so that body is unchanged too.
+   *
    * NEVER THE ADDRESS FIELDS. `block`, `street`, `building` and `address` are
    * refused BY NAME by the route, alongside a price and a branch, because an
    * address posted into an order never entered her book. Only an `addressId`,
    * and only for delivery.
    */
-  fulfilment: { fulfilment?: 'delivery'; addressId?: string } = {},
+  fulfilment: FulfilmentBody = {},
   signal?: AbortSignal,
 ): Promise<OrderResult> {
   const body = {

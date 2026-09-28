@@ -525,8 +525,14 @@ export const en: Copy = {
   fulfilTitle: 'How would you like it?',
   fulfilPickup: 'Collect it',
   fulfilDelivery: 'Have it delivered',
-  // Names the salon, never a branch — `POST /orders` takes no pickup branch.
+  // Only when there is no branch to name — see copy/types.ts. Since W7 the
+  // tile names the branch (`fulfilPickupAt`) or asks for one.
   fulfilPickupBody: 'Pick it up at the salon when it is ready.',
+  // W7 — NEW COPY, NO DESIGN SOURCE, CLIENT TO REVIEW.
+  fulfilPickupAt: (branch) => `Pick it up at ${branch} when it is ready.`,
+  fulfilPickupChoose: 'Choose a branch below and pick it up there when it is ready.',
+  pickupFrom: 'Collect from',
+  pickupClosedName: (branch) => `${branch} (closed)`,
   fulfilDeliveryBody: 'We will bring it to one of your saved addresses.',
   addressChooseTitle: 'Deliver to',
   addressAddCta: 'Add an address',
@@ -574,6 +580,12 @@ export const en: Copy = {
   addressDeleteCancel: 'Keep it',
 
   cartNoAddress: 'Choose where it should go.',
+  // W7 — NEW COPY. Each refusal from its CODE; none is the server's message.
+  cartNoPickupBranch: 'Choose which branch you will collect it from.',
+  cartPickupRequired: 'This salon has more than one branch now. Choose where you will collect it.',
+  cartPickupUnknown: "That branch isn't one of this salon's. Choose another branch to collect from.",
+  cartPickupClosed:
+    'That branch has just closed, so nothing was charged. Choose another branch to collect from. Your basket is still here.',
   // NOT a failure sentence. The money moved; see `domain/orderRefusal.ts`.
   cartAlreadyPlaced: 'Your order was already placed. Check My orders.',
 
@@ -597,6 +609,10 @@ export const en: Copy = {
   */
   orderAddressFixed: 'The address you gave when you ordered.',
   orderCollectAt: 'Collect at the salon',
+  // W7 — NEW COPY.
+  orderBranchClosed: 'This branch has closed since you ordered. Contact the salon to arrange collection.',
+  orderBranchNotRecorded:
+    'This order was placed before you could choose a branch. Ask the salon where to collect it.',
   orderTruncated: 'Showing your most recent orders.',
 
   bookTitle: 'Book', // design:1240
@@ -936,6 +952,10 @@ export const en: Copy = {
   bellChargeVoided: 'Voided — the amount is back in your wallet',
   bellShopLine: (name, qty) => (qty > 1 ? `${name} × ${qty}` : name),
   bellPickup: 'Pickup',
+  // W7 — NEW COPY.
+  bellPickupAt: (branch) => `Pickup at ${branch}`,
+  bellPickupClosed: (branch) => `Pickup at ${branch}, which has since closed`,
+  bellPickupUnrecorded: 'Pickup, branch not recorded',
   bellDelivery: 'Delivery',
   bellBookingTitle: (salon) => `Your booking at ${salon} is confirmed.`, // whatsapp-templates.md § 1
   bellBookingWith: (service, artist) => `${service} with ${artist}`, // whatsapp-templates.md § 1
@@ -975,6 +995,13 @@ export const en: Copy = {
     invalid_products: 'Something in your basket is no longer available.',
     unknown_address: 'The delivery address you chose was removed.',
     address_required: 'The order needed a delivery address.',
+    // W7 — NEW COPY. The branch is re-checked when the bank confirms.
+    pickup_branch_closed:
+      'The branch you chose closed while you were paying. Choose another branch and pay from your balance.',
+    pickup_branch_required:
+      'The salon now has more than one branch. Choose where to collect it and pay from your balance.',
+    unknown_pickup_branch:
+      "The branch you chose isn't one of this salon's any more. Choose another and pay from your balance.",
     other: "We couldn't place the order on our side.",
   },
   cardOrderInWallet: 'In your wallet',

@@ -59,6 +59,7 @@ import { AccountButton } from '../components/AccountButton';
 import { BellButton } from '../components/BellButton';
 import { BellSheet } from '../components/BellSheet';
 import { useBell } from '../state/useBell';
+import { useOrders } from '../state/useOrders';
 
 interface HomeProps {
   /**
@@ -180,6 +181,15 @@ export function HomeScreen({
     it lives in this header and nowhere else.
   */
   const bell = useBell({ enabled: snapshot !== null, refreshKey: fetchedAt });
+  /*
+    W7 — HER ORDERS, FOR THE BELL'S PICKUP ROWS. The bell's shop item carries
+    no branch (`domain/bell.ts` § limit 3), so where she collects is joined in
+    from `GET /members/me/orders`. Gated on the panel being open — the same
+    gate the Shop screen puts on the same read — so Home does not pay for it on
+    every visit. Until it lands, or if it fails, a pickup row says "Pickup" and
+    names nothing; the bell's own four states are unaffected.
+  */
+  const bellOrders = useOrders(bell.open);
 
   const rows = useMemo(
     () =>
@@ -300,6 +310,7 @@ export function HomeScreen({
             bell={bell}
             salon={salonName(salon, lang)}
             transactions={snapshot.transactions}
+            {...(bellOrders.orders ? { orders: bellOrders.orders } : {})}
             onOpenSettings={() => {
               // The EXISTING switches — Account → Notifications. Not rebuilt.
               bell.close();
