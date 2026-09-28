@@ -358,7 +358,18 @@ done but was not the ask. Aftab: *"the merchant should be able to add a custom o
 dropdown."* So: a per-salon list of free-text rewards the merchant writes, picked like a
 preset, snapshotted onto the campaign at submission. A label only, like every campaign reward
 today: nothing applies a campaign reward as an earning effect, preset or custom. Lane A
-(`campaign_reward`, migration 0064) → trunk types → lanes C and D. **In progress.**
+(`campaign_reward`, migration 0064) → trunk types → lanes C and D. **Done, on main at
+7b42e29. Not yet deployed:** Supabase needs 0064 first.
+
+**The salon's clock, found while answering "my wallet bookings are not on the dashboard"**
+(they were: the simulator's wallet talks to the local API, the Vercel dashboard to Supabase).
+Merchant times read in the viewer's zone, not the salon's: "30 Sept · 12:00 PM" for a 10:00
+Kuwait booking on a PKT Mac. Fixed on every merchant screen (lane C), in the wallet and
+scanner (lane B), and in the API. The API now refuses an instant with no offset on campaigns,
+vouchers and all four booking doors, and `GET /charges` "today" now starts at the salon's
+midnight, where on Vercel it began at 03:00 Kuwait. **Deploy order: dashboard before API.**
+The live dashboard still sends a zoneless campaign `scheduledAt`, which the new API refuses.
+Done, on main at 7b42e29.
 
 **THE THIRD LIST, given 2026-09-28 — six for the wallet, one for the staff scanner.**
 Checked against the code before anything was built; several were not what they read as.
