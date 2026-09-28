@@ -2118,3 +2118,15 @@ push and rate-limited is what stops it becoming a route around non-negotiable #8
 - at least ten Overview analytics widgets
 
 Client-requested restyles are recorded as they land.
+
+**Scanner result sub-line after a climb (lane B, 02ad1bb).** The design (line 381) draws the
+tier from before the charge beside her name. After a charge that climbed a tier, it now
+names the tier she holds, so "Latifa A. · Silver" no longer sits above "Reached Gold". It
+is unchanged in every other case.
+
+**Wallet refresh after paying (lane B, eccc46a).** Home re-reads from the server when the
+payment code closes, when the app returns to the foreground, and on pull-to-refresh
+(native only). The three triggers share one gate, at most one read per 3 seconds. A failed
+refresh keeps the last good balance under the existing stale banner. An upcoming-booking
+card that is already showing refreshes quietly, with no skeleton flash. The failure card
+still appears on its first load.
