@@ -129,7 +129,7 @@ let rereads = 0;
 function Shell() {
   const [n, setN] = useState(0);
   rereads = n;
-  const shop = useShop(BALANCE, () => setN((x) => x + 1));
+  const shop = useShop(BALANCE, () => setN((x) => x + 1), []);
   return (
     <ShopScreen
       shop={shop}

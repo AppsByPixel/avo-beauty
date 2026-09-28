@@ -73,7 +73,7 @@ const ORDER = {
 
 async function mountReady(balance = 24500) {
   const onPaid = vi.fn();
-  const hook = renderHook(() => useShop(balance, onPaid));
+  const hook = renderHook(() => useShop(balance, onPaid, []));
   await waitFor(() => expect(hook.result.current.status).toBe('ready'));
   return { ...hook, onPaid };
 }
@@ -96,7 +96,7 @@ beforeEach(() => {
 describe('the fork defaults to pickup and sends nothing for it', () => {
   it('opens on pickup with no address and nothing blocking', async () => {
     const { result } = await mountReady();
-    expect(result.current.fulfilment).toEqual({ mode: 'pickup', addressId: null });
+    expect(result.current.fulfilment).toEqual({ mode: 'pickup', addressId: null, pickupBranchId: null });
     expect(result.current.block).toBeNull();
   });
 
@@ -145,7 +145,7 @@ describe('delivery', () => {
     act(() => result.current.chooseAddress('ADR-1'));
 
     // Choosing an address IMPLIES delivery — she tapped a specific address.
-    expect(result.current.fulfilment).toEqual({ mode: 'delivery', addressId: 'ADR-1' });
+    expect(result.current.fulfilment).toEqual({ mode: 'delivery', addressId: 'ADR-1', pickupBranchId: null });
     expect(result.current.block).toBeNull();
 
     await act(async () => {
@@ -167,7 +167,7 @@ describe('delivery', () => {
     act(() => result.current.chooseAddress('ADR-1'));
     act(() => result.current.setFulfilment('pickup'));
 
-    expect(result.current.fulfilment).toEqual({ mode: 'pickup', addressId: 'ADR-1' });
+    expect(result.current.fulfilment).toEqual({ mode: 'pickup', addressId: 'ADR-1', pickupBranchId: null });
 
     await act(async () => {
       await result.current.checkout();
@@ -185,7 +185,7 @@ describe('delivery', () => {
     act(() => result.current.chooseAddress('ADR-GONE'));
     act(() => result.current.reconcileAddresses(['ADR-1', 'ADR-2']));
 
-    expect(result.current.fulfilment).toEqual({ mode: 'delivery', addressId: null });
+    expect(result.current.fulfilment).toEqual({ mode: 'delivery', addressId: null, pickupBranchId: null });
     expect(result.current.block).toBe('noAddress');
   });
 });
@@ -357,7 +357,7 @@ describe('a refused order leaves her cart intact', () => {
       await result.current.checkout();
     });
 
-    expect(result.current.fulfilment).toEqual({ mode: 'delivery', addressId: 'ADR-1' });
+    expect(result.current.fulfilment).toEqual({ mode: 'delivery', addressId: 'ADR-1', pickupBranchId: null });
   });
 });
 
@@ -377,7 +377,7 @@ describe('a settled order clears the cart and the choice together', () => {
     });
 
     expect(result.current.cart).toEqual({});
-    expect(result.current.fulfilment).toEqual({ mode: 'pickup', addressId: null });
+    expect(result.current.fulfilment).toEqual({ mode: 'pickup', addressId: null, pickupBranchId: null });
     expect(onPaid).toHaveBeenCalledTimes(1);
   });
 

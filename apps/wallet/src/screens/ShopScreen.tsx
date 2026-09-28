@@ -103,7 +103,6 @@ import type { MemberAddress, Salon, TierName } from '@avo/types';
 import { CartSheet, type CheckoutMethod } from '../components/CartSheet';
 import { CardOrderSheet } from '../components/CardOrderSheet';
 import { useCardCheckout } from '../state/useCardCheckout';
-import { fulfilmentBody } from '../domain/fulfilment';
 import { AddressSheet } from '../components/AddressSheet';
 import { OrdersSheet } from '../components/OrdersSheet';
 import { TopUpSheet } from '../components/TopUpSheet';
@@ -287,7 +286,13 @@ export function ShopScreen({
   const [method, setMethod] = useState<CheckoutMethod>('wallet');
   const card = useCardCheckout({
     lines: shop.orderLines,
-    fulfilment: () => fulfilmentBody(shop.fulfilment),
+    /*
+      THE SAME BODY THE WALLET RAIL SENDS — `fulfilmentBody(choice, branches)`,
+      built once in `useShop` against the same branch list. So the card rail
+      carries `pickupBranchId` exactly when the wallet rail does (W7), and never
+      on a delivery.
+    */
+    fulfilment: () => shop.orderFulfilment,
     onPlaced: (result) => {
       shop.placedByServer();
       setCartOpen(false);
@@ -616,6 +621,8 @@ export function ShopScreen({
         onTopUp={() => topUp.open(topUpAmountForShortfall(shop.shortfall))}
         onFulfilment={shop.setFulfilment}
         onChooseAddress={shop.chooseAddress}
+        pickupBranches={shop.pickupBranches}
+        onChoosePickupBranch={shop.choosePickupBranch}
         onAddAddress={() => {
           book.clearWriteError();
           setAddressSheet({ address: null });
@@ -637,7 +644,15 @@ export function ShopScreen({
           */
           if (shop.refusal?.kind === 'short') shop.clearRefusal();
         }}
-        onPayCard={card.pay}
+        /*
+          The card rail's second gate, as `useShop.checkout` is the wallet's: the
+          button is already disabled on a block, and a caller that ignored that
+          still cannot open a payment for an unsubmittable basket. The server's
+          pre-flight refusal is the control (#7); this is the courtesy.
+        */
+        onPayCard={(m) => {
+          if (shop.block === null) card.pay(m);
+        }}
         cardOpen={card.openAttempt}
         onCheckCard={card.check}
       />
@@ -727,7 +742,19 @@ export function ShopScreen({
           absent case is the closed sheet, where there is no transaction either.
         */
         {...(invoice
-          ? { detail: { items: invoice.items, balanceAfterFils: invoice.balanceAfterFils } }
+          ? {
+              detail: {
+                items: invoice.items,
+                balanceAfterFils: invoice.balanceAfterFils,
+                /*
+                  W7 — WHERE SHE COLLECTS IT, as the server settled it. At a
+                  single-branch salon she sent nothing, and this is where she
+                  learns the branch. Absent (a card result stored before 0060)
+                  and null (a delivery) both draw no row.
+                */
+                ...(invoice.pickupBranch ? { pickupBranch: invoice.pickupBranch } : {}),
+              },
+            }
           : {})}
         onClose={() => setInvoice(null)}
         onReport={onReport}

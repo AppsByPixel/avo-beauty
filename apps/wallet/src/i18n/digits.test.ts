@@ -242,6 +242,13 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   // --- the shop paid by card (W2). Already-formatted money, plus a method word.
   cartPayWith: [MONEY_SAMPLE, 'KNET'],
   cardOrderRefusedBody: [MONEY_SAMPLE],
+
+  // --- the pickup branch (W7). A branch NAME, already in the reading language
+  // (`branchName`), so the sample carries no digits of its own.
+  fulfilPickupAt: ['Salmiya'],
+  pickupClosedName: ['Salmiya'],
+  bellPickupAt: ['Salmiya'],
+  bellPickupClosed: ['Salmiya'],
 };
 
 /**

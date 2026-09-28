@@ -122,7 +122,7 @@ function Harness({ lang = 'en' as 'en' | 'ar' }) {
 }
 
 function Screen() {
-  const shop = useShop(60000, onToppedUp);
+  const shop = useShop(60000, onToppedUp, []);
   return (
     <ShopScreen
       shop={shop}

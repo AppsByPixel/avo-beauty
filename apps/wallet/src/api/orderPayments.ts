@@ -39,6 +39,7 @@ import { z } from 'zod';
 import { TopUpIntentPublicSchema, type PaymentMethod } from '@avo/types';
 import { getJson, postJson } from './client';
 import { OrderResultSchema, type CartLine } from './shop';
+import type { FulfilmentBody } from '../domain/fulfilment';
 
 export const OrderPaymentStatusSchema = z.enum(['awaiting_payment', 'not_paid', 'placed', 'refused']);
 export type OrderPaymentStatus = z.infer<typeof OrderPaymentStatusSchema>;
@@ -78,7 +79,13 @@ export type OrderPaymentView = z.infer<typeof OrderPaymentViewSchema>;
 export function createOrderPayment(
   items: CartLine[],
   method: Exclude<PaymentMethod, 'wallet'>,
-  fulfilment: { fulfilment?: 'delivery'; addressId?: string },
+  /**
+   * `fulfilmentBody(choice, branches)` — the same function `POST /orders` is
+   * built from, so the two rails cannot disagree about where it goes. Carries
+   * `pickupBranchId` for a pickup at a multi-branch salon (W7), never on a
+   * delivery, and never `branchId`.
+   */
+  fulfilment: FulfilmentBody,
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<OrderPaymentView> {

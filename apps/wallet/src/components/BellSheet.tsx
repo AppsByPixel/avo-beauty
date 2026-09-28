@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import type { Transaction } from '@avo/types';
+import type { ShopOrder, Transaction } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { Sheet } from './Sheet';
 import { OfflineBanner } from './Banners';
@@ -31,22 +31,30 @@ import { focusable } from '../theme/focus';
 import { bellRows, campaignsHidden, idsToMark, type BellRow } from '../domain/bell';
 import type { BellController } from '../state/useBell';
 
+const NO_ORDERS: readonly ShopOrder[] = [];
+
 interface Props {
   bell: BellController;
   /** The salon's name in the reading language, for the template titles. */
   salon: string;
   /** Home's transaction page — how a voided charge is recognised. */
   transactions: readonly Pick<Transaction, 'id' | 'voidedAt'>[];
+  /**
+   * Her orders, for where a pickup is collected — the shop item carries no
+   * branch (`domain/bell.ts` § limit 3). Optional; without it a pickup row
+   * says "Pickup" and nothing about where.
+   */
+  orders?: readonly ShopOrder[];
   /** Account → Notifications, where the existing switches are. */
   onOpenSettings: () => void;
 }
 
-export function BellSheet({ bell, salon, transactions, onOpenSettings }: Props) {
+export function BellSheet({ bell, salon, transactions, orders = NO_ORDERS, onOpenSettings }: Props) {
   const { lang, copy } = useLanguage();
 
   const rows = useMemo(
-    () => (bell.items ? bellRows(bell.items, { lang, copy, salon, transactions }) : null),
-    [bell.items, lang, copy, salon, transactions],
+    () => (bell.items ? bellRows(bell.items, { lang, copy, salon, transactions, orders }) : null),
+    [bell.items, lang, copy, salon, transactions, orders],
   );
 
   /*

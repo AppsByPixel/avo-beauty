@@ -90,8 +90,37 @@
  * case: after an order settles the cart is emptied, she adds something else, and
  * that new cart must not arrive under the key the settled order burned.
  *
- * `fulfilmentBody(choice)` is therefore read at CALL TIME rather than folded into
- * the key, and pickup contributes no keys at all — see `domain/fulfilment.ts`.
+ * `fulfilmentBody(choice, branches)` is therefore read at CALL TIME rather than
+ * folded into the key, and a single-branch pickup contributes no keys at all —
+ * see `domain/fulfilment.ts`.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * AND THE PICKUP BRANCH IS NOT IN IT EITHER — W7, decided on the same walk.
+ *
+ * The API hashes `pickupBranchId` too ("collecting at Salmiya and at Kuwait
+ * City are different orders", routes/orders.ts), and it is right: they are.
+ * The question is only what the CLIENT does when she changes branch under a
+ * cart whose last attempt has an unknown outcome — she taps Pay collecting at
+ * Salmiya, the answer never arrives, she switches to Kuwait City and taps again:
+ *
+ *   branch NOT in the signature — SAME key.
+ *       the first attempt COMMITTED  → 422 `idempotency_key_reused` →
+ *           `alreadyPlaced`: "Your order was already placed. Check My orders."
+ *           ONE debit, and My orders now says WHERE — Salmiya, the branch the
+ *           committed order is actually waiting at.
+ *       the first attempt ROLLED BACK → nothing persisted, nothing burned; the
+ *           Kuwait City order is placed at 201. ONE debit.
+ *
+ *   branch IN the signature — NEW key.
+ *       the first attempt COMMITTED  → a second order at Kuwait City and A
+ *           SECOND DEBIT, for one basket she only meant to buy once.
+ *
+ * So the same order at a different counter is the SAME PURCHASE for the key's
+ * purposes, and a DIFFERENT REQUEST for the server's — which is exactly the
+ * pair of facts a 422 reports. The ordinary branch change is unaffected: the
+ * case that matters in practice is `pickup_branch_closed`, a refusal that
+ * ROLLED BACK, so the same key carries her corrected branch straight through.
+ * Pinned in `pickupBranchRender.test.tsx` § the idempotency key.
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
@@ -121,9 +150,12 @@ import {
   fulfilmentBody,
   PICKUP,
   reconcileChoice,
+  reconcilePickupBranch,
   type CheckoutBlock,
   type Fulfilment,
+  type FulfilmentBody,
   type FulfilmentChoice,
+  type PickupBranchOption,
 } from '../domain/fulfilment';
 
 /**
@@ -219,11 +251,24 @@ export interface ShopState {
    */
   fulfilment: FulfilmentChoice;
   /**
-   * Why Pay cannot be tapped yet, or null. Today the only value is `noAddress`.
-   * A COURTESY, not a control: the server refuses the same case by name and #7
-   * makes that the authority.
+   * Why Pay cannot be tapped yet, or null: `noAddress`, or — W7 — a pickup at a
+   * multi-branch salon with no branch chosen (`noPickupBranch`). A COURTESY,
+   * not a control: the server refuses both cases by name and #7 makes that the
+   * authority.
    */
   block: CheckoutBlock | null;
+  /**
+   * The salon's OPEN branches, as this hook was handed them — the one list the
+   * picker draws, the block reads and the body is built against, so the three
+   * cannot disagree about whether there is a choice.
+   */
+  pickupBranches: readonly PickupBranchOption[];
+  /**
+   * `fulfilmentBody(choice, pickupBranches)` for the cart as it stands — what
+   * the CARD rail sends. The wallet rail builds the same value inside
+   * `checkout`; neither feeds the idempotency key.
+   */
+  orderFulfilment: FulfilmentBody;
 }
 
 export interface ShopActions {
@@ -242,6 +287,11 @@ export interface ShopActions {
   setFulfilment: (mode: Fulfilment) => void;
   /** Choose which saved address a delivery goes to. */
   chooseAddress: (addressId: string) => void;
+  /**
+   * Choose which branch she collects from (W7). Implies pickup, as choosing an
+   * address implies delivery: she tapped a branch inside the Collect section.
+   */
+  choosePickupBranch: (branchId: string) => void;
   /**
    * Re-resolve the selection against the ids that still exist, after the
    * address book has been read or written. See `reconcileChoice` — a selection
@@ -270,7 +320,25 @@ export interface ShopActions {
 /** What the shell owns and the screen renders. */
 export type ShopController = ShopState & ShopActions;
 
-export function useShop(balanceFils: number, onPaid: () => void): ShopController {
+export function useShop(
+  balanceFils: number,
+  onPaid: () => void,
+  /**
+   * `Salon.branches` — OPEN branches only, per the salons route. REQUIRED
+   * rather than defaulted, for `fulfilmentBody`'s reason: a shell that forgot
+   * it would send no branch at a multi-branch salon and every pickup there
+   * would be refused.
+   */
+  pickupBranches: readonly PickupBranchOption[],
+  /**
+   * Re-read the salon, because the server just said the branch list on screen
+   * is wrong — a closed, unknown or newly-required pickup branch. The shell
+   * passes `home.retry`, which re-reads `GET /salons/{id}`; the reconcile below
+   * then drops a branch that closed. Optional: a caller with no salon to
+   * re-read (a spec) simply keeps its list.
+   */
+  onBranchesStale?: () => void,
+): ShopController {
   const [status, setStatus] = useState<ShopStatus>('loading');
   const [products, setProducts] = useState<Product[] | null>(null);
   const [failure, setFailure] = useState<ShopState['failure']>(null);
@@ -378,7 +446,10 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
   // ------------------------------------------------------------ fulfilment --
   const setFulfilment = useCallback((mode: Fulfilment) => {
     // The address is KEPT across a switch to pickup — see `ShopActions`.
-    setChoice((c) => ({ mode, addressId: c.addressId }));
+    // So is the pickup branch across a switch to delivery — `fulfilmentBody`
+    // drops it on that path, which is what keeps `pickup_branch_not_for_delivery`
+    // off the wire.
+    setChoice((c) => ({ ...c, mode }));
     setRefusal(null);
   }, []);
 
@@ -391,16 +462,48 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
       delivery section, which is an act of choosing, and leaving the mode on
       pickup would drop what she just did.
     */
-    setChoice({ mode: 'delivery', addressId });
+    setChoice((c) => ({ ...c, mode: 'delivery', addressId }));
     setRefusal(null);
+  }, []);
+
+  const choosePickupBranch = useCallback((branchId: string) => {
+    setChoice((c) => ({ ...c, mode: 'pickup', pickupBranchId: branchId }));
+    setRefusal(null);
+  }, []);
+
+  /*
+    THE BRANCH LIST IS RE-RESOLVED WHENEVER IT CHANGES — a closed branch drops
+    out of `salon.branches` on the next read, and a selection pointing at it
+    would be refused `pickup_branch_closed`. `reconcilePickupBranch` loses the
+    selection and NEVER moves her to another branch. Keyed on the ids, not the
+    array, so a re-read of an unchanged list does not run it.
+  */
+  const branchKey = pickupBranches.map((b) => b.id).join(',');
+  useEffect(() => {
+    setChoice((c) => reconcilePickupBranch(c, pickupBranches));
+    // `branchKey` IS the dependency; the array's identity changes on every read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchKey]);
+
+  const branchesStaleRef = useRef(onBranchesStale);
+  branchesStaleRef.current = onBranchesStale;
+  /**
+   * Every refusal goes through here, from either rail. The three pickup-branch
+   * refusals mean the list she chose from is out of date, so the salon is
+   * re-read; the refusal itself stays on screen until she chooses again.
+   */
+  const refuse = useCallback((r: CheckoutRefusal) => {
+    setRefusal(r);
+    if (r.kind === 'pickupRequired' || r.kind === 'pickupUnknown' || r.kind === 'pickupClosed') {
+      branchesStaleRef.current?.();
+    }
   }, []);
 
   const reconcileAddresses = useCallback((addressIds: readonly string[]) => {
     setChoice((c) => {
-      const next = reconcileChoice(c, addressIds);
-      // Identity is preserved when nothing changed, so this never re-renders on
-      // every refetch of an unchanged book.
-      return next.addressId === c.addressId && next.mode === c.mode ? c : next;
+      // `reconcileChoice` returns `c` itself when nothing changed, so this
+      // never re-renders on every refetch of an unchanged book.
+      return reconcileChoice(c, addressIds);
     });
   }, []);
 
@@ -418,10 +521,14 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
       It sets the refusal the SERVER would have set, so the sentence she reads is
       the same either way.
     */
-    if (checkoutBlock(fulfilment) === 'noAddress') {
+    const blocked = checkoutBlock(fulfilment, pickupBranches);
+    if (blocked === 'noAddress') {
       setRefusal({ kind: 'noAddress' });
       return null;
     }
+    // No branch chosen at a multi-branch salon. The sheet draws the block's own
+    // chip; there is no server refusal to impersonate, so nothing is set.
+    if (blocked === 'noPickupBranch') return null;
 
     setBusy(true);
     setRefusal(null);
@@ -431,7 +538,11 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
         at call time, and deliberately does not feed the key — see the header §
         THE KEY IS KEYED ON THE CART, which walks the double-charge this prevents.
       */
-      const result = await placeOrder(items, keyRef.current.key, fulfilmentBody(fulfilment));
+      const result = await placeOrder(
+        items,
+        keyRef.current.key,
+        fulfilmentBody(fulfilment, pickupBranches),
+      );
       /*
         The cart is emptied on success and the wallet re-reads. `balanceAfterFils`
         is deliberately not stored — #2: the balance on screen is the server's
@@ -460,7 +571,7 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
         has no renderer. It is `domain/orderRefusal.ts` now, and the race that
         motivated it is driven and pinned in `orderRefusal.test.ts`.
       */
-      setRefusal(orderRefusal(err));
+      refuse(orderRefusal(err));
       return null;
     } finally {
       if (aliveRef.current) setBusy(false);
@@ -473,10 +584,14 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
       misplaced line from being wrong and the cost is a customer who has to
       rebuild her basket after a network blip.
     */
-  }, [busy, cart, products, fulfilment, onPaid]);
+  }, [busy, cart, products, fulfilment, pickupBranches, onPaid, refuse]);
 
   const orderLines = useMemo(() => toOrderLines(cart, products ?? []), [cart, products]);
-  const showRefusal = useCallback((r: CheckoutRefusal) => setRefusal(r), []);
+  const showRefusal = refuse;
+  const orderFulfilment = useMemo(
+    () => fulfilmentBody(fulfilment, pickupBranches),
+    [fulfilment, pickupBranches],
+  );
   const placedByServer = useCallback(() => {
     // The same three lines the wallet path runs on success, for the same reasons.
     setCart({});
@@ -502,13 +617,16 @@ export function useShop(balanceFils: number, onPaid: () => void): ShopController
     busy,
     refusal,
     fulfilment,
-    block: checkoutBlock(fulfilment),
+    block: checkoutBlock(fulfilment, pickupBranches),
+    pickupBranches,
+    orderFulfilment,
     retry: useCallback(() => setReload((n) => n + 1), []),
     add,
     remove,
     clearRefusal,
     setFulfilment,
     chooseAddress,
+    choosePickupBranch,
     reconcileAddresses,
     checkout,
   };

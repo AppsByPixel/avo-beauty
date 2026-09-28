@@ -53,8 +53,8 @@
  *                           transcribed from a server literal is exactly the
  *                           receipt figure that goes quietly wrong. Reported.
  *
- *                           Pickup is not on the response at all; it is on
- *                           `ShopOrder`, a different read.
+ *                           (The design's "Pickup" row here is that visit
+ *                           delta, not a location.)
  *
  *   `feeFils`, `note`       merchant-visible-customer-never, and DECISIONS 107.
  *                           Neither is a field on `ReceiptDetail`, so neither
@@ -122,6 +122,19 @@ export interface ReceiptDetail {
    * truthiness check would drop.
    */
   balanceAfterFils?: number;
+  /**
+   * `OrderResult.pickupBranch` — W7, migration 0060. WHERE SHE COLLECTS IT, as
+   * the server settled it, which is the only place she learns the branch at a
+   * single-branch salon (she sent none). Absent for a delivery and for a card
+   * result stored before 0060: no row, never "the salon".
+   *
+   * A DIFFERENT FACT FROM THE `Branch` ROW, even when the two names agree. That
+   * row is `tx.branchId`, the attribution branch; this is the counter. Today a
+   * chosen pickup branch IS the attribution branch (services/order.ts), so the
+   * two read the same — but they are two columns, and a receipt that merged
+   * them would be wrong the day they diverge.
+   */
+  pickupBranch?: Named & { closed: boolean };
 }
 
 export interface Receipt {
@@ -357,6 +370,19 @@ export function buildReceipt(
       rows.push({ label: copy.txPaidFrom, value: copy.txMethod[tx.method] });
     }
     if (branch) rows.push({ label: copy.txBranch, value: branch });
+  }
+
+  /*
+    W7 — WHERE SHE COLLECTS IT, from the checkout response. `closed` is always
+    false on a fresh order (a closed branch is refused at checkout) and is
+    rendered anyway, so the builder is total rather than trusting that.
+  */
+  if (detail?.pickupBranch) {
+    const name = branchName(detail.pickupBranch, lang);
+    rows.push({
+      label: copy.pickupFrom,
+      value: detail.pickupBranch.closed ? copy.pickupClosedName(name) : name,
+    });
   }
 
   /*

@@ -135,3 +135,40 @@ export function sortedOrders(orders: readonly ShopOrder[]): ShopOrder[] {
     return b.createdAt.localeCompare(a.createdAt);
   });
 }
+
+/**
+ * WHERE A PICKUP ORDER IS COLLECTED — W7, migration 0060 — or `null` for a
+ * delivery. One function for the orders list and the bell, so the two cannot
+ * tell her different things about one order.
+ *
+ * FOUR ANSWERS, and two of them are the reason this is a function:
+ *
+ *   `branch`       the branch she chose, or the salon's only one. Named from
+ *                  the ORDER's own `pickupBranch` (served inline, name and
+ *                  all), never looked up in `salon.branches` — that list is
+ *                  OPEN branches only, so a closed one would vanish.
+ *   `closedWaiting` `closed: true` on an order she has NOT collected yet: the
+ *                  branch closed after she ordered. Not a normal pickup, and
+ *                  must not be drawn as one — she would go to a shut counter.
+ *                  A COLLECTED order at a since-closed branch is plain
+ *                  `branch` with `closed: true`: it is history, and the
+ *                  warning would ask her to act on something finished.
+ *   `notRecorded`  `pickup` + `pickupBranch: null`: placed before 0060 at a
+ *                  multi-branch salon, so she was never asked. NOT a branch
+ *                  and NOT "the salon" — ShopOrderSchema says so outright. The
+ *                  honest answer is that it was not recorded.
+ */
+export type PickupLocation =
+  | { kind: 'branch'; branch: NonNullable<ShopOrder['pickupBranch']> }
+  | { kind: 'closedWaiting'; branch: NonNullable<ShopOrder['pickupBranch']> }
+  | { kind: 'notRecorded' };
+
+export function pickupLocation(
+  order: Pick<ShopOrder, 'fulfilment' | 'status' | 'pickupBranch'>,
+): PickupLocation | null {
+  if (order.fulfilment !== 'pickup') return null;
+  const branch = order.pickupBranch;
+  if (branch === null) return { kind: 'notRecorded' };
+  if (branch.closed && orderIsOpen(order)) return { kind: 'closedWaiting', branch };
+  return { kind: 'branch', branch };
+}

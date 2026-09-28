@@ -774,13 +774,49 @@ export interface Copy {
   fulfilPickup: string;
   fulfilDelivery: string;
   /**
-   * Under the pickup option. IT NAMES THE SALON AND NOT A BRANCH, deliberately:
-   * `POST /orders` takes no pickup branch, resolves the branch server-side, and
-   * refuses a client-supplied `branchId` by name — so a sentence naming a branch
-   * would be a promise this app cannot keep. See `domain/fulfilment.ts` § THE
-   * PICKUP BRANCH.
+   * Under the pickup option, ONLY WHEN THE APP DOES NOT KNOW THE BRANCH — a
+   * salon whose branch list is empty. It used to be the only sentence, because
+   * `POST /orders` took no pickup branch; since W7 (migration 0060) the tile
+   * names the branch whenever there is one to name — `fulfilPickupAt` — and
+   * asks her to choose when there are several — `fulfilPickupChoose`.
    */
   fulfilPickupBody: string;
+  /**
+   * W7. NEW COPY, NO DESIGN SOURCE. Under the pickup option, naming the branch:
+   * the salon's only open branch (nothing is sent; the server uses it), or the
+   * one she chose from the picker. `fulfilPickupBody` with the branch in place
+   * of "the salon".
+   */
+  fulfilPickupAt(branch: string): string;
+  /** W7. NEW COPY. Under the pickup option at a multi-branch salon, none chosen. */
+  fulfilPickupChoose: string;
+  /**
+   * W7. NEW COPY. "Collect from" — the picker's heading, the invoice row's
+   * label and the order row's label. One key because it is one fact in three
+   * places, and three spellings of it would be three things to review.
+   */
+  pickupFrom: string;
+  /** W7. NEW COPY. A branch that has closed since — "Salmiya (closed)". */
+  pickupClosedName(branch: string): string;
+  /**
+   * W7. NEW COPY. Pay is held: a pickup at a multi-branch salon with no branch
+   * chosen. The client-side mirror of `pickup_branch_required`.
+   */
+  cartNoPickupBranch: string;
+  /**
+   * W7. NEW COPY. The three pickup refusals, each from its CODE — never the
+   * server's English `message`. All three are made before the debit, so the
+   * basket is kept and nothing was charged.
+   *
+   *   `cartPickupRequired`  400 `pickup_branch_required` — the list on screen
+   *                         was stale; the salon has more than one branch now.
+   *   `cartPickupUnknown`   404 `unknown_pickup_branch`.
+   *   `cartPickupClosed`    409 `pickup_branch_closed` — closed between her
+   *                         choosing it and paying. Says the basket survived.
+   */
+  cartPickupRequired: string;
+  cartPickupUnknown: string;
+  cartPickupClosed: string;
   /** Under the delivery option, when she has at least one saved address. */
   fulfilDeliveryBody: string;
   /** The heading above her saved addresses, inside the delivery section. */
@@ -898,8 +934,24 @@ export interface Copy {
    * is why there is no edit control on an order.
    */
   orderAddressFixed: string;
-  /** Where a pickup order is collected. Names the salon, not a branch. */
+  /**
+   * Where a pickup order is collected, when the app has no branch to name. No
+   * longer reached by a real order: since W7 a pickup names its branch, and a
+   * pickup with NO branch is `orderBranchNotRecorded`, which must not say "the
+   * salon" (ShopOrderSchema.pickupBranch: "Do not render it as 'the salon'").
+   */
   orderCollectAt: string;
+  /**
+   * W7. NEW COPY. `closed: true` on an order she is still waiting to collect —
+   * the branch closed after she ordered. Said plainly, with what to do.
+   */
+  orderBranchClosed: string;
+  /**
+   * W7. NEW COPY. `pickup` + `pickupBranch: null` — placed before 0060 at a
+   * multi-branch salon, so she was never asked. Neither a branch nor "the
+   * salon": the honest sentence is that it was not recorded.
+   */
+  orderBranchNotRecorded: string;
   /** The page was capped at 200. Not a case this app will meet; read anyway. */
   orderTruncated: string;
 
@@ -1380,7 +1432,19 @@ export interface Copy {
   bellChargeVoided: string;
   /** "Repair mask × 2" — the qty is a count. Qty 1 is the name alone. */
   bellShopLine(name: string, qty: number): string;
+  /**
+   * A pickup whose order is not on the page `GET /members/me/orders` returned
+   * — the read failed, is still in flight, or is past its cap. Says pickup and
+   * nothing about where. (The bell item itself carries no branch; see
+   * `domain/bell.ts` § shopLines.)
+   */
   bellPickup: string;
+  /** W7. NEW COPY. A pickup at a named branch. */
+  bellPickupAt(branch: string): string;
+  /** W7. NEW COPY. A pickup still to collect, at a branch that has since closed. */
+  bellPickupClosed(branch: string): string;
+  /** W7. NEW COPY. A pickup placed before she could choose a branch. */
+  bellPickupUnrecorded: string;
   bellDelivery: string;
   /** whatsapp-templates.md § 1 — "Your booking at {{1}} is confirmed." */
   bellBookingTitle(salon: string): string;

@@ -620,6 +620,11 @@ export const ar: Copy = {
   fulfilDelivery: 'توصيل',
   // يذكر الصالون ولا يذكر الفرع — لا يوجد فرع استلام في العقد.
   fulfilPickupBody: 'استلميها من الصالون عند جهوزها.',
+  // W7 — نص جديد بلا مصدر في التصميم. مُدرج في AR_UNVERIFIED.
+  fulfilPickupAt: (branch) => `استلميها من ${branch} عند جهوزها.`,
+  fulfilPickupChoose: 'اختاري فرعاً أدناه واستلميها منه عند جهوزها.',
+  pickupFrom: 'الاستلام من',
+  pickupClosedName: (branch) => `${branch} (مغلق)`,
   fulfilDeliveryBody: 'سنوصلها إلى أحد عناوينك المحفوظة.',
   addressChooseTitle: 'التوصيل إلى',
   addressAddCta: 'أضيفي عنواناً',
@@ -658,6 +663,11 @@ export const ar: Copy = {
   addressDeleteCancel: 'الاحتفاظ به',
 
   cartNoAddress: 'اختاري إلى أين نوصلها.',
+  // W7 — كل رفض من رمزه، لا من رسالة الخادم الإنجليزية.
+  cartNoPickupBranch: 'اختاري الفرع الذي ستستلمين منه.',
+  cartPickupRequired: 'أصبح لهذا الصالون أكثر من فرع. اختاري من أين ستستلمين طلبكِ.',
+  cartPickupUnknown: 'هذا الفرع ليس من فروع الصالون. اختاري فرعاً آخر للاستلام.',
+  cartPickupClosed: 'أُغلق هذا الفرع للتو، ولم يُخصم أي مبلغ. اختاري فرعاً آخر للاستلام، وسلّتكِ كما هي.',
   // ليست جملة فشل: المبلغ خُصم فعلاً والطلب موجود.
   cartAlreadyPlaced: 'طلبك مُسجّل بالفعل. راجعي طلباتي.',
 
@@ -677,6 +687,8 @@ export const ar: Copy = {
   orderDeliveringTo: 'إلى',
   orderAddressFixed: 'العنوان الذي أدخلتِه عند الطلب.',
   orderCollectAt: 'الاستلام من الصالون',
+  orderBranchClosed: 'أُغلق هذا الفرع بعد طلبكِ. تواصلي مع الصالون لترتيب الاستلام.',
+  orderBranchNotRecorded: 'تم هذا الطلب قبل أن يصبح اختيار الفرع ممكناً. اسألي الصالون من أين تستلمينه.',
   orderTruncated: 'نعرض أحدث طلباتك.',
 
   bookTitle: 'احجزي', // design:1347
@@ -986,6 +998,9 @@ export const ar: Copy = {
   bellChargeVoided: 'أُلغيت العملية ورجع المبلغ لمحفظتكِ',
   bellShopLine: (name, qty) => (qty > 1 ? `${name} × ${ea(qty)}` : name),
   bellPickup: 'استلام من الصالون',
+  bellPickupAt: (branch) => `استلام من ${branch}`,
+  bellPickupClosed: (branch) => `استلام من ${branch}، وقد أُغلق الفرع منذ ذلك الحين`,
+  bellPickupUnrecorded: 'استلام، والفرع غير مسجّل',
   bellDelivery: 'توصيل',
   bellBookingTitle: (salon) => `تم تأكيد حجزكِ في ${salon}.`, // whatsapp-templates.md § 1
   bellBookingWith: (service, artist) => `${service} مع ${artist}`, // whatsapp-templates.md § 1
@@ -1024,6 +1039,9 @@ export const ar: Copy = {
     invalid_products: 'أحد المنتجات في سلتكِ لم يعد متوفراً.',
     unknown_address: 'حُذف عنوان التوصيل الذي اخترتِه.',
     address_required: 'احتاج الطلب إلى عنوان توصيل.',
+    pickup_branch_closed: 'أُغلق الفرع الذي اخترتِه أثناء الدفع. اختاري فرعاً آخر وادفعي من رصيدكِ.',
+    pickup_branch_required: 'أصبح للصالون أكثر من فرع. اختاري من أين ستستلمينها وادفعي من رصيدكِ.',
+    unknown_pickup_branch: 'الفرع الذي اخترتِه لم يعد من فروع الصالون. اختاري فرعاً آخر وادفعي من رصيدكِ.',
     other: 'تعذّر علينا إتمام الطلب.',
   },
   cardOrderInWallet: 'في محفظتكِ',
@@ -1381,4 +1399,27 @@ export const AR_UNVERIFIED = [
   'cardOrderRefusal.other',
   'cardOrderInWallet',
   'cardOrderBackToCart',
+  /**
+   * THE PICKUP BRANCH — W7, "Collect it is good, but from which branch if they
+   * have multiple". No design source for any of them. Read first:
+   * `cartPickupClosed` (the refusal that can land between choosing and paying,
+   * and has to say her basket survived), `orderBranchNotRecorded` (it must not
+   * read as "the salon") and `fulfilPickupAt` (the register of the tile).
+   */
+  'fulfilPickupAt',
+  'fulfilPickupChoose',
+  'pickupFrom',
+  'pickupClosedName',
+  'cartNoPickupBranch',
+  'cartPickupRequired',
+  'cartPickupUnknown',
+  'cartPickupClosed',
+  'orderBranchClosed',
+  'orderBranchNotRecorded',
+  'bellPickupAt',
+  'bellPickupClosed',
+  'bellPickupUnrecorded',
+  'cardOrderRefusal.pickup_branch_closed',
+  'cardOrderRefusal.pickup_branch_required',
+  'cardOrderRefusal.unknown_pickup_branch',
 ] as const;

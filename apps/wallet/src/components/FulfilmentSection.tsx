@@ -23,14 +23,23 @@
  *   it is the row somebody later "fixes" by putting a number in it. The cart's
  *   totals block is untouched by this component.
  *
- *   NO PICKUP BRANCH PICKER. `POST /orders` takes no pickup branch, resolves the
- *   branch server-side and refuses a client-supplied `branchId` by name. So the
- *   pickup tile says "the salon" and claims no location. The three ways to fake
- *   one — reuse the booking screen's `branchChoice` filter, send it anyway, or
- *   show a picker and drop the value — are all rejected in
- *   `domain/fulfilment.ts` § THE PICKUP BRANCH, and the third is the dangerous
- *   one: she would believe she chose Salmiya and nothing on screen would ever
- *   say the location was not settled. REPORTED as a gap.
+ *   A PICKUP BRANCH PICKER ONLY WHEN THERE IS A CHOICE — W7. This paragraph
+ *   used to read "NO PICKUP BRANCH PICKER": `POST /orders` took no pickup
+ *   branch and refused `branchId` by name, so the tile said "the salon" and
+ *   claimed no location. Migration 0060 gave the API a `pickupBranchId` of its
+ *   own, and the picker below is the client half. With ONE open branch there is
+ *   nothing to choose: no picker, nothing sent, and the tile NAMES that branch
+ *   rather than saying "the salon". With several, the branches are listed under
+ *   "Collect it" as the same radio rows the addresses use one step down, NONE
+ *   IS PRESELECTED, and Pay is held until she picks — see
+ *   `domain/fulfilment.ts` § THE PICKUP BRANCH for why there is no default.
+ *
+ *   ITS STATES ARE THE SNAPSHOT'S. The list is `salon.branches` from the
+ *   snapshot Shop is not rendered without, so it has no loading, empty or cold
+ *   failure of its own to draw: loading is Home's skeleton, "empty" is "fewer
+ *   than two" and draws no picker, and offline keeps the list the snapshot
+ *   holds — the server re-validates the branch at the POST, and a stale choice
+ *   comes back as `pickup_branch_closed`, rendered in the cart from its code.
  *
  *   NO DEFAULT INTO DELIVERY. A customer with one saved address is not thereby
  *   choosing delivery. Pickup is the default because it is what this app did
@@ -66,7 +75,15 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { MemberAddress } from '@avo/types';
 import { useLanguage } from '../i18n/language';
 import { addressLines } from '../domain/address';
-import type { Fulfilment, FulfilmentChoice } from '../domain/fulfilment';
+import {
+  chosenPickupBranch,
+  onlyPickupBranch,
+  pickupPickerApplies,
+  type Fulfilment,
+  type FulfilmentChoice,
+  type PickupBranchOption,
+} from '../domain/fulfilment';
+import { branchName } from '../domain/names';
 import type { AddressBookController } from '../state/useAddresses';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
@@ -79,7 +96,16 @@ interface Props {
   onAdd: () => void;
   onEdit: (address: MemberAddress) => void;
   onDelete: (address: MemberAddress) => void;
+  /**
+   * W7 — the salon's OPEN branches (`useShop.pickupBranches`). OPTIONAL,
+   * defaulting to none, so a spec that mounts this section without a salon
+   * gets the section it pinned: no picker, and the tile's no-branch sentence.
+   */
+  pickupBranches?: readonly PickupBranchOption[];
+  onChoosePickupBranch?: (branchId: string) => void;
 }
+
+const NO_BRANCHES: readonly PickupBranchOption[] = [];
 
 export function FulfilmentSection({
   choice,
@@ -89,9 +115,27 @@ export function FulfilmentSection({
   onAdd,
   onEdit,
   onDelete,
+  pickupBranches = NO_BRANCHES,
+  onChoosePickupBranch = () => undefined,
 }: Props) {
   const { lang, copy } = useLanguage();
   const delivering = choice.mode === 'delivery';
+
+  /*
+    WHAT THE PICKUP TILE SAYS, and it never says "the salon" when there is a
+    branch to name. One open branch → that branch (nothing is sent; the server
+    uses it). Several → her choice, or "choose a branch below". None known →
+    the original sentence, which is the only case left where it is true.
+  */
+  const only = onlyPickupBranch(pickupBranches);
+  const chosen = chosenPickupBranch(choice, pickupBranches);
+  const picker = pickupPickerApplies(pickupBranches);
+  const named = only ?? chosen;
+  const pickupBody = named
+    ? copy.fulfilPickupAt(branchName(named, lang))
+    : picker
+      ? copy.fulfilPickupChoose
+      : copy.fulfilPickupBody;
 
   return (
     <View style={styles.section} testID="fulfilment-section">
@@ -100,11 +144,41 @@ export function FulfilmentSection({
       {/* --------------------------------------------------- the two options -- */}
       <Option
         title={copy.fulfilPickup}
-        body={copy.fulfilPickupBody}
+        body={pickupBody}
         selected={!delivering}
         onPress={() => onMode('pickup')}
         testID="fulfil-pickup"
       />
+
+      {/*
+        W7 — WHERE SHE COLLECTS IT, under "Collect it" and only while collecting,
+        for the address list's reason: a chooser under the option she did not
+        pick would be offering a decision that cannot reach the server
+        (`fulfilmentBody` drops the branch on a delivery).
+
+        NOTHING IS PRESELECTED. Every row starts unselected and Pay is held
+        (`noPickupBranch`) until she taps one. A branch she did not notice being
+        chosen is an order waiting at the wrong counter.
+      */}
+      {!delivering && picker ? (
+        <View
+          style={styles.addresses}
+          accessibilityRole="radiogroup"
+          accessibilityLabel={copy.pickupFrom}
+          testID="fulfil-pickup-branches"
+        >
+          <Text style={[text('label', lang), styles.heading]}>{copy.pickupFrom}</Text>
+          {pickupBranches.map((branch) => (
+            <BranchRow
+              key={branch.id}
+              name={branchName(branch, lang)}
+              selected={choice.pickupBranchId === branch.id}
+              onPress={() => onChoosePickupBranch(branch.id)}
+              testID={`pickup-branch-${branch.id}`}
+            />
+          ))}
+        </View>
+      ) : null}
       <Option
         title={copy.fulfilDelivery}
         body={copy.fulfilDeliveryBody}
@@ -244,6 +318,49 @@ function Option({
           {title}
         </Text>
         <Text style={[text('bodyS', lang), styles.body]}>{body}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+/**
+ * One branch she could collect from — W7. The address row's radio, with the
+ * branch's name in the reading language (`nameAr ?? name`, `domain/names.ts`)
+ * and nothing else: no address, no hours, because `salon.branches` carries a
+ * name and nothing a customer could walk to. That is a gap in the branch
+ * entity, not something to invent here.
+ */
+function BranchRow({
+  name,
+  selected,
+  onPress,
+  testID,
+}: {
+  name: string;
+  selected: boolean;
+  onPress: () => void;
+  testID: string;
+}) {
+  const { lang } = useLanguage();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      aria-checked={selected}
+      accessibilityLabel={name}
+      dataSet={focusable}
+      testID={testID}
+      style={[styles.row, selected ? styles.rowOn : styles.rowIdle]}
+    >
+      <View style={[styles.dot, selected ? styles.dotOn : styles.dotOff]} />
+      <View style={styles.rowText}>
+        <Text
+          style={[text('bodyL', lang, '600'), selected ? styles.titleOn : styles.titleOff]}
+          numberOfLines={1}
+        >
+          {name}
+        </Text>
       </View>
     </Pressable>
   );
