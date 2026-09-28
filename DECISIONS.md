@@ -2156,3 +2156,24 @@ Aftab asked for.**
   - payment mix split into top-up methods and wallet spend, because charges are always paid from
     the wallet
   - top services counts booked services only, because a walk-in's basket is stored hashed
+
+**Overview analytics and the customer card (lane C, 23aa0a5..1c08344).**
+- **Overview:** up to 13 analytics cards, depending on the salon's modules and permissions. All
+  charts are hand-built, with no new dependency.
+  - A card withheld for **permission** stays visible with "You don't have access to …", so a
+    missing card never reads as a missing figure.
+  - A **module that is off** draws no card.
+  - A **salon-wide figure under a branch** says "Salon-wide only".
+  - The window is a fixed rolling 30 days, captioned "This month" as the Reports page already
+    does. There is no period control.
+- **Customer card:** a Bookings panel and a Purchases panel replace "Not on this card yet". A
+  booking row deep-links to Appointments on its day, with the row marked. The note that Gift
+  and Reimburse are not in this release lives only in a code comment now.
+
+**"+1 visit" on her activity (lane B, e90df1d).**
+- The receipt shows the design's "Visit credit" row, from `transaction.loyalty`. It shows
+  nothing when the value is null.
+- A voided charge shows no count, because the void took it back.
+- Arabic counts use Eastern digits. Western digits are for money only (`digits.test.ts`).
+- Arabic plural forms for two or more visits, and every stamp form, are in `AR_UNVERIFIED`
+  waiting for native review.
