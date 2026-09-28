@@ -42,6 +42,7 @@ import {
 import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
 import { badRequest, conflict, notFound } from '../http/errors';
+import { serialiseTransactionLoyalty } from '../http/serialise';
 import { parseAmountFils, requireString, requireStringArray } from '../money/validate';
 import {
   awaitCommittedKey,
@@ -495,6 +496,19 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
          */
         voidedAt: v ? v.createdAt.toISOString() : null,
         reversedByTransactionId: v ? v.id : null,
+        /**
+         * WHAT THE VISIT EARNED (migration 0065), and not optional here although
+         * no screen on the till renders it yet.
+         *
+         * The scanner parses these rows with `ChargeRowSchema =
+         * TransactionSchema.extend(...)`. Once trunk lands `loyalty` on
+         * `TransactionSchema` as `.nullable()` — required on the wire — a row
+         * without it fails that parse and Today's charges stops loading. So this
+         * route has to send it the day the schema asks for it, and sending it
+         * first is the only order that cannot break the till. The same shape
+         * her wallet reads, from the same function.
+         */
+        loyalty: serialiseTransactionLoyalty(t),
       })),
       nextCursor: null,
     });

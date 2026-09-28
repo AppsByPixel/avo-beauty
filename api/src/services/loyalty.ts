@@ -25,6 +25,16 @@ export interface TiersOutcome {
   visitsToNext: number | null;
   /** True when this charge crossed a threshold — the receipt and the audit say so. */
   climbed: boolean;
+  /**
+   * The increment ACTUALLY APPLIED, after any branch boost or happy-hour
+   * multiplier — "+2 visits", not "+1 visit, and there was a boost".
+   *
+   * The server's to state (non-negotiable #2). The scanner could otherwise only
+   * subtract the scan's visit count from `visits`, which is the client deciding
+   * what the server awarded, and wrong the moment two tills charge her at once.
+   * It is also what `POST /voids` takes back — see migration 0065.
+   */
+  visitsEarned: number;
 }
 
 export interface StampsOutcome {
@@ -32,6 +42,8 @@ export interface StampsOutcome {
   stamps: number;
   target: number;
   rewardReady: boolean;
+  /** The stamps actually added, after any multiplier. `visitsEarned`'s twin. */
+  stampsEarned: number;
 }
 
 export type LoyaltyOutcome = TiersOutcome | StampsOutcome;
@@ -83,6 +95,7 @@ export function applyVisits(
     nextTier: (next?.name as TierName) ?? null,
     visitsToNext: next ? next.minVisits - visits : null,
     climbed: tier !== currentTier,
+    visitsEarned: visitIncrement,
   };
 }
 
@@ -98,5 +111,7 @@ export function applyStamps(
     stamps,
     target,
     rewardReady: stamps >= target,
+    stampsEarned: stampIncrement,
   };
 }
+

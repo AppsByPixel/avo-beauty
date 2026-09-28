@@ -55,7 +55,7 @@ import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
 import { transaction } from '../db/schema/transaction';
 import type { MemberPrincipal, Principal, StaffPrincipal } from '../auth/principal';
-import { serialiseTransactionForCustomer } from '../http/serialise';
+import { NO_LOYALTY_RECORD, serialiseTransactionForCustomer } from '../http/serialise';
 import { env } from '../env';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
 import { parseDate, parseInstant, salonWallClock } from '../time/zone';
@@ -640,6 +640,9 @@ export async function createBooking(
           // again narrower than the schema.
           customAmount: false,
           note: null,
+          // A hold earns nothing; the visit is earned by the charge that settles
+          // it. `transaction_loyalty_is_charge_only` (0065) makes that a fact.
+          ...NO_LOYALTY_RECORD,
         },
         // Created inside this transaction, so nothing can have reversed it yet. Said
         // rather than defaulted — the same argument as services/charge.ts.
