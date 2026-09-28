@@ -635,12 +635,12 @@ export const en: Copy = {
   // the register of the three above it. See copy/types.ts. AR GAP.
   chooseBranch: 'Choose a branch',
 
-  // The branch strip. NOT IN THE BUNDLE -- see copy/types.ts for why each of
-  // these reads the way it does, and that all seven are owed to the copywriter.
-  // "All branches" is the one borrowed word: `branchNote` below already says
-  // "One wallet -- valid at all branches" (design:1163), so "all branches" is
-  // established product vocabulary rather than a new coinage.
-  branchFilterAll: 'All branches',
+  // The branch step. NOT IN THE BUNDLE -- see copy/types.ts for why each of
+  // these reads the way it does, and that all of them are owed to the
+  // copywriter. `branchFilterAll` ("All branches") was removed with the row it
+  // labelled (Aftab, 2026-09-29). ⚠️ `branchEmptyBody` still tells her to
+  // "choose All branches" and is therefore NOT SHOWN -- flagged to trunk for
+  // replacement copy; see BookScreen § ArtistsEmpty.
   branchFilterOther: 'Other artists',
   branchFilterOtherNote: "The salon hasn't listed a branch for these artists yet.",
   branchEmptyTitle: 'No artists at this branch',

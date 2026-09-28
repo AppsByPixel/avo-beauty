@@ -206,6 +206,9 @@ describe('entry at a multi-branch salon, before the roster lands', () => {
 describe('Back leaves from the first step, whichever it is', () => {
   it('multi-branch: service steps back to the branch, and the branch leaves', async () => {
     draw(salonWith([KWC, SAL]));
+    // No "All branches" default since 2026-09-29: she chooses a branch first.
+    await waitFor(() => expect(screen.getByTestId(`book-branch-${KWC.id}`)).toBeTruthy());
+    fireEvent.click(screen.getByTestId(`book-branch-${KWC.id}`));
     await waitFor(() => expect(isDisabled('book-next')).toBe(false));
     fireEvent.click(screen.getByTestId('book-next'));
     await waitFor(() => expect(screen.getByText(en.chooseService)).toBeTruthy());
@@ -233,14 +236,17 @@ describe('Back leaves from the first step, whichever it is', () => {
 
 // ═══════════════════════════════════════════════════════ the empty branch ══
 
-describe('an empty branch is said under the chips, and Continue is held', () => {
-  it('shows the empty panel on the branch step and keeps Continue disabled until another chip', async () => {
+describe('an empty branch is said under the rows, and Continue is held', () => {
+  it('shows the empty panel on the branch step and keeps Continue disabled until another row', async () => {
     draw(salonWith([KWC, SAL]));
     await waitFor(() => expect(screen.getByTestId(`book-branch-${SAL.id}`)).toBeTruthy());
 
     fireEvent.click(screen.getByTestId(`book-branch-${SAL.id}`));
     await waitFor(() => expect(screen.getByTestId('book-branch-empty')).toBeTruthy());
-    expect(screen.getByText(en.branchEmptyBody)).toBeTruthy();
+    expect(screen.getByText(en.branchEmptyTitle)).toBeTruthy();
+    // Its written body tells her to "choose All branches", a row that no longer
+    // exists, so it is not shown -- flagged to trunk (BookScreen § ArtistsEmpty).
+    expect(screen.queryByText(en.branchEmptyBody)).toBeNull();
     expect(isDisabled('book-next')).toBe(true);
     // Still the branch step: the chips she needs are right above the panel.
     expect(count()).toBe(en.bookStep(1, 5));
@@ -256,6 +262,9 @@ describe('an empty branch is said under the chips, and Continue is held', () => 
 describe('the Book flow in Arabic — non-negotiable #12', () => {
   it('lays out right-to-left, and walks branch → service with the counter in Arabic', async () => {
     draw(salonWith([KWC, SAL]), 'ar');
+    await waitFor(() => expect(screen.getByTestId(`book-branch-${KWC.id}`)).toBeTruthy());
+    expect(isDisabled('book-next')).toBe(true);
+    fireEvent.click(screen.getByTestId(`book-branch-${KWC.id}`));
     await waitFor(() => expect(isDisabled('book-next')).toBe(false));
 
     expect(document.documentElement.dir).toBe('rtl');
@@ -268,7 +277,7 @@ describe('the Book flow in Arabic — non-negotiable #12', () => {
     expect(count()).toBe('الخطوة ١ من ٥');
     expect(screen.getByTestId('book-progress').getAttribute('aria-valuenow')).toBe('1');
     expect(screen.getByTestId('book-progress').getAttribute('aria-valuemax')).toBe('5');
-    // The branch chip speaks the branch's Arabic name.
+    // The branch row speaks the branch's Arabic name.
     expect(screen.getByTestId(`book-branch-${KWC.id}`).textContent).toBe(KWC.nameAr);
 
     fireEvent.click(screen.getByTestId('book-next'));

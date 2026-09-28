@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ALL_BRANCHES,
   branchChoiceLabel,
   branchChoices,
   branchQuery,
@@ -20,7 +19,7 @@ const KWC: PickableBranch = { id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدي
 const SAL: PickableBranch = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية' };
 const NO_AR: PickableBranch = { id: 'BR-HAW', name: 'Hawally', nameAr: null };
 
-const COPY = { branchFilterAll: 'All branches', branchFilterOther: 'Other artists' };
+const COPY = { branchFilterOther: 'Other artists' };
 
 const kinds = (chips: BranchChoice[]) =>
   chips.map((c) => (c.kind === 'branch' ? c.branchId : c.kind));
@@ -52,10 +51,10 @@ describe('branchChoices — when the strip appears at all', () => {
   });
 });
 
-describe('branchChoices — the three groups', () => {
-  it('offers All, every branch, and Other artists when the roster is mixed', () => {
+describe('branchChoices — every branch, then Other artists, and no All', () => {
+  it('offers every branch and Other artists when the roster is mixed', () => {
     const chips = branchChoices({ branches: [KWC, SAL], split: { total: 4, unassigned: 2 } });
-    expect(kinds(chips)).toEqual(['all', 'BR-KWC', 'BR-SAL', 'unassigned']);
+    expect(kinds(chips)).toEqual(['BR-KWC', 'BR-SAL', 'unassigned']);
   });
 
   /**
@@ -64,30 +63,35 @@ describe('branchChoices — the three groups', () => {
    */
   it('drops Other artists once every artist has a branch', () => {
     const chips = branchChoices({ branches: [KWC, SAL], split: { total: 4, unassigned: 0 } });
-    expect(kinds(chips)).toEqual(['all', 'BR-KWC', 'BR-SAL']);
+    expect(kinds(chips)).toEqual(['BR-KWC', 'BR-SAL']);
   });
 
   it('keeps a branch chip whose artists are all elsewhere — an honest empty state, not a hidden chip', () => {
     // Three branches, one assigned artist. Two chips lead to "no artists here",
     // which is true and is a state the screen builds.
     const chips = branchChoices({ branches: [KWC, SAL, NO_AR], split: { total: 3, unassigned: 2 } });
-    expect(kinds(chips)).toEqual(['all', 'BR-KWC', 'BR-SAL', 'BR-HAW', 'unassigned']);
+    expect(kinds(chips)).toEqual(['BR-KWC', 'BR-SAL', 'BR-HAW', 'unassigned']);
   });
 
-  it('leads with All, so the default chip is the request the wallet always made', () => {
+  /**
+   * Aftab, 2026-09-29: "Remove all branches option in the select branch while
+   * booking". The first row is a real branch, and no row means "all".
+   */
+  it('leads with a real branch, never an All choice', () => {
     const chips = branchChoices({ branches: [KWC, SAL], split: { total: 4, unassigned: 1 } });
-    expect(chips[0]).toEqual(ALL_BRANCHES);
+    expect(chips[0]).toEqual({ kind: 'branch', branchId: 'BR-KWC' });
+    expect(chips.some((c) => (c as { kind: string }).kind === 'all')).toBe(false);
   });
 });
 
 describe('branchQuery — the wire value', () => {
   /**
-   * `all` OMITS the parameter. The API treats `?branch=all` and no parameter
-   * identically, so this keeps the default request byte-identical to the one
-   * made before the picker existed.
+   * NO CHOICE OMITS the parameter. The API treats `?branch=all` and no
+   * parameter identically, so this keeps the request of a salon with no branch
+   * step byte-identical to the one made before the picker existed.
    */
-  it('omits the parameter for All', () => {
-    expect(branchQuery({ kind: 'all' })).toBeUndefined();
+  it('omits the parameter when nothing is chosen', () => {
+    expect(branchQuery(null)).toBeUndefined();
   });
 
   it("sends the API's own 'unassigned' for the third group", () => {
@@ -117,10 +121,10 @@ describe('sameChoice', () => {
     expect(sameChoice({ kind: 'branch', branchId: 'BR-KWC' }, { kind: 'branch', branchId: 'BR-SAL' })).toBe(false);
   });
 
-  it('matches all to all and unassigned to unassigned', () => {
-    expect(sameChoice(ALL_BRANCHES, { kind: 'all' })).toBe(true);
+  it('matches unassigned to unassigned, and nothing chosen to no row', () => {
     expect(sameChoice({ kind: 'unassigned' }, { kind: 'unassigned' })).toBe(true);
-    expect(sameChoice(ALL_BRANCHES, { kind: 'unassigned' })).toBe(false);
+    expect(sameChoice(null, { kind: 'unassigned' })).toBe(false);
+    expect(sameChoice(null, { kind: 'branch', branchId: 'BR-KWC' })).toBe(false);
   });
 });
 
@@ -144,18 +148,15 @@ describe('branchChoiceLabel — non-negotiable #12', () => {
     );
   });
 
-  it('labels the two filter chips from copy, in both languages', () => {
-    const ar = { branchFilterAll: 'كل الفروع', branchFilterOther: 'مصففات أخريات' };
-    expect(branchChoiceLabel(ALL_BRANCHES, [], 'en', COPY)).toBe('All branches');
+  it('labels Other artists from copy, in both languages', () => {
+    const ar = { branchFilterOther: 'مصففات أخريات' };
     expect(branchChoiceLabel({ kind: 'unassigned' }, [], 'en', COPY)).toBe('Other artists');
-    expect(branchChoiceLabel(ALL_BRANCHES, [], 'ar', ar)).toBe('كل الفروع');
     expect(branchChoiceLabel({ kind: 'unassigned' }, [], 'ar', ar)).toBe('مصففات أخريات');
   });
 
-  it('does not throw on a branch it cannot find', () => {
-    expect(branchChoiceLabel({ kind: 'branch', branchId: 'BR-GONE' }, [KWC], 'en', COPY)).toBe(
-      'All branches',
-    );
+  /** It used to fall back to "All branches", a label that now names nothing. */
+  it('does not throw on a branch it cannot find, and names nothing', () => {
+    expect(branchChoiceLabel({ kind: 'branch', branchId: 'BR-GONE' }, [KWC], 'en', COPY)).toBeNull();
   });
 });
 

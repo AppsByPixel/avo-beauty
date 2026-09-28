@@ -722,7 +722,6 @@ export const ar: Copy = {
   // translation pass. Feminine address forms throughout, matching
   // `اختاري المصففة` above: `مصففات أخريات` is feminine plural, and
   // `جرّبي` is the feminine imperative.
-  branchFilterAll: 'كل الفروع',
   branchFilterOther: 'مصففات أخريات',
   branchFilterOtherNote: 'لم يحدّد الصالون فرعاً لهؤلاء المصففات بعد.',
   branchEmptyTitle: 'لا مصففات في هذا الفرع',
@@ -1287,7 +1286,6 @@ export const AR_UNVERIFIED = [
    * go. Added now rather than in the branch-picker slice's own commit, and
    * reported.
    */
-  'branchFilterAll',
   'branchFilterOther',
   'branchFilterOtherNote',
   'branchEmptyTitle',

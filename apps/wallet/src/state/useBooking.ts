@@ -63,7 +63,6 @@ import {
 } from '../api/booking';
 import { dayStrip, salonDate, type StripDay } from '../domain/booking';
 import {
-  ALL_BRANCHES,
   branchChoices,
   branchQuery,
   branchStepApplies,
@@ -220,7 +219,14 @@ export interface BookingController {
    * strip to a step did not change that: there is still no field to send.
    */
   branchOptions: BranchChoice[];
-  branchChoice: BranchChoice;
+  /**
+   * The row she chose, or NULL for none -- which is both "not chosen yet" on
+   * the branch step and "there is no branch step". There is no "All branches"
+   * choice (Aftab, 2026-09-29), so a salon with a branch step opens it with
+   * nothing selected and Continue waiting for her, exactly as the service step
+   * does; null reads the roster unfiltered, as the wallet always has.
+   */
+  branchChoice: BranchChoice | null;
   /**
    * The unfiltered roster's split, or null while it is unknown. Read from the
    * UNFILTERED mount read and never from a filtered one, so tapping a branch
@@ -322,11 +328,12 @@ export function useBooking(options: {
   /**
    * The selected filter, and the unfiltered roster's split.
    *
-   * `ALL_BRANCHES` is the default, and `branchQuery` maps it to no parameter at
-   * all -- so a salon with no strip issues exactly the request this app issued
-   * before the picker existed.
+   * `null` is the default -- nothing chosen -- and `branchQuery` maps it to no
+   * parameter at all, so a salon with no branch step (and a reschedule) issues
+   * exactly the request this app issued before the picker existed. There is no
+   * "All branches" choice to default to any more (Aftab, 2026-09-29).
    */
-  const [branchChoice, setBranchChoice] = useState<BranchChoice>(ALL_BRANCHES);
+  const [branchChoice, setBranchChoice] = useState<BranchChoice | null>(null);
   const [split, setSplit] = useState<LoadState<RosterSplit>>({ status: 'loading' });
   const rosterSplit = split.status === 'ready' ? split.data : null;
 
@@ -667,7 +674,7 @@ export function useBooking(options: {
    * looks enabled for a row nobody can point at. `selectedArtist` is derived
    * from the visible list, so it would already read null -- clearing `artistId`
    * as well means there is no hidden second answer to "who is booked" waiting
-   * to reappear if she taps back to All.
+   * to reappear if she taps back to the branch she had first.
    *
    * The strip does NOT re-render itself out of existence on a filter change:
    * `rosterSplit` is keyed off the unfiltered read, so it does not move here.
@@ -730,10 +737,14 @@ export function useBooking(options: {
    * another branch" is one tap away. This is the second gate -- the disabled
    * Continue is the first -- for the same reason `pickSlot` has one.
    *
-   * `'all'` and `'unassigned'` can never be empty here: the step exists only
-   * when some artist is assigned (so the roster is non-empty), and the
-   * unassigned chip appears only when that group is. The read is waited on
-   * anyway rather than special-cased, so the gate has one rule.
+   * `'unassigned'` can never be empty here: its row appears only when that
+   * group is. The read is waited on anyway rather than special-cased, so the
+   * gate has one rule.
+   *
+   * NOTHING CHOSEN IS `null`, NOT `true`. With no "All branches" default the
+   * step opens with no row selected; the roster behind it is the unfiltered
+   * one and is non-empty, but it is not a branch she chose, so Continue waits
+   * for a tap -- the same rule as every other step.
    */
   /*
     SINCE 0061 "SOMEBODY" MEANS SOMEBODY WHO DOES A SERVICE. A branch whose
@@ -744,7 +755,7 @@ export function useBooking(options: {
     the service step's own failure and its retry rather than a held Continue.
   */
   const branchHasArtists: boolean | null =
-    roster.status !== 'ready'
+    branchChoice === null || roster.status !== 'ready'
       ? null
       : allServices.status === 'loading'
         ? null

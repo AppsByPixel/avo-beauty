@@ -65,7 +65,7 @@ import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
 import { DEFAULT_TOP_UP_AMOUNT } from '../domain/topup';
 import { fils } from '@avo/types';
 import {
-  BranchChip,
+  BranchRow,
   DayChip,
   DepositCard,
   EmptyPanel,
@@ -560,14 +560,23 @@ function Entry({ flow }: { flow: ReturnType<typeof useBooking> }) {
  * bookings are correctly attributed with nothing on screen.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * IT IS THE SAME CHIPS, NOT A NEW VISUAL LANGUAGE
+ * IT IS THE SERVICE LIST'S ROWS, AND THERE IS NO "ALL BRANCHES"
  * ═══════════════════════════════════════════════════════════════════════════
- * The bundle draws no branch step, so anything invented here is unsourced. The
- * least-invented option is the one already approved: `BranchChip` in the day
- * strip's own horizontal `ScrollView` (design:568-572), under the same
- * uppercase micro label the other three steps carry. `BranchChip` therefore
- * keeps its place — not at review, where it never was, but as the control of
- * the step it was always drawing.
+ * The bundle draws no branch step, so anything here is borrowed. It borrowed
+ * the day strip's chips first (a horizontal `ScrollView` of `BranchChip`s,
+ * design:568-572), from when the branch was a filter inside the artist step.
+ * Aftab, 2026-09-29: "Book branch list should be same design wise as services
+ * list". So it is now `BranchRow` -- the service row's own shell
+ * (`OptionRow`), in the service list's own `styles.rows` container, under the
+ * same micro label -- and a selected branch looks exactly like a selected
+ * service.
+ *
+ * And, the same day: "Remove all branches option in the select branch while
+ * booking". The rows are every open branch, then "Other artists" when some
+ * artist has no branch -- the only way to reach her, so it stays, last, with
+ * its note. Nothing is selected when the step paints; Continue waits for a
+ * tap, as it does on the service step. `domain/branchPicker.ts` records why
+ * removing "all" leaves no bookable artist unreachable.
  *
  * AN EMPTY `branchOptions` HERE IS A LOAD, NOT AN ABSENCE. The step's existence
  * is decided once, at entry, so a `retryLoad` that re-reads the roster split
@@ -578,12 +587,11 @@ function Entry({ flow }: { flow: ReturnType<typeof useBooking> }) {
  * ═══════════════════════════════════════════════════════════════════════════
  * AN EMPTY BRANCH IS SAID HERE, NOT TWO STEPS LATER
  * ═══════════════════════════════════════════════════════════════════════════
- * Tapping a chip re-reads the roster for it. If it comes back empty, the panel
- * appears under the chips and Continue stays disabled — `useBooking § the
- * empty branch`. Before W1 this panel lived on the artist step and its body,
- * "Try another branch, or choose All branches to see everyone", pointed at
- * chips that had become the previous step. Under the chips it is literally
- * true again, so the invented copy is reused verbatim rather than rewritten.
+ * Tapping a row re-reads the roster for it. If it comes back empty, the panel
+ * appears under the rows and Continue stays disabled — `useBooking § the
+ * empty branch`. The panel shows its TITLE ONLY now: its body, "Try another
+ * branch, or choose All branches to see everyone", points at a row that no
+ * longer exists, and copy is not this lane's to rewrite. See `ArtistsEmpty`.
  */
 function BranchStep({
   flow,
@@ -615,27 +623,31 @@ function BranchStep({
     );
   }
 
-  const label = (choice: BranchChoice) =>
-    branchChoiceLabel(choice, salon.branches, lang, copy);
+  const rowKey = (choice: BranchChoice) =>
+    choice.kind === 'branch' ? choice.branchId : choice.kind;
 
   return (
     <View style={styles.branchBlock}>
       <StepLabel>{copy.chooseBranch}</StepLabel>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.strip}
-      >
-        {flow.branchOptions.map((choice) => (
-          <BranchChip
-            key={choice.kind === 'branch' ? choice.branchId : choice.kind}
-            label={label(choice)}
-            selected={sameChoice(flow.branchChoice, choice)}
-            onPick={() => flow.pickBranch(choice)}
-            testID={`book-branch-${choice.kind === 'branch' ? choice.branchId : choice.kind}`}
-          />
-        ))}
-      </ScrollView>
+      {/* The service list's own container and gap -- see the header. */}
+      <View style={styles.rows}>
+        {flow.branchOptions.map((choice) => {
+          const label = branchChoiceLabel(choice, salon.branches, lang, copy);
+          // Unreachable from `branchChoices`, which builds rows from the same
+          // `salon.branches`; a row with no name is not drawn rather than
+          // drawn blank.
+          if (label === null) return null;
+          return (
+            <BranchRow
+              key={rowKey(choice)}
+              label={label}
+              selected={sameChoice(flow.branchChoice, choice)}
+              onPick={() => flow.pickBranch(choice)}
+              testID={`book-branch-${rowKey(choice)}`}
+            />
+          );
+        })}
+      </View>
 
       {/*
         THE NOTE IS WHAT STOPS THE THIRD GROUP BEING A HALF-TRUTH.
@@ -649,7 +661,7 @@ function BranchStep({
         decision. This sentence is what keeps "Other artists" from being read as
         "a branch called Other".
       */}
-      {flow.branchChoice.kind === 'unassigned' ? (
+      {flow.branchChoice?.kind === 'unassigned' ? (
         <View style={styles.branchNote}>
           <Note tone="wash">{copy.branchFilterOtherNote}</Note>
         </View>
@@ -685,19 +697,24 @@ function BranchStep({
  * Two different emptinesses, and telling them apart is the whole value:
  *
  *   A BRANCH WITH NO ARTISTS. She chose a location and it has nobody bookable.
- *   The body points at the way out -- another branch, or All -- because an empty
- *   state that names nothing to do is a dead end. This is reachable by design
- *   rather than by accident: `branchChoices` keeps a chip for every open branch
- *   even when its roster is empty, on the grounds that a MISSING chip reads as a
- *   branch that does not exist while an empty one reads as a branch with nobody
- *   in today. Only one of those is true.
+ *   This is reachable by design rather than by accident: `branchChoices` keeps
+ *   a row for every open branch even when its roster is empty, on the grounds
+ *   that a MISSING row reads as a branch that does not exist while an empty one
+ *   reads as a branch with nobody in today. Only one of those is true.
  *
- *   SINCE W1 IT IS SHOWN ON THE BRANCH STEP, under the chips, and Continue is
+ *   SINCE W1 IT IS SHOWN ON THE BRANCH STEP, under the rows, and Continue is
  *   refused on it -- so she meets it before choosing a service rather than
- *   after. `branchEmptyBody` ("Try another branch, or choose All branches to
- *   see everyone") is true there word for word: the chips are right above it.
- *   On the artist step it survives only as a backstop for a roster that
+ *   after. On the artist step it survives only as a backstop for a roster that
  *   changed between the two reads.
+ *
+ *   ⚠️ TITLE ONLY SINCE 2026-09-29. Its body, `branchEmptyBody` -- "Try another
+ *   branch, or choose All branches to see everyone." / "جرّبي فرعاً آخر، أو
+ *   اختاري كل الفروع لرؤية الجميع." -- tells her to choose a row the step no
+ *   longer has. Half of it is still true and the other half is now false, and
+ *   rewriting product copy is not this lane's call, so the sentence is not
+ *   shown and is flagged to trunk for replacement copy in both languages. The
+ *   way out is still on screen without it: the other branch rows are directly
+ *   above the panel.
  *
  *   THE SALON HAS NOBODY AT ALL. Nothing to filter and nothing to suggest, so it
  *   says so plainly. Lumiere in the seed is exactly this -- two branches, zero
@@ -710,12 +727,14 @@ function BranchStep({
  */
 function ArtistsEmpty({ flow }: { flow: ReturnType<typeof useBooking> }) {
   const { copy } = useLanguage();
-  const filtered = flow.branchChoice.kind !== 'all';
-  return (
+  const filtered = flow.branchChoice !== null;
+  return filtered ? (
+    <EmptyPanel title={copy.branchEmptyTitle} testID="book-branch-empty" />
+  ) : (
     <EmptyPanel
-      title={filtered ? copy.branchEmptyTitle : copy.artistsEmptyTitle}
-      body={filtered ? copy.branchEmptyBody : copy.artistsEmptyBody}
-      testID={filtered ? 'book-branch-empty' : 'book-artists-empty'}
+      title={copy.artistsEmptyTitle}
+      body={copy.artistsEmptyBody}
+      testID="book-artists-empty"
     />
   );
 }
@@ -907,14 +926,13 @@ function ConfirmFailure({
  *                           said she is short, "Top up to book", which opens the
  *                           sheet instead.
  *
- * THE BRANCH STEP GATES ON THE ROSTER, NOT ON A TAP. The other three gate on a
- * selection because there is no default: no service is chosen until she
- * chooses one. A branch IS defaulted — `ALL_BRANCHES` is the initial
- * `branchChoice` and the first chip is selected when the step paints — so a
- * tap is never demanded. What is demanded, since W1 moved the branch first, is
- * that the chosen chip's roster has landed with somebody in it
- * (`flow.branchHasArtists`): otherwise Continue would lead through the service
- * step to an empty staff step. `useBooking § the empty branch`.
+ * THE BRANCH STEP GATES ON A TAP AND ON THE ROSTER. Like the other three
+ * there is no default -- since the "All branches" row went (2026-09-29) nothing
+ * is chosen until she chooses a branch, and `flow.branchHasArtists` is null
+ * until she does. What is also demanded, since W1 moved the branch first, is
+ * that the chosen row's roster has landed with somebody in it: otherwise
+ * Continue would lead through the service step to an empty staff step.
+ * `useBooking § the empty branch`.
  */
 function Cta({
   flow,

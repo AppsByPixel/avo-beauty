@@ -102,6 +102,61 @@ export function ProgressBar({ step, total }: { step: number | null; total: numbe
 // ---------------------------------------------------------------- step one --
 
 /**
+ * THE ONE ROW BEHIND THE SERVICE LIST AND THE BRANCH LIST. design:538-543.
+ *
+ * Factored out of `ServiceRow` when Aftab asked, 2026-09-29, for the branch
+ * step to be "same design wise as services list". Not a copy of the service
+ * row with a different body: the box, its selected border, the title's face
+ * and the gap are these styles and nowhere else, so the two lists cannot drift
+ * apart one padding at a time. `trailing` is the only slot -- the service's
+ * price; a branch has none.
+ *
+ * `aria-checked` IS SET EXPLICITLY. react-native-web renders `role="radio"`
+ * from `accessibilityRole` but drops `accessibilityState` entirely (probed in
+ * jsdom, 2026-09-29), so on the web build a screen reader heard every row in
+ * this list as unchecked. `FulfilmentSection` already sets it the same way.
+ * `accessibilityState` stays for native, which reads it.
+ *
+ * A logical `row`, never `row-reverse` and no physical left/right: under RTL
+ * the title sits at the right and the trailing price at the left, which is the
+ * mirroring non-negotiable #12 asks for, done by the layout rather than by a
+ * language check.
+ */
+function OptionRow({
+  title,
+  accessibilityLabel,
+  selected,
+  onPick,
+  testID,
+  trailing,
+}: {
+  title: string;
+  accessibilityLabel: string;
+  selected: boolean;
+  onPick: () => void;
+  testID: string;
+  trailing?: React.ReactNode;
+}) {
+  const { lang } = useLanguage();
+  return (
+    <TappableRow
+      onPress={onPick}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      aria-checked={selected}
+      accessibilityLabel={accessibilityLabel}
+      testID={testID}
+      style={[styles.optionRow, selected && styles.optionRowOn]}
+    >
+      <View style={styles.optionBody}>
+        <Text style={[text('bodyL', lang, '600'), styles.optionName]}>{title}</Text>
+      </View>
+      {trailing}
+    </TappableRow>
+  );
+}
+
+/**
  * design:538-543.
  *
  * NO DURATION ON THE ROW, and that is a design/contract disagreement rather
@@ -128,19 +183,55 @@ export function ServiceRow({
   // is a copy decision for the salon rather than one for this lane.
   const name = serviceName(service, lang);
   return (
-    <TappableRow
-      onPress={onPick}
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
+    <OptionRow
+      title={name}
       accessibilityLabel={`${name} · ${formatMoney(service.priceFils as Fils, lang)}`}
+      selected={selected}
+      onPick={onPick}
       testID={`book-service-${service.id}`}
-      style={[styles.optionRow, selected && styles.optionRowOn]}
-    >
-      <View style={styles.optionBody}>
-        <Text style={[text('bodyL', lang, '600'), styles.optionName]}>{name}</Text>
-      </View>
-      <Money amount={service.priceFils} />
-    </TappableRow>
+      trailing={<Money amount={service.priceFils} />}
+    />
+  );
+}
+
+/**
+ * One branch-step row -- a branch, or "Other artists". (migration 0044)
+ *
+ * The service list's own row (`OptionRow`), per Aftab 2026-09-29: "Book branch
+ * list should be same design wise as services list". It replaced `BranchChip`,
+ * a one-line chip in a horizontal strip borrowed from the day strip back when
+ * the branch was a filter inside the artist step; as step 1 of the flow it now
+ * reads as the list it is.
+ *
+ * THE TITLE ALONE, NO SECOND LINE. The service row has no secondary line to
+ * match -- its only other content is the price -- and `Branch` carries nothing
+ * a customer choosing where to be seen could honestly be shown: no area or
+ * address, and the only worded hours line in the app (`pickupHours`, "Collect
+ * during working hours, ...") is about collecting an order, not an
+ * appointment. No new copy was written for it.
+ *
+ * `label` is already resolved -- `branchChoiceLabel`, so `nameAr ?? name` is
+ * applied in one place (non-negotiable #12).
+ */
+export function BranchRow({
+  label,
+  selected,
+  onPick,
+  testID,
+}: {
+  label: string;
+  selected: boolean;
+  onPick: () => void;
+  testID: string;
+}) {
+  return (
+    <OptionRow
+      title={label}
+      accessibilityLabel={label}
+      selected={selected}
+      onPick={onPick}
+      testID={testID}
+    />
   );
 }
 
@@ -227,68 +318,6 @@ export function ArtistRow({
       <View style={[styles.tick, selected && styles.tickOn]}>
         {selected ? <Text style={[text('bodyS', lang, '700'), styles.tickMark]}>✓</Text> : null}
       </View>
-    </TappableRow>
-  );
-}
-
-// ---------------------------------------------- step one: the branch chips ---
-
-/**
- * One branch filter chip. (migration 0044)
- *
- * ═══════════════════════════════════════════════════════════════════════════
- * NOT DRAWN IN THE BUNDLE, SO IT BORROWS RATHER THAN INVENTS
- * ═══════════════════════════════════════════════════════════════════════════
- * `AVO Wallet Home.dc.html` draws three booking steps -- service :534, artist
- * :547, date & time :565 -- and no branch step. CLAUDE.md forbids restyling and
- * this is new UI, so the vocabulary is taken wholesale from the DAY STRIP at
- * :568-572: a horizontally scrolling row of chips above the content it governs,
- * `gap:9px`, `overflow:auto`, white with a hairline border, and the selected one
- * filled.
- *
- * That borrowing is not just economy, it is the correct SEMANTICS. The day strip
- * is the bundle's own idiom for "narrow what is below", and a branch is a filter
- * over the artist list rather than a step in the flow -- the API is explicit
- * that choosing a branch "is a FILTER and never an assertion". Drawing it as a
- * fourth step would claim she had decided something the server never receives.
- *
- * ONE DIFFERENCE FROM `DayChip`, and it is deliberate: a single line, not two.
- * A day chip stacks a weekday over a date because it carries two facts. A branch
- * carries one -- its name, resolved through `branchName` for Arabic -- so a
- * second line would be an empty row held open for nothing.
- *
- * `accessibilityRole="radio"` and a `selected` state, the same as `DayChip` and
- * `SlotChip`: one of these is always chosen, and the strip is a single choice.
- * Non-negotiable #9 holds -- the filled chip is white on `brandDeep` via
- * `onBrandFill`, never on `brand`.
- */
-export function BranchChip({
-  label,
-  selected,
-  onPick,
-  testID,
-}: {
-  label: string;
-  selected: boolean;
-  onPick: () => void;
-  testID?: string;
-}) {
-  const { lang } = useLanguage();
-  return (
-    <TappableRow
-      onPress={onPick}
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
-      accessibilityLabel={label}
-      testID={testID}
-      style={[styles.branchChip, selected && styles.branchChipOn]}
-    >
-      <Text
-        style={[text('bodyL', lang, '600'), selected ? styles.branchNameOn : styles.branchName]}
-        numberOfLines={1}
-      >
-        {label}
-      </Text>
     </TappableRow>
   );
 }
@@ -519,14 +548,21 @@ export function EmptyPanel({
   testID,
 }: {
   title: string;
-  body: string;
+  /**
+   * Optional for one caller: the branch step's empty panel, whose written body
+   * became false when the "All branches" row went (see `BookScreen §
+   * ArtistsEmpty`). No body is drawn rather than a false one.
+   */
+  body?: string;
   testID?: string;
 }) {
   const { lang } = useLanguage();
   return (
     <View style={styles.emptyPanel} testID={testID}>
       <Text style={[text('displayS', lang), styles.emptyTitle]}>{title}</Text>
-      <Text style={[text('body', lang), styles.emptyBody]}>{body}</Text>
+      {body !== undefined ? (
+        <Text style={[text('body', lang), styles.emptyBody]}>{body}</Text>
+      ) : null}
     </View>
   );
 }
@@ -600,30 +636,6 @@ const styles = StyleSheet.create({
   },
   tickOn: { backgroundColor: color.brand, borderColor: color.brand },
   tickMark: { color: WHITE, fontSize: 12, lineHeight: 14 },
-
-  /**
-   * The day chip's box, minus the two-line stack. `maxWidth` because a branch
-   * name is arbitrary text from a merchant -- "Kuwait City" and
-   * "مدينة الكويت" both fit, and a longer one truncates at one line rather
-   * than pushing the rest of the strip off the far edge where a customer in
-   * either script would not think to scroll for it.
-   */
-  branchChip: {
-    minWidth: 58,
-    maxWidth: 190,
-    minHeight: MIN_TAP_TARGET,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: color.white,
-    borderWidth: 1,
-    borderColor: color.borderControl,
-  },
-  branchChipOn: { backgroundColor: onBrandFill.backgroundColor, borderColor: color.brandDeep },
-  branchName: { color: color.ink },
-  branchNameOn: { color: WHITE },
 
   dayChip: {
     minWidth: 58,
