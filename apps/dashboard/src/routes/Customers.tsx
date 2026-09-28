@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { fils } from '@avo/types';
-import { Button, Card, EmptyState, Money, Skeleton } from '@avo/ui';
+import { Button, Card, EmptyState, Money, Pill, Skeleton } from '@avo/ui';
 import {
   useCustomer,
   useCustomerBook,
@@ -10,7 +10,14 @@ import {
 } from '../api/customers.js';
 import type { ActivityItem } from '../api/salon.js';
 import { ApiError } from '../api/client.js';
+import { useMemberBookings, type MerchantBooking } from '../api/bookings.js';
+import { useMemberOrders, type MerchantShopOrder } from '../api/orders.js';
 import { useSalon } from '../api/salon.js';
+import { AppointmentLink } from './AppointmentLink.js';
+import { appointmentHref } from './appointmentHref.js';
+import { whenLabel as bookingWhen } from './appointmentWhen.js';
+import { pillFor } from './appointmentsWeekRules.js';
+import { STATUS_PILL as ORDER_PILL } from './ShopOrders.js';
 import { clock24, clockFrame, dayMonth } from './salonTime.js';
 import { SectionError } from './sectionState.js';
 
@@ -43,27 +50,23 @@ import { SectionError } from './sectionState.js';
  * it. It is reachable, it is simply reachable second.
  *
  * =========================================================================
- * THREE PANELS THE DESIGN DRAWS THAT ARE NOT HERE — SAID ON THE SCREEN
+ * BOOKINGS AND PURCHASES ARE ON THE CARD NOW — EACH BEHIND ITS OWN SECTION
  * =========================================================================
- * The design's customer card has six parts. Four are served and two are not, plus
- * the card's two buttons. Rather than quietly drawing five sixths of a card, the
- * card renders `UnservedPanels` naming all three and why. The reasons are
- * `api/src/routes/customers.ts`' and are NOT worked around with a client-side
- * join, which is the one thing that would turn a stated absence into a leak:
+ * Aftab, 2026-09-29: "On the customer view screen, the bookings and purchases
+ * should be displayed". This card used to name them as absent, because the card
+ * is `team` and those records are `appointments` and `shop` data, and those are
+ * not ordered — the seeded frontdesk `ST-002` holds `appointments` and not
+ * `team`. Lane A resolved it without a join (72d79f7): each panel reads ITS OWN
+ * BOARD, filtered to her — `GET /salons/{id}/bookings?memberId=` behind
+ * `appointments`, `GET /v1/salons/{id}/orders?memberId=` behind `shop`. So a
+ * panel needs `team` (which opened the card) AND its section's permission, and
+ * without the second it says the merchant has no access to that section rather
+ * than failing. `team` alone would have leaked appointment data and shoppers'
+ * delivery addresses to somebody neither section trusted.
  *
- *   NEXT BOOKING is `appointments` data. `team` and `appointments` are not
- *       ordered — the seeded frontdesk `ST-002` holds `appointments` and not
- *       `team` — so a joined read resolves to the STRICTEST of the two, which is
- *       BOTH. Fetching `GET /salons/{id}/bookings` from this card would hand a
- *       `team`-only manager appointment data she is not granted, or 403 the whole
- *       card for a `team` holder who lacks `appointments`. Neither is a panel.
- *
- *   PURCHASES is the same join twice over — services are `appointments`, products
- *       are `shop`.
- *
- *   GIFT and REIMBURSE move money. They need idempotency keys (#4) and the
- *       adjustment path, and `POST /members/{id}/adjustments` is gated
- *       differently again. A read slice does not grow a write.
+ * GIFT AND REIMBURSE are still not here. They move money into her wallet, need
+ * idempotency keys (#4) and the adjustment path, and a read slice does not grow
+ * a write. The panel that used to say so was replaced by the two above, as asked.
  *
  * A FOURTH ABSENCE FOUND WHILE BUILDING, AND IT IS THE SAME RULE A THIRD TIME.
  * The design's Wallet panel draws eight stamp dots under "6 of 8 stamps · free
@@ -443,8 +446,8 @@ function isUnknownMember(error: unknown): boolean {
 }
 
 /**
- * ONE CUSTOMER. The design's detail view, minus the three panels named in the file
- * header and plus the notice that names them.
+ * ONE CUSTOMER. The design's detail view: her profile, her activity, and her
+ * bookings and purchases, each panel behind its own section's permission.
  *
  * TWO READS, TWO STATES, AND THEY ARE NOT MERGED. The card and the history are
  * separate requests — `routes/customers.ts` split them because her activity grows
@@ -471,6 +474,8 @@ export function CustomerCard({
 }) {
   const card = useCustomer(memberId);
   const history = useCustomerHistory(memberId);
+  // A cache hit — the shell has read the salon. Only the module flags are used.
+  const modules = useSalon().data?.modules ?? null;
 
   return (
     <div className="cust-card">
@@ -515,7 +520,33 @@ export function CustomerCard({
           />
         </Card>
 
-        <UnservedPanels />
+        {/*
+          A MODULE THAT IS OFF HAS NO PANEL — "no bookings yet" at a salon that
+          takes none is the other empty's copy (`api/bookings.ts §
+          useSalonBookings`). Unknown while the salon read is in flight, and
+          drawn meanwhile: the panel's own pending paint covers that tick.
+        */}
+        {modules?.booking === false ? null : (
+          <Card className="cust-card__panel">
+            <h3 className="cust-card__panel-title avo-display">Bookings</h3>
+            <MemberBookings
+              memberId={memberId}
+              timezone={timezone}
+              suppressed={card.isError && isUnknownMember(card.error)}
+            />
+          </Card>
+        )}
+
+        {modules?.shop === false ? null : (
+          <Card className="cust-card__panel">
+            <h3 className="cust-card__panel-title avo-display">Purchases</h3>
+            <MemberPurchases
+              memberId={memberId}
+              timezone={timezone}
+              suppressed={card.isError && isUnknownMember(card.error)}
+            />
+          </Card>
+        )}
       </div>
     </div>
   );
@@ -677,36 +708,325 @@ export function MemberEmail({
   return <span dir="ltr">{customer.email}</span>;
 }
 
+/* ----------------------------------------------------- bookings, purchases -- */
+
 /**
- * THE PANELS THIS CARD DOES NOT HAVE, NAMED ON THE SCREEN.
- *
- * A merchant who knows the design expects Next booking, Purchases, Gift and
- * Reimburse. Silently drawing four panels where six were specified makes the card
- * look finished and wrong; it also invites the next person to "fix" it with a
- * client-side join, which is the one repair that would actually leak something.
- *
- * So the absence is stated, in the merchant's terms rather than in permission
- * names — "your booking access" is what she can act on; `perms.appointments` is
- * not. What she needs to know is that the data exists elsewhere in the product and
- * that this panel is not broken.
+ * A PANEL READ THAT WAS REFUSED. Not a failure and not a retry: an identical
+ * request produces an identical 403, because this staff member does not hold
+ * that section's permission. `team` opened the card; the panel needs more.
  */
-export function UnservedPanels() {
+function isRefused(error: unknown): boolean {
+  return error instanceof ApiError && error.isForbidden;
+}
+
+function PanelSkeleton() {
   return (
-    <Card className="cust-card__panel cust-card__panel--unserved">
-      <h3 className="cust-card__panel-title avo-display">Not on this card yet</h3>
-      <ul className="cust-card__unserved">
-        <li>
-          <b>Next booking</b> and <b>Purchases</b> are appointment and shop records. They sit
-          behind different access from the customer book, so they cannot be shown on a card
-          opened with Team &amp; accounts alone. Her appointments are on the Appointments board
-          and her orders are on Shop → Orders.
-        </li>
-        <li>
-          <b>Gift</b> and <b>Reimburse</b> move money into her wallet. They are not part of this
-          release; a refund is wallet credit and is issued from the charge it belongs to.
-        </li>
+    <div className="cust-card__feed">
+      {[0, 1, 2].map((n) => (
+        <div className="cust-card__feed-row" key={n}>
+          <Skeleton width="62%" height={13} />
+          <Skeleton width="30%" height={11} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * HER APPOINTMENTS, UPCOMING FIRST AND SOONEST FIRST, THEN THE PAST NEWEST FIRST.
+ *
+ * The wire is `starts_at DESC`, so every future booking arrives ahead of every
+ * past one; this splits what is in hand at `now` and reverses the future half.
+ * "Upcoming" is a question about TIME, not status — a cancelled appointment next
+ * Tuesday is still next Tuesday's, and its pill says it was cancelled.
+ *
+ * EXPORTED for the render test, which pins the order without a clock.
+ */
+export function splitBookings(
+  items: readonly MerchantBooking[],
+  now: Date,
+): { upcoming: MerchantBooking[]; past: MerchantBooking[] } {
+  const t = now.getTime();
+  const upcoming: MerchantBooking[] = [];
+  const past: MerchantBooking[] = [];
+  for (const b of items) {
+    const at = new Date(b.startsAt).getTime();
+    (Number.isFinite(at) && at >= t ? upcoming : past).push(b);
+  }
+  upcoming.reverse();
+  return { upcoming, past };
+}
+
+export const RECORD_FOLD = 5;
+
+export function MemberBookings({
+  memberId,
+  timezone,
+  suppressed,
+  now = new Date(),
+}: {
+  memberId: string;
+  timezone: string | null;
+  suppressed: boolean;
+  now?: Date;
+}) {
+  const query = useMemberBookings(memberId, !suppressed);
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+
+  if (suppressed) return null;
+
+  if (query.isError) {
+    if (isUnknownMember(query.error)) return null;
+    if (isRefused(query.error)) {
+      return (
+        <p className="cust-card__refused">
+          You don&rsquo;t have access to appointments, so her bookings aren&rsquo;t shown here.
+        </p>
+      );
+    }
+    return (
+      <SectionError
+        error={query.error}
+        forbiddenTitle="You don't have access to appointments"
+        failedTitle="Couldn't load her bookings"
+        onRetry={() => void query.refetch()}
+        retrying={query.isFetching}
+      />
+    );
+  }
+
+  if (query.isPending) return <PanelSkeleton />;
+
+  const items = (query.data?.pages ?? []).flatMap((p) => p.items);
+  if (items.length === 0 && !query.hasNextPage) {
+    return (
+      <EmptyState
+        title="No bookings yet"
+        body="Her appointments appear here as she books in the app or the front desk books for her."
+      />
+    );
+  }
+
+  const { upcoming, past } = splitBookings(items, now);
+  const foldable = past.length > RECORD_FOLD;
+  const shownPast = foldable && !expanded ? past.slice(0, RECORD_FOLD) : past;
+  const offerNextPage = query.hasNextPage && (expanded || !foldable);
+
+  return (
+    <>
+      <h4 className="cust-card__records-head">Upcoming</h4>
+      {upcoming.length === 0 ? (
+        <p className="cust-card__records-none">Nothing booked ahead.</p>
+      ) : (
+        <ul className="cust-card__feed">
+          {upcoming.map((b) => (
+            <BookingRecord key={b.id} booking={b} timezone={timezone} />
+          ))}
+        </ul>
+      )}
+
+      <h4 className="cust-card__records-head">Past</h4>
+      {past.length === 0 ? (
+        <p className="cust-card__records-none">
+          {/* With a page still unread, "none" would be a claim about rows not yet asked for. */}
+          {query.hasNextPage ? 'Older bookings are on the next page.' : 'No past bookings.'}
+        </p>
+      ) : (
+        <ul className="cust-card__feed" id={listId}>
+          {shownPast.map((b) => (
+            <BookingRecord key={b.id} booking={b} timezone={timezone} />
+          ))}
+        </ul>
+      )}
+
+      {foldable || offerNextPage ? (
+        <div className="cust-card__more">
+          {foldable ? (
+            <Button
+              variant="quiet"
+              aria-expanded={expanded}
+              aria-controls={listId}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? 'Show less' : 'Show all'}
+            </Button>
+          ) : null}
+          {offerNextPage ? (
+            <Button
+              variant="secondary"
+              onClick={() => void query.fetchNextPage()}
+              disabled={query.isFetchingNextPage}
+            >
+              {query.isFetchingNextPage ? 'Loading…' : 'Show more'}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * One appointment, linked to the board. The label is the board's own
+ * (`appointmentsWeekRules.ts § pillFor`), so a hand-written booking with no
+ * deposit reads "Booked" here exactly as it does there. The time is the
+ * Appointments board's `whenLabel`, in the salon's clock.
+ */
+export function BookingRecord({
+  booking,
+  timezone,
+}: {
+  booking: MerchantBooking;
+  timezone: string | null;
+}) {
+  const pill = pillFor(booking);
+  return (
+    <li className="cust-card__feed-row cust-card__record">
+      <AppointmentLink
+        className="cust-card__record-link"
+        href={appointmentHref(booking.id, booking.startsAt, timezone)}
+      >
+        <span className="cust-card__feed-what">
+          {booking.serviceName} · {booking.artistName}
+        </span>
+        <span className="cust-card__feed-when">
+          {bookingWhen(booking.startsAt, timezone)}
+          {booking.depositFils > 0 ? (
+            <>
+              {' '}
+              · <Money amount={fils(booking.depositFils)} withUnit /> deposit
+            </>
+          ) : null}
+        </span>
+      </AppointmentLink>
+      <Pill tone={pill.tone}>{pill.label}</Pill>
+    </li>
+  );
+}
+
+/**
+ * HER ORDERS, NEWEST FIRST, WITH WHAT SHE BOUGHT AND WHAT IT COST.
+ *
+ * `lines` are the checkout snapshot — the name and unit price as she paid them,
+ * not the catalogue's today — and `totalFils` is the order's own wallet debit,
+ * printed as served rather than re-summed from the lines (#1: nothing here adds
+ * money up). Status labels are the Orders board's own.
+ */
+export function MemberPurchases({
+  memberId,
+  timezone,
+  suppressed,
+}: {
+  memberId: string;
+  timezone: string | null;
+  suppressed: boolean;
+}) {
+  const query = useMemberOrders(memberId, !suppressed);
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+
+  if (suppressed) return null;
+
+  if (query.isError) {
+    if (isUnknownMember(query.error)) return null;
+    if (isRefused(query.error)) {
+      return (
+        <p className="cust-card__refused">
+          You don&rsquo;t have access to the shop, so her purchases aren&rsquo;t shown here.
+        </p>
+      );
+    }
+    return (
+      <SectionError
+        error={query.error}
+        forbiddenTitle="You don't have access to the shop"
+        failedTitle="Couldn't load her purchases"
+        onRetry={() => void query.refetch()}
+        retrying={query.isFetching}
+      />
+    );
+  }
+
+  if (query.isPending) return <PanelSkeleton />;
+
+  const orders = (query.data?.pages ?? []).flatMap((p) => p.items);
+  if (orders.length === 0) {
+    return (
+      <EmptyState
+        title="No purchases yet"
+        body="Orders she places from your shop in the AVO app appear here."
+      />
+    );
+  }
+
+  const foldable = orders.length > RECORD_FOLD;
+  const shown = foldable && !expanded ? orders.slice(0, RECORD_FOLD) : orders;
+  const offerNextPage = query.hasNextPage && (expanded || !foldable);
+
+  return (
+    <>
+      <ul className="cust-card__feed" id={listId}>
+        {shown.map((o) => (
+          <OrderRecord key={o.transactionId} order={o} timezone={timezone} />
+        ))}
       </ul>
-    </Card>
+      {foldable || offerNextPage ? (
+        <div className="cust-card__more">
+          {foldable ? (
+            <Button
+              variant="quiet"
+              aria-expanded={expanded}
+              aria-controls={listId}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? 'Show less' : 'Show all'}
+            </Button>
+          ) : null}
+          {offerNextPage ? (
+            <Button
+              variant="secondary"
+              onClick={() => void query.fetchNextPage()}
+              disabled={query.isFetchingNextPage}
+            >
+              {query.isFetchingNextPage ? 'Loading…' : 'Show more'}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+export function OrderRecord({
+  order,
+  timezone,
+}: {
+  order: MerchantShopOrder;
+  timezone: string | null;
+}) {
+  const pill = ORDER_PILL[order.status];
+  return (
+    <li className="cust-card__feed-row cust-card__record">
+      <span className="cust-card__feed-body">
+        <span className="cust-card__feed-what">
+          <Money amount={fils(order.totalFils)} withUnit /> ·{' '}
+          {order.fulfilment === 'delivery' ? 'Delivery' : 'Pickup'}
+        </span>
+        <span className="cust-card__feed-when">{whenLabel(order.createdAt, timezone)}</span>
+        <ul className="cust-card__lines">
+          {order.lines.map((l) => (
+            <li key={l.productId}>
+              <span>
+                {l.qty} × {l.name}
+              </span>
+              <Money amount={fils(l.lineTotalFils)} />
+            </li>
+          ))}
+        </ul>
+      </span>
+      <Pill tone={pill.tone}>{pill.label}</Pill>
+    </li>
   );
 }
 

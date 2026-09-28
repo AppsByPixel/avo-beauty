@@ -258,7 +258,7 @@ import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
  * `dot` is deliberately off: interaction-spec.md §2 — "Status pills must carry
  * their meaning as text, not color alone" — and the text is the label itself.
  */
-const STATUS_PILL: Record<OrderStatus, { label: string; tone: PillTone }> = {
+export const STATUS_PILL: Record<OrderStatus, { label: string; tone: PillTone }> = {
   preparing: { label: 'Preparing', tone: 'brand' },
   ready: { label: 'Ready', tone: 'warn' },
   closed: { label: 'Closed', tone: 'quiet' },
