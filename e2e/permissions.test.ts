@@ -296,6 +296,94 @@ describe('perms.void — POST /voids', () => {
   });
 });
 
+// ----------------------------------------- DECISIONS #109 — a typed price --
+
+/**
+ * ANYONE WHO CAN CHARGE MAY TYPE A CUSTOM AMOUNT — DECISIONS #109, answered
+ * 2026-09-28, and the mock followed it in dev `2859695`.
+ *
+ * Until then the mock refused `amountFils` under `noperms` with the VOID refusal,
+ * mirroring the real API's old `requireScannerPerm(req, 'void')`. Nothing in `e2e/`
+ * asserted that refusal (grepped for `noperms`, `amountFils` and the void copy
+ * before this was written: every hit is an ordinary void or top-up), so removing it
+ * broke nothing here. That is also why it needs a pin: a rule whose REMOVAL no spec
+ * noticed is a rule whose RETURN no spec would notice either, and a mock that
+ * quietly began refusing Hessa again would show every scanner built against it a
+ * 403 the real API never sends.
+ *
+ * WHY HESSA IS THE RIGHT PRINCIPAL. `noperms` is ST-002 — scanner ON, charges and
+ * void OFF (the tripwire at the top of this file). She is exactly the member the
+ * ruling is about: she can take payment and cannot review or reverse one. So the
+ * pin is the pair — her typed price is CHARGED, and her void of it is still REFUSED
+ * — because the custom amount used to borrow the void gate, and the ruling moved
+ * one without touching the other.
+ *
+ * AND THE SAFEGUARDS THE RULING KEPT still refuse her: no reason, and an amount over
+ * the 200.000 KD ceiling. Removing a gate is where the neighbouring checks get lost
+ * with it.
+ *
+ * Against the mock, like the rest of this file. The real API's side of #109 is lane
+ * A's `728861d` and is not re-proved here.
+ */
+describe('DECISIONS #109 — Hessa (scanner on, void off) may type a price', () => {
+  const VOID_REFUSAL = /permission to void/i;
+
+  it('her custom amount is charged, not refused with the void copy', async () => {
+    const res = await api<{
+      transaction: { id: string; amountFils: number; kind: string; customAmount?: boolean };
+      error?: string;
+      message?: string;
+    }>('POST', '/charges', {
+      scenario: NOPERMS,
+      idempotencyKey: idempotencyKey('custom-amount-hessa'),
+      body: { memberId: MEMBER_ID, amountFils: 3_500, reason: 'Fringe trim, not on the menu' },
+    });
+
+    expect(JSON.stringify(res.body), 'the old void refusal came back for a typed price').not.toMatch(
+      VOID_REFUSAL,
+    );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.transaction.kind).toBe('charge');
+    expect(res.body.transaction.amountFils).toBe(-3_500);
+    expect(res.body.transaction.customAmount).toBe(true);
+  });
+
+  it('and her VOID of it is still refused — #109 moved one gate, not both', async () => {
+    const charged = await api<{ transaction: { id: string } }>('POST', '/charges', {
+      scenario: NOPERMS,
+      idempotencyKey: idempotencyKey('custom-amount-hessa-tovoid'),
+      body: { memberId: MEMBER_ID, amountFils: 2_000, reason: 'Brow tint, priced at the desk' },
+    });
+    expect(charged.status, JSON.stringify(charged.body)).toBe(200);
+
+    const res = await api<{ error: string; message: string }>('POST', '/voids', {
+      scenario: NOPERMS,
+      idempotencyKey: idempotencyKey('custom-amount-hessa-void'),
+      body: { transactionId: charged.body.transaction.id, reason: 'typed the wrong figure' },
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toMatch(VOID_REFUSAL);
+  });
+
+  it('the safeguards the ruling kept still refuse her — no reason, and over the ceiling', async () => {
+    const noReason = await api<{ error: string }>('POST', '/charges', {
+      scenario: NOPERMS,
+      idempotencyKey: idempotencyKey('custom-amount-hessa-noreason'),
+      body: { memberId: MEMBER_ID, amountFils: 3_500 },
+    });
+    expect(noReason.status).toBe(400);
+    expect(noReason.body.error).toBe('invalid_request');
+
+    const tooMuch = await api<{ error: string }>('POST', '/charges', {
+      scenario: NOPERMS,
+      idempotencyKey: idempotencyKey('custom-amount-hessa-ceiling'),
+      body: { memberId: MEMBER_ID, amountFils: 200_001, reason: 'a typing mistake' },
+    });
+    expect(tooMuch.status).toBe(400);
+    expect(tooMuch.body.error).toBe('amount_above_ceiling');
+  });
+});
+
 // ------------------------------------------------------------- the gap ledger --
 
 /**
