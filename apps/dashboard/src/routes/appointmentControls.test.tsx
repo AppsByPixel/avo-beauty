@@ -44,7 +44,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { StaffPerms } from '@avo/types';
 import { ApiError } from '../api/client.js';
 import type { MerchantBooking } from '../api/bookings.js';
@@ -550,4 +550,41 @@ describe('the in-row steps send what the merchant chose', () => {
       }
     },
   );
+});
+
+/* ============================================ the slot, in the salon's clock == */
+
+/**
+ * THE LIST PRINTS A SLOT IN THE SALON'S CLOCK, FROM A VIEWER WHO IS NOT IN IT.
+ * BK-10000005 as trunk found it: `2026-09-30T07:00:00Z` at SAL-AMARA is 10:00 in
+ * Kuwait and the row drew "12:00 PM" on a Mac in Pakistan. `whenLabelZone.test.ts`
+ * pins the formatter; this pins that the row hands it `controls.timezone`, for
+ * the slot AND for the "Returns … if missed" deadline under the pill.
+ */
+describe('a row’s slot is the salon’s clock, not the viewer’s', () => {
+  const saved = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = 'Asia/Karachi';
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+    vi.useRealTimers();
+  });
+
+  it('BK-10000005 reads "Tomorrow · 10:00 AM" the day before, from Karachi', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-29T09:00:00.000Z')); // 12:00 Kuwait, 29 Sep
+    renderRow({
+      ...HELD,
+      startsAt: '2026-09-30T07:00:00.000Z',
+      endsAt: '2026-09-30T08:00:00.000Z',
+      noShowReturnDueAt: '2026-09-30T09:00:00.000Z',
+    });
+
+    const when = document.querySelector('.appts__when time');
+    expect(when?.textContent).toBe('Tomorrow · 10:00 AM');
+    expect(document.querySelector('.appts__due time')?.textContent).toBe('Tomorrow · 12:00 PM');
+    vi.useRealTimers();
+  });
 });

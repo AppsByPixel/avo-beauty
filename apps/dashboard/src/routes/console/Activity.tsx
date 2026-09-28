@@ -4,6 +4,7 @@ import { usePlatformActivity } from '../../api/platformActivity.js';
 import type { ActivityItem } from '../../api/salon.js';
 import { useAllPlatformSalons } from '../../api/platformSalons.js';
 import { whenLabel } from '../AuditLog.js';
+import { viewerZone } from '../salonTime.js';
 import { SectionError } from '../sectionState.js';
 
 /**
@@ -225,7 +226,7 @@ function FeedRow({
           <b>{item.who}</b> {item.what}
         </span>
         <time className="activity__when" dateTime={item.at} title={new Date(item.at).toISOString()}>
-          {whenLabel(item.at)}
+          {whenLabel(item.at, viewerZone())}
         </time>
       </span>
       <span className="activity__salon" data-platform={item.salonId === null ? '' : undefined}>

@@ -70,6 +70,10 @@ import { SectionError, WriteError } from './sectionState.js';
  * this route would also be a cycle, since this file mounts that component. Same
  * shape and same reason as `noShowWindow.ts`; nothing about the formatter itself
  * changed.
+ *
+ * IT NOW TAKES THE SALON'S ZONE, and a row reads it off `controls.timezone` — the
+ * same `salon.data.timezone` the reschedule step converts with, so the time a
+ * row prints and the time the step seeds from are one reading of one instant.
  */
 
 /**
@@ -612,7 +616,7 @@ export function Appointments() {
           deposits either, and "no deposits on hold" shown to a salon where
           nobody can book is the switched-off empty's sentence told wrong.
         */
-        <DepositHealth />
+        <DepositHealth timezone={salon.data?.timezone ?? null} />
       ) : (
         <Card className="appts__card" flush>
           <div className="appts__scroll">
@@ -856,7 +860,7 @@ export function BookingRow({
       </td>
       <td className="appts__when">
         <time dateTime={booking.startsAt} title={new Date(booking.startsAt).toISOString()}>
-          {whenLabel(booking.startsAt)}
+          {whenLabel(booking.startsAt, controls.timezone)}
         </time>
         {booking.rescheduledCount > 0 ? (
           <div className="appts__moved">
@@ -908,7 +912,7 @@ export function BookingRow({
             <span className="appts__due">
               Returns{' '}
               <time dateTime={booking.noShowReturnDueAt}>
-                {whenLabel(booking.noShowReturnDueAt)}
+                {whenLabel(booking.noShowReturnDueAt, controls.timezone)}
               </time>{' '}
               if missed
             </span>

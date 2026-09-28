@@ -191,7 +191,7 @@ export function Shop() {
       */}
       {shopOn === false ? <ShopModuleOffNotice /> : null}
 
-      {tab === 'catalogue' ? <ShopCatalogue /> : <ShopOrders shopOn={shopOn} />}
+      {tab === 'catalogue' ? <ShopCatalogue /> : <ShopOrders shopOn={shopOn} timezone={salon.data?.timezone ?? null} />}
     </div>
   );
 }
