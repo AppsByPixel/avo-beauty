@@ -76,6 +76,7 @@ import {
   awaitCommittedKey,
 } from '../services/idempotency';
 import { writeAudit } from '../services/audit';
+import { parseInstant } from '../time/zone';
 
 /** Integer fils, non-negotiable #1, and a voucher only ever adds. */
 function parseAmountFils(value: unknown): number {
@@ -194,10 +195,10 @@ export async function registerVoucherRoutes(app: FastifyInstance): Promise<void>
 
     let expiresAt: Date | null = null;
     if (body.expiresAt !== undefined && body.expiresAt !== null) {
-      const parsed = new Date(String(body.expiresAt));
-      if (Number.isNaN(parsed.getTime())) {
-        throw badRequest('invalid_expiry', 'expiresAt must be an ISO instant, or omitted.');
-      }
+      // An instant WITH its offset — `time/zone.ts` § parseInstant. A zoneless
+      // "2026-10-01T23:59:59" would expire at a moment chosen by the API
+      // process's zone, not by the console that picked the date.
+      const parsed = parseInstant(body.expiresAt, { field: 'expiresAt', code: 'invalid_expiry' });
       if (parsed.getTime() <= Date.now()) {
         // A voucher that is already expired at issue is a voucher nobody can
         // redeem, and it would sit in her list looking like an apology.

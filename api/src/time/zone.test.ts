@@ -23,6 +23,7 @@ import {
   isValidTimeZone,
   minutesToHhmm,
   parseDate,
+  parseInstant,
   salonWallClock,
   wallClockInstant,
   weekdayOf,
@@ -166,5 +167,46 @@ describe('validation', () => {
     expect(weekdayOf(parseDate('2026-08-16'))).toBe(0);
     expect(weekdayOf(parseDate('2026-08-17'))).toBe(1);
     expect(weekdayOf(parseDate('2026-08-22'))).toBe(6);
+  });
+});
+
+describe('parseInstant — a caller-supplied instant must name its clock', () => {
+  const field = { field: 'scheduledAt', code: 'invalid_scheduled_at' };
+  const refusal = (value: unknown): { code?: string; message?: string } => {
+    try {
+      parseInstant(value, field);
+    } catch (err) {
+      return err as { code?: string; message?: string };
+    }
+    throw new Error(`${String(value)} was accepted`);
+  };
+
+  it('refuses a wall clock with no offset, under every process zone, with the route’s code', () => {
+    for (const raw of ['2026-09-30T10:00', '2026-09-30T10:00:00', '2026-09-30T10:00:00.000', '2026-09-30 10:00', '2026-09-30']) {
+      for (const [tz, err] of underEveryProcessZone(() => refusal(raw))) {
+        expect(err.code, `${tz} · ${raw}`).toBe('invalid_scheduled_at');
+        expect(err.message, `${tz} · ${raw}`).toContain('does not say which time zone');
+      }
+    }
+  });
+
+  it('a Z time and the same moment written +03:00 are one instant, whatever TZ the API booted with', () => {
+    for (const [tz, [z, plus3]] of underEveryProcessZone(() => [
+      parseInstant('2026-09-30T07:00:00Z', field).toISOString(),
+      parseInstant('2026-09-30T10:00+03:00', field).toISOString(),
+    ])) {
+      expect(z, tz).toBe('2026-09-30T07:00:00.000Z');
+      expect(plus3, tz).toBe('2026-09-30T07:00:00.000Z');
+    }
+    expect(parseInstant('2026-09-30T07:00:00.123456Z', field).toISOString()).toBe('2026-09-30T07:00:00.123Z');
+    expect(parseInstant('2026-09-29T21:00:00-10:00', field).toISOString()).toBe('2026-09-30T07:00:00.000Z');
+  });
+
+  it('refuses what Date would quietly bend: 31 February, 24:00, a colonless offset, garbage', () => {
+    for (const raw of ['2026-02-31T07:00:00Z', '2026-09-30T24:00:00Z', '2026-09-30T10:00+0300', '2026-09-30t07:00z', 'soon', '', 42, null]) {
+      const err = refusal(raw);
+      expect(err.code, String(raw)).toBe('invalid_scheduled_at');
+      expect(err.message, String(raw)).toContain('ISO 8601 instant');
+    }
   });
 });

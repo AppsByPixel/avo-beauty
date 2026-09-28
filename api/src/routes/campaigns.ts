@@ -52,6 +52,7 @@ import {
   readMessagingPolicy,
   requireWithdrawable,
 } from '../services/campaign';
+import { parseInstant } from '../time/zone';
 
 /**
  * `CampaignSchema` on the wire — TWENTY-TWO FIELDS, INCLUDING THE HOLD AND THE
@@ -299,15 +300,17 @@ export async function registerCampaignRoutes(app: FastifyInstance): Promise<void
      * boundary says it too rather than letting a constraint violation reach a
      * merchant as a 500. The design's quiet-hours flag reads `scheduledAt` only for
      * `later`, and a `now` campaign carrying one would make that flag lie.
+     *
+     * AND THE MOMENT MUST SAY WHICH CLOCK IT IS IN. "2026-09-30T10:00", with no
+     * offset, used to be accepted and read in the API PROCESS's zone: 05:00Z on a
+     * laptop in Karachi, 10:00Z on Vercel — a Kuwait merchant's 10:00 campaign
+     * sent at 13:00 her time. `parseInstant` refuses it; the dashboard sends the
+     * instant it built in the salon's zone, and the server does not guess.
      */
     let scheduledAt: Date | null = null;
     if (sendWhen === 'later') {
       const raw = requireString(body.scheduledAt, 'scheduledAt', 40);
-      const parsed = new Date(raw);
-      if (Number.isNaN(parsed.getTime())) {
-        throw badRequest('invalid_scheduled_at', 'scheduledAt must be an ISO 8601 instant.');
-      }
-      scheduledAt = parsed;
+      scheduledAt = parseInstant(raw, { field: 'scheduledAt', code: 'invalid_scheduled_at' });
     } else if (body.scheduledAt !== undefined && body.scheduledAt !== '') {
       throw badRequest(
         'scheduled_at_not_allowed',
