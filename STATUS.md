@@ -357,7 +357,8 @@ Checked against the code before anything was built; several were not what they r
 
 | # | What he asked for | What was actually true | State |
 |---|---|---|---|
-| W1 | Branch selection missing | Booking and shop pick-up already have a picker; the design draws no other. | **Parked by Aftab** ("move onto the next one"). Open — ask where. |
+| W1 | Branch selection missing | **Specified 2026-09-28: "In book, it should be branch selection then service, then staff."** The flow was `service → branch → artist` (branch only at multi-branch salons). The product spec (§2.1) has no branch step at all. | In progress — lane B. Branch first means the FIRST screen depends on the roster, which loads async. |
+| W7 | *"on the cart page, Collect it is good, but from which branch if they have multiple"* | **No pickup-branch picker existed, on purpose:** `POST /orders` refuses a client-supplied `branchId`, and the tile said "the salon". A pickup location is a real customer choice, distinct from the server-resolved attribution branch — so it needs its own field, and it must reach the merchant's order board. | In progress — lane A (API), then lane B (cart) and lane C (board). |
 | W2 | Payment methods in the shop | Orders were **wallet-only** — `services/order.ts` hard-codes `method: 'wallet'`. A real gap and a new money path. | In progress — lane A (reuse the top-up gateway path; no second one). |
 | W3 | Invoice sent after a product purchase | The on-screen invoice already appears. Email sending is **built but off**: `RECEIPT_DRIVER` defaults to `logging` and is unset on Vercel; transport is Resend. | **Held by Aftab ("not yet")** — needs his Resend account, a verified domain, and the AVO-vs-per-salon domain decision. |
 | W4 | Notification bell in the wallet | Only notification **preferences** existed; no feed a customer can open. | In progress — lane A (API), then lane B. |
