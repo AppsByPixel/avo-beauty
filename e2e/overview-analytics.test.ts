@@ -78,7 +78,12 @@ const A_STAFF_HANDLE = 'noura';
 
 /** The fixture. See the header. Every id is this file's and nothing else names it. */
 const OV_MEMBER = 'QA-OV-0001';
-const OV_MEMBER_PHONE = '+96599777501';
+/**
+ * `+965997779xx` is unclaimed. `…7775xx` WAS this file's first choice and is
+ * `scanner.test.ts`'s twin at salon A — measured, in the first full run: the
+ * isolated runs were green only because scanner.test.ts had not run yet.
+ */
+const OV_MEMBER_PHONE = '+96599777901';
 const OV_ARTIST = 'AR-004';
 const OV_HOLD = 'TX-QAOV-HOLD';
 const OV_CHARGE = 'TX-QAOV-CHARGE';
