@@ -414,6 +414,13 @@
       "when": 1790051600000,
       "tag": "0058_an_order_paid_by_card_passes_through_the_wallet",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790138000000,
+      "tag": "0059_the_bell_opens_on_her_history_read",
+      "breakpoints": true
     }
   ]
 }
