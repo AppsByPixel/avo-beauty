@@ -25,7 +25,8 @@
  * somebody else's wallet.
  */
 
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { negate } from '@avo/types';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import {
@@ -37,7 +38,8 @@ import {
 import { badRequest, conflict, notFound } from '../http/errors';
 import { serialiseMemberContact } from '../http/serialise';
 import { requireString } from '../money/validate';
-import { MAX_LINE_QTY } from '../db/schema/shopOrder';
+import { MAX_LINE_QTY, shopOrderLine } from '../db/schema/shopOrder';
+import { transaction } from '../db/schema/transaction';
 import {
   ORDER_STATUS_FLOW,
   shopOrder,
@@ -48,11 +50,16 @@ import { branch, salon } from '../db/schema/salon';
 import { resolveBranchHours } from '../services/branchHours';
 import { writeAudit } from '../services/audit';
 import type { PickupBranchView } from '../services/order';
+import {
+  afterCursor,
+  cursorInstant,
+  encodeCursor,
+  parseCursor,
+} from '../services/streamCursor';
 
 /**
- * One page of the merchant's fulfilment board. A cap, reported as one — see the
- * `truncated` field on the list, and `GET /salons/{id}/bookings` for why a
- * hardcoded `nextCursor: null` on a capped list is not acceptable here.
+ * One page of the merchant's fulfilment board. It pages with a real cursor now —
+ * see the board route — and `truncated` says whether there is another page.
  */
 const ORDERS_PAGE = 200;
 
@@ -424,7 +431,10 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
    * rather than ignored, for `GET /salons/{id}/bookings`'s reason: a board
    * filtered on a typo renders empty and the merchant reads that as "no orders".
    */
-  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+  app.get<{
+    Params: { id: string };
+    Querystring: { status?: string; cursor?: string; memberId?: unknown };
+  }>(
     '/v1/salons/:id/orders',
     async (req, reply) => {
       const p = requireDashboardPerm(req, 'shop');
@@ -447,6 +457,47 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      /**
+       * A REAL CURSOR NOW — the debt the `truncated` comment below recorded as
+       * "owed the day a salon has more than `ORDERS_PAGE` live orders", paid
+       * because the customer card's Purchases panel pages through ONE customer's
+       * orders and needs the house `nextCursor` envelope to do it.
+       * `services/streamCursor.ts`, one stream, rank 0, keyed `(created_at,
+       * transaction_id)` — the `GET /salons/{id}/bookings` shape exactly.
+       *
+       * THE FIRST PAGE IS UNCHANGED: the same 200 rows in the same order, with
+       * `transaction_id ASC` added only as the tiebreak `afterCursor` needs (two
+       * orders can share a `created_at` to the microsecond, and without a total
+       * order a page boundary between them repeats one or loses one).
+       */
+      const cursor = parseCursor(req.query?.cursor, [0]);
+
+      /**
+       * `?memberId=` — ONE CUSTOMER'S ORDERS, for the customer card's Purchases
+       * panel. `GET /salons/{id}/bookings`' `?memberId=` carries the argument and
+       * it applies here unchanged, one section over: the gate is THIS board's
+       * (`shop`), because the board already serves every one of these rows,
+       * addresses included, to a `shop` holder — and `team` alone would hand a
+       * customer's delivery address to somebody the Shop section never trusted.
+       *
+       * A member who is not this salon's is `404 unknown_member`, as the card
+       * answers — not an empty list. Absent is unchanged: no lookup, no predicate.
+       */
+      const rawMember = req.query?.memberId;
+      if (rawMember !== undefined && typeof rawMember !== 'string') {
+        throw badRequest('invalid_member_id', 'memberId must be one member id.');
+      }
+      const wantedMember =
+        typeof rawMember === 'string' && rawMember.trim() !== '' ? rawMember.trim() : null;
+      if (wantedMember !== null) {
+        const [found] = await db
+          .select({ id: member.id })
+          .from(member)
+          .where(and(eq(member.id, wantedMember), eq(member.salonId, p.salonId)))
+          .limit(1);
+        if (!found) throw notFound('unknown_member', 'No such member.');
+      }
+
       const rows = await db
         /**
          * `erased_at` COMES BACK WITH THE PHONE, ALWAYS. The join is live, so an
@@ -463,9 +514,15 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
           memberName: member.name,
           memberPhone: member.phone,
           memberErasedAt: member.erasedAt,
+          /** Microsecond-exact, for the cursor — see `GET /salons/{id}/bookings`. */
+          at: cursorInstant(shopOrder.createdAt),
+          /** The order's own debit. Signed as stored (`< 0`); negated once, below. */
+          amountFils: transaction.amountFils,
         })
         .from(shopOrder)
         .innerJoin(member, eq(member.id, shopOrder.memberId))
+        // 1:1 — `shop_order.transaction_id` is the order's primary key and its FK.
+        .innerJoin(transaction, eq(transaction.id, shopOrder.transactionId))
         /**
          * NOT FILTERED BY THE STAFF MEMBER'S BRANCH ACCESS, and that is question
          * 2's answer rather than an omission. Closing a branch `array_remove`s it
@@ -480,14 +537,54 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
         .where(
           and(
             eq(shopOrder.salonId, p.salonId),
+            // `shop_order_member_idx` is `(member_id, created_at DESC)`.
+            wantedMember !== null ? eq(shopOrder.memberId, wantedMember) : undefined,
             wanted ? inArray(shopOrder.status, wanted as OrderStatus[]) : undefined,
+            afterCursor(cursor, 0, shopOrder.createdAt, shopOrder.transactionId),
           ),
         )
-        .orderBy(desc(shopOrder.createdAt))
-        .limit(ORDERS_PAGE);
+        .orderBy(desc(shopOrder.createdAt), asc(shopOrder.transactionId))
+        // `+ 1` answers "is there another page" without a second COUNT.
+        .limit(ORDERS_PAGE + 1);
+
+      const page = rows.slice(0, ORDERS_PAGE);
+      const last = page[page.length - 1];
+      const more = rows.length > ORDERS_PAGE;
+
+      /**
+       * WHAT WAS BOUGHT — the lines, and what it cost. Added for the customer
+       * card's Purchases panel, which the design draws as an item / date / price
+       * list and which an order carrying only a status cannot fill. Served on
+       * every board row rather than only under `?memberId=`, so the board has one
+       * row shape and not two.
+       *
+       * THE LINES ARE THE SNAPSHOT `shop_order_line` took at checkout — name and
+       * unit price as she paid them, not as the catalogue reads today.
+       * `totalFils` is the ORDER'S OWN DEBIT, `-amount_fils` on its `shop`
+       * transaction: what left her wallet. Not re-summed from the lines, so it
+       * is the money fact rather than a second figure derived from the first.
+       *
+       * One query for the whole page, by the lines' primary key, rather than
+       * one per order.
+       */
+      const ids = page.map((r) => r.o.transactionId);
+      const lineRows =
+        ids.length === 0
+          ? []
+          : await db
+              .select()
+              .from(shopOrderLine)
+              .where(inArray(shopOrderLine.transactionId, ids))
+              .orderBy(asc(shopOrderLine.name), asc(shopOrderLine.productId));
+      const linesOf = new Map<string, typeof lineRows>();
+      for (const l of lineRows) {
+        const list = linesOf.get(l.transactionId) ?? [];
+        list.push(l);
+        linesOf.set(l.transactionId, list);
+      }
 
       return reply.send({
-        items: rows.map((r) => ({
+        items: page.map((r) => ({
           ...serialiseShopOrder(r.o, r.pickup),
           /**
            * THE NAME IS THE TOMBSTONE AND STAYS THE TOMBSTONE — "Deleted account"
@@ -497,18 +594,32 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
            */
           memberName: r.memberName,
           ...serialiseMemberContact({ phone: r.memberPhone, erasedAt: r.memberErasedAt }),
+          lines: (linesOf.get(r.o.transactionId) ?? []).map((l) => ({
+            productId: l.productId,
+            name: l.name,
+            qty: l.qty,
+            unitPriceFils: l.unitPriceFils,
+            lineTotalFils: l.lineTotalFils,
+          })),
+          totalFils: negate(r.amountFils),
         })),
         /**
-         * A CAP WITH AN HONEST CURSOR IS NOT WHAT THIS IS — it is a cap, said out
-         * loud. `nextCursor: null` on a capped list is the lie
-         * `GET /salons/{id}/bookings` was just fixed for, so this does not repeat
-         * it: `truncated` is true when the cap was reached, and a client that sees
-         * it knows the board is incomplete. A real cursor is the better answer and
-         * is owed the day a salon has more than `ORDERS_PAGE` live orders; saying
-         * so here is what stops the field being believed in the meantime.
+         * THIS WAS A CAP WITH `nextCursor: null`, said out loud through
+         * `truncated` rather than hidden, and a real cursor was recorded here as
+         * owed. It is paid (see `parseCursor` above); `truncated` is kept for the
+         * client that already reads it.
          */
-        truncated: rows.length === ORDERS_PAGE,
-        nextCursor: null,
+        truncated: more,
+        /**
+         * NULL ONLY WHEN IT IS TRUE — the `+ 1` row came back or it did not.
+         * `truncated` stays, meaning exactly "there is another page", so a client
+         * that reads it keeps working; it used to be `=== ORDERS_PAGE`, which was
+         * true on a board of exactly 200 with nothing behind it.
+         */
+        nextCursor:
+          more && last
+            ? encodeCursor({ at: last.at, rank: 0, id: last.o.transactionId })
+            : null,
       });
     },
   );

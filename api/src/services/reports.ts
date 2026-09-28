@@ -783,8 +783,12 @@ export interface ReportResult extends ReportShape {
  * column headed `Gross KD`. Measured on a driven window: 23.5% of takings missing.
  * `earned_fils` on the view is the whole visit, and it is the same expression the
  * void's refund is computed from.
+ *
+ * EXPORTED for `services/overviewAnalytics.ts`, whose revenue and visit figures
+ * must reconcile with these reports. A second copy of the predicate is a second
+ * place for "not voided" to drift — `metrics.ts § int`'s one-funnel argument.
  */
-const NOT_VOIDED = sql`AND NOT EXISTS (
+export const NOT_VOIDED = sql`AND NOT EXISTS (
       SELECT 1 FROM "transaction" r
        WHERE r.reverses_transaction_id = t.id AND r.status = 'settled'
     )`;

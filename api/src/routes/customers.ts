@@ -46,6 +46,14 @@
  *   PURCHASES (the item/date/price list) is the same join one step further —
  *       services are `appointments`, products are `shop`. Same reason, twice.
  *
+ *   BOTH NOW HAVE THEIR OWN READ, and it is not on this card (2026-09-29). They are
+ *       `?memberId=` filters on the boards that already serve those rows —
+ *       `GET /salons/{id}/bookings` (`appointments`) and `GET /v1/salons/{id}/orders`
+ *       (`shop`) — gated exactly as those boards are, answering `404 unknown_member`
+ *       for somebody who is not this salon's, as the card does. The card panel needs
+ *       both permissions; each read carries only its own. `routes/salons.ts § ?memberId=`
+ *       has the argument, including why `team` + `appointments` would be theatre.
+ *
  *   THE ACTIVITY LIST IS NOT SUCH A JOIN, and it is worth saying why rather than
  *       treating the difference as obvious. It reads `transaction` and
  *       `loyalty_event`, which `REPORT_PERMISSION` maps to `dashboard` via `sales`.
