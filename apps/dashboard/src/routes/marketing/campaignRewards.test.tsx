@@ -46,6 +46,7 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stripComments } from '../../testing/stripComments.js';
 import {
+  CAMPAIGN_ADD_CUSTOM_LABEL,
   CAMPAIGN_NO_REWARD,
   CAMPAIGN_REWARDS,
   HAPPY_REWARDS,
@@ -194,12 +195,17 @@ describe('the rendered select draws every option it is given', () => {
   it('renders one option per offered reward, with its copy', () => {
     renderComposer();
     const select = screen.getByLabelText<HTMLSelectElement>(/Attach a reward/);
-    expect([...select.options].map((o) => o.value)).toEqual(
-      CAMPAIGN_REWARDS.map((r) => r.value),
-    );
-    expect([...select.options].map((o) => o.textContent)).toEqual(
-      CAMPAIGN_REWARDS.map((r) => r.label),
-    );
+    /*
+     * THE ADD OPTION IS LAST AND IS NOT A REWARD, so it is peeled off before the
+     * comparison rather than added to `CAMPAIGN_REWARDS` — it opens the field
+     * that writes one. Her saved rewards sit between the two and are pinned in
+     * customCampaignRewards.test.tsx; this stub answers with none.
+     */
+    const options = [...select.options];
+    expect(options.at(-1)?.textContent).toBe(CAMPAIGN_ADD_CUSTOM_LABEL);
+    const offered = options.slice(0, -1);
+    expect(offered.map((o) => o.value)).toEqual(CAMPAIGN_REWARDS.map((r) => r.value));
+    expect(offered.map((o) => o.textContent)).toEqual(CAMPAIGN_REWARDS.map((r) => r.label));
   });
 
   /**

@@ -1,16 +1,23 @@
 import { useState } from 'react';
-import type { Branch, Campaign, RewardKey } from '@avo/types';
+import type { Branch, Campaign, CampaignReward, RewardKey } from '@avo/types';
 import { Button, Card, Pill, Segmented, Skeleton, TextField, type PillTone } from '@avo/ui';
 import {
   AUDIENCES,
+  CAMPAIGN_ADD_CUSTOM_LABEL,
+  CAMPAIGN_REWARD_LABEL_MAX,
   CAMPAIGN_REWARDS,
   CAMPAIGN_STATUS_LABEL,
   CHANNELS,
+  campaignRewardLabel,
+  useAddCampaignReward,
+  useCampaignRewards,
   useCampaigns,
+  useRemoveCampaignReward,
   useSubmitCampaign,
+  type CampaignDraft,
 } from '../../api/promotions.js';
 import { ApiError } from '../../api/client.js';
-import { SectionError, WriteError } from '../sectionState.js';
+import { isForbidden, isUnauthenticated, SectionError, WriteError } from '../sectionState.js';
 
 /**
  * Marketing → Campaigns. NON-NEGOTIABLE #8 LIVES ON THIS SCREEN.
@@ -46,6 +53,27 @@ const STATUS_TONE: Record<Campaign['status'], PillTone> = {
 const BODY_MAX = 140;
 const TITLE_MAX = 42;
 
+/**
+ * What the reward `<select>` holds. A preset key or `none` as itself; one of her
+ * saved rewards as `saved:<id>`; and the add option as a sentinel that is never a
+ * reward. RewardKeys have no colon, so the three cannot collide.
+ */
+type RewardChoice = RewardKey | 'none' | `saved:${string}`;
+const ADD_CUSTOM = '__add_custom';
+const SAVED = 'saved:';
+
+const savedId = (choice: RewardChoice): string | null =>
+  choice.startsWith(SAVED) ? choice.slice(SAVED.length) : null;
+
+/**
+ * The submit body's reward, from the choice. A saved reward goes as
+ * `reward: 'custom'` and its ID — never its words; the server resolves those.
+ */
+function rewardFields(choice: RewardChoice): Pick<CampaignDraft, 'reward' | 'customRewardId'> {
+  const id = savedId(choice);
+  return id === null ? { reward: choice as RewardKey | 'none' } : { reward: 'custom', customRewardId: id };
+}
+
 export function Campaigns({ branches, loading }: CampaignsProps) {
   const submit = useSubmitCampaign();
   const [audience, setAudience] = useState<Campaign['audience']>('all');
@@ -53,9 +81,20 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
   const [channel, setChannel] = useState<Campaign['channel']>('push');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
-  const [reward, setReward] = useState<RewardKey | 'none'>('none');
+  const [chosenReward, setReward] = useState<RewardChoice>('none');
   const [when, setWhen] = useState<'now' | 'later'>('now');
   const [scheduledAt, setScheduledAt] = useState('');
+
+  const savedRewards = useCampaignRewards();
+  /*
+   * A saved reward that has left her list (removed here, or by a colleague and
+   * picked up on refetch) is no longer a choice, so the select falls back to "no
+   * reward" rather than pointing at an option that is not drawn. Only once the
+   * list has LOADED: while it is loading or failed, nothing saved is offered.
+   */
+  const chosenId = savedId(chosenReward);
+  const reward: RewardChoice =
+    chosenId !== null && !savedRewards.data?.some((r) => r.id === chosenId) ? 'none' : chosenReward;
 
   const ready = title.trim() !== '' && body.trim() !== '';
 
@@ -122,22 +161,7 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
           </span>
         </label>
 
-        <label className="mk__field">
-          <span className="avo-label">
-            Attach a reward <span className="mk__optional">— optional</span>
-          </span>
-          <select
-            className="avo-input"
-            value={reward}
-            onChange={(e) => setReward(e.target.value as RewardKey | 'none')}
-          >
-            {CAMPAIGN_REWARDS.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <RewardPicker value={reward} onChange={setReward} saved={savedRewards} />
 
         <div className="mk__submitrow">
           <Segmented
@@ -173,7 +197,7 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
                   channel,
                   audience,
                   branchId,
-                  reward,
+                  ...rewardFields(reward),
                   when,
                   scheduledAt: when === 'later' ? scheduledAt : '',
                 },
@@ -264,6 +288,176 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
 }
 
 /**
+ * "Attach a reward": no reward, the presets, HER OWN saved rewards, and a last
+ * option that writes a new one.
+ *
+ * Aftab: "the merchant should be able to add a custom option in the dropdown."
+ * So the add lives IN the dropdown, as its last option, and choosing it opens a
+ * field under the select rather than a dialog. Cancel puts the select back on
+ * what it held before; Save stores the reward on the server and selects the row
+ * the server returned.
+ *
+ * A saved reward is a LABEL. It moves no money and applies no earning effect —
+ * the salon honours it at the counter — which is why happy hours, whose rewards
+ * ARE applied to a charge, keep their closed list and never see this one.
+ *
+ * STATES. Loading: the presets are drawn and usable, and her own appear when they
+ * arrive. Failed: the presets still work, with a quiet line and a retry under the
+ * select. Empty: no "Your rewards" group at all.
+ */
+function RewardPicker({
+  value,
+  onChange,
+  saved,
+}: {
+  value: RewardChoice;
+  onChange: (next: RewardChoice) => void;
+  saved: ReturnType<typeof useCampaignRewards>;
+}) {
+  const add = useAddCampaignReward();
+  const remove = useRemoveCampaignReward();
+  const [adding, setAdding] = useState(false);
+  const [label, setLabel] = useState('');
+
+  const items: CampaignReward[] = saved.data ?? [];
+  const selectedId = savedId(value);
+  const trimmed = label.trim();
+
+  const cancel = () => {
+    setAdding(false);
+    setLabel('');
+    add.reset();
+  };
+
+  return (
+    <div className="mk__field">
+      <label className="mk__rewardfield">
+        <span className="avo-label">
+          Attach a reward <span className="mk__optional">— optional</span>
+        </span>
+        <select
+          className="avo-input"
+          value={adding ? ADD_CUSTOM : value}
+          onChange={(e) => {
+            if (e.target.value === ADD_CUSTOM) {
+              remove.reset();
+              setAdding(true);
+              return;
+            }
+            // Picking anything else closes the field, the same as Cancel would.
+            if (adding) cancel();
+            remove.reset();
+            onChange(e.target.value as RewardChoice);
+          }}
+        >
+          {CAMPAIGN_REWARDS.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+          {items.length > 0 ? (
+            <optgroup label="Your rewards">
+              {items.map((r) => (
+                <option key={r.id} value={`${SAVED}${r.id}`}>
+                  {r.label}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          <option value={ADD_CUSTOM}>{CAMPAIGN_ADD_CUSTOM_LABEL}</option>
+        </select>
+      </label>
+
+      {selectedId !== null && !adding ? (
+        <div className="mk__rewardactions">
+          <Button
+            variant="quiet"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate(selectedId, { onSuccess: () => onChange('none') })}
+          >
+            Remove from your list
+          </Button>
+        </div>
+      ) : null}
+      {remove.isError ? (
+        <WriteError error={remove.error} reassurance="That reward is still on your list." />
+      ) : null}
+
+      {saved.isError ? <SavedRewardsError saved={saved} /> : null}
+
+      {adding ? (
+        <div className="mk__customreward">
+          <TextField
+            label="Your reward"
+            placeholder="e.g. Free hair mask with any blow-dry"
+            value={label}
+            maxLength={CAMPAIGN_REWARD_LABEL_MAX}
+            autoFocus
+            onChange={(e) => setLabel(e.target.value)}
+          />
+          <span className="mk__count" aria-live="polite">
+            {label.length} / {CAMPAIGN_REWARD_LABEL_MAX}
+          </span>
+          <div className="mk__rewardactions">
+            <Button
+              disabled={add.isPending || trimmed === ''}
+              onClick={() =>
+                add.mutate(trimmed, {
+                  onSuccess: (row) => {
+                    onChange(`${SAVED}${row.id}`);
+                    setAdding(false);
+                    setLabel('');
+                  },
+                })
+              }
+            >
+              Save
+            </Button>
+            <Button variant="secondary" disabled={add.isPending} onClick={cancel}>
+              Cancel
+            </Button>
+          </div>
+          {/*
+            THE SERVER'S SENTENCE, VERBATIM — "You already have a reward with that
+            name.", "You can save up to 20 rewards. Remove one to add another." —
+            because each names the fix, and a paraphrase would drop it.
+          */}
+          {add.isError ? <WriteError error={add.error} reassurance="No reward was added." /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Her saved rewards did not load. QUIET, because the select still works: every
+ * preset is drawn and a campaign can be submitted with one. So this is one line
+ * and a retry under the field, not a section error replacing it.
+ *
+ * A 403 is "you can't", not "we failed", and gets the server's own sentence and
+ * no retry — interaction-spec.md §4. It should be unreachable (the same
+ * permission gates the whole screen), and rendering it honestly costs nothing.
+ */
+function SavedRewardsError({ saved }: { saved: ReturnType<typeof useCampaignRewards> }) {
+  if (isUnauthenticated(saved.error)) return null;
+  if (isForbidden(saved.error)) {
+    return (
+      <p className="mk__rewardnote" role="alert">
+        {(saved.error as ApiError).message}
+      </p>
+    );
+  }
+  return (
+    <p className="mk__rewardnote" role="alert">
+      Couldn&rsquo;t load your saved rewards.{' '}
+      <Button variant="quiet" disabled={saved.isFetching} onClick={() => void saved.refetch()}>
+        Try again
+      </Button>
+    </p>
+  );
+}
+
+/**
  * The queue.
  *
  * `GET /v1/salons/{id}/campaigns` does not exist yet — see `useCampaigns`. A 404
@@ -340,6 +534,12 @@ function Queue({ loading }: { loading: boolean }) {
 }
 
 function QueueRow({ campaign: c }: { campaign: Campaign }) {
+  /*
+   * THE REWARD, AS SHE ATTACHED IT. A custom one is the server's snapshot of her
+   * words at submission, verbatim — so removing it from her list later does not
+   * rewrite what this row says AVO was asked to approve.
+   */
+  const reward = campaignRewardLabel(c);
   return (
     <div className="mk__queuerow">
       <div className="mk__queuetop">
@@ -355,6 +555,7 @@ function QueueRow({ campaign: c }: { campaign: Campaign }) {
               : 'On approval',
           { push: 'push', wa: 'WhatsApp', both: 'push + WhatsApp' }[c.channel],
           c.result ?? `${c.reach.toLocaleString('en-US')} people`,
+          ...(reward !== null ? [reward] : []),
         ].join(' · ')}
       </div>
       {/*
