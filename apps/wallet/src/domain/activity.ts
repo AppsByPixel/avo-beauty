@@ -71,8 +71,30 @@ function when(
   lang: Language,
   copy: Copy,
 ): string {
-  const date = new Date(tx.createdAt);
-  const now = new Date();
+  const head = dayAndTime(new Date(tx.createdAt), lang, copy);
+  const branch = branchLabel(tx, branches, lang);
+  // A top-up has no branch a customer would recognise; a charge always does.
+  const withBranch = branch && tx.kind !== 'topup' ? `${head} · ${branch}` : head;
+
+  // The status suffix used to be an inline ' · Pending' in the component, which
+  // is the shape of string an Arabic build silently ships in English.
+  if (tx.status === 'pending') return `${withBranch} · ${copy.rowPending}`;
+  if (tx.status === 'failed' || tx.status === 'cancelled') {
+    return `${withBranch} · ${copy.rowFailed}`;
+  }
+  return withBranch;
+}
+
+/**
+ * "Today · 4:30 pm" / "12 Jul · 4:30 pm" — the activity row's stamp, in Kuwait
+ * time, Eastern digits in Arabic.
+ *
+ * Exported so the bell (`domain/bell.ts`) stamps its rows with the SAME words
+ * and the same clock the activity row beneath it uses: a top-up that reads
+ * "Today · 4:30 pm" in one list and "14 min ago" in the other is two
+ * descriptions of one event. Split out of `when` unchanged.
+ */
+export function dayAndTime(date: Date, lang: Language, copy: Copy, now: Date = new Date()): string {
   const sameDay = date.toDateString() === now.toDateString();
   const yesterday = new Date(now.getTime() - 86_400_000).toDateString() === date.toDateString();
   const locale = dateLocale(lang);
@@ -89,22 +111,11 @@ function when(
     timeZone: KUWAIT_TIME_ZONE,
   }).format(date);
 
-  const head = sameDay
+  return sameDay
     ? `${copy.today} · ${time}`
     : yesterday
       ? `${copy.yesterday} · ${time}`
       : `${day} · ${time}`;
-  const branch = branchLabel(tx, branches, lang);
-  // A top-up has no branch a customer would recognise; a charge always does.
-  const withBranch = branch && tx.kind !== 'topup' ? `${head} · ${branch}` : head;
-
-  // The status suffix used to be an inline ' · Pending' in the component, which
-  // is the shape of string an Arabic build silently ships in English.
-  if (tx.status === 'pending') return `${withBranch} · ${copy.rowPending}`;
-  if (tx.status === 'failed' || tx.status === 'cancelled') {
-    return `${withBranch} · ${copy.rowFailed}`;
-  }
-  return withBranch;
 }
 
 /**

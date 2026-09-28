@@ -963,6 +963,42 @@ export const ar: Copy = {
   deleteScheduledBody: en.deleteScheduledBody, // AR GAP
   deleteCheckFailed: en.deleteCheckFailed, // AR GAP
 
+  // ─────────────────────────────────────────── the bell — client ask W4 ──
+  // WRITTEN ARABIC, FEMININE ADDRESS, NO DESIGN SOURCE — every key without a
+  // `whatsapp-templates.md` marker is in AR_UNVERIFIED for the native-speaker
+  // review, the delivery slice's treatment of a surface the bundle never drew.
+  // Not AR_GAPS: the bell is a whole surface, and English rows inside an Arabic
+  // bell would be the half-translated screen #12 forbids.
+  //
+  // The five marked keys are the designer's own template Arabic
+  // (whatsapp-templates.md § 1 and § 4), variables and all.
+  bellAria: (n) => (n === 0 ? 'الإشعارات' : `الإشعارات، ${ea(n)} غير مقروءة`),
+  bellBadge: (n) => (n > 99 ? `${ea(99)}+` : ea(n)),
+  bellUnread: 'غير مقروء',
+  bellEmptyTitle: 'لا جديد لديكِ',
+  bellEmptyBody: 'ستظهر هنا مدفوعاتكِ وعمليات الشحن وحجوزاتكِ.',
+  bellOffersOff: 'عروض الصالون مغلقة، لذلك لا تظهر هنا.',
+  bellOffersOffCta: 'إعدادات الإشعارات',
+  bellLoadFailed: 'تعذّر تحميل إشعاراتكِ.',
+  bellMarkAll: 'تحديد الكل كمقروء',
+  bellTopupBonus: (bonus) => `يشمل مكافأة ${bonus}`,
+  bellChargeCustom: 'مبلغ أُدخل في الصالون',
+  bellChargeVoided: 'أُلغيت العملية ورجع المبلغ لمحفظتكِ',
+  bellShopLine: (name, qty) => (qty > 1 ? `${name} × ${ea(qty)}` : name),
+  bellPickup: 'استلام من الصالون',
+  bellDelivery: 'توصيل',
+  bellBookingTitle: (salon) => `تم تأكيد حجزكِ في ${salon}.`, // whatsapp-templates.md § 1
+  bellBookingWith: (service, artist) => `${service} مع ${artist}`, // whatsapp-templates.md § 1
+  bellBookingAt: (day, time) => `${day} الساعة ${time}`, // whatsapp-templates.md § 1
+  bellNoShowTitle: (salon) => `${salon} — رجع عربونكِ.`, // whatsapp-templates.md § 4
+  bellNoShowBody: (service, day) => `افتقدناكِ في موعد ${service} يوم ${day}.`, // whatsapp-templates.md § 4
+  bellNoShowBare: 'رجع عربونكِ إلى محفظتكِ.', // whatsapp-templates.md § 4, amount cut
+  bellCancelledReturn: 'ألغيتِ الحجز ورجع العربون لمحفظتكِ.',
+  bellCardOrder: (method) => `دُفع عبر ${method}`,
+  bellCardOrderBonus: (bonus) => `أُضيفت مكافأة ${bonus} إلى محفظتكِ`,
+  bellUnknownTitle: 'إشعار جديد',
+  bellUnknownBody: 'حدّثي التطبيق لقراءة هذا الإشعار.',
+
   langSwitch: 'EN', // design:1339
   restartNeeded: en.restartNeeded, // AR GAP
 };
@@ -1258,4 +1294,33 @@ export const AR_UNVERIFIED = [
   'orderAddressFixed',
   'orderCollectAt',
   'orderTruncated',
+  /**
+   * THE BELL — client ask W4. A surface the wallet design never drew, so every
+   * key the bell added is here EXCEPT the five lifted from
+   * `design/whatsapp-templates.md` (bellBookingTitle, bellBookingWith,
+   * bellBookingAt, bellNoShowTitle, bellNoShowBody) and `bellNoShowBare`, which
+   * is § 4's own sentence with the amount cut — the zero-deposit precedent
+   * above. Read first: `bellEmptyTitle` (it sets the register), `bellOffersOff`
+   * (the one sentence about consent), and `bellChargeVoided` (money came back).
+   */
+  'bellAria',
+  'bellBadge',
+  'bellUnread',
+  'bellEmptyTitle',
+  'bellEmptyBody',
+  'bellOffersOff',
+  'bellOffersOffCta',
+  'bellLoadFailed',
+  'bellMarkAll',
+  'bellTopupBonus',
+  'bellChargeCustom',
+  'bellChargeVoided',
+  'bellShopLine',
+  'bellPickup',
+  'bellDelivery',
+  'bellCancelledReturn',
+  'bellCardOrder',
+  'bellCardOrderBonus',
+  'bellUnknownTitle',
+  'bellUnknownBody',
 ] as const;

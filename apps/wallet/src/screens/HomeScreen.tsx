@@ -56,6 +56,9 @@ import {
 import { TopUpSheet } from '../components/TopUpSheet';
 import { TransactionSheet } from '../components/TransactionSheet';
 import { AccountButton } from '../components/AccountButton';
+import { BellButton } from '../components/BellButton';
+import { BellSheet } from '../components/BellSheet';
+import { useBell } from '../state/useBell';
 
 interface HomeProps {
   /**
@@ -169,6 +172,14 @@ export function HomeScreen({
   }, [markSucceeded, retry]);
 
   const topUp = useTopUp({ onSucceeded });
+
+  /*
+    THE BELL (W4). Read once the wallet is on screen, and again whenever Home
+    re-reads the wallet — a top-up or a charge that moved her balance also
+    queued a receipt, so the badge follows `fetchedAt`. See `BellButton` for why
+    it lives in this header and nowhere else.
+  */
+  const bell = useBell({ enabled: snapshot !== null, refreshKey: fetchedAt });
 
   const rows = useMemo(
     () =>
@@ -285,6 +296,16 @@ export function HomeScreen({
             // the receipt reference already handed over. src/support/contact.ts.
             onReport={onOpenAccount}
           />
+          <BellSheet
+            bell={bell}
+            salon={salonName(salon, lang)}
+            transactions={snapshot.transactions}
+            onOpenSettings={() => {
+              // The EXISTING switches — Account → Notifications. Not rebuilt.
+              bell.close();
+              onOpenAccount();
+            }}
+          />
           {/*
             design:641-643 USED TO BE RENDERED HERE and is now a sibling of the
             whole shell, in `App.tsx`. design:627's Pay tab opens the same
@@ -335,6 +356,8 @@ export function HomeScreen({
         {/* design:195-198 — the switch and the avatar, in that order. */}
         <View style={styles.headerControls}>
           <LanguageToggle />
+          {/* W4 — not in the design. Between the switch and the avatar; see BellButton. */}
+          <BellButton unreadCount={bell.unreadCount} onPress={bell.openPanel} />
           <AccountButton onPress={onOpenAccount} />
         </View>
       </View>

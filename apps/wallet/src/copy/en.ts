@@ -919,6 +919,36 @@ export const en: Copy = {
     )}. You can cancel any time before then.`,
   deleteCheckFailed: "We couldn't check whether your account is scheduled for deletion.",
 
+  // ─────────────────────────────────────────── the bell — client ask W4 ──
+  // NEW COPY, NO DESIGN SOURCE, CLIENT TO REVIEW — except the five marked
+  // `whatsapp-templates.md`, which are the design's own template sentences.
+  bellAria: (n) => (n === 0 ? 'Notifications' : `Notifications, ${n} unread`),
+  bellBadge: (n) => (n > 99 ? '99+' : `${n}`),
+  bellUnread: 'Unread',
+  bellEmptyTitle: "You're all caught up",
+  bellEmptyBody: 'Payments, top-ups and bookings will show up here.',
+  bellOffersOff: "Salon offers are switched off, so they don't appear here.",
+  bellOffersOffCta: 'Notification settings',
+  bellLoadFailed: "We couldn't load your notifications.",
+  bellMarkAll: 'Mark all as read',
+  bellTopupBonus: (bonus) => `Includes a ${bonus} bonus`,
+  bellChargeCustom: 'Amount entered at the salon',
+  bellChargeVoided: 'Voided — the amount is back in your wallet',
+  bellShopLine: (name, qty) => (qty > 1 ? `${name} × ${qty}` : name),
+  bellPickup: 'Pickup',
+  bellDelivery: 'Delivery',
+  bellBookingTitle: (salon) => `Your booking at ${salon} is confirmed.`, // whatsapp-templates.md § 1
+  bellBookingWith: (service, artist) => `${service} with ${artist}`, // whatsapp-templates.md § 1
+  bellBookingAt: (day, time) => `${day} at ${time}`, // whatsapp-templates.md § 1
+  bellNoShowTitle: (salon) => `${salon} — your deposit is back.`, // whatsapp-templates.md § 4
+  bellNoShowBody: (service, day) => `We missed you at ${service} on ${day}.`, // whatsapp-templates.md § 4
+  bellNoShowBare: 'Your deposit has returned to your wallet.', // whatsapp-templates.md § 4, amount cut
+  bellCancelledReturn: 'You cancelled, and your deposit is back in your wallet.',
+  bellCardOrder: (method) => `Paid by ${method}`,
+  bellCardOrderBonus: (bonus) => `${bonus} bonus added to your wallet`,
+  bellUnknownTitle: 'New notification',
+  bellUnknownBody: 'Update the app to read this one.',
+
   // design/AVO Wallet Home.dc.html:1232 — the English build offers Arabic.
   langSwitch: 'العربية',
   restartNeeded: 'Restart the app to switch direction',
