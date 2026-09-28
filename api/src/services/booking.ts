@@ -44,7 +44,14 @@
  */
 
 import { and, asc, eq, gt, inArray, isNotNull, lte, sql } from 'drizzle-orm';
-import { add, fils, subtract, type Fils } from '@avo/types';
+import {
+  add,
+  fils,
+  subtract,
+  type BookingCancelResult,
+  type BookingSettlement,
+  type Fils,
+} from '@avo/types';
 import type { Db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
@@ -79,7 +86,7 @@ import {
   readPublishedPolicy,
   type CancellationRule,
   type NoShowRule,
-  type StampedPolicyView,
+  type BookingPolicyStamp,
 } from './bookingPolicy';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
@@ -150,7 +157,7 @@ export interface BookingRow {
  * The stamp, or null for a LEGACY booking. `booking_policy_stamp_is_whole` makes
  * "some of the six" unrepresentable, so testing one column is testing all six.
  */
-export function stampedPolicyOf(row: BookingRow): StampedPolicyView | null {
+export function stampedPolicyOf(row: BookingRow): BookingPolicyStamp | null {
   if (
     row.policyId === null ||
     row.policyVersion === null ||
@@ -183,13 +190,13 @@ export function stampedPolicyOf(row: BookingRow): StampedPolicyView | null {
  * them — before 0066, or by the pre-0066 API still serving while it applies —
  * went through a `returnDeposit` that could only ever return the whole deposit.
  */
-export function settlementOf(row: BookingRow): { returnedFils: number; keptFils: number } | null {
+export function settlementOf(row: BookingRow): BookingSettlement | null {
   if (row.holdTransactionId === null) return null;
   if (row.status !== 'cancelled' && row.status !== 'no_show_returned') return null;
   if (row.settledReturnedFils === null || row.settledKeptFils === null) {
-    return { returnedFils: row.depositFils, keptFils: 0 };
+    return { returnedFils: fils(row.depositFils), keptFils: fils(0) };
   }
-  return { returnedFils: row.settledReturnedFils, keptFils: row.settledKeptFils };
+  return { returnedFils: fils(row.settledReturnedFils), keptFils: fils(row.settledKeptFils) };
 }
 
 /**
@@ -1211,23 +1218,20 @@ async function reloadBooking(tx: Executor, id: string): Promise<BookingRow> {
   return row as BookingRow;
 }
 
-/** What a cancel did. The same shape for a legacy booking and a policy one. */
-export interface CancelResult {
+/**
+ * What a cancel did: trunk's `BookingCancelResultSchema` (`@avo/types`, b23e78c),
+ * the same shape for a legacy booking and a policy one. `refundedFils` is what
+ * came back (kept under that name for the pre-0066 client), `keptFils` what the
+ * salon kept (0 on a legacy booking), `returnPercent` 100 on a legacy booking,
+ * `rule` null on a legacy booking or later than every rule.
+ *
+ * `booking` is the serialiser's own type rather than the schema's because the
+ * serialiser sends a strict SUPERSET of `BookingSchema` (`endsAt`,
+ * `noShowReturnDueAt`, `changeableUntil`, ... — see `serialiseBooking`).
+ */
+export type CancelResult = Omit<BookingCancelResult, 'booking'> & {
   booking: ReturnType<typeof serialiseBooking>;
-  /** What came back to her wallet. Kept under this name for the pre-0066 client. */
-  refundedFils: number;
-  /** What the salon kept. 0 on a legacy booking. */
-  keptFils: number;
-  /** The percent applied. 100 on a legacy booking. */
-  returnPercent: number;
-  /** The cut-off rule that matched, or null (legacy, or later than every rule). */
-  rule: CancellationRule | null;
-  balanceAfterFils: number;
-  /** The `deposit_return`, or null when nothing came back (a 0% cancellation). */
-  transactionId: string | null;
-  /** The `deposit_forfeit`, or null when nothing was kept. */
-  forfeitTransactionId: string | null;
-}
+};
 
 /**
  * She cancels her own appointment. What comes back is decided by the policy the

@@ -25,19 +25,20 @@ import {
   text,
   unique,
 } from 'drizzle-orm/pg-core';
+import type { BookingPolicy, CancellationRule } from '@avo/types';
 import { timestamptz } from './_shared';
 import { member } from './member';
 import { salon } from './salon';
 import { staffUser } from './staff';
 
-export type NoShowRule = 'keep' | 'return';
-
-export interface CancellationRule {
-  /** Whole hours before `starts_at`. She meets it when at least this far ahead. */
-  hoursBefore: number;
-  /** Whole percent of the deposit returned to her wallet, 0–100. */
-  returnPercent: number;
-}
+/**
+ * The wire shapes are trunk's (`@avo/types`, b23e78c): `CancellationRuleSchema`
+ * and `BookingPolicySchema.noShow`. The columns are typed by them rather than by a
+ * local copy, so a contract change is a compile error here and not a drift.
+ * `hoursBefore` is whole hours before `starts_at`; `returnPercent` whole percent.
+ */
+export type NoShowRule = BookingPolicy['noShow'];
+export type { CancellationRule };
 
 export const bookingPolicy = pgTable(
   'booking_policy',

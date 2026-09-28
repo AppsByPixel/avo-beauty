@@ -60,7 +60,13 @@
  */
 
 import { desc, eq, sql } from 'drizzle-orm';
-import { fils, subtract, type Fils } from '@avo/types';
+import {
+  fils,
+  subtract,
+  type BookingPolicy,
+  type BookingPolicyStamp,
+  type Fils,
+} from '@avo/types';
 import type { Db } from '../db/client';
 import {
   bookingPolicy,
@@ -100,30 +106,18 @@ export interface PolicyInput {
   text: { en: string; ar: string };
 }
 
-/** The wire shape. `GET/PUT /salons/{id}/booking-policy` and the customer read. */
-export interface BookingPolicyView {
-  id: string;
-  salonId: string;
-  version: number;
-  noShow: NoShowRule;
-  cancellation: CancellationRule[];
-  /** Empty `ar` falls back to `en` at the display boundary, as `LegalDocSchema`. */
-  text: { en: string; ar: string };
-  publishedAt: string;
-}
-
-/** The stamp a booking carries. The same fields minus the salon and the instant. */
-export interface StampedPolicyView {
-  id: string;
-  version: number;
-  noShow: NoShowRule;
-  cancellation: CancellationRule[];
-  text: { en: string; ar: string };
-}
+/**
+ * The wire shapes are trunk's, from `@avo/types` (b23e78c): `BookingPolicy` for
+ * `GET/PUT /salons/{id}/booking-policy` and the customer read, and
+ * `BookingPolicyStamp` for the policy a booking carries. The api-local copies
+ * this file used to declare are gone. `ar` may be '' and falls back to `en` at
+ * the display boundary, as `LegalDocSchema`.
+ */
+export type { BookingPolicy, BookingPolicyStamp };
 
 type PolicyRow = typeof bookingPolicy.$inferSelect;
 
-export function serialisePolicy(row: PolicyRow): BookingPolicyView {
+export function serialisePolicy(row: PolicyRow): BookingPolicy {
   return {
     id: row.id,
     salonId: row.salonId,
@@ -365,7 +359,7 @@ function sameAs(row: PolicyRow, input: PolicyInput): boolean {
 }
 
 export interface PublishResult {
-  policy: BookingPolicyView;
+  policy: BookingPolicy;
   /** False when the body was identical to the current version: nothing written. */
   published: boolean;
   /** Bell notices written by THIS publish. 0 on the second publish of a salon-day. */
