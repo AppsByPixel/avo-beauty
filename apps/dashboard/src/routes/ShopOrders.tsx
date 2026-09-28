@@ -9,6 +9,7 @@ import {
 } from '../api/orders.js';
 import { SectionError, WriteError } from './sectionState.js';
 import { whenLabel } from './AuditLog.js';
+import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
 
 /**
  * Merchant → Shop → Orders. The fulfilment board.
@@ -92,8 +93,9 @@ import { whenLabel } from './AuditLog.js';
  *                               in the app this model is taken from, and
  *                               delivery-based means delivery is available and
  *                               chosen — not that collection was removed. So the
- *                               cell says what is happening ("Collecting at the
- *                               salon") rather than reporting an absence with an
+ *                               cell says what is happening ("Collecting at
+ *                               Salmiya" since 0060 — § which branch she collects
+ *                               from) rather than reporting an absence with an
  *                               em dash or "No address". Rendering live data as
  *                               missing data is the premature-zero class with
  *                               the sign flipped.
@@ -166,6 +168,74 @@ import { whenLabel } from './AuditLog.js';
  * distinction cost legibility for a difference the WORDS already make — the same
  * argument `STATUS_PILL` makes for `dot: false`. The rule in `app.css` carries
  * the measurements.
+ *
+ * ---------------------------------------------------------------------------
+ * WHICH BRANCH SHE COLLECTS FROM — migration 0060, and three states again
+ *
+ * The client's question was "Collect it is good, but from which branch if they
+ * have multiple". The customer now answers it; this board is where the answer
+ * has to land, because staff need to know which counter to prepare the order at.
+ * `pickupBranch` is `{ id, name, nameAr, closed } | null`, served INLINE:
+ *
+ *   open branch       "Collecting at Salmiya". The name is the fact staff act
+ *                     on, so it is the one word on the line that is not muted.
+ *   `closed: true`    the order is waiting at a counter nobody is behind. This
+ *                     is the one that needs a human — somebody has to agree with
+ *                     her where she collects it now — so it takes the board's
+ *                     attention idiom (`--avo-warn-*`, the truncation notice's
+ *                     pair) rather than the pickup line's quiet italic. The row
+ *                     keeps its status control: lane A kept preparing → ready →
+ *                     closed working at a closed branch, and blocking it here
+ *                     would strand the order on the one screen that can move it.
+ *   `null`            placed before customers could choose, at a salon with more
+ *                     than one branch. "Pickup branch not chosen", and NOT "Collecting
+ *                     at the salon" — which is what this cell said before 0060,
+ *                     and which `ShopOrderSchema` now forbids by name ("Do not
+ *                     render it as 'the salon'"): at a two-branch salon it names
+ *                     a place that does not exist.
+ *
+ * NEVER LOOKED UP IN `salon.branches`. That list is OPEN branches only, so the
+ * closed case — the one that matters — would resolve to nothing and the order's
+ * location would vanish. The name and the flag are read off the row, always.
+ * `shopOrdersRender.test.tsx § no lookup` pins it.
+ *
+ * `name`, NOT `nameAr`. The merchant dashboard is English-only by decision
+ * (`design/README.md` § Known gaps 1).
+ *
+ * ---------------------------------------------------------------------------
+ * THE HEADER'S BRANCH SELECTOR NARROWS THIS BOARD — BUT ONLY WHERE IT KNOWS
+ *
+ * The decision, and it is `narrowToBranch` below: selecting a branch hides a
+ * row ONLY when the row positively says it is collected at a DIFFERENT, OPEN
+ * branch. Everything else stays:
+ *
+ *   - pickups at the selected branch (the point);
+ *   - every DELIVERY — the wire carries no preparing branch for a delivery (the
+ *     attribution branch is deliberately client-invisible), so hiding it under
+ *     some branch would be this client inventing which counter sends it;
+ *   - every pickup whose branch was NOT CHOSEN — it may well be this one;
+ *   - every pickup at a CLOSED branch — under every selection, not just "All".
+ *
+ * WHY NARROW AT ALL. `BranchScope.tsx` exists because the header said "Salmiya"
+ * over numbers computed for both branches, and called that a defect: the label
+ * is a scope claim and the screen underneath has to honour it or not show it.
+ * Before 0060 this board had nothing to narrow BY; now every pickup row carries
+ * the fact. A Salmiya front desk asking "what do I prepare here" is exactly the
+ * question the selector asks, and "All branches" remains one click away.
+ *
+ * WHY THE CLOSED BRANCH STAYS UNDER EVERY SELECTION. A closed branch is not in
+ * `salon.branches`, so it can never BE the selection — a rule of "show only the
+ * selected branch's pickups" would make those orders reachable only under "All
+ * branches", and lane A kept the board unfiltered by staff branch access for
+ * precisely this reason: closing a branch is the event that makes an order need
+ * a human, and the view somebody is standing in must not be the one that hides
+ * it. So it stays wherever she is looking, flagged.
+ *
+ * THE NARROWING IS CLIENT-SIDE, AND THAT IS STATED RATHER THAN HIDDEN. The API
+ * has no `?branch=` on this route. On a board at the cap this narrows the 200
+ * rows that came back, so the truncation notice — a fact about the board, not
+ * about the view — still renders under a branch selection. Hidden rows are
+ * COUNTED on screen, so a narrowed board never reads as a complete one.
  */
 
 /**
@@ -253,6 +323,7 @@ export function ShopOrders({ shopOn }: ShopOrdersProps) {
    * cache entry its result has to be written into — see `api/orders.ts § writeRow`.
    */
   const move = useMoveOrder(filter);
+  const scope = useBranchScope();
 
   if (board.isError) {
     return (
@@ -266,8 +337,12 @@ export function ShopOrders({ shopOn }: ShopOrdersProps) {
     );
   }
 
-  const rows = board.data?.items ?? [];
+  const loaded = board.data?.items ?? [];
   const truncated = board.data?.truncated === true;
+  /* The header's selection, applied — see the header § the branch selector. */
+  const { visible: rows, hidden } = narrowToBranch(loaded, scope.selected);
+  const branchName = scope.selectedName ?? 'this branch';
+  const showAllBranches = () => scope.select(ALL_BRANCHES);
 
   return (
     <div className="orders">
@@ -304,6 +379,10 @@ export function ShopOrders({ shopOn }: ShopOrdersProps) {
       */}
       {truncated ? <TruncatedNotice filtered={filter !== null} onNarrow={() => setFilter('preparing')} /> : null}
 
+      {hidden > 0 && rows.length > 0 ? (
+        <BranchNarrowing branchName={branchName} hidden={hidden} onShowAll={showAllBranches} />
+      ) : null}
+
       <Card className="orders__card" flush>
         <div className="orders__scroll">
           <table className="orders__table">
@@ -333,10 +412,22 @@ export function ShopOrders({ shopOn }: ShopOrdersProps) {
                     ))}
                   </tr>
                 ))
-              ) : rows.length === 0 ? (
+              ) : loaded.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="orders__empty">
                     <BoardEmpty filter={filter} shopOn={shopOn} onClear={() => setFilter(null)} />
+                  </td>
+                </tr>
+              ) : rows.length === 0 ? (
+                /*
+                  A FOURTH EMPTY, AND A DIFFERENT FACT FROM THE OTHER THREE: the
+                  board HAS orders and every one of them is collected at another
+                  open branch. "No orders yet" here would be a claim about the
+                  shop made out of a claim about the view.
+                */
+                <tr>
+                  <td colSpan={6} className="orders__empty">
+                    <BranchEmpty branchName={branchName} onShowAll={showAllBranches} />
                   </td>
                 </tr>
               ) : (
@@ -482,6 +573,123 @@ export function BoardEmpty({
   );
 }
 
+/* -------------------------------------------------------- the branch selector
+ *
+ * The rule the header argues, as a function so it can be asserted directly.
+ * `selected` is `BranchScope.selected` — `'all'` or an open branch's id.
+ *
+ * A ROW IS HIDDEN ONLY ON POSITIVE EVIDENCE THAT IT BELONGS ELSEWHERE: a pickup
+ * whose branch is known, still open, and not the selected one. Each of the three
+ * `keep` arms below is a way of NOT concluding a row is somebody else's from a
+ * field that does not say so — the same discipline `selectionIsStale` applies to
+ * the selection itself.
+ *
+ * `pickupBranch.id` IS COMPARED, NEVER RESOLVED. Nothing here reads
+ * `salon.branches`; the id on the row and the id in the selection are the whole
+ * comparison, so a branch that closed after the order was placed cannot make its
+ * orders disappear by failing a lookup.
+ */
+export function narrowToBranch<T extends Pick<MerchantShopOrder, 'fulfilment' | 'pickupBranch'>>(
+  rows: readonly T[],
+  selected: string,
+): { visible: T[]; hidden: number } {
+  if (selected === ALL_BRANCHES) return { visible: [...rows], hidden: 0 };
+  const visible = rows.filter((o) => {
+    // A delivery has no counter on the wire; which branch sends it is not ours to guess.
+    if (o.fulfilment !== 'pickup') return true;
+    // Placed before she could choose — it may be this branch as easily as another.
+    if (o.pickupBranch === null) return true;
+    // Nobody is behind that counter, and it can never be the selection. Everywhere.
+    if (o.pickupBranch.closed) return true;
+    return o.pickupBranch.id === selected;
+  });
+  return { visible, hidden: rows.length - visible.length };
+}
+
+/**
+ * THE NARROWING, SAID. Rendered only when it actually hid something — a line
+ * saying "0 hidden" is noise on every single-branch-sized day.
+ *
+ * It names what is STILL on screen as well as what is not, because the rule is
+ * not "only Salmiya": a merchant who sees a Kuwait City delivery under the
+ * Salmiya selection should be able to tell that is the rule and not a leak.
+ */
+export function BranchNarrowing({
+  branchName,
+  hidden,
+  onShowAll,
+}: {
+  branchName: string;
+  hidden: number;
+  onShowAll: () => void;
+}) {
+  return (
+    <div className="orders__scope" role="status">
+      <span>
+        Showing pickups at <b>{branchName}</b>, with every delivery and every pickup not tied to
+        an open branch. {hidden} pickup{hidden === 1 ? '' : 's'} at other branches{' '}
+        {hidden === 1 ? 'is' : 'are'} hidden.
+      </span>
+      <Button variant="quiet" onClick={onShowAll}>
+        Show all branches
+      </Button>
+    </div>
+  );
+}
+
+export function BranchEmpty({
+  branchName,
+  onShowAll,
+}: {
+  branchName: string;
+  onShowAll: () => void;
+}) {
+  return (
+    <EmptyState
+      title={`No orders to collect at ${branchName}`}
+      body="Every order on this board is being collected at another branch."
+      action={{ label: 'Show all branches', onClick: onShowAll }}
+    />
+  );
+}
+
+/**
+ * WHERE SHE COLLECTS IT — the pickup arm of the Where cell. Three states; the
+ * header § which branch she collects from has the argument for each.
+ *
+ * `branch` IS THE ROW'S OWN FIELD and this component is given nothing else — no
+ * branch list to look it up in, which is the structural half of "never look it
+ * up in `salon.branches`".
+ */
+export function PickupWhere({ branch }: { branch: MerchantShopOrder['pickupBranch'] }) {
+  if (branch === null) {
+    return (
+      <>
+        <span className="orders__pickup">Pickup branch not chosen</span>
+        <div className="orders__stamp">Placed before customers could pick a branch.</div>
+      </>
+    );
+  }
+
+  if (branch.closed) {
+    return (
+      <div className="orders__pickup-closed">
+        <span className="orders__pickup-closed-dot" aria-hidden="true" />
+        <div>
+          <b>{branch.name} has closed.</b> Nobody is at that counter to hand this over. Agree
+          with the customer where she collects it.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <span className="orders__pickup">
+      Collecting at <span className="orders__pickup-branch">{branch.name}</span>
+    </span>
+  );
+}
+
 /* --------------------------------------------------------------------- a row */
 
 export function OrderRow({
@@ -606,9 +814,10 @@ export function OrderRow({
           /*
             NOT AN EM DASH AND NOT "No address". Pickup is a live fork, so this
             cell describes what is happening rather than reporting a field that
-            is missing. See the header § where an order is going.
+            is missing — and since 0060 it says WHERE. See the header § which
+            branch she collects from.
           */
-          <span className="orders__pickup">Collecting at the salon</span>
+          <PickupWhere branch={order.pickupBranch} />
         )}
       </td>
       <td className="orders__when">

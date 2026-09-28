@@ -395,6 +395,7 @@ function parseClosureShape(
   depositHeldBookings: number;
   depositHeldBookingsBranchAssumed: number;
   tillsUnenrolled: string[];
+  pickupOrdersWaiting: number;
 } {
   const branch = BranchSchema.parse(raw);
   const r = raw as Record<string, unknown>;
@@ -409,6 +410,22 @@ function parseClosureShape(
       `${where}.depositHeldBookingsBranchAssumed`,
     ),
     tillsUnenrolled: strList(r.tillsUnenrolled, `${where}.tillsUnenrolled`),
+    /*
+     * MIGRATION 0060, AND IT JOINS THE SHARED SIX RATHER THAN BEING TOLERATED.
+     * `count` throws on a missing key, a string, a negative or a fraction — so an
+     * unreadable count takes the same two exits every other field does: the
+     * preview BLOCKS the close, and the receipt DEGRADES to the sentence that
+     * sends her to Shop → Orders. It can never arrive at the screen as 0, and
+     * "No pickup order is waiting here" is exactly the reassuring sentence that
+     * reads as permission to close.
+     *
+     * Considered and not done: parsing it leniently on the receipt alone, so a
+     * bad count could not cost the receipt its staff names. That would give the
+     * two bodies different rules for the same field — the API named them
+     * identically "so the preview and the outcome are comparable" — and the
+     * degraded receipt already names every place the truth still lives.
+     */
+    pickupOrdersWaiting: count(r.pickupOrdersWaiting, `${where}.pickupOrdersWaiting`),
   };
 }
 
@@ -603,6 +620,13 @@ export interface BranchClosurePreview extends Branch {
    * broke by charging from one and getting a 404.
    */
   tillsUnenrolled: string[];
+  /**
+   * SHOP ORDERS A CUSTOMER CHOSE TO COLLECT HERE AND HAS NOT YET (migration
+   * 0060) — `preparing` or `ready`. The close leaves them on the board, flagged
+   * `pickupBranch.closed`, but nobody will be behind this counter; the count is
+   * here so she decides what happens to them BEFORE confirming.
+   */
+  pickupOrdersWaiting: number;
 }
 
 /**
@@ -707,6 +731,8 @@ export interface BranchClosure extends Branch {
   depositHeldBookingsBranchAssumed: number;
   /** The tills this close unenrolled, from the cascade's own RETURNING. */
   tillsUnenrolled: string[];
+  /** Pickup orders still waiting at the branch that just closed. The preview's number. */
+  pickupOrdersWaiting: number;
 }
 
 /**

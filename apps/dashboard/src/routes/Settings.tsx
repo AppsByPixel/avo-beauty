@@ -1508,6 +1508,33 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
                       ) : (
                         <li>No till stands at this branch.</li>
                       )}
+
+                      {/*
+                        PICKUP ORDERS WAITING HERE — migration 0060. A customer
+                        chose this counter and has not collected yet. The close
+                        does not touch her order: it stays on Shop → Orders,
+                        flagged as at a closed branch. But nobody will be here to
+                        hand it over, so this is a warning she reads BEFORE the
+                        button, not a discovery she makes when the customer
+                        arrives. `pickupOrdersWaiting` is parsed as a count
+                        (`api/settings.ts § parseClosureShape`), so an unreadable
+                        one blocks this sheet rather than reaching the reassuring
+                        line below as 0.
+                      */}
+                      {impact.pickupOrdersWaiting > 0 ? (
+                        <li className="settings__consequence--warn">
+                          <b>
+                            {impact.pickupOrdersWaiting} pickup order
+                            {impact.pickupOrdersWaiting === 1 ? ' is' : 's are'} waiting at this
+                            branch
+                          </b>{' '}
+                          — {impact.pickupOrdersWaiting === 1 ? 'it stays' : 'they stay'} on Shop →
+                          Orders, marked as at a closed branch, and nobody will be here to hand{' '}
+                          {impact.pickupOrdersWaiting === 1 ? 'it' : 'them'} over.
+                        </li>
+                      ) : (
+                        <li>No pickup order is waiting here.</li>
+                      )}
                     </ul>
 
                     {/*
@@ -1593,7 +1620,10 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
             ? `Unenrolled ${closed.closure.tillsUnenrolled.join(', ')} — set ${closed.closure.tillsUnenrolled.length === 1 ? 'it' : 'them'} up again at another branch under Tills. `
             : ''}
           {closed.closure.depositHeldBookings > 0
-            ? `${closed.closure.depositHeldBookings} appointment${closed.closure.depositHeldBookings === 1 ? '' : 's'} still hold a deposit here.`
+            ? `${closed.closure.depositHeldBookings} appointment${closed.closure.depositHeldBookings === 1 ? '' : 's'} still hold a deposit here. `
+            : ''}
+          {closed.closure.pickupOrdersWaiting > 0
+            ? `${closed.closure.pickupOrdersWaiting} pickup order${closed.closure.pickupOrdersWaiting === 1 ? ' is' : 's are'} still waiting here — flagged on Shop → Orders.`
             : ''}
         </div>
       ) : null}
@@ -1629,7 +1659,8 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         <div className="settings__closed" role="status">
           <b>{closed.name} is closed.</b> We couldn&rsquo;t read the summary of what that
           changed. Check Accounts → Team for staff who may have been left with no branch
-          access, and Tills below for counters that may have been unenrolled.
+          access, Tills below for counters that may have been unenrolled, and Shop → Orders
+          for pickup orders that may still be waiting there.
         </div>
       ) : null}
 

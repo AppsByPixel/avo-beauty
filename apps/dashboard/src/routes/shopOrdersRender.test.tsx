@@ -228,9 +228,19 @@ function renderRow(order: MerchantShopOrder, moving = false) {
 }
 
 describe('pickup is a live fork, so its row states a fact rather than an absence', () => {
+  /*
+   * SINCE 0060 THE FACT IS A BRANCH. `PICKUP` itself keeps `pickupBranch: null`
+   * (trunk's fixture, and a real legacy row); the chosen-branch case is the
+   * ordinary one, so it is the one that says where. The null and closed arms are
+   * `shopOrdersPickupBranch.test.tsx`'s subject.
+   */
   it('says where the order is going instead of rendering a missing field', () => {
-    renderRow(PICKUP);
-    expect(screen.getByText('Collecting at the salon')).toBeTruthy();
+    renderRow({
+      ...PICKUP,
+      pickupBranch: { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false },
+    });
+    expect(screen.getByText('Salmiya')).toBeTruthy();
+    expect(document.querySelector('.orders__where')?.textContent).toBe('Collecting at Salmiya');
   });
 
   it('never renders the pickup cell as an em dash or as "no address"', () => {
@@ -239,6 +249,8 @@ describe('pickup is a live fork, so its row states a fact rather than an absence
     // The two shapes that would report ordinary data as broken.
     expect(where.textContent).not.toContain('—');
     expect(where.textContent?.toLowerCase()).not.toContain('no address');
+    // And not the pre-0060 sentence, which names a place a two-branch salon lacks.
+    expect(where.textContent).not.toContain('Collecting at the salon');
   });
 
   it('labels the fulfilment in words, not by the presence of an address', () => {

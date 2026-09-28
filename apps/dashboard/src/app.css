@@ -8441,6 +8441,61 @@ a:hover {
   color: var(--avo-text-muted-strong);
 }
 
+/*
+ * THE BRANCH ON A PICKUP LINE — migration 0060. The one word on the line that is
+ * not muted and not italic, because it is the fact a member of staff scans the
+ * column for: which counter to prepare this at.
+ */
+.orders__pickup-branch {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--avo-ink);
+}
+
+/*
+ * A PICKUP WAITING AT A BRANCH THAT HAS SINCE CLOSED — the row that needs a
+ * human. `--avo-warn-*`, the pair `.orders__truncated` above already uses on
+ * this board, and for the same register of fact: not a failure, but something on
+ * screen that is not what it looks like. NOT `--avo-danger-*`: the order is paid
+ * for and still movable; red over a working row trains a merchant to ignore red.
+ */
+.orders__pickup-closed {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--avo-warn-bg);
+  color: var(--avo-warn-text);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  max-width: 36ch;
+}
+
+.orders__pickup-closed-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9px;
+  background: var(--avo-warn-text);
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+/*
+ * THE HEADER'S BRANCH SELECTION, SAID — shown only when it hid something.
+ * Quiet, because narrowing is something she chose and not a problem.
+ */
+.orders__scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-strong);
+}
+
 .orders__address {
   display: flex;
   flex-direction: column;
