@@ -111,6 +111,7 @@ import {
   LegalDocumentSetSchema,
   MemberAddressSchema,
   MemberSchema,
+  CampaignRewardSchema,
   CampaignSchema,
   PlatformMessagingPolicySchema,
   ProductSchema,
@@ -342,6 +343,20 @@ let quietDate = '';
 let bookingId = '';
 let topUpId = '';
 
+/**
+ * THE CUSTOM-REWARD SAMPLE — migration 0064. A reward salon A saves, and a campaign
+ * that names it, both through the API in `beforeAll`. See the describe at the bottom
+ * of this file for why the campaign is the load-bearing half.
+ *
+ * The label is this file's own so the pre-clean in `beforeAll` and the delete in
+ * `afterAll` can find exactly these rows: the same words cannot be saved twice at one
+ * salon (`campaign_reward_active_label_uq`), so a second run against one database
+ * would otherwise meet 409 `duplicate_reward` before a single probe ran.
+ */
+const CT_REWARD_LABEL = 'Contract probe · free fringe trim';
+let customRewardId = '';
+let customCampaignId = '';
+
 // ---------------------------------------------------------------- the probes --
 
 interface Probe {
@@ -524,7 +539,52 @@ function probes(): Probe[] {
        * sees first, which is the half that broke. The VALUES on a genuinely held
        * campaign are pinned against a campaign that really gets held, in
        * `campaigns.test.ts`.
+       *
+       * AND SINCE MIGRATION 0064 THE LIST CARRIES BOTH VALUES OF `customReward`: the
+       * ordinary campaign above serves `null`, and the custom-reward campaign this file
+       * also submits serves the salon's own words. A sample of nulls alone would pass a
+       * `z.null()` as readily as the real `z.string().nullable()` — see the describe at
+       * the bottom of this file, which requires the non-null one.
        */
+    },
+    {
+      /**
+       * THE SALON'S OWN CAMPAIGN REWARDS — `routes/campaignRewards.ts`, migration 0064,
+       * caught by the unclassified check on the first run after the merge. Behind
+       * `perms.marketing`, which ST-001 holds.
+       *
+       * WITNESSED BY A REWARD THIS FILE SAVES, because the seed saves none and an empty
+       * `items` would witness the envelope and nothing in it — the products trap again.
+       * The save is harmless: a reward is a LABEL, it moves no money and nothing
+       * applies it (`routes/campaignRewards.ts` header).
+       */
+      route: 'GET /v1/salons/:id/campaign-rewards',
+      label: `GET /v1/salons/${SALON_A}/campaign-rewards`,
+      schemaName: 'paginated(CampaignRewardSchema)',
+      schema: paginated(CampaignRewardSchema),
+      requireNonEmpty: ['items'],
+      /**
+       * THE ENVELOPE, NOT THE ITEM. `routes/campaignRewards.ts:112` answers
+       * `{ items }` with no `nextCursor`, and `paginated()` requires it
+       * (`nextCursor: z.string().nullable()`, required-and-nullable on purpose). Every
+       * other `{ items }` reply in `api/src/routes/` serves `nextCursor` — 27 of 27,
+       * checked site by site, `null` where there is no second page, including the
+       * campaign list beside this one — and trunk's mock route (`packages/mock/src/server.ts:894`) omits it the same
+       * way, so no consumer built on either would notice until it reached for
+       * `paginated()`. Found by this probe on its first run.
+       *
+       * NOT LANE D'S COLUMN TO FIX, and it is reported rather than worked around with a
+       * local `{ items }` schema here: a schema this file invented would be a contract
+       * nobody else reads. Either the route and the mock send `nextCursor: null`, or
+       * trunk declares a bare-list envelope in `packages/types` and this probe uses it.
+       * `knownBug` fails the day either lands, which is when this line comes out.
+       *
+       * THE ITEM IS STILL CHECKED IN BOTH DIRECTIONS while the envelope is known-bad:
+       * the describe at the bottom of this file parses the served row with
+       * `CampaignRewardSchema` itself and runs the stripping comparison on it.
+       */
+      knownParseFailure:
+        'the route serves { items } with no nextCursor; every other list route serves nextCursor',
     },
     /**
      * THE APPROVAL QUEUE, across every salon. Reachable since `signInPlatform` landed.
@@ -2136,6 +2196,58 @@ beforeAll(async () => {
     );
   }
 
+  // ---- a reward the salon wrote, and a campaign carrying it ---------------------
+  /**
+   * Migration 0064. Without this every campaign in the sample serves
+   * `customReward: null` and the reward list serves `items: []`, so `CampaignSchema`'s
+   * new field would be checked against nulls only — the "probe that only ever saw
+   * null" this project has shipped twice.
+   *
+   * THROUGH THE API, NOT IN SQL, and the campaign names the reward by id alone: the
+   * server copies the label onto the campaign, so the words served below are the
+   * server's resolution rather than a value this file typed into a column.
+   *
+   * Pre-cleaned by label, campaign first (`campaign_custom_reward_same_salon_fk` is
+   * `restrict`), for an interrupted run against a long-lived database.
+   */
+  psql(`
+    DELETE FROM campaign WHERE salon_id = '${SALON_A}' AND custom_reward_id IN
+      (SELECT id FROM campaign_reward WHERE salon_id = '${SALON_A}' AND label = '${CT_REWARD_LABEL}');
+    DELETE FROM campaign_reward WHERE salon_id = '${SALON_A}' AND label = '${CT_REWARD_LABEL}';
+  `);
+  const savedReward = await treq<any>('POST', `/v1/salons/${SALON_A}/campaign-rewards`, {
+    token: dashboard,
+    body: { label: CT_REWARD_LABEL },
+  });
+  if (savedReward.status !== 201 || typeof savedReward.body?.id !== 'string') {
+    throw new Error(
+      `POST /v1/salons/${SALON_A}/campaign-rewards: ${savedReward.status} ${savedReward.raw}\n` +
+        'This file needs one saved reward so CampaignRewardSchema and a non-null ' +
+        'CampaignSchema.customReward have something to be witnessed against.',
+    );
+  }
+  customRewardId = savedReward.body.id;
+  const customCampaign = await treq<any>('POST', `/v1/salons/${SALON_A}/campaigns`, {
+    token: dashboard,
+    idempotencyKey: key('campaign-custom'),
+    body: {
+      title: 'Fringe week',
+      body: 'A free fringe trim with any cut this week.',
+      channel: 'push',
+      audience: 'all',
+      when: 'now',
+      reward: 'custom',
+      customRewardId,
+    },
+  });
+  if (customCampaign.status !== 201 || typeof customCampaign.body?.id !== 'string') {
+    throw new Error(
+      `POST /v1/salons/${SALON_A}/campaigns (reward: 'custom'): ${customCampaign.status} ` +
+        `${customCampaign.raw}`,
+    );
+  }
+  customCampaignId = customCampaign.body.id;
+
   // ---- the #10 re-prompt state, both doors, with `accepted` POPULATED -----------
   /**
    * ORDER MATTERS AND IT IS THE POINT. A member who has never accepted anything
@@ -2307,6 +2419,12 @@ beforeAll(async () => {
       dashboard,
     ],
     [`GET /v1/salons/${SALON_A}/campaigns`, `/v1/salons/${SALON_A}/campaigns`, dashboard],
+    // Witnessed by the reward saved earlier in this hook. perms.marketing, as above.
+    [
+      `GET /v1/salons/${SALON_A}/campaign-rewards`,
+      `/v1/salons/${SALON_A}/campaign-rewards`,
+      dashboard,
+    ],
     ['GET /members/me', '/members/me', member],
     ['GET /members/me/transactions', '/members/me/transactions', member],
     ['GET /members/me/wallet-token', '/members/me/wallet-token', member],
@@ -2380,6 +2498,16 @@ afterAll(async () => {
   psql(`DELETE FROM merchant_notification WHERE id = '${BELL_NOTIFICATION}';`);
   // Salmiya follows the salon again. See CT_BRANCH_HOURS.
   psql(`UPDATE branch SET business_hours = NULL WHERE id = '${A_BRANCH}' AND salon_id = '${SALON_A}';`);
+  /**
+   * The custom-reward sample goes, campaign first for the `restrict` FK. It is still
+   * `pending` — a merchant cannot send — so there is no `campaign_send` row behind it.
+   * See CT_REWARD_LABEL for why the reward cannot be left standing.
+   */
+  psql(`
+    DELETE FROM campaign WHERE salon_id = '${SALON_A}' AND custom_reward_id IN
+      (SELECT id FROM campaign_reward WHERE salon_id = '${SALON_A}' AND label = '${CT_REWARD_LABEL}');
+    DELETE FROM campaign_reward WHERE salon_id = '${SALON_A}' AND label = '${CT_REWARD_LABEL}';
+  `);
   await stopTenancyApi();
 });
 
@@ -2720,12 +2848,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 62 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 63 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(62);
+    ).toBe(63);
   });
 
   it('no GET route is left unclassified', () => {
@@ -3780,5 +3908,93 @@ describe('artistIds and branch hours — the samples reach the values the probes
     expect(pick(kept.find((b) => b.id === follower!.id)), 'SalonSchema changed the fallback').toEqual(
       pick(follower),
     );
+  });
+});
+
+// ===========================================================================
+// Migration 0064 — a campaign reward the salon wrote
+// ===========================================================================
+
+/**
+ * `CampaignSchema.customReward` IS WITNESSED NON-NULL, ON BOTH DOORS THAT SERVE IT.
+ *
+ * Trunk landed `customReward: z.string().nullable()` and `CampaignRewardSchema` with
+ * the serialiser that sends them (`210021f`), so the generic probes above already
+ * parse and strip-check every campaign and every reward. What they cannot promise on
+ * their own is that a sample reached a NON-NULL `customReward`: every campaign before
+ * this slice serves `null`, and a schema narrowed to `z.null()` — or a serialiser that
+ * hard-coded `customReward: null` — would read green against a sample of nulls. That is
+ * the blind spot `pickupBranch: null` and the default-only `businessHoursSource` each
+ * shipped with.
+ *
+ * So the custom-reward campaign `beforeAll` submitted is required here by id, on the
+ * merchant's list AND on the console queue — two call sites of one serialiser, the
+ * second of which is what the approver reads — and its words are compared with the
+ * column, read in SQL rather than off the API's own reply. The ordinary campaign in
+ * the same list is required to serve `null` beside it, so both halves of the nullable
+ * are on the wire in one sample.
+ */
+describe('customReward — the sample reaches the salon\'s own words, not only null', () => {
+  const storedLabel = () =>
+    scalar(`select coalesce(custom_reward_label, '<null>') from campaign where id = '${customCampaignId}'`).trim();
+
+  for (const label of [`GET /v1/salons/${SALON_A}/campaigns`, 'GET /v1/platform/campaigns']) {
+    it(`${label} serves the custom-reward campaign with a NON-NULL customReward, and CampaignSchema keeps it`, () => {
+      const res = response(label);
+      expect(res.status, res.raw).toBe(200);
+      const items = res.body.items as Array<Record<string, unknown>>;
+
+      const custom = items.find((c) => c.id === customCampaignId);
+      expect(
+        custom,
+        `the custom-reward campaign ${customCampaignId} is not in ${label}, so ` +
+          'CampaignSchema.customReward has been checked against null only.',
+      ).toBeDefined();
+      expect(custom!.reward).toBe('custom');
+      expect(
+        custom!.customReward,
+        `${label} served customReward ${JSON.stringify(custom!.customReward)} on a campaign whose ` +
+          'reward is "custom". A null here is the serialiser dropping the snapshot.',
+      ).toBe(CT_REWARD_LABEL);
+      expect(storedLabel(), 'the wire and campaign.custom_reward_label disagree').toBe(CT_REWARD_LABEL);
+
+      // Both values of the nullable in one sample.
+      const ordinary = items.filter((c) => c.reward !== 'custom');
+      expect(ordinary.length, `${label} carries no ordinary campaign to serve null beside it`).toBeGreaterThan(0);
+      for (const c of ordinary) {
+        expect(c.customReward, `campaign ${String(c.id)} is not custom and serves a customReward`).toBeNull();
+      }
+
+      const parsed = CampaignSchema.safeParse(custom);
+      expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
+      expect(
+        (parsed as { data: { customReward: string | null } }).data.customReward,
+        'CampaignSchema changed the customReward it parsed',
+      ).toBe(CT_REWARD_LABEL);
+    });
+  }
+
+  it(`GET /v1/salons/${SALON_A}/campaign-rewards serves the saved reward, parsed by CampaignRewardSchema, as the table holds it`, () => {
+    const res = response(`GET /v1/salons/${SALON_A}/campaign-rewards`);
+    expect(res.status, res.raw).toBe(200);
+    const row = (res.body.items as Array<Record<string, unknown>>).find((r) => r.id === customRewardId);
+    expect(row, `the reward ${customRewardId} this file saved is not in the list\n${res.raw.slice(0, 800)}`).toBeDefined();
+
+    const parsed = CampaignRewardSchema.safeParse(row);
+    expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
+    // Direction two on the ITEM, which the generic probe cannot reach while the
+    // envelope is a known parse failure (see its `knownParseFailure`).
+    const lost = keyDeltas(row, (parsed as { data: unknown }).data);
+    expect(lost.length === 0 ? '' : describeDeltas(lost), 'CampaignRewardSchema is narrower than the wire').toBe('');
+
+    const [salonId, stored, archived] = scalar(
+      `select concat_ws('|', salon_id, label, coalesce(archived_at::text, 'active'))
+         from campaign_reward where id = '${customRewardId}'`,
+    )
+      .trim()
+      .split('|');
+    expect(row!.salonId).toBe(salonId);
+    expect(row!.label).toBe(stored);
+    expect(archived, 'the list served a reward the table has archived').toBe('active');
   });
 });
