@@ -96,6 +96,14 @@ export async function registerCampaignRewardRoutes(app: FastifyInstance): Promis
    * Her saved options, active only, OLDEST FIRST — the order she added them,
    * which is the order the dropdown lists them under the fixed rewards.
    * Salon-scoped in the WHERE.
+   *
+   * `nextCursor: null` IS THE TRUTH HERE, not a capped list claiming it has no
+   * more pages (the `GET /salons/{id}/bookings` lesson in routes/salons.ts).
+   * There is no LIMIT on this read: the cap is on SAVES — twenty active, held
+   * under the advisory lock in the POST below — so every active row is on this
+   * one page and there is never a second. It is sent so the reply is the shared
+   * `paginated()` envelope every other list answers; without it the contract
+   * probe fails `nextCursor: Required`.
    */
   app.get<{ Params: { id: string } }>(
     '/v1/salons/:id/campaign-rewards',
@@ -109,7 +117,7 @@ export async function registerCampaignRewardRoutes(app: FastifyInstance): Promis
         .where(and(eq(campaignReward.salonId, p.salonId), isNull(campaignReward.archivedAt)))
         .orderBy(asc(campaignReward.createdAt), asc(campaignReward.id));
 
-      return reply.send({ items: rows.map(serialiseCampaignReward) });
+      return reply.send({ items: rows.map(serialiseCampaignReward), nextCursor: null });
     },
   );
 
