@@ -891,7 +891,7 @@ let campaignRewardSeq = 10000000;
 
 app.get('/v1/salons/:id/campaign-rewards', async (req, reply) => {
   if (await intercept(req, reply)) return;
-  return { items: campaignRewards };
+  return { items: campaignRewards, nextCursor: null };
 });
 
 app.post('/v1/salons/:id/campaign-rewards', async (req, reply) => {
