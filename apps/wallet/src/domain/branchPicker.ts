@@ -22,8 +22,11 @@
  * :547, date & time :565) and no branch step, so `TOTAL_STEPS` stayed 4 and the
  * picker was a filter strip inside step 2.
  *
- * Aftab reversed that after testing the app: the flow is now service → branch →
- * artist → time → confirmation, and `TOTAL_STEPS` is 5. WHAT DID NOT CHANGE IS
+ * Aftab reversed that after testing the app, and then fixed the step's place
+ * (W1, "branch selection then service, then staff"): the flow is now branch →
+ * service → artist → time → confirmation, and `TOTAL_STEPS` is 5. The product
+ * spec's "service → artist → day" (AVO-Beauty-Product-Description-v2.md:41)
+ * predates both decisions; the order is the client's. WHAT DID NOT CHANGE IS
  * THE SENTENCE ABOVE IT. The step selects which artists she SEES; the booking's
  * branch is still derived server-side from the artist she picks. `POST
  * /bookings` still takes only `{artistId, serviceId, startsAt}` and still
@@ -102,7 +105,7 @@
  *   NOTHING ASSIGNED → NO PICKER. Every branch chip would return an empty list
  *   and "Other artists" would be the whole roster: three ways to say one thing,
  *   two of them dead ends that read as a broken salon. This is the common case
- *   today, and suppressing it means those salons see step 2 exactly as it is now
+ *   today, and suppressing it means those salons see the artist step as it is now
  *   — zero change, zero risk, and nothing told to a customer about the salon's
  *   data hygiene.
  *
@@ -111,7 +114,9 @@
  *   immediately — and then vanish when the counts arrive and say nothing is
  *   assigned. A control that appears and then disappears is worse than one that
  *   arrives with the list it filters. It therefore arrives WITH the roster, in
- *   one paint, and the loading state of step 2 is unchanged from today.
+ *   one paint. Since W1 put the branch FIRST, "not known yet" is also "step 1 is
+ *   not known yet", and `useBooking § the entry gate` holds the whole flow on a
+ *   skeleton until this returns — this rule is unchanged, its caller is not.
  *
  * Once shown it is STICKY: visibility is decided from the unfiltered mount read,
  * never from the filtered one. Otherwise tapping a branch with no artists would
@@ -229,7 +234,8 @@ export function branchChoices(input: {
  * salon: one option is not a choice, `resolveBranch` already treats a lone open
  * branch as `established`, and she must not be asked. The caller is responsible
  * for the other half of honesty — that the COUNTER says four when this returns
- * false. See `useBooking` § the branch step.
+ * false. See `useBooking` § the entry gate, which asks this exactly once per
+ * mount.
  */
 export function branchStepApplies(input: {
   branches: readonly PickableBranch[];

@@ -1,15 +1,26 @@
 /**
  * The Book flow's state machine.
  *
- * Service → branch → artist → time → confirmation, expressed as a union for the
+ * Branch → service → artist → time → confirmation, expressed as a union for the
  * same reason `useTopUp` is: "which step am I on" and "what has been chosen by
  * now" cannot drift apart. There is no path to the review step without a
  * service, an artist and a slot, and the compiler is what says so.
  *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THIS ORDER IS NOT THE PRODUCT SPEC'S, AND IT IS NOT DRIFT
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `design/AVO-Beauty-Product-Description-v2.md:41` says "service → artist →
+ * day (7-day strip) → time slot → confirm" and has no branch step at all. The
+ * branch step was added after Aftab tested the app (it sat second, after the
+ * service), and he has since fixed its position himself — client ask W1,
+ * verbatim: "In book, it should be branch selection then service, then
+ * staff". So BRANCH FIRST is the authorised order. A reader comparing this
+ * file to the spec is looking at a client decision, not a lane's improvisation.
+ *
  * THE BRANCH STEP IS CONDITIONAL AND THE COUNTER IS NOT A CONSTANT. Most salons
- * have one open branch and are never asked, so their flow is four steps long
- * and says so. `TOTAL_STEPS` is the ceiling; `totalSteps` on the controller is
- * the answer. See § the branch step, at the latch.
+ * have one open branch and are never asked, so their flow is four steps long,
+ * opens on the service, and says so. `TOTAL_STEPS` is the ceiling;
+ * `totalSteps` on the controller is the answer. See § the entry gate.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * THE THINGS THIS FILE REFUSES TO DECIDE
@@ -61,7 +72,13 @@ import {
   type RosterSplit,
 } from '../domain/branchPicker';
 
-export type StepName = 'service' | 'branch' | 'artist' | 'day' | 'review' | 'confirmed';
+/**
+ * `'entry'` IS NOT A NUMBERED STEP. It is "the first step is not known yet" —
+ * the few hundred milliseconds at a multi-branch salon between opening Book and
+ * the roster split landing, during which step 1 could be either `branch` or
+ * `service`. See § the entry gate. Every other member is a step she stands on.
+ */
+export type StepName = 'entry' | 'branch' | 'service' | 'artist' | 'day' | 'review' | 'confirmed';
 
 /**
  * The numbered steps of the progress bar AT FULL LENGTH. `confirmed` is past it.
@@ -69,8 +86,9 @@ export type StepName = 'service' | 'branch' | 'artist' | 'day' | 'review' | 'con
  * ═══════════════════════════════════════════════════════════════════════════
  * FIVE IS THE CEILING, NOT THE ANSWER. READ `totalSteps` OFF THE CONTROLLER.
  * ═══════════════════════════════════════════════════════════════════════════
- * Service → branch → artist → time → confirmation is the flow Aftab asked for,
- * and it is five steps at a salon where the branch question can be answered.
+ * Branch → service → artist → time → confirmation is the flow Aftab asked for
+ * (W1 — see the header for why that departs from the product spec), and it is
+ * five steps at a salon where the branch question can be answered.
  * At every other salon — which today is MOST salons — the branch step is
  * suppressed and the flow is four, so this constant is the wrong number to
  * print. A "Step 2 of 5" naming a step she cannot reach is worse than four
@@ -112,18 +130,20 @@ export interface BookingController {
   step: StepName;
   /**
    * 1..`totalSteps` for the progress bar. `confirmed` reports `totalSteps`, the
-   * bar being complete.
+   * bar being complete. NULL ON `'entry'` — there is no number that is true
+   * yet, so the type makes the screen print none rather than a guess.
    */
-  stepIndex: number;
+  stepIndex: number | null;
   /**
-   * HOW LONG THIS SALON'S FLOW ACTUALLY IS — 5 with the branch step, 4 without.
+   * HOW LONG THIS SALON'S FLOW ACTUALLY IS — 5 with the branch step, 4 without,
+   * and NULL while that is not known (`'entry'` only).
    *
    * Not `TOTAL_STEPS`. The constant is the ceiling; this is the number the
    * customer is entitled to be told, and it is the one the counter and the
-   * progress bar both read. See § the branch step below for why it only ever
-   * rises.
+   * progress bar both read. See § the entry gate for why it is decided once,
+   * before it is ever shown, and never moves after.
    */
-  totalSteps: number;
+  totalSteps: number | null;
   /**
    * Whether `'branch'` is on this salon's path at all.
    *
@@ -132,13 +152,42 @@ export interface BookingController {
    * would be a second place for the rule to be half-applied.
    */
   hasBranchStep: boolean;
+  /**
+   * The step Back leaves the flow from: `branch` or `service` for a new booking
+   * (null on `'entry'`, which Back also leaves), `day` for a reschedule. One
+   * field, so the screen's "leave or step back" test cannot disagree with the
+   * machine's idea of where the flow starts.
+   */
+  firstStep: StepName | null;
+  /**
+   * The entry gate's failure, when the read that decides step 1 failed. The
+   * screen renders the failure screen with a retry; see § the entry gate.
+   */
+  entryFailure: LoadFailure | null;
+  /**
+   * The split read's failure at ANY point, entry included. After entry it is
+   * a re-read (a `retryLoad`), and it fails the branch step's chips -- with a
+   * retry -- rather than leaving that step on a skeleton for ever.
+   */
+  splitFailure: LoadFailure | null;
 
   services: LoadState<BookableService[]>;
   artists: LoadState<BookableArtist[]>;
   availability: LoadState<Availability>;
 
   /**
-   * THE BRANCH SWITCH -- step 2's chips, when step 2 exists.
+   * THE BRANCH STEP'S CONTINUE — true only once the roster behind the chosen
+   * chip has been read and has somebody in it.
+   *
+   * `null` while that read is in flight, `false` for a branch with nobody
+   * bookable. See § the empty branch, at `next`, for why this gate exists: with
+   * the branch first, an empty branch would otherwise be discovered two steps
+   * later, after she had chosen a service for it.
+   */
+  branchHasArtists: boolean | null;
+
+  /**
+   * THE BRANCH SWITCH -- step 1's chips, when step 1 is the branch.
    *
    * `branchOptions` is EMPTY when there should be no branch step at all, which
    * is the common case: a single-branch salon, or a salon whose artists are all
@@ -206,7 +255,30 @@ export function useBooking(options: {
   const { salon, reschedule, onBooked } = options;
   const rescheduling = reschedule !== undefined;
 
-  const [step, setStep] = useState<StepName>(rescheduling ? 'day' : 'service');
+  /**
+   * MORE THAN ONE OPEN BRANCH IS THE ONLY REASON TO ASK THE BRANCH QUESTION.
+   *
+   * `salon.branches` carries only OPEN branches. Below two there is no step
+   * whatever the roster looks like, so the `?branch=unassigned` read below is
+   * not made at all, there is no entry gate, and a single-branch salon's first
+   * frame and network traffic are exactly what they were before W1.
+   *
+   * A RESCHEDULE IS EXCLUDED HERE, AND THAT IS WHAT KEEPS IT UNTOUCHED. It
+   * enters at the grid with the artist already fixed, so there is no roster to
+   * filter and no branch question to ask -- and asking it would print a "Step 4
+   * of 5" over a flow whose first three steps do not exist. Gating the split
+   * read on it also drops two requests a reschedule was making and never using.
+   */
+  const multiBranch = !rescheduling && salon.branches.length >= 2;
+
+  /**
+   * A reschedule starts at the grid, as it always has. A single-branch salon
+   * starts at the service, as it always has. Only a multi-branch new booking
+   * starts at `'entry'` — see § the entry gate.
+   */
+  const [step, setStep] = useState<StepName>(
+    rescheduling ? 'day' : multiBranch ? 'entry' : 'service',
+  );
   const [services, setServices] = useState<LoadState<BookableService[]>>({ status: 'loading' });
   const [artists, setArtists] = useState<LoadState<BookableArtist[]>>({ status: 'loading' });
   const [availability, setAvailability] = useState<LoadState<Availability>>({ status: 'loading' });
@@ -230,69 +302,103 @@ export function useBooking(options: {
    * before the picker existed.
    */
   const [branchChoice, setBranchChoice] = useState<BranchChoice>(ALL_BRANCHES);
-  const [rosterSplit, setRosterSplit] = useState<RosterSplit | null>(null);
+  const [split, setSplit] = useState<LoadState<RosterSplit>>({ status: 'loading' });
+  const rosterSplit = split.status === 'ready' ? split.data : null;
 
   /**
-   * MORE THAN ONE OPEN BRANCH IS THE ONLY REASON TO ASK THE SECOND QUESTION.
+   * ═════════════════════════════════════════════════════════════════════════
+   * THE ENTRY GATE -- STEP 1 IS DECIDED BY DATA THAT HAS NOT ARRIVED YET
+   * ═════════════════════════════════════════════════════════════════════════
+   * Whether a multi-branch salon asks the branch question is
+   * `branchStepApplies`, and that needs the roster split, which is an async
+   * read. With the branch SECOND (the order before W1) the flow could open on
+   * `service` while that read was in flight and slot the branch in behind it.
+   * With the branch FIRST there is nothing to open on: step 1 is either
+   * `branch` or `service`, and which one is exactly what has not loaded.
    *
-   * `salon.branches` carries only OPEN branches. Below two there is no step
-   * whatever the roster looks like, so the `?branch=unassigned` read below is
-   * not made at all and a single-branch salon's network traffic is unchanged.
+   * Guessing is ruled out in both directions. Open on `service` and move her to
+   * `branch` when the split lands, and the screen changes under her finger --
+   * possibly after she has tapped a service. Open on `branch` and skip past it
+   * when the split says nothing is assigned, and a salon that has never
+   * assigned anyone (most multi-branch salons today, migration 0044) flashes a
+   * branch step it does not have.
    *
-   * A RESCHEDULE IS EXCLUDED HERE, AND THAT IS WHAT KEEPS IT UNTOUCHED. It
-   * enters at the grid with the artist already fixed, so there is no roster to
-   * filter and no branch question to ask -- and asking it would print a "Step 4
-   * of 5" over a flow whose first three steps do not exist. Gating the split
-   * read on it also drops two requests a reschedule was making and never using.
+   * So a multi-branch new booking opens on `'entry'`: header, back button, an
+   * empty progress track, NO COUNTER, and a row skeleton. In the render in
+   * which the split lands, `hasBranchStep` is set and `'entry'` moves to the
+   * right first step before anything commits (see the block after the split
+   * effect) -- so there is no painted frame in which the step and the count
+   * disagree.
+   *
+   * HOW LONG IT IS. One network round trip: the two `GET /artists/bookable`
+   * reads (unfiltered, and `?branch=unassigned`) go out in parallel at mount,
+   * alongside the service list, with no dependency between them. So it is the
+   * same order of wait step 1's skeleton always had -- the service list was one
+   * round trip too -- but gated on the slower of the two ROSTER reads rather
+   * than on the service list. (When it opens on the service, that list went
+   * out at the same instant and has usually landed already; if not, the
+   * service step shows its own skeleton, as it always did.) Not measured on a
+   * device in this slice.
+   * Its ceiling is the client's `REQUEST_TIMEOUT_MS` (15 s), after which the
+   * read fails as `offline`.
+   *
+   * WHEN IT FAILS. Before W1 a failed split read was swallowed: the strip
+   * stayed absent and step 2 rendered as it always had. That no longer
+   * works, because the gate IS the first thing she sees -- swallowing the
+   * failure would either hold her on a skeleton for ever or quietly decide
+   * "four steps" on the strength of a network blip, and a later retry that
+   * succeeded would then have to add a step to a flow she was already
+   * counting. So a failure at entry is a real failure screen (`entryFailure`)
+   * with the ordinary retry: offline gets the offline copy, a 5xx gets ours,
+   * and `retryLoad` puts her back on the skeleton and re-reads. It is
+   * recoverable in place; nothing she chose is lost, because she has chosen
+   * nothing yet.
+   *
+   * ═════════════════════════════════════════════════════════════════════════
+   * THE COUNTER -- THE OLD INVARIANT IS REPLACED, NOT RE-ARGUED
+   * ═════════════════════════════════════════════════════════════════════════
+   * Before W1 the count was LATCHED and "only ever rose": it printed four
+   * while the split loaded and went to five when the split proved the step
+   * answerable. That was tolerable only because the branch was step 2 -- the
+   * 4 → 5 rise happened while she stood on step 1, and "Step 1 of 4" becoming
+   * "Step 1 of 5" was the understatement it accepted.
+   *
+   * With the branch first, the same rise would be "Step 1 of 4" on a service
+   * list becoming "Step 1 of 5" on a branch step -- a different screen AND a
+   * different count. A monotone count cannot fix that. So the rule is now:
+   *
+   *   THE COUNT IS DECIDED ONCE, BEFORE IT IS FIRST SHOWN, AND NEVER MOVES.
+   *
+   * `totalSteps` is `null` on `'entry'` (the type makes the screen print no
+   * number), and fixed at 4 or 5 from the first numbered step to the end of
+   * the mount. A single-branch salon and a reschedule are decided at mount,
+   * synchronously, so they never see `'entry'` at all.
+   *
+   * IT DOES NOT RE-DECIDE ON A RETRY. `retryLoad` re-reads the split, and a
+   * re-read after entry updates the CHIPS (`branchOptions`) and nothing else:
+   * the step exists or it does not from the moment she first saw a number.
+   * A merchant assigning her first artist while a customer is mid-flow does
+   * not insert a step 1 behind a customer already on step 3.
    */
-  const multiBranch = !rescheduling && salon.branches.length >= 2;
+  const [hasBranchStep, setHasBranchStep] = useState(false);
 
   /**
    * The chips, or an empty array meaning "no branch step". `branches` is passed
    * straight through -- the salons route serves only OPEN branches, which is
    * the same reading `resolveBranch` takes when it decides whether a branch was
    * established.
+   *
+   * Gated on `hasBranchStep` as well, so the chips and the step cannot
+   * disagree even after a re-read changes the split: a flow decided at four
+   * steps has no chips, whatever the roster says later.
    */
   const branchOptions = useMemo(
-    () => (multiBranch ? branchChoices({ branches: salon.branches, split: rosterSplit }) : []),
-    [multiBranch, salon.branches, rosterSplit],
+    () =>
+      multiBranch && hasBranchStep
+        ? branchChoices({ branches: salon.branches, split: rosterSplit })
+        : [],
+    [multiBranch, hasBranchStep, salon.branches, rosterSplit],
   );
-
-  /**
-   * ═════════════════════════════════════════════════════════════════════════
-   * THE BRANCH STEP -- WHETHER THIS SALON HAS ONE, AND WHY IT ONLY EVER RISES
-   * ═════════════════════════════════════════════════════════════════════════
-   * `branchStepApplies` is `branchChoices(...).length > 0`, so the step and the
-   * chips on it cannot disagree. But that predicate is FALSE WHILE THE ROSTER
-   * SPLIT IS STILL LOADING, and a step count is not a thing that may flicker:
-   * it is printed on the header of step 1, the step she is looking at while
-   * that read is in flight.
-   *
-   * So the answer is LATCHED. Four until the split proves the question is
-   * answerable, then five, and never back down. That direction is chosen, not
-   * incidental:
-   *
-   *   4 → 5   understates for a moment and then adds a step she can walk.
-   *   5 → 4   printed "Step 2 of 5" over a step that turned out not to exist.
-   *
-   * The brief's rule is the second one -- "a Step 2 of 5 that cannot be reached
-   * is worse than four steps" -- so the monotone direction is up.
-   *
-   * IT ALSO SURVIVES A RETRY. `retryLoad` nulls `rosterSplit` to re-read it;
-   * without the latch the branch step would vanish from under a customer
-   * standing on it, taking the flow's length with it. While that re-read is in
-   * flight `branchOptions` is empty and the step renders its skeleton, which is
-   * what a step whose content is loading should do.
-   *
-   * A ref rather than state because it is derived from a render that has
-   * already been scheduled by `setRosterSplit` -- the same reason `keyRef`
-   * below is a ref. It never needs to cause a render of its own.
-   */
-  const branchStepLatch = useRef(false);
-  if (branchStepApplies({ branches: salon.branches, split: rosterSplit })) {
-    branchStepLatch.current = true;
-  }
-  const hasBranchStep = multiBranch && branchStepLatch.current;
 
   /**
    * The strip is computed ONCE per mount from one instant.
@@ -375,32 +481,49 @@ export function useBooking(options: {
    * above, which by then may hold a filtered list. Two reads, one instant, no
    * ordering assumption between them.
    *
-   * A FAILURE HERE IS NOT A FAILED SCREEN. If the split cannot be read, the
-   * strip stays absent and step 2 renders exactly as it does today -- the
-   * roster is what she needs, and losing a filter is not worth losing the
-   * booking flow over. The failure of the read that matters is already surfaced
-   * by the effect above.
+   * A FAILURE HERE IS NOW A FAILED SCREEN, where before W1 it was swallowed.
+   * This read decides step 1, so it is the first thing she waits on; see
+   * § the entry gate for why a silent fallback to four steps is no longer
+   * available. After entry, a failed RE-read fails the branch step's chips
+   * (with a retry) and touches nothing else.
+   *
+   * Step 1 is decided from what this stores; see the block below it.
    */
   useEffect(() => {
-    if (!multiBranch) {
-      setRosterSplit(null);
-      return;
-    }
+    if (!multiBranch) return;
     const controller = new AbortController();
-    setRosterSplit(null);
+    setSplit({ status: 'loading' });
     Promise.all([
       getArtists(salon.id, undefined, controller.signal),
       getArtists(salon.id, 'unassigned', controller.signal),
     ])
-      .then(([all, unassigned]) =>
-        setRosterSplit({ total: all.length, unassigned: unassigned.length }),
-      )
-      .catch(() => {
+      .then(([all, unassigned]) => {
         if (controller.signal.aborted) return;
-        setRosterSplit(null);
+        setSplit({ status: 'ready', data: { total: all.length, unassigned: unassigned.length } });
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setSplit({ status: 'failed', failure: toFailure(err) });
       });
     return () => controller.abort();
   }, [salon.id, reloadToken, multiBranch]);
+
+  /**
+   * LEAVING `'entry'`: decided in the render in which the split first reads
+   * `ready`, before that render commits.
+   *
+   * State set during render, guarded, is React's own pattern for state derived
+   * from other state -- React discards the in-progress render and re-runs it
+   * with the new values before anything is painted, so there is no committed
+   * frame holding a ready split and an undecided step. `step === 'entry'` is
+   * the whole "decided once" guard: nothing ever sets `'entry'` again, so a
+   * re-read after entry cannot reach this block.
+   */
+  if (step === 'entry' && split.status === 'ready') {
+    const asks = branchStepApplies({ branches: salon.branches, split: split.data });
+    setHasBranchStep(asks);
+    setStep(asks ? 'branch' : 'service');
+  }
 
   /**
    * The grid, re-read whenever the artist or the day changes.
@@ -496,27 +619,68 @@ export function useBooking(options: {
     setShortfallFils(null);
   }, []);
 
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * THE EMPTY BRANCH -- CAUGHT ON THE STEP SHE CAN FIX IT FROM
+   * ═════════════════════════════════════════════════════════════════════════
+   * With the service first, an empty staff step could only follow a branch she
+   * had just chosen, one tap back. With the branch first, the same empty staff
+   * step would arrive AFTER she had also chosen a service -- two steps from the
+   * chips that caused it, and reading as "nobody does this service here".
+   *
+   * THE SERVICE IS NEVER THE REASON, AND THAT IS WHY THE SERVICE LIST IS NOT
+   * NARROWED. The data model has no artist-to-service relation at all:
+   * `BookableArtist` is `{id, salonId, name, nameAr, availabilityLive}`, there
+   * is no `artist_service` table, and `POST /bookings` accepts any active
+   * artist of the salon with any active service of the salon
+   * (api/src/services/booking.ts § "2. what and who"). Every artist the branch
+   * shows can be booked for every service the list shows. Narrowing the list
+   * client-side would need a field the API does not have -- reported, not
+   * invented.
+   *
+   * So the only way to an empty staff step is an EMPTY BRANCH, and that is
+   * knowable on the branch step: choosing a chip re-reads the roster for it
+   * immediately (the artists effect is keyed on `branchChoice`). `next` from
+   * `branch` therefore refuses until that read has landed with somebody in
+   * it, and the screen shows the empty panel under the chips, where "try
+   * another branch" is one tap away. This is the second gate -- the disabled
+   * Continue is the first -- for the same reason `pickSlot` has one.
+   *
+   * `'all'` and `'unassigned'` can never be empty here: the step exists only
+   * when some artist is assigned (so the roster is non-empty), and the
+   * unassigned chip appears only when that group is. The read is waited on
+   * anyway rather than special-cased, so the gate has one rule.
+   */
+  const branchHasArtists: boolean | null =
+    artists.status === 'ready' ? artists.data.length > 0 : null;
+
   const next = useCallback(() => {
     setStep((s) => {
-      if (s === 'service') return hasBranchStep ? 'branch' : 'artist';
-      if (s === 'branch') return 'artist';
+      if (s === 'branch') return branchHasArtists === true ? 'service' : s;
+      if (s === 'service') return 'artist';
       if (s === 'artist') return 'day';
       if (s === 'day') return 'review';
       return s;
     });
-  }, [hasBranchStep]);
+  }, [branchHasArtists]);
 
+  /**
+   * Back, for the new order. Stepping back FROM the first step is not the
+   * machine's to do -- the screen leaves the flow when `step === firstStep`
+   * (or on `'entry'`), so here the first step simply stays put.
+   */
   const back = useCallback(() => {
     setStep((s) => {
       if (s === 'review') return 'day';
       // A reschedule starts at the grid, so stepping back out of it leaves the
       // flow rather than walking into an artist picker she never saw.
       if (s === 'day') return rescheduling ? 'day' : 'artist';
+      if (s === 'artist') return 'service';
       // The skip is honoured in BOTH directions. Walking back into a branch
       // step a salon does not have would be a dead screen with one chip on it,
       // and it would do it after the counter had already said there were four.
-      if (s === 'artist') return hasBranchStep ? 'branch' : 'service';
-      if (s === 'branch') return 'service';
+      // Without one, `service` is the first step and Back leaves the flow.
+      if (s === 'service') return hasBranchStep ? 'branch' : 'service';
       return s;
     });
   }, [rescheduling, hasBranchStep]);
@@ -578,28 +742,47 @@ export function useBooking(options: {
    *
    * `confirmed` reports `totalSteps` rather than a number of its own -- the bar
    * is complete, and the design draws it full behind the confirmation.
+   *
+   * `'entry'` reports NULL for both, and that is the rule § the entry gate
+   * argues: the count is decided before it is first shown and never moves, so
+   * before it is decided there is no count to show. Everything after the
+   * branch is one place later when the branch step exists.
    */
-  const totalSteps = hasBranchStep ? 5 : 4;
-  const stepIndex =
-    step === 'service'
+  const entering = step === 'entry';
+  const offset = hasBranchStep ? 1 : 0;
+  const totalSteps = entering ? null : 4 + offset;
+  const stepIndex = entering
+    ? null
+    : step === 'branch'
       ? 1
-      : step === 'branch'
-        ? 2
+      : step === 'service'
+        ? 1 + offset
         : step === 'artist'
-          ? hasBranchStep
-            ? 3
-            : 2
+          ? 2 + offset
           : step === 'day'
-            ? hasBranchStep
-              ? 4
-              : 3
+            ? 3 + offset
             : totalSteps;
+
+  const firstStep: StepName | null = rescheduling
+    ? 'day'
+    : entering
+      ? null
+      : hasBranchStep
+        ? 'branch'
+        : 'service';
+
+  const splitFailure = split.status === 'failed' ? split.failure : null;
+  const entryFailure = entering ? splitFailure : null;
 
   return {
     step,
     stepIndex,
     totalSteps,
     hasBranchStep,
+    firstStep,
+    entryFailure,
+    splitFailure,
+    branchHasArtists,
     services,
     artists,
     availability,
