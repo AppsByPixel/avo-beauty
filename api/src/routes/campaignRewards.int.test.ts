@@ -9,6 +9,9 @@
  *     and a till's PIN session is refused on all three whatever its holder may do;
  *   - a saved reward is trimmed, served in exactly four fields, listed oldest
  *     first, and audited;
+ *   - the list answers the shared `paginated()` envelope, `{ items, nextCursor:
+ *     null }`, and a salon at the cap gets all twenty on that one page — the null
+ *     is true because the cap is on saves, not on the read;
  *   - empty, blank and 61-character labels are 400 `invalid_label`, 60 code points
  *     is fine even when `.length` would say 61;
  *   - a case-insensitive duplicate of an active one is 409 `duplicate_reward`,
@@ -266,6 +269,15 @@ suite('a reward the salon wrote', () => {
     expect(created).toEqual([...created].sort((x, y) => x - y));
   });
 
+  it('answers the paginated envelope — items and nextCursor: null, nothing else', async () => {
+    await save(`Envelope ${RUN}`);
+    const res = await call('GET', rewardsUrl(SALON), manager);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(Object.keys(res.body).sort()).toEqual(['items', 'nextCursor']);
+    expect(res.body.nextCursor).toBeNull();
+    expect(Array.isArray(res.body.items)).toBe(true);
+  });
+
   it('refuses empty, blank, non-string and 61-character labels with invalid_label', async () => {
     for (const bad of ['', '    ', 42, null, 'x'.repeat(61), ` ${'y'.repeat(61)} `]) {
       const res = await save(bad);
@@ -336,6 +348,12 @@ suite('a reward the salon wrote', () => {
     const [active] = await exec(sql`
       SELECT count(*)::int AS n FROM campaign_reward WHERE salon_id = ${CAP_SALON} AND archived_at IS NULL`);
     expect(active?.n).toBe(20);
+
+    // At the cap the list is still one page: all twenty, and no cursor to follow.
+    const full = await call('GET', rewardsUrl(CAP_SALON), capManager);
+    expect(full.status, JSON.stringify(full.body)).toBe(200);
+    expect(full.body.items).toHaveLength(20);
+    expect(full.body.nextCursor).toBeNull();
   });
 
   it('DELETE archives, audits, and is 404 for another salon’s id, an archived one, or none', async () => {
