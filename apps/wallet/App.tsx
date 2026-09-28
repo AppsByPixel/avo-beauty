@@ -66,6 +66,7 @@ import { bootDestination } from './src/domain/bootGate';
 import { LanguageProvider, useCopy, useLanguage } from './src/i18n/language';
 import { initialLanguage } from './src/i18n/initialLanguage';
 import { useWalletHome } from './src/state/useWalletHome';
+import { useWalletRefresh } from './src/state/useWalletRefresh';
 import type { WalletSnapshot } from './src/state/cache';
 import { useShop } from './src/state/useShop';
 import { Toast, useToast } from './src/components/Toast';
@@ -263,6 +264,14 @@ function Wallet({
   const [screen, setScreen] = useState<Screen>('home');
   const [reschedule, setReschedule] = useState<RescheduleTarget | null>(null);
   const home = useWalletHome();
+  /*
+    WHEN THE WALLET RE-READS ITSELF: the payment code closing (below, on
+    `PaymentCodeLayer`), the app returning to the foreground, and Home's
+    pull-to-refresh. A charge is made on the salon's device, so nothing on this
+    phone hears about it; these are the moments it can have happened. One
+    throttled gate for all three. See `state/useWalletRefresh.ts`.
+  */
+  const walletRefresh = useWalletRefresh(home);
   const toast = useToast();
   /**
    * THE CART LIVES HERE, NOT IN THE SHOP SCREEN, and that reverses an earlier call
@@ -415,6 +424,8 @@ function Wallet({
       */
       onEnlargeCode={() => setPayRequested(true)}
       onRetryCode={walletToken.refresh}
+      onPullToRefresh={walletRefresh.requestRefresh}
+      refreshGeneration={walletRefresh.generation}
     />
   );
 
@@ -626,7 +637,17 @@ function Wallet({
         */
         open={enlargedCodeIsOpen(payRequested, codeView)}
         secondsRemaining={walletToken.secondsRemaining}
-        onClose={() => setPayRequested(false)}
+        /*
+          SHE HAS JUST SHOWN THE CODE, SO SHE MAY JUST HAVE PAID. The charge
+          happened on the scanner and this app was not told, so closing the code
+          re-reads the wallet: the balance, the visit or stamp, the booking whose
+          deposit it used, the receipt in the bell. The server's figures, never
+          one worked out here (#2).
+        */
+        onClose={() => {
+          setPayRequested(false);
+          walletRefresh.requestRefresh();
+        }}
       />
 
       <Toast message={toast.message} />

@@ -965,19 +965,42 @@ export interface UpcomingState {
  * that is currently out of her wallet, and a cancelled booking's deposit is
  * already back in it.
  */
-export function useUpcoming(options: { enabled: boolean; onChanged: () => void }): UpcomingState {
-  const { enabled, onChanged } = options;
+export function useUpcoming(options: {
+  enabled: boolean;
+  onChanged: () => void;
+  /**
+   * Re-reads the list when it changes. Home passes `useWalletRefresh`'s
+   * `generation`, so the card is re-read when the payment code closes, when the
+   * app comes back to the foreground, and on pull-to-refresh — a charge that
+   * applied her deposit takes the booking out of `deposit_held`.
+   */
+  refreshKey?: unknown;
+}): UpcomingState {
+  const { enabled, onChanged, refreshKey } = options;
   const [status, setStatus] = useState<UpcomingState['status']>('loading');
   const [bookings, setBookings] = useState<BookingView[]>([]);
   const [failure, setFailure] = useState<LoadFailure | null>(null);
   const [actionFailure, setActionFailure] = useState<LoadFailure | null>(null);
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState(0);
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
-    setStatus('loading');
+    /*
+      A RE-READ OVER A LIST ON SCREEN IS QUIET. `refreshKey` fires this on every
+      foreground, so going to 'loading' here would flash the skeleton over her
+      appointment each time she opens the app, and a background re-read that
+      failed would swap a booking she can see for the failure card. Stale, not
+      blank: over a READY list the card stays as it is while the read is out and
+      after it fails; Home's own stale or offline banner is what says so. From
+      'loading' or 'failed' (the first read, and the failure card's own Try
+      again) nothing changed.
+    */
+    const quiet = statusRef.current === 'ready';
+    if (!quiet) setStatus('loading');
     getBookings('deposit_held', controller.signal)
       .then((items) => {
         setBookings(items);
@@ -985,12 +1008,12 @@ export function useUpcoming(options: { enabled: boolean; onChanged: () => void }
         setStatus('ready');
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || quiet) return;
         setFailure(toFailure(err));
         setStatus('failed');
       });
     return () => controller.abort();
-  }, [enabled, token]);
+  }, [enabled, token, refreshKey]);
 
   const reload = useCallback(() => setToken((t) => t + 1), []);
 

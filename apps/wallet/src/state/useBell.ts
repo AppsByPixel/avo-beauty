@@ -93,9 +93,15 @@ const INITIAL: BellState = {
 };
 
 /**
- * @param refreshKey  Re-reads the badge when it changes — Home passes its own
- *                    `fetchedAt`, so a top-up or a charge that re-read the
- *                    wallet also re-reads the bell.
+ * @param refreshKey  Re-reads the badge when it changes. Home passes its own
+ *                    `fetchedAt`, which moves only when a wallet read SUCCEEDS,
+ *                    so the bell follows every successful re-read and nothing
+ *                    else: the top-up, order, booking and cancel re-reads, and
+ *                    the three in `useWalletRefresh` (the payment code closing,
+ *                    the app returning to the foreground, pull-to-refresh).
+ *                    A charge is made on the salon's device and this app is
+ *                    never told of one; the bell picks up its receipt at the
+ *                    next of those three, not when the charge happens.
  */
 export function useBell(options: { enabled: boolean; refreshKey?: unknown }): BellController {
   const { enabled, refreshKey } = options;

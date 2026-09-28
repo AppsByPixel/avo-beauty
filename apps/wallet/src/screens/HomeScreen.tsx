@@ -10,9 +10,11 @@
  * treatments from design/AVO States.dc.html.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -101,6 +103,14 @@ interface HomeProps {
   onEnlargeCode: () => void;
   /** Reached only from the `failed` panel, whose copy asks for it. */
   onRetryCode: () => void;
+  /**
+   * Pull-to-refresh. App's `useWalletRefresh().requestRefresh`, the same
+   * throttled re-read the payment code's close and the foreground run, so a pull
+   * cannot become a fourth path with its own opinion. True when a read started.
+   */
+  onPullToRefresh: () => boolean;
+  /** `useWalletRefresh().generation` — re-reads the Upcoming card with the wallet. */
+  refreshGeneration: number;
 }
 
 export function HomeScreen({
@@ -113,6 +123,8 @@ export function HomeScreen({
   codeSecondsRemaining,
   onEnlargeCode,
   onRetryCode,
+  onPullToRefresh,
+  refreshGeneration,
 }: HomeProps) {
   const { lang, copy } = useLanguage();
   const { status, snapshot, fetchedAt, failure } = home;
@@ -181,6 +193,20 @@ export function HomeScreen({
     it lives in this header and nowhere else.
   */
   const bell = useBell({ enabled: snapshot !== null, refreshKey: fetchedAt });
+
+  /*
+    PULL-TO-REFRESH. The spinner is up only for a read the PULL started: tying
+    it to `home.refreshing` alone would drop the platform spinner over the top of
+    the page for every top-up re-read and banner Try again too. A throttled pull
+    starts nothing, so `pulled` never rises and the control lets go at once.
+  */
+  const [pulled, setPulled] = useState(false);
+  const onPull = useCallback(() => {
+    if (onPullToRefresh()) setPulled(true);
+  }, [onPullToRefresh]);
+  useEffect(() => {
+    if (!home.refreshing) setPulled(false);
+  }, [home.refreshing]);
   /*
     W7 — HER ORDERS, FOR THE BELL'S PICKUP ROWS. The bell's shop item carries
     no branch (`domain/bell.ts` § limit 3), so where she collects is joined in
@@ -213,6 +239,7 @@ export function HomeScreen({
   const upcoming = useUpcoming({
     enabled: bookingOn,
     onChanged: home.retry,
+    refreshKey: refreshGeneration,
   });
   const labels = useBookingLabels(snapshot?.salon.id ?? null, bookingOn);
   const nextBooking = useMemo(
@@ -290,6 +317,8 @@ export function HomeScreen({
     <Shell
       scrollRef={scrollRef}
       onScroll={onScroll}
+      refreshing={pulled && home.refreshing}
+      onRefresh={onPull}
       overlay={
         <>
           <TopUpSheet
@@ -526,6 +555,8 @@ function Shell({
   overlay,
   scrollRef,
   onScroll,
+  refreshing,
+  onRefresh,
 }: {
   children: React.ReactNode;
   centered?: boolean;
@@ -533,7 +564,20 @@ function Shell({
   /** Home's loaded state only — the skeleton and failure shells have no feed. */
   scrollRef?: React.RefObject<ScrollView | null>;
   onScroll?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  /**
+   * Pull-to-refresh, loaded state only: the skeleton has nothing to refresh and
+   * the failure screen has its own Try again. NATIVE only. It is a touch idiom
+   * with no desktop equivalent, and react-native-web implements it by wrapping
+   * the scroll view in a second View carrying the scroll view's own style,
+   * which would re-lay out the web wallet's fixed column for no gesture.
+   */
+  refreshing?: boolean;
+  onRefresh?: () => void;
 }) {
+  const refreshControl =
+    onRefresh && Platform.OS !== 'web' ? (
+      <RefreshControl refreshing={refreshing ?? false} onRefresh={onRefresh} />
+    ) : undefined;
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.frame}>
@@ -545,6 +589,7 @@ function Shell({
           scrollEventThrottle={64}
           contentContainerStyle={[styles.scroll, centered && styles.scrollCentered]}
           showsVerticalScrollIndicator={false}
+          refreshControl={refreshControl}
         >
           {children}
         </ScrollView>
