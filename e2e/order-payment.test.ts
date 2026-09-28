@@ -74,14 +74,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import { assertRaced, timed } from './support/race.js';
 import {
+  A_BRANCH,
   GATEWAY_WEBHOOK_SECRET,
   SALON_A,
   SIGNATURE_HEADER,
   apiLogTail,
   nowSeconds,
   psql,
+  retireBranches,
   scalar,
   signCallback,
+  signInDashboard,
   signInMember,
   startTenancyApi,
   stopTenancyApi,
@@ -98,6 +101,8 @@ const M = {
   raceAddress: { id: 'QA-OP-0004', phone: '+96555980004' },
   raceRetired: { id: 'QA-OP-0005', phone: '+96555980005' },
   racePrice: { id: 'QA-OP-0006', phone: '+96555980006' },
+  /** Her pickup branch closes while she is on the hosted page. Migration 0060. */
+  raceBranch: { id: 'QA-OP-0009', phone: '+96555980009' },
   /** The tenancy pair: `owner` holds the payment, `stranger` asks about it. */
   owner: { id: 'QA-OP-0007', phone: '+96555980007' },
   stranger: { id: 'QA-OP-0008', phone: '+96555980008' },
@@ -114,6 +119,14 @@ const DOOMED_FILS = 6_000;
 const MOVING = 'PR-QAOP-MOVING';
 const MOVING_FILS = 5_000;
 const MOVING_NEW_FILS = 4_000;
+
+/**
+ * A SAL-AMARA branch that exists to be closed mid-payment, and closed again in
+ * `afterAll` whatever happens. `ZZ` so that while it is open it sorts after
+ * `BR-KWC` and can never become the branch `resolveBranch` attributes anything
+ * to; it takes no transaction, so `retireBranches` deletes it outright.
+ */
+const CLOSING_BRANCH = 'BR-ZZQA-OP-CLOSING';
 
 /** Silver. Asserted on every intent this file opens rather than assumed. */
 const BONUS_PERCENT = 10;
@@ -231,13 +244,34 @@ interface View {
   };
 }
 
-type Basket = { items: Array<{ productId: string; qty: number }>; fulfilment?: string; addressId?: string };
+type Basket = {
+  items: Array<{ productId: string; qty: number }>;
+  fulfilment?: string;
+  addressId?: string;
+  pickupBranchId?: string;
+};
+
+/**
+ * WHERE SHE COLLECTS IT, defaulted for a PICKUP basket that does not say.
+ *
+ * Migration 0060: SAL-AMARA has two open branches, so a pickup naming none is
+ * `400 pickup_branch_required` before the gateway is reached. Every basket in this
+ * file that is not ABOUT the pickup branch collects at `A_BRANCH`. The default is
+ * applied only when the key is ABSENT — a spec that writes `pickupBranchId` itself
+ * (the closed-branch race below) is sent exactly what it wrote — and never to a
+ * delivery, where a pickup branch is refused rather than ignored.
+ */
+const PICKUP = A_BRANCH;
+const withPickup = (basket: Basket): Basket =>
+  basket.fulfilment === 'delivery' || 'pickupBranchId' in basket
+    ? basket
+    : { ...basket, pickupBranchId: PICKUP };
 
 const open = (who: Who, basket: Basket, idemKey = key(`${who}-open`), method = 'knet') =>
   treq<View & { error?: string; message?: string }>('POST', '/orders/payments', {
     token: token[who]!,
     idempotencyKey: idemKey,
-    body: { ...basket, method },
+    body: { ...withPickup(basket), method },
   });
 
 const read = (who: Who, intentId: string) =>
@@ -353,6 +387,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Retired, not deleted — order lines reference them, and the ledger is append-only.
   psql(`UPDATE product SET active = false WHERE id IN ('${PRODUCT}', '${DOOMED}', '${MOVING}');`);
+  retireBranches(SALON_A, [CLOSING_BRANCH]);
   await stopTenancyApi();
 });
 
@@ -690,7 +725,7 @@ describe('the race — the payment confirms, the order cannot be placed, the mon
     const res = await treq<any>('POST', '/orders', {
       token: token.raceAddress!,
       idempotencyKey: key('race-address-spend'),
-      body: { items: [{ productId: PRODUCT, qty: 1 }] },
+      body: { items: [{ productId: PRODUCT, qty: 1 }], pickupBranchId: PICKUP },
     });
     expect(res.status, res.raw).toBeLessThan(300);
     const after = delta(mid, money('raceAddress'));
@@ -722,6 +757,57 @@ describe('the race — the payment confirms, the order cannot be placed, the mon
 
     const back = await read('racePrice', view.intent.id);
     assertRefusedAndWhole('racePrice', before, view.intent.id, 'price_changed', back.body);
+  });
+
+  /**
+   * HER PICKUP BRANCH CLOSES WHILE SHE IS ON THE HOSTED PAGE — migration 0060.
+   *
+   * The pre-flight accepted it (it was open), the card was charged, and by the
+   * time the confirmation arrives the merchant has closed the counter she chose.
+   * `placeAttachedOrder` re-validates the stored `pickupBranchId` inside the
+   * savepoint: refused `pickup_branch_closed`, the whole credit kept, and NO
+   * fulfilment row — the orphan to fear is a `shop_order` pointing at a closed
+   * counter with nobody to hand the bag over. Closed through the merchant's own
+   * `DELETE …/branches/{bid}`, not by SQL, so the close is the product's.
+   */
+  it('her pickup branch closes while she pays — refused, the credit kept, and no fulfilment row', async () => {
+    psql(`
+      INSERT INTO branch (id, salon_id, name)
+      VALUES ('${CLOSING_BRANCH}', '${SALON_A}', 'QA order-payment closing counter')
+      ON CONFLICT (id) DO UPDATE SET closed_at = NULL;
+    `);
+    const web = await signInDashboard(SALON_A, 'noura');
+    const before = money('raceBranch');
+
+    const view = await opened(
+      'raceBranch',
+      { items: [{ productId: PRODUCT, qty: 1 }], pickupBranchId: CLOSING_BRANCH },
+      PRODUCT_FILS,
+    );
+
+    const closed = await treq<any>('DELETE', `/salons/${SALON_A}/branches/${CLOSING_BRANCH}`, {
+      token: web,
+    });
+    precondition(closed.status === 200, `could not close the branch: ${closed.status} ${closed.raw}`);
+    precondition(
+      scalar(`select closed_at is not null from branch where id='${CLOSING_BRANCH}'`).trim() === 't',
+      'the close answered 200 and the branch row is still open',
+    );
+
+    expect((await payOnHostedPage(view)).status).toBe(200);
+    const back = await read('raceBranch', view.intent.id);
+    expect(back.status, back.raw).toBe(200);
+    assertRefusedAndWhole('raceBranch', before, view.intent.id, 'pickup_branch_closed', back.body);
+
+    // The fulfilment table, read directly: nothing waits at the closed counter.
+    expect(
+      Number(scalar(`select count(*) from shop_order where pickup_branch_id='${CLOSING_BRANCH}'`)),
+      'a fulfilment row was written for a branch that closed before the order was placed',
+    ).toBe(0);
+    // And the stored request still says what she chose — the refusal is about THAT branch.
+    expect(
+      scalar(`select order_request->>'pickupBranchId' from topup_intent where id='${view.intent.id}'`).trim(),
+    ).toBe(CLOSING_BRANCH);
   });
 
   it('the database itself refuses a settled order payment with no outcome', () => {
@@ -840,7 +926,7 @@ describe("tenancy — one customer's order payment is not addressable by another
 // ------------------------------------------------------ the wallet census --
 
 describe('every member this file touched reconciles — invariant 5, before teardown measures it', () => {
-  it('balance equals the member_wallet ledger for all eight, with no reconciliation posted', () => {
+  it('balance equals the member_wallet ledger for every one of them, with no reconciliation posted', () => {
     const drifting = (Object.keys(M) as Who[])
       .map((who) => ({ who, ...money(who) }))
       .filter((m) => m.balance !== m.walletLedger)

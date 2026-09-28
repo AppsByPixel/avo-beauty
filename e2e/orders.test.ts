@@ -56,6 +56,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import { assertRaced, timed, valuesOf } from './support/race.js';
 import {
+  A_BRANCH,
   SALON_A,
   SALON_B,
   apiLogTail,
@@ -105,11 +106,20 @@ const ledgerSum = (): number =>
     ),
   );
 
+/**
+ * WHERE SHE COLLECTS IT — `A_BRANCH`, named on every order this file expects to
+ * settle. Migration 0060: SAL-AMARA has two open branches, so a pickup that names
+ * none is `400 pickup_branch_required` and the server no longer picks one for her.
+ * Nothing in this file is ABOUT the pickup branch — `pickup-branch.test.ts` is —
+ * so it is a constant, and every spec here stays a claim about the money.
+ */
+const PICKUP = A_BRANCH;
+
 const order = (idemKey: string, qty = 1) =>
   treq<any>('POST', '/orders', {
     token: member,
     idempotencyKey: idemKey,
-    body: { items: [{ productId: PRODUCT, qty }] },
+    body: { items: [{ productId: PRODUCT, qty }], pickupBranchId: PICKUP },
   });
 
 /** Set her balance to an exact figure. The only way to make the race decisive. */
@@ -717,7 +727,9 @@ describe('POST /orders refuses a basket it cannot price, by name and without mov
     const res = await treq<any>('POST', '/orders', {
       token: member,
       idempotencyKey: k,
-      body: { items: ids.map((productId) => ({ productId, qty: 1 })) },
+      // A VALID order in every respect but the basket, so each refusal below is
+      // about the product and nothing else — including where she collects it.
+      body: { items: ids.map((productId) => ({ productId, qty: 1 })), pickupBranchId: PICKUP },
     });
 
     return { res, before, rowsBefore, ledgerBefore, k };
@@ -827,7 +839,7 @@ describe('POST /orders refuses a basket it cannot price, by name and without mov
     const corrected = await treq<any>('POST', '/orders', {
       token: member,
       idempotencyKey: k,
-      body: { items: [{ productId: PRODUCT, qty: 1 }] },
+      body: { items: [{ productId: PRODUCT, qty: 1 }], pickupBranchId: PICKUP },
     });
     expect(
       corrected.status,

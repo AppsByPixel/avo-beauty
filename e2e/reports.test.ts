@@ -75,6 +75,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
+  A_BRANCH,
   A_STAFF_FULL,
   SALON_A,
   SALON_B,
@@ -662,12 +663,22 @@ describe('a mid-window rename neither relabels the past nor splits the product',
    * `shop_order_line.name` is a sale-time snapshot; the grouping key is `product_id`.
    * Both sales go through the REAL `POST /orders`, so the snapshot under test is the
    * one the production write path takes — not one this file typed into a line row.
+   *
+   * THE PICKUP BRANCH IS A FIXTURE HERE, NOT A CLAIM. Since migration 0060 a pickup
+   * at two-branch SAL-AMARA must name where she collects, and the branch it names
+   * is where the revenue is booked. Every read in this describe is SALON-WIDE
+   * (`products-sold`, no `?branch=`), so no figure below depends on it — and it was
+   * never pinned here: before 0060 these two orders were booked to the lowest open
+   * branch id (`BR-KWC`) with `branch_assumed = true`, and nothing in this file
+   * looked. `A_BRANCH` is chosen because it is none of `BR_RPT`, `BR_EVIL` or
+   * `BR_EMPTY`, whose per-branch figures above are hand sums that a stray real order
+   * would break on a re-run. Attribution itself is `pickup-branch.test.ts`'s.
    */
   it('drives the rename between two real sales', async () => {
     const first = await treq<any>('POST', '/orders', {
       token: member,
       idempotencyKey: key('rename-1'),
-      body: { items: [{ productId: 'PR-QA-RS', qty: 1 }] },
+      body: { items: [{ productId: 'PR-QA-RS', qty: 1 }], pickupBranchId: A_BRANCH },
     });
     precondition(first.status === 201, `the first order failed: ${first.raw}`);
 
@@ -696,7 +707,7 @@ describe('a mid-window rename neither relabels the past nor splits the product',
     const second = await treq<any>('POST', '/orders', {
       token: member,
       idempotencyKey: key('rename-2'),
-      body: { items: [{ productId: 'PR-QA-RS', qty: 2 }] },
+      body: { items: [{ productId: 'PR-QA-RS', qty: 2 }], pickupBranchId: A_BRANCH },
     });
     precondition(second.status === 201, `the second order failed: ${second.raw}`);
 
