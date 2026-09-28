@@ -711,6 +711,39 @@ const PINNED_COVERAGE: string[] = [
   'DELETE /v1/platform/admins/:id → admins',
   'DELETE /v1/platform/policies/draft/:docId → policies',
   'DELETE /v1/platform/support/topics/:id → policies',
+  /**
+   * =======================================================================
+   * THE SALON'S OWN CAMPAIGN REWARDS — `api/src/routes/campaignRewards.ts`,
+   * migration 0064, dev `44cf899`. The census named all three on the first run
+   * after the merge; these lines are pasted from its output, not from the brief.
+   * =======================================================================
+   *   GET    /v1/salons/:id/campaign-rewards              her saved options
+   *   POST   /v1/salons/:id/campaign-rewards              save one `{ label }`
+   *   DELETE /v1/salons/:id/campaign-rewards/:rewardId    remove (archives)
+   *
+   * `→ marketing` ON ALL THREE, and it is the right permission rather than merely
+   * the one the source names: the list exists only to feed the campaign form, and
+   * a staff member refused `POST …/campaigns` has no use for its options. The
+   * generated sweep revokes `marketing`, requires the refusal to carry
+   * `marketing`'s own copy, then grants it alone and requires the refusal to stop.
+   *
+   * NONE OF THE THREE IS IN `MIRROR_WOULD_WRITE`, and that was checked rather than
+   * assumed. The granted mirror sends `{}` to the POST and `ZZ-NO-SUCH-THING` as
+   * the DELETE's `:rewardId`, so the POST stops at 400 `invalid_label` and the
+   * DELETE at 404 `unknown_reward` — the gate opened and nothing was saved or
+   * archived. Measured: after this file ran against `avo_lane_d`,
+   * `campaign_reward` held zero rows and `audit_log` no `campaign_reward` subject.
+   *
+   * WHAT THESE LINES CANNOT SAY: that the list is salon B's alone, that the DELETE
+   * cannot archive another salon's reward from her own URL, or that a campaign
+   * cannot name another salon's reward. `requireSameSalon` and the `salon_id`
+   * term in each WHERE are invisible to a `→ marketing` line. The first is
+   * `tenancy.test.ts § SALON_ROUTES`; the other two are driven by request, with
+   * the rows read back, in `campaigns.test.ts § custom campaign rewards`, which
+   * also drives the gate a second time with a real front-desk principal (Hessa,
+   * ST-002) rather than a probe account.
+   */
+  'DELETE /v1/salons/:id/campaign-rewards/:rewardId → marketing',
   'DELETE /v1/salons/:id/campaigns/:cid → marketing',
   'DELETE /v1/salons/:id/products/:oid/image → shop',
   'DELETE /v1/salons/:id/promotions/happy-hours/:hid → marketing',
@@ -929,6 +962,8 @@ const PINNED_COVERAGE: string[] = [
   'GET /v1/platform/salons/:id → salons',
   'GET /v1/platform/settings → controls',
   'GET /v1/platform/support [requirePrincipal]',
+  // Campaign rewards, migration 0064 — see the DELETE's note above.
+  'GET /v1/salons/:id/campaign-rewards → marketing',
   'GET /v1/salons/:id/campaigns → marketing',
   'GET /v1/salons/:id/messaging-policy → marketing',
   /**
@@ -1149,6 +1184,8 @@ const PINNED_COVERAGE: string[] = [
   'POST /v1/platform/policies/publish → policies',
   'POST /v1/platform/salons → salons',
   'POST /v1/platform/support/topics → policies',
+  // Campaign rewards, migration 0064 — see the DELETE's note above.
+  'POST /v1/salons/:id/campaign-rewards → marketing',
   'POST /v1/salons/:id/campaigns → marketing',
   /** The bell's write. No perm gate BY DESIGN — see the GET's note above. */
   'POST /v1/salons/:id/notifications/read [requireDashboardScope]',
