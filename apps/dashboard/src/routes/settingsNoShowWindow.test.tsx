@@ -1,90 +1,38 @@
 // @vitest-environment jsdom
 
 /**
- * Merchant → Settings → Booking deposit → the no-show return window.
+ * Merchant → Settings → Booking deposit → the no-show return window, WHICH IS
+ * NOT EDITABLE HERE ANY MORE.
  *
- * WHY THIS FILE EXISTS
- * --------------------
- * Aftab's item 6: "what if they dont have enough payment (sometimes they dont
- * have money but lock the booking and they dont come) deposit health option for
- * merchants". The merchant's complaint is a customer who locks a slot with a
- * deposit and never arrives. One third of that is this control.
+ * WHAT THIS FILE USED TO PIN, AND WHY IT NOW PINS THE OPPOSITE
+ * ------------------------------------------------------------
+ * It pinned a "Return window" select on the deposit card (15 minutes … 4 hours)
+ * writing `noShowReturnMinutes` through `PATCH /salons/{id}`, and its first spec
+ * — "lets a merchant edit the window at all" — asserted the field was in
+ * `MERCHANT_EDITABLE`. Lane A's be36b9a moved it to `PLATFORM_ONLY_EDITABLE`
+ * (migration 0066): the salon's own booking policy decides what a no-show does,
+ * and a merchant PATCH that sends the window answers `400 not_editable`. That
+ * spec went red on dev, correctly.
  *
- * `noShowReturnMinutes` has been merchant-editable on the server since the route
- * was written — `MERCHANT_EDITABLE` carries it, `parseNoShowReturnMinutes`
- * validates it, `salon_no_show_return_in_range` CHECKs it — and this dashboard
- * READ it and only displayed it: `DepositPanel`'s foot sentence rendered
- * `returnLabel` and nothing on the surface could change the number. So the panel
- * told a merchant a rule about her own money and gave her no way to set it,
- * directly beneath a stepper that sets the deposit immediately.
+ * So the truth is now: the server refuses it from a merchant, the Settings card
+ * draws no control for it, no merchant write type admits it, and the card's foot
+ * sentence states the salon's POLICY — falling back to the design's window
+ * sentence only for a salon that has never published one, which is the salon
+ * whose bookings still settle by that window.
  *
- * NEW WORK. The design bundle draws NO control here. `AVO Merchant Dashboard
- * .dc.html:1059` is a static strip — `No-show: deposit returns to the wallet
- * <b>1 hour</b> after a missed slot.` — with the hour hard-coded in the markup
- * and no affordance beside it. So the SENTENCE is the designer's, verbatim and
- * unchanged, and the CONTROL is invented. Said plainly rather than implied, so a
- * later reader does not go looking for a dropdown in the bundle.
- *
- * WHAT THIS FILE IS NOT ABOUT — FORFEITURE
- * ----------------------------------------
- * The bundle's own notification copy at `AVO Merchant Dashboard.dc.html:1136`
- * reads "Deposit is yours to keep or release." That is a THIRD thing — the
- * merchant keeping the money — and it is not built, deliberately, and it is
- * escalated. It contradicts the product description in so many words:
- * `design/AVO-Beauty-Product-Description-v2.md:45` says the deposit
- * "automatically returns to their wallet. (Money never leaves the ecosystem; the
- * deposit creates commitment, not punishment.)" and `api-contract.md:365` repeats
- * it. Nothing in this file's copy may imply forfeiture, and nothing in it does:
- * every string here says the money RETURNS.
- *
- * THE CONTROL'S SHAPE, AND WHY IT IS A LIST AND NOT A STEPPER
- * ----------------------------------------------------------
- * The deposit above it is a `Stepper` with a hard 1–10 KD range that the database
- * states (`salon_deposit_range`) and the route re-states (`parseDepositFils`).
- * The window's range is the server's and is NOT a range this control may
- * re-state: `parseNoShowReturnMinutes` holds 5 ≤ n ≤ 1440 and the CHECK
- * `salon_no_show_return_in_range` holds it again. A stepper would still have to
- * invent `step`, and would have to MIRROR `min` and `max` — and
- * `Stepper` CLAMPS (`Math.min(max, Math.max(min, next))`), which means a salon
- * holding a value outside an invented range would have it silently rewritten by a
- * client the moment anyone touched the control. `e2e/tenancy.test.ts:709` already
- * sends `noShowReturnMinutes: 999` and calls it valid — still true under the new
- * range, since 999 is inside it — so such salons are reachable today.
- *
- * A fixed option list invents a CHOICE rather than a BOUND, does not clamp, and
- * has one property a stepper cannot have: every value the control can produce is
- * enumerable, so the design's sentence can be checked at all of them rather than
- * argued about. That check is `the sentence and the option agree` below.
- *
- * WHERE THE BOUND BELONGS — AND IT HAS SINCE LANDED THERE
- * -------------------------------------------------------
- * On the server, and it was `api/`'s job — not this lane's. A client bound is a
- * validation the next client will not have, which is non-negotiable #7's
- * reasoning applied to a range instead of a permission, and the console's
- * `PATCH /v1/platform/salons/{id}` is already a second door onto the same column.
- *
- * That argument is now history rather than a request: lane A landed 5 ≤ n ≤ 1440
- * in `parseNoShowReturnMinutes` and in migration 0051, which REPLACES the old
- * `salon_no_show_return_positive`. A tripwire used to sit at the end of the server
- * section demanding the presets be re-read the day a ceiling arrived; it fired, the
- * presets were re-read and needed no change, and it is gone. What stands in its
- * place is `offers no preset the server would refuse`, which checks that agreement
- * on every run instead of once.
+ * `bookingPolicyPanel.test.tsx` covers the panel that replaced the control.
  */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fils, type Salon } from '@avo/types';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { fils, type BookingPolicy, type Salon } from '@avo/types';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { SalonPatch } from '../api/settings.js';
 import { stripComments } from '../testing/stripComments.js';
 import { DepositPanel } from './Settings.js';
 
-/* `shopRender.test.tsx`'s reason: vitest does not run with `globals`, so nothing
- * registers @testing-library/react's own cleanup and every render would
- * accumulate in one document. */
 afterEach(cleanup);
 
 /** `apps/dashboard/src/routes` → repo root. */
@@ -93,175 +41,29 @@ const read = (rel: string) => stripComments(readFileSync(join(REPO, rel), 'utf8'
 
 const SALONS_ROUTE = 'api/src/routes/salons.ts';
 const SETTINGS_ROUTE = 'apps/dashboard/src/routes/Settings.tsx';
-const SALON_SCHEMA = 'api/src/db/schema/salon.ts';
-const BOOKING_SERVICE = 'api/src/services/booking.ts';
 
-/* ------------------------------------------------------------------- server */
-
-/**
- * The body of `const MERCHANT_EDITABLE = new Set([ … ])`, as string literals.
- *
- * Sliced to the Set rather than grepped file-wide, for
- * `settingsReceiptChannels.test.tsx`' reason: `salons.ts` also declares
- * `PLATFORM_ONLY_EDITABLE` and `PLATFORM_EDITABLE`, and a file-wide search
- * answers for whichever it lands in.
- */
-function merchantEditable(): string[] {
+/** The literals inside `const <name> = new Set([ … ])` in `salons.ts`. */
+function setMembers(name: string): string[] {
   const src = read(SALONS_ROUTE);
-  const open = src.indexOf('const MERCHANT_EDITABLE = new Set([');
-  expect(open, `MERCHANT_EDITABLE not found in ${SALONS_ROUTE}`).toBeGreaterThan(-1);
+  const open = src.indexOf(`const ${name} = new Set([`);
+  expect(open, `${name} not found in ${SALONS_ROUTE}`).toBeGreaterThan(-1);
   const close = src.indexOf('])', open);
   expect(close).toBeGreaterThan(open);
   return [...src.slice(open, close).matchAll(/'([^']+)'/g)].flatMap((m) => m[1] ?? []);
 }
 
-/** The body of `function parseNoShowReturnMinutes(`, to its column-0 brace. */
-function validatorBody(): string {
-  const src = read(SALONS_ROUTE);
-  const open = src.indexOf('function parseNoShowReturnMinutes(');
-  expect(open, `parseNoShowReturnMinutes not found in ${SALONS_ROUTE}`).toBeGreaterThan(-1);
-  const close = src.indexOf('\n}', open);
-  expect(close).toBeGreaterThan(open);
-  return src.slice(open, close);
-}
+/* ------------------------------------------------------------------- server */
 
-/**
- * The two bounds, READ OUT OF `salons.ts` RATHER THAN RETYPED HERE.
- *
- * They are module-scope constants ABOVE `parseNoShowReturnMinutes`, so
- * `validatorBody()` cannot see them — it slices the function. Two numbers copied
- * into this file would agree with the server exactly until the day someone
- * retuned one of them, which is the drift the whole file is built to refuse.
- */
-function serverBounds(): { min: number; max: number } {
-  const src = read(SALONS_ROUTE);
-  const pick = (name: string) => {
-    const found = new RegExp(`const ${name}\\s*=\\s*([\\d_]+)`).exec(src);
-    expect(found?.[1], `${name} not found in ${SALONS_ROUTE}`).toBeTruthy();
-    // `1_440` is how the route writes it; the separator is not part of the value.
-    return Number((found?.[1] ?? '').replace(/_/g, ''));
-  };
-  return {
-    min: pick('NO_SHOW_RETURN_MIN_MINUTES'),
-    max: pick('NO_SHOW_RETURN_MAX_MINUTES'),
-  };
-}
-
-/**
- * `RETURN_WINDOW_PRESETS`, read out of `Settings.tsx` rather than imported.
- *
- * It is not exported, and it should not become exported to serve a test. Reading
- * the SOURCE is also what makes `offers no preset the server would refuse` mean
- * what it says: the `PRESETS` table further down is this file's EXPECTATION, and
- * an expectation checked against itself proves nothing about the shipped list.
- */
-function returnWindowPresets(): number[] {
-  const src = read(SETTINGS_ROUTE);
-  const open = src.indexOf('const RETURN_WINDOW_PRESETS');
-  expect(open, `RETURN_WINDOW_PRESETS not found in ${SETTINGS_ROUTE}`).toBeGreaterThan(-1);
-  const lhs = src.indexOf('= [', open);
-  expect(lhs).toBeGreaterThan(open);
-  const close = src.indexOf(']', lhs);
-  expect(close).toBeGreaterThan(lhs);
-  return [...src.slice(lhs, close).matchAll(/\d+/g)].map((m) => Number(m[0]));
-}
-
-describe('the server half — what a merchant may set, and what nothing stops her setting', () => {
+describe('the server refuses the window from a merchant', () => {
   /**
-   * The day this leaves the set, every change made through the control below
-   * comes back as a `not_editable` 400 and the select goes on rendering as if it
-   * worked. `settingsModules.test.ts`' lesson, one field over.
+   * THE ONE SERVER ASSERTION KEPT, INVERTED. A merchant PATCH carrying the field
+   * is refused `not_editable` — so a control on this screen could only ever
+   * produce a 400. The console still writes it, for legacy bookings.
    */
-  it('lets a merchant edit the window at all', () => {
-    expect(merchantEditable()).toContain('noShowReturnMinutes');
-  });
-
-  /** It has to come BACK, or the select has nothing to reflect after a write. */
-  it('serves the value the control reflects', () => {
-    expect(read(SALONS_ROUTE)).toContain('noShowReturnMinutes: s.noShowReturnMinutes');
-  });
-
-  /**
-   * THE RANGE, IN BOTH PLACES THAT STATE IT. Out-of-range is the server's
-   * refusal, not the client's — the name of this spec used to say "a floor",
-   * and there are now two ends to hold.
-   *
-   * THE OLD CONSTRAINT IS GONE, NOT STOOD BESIDE THE NEW ONE, and `not.toContain`
-   * is the assertion that says so. `> 0` next to `>= 5` can never be the CHECK
-   * that fires, so a database carrying both would name a constraint in its error
-   * that no longer describes the rule it broke. Migration 0051 REPLACES.
-   *
-   * THE TWO NUMBERS ARE PINNED LITERALLY, ONCE, AND ON PURPOSE. Everything else
-   * here reads them from source so the route and the column cannot drift apart —
-   * but a range that agrees with itself at 10080 would still pass every one of
-   * those checks, and 10080 is the money defect. 1440 is where the early-arrival
-   * grace certainly crosses into another day's booking; 5 keeps the till able to
-   * see a deposit at check-in. Retuning either is a decision, and a decision
-   * should have to come back through this spec.
-   */
-  it('states a floor and a ceiling, in the route and in the database', () => {
-    const { min, max } = serverBounds();
-    expect([min, max]).toEqual([5, 1440]);
-
-    const body = validatorBody();
-    expect(body).toContain('value < NO_SHOW_RETURN_MIN_MINUTES');
-    expect(body).toContain('value > NO_SHOW_RETURN_MAX_MINUTES');
-
-    const schema = read(SALON_SCHEMA);
-    expect(schema).toContain('salon_no_show_return_in_range');
-    expect(schema).toContain(`BETWEEN ${min} AND ${max}`);
-    expect(schema).not.toContain('salon_no_show_return_positive');
-  });
-
-  /**
-   * THE NUMBER IS TWO WINDOWS, NOT ONE — and this is the whole argument for a
-   * ceiling, so it is pinned rather than left in prose.
-   *
-   * `findApplicableHold` reuses it as the EARLY-ARRIVAL GRACE at the till:
-   * `starts_at <= now + noShowReturnMinutes` decides which held deposit a charge
-   * may consume. Its own header spells out the failure that predicate exists to
-   * prevent — "A customer with an appointment next Tuesday who walks in today for
-   * a blow-dry must not have Tuesday's deposit spent on it". A large enough
-   * window re-opens exactly that, by configuration rather than by code.
-   */
-  it('reuses the same number as the early-arrival grace at the till', () => {
-    const src = read(BOOKING_SERVICE);
-    expect(src).toContain('params.noShowReturnMinutes * 60_000');
-    expect(src).toContain('lte(booking.startsAt, graceEnd)');
-  });
-
-  /**
-   * EVERY VALUE THE CONTROL CAN EMIT IS ONE THE SERVER WILL TAKE.
-   *
-   * THIS REPLACES A TRIPWIRE. The assertion that stood here asserted the server
-   * had NO ceiling, and its failure message asked whoever saw it red to go and
-   * re-read `RETURN_WINDOW_PRESETS` against the new range. It fired when lane A
-   * landed 5 ≤ n ≤ 1440. The presets were re-read: `[15, 30, 60, 120, 240]` sits
-   * inside the range at both ends, so the list needed no change. A one-shot
-   * instruction that has been carried out is dead weight, so it is gone — but the
-   * agreement it asked for once is worth holding on every run, because the two
-   * halves live in different files owned by different lanes.
-   *
-   * BOTH SIDES ARE READ FROM SOURCE. The list out of `Settings.tsx`, the bounds
-   * out of `salons.ts`. Retyping either side is exactly how they drift: a sixth
-   * preset outside the range must fail HERE, at a lane's own gate, and not as a
-   * 400 under a merchant's hand with the select rendering as though it worked.
-   *
-   * Reading `api/` is a READ. This lane writes only `apps/dashboard/` and
-   * `packages/ui/`, and the specs above already read the same two api files.
-   */
-  it('offers no preset the server would refuse', () => {
-    const { min, max } = serverBounds();
-    const presets = returnWindowPresets();
-
-    expect(presets.length, 'no presets parsed — the reader has lost the array').toBeGreaterThan(0);
-    for (const preset of presets) {
-      expect(
-        preset >= min && preset <= max,
-        `preset ${preset} is outside the server's ${min}–${max} range, so the control can emit a ` +
-          'value `parseNoShowReturnMinutes` refuses. Move the preset, or argue the bound in api/.',
-      ).toBe(true);
-    }
+  it('keeps noShowReturnMinutes out of MERCHANT_EDITABLE and in the console-only set', () => {
+    expect(setMembers('MERCHANT_EDITABLE')).not.toContain('noShowReturnMinutes');
+    expect(setMembers('PLATFORM_ONLY_EDITABLE')).toContain('noShowReturnMinutes');
+    expect(read(SALONS_ROUTE)).toContain("badRequest('not_editable'");
   });
 });
 
@@ -273,30 +75,7 @@ const SALON: Salon = {
   nameAr: 'صالون أمارة',
   plan: 'growth',
   city: 'Kuwait City',
-  /*
-   * A TENANT'S OWN HEX, DELIBERATELY ARBITRARY AND DELIBERATELY NOT A PRESET.
-   *
-   * This was `'#6E7F6C'`, and unlike the console's swatch list that was not a
-   * transcription bug — `brandColor` is a white-label INPUT, so a fixed literal
-   * is the honest shape for it and nothing here asserts on the value. It is
-   * changed anyway, for a different reason: `#6E7F6C` is no longer a hex a salon
-   * row can hold. Migration 0055 rewrites every occurrence of the retired
-   * shipped default to `#459A3C` (case-insensitively), so after it runs the only
-   * salons on that value are ones the seed re-creates — trunk's open item, not a
-   * state this fixture should stand for.
-   *
-   * NOT READ FROM `brandPresets.amaraSage.brand` EITHER, which would be the
-   * reflex after the swatch fix one directory along. That hex IS the platform
-   * default, and a fixture for "the salon chose its own colour" must not be the
-   * value that means "nobody chose" — the two are indistinguishable at the point
-   * the screen reads the row. It would also tie an unrelated spec to the brand
-   * ramp, so the next revision would silently move an input these tests do not
-   * care about.
-   *
-   * `#7A5C8E` is SAL-LUMIERE's, the salon 0055's own message names as owning its
-   * hex, and it is already what `api/platformSalonDetail.test.ts:42` uses. One
-   * arbitrary tenant colour across the dashboard's fixtures.
-   */
+  // A tenant's own hex, SAL-LUMIERE's — see `settingsSocialLinks.test.tsx`.
   brandColor: '#7A5C8E',
   modules: { booking: true, shop: false },
   loyaltyMode: 'tiers',
@@ -313,312 +92,115 @@ const SALON: Salon = {
 
 const salonWith = (over: Partial<Salon>): Salon => ({ ...SALON, ...over });
 
+const POLICY: BookingPolicy = {
+  id: 'BP-1',
+  salonId: 'SAL-AMARA',
+  version: 1,
+  noShow: 'keep',
+  cancellation: [{ hoursBefore: 24, returnPercent: 100 }],
+  text: { en: 'Cancel a day ahead for a full return.', ar: '' },
+  publishedAt: '2026-09-29T09:00:00.000Z',
+};
+
 type Updater = Parameters<typeof DepositPanel>[0]['update'];
 
-/**
- * The real `useUpdateSalon` result is a react-query object; the panel reaches for
- * three of its fields. A stub carrying exactly those three keeps the assertions
- * below on the RENDERED DOM rather than on a mock's call log alone — the calls
- * are checked too, but never instead.
- */
-function stubUpdate(over: { isPending?: boolean; variables?: SalonPatch } = {}) {
+function stubUpdate(over: { isPending?: boolean } = {}) {
   const calls: SalonPatch[] = [];
   const update = {
     isPending: over.isPending ?? false,
-    variables: over.variables,
+    variables: undefined,
     mutate: (patch: SalonPatch) => void calls.push(patch),
   } as unknown as Updater;
   return { update, calls };
 }
 
-/** The select, by its accessible name. */
-const windowSelect = () =>
-  screen.getByRole('combobox', { name: 'No-show return window' }) as HTMLSelectElement;
+const foot = (container: HTMLElement) => container.querySelector('.settings__foot');
 
-/** The design's foot sentence, and the emphasised phrase inside it. */
-const footEmphasis = (container: HTMLElement) =>
-  container.querySelector('.settings__foot b') as HTMLElement | null;
-
-/**
- * THE OPTIONS, WRITTEN OUT RATHER THAN IMPORTED.
- *
- * `MERCHANT_EDITABLE`'s lesson, from `salons.ts`' own comment: "A test that
- * derives its expectation from the thing it is testing cannot fail when the thing
- * changes." Importing `RETURN_WINDOW_PRESETS` and asserting the select offers
- * `RETURN_WINDOW_PRESETS` would pass against any list at all, including an empty
- * one. These five minute counts and these five words are the expectation.
- *
- * FIFTEEN MINUTES AT THE BOTTOM, FOUR HOURS AT THE TOP, and both ends are about
- * the till rather than about taste — see the module header and
- * `Settings.tsx § RETURN_WINDOW_PRESETS` for the argument.
- */
-const PRESETS: ReadonlyArray<[number, string]> = [
-  [15, '15 minutes'],
-  [30, '30 minutes'],
-  [60, '1 hour'],
-  [120, '2 hours'],
-  [240, '4 hours'],
-];
-
-describe('the control the design does not draw', () => {
-  it('draws a select the merchant can actually reach', () => {
+describe('the window is not editable here', () => {
+  it('draws no window control on the deposit card', () => {
     const { update } = stubUpdate();
-    render(<DepositPanel salon={SALON} update={update} />);
-    expect(windowSelect()).toBeTruthy();
-  });
-
-  it('offers the five presets, in order, and nothing else', () => {
-    const { update } = stubUpdate();
-    render(<DepositPanel salon={SALON} update={update} />);
-    const labels = [...windowSelect().options].map((o) => o.textContent);
-    expect(labels).toEqual(PRESETS.map(([, label]) => label));
-  });
-
-  it('shows the window the server holds, not the default', () => {
-    const { update } = stubUpdate();
-    render(<DepositPanel salon={salonWith({ noShowReturnMinutes: 120 })} update={update} />);
-    expect(windowSelect().value).toBe('120');
-    expect(windowSelect().selectedOptions[0]?.textContent).toBe('2 hours');
-  });
-
-  /**
-   * THE PROPERTY THE LIST EXISTS FOR, AND THE BRIEF'S QUESTION ANSWERED AT EVERY
-   * VALUE RATHER THAN ARGUED.
-   *
-   * The design's sentence carries the window inside it — "returns to the wallet
-   * <b>1 hour</b> after a missed slot" — so a control that can produce a value
-   * the sentence renders badly breaks settled copy. Every reachable value is
-   * driven through a real render and the two words are compared to each other,
-   * not to a constant.
-   */
-  it.each(PRESETS)('the sentence and the option agree at %i minutes', (minutes, label) => {
-    const { update } = stubUpdate();
-    const { container } = render(
-      <DepositPanel salon={salonWith({ noShowReturnMinutes: minutes })} update={update} />,
-    );
-    expect(footEmphasis(container)?.textContent).toBe(label);
-    expect(windowSelect().selectedOptions[0]?.textContent).toBe(label);
-  });
-
-  /**
-   * "1 minutes" — the singular the foot sentence got wrong.
-   *
-   * THIS PINS THE FORMATTER, NOT A REACHABLE SALON, and that distinction is the
-   * whole of this comment. It used to be justified by storability — the CHECK was
-   * `> 0`, so 1 could sit in the column — and that justification is now FALSE: the
-   * floor is 5, and neither the route nor `salon_no_show_return_in_range` will
-   * admit 1 from any door. The minute-singular arm of `formatReturnWindow` is
-   * therefore unreachable from the server today.
-   *
-   * It is still pinned, because this spec renders a PROP rather than a stored
-   * value, and because a naive `${minutes} minutes` is the implementation someone
-   * writes when the arm looks unused. The arm is cheap; re-deriving why it exists
-   * after it is deleted is not. Moving the case to a still-storable non-preset
-   * value — 45, say — would have kept the spec honest about reachability and lost
-   * the singular entirely, since no storable value below 60 produces it.
-   */
-  it('says "1 minute", not "1 minutes"', () => {
-    const { update } = stubUpdate();
-    const { container } = render(
-      <DepositPanel salon={salonWith({ noShowReturnMinutes: 1 })} update={update} />,
-    );
-    expect(footEmphasis(container)?.textContent).toBe('1 minute');
-  });
-
-  /**
-   * THE CASE THAT DECIDES WHETHER THE CONTROL IS HONEST, and the one a `Stepper`
-   * could not have passed: it clamps, so 999 would have been silently pulled to
-   * the top of an invented range the first time anyone opened the panel.
-   *
-   * 999 is not hypothetical — `e2e/tenancy.test.ts:709` sends it.
-   */
-  it('carries a value it does not offer rather than rewriting it', () => {
-    const { update, calls } = stubUpdate();
-    const { container } = render(
-      <DepositPanel salon={salonWith({ noShowReturnMinutes: 999 })} update={update} />,
-    );
-    expect(windowSelect().value).toBe('999');
-    expect(windowSelect().selectedOptions[0]?.textContent).toBe('999 minutes');
-    expect(footEmphasis(container)?.textContent).toBe('999 minutes');
-    // Rendering is not writing. Nothing was sent to correct her salon.
-    expect(calls).toEqual([]);
-  });
-
-  it('sorts a carried value into the list rather than appending it', () => {
-    const { update } = stubUpdate();
-    render(<DepositPanel salon={salonWith({ noShowReturnMinutes: 45 })} update={update} />);
-    expect([...windowSelect().options].map((o) => o.value)).toEqual([
-      '15',
-      '30',
-      '45',
-      '60',
-      '120',
-      '240',
-    ]);
-  });
-});
-
-describe('the write path — the screen’s one mutation, and its refusal', () => {
-  it('sends the chosen window and nothing else', () => {
-    const { update, calls } = stubUpdate();
-    render(<DepositPanel salon={SALON} update={update} />);
-    fireEvent.change(windowSelect(), { target: { value: '120' } });
-    expect(calls).toEqual([{ noShowReturnMinutes: 120 }]);
-  });
-
-  /**
-   * ONE KEY, for `applyModules`' reason one panel up: the server only touches a
-   * column whose key is present, so a write built from a stale render cannot take
-   * the deposit with it.
-   */
-  it('never sends the deposit alongside it', () => {
-    const { update, calls } = stubUpdate();
-    render(<DepositPanel salon={SALON} update={update} />);
-    fireEvent.change(windowSelect(), { target: { value: '15' } });
-    expect(Object.keys(calls[0] ?? {})).toEqual(['noShowReturnMinutes']);
-  });
-
-  it('sends nothing when the merchant re-picks the window she already has', () => {
-    const { update, calls } = stubUpdate();
-    render(<DepositPanel salon={SALON} update={update} />);
-    fireEvent.change(windowSelect(), { target: { value: '60' } });
-    expect(calls).toEqual([]);
-  });
-
-  /**
-   * IN FLIGHT: THE CONTROL SHOWS HER CHOICE, THE SENTENCE SHOWS THE SALON'S RULE.
-   *
-   * Not an inconsistency — the two say different things. The select is the
-   * merchant's intent and must not snap back under her hand; the sentence is a
-   * claim about what happens to a CUSTOMER'S money and must never run ahead of
-   * the server. `useUpdateSalon` writes nothing optimistically for the same
-   * reason ("a stepper showing 7 KD while the server still holds 5"). They
-   * re-agree the moment the write settles, either way it settles.
-   */
-  it('shows the in-flight choice on the control and the held rule in the sentence', () => {
-    const { update } = stubUpdate({ isPending: true, variables: { noShowReturnMinutes: 240 } });
-    const { container } = render(<DepositPanel salon={SALON} update={update} />);
-    expect(windowSelect().value).toBe('240');
-    expect(footEmphasis(container)?.textContent).toBe('1 hour');
-  });
-
-  it('locks the control while a write is in flight', () => {
-    const { update } = stubUpdate({ isPending: true, variables: { noShowReturnMinutes: 240 } });
-    render(<DepositPanel salon={SALON} update={update} />);
-    expect(windowSelect().disabled).toBe(true);
-  });
-
-  /**
-   * A PENDING WRITE THAT IS NOT THIS ONE MUST NOT MOVE THIS CONTROL. `update` is
-   * ONE mutation shared by every panel on the screen — the modules, the deposit,
-   * both receipt switches — so `isPending` alone would show a WhatsApp flip as a
-   * changed return window. `variables` is what separates them.
-   */
-  it('ignores another panel’s write', () => {
-    const { update } = stubUpdate({ isPending: true, variables: { whatsappEnabled: false } });
-    render(<DepositPanel salon={SALON} update={update} />);
-    expect(windowSelect().value).toBe('60');
-  });
-
-  /**
-   * THE REFUSAL PATH IS THE SCREEN'S, NOT A SECOND ONE. When the PATCH fails,
-   * `useUpdateSalon` does not invalidate, the salon prop is unchanged, and
-   * `isPending` is false — so the select renders the server's value again with no
-   * reset logic of its own. `Settings` puts `WriteError` under the panels.
-   */
-  it('returns to the held value when the write settles without changing it', () => {
-    const { update } = stubUpdate({ isPending: false, variables: { noShowReturnMinutes: 240 } });
-    const { container } = render(<DepositPanel salon={SALON} update={update} />);
-    expect(windowSelect().value).toBe('60');
-    expect(footEmphasis(container)?.textContent).toBe('1 hour');
-  });
-
-  /** Loading is the panel's existing skeleton; a control with no salon is a lie. */
-  it('draws no control until the salon has loaded', () => {
-    const { update } = stubUpdate();
-    render(<DepositPanel salon={undefined} update={update} />);
+    render(<DepositPanel salon={SALON} update={update} policy={null} />);
     expect(screen.queryByRole('combobox', { name: 'No-show return window' })).toBeNull();
+    expect(screen.queryByText('Return window')).toBeNull();
+    // The deposit stepper is still the card's one control.
+    expect(screen.getByRole('button', { name: 'Increase Booking deposit' })).toBeTruthy();
+  });
+
+  it('carries no preset list and no write of the field in the screen source', () => {
+    const src = read(SETTINGS_ROUTE);
+    expect(src).not.toContain('RETURN_WINDOW_PRESETS');
+    expect(src).not.toMatch(/noShowReturnMinutes\s*:/);
+  });
+
+  it('does not admit the field in the merchant write type', () => {
+    // @ts-expect-error — `SalonPatch` no longer carries `noShowReturnMinutes`.
+    const stale: SalonPatch = { noShowReturnMinutes: 60 };
+    expect(stale).toBeTruthy();
+  });
+
+  it('writes only the deposit when the stepper moves', () => {
+    vi.useFakeTimers();
+    try {
+      const { update, calls } = stubUpdate();
+      render(<DepositPanel salon={SALON} update={update} policy={POLICY} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Booking deposit' }));
+      act(() => void vi.advanceTimersByTime(600));
+      expect(calls).toEqual([{ depositFils: 6000 }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
-/* ------------------------------------------- the sentence, before it can speak */
-
-/**
- * THE SPEC THE `?? 60` SURVIVED, AND THE ASSERTION THAT WOULD HAVE ENDED IT.
- *
- * The test above has always been here and has always passed: the CONTROL is
- * skeletoned when the salon has not loaded. The SENTENCE beside it was not — it
- * rendered `salon?.noShowReturnMinutes ?? 60` from outside the skeleton branch,
- * so every merchant on every load was told "1 hour", and a salon set to 4 hours
- * was told it and then corrected. Nothing was red. The card was half-honest and
- * no assertion looked at the other half.
- *
- * `not.toMatch(/1 hour/)` is the assertion, and it is the same one the
- * Appointments banner now carries, for the same reason: 60 is the column default,
- * the seed, the contract's example and the design's rendered hour, so "1 hour" is
- * exactly what a screen says when it is remembering rather than reading.
- */
-describe('the foot sentence claims nothing about the window until the salon lands', () => {
-  const foot = (container: HTMLElement) => container.querySelector('.settings__foot');
-
-  it('states no window, and above all not the default one', () => {
+describe('the foot sentence states the salon’s policy, or the legacy window without one', () => {
+  it('states "keep" from a keep policy', () => {
     const { update } = stubUpdate();
-    const { container } = render(<DepositPanel salon={undefined} update={update} />);
-    expect(foot(container)?.textContent).not.toMatch(/1 hour/);
-    // Not half the sentence either — no emphasised phrase, because no phrase.
-    expect(footEmphasis(container)).toBeNull();
+    const { container } = render(<DepositPanel salon={SALON} update={update} policy={POLICY} />);
+    expect(foot(container)?.textContent).toBe(
+      'No-shows: you keep the deposit. It settles 1 hour after the slot ends, or when you mark it.',
+    );
+    expect(foot(container)?.textContent).not.toMatch(/returns to the wallet/);
   });
 
-  /**
-   * AND IT HOLDS THE CARD'S SHAPE RATHER THAN VANISHING, which is where this
-   * screen's answer parts company with the Appointments banner's. The rows above
-   * skeleton at their real heights on purpose — `Settings.tsx` § the foot argues
-   * the difference. A line that disappears and comes back is the reflow those
-   * rows are paying to avoid.
-   */
-  it('skeletons the line rather than dropping it', () => {
-    const { update } = stubUpdate();
-    const { container } = render(<DepositPanel salon={undefined} update={update} />);
-    expect(foot(container)).not.toBeNull();
-    expect(foot(container)!.querySelector('.avo-skeleton')).not.toBeNull();
-  });
-
-  /**
-   * THE SKELETON IS NOT ANNOUNCED. `Skeleton` is `aria-hidden`, so a screen
-   * reader on a loading card hears the card's title and its rows and no claim
-   * about the window at all — rather than a sentence with a hole in it, which was
-   * the reason the banner one screen over does not skeleton its duration inline.
-   */
-  it('says nothing to a screen reader either', () => {
-    const { update } = stubUpdate();
-    const { container } = render(<DepositPanel salon={undefined} update={update} />);
-    expect(foot(container)!.textContent).toBe('');
-  });
-
-  /** And the moment it lands it is the design's sentence again, whole. */
-  it('states the salon’s own window as soon as there is one', () => {
+  it('states "return" from a return policy', () => {
     const { update } = stubUpdate();
     const { container } = render(
-      <DepositPanel salon={salonWith({ noShowReturnMinutes: 240 })} update={update} />,
+      <DepositPanel salon={SALON} update={update} policy={{ ...POLICY, noShow: 'return' }} />,
+    );
+    expect(foot(container)?.textContent).toBe(
+      'No-shows: the deposit returns to her wallet. It settles 1 hour after the slot ends, or when you mark it.',
+    );
+  });
+
+  it('keeps the design’s window sentence for a salon with no policy, at its own window', () => {
+    const { update } = stubUpdate();
+    const { container } = render(
+      <DepositPanel salon={salonWith({ noShowReturnMinutes: 240 })} update={update} policy={null} />,
     );
     expect(foot(container)?.textContent).toBe(
       'No-show: deposit returns to the wallet 4 hours after a missed slot.',
     );
-    expect(foot(container)?.textContent).not.toMatch(/1 hour/);
+  });
+
+  it('claims nothing while either read is still out — skeleton, no text', () => {
+    const { update } = stubUpdate();
+    for (const [salon, policy] of [
+      [undefined, null],
+      [SALON, undefined],
+    ] as const) {
+      const { container, unmount } = render(
+        <DepositPanel salon={salon} update={update} policy={policy} />,
+      );
+      expect(foot(container)!.querySelector('.avo-skeleton')).not.toBeNull();
+      expect(foot(container)!.textContent).toBe('');
+      unmount();
+    }
   });
 });
 
 /* --------------------------------------------------------------- the weight */
 
-/**
- * The foot sentence's `<b>` under the real cascade, for `emphasisWeight.test.tsx`'
- * reason: `<b>` with no author rule is not unstyled, it is the UA sheet's
- * `font-weight: bolder`, which against 400 copy resolves to 700 — and the design
- * pins this exact phrase at 600 inline. The global `b, strong` rule now covers
- * it; this pins the covered instance rather than the rule, because a scoped rule
- * added to `.settings__foot` later could beat it silently.
- */
-describe('the emphasised window carries the design weight', () => {
+describe('the emphasised phrase carries the design weight', () => {
   beforeAll(() => {
     for (const relative of [
       '../../../../packages/tokens/dist/avo-tokens.css',
@@ -631,10 +213,10 @@ describe('the emphasised window carries the design weight', () => {
     }
   });
 
-  it('renders the window at 600, never the browser’s 700', () => {
+  it('renders the emphasis at 600, never the browser’s 700', () => {
     const { update } = stubUpdate();
-    const { container } = render(<DepositPanel salon={SALON} update={update} />);
-    const emphasis = footEmphasis(container);
+    const { container } = render(<DepositPanel salon={SALON} update={update} policy={null} />);
+    const emphasis = container.querySelector('.settings__foot b') as HTMLElement | null;
     expect(emphasis?.textContent).toBe('1 hour');
     expect(getComputedStyle(emphasis!).fontWeight).toBe('600');
   });

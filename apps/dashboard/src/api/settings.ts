@@ -109,24 +109,13 @@ export type SalonPatch = Partial<
     | 'nameAr'
     | 'brandColor'
     | 'depositFils'
-    /**
-     * IN `MERCHANT_EDITABLE` SINCE THE ROUTE WAS WRITTEN, AND UNREACHABLE FROM
-     * THIS CLIENT UNTIL NOW — the inverse of the six stale "not built" claims
-     * above, and the same shape as `emailEnabled` below it: nothing here ever
-     * asserted the field was unwritable, it was simply never reached for, which
-     * is the quieter failure because there was no sentence for anyone to
-     * re-check. `Settings.tsx § DepositPanel` read it and only displayed it.
-     *
-     * THE SERVER STATES A FLOOR AND A CEILING. `parseNoShowReturnMinutes` wants a
-     * whole number of minutes within 5 ≤ n ≤ 1440, and `salon_no_show_return_in_
-     * range` states the same bound at the column (migration 0051, which REPLACED
-     * the old `salon_no_show_return_positive`). The range this field needed was
-     * reported to `api/` rather than implemented here, and `api/` landed it. The
-     * control this type serves offers a fixed list inside that range; the list is
-     * still a CHOICE and not a validation. See that panel's header for the
-     * argument and the two windows this one number drives.
+    /*
+     * `noShowReturnMinutes` WAS HERE AND IS GONE. Lane A's be36b9a moved it to
+     * `PLATFORM_ONLY_EDITABLE`: a merchant PATCH that sends it answers
+     * `400 not_editable`. The salon's booking policy replaced it
+     * (`api/bookingPolicy.ts`). Out of this type, so no merchant screen can
+     * compile a write the server refuses.
      */
-    | 'noShowReturnMinutes'
     | 'businessHours'
     | 'whatsappEnabled'
     | 'emailEnabled'

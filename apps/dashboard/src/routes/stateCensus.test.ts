@@ -442,8 +442,14 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
  */
 /**
  * `AppointmentLink.tsx` is an anchor that navigates in-app — no fetch, no state.
+ * `depositCopy.tsx` is copy: the no-show sentence and the settlement note, from props.
  */
-const NON_SCREENS = ['NotBuiltYet.tsx', 'sectionState.tsx', 'AppointmentLink.tsx'] as const;
+const NON_SCREENS = [
+  'NotBuiltYet.tsx',
+  'sectionState.tsx',
+  'AppointmentLink.tsx',
+  'depositCopy.tsx',
+] as const;
 
 /**
  * Every route component in a directory — and NOT the tests beside them.

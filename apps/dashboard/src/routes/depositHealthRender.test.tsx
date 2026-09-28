@@ -146,7 +146,7 @@ const MAHA = row({
 /**
  * A LONG SERVICE, BOOKED EARLY. `no_show_return_due_at` is `ends_at` plus the
  * salon's window, so a six-hour keratin starting at 09:30 is due back LATER than
- * a half-hour manicure starting at 14:00 — which means the "Owed for" figure
+ * a half-hour manicure starting at 14:00 — which means the "Overdue by" figure
  * DOES NOT DESCEND down the queue even though `starts_at` ascends.
  *
  * THAT IS DELIBERATE AND THIS SPEC EARNED IT. The first fixture gave every row a
@@ -368,7 +368,7 @@ describe('the three states are three sections, each with its own sentence', () =
     rig();
 
     return screen.findByText('Noura S.').then(() => {
-      expect(within(section('return_overdue')).getByText('Owed for')).toBeTruthy();
+      expect(within(section('return_overdue')).getByText('Overdue by')).toBeTruthy();
       expect(within(section('awaiting_arrival')).getByText('Since slot')).toBeTruthy();
       expect(within(section('unclosed')).getByText('Past due by')).toBeTruthy();
     });

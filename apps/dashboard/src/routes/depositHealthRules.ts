@@ -88,7 +88,7 @@ export const DEPOSIT_FRAMING: Record<DepositState, DepositFraming> = {
   awaiting_arrival: {
     title: 'Still within the grace window',
     body:
-      'Her slot has started and nothing has settled it yet — she may be running late, or already in the chair and not charged. Her deposit is still held and nothing is owed back until the window above runs out.',
+      'Her slot has started and nothing has settled it yet — she may be running late, or already in the chair and not charged. Her deposit is still held, and nothing settles until the time the rule above states.',
     caption: 'Bookings whose slot has started and whose grace window has not run out.',
     elapsedHead: 'Since slot',
   },
@@ -102,12 +102,20 @@ export const DEPOSIT_FRAMING: Record<DepositState, DepositFraming> = {
    * section that described an AVO fault and offered her nothing would read as a
    * reprimand.
    */
+  /*
+   * DIRECTION-NEUTRAL SINCE MIGRATION 0066. Under a salon policy a missed slot
+   * can KEEP the deposit, so "We owe this money back" and "money that is already
+   * hers" were false for every `keep` booking in this list. The deposit-health
+   * rows do not carry the booking's policy, so the copy names the settle — back
+   * to her wallet or to the salon, as the booking's policy says — and not a
+   * direction. Still ours: settling runs on AVO's side.
+   */
   return_overdue: {
-    title: 'We owe this money back',
+    title: 'Waiting on us to settle',
     body:
-      'The return deadline has passed and the deposit is still held. Returning it runs on our side, not hers — each row is a customer waiting for money that is already hers. If this list is not empty, tell AVO support; there is nothing for you to do here.',
-    caption: 'Deposits past their return deadline that AVO has not yet returned.',
-    elapsedHead: 'Owed for',
+      "The settle time has passed and the deposit is still held. Settling it runs on our side, not hers — each row goes back to her wallet or stays with the salon, as that booking's policy says. If this list is not empty, tell AVO support; there is nothing for you to do here.",
+    caption: 'Deposits past their settle time that AVO has not yet settled.',
+    elapsedHead: 'Overdue by',
   },
   /*
    * NO MONEY IN THIS SECTION AT ALL — not a column, not a figure, not a zero.

@@ -1,4 +1,4 @@
-import type { Salon } from '@avo/types';
+import { fils, formatMoney, type Salon } from '@avo/types';
 import type { PillTone } from '@avo/ui';
 import type { BookingStatus, MerchantBooking } from '../api/bookings.js';
 import { enumerateDays, shiftDate } from './salesTrendRules.js';
@@ -103,9 +103,25 @@ export const STATUS_PILL: Record<BookingStatus, { label: string; tone: PillTone 
  * migration. Reported.
  */
 export function pillFor(
-  booking: Pick<MerchantBooking, 'status' | 'depositFils'>,
+  booking: Pick<MerchantBooking, 'status' | 'depositFils'> & {
+    settlement?: MerchantBooking['settlement'];
+  },
 ): { label: string; tone: PillTone } {
   const pill = STATUS_PILL[booking.status];
+  /*
+   * A NO-SHOW UNDER A `keep` POLICY IS NOT RETURNED, and the enum still spells
+   * it `no_show_returned`. The settlement is the fact: nothing went back and the
+   * salon kept it, so the pill says so. The tone is unchanged.
+   */
+  if (
+    booking.depositFils !== 0 &&
+    booking.status === 'no_show_returned' &&
+    booking.settlement &&
+    booking.settlement.returnedFils === 0 &&
+    booking.settlement.keptFils > 0
+  ) {
+    return { ...pill, label: 'No-show · kept' };
+  }
   if (booking.depositFils !== 0) return pill;
   if (booking.status === 'deposit_held') return { ...pill, label: 'Booked' };
   if (booking.status === 'no_show_returned') return { ...pill, label: 'No-show' };
@@ -915,9 +931,36 @@ export function chipLabel(item: PlacedBooking): string {
     b.memberName,
     b.serviceName,
     `with ${b.artistName}`,
-    STATUS_PILL[b.status].label,
+    // `pillFor`, so a kept no-show is not announced as returned.
+    pillFor(b).label,
   ];
   if (b.branchAssumed) parts.push('branch assumed');
   if (b.calendarSyncState === 'failed') parts.push('not on their calendar');
   return parts.join(', ');
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHERE A SETTLED DEPOSIT WENT — `booking.settlement`, IN THE SERVER'S FILS
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Under a salon policy a cancel can return part of a deposit and a no-show can
+ * keep all of it, so the deposit column alone no longer says what happened to
+ * the money. The split is the server's (`settlementOf`, api/services/booking.ts):
+ * the percent rounded down to the fil, the remainder kept. Nothing is computed
+ * here; both halves are formatted with `formatMoney` and nothing else (#1).
+ *
+ * `null` until it settles, and `null` on a booking that never held a deposit —
+ * a hand-written appointment has no money to account for, and "Returned
+ * 0.000 KD" over one would be the false claim `pillFor` exists to withhold.
+ */
+export function settlementText(
+  booking: Pick<MerchantBooking, 'depositFils' | 'settlement'>,
+): string | null {
+  const s = booking.settlement;
+  if (s === null || s === undefined || booking.depositFils === 0) return null;
+  const returned = formatMoney(fils(s.returnedFils), 'en');
+  const kept = formatMoney(fils(s.keptFils), 'en');
+  if (s.returnedFils > 0 && s.keptFils > 0) return `Returned ${returned} · kept ${kept}`;
+  if (s.keptFils > 0) return `Kept ${kept}`;
+  return `Returned ${returned}`;
 }

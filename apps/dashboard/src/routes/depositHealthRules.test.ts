@@ -293,9 +293,12 @@ describe('the three states never share a sentence', () => {
     // It names AVO as the party that owes, and says there is nothing for the
     // merchant to do — a section describing our fault that offered her nothing
     // would read as a reprimand.
-    expect(body).toContain('Returning it runs on our side, not hers');
+    expect(body).toContain('Settling it runs on our side, not hers');
     expect(body).toContain('nothing for you to do here');
-    expect(title).toBe('We owe this money back');
+    expect(title).toBe('Waiting on us to settle');
+    // Since 0066 a missed slot can keep the deposit, so no direction is claimed.
+    expect(all).not.toContain('owe this money');
+    expect(all).not.toContain('already hers');
   });
 
   /**
@@ -320,7 +323,7 @@ describe('the three states never share a sentence', () => {
   it('frames awaiting_arrival as still waiting rather than as late', () => {
     const { title, body } = DEPOSIT_FRAMING.awaiting_arrival;
     expect(title).toBe('Still within the grace window');
-    expect(body).toContain('nothing is owed back');
+    expect(body).toContain('nothing settles until');
     for (const word of BLAME) {
       expect(body.toLowerCase(), `awaiting_arrival copy contains "${word}"`).not.toContain(word);
     }

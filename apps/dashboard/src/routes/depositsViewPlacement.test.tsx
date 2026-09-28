@@ -49,6 +49,10 @@ const perms = { appointments: true, void: true } as StaffPerms;
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('../api/salon.js', () => ({ useSalon: () => useSalon() }));
+/** No published policy: the banner shows the legacy strip this file's last spec reads. */
+vi.mock('../api/bookingPolicy.js', () => ({
+  useBookingPolicy: () => ({ data: null, isSuccess: true, isPending: false, isError: false }),
+}));
 
 const idleWrite = () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null });
 vi.mock('../api/bookings.js', async () => {
