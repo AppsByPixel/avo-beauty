@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "beauty.avo.wallet",
-      "buildNumber": "1",
+      "buildNumber": "3",
       "config": {
         "usesNonExemptEncryption": false
       },
