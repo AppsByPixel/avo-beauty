@@ -439,3 +439,35 @@ describe('the Overview activity panel', () => {
     ).toEqual([]);
   });
 });
+
+/* ---------------------------------------------------- the Services tab (M7) --
+ *
+ * The five calls the Services screen makes, and the branch-hours PATCH beside
+ * them, named by the route each must land on. The sweep above already proves
+ * every merchant call resolves; this pins that THESE calls exist at all, so a
+ * hook renamed to a `/v1/` path the API does not register — the services
+ * routes are all BARE — or deleted outright, fails here by name rather than
+ * dropping silently out of the sweep.
+ */
+describe('the Services tab reaches the routes it was built for', () => {
+  const expected = [
+    ['services.ts', 'GET /salons/:id/services'],
+    ['services.ts', 'POST /salons/:id/services'],
+    ['services.ts', 'PATCH /salons/:id/services/:sid'],
+    ['services.ts', 'DELETE /salons/:id/services/:sid'],
+    ['services.ts', 'PUT /salons/:id/services/:sid/artists'],
+    ['artists.ts', 'GET /salons/:id/artists'],
+    ['settings.ts', 'PATCH /salons/:id/branches/:bid'],
+  ] as const;
+
+  it.each(expected)('%s calls %s', (file, routeName) => {
+    const hits = CALLS.filter((c) => c.where.startsWith(`${file}:`)).map((c) => routeFor(c)?.name);
+    expect(hits, `${file} makes no call that resolves to ${routeName}`).toContain(routeName);
+  });
+
+  it('none of them is scanner-only', () => {
+    for (const [, routeName] of expected) {
+      expect(GATES.find((g) => g.name === routeName)?.scannerOnly).toBe(false);
+    }
+  });
+});

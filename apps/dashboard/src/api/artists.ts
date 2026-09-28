@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import type { Artist } from '@avo/types';
+import { ArtistSchema, type Artist } from '@avo/types';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 import type { Paginated } from './salon.js';
@@ -13,24 +13,45 @@ import type { Paginated } from './salon.js';
 /**
  * `GET /salons/{id}/artists`, `PUT /artists/{id}/availability` — both `perms.team`.
  *
- * THE WIRE SHAPE IS WIDER THAN `ArtistSchema`.
+ * THE WIRE SHAPE IS `ArtistSchema`, AND THIS HEADER USED TO SAY IT WAS WIDER.
  *
- * The API's `serialiseArtist` returns three fields the shared schema does not
- * declare: `nameAr`, `active`, and `hasOwnLogin`. Two of them are load-bearing
- * here — `active` decides whether an artist is bookable at all, and
- * `hasOwnLogin` is the difference between "she can set her own hours from the
- * scanner" and "only reception can", which is what the card's summary line has
- * to say honestly.
+ * It read: "The API's `serialiseArtist` returns three fields the shared schema
+ * does not declare: `nameAr`, `active`, and `hasOwnLogin` … the fields belong on
+ * `ArtistSchema` and are reported, not added here." They were reported and trunk
+ * added them — `ArtistSchema` now declares all three, and its eleven fields are
+ * exactly the eleven `serialiseArtist` emits (checked against the serialiser in
+ * `api/src/routes/artists.ts`, not inferred from the name). So the local widening
+ * is an alias now, and the roster is PARSED rather than cast.
  *
- * So this widens the type locally rather than reading undeclared fields off an
- * `Artist` and hoping. `packages/types` is trunk-owned; the fields belong on
- * `ArtistSchema` and are reported, not added here.
+ * WHY IT IS PARSED NOW. Merchant → Services reads this roster to assign staff to
+ * a service, and it sends ids from it back to `PUT …/services/{sid}/artists`.
+ * An assertion over that list is how a malformed row becomes a checkbox whose id
+ * the server refuses as `unknown_artist`. A parse failure is an ordinary failed
+ * read, on both screens that use it.
  */
-export interface DashboardArtist extends Artist {
-  nameAr: string | null;
-  /** Whether a staff login is linked, i.e. whether she can edit her own week. */
-  hasOwnLogin: boolean;
-  active: boolean;
+export type DashboardArtist = Artist;
+
+/** `ArtistSchema` per row, and the envelope by hand — `api/staff.ts § parseStaffPage`. */
+export function parseArtistPage(raw: unknown): Paginated<DashboardArtist> {
+  const where = 'GET /salons/{id}/artists';
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${where} was not an object.`);
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.items)) throw new Error(`${where}.items was not an array.`);
+  if (r.nextCursor !== null && typeof r.nextCursor !== 'string') {
+    throw new Error(`${where}.nextCursor was neither a string nor null.`);
+  }
+  return {
+    items: r.items.map((row, i) => {
+      try {
+        return ArtistSchema.parse(row);
+      } catch (cause) {
+        throw new Error(`${where}.items[${i}] was not an artist: ${String(cause)}`);
+      }
+    }),
+    nextCursor: r.nextCursor,
+  };
 }
 
 /** JS `getDay()` order, Sunday first — the key space the API validates against. */
@@ -52,14 +73,21 @@ export const artistKeys = {
   list: (salonId: string) => [...artistKeys.all, salonId] as const,
 };
 
-export function useArtists(): UseQueryResult<Paginated<DashboardArtist>> {
+/**
+ * `enabled` for Merchant → Services, which reads the roster only for a reader
+ * holding `perms.team` — the permission this route and the assign control both
+ * need. Without it the request is a guaranteed 403, and firing it would put a
+ * refusal on a screen whose other half she may use freely.
+ */
+export function useArtists(enabled = true): UseQueryResult<Paginated<DashboardArtist>> {
   const salonId = useSalonId();
   return useQuery({
+    enabled,
     queryKey: artistKeys.list(salonId),
-    queryFn: ({ signal }) =>
-      authedRequest<Paginated<DashboardArtist>>('merchant', `/salons/${salonId}/artists`, {
-        signal,
-      }),
+    queryFn: async ({ signal }) =>
+      parseArtistPage(
+        await authedRequest<unknown>('merchant', `/salons/${salonId}/artists`, { signal }),
+      ),
     // Retry policy is global — api/retryPolicy.ts. `perms.team` gates this one.
   });
 }

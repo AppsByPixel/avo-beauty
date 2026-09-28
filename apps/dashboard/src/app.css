@@ -2064,6 +2064,15 @@ a:hover {
   font-weight: 600;
 }
 
+/* A session that is not a window (`to <= from`) — "No evening session". Body
+   type and the muted ink, because it is the absence of a time, not a time. */
+.settings__hours-none {
+  font-family: var(--avo-font-ui);
+  font-weight: 400;
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
 .settings__note {
   margin-top: 10px;
   font-size: 12px;
@@ -2080,6 +2089,47 @@ a:hover {
   gap: 11px;
   padding: 12px 0;
   border-top: 1px solid var(--avo-hairline-inner);
+  /* The hours editor opens inside the row, on its own line. */
+  flex-wrap: wrap;
+}
+
+/* Name above the hours line, taking the space the name alone used to. */
+.settings__branch-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings__branch-hours {
+  font-size: 12px;
+  color: var(--avo-text-muted);
+}
+
+/* The hours editor — the close sheet's surface idiom without its warning tint:
+   setting hours is not a consequence to read before deciding. */
+.settings__branch-editor {
+  flex: 0 0 100%;
+  margin-top: 4px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-brand-tint);
+}
+
+.settings__branch-editor-text {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-brand-deeper);
+}
+
+.settings__branch-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  flex-wrap: wrap;
 }
 
 .settings__branch-dot {
@@ -8206,6 +8256,110 @@ a:hover {
  * the board is a six-column table and sets its own. So the frame constrains
  * nothing and each tab keeps the width its content wants.
  */
+/* ------------------------------------------------------------ services (M7)
+   Merchant → Services. Not in the design bundle; built on Shop's catalogue
+   classes (`.shop`, `.shop__row`, `.shop__price`, `.shop__confirm`) and only the
+   second line — who does it — is new. Wider than the catalogue because a row
+   carries two names (English, and the Arabic the wallet shows) beside the price. */
+.services {
+  max-width: 860px;
+}
+
+.services__note {
+  margin-bottom: 14px;
+}
+
+/* The hairline moves from the row to the item, because an item is two lines. */
+.services__item {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--avo-hairline-inner);
+}
+
+.services__item:last-child {
+  border-bottom: none;
+}
+
+.services__row {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+.services__name-ar {
+  font-family: var(--avo-font-arabic);
+}
+
+.services__name-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.services__name-ar-text {
+  font-family: var(--avo-font-arabic);
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--avo-text-muted);
+  text-align: start;
+}
+
+.services__price-text {
+  flex-shrink: 0;
+  font-family: var(--avo-font-display);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.services__staff-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.services__staff {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+}
+
+/* Edit, assign and roster-failure panels: the close sheet's surface without its
+   warning tint — the warning, where there is one, is in the words. */
+.services__panel {
+  margin-top: 10px;
+  padding: 13px 15px;
+  border-radius: 12px;
+  background: var(--avo-brand-tint);
+}
+
+.services__panel-text {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-brand-deeper);
+}
+
+.services__panel-text--warn {
+  margin: 10px 0 0;
+  color: var(--avo-warn-text);
+}
+
+.services__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.services__price-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--avo-warn-text);
+}
+
 .shop-section__tabs {
   display: inline-flex;
   margin-bottom: 18px;

@@ -66,6 +66,34 @@ export const NAV_ITEMS: NavItem[] = [
       </svg>
     ),
   },
+  /*
+   * THE ELEVENTH ITEM, AND THE FIRST THE DESIGN DOES NOT DRAW. Every other row
+   * here is transcribed from `AVO Merchant Dashboard.dc.html`, and several
+   * screens' headers argue against inventing a section on exactly that ground
+   * (`Shop.tsx`, `Tills.tsx`). This one is the client's own request — M7, "a
+   * Services tab where they can add the services, price it, then assign them" —
+   * and it does not fit inside an existing section: it spans two permissions
+   * (`loyalty` for the price, `team` for the staff), so neither Settings nor
+   * Team owns it. The icon follows the set's stroke idiom: a price tag.
+   */
+  {
+    id: 'services',
+    label: 'Services',
+    to: '/services',
+    built: true,
+    title: 'Services',
+    subtitle: 'What the salon offers, what it costs, and who does it',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+        <path
+          d="M10.6 2.8H16a1.2 1.2 0 0 1 1.2 1.2v5.4l-7.6 7.6a1.2 1.2 0 0 1-1.7 0L2.9 12a1.2 1.2 0 0 1 0-1.7z"
+          {...stroke}
+          strokeLinejoin="round"
+        />
+        <circle cx="13.6" cy="6.4" r="1.3" {...stroke} />
+      </svg>
+    ),
+  },
   {
     id: 'shop',
     label: 'Shop',

@@ -27,6 +27,7 @@ import { Marketing } from './routes/Marketing.js';
 import { NotBuiltYet } from './routes/NotBuiltYet.js';
 import { Overview } from './routes/Overview.js';
 import { Reports } from './routes/Reports.js';
+import { Services } from './routes/Services.js';
 import { Settings } from './routes/Settings.js';
 import { Shop } from './routes/Shop.js';
 import { SignIn } from './routes/SignIn.js';
@@ -150,6 +151,7 @@ const SECTIONS = [
   { path: '/overview', component: Overview },
   { path: '/appointments', component: Appointments },
   { path: '/team', component: Team },
+  { path: '/services', component: Services },
   { path: '/loyalty', component: Loyalty },
   { path: '/marketing', component: Marketing },
   { path: '/settings', component: Settings },

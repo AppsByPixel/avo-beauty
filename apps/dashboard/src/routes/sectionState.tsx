@@ -267,10 +267,19 @@ export interface WriteErrorProps {
   error: unknown;
   /** What did not happen: "Nothing was published." */
   reassurance: string;
+  /**
+   * A 404 THAT MEANS "IT MOVED UNDER YOU", by code, and what to say for it.
+   *
+   * A 404 is otherwise "Something went wrong on our side." — right for a path this
+   * client should never have built, wrong for `unknown_service` after a colleague
+   * retired the service a second ago. The caller names the codes it knows the
+   * meaning of; anything else keeps the generic sentence.
+   */
+  notFound?: Readonly<Record<string, string>>;
   children?: ReactNode;
 }
 
-export function WriteError({ error, reassurance }: WriteErrorProps) {
+export function WriteError({ error, reassurance, notFound }: WriteErrorProps) {
   if (isUnauthenticated(error)) return null;
 
   const forbidden = isForbidden(error);
@@ -294,12 +303,15 @@ export function WriteError({ error, reassurance }: WriteErrorProps) {
   const serverExplained =
     api !== null &&
     (api.status === 400 || api.status === 409 || forbidden || namedStateAnswer(api) !== null);
+  const moved = api !== null && api.status === 404 ? notFound?.[api.code] : undefined;
 
   return (
     <div className="section-write-error" role="alert">
       <span className="section-write-error__dot" aria-hidden="true" />
       <span className="section-write-error__text">
-        {serverExplained
+        {moved !== undefined
+          ? moved
+          : serverExplained
           ? api.message
           : api?.isConnectivity
             ? "We couldn't reach the workspace."
