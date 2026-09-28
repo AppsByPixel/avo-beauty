@@ -30,6 +30,7 @@ import { fils, formatMoney } from '@avo/types';
 import { db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
+import { salon } from '../db/schema/salon';
 import { ledgerEntry } from '../db/schema/ledger';
 import { chargeReversedPosting } from '../money/ledger';
 import { readTransactionRevenue } from '../money/revenue';
@@ -61,6 +62,7 @@ import { chargeScannerBudget } from '../services/scannerLimit';
 import { writeAudit } from '../services/audit';
 import type { StaffPrincipal } from '../auth/principal';
 import { nextTransactionId } from '../services/ids';
+import { parseDate, salonWallClock, wallClockInstant } from '../time/zone';
 
 /**
  * Lane D pins the low-balance case with `x-avo-scenario: lowbal`, which the mock
@@ -397,8 +399,33 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
   app.get('/charges', async (req, reply) => {
     const p = requireScannerPerm(req, 'charges');
 
-    const since = new Date();
-    since.setHours(0, 0, 0, 0);
+    /**
+     * "TODAY" IS THE SALON'S DAY, not the API process's.
+     *
+     * This was `new Date()` + `setHours(0, 0, 0, 0)`, which is midnight in
+     * whatever zone the process booted under. On Vercel that is UTC, so a Kuwait
+     * salon's "today" began at 03:00 Kuwait and staff closing up after midnight
+     * saw yesterday's charges until three in the morning. On a laptop in Karachi
+     * it began at 22:00 Kuwait, and trunk's gate lost charges made minutes
+     * earlier the first time it ran across local midnight.
+     *
+     * The boundary is `wallClockInstant(salonToday, 00:00, salon.timezone)` —
+     * the same two calls `services/metrics.ts` makes for its `dayStart`, and
+     * `src/time/zone.ts` is the one place either is defined. A DST zone is
+     * right by construction: the local date is read in the zone at `now`, and
+     * its midnight is resolved to an instant with the offset in force AT that
+     * midnight, so a 23- or 25-hour day starts where its own clock says. Not
+     * `now - 24h`, which is a different list — this afternoon's closing screen
+     * would show yesterday afternoon.
+     */
+    const [s] = await db
+      .select({ timezone: salon.timezone })
+      .from(salon)
+      .where(eq(salon.id, p.salonId))
+      .limit(1);
+    if (!s) throw notFound('unknown_salon', 'No such salon.');
+    const now = new Date();
+    const since = wallClockInstant(parseDate(salonWallClock(now, s.timezone).date), 0, s.timezone);
 
     /**
      * THE VOID IS A SEPARATE ROW, so the list has to go and look for it.
