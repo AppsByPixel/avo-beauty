@@ -9,6 +9,7 @@ import {
   moneyAriaLabel,
   parseKwdInput,
   percentOf,
+  percentOfFloor,
   subtract,
 } from './money.js';
 
@@ -135,5 +136,31 @@ describe('the charge arithmetic', () => {
     const due = fils(8000);
     const shortfall = subtract(due, balance);
     expect(formatFils(shortfall)).toBe('5.500');
+  });
+});
+
+describe('percentOfFloor — the booking policy split', () => {
+  it('rounds down to the fil, where percentOf rounds half up', () => {
+    expect(percentOfFloor(fils(5005), 50)).toBe(2502);
+    expect(percentOf(fils(5005), 50)).toBe(2503);
+  });
+
+  it('is exact at the ends', () => {
+    expect(percentOfFloor(fils(5005), 100)).toBe(5005);
+    expect(percentOfFloor(fils(5005), 0)).toBe(0);
+    expect(percentOfFloor(fils(0), 60)).toBe(0);
+  });
+
+  it('agrees with integer division for every percent on an awkward amount', () => {
+    for (let p = 0; p <= 100; p++) {
+      expect(percentOfFloor(fils(9999), p)).toBe(Number((9999n * BigInt(p)) / 100n));
+    }
+  });
+
+  it('refuses a fractional or out-of-range percent, and a negative amount', () => {
+    expect(() => percentOfFloor(fils(1000), 12.5)).toThrow(RangeError);
+    expect(() => percentOfFloor(fils(1000), 101)).toThrow(RangeError);
+    expect(() => percentOfFloor(fils(1000), -1)).toThrow(RangeError);
+    expect(() => percentOfFloor(fils(-1000), 50)).toThrow(RangeError);
   });
 });

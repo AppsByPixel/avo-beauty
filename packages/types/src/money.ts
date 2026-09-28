@@ -83,6 +83,26 @@ export function percentOf(amount: Fils, percent: number): Fils {
   return fils(Math.round((amount * percent) / 100));
 }
 
+/**
+ * A whole percent of an amount, ROUNDED DOWN to the fil. The booking policy's
+ * cancellation return uses this (DECISIONS, "Booking policy"): she gets the
+ * floor, the salon keeps the remainder fil. `percentOf` rounds half up and is
+ * the wrong tool for a split, because 50% of 5.005 would give her 2.503.
+ *
+ * Integer-only on purpose: `percent` must be a whole number 0..100 and the
+ * amount non-negative, so the product is an exact integer and the division is
+ * done without a float ever standing in for money.
+ */
+export function percentOfFloor(amount: Fils, percent: number): Fils {
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+    throw new RangeError(`percentOfFloor takes a whole percent 0..100, got ${percent}`);
+  }
+  if (amount < 0) throw new RangeError(`percentOfFloor takes a non-negative amount, got ${amount}`);
+  const product = amount * percent;
+  if (!Number.isSafeInteger(product)) throw new RangeError('percentOfFloor overflow');
+  return fils((product - (product % 100)) / 100);
+}
+
 // ------------------------------------------------------------- commission --
 // api-contract.md § Commission. Merchant-visible, customer-never.
 // Configurable per platform in Owner → Controls; these are the defaults.
