@@ -647,6 +647,12 @@ export const en: Copy = {
   branchEmptyBody: 'Try another branch, or choose All branches to see everyone.',
   artistsEmptyTitle: 'No artists to book with',
   artistsEmptyBody: "This salon hasn't added anyone to book with yet.",
+  // NEW COPY — services nobody is assigned to, and `409 artist_not_assigned`.
+  servicesEmptyTitle: 'No services to book yet',
+  servicesEmptyBody: "This salon hasn't opened any services for booking yet.",
+  artistNotAssignedTitle: 'That artist no longer does this service',
+  artistNotAssignedBody: 'Choose another artist. Your service is still selected.',
+  artistNotAssignedRescheduleBody: 'Your appointment has not changed. It is still at the time you booked.',
   morning: 'Morning', // design:1241
   evening: 'Evening', // design:1241
   review: 'Review', // design:1241

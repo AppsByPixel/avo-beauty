@@ -729,6 +729,12 @@ export const ar: Copy = {
   branchEmptyBody: 'جرّبي فرعاً آخر، أو اختاري كل الفروع لرؤية الجميع.',
   artistsEmptyTitle: 'لا مصففات متاحة للحجز',
   artistsEmptyBody: 'لم يُضِف هذا الصالون أي مصففة للحجز بعد.',
+  // نص جديد، مُدرج في AR_UNVERIFIED. `اختاري` أمر للمؤنث.
+  servicesEmptyTitle: 'لا خدمات متاحة للحجز بعد',
+  servicesEmptyBody: 'لم يفتح هذا الصالون أي خدمة للحجز بعد.',
+  artistNotAssignedTitle: 'لم تعد هذه المصففة تقدّم هذه الخدمة',
+  artistNotAssignedBody: 'اختاري مصففة أخرى. خدمتكِ ما زالت مختارة.',
+  artistNotAssignedRescheduleBody: 'لم يتغيّر موعدكِ. ما زال في الوقت الذي حجزتِه.',
   morning: 'صباحاً', // design:1348
   evening: 'مساءً', // design:1348
   review: 'المراجعة', // design:1348
@@ -1445,4 +1451,10 @@ export const AR_UNVERIFIED = [
   'pickupHours',
   'pickupClosedToday',
   'pickupClosedTomorrow',
+  /** Services nobody performs, and `409 artist_not_assigned`. No design source. */
+  'servicesEmptyTitle',
+  'servicesEmptyBody',
+  'artistNotAssignedTitle',
+  'artistNotAssignedBody',
+  'artistNotAssignedRescheduleBody',
 ] as const;

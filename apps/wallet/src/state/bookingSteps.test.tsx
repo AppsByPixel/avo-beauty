@@ -30,9 +30,10 @@
  *   4. the counter: every COMMITTED render's (index, total) is recorded; the
  *      total never changes and the first number shown is 1.
  *   5. an empty branch: the roster behind the chosen chip is known on the
- *      branch step, and Continue from it is refused. The service list is not
- *      narrowed, because the API has no artist-to-service relation to narrow by
- *      — pinned so an invented filter shows up as a failure here.
+ *      branch step, and Continue from it is refused. Since migration 0061 the
+ *      service list IS narrowed by `Service.artistIds`; every fixture here is
+ *      fully assigned (0062's backfill), so these specs pin that an existing
+ *      salon's flow is unchanged. The narrowing is `serviceAssignment.test.tsx`.
  *   6. back, in both salon shapes.
  *   7. reschedule still enters at `day`.
  *
@@ -94,9 +95,16 @@ const salonWith = (branches: Array<typeof KWC>): Salon =>
     modules: { booking: true },
   }) as unknown as Salon;
 
+/**
+ * FULLY ASSIGNED — every artist does every service, which is what migration
+ * 0062's backfill made true for every existing salon. Every spec in this file
+ * therefore pins that an existing salon's flow is UNCHANGED by 0061; the
+ * narrowing itself is driven in `serviceAssignment.test.tsx`.
+ */
+const EVERYONE = ['AR-1', 'AR-2', 'AR-3', 'AR-4'];
 const SERVICES = [
-  { id: 'SV-1', name: 'Cut & style', nameAr: null, priceFils: 12000 },
-  { id: 'SV-2', name: 'Balayage', nameAr: null, priceFils: 45000 },
+  { id: 'SV-1', name: 'Cut & style', nameAr: null, priceFils: 12000, artistIds: EVERYONE },
+  { id: 'SV-2', name: 'Balayage', nameAr: null, priceFils: 45000, artistIds: EVERYONE },
 ];
 
 const artist = (id: string): BookableArtist =>
@@ -462,12 +470,14 @@ describe('an empty branch is caught on the branch step', () => {
   });
 
   /**
-   * THE SERVICE LIST IS THE SALON'S, WHATEVER THE BRANCH. `BookableArtist`
-   * carries no services and the API books any active artist for any active
-   * service, so there is nothing to narrow by. If someone adds a client-side
-   * filter without the API field it needs, this goes red.
+   * THIS USED TO PIN THAT THE LIST WAS NOT NARROWED, because there was no
+   * artist-to-service relation to narrow by. Migration 0061 added one
+   * (`Service.artistIds`) and the flow now narrows by it — but 0062 assigned
+   * every artist to every service, so at an existing salon the answer is still
+   * EVERY SERVICE, whichever branch. That is the pin now: the new filter
+   * changes nothing until a merchant edits assignments.
    */
-  it('offers every service after a branch is chosen — there is no relation to narrow by', async () => {
+  it('an existing, fully-assigned salon still offers every service after a branch is chosen', async () => {
     const { result } = mount(salonWith([KWC, SAL]));
     await waitFor(() => expect(result.current.step).toBe('branch'));
     act(() => result.current.pickBranch({ kind: 'branch', branchId: KWC.id }));

@@ -1032,6 +1032,25 @@ export interface Copy {
   /** The salon has no bookable artists at all -- step 2 had no empty state. */
   artistsEmptyTitle: string;
   artistsEmptyBody: string;
+  /**
+   * NEW COPY. The service step with nothing on it: every service the salon
+   * offers has nobody assigned to perform it (`Service.artistIds`, migration
+   * 0061), so none can be booked. The service step had no empty state before,
+   * because every service was always bookable.
+   */
+  servicesEmptyTitle: string;
+  servicesEmptyBody: string;
+  /**
+   * NEW COPY. `409 artist_not_assigned` — the merchant took this artist off
+   * this service between her choosing and confirming. Rendered from the CODE,
+   * never the server's English `message`. A new booking is sent back to the
+   * staff step with her service still chosen (`artistNotAssignedBody`); a
+   * reschedule, whose artist is fixed, is told her appointment did not move
+   * (`artistNotAssignedRescheduleBody`).
+   */
+  artistNotAssignedTitle: string;
+  artistNotAssignedBody: string;
+  artistNotAssignedRescheduleBody: string;
 
   // book — the artist rows' availability badge, design:1491-1492
   availLive: string;
