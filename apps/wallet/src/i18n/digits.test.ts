@@ -258,6 +258,17 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   pickupHours: [[['10:00', '13:00'], ['16:30', '21:00']]],
   pickupClosedToday: ['16:30'],
   pickupClosedTomorrow: ['10:00'],
+
+  // --- the salon's booking policy (migration 0066). A cut-off is two COUNTS,
+  // hours and a percentage, so Eastern in Arabic with the Arabic percent sign;
+  // two digits each so a partial conversion shows. The money lines take ONE
+  // already-formatted amount and no count — see MONEY_ARG_KEYS.
+  policyCutoff: [24, 50, true],
+  cancelPreviewBack: [MONEY_SAMPLE],
+  cancelPreviewKept: [MONEY_SAMPLE],
+  settledBack: [MONEY_SAMPLE],
+  settledKept: [MONEY_SAMPLE],
+  bellPolicyTitle: ['Amara'],
 };
 
 /**
@@ -344,6 +355,17 @@ const MONEY_ARG_KEYS = new Set([
   */
   'cartPayWith',
   'cardOrderRefusedBody',
+  /*
+    The booking policy's money lines (migration 0066): what a cancel would
+    return and keep, and where a settled deposit went. One `formatMoney`
+    argument each and no other number — the percentage and the hours live in
+    `policyCutoff`, a separate string, precisely so that none of these mixes a
+    count with an amount.
+  */
+  'cancelPreviewBack',
+  'cancelPreviewKept',
+  'settledBack',
+  'settledKept',
 ]);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */

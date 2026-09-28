@@ -361,6 +361,17 @@ export function bellRow(item: BellItem, ctx: BellContext): BellRow {
       };
     }
 
+    case 'booking_policy':
+      return {
+        ...b,
+        kind: 'booking_policy',
+        title: copy.bellPolicyTitle(ctx.salon),
+        lines: [copy.bellPolicyLine],
+        // Terms, not money: no figure.
+        amount: null,
+        markable: true,
+        verbatim: false,
+      };
     case 'campaign':
       return {
         ...b,

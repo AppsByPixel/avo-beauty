@@ -46,6 +46,9 @@ vi.mock('../api/booking', () => ({
   rescheduleBooking,
   getBookings: vi.fn(),
   cancelBooking: vi.fn(),
+  // Migration 0066: the review step reads the salon's policy. None here — the
+  // legacy terms these specs were written against.
+  getBookingPolicy: () => Promise.resolve(null),
 }));
 vi.mock('../api/topups', () => ({ createTopUp: vi.fn(), getTopUp: vi.fn() }));
 vi.mock('../platform/gateway', () => ({ openGateway: vi.fn() }));
@@ -295,6 +298,8 @@ async function walkToConfirm() {
   fireEvent.click(screen.getByTestId('book-slot-16:00'));
   fireEvent.click(screen.getByTestId('book-next'));
   await waitFor(() => expect(screen.getByTestId('book-confirm')).toBeTruthy());
+  // Migration 0066: Confirm waits for the salon's policy read to land.
+  await waitFor(() => expect(screen.queryByTestId('book-policy-loading')).toBeNull());
   fireEvent.click(screen.getByTestId('book-confirm'));
 }
 
@@ -343,12 +348,14 @@ describe('4. `409 artist_not_assigned` is recoverable, from the code', () => {
     await waitFor(() => expect(screen.getByTestId('book-slot-16:00')).toBeTruthy());
     fireEvent.click(screen.getByTestId('book-slot-16:00'));
     fireEvent.click(screen.getByTestId('book-next'));
+    await screen.findByTestId('book-confirm');
+    await waitFor(() => expect(screen.queryByTestId('book-policy-loading')).toBeNull());
     fireEvent.click(await screen.findByTestId('book-confirm'));
     await waitFor(() => expect(createBooking).toHaveBeenCalledTimes(2));
 
     const [first, second] = createBooking.mock.calls;
-    expect(first![0]).toEqual({ artistId: 'AR-1', serviceId: 'SV-CUT', startsAt: SLOT.startsAt });
-    expect(second![0]).toEqual({ artistId: 'AR-2', serviceId: 'SV-CUT', startsAt: SLOT.startsAt });
+    expect(first![0]).toEqual({ artistId: 'AR-1', serviceId: 'SV-CUT', startsAt: SLOT.startsAt, policyVersion: null });
+    expect(second![0]).toEqual({ artistId: 'AR-2', serviceId: 'SV-CUT', startsAt: SLOT.startsAt, policyVersion: null });
     expect(second![1]).not.toBe(first![1]);
   });
 
@@ -370,6 +377,8 @@ describe('4. `409 artist_not_assigned` is recoverable, from the code', () => {
     await waitFor(() => expect(screen.getByTestId('book-slot-16:00')).toBeTruthy());
     fireEvent.click(screen.getByTestId('book-slot-16:00'));
     fireEvent.click(screen.getByTestId('book-next'));
+    await screen.findByTestId('book-confirm');
+    await waitFor(() => expect(screen.queryByTestId('book-policy-loading')).toBeNull());
     fireEvent.click(await screen.findByTestId('book-confirm'));
 
     const failure = await screen.findByTestId('book-confirm-failure');

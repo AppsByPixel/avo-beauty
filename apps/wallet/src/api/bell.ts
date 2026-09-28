@@ -52,6 +52,7 @@ export const BELL_KINDS = [
   'shop',
   'deposit_hold',
   'deposit_return',
+  'booking_policy',
   'campaign',
 ] as const;
 
@@ -125,6 +126,19 @@ const DepositReturnItem = Envelope.extend({
   startsAt: Instant.nullable(),
 });
 
+/**
+ * `booking_policy` (migration 0066) — the salon published a new booking policy.
+ * Bell only, never push, at most one a salon-day. It carries a pointer and no
+ * text: the wallet reads the salon's current policy when she opens it. It was an
+ * `unknown` row — drawn neutral, "update the app" — until this build knew it.
+ */
+const BookingPolicyItem = Envelope.extend({
+  kind: z.literal('booking_policy'),
+  salonId: z.string().min(1),
+  policyId: z.string().min(1),
+  policyVersion: z.number().int().positive(),
+});
+
 const CampaignItem = Envelope.extend({
   kind: z.literal('campaign'),
   campaignId: z.string().min(1),
@@ -140,6 +154,7 @@ const KnownItem = z.discriminatedUnion('kind', [
   ShopItem,
   DepositHoldItem,
   DepositReturnItem,
+  BookingPolicyItem,
   CampaignItem,
 ]);
 

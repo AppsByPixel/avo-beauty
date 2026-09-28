@@ -46,13 +46,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { BookableArtist, Salon } from '@avo/types';
+import type { BookableArtist, BookingPolicy, Salon } from '@avo/types';
 import { ApiError, newIdempotencyKey } from '../api/client';
 import {
   cancelBooking,
   createBooking,
   getArtists,
   getAvailability,
+  getBookingPolicy,
   getBookings,
   getServices,
   rescheduleBooking,
@@ -60,6 +61,7 @@ import {
   type AvailabilitySlotWire,
   type BookableService,
   type BookingView,
+  type CancelBookingResult,
 } from '../api/booking';
 import { dayStrip, salonDate, type StripDay } from '../domain/booking';
 import {
@@ -270,6 +272,28 @@ export interface BookingController {
   retryLoad: () => void;
   /** After a top-up lands, so the next Confirm is not answered from a stale 402. */
   clearShortfall: () => void;
+
+  /**
+   * THE SALON'S BOOKING POLICY ON THE CONFIRM STEP (migration 0066).
+   *
+   * `null` when no policy is shown at all: a reschedule (the booking keeps the
+   * policy it was stamped with, and nothing new is agreed to) or a salon that
+   * takes no deposit (the policy decides only what happens to a deposit).
+   * Otherwise the read, made each time she reaches the review step:
+   *
+   *   loading          Confirm is OFF. She cannot book under a policy she has
+   *                    not been shown.
+   *   failed           Confirm stays OFF, with a retry. Booking without
+   *                    `policyVersion` would let the server stamp whatever is
+   *                    current, which is booking her silently.
+   *   ready, null      the salon has none. Nothing new is drawn, and
+   *                    `policyVersion: null` is sent.
+   *   ready, policy    drawn above Confirm, and its version is sent.
+   */
+  policy: LoadState<BookingPolicy | null> | null;
+  /** True after 409 `policy_changed`: the policy on screen is the new one. */
+  policyChanged: boolean;
+  retryPolicy: () => void;
 }
 
 export function useBooking(options: {
@@ -324,6 +348,15 @@ export function useBooking(options: {
     { booking: BookingView; balanceAfterFils: number | null } | null
   >(null);
   const [reloadToken, setReloadToken] = useState(0);
+
+  /*
+    THE POLICY SHE IS SHOWN, and whether a 409 just replaced it. Only a NEW
+    booking at a salon that holds a deposit reads it; see `policy` above.
+  */
+  const policyApplies = !rescheduling && salon.depositFils > 0;
+  const [policy, setPolicy] = useState<LoadState<BookingPolicy | null>>({ status: 'loading' });
+  const [policyToken, setPolicyToken] = useState(0);
+  const [policyChanged, setPolicyChanged] = useState(false);
 
   /**
    * The selected filter, and the unfiltered roster's split.
@@ -640,7 +673,19 @@ export function useBooking(options: {
    * what stops the API answering a genuinely different booking with a 422 — it
    * treats the same key with a different body as a conflict, not a replay.
    */
-  const attemptKey = `${artistId ?? ''}|${serviceId ?? ''}|${selectedSlot?.startsAt ?? ''}`;
+  /*
+    THE POLICY VERSION IS PART OF THE ATTEMPT. The server hashes `policyVersion`
+    into the request, so the same key with the version a 409 `policy_changed`
+    replaced would be a different body under an old key. That refusal rolls back
+    before the key is stored, so reuse would in fact be harmless today — the key
+    re-mints anyway, because "the same key, a different body" is the 422 this
+    block exists to never send.
+  */
+  const shownVersion =
+    policyApplies && policy.status === 'ready' ? (policy.data?.version ?? null) : undefined;
+  const attemptKey = `${artistId ?? ''}|${serviceId ?? ''}|${selectedSlot?.startsAt ?? ''}|${
+    shownVersion === undefined ? '' : String(shownVersion)
+  }`;
   const keyRef = useRef<{ attempt: string; key: string } | null>(null);
   if (keyRef.current?.attempt !== attemptKey) {
     keyRef.current = { attempt: attemptKey, key: newIdempotencyKey() };
@@ -794,13 +839,40 @@ export function useBooking(options: {
     });
   }, [rescheduling, hasBranchStep]);
 
+  /*
+    READ ON EVERY ARRIVAL AT THE REVIEW STEP, and again after a 409. Never
+    cached across visits: the review step is where she agrees to it, and a
+    policy read three steps earlier is the stale version `policy_changed`
+    exists to refuse.
+  */
+  const onReview = step === 'review';
+  useEffect(() => {
+    if (!policyApplies || !onReview) return;
+    const controller = new AbortController();
+    setPolicy({ status: 'loading' });
+    getBookingPolicy(salon.id, controller.signal)
+      .then((data) => setPolicy({ status: 'ready', data }))
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setPolicy({ status: 'failed', failure: toFailure(err) });
+      });
+    return () => controller.abort();
+  }, [policyApplies, onReview, salon.id, policyToken]);
+  // Leaving the review step retires the 409 notice; it was about that visit.
+  if (!onReview && policyChanged) setPolicyChanged(false);
+
   const confirm = useCallback(() => {
     if (!artistId || !serviceId || !selectedSlot || submitting) return;
+    // Not before the policy is on screen. The button is off too; this is the
+    // half a double-tap or a stale render cannot get past.
+    if (!reschedule && policyApplies && shownVersion === undefined) return;
     const key = keyRef.current?.key ?? newIdempotencyKey();
 
     setSubmitting(true);
     setConfirmFailure(null);
     setShortfallFils(null);
+    // She has read the new one and confirmed; the notice has done its job.
+    setPolicyChanged(false);
 
     const run = async () => {
       try {
@@ -812,7 +884,12 @@ export function useBooking(options: {
           return;
         }
         const created = await createBooking(
-          { artistId, serviceId, startsAt: selectedSlot.startsAt },
+          {
+            artistId,
+            serviceId,
+            startsAt: selectedSlot.startsAt,
+            ...(shownVersion === undefined ? {} : { policyVersion: shownVersion }),
+          },
           key,
         );
         setResult({ booking: created.booking, balanceAfterFils: created.balanceAfterFils });
@@ -855,15 +932,29 @@ export function useBooking(options: {
           setReloadToken((t) => t + 1);
           return;
         }
+        /**
+         * `409 policy_changed` — THE SALON PUBLISHED WHILE SHE WAS READING.
+         * Nothing was held: the server refuses before the deposit moves. She
+         * stays on the review step, the new policy is read and drawn in place
+         * of the old one with a line saying it changed, and Confirm is off
+         * until it has landed. The next tap is a new attempt under the new
+         * version — never a silent re-send under a policy she did not see.
+         */
+        if (failure.code === 'policy_changed' && !reschedule) {
+          setPolicyChanged(true);
+          setPolicyToken((t) => t + 1);
+          return;
+        }
         setConfirmFailure(failure);
       } finally {
         setSubmitting(false);
       }
     };
     void run();
-  }, [artistId, serviceId, selectedSlot, submitting, reschedule, onBooked]);
+  }, [artistId, serviceId, selectedSlot, submitting, reschedule, onBooked, policyApplies, shownVersion]);
 
   const retryLoad = useCallback(() => setReloadToken((t) => t + 1), []);
+  const retryPolicy = useCallback(() => setPolicyToken((t) => t + 1), []);
   const clearShortfall = useCallback(() => setShortfallFils(null), []);
 
   /**
@@ -940,6 +1031,9 @@ export function useBooking(options: {
     confirm,
     retryLoad,
     clearShortfall,
+    policy: policyApplies ? policy : null,
+    policyChanged,
+    retryPolicy,
   };
 }
 
@@ -953,8 +1047,11 @@ export interface UpcomingState {
   actionFailure: LoadFailure | null;
   busy: boolean;
   reload: () => void;
-  /** Cancel. Returns the refunded amount so the toast can name it. */
-  cancel: (id: string) => Promise<number | null>;
+  /**
+   * Cancel. Returns the SERVER's answer — what came back and what the salon
+   * kept — or null when it was refused (the refusal is `actionFailure`).
+   */
+  cancel: (id: string) => Promise<CancelBookingResult | null>;
   clearActionFailure: () => void;
 }
 
@@ -1017,19 +1114,33 @@ export function useUpcoming(options: {
 
   const reload = useCallback(() => setToken((t) => t + 1), []);
 
+  /*
+    ONE IDEMPOTENCY KEY PER BOOKING'S CANCEL, kept for the life of the card. A
+    cancel whose response was lost is retried under the same key and the server
+    replays its first answer instead of settling twice; a refusal rolls back
+    before the key is stored, so re-using it after one costs nothing. The API
+    requires the key on a policy booking and honours it on a legacy one.
+  */
+  const cancelKeys = useRef(new Map<string, string>());
+
   const cancel = useCallback(
-    async (id: string): Promise<number | null> => {
+    async (id: string): Promise<CancelBookingResult | null> => {
       setBusy(true);
       setActionFailure(null);
+      let key = cancelKeys.current.get(id);
+      if (key === undefined) {
+        key = newIdempotencyKey();
+        cancelKeys.current.set(id, key);
+      }
       try {
-        const outcome = await cancelBooking(id);
+        const outcome = await cancelBooking(id, key);
         setBookings((prev) => prev.filter((b) => b.id !== id));
         // The balance changed, so Home has to re-read it. Non-negotiable #2:
         // the new balance is the server's answer, never the old one plus the
         // refund — `balanceAfterFils` is in the response and is still not added
         // to anything here.
         onChanged();
-        return outcome.refundedFils;
+        return outcome;
       } catch (err) {
         /**
          * `409 change_window_closed` arrives here and is SURFACED, not

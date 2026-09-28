@@ -50,6 +50,9 @@ vi.mock('../api/booking', () => ({
   rescheduleBooking: vi.fn(),
   getBookings: vi.fn(),
   cancelBooking: vi.fn(),
+  // Migration 0066: the review step reads the salon's policy. None here — the
+  // legacy terms these specs were written against.
+  getBookingPolicy: () => Promise.resolve(null),
 }));
 vi.mock('../api/topups', () => ({ createTopUp: vi.fn(), getTopUp: vi.fn() }));
 vi.mock('../platform/gateway', () => ({ openGateway: vi.fn() }));

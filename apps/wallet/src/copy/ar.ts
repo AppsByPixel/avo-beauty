@@ -130,6 +130,21 @@ const tierTo = (tier: TierName) => `لل${TIER_NAME[tier]}`;
 const visitsNoun = (n: number) => (n >= 3 && n <= 10 ? 'زيارات' : 'زيارة');
 
 /**
+ * "N hours" for a booking policy's cut-off, after قبل. The counted noun agrees
+ * with the number: one and two are the noun alone (قبل ساعة, قبل ساعتين — the
+ * design's own "حتى ساعة قبل الموعد" is the first), three to ten take the
+ * plural, and eleven upward the singular, as design:1352 writes "٢٤ ساعة".
+ * The hundreds repeat the pattern on their last two digits. UNVERIFIED past
+ * the design's two cases — `AR_UNVERIFIED` lists `policyCutoff`.
+ */
+function hoursAr(n: number): string {
+  if (n === 1) return 'ساعة';
+  if (n === 2) return 'ساعتين';
+  const tail = n % 100;
+  return tail >= 3 && tail <= 10 ? `${ea(n)} ساعات` : `${ea(n)} ساعة`;
+}
+
+/**
  * The adjective form, for design:1282 `'مستواكِ الفضي يضيف ١٠٪ …'` — مستوى is
  * masculine, so the tier agrees as a masculine adjective rather than appearing
  * as the feminine noun above.
@@ -861,6 +876,34 @@ export const ar: Copy = {
   noUpcomingBody: en.noUpcomingBody, // AR GAP
   noUpcomingAction: 'احجزي', // design:1340 — the nav label, the same word.
 
+  // ═══════════════════════ the salon's own booking policy (migration 0066) ══
+  // NEW COPY, written here — no design source in either language. Feminine
+  // address throughout; counts and percentages Eastern, money Western (it
+  // arrives already formatted). Every key is in `AR_UNVERIFIED`.
+  policyTitle: 'سياسة الحجز',
+  policyNoShowKeep: 'إذا لم تحضري: يحتفظ الصالون بعربونكِ.',
+  policyNoShowReturn: 'إذا لم تحضري: يعود عربونكِ إلى محفظتكِ.',
+  policyCutoff: (hoursBefore, returnPercent, first) =>
+    `${first ? 'الإلغاء ' : ''}قبل ${hoursAr(hoursBefore)}: ${
+      returnPercent === 0 ? 'لا يُعاد شيء' : `يُعاد ${ea(returnPercent)}${PC}`
+    }`,
+  policyCutoffLater: 'بعد ذلك: لا يُعاد شيء',
+  policyCancelNothing: 'إذا ألغيتِ: يحتفظ الصالون بعربونكِ.',
+  policyLoadFailed: 'تعذّر تحميل سياسة الحجز لدى الصالون.',
+  policyChanged: 'حدّث الصالون سياسة الحجز للتو. اقرئيها قبل أن تؤكدي الحجز.',
+  policyNone: 'لم ينشر هذا الصالون سياسة حجز.',
+  reschedNotePolicy: 'يمكنكِ تغيير الموعد حتى ساعة قبله.',
+  cancelPreviewTitle: 'إلغاء هذا الموعد؟',
+  cancelPreviewBack: (amount) => `إذا ألغيتِ الآن، يعود ${amount} إلى محفظتكِ.`,
+  cancelPreviewNothing: 'إذا ألغيتِ الآن، لن يعود شيء إلى محفظتكِ.',
+  cancelPreviewKept: (amount) => `يحتفظ الصالون بـ ${amount}.`,
+  cancelConfirm: 'إلغاء الموعد',
+  cancelKeep: 'إبقاء الموعد',
+  settledBack: (amount) => `عاد ${amount} إلى محفظتكِ`,
+  settledKept: (amount) => `احتفظ الصالون بـ ${amount}`,
+  cancelStartedTitle: 'بدأ هذا الموعد',
+  cancelStartedBody: 'لم يعد بالإمكان إلغاؤه.',
+
   // ══════════════════════════════════════════════════════════════ account ══
   // design:1289-1338. The design's Arabic block covers the whole Account screen,
   // so this section adds not a single new AR GAP — every string below was
@@ -1056,6 +1099,9 @@ export const ar: Copy = {
   bellCardOrderBonus: (bonus) => `أُضيفت مكافأة ${bonus} إلى محفظتكِ`,
   bellUnknownTitle: 'إشعار جديد',
   bellUnknownBody: 'حدّثي التطبيق لقراءة هذا الإشعار.',
+  // NEW COPY — `booking_policy`, migration 0066. In `AR_UNVERIFIED`.
+  bellPolicyTitle: (salon) => `حدّث ${salon} سياسة الحجز`,
+  bellPolicyLine: 'اضغطي لقراءتها.',
 
   // ───────────────────────────── the shop, paid by card — client ask W2 ──
   // WRITTEN ARABIC, FEMININE ADDRESS, NO DESIGN SOURCE — all in AR_UNVERIFIED.
@@ -1483,4 +1529,34 @@ export const AR_UNVERIFIED = [
   'artistNotAssignedTitle',
   'artistNotAssignedBody',
   'artistNotAssignedRescheduleBody',
+  /**
+   * THE SALON'S BOOKING POLICY (migration 0066). No design source in either
+   * language; the policy's own words come from the API and are not here. Read
+   * first: `policyCutoff` (the hours agreement, `hoursAr`), `cancelPreviewKept`
+   * and `settledKept` (the sentences that tell her money stayed with the salon),
+   * and `bellPolicyTitle`, whose verb agrees with الصالون rather than with a
+   * salon name that may read as feminine.
+   */
+  'policyTitle',
+  'policyNoShowKeep',
+  'policyNoShowReturn',
+  'policyCutoff',
+  'policyCutoffLater',
+  'policyCancelNothing',
+  'policyLoadFailed',
+  'policyChanged',
+  'policyNone',
+  'reschedNotePolicy',
+  'cancelPreviewTitle',
+  'cancelPreviewBack',
+  'cancelPreviewNothing',
+  'cancelPreviewKept',
+  'cancelConfirm',
+  'cancelKeep',
+  'settledBack',
+  'settledKept',
+  'cancelStartedTitle',
+  'cancelStartedBody',
+  'bellPolicyTitle',
+  'bellPolicyLine',
 ] as const;

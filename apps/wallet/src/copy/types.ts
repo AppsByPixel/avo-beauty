@@ -1206,6 +1206,73 @@ export interface Copy {
   noUpcomingBody: string;
   noUpcomingAction: string;
 
+  // ═══════════════════════ the salon's own booking policy (migration 0066) ══
+  /**
+   * DECISIONS.md § "The fourth list, 2026-09-29": the salon writes its own
+   * policy, she reads it before she confirms a booking that takes a deposit, and
+   * the booking carries the version it was made under.
+   *
+   * NONE OF THIS IS LEGAL COPY, and none of it is the policy (non-negotiable
+   * #10). The policy's own words come from the API (`policy.text`) and are
+   * rendered verbatim. These keys are only the FRAME around it and a plain
+   * summary of its RULES, which are data (`noShow`, `cancellation`).
+   *
+   * NEW COPY in both languages — the design bundle predates the ruling. The
+   * Arabic is written with feminine address and is in `AR_UNVERIFIED`.
+   *
+   * Money never enters a rule-summary string, and a count never enters a money
+   * string: in Arabic the first is Eastern and the second Western, and
+   * `digits.test.ts` refuses a string that mixes the two.
+   */
+  policyTitle: string;
+  /** `noShow: 'keep'`. */
+  policyNoShowKeep: string;
+  /** `noShow: 'return'`. */
+  policyNoShowReturn: string;
+  /**
+   * One cut-off: "Cancel 24 hours before: 100% back". `first` carries the verb,
+   * so the rules join into one line with " · ": "Cancel 24 hours before: 100%
+   * back · 2 hours before: 50% back · later: nothing back". A 0% rule says
+   * "nothing back" rather than "0% back".
+   */
+  policyCutoff(hoursBefore: number, returnPercent: number, first: boolean): string;
+  /** The tail after the last cut-off: later than all of them returns nothing. */
+  policyCutoffLater: string;
+  /** A policy with no cut-offs at all: a cancel by her never returns anything. */
+  policyCancelNothing: string;
+  /** The confirm step could not read the salon's policy. Confirm stays off. */
+  policyLoadFailed: string;
+  /** 409 `policy_changed`: the new policy is on screen, and she confirms again. */
+  policyChanged: string;
+  /** The bell opened a policy and the salon has none. `GET` answered `null`. */
+  policyNone: string;
+  /**
+   * `reschedNote` for a booking made under a policy. Its design sentence —
+   * "Free until an hour before. After that the deposit stays with the salon." —
+   * is the legacy rule, and on a policy booking it is false about a cancel. The
+   * reschedule window (one hour) is unchanged, so that is all this says; the
+   * cancel terms are the policy block beside it.
+   */
+  reschedNotePolicy: string;
+
+  /**
+   * Before she cancels a policy booking: what comes back AT THIS MOMENT under the
+   * stamped rule. A preview for display only — the server's answer is what the
+   * cancelled card shows afterwards (non-negotiable #2).
+   */
+  cancelPreviewTitle: string;
+  cancelPreviewBack(amount: string): string;
+  cancelPreviewNothing: string;
+  cancelPreviewKept(amount: string): string;
+  cancelConfirm: string;
+  cancelKeep: string;
+  /** Where a settled deposit went — `booking.settlement`, or the cancel result. */
+  settledBack(amount: string): string;
+  settledKept(amount: string): string;
+  /** 409 `appointment_started` — a policy booking's cancel after `startsAt`. */
+  cancelStartedTitle: string;
+  cancelStartedBody: string;
+
   // ══════════════════════════════════════════════════════════════ account ══
 
   // account — shell and section headings
@@ -1538,6 +1605,12 @@ export interface Copy {
   /** A kind this build does not know. Drawn neutral, never crashed on. */
   bellUnknownTitle: string;
   bellUnknownBody: string;
+  /**
+   * `booking_policy` — the salon published a new booking policy (bell only, no
+   * push, one a day). The row opens the salon's current policy. NEW COPY.
+   */
+  bellPolicyTitle(salon: string): string;
+  bellPolicyLine: string;
 
   // ───────────────────────────── the shop, paid by card — client ask W2 ──
   /**
