@@ -2,8 +2,10 @@ import { useEffect, useId, useRef, useState } from 'react';
 import {
   fils,
   formatFils,
+  hhmmToMinutes,
   socialUrl,
   visibleSocialLinks,
+  type Branch,
   type Salon,
   type SocialLink,
 } from '@avo/types';
@@ -24,12 +26,22 @@ import {
   useAddBranch,
   useBranchClosurePreview,
   useCloseBranch,
+  useSetBranchHours,
   useUpdateSalon,
   useUpdateSocialLink,
   type BranchClosure,
   type SocialLinkPatch,
 } from '../api/settings.js';
 import { useSession } from '../auth/AuthProvider.js';
+import {
+  END_OF_DAY,
+  describeHours,
+  isWindow,
+  minutesToClock,
+  noEvening,
+  type BusinessHours,
+  type Span,
+} from './businessHours.js';
 import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
 import { Tills } from './Tills.js';
@@ -1142,7 +1154,7 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
 
 /* ----------------------------------------------------------- business hours */
 
-function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
+export function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
   const hours = salon?.businessHours;
   return (
     <Card className="settings__card">
@@ -1151,19 +1163,16 @@ function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
         <Skeleton width="70%" height={16} />
       ) : (
         <>
-          <div className="settings__hours-row">
-            <span className="settings__hours-label">Morning</span>
-            <span className="settings__hours-value">
-              {hours.morning[0]} &ndash; {hours.morning[1]}
-            </span>
-          </div>
-          <div className="settings__hours-row settings__hours-row--divided">
-            <span className="settings__hours-label">Evening</span>
-            <span className="settings__hours-value">
-              {hours.evening[0]} &ndash; {hours.evening[1]}
-            </span>
-          </div>
-          <div className="settings__note">Afternoon closure — typical of Kuwait retail.</div>
+          <HoursRows hours={hours} />
+          {/*
+            THE DESIGN'S SENTENCE, VERBATIM — AND ONLY WHERE IT IS TRUE. It
+            describes the gap between two sittings. A salon open straight through
+            (`evening` zero-length, the established spelling) has no afternoon
+            closure, and telling her it does is the phantom evening in words.
+          */}
+          {isWindow(hours.morning) && isWindow(hours.evening) ? (
+            <div className="settings__note">Afternoon closure — typical of Kuwait retail.</div>
+          ) : null}
           {/*
             The zone is not decoration. `businessHours` is naive wall clock; the
             same "10:00" resolves to a different instant per zone, and it is what
@@ -1176,6 +1185,41 @@ function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
         </>
       )}
     </Card>
+  );
+}
+
+/**
+ * THE TWO SESSIONS, RENDERED THE WAY THE SERVER TRADES THEM. A branch's row line
+ * reads through `describeHours` from the same module, so the rule cannot hold for
+ * the salon and drift for a branch.
+ *
+ * A zero-length span (`to <= from`) is "no session", never "21:00 – 21:00".
+ * `routes/businessHours.ts § isWindow` carries the argument. EXPORTED for
+ * `settingsBranchHours.test.tsx`.
+ */
+export function HoursRows({ hours }: { hours: BusinessHours }) {
+  const row = (span: Span, empty: string) => (
+    <span className="settings__hours-value">
+      {isWindow(span) ? (
+        <>
+          {span[0]} &ndash; {span[1]}
+        </>
+      ) : (
+        <span className="settings__hours-none">{empty}</span>
+      )}
+    </span>
+  );
+  return (
+    <>
+      <div className="settings__hours-row">
+        <span className="settings__hours-label">Morning</span>
+        {row(hours.morning, 'No morning session')}
+      </div>
+      <div className="settings__hours-row settings__hours-row--divided">
+        <span className="settings__hours-label">Evening</span>
+        {row(hours.evening, 'No evening session')}
+      </div>
+    </>
   );
 }
 
@@ -1239,6 +1283,8 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
   const closeBranch = useCloseBranch();
   const [newName, setNewName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** The one branch whose hours editor is open, if any. One at a time, like the close sheet. */
+  const [editingHours, setEditingHours] = useState<string | null>(null);
   /*
    * THE BRANCH NAME IS KEPT BESIDE THE RECEIPT, because the degraded receipt
    * needs one and the body that failed to parse is exactly the body that cannot
@@ -1276,8 +1322,29 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
             return (
               <li key={branch.id} className="settings__branch">
                 <span className="settings__branch-dot" aria-hidden="true" />
-                <span className="settings__branch-name">{branch.name}</span>
+                <span className="settings__branch-main">
+                  <span className="settings__branch-name">{branch.name}</span>
+                  {/*
+                    WHERE THIS BRANCH'S HOURS COME FROM, from `businessHoursSource`
+                    — the server resolves it, so this reads the answer rather than
+                    comparing the branch's hours with the salon's (two identical
+                    sets can still be an override she chose to pin).
+                  */}
+                  <span className="settings__branch-hours">
+                    {branch.businessHoursSource === 'salon'
+                      ? 'Using the salon\u2019s hours'
+                      : `Own hours · ${describeHours(branch.businessHours)}`}
+                  </span>
+                </span>
                 <span className="settings__branch-id">{branch.id}</span>
+                <Button
+                  variant="quiet"
+                  aria-label={`Set the hours for ${branch.name}`}
+                  aria-expanded={editingHours === branch.id}
+                  onClick={() => setEditingHours(editingHours === branch.id ? null : branch.id)}
+                >
+                  Hours
+                </Button>
                 {/*
                   The ✕ pattern from Accounts: a control that cannot succeed says
                   why BEFORE it is pressed. The server refuses the last open
@@ -1301,6 +1368,9 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
                 >
                   <span aria-hidden="true">✕</span>
                 </button>
+                {editingHours === branch.id ? (
+                  <BranchHoursEditor branch={branch} onClose={() => setEditingHours(null)} />
+                ) : null}
               </li>
             );
           })}
@@ -1381,8 +1451,9 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
 
                   1. THE CLOSE IS ONE-WAY FROM EVERY SURFACE. There is no reopen
                      endpoint — `grep -rn reopen api/src` finds nothing, and
-                     `PATCH /salons/{id}/branches/{bid}` accepts `name` and
-                     `nameAr` and answers `not_editable` to anything else. So a
+                     `PATCH /salons/{id}/branches/{bid}` accepts `name`,
+                     `nameAr` and `businessHours` (0063) and answers
+                     `not_editable` to anything else — `closedAt` included. So a
                      close decided on unknown impact cannot be undone by the
                      person who decided it.
 
@@ -1693,6 +1764,197 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
         <WriteError error={closeBranch.error} reassurance="That branch is still open." />
       ) : null}
     </Card>
+  );
+}
+
+/* ------------------------------------------------------ a branch's own hours */
+
+/**
+ * ==========================================================================
+ * Settings → Branches → Hours. W8, the merchant half.
+ * ==========================================================================
+ * A branch can keep its OWN hours or use the salon's — `PATCH
+ * /salons/{id}/branches/{bid}` with `{ businessHours }` or `{ businessHours:
+ * null }`, `perms.loyalty`, the gate this whole panel is already behind. What
+ * customers do with them today: the wallet's pickup sheet says when to collect a
+ * shop order at this counter.
+ *
+ * THE CONTROLS ARE THE TEAM HOURS EDITOR'S, NOT A SECOND VOCABULARY. There is no
+ * salon-hours EDITOR on this screen to reuse — `BusinessHoursPanel` above only
+ * displays the salon's hours (`SalonPatch` admits `businessHours`, and nothing
+ * in the dashboard writes it). So this borrows the one hours editor the
+ * dashboard has, Team's: the `Stepper` per From/To in 30-minute steps, with the
+ * same keyboard contract. The read-back — the row's "Own hours · …" line and the
+ * salon's `HoursRows` — goes through `routes/businessHours.ts`, so the salon's
+ * hours and a branch's obey one display rule.
+ *
+ * TWO SITTINGS, AND THE SECOND IS OPTIONAL. The Kuwaiti afternoon closure is the
+ * norm, so the editor opens on two windows; switching "Evening session" off
+ * writes the ESTABLISHED spelling of "no second sitting" — a zero-length evening
+ * at the morning's close (`businessHours.ts § noEvening`) — because
+ * `BusinessHoursSchema` has no other way to say it and `tradingSpans` already
+ * drops such a span. A branch open straight through is therefore expressible,
+ * and reads back as "No evening session" rather than a phantom "21:00 – 21:00".
+ *
+ * "USE THE SALON'S HOURS" SENDS `null`, and is offered only while the branch
+ * has its own. The response carries the salon's hours back with `source:
+ * 'salon'`, so the row then says "Using the salon's hours" from the server's
+ * answer, not from this editor's assumption.
+ *
+ * NO OPTIMISTIC WRITE. The row changes when the PATCH answers, from the parsed
+ * body (`api/settings.ts § useSetBranchHours`).
+ */
+const HOURS_STEP = 30;
+
+export function BranchHoursEditor({ branch, onClose }: { branch: Branch; onClose: () => void }) {
+  const save = useSetBranchHours();
+  const current = branch.businessHours;
+  const own = branch.businessHoursSource === 'branch';
+
+  const [morning, setMorning] = useState<[number, number]>(() =>
+    isWindow(current.morning)
+      ? [hhmmToMinutes(current.morning[0]), hhmmToMinutes(current.morning[1])]
+      : [10 * 60, 13 * 60],
+  );
+  const [eveningOn, setEveningOn] = useState(() => isWindow(current.evening));
+  const [evening, setEvening] = useState<[number, number]>(() =>
+    isWindow(current.evening)
+      ? [hhmmToMinutes(current.evening[0]), hhmmToMinutes(current.evening[1])]
+      : [16 * 60, 21 * 60],
+  );
+
+  const morningSpan: Span = [minutesToClock(morning[0]), minutesToClock(morning[1])];
+  const next: BusinessHours = {
+    morning: morningSpan,
+    evening: eveningOn
+      ? [minutesToClock(evening[0]), minutesToClock(evening[1])]
+      : noEvening(morningSpan),
+  };
+  /*
+   * ON THE SALON'S HOURS, SAVING IS ALWAYS A CHANGE — it pins these hours to the
+   * branch, even if they match the salon's today, so the salon's next edit no
+   * longer moves this branch. With its own hours, only a real difference saves.
+   */
+  const changed = !own || JSON.stringify(next) !== JSON.stringify(current);
+
+  const stepper = (
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    onChange: (v: number) => void,
+  ) => (
+    <Stepper
+      size="sm"
+      label={label}
+      value={value}
+      min={min}
+      max={max}
+      step={HOURS_STEP}
+      format={(v) => minutesToClock(v)}
+      valueText={minutesToClock(value)}
+      disabled={save.isPending}
+      onChange={onChange}
+    />
+  );
+
+  return (
+    <div className="settings__branch-editor" role="group" aria-label={`Hours for ${branch.name}`}>
+      <p className="settings__branch-editor-text">
+        {own ? (
+          <>
+            <b>{branch.name}</b> keeps its own hours.
+          </>
+        ) : (
+          <>
+            <b>{branch.name}</b> is using the salon&rsquo;s hours. Set its own here — the salon&rsquo;s
+            hours stay as they are for every other branch.
+          </>
+        )}{' '}
+        Customers see these hours when they collect a shop order here.
+      </p>
+
+      <div className="settings__branch-editor-row">
+        <span className="settings__hours-label">Morning</span>
+        {stepper(`${branch.name} morning opens at`, morning[0], 0, morning[1] - HOURS_STEP, (v) =>
+          setMorning([v, morning[1]]),
+        )}
+        <span className="hours-row__arrow" aria-hidden="true">
+          &rarr;
+        </span>
+        {stepper(
+          `${branch.name} morning closes at`,
+          morning[1],
+          morning[0] + HOURS_STEP,
+          END_OF_DAY,
+          (v) => setMorning([morning[0], v]),
+        )}
+      </div>
+
+      <div className="settings__branch-editor-row">
+        <Toggle
+          label="Evening session"
+          checked={eveningOn}
+          disabled={save.isPending}
+          onChange={setEveningOn}
+        />
+        {eveningOn ? (
+          <>
+            {stepper(
+              `${branch.name} evening opens at`,
+              evening[0],
+              0,
+              evening[1] - HOURS_STEP,
+              (v) => setEvening([v, evening[1]]),
+            )}
+            <span className="hours-row__arrow" aria-hidden="true">
+              &rarr;
+            </span>
+            {stepper(
+              `${branch.name} evening closes at`,
+              evening[1],
+              evening[0] + HOURS_STEP,
+              END_OF_DAY,
+              (v) => setEvening([evening[0], v]),
+            )}
+          </>
+        ) : (
+          <span className="settings__hours-none">Open straight through — no second sitting.</span>
+        )}
+      </div>
+
+      <div className="settings__confirm-actions">
+        <Button
+          disabled={save.isPending || !changed}
+          onClick={() =>
+            save.mutate({ branchId: branch.id, businessHours: next }, { onSuccess: onClose })
+          }
+        >
+          {save.isPending && save.variables?.businessHours !== null ? 'Saving…' : 'Save hours'}
+        </Button>
+        {own ? (
+          <Button
+            variant="secondary"
+            disabled={save.isPending}
+            onClick={() =>
+              save.mutate({ branchId: branch.id, businessHours: null }, { onSuccess: onClose })
+            }
+          >
+            Use the salon&rsquo;s hours
+          </Button>
+        ) : null}
+        <Button variant="quiet" disabled={save.isPending} onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+
+      {save.isError ? (
+        <WriteError
+          error={save.error}
+          reassurance={`${branch.name}\u2019s hours are unchanged.`}
+        />
+      ) : null}
+    </div>
   );
 }
 

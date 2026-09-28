@@ -285,6 +285,12 @@ const SECTION_SCREENS = [
    */
   'ShopOrders.tsx',
   /**
+   * Merchant → Services (M7). Owns the services read and, for a `perms.team`
+   * reader, the roster read; both render their own `SectionError`, and the list
+   * skeletons in the loaded row's shape.
+   */
+  'Services.tsx',
+  /**
    * The console's Accounts list and the platform feed. Both own their own read
    * (`GET /v1/platform/accounts`, `GET /v1/platform/activity`) behind their own
    * section gate, so both answer for their own four states.

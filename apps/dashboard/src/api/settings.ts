@@ -502,6 +502,62 @@ export function useAddBranch(): UseMutationResult<Branch | null, unknown, { name
 }
 
 /**
+ * `PATCH /salons/{id}/branches/{bid}` with `{ businessHours }` — `perms.loyalty`,
+ * the gate the rest of the branch routes and the salon's own hours already carry.
+ *
+ * A BRANCH'S OWN HOURS, OR `null` TO GO BACK TO THE SALON'S (migration 0063).
+ * The branch always SERVES hours — its override, else the salon's — and
+ * `businessHoursSource` says which, so a cleared override comes back in the same
+ * response as the salon's hours with `source: 'salon'`, not as a null this
+ * client would have to resolve itself.
+ *
+ * THE SERVER VALIDATES WITH THE SALON'S OWN PARSER (`parseBusinessHours`), so
+ * this client does not restate the clock rules. What it does get right on its
+ * side is the "no second sitting" spelling: a span with `to <= from` is not a
+ * window, and `Settings.tsx § BranchHoursEditor` writes a closed evening that
+ * way rather than inventing a key the schema does not have.
+ *
+ * PARSED WITH `BranchSchema` BARE, AND `safeParse`, FOR `useAddBranch`'S REASON.
+ * The 200 is a commit; an unreadable one must not render as "Those hours were
+ * not saved." over hours that were. A readable branch is written into the
+ * cached salon's `branches` in place — the list the whole shell reads — and an
+ * unreadable one invalidates the salon so the truth comes from a fresh read.
+ */
+export function useSetBranchHours(): UseMutationResult<
+  Branch | null,
+  unknown,
+  { branchId: string; businessHours: Branch['businessHours'] | null }
+> {
+  const salonId = useSalonId();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ branchId, businessHours }) => {
+      const parsed = BranchSchema.safeParse(
+        await authedRequest<unknown>('merchant', `/salons/${salonId}/branches/${branchId}`, {
+          method: 'PATCH',
+          body: { businessHours },
+        }),
+      );
+      if (!parsed.success) {
+        void queryClient.invalidateQueries({ queryKey: salonKeys.detail(salonId) });
+        return null;
+      }
+      const branch = parsed.data;
+      queryClient.setQueryData<Salon>(salonKeys.detail(salonId), (current) =>
+        current
+          ? {
+              ...current,
+              branches: current.branches.map((b) => (b.id === branch.id ? branch : b)),
+            }
+          : current,
+      );
+      return branch;
+    },
+  });
+}
+
+/**
  * `DELETE /salons/{id}/branches/{bid}` — `perms.loyalty`. A CLOSE, not a delete.
  *
  * The row survives with `closedAt` set, because `booking.branch_id` and

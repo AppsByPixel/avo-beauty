@@ -77,7 +77,7 @@ export function useProducts(): UseQueryResult<Paginated<Product>> {
  * KD suffix, so a merchant types KWD and the wire takes integer fils. That
  * conversion happens HERE, once, through `parseKwdInput` from `@avo/types` —
  * never a local `Number(x) * 1000`, which is the float this non-negotiable
- * exists to keep away from money (`8.7 * 1000` is `8699.999999999999`).
+ * exists to keep away from money (`1.005 * 1000` is `1004.9999999999999`).
  *
  * `parseKwdInput` THROWS, deliberately, and this wrapper turns the throw into a
  * value the row can render. A price cell needs three answers, not two: valid,
