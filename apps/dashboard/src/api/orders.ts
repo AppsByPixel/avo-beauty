@@ -1,12 +1,23 @@
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
   type UseMutationResult,
   type UseQueryResult,
 } from '@tanstack/react-query';
-import { ShopOrderSchema, type OrderStatus, type ShopOrder } from '@avo/types';
+import {
+  OrderBoardSchema,
+  ShopOrderSchema,
+  type MerchantShopOrder,
+  type OrderBoard,
+  type OrderStatus,
+  type ShopOrder,
+} from '@avo/types';
 import { ApiError } from './client.js';
+import { memberQuery } from './bookings.js';
 import { authedRequest } from '../auth/authedRequest.js';
 import { useSalonId } from '../auth/AuthProvider.js';
 
@@ -72,154 +83,63 @@ import { useSalonId } from '../auth/AuthProvider.js';
  *    must not leave the UI a step ahead of the server — see `useMoveOrder`,
  *    which is deliberately not optimistic.
  *
- * 4. THE BOARD IS A CAP OF 200 REPORTING `truncated: true`. Honest, but NOT a
- *    cursor — `nextCursor` is null and means it. Lane A named that in the code
- *    rather than leaving another believable `nextCursor: null`, and this client
- *    renders it rather than hiding it. See `OrderBoard` below and
- *    `routes/ShopOrders.tsx` § the truncation.
+ * 4. THE BOARD PAGES 200 AT A TIME WITH A REAL CURSOR NOW. `truncated` still
+ *    means "there is another page" and `nextCursor` is that page's cursor, a
+ *    string, or null when there is none (lane A, 72d79f7). The BOARD screen
+ *    still renders the first page and its truncation notice rather than paging
+ *    — `routes/ShopOrders.tsx` § the truncation — and the customer card's
+ *    Purchases panel is the first reader that follows the cursor
+ *    (`useMemberOrders` below).
  */
 
 /**
- * THE WIRE SHAPE IS WIDER THAN `ShopOrderSchema`, DELIBERATELY, and the extra
- * fields are the join `perms.shop` is the gate for.
+ * THE WIRE SHAPE IS WIDER THAN `ShopOrderSchema`, AND IT IS NOW TRUNK'S.
  *
- * `ShopOrderSchema` is the shape the CUSTOMER's half reads (`GET
- * /members/me/orders`), where the member is the principal and needs no name on
- * her own order. The merchant's board joins `member` for the two things a
- * fulfilment row cannot be drawn without — who it is for, and how to reach her
- * when the building number turns out to be wrong.
+ * `MerchantShopOrderSchema` and `OrderBoardSchema` landed in `@avo/types`
+ * (8769f4c) with the serialiser that sends them: `ShopOrderSchema` plus the
+ * member join `perms.shop` is the gate for (`memberName`, `memberPhone`,
+ * `memberErased`) plus what was bought — `lines` (the checkout snapshot: name
+ * and unit price as she paid them) and `totalFils` (the order's own wallet
+ * debit, not a re-sum of the lines). This file used to carry a hand-written
+ * mirror of the first three and check them by hand beside a bare
+ * `ShopOrderSchema` run, because the schema did not exist yet. It does, so the
+ * mirror is gone and the types are re-exported from the one place both the API's
+ * specs and this client read.
  *
- * A hand-written MIRROR, not a shared type, for `api/bookings.ts`'s reason:
- * `packages/types` is trunk-owned and `ShopOrderSchema` is what the wallet
- * validates against, so widening it is a trunk change rather than a lane one.
- * Flagged in the lane report — these two belong in a `MerchantShopOrderSchema`
- * beside it, exactly as `MerchantBooking`'s five do.
+ * `memberPhone` IS NULL WHEN `memberErased` — the `+990` tombstone is withheld
+ * server-side (DECISIONS.md #100). `ShopOrders.tsx` still reads the null phone
+ * as a second, independent arm so no payload can produce `tel:null`.
  */
-export interface MerchantShopOrder extends ShopOrder {
-  /**
-   * STILL 'Deleted account' AFTER ERASURE, and it stays on the wire. A row needs
-   * a subject even when the subject is gone — see `memberErased`.
-   */
-  memberName: string;
-  /**
-   * E.164. The board's one call-her-back affordance; see the `tel:` link.
-   *
-   * NULL WHEN `memberErased`, AND NULLABLE FOR THAT REASON ALONE. `erasure.ts`
-   * tombstones the phone as `+990` + twelve random digits — an unassigned
-   * country code, so it is unreachable by construction — and this board joined
-   * it straight through as an ordinary contact until DECISIONS.md #100. The
-   * server now withholds it rather than serving a number that dials nowhere.
-   */
-  memberPhone: string | null;
-  /**
-   * TRUE WHEN THE MEMBER HAS BEEN ERASED. The signal is the API's because the
-   * only client-side detection available was string-matching a server constant,
-   * which rots the moment the sentinel prefix changes — silently, by re-offering
-   * the link. Contract decided at trunk; served by this endpoint and by
-   * `GET /salons/{id}/bookings`.
-   *
-   * THE MID-FLIGHT WINDOW IS CLOSED. While lane A's signal was landing this
-   * field could be absent and read `undefined`; `serialiseMemberContact` now
-   * serves it on every row and `parseOrderBoard` REQUIRES it, so the board
-   * refuses a payload without it. `ShopOrders.tsx` still reads the null phone as
-   * a second, independent arm so no payload can produce `tel:null`.
-   */
-  memberErased: boolean;
-}
-
-/**
- * NOT `Paginated<T>`, AND THE DIFFERENCE IS THE WHOLE POINT OF THIS TYPE.
- *
- * `Paginated<T>` is `{ items, nextCursor }`. Declaring this list as one would
- * drop `truncated` on the floor at the type level, and the screen would then be
- * unable to say the board is incomplete even though the server took the trouble
- * to tell it. That is the `nextCursor: null` defect one layer up: the API stopped
- * lying and the client would have gone on believing the old lie by omission.
- *
- * `nextCursor` is kept and is ALWAYS null. It is in the shape because the server
- * sends it, and it is named here so nobody wires paging to it: there is no
- * cursor behind this endpoint yet. `truncated` is the field with the information.
- */
-export interface OrderBoard {
-  items: MerchantShopOrder[];
-  /** True when the 200-row cap was reached, so the board is INCOMPLETE. */
-  truncated: boolean;
-  /** Always null. Not a cursor — see above. */
-  nextCursor: null;
-}
+export type { MerchantShopOrder, OrderBoard };
 
 /**
  * ===========================================================================
- * THE BOARD, READ RATHER THAN ASSERTED — 0060 IS WHY THIS STOPPED BEING A CAST
+ * THE BOARD, PARSED THROUGH `OrderBoardSchema` — AND A BAD ROW FAILS IT ALL
  * ===========================================================================
- * `useOrderBoard` used to be `authedRequest<OrderBoard>`, an unchecked assertion
- * over `unknown` JSON. `pickupBranch` is why that could not stay: the Where cell
- * FORKS on it — `null` renders "Pickup branch not chosen", `closed: true` renders the
- * attention state, anything else renders "Collecting at {name}" — and the
- * header's branch selector hides rows by its `id`. A payload whose `closed`
- * arrived as `"true"`, or whose branch arrived without an id, would pick an arm
- * silently: an order at a closed counter drawn as an ordinary pickup, or dropped
- * from a narrowed board. Neither is visible from the screen, which is the whole
- * reason it has to be a parse.
- *
- * THE ROW IS `ShopOrderSchema`, RUN BARE, and the three joined fields are
- * checked by hand beside it — `zod` is not a dependency of this app and
- * `@avo/types` does not re-export `z`, so `ShopOrderSchema.extend({…})` is not
- * available (`api/settings.ts § parseClosureShape` records the same constraint).
- * The shared schema is what carries `pickupBranch`, so the board and the wallet
- * cannot disagree about what one looks like.
+ * `pickupBranch` is why this stopped being a cast (0060): the Where cell FORKS
+ * on it, and a payload whose `closed` arrived as `"true"` would pick an arm
+ * silently. The schema is `.strict()` on the row, so a row that grew an
+ * undeclared key fails here too rather than being stripped in transit.
  *
  * A BAD ROW FAILS THE WHOLE BOARD rather than being dropped — `api/staff.ts §
  * parseStaffPage`'s rule, for a sharper reason here. A dropped row is an order
  * that silently leaves the one screen that prepares it, and the customer arrives
  * for it anyway. "Couldn't load orders" is loud and retryable; a board that is
- * one order short is neither.
+ * one order short is neither. The index of the first bad row is kept in the
+ * message, because it is what makes one bad row in two hundred findable.
  *
- * `memberErased` IS NOW REQUIRED. It was tolerated as absent while lane A's
- * signal was in flight (see `MerchantShopOrder`); `serialiseMemberContact` has
- * served it on every row since, so a payload without it is a broken join and not
- * a transitional one. `OrderRow` still reads the null phone as a second arm.
+ * `nextCursor` IS A REAL CURSOR NOW — a string, or null when there is no next
+ * page — and the schema says so. The old parse REFUSED a string, which was right
+ * while the server's null meant "not a cursor" and would now refuse every page
+ * but the last.
  */
 export function parseOrderBoard(raw: unknown): OrderBoard {
   const where = 'GET /v1/salons/{id}/orders';
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error(`${where} was not an object.`);
-  }
-  const r = raw as Record<string, unknown>;
-  if (!Array.isArray(r.items)) throw new Error(`${where}.items was not an array.`);
-  if (typeof r.truncated !== 'boolean') throw new Error(`${where}.truncated was not a boolean.`);
-  // Always null — see `OrderBoard.nextCursor`. A string here would be a cursor
-  // this client has no way to follow.
-  if (r.nextCursor !== null) throw new Error(`${where}.nextCursor was not null.`);
-
-  return {
-    items: r.items.map((row, i) => {
-      const at = `${where}.items[${i}]`;
-      let order: ShopOrder;
-      try {
-        order = ShopOrderSchema.parse(row);
-      } catch (cause) {
-        // The index is what makes one bad row in two hundred findable.
-        throw new Error(`${at} was not a shop order: ${String(cause)}`);
-      }
-      const j = row as Record<string, unknown>;
-      if (typeof j.memberName !== 'string') throw new Error(`${at}.memberName was not a string.`);
-      if (j.memberPhone !== null && typeof j.memberPhone !== 'string') {
-        throw new Error(`${at}.memberPhone was neither a string nor null.`);
-      }
-      if (typeof j.memberErased !== 'boolean') {
-        throw new Error(`${at}.memberErased was not a boolean.`);
-      }
-      return {
-        ...order,
-        memberName: j.memberName,
-        memberPhone: j.memberPhone,
-        memberErased: j.memberErased,
-      };
-    }),
-    truncated: r.truncated,
-    nextCursor: null,
-  };
+  const parsed = OrderBoardSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issue = parsed.error.issues[0];
+  const path = issue ? issue.path.map((p) => (typeof p === 'number' ? `[${p}]` : `.${p}`)).join('') : '';
+  throw new Error(`${where}${path} did not match the board: ${issue?.message ?? 'invalid'}`);
 }
 
 /**
@@ -232,6 +152,15 @@ export const orderKeys = {
   all: ['orders'] as const,
   board: (salonId: string, status: OrderStatus | null) =>
     [...orderKeys.all, salonId, status ?? 'any'] as const,
+  /**
+   * One customer's orders, for the card's Purchases panel. `'member'` cannot
+   * collide with a `board` key — the third element there is a status or
+   * `'any'`, and the server refuses any other status by name — and it sits
+   * under `all`, so a status move's `invalidateQueries({ queryKey: all })`
+   * reaches her card too.
+   */
+  member: (salonId: string, memberId: string) =>
+    [...orderKeys.all, salonId, 'member', memberId] as const,
 };
 
 /**
@@ -541,5 +470,45 @@ function writeRow(
   void queryClient.invalidateQueries({
     queryKey: orderKeys.all,
     predicate: (query) => query.queryKey[2] !== (filter ?? 'any'),
+  });
+}
+
+/**
+ * ===========================================================================
+ * `GET /v1/salons/{id}/orders?memberId=` — ONE CUSTOMER'S ORDERS, PAGED.
+ * ===========================================================================
+ * The customer card's Purchases panel. The gate is the BOARD'S (`perms.shop`),
+ * not the card's (`team`): the board already serves every one of these rows,
+ * delivery addresses included, to a `shop` holder, and `team` alone would hand a
+ * customer's address to somebody the Shop section never trusted (lane A,
+ * 72d79f7; DECISIONS.md, the fourth list). So the panel needs BOTH — `team` to
+ * open the card, `shop` to fill it — and a `team`-only manager is answered 403
+ * here, which the panel renders as "no access", not as a failure.
+ *
+ * A member who is not this salon's is `404 unknown_member`, never an empty page.
+ *
+ * WALKED WITH THE BOARD'S REAL CURSOR, newest order first. `networkMode:
+ * 'always'` for `useOrderBoard`'s reason; `enabled` so a card that already
+ * answered 404 does not ask a second time.
+ */
+export function useMemberOrders(
+  memberId: string,
+  enabled = true,
+): UseInfiniteQueryResult<InfiniteData<OrderBoard>> {
+  const salonId = useSalonId();
+  return useInfiniteQuery({
+    queryKey: orderKeys.member(salonId, memberId),
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam, signal }) =>
+      parseOrderBoard(
+        await authedRequest<unknown>(
+          'merchant',
+          `/v1/salons/${salonId}/orders${memberQuery(memberId, pageParam)}`,
+          { signal },
+        ),
+      ),
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+    networkMode: 'always',
   });
 }

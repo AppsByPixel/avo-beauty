@@ -1200,6 +1200,488 @@ a:hover {
   padding: 11px 0 6px;
 }
 
+/* ======================================================= overview analytics == */
+
+/*
+ * THE ANALYTICS GRID — NEW WORK, the design bundle draws none of these widgets
+ * (routes/OverviewAnalytics.tsx). Every value below is one this file already
+ * uses: the cards borrow `.overview__card-title`, the Overview's 18px grid gap,
+ * the trend card's caption type and the feed's hairlines, so thirteen new
+ * panels read as the same screen rather than a second design.
+ *
+ * interaction-spec.md §1: two-column grids stay 2-up at `wide` and `base` and go
+ * 1-up at `narrow` and `tablet`. The heatmap spans both columns where there are
+ * two, because 7 × N cells need width to be a shape.
+ */
+.ovw-section {
+  margin-top: 28px;
+}
+
+.ovw-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 10px;
+}
+
+.ovw-head .overview__card-title {
+  padding: 0;
+  margin: 0;
+}
+
+.ovw-head__scope {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--avo-text-muted);
+}
+
+.ovw-section > .avo-stale {
+  margin-bottom: 12px;
+}
+
+.ovw-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.dash[data-bp='base'] .ovw-grid,
+.dash[data-bp='wide'] .ovw-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dash[data-bp='base'] .ovw[data-wide],
+.dash[data-bp='wide'] .ovw[data-wide] {
+  grid-column: 1 / -1;
+}
+
+.ovw {
+  padding: 8px 20px 16px;
+  min-width: 0;
+}
+
+.ovw__caption {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
+.ovw__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.ovw__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.ovw__quiet {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-strong);
+}
+
+.ovw__quiet b {
+  font-weight: 600;
+}
+
+.ovw__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--avo-text-muted);
+}
+
+.ovw__lead {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.ovw__sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-text-muted-label);
+}
+
+.ovw__control {
+  display: flex;
+}
+
+/* ------------------------------------------------------ horizontal bars -- */
+
+.ovw-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.ovw-bars__row {
+  display: grid;
+  grid-template-columns: minmax(0, 34%) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.ovw-bars__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ovw-bars__track {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--avo-surface-alt);
+  overflow: hidden;
+}
+
+/* `--avo-brand` is a progress fill with no text on it — non-negotiable #9. */
+.ovw-bars__bar {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 5px;
+  background: var(--avo-brand);
+}
+
+.ovw-bars__bar[data-zero='true'] {
+  background: var(--avo-hairline);
+}
+
+.ovw-bars__bar[data-tone='bronze'] { background: var(--avo-tier-bronze-dot); }
+.ovw-bars__bar[data-tone='silver'] { background: var(--avo-tier-silver-dot); }
+.ovw-bars__bar[data-tone='gold'] { background: var(--avo-tier-gold-dot); }
+.ovw-bars__bar[data-tone='black'] { background: var(--avo-tier-black-dot); }
+.ovw-bars__bar[data-tone='member'] { background: var(--avo-tier-member-dot); }
+
+.ovw-bars__figure {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ovw-bars__share {
+  font-weight: 500;
+  color: var(--avo-text-muted);
+}
+
+/* -------------------------------------------------------- column bars ---- */
+
+.ovw-cols {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.ovw-cols__col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.ovw-cols__count,
+.ovw-cols__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--avo-text-muted-label);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ovw-cols__track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 96px;
+  border-bottom: 1px solid var(--avo-hairline);
+}
+
+.ovw-cols__bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--avo-brand);
+}
+
+/* A PART WEEK is paler and outlined, and the card says so in words beneath. */
+.ovw-cols__bar[data-partial='true'] {
+  background: var(--avo-brand-tint);
+  box-shadow: inset 0 0 0 1px var(--avo-brand);
+}
+
+.ovw-cols__bar[data-zero='true'] {
+  background: var(--avo-hairline);
+  box-shadow: none;
+}
+
+/* ------------------------------------------------------------- figures --- */
+
+.ovw-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+}
+
+.ovw-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ovw-figure__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-text-muted-label);
+}
+
+.ovw-figure__value {
+  font-family: var(--avo-font-display);
+  font-size: 24px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.ovw-figure__note {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--avo-text-muted);
+  max-width: 34ch;
+}
+
+/* ---------------------------------------------------------------- lists --- */
+
+.ovw-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ovw-list__row {
+  border-top: 1px solid var(--avo-hairline-inner);
+}
+
+.ovw-list__row > .ovw-list__main,
+.ovw-list__link {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 0;
+}
+
+.ovw-list__row > .ovw-list__main {
+  padding-bottom: 0;
+}
+
+.ovw-list__row > .ovw-list__sub {
+  display: block;
+  padding: 3px 0 9px;
+}
+
+.ovw-list__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.ovw-list__link:hover .ovw-list__main {
+  text-decoration: underline;
+}
+
+.ovw-list__main {
+  font-size: 13.5px;
+}
+
+.ovw-list__main b {
+  font-weight: 600;
+}
+
+.ovw-list__sub {
+  font-size: 11.5px;
+  color: var(--avo-text-muted-soft);
+}
+
+/* -------------------------------------------------------------- tables ---- */
+
+.ovw-table {
+  overflow-x: auto;
+}
+
+.ovw-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ovw-table th,
+.ovw-table td {
+  padding: 8px 6px;
+  text-align: left;
+  border-top: 1px solid var(--avo-hairline-inner);
+  white-space: nowrap;
+}
+
+.ovw-table thead th {
+  border-top: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--avo-text-muted-label);
+}
+
+.ovw-table tbody th {
+  font-weight: 500;
+}
+
+.ovw-table [data-numeric] {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- heatmap ---- */
+
+.ovw-heat {
+  overflow-x: auto;
+}
+
+.ovw-heat table {
+  border-collapse: separate;
+  border-spacing: 3px;
+}
+
+.ovw-heat th {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--avo-text-muted-label);
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ovw-heat thead th {
+  height: 14px;
+}
+
+.ovw-heat tbody th,
+.ovw-heat__corner {
+  width: 34px;
+  padding-right: 4px;
+}
+
+/*
+ * A FIXED CELL, NOT A SHARE OF THE CARD. The hours are trimmed to the ones that
+ * saw a visit, so a quiet week can be two columns wide; stretched to the card
+ * those two would read as two long bars. At 24 hours the grid is 744px and the
+ * wrapper scrolls inside the card at the 1-up widths (interaction-spec §1).
+ */
+.ovw-heat tbody td {
+  width: 28px;
+  min-width: 28px;
+  height: 20px;
+  border-radius: 3px;
+  background: var(--avo-surface-alt);
+}
+
+/* Four steps, all `--avo-brand` family surfaces; no text sits on any (#9). */
+.ovw-heat td[data-level='1'],
+.ovw-heat__swatch[data-level='1'] { background: var(--avo-brand-tint); box-shadow: inset 0 0 0 1px var(--avo-hairline); }
+.ovw-heat td[data-level='2'],
+.ovw-heat__swatch[data-level='2'] { background: var(--avo-brand); }
+.ovw-heat td[data-level='3'],
+.ovw-heat__swatch[data-level='3'] { background: var(--avo-brand-deep); }
+.ovw-heat td[data-level='4'],
+.ovw-heat__swatch[data-level='4'] { background: var(--avo-brand-deeper); }
+
+.ovw-heat__legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--avo-text-muted);
+}
+
+.ovw-heat__swatch {
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* ------------------------------------------------------ first vs returning */
+
+.ovw-split {
+  display: flex;
+  gap: 2px;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--avo-surface-alt);
+}
+
+.ovw-split__part,
+.ovw-legend__key {
+  display: block;
+  height: 100%;
+}
+
+.ovw-split__part[data-part='first'],
+.ovw-legend__key[data-part='first'] {
+  background: var(--avo-brand);
+}
+
+.ovw-split__part[data-part='returning'],
+.ovw-legend__key[data-part='returning'] {
+  background: var(--avo-brand-deeper);
+}
+
+.ovw-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  font-size: 13px;
+}
+
+.ovw-legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ovw-legend b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ovw-legend__key {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
 /*
  * The list takes focus when the control withdraws itself (routes/Overview.tsx
  * § listRef). No outline rule here on purpose: the token `:focus-visible` ring
@@ -2907,6 +3389,20 @@ a:hover {
   padding: 15px 20px;
   border-bottom: 1px solid var(--avo-hairline-inner);
   vertical-align: top;
+}
+
+/*
+ * THE ROW A LINK ARRIVED FOR — from the Overview's Upcoming list or a customer's
+ * Bookings panel (routes/appointmentHref.ts). A tint of the brand surface behind
+ * ordinary text (#9 forbids white on brand, not ink on a tint) and a brand rule
+ * down its first edge, so it is findable without reading every row.
+ */
+.appts__table tbody tr[data-focused='true'] td {
+  background: var(--avo-brand-tint2);
+}
+
+.appts__table tbody tr[data-focused='true'] td:first-child {
+  box-shadow: inset 3px 0 0 var(--avo-brand);
 }
 
 .appts__table tbody tr:last-child td {
@@ -9353,4 +9849,66 @@ a:hover {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* ------------------------------------------ customer card: her records ---- */
+
+/*
+ * Bookings and Purchases on the customer card. The rows are the activity
+ * panel's own (`.cust-card__feed-row`), with the status pill at the end of the
+ * row the way the Appointments and Orders boards place it.
+ */
+.cust-card__records-head {
+  margin: 10px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--avo-text-muted-label);
+}
+
+.cust-card__records-head:first-child {
+  margin-top: 0;
+}
+
+.cust-card__records-none,
+.cust-card__refused {
+  margin: 4px 0 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--avo-text-muted-strong);
+}
+
+.cust-card__record {
+  justify-content: space-between;
+}
+
+.cust-card__record-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cust-card__record-link:hover .cust-card__feed-what {
+  text-decoration: underline;
+}
+
+.cust-card__lines {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--avo-text-muted-strong);
+}
+
+.cust-card__lines li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
 }

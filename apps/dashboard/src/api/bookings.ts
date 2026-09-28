@@ -157,6 +157,14 @@ export const bookingKeys = {
    * what made `patchBookingStatus` below necessary — see its docblock.
    */
   stream: (salonId: string) => [...bookingKeys.all, salonId, 'stream'] as const,
+  /**
+   * One customer's appointments, for the card's Bookings panel. `'member'`
+   * cannot collide with a `list` key (the third element there is a status or
+   * `'any'`) nor with `'stream'`, and it sits under `all` so every write's
+   * `invalidateQueries({ queryKey: bookingKeys.all })` reaches her card.
+   */
+  member: (salonId: string, memberId: string) =>
+    [...bookingKeys.all, salonId, 'member', memberId] as const,
 };
 
 /**
@@ -261,6 +269,53 @@ export function useSalonBookingStream(
         `/salons/${salonId}/bookings${
           pageParam === null ? '' : `?cursor=${encodeURIComponent(pageParam)}`
         }`,
+        { signal },
+      ),
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+    networkMode: 'always',
+  });
+}
+
+/**
+ * ===========================================================================
+ * `GET /salons/{id}/bookings?memberId=` — ONE CUSTOMER'S APPOINTMENTS, PAGED.
+ * ===========================================================================
+ * The customer card's Bookings panel (Aftab, 2026-09-29: "On the customer view
+ * screen, the bookings and purchases should be displayed"). The gate is the
+ * BOARD'S, `perms.appointments` — not the card's `team` — for lane A's reason in
+ * `routes/salons.ts § ?memberId=`: `team` alone would hand appointment data to a
+ * `team`-only holder. So the panel needs both permissions, each read carries
+ * exactly its own, and a 403 here is the panel's "no access" state.
+ *
+ * `starts_at DESC`, the board's order, walked with its cursor. That order is
+ * what makes "upcoming first" honest without a second request: every future
+ * booking sorts ahead of every past one, so the FIRST page holds all of her
+ * upcoming appointments unless she has more than 200 of them. The panel splits
+ * what it holds at the present instant and reverses the future half so the
+ * soonest reads first — see `Customers.tsx § splitBookings`.
+ *
+ * A member who is not this salon's is `404 unknown_member`, never an empty page.
+ */
+/** `?memberId=…[&cursor=…]` — shared by both member reads, glued to each path literal. */
+export function memberQuery(memberId: string, cursor: string | null): string {
+  const params = new URLSearchParams({ memberId });
+  if (cursor !== null) params.set('cursor', cursor);
+  return `?${params.toString()}`;
+}
+
+export function useMemberBookings(
+  memberId: string,
+  enabled = true,
+): UseInfiniteQueryResult<InfiniteData<Paginated<MerchantBooking>>> {
+  const salonId = useSalonId();
+  return useInfiniteQuery({
+    queryKey: bookingKeys.member(salonId, memberId),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) =>
+      authedRequest<Paginated<MerchantBooking>>(
+        'merchant',
+        `/salons/${salonId}/bookings${memberQuery(memberId, pageParam)}`,
         { signal },
       ),
     getNextPageParam: (last) => last.nextCursor,

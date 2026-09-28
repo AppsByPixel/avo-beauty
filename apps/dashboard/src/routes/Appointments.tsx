@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { parseFils, type StaffPerms } from '@avo/types';
 import {
@@ -45,6 +45,7 @@ import {
 } from './appointmentsRange.js';
 import { instantFromSalonLocal, pillFor, salonLocalFields } from './appointmentsWeekRules.js';
 import { whenLabel } from './appointmentWhen.js';
+import { readBookingFocus, type BookingFocus } from './appointmentHref.js';
 import { DepositHealth } from './DepositHealth.js';
 import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
@@ -463,7 +464,20 @@ export function Appointments() {
    * name, and a skeleton over a question nobody has finished asking would promise
    * an answer that is not coming — `Reports.tsx`' rule for the same control.
    */
-  const [dates, setDates] = useState<RangeSelection>(ALL_DATES);
+  /*
+   * ARRIVING FROM A LINK TO ONE BOOKING — the Overview's Upcoming list and the
+   * customer card's Bookings panel (`appointmentHref.ts`). The link names the
+   * booking and the SALON day it starts on; the board opens filtered to that day
+   * so the row is on the page, and marks it. Read ONCE, on mount: it is where the
+   * merchant arrived, not a setting, and changing the filter afterwards is hers.
+   * Nothing about it is a control (#7) — an id not on the page marks nothing.
+   */
+  const [focus] = useState<BookingFocus | null>(() =>
+    typeof window === 'undefined' ? null : readBookingFocus(window.location.search),
+  );
+  const [dates, setDates] = useState<RangeSelection>(() =>
+    focus?.day ? { preset: 'custom', from: focus.day, to: focus.day } : ALL_DATES,
+  );
   const resolved = resolveRange(dates, salon.data?.timezone ?? null, new Date());
   const range = resolved.kind === 'range' ? resolved.range : null;
   const asking = resolved.kind === 'all' || resolved.kind === 'range';
@@ -856,7 +870,11 @@ export function Appointments() {
                   </tr>
                 ) : (
                   rows.map((booking) => (
-                    <BookingRow key={booking.id} {...actionsFor(booking)} />
+                    <BookingRow
+                      key={booking.id}
+                      {...actionsFor(booking)}
+                      focused={focus?.bookingId === booking.id}
+                    />
                   ))
                 )}
               </tbody>
@@ -965,8 +983,17 @@ export interface BookingActionsProps {
   onConfirm: () => void;
 }
 
-export function BookingRow(props: BookingActionsProps) {
-  const { booking, controls } = props;
+export function BookingRow(props: BookingActionsProps & { focused?: boolean }) {
+  const { booking, controls, focused = false } = props;
+  /*
+   * THE ROW A LINK ARRIVED FOR is scrolled into view once and marked — an
+   * outline and `aria-current`, so it is findable by eye and announced as the
+   * one she came for. `scrollIntoView` is optional-called: jsdom has none.
+   */
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    if (focused) rowRef.current?.scrollIntoView?.({ block: 'center' });
+  }, [focused]);
 
   /**
    * A WALK-IN. `GET /salons/{id}/bookings` serves the front desk's own
@@ -988,7 +1015,10 @@ export function BookingRow(props: BookingActionsProps) {
   const walkIn = booking.memberId === null;
 
   return (
-    <tr>
+    <tr
+      ref={rowRef}
+      {...(focused ? { 'data-focused': 'true', 'aria-current': 'true' as const } : {})}
+    >
       <td>
         <div className="appts__customer">{booking.memberName}</div>
         {walkIn ? <div className="appts__assumed">Walk-in · no account</div> : null}

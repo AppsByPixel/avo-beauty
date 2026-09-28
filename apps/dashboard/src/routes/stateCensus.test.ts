@@ -129,6 +129,14 @@ const SECTION_SCREENS = [
    */
   'SalesTrend.tsx',
   /**
+   * Merchant → Overview → Analytics. NEW WORK; the design bundle draws none of
+   * its thirteen cards. Mounted by `Overview.tsx` and not routed, like
+   * `SalesTrend.tsx`. It owns its reads (`GET /v1/salons/{id}/overview/analytics`
+   * and the earnings-by-branch report) and every card carries its own skeleton
+   * and its own error/offline answer through `WidgetError` → `ErrorState`.
+   */
+  'OverviewAnalytics.tsx',
+  /**
    * Merchant → Appointments → Week. NEW WORK; there is no calendar view in the
    * design bundle (`routes/appointmentsWeekRules.ts` carries the disclosure —
    * every "calendar" in the merchant artboard is Google Calendar as an
@@ -432,7 +440,10 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
  *                       the courtesy-gate ledger) — the thing under test, not a
  *                       tested thing.
  */
-const NON_SCREENS = ['NotBuiltYet.tsx', 'sectionState.tsx'] as const;
+/**
+ * `AppointmentLink.tsx` is an anchor that navigates in-app — no fetch, no state.
+ */
+const NON_SCREENS = ['NotBuiltYet.tsx', 'sectionState.tsx', 'AppointmentLink.tsx'] as const;
 
 /**
  * Every route component in a directory — and NOT the tests beside them.

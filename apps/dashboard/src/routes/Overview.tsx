@@ -21,6 +21,8 @@ import { useSalon } from '../api/salon.js';
 import { useBranchScope } from '../shell/BranchScope.js';
 import { clock12, clockFrame, feedStamp } from './salonTime.js';
 import { SalesTrendCard } from './SalesTrend.js';
+import { AnalyticsSection } from './OverviewAnalytics.js';
+import { joinClauses } from './overviewAnalyticsRules.js';
 
 /**
  * Merchant → Overview.
@@ -171,6 +173,14 @@ export function Overview() {
           />
         </Card>
       </div>
+
+      {/*
+        THE ANALYTICS GRID, UNDER THE PAIR AND NEVER BESIDE THE KPI ROW. Aftab:
+        "dashboard has only one graph widget and it looks so empty otherwise".
+        It reads one endpoint of its own, scoped by the same branch selection as
+        the tiles, and owns every state it draws — see `OverviewAnalytics.tsx`.
+      */}
+      <AnalyticsSection />
     </>
   );
 }
@@ -257,20 +267,12 @@ function assumedClause(assumed: number, total: number, noun: string): string | n
 }
 
 /**
- * "a", "a and b", "a, b and c" — an Oxford-comma-free list, as the copy elsewhere
- * sets.
- *
- * EXPORTED FOR `Reports.tsx` § BranchAssumedCaveat, which carries the SAME
- * SENTENCE about the same column ("Branch assumed on {…} — treat these branch
- * figures as approximate") over a different set of figures. The sentence is
- * reused rather than reinvented, so its list grammar is too: a second
- * implementation would drift into an Oxford comma on one screen and not the
- * other, which is the kind of divergence nobody notices and everybody reads.
+ * "a", "a and b", "a, b and c" — now lives in `overviewAnalyticsRules.ts`, so the
+ * analytics grid can use it without importing this screen. RE-EXPORTED here so
+ * `Reports.tsx § BranchAssumedCaveat`, which carries the same sentence about the
+ * same column, keeps one list grammar and its import path.
  */
-export function joinClauses(parts: string[]): string {
-  if (parts.length <= 1) return parts[0] ?? '';
-  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
-}
+export { joinClauses };
 
 /**
  * THE SIZE OF THE DOUBT BEHIND A PER-BRANCH FIGURE — proportionally, or not at

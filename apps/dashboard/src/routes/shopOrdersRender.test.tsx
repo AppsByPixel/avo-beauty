@@ -92,6 +92,8 @@ const DELIVERY: MerchantShopOrder = {
   memberPhone: '+96599124408',
   /* A live member. The flag is on every row, not only the erased ones. */
   memberErased: false,
+  lines: [{ productId: 'PR-1', name: 'Argan oil', qty: 1, unitPriceFils: 4500, lineTotalFils: 4500 }],
+  totalFils: 4500,
 };
 
 const PICKUP: MerchantShopOrder = {
@@ -112,6 +114,8 @@ const PICKUP: MerchantShopOrder = {
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
   memberErased: false,
+  lines: [{ productId: 'PR-1', name: 'Argan oil', qty: 1, unitPriceFils: 4500, lineTotalFils: 4500 }],
+  totalFils: 4500,
 };
 
 /**
@@ -164,6 +168,8 @@ const ERASED_DELIVERY: MerchantShopOrder = {
   memberName: 'Deleted account',
   memberPhone: null,
   memberErased: true,
+  lines: [{ productId: 'PR-1', name: 'Argan oil', qty: 1, unitPriceFils: 4500, lineTotalFils: 4500 }],
+  totalFils: 4500,
 };
 
 /**

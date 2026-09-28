@@ -145,6 +145,8 @@ const ORDER_ROW: MerchantShopOrder = {
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
   memberErased: false,
+  lines: [{ productId: 'PR-1', name: 'Argan oil', qty: 1, unitPriceFils: 4500, lineTotalFils: 4500 }],
+  totalFils: 4500,
 };
 
 /** `serialiseShopOrder(row)` — the BARE `ShopOrder`, no join. */

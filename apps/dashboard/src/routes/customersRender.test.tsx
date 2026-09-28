@@ -522,23 +522,21 @@ describe('one customer’s card', () => {
   });
 
   /**
-   * THE THREE UNSERVED PANELS ARE NAMED ON THE SCREEN.
-   *
-   * The requirement is that the absence is STATED, because a card silently missing
-   * two of the design's six panels looks finished and wrong — and because the next
-   * person to "fix" it is one client-side join away from handing a `team`-only
-   * manager appointment data she is not granted.
+   * BOOKINGS AND PURCHASES ARE PANELS NOW, NOT AN ABSENCE. They were named as
+   * "Not on this card yet" until lane A served each behind its own board's
+   * permission (72d79f7). `customerRecordsRender.test.tsx` drives both panels;
+   * this pins only that the old notice is gone and the two panels mount. This
+   * file routes no bookings or orders fixture, so each panel answers with its
+   * own failure — which is the point: a panel's read failing does not take the
+   * card with it.
    */
-  it('says which panels the design draws that it does not', async () => {
+  it('draws Bookings and Purchases panels where the absence notice was', async () => {
     await openCard();
 
-    const note = (await screen.findByText('Not on this card yet')).closest('div');
-    expect(note).not.toBeNull();
-    const panel = within(note as HTMLElement);
-    expect(panel.getByText('Next booking')).toBeTruthy();
-    expect(panel.getByText('Purchases')).toBeTruthy();
-    expect(panel.getByText('Gift')).toBeTruthy();
-    expect(panel.getByText('Reimburse')).toBeTruthy();
+    expect(await screen.findByText('Bookings', { selector: 'h3' })).toBeTruthy();
+    expect(screen.getByText('Purchases', { selector: 'h3' })).toBeTruthy();
+    expect(screen.queryByText('Not on this card yet')).toBeNull();
+    expect(await screen.findByText('Personal information')).toBeTruthy();
   });
 
   it('returns to the book', async () => {

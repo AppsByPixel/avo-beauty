@@ -119,6 +119,8 @@ function row(transactionId: string, over: Record<string, unknown>): Record<strin
     memberName: `Customer ${transactionId}`,
     memberPhone: '+96599124408',
     memberErased: false,
+    lines: [{ productId: 'PR-1', name: 'Argan oil', qty: 1, unitPriceFils: 4500, lineTotalFils: 4500 }],
+    totalFils: 4500,
     ...over,
   };
 }
@@ -405,6 +407,21 @@ describe('the board is parsed, so a malformed branch cannot pick an arm silently
       memberErased: false,
       pickupBranch: { id: 'BR-SAL', name: 'Salmiya', closed: false },
     });
+  });
+
+  /**
+   * THE BOARD PAGES NOW (lane A, 72d79f7): `nextCursor` is a real string when
+   * there is another page, and every row carries what was bought. The old parse
+   * refused a string cursor outright and dropped `lines` / `totalFils` with the
+   * rest of the unknown keys — both pinned here against `OrderBoardSchema`.
+   */
+  it('accepts a real cursor and keeps the lines and the total', () => {
+    const parsed = parseOrderBoard({ ...BOARD, truncated: true, nextCursor: 'eyJhdCI6MX0' });
+    expect(parsed.nextCursor).toBe('eyJhdCI6MX0');
+    expect(parsed.items[0]!.lines).toEqual([
+      { productId: 'PR-1', name: 'Argan oil', qty: 1, unitPriceFils: 4500, lineTotalFils: 4500 },
+    ]);
+    expect(parsed.items[0]!.totalFils).toBe(4500);
   });
 
   it.each([
