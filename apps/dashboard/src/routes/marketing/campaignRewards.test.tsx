@@ -179,7 +179,7 @@ function renderComposer() {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<Campaigns branches={[]} loading={false} />, { wrapper: Wrapper });
+  return render(<Campaigns branches={[]} loading={false} timezone="Asia/Kuwait" />, { wrapper: Wrapper });
 }
 
 describe('the rendered select draws every option it is given', () => {

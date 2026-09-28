@@ -105,12 +105,13 @@ export function Marketing() {
       <p className="mk__hint">{HINT[tab]}</p>
 
       {tab === 'campaigns' ? (
-        <Campaigns branches={branches} loading={loading} />
+        <Campaigns branches={branches} loading={loading} timezone={salon.data?.timezone ?? null} />
       ) : tab === 'boosts' ? (
         <Boosts
           branches={branches}
           promotions={promotions.data}
           loading={loading}
+          timezone={salon.data?.timezone ?? null}
         />
       ) : (
         <HappyHours branches={branches} promotions={promotions.data} loading={loading} />

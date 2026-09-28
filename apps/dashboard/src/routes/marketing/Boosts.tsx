@@ -8,6 +8,7 @@ import {
   usePublishBoosts,
   type BoostValues,
 } from '../../api/promotions.js';
+import { clockFrame, dayMonth } from '../salonTime.js';
 import { WriteError } from '../sectionState.js';
 
 /**
@@ -24,6 +25,8 @@ export interface BoostsProps {
   branches: Branch[];
   promotions: PromotionSet | undefined;
   loading: boolean;
+  /** The salon's zone — "published 12 Sep" is the salon's calendar day. */
+  timezone: string | null;
 }
 
 type Draft = Record<string, BoostValues>;
@@ -36,7 +39,7 @@ function draftFrom(branches: Branch[], promotions: PromotionSet | undefined): Dr
   );
 }
 
-export function Boosts({ branches, promotions, loading }: BoostsProps) {
+export function Boosts({ branches, promotions, loading, timezone }: BoostsProps) {
   const publish = usePublishBoosts();
   const [draft, setDraft] = useState<Draft>(() => draftFrom(branches, promotions));
 
@@ -150,7 +153,7 @@ export function Boosts({ branches, promotions, loading }: BoostsProps) {
         <span className="mk__boostnote">
           {dirty
             ? 'Higher earning costs you margin on every visit at that branch.'
-            : publishedNote(promotions)}
+            : publishedNote(promotions, timezone)}
         </span>
         <Button
           onClick={() => publish.mutate(draft)}
@@ -172,12 +175,10 @@ export function Boosts({ branches, promotions, loading }: BoostsProps) {
 }
 
 /** "A visit at Salmiya is worth 2 visits, tops up 10% richer and earns 2 stamps." */
-function publishedNote(promotions: PromotionSet | undefined): string {
+function publishedNote(promotions: PromotionSet | undefined, timezone: string | null): string {
   if (!promotions?.boostsPublishedAt) return 'Live for all staff and scanners.';
   const at = new Date(promotions.boostsPublishedAt);
   const by = promotions.boostsPublishedBy;
-  return `Live for all staff and scanners — published ${at.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-  })}${by ? ` by ${by}` : ''}.`;
+  // The salon's calendar day, not the browser's — see `salonTime.ts`.
+  return `Live for all staff and scanners — published ${dayMonth(at, clockFrame(timezone))}${by ? ` by ${by}` : ''}.`;
 }
