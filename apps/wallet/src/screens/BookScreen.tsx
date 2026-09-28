@@ -1,20 +1,32 @@
 /**
  * Wallet · Book. design/AVO Wallet Home.dc.html § BOOK (:521-618).
  *
- * Service → branch → artist → day and time → review → confirmed, with the
+ * Branch → service → artist → day and time → review → confirmed, with the
  * deposit held by the server at the moment of confirmation.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * THE BRANCH STEP MOST SALONS NEVER SEE
+ * THE BRANCH STEP MOST SALONS NEVER SEE -- AND WHY IT IS FIRST
  * ═══════════════════════════════════════════════════════════════════════════
- * The design draws three numbered steps and no branch step; Aftab added one
- * after testing the app. It is CONDITIONAL, and the condition is the whole
- * feature: a salon with one open branch is never asked, and its counter reads
- * "Step 2 of 4" rather than a "Step 2 of 5" whose second step does not exist.
- * That is why the header below reads `flow.totalSteps` and not `TOTAL_STEPS` —
- * the constant is the ceiling, the controller has the answer, and
- * `state/useBooking.ts § the branch step` argues the latch that keeps the
- * number from flickering while the roster loads.
+ * The design draws three numbered steps and no branch step, and the product
+ * spec (AVO-Beauty-Product-Description-v2.md:41) reads "service → artist →
+ * day → time slot → confirm". Aftab added a branch step after testing the app,
+ * and then fixed its place himself (W1: "In book, it should be branch
+ * selection then service, then staff"). Branch first is therefore the
+ * authorised order, not drift from the spec.
+ *
+ * It is CONDITIONAL, and the condition is the whole feature: a salon with one
+ * open branch is never asked, opens on the service exactly as before, and its
+ * counter reads "Step 1 of 4". That is why the header below reads
+ * `flow.totalSteps` and not `TOTAL_STEPS` — the constant is the ceiling, the
+ * controller has the answer.
+ *
+ * AT A MULTI-BRANCH SALON THE FIRST SCREEN WAITS FOR THE ROSTER. Whether step
+ * 1 is the branch or the service depends on a read that has not landed when
+ * Book opens, so the flow opens on `'entry'` — header, empty track, no
+ * counter, a skeleton — and then on the right step, once. Never the service
+ * first and then the branch. `state/useBooking.ts § the entry gate` argues it,
+ * including its failure state, which is the ordinary failure screen with a
+ * retry because it is now the first thing she sees.
  *
  * THE STEP DOES NOT ASSERT A BRANCH. It filters the roster; the booking's
  * branch is still derived server-side from the artist. There is no `branchId`
@@ -157,8 +169,15 @@ export function BookScreen({
 
   // ------------------------------------------------------------- the shell --
 
+  /**
+   * Back LEAVES from the first step, whichever that is: `branch` at a salon
+   * with a branch step, `service` at one without, `day` on a reschedule — and
+   * from `'entry'`, where she has not reached a step at all. `firstStep` is
+   * the machine's answer, so this cannot disagree with `flow.back()` about
+   * where the flow starts.
+   */
   const onBack = useCallback(() => {
-    if (flow.step === 'service' || (flow.rescheduling && flow.step === 'day')) {
+    if (flow.step === 'entry' || flow.step === flow.firstStep) {
       onHome();
       return;
     }
@@ -254,16 +273,26 @@ export function BookScreen({
           <Text style={[text('bodyL', lang, '600'), styles.backText]}>{copy.back}</Text>
         </Pressable>
         <Text style={[text('displayM', lang), styles.title]}>{copy.bookTitle}</Text>
-        <Text style={[text('body', lang, '600'), styles.stepCount]}>
+        <Text style={[text('body', lang, '600'), styles.stepCount]} testID="book-step-count">
           {/*
             `flow.totalSteps`, NOT `TOTAL_STEPS`. Four at a single-branch salon,
             five where the branch step is real. Printing the constant here is
             the exact defect this slice was told to avoid.
+
+            NOTHING on `'entry'`, where both are null: the count is decided
+            before it is first shown, so there is no number yet that is true.
+            The Text stays mounted so the header keeps its shape.
           */}
-          {copy.bookStep(flow.stepIndex, flow.totalSteps)}
+          {flow.stepIndex !== null && flow.totalSteps !== null
+            ? copy.bookStep(flow.stepIndex, flow.totalSteps)
+            : ''}
         </Text>
       </View>
       <ProgressBar step={flow.stepIndex} total={flow.totalSteps} />
+
+      {flow.step === 'entry' && <Entry flow={flow} />}
+
+      {flow.step === 'branch' && <BranchStep flow={flow} salon={salon} />}
 
       {flow.step === 'service' && (
         <Step
@@ -286,8 +315,6 @@ export function BookScreen({
           )}
         </Step>
       )}
-
-      {flow.step === 'branch' && <BranchStep flow={flow} salon={salon} />}
 
       {flow.step === 'artist' && (
         <Step
@@ -385,7 +412,10 @@ export function BookScreen({
         </>
       )}
 
-      {flow.step !== 'confirmed' ? <Cta flow={flow} salon={salon} topUp={topUp} amount={topUpAmount} /> : null}
+      {/* No CTA on `'entry'`: there is nothing to continue from yet. */}
+      {flow.step !== 'confirmed' && flow.step !== 'entry' ? (
+        <Cta flow={flow} salon={salon} topUp={topUp} amount={topUpAmount} />
+      ) : null}
 
       <View style={styles.footerSpace} />
     </Shell>
@@ -439,8 +469,44 @@ function Step<T>({
 }
 
 /**
- * STEP 2 -- THE BRANCH. (migration 0044; promoted from a filter strip to a step
- * by Aftab after testing the app.)
+ * THE ENTRY GATE -- before step 1 is known. `useBooking § the entry gate`.
+ *
+ * LOADING is a row skeleton with NO step label: the label would be "Choose a
+ * branch" or "Choose a service", and which one is the thing being waited on.
+ * Rows because both candidates' own loading states are rows (`BranchStep`'s
+ * skeleton below, and the service step's), so whichever arrives replaces a
+ * shape it already has. interaction-spec.md §4: a skeleton matching the real
+ * layout, never a centred spinner. No new copy — the skeleton's spoken label
+ * is `loadingAria`, like every other skeleton in this flow.
+ *
+ * FAILURE is the ordinary failure screen with a retry. Offline gets the
+ * offline copy and a 5xx gets ours (`domain/loadFailure.ts`), and the retry
+ * re-reads the split and puts her back on this skeleton. It has to be
+ * recoverable in place: this is the first thing she sees, so a dead end here
+ * would be a Book tab that does not work.
+ */
+function Entry({ flow }: { flow: ReturnType<typeof useBooking> }) {
+  if (flow.entryFailure) {
+    return (
+      <FailureScreen
+        kind={flow.entryFailure.kind}
+        message={flow.entryFailure.message}
+        reference={flow.entryFailure.reference}
+        onRetry={flow.retryLoad}
+        retrying={false}
+      />
+    );
+  }
+  return (
+    <View testID="book-entry-loading">
+      <RowSkeleton count={3} />
+    </View>
+  );
+}
+
+/**
+ * STEP 1 -- THE BRANCH. (migration 0044; promoted from a filter strip to a step
+ * by Aftab after testing the app, and moved first by W1.)
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * MOST SALONS NEVER REACH THIS COMPONENT, AND THAT IS STILL THE FEATURE
@@ -467,9 +533,20 @@ function Step<T>({
  * the step it was always drawing.
  *
  * AN EMPTY `branchOptions` HERE IS A LOAD, NOT AN ABSENCE. The step's existence
- * is latched, so a `retryLoad` that nulls the roster split leaves her standing
- * on this step with no chips for an instant. That is the step's loading state
- * and it renders as one, rather than as a step with nothing on it.
+ * is decided once, at entry, so a `retryLoad` that re-reads the roster split
+ * leaves her standing on this step with no chips for an instant. That is the
+ * step's loading state and it renders as one; a FAILED re-read renders the
+ * failure screen with a retry rather than that skeleton for ever.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * AN EMPTY BRANCH IS SAID HERE, NOT TWO STEPS LATER
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Tapping a chip re-reads the roster for it. If it comes back empty, the panel
+ * appears under the chips and Continue stays disabled — `useBooking § the
+ * empty branch`. Before W1 this panel lived on the artist step and its body,
+ * "Try another branch, or choose All branches to see everyone", pointed at
+ * chips that had become the previous step. Under the chips it is literally
+ * true again, so the invented copy is reused verbatim rather than rewritten.
  */
 function BranchStep({
   flow,
@@ -479,6 +556,18 @@ function BranchStep({
   salon: Salon;
 }) {
   const { lang, copy } = useLanguage();
+
+  if (flow.splitFailure) {
+    return (
+      <FailureScreen
+        kind={flow.splitFailure.kind}
+        message={flow.splitFailure.message}
+        reference={flow.splitFailure.reference}
+        onRetry={flow.retryLoad}
+        retrying={false}
+      />
+    );
+  }
 
   if (flow.branchOptions.length === 0) {
     return (
@@ -528,12 +617,33 @@ function BranchStep({
           <Note tone="wash">{copy.branchFilterOtherNote}</Note>
         </View>
       ) : null}
+
+      {/*
+        The chosen chip's roster. A failed read is a failure with a retry; an
+        empty one is the panel, and `useBooking` refuses Continue on it too.
+        A read still in flight shows nothing here and a disabled Continue for
+        one round trip -- the chip itself has already answered the tap.
+      */}
+      {flow.artists.status === 'failed' ? (
+        <FailureScreen
+          kind={flow.artists.failure.kind}
+          message={flow.artists.failure.message}
+          reference={flow.artists.failure.reference}
+          onRetry={flow.retryLoad}
+          retrying={false}
+        />
+      ) : flow.branchHasArtists === false ? (
+        <View style={styles.branchNote}>
+          <ArtistsEmpty flow={flow} />
+        </View>
+      ) : null}
     </View>
   );
 }
 
 /**
- * Step 2's EMPTY state, which it did not have before this slice.
+ * The roster's EMPTY state -- on the branch step (an empty branch) and on the
+ * artist step (an empty salon).
  *
  * Two different emptinesses, and telling them apart is the whole value:
  *
@@ -545,15 +655,12 @@ function BranchStep({
  *   branch that does not exist while an empty one reads as a branch with nobody
  *   in today. Only one of those is true.
  *
- *   THE WAY OUT MOVED AND THE SENTENCE DID NOT. `branchEmptyBody` says "Try
- *   another branch, or choose All branches to see everyone" -- and until this
- *   slice the chips were on this same step, one tap above the panel. They are
- *   now the previous step, so the way out is the Back button. The copy is still
- *   TRUE and still names the one useful action, so it is left verbatim rather
- *   than reworded: it is an invented string already (`AR_UNVERIFIED`), and a
- *   lane quietly rewriting invented copy to match its own layout change is how
- *   the copywriter ends up reviewing a sentence nobody chose. Flagged in the
- *   report instead.
+ *   SINCE W1 IT IS SHOWN ON THE BRANCH STEP, under the chips, and Continue is
+ *   refused on it -- so she meets it before choosing a service rather than
+ *   after. `branchEmptyBody` ("Try another branch, or choose All branches to
+ *   see everyone") is true there word for word: the chips are right above it.
+ *   On the artist step it survives only as a backstop for a roster that
+ *   changed between the two reads.
  *
  *   THE SALON HAS NOBODY AT ALL. Nothing to filter and nothing to suggest, so it
  *   says so plainly. Lumiere in the seed is exactly this -- two branches, zero
@@ -738,18 +845,20 @@ function ConfirmFailure({ failure }: { failure: { code: string | null; message: 
 /**
  * design:1549-1558 — one button, four labels.
  *
- *   service/branch/artist   Continue, enabled once something is chosen
+ *   branch/service/artist   Continue, enabled once something is chosen
  *   day                     Review booking, enabled once a slot is chosen
  *   review                  Confirm · hold <deposit>  — or, when the server has
  *                           said she is short, "Top up to book", which opens the
  *                           sheet instead.
  *
- * THE BRANCH STEP IS ALWAYS ENABLED, and it is the only step that is. The other
- * three gate on a selection because there is no default: no service is chosen
- * until she chooses one. A branch IS defaulted — `ALL_BRANCHES` is the initial
- * `branchChoice` and the first chip is selected when the step paints — so
- * Continue is a legitimate answer from the first frame, and disabling it would
- * demand a tap on a chip that is already on.
+ * THE BRANCH STEP GATES ON THE ROSTER, NOT ON A TAP. The other three gate on a
+ * selection because there is no default: no service is chosen until she
+ * chooses one. A branch IS defaulted — `ALL_BRANCHES` is the initial
+ * `branchChoice` and the first chip is selected when the step paints — so a
+ * tap is never demanded. What is demanded, since W1 moved the branch first, is
+ * that the chosen chip's roster has landed with somebody in it
+ * (`flow.branchHasArtists`): otherwise Continue would lead through the service
+ * step to an empty staff step. `useBooking § the empty branch`.
  */
 function Cta({
   flow,
@@ -804,7 +913,7 @@ function Cta({
     flow.step === 'service'
       ? flow.selectedService !== null
       : flow.step === 'branch'
-        ? true
+        ? flow.branchHasArtists === true
         : flow.step === 'artist'
           ? flow.selectedArtist !== null
           : flow.selectedSlot !== null;

@@ -53,11 +53,40 @@ export function StepLabel({ children }: { children: string }) {
   return <Text style={[text('label', lang), styles.stepLabel]}>{children}</Text>;
 }
 
-/** design:531 — the four-step progress bar. `brand` as a surface, which is its job. */
-export function ProgressBar({ step, total }: { step: number; total: number }) {
+/**
+ * design:531 — the progress bar (four steps in the design; four or five here,
+ * per salon). `brand` as a surface, which is its job.
+ *
+ * `null` for both is the Book flow's entry gate (`useBooking § the entry
+ * gate`): the length of the flow is not known yet, so the TRACK is drawn --
+ * the header keeps its height and nothing shifts when the count arrives --
+ * and there is no fill and no value, because any fraction would be a claim
+ * about a total nobody has decided.
+ *
+ * `aria-valuenow`/`-max` are the counter's own numbers, so a screen reader
+ * hears "2 of 5" from the bar rather than a bare "progress bar".
+ */
+export function ProgressBar({ step, total }: { step: number | null; total: number | null }) {
+  if (step === null || total === null) {
+    return (
+      <View
+        style={styles.track}
+        accessibilityRole="progressbar"
+        accessibilityState={{ busy: true }}
+        testID="book-progress"
+      />
+    );
+  }
   const fraction = Math.min(step, total) / total;
   return (
-    <View style={styles.track} accessibilityRole="progressbar">
+    <View
+      style={styles.track}
+      accessibilityRole="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={total}
+      aria-valuenow={step}
+      testID="book-progress"
+    >
       {/*
         `alignSelf: flex-start` unconditionally. On the cross axis of a column
         container that is already the INLINE start, which under RTL is the
@@ -202,7 +231,7 @@ export function ArtistRow({
   );
 }
 
-// ----------------------------------------------- step two: the branch strip --
+// ---------------------------------------------- step one: the branch chips ---
 
 /**
  * One branch filter chip. (migration 0044)

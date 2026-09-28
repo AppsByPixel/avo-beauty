@@ -1,29 +1,46 @@
 // @vitest-environment jsdom
 
 /**
- * THE BRANCH STEP, DRIVEN — five steps when the question is worth asking, four
- * when it is not, and a counter that never promises a step she cannot reach.
+ * THE BOOK FLOW'S SHAPE, DRIVEN — branch first where the question is worth
+ * asking (W1), service first everywhere else, and a counter that is decided
+ * before it is shown and never moves after.
  *
  * ═════════════════════════════════════════════════════════════════════════════
  * WHY THE HOOK AND NOT THE PREDICATE
  * ═════════════════════════════════════════════════════════════════════════════
  * `domain/branchPicker.test.ts` already proves `branchStepApplies` — when a
  * branch question is answerable at all. It cannot reach the thing that actually
- * breaks in front of a customer: whether the MACHINE skips the step it says it
- * skips, and whether `stepIndex`/`totalSteps` agree with the path she can walk.
+ * breaks in front of a customer: whether the MACHINE opens on the step it says
+ * it opens on, and whether `stepIndex`/`totalSteps` agree with the path she can
+ * walk.
  *
  * A counter is the easiest thing in this change to get wrong and the hardest to
  * notice, because it is right on the salon the developer seeded. Amara has two
- * branches; most salons have one. So the one-branch case is driven first and
- * asserted step by step, not inferred from the two-branch one.
+ * branches; most salons have one. So the one-branch case is driven first-class
+ * and asserted step by step, not inferred from the two-branch one.
  *
- * EVERY TEST IN THIS FILE FAILS BEFORE THIS SLICE: `StepName` had no `'branch'`
- * member, `TOTAL_STEPS` was the literal 4, and `BookingController` had no
- * `totalSteps` — so the two-branch expectations are unsatisfiable and the
- * one-branch ones assert a 4 that was a constant rather than a decision.
+ * ═════════════════════════════════════════════════════════════════════════════
+ * WHAT W1 CHANGED, AND WHAT EACH BLOCK BELOW PINS
+ * ═════════════════════════════════════════════════════════════════════════════
+ *   1. multi-branch: branch → service → artist → day → review, 1..5 of 5.
+ *   2. single-branch: TODAY'S FLOW, unchanged — service on the first render,
+ *      no entry gate, no branch read, 1..4 of 4.
+ *   3. the entry gate: before the roster split lands the step is `'entry'`,
+ *      never `service`-then-`branch`; a failure there is recoverable.
+ *   4. the counter: every COMMITTED render's (index, total) is recorded; the
+ *      total never changes and the first number shown is 1.
+ *   5. an empty branch: the roster behind the chosen chip is known on the
+ *      branch step, and Continue from it is refused. The service list is not
+ *      narrowed, because the API has no artist-to-service relation to narrow by
+ *      — pinned so an invented filter shows up as a failure here.
+ *   6. back, in both salon shapes.
+ *   7. reschedule still enters at `day`.
+ *
+ * The RTL half (8) needs the screen, not the hook: `screens/bookEntryRender.test.tsx`.
  */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BookableArtist, Salon } from '@avo/types';
 
@@ -48,7 +65,15 @@ vi.mock('../api/booking', () => ({
 }));
 
 // eslint-disable-next-line import/first
-import { TOTAL_STEPS, useBooking, type RescheduleTarget } from './useBooking';
+import {
+  TOTAL_STEPS,
+  useBooking,
+  type BookingController,
+  type RescheduleTarget,
+  type StepName,
+} from './useBooking';
+// eslint-disable-next-line import/first
+import { ApiError } from '../api/client';
 
 // --------------------------------------------------------------- fixtures --
 
@@ -69,12 +94,19 @@ const salonWith = (branches: Array<typeof KWC>): Salon =>
     modules: { booking: true },
   }) as unknown as Salon;
 
-const SERVICES = [{ id: 'SV-1', name: 'Cut & style', nameAr: null, priceFils: 12000 }];
+const SERVICES = [
+  { id: 'SV-1', name: 'Cut & style', nameAr: null, priceFils: 12000 },
+  { id: 'SV-2', name: 'Balayage', nameAr: null, priceFils: 45000 },
+];
 
 const artist = (id: string): BookableArtist =>
   ({ id, name: id, nameAr: null }) as unknown as BookableArtist;
 
-/** Four bookable artists, of whom two carry a branch. */
+/**
+ * Four bookable artists: AR-1 at Kuwait City, AR-2 at Salmiya... except that
+ * Salmiya is served EMPTY below, which is the W1 hazard — a branch chip whose
+ * roster has nobody in it. AR-3 and AR-4 are unassigned.
+ */
 const ROSTER = [artist('AR-1'), artist('AR-2'), artist('AR-3'), artist('AR-4')];
 const UNASSIGNED_TWO = [artist('AR-3'), artist('AR-4')];
 
@@ -86,12 +118,62 @@ const UNASSIGNED_TWO = [artist('AR-3'), artist('AR-4')];
 function serveRoster(unassigned: BookableArtist[]) {
   getArtists.mockImplementation((_salonId: string, branch?: string) => {
     if (branch === 'unassigned') return Promise.resolve(unassigned);
+    if (branch === KWC.id) return Promise.resolve([artist('AR-1')]);
+    if (branch === SAL.id) return Promise.resolve([]);
     return Promise.resolve(ROSTER);
   });
 }
 
-const mount = (salon: Salon, reschedule?: RescheduleTarget) =>
-  renderHook(() => useBooking({ salon, reschedule, onBooked: vi.fn(), now: new Date('2026-09-14T08:00:00+03:00') }));
+/** A split read held open until the spec releases it. */
+function holdSplit() {
+  let release: (rows: BookableArtist[]) => void = () => {};
+  let fail: (err: unknown) => void = () => {};
+  getArtists.mockImplementation((_salonId: string, branch?: string) => {
+    if (branch === 'unassigned') {
+      return new Promise<BookableArtist[]>((res, rej) => {
+        release = res;
+        fail = rej;
+      });
+    }
+    return Promise.resolve(ROSTER);
+  });
+  return {
+    release: (rows: BookableArtist[]) => release(rows),
+    fail: (err: unknown) => fail(err),
+  };
+}
+
+interface Frame {
+  step: StepName;
+  stepIndex: number | null;
+  totalSteps: number | null;
+}
+
+/**
+ * Mounts the hook and records every COMMITTED render — in an effect, so a
+ * render React discards (the entry gate sets state during render) is not
+ * mistaken for a frame she saw.
+ */
+const mount = (salon: Salon, reschedule?: RescheduleTarget) => {
+  const frames: Frame[] = [];
+  const hook = renderHook(() => {
+    const c: BookingController = useBooking({
+      salon,
+      reschedule,
+      onBooked: vi.fn(),
+      now: new Date('2026-09-14T08:00:00+03:00'),
+    });
+    useEffect(() => {
+      frames.push({ step: c.step, stepIndex: c.stepIndex, totalSteps: c.totalSteps });
+    });
+    return c;
+  });
+  return { ...hook, frames };
+};
+
+/** The steps she was shown, in order, with consecutive repeats collapsed. */
+const path = (frames: Frame[]) =>
+  frames.map((f) => f.step).filter((s, i, all) => i === 0 || all[i - 1] !== s);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -103,24 +185,25 @@ beforeEach(() => {
 // ══════════════════════════════════════════════════════ the flow's length ══
 
 describe('TOTAL_STEPS', () => {
-  it('is five — service, branch, artist, time, confirmation', () => {
+  it('is five — branch, service, artist, time, confirmation', () => {
     expect(TOTAL_STEPS).toBe(5);
   });
 });
 
-// ══════════════════════════════════════════════ a salon with two branches ══
+// ═══════════════════════════════ 1 · a salon with two branches (W1 order) ══
 
-describe('two open branches, some artists assigned — the branch step is real', () => {
-  it('reports five steps and puts the branch between service and artist', async () => {
+describe('two open branches, some artists assigned — branch first', () => {
+  it('opens on the branch, then service, then artist, then day, then review', async () => {
     const { result } = mount(salonWith([KWC, SAL]));
-    await waitFor(() => expect(result.current.branchOptions.length).toBeGreaterThan(0));
+    await waitFor(() => expect(result.current.step).toBe('branch'));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
 
     expect(result.current.totalSteps).toBe(5);
-    expect(result.current.step).toBe('service');
     expect(result.current.stepIndex).toBe(1);
+    expect(result.current.firstStep).toBe('branch');
 
     act(() => result.current.next());
-    expect(result.current.step).toBe('branch');
+    expect(result.current.step).toBe('service');
     expect(result.current.stepIndex).toBe(2);
 
     act(() => result.current.next());
@@ -136,54 +219,64 @@ describe('two open branches, some artists assigned — the branch step is real',
     expect(result.current.stepIndex).toBe(5);
   });
 
-  it('walks back through the branch step rather than past it', async () => {
+  it('never sends a branch to POST /bookings — the chip filters the roster and nothing else', async () => {
     const { result } = mount(salonWith([KWC, SAL]));
-    await waitFor(() => expect(result.current.branchOptions.length).toBeGreaterThan(0));
+    await waitFor(() => expect(result.current.step).toBe('branch'));
+    act(() => result.current.pickBranch({ kind: 'branch', branchId: KWC.id }));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    expect(getArtists).toHaveBeenCalledWith('SAL-AMARA', KWC.id, expect.anything());
 
-    act(() => result.current.next());
-    act(() => result.current.next());
-    expect(result.current.step).toBe('artist');
-
-    act(() => result.current.back());
-    expect(result.current.step).toBe('branch');
-
-    act(() => result.current.back());
-    expect(result.current.step).toBe('service');
-  });
-
-  /**
-   * THE COUNTER IS NEVER AHEAD OF THE PATH. Before the roster split lands, the
-   * hook cannot know whether the branch question is answerable, and a "Step 2
-   * of 5" painted in that window would name a step that may never exist. So the
-   * flow reports four until the split PROVES otherwise, and only ever rises.
-   */
-  it('reports four until the split proves the step is answerable, never the reverse', async () => {
-    let release: (rows: BookableArtist[]) => void = () => {};
-    getArtists.mockImplementation((_salonId: string, branch?: string) => {
-      if (branch === 'unassigned') return new Promise<BookableArtist[]>((r) => (release = r));
-      return Promise.resolve(ROSTER);
+    createBooking.mockResolvedValue({
+      booking: { id: 'BK-1', depositFils: 5000, startsAt: '2026-09-14T13:00:00Z' },
+      balanceAfterFils: 0,
     });
-
-    const { result } = mount(salonWith([KWC, SAL]));
-    expect(result.current.totalSteps).toBe(4);
-
-    await act(async () => {
-      release(UNASSIGNED_TWO);
-      await Promise.resolve();
+    getAvailability.mockResolvedValue({
+      date: '2026-09-14',
+      open: true,
+      hoursSource: 'artist',
+      slots: [{ startsAt: '2026-09-14T13:00:00Z', endsAt: '2026-09-14T13:45:00Z', local: '16:00', available: true }],
     });
-    await waitFor(() => expect(result.current.totalSteps).toBe(5));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.services.status).toBe('ready'));
+    act(() => result.current.pickService(SERVICES[0] as never));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.artists.status).toBe('ready'));
+    act(() => result.current.pickArtist(artist('AR-1')));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.availability.status).toBe('ready'));
+    const grid = result.current.availability;
+    if (grid.status !== 'ready') throw new Error('grid not ready');
+    const slot = grid.data.slots[0]!;
+    act(() => result.current.pickSlot(slot));
+    act(() => result.current.next());
+    act(() => result.current.confirm());
+    await waitFor(() => expect(createBooking).toHaveBeenCalledTimes(1));
+
+    const body = createBooking.mock.calls[0]![0] as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['artistId', 'serviceId', 'startsAt']);
   });
 });
 
-// ═════════════════════════════════════════════ a salon with one branch ═════
+// ═══════════════════════════ 2 · a salon with one branch — today's flow ════
 
-describe('one open branch — she is not asked, and the counter says four', () => {
-  it('never offers a branch step and never counts one', async () => {
-    const { result } = mount(salonWith([KWC]));
+describe('one open branch — she is not asked, and nothing about the flow moved', () => {
+  it('is on the service at the very first render, counting four, with no entry gate', () => {
+    const { result, frames } = mount(salonWith([KWC]));
+    // Synchronous, before any read resolves: a single-branch salon has nothing
+    // to wait for, so it must not wait.
+    expect(result.current.step).toBe('service');
+    expect(result.current.stepIndex).toBe(1);
+    expect(result.current.totalSteps).toBe(4);
+    expect(result.current.firstStep).toBe('service');
+    expect(frames[0]).toEqual({ step: 'service', stepIndex: 1, totalSteps: 4 });
+  });
+
+  it('walks service → artist → day → review, 1..4 of 4, and never counts a branch', async () => {
+    const { result, frames } = mount(salonWith([KWC]));
     await waitFor(() => expect(result.current.services.status).toBe('ready'));
 
-    expect(result.current.totalSteps).toBe(4);
     expect(result.current.branchOptions).toEqual([]);
+    expect(result.current.hasBranchStep).toBe(false);
 
     act(() => result.current.next());
     expect(result.current.step).toBe('artist');
@@ -197,11 +290,8 @@ describe('one open branch — she is not asked, and the counter says four', () =
     expect(result.current.step).toBe('review');
     expect(result.current.stepIndex).toBe(4);
 
-    act(() => result.current.back());
-    act(() => result.current.back());
-    expect(result.current.step).toBe('artist');
-    act(() => result.current.back());
-    expect(result.current.step).toBe('service');
+    expect(frames.every((f) => f.totalSteps === 4)).toBe(true);
+    expect(path(frames)).toEqual(['service', 'artist', 'day', 'review']);
   });
 
   it('asks the API nothing about branches at all', async () => {
@@ -214,29 +304,227 @@ describe('one open branch — she is not asked, and the counter says four', () =
 /**
  * The common case migration 0044 left behind: two open branches, nobody
  * assigned. Every branch chip would return an empty list, so the question has
- * no answer — and a step with no answer is worse than no step.
+ * no answer — and a step with no answer is worse than no step. This salon DOES
+ * pass through the entry gate (it cannot know nobody is assigned without
+ * asking), and then opens on the service, never on the branch.
  */
-describe('two branches, nothing assigned — the step is suppressed too', () => {
-  it('stays at four steps and skips straight to the artist', async () => {
+describe('two branches, nothing assigned — the step is suppressed, after the gate', () => {
+  it('opens on the service at four steps and never shows the branch', async () => {
     serveRoster(ROSTER); // every artist unassigned
-    const { result } = mount(salonWith([KWC, SAL]));
-    await waitFor(() => expect(result.current.rosterSplit).not.toBeNull());
+    const { result, frames } = mount(salonWith([KWC, SAL]));
+    await waitFor(() => expect(result.current.step).toBe('service'));
 
     expect(result.current.branchOptions).toEqual([]);
     expect(result.current.totalSteps).toBe(4);
+    expect(result.current.stepIndex).toBe(1);
+    expect(result.current.firstStep).toBe('service');
 
     act(() => result.current.next());
     expect(result.current.step).toBe('artist');
     expect(result.current.stepIndex).toBe(2);
+
+    expect(path(frames)).toEqual(['entry', 'service', 'artist']);
   });
 });
 
-// ═══════════════════════════════════════════════════════════ rescheduling ══
+// ═════════════════════════════════════ 3 · entry before the roster lands ═══
+
+describe('the entry gate — step 1 waits for the data that decides it', () => {
+  it('shows `entry` while the split is in flight, then the branch — never service first', async () => {
+    const split = holdSplit();
+    const { result, frames } = mount(salonWith([KWC, SAL]));
+
+    expect(result.current.step).toBe('entry');
+    expect(result.current.firstStep).toBeNull();
+    // Let the service list and the unfiltered roster land: the gate must hold
+    // on the split alone, not lift because something else arrived.
+    await waitFor(() => expect(result.current.services.status).toBe('ready'));
+    await waitFor(() => expect(result.current.artists.status).toBe('ready'));
+    expect(result.current.step).toBe('entry');
+
+    await act(async () => {
+      split.release(UNASSIGNED_TWO);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.step).toBe('branch'));
+
+    expect(path(frames)).toEqual(['entry', 'branch']);
+    expect(frames.some((f) => f.step === 'service')).toBe(false);
+  });
+
+  it('a failed split at entry is a failure with a retry, and the retry recovers', async () => {
+    const first = holdSplit();
+    const { result } = mount(salonWith([KWC, SAL]));
+    await act(async () => {
+      first.fail(new ApiError('offline', 'You are offline.', 'REF-1', null));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.entryFailure).not.toBeNull());
+    expect(result.current.entryFailure?.kind).toBe('offline');
+    expect(result.current.step).toBe('entry');
+    expect(result.current.totalSteps).toBeNull();
+
+    const second = holdSplit();
+    act(() => result.current.retryLoad());
+    // Back on the skeleton, not still on the failure, while the retry is out.
+    await waitFor(() => expect(result.current.entryFailure).toBeNull());
+    expect(result.current.step).toBe('entry');
+
+    await act(async () => {
+      second.release(UNASSIGNED_TWO);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.step).toBe('branch'));
+    expect(result.current.totalSteps).toBe(5);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════ 4 · counter ═══
+
+describe('the counter — decided before it is shown, and never moves', () => {
+  it('multi-branch: no number on entry, then 1 of 5, and the total is 5 on every numbered frame', async () => {
+    const split = holdSplit();
+    const { result, frames } = mount(salonWith([KWC, SAL]));
+    expect(result.current.stepIndex).toBeNull();
+    expect(result.current.totalSteps).toBeNull();
+
+    await act(async () => {
+      split.release(UNASSIGNED_TWO);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    act(() => result.current.next());
+    act(() => result.current.next());
+
+    const numbered = frames.filter((f) => f.totalSteps !== null);
+    expect(numbered[0]).toEqual({ step: 'branch', stepIndex: 1, totalSteps: 5 });
+    expect(new Set(numbered.map((f) => f.totalSteps))).toEqual(new Set([5]));
+    // Every un-numbered frame is the gate and nothing else.
+    expect(frames.filter((f) => f.totalSteps === null).every((f) => f.step === 'entry')).toBe(true);
+  });
+
+  it('a retry after entry that finds nobody assigned any more does not take the step away', async () => {
+    const { result, frames } = mount(salonWith([KWC, SAL]));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    act(() => result.current.next()); // on the service, "2 of 5"
+
+    serveRoster(ROSTER); // the merchant unassigned everyone meanwhile
+    act(() => result.current.retryLoad());
+    await waitFor(() => expect(result.current.rosterSplit).toEqual({ total: 4, unassigned: 4 }));
+
+    expect(result.current.totalSteps).toBe(5);
+    expect(result.current.stepIndex).toBe(2);
+    expect(new Set(frames.filter((f) => f.totalSteps !== null).map((f) => f.totalSteps))).toEqual(
+      new Set([5]),
+    );
+  });
+});
+
+// ═══════════════════════════════════════════ 5 · an empty branch, and services ═
+
+describe('an empty branch is caught on the branch step', () => {
+  it('knows the chosen branch has nobody, and refuses Continue from it', async () => {
+    const { result } = mount(salonWith([KWC, SAL]));
+    await waitFor(() => expect(result.current.step).toBe('branch'));
+
+    act(() => result.current.pickBranch({ kind: 'branch', branchId: SAL.id }));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(false));
+
+    act(() => result.current.next());
+    expect(result.current.step).toBe('branch');
+    expect(result.current.stepIndex).toBe(1);
+
+    // Another chip, one tap away on the same step, is the way out.
+    act(() => result.current.pickBranch({ kind: 'branch', branchId: KWC.id }));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    act(() => result.current.next());
+    expect(result.current.step).toBe('service');
+  });
+
+  it('holds Continue while the chosen branch is still being read', async () => {
+    const { result } = mount(salonWith([KWC, SAL]));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+
+    let land: (rows: BookableArtist[]) => void = () => {};
+    getArtists.mockImplementation((_s: string, branch?: string) =>
+      branch === KWC.id ? new Promise<BookableArtist[]>((r) => (land = r)) : Promise.resolve(ROSTER),
+    );
+    act(() => result.current.pickBranch({ kind: 'branch', branchId: KWC.id }));
+    expect(result.current.branchHasArtists).toBeNull();
+    act(() => result.current.next());
+    expect(result.current.step).toBe('branch');
+
+    await act(async () => {
+      land([artist('AR-1')]);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+  });
+
+  /**
+   * THE SERVICE LIST IS THE SALON'S, WHATEVER THE BRANCH. `BookableArtist`
+   * carries no services and the API books any active artist for any active
+   * service, so there is nothing to narrow by. If someone adds a client-side
+   * filter without the API field it needs, this goes red.
+   */
+  it('offers every service after a branch is chosen — there is no relation to narrow by', async () => {
+    const { result } = mount(salonWith([KWC, SAL]));
+    await waitFor(() => expect(result.current.step).toBe('branch'));
+    act(() => result.current.pickBranch({ kind: 'branch', branchId: KWC.id }));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    act(() => result.current.next());
+    await waitFor(() => expect(result.current.services.status).toBe('ready'));
+    expect(result.current.services).toEqual({ status: 'ready', data: SERVICES });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════ 6 · back ═════
+
+describe('back, in both salon shapes', () => {
+  it('multi-branch: review → day → artist → service → branch, and branch is where the flow is left', async () => {
+    const { result } = mount(salonWith([KWC, SAL]));
+    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    for (let i = 0; i < 4; i += 1) act(() => result.current.next());
+    expect(result.current.step).toBe('review');
+
+    const walked: StepName[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      act(() => result.current.back());
+      walked.push(result.current.step);
+    }
+    expect(walked).toEqual(['day', 'artist', 'service', 'branch']);
+    expect(result.current.firstStep).toBe('branch');
+
+    // The machine does not walk off its first step; the screen leaves instead.
+    act(() => result.current.back());
+    expect(result.current.step).toBe('branch');
+  });
+
+  it('single-branch: back from the artist is the service, and the service is where the flow is left', async () => {
+    const { result } = mount(salonWith([KWC]));
+    await waitFor(() => expect(result.current.services.status).toBe('ready'));
+    act(() => result.current.next());
+    act(() => result.current.next());
+    act(() => result.current.next());
+    expect(result.current.step).toBe('review');
+
+    act(() => result.current.back());
+    act(() => result.current.back());
+    expect(result.current.step).toBe('artist');
+    act(() => result.current.back());
+    expect(result.current.step).toBe('service');
+    expect(result.current.firstStep).toBe('service');
+    act(() => result.current.back());
+    expect(result.current.step).toBe('service');
+  });
+});
+
+// ═══════════════════════════════════════════════════════ 7 · rescheduling ══
 
 /**
  * A reschedule fixes the artist, so there is no roster to filter and no branch
  * to ask about. It enters at the grid exactly as before, and the counter it
- * shows is the one it showed before this slice.
+ * shows is the one it showed before W1.
  */
 describe('rescheduling — untouched by the branch step', () => {
   const TARGET: RescheduleTarget = {
@@ -245,15 +533,18 @@ describe('rescheduling — untouched by the branch step', () => {
     serviceId: 'SV-1',
   };
 
-  it('enters at the grid, counts four, and never reads the split', async () => {
-    const { result } = mount(salonWith([KWC, SAL]), TARGET);
+  it('enters at the grid on the first render, counts four, and never reads the split', async () => {
+    const { result, frames } = mount(salonWith([KWC, SAL]), TARGET);
+    expect(frames[0]).toEqual({ step: 'day', stepIndex: 3, totalSteps: 4 });
     await waitFor(() => expect(result.current.services.status).toBe('ready'));
 
     expect(result.current.step).toBe('day');
     expect(result.current.totalSteps).toBe(4);
     expect(result.current.stepIndex).toBe(3);
+    expect(result.current.firstStep).toBe('day');
     expect(result.current.branchOptions).toEqual([]);
     expect(getArtists.mock.calls.some(([, branch]) => branch === 'unassigned')).toBe(false);
+    expect(frames.some((f) => f.step === 'entry')).toBe(false);
   });
 
   it('still refuses to walk back out of the grid into steps she never saw', async () => {
