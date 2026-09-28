@@ -13,7 +13,9 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../http/errors';
 import {
   cancellationOutcome,
+  lockInCap,
   noShowOutcome,
+  returnPercentAt,
   parseCancellationRules,
   parsePolicyInput,
   splitDeposit,
@@ -108,6 +110,78 @@ describe('cancellationOutcome — the first threshold she meets wins', () => {
 
   it('a policy with no rules returns nothing on any cancel', () => {
     expect(cancellationOutcome([], START, before(500), fils(5_000)).returnedFils).toBe(0);
+  });
+});
+
+describe('the reschedule cap — a late move cannot buy back a return she had lost', () => {
+  const rules = [
+    { hoursBefore: 48, returnPercent: 100 },
+    { hoursBefore: 24, returnPercent: 50 },
+  ];
+  const DAY = 24 * H;
+
+  it('no cap: the rules decide, unchanged', () => {
+    expect(cancellationOutcome(rules, START, before(72), fils(5_005), null)).toEqual(
+      cancellationOutcome(rules, START, before(72), fils(5_005)),
+    );
+  });
+
+  it("trunk's case: moved at 30h (50% locked in), cancelled a week out — 50%, not 100%", () => {
+    const original = START;
+    const movedAt = before(30);
+    const cap = lockInCap(null, returnPercentAt(rules, original, movedAt));
+    expect(cap).toBe(50);
+    const newSlot = new Date(original.getTime() + 7 * DAY);
+    expect(cancellationOutcome(rules, newSlot, movedAt, fils(5_005), cap)).toEqual({
+      rule: { hoursBefore: 24, returnPercent: 50 },
+      returnPercent: 50,
+      returnedFils: 2_502,
+      keptFils: 2_503,
+    });
+  });
+
+  it('the cap is a ceiling, not a floor: the new slot\'s own rules can still bring it lower', () => {
+    const newSlot = new Date(START.getTime() + 7 * DAY);
+    // Twelve hours before the NEW slot: later than every rule → 0%, cap 50 or not.
+    const late = new Date(newSlot.getTime() - 12 * H);
+    expect(cancellationOutcome(rules, newSlot, late, fils(5_005), 50)).toMatchObject({
+      rule: null,
+      returnPercent: 0,
+      keptFils: 5_005,
+    });
+  });
+
+  it('a cap below every rule names no rule', () => {
+    expect(cancellationOutcome(rules, START, before(72), fils(5_005), 0)).toEqual({
+      rule: null,
+      returnPercent: 0,
+      returnedFils: 0,
+      keptFils: 5_005,
+    });
+  });
+
+  it('WHY A CAP: an early move (100%) keeps 100% after the original slot\'s time has gone by', () => {
+    // Booked for the 10th; moved on the 5th, five days ahead, to the 25th.
+    const movedAt = new Date(START.getTime() - 5 * DAY);
+    const cap = lockInCap(null, returnPercentAt(rules, START, movedAt));
+    expect(cap).toBe(100);
+    const newSlot = new Date(START.getTime() + 15 * DAY);
+    // Cancelled on the 15th: ten days before the appointment that exists. The
+    // original slot (the 10th) is five days in the PAST, so measuring from it
+    // would return 0% and keep the whole deposit. The cap returns it all.
+    const cancelAt = new Date(START.getTime() + 5 * DAY);
+    expect(cancellationOutcome(rules, START, cancelAt, fils(5_005)).returnPercent).toBe(0);
+    expect(cancellationOutcome(rules, newSlot, cancelAt, fils(5_005), cap).returnPercent).toBe(100);
+  });
+
+  it('lockInCap only ever narrows, across a chain of moves', () => {
+    expect(lockInCap(null, 100)).toBe(100);
+    expect(lockInCap(null, 50)).toBe(50);
+    expect(lockInCap(50, 100)).toBe(50);
+    expect(lockInCap(100, 50)).toBe(50);
+    expect(lockInCap(50, 0)).toBe(0);
+    // A second move, from a slot a week out, with 50% already locked in.
+    expect(returnPercentAt(rules, new Date(START.getTime() + 7 * DAY), START, 50)).toBe(50);
   });
 });
 

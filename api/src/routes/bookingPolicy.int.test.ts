@@ -38,6 +38,12 @@ const OTHER_MANAGER = `${OTHER}-MGR`;
 const ARTIST = `${SALON}-AR`;
 const SVC = `${SALON}-SV`;
 const DEPOSIT = 5_005;
+/**
+ * `BOOKING_SETTLE_GRACE_MINUTES`' default, which this suite runs under: a policy
+ * booking settles automatically at `ends_at` + 60, the hour the till needs.
+ * `bookingSettleGraceZero.int.test.ts` pins 0 in a process of its own.
+ */
+const GRACE_MIN = 60;
 
 type Json = Record<string, any>;
 
@@ -113,16 +119,37 @@ suite('the salon writes its own booking policy (0066)', () => {
    */
   async function heldBooking(
     memberId: string,
-    opts: { startsInMinutes: number; durationMin?: number; policyId: string | null },
+    opts: {
+      startsInMinutes: number;
+      durationMin?: number;
+      policyId: string | null;
+      /**
+       * Give the fixture artist a real week and the service, so the booking can
+       * be moved through the real `POST /bookings/{id}/reschedule` — which checks
+       * the availability grid and the artist-service pair.
+       */
+      movable?: boolean;
+    },
   ): Promise<string> {
     const bk = `BP-BK-${randomUUID().slice(0, 12)}`;
     const hold = `BP-TX-H-${randomUUID().slice(0, 12)}`;
     const artist = `BP-AR-${randomUUID().slice(0, 12)}`;
     const dur = opts.durationMin ?? 60;
     const start = `${opts.startsInMinutes} minutes`;
+    const windows = opts.movable
+      ? JSON.stringify(
+          Object.fromEntries(
+            ['0', '1', '2', '3', '4', '5', '6'].map((d) => [d, { open: true, from: '10:00', to: '20:00' }]),
+          ),
+        )
+      : '{}';
     await exec(sql`
       INSERT INTO artist (id, salon_id, branch_id, name, slot_minutes, windows, active)
-      VALUES (${artist}, ${SALON}, ${BRANCH}, 'BP Fixture Artist', 60, '{}'::jsonb, true)`);
+      VALUES (${artist}, ${SALON}, ${BRANCH}, 'BP Fixture Artist', 60, ${windows}::jsonb, true)`);
+    if (opts.movable) {
+      await exec(sql`
+        INSERT INTO artist_service (artist_id, service_id, salon_id) VALUES (${artist}, ${SVC}, ${SALON})`);
+    }
     await exec(sql`
       INSERT INTO "transaction"
         (id, member_id, salon_id, branch_id, kind, amount_fils, method, status, reference, created_at, settled_at)
@@ -153,7 +180,7 @@ suite('the salon writes its own booking policy (0066)', () => {
         SELECT ${bk}, ${SALON}, ${BRANCH}, ${memberId}, ${artist}, ${SVC},
                now() + ${start}::interval, now() + ${start}::interval + ${`${dur} minutes`}::interval, ${dur},
                ${DEPOSIT}, 'deposit_held', ${hold},
-               now() + ${start}::interval + ${`${dur} minutes`}::interval,
+               now() + ${start}::interval + ${`${dur + GRACE_MIN} minutes`}::interval,
                p.id, p.version, p.no_show_rule, p.cancellation_rules, p.text_en, p.text_ar
           FROM booking_policy p WHERE p.id = ${opts.policyId}`);
     }
@@ -464,8 +491,8 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(booked.policy).toMatchObject({ version: 2, noShow: 'keep', cancellation: RULES });
       expect(booked.policy.text).toEqual({ en: TEXT.en, ar: 'نص' });
       expect(booked.settlement).toBeNull();
-      // Automatic settle at slot end: `no_show_return_due_at` = `ends_at` (+0).
-      expect(booked.noShowReturnDueAt).toBe(booked.endsAt);
+      // Automatic settle an hour after the slot ends: `ends_at` + the grace (60).
+      expect(Date.parse(booked.noShowReturnDueAt) - Date.parse(booked.endsAt)).toBe(GRACE_MIN * 60_000);
 
       // The salon changes its mind: everything kept, from any distance.
       await publish({ noShow: 'return', cancellation: [], text: { en: 'Nothing back on cancel.', ar: '' } });
@@ -642,6 +669,149 @@ suite('the salon writes its own booking policy (0066)', () => {
     });
   });
 
+  // ===================================================== the loophole ==
+
+  describe('the reschedule loophole — a late move cannot buy back a return she had lost', () => {
+    let policyId = '';
+
+    beforeAll(async () => {
+      const out = await publish({ noShow: 'keep', cancellation: RULES, text: TEXT });
+      policyId = String(out.policy.id);
+    });
+
+    /** The booking's artist's first open slot five or more days out. */
+    async function laterSlot(bk: string, memberId: string): Promise<string> {
+      const [row] = await exec(sql`SELECT artist_id FROM booking WHERE id = ${bk}`);
+      for (let d = 5; d < 20; d++) {
+        const day = new Date(Date.now() + d * 86_400_000).toISOString().slice(0, 10);
+        const res = await get(`/artists/${String(row?.artist_id)}/availability?date=${day}`, memberBearer[memberId]!);
+        expect(res.statusCode, res.body).toBe(200);
+        const slot = ((res.json() as Json).slots as Json[]).find((s) => s.available)?.startsAt;
+        if (slot) return String(slot);
+      }
+      throw new Error('the fixture artist offered no slot');
+    }
+
+    const reschedule = (bk: string, memberId: string, startsAt: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/bookings/${bk}/reschedule`,
+        headers: { authorization: `Bearer ${memberBearer[memberId]}` },
+        payload: { startsAt },
+      });
+
+    it('30h out (50%), moved a week later, then cancelled: 50% — the ORIGINAL slot\'s percent, not 100%', async () => {
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: 30 * 60, policyId, movable: true });
+      const before = await balanceOf(m);
+
+      const moved = await reschedule(bk, m, await laterSlot(bk, m));
+      expect(moved.statusCode, moved.body).toBe(200);
+      const after = (moved.json() as Json).booking as Json;
+      // A week out: by the rules alone this would now be a 100% cancel.
+      expect(Date.parse(String(after.startsAt)) - Date.now()).toBeGreaterThan(48 * 3_600_000);
+      expect(after.returnCapPercent).toBe(50);
+      expect(after.rescheduledCount).toBe(1);
+
+      const res = await cancel(bk, m);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({
+        refundedFils: 2_502,
+        keptFils: 2_503,
+        returnPercent: 50,
+        rule: { hoursBefore: 24, returnPercent: 50 },
+      });
+      expect(await balanceOf(m)).toBe(before + 2_502);
+      expect((await settlementLegs(bk)).sort()).toEqual([
+        'deposit_held:debit:2502',
+        'deposit_held:debit:2503',
+        'member_wallet:credit:2502',
+        'salon_revenue:credit:2503',
+      ]);
+    });
+
+    it('12h out (0%), moved a week later: the cap is 0 and the whole deposit stays with the salon', async () => {
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: 12 * 60, policyId, movable: true });
+      const before = await balanceOf(m);
+      const moved = await reschedule(bk, m, await laterSlot(bk, m));
+      expect(moved.statusCode, moved.body).toBe(200);
+      expect(((moved.json() as Json).booking as Json).returnCapPercent).toBe(0);
+
+      const res = await cancel(bk, m);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ refundedFils: 0, keptFils: 5_005, returnPercent: 0, rule: null });
+      expect(await balanceOf(m)).toBe(before);
+    });
+
+    it('72h out (100%), moved: nothing was lost, so nothing is capped — 100% back', async () => {
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: 72 * 60, policyId, movable: true });
+      const before = await balanceOf(m);
+      const moved = await reschedule(bk, m, await laterSlot(bk, m));
+      expect(moved.statusCode, moved.body).toBe(200);
+      expect(((moved.json() as Json).booking as Json).returnCapPercent).toBe(100);
+
+      const res = await cancel(bk, m);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ refundedFils: 5_005, keptFils: 0, returnPercent: 100 });
+      expect(await balanceOf(m)).toBe(before + 5_005);
+    });
+
+    it('a second move only narrows: 50% locked in, moved again from a week out, still 50%', async () => {
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: 30 * 60, policyId, movable: true });
+      const first = await reschedule(bk, m, await laterSlot(bk, m));
+      expect(first.statusCode, first.body).toBe(200);
+      // Move it again, to a later slot on the same grid (the next day's).
+      const firstAt = Date.parse(String(((first.json() as Json).booking as Json).startsAt));
+      const [row] = await exec(sql`SELECT artist_id FROM booking WHERE id = ${bk}`);
+      const nextDay = new Date(firstAt + 86_400_000).toISOString().slice(0, 10);
+      const grid = await get(`/artists/${String(row?.artist_id)}/availability?date=${nextDay}`, memberBearer[m]!);
+      const slot = ((grid.json() as Json).slots as Json[]).find((s) => s.available)?.startsAt;
+      const second = await reschedule(bk, m, String(slot));
+      expect(second.statusCode, second.body).toBe(200);
+      expect(((second.json() as Json).booking as Json)).toMatchObject({ returnCapPercent: 50, rescheduledCount: 2 });
+      const res = await cancel(bk, m);
+      expect(res.json()).toMatchObject({ refundedFils: 2_502, keptFils: 2_503, returnPercent: 50 });
+    });
+
+    it('consistent with changeableUntil: a move inside the last hour is refused and locks in nothing; her cancel there is allowed', async () => {
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: 45, policyId, movable: true });
+      const view = await get(`/bookings/${bk}`, memberBearer[m]!);
+      const b = view.json() as Json;
+      expect(Date.parse(String(b.changeableUntil))).toBeLessThan(Date.now());
+      expect(b.returnCapPercent).toBeNull();
+
+      const moved = await reschedule(bk, m, await laterSlot(bk, m));
+      expect(moved.statusCode, moved.body).toBe(409);
+      expect((moved.json() as Json).error).toBe('change_window_closed');
+      expect(
+        await num(sql`SELECT count(*)::int AS n FROM booking WHERE id = ${bk} AND policy_return_cap_percent IS NULL AND rescheduled_count = 0`),
+      ).toBe(1);
+
+      // Cancelling is not gated on `changeableUntil` for a policy booking — the
+      // rules decide, and 45 minutes out is later than every threshold.
+      const res = await cancel(bk, m);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ refundedFils: 0, keptFils: 5_005, returnPercent: 0 });
+    });
+
+    it('a legacy booking is never capped — the field is null and the move keeps the full return', async () => {
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: 30 * 60, policyId: null, movable: true });
+      const before = await balanceOf(m);
+      const moved = await reschedule(bk, m, await laterSlot(bk, m));
+      expect(moved.statusCode, moved.body).toBe(200);
+      expect(((moved.json() as Json).booking as Json).returnCapPercent).toBeNull();
+      const res = await cancel(bk, m, null);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ refundedFils: 5_005, keptFils: 0 });
+      expect(await balanceOf(m)).toBe(before + 5_005);
+    });
+  });
+
   // ============================================================ no-show ==
 
   describe('the no-show rule: keep versus return, by hand and at slot end', () => {
@@ -683,7 +853,7 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(await settlementLegs(bk)).toEqual(['deposit_held:debit:5005', 'member_wallet:credit:5005']);
     });
 
-    it('the sweep settles AT slot end, not a second before, and applies the stamp', async () => {
+    it('the sweep settles an HOUR after slot end (grace 60), not a second before, and applies the stamp', async () => {
       const mk = await customer();
       const mr = await customer();
       // Started 30 minutes ago, 60 minutes long: the slot ends in 30 minutes.
@@ -694,12 +864,19 @@ suite('the salon writes its own booking policy (0066)', () => {
         await num(sql`SELECT (extract(epoch FROM ends_at) * 1000)::bigint AS n FROM booking WHERE id = ${keep}`),
       );
       const [bk0, br0] = [await balanceOf(mk), await balanceOf(mr)];
+      const held = () =>
+        num(sql`SELECT count(*)::int AS n FROM booking WHERE id IN (${keep}, ${ret}) AND status = 'deposit_held'`);
 
-      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() - 1_000));
-      expect(await num(sql`SELECT count(*)::int AS n FROM booking WHERE id IN (${keep}, ${ret}) AND status = 'deposit_held'`)).toBe(2);
+      // At slot end, and five minutes after it — she may still be at the till.
+      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + 1_000));
+      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + 5 * 60_000));
+      expect(await held()).toBe(2);
+      // A second before the grace runs out.
+      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + GRACE_MIN * 60_000 - 1_000));
+      expect(await held()).toBe(2);
 
       // The second booking's slot ends within a few ms of the first's (two INSERTs).
-      const tick = await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + 60_000));
+      const tick = await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + GRACE_MIN * 60_000 + 60_000));
       expect(tick.kept).toBeGreaterThanOrEqual(1);
       expect(tick.returned).toBeGreaterThanOrEqual(1);
 
@@ -718,13 +895,48 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(n?.title).toBe('A deposit was kept under your booking policy');
     });
 
+    it('keep, and charged at the till five minutes after her slot ended: the deposit is APPLIED, not kept', async () => {
+      // The case the 60-minute grace exists for. At grace 0 the sweep would have
+      // forfeited this deposit at slot end and the till would charge in full.
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: -65, durationMin: 60, policyId: keepId });
+      await runNoShowReturnsOnce(db, 500);
+      expect(await num(sql`SELECT count(*)::int AS n FROM booking WHERE id = ${bk} AND status = 'deposit_held'`)).toBe(1);
+
+      const before = await balanceOf(m);
+      const till = (
+        await issue(db, {
+          principalKind: 'staff',
+          staffId: MANAGER,
+          salonId: SALON,
+          scope: 'scanner',
+          deviceId: `BP-DEV-${randomUUID()}`,
+        })
+      ).accessToken;
+      const res = await app.inject({
+        method: 'POST',
+        url: '/charges',
+        headers: { authorization: `Bearer ${till}`, 'idempotency-key': `bp-till-${randomUUID()}` },
+        payload: { memberId: m, amountFils: 9_000, reason: 'BP till after slot end', confirmDuplicate: true },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const out = res.json() as Json;
+      expect(out).toMatchObject({ depositAppliedFils: DEPOSIT, depositReturnedFils: 0, bookingId: bk });
+      // 9.000 less the 5.005 already held: 3.995 from her spendable balance, nothing forfeited.
+      expect(await balanceOf(m)).toBe(before - (9_000 - DEPOSIT));
+      const [row] = await exec(sql`
+        SELECT status::text AS status, forfeit_transaction_id AS f FROM booking WHERE id = ${bk}`);
+      expect(row).toEqual({ status: 'completed', f: null });
+    });
+
     it('sweep and manual mark racing: each booking settles EXACTLY once', async () => {
       const pairs: Array<{ m: string; bk: string; before: number }> = [];
       for (let i = 0; i < 6; i++) {
         const m = await customer();
-        // Ended already (started 90 min ago, 60 min long), so both paths want it.
+        // Past its grace already (started 150 min ago, 60 min long, +60), so both
+        // paths want it.
         const bk = await heldBooking(m, {
-          startsInMinutes: -90,
+          startsInMinutes: -(60 + GRACE_MIN + 30),
           durationMin: 60,
           policyId: i % 2 === 0 ? keepId : returnId,
         });
@@ -784,7 +996,8 @@ suite('the salon writes its own booking policy (0066)', () => {
         await num(sql`
           SELECT (extract(epoch FROM no_show_return_due_at) * 1000)::bigint AS n FROM booking WHERE id = ${bk}`),
       );
-      // Its slot ended 30 minutes ago; a policy booking would already be settled.
+      // Its slot ended 30 minutes ago. Its deadline is the salon's old window
+      // (60), stamped at booking — not the policy grace, whatever that is set to.
       await runNoShowReturnsOnce(db, 500, new Date(due.getTime() - 1_000));
       expect(await num(sql`SELECT count(*)::int AS n FROM booking WHERE id = ${bk} AND status = 'deposit_held'`)).toBe(1);
       // +1 ms: the epoch above is rounded to the millisecond, the column holds microseconds.
@@ -859,6 +1072,43 @@ suite('the salon writes its own booking policy (0066)', () => {
       const res = await get('/members/me/transactions', memberBearer[m]!);
       expect(res.statusCode, res.body).toBe(200);
       expect(((res.json() as Json).items as Json[]).some((t) => t.kind === 'deposit_forfeit')).toBe(false);
+    });
+
+    it("every deposit this suite's salon KEPT is in the Sales report and the Overview's spend, to the fil", async () => {
+      // The ledger's own answer: the salon_revenue leg of every forfeit. `upTo`
+      // because the sweep specs above settle at a FUTURE instant they pass in
+      // (slot end + grace), and a report window ends at the real now.
+      const ledgerKept = (upTo: 'all' | 'now') =>
+        num(sql`
+          SELECT coalesce(sum(l.amount_fils), 0)::bigint AS n
+            FROM ledger_entry l JOIN "transaction" t ON t.id = l.transaction_id
+           WHERE t.salon_id = ${SALON} AND t.kind::text = 'deposit_forfeit'
+             AND l.account = 'salon_revenue' AND l.direction = 'credit'
+             ${upTo === 'now' ? sql`AND t.created_at < now()` : sql``}`);
+      // And the bookings' own: settled_kept_fils, which the settle wrote beside it.
+      const bookingKept = await num(sql`
+        SELECT coalesce(sum(settled_kept_fils), 0)::bigint AS n FROM booking WHERE salon_id = ${SALON}`);
+      expect(await ledgerKept('all')).toBe(bookingKept);
+      const keptByNow = await ledgerKept('now');
+      expect(keptByNow).toBeGreaterThan(0);
+
+      const sales = await get(`/salons/${SALON}/reports/sales?period=30d`, bearer[MANAGER]!);
+      expect(sales.statusCode, sales.body).toBe(200);
+      const report = sales.json() as Json;
+      expect((report.columns as Json[]).at(-1)).toEqual({
+        header: 'Kept deposits KD',
+        key: 'keptDepositsFils',
+        type: 'money',
+      });
+      const kept = (report.rows as Json[]).reduce((n, r) => n + Number(r.keptDepositsFils), 0);
+      expect(kept).toBe(keptByNow);
+
+      const ov = await get(`/v1/salons/${SALON}/overview/analytics?period=30d`, bearer[MANAGER]!);
+      expect(ov.statusCode, ov.body).toBe(200);
+      const wallet = (ov.json() as Json).wallet as Json;
+      // The one charge this suite rang up (9.000 against a 5.005 deposit) is `Gross KD`.
+      expect(report.stat.value).toBe(9_000);
+      expect(wallet.spentFils).toBe(report.stat.value + kept);
     });
   });
 });

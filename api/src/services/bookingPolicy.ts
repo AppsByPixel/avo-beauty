@@ -12,8 +12,9 @@
  *   no-show        `keep` → the deposit is forfeited to the salon.
  *                  `return` → it goes back to her wallet.
  *                  Applied when staff mark the no-show (after `starts_at`) or when
- *                  the slot ends (`ends_at` + `BOOKING_SETTLE_GRACE_MINUTES`, 0 by
- *                  default), whichever is first — trunk's ruling.
+ *                  the slot ends (`ends_at` + `BOOKING_SETTLE_GRACE_MINUTES`, 60 by
+ *                  default, so she can still be charged at the till), whichever
+ *                  is first — trunk's rulings.
  *   her cancel     up to three `{ hoursBefore, returnPercent }`. The first rule
  *                  whose threshold she meets wins; later than all of them, 0%.
  *                  `returnPercent` of integer fils, ROUNDED DOWN; the salon keeps
@@ -60,7 +61,13 @@
  */
 
 import { desc, eq, sql } from 'drizzle-orm';
-import { fils, subtract, type Fils } from '@avo/types';
+import {
+  fils,
+  subtract,
+  type BookingPolicy,
+  type BookingPolicyStamp,
+  type Fils,
+} from '@avo/types';
 import type { Db } from '../db/client';
 import {
   bookingPolicy,
@@ -100,30 +107,18 @@ export interface PolicyInput {
   text: { en: string; ar: string };
 }
 
-/** The wire shape. `GET/PUT /salons/{id}/booking-policy` and the customer read. */
-export interface BookingPolicyView {
-  id: string;
-  salonId: string;
-  version: number;
-  noShow: NoShowRule;
-  cancellation: CancellationRule[];
-  /** Empty `ar` falls back to `en` at the display boundary, as `LegalDocSchema`. */
-  text: { en: string; ar: string };
-  publishedAt: string;
-}
-
-/** The stamp a booking carries. The same fields minus the salon and the instant. */
-export interface StampedPolicyView {
-  id: string;
-  version: number;
-  noShow: NoShowRule;
-  cancellation: CancellationRule[];
-  text: { en: string; ar: string };
-}
+/**
+ * The wire shapes are trunk's, from `@avo/types` (b23e78c): `BookingPolicy` for
+ * `GET/PUT /salons/{id}/booking-policy` and the customer read, and
+ * `BookingPolicyStamp` for the policy a booking carries. The api-local copies
+ * this file used to declare are gone. `ar` may be '' and falls back to `en` at
+ * the display boundary, as `LegalDocSchema`.
+ */
+export type { BookingPolicy, BookingPolicyStamp };
 
 type PolicyRow = typeof bookingPolicy.$inferSelect;
 
-export function serialisePolicy(row: PolicyRow): BookingPolicyView {
+export function serialisePolicy(row: PolicyRow): BookingPolicy {
   return {
     id: row.id,
     salonId: row.salonId,
@@ -314,17 +309,64 @@ export interface CancellationOutcome {
  * milliseconds against the server's clock, never the device's. Rules are stored
  * earliest cut-off first, so the first match is the most generous one she still
  * qualifies for. Later than every threshold returns 0%.
+ *
+ * =========================================================================
+ * `capPercent` — THE RESCHEDULE LOOPHOLE (trunk, 2026-09-29; migration 0067)
+ * =========================================================================
+ * Moving a booking must not buy back a return she had already lost. Under
+ * 48h→100% / 24h→50%, a booking 30 hours out returns 50%; moved to next week it
+ * would be 100% again. So each of HER reschedules locks in what a cancel would
+ * have returned at that instant (`returnPercentAt` against the slot she left,
+ * folded by `lockInCap`), and a cancel returns the SMALLER of that cap and what
+ * the rules give against the CURRENT slot.
+ *
+ * WHY A CAP AND NOT "MEASURE EVERY CUT-OFF FROM THE FIRST SLOT FOR EVER". The
+ * two agree on the case trunk named — a late move followed by a cancel returns
+ * the original slot's percent. They part company only once the ORIGINAL slot's
+ * time has gone by, and there the first-slot reading takes money she never
+ * lost: she moves a booking from the 5th to the 20th with ten days' notice (100%
+ * at the move), then cancels on the 10th, ten days before the appointment that
+ * now exists — measured from the 5th, which has passed, that is 0% and the salon
+ * keeps the whole deposit. The cap keeps her 100% there and still refuses the
+ * buy-back. Reported to trunk.
+ *
+ * When the cap binds, `rule` is the stamped rule whose percent the cap equals
+ * (the one that applied at the move), or null when the cap is below every rule
+ * — she moved it later than every threshold.
  */
 export function cancellationOutcome(
   rules: readonly CancellationRule[],
   startsAt: Date,
   now: Date,
   deposit: Fils,
+  capPercent: number | null = null,
 ): CancellationOutcome {
   const aheadMs = startsAt.getTime() - now.getTime();
-  const rule = rules.find((r) => aheadMs >= r.hoursBefore * 3_600_000) ?? null;
-  const returnPercent = rule ? rule.returnPercent : 0;
-  return { rule, returnPercent, ...splitDeposit(deposit, returnPercent) };
+  const matched = rules.find((r) => aheadMs >= r.hoursBefore * 3_600_000) ?? null;
+  const byRules = matched ? matched.returnPercent : 0;
+  if (capPercent === null || capPercent >= byRules) {
+    return { rule: matched, returnPercent: byRules, ...splitDeposit(deposit, byRules) };
+  }
+  const rule = rules.find((r) => r.returnPercent === capPercent) ?? null;
+  return { rule, returnPercent: capPercent, ...splitDeposit(deposit, capPercent) };
+}
+
+/** What a cancel at `now` would return, in percent, against the slot at `startsAt`. */
+export function returnPercentAt(
+  rules: readonly CancellationRule[],
+  startsAt: Date,
+  now: Date,
+  capPercent: number | null = null,
+): number {
+  return cancellationOutcome(rules, startsAt, now, fils(0), capPercent).returnPercent;
+}
+
+/**
+ * The cap after one more of her moves: never higher than it was, never higher
+ * than what she had at the moment she moved. `least()` across every move.
+ */
+export function lockInCap(existing: number | null, atMove: number): number {
+  return existing === null ? atMove : Math.min(existing, atMove);
 }
 
 /** The no-show rule as a split. `keep` keeps everything, `return` returns everything. */
@@ -365,7 +407,7 @@ function sameAs(row: PolicyRow, input: PolicyInput): boolean {
 }
 
 export interface PublishResult {
-  policy: BookingPolicyView;
+  policy: BookingPolicy;
   /** False when the body was identical to the current version: nothing written. */
   published: boolean;
   /** Bell notices written by THIS publish. 0 on the second publish of a salon-day. */

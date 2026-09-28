@@ -95,6 +95,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  smallint,
   text,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
@@ -286,6 +287,16 @@ export const booking = pgTable(
     policyTextAr: text('policy_text_ar'),
 
     /**
+     * THE RETURN HER OWN RESCHEDULE LOCKED IN (migration 0067) — the reschedule
+     * loophole. At each customer reschedule of a POLICY booking, the percent a
+     * cancel would have returned at that instant against the slot she left,
+     * folded in with `least()`. A cancel returns the smaller of this and what the
+     * stamped rules give against the current slot. NULL: never moved by her, or
+     * LEGACY. services/bookingPolicy.ts § cancellationOutcome.
+     */
+    policyReturnCapPercent: smallint('policy_return_cap_percent'),
+
+    /**
      * WHERE THE DEPOSIT WENT when it left escrow other than by a charge.
      * `returned + kept = deposit_fils`. NULL on rows settled before 0066 (and by
      * the pre-0066 API), every one of which was a full return.
@@ -454,6 +465,11 @@ export const booking = pgTable(
       'booking_settled_names_the_return',
       sql`${t.settledReturnedFils} IS NULL
           OR (${t.settledReturnedFils} > 0) = (${t.settledTransactionId} IS DISTINCT FROM ${t.forfeitTransactionId})`,
+    ),
+    check(
+      'booking_policy_return_cap_valid',
+      sql`${t.policyReturnCapPercent} IS NULL
+          OR (${t.policyId} IS NOT NULL AND ${t.policyReturnCapPercent} BETWEEN 0 AND 100)`,
     ),
     check(
       'booking_rescheduled_at_matches_count',

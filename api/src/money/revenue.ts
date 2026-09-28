@@ -154,3 +154,41 @@ export async function readTransactionRevenue(
 
   return { chargedFils, depositAppliedFils, earnedFils };
 }
+
+// ------------------------------------------------------------ kept deposits --
+
+/**
+ * A DEPOSIT THE SALON KEPT — the other way held money becomes revenue.
+ *
+ * A booking's deposit reaches `salon_revenue` two ways. Applied at the till, it
+ * is the `deposit_held` debit on the CHARGE's own ledger entries, and
+ * `transaction_revenue` already counts it inside `earned_fils`. Kept under the
+ * salon's booking policy (a no-show under `keep`, or the kept share of her late
+ * cancel — migration 0066), it is a `deposit_forfeit` transaction whose pair is
+ * `deposit_held` DEBIT + `salon_revenue` CREDIT, and nothing counted it: the
+ * Sales report and the Overview read `transaction_revenue`, whose kinds are
+ * `charge` and `shop`.
+ *
+ * NOT FOLDED INTO `transaction_revenue`, deliberately. That view is also what a
+ * void refunds from, and "what the visit was worth" per charge; a forfeit is
+ * neither a visit nor voidable. And `sales`' existing columns (`Transactions`,
+ * `Gross KD`) and the `earnings-by-branch` / `artist-performance` reconciliation
+ * built on them stay exactly as they were — trunk's instruction. The kept money
+ * is its own column beside them.
+ *
+ * THE FIGURE IS THE LEDGER LEG, NOT `transaction.amount_fils`. A forfeit's
+ * `amount_fils` is ZERO by CHECK (it is her wallet delta, and her wallet does
+ * not move — the money left it when the deposit was held). The magnitude lives
+ * on the `salon_revenue` credit, exactly one per forfeit (money/ledger.ts
+ * § depositForfeitedPosting), so an INNER join counts each forfeit once.
+ *
+ * Joined onto a `transaction` alias the caller has already restricted to
+ * settled `deposit_forfeit` rows. Exposes `<as>.amount_fils`.
+ */
+export function keptDepositJoin(txAlias: string, as = 'kept'): SQL {
+  const a = sql.identifier(as);
+  return sql`JOIN ledger_entry ${a}
+                ON ${a}.transaction_id = ${sql.identifier(txAlias)}.id
+               AND ${a}.account = 'salon_revenue'
+               AND ${a}.direction = 'credit'`;
+}

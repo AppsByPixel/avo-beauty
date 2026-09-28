@@ -86,11 +86,78 @@ import type { Executor } from './audit';
 /** The wire shape of one window — exactly `HappyHourSchema`, no `live` flag. */
 export type HappyHourWire = HappyHour;
 
+/**
+ * One branch's boost on the wire. `BoostSchema` plus the four fields of
+ * migration 0067, which trunk has not landed yet (reported) — `BoostSchema` is
+ * a plain `z.object`, so a client on today's contract strips them and keeps
+ * working. ALL FOUR ARE ALWAYS PRESENT, null when unset, because they are
+ * proposed `.nullable()` and nullable is required on the wire.
+ *
+ * There is NO `live` field, for the happy hour's reason: a client resolves
+ * `isBoostLive(boost, now)` itself, every second, and the server runs the same
+ * predicate at charge and top-up time.
+ */
+export interface BoostWire {
+  visit: number;
+  topup: number;
+  stamp: number;
+  /** The boost applies from here (inclusive). Null: from publish. */
+  startsAt: string | null;
+  /** …until here (exclusive). Null: until changed. */
+  endsAt: string | null;
+  /** Set when a merchant stopped it; the values are then neutral 1/0/1. */
+  stoppedAt: string | null;
+  /** Her display name, as `boostsPublishedBy`. */
+  stoppedBy: string | null;
+}
+
 export interface PromotionSetWire {
-  boosts: Record<string, { visit: number; topup: number; stamp: number }>;
+  boosts: Record<string, BoostWire>;
   boostsPublishedAt: string | null;
   boostsPublishedBy: string | null;
   happy: HappyHourWire[];
+}
+
+/**
+ * IS THIS BRANCH'S BOOST APPLYING AT `now`? — the boost's `isHappyHourLive`.
+ *
+ *     (startsAt === null || startsAt <= now) && (endsAt === null || now < endsAt)
+ *
+ * Half-open, like the happy hour's `from <= now < to`: a charge landing exactly
+ * on `endsAt` is outside the boost. Absolute instants, not wall clock, so unlike
+ * `isHappyHourLive` it needs no zone offset.
+ *
+ * A STOPPED boost needs no clause: a stop writes the neutral 1/0/1 and clears
+ * the window (`boost_stopped_is_neutral`), so it earns nothing whether or not a
+ * reader knows the stop exists.
+ *
+ * PURE, AND WRITTEN AGAINST THE WIRE SHAPE ON PURPOSE: it belongs in
+ * `packages/types/src/rules.ts` beside `isHappyHourLive`, so the wallet's chip,
+ * the dashboard's "Ends in 2h" and this server's charge-time decision cannot
+ * disagree. `packages/types` is trunk's; it is written here and reported for
+ * trunk to move, at which point this becomes an import.
+ */
+export function isBoostLive(
+  boost: { startsAt: string | null; endsAt: string | null },
+  now: Date,
+): boolean {
+  const t = now.getTime();
+  if (boost.startsAt !== null && t < Date.parse(boost.startsAt)) return false;
+  if (boost.endsAt !== null && t >= Date.parse(boost.endsAt)) return false;
+  return true;
+}
+
+/** `boost` row → wire. */
+export function serialiseBoost(b: typeof boost.$inferSelect): BoostWire {
+  return {
+    visit: b.visit,
+    topup: b.topup,
+    stamp: b.stamp,
+    startsAt: b.startsAt ? b.startsAt.toISOString() : null,
+    endsAt: b.endsAt ? b.endsAt.toISOString() : null,
+    stoppedAt: b.stoppedAt ? b.stoppedAt.toISOString() : null,
+    stoppedBy: b.stoppedBy,
+  };
 }
 
 /** NULL branch means every branch; the wire spells that `"all"`. */
@@ -124,7 +191,7 @@ export async function readPromotionSet(exec: Db, salonId: string): Promise<Promo
   let publishedAt: Date | null = null;
   let publishedBy: string | null = null;
   for (const b of boostRows) {
-    boosts[b.branchId] = { visit: b.visit, topup: b.topup, stamp: b.stamp };
+    boosts[b.branchId] = serialiseBoost(b);
     // Every row of a set is stamped identically by `PUT .../boosts`, so the max
     // is the set's publish time. Taking the max rather than "the first row"
     // means a hand-edited database still reports the most recent truth.
@@ -201,7 +268,15 @@ export interface PromotionInputs {
    * rather than quietly wrong.
    */
   branchId: string | null;
-  boosts: Array<{ branchId: string; visit: number; topup: number; stamp: number }>;
+  /** `startsAt` / `endsAt` as ISO strings, the wire form `isBoostLive` reads. */
+  boosts: Array<{
+    branchId: string;
+    visit: number;
+    topup: number;
+    stamp: number;
+    startsAt: string | null;
+    endsAt: string | null;
+  }>;
   windows: HappyHourWire[];
 }
 
@@ -221,12 +296,15 @@ export function decideEarning(input: PromotionInputs, now: Date): EarningDecisio
 
   const decision: EarningDecision = { ...NO_PROMOTION, decidedAt: now };
 
-  // ---- branch boosts. Always on, no window, scoped to the branch charged at --
+  // ---- branch boosts. Scoped to the branch charged at, and only while LIVE --
   // Skipped entirely when the branch is not known — see `PromotionInputs.branchId`.
+  // `isBoostLive` against THIS evaluation instant (migration 0067): a boost past
+  // its `endsAt`, or not yet at its `startsAt`, earns nothing, whatever a client
+  // is still showing. Nothing flips a flag when it expires; this is the check.
   const b = input.branchId
     ? input.boosts.find((x) => x.branchId === input.branchId)
     : undefined;
-  if (b) {
+  if (b && isBoostLive(b, now)) {
     decision.visitMultiplier = Math.max(decision.visitMultiplier, b.visit);
     decision.stampMultiplier = Math.max(decision.stampMultiplier, b.stamp);
     decision.topupBonusPercent = Math.max(decision.topupBonusPercent, b.topup);
@@ -317,6 +395,8 @@ export async function loadPromotionInputs(
       visit: b.visit,
       topup: b.topup,
       stamp: b.stamp,
+      startsAt: b.startsAt ? b.startsAt.toISOString() : null,
+      endsAt: b.endsAt ? b.endsAt.toISOString() : null,
     })),
     windows: happyRows.map(serialiseHappyHour),
   };

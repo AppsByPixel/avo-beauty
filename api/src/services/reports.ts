@@ -125,7 +125,7 @@ import {
   type Period,
   type PeriodWindow,
 } from './period';
-import { revenueJoin, revenueLeftJoin } from '../money/revenue';
+import { keptDepositJoin, revenueJoin, revenueLeftJoin } from '../money/revenue';
 import type { PermissionName } from '../auth/principal';
 
 /**
@@ -947,22 +947,64 @@ async function computeReportBody(
      * ISO DATES, not the design's `06 Jul`. A 90-day export crosses a year boundary
      * and `06 Jul` cannot say which year; ISO also sorts correctly in the
      * spreadsheet this file exists to be opened in. Reported as a departure.
+     *
+     * KEPT DEPOSITS ARE REVENUE TOO, AND THEY ARE THEIR OWN COLUMN (trunk,
+     * 2026-09-29). A deposit the salon kept under its booking policy — a no-show
+     * under `keep`, the kept share of a late cancel — is a `deposit_forfeit`
+     * whose `salon_revenue` leg nothing read, so the salon's takings were missing
+     * it. It is served as `Kept deposits KD`, appended AFTER the four existing
+     * columns so none of them moves or changes meaning: `Transactions` and
+     * `Gross KD` are still charges and shop orders only, the `KD gross` stat is
+     * still their sum, and `earnings-by-branch` / `artist-performance` still
+     * reconcile against it. The salon's whole take for a row is
+     * `grossFils + keptDepositsFils` — a sum of two served integers.
+     * `money/revenue.ts § keptDepositJoin` carries why it is not folded into
+     * `transaction_revenue`.
+     *
+     * The same day, branch, window, branch filter and void predicate as the
+     * charges; a day with a forfeit and no sale is a row of its own (0
+     * transactions, 0.000 gross) rather than money with nowhere to sit.
      */
     const rows = (await db.execute(sql`
-      SELECT to_char((t.created_at AT TIME ZONE ${scope.timezone})::date, 'YYYY-MM-DD') AS day,
-             br.name AS branch,
-             count(*) AS txns,
-             coalesce(sum(rev.earned_fils), 0)::bigint AS gross
-        FROM "transaction" t
-        ${revenueJoin('t')}
-        JOIN branch br ON br.id = t.branch_id
-       WHERE t.salon_id = ${scope.salonId}
-         AND t.kind IN ('charge', 'shop')
-         AND t.status = 'settled'
-         AND t.created_at >= ${at(from)}
-         AND t.created_at < ${at(now)}
-         ${b === null ? sql`` : sql`AND t.branch_id = ${b}`}
-         ${NOT_VOIDED}
+      SELECT day, branch,
+             sum(txns)::bigint AS txns,
+             sum(gross)::bigint AS gross,
+             sum(kept)::bigint AS kept
+        FROM (
+          SELECT to_char((t.created_at AT TIME ZONE ${scope.timezone})::date, 'YYYY-MM-DD') AS day,
+                 br.name AS branch,
+                 count(*) AS txns,
+                 coalesce(sum(rev.earned_fils), 0)::bigint AS gross,
+                 0::bigint AS kept
+            FROM "transaction" t
+            ${revenueJoin('t')}
+            JOIN branch br ON br.id = t.branch_id
+           WHERE t.salon_id = ${scope.salonId}
+             AND t.kind IN ('charge', 'shop')
+             AND t.status = 'settled'
+             AND t.created_at >= ${at(from)}
+             AND t.created_at < ${at(now)}
+             ${b === null ? sql`` : sql`AND t.branch_id = ${b}`}
+             ${NOT_VOIDED}
+           GROUP BY 1, 2
+          UNION ALL
+          SELECT to_char((t.created_at AT TIME ZONE ${scope.timezone})::date, 'YYYY-MM-DD') AS day,
+                 br.name AS branch,
+                 0::bigint AS txns,
+                 0::bigint AS gross,
+                 coalesce(sum(kept.amount_fils), 0)::bigint AS kept
+            FROM "transaction" t
+            ${keptDepositJoin('t')}
+            JOIN branch br ON br.id = t.branch_id
+           WHERE t.salon_id = ${scope.salonId}
+             AND t.kind = 'deposit_forfeit'
+             AND t.status = 'settled'
+             AND t.created_at >= ${at(from)}
+             AND t.created_at < ${at(now)}
+             ${b === null ? sql`` : sql`AND t.branch_id = ${b}`}
+             ${NOT_VOIDED}
+           GROUP BY 1, 2
+        ) s
        GROUP BY 1, 2
        ORDER BY 1 DESC, 2 ASC
     `)) as unknown as Array<Record<string, unknown>>;
@@ -975,12 +1017,14 @@ async function computeReportBody(
         { header: 'Transactions', key: 'transactions', type: 'int' },
         { header: 'Gross KD', key: 'grossFils', type: 'money' },
         { header: 'Branch', key: 'branch', type: 'text' },
+        { header: 'Kept deposits KD', key: 'keptDepositsFils', type: 'money' },
       ],
       rows: rows.map((r) => ({
         date: String(r.day ?? ''),
         transactions: int(r.txns),
         grossFils: int(r.gross),
         branch: String(r.branch ?? ''),
+        keptDepositsFils: int(r.kept),
       })),
     };
   }

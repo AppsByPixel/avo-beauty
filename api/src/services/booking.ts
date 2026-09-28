@@ -44,7 +44,14 @@
  */
 
 import { and, asc, eq, gt, inArray, isNotNull, lte, sql } from 'drizzle-orm';
-import { add, fils, subtract, type Fils } from '@avo/types';
+import {
+  add,
+  fils,
+  subtract,
+  type BookingCancelResult,
+  type BookingSettlement,
+  type Fils,
+} from '@avo/types';
 import type { Db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
@@ -75,11 +82,13 @@ import { assertArtistPerformsService, assertBookedPairAssigned } from './artistS
 import { resolveBranch } from './branch';
 import {
   cancellationOutcome,
+  lockInCap,
   noShowOutcome,
+  returnPercentAt,
   readPublishedPolicy,
   type CancellationRule,
   type NoShowRule,
-  type StampedPolicyView,
+  type BookingPolicyStamp,
 } from './bookingPolicy';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
@@ -139,6 +148,8 @@ export interface BookingRow {
   policyCancellationRules: CancellationRule[] | null;
   policyTextEn: string | null;
   policyTextAr: string | null;
+  /** The return her own late reschedule locked in (migration 0067). NULL: none. */
+  policyReturnCapPercent: number | null;
   /** Where the deposit went when it left escrow other than by a charge. */
   settledReturnedFils: number | null;
   settledKeptFils: number | null;
@@ -150,7 +161,7 @@ export interface BookingRow {
  * The stamp, or null for a LEGACY booking. `booking_policy_stamp_is_whole` makes
  * "some of the six" unrepresentable, so testing one column is testing all six.
  */
-export function stampedPolicyOf(row: BookingRow): StampedPolicyView | null {
+export function stampedPolicyOf(row: BookingRow): BookingPolicyStamp | null {
   if (
     row.policyId === null ||
     row.policyVersion === null ||
@@ -183,13 +194,13 @@ export function stampedPolicyOf(row: BookingRow): StampedPolicyView | null {
  * them — before 0066, or by the pre-0066 API still serving while it applies —
  * went through a `returnDeposit` that could only ever return the whole deposit.
  */
-export function settlementOf(row: BookingRow): { returnedFils: number; keptFils: number } | null {
+export function settlementOf(row: BookingRow): BookingSettlement | null {
   if (row.holdTransactionId === null) return null;
   if (row.status !== 'cancelled' && row.status !== 'no_show_returned') return null;
   if (row.settledReturnedFils === null || row.settledKeptFils === null) {
-    return { returnedFils: row.depositFils, keptFils: 0 };
+    return { returnedFils: fils(row.depositFils), keptFils: fils(0) };
   }
-  return { returnedFils: row.settledReturnedFils, keptFils: row.settledKeptFils };
+  return { returnedFils: fils(row.settledReturnedFils), keptFils: fils(row.settledKeptFils) };
 }
 
 /**
@@ -243,6 +254,16 @@ export function serialiseBooking(row: BookingRow) {
      * back to `en` at the display boundary.
      */
     policy: stampedPolicyOf(row),
+    /**
+     * THE RETURN HER OWN RESCHEDULE LOCKED IN (migration 0067), or null when she
+     * has never moved it (and always on a LEGACY booking). A cancel returns the
+     * smaller of this and what `policy.cancellation` gives against `startsAt` —
+     * services/bookingPolicy.ts § cancellationOutcome. PRESENT on every row, for
+     * `policy`'s reason: a wallet previewing "cancel now returns X" from the
+     * rules alone would promise a 100% the server will not pay after a late move.
+     * Not yet in `BookingSchema`; reported to trunk.
+     */
+    returnCapPercent: row.policyId === null ? null : row.policyReturnCapPercent,
     /** `{ returnedFils, keptFils }` once the deposit has left escrow, else null. */
     settlement: settlementOf(row),
   };
@@ -256,8 +277,8 @@ export function serialiseBooking(row: BookingRow) {
  *
  *   LEGACY   `endsAt` + the salon's `no_show_return_minutes` — unchanged, and
  *            the column is frozen now that the merchant cannot write it.
- *   POLICY   `endsAt` + `BOOKING_SETTLE_GRACE_MINUTES` (0): "when the booked slot
- *            ends", trunk's ruling. See env.ts for why it is a named number.
+ *   POLICY   `endsAt` + `BOOKING_SETTLE_GRACE_MINUTES` (60): the slot's end plus
+ *            the time a till needs to ring up the visit. See env.ts.
  */
 function automaticSettleAt(
   row: Pick<BookingRow, 'policyId'>,
@@ -674,9 +695,9 @@ export async function createBooking(
      * appointment; see db/schema/booking.ts for why it is measured from `ends_at`.
      *
      *   LEGACY   `ends_at` + `salon.no_show_return_minutes`, exactly as before.
-     *   POLICY   `ends_at` + `BOOKING_SETTLE_GRACE_MINUTES` (0): trunk's ruling
-     *            that the stamped no-show rule applies "when the booked slot
-     *            ends". It is the same column, so the worker, the partial index,
+     *   POLICY   `ends_at` + `BOOKING_SETTLE_GRACE_MINUTES` (60): the stamped
+     *            no-show rule applies once the slot has ended and the till has
+     *            had its hour. It is the same column, so the worker, the partial index,
      *            `findApplicableHold` and deposit health all keep working on it.
      */
     const noShowReturnDueAt = new Date(
@@ -1211,23 +1232,20 @@ async function reloadBooking(tx: Executor, id: string): Promise<BookingRow> {
   return row as BookingRow;
 }
 
-/** What a cancel did. The same shape for a legacy booking and a policy one. */
-export interface CancelResult {
+/**
+ * What a cancel did: trunk's `BookingCancelResultSchema` (`@avo/types`, b23e78c),
+ * the same shape for a legacy booking and a policy one. `refundedFils` is what
+ * came back (kept under that name for the pre-0066 client), `keptFils` what the
+ * salon kept (0 on a legacy booking), `returnPercent` 100 on a legacy booking,
+ * `rule` null on a legacy booking or later than every rule.
+ *
+ * `booking` is the serialiser's own type rather than the schema's because the
+ * serialiser sends a strict SUPERSET of `BookingSchema` (`endsAt`,
+ * `noShowReturnDueAt`, `changeableUntil`, ... — see `serialiseBooking`).
+ */
+export type CancelResult = Omit<BookingCancelResult, 'booking'> & {
   booking: ReturnType<typeof serialiseBooking>;
-  /** What came back to her wallet. Kept under this name for the pre-0066 client. */
-  refundedFils: number;
-  /** What the salon kept. 0 on a legacy booking. */
-  keptFils: number;
-  /** The percent applied. 100 on a legacy booking. */
-  returnPercent: number;
-  /** The cut-off rule that matched, or null (legacy, or later than every rule). */
-  rule: CancellationRule | null;
-  balanceAfterFils: number;
-  /** The `deposit_return`, or null when nothing came back (a 0% cancellation). */
-  transactionId: string | null;
-  /** The `deposit_forfeit`, or null when nothing was kept. */
-  forfeitTransactionId: string | null;
-}
+};
 
 /**
  * She cancels her own appointment. What comes back is decided by the policy the
@@ -1358,7 +1376,14 @@ export async function cancelBooking(
           { startsAt: row.startsAt.toISOString() },
         );
       }
-      split = cancellationOutcome(stamped.cancellation, row.startsAt, now, deposit);
+      // Against the CURRENT slot, capped by what her own late moves locked in.
+      split = cancellationOutcome(
+        stamped.cancellation,
+        row.startsAt,
+        now,
+        deposit,
+        row.policyReturnCapPercent,
+      );
     }
 
     const settled = await settleDeposit(tx, {
@@ -1915,6 +1940,27 @@ export async function rescheduleBooking(
     const endsAt = new Date(slot.endsAt);
     const noShowReturnDueAt = automaticSettleAt(row as BookingRow, endsAt, s.noShowReturnMinutes);
 
+    /**
+     * THE RESCHEDULE LOOPHOLE (trunk, 2026-09-29; migration 0067). On a POLICY
+     * booking, what a cancel would return RIGHT NOW against the slot she is
+     * leaving is locked in as a ceiling for every later cancel. A move 30 hours
+     * out under 48h→100% / 24h→50% locks in 50%; the new slot a week away cannot
+     * buy the other half back. Measured against `row.startsAt` — the current slot,
+     * before the move — and folded with any earlier cap, so a chain of moves
+     * only ever narrows. LEGACY: nothing to cap; it returns the whole deposit.
+     *
+     * Consistent with `changeableUntil`: `assertChangeWindowOpen` above has
+     * already refused a move inside the last hour, against the same current slot.
+     */
+    const stamped = stampedPolicyOf(row as BookingRow);
+    const returnCapPercent =
+      stamped === null
+        ? null
+        : lockInCap(
+            row.policyReturnCapPercent,
+            returnPercentAt(stamped.cancellation, row.startsAt, now, row.policyReturnCapPercent),
+          );
+
     const [updated] = await tx
       .update(booking)
       .set({
@@ -1923,6 +1969,7 @@ export async function rescheduleBooking(
         durationMin: Math.round((endsAt.getTime() - startsAt.getTime()) / 60_000),
         // Recomputed, not carried: the promise is about the new slot.
         noShowReturnDueAt,
+        policyReturnCapPercent: returnCapPercent,
         rescheduledCount: row.rescheduledCount + 1,
         rescheduledAt: now,
         updatedAt: now,
@@ -1971,6 +2018,8 @@ export async function rescheduleBooking(
         depositCarriedFils: row.depositFils,
         holdTransactionId: row.holdTransactionId,
         noShowReturnDueAt: noShowReturnDueAt.toISOString(),
+        returnCapPercent,
+        previousReturnCapPercent: row.policyReturnCapPercent,
       },
       ipAddress: ctx.ipAddress ?? null,
       userAgent: ctx.userAgent ?? null,

@@ -25,6 +25,7 @@ import { badRequest, conflict, notFound } from '../http/errors';
 /** One definition of "HH:MM" for the whole API — see http/fields.ts. */
 import { HHMM, HHMM_OR_END_OF_DAY } from '../http/fields';
 import { requireString } from '../money/validate';
+import { parseInstant } from '../time/zone';
 import { writeAudit } from '../services/audit';
 import { db } from '../db/client';
 import { legalDocumentDraft, legalDocumentSet } from '../db/schema/legal';
@@ -77,6 +78,99 @@ async function branchIdsOf(salonId: string): Promise<Set<string>> {
     .from(branch)
     .where(and(eq(branch.salonId, salonId), isNull(branch.closedAt)));
   return new Set(rows.map((r) => r.id));
+}
+
+// ------------------------------------------------------------------ boosts --
+
+interface BoostInput {
+  branchId: string;
+  visit: number;
+  topup: number;
+  stamp: number;
+  /** Migration 0067. Null: no bound. */
+  startsAt: Date | null;
+  endsAt: Date | null;
+}
+
+const neutralBoost = (branchId: string): BoostInput => ({
+  branchId,
+  visit: 1,
+  topup: 0,
+  stamp: 1,
+  startsAt: null,
+  endsAt: null,
+});
+
+const isNeutral = (b: { visit: number; topup: number; stamp: number }) =>
+  b.visit === 1 && b.topup === 0 && b.stamp === 1;
+
+/**
+ * One branch of the `PUT …/boosts` body. The bounds are enforced here AND by the
+ * CHECKs. Non-negotiable #7: the stepper stopping at 3 is a courtesy; a
+ * hand-rolled PUT of `visit: 50` would multiply a customer's loyalty standing by
+ * fifty.
+ */
+function parseBoost(branchId: string, v: Record<string, unknown>): BoostInput {
+  const visit = v.visit ?? 1;
+  const topup = v.topup ?? 0;
+  const stamp = v.stamp ?? 1;
+  if (!Number.isInteger(visit) || (visit as number) < 1 || (visit as number) > 3) {
+    throw badRequest('invalid_boost', `${branchId}: visit must be a whole number 1-3.`);
+  }
+  if (!Number.isInteger(topup) || (topup as number) < 0 || (topup as number) > 30) {
+    throw badRequest('invalid_boost', `${branchId}: topup must be a whole number 0-30.`);
+  }
+  if (!Number.isInteger(stamp) || (stamp as number) < 1 || (stamp as number) > 3) {
+    throw badRequest('invalid_boost', `${branchId}: stamp must be a whole number 1-3.`);
+  }
+  const bound = (value: unknown, field: 'startsAt' | 'endsAt'): Date | null =>
+    value === undefined || value === null
+      ? null
+      : parseInstant(value, { field: `${branchId}: ${field}`, code: 'invalid_boost_window' });
+  let startsAt = bound(v.startsAt, 'startsAt');
+  let endsAt = bound(v.endsAt, 'endsAt');
+  if (startsAt !== null && endsAt !== null && endsAt.getTime() <= startsAt.getTime()) {
+    throw badRequest(
+      'invalid_boost_window',
+      `${branchId}: a boost has to end after it starts.`,
+      { branchId },
+    );
+  }
+  // A window on "no boost" is a window on nothing. Dropped, so a neutral branch
+  // is one shape and `boost_stopped_is_neutral` can be kept by an unchanged one.
+  if (isNeutral({ visit: visit as number, topup: topup as number, stamp: stamp as number })) {
+    startsAt = null;
+    endsAt = null;
+  }
+  return {
+    branchId,
+    visit: visit as number,
+    topup: topup as number,
+    stamp: stamp as number,
+    startsAt,
+    endsAt,
+  };
+}
+
+const sameInstant = (a: Date | null, b: Date | null) =>
+  a === null || b === null ? a === b : a.getTime() === b.getTime();
+
+function sameBoost(stored: typeof boost.$inferSelect, next: BoostInput): boolean {
+  return (
+    stored.visit === next.visit &&
+    stored.topup === next.topup &&
+    stored.stamp === next.stamp &&
+    sameInstant(stored.startsAt, next.startsAt) &&
+    sameInstant(stored.endsAt, next.endsAt)
+  );
+}
+
+/** The audit line: `BR-KWC: 2× visits, +10% top-ups, 1× stamps · from … · until …`. */
+function describeBoost(b: BoostInput): string {
+  const base = `${b.branchId}: ${b.visit}× visits, +${b.topup}% top-ups, ${b.stamp}× stamps`;
+  const from = b.startsAt ? ` · from ${b.startsAt.toISOString()}` : '';
+  const until = b.endsAt ? ` · until ${b.endsAt.toISOString()}` : '';
+  return `${base}${from}${until}`;
 }
 
 interface WindowFields {
@@ -233,7 +327,26 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
    * A PUT, not a PATCH, because the dashboard's screen is the whole grid: a
    * merchant who clears Salmiya's boost and saves has sent one branch, and a
    * merge would leave the old value standing. Branches absent from the body are
-   * therefore reset to neutral (1/0/1) rather than left alone.
+   * therefore reset to neutral (1/0/1, no window) rather than left alone.
+   *
+   * A DURATION (migration 0067). Each branch may carry `startsAt` and/or
+   * `endsAt`, ISO instants with a zone; absent or null is "no bound". The boost
+   * applies while `startsAt <= now < endsAt` — `isBoostLive`, resolved by every
+   * reader at its own instant, so nothing has to run when it expires. It is part
+   * of the grid like the three values: a branch sent WITHOUT its window loses it.
+   *
+   * WHAT A PUBLISH DOES TO A BRANCH IT DID NOT CHANGE. A branch whose values and
+   * window are exactly what is stored keeps its stop record (`stoppedAt`,
+   * `stoppedBy`) — the grid re-sends every branch, and a merchant editing
+   * Salmiya must not erase the note that Kuwait City was stopped. It is not
+   * re-validated either, so an expired boost sent back unchanged is not refused
+   * for ending in the past. A branch that DID change is a new boost: its stop
+   * record clears, and an `endsAt` at or before now is refused
+   * (`boost_already_ended`) — a boost that can never apply is a mistake, not a
+   * setting.
+   *
+   * `stoppedAt` / `stoppedBy` in the body are IGNORED rather than refused, so a
+   * client may send the read object's boosts straight back.
    */
   app.put<{ Params: { id: string } }>('/v1/salons/:id/promotions/boosts', async (req, reply) => {
     const p = requireDashboardPerm(req, 'marketing');
@@ -246,71 +359,56 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
     }
 
     const known = await branchIdsOf(req.params.id);
-    const parsed: Array<{ branchId: string; visit: number; topup: number; stamp: number }> = [];
+    const parsed: BoostInput[] = [];
 
     for (const [branchId, raw] of Object.entries(boosts as Record<string, unknown>)) {
       if (!known.has(branchId)) {
         throw badRequest('invalid_branch', `${branchId} is not a branch of this salon.`);
       }
-      const v = (raw ?? {}) as Record<string, unknown>;
-      const visit = v.visit ?? 1;
-      const topup = v.topup ?? 0;
-      const stamp = v.stamp ?? 1;
-      // Bounds enforced here AND by the CHECK. Non-negotiable #7: the stepper
-      // stopping at 3 is a courtesy; a hand-rolled PUT of `visit: 50` would
-      // multiply a customer's loyalty standing by fifty.
-      if (!Number.isInteger(visit) || (visit as number) < 1 || (visit as number) > 3) {
-        throw badRequest('invalid_boost', `${branchId}: visit must be a whole number 1-3.`);
-      }
-      if (!Number.isInteger(topup) || (topup as number) < 0 || (topup as number) > 30) {
-        throw badRequest('invalid_boost', `${branchId}: topup must be a whole number 0-30.`);
-      }
-      if (!Number.isInteger(stamp) || (stamp as number) < 1 || (stamp as number) > 3) {
-        throw badRequest('invalid_boost', `${branchId}: stamp must be a whole number 1-3.`);
-      }
-      parsed.push({
-        branchId,
-        visit: visit as number,
-        topup: topup as number,
-        stamp: stamp as number,
-      });
+      parsed.push(parseBoost(branchId, (raw ?? {}) as Record<string, unknown>));
     }
 
     const now = new Date();
     await db.transaction(async (tx) => {
+      // Locked, so two publishes cannot both read "unchanged" off the same row.
+      const current = new Map(
+        (
+          await tx.select().from(boost).where(eq(boost.salonId, req.params.id)).for('update')
+        ).map((r) => [r.branchId, r]),
+      );
+
       // Every branch of the salon, so a branch the body omitted is reset rather
       // than left holding a boost the merchant thinks she removed. One
       // `published_at` across the set: it published as a unit.
       for (const branchId of known) {
-        const next = parsed.find((x) => x.branchId === branchId) ?? {
-          branchId,
-          visit: 1,
-          topup: 0,
-          stamp: 1,
+        const next = parsed.find((x) => x.branchId === branchId) ?? neutralBoost(branchId);
+        const stored = current.get(branchId);
+        const unchanged = stored !== undefined && sameBoost(stored, next);
+        if (!unchanged && next.endsAt !== null && next.endsAt.getTime() <= now.getTime()) {
+          throw badRequest(
+            'boost_already_ended',
+            `${branchId}: endsAt ${next.endsAt.toISOString()} has already passed, so this boost would never apply. Pick a later end, or none.`,
+            { branchId },
+          );
+        }
+        const stop = unchanged
+          ? { stoppedAt: stored.stoppedAt, stoppedBy: stored.stoppedBy, stoppedByStaffId: stored.stoppedByStaffId }
+          : { stoppedAt: null, stoppedBy: null, stoppedByStaffId: null };
+        const values = {
+          visit: next.visit,
+          topup: next.topup,
+          stamp: next.stamp,
+          startsAt: next.startsAt,
+          endsAt: next.endsAt,
+          ...stop,
+          publishedAt: now,
+          publishedBy: p.name,
+          updatedAt: now,
         };
         await tx
           .insert(boost)
-          .values({
-            salonId: req.params.id,
-            branchId,
-            visit: next.visit,
-            topup: next.topup,
-            stamp: next.stamp,
-            publishedAt: now,
-            publishedBy: p.name,
-            updatedAt: now,
-          })
-          .onConflictDoUpdate({
-            target: [boost.salonId, boost.branchId],
-            set: {
-              visit: next.visit,
-              topup: next.topup,
-              stamp: next.stamp,
-              publishedAt: now,
-              publishedBy: p.name,
-              updatedAt: now,
-            },
-          });
+          .values({ salonId: req.params.id, branchId, ...values })
+          .onConflictDoUpdate({ target: [boost.salonId, boost.branchId], set: values });
       }
 
       await writeAudit(tx, p, {
@@ -318,12 +416,18 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
         kind: 'rules',
         action: 'Boosts published',
         detail: parsed.length
-          ? parsed.map((b) => `${b.branchId}: ${b.visit}× visits, +${b.topup}% top-ups, ${b.stamp}× stamps`).join(' · ')
+          ? parsed.map(describeBoost).join(' · ')
           : 'All branches reset to no boost',
         source: 'merchant',
         subjectType: 'salon',
         subjectId: req.params.id,
-        metadata: { boosts: parsed },
+        metadata: {
+          boosts: parsed.map((b) => ({
+            ...b,
+            startsAt: b.startsAt ? b.startsAt.toISOString() : null,
+            endsAt: b.endsAt ? b.endsAt.toISOString() : null,
+          })),
+        },
         ipAddress: req.ip ?? null,
         userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
       });
@@ -331,6 +435,123 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
 
     return reply.send(await readPromotionSet(db, req.params.id));
   });
+
+  /**
+   * perms.marketing — THE SAME GATE AS PUBLISHING (non-negotiable #7, and a
+   * `boostWindow.int.test.ts` spec calls it directly with the permission off).
+   *
+   * STOP ONE BRANCH'S BOOST, NOW. Aftab: "Duration and stop option in the branch
+   * boost". The branch goes back to neutral (1/0/1, no window) and the row
+   * records who stopped it and when (`boost_stop_is_whole`); every other branch
+   * is untouched, which is why this is not a PUT of the set. Neutral rather than
+   * flagged: a stopped boost then earns nothing through every reader, including
+   * a wallet or a till too old to know `stoppedAt` exists (migration 0067 § 2).
+   *
+   * The charge that races it is decided by the row lock: a charge inside
+   * `performCharge` reads the boost inside its own transaction, so it sees
+   * either the boost or the stop, never half of each.
+   *
+   * Refused, with a sentence, when there is nothing running to stop: a neutral
+   * branch (`no_boost_running`), one already stopped (`boost_already_stopped`),
+   * or one past its `endsAt` (`boost_already_ended`). A boost SCHEDULED for later
+   * can be stopped — that cancels it before it starts.
+   *
+   * Not an Idempotency-Key endpoint: it moves no money (#4 is money-moving
+   * POSTs), and a retried stop is told `boost_already_stopped`, by name.
+   */
+  app.post<{ Params: { id: string; branchId: string } }>(
+    '/v1/salons/:id/promotions/boosts/:branchId/stop',
+    async (req, reply) => {
+      const p = requireDashboardPerm(req, 'marketing');
+      requireSameSalon(p, req.params.id);
+      const { id: salonId, branchId } = req.params;
+      const now = new Date();
+
+      await db.transaction(async (tx) => {
+        const [row] = await tx
+          .select()
+          .from(boost)
+          .where(and(eq(boost.salonId, salonId), eq(boost.branchId, branchId)))
+          .for('update')
+          .limit(1);
+        if (!row) {
+          const [br] = await tx
+            .select({ id: branch.id })
+            .from(branch)
+            .where(and(eq(branch.salonId, salonId), eq(branch.id, branchId)))
+            .limit(1);
+          if (!br) throw notFound('unknown_branch', 'No such branch.');
+          throw conflict('no_boost_running', 'This branch has no boost to stop.', { branchId });
+        }
+        if (row.stoppedAt !== null) {
+          throw conflict(
+            'boost_already_stopped',
+            `This boost was already stopped by ${row.stoppedBy} at ${row.stoppedAt.toISOString()}.`,
+            { branchId, stoppedAt: row.stoppedAt.toISOString(), stoppedBy: row.stoppedBy },
+          );
+        }
+        if (row.visit === 1 && row.topup === 0 && row.stamp === 1) {
+          throw conflict('no_boost_running', 'This branch has no boost to stop.', { branchId });
+        }
+        if (row.endsAt !== null && row.endsAt.getTime() <= now.getTime()) {
+          throw conflict('boost_already_ended', 'This boost has already ended.', {
+            branchId,
+            endsAt: row.endsAt.toISOString(),
+          });
+        }
+
+        await tx
+          .update(boost)
+          .set({
+            visit: 1,
+            topup: 0,
+            stamp: 1,
+            startsAt: null,
+            endsAt: null,
+            stoppedAt: now,
+            stoppedBy: p.name,
+            stoppedByStaffId: p.id,
+            updatedAt: now,
+          })
+          .where(and(eq(boost.salonId, salonId), eq(boost.branchId, branchId)));
+
+        const stopped: BoostInput = {
+          branchId,
+          visit: row.visit,
+          topup: row.topup,
+          stamp: row.stamp,
+          startsAt: row.startsAt,
+          endsAt: row.endsAt,
+        };
+        await writeAudit(tx, p, {
+          salonId: p.salonId,
+          kind: 'rules',
+          action: 'Boost stopped',
+          detail: `${describeBoost(stopped)} · stopped`,
+          source: 'merchant',
+          subjectType: 'salon',
+          subjectId: salonId,
+          metadata: {
+            branchId,
+            stopped: {
+              visit: row.visit,
+              topup: row.topup,
+              stamp: row.stamp,
+              startsAt: row.startsAt ? row.startsAt.toISOString() : null,
+              endsAt: row.endsAt ? row.endsAt.toISOString() : null,
+              publishedAt: row.publishedAt.toISOString(),
+              publishedBy: row.publishedBy,
+            },
+            stoppedAt: now.toISOString(),
+          },
+          ipAddress: req.ip ?? null,
+          userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+        });
+      });
+
+      return reply.send(await readPromotionSet(db, salonId));
+    },
+  );
 
   /** perms.marketing. A new window. */
   app.post<{ Params: { id: string } }>(
