@@ -1005,7 +1005,6 @@ export interface Copy {
    * a lie, since nobody has said she works at all of them. "Other artists" is
    * true relative to the branch chips beside it and claims no location.
    */
-  branchFilterAll: string;
   branchFilterOther: string;
   /**
    * The branch STEP's own micro label, beside `chooseService` / `chooseArtist` /
@@ -1026,8 +1025,13 @@ export interface Copy {
   chooseBranch: string;
   /** Shown under the strip while the Other artists group is selected. */
   branchFilterOtherNote: string;
-  /** A branch chip whose roster came back empty. */
+  /** A branch row whose roster came back empty. */
   branchEmptyTitle: string;
+  /**
+   * ⚠️ NOT RENDERED since 2026-09-29, and kept only so trunk can replace it.
+   * Both languages tell her to "choose All branches", a row the branch step
+   * no longer has. Owed: new copy in both languages, or a decision to drop it.
+   */
   branchEmptyBody: string;
   /** The salon has no bookable artists at all -- step 2 had no empty state. */
   artistsEmptyTitle: string;

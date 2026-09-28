@@ -77,8 +77,25 @@
  *   `?branch=` accepts exactly three kinds of value — a branch id, `unassigned`,
  *   and `all` — and `artistBranchFilter` was written ONCE for both artist lists
  *   so the merchant roster and the customer's list cannot disagree about what
- *   the parameter means. The strip mirrors that domain one chip per value kind,
- *   so the screen and the server cannot disagree either.
+ *   the parameter means.
+ *
+ * NO "ALL BRANCHES" ROW, SINCE 2026-09-29. The step used to offer all three
+ * value kinds, `all` first and selected by default. Aftab: "Remove all branches
+ * option in the select branch while booking". So the step offers TWO of the
+ * three -- every open branch, then "Other artists" -- and nothing is selected
+ * until she picks. `all` survives only as what the request means when no
+ * branch has been chosen, which is `null` here and an OMITTED parameter on the
+ * wire (see § branchQuery): a salon with no branch step, a reschedule, and the
+ * unfiltered split read.
+ *
+ * NOTHING BECOMES UNREACHABLE BY IT. Every bookable artist either has a
+ * `branchId` naming an open branch (a row), or has none (`unassigned`, the last
+ * row, present whenever that group is non-empty). The one exception is not new:
+ * an artist still pointed at a branch that has since CLOSED. `Salon.branches`
+ * is open-only so no row names her, and she is not `unassigned` -- but
+ * `resolveBranch` already refuses a closed `supplied` branch, so a booking with
+ * her would fail at the deposit hold. "All" offered her; it did not make her
+ * bookable. Reported rather than routed.
  *
  * `unassigned` IS STAFF VOCABULARY AND DOES NOT REACH THE CUSTOMER. The chip
  * reads "Other artists" — true relative to the branch chips beside it ("not at
@@ -128,17 +145,18 @@ import type { Language } from '@avo/types';
 import { branchName, type Named } from './names';
 
 /**
- * The three value kinds `?branch=` accepts, as a union rather than a bare
- * string — `'unassigned'` is also a legal branch id shape, so a plain string
- * cannot distinguish "the branch whose id is unassigned" from the filter.
+ * The two value kinds of `?branch=` a customer can CHOOSE, as a union rather
+ * than a bare string — `'unassigned'` is also a legal branch id shape, so a
+ * plain string cannot distinguish "the branch whose id is unassigned" from the
+ * filter.
+ *
+ * The third kind, `all`, is not a choice any more (see the header). "No filter"
+ * is `null` wherever a choice is held: nothing chosen yet on the branch step,
+ * or no branch step at all.
  */
 export type BranchChoice =
-  | { kind: 'all' }
   | { kind: 'unassigned' }
   | { kind: 'branch'; branchId: string };
-
-/** The default, and the request the wallet has always made. */
-export const ALL_BRANCHES: BranchChoice = { kind: 'all' };
 
 /**
  * A branch as this module needs it: an id and the two name fields
@@ -160,28 +178,33 @@ export interface RosterSplit {
 /**
  * The `?branch=` value for a choice, or `undefined` to omit the parameter.
  *
- * `all` OMITS IT rather than sending `?branch=all`. The API treats the two
- * identically (`artistBranchFilter` returns `undefined` for both), so this is a
- * free choice — and the free choice worth making is the one that leaves the
- * default request byte-identical to the one this app made before the picker
- * existed. A salon with no picker cannot have its roster read changed by a
- * feature it does not show.
+ * NO CHOICE (`null`) OMITS IT rather than sending `?branch=all`. The API treats
+ * the two identically (`artistBranchFilter` returns `undefined` for both), so
+ * this is a free choice — and the free choice worth making is the one that
+ * leaves the request byte-identical to the one this app made before the picker
+ * existed. A salon with no branch step cannot have its roster read changed by
+ * a feature it does not show.
  */
-export function branchQuery(choice: BranchChoice): string | undefined {
-  if (choice.kind === 'all') return undefined;
+export function branchQuery(choice: BranchChoice | null): string | undefined {
+  if (choice === null) return undefined;
   if (choice.kind === 'unassigned') return 'unassigned';
   return choice.branchId;
 }
 
-/** Two choices name the same filter. Used to drive the selected chip. */
-export function sameChoice(a: BranchChoice, b: BranchChoice): boolean {
+/**
+ * Two choices name the same filter. Used to drive the selected row. `null` --
+ * nothing chosen -- matches no row.
+ */
+export function sameChoice(a: BranchChoice | null, b: BranchChoice | null): boolean {
+  if (a === null || b === null) return false;
   if (a.kind !== b.kind) return false;
   if (a.kind === 'branch' && b.kind === 'branch') return a.branchId === b.branchId;
   return true;
 }
 
 /**
- * The chips, in order, or an EMPTY ARRAY meaning "draw no strip".
+ * The rows, in order -- every open branch, then "Other artists" when that group
+ * is non-empty -- or an EMPTY ARRAY meaning "no branch step".
  *
  * Empty rather than a nullable list so the caller's render is one `.map` with no
  * second branch to forget: `chips.length === 0` and `chips.map(...)` are the
@@ -208,8 +231,7 @@ export function branchChoices(input: {
   const assigned = split.total - split.unassigned;
   if (assigned <= 0) return [];
 
-  const chips: BranchChoice[] = [ALL_BRANCHES];
-  for (const b of branches) chips.push({ kind: 'branch', branchId: b.id });
+  const chips: BranchChoice[] = branches.map((b) => ({ kind: 'branch', branchId: b.id }));
   // Last, and only when the group is non-empty. When every artist has been
   // assigned it disappears on its own — the feature completes itself as the
   // merchant works through the roster.
@@ -245,16 +267,16 @@ export function branchStepApplies(input: {
 }
 
 /**
- * The two strings this module needs, structurally, so it does not depend on the
+ * The one string this module needs, structurally, so it does not depend on the
  * whole `Copy` interface — the same narrowing `Named` applies to entities.
  */
 export interface BranchStripCopy {
-  branchFilterAll: string;
   branchFilterOther: string;
 }
 
 /**
- * A chip's label in the reading language.
+ * A row's label in the reading language, or `null` for a branch id this salon
+ * does not list.
  *
  * A branch's name goes through `branchName`, so `nameAr ?? name` is applied in
  * exactly one place for the fourth render site in this app — non-negotiable #12,
@@ -262,18 +284,18 @@ export interface BranchStripCopy {
  * seed leaves SAL-LUMIERE's branches with `name_ar` NULL on purpose, so the
  * fallback has a real null path here too.
  *
- * A branch id with no matching branch returns the `all` label rather than
- * throwing: an unknown chip cannot be produced by `branchChoices`, and a screen
- * is not the place to crash over one.
+ * A branch id with no matching branch returns `null` rather than throwing, and
+ * the screen draws no row for it: an unknown row cannot be produced by
+ * `branchChoices`, and a screen is not the place to crash over one. It used to
+ * fall back to the "All branches" label, which no longer names anything.
  */
 export function branchChoiceLabel(
   choice: BranchChoice,
   branches: readonly PickableBranch[],
   lang: Language,
   copy: BranchStripCopy,
-): string {
-  if (choice.kind === 'all') return copy.branchFilterAll;
+): string | null {
   if (choice.kind === 'unassigned') return copy.branchFilterOther;
   const found = branches.find((b) => b.id === choice.branchId);
-  return found ? branchName(found, lang) : copy.branchFilterAll;
+  return found ? branchName(found, lang) : null;
 }

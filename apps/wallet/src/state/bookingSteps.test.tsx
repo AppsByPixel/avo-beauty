@@ -179,6 +179,18 @@ const mount = (salon: Salon, reschedule?: RescheduleTarget) => {
   return { ...hook, frames };
 };
 
+/**
+ * THE BRANCH STEP IS WALKED BY CHOOSING A BRANCH. Since 2026-09-29 there is no
+ * "All branches" row selected by default (Aftab: "Remove all branches option in
+ * the select branch while booking"), so nothing is chosen when the step paints
+ * and Continue waits for a tap, as on every other step.
+ */
+async function chooseKwc(result: { current: BookingController }) {
+  await waitFor(() => expect(result.current.step).toBe('branch'));
+  act(() => result.current.pickBranch({ kind: 'branch', branchId: KWC.id }));
+  await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+}
+
 /** The steps she was shown, in order, with consecutive repeats collapsed. */
 const path = (frames: Frame[]) =>
   frames.map((f) => f.step).filter((s, i, all) => i === 0 || all[i - 1] !== s);
@@ -204,7 +216,12 @@ describe('two open branches, some artists assigned — branch first', () => {
   it('opens on the branch, then service, then artist, then day, then review', async () => {
     const { result } = mount(salonWith([KWC, SAL]));
     await waitFor(() => expect(result.current.step).toBe('branch'));
-    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    // Nothing chosen on arrival, and Continue refuses until she chooses.
+    expect(result.current.branchChoice).toBeNull();
+    expect(result.current.branchHasArtists).toBeNull();
+    act(() => result.current.next());
+    expect(result.current.step).toBe('branch');
+    await chooseKwc(result);
 
     expect(result.current.totalSteps).toBe(5);
     expect(result.current.stepIndex).toBe(1);
@@ -400,7 +417,7 @@ describe('the counter — decided before it is shown, and never moves', () => {
       split.release(UNASSIGNED_TWO);
       await Promise.resolve();
     });
-    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    await chooseKwc(result);
     act(() => result.current.next());
     act(() => result.current.next());
 
@@ -413,7 +430,7 @@ describe('the counter — decided before it is shown, and never moves', () => {
 
   it('a retry after entry that finds nobody assigned any more does not take the step away', async () => {
     const { result, frames } = mount(salonWith([KWC, SAL]));
-    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    await chooseKwc(result);
     act(() => result.current.next()); // on the service, "2 of 5"
 
     serveRoster(ROSTER); // the merchant unassigned everyone meanwhile
@@ -451,7 +468,7 @@ describe('an empty branch is caught on the branch step', () => {
 
   it('holds Continue while the chosen branch is still being read', async () => {
     const { result } = mount(salonWith([KWC, SAL]));
-    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    await waitFor(() => expect(result.current.step).toBe('branch'));
 
     let land: (rows: BookableArtist[]) => void = () => {};
     getArtists.mockImplementation((_s: string, branch?: string) =>
@@ -493,7 +510,7 @@ describe('an empty branch is caught on the branch step', () => {
 describe('back, in both salon shapes', () => {
   it('multi-branch: review → day → artist → service → branch, and branch is where the flow is left', async () => {
     const { result } = mount(salonWith([KWC, SAL]));
-    await waitFor(() => expect(result.current.branchHasArtists).toBe(true));
+    await chooseKwc(result);
     for (let i = 0; i < 4; i += 1) act(() => result.current.next());
     expect(result.current.step).toBe('review');
 
