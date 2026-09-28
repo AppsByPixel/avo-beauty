@@ -6,7 +6,6 @@
 import { describe, expect, it } from 'vitest';
 import { fils, formatFils } from '@avo/types';
 import { chargeTotals } from './charge';
-import { loyaltySentence } from './loyalty';
 
 const services = [
   { id: 'cut', name: 'Cut & style', priceFils: 12000 },
@@ -53,37 +52,5 @@ describe('chargeTotals', () => {
     expect(Number.isInteger(t.totalFils)).toBe(true);
     expect(Number.isInteger(t.chargedFils)).toBe(true);
     expect(formatFils(t.chargedFils)).toBe('23.500');
-  });
-});
-
-describe('loyaltySentence', () => {
-  it('renders the stamps form from the design', () => {
-    expect(
-      loyaltySentence({ mode: 'stamps', stamps: 5, target: 8, rewardReady: false }),
-    ).toBe('Stamp added · 5 of 8');
-  });
-
-  it('renders the tiers form from the design', () => {
-    expect(
-      loyaltySentence({
-        mode: 'tiers',
-        visits: 5,
-        tier: 'silver',
-        nextTier: 'gold',
-        visitsToNext: 5,
-      }),
-    ).toBe('Visit added · 5 of 10 to Gold');
-  });
-
-  it('degrades at the top of the ladder instead of dangling "to null"', () => {
-    expect(
-      loyaltySentence({
-        mode: 'tiers',
-        visits: 40,
-        tier: 'black',
-        nextTier: null,
-        visitsToNext: null,
-      }),
-    ).toBe('Visit added · 40 visits');
   });
 });

@@ -244,9 +244,10 @@ describe('an empty branch is said under the rows, and Continue is held', () => {
     fireEvent.click(screen.getByTestId(`book-branch-${SAL.id}`));
     await waitFor(() => expect(screen.getByTestId('book-branch-empty')).toBeTruthy());
     expect(screen.getByText(en.branchEmptyTitle)).toBeTruthy();
-    // Its written body tells her to "choose All branches", a row that no longer
-    // exists, so it is not shown -- flagged to trunk (BookScreen § ArtistsEmpty).
-    expect(screen.queryByText(en.branchEmptyBody)).toBeNull();
+    // Title only. Its old body told her to "choose All branches", a row that no
+    // longer exists, and trunk deleted the key (BookScreen § ArtistsEmpty).
+    expect('branchEmptyBody' in en).toBe(false);
+    expect(screen.queryByText(/All branches/)).toBeNull();
     expect(isDisabled('book-next')).toBe(true);
     // Still the branch step: the chips she needs are right above the panel.
     expect(count()).toBe(en.bookStep(1, 5));

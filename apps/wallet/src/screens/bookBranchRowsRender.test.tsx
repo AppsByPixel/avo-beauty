@@ -225,7 +225,9 @@ describe('there is no "All branches" choice, in either language', () => {
     fireEvent.click(screen.getByTestId(`book-branch-${SAL.id}`));
     await waitFor(() => expect(screen.getByTestId('book-branch-empty')).toBeTruthy());
     expect(screen.getByText(en.branchEmptyTitle)).toBeTruthy();
-    expect(screen.queryByText(en.branchEmptyBody)).toBeNull();
+    // Title only: the body that pointed at "All branches" was deleted by trunk.
+    expect('branchEmptyBody' in en).toBe(false);
+    expect(screen.queryByText(/All branches/)).toBeNull();
     expect(isDisabled('book-next')).toBe(true);
   });
 });

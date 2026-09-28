@@ -725,7 +725,6 @@ export const ar: Copy = {
   branchFilterOther: 'مصففات أخريات',
   branchFilterOtherNote: 'لم يحدّد الصالون فرعاً لهؤلاء المصففات بعد.',
   branchEmptyTitle: 'لا مصففات في هذا الفرع',
-  branchEmptyBody: 'جرّبي فرعاً آخر، أو اختاري كل الفروع لرؤية الجميع.',
   artistsEmptyTitle: 'لا مصففات متاحة للحجز',
   artistsEmptyBody: 'لم يُضِف هذا الصالون أي مصففة للحجز بعد.',
   // نص جديد، مُدرج في AR_UNVERIFIED. `اختاري` أمر للمؤنث.
@@ -1289,7 +1288,6 @@ export const AR_UNVERIFIED = [
   'branchFilterOther',
   'branchFilterOtherNote',
   'branchEmptyTitle',
-  'branchEmptyBody',
   'artistsEmptyTitle',
   'artistsEmptyBody',
   /**
