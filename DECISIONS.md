@@ -2195,3 +2195,17 @@ Aftab asked for.**
   deposit settings. The no-show window is console-only now.
 - **Rounding.** Percent returns round down to the fil. `percentOf` in `@avo/types` rounds half
   up, so the API floors in its own integer maths. A shared `percentOfFloor` is owed.
+
+**Search and filters on every list (lane C, 1f3c1a7..52df9e6).**
+- There is one shared toolbar (`packages/ui` `FilterBar`), and filter state lives in the URL.
+- A list the server returns whole is filtered in the browser. A paged or capped list sends the
+  endpoint's own parameters. Where no parameter exists, the filter is disabled with a note, never
+  faked.
+- **Searches that name a person stay out of the URL**, so names and phone numbers do not end up in
+  browser history or shared links. This applies to the customer book, console Accounts, and both
+  audit logs. Their chips and selects are still in the URL.
+- Console Activity gained a salon filter, which the design does not draw.
+- Eleven server parameters are owed to lane A, including orders
+  `?fulfilment/branch/from/to`, audit `?from/to`, customers `?tier`, bookings `?artist`, and
+  platform salons `?q/plan/loyalty`. Products have no category field, so a category filter is a
+  data-model question, not a parameter.
