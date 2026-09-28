@@ -44,6 +44,7 @@ import { useSalonId } from '../auth/AuthProvider.js';
 import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
 import { ApiError } from '../api/client.js';
 import { badRequestAnswer, isForbidden, SectionError } from './sectionState.js';
+import { DATE_PARAM, enumParam, useUrlFilters } from './listFilters.js';
 
 /**
  * Merchant → Reports. Six cards off `GET /salons/{id}/reports/{kind}`, each with
@@ -118,7 +119,22 @@ export function Reports() {
    * screen owns the state, the component owns the markup, and a test can drive
    * the markup.
    */
-  const [selection, setSelection] = useState<WindowSelection>(DEFAULT_WINDOW_SELECTION);
+  /*
+   * AND THAT ONE VALUE LIVES IN THE URL — `?period=&from=&to=&compare=&cfrom=&cto=`,
+   * each absent at its default — so Back undoes a window and a link opens the
+   * same report. A new segment is a history entry; typing a day replaces it.
+   * The branch stays the shell's (`useBranchScope`) and is not duplicated here.
+   * Every report is already filtered SERVER-side by all of these; nothing on
+   * this screen trims rows, and the export matches the cards because both are
+   * built from `filters` below.
+   */
+  const url = useUrlFilters(REPORT_WINDOW_PARAMS);
+  const selection = selectionFromUrl(url.values);
+  const setSelection = (next: WindowSelection) => {
+    const patch = selectionToUrl(next);
+    if (next.periodSeg !== selection.periodSeg || next.compareSeg !== selection.compareSeg) url.set(patch);
+    else url.replace(patch);
+  };
 
   const periodToken = periodTokenOf(selection);
   const compareToken = compareTokenOf(selection);
@@ -287,6 +303,39 @@ export interface WindowSelection {
   compareSeg: CompareSegment;
   compareFrom: string;
   compareTo: string;
+}
+
+const REPORT_WINDOW_PARAMS = {
+  period: enumParam(['7d', '90d', 'custom']),
+  from: DATE_PARAM,
+  to: DATE_PARAM,
+  compare: enumParam(['previous', 'dates']),
+  cfrom: DATE_PARAM,
+  cto: DATE_PARAM,
+} as const;
+
+/** The URL's six keys → the one value. An absent key is the default's. */
+export function selectionFromUrl(v: Record<keyof typeof REPORT_WINDOW_PARAMS, string>): WindowSelection {
+  return {
+    periodSeg: (v.period || DEFAULT_WINDOW_SELECTION.periodSeg) as PeriodSegment,
+    periodFrom: v.from,
+    periodTo: v.to,
+    compareSeg: (v.compare || DEFAULT_WINDOW_SELECTION.compareSeg) as CompareSegment,
+    compareFrom: v.cfrom,
+    compareTo: v.cto,
+  };
+}
+
+/** …and back, writing nothing for a default so an untouched screen has a bare URL. */
+export function selectionToUrl(s: WindowSelection): Record<keyof typeof REPORT_WINDOW_PARAMS, string> {
+  return {
+    period: s.periodSeg === DEFAULT_WINDOW_SELECTION.periodSeg ? '' : s.periodSeg,
+    from: s.periodFrom,
+    to: s.periodTo,
+    compare: s.compareSeg === 'none' ? '' : s.compareSeg,
+    cfrom: s.compareFrom,
+    cto: s.compareTo,
+  };
 }
 
 /** `30d`, which is what this screen asked for before ranges existed. */

@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fils, type Fils, type Product } from '@avo/types';
-import { Button, Card, ImageSlot, InfoBanner, Money, Segmented, Skeleton } from '@avo/ui';
+import {
+  Button,
+  Card,
+  FilterBar,
+  FilterEmpty,
+  ImageSlot,
+  InfoBanner,
+  Money,
+  Segmented,
+  Skeleton,
+} from '@avo/ui';
 import {
   priceInputValue,
   readPriceInput,
@@ -18,7 +28,16 @@ import {
 } from '../api/productImage.js';
 import { useSalon } from '../api/salon.js';
 import { SectionError, WriteError } from './sectionState.js';
-import { ShopOrders } from './ShopOrders.js';
+import { ORDER_FILTER_KEYS, ShopOrders } from './ShopOrders.js';
+import {
+  TEXT_PARAM,
+  enumParam,
+  shownLabel,
+  textMatches,
+  useSearchText,
+  useStableMatches,
+  useUrlFilters,
+} from './listFilters.js';
 
 /**
  * Merchant → Shop. `AVO Merchant Dashboard.dc.html:296` § SHOP.
@@ -167,8 +186,22 @@ const TABS: Array<{ value: Tab; label: string }> = [
  * carry on, and the notice does not render — which is the same treatment
  * `undefined` gets while the read is in flight.
  */
+/**
+ * THE TAB IS IN THE URL TOO (`?tab=orders`), because a filter is: a link to the
+ * Ready orders that opened on the catalog would share half a view. Switching
+ * tabs drops the other tab's filters in the same history entry, so Back returns
+ * to the tab AND the filters that were up on it, and nothing leaks across.
+ */
+const SHOP_TAB = { tab: enumParam(['orders']) } as const;
+
 export function Shop() {
-  const [tab, setTab] = useState<Tab>('catalogue');
+  const url = useUrlFilters(SHOP_TAB);
+  const tab: Tab = url.values.tab === 'orders' ? 'orders' : 'catalogue';
+  const setTab = (next: Tab) =>
+    url.set({
+      tab: next === 'orders' ? 'orders' : '',
+      ...Object.fromEntries([...CATALOGUE_FILTER_KEYS, ...ORDER_FILTER_KEYS].map((k) => [k, ''])),
+    });
   const salon = useSalon();
   /*
    * Only ever from a LOADED salon. `undefined` is "not known yet" and must not
@@ -196,12 +229,49 @@ export function Shop() {
   );
 }
 
+/**
+ * ===========================================================================
+ * THE CATALOG'S SEARCH — BY NAME, IN THE BROWSER, AND WHY THAT IS HONEST HERE
+ * ===========================================================================
+ * `GET /salons/{id}/products` answers the WHOLE active catalog in one response
+ * with `nextCursor: null` (api/src/routes/salons.ts § products — no LIMIT, no
+ * cursor). A filter over a list the server says is complete hides nothing the
+ * server has, so this one is a string match rather than a `?q=`.
+ *
+ * NAME ONLY. The brief asked for category and status too, and neither exists to
+ * filter on: `ProductSchema` has no category, and a retired product is not
+ * returned at all, so every row is the one status "for sale". Drawing a filter
+ * with one possible answer, or inventing categories, would be a control with
+ * nothing behind it — reported to lane A instead.
+ */
+export const CATALOGUE_FILTER_KEYS = ['q'] as const;
+const CATALOGUE_FILTERS = { q: TEXT_PARAM } as const;
+
 export function ShopCatalogue() {
   const products = useProducts();
   const create = useCreateProduct();
   const update = useUpdateProduct();
   const retire = useRetireProduct();
   const [drafting, setDrafting] = useState(false);
+  const url = useUrlFilters(CATALOGUE_FILTERS);
+  // Client-side, so short: nothing is sent per keystroke; only the URL is written.
+  const search = useSearchText(url.values.q, (q) => url.replace({ q }), 150);
+  const query = url.values.q;
+  /*
+   * ABOVE THE ERROR RETURN — `console/Salons.tsx` found the hooks-count crash
+   * that ordering causes. And STABLE: see `useStableMatches` for the row that
+   * would otherwise unmount under her cursor mid-rename.
+   */
+  const visible = useStableMatches(
+    products.data?.items,
+    (p) => p.id,
+    (p) => textMatches(query, p.name),
+    query,
+  );
+  const clearFilters = () => {
+    search.reset();
+    url.clear();
+  };
 
   if (products.isError) {
     return (
@@ -216,6 +286,7 @@ export function ShopCatalogue() {
   }
 
   const items = products.data?.items;
+  const filtered = query.trim() !== '';
 
   return (
     <div className="shop">
@@ -270,6 +341,22 @@ export function ShopCatalogue() {
         )}
       </div>
 
+      <FilterBar
+        label="Filter products"
+        search={{
+          value: search.text,
+          onChange: search.setText,
+          label: 'Search products by name',
+          placeholder: 'Search products',
+        }}
+        count={
+          products.isPending || !filtered
+            ? null
+            : shownLabel(visible?.length ?? 0, items?.length ?? 0, 'product', 'products', true)
+        }
+        onClear={filtered ? clearFilters : undefined}
+      />
+
       <Card className="shop__card">
         {products.isPending ? (
           /* Five rows because the loaded card is a list of rows this shape —
@@ -289,7 +376,7 @@ export function ShopCatalogue() {
           ))
         ) : (
           <>
-            {(items ?? []).map((product) => (
+            {(visible ?? []).map((product) => (
               <ProductRow
                 key={product.id}
                 product={product}
@@ -317,6 +404,10 @@ export function ShopCatalogue() {
                   create.mutate(input, { onSuccess: () => setDrafting(false) });
                 }}
               />
+            ) : null}
+
+            {filtered && (items ?? []).length > 0 && (visible ?? []).length === 0 && !drafting ? (
+              <FilterEmpty things="products" onClear={clearFilters} />
             ) : null}
 
             {(items ?? []).length === 0 && !drafting ? (

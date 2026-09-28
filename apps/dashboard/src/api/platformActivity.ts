@@ -71,10 +71,12 @@ import { parseActivityFeed, type ActivityItem, type Paginated } from './salon.js
  * END the walk on any group of rows sharing a millisecond — which, per the above,
  * is every charge.
  *
- * NO `?salon=` PARAMETER IS SENT, THOUGH THE ENDPOINT TAKES ONE. The design's
- * Activity section draws a banner and a feed and no filter of any kind, so
- * surfacing one would be inventing product. It is reported as available-and-not-
- * drawn rather than quietly added — see the lane report.
+ * `?salon=` IS SENT NOW, when a salon is picked. It was held back because the
+ * design's Activity section draws no filter, and "surfacing one would be
+ * inventing product"; Aftab has since asked for filters on every screen
+ * (2026-09-29), which is the product decision that was missing. It narrows
+ * server-side — the feed is cursor-paged, and filtering a loaded page by salon
+ * would hide that salon's older lines.
  *
  * NO COURTESY GATE. The read is section-gated server-side, the refusal arrives on
  * its own carrying the server's sentence, and there is no write on this screen.
@@ -84,17 +86,20 @@ import { parseActivityFeed, type ActivityItem, type Paginated } from './salon.js
 const PAGE_SIZE = 30;
 
 export const platformActivityKeys = {
-  feed: () => ['platform', 'activity'] as const,
+  feed: (salonId: string | null = null) => ['platform', 'activity', salonId ?? 'all'] as const,
 };
 
-export function usePlatformActivity(): UseInfiniteQueryResult<
-  InfiniteData<Paginated<ActivityItem>>
-> {
+export function usePlatformActivity(
+  salonId: string | null = null,
+  enabled = true,
+): UseInfiniteQueryResult<InfiniteData<Paginated<ActivityItem>>> {
   return useInfiniteQuery({
-    queryKey: platformActivityKeys.feed(),
+    enabled,
+    queryKey: platformActivityKeys.feed(salonId),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam, signal }) => {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (salonId !== null) params.set('salon', salonId);
       if (pageParam !== null) params.set('cursor', pageParam);
       const raw = await authedRequest<unknown>(
         'owner',

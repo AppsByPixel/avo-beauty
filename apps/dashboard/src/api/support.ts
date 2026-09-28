@@ -66,7 +66,8 @@ export const supportKeys = {
    * refetch it for no reason and, worse, imply the two move together.
    */
   config: ['support', 'config'] as const,
-  tickets: (route: string, status: string) => ['support', 'tickets', route, status] as const,
+  tickets: (route: string, status: string, salon: string = '') =>
+    ['support', 'tickets', route, status, salon] as const,
 };
 
 /* ------------------------------------------------------------ the config -- */
@@ -271,6 +272,8 @@ export interface QueueFilter {
   /** '' means every queue. A platform admin may ask for either; a merchant may not. */
   route: '' | 'salon' | 'avo';
   status: '' | 'open' | 'closed';
+  /** `?salon=` — one salon's tickets. '' or absent means every salon. */
+  salon?: string;
 }
 
 /**
@@ -293,13 +296,15 @@ export interface QueueFilter {
  * count of the queue and not of the rows on screen, and conflating them would
  * under-report a busy day as exactly the page size.
  */
-export function useTicketQueue(filter: QueueFilter): UseQueryResult<TicketPage> {
+export function useTicketQueue(filter: QueueFilter, enabled = true): UseQueryResult<TicketPage> {
   return useQuery({
-    queryKey: supportKeys.tickets(filter.route, filter.status),
+    enabled,
+    queryKey: supportKeys.tickets(filter.route, filter.status, filter.salon ?? ''),
     queryFn: async ({ signal }) => {
       const params = new URLSearchParams();
       if (filter.route !== '') params.set('route', filter.route);
       if (filter.status !== '') params.set('status', filter.status);
+      if (filter.salon) params.set('salon', filter.salon);
       const qs = params.toString();
       const raw = await authedRequest<unknown>(
         'owner',

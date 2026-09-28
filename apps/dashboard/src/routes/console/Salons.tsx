@@ -6,6 +6,9 @@ import {
   Button,
   Card,
   EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterSelect,
   InfoBanner,
   Money,
   Segmented,
@@ -16,7 +19,9 @@ import {
 } from '@avo/ui';
 import {
   LOYALTY_LABEL,
+  LOYALTY_MODES,
   PLAN_LABEL,
+  SALON_PLANS,
   useOnboardSalon,
   usePlatformSalons,
   type LoyaltyMode,
@@ -27,6 +32,42 @@ import { usePlatformSettings } from '../../api/platformConsole.js';
 import { useConsoleSections } from '../../auth/AuthProvider.js';
 import { ApiError } from '../../api/client.js';
 import { SectionError, WriteError } from '../sectionState.js';
+import {
+  TEXT_PARAM,
+  enumParam,
+  shownLabel,
+  textMatches,
+  useSearchText,
+  useUrlFilters,
+} from '../listFilters.js';
+
+/**
+ * ===========================================================================
+ * THE FILTERS NEED EVERY SALON, SO WHILE ONE IS UP THE LIST LOADS EVERY SALON
+ * ===========================================================================
+ * `GET /v1/platform/salons` pages 50 at a time and takes no `?q=` or `?plan=`.
+ * This screen used to filter the pages it happened to hold and call the result
+ * "{n} shown" — honest about the count, and still a search that answered "no
+ * salons match" for a salon on page three. A filter over a partial list is the
+ * failure `api/src/routes/salons.ts` records for the bookings cap — "a confident
+ * answer with nothing behind it" — and this route's own handler already says "a
+ * list endpoint that only works while the table is small" is a regression
+ * waiting (`platformConsole.ts` § GET /v1/platform/salons).
+ *
+ * So a search or filter first walks the cursor to the end — the same walk
+ * `useAllPlatformSalons` does for the audit screen's picker — and says it is
+ * doing so; only once the server says there is no next page is anything
+ * filtered. Salons number in the hundreds, not the millions, so the walk is a
+ * few requests. Lane A has `?q=`, `?plan=` and `?loyalty=` in the report, which
+ * would let this stop walking.
+ *
+ * In the URL: `q` (a salon's name is not a person's), `plan`, `loyalty`.
+ */
+const SALON_FILTERS = {
+  q: TEXT_PARAM,
+  plan: enumParam(SALON_PLANS),
+  loyalty: enumParam(LOYALTY_MODES),
+} as const;
 
 /**
  * Console → Salons. `GET /v1/platform/salons`, gated `salons`
@@ -116,10 +157,19 @@ import { SectionError, WriteError } from '../sectionState.js';
  * weeks, which is precisely the argument for not making a second one here.
  */
 export function Salons() {
-  const [search, setSearch] = useState('');
+  const url = useUrlFilters(SALON_FILTERS);
+  const search = useSearchText(url.values.q, (q) => url.replace({ q }), 150);
   const [wizardOpen, setWizardOpen] = useState(false);
   const onboardButton = useRef<HTMLButtonElement>(null);
   const list = usePlatformSalons();
+  const query = url.values.q.trim();
+  const narrowing = query !== '' || url.values.plan !== '' || url.values.loyalty !== '';
+  const { hasNextPage, isFetchingNextPage, fetchNextPage, isError: listFailed } = list;
+  useEffect(() => {
+    if (narrowing && hasNextPage && !isFetchingNextPage && !listFailed) void fetchNextPage();
+  }, [narrowing, hasNextPage, isFetchingNextPage, fetchNextPage, listFailed]);
+  /* Filtering waits for the last page; until then the rows are not the answer. */
+  const walking = narrowing && hasNextPage === true;
   /*
    * The courtesy over `salons`, the section gating `POST /v1/platform/salons`
    * (platformConsole.ts:452). This IS now the same section the list read is gated
@@ -147,7 +197,6 @@ export function Salons() {
   }, []);
 
   const rows = (list.data?.pages ?? []).flatMap((p) => p.items);
-  const query = search.trim().toLowerCase();
 
   /*
    * FILTERED IN THE BROWSER, AND THE WORD "shown" IS WHY THAT IS HONEST. The
@@ -174,17 +223,18 @@ export function Salons() {
    */
   const filtered = useMemo(
     () =>
-      query === ''
-        ? rows
-        : rows.filter(
-            (s) =>
-              s.name.toLowerCase().includes(query) ||
-              s.id.toLowerCase().includes(query) ||
-              (s.city ?? '').toLowerCase().includes(query) ||
-              (s.nameAr ?? '').toLowerCase().includes(query),
-          ),
-    [rows, query],
+      rows.filter(
+        (s) =>
+          textMatches(query, s.name, s.id, s.city, s.nameAr) &&
+          (url.values.plan === '' || s.plan === url.values.plan) &&
+          (url.values.loyalty === '' || s.loyaltyMode === url.values.loyalty),
+      ),
+    [rows, query, url.values.plan, url.values.loyalty],
   );
+  const clearFilters = () => {
+    search.reset();
+    url.clear();
+  };
 
   if (list.isError) {
     return (
@@ -205,24 +255,42 @@ export function Salons() {
       </InfoBanner>
 
       <div className="salons__controls">
-        <input
-          className="avo-input salons__search"
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search salon or city"
-          aria-label="Search the salons on AVO"
-        />
-        {/*
-          THE COUNT WITHHOLDS ITSELF WHILE PENDING, and so does the caption below.
-          `rows` is `[]` before the first page lands, so an unguarded "{n} shown"
-          would announce "0 shown" over a skeleton — the fabricated zero the
-          no-`0.000` rule bans on money, arriving on a count instead. The same
-          defect was found on both audit screens through the sr-only caption.
-        */}
-        <span className="salons__count" role="status">
-          {list.isPending ? '' : `${filtered.length} shown`}
-        </span>
+        <FilterBar
+          label="Filter salons"
+          search={{
+            value: search.text,
+            onChange: search.setText,
+            label: 'Search the salons on AVO',
+            placeholder: 'Search salon or city',
+          }}
+          count={
+            list.isPending || walking
+              ? null
+              : narrowing
+                ? shownLabel(filtered.length, rows.length, 'salon', 'salons', true)
+                : `${filtered.length} shown`
+          }
+          onClear={narrowing ? clearFilters : undefined}
+        >
+          <FilterSelect
+            label="Filter by plan"
+            value={url.values.plan}
+            onChange={(plan) => url.set({ plan })}
+            options={[
+              { value: '', label: 'Every plan' },
+              ...SALON_PLANS.map((p) => ({ value: p, label: PLAN_LABEL[p] })),
+            ]}
+          />
+          <FilterChips
+            label="Filter by loyalty"
+            value={url.values.loyalty}
+            onChange={(loyalty) => url.set({ loyalty })}
+            options={[
+              { value: '', label: 'All' },
+              ...LOYALTY_MODES.map((m) => ({ value: m, label: LOYALTY_LABEL[m] })),
+            ]}
+          />
+        </FilterBar>
         {/*
           "+ Onboard a salon", verbatim, and offered only to an admin the SERVER
           will let finish. An analyst reads this whole list and is refused the
@@ -241,7 +309,7 @@ export function Salons() {
           <table className="salons__table">
             <caption className="avo-sr-only">
               Every salon on AVO, oldest first.
-              {list.isPending ? '' : ` ${filtered.length} shown.`}
+              {list.isPending || walking ? '' : ` ${filtered.length} shown.`}
             </caption>
             <thead>
               <tr>
@@ -263,7 +331,7 @@ export function Salons() {
               </tr>
             </thead>
             <tbody>
-              {list.isPending ? (
+              {list.isPending || walking ? (
                 [0, 1, 2, 3, 4].map((n) => (
                   <tr key={n}>
                     {[0, 1, 2, 3, 4, 5, 6].map((c) => (
@@ -276,13 +344,18 @@ export function Salons() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="salons__empty">
-                    {query !== '' ? (
+                    {narrowing ? (
                       /*
                        * NAMES WHAT IT FILTERED. "No salons" under an invisible
                        * search box reads as "AVO has no salons", which on this
-                       * screen is a claim about the whole business.
+                       * screen is a claim about the whole business. And it is
+                       * said only after every page is in — see SALON_FILTERS.
                        */
-                      `No salons match “${search.trim()}”.`
+                      <EmptyState
+                        title={query !== '' ? `No salons match “${query}”` : 'No salons match these filters'}
+                        body="The search covered every salon on AVO, not just the first page."
+                        action={{ label: 'Clear filters', onClick: clearFilters }}
+                      />
                     ) : (
                       <EmptyState
                         title="No salons yet"
@@ -299,7 +372,13 @@ export function Salons() {
         </div>
       </Card>
 
-      {list.hasNextPage ? (
+      {walking ? (
+        <p className="salons__walking" role="status">
+          Loading every salon so the search covers them all…
+        </p>
+      ) : null}
+
+      {list.hasNextPage && !narrowing ? (
         <div className="salons__more">
           <Button
             variant="secondary"

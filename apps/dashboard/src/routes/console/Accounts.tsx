@@ -1,5 +1,15 @@
-import { useEffect, useState } from 'react';
-import { Button, Card, EmptyState, InfoBanner, Pill, Segmented, Skeleton } from '@avo/ui';
+import { useState } from 'react';
+import {
+  Button,
+  Card,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterSelect,
+  InfoBanner,
+  Pill,
+  Skeleton,
+} from '@avo/ui';
 import {
   useSendResetLink,
   usePlatformAccounts,
@@ -7,6 +17,9 @@ import {
   type PlatformAccount,
 } from '../../api/platformAccounts.js';
 import { SectionError, WriteError } from '../sectionState.js';
+import { useAllPlatformSalons } from '../../api/platformSalons.js';
+import { TEXT_PARAM, enumParam, useSearchText, useUrlFilters } from '../listFilters.js';
+import { resolveSalonParam } from './salonParam.js';
 import { AccountVouchers } from './AccountVouchers.js';
 
 /**
@@ -138,17 +151,29 @@ import { AccountVouchers } from './AccountVouchers.js';
  * data lands, and the sr-only caption withholds it on the same condition — the
  * announced-not-painted defect both audit screens had.
  */
+/**
+ * THE FILTERS. All three go to the server — `?q=`, `?role=`, `?salon=` on
+ * `GET /v1/platform/accounts`, which pages two streams on a composite cursor —
+ * so none of them trims a loaded page. `role` and `salon` are in the URL; the
+ * search is NOT, because it is a customer's name or phone (`listFilters.ts`).
+ */
+const CONSOLE_ACCOUNT_FILTERS = {
+  role: enumParam(['customer', 'staff', 'owner']),
+  salon: TEXT_PARAM,
+} as const;
+
 export function ConsoleAccounts() {
-  const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
-  const [role, setRole] = useState<AccountRoleFilter>('all');
+  const url = useUrlFilters(CONSOLE_ACCOUNT_FILTERS);
+  const role = (url.values.role || 'all') as AccountRoleFilter;
+  const salonList = useAllPlatformSalons();
+  const salon = resolveSalonParam(url.values.salon, salonList);
+  const salonLabel =
+    salon.salonId === null
+      ? null
+      : (salonList.salons.find((s) => s.id === salon.salonId)?.name ?? salon.salonId);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setQuery(search), 300);
-    return () => clearTimeout(timer);
-  }, [search]);
-
-  const accounts = usePlatformAccounts({ q: query, role });
+  const accounts = usePlatformAccounts({ q: query, role, salon: salon.salonId }, !salon.waiting);
   const reset = useSendResetLink();
 
   /*
@@ -178,6 +203,21 @@ export function ConsoleAccounts() {
    */
   const [openVouchers, setOpenVouchers] = useState<PlatformAccount | null>(null);
 
+  const search = useSearchText(
+    query,
+    (next) => {
+      setQuery(next);
+      setOpenVouchers(null);
+    },
+    300,
+  );
+  const clearFilters = () => {
+    search.reset();
+    setQuery('');
+    setOpenVouchers(null);
+    url.clear();
+  };
+
   if (accounts.isError) {
     return (
       <SectionError
@@ -191,7 +231,7 @@ export function ConsoleAccounts() {
   }
 
   const rows = (accounts.data?.pages ?? []).flatMap((p) => p.items);
-  const filtered = query.trim() !== '' || role !== 'all';
+  const filtered = query.trim() !== '' || role !== 'all' || salon.salonId !== null;
 
   return (
     <div className="accounts-console">
@@ -203,27 +243,23 @@ export function ConsoleAccounts() {
         Every account on the platform. Passwords are never stored or shown.
       </InfoBanner>
 
-      <div className="accounts-console__controls">
-        <input
-          className="avo-input accounts-console__search"
-          type="search"
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setOpenVouchers(null);
-          }}
-          placeholder="Search name or salon"
-          aria-label="Search every account on the platform"
-        />
-        <span className="accounts-console__count" role="status">
-          {/* No `?? 0` — a pending screen announces no count it is not painting. */}
-          {accounts.isPending ? '' : `${rows.length} shown`}
-        </span>
-        <Segmented<AccountRoleFilter>
+      <FilterBar
+        label="Filter accounts"
+        search={{
+          value: search.text,
+          onChange: search.setText,
+          label: 'Search every account on the platform',
+          placeholder: 'Search name or salon',
+        }}
+        /* No `?? 0` — a pending screen announces no count it is not painting. */
+        count={accounts.isPending ? null : `${rows.length} shown`}
+        onClear={filtered ? clearFilters : undefined}
+      >
+        <FilterChips<AccountRoleFilter>
           label="Filter by role"
           value={role}
           onChange={(next) => {
-            setRole(next);
+            url.set({ role: next === 'all' ? '' : next });
             setOpenVouchers(null);
           }}
           options={[
@@ -233,7 +269,21 @@ export function ConsoleAccounts() {
             { value: 'owner', label: 'Owners' },
           ]}
         />
-      </div>
+        {salonList.salons.length > 0 ? (
+          <FilterSelect
+            label="Filter by salon"
+            value={salon.salonId ?? ''}
+            onChange={(next) => {
+              url.set({ salon: next });
+              setOpenVouchers(null);
+            }}
+            options={[
+              { value: '', label: 'Every salon' },
+              ...salonList.salons.map((s) => ({ value: s.id, label: s.name })),
+            ]}
+          />
+        ) : null}
+      </FilterBar>
 
       {/*
         A failed RESET, reported above the table rather than inside a row: the row
@@ -292,7 +342,11 @@ export function ConsoleAccounts() {
                        * empty state was unreachable for months because the
                        * request was refused before it could return zero rows.
                        */
-                      <EmptyState title="No accounts match" body={emptyLine(query, role)} />
+                      <EmptyState
+                        title="No accounts match"
+                        body={emptyLine(query, role, salonLabel)}
+                        action={{ label: 'Clear filters', onClick: clearFilters }}
+                      />
                     ) : (
                       /*
                        * The unfiltered empty. Reachable only on a platform with
@@ -537,7 +591,7 @@ export function AccountRow({
 }
 
 /** Names the filter an empty result was filtered by. */
-function emptyLine(query: string, role: AccountRoleFilter): string {
+function emptyLine(query: string, role: AccountRoleFilter, salonName: string | null = null): string {
   const what =
     role === 'all'
       ? 'accounts'
@@ -547,7 +601,9 @@ function emptyLine(query: string, role: AccountRoleFilter): string {
           ? 'salon owners'
           : 'staff accounts';
   const q = query.trim();
-  if (q !== '') return `No ${what} match “${q}”.`;
+  const at = salonName === null ? '' : ` at ${salonName}`;
+  if (q !== '') return `No ${what}${at} match “${q}”.`;
+  if (salonName !== null) return `There are no ${what} at ${salonName} yet.`;
   return `There are no ${what} on the platform yet.`;
 }
 

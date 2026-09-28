@@ -369,12 +369,24 @@ export interface CampaignList {
  * Withdraw (`DELETE .../campaigns/{cid}`) and the monthly cap have the same
  * problem and the same treatment. All three are in the lane report.
  */
-export function useCampaigns(): UseQueryResult<CampaignList> {
+export function useCampaigns(status: Campaign['status'] | null = null): UseQueryResult<CampaignList> {
   const salonId = useSalonId();
   return useQuery({
-    queryKey: promotionKeys.campaigns(salonId),
+    /*
+     * `?status=` NARROWS SERVER-SIDE. The route caps the queue at 200 rows
+     * newest-first (`LIMIT 200`, api/src/routes/campaigns.ts) and says nothing
+     * when it does, so a status chip that trimmed the loaded 200 would hide an
+     * older rejected campaign behind newer sends. The key keeps the status under
+     * `campaigns(salonId)`, so the submit's prefix invalidation still reaches
+     * every filtered queue.
+     */
+    queryKey: [...promotionKeys.campaigns(salonId), status ?? 'any'] as const,
     queryFn: ({ signal }) =>
-      authedRequest<CampaignList>('merchant', `/v1/salons/${salonId}/campaigns`, { signal }),
+      authedRequest<CampaignList>(
+        'merchant',
+        `/v1/salons/${salonId}/campaigns${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+        { signal },
+      ),
     networkMode: 'always',
     /*
      * `retry: false` used to sit here, and removing it is a deliberate BEHAVIOUR

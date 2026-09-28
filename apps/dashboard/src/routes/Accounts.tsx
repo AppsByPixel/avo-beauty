@@ -1,6 +1,20 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { StaffUser } from '@avo/types';
-import { Button, Card, Chip, EmptyState, Pill, Segmented, Select, Skeleton, TextField } from '@avo/ui';
+import {
+  Button,
+  Card,
+  Chip,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  FilterSelect,
+  Pill,
+  Segmented,
+  Select,
+  Skeleton,
+  TextField,
+} from '@avo/ui';
 import {
   PERMISSIONS,
   ROLE_LABEL,
@@ -18,6 +32,15 @@ import {
 } from '../api/staff.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
+import {
+  TEXT_PARAM,
+  enumParam,
+  shownLabel,
+  textMatches,
+  useSearchText,
+  useStableMatches,
+  useUrlFilters,
+} from './listFilters.js';
 import { Customers } from './Customers.js';
 import { SectionError, WriteError } from './sectionState.js';
 
@@ -58,6 +81,50 @@ import { SectionError, WriteError } from './sectionState.js';
 
 type Tab = 'team' | 'customers';
 
+/**
+ * ===========================================================================
+ * THE TEAM LIST'S FILTERS — ALL IN THE BROWSER, BECAUSE THE ROSTER IS WHOLE
+ * ===========================================================================
+ * `GET /staff` returns every account in the salon, leavers included, with
+ * `nextCursor: null` and no LIMIT (api/src/routes/staff.ts § the roster — "The
+ * screen filters; the API does not decide that for it"). So role, branch,
+ * on-the-team and a name/username search are all string and set matches here.
+ *
+ * BRANCH MEANS "CAN WORK THERE": an account with `branchAccess: 'all'` matches
+ * every branch, because she can. Filtering to Salmiya and losing the owner would
+ * misreport who can take a charge at that counter.
+ *
+ * The tab is `?tab=customers` so a link can open the book; the BOOK's search is
+ * not in the URL — it is a customer's name or phone (`listFilters.ts`).
+ */
+const TEAM_ROLES = ['owner', 'manager', 'frontdesk', 'artist', 'scanner'] as const;
+const TEAM_FILTERS = {
+  tab: enumParam(['customers']),
+  q: TEXT_PARAM,
+  role: enumParam(TEAM_ROLES),
+  branch: TEXT_PARAM,
+  standing: enumParam(['current', 'left']),
+} as const;
+const TEAM_FILTER_KEYS = ['q', 'role', 'branch', 'standing'] as const;
+
+export function teamMatches(
+  account: StaffUser,
+  f: { q: string; role: string; branch: string; standing: string },
+): boolean {
+  if (!textMatches(f.q, account.name, account.handle)) return false;
+  if (f.role !== '' && account.role !== f.role) return false;
+  if (
+    f.branch !== '' &&
+    account.branchAccess !== 'all' &&
+    !account.branchAccess.includes(f.branch)
+  ) {
+    return false;
+  }
+  if (f.standing === 'current' && !account.active) return false;
+  if (f.standing === 'left' && account.active) return false;
+  return true;
+}
+
 export function Accounts() {
   const session = useSession('merchant');
   const staff = useStaff();
@@ -66,10 +133,49 @@ export function Accounts() {
   const createStaff = useCreateStaff();
   const deactivate = useDeactivateStaff();
   const sendReset = useSendPasswordReset();
-  const [tab, setTab] = useState<Tab>('team');
+  const url = useUrlFilters(TEAM_FILTERS);
+  const tab: Tab = url.values.tab === 'customers' ? 'customers' : 'team';
+  const setTab = (next: Tab) =>
+    url.set({
+      tab: next === 'customers' ? 'customers' : '',
+      ...Object.fromEntries(TEAM_FILTER_KEYS.map((k) => [k, ''])),
+    });
+  const search = useSearchText(url.values.q, (q) => url.replace({ q }), 150);
   const [adding, setAdding] = useState(false);
   /** staffId → the reset the server accepted, so the card can say when it expires. */
   const [resetSent, setResetSent] = useState<Record<string, string>>({});
+
+  /*
+   * A branch id from the URL counts only when it is one of this salon's branches
+   * — anything else reads as "all", never as a filter nobody can see or clear.
+   */
+  const knownBranches = salon.data?.branches ?? [];
+  const branchFilter = knownBranches.some((b) => b.id === url.values.branch) ? url.values.branch : '';
+  const teamFilter = {
+    q: url.values.q,
+    role: url.values.role,
+    branch: branchFilter,
+    standing: url.values.standing,
+  };
+  const filterKey = [teamFilter.q.trim(), teamFilter.role, teamFilter.branch, teamFilter.standing].join('|');
+  const teamFiltered = filterKey !== '|||';
+  const visible = useStableMatches(
+    staff.data?.items,
+    (a) => a.id,
+    (a) => teamMatches(a, teamFilter),
+    teamFiltered ? filterKey : '',
+  );
+  const clearTeamFilters = () => {
+    search.reset();
+    url.set(Object.fromEntries(TEAM_FILTER_KEYS.map((k) => [k, ''])));
+  };
+  const roleOptions = useMemo(
+    () => [
+      { value: '', label: 'All roles' },
+      ...TEAM_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] ?? r })),
+    ],
+    [],
+  );
 
   if (staff.isError) {
     return (
@@ -172,6 +278,52 @@ export function Accounts() {
             )}
           </div>
 
+          {items && items.length > 0 ? (
+            <FilterBar
+              label="Filter team accounts"
+              search={{
+                value: search.text,
+                onChange: search.setText,
+                label: 'Search team accounts by name or username',
+                placeholder: 'Search name or username',
+              }}
+              count={
+                teamFiltered
+                  ? shownLabel(visible?.length ?? 0, items.length, 'account', 'accounts', true)
+                  : null
+              }
+              onClear={teamFiltered ? clearTeamFilters : undefined}
+            >
+              <FilterSelect
+                label="Filter by role"
+                options={roleOptions}
+                value={teamFilter.role}
+                onChange={(role) => url.set({ role })}
+              />
+              {branches.length > 1 ? (
+                <FilterSelect
+                  label="Filter by branch"
+                  options={[
+                    { value: '', label: 'All branches' },
+                    ...branches.map((b) => ({ value: b.id, label: b.name })),
+                  ]}
+                  value={teamFilter.branch}
+                  onChange={(branch) => url.set({ branch })}
+                />
+              ) : null}
+              <FilterChips
+                label="Standing"
+                options={[
+                  { value: '', label: 'Everyone' },
+                  { value: 'current', label: 'On the team' },
+                  { value: 'left', label: 'Left the team' },
+                ]}
+                value={teamFilter.standing}
+                onChange={(standing) => url.set({ standing })}
+              />
+            </FilterBar>
+          ) : null}
+
           {adding ? (
             <NewAccountForm
               branches={branches}
@@ -192,9 +344,11 @@ export function Accounts() {
               title="No team accounts"
               body="Add a teammate to create their sign-in, then set exactly what they are allowed to do. They receive a link to set their own password — you never type one for them."
             />
+          ) : (visible ?? []).length === 0 ? (
+            <FilterEmpty things="team accounts" onClear={clearTeamFilters} />
           ) : (
             <div className="accounts__list">
-              {items.map((account) => (
+              {(visible ?? []).map((account) => (
                 <AccountCard
                   key={account.id}
                   account={account}

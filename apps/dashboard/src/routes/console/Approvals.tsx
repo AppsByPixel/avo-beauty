@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import type { Campaign } from '@avo/types';
-import { Button, Card, EmptyState, InfoBanner, Pill, Skeleton, Stepper, Toggle } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  InfoBanner,
+  Pill,
+  Skeleton,
+  Stepper,
+  Toggle,
+} from '@avo/ui';
 import {
   isCampaignHeld,
   useDecideCampaign,
@@ -10,6 +22,7 @@ import {
 } from '../../api/platform.js';
 import { campaignRewardLabel } from '../../api/promotions.js';
 import { SectionError, WriteError } from '../sectionState.js';
+import { enumParam, useUrlFilters } from '../listFilters.js';
 
 /**
  * Approvals — where non-negotiable #8 is satisfied or broken.
@@ -39,8 +52,34 @@ import { SectionError, WriteError } from '../sectionState.js';
  * "held — this customer has had two messages this week" are different things to
  * do next.
  */
+/**
+ * THE DECIDED LIST'S STATUS FILTER GOES TO THE SERVER. `GET /v1/platform/campaigns`
+ * is `LIMIT 200` newest-first with no cursor and no truncation flag, so picking
+ * Rejected out of the loaded 200 would hide an older rejection. With a chip on,
+ * Decided is its own `?status=` read; the unfiltered read still feeds the queue
+ * above and the counts beside it, exactly as before. `?decided=` in the URL.
+ *
+ * No salon filter: the endpoint takes no `?salon=`, and the list is not known
+ * to be complete. In the lane report.
+ */
+const DECIDED_STATUSES = ['approved', 'sent', 'rejected'] as const;
+const APPROVAL_FILTERS = { decided: enumParam(DECIDED_STATUSES) } as const;
+const DECIDED_CHIPS = [
+  { value: '', label: 'All' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'sent', label: 'Sent' },
+  { value: 'rejected', label: 'Rejected' },
+];
+
 export function Approvals() {
   const campaigns = usePlatformCampaigns();
+  const url = useUrlFilters(APPROVAL_FILTERS);
+  const decidedStatus = url.values.decided;
+  // Only asked for while a chip is on. Disabled, it shares the unfiltered key above.
+  const decidedRead = usePlatformCampaigns(
+    decidedStatus === '' ? undefined : decidedStatus,
+    decidedStatus !== '',
+  );
   const policy = useMessagingPolicy();
   const decide = useDecideCampaign();
 
@@ -61,7 +100,8 @@ export function Approvals() {
 
   const items = campaigns.data ?? [];
   const pending = items.filter((c) => c.status === 'pending');
-  const decided = items.filter((c) => c.status !== 'pending');
+  const decided =
+    decidedStatus === '' ? items.filter((c) => c.status !== 'pending') : (decidedRead.data ?? []);
 
   return (
     <div className="approvals">
@@ -175,7 +215,39 @@ export function Approvals() {
           ) : null}
 
           <h2 className="approvals__h2 approvals__h2--decided avo-display">Decided</h2>
-          {decided.length === 0 ? (
+          <FilterBar
+            label="Filter decided campaigns"
+            className="avo-filterbar--inset"
+            count={
+              decidedStatus === '' || decidedRead.isPending || decidedRead.isError
+                ? null
+                : `${decided.length} ${decided.length === 1 ? 'campaign' : 'campaigns'}`
+            }
+            onClear={decidedStatus !== '' ? () => url.clear() : undefined}
+          >
+            <FilterChips
+              label="Decision"
+              options={DECIDED_CHIPS}
+              value={decidedStatus}
+              onChange={(next) => url.set({ decided: next })}
+            />
+          </FilterBar>
+          {decidedStatus !== '' && decidedRead.isError ? (
+            <SectionError
+              error={decidedRead.error}
+              forbiddenTitle="You don't have access to approvals"
+              failedTitle="Couldn't load the decided campaigns"
+              onRetry={() => void decidedRead.refetch()}
+              retrying={decidedRead.isFetching}
+            />
+          ) : decidedStatus !== '' && decidedRead.isPending ? (
+            <Card className="approvals__card">
+              <Skeleton width="60%" height={13} />
+              <Skeleton width="40%" height={13} />
+            </Card>
+          ) : decided.length === 0 && decidedStatus !== '' ? (
+            <FilterEmpty things="campaigns" onClear={() => url.clear()} />
+          ) : decided.length === 0 ? (
             <p className="approvals__none">Nothing decided yet.</p>
           ) : (
             <ul className="approvals__decided">

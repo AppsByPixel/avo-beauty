@@ -10,6 +10,16 @@
 export { Button, type ButtonProps, type ButtonVariant } from './Button.js';
 export { Card, type CardProps } from './Card.js';
 export { Chip, type ChipProps } from './Chip.js';
+export {
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  FilterSelect,
+  type FilterBarProps,
+  type FilterChipOption,
+  type FilterChipsProps,
+  type FilterSelectProps,
+} from './FilterBar.js';
 export { IconButton, type IconButtonProps, type IconButtonTone } from './IconButton.js';
 export { IconCancel, IconCheck, IconClock, IconNoShow, IconSwap } from './icons.js';
 export { ImageSlot, type ImageSlotProps, type ImageSlotState } from './ImageSlot.js';

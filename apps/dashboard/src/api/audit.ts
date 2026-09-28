@@ -167,8 +167,11 @@ export const platformAuditKeys = {
 
 export function usePlatformAuditLog(
   filters: PlatformAuditFilters,
+  /** False while a `?salon=` from the URL is still being checked — `console/salonParam.ts`. */
+  enabled = true,
 ): UseInfiniteQueryResult<InfiniteData<AuditPage>> {
   return useInfiniteQuery({
+    enabled,
     queryKey: platformAuditKeys.list(filters),
     initialPageParam: null as number | null,
     queryFn: ({ pageParam, signal }) => {
