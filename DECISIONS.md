@@ -2209,3 +2209,16 @@ Aftab asked for.**
   `?fulfilment/branch/from/to`, audit `?from/to`, customers `?tier`, bookings `?artist`, and
   platform salons `?q/plan/loyalty`. Products have no category field, so a category filter is a
   data-model question, not a parameter.
+
+**Her side of the booking policy (lane B, fb41bf5).**
+- **Before booking:** the review step shows the salon's policy, and Confirm stays off until it
+  has loaded. `policyVersion` is sent with the booking. On `policy_changed` she is shown the new
+  policy and confirms again.
+- **Cancelling:** a preview says what comes back right now. Afterwards the card shows the
+  server's figures, which win if they differ from the preview.
+- **Bell:** `booking_policy` is a known bell kind and opens a policy sheet.
+- **Copy:** 22 new strings in both languages, none with a design source. The Arabic strings are
+  in `AR_UNVERIFIED`. Hours and percentages use Eastern digits, money uses Western digits, and no
+  string mixes the two.
+- **Shared maths:** `percentOfFloor` is now in `@avo/types`. The API and the wallet each still
+  have their own copy, and both switch to the shared one next.
