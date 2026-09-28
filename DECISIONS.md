@@ -1994,3 +1994,26 @@ disagree.
 able to take a deposit by phone, that is a customer-consent question before it is an engineering
 one. If the pill ternary starts appearing in a fourth place, the enum break has become cheaper than
 the containment and should be taken as a single trunk slice.
+
+### Card-paid shop orders and the wallet bell — two rulings, one still open
+
+**Decided by Aftab, 2026-09-28**, on the wallet list's items W2 and W4.
+
+**1. The tier bonus is credited on a card-paid order — kept.** A card payment at shop
+checkout passes through the wallet as a top-up sized to the order (`services/orderPayment.ts`),
+so it earns her tier bonus and any live top-up promotion, exactly as the existing two-step
+path does (top up, then pay from the wallet). Without it, paying in one step would cost her
+more than paying in two — the new shortcut would be the worse deal. Removing it is one line.
+
+**2. The bell opens with her history already read.** Existing members would otherwise meet
+their whole receipt history as unread on day one. A new migration (0059) marks what exists
+when it runs as read; only what happens after launch is unread. **It snapshots existing ROWS,
+not a timestamp**, deliberately: lane A's bell fixtures are backdated to 2020 to avoid the
+monthly campaign cap, so "created before launch" would have silently marked them read. It
+must not recreate marks for an erased member, and must not hold a lock on `receipt_job` or
+`campaign_send`, which are written inside money transactions on the live database.
+
+**Still open — the card fee.** A card-paid order is priced like a top-up: KNET 150 fils flat,
+card 2.5% + 50 fils, borne by the merchant; the total she pays does not change. Wallet-paid
+orders carry no fee. Whether salons accept a payment-provider fee on card shop sales is a
+business decision and has not been made. The code ships with the merchant bearing it.
