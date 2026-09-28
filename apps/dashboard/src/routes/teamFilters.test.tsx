@@ -159,10 +159,10 @@ describe('Accounts → Team', () => {
   it('role narrows, and branch keeps everyone who CAN work there — all-branch accounts included', async () => {
     mount(<Accounts />);
     await screen.findByText('Noura Al-Sabah');
-    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'artist' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by role' }), { target: { value: 'artist' } });
     await waitFor(() => expect(accountNames()).toEqual(['Dana Yousef', 'Mona Karim']));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: '' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Branch' }), { target: { value: 'BR-SAL' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by role' }), { target: { value: '' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by branch' }), { target: { value: 'BR-SAL' } });
     await waitFor(() =>
       expect(accountNames()).toEqual(['Noura Al-Sabah', 'Hessa Al-Mutairi', 'Mona Karim']),
     );
@@ -197,7 +197,7 @@ describe('Accounts → Team', () => {
   it('never asks the server again — the roster is whole', async () => {
     mount(<Accounts />);
     await screen.findByText('Noura Al-Sabah');
-    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'owner' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by role' }), { target: { value: 'owner' } });
     searchFor('Search team accounts by name or username', 'nou');
     await waitFor(() => expect(window.location.search).toContain('q=nou'));
     expect(paths()).toEqual(['/staff']);
@@ -224,9 +224,9 @@ describe('Team (artists)', () => {
     await waitFor(() => expect(artistNames()).toEqual(['Dana']));
     searchFor('Search artists by name', '');
     await waitFor(() => expect(artistNames()).toHaveLength(3));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Branch' }), { target: { value: 'unassigned' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by branch' }), { target: { value: 'unassigned' } });
     await waitFor(() => expect(artistNames()).toEqual(['Rana']));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Branch' }), { target: { value: '' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter by branch' }), { target: { value: '' } });
     fireEvent.click(screen.getByRole('radio', { name: 'Google Calendar' }));
     await waitFor(() => expect(artistNames()).toEqual(['Noura']));
     expect(paths()).toEqual(['/salons/SAL-AMARA/artists']);

@@ -295,14 +295,14 @@ export function Accounts() {
               onClear={teamFiltered ? clearTeamFilters : undefined}
             >
               <FilterSelect
-                label="Role"
+                label="Filter by role"
                 options={roleOptions}
                 value={teamFilter.role}
                 onChange={(role) => url.set({ role })}
               />
               {branches.length > 1 ? (
                 <FilterSelect
-                  label="Branch"
+                  label="Filter by branch"
                   options={[
                     { value: '', label: 'All branches' },
                     ...branches.map((b) => ({ value: b.id, label: b.name })),

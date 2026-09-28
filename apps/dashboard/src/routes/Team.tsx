@@ -246,7 +246,7 @@ export function Team() {
           >
             {branches.length > 1 ? (
               <FilterSelect
-                label="Branch"
+                label="Filter by branch"
                 options={[
                   { value: '', label: 'All branches' },
                   ...branches.map((b) => ({ value: b.id, label: b.name })),
