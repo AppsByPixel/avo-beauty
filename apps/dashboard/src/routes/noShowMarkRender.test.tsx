@@ -119,7 +119,7 @@ const { Appointments, BookingRow, canMarkNoShow } = await import('./Appointments
 function cssFrom(relative: string): string {
   return readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 }
-const DASHBOARD_CSS = cssFrom('../app.css');
+const UI_CSS = cssFrom('../../../../packages/ui/src/ui.css');
 
 beforeAll(() => {
   for (const relative of [
@@ -303,7 +303,15 @@ describe('the link needs three conditions, and the design only draws one', () =>
 
 /* ================================================= 2 · what it is, visually = */
 
-describe('the control is the design’s quiet link, and a button', () => {
+/**
+ * THE QUIET LINK BECAME AN ICON BUTTON ON 2026-09-29, by the client's request
+ * ("The change status buttons on the appointment lists should be more visible
+ * like icons"). It was the design's `:184` 12px link in `--avo-text-muted-soft`;
+ * it is now `@avo/ui`'s `IconButton` in the danger tone, with the same visible
+ * words and the same accessible name. The size and the token discipline are
+ * still pinned; the colour it is pinned TO changed.
+ */
+describe('the control is an icon button, and a button', () => {
   it('carries the design’s 12px, through the cascade and not through a class name', () => {
     renderRow(HELD);
     // `font: inherit` undresses the UA button; without it this is 13.333px in
@@ -312,16 +320,19 @@ describe('the control is the design’s quiet link, and a button', () => {
   });
 
   /**
-   * `:184` names `rgba(28,27,25,0.45)`, which IS `--avo-text-muted-soft`.
-   * Asserted against the DECLARATION rather than `getComputedStyle`, for
-   * `emphasisWeight.test.tsx`'s measured reason: jsdom does not substitute
-   * custom properties, so a computed read answers the same thing for the right
-   * token and the wrong one. `cssTokenRefs.test.ts` proves the name resolves.
+   * DESTRUCTIVE, AND IT LOOKS IT: the danger tone, whose colour is the danger
+   * TEXT token. Asserted against the DECLARATION rather than
+   * `getComputedStyle`, for `emphasisWeight.test.tsx`'s measured reason: jsdom
+   * does not substitute custom properties, so a computed read answers the same
+   * thing for the right token and the wrong one. `cssTokenRefs.test.ts` proves
+   * the name resolves.
    */
-  it('takes its colour from the token, not from a re-typed hex', () => {
-    const rule = DASHBOARD_CSS.match(/\.appts__mark\s*\{([^}]*)\}/);
-    expect(rule, 'no .appts__mark rule in app.css').not.toBeNull();
-    expect(rule![1]).toMatch(/color:\s*var\(--avo-text-muted-soft\)/);
+  it('wears the danger tone, coloured by the token and not a re-typed hex', () => {
+    renderRow(HELD);
+    expect(markLink()!.className).toContain('avo-iconbtn--danger');
+    const rule = UI_CSS.match(/\.avo-iconbtn--danger\s*\{([^}]*)\}/);
+    expect(rule, 'no .avo-iconbtn--danger rule in ui.css').not.toBeNull();
+    expect(rule![1]).toMatch(/color:\s*var\(--avo-danger-text\)/);
     expect(rule![1]).not.toMatch(/#|rgba\(/);
   });
 

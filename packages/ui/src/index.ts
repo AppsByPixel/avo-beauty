@@ -10,6 +10,8 @@
 export { Button, type ButtonProps, type ButtonVariant } from './Button.js';
 export { Card, type CardProps } from './Card.js';
 export { Chip, type ChipProps } from './Chip.js';
+export { IconButton, type IconButtonProps, type IconButtonTone } from './IconButton.js';
+export { IconCancel, IconCheck, IconClock, IconNoShow, IconSwap } from './icons.js';
 export { ImageSlot, type ImageSlotProps, type ImageSlotState } from './ImageSlot.js';
 export { InfoBanner, type InfoBannerProps } from './InfoBanner.js';
 export { InlineError, type InlineErrorProps } from './InlineError.js';

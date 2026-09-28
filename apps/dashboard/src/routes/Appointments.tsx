@@ -1,7 +1,24 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { parseFils, type StaffPerms } from '@avo/types';
-import { Button, Card, EmptyState, InfoBanner, Money, Pill, Segmented, Select, Skeleton, TextField } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  IconButton,
+  IconCancel,
+  IconCheck,
+  IconClock,
+  IconNoShow,
+  IconSwap,
+  InfoBanner,
+  Money,
+  Pill,
+  Segmented,
+  Select,
+  Skeleton,
+  TextField,
+} from '@avo/ui';
 import {
   isSlotTaken,
   useCancelBooking,
@@ -1121,12 +1138,17 @@ export function BookingActions({
         rows. The status cell is already "what state is this in", and what
         you may do about it is the same question.
 
-        THE SHAPE IS THE NO-SHOW LINK'S, WHICH THIS FILE ALREADY ARGUED:
-        a 12px link-styled `<button>`, and the link SWAPS for a short step in
-        the same slot rather than opening a modal. That decision is recorded
-        at § the armed row and it holds for all five controls — an overlay,
-        a focus trap and a title this design draws nowhere, for a form with
-        one or two fields.
+        ICON BUTTONS WITH THEIR WORD, NOT QUIET LINKS (2026-09-29). Aftab: "The
+        change status buttons on the appointment lists should be more visible
+        like icons". Each is an `@avo/ui` `IconButton` — an icon from the
+        dashboard's own inline-SVG set plus the same short label it always had,
+        so nothing is left to a guess about a glyph — and cancel and no-show
+        wear the danger tone. The accessible names are unchanged.
+
+        THE STEP STILL SWAPS IN THE SAME SLOT rather than opening a modal. That
+        decision is recorded at § the armed row and it holds for all five
+        controls — an overlay, a focus trap and a title this design draws
+        nowhere, for a form with one or two fields.
 
         ONE STEP AT A TIME ACROSS THE BOARD, so the links disappear while any
         step is open on this row. Four half-filled steps in a table whose
@@ -1140,24 +1162,20 @@ export function BookingActions({
       {controls.open === null && !armed ? (
         <span className="appts__acts">
           {controls.can.reschedule && controls.timezone !== null ? (
-            <button
-              type="button"
-              className="appts__mark"
+            <IconButton
+              icon={<IconClock />}
+              label="Change time"
               aria-label={`Change the date or time for ${booking.memberName}`}
               onClick={() => controls.onOpen('reschedule')}
-            >
-              Change time
-            </button>
+            />
           ) : null}
           {controls.can.reassign ? (
-            <button
-              type="button"
-              className="appts__mark"
+            <IconButton
+              icon={<IconSwap />}
+              label="Reassign"
               aria-label={`Reassign ${booking.memberName} to another artist`}
               onClick={() => controls.onOpen('reassign')}
-            >
-              Reassign
-            </button>
+            />
           ) : null}
           {/*
             "MARK DONE" AND NOT "COMPLETE", and the divergence is the
@@ -1168,24 +1186,21 @@ export function BookingActions({
             "Mark no-show" as the pair it actually is.
           */}
           {controls.can.complete ? (
-            <button
-              type="button"
-              className="appts__mark"
+            <IconButton
+              icon={<IconCheck />}
+              label="Mark done"
               aria-label={`Mark ${booking.memberName}'s appointment as done`}
               onClick={() => controls.onOpen('complete')}
-            >
-              Mark done
-            </button>
+            />
           ) : null}
           {controls.can.cancel ? (
-            <button
-              type="button"
-              className="appts__mark"
+            <IconButton
+              icon={<IconCancel />}
+              label="Cancel appointment"
+              tone="danger"
               aria-label={`Cancel ${booking.memberName}'s appointment`}
               onClick={() => controls.onOpen('cancel')}
-            >
-              Cancel appointment
-            </button>
+            />
           ) : null}
         </span>
       ) : null}
@@ -1307,8 +1322,15 @@ export function BookingActions({
         keyboard user reaches with the wrong key, a screen reader announces
         as "link", and a middle-click opens in a tab where nothing happens.
         CLAUDE.md's own rule for this case — follow the platform, note the
-        departure. Everything visual stays: 12px, `--avo-text-muted-soft`,
-        the exact colour `:184` names, beside the pill in the same slot.
+        departure.
+
+        AND IT IS NO LONGER THE DESIGN'S QUIET LINK (2026-09-29). It was 12px
+        in `--avo-text-muted-soft`, the exact colour `:184` names. Aftab: "The
+        change status buttons on the appointment lists should be more visible
+        like icons". So it is an `IconButton` beside the other four, in the
+        DANGER tone with cancel — the two controls that cannot be undone and
+        release the slot. The confirmation below is unchanged. A deliberate,
+        client-requested restyle, recorded for DECISIONS.md.
 
         THE ACCESSIBLE NAME CARRIES THE CUSTOMER. "Mark no-show" repeated
         down a column of rows is a list of identical controls to anyone not
@@ -1317,14 +1339,13 @@ export function BookingActions({
         drawn.
       */}
       {canMark && !armed && controls.open === null ? (
-        <button
-          type="button"
-          className="appts__mark"
+        <IconButton
+          icon={<IconNoShow />}
+          label="Mark no-show"
+          tone="danger"
           aria-label={`Mark no-show for ${booking.memberName}`}
           onClick={onArm}
-        >
-          Mark no-show
-        </button>
+        />
       ) : null}
 
       {/*

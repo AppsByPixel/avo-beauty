@@ -835,3 +835,60 @@
   line-height: 1.5;
   color: var(--avo-text-muted);
 }
+
+/* ------------------------------------------------------------- icon button -- */
+
+/*
+ * `IconButton` — icon + short label in a hairline pill. Sized for a dense table
+ * cell (12px, 28px tall) and still a real target. The resting colour is
+ * `--avo-text-muted-strong` (6.34:1 on white), not the 0.45 the old text links
+ * wore at rest (2.87:1): the client asked for these to be MORE visible, and the
+ * border is what separates a control from the captions beside it.
+ */
+.avo-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 9px 4px 7px;
+  border: 1px solid var(--avo-border-control);
+  border-radius: 8px;
+  background: var(--avo-white);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--avo-text-muted-strong);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--avo-motion-fast) ease,
+    color var(--avo-motion-fast) ease,
+    border-color var(--avo-motion-fast) ease;
+}
+
+.avo-iconbtn__icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.avo-iconbtn:hover:not(:disabled) {
+  background: var(--avo-surface-alt);
+  color: var(--avo-ink);
+}
+
+/* Cancel and no-show: they cannot be undone and they release the slot. */
+.avo-iconbtn--danger {
+  color: var(--avo-danger-text);
+  border-color: color-mix(in srgb, var(--avo-danger-text) 32%, transparent);
+}
+
+.avo-iconbtn--danger:hover:not(:disabled) {
+  background: var(--avo-danger-bg);
+  color: var(--avo-danger-text);
+}
+
+.avo-iconbtn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
