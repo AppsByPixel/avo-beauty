@@ -707,14 +707,10 @@ function BranchStep({
  *   after. On the artist step it survives only as a backstop for a roster that
  *   changed between the two reads.
  *
- *   ⚠️ TITLE ONLY SINCE 2026-09-29. Its body, `branchEmptyBody` -- "Try another
- *   branch, or choose All branches to see everyone." / "جرّبي فرعاً آخر، أو
- *   اختاري كل الفروع لرؤية الجميع." -- tells her to choose a row the step no
- *   longer has. Half of it is still true and the other half is now false, and
- *   rewriting product copy is not this lane's call, so the sentence is not
- *   shown and is flagged to trunk for replacement copy in both languages. The
- *   way out is still on screen without it: the other branch rows are directly
- *   above the panel.
+ *   TITLE ONLY SINCE 2026-09-29. Its body, `branchEmptyBody`, told her to
+ *   "choose All branches", a row the step no longer has, and trunk ruled the
+ *   key deleted in both languages rather than rewritten. The way out is still
+ *   on screen without it: the other branch rows are directly above the panel.
  *
  *   THE SALON HAS NOBODY AT ALL. Nothing to filter and nothing to suggest, so it
  *   says so plainly. Lumiere in the seed is exactly this -- two branches, zero

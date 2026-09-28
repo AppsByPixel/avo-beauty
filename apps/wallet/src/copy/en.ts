@@ -638,13 +638,11 @@ export const en: Copy = {
   // The branch step. NOT IN THE BUNDLE -- see copy/types.ts for why each of
   // these reads the way it does, and that all of them are owed to the
   // copywriter. `branchFilterAll` ("All branches") was removed with the row it
-  // labelled (Aftab, 2026-09-29). ⚠️ `branchEmptyBody` still tells her to
-  // "choose All branches" and is therefore NOT SHOWN -- flagged to trunk for
-  // replacement copy; see BookScreen § ArtistsEmpty.
+  // labelled (Aftab, 2026-09-29), and `branchEmptyBody` -- which told her to
+  // choose it -- was deleted by trunk's ruling; the empty panel is title-only.
   branchFilterOther: 'Other artists',
   branchFilterOtherNote: "The salon hasn't listed a branch for these artists yet.",
   branchEmptyTitle: 'No artists at this branch',
-  branchEmptyBody: 'Try another branch, or choose All branches to see everyone.',
   artistsEmptyTitle: 'No artists to book with',
   artistsEmptyBody: "This salon hasn't added anyone to book with yet.",
   // NEW COPY — services nobody is assigned to, and `409 artist_not_assigned`.

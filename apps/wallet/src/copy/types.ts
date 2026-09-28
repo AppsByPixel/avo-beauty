@@ -1026,13 +1026,13 @@ export interface Copy {
   /** Shown under the strip while the Other artists group is selected. */
   branchFilterOtherNote: string;
   /** A branch row whose roster came back empty. */
-  branchEmptyTitle: string;
   /**
-   * ⚠️ NOT RENDERED since 2026-09-29, and kept only so trunk can replace it.
-   * Both languages tell her to "choose All branches", a row the branch step
-   * no longer has. Owed: new copy in both languages, or a decision to drop it.
+   * Title only. It had a body, `branchEmptyBody`, that told her to "choose All
+   * branches" -- a row the branch step lost on 2026-09-29 -- and trunk ruled the
+   * key deleted rather than rewritten. The other branch rows sit directly above
+   * the panel, which is the way out the sentence used to point at.
    */
-  branchEmptyBody: string;
+  branchEmptyTitle: string;
   /** The salon has no bookable artists at all -- step 2 had no empty state. */
   artistsEmptyTitle: string;
   artistsEmptyBody: string;
