@@ -122,3 +122,55 @@ describe('the wire', () => {
     expect(new URL(calls[0]!.url).pathname).toBe('/orders/payments/TI-10000003');
   });
 });
+
+/**
+ * THE STORED SNAPSHOT HAZARD — W8. `order.result` is written ONCE, at
+ * settlement (`topup_intent.order_result`), and read back verbatim for as long
+ * as she can open the payment. So `GET /orders/payments/{id}` answers bodies of
+ * three vintages, and all three were real card payments:
+ *
+ *   before 0060   no `pickupBranch` key at all
+ *   0060 – 0062   `pickupBranch: { id, name, nameAr, closed }` — NO hours, no zone
+ *   0063 on       `pickupBranch` with `businessHours`, `businessHoursSource`,
+ *                 `timezone`
+ *
+ * `ShopOrderSchema.pickupBranch` now requires the 0063 fields. Parsed against it
+ * strictly, the middle vintage fails, the read throws, and a customer whose card
+ * WAS charged is told the app could not check her payment. So these must all
+ * parse, and only the last may carry hours.
+ */
+describe('a card order settled before migration 0063 still reads', () => {
+  const KWC = { id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت', closed: false };
+  const HOURS = { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] };
+  const withBranch = (pickupBranch: unknown) => ({
+    ...PLACED,
+    order: { ...PLACED.order, result: { ...PLACED.order.result, pickupBranch } },
+  });
+
+  it('before 0060 — no key — parses, with no branch', async () => {
+    stub(PLACED);
+    const view = await getOrderPayment('TI-10000000');
+    expect(view.order.result?.pickupBranch).toBeUndefined();
+  });
+
+  it('0060–0062 — a branch with NO hours and NO zone — parses, and names the branch', async () => {
+    stub(withBranch(KWC));
+    const view = await getOrderPayment('TI-10000000');
+    expect(view.order.status).toBe('placed');
+    expect(view.order.result?.pickupBranch).toEqual(KWC);
+  });
+
+  it('0063 on — the hours and the zone come through', async () => {
+    stub(withBranch({ ...KWC, businessHours: HOURS, businessHoursSource: 'salon', timezone: 'Asia/Kuwait' }));
+    const view = await getOrderPayment('TI-10000000');
+    expect(view.order.result?.pickupBranch?.businessHours).toEqual(HOURS);
+    expect(view.order.result?.pickupBranch?.timezone).toBe('Asia/Kuwait');
+  });
+
+  it('relaxed, not loosened: hours that ARE present are still checked, and a branch still needs a name', () => {
+    expect(() =>
+      OrderPaymentViewSchema.parse(withBranch({ ...KWC, businessHours: { morning: ['banana', 7] } })),
+    ).toThrow();
+    expect(() => OrderPaymentViewSchema.parse(withBranch({ id: 'BR-KWC', closed: false }))).toThrow();
+  });
+});

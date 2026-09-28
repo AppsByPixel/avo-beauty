@@ -129,6 +129,8 @@ interface Props {
    */
   pickupBranches?: readonly PickupBranchOption[];
   onChoosePickupBranch?: (branchId: string) => void;
+  /** W8 — `salon.timezone`, for "closed now". See `FulfilmentSection`. */
+  pickupTimezone?: string | null;
 }
 
 const NO_BRANCHES: readonly PickupBranchOption[] = [];
@@ -181,6 +183,7 @@ export function CartSheet({
   onCheckCard = () => undefined,
   pickupBranches = NO_BRANCHES,
   onChoosePickupBranch = () => undefined,
+  pickupTimezone = null,
 }: Props) {
   const { lang, copy } = useLanguage();
   const empty = lines.length === 0;
@@ -317,6 +320,7 @@ export function CartSheet({
               onDelete={onDeleteAddress}
               pickupBranches={pickupBranches}
               onChoosePickupBranch={onChoosePickupBranch}
+              pickupTimezone={pickupTimezone}
             />
 
             <MethodChoice method={method} balanceFils={balanceFils} onMethod={onMethod} />

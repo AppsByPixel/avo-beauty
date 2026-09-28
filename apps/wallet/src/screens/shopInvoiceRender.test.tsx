@@ -133,6 +133,7 @@ function Screen() {
       memberFetchedAt={Date.now()}
       tier="silver"
       branches={BRANCHES as never}
+      timezone="Asia/Kuwait"
       onToppedUp={onToppedUp}
       onReport={onReport}
     />

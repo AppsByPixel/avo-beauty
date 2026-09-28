@@ -78,8 +78,10 @@ import { ar } from '../copy/ar';
 // ------------------------------------------------------------------ fixtures --
 
 /** As `GET /salons/SAL-AMARA` serves them (seed: both carry `name_ar`). */
-const KWC: PickupBranchOption = { id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت' };
-const SAL: PickupBranchOption = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية' };
+/** W8 — every branch now serves its resolved hours; the seed's split day. */
+const HOURS = { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] } as PickupBranchOption['businessHours'];
+const KWC: PickupBranchOption = { id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت', businessHours: HOURS };
+const SAL: PickupBranchOption = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', businessHours: HOURS };
 const TWO = [KWC, SAL];
 const ONE = [KWC];
 
@@ -185,6 +187,17 @@ function refusal(code: string, status: number, message: string) {
 
 // ------------------------------------------------------------------ harness --
 
+/**
+ * A picker row's NAME — its text with the W8 hours block taken out. The row
+ * still carries nothing else (no address, no preselection mark); the hours are
+ * pinned against a fixed clock in `pickupHoursRender.test.tsx`.
+ */
+function rowName(testID: string): string {
+  const row = screen.getByTestId(testID).textContent ?? '';
+  const hours = screen.queryByTestId(`${testID}-hours`)?.textContent ?? '';
+  return row.replace(hours, '');
+}
+
 let stale = 0;
 
 function Shell({ branches }: { branches: readonly PickupBranchOption[] }) {
@@ -198,6 +211,7 @@ function Shell({ branches }: { branches: readonly PickupBranchOption[] }) {
       memberFetchedAt={Date.now()}
       tier="silver"
       branches={branches as never}
+      timezone="Asia/Kuwait"
       onToppedUp={vi.fn()}
       onReport={vi.fn()}
     />
@@ -247,8 +261,8 @@ describe('1. a salon with several open branches', () => {
   it('shows the picker under Collect it, with NOTHING preselected, and holds Pay', async () => {
     await cartAt(TWO);
     expect(screen.getByTestId('fulfil-pickup-branches')).toBeTruthy();
-    expect(screen.getByTestId('pickup-branch-BR-KWC').textContent).toBe('Kuwait City');
-    expect(screen.getByTestId('pickup-branch-BR-SAL').textContent).toBe('Salmiya');
+    expect(rowName('pickup-branch-BR-KWC')).toBe('Kuwait City');
+    expect(rowName('pickup-branch-BR-SAL')).toBe('Salmiya');
     // No honest default exists, so none is taken — see domain/fulfilment.ts.
     expect(checked('pickup-branch-BR-KWC')).toBe('false');
     expect(checked('pickup-branch-BR-SAL')).toBe('false');
@@ -546,8 +560,8 @@ describe('7. the picker in Arabic', () => {
     expect(document.documentElement.dir).toBe('rtl');
     const picker = screen.getByTestId('fulfil-pickup-branches');
     expect(picker.textContent).toContain(ar.pickupFrom);
-    expect(screen.getByTestId('pickup-branch-BR-KWC').textContent).toBe('مدينة الكويت');
-    expect(screen.getByTestId('pickup-branch-BR-SAL').textContent).toBe('السالمية');
+    expect(rowName('pickup-branch-BR-KWC')).toBe('مدينة الكويت');
+    expect(rowName('pickup-branch-BR-SAL')).toBe('السالمية');
     expect(screen.getByTestId('fulfil-pickup').textContent).toContain(ar.fulfilPickupChoose);
     expect(screen.getByTestId('cart-no-pickup-branch').textContent).toBe(ar.cartNoPickupBranch);
     // No Latin letter anywhere in the picker — a missed `nameAr` would show here.

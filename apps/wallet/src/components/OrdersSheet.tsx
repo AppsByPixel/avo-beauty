@@ -79,6 +79,7 @@ import {
 import { branchName } from '../domain/names';
 import type { OrdersController } from '../state/useOrders';
 import { Sheet } from './Sheet';
+import { PickupHoursNote } from './PickupHoursNote';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
 
@@ -261,6 +262,19 @@ function PickupLine({ order }: { order: ShopOrder }) {
       >
         {where.branch.closed ? copy.pickupClosedName(name) : name}
       </Text>
+      {/*
+        W8 — WHEN SHE CAN COLLECT, while there is still something to collect.
+        A collected order is history and a closed branch has no hours to keep,
+        so both draw none. The zone is the order's own (`pickupBranch.timezone`),
+        because this sheet does not otherwise hold the salon.
+      */}
+      {where.kind === 'branch' && orderIsOpen(order) && !where.branch.closed ? (
+        <PickupHoursNote
+          hours={where.branch.businessHours}
+          timezone={where.branch.timezone}
+          testID={`order-pickup-hours-${id}`}
+        />
+      ) : null}
       {where.kind === 'closedWaiting' ? (
         /*
           CLOSED WHILE SHE WAITS. The danger chip rather than a muted line: she

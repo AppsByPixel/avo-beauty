@@ -137,6 +137,7 @@ function Shell() {
       memberFetchedAt={Date.now()}
       tier="silver"
       branches={[] as never}
+      timezone="Asia/Kuwait"
       onToppedUp={() => setN((x) => x + 1)}
       onReport={vi.fn()}
     />

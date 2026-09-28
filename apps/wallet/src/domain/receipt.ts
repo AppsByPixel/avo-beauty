@@ -74,6 +74,7 @@ import {
   type Transaction,
 } from '@avo/types';
 import type { Copy } from '../copy/types';
+import type { BusinessHours } from './pickupHours';
 import { dateLocale } from './activity';
 import { branchName, type Named } from './names';
 
@@ -134,7 +135,18 @@ export interface ReceiptDetail {
    * two read the same — but they are two columns, and a receipt that merged
    * them would be wrong the day they diverge.
    */
-  pickupBranch?: Named & { closed: boolean };
+  pickupBranch?: Named & {
+    closed: boolean;
+    /**
+     * W8 — when she can collect, and the zone "closed now" is read in. Not rows:
+     * `TransactionSheet` draws them as a note under the rows card, so the email
+     * parity this builder shares with the receipt composer is untouched.
+     * OPTIONAL: a card order settled before migration 0063 stored neither, and
+     * that sheet draws no hours rather than failing (`api/shop.ts`).
+     */
+    businessHours?: BusinessHours | undefined;
+    timezone?: string | undefined;
+  };
 }
 
 export interface Receipt {

@@ -483,6 +483,8 @@ function Wallet({
                 branch, so it is never a placeholder.
               */
               branches={snapshot.salon.branches}
+              /* W8 — the zone "closed now" is decided in. Never the device's. */
+              timezone={snapshot.salon.timezone}
               /*
                 `onToast` USED TO BE HERE and is gone with the paid toast. The
                 invoice replaced it: `Toast` is zIndex 40 over `Sheet`'s 30, so

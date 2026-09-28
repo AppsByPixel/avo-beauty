@@ -249,6 +249,13 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   pickupClosedName: ['Salmiya'],
   bellPickupAt: ['Salmiya'],
   bellPickupClosed: ['Salmiya'],
+
+  // --- when she can collect (W8). The RAW "HH:MM" spans off the contract, so
+  // the sentence formats its own clock and a script can never cross over. Two
+  // spans with a half-hour, so a partial conversion shows.
+  pickupHours: [[['10:00', '13:00'], ['16:30', '21:00']]],
+  pickupClosedToday: ['16:30'],
+  pickupClosedTomorrow: ['10:00'],
 };
 
 /**

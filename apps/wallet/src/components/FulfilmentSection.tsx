@@ -84,6 +84,8 @@ import {
   type PickupBranchOption,
 } from '../domain/fulfilment';
 import { branchName } from '../domain/names';
+import { PickupHoursLinesView, spokenPickupHours, usePickupHours } from './PickupHoursNote';
+import type { BusinessHours } from '../domain/pickupHours';
 import type { AddressBookController } from '../state/useAddresses';
 import { color, MIN_TAP_TARGET, radius, text } from '../theme';
 import { focusable } from '../theme/focus';
@@ -103,6 +105,13 @@ interface Props {
    */
   pickupBranches?: readonly PickupBranchOption[];
   onChoosePickupBranch?: (branchId: string) => void;
+  /**
+   * W8 — `salon.timezone`, the zone "closed now" is decided in. NEVER the
+   * device's. Optional for the specs that mount this section bare: without it
+   * the hours still show and the closed-now line does not, rather than being
+   * decided on the phone's clock.
+   */
+  pickupTimezone?: string | null;
 }
 
 const NO_BRANCHES: readonly PickupBranchOption[] = [];
@@ -117,6 +126,7 @@ export function FulfilmentSection({
   onDelete,
   pickupBranches = NO_BRANCHES,
   onChoosePickupBranch = () => undefined,
+  pickupTimezone = null,
 }: Props) {
   const { lang, copy } = useLanguage();
   const delivering = choice.mode === 'delivery';
@@ -131,6 +141,8 @@ export function FulfilmentSection({
   const chosen = chosenPickupBranch(choice, pickupBranches);
   const picker = pickupPickerApplies(pickupBranches);
   const named = only ?? chosen;
+  /* W8 — the only branch's hours, for the tile that names it. */
+  const onlyHours = usePickupHours(only?.businessHours ?? null, pickupTimezone);
   const pickupBody = named
     ? copy.fulfilPickupAt(branchName(named, lang))
     : picker
@@ -148,7 +160,15 @@ export function FulfilmentSection({
         selected={!delivering}
         onPress={() => onMode('pickup')}
         testID="fulfil-pickup"
-      />
+        spoken={delivering ? '' : spokenPickupHours(onlyHours)}
+      >
+        {/*
+          W8 — the ONLY branch's hours, on the tile that names it. At a
+          multi-branch salon each row below carries its own, so the tile says
+          nothing about hours rather than repeating the chosen row's.
+        */}
+        {!delivering ? <PickupHoursLinesView lines={onlyHours} testID="fulfil-pickup-hours" /> : null}
+      </Option>
 
       {/*
         W7 — WHERE SHE COLLECTS IT, under "Collect it" and only while collecting,
@@ -175,6 +195,8 @@ export function FulfilmentSection({
               selected={choice.pickupBranchId === branch.id}
               onPress={() => onChoosePickupBranch(branch.id)}
               testID={`pickup-branch-${branch.id}`}
+              hours={branch.businessHours}
+              timezone={pickupTimezone}
             />
           ))}
         </View>
@@ -293,12 +315,18 @@ function Option({
   selected,
   onPress,
   testID,
+  children,
+  spoken = '',
 }: {
   title: string;
   body: string;
   selected: boolean;
   onPress: () => void;
   testID: string;
+  /** W8 — the only branch's hours, under the body. */
+  children?: React.ReactNode;
+  /** W8 — the same hours, for the label that replaces what children would say. */
+  spoken?: string;
 }) {
   const { lang } = useLanguage();
   return (
@@ -306,7 +334,7 @@ function Option({
       onPress={onPress}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
-      accessibilityLabel={`${title} · ${body}`}
+      accessibilityLabel={`${title} · ${body}${spoken}`}
       dataSet={focusable}
       testID={testID}
       style={[styles.row, selected ? styles.rowOn : styles.rowIdle]}
@@ -318,6 +346,7 @@ function Option({
           {title}
         </Text>
         <Text style={[text('bodyS', lang), styles.body]}>{body}</Text>
+        {children}
       </View>
     </Pressable>
   );
@@ -326,29 +355,34 @@ function Option({
 /**
  * One branch she could collect from — W7. The address row's radio, with the
  * branch's name in the reading language (`nameAr ?? name`, `domain/names.ts`)
- * and nothing else: no address, no hours, because `salon.branches` carries a
- * name and nothing a customer could walk to. That is a gap in the branch
- * entity, not something to invent here.
+ * and, since W8, when its counter is staffed — drawn AND in its label. Still no address:
+ * `salon.branches` carries nothing a customer could walk to, and that is a gap
+ * in the branch entity, not something to invent here.
  */
 function BranchRow({
   name,
   selected,
   onPress,
   testID,
+  hours,
+  timezone,
 }: {
   name: string;
   selected: boolean;
   onPress: () => void;
   testID: string;
+  hours: BusinessHours;
+  timezone: string | null;
 }) {
   const { lang } = useLanguage();
+  const lines = usePickupHours(hours, timezone);
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
       aria-checked={selected}
-      accessibilityLabel={name}
+      accessibilityLabel={`${name}${spokenPickupHours(lines)}`}
       dataSet={focusable}
       testID={testID}
       style={[styles.row, selected ? styles.rowOn : styles.rowIdle]}
@@ -361,6 +395,7 @@ function BranchRow({
         >
           {name}
         </Text>
+        <PickupHoursLinesView lines={lines} testID={`${testID}-hours`} />
       </View>
     </Pressable>
   );

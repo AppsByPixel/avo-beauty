@@ -177,6 +177,14 @@ export const OrderLineSchema = z.object({
   lineTotalFils: FilsSchema.nonnegative(),
 });
 
+/**
+ * `ShopOrderSchema.pickupBranch` with the three 0063 fields optional — see
+ * `OrderResultSchema.pickupBranch` for the stored snapshot that needs it.
+ */
+export const OrderResultPickupBranchSchema = ShopOrderSchema.shape.pickupBranch
+  .unwrap()
+  .partial({ businessHours: true, businessHoursSource: true, timezone: true });
+
 export const OrderResultSchema = z.object({
   transaction: TransactionSchema,
   balanceAfterFils: FilsSchema.nonnegative(),
@@ -194,8 +202,20 @@ export const OrderResultSchema = z.object({
    * order's result is a STORED body (`topup_intent.order_result`), and one
    * settled before 0060 has no such key. Absent means "not told", which renders
    * no row — never "the salon".
+   *
+   * AND ITS HOURS ARE OPTIONAL TOO — W8, migration 0063. The same stored body,
+   * one migration later: a card order settled between 0060 and 0063 has a
+   * `pickupBranch` with `{ id, name, nameAr, closed }` and NO `businessHours`,
+   * `businessHoursSource` or `timezone`. Parsed against `ShopOrderSchema`'s
+   * now-required hours, that snapshot fails, `GET /orders/payments/{id}` throws,
+   * and a customer whose card WAS charged is shown "we couldn't check" over an
+   * order that was placed. So those three are relaxed HERE AND ONLY HERE: the
+   * branch still names where she collects, and the hours line simply is not
+   * drawn (`PickupHoursNote` needs both hours and a zone to say "closed now").
+   * Everything else stays tied to the contract through `.unwrap()`, so a
+   * rename in `packages/types` still breaks this line.
    */
-  pickupBranch: ShopOrderSchema.shape.pickupBranch.optional(),
+  pickupBranch: OrderResultPickupBranchSchema.nullable().optional(),
   /** A literal. See the header — `false` is a statement, not a default. */
   voidable: z.literal(false),
 });

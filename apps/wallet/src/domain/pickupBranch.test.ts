@@ -198,7 +198,14 @@ describe('the bell’s shop row says where, joined from her orders', () => {
     ['en', 'Repair mask · Pickup at Salmiya'],
     ['ar', `Repair mask · ${ar.bellPickupAt('السالمية')}`],
   ] as const)('%s — the branch, Arabic from `nameAr`', (lang, line) => {
-    expect(bellRow(SHOP, ctx(lang, pickup({ ...SAL, closed: false }))).lines).toEqual([line]);
+    // W8 — then when to collect. `now` is 12:00Z = 15:00 in Kuwait, inside the
+    // afternoon closure, so the second line says it opens again at 16:00.
+    const copy = lang === 'ar' ? ar : en;
+    expect(bellRow(SHOP, ctx(lang, pickup({ ...SAL, closed: false }))).lines).toEqual([
+      line,
+      copy.pickupHours([['10:00', '13:00'], ['16:00', '21:00']]),
+      copy.pickupClosedToday('16:00'),
+    ]);
   });
 
   it('Arabic falls back to `name`', () => {
