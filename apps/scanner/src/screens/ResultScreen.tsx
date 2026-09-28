@@ -2,7 +2,7 @@
  * The charge result — design:377-394.
  *
  * Every number on this screen comes off the charge response: the amount, the
- * new balance, the returned deposit, the loyalty outcome. Nothing is recomputed
+ * new balance, the returned deposit, what the visit earned. Nothing is recomputed
  * from what the screen before it believed (non-negotiable #2).
  *
  * THE RETURNED DEPOSIT IS THE ONE ROW THAT IS NOT IN THE DESIGN, and it is here
@@ -24,10 +24,10 @@ import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { fils } from '@avo/types';
 import { copy } from '../copy/en';
-import { loyaltySentence } from '../domain/loyalty';
 import { useReducedMotion } from '../motion/useReducedMotion';
 import { color, display, radius, ui } from '../theme';
 import { DangerButton, PrimaryButton } from '../components/Buttons';
+import { LoyaltyLine } from '../components/LoyaltyLine';
 import { Money, moneyOf } from '../components/Money';
 import type { ChargeAttempt } from './MemberScreen';
 
@@ -172,9 +172,8 @@ export function ResultScreen({
 
         <View style={[styles.panelRow, styles.divided]}>
           <Text style={[ui(13.5), styles.rowLabel]}>{copy.loyalty}</Text>
-          <Text style={[ui(13.5, '500'), styles.loyalty]} testID="result-loyalty">
-            {loyaltySentence(result.loyalty)}
-          </Text>
+          {/* What this visit earned — "+1 visit · 2 more to Gold". See LoyaltyLine. */}
+          <LoyaltyLine result={result} />
         </View>
 
         {/*
@@ -303,7 +302,6 @@ const styles = StyleSheet.create({
   },
   divided: { borderTopWidth: 1, borderTopColor: color.hairlineInner },
   rowLabel: { color: color.textMutedLabel },
-  loyalty: { flex: 1, textAlign: 'right', color: color.ink },
   receiptRow: { justifyContent: 'flex-start', gap: 8 },
   receiptDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.success },
   actions: { marginTop: 'auto', width: '100%', gap: 10 },

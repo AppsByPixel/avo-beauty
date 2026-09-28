@@ -19,6 +19,29 @@ import { getJson, postMoney } from './client';
  * Mirrors `LoyaltyOutcome` in api/src/services/loyalty.ts. `mode` is exclusive:
  * a tiers salon never sends stamps and a stamps salon never sends visits, which
  * is why this is a discriminated union and not one object with nullable halves.
+ *
+ * ---------------------------------------------------------------------------
+ * `visitsEarned` / `stampsEarned` — HOW MANY THIS CHARGE ADDED. NOT SENT YET.
+ * ---------------------------------------------------------------------------
+ * DECISIONS.md § "The fourth list": after a scan the screen says what she
+ * gained, "+1 visit · 2 more to Gold". The outcome carries the state AFTER the
+ * charge and nothing about the increment, and the increment cannot be read off
+ * anything else on this response:
+ *
+ *   - `happyHour` is null whenever no WINDOW moved the rate, but a branch boost
+ *     moves it without a window (services/promotions.ts § decideEarning sets the
+ *     multiplier and leaves `happyHourId` null). So "no happy hour, therefore
+ *     +1" is false at exactly the enrolled tills a boost pays at.
+ *   - The member's count before the charge is on the scan, but subtracting it
+ *     from `visits` is the client deciding what the server awarded
+ *     (non-negotiable #2), and it is wrong the moment two tills charge her.
+ *
+ * So the count is the server's to state, and lane A is asked for exactly these
+ * two names (see the lane B report of 2026-09-29). OPTIONAL UNTIL THEN, which is
+ * the one place this file tolerates absence: today "absent" really does mean
+ * "this API is too old to say", and `domain/loyalty.ts § loyaltyGain` renders
+ * that as the design's "Visit added" / "Stamp added" rather than a number. When
+ * the server sends them this should tighten to required, like `happyHour`.
  */
 export const TiersOutcomeSchema = z.object({
   mode: z.literal('tiers'),
@@ -27,6 +50,7 @@ export const TiersOutcomeSchema = z.object({
   nextTier: z.enum(['bronze', 'silver', 'gold', 'black']).nullable(),
   visitsToNext: z.number().int().nullable(),
   climbed: z.boolean().optional(),
+  visitsEarned: z.number().int().nonnegative().optional(),
 });
 
 export const StampsOutcomeSchema = z.object({
@@ -34,6 +58,7 @@ export const StampsOutcomeSchema = z.object({
   stamps: z.number().int().nonnegative(),
   target: z.number().int().positive(),
   rewardReady: z.boolean(),
+  stampsEarned: z.number().int().nonnegative().optional(),
 });
 
 export const LoyaltyOutcomeSchema = z.discriminatedUnion('mode', [

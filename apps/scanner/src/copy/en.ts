@@ -352,12 +352,37 @@ export const copy = {
   depositReturned: 'Deposit returned',
   /** :385 */
   loyalty: 'Loyalty',
-  /** :610-612 — the two loyalty sentences */
-  loyaltyStamp: (have: number, target: number) => `Stamp added · ${have} of ${target}`,
-  loyaltyVisit: (have: number, target: number, tier: string) =>
-    `Visit added · ${have} of ${target} to ${tier}`,
-  /** No next rung — the ladder's top. The design only shows the climbing case. */
-  loyaltyVisitTop: (have: number) => `Visit added · ${have} visits`,
+  /**
+   * THE LOYALTY LINE — what this visit earned. `domain/loyalty.ts § loyaltyGain`
+   * joins these with " · ".
+   *
+   * design:610-612 drew "Visit added · 5 of 10 to Gold" / "Stamp added · 5 of 8".
+   * Aftab ruled on 2026-09-29 (DECISIONS.md § "The fourth list") that the line
+   * says what she GAINED — "+1 visit · 2 more to Gold" — so the count and the
+   * "more to" / "Reached" clauses are NEW COPY, recorded by trunk. What survives
+   * from the design is its first clause, used only while the API does not yet
+   * say how many were added (see api/charges.ts § visitsEarned), and its stamp
+   * progress "5 of 8".
+   */
+  loyaltyVisitAdded: 'Visit added',
+  loyaltyStampAdded: 'Stamp added',
+  loyaltyVisitsEarned: (n: number) => `+${n} ${n === 1 ? 'visit' : 'visits'}`,
+  loyaltyStampsEarned: (n: number) => `+${n} ${n === 1 ? 'stamp' : 'stamps'}`,
+  loyaltyToNext: (n: number, tier: string) => `${n} more to ${tier}`,
+  loyaltyReached: (tier: string) => `Reached ${tier}`,
+  loyaltyStampProgress: (have: number, target: number) => `${have} of ${target}`,
+  loyaltyRewardReady: 'Reward ready',
+  /**
+   * The multiplier the server applied, named with the bundle's own reward labels
+   * (design/avo-promotions.js:19-21, the wallet's `happyReward`). Only the
+   * values those labels describe; any other multiplier has no words and says
+   * nothing rather than borrowing the nearest one.
+   */
+  loyaltyMultiplier: {
+    x2visit: 'Double visit credit',
+    x2stamp: 'Double stamps',
+    x3stamp: 'Triple stamps',
+  },
   /** :386 */
   receiptSent: 'WhatsApp receipt sent',
   /** interaction-spec.md §3 — the reduced-motion replacement for a pulse dot. */
