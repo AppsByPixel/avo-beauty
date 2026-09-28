@@ -1,5 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Chip, EmptyState, InfoBanner, Pill, Select, Skeleton } from '@avo/ui';
+import { useMemo, useState } from 'react';
+import {
+  Button,
+  Card,
+  Chip,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterSelect,
+  InfoBanner,
+  Pill,
+  Skeleton,
+} from '@avo/ui';
 import {
   AUDIT_KINDS,
   usePlatformAuditLog,
@@ -8,7 +19,16 @@ import {
   type PlatformAuditScope,
 } from '../../api/audit.js';
 import { useAllPlatformSalons } from '../../api/platformSalons.js';
-import { auditEmptyLine, ClockGlyph, KIND_LABEL, KIND_TONE, whenLabel } from '../AuditLog.js';
+import {
+  AUDIT_KIND_CHIPS,
+  auditEmptyLine,
+  ClockGlyph,
+  KIND_LABEL,
+  KIND_TONE,
+  whenLabel,
+} from '../AuditLog.js';
+import { TEXT_PARAM, enumParam, useSearchText, useUrlFilters } from '../listFilters.js';
+import { resolveSalonParam } from './salonParam.js';
 import { viewerZone } from '../salonTime.js';
 import { SectionError } from '../sectionState.js';
 
@@ -69,31 +89,51 @@ import { SectionError } from '../sectionState.js';
  * There is no POST on either read and never will be: rows are written by the
  * handlers that cause them and UPDATE/DELETE are revoked at the role level.
  */
-export function Audit() {
-  const [search, setSearch] = useState('');
-  const [query, setQuery] = useState('');
-  const [kind, setKind] = useState<AuditKind | null>(null);
-  const [scope, setScope] = useState<PlatformAuditScope>(null);
+/**
+ * `?kind=` and `?salon=` IN THE URL — `platform` for AVO's own rows, or a salon
+ * id — and all three filters on the request, as before: the log is cursor-paged
+ * across every salon. The search is NOT in the URL, for the merchant screen's
+ * reason: it matches people.
+ */
+const CONSOLE_AUDIT_FILTERS = { kind: enumParam(AUDIT_KINDS), salon: TEXT_PARAM } as const;
 
+export function Audit() {
+  const [query, setQuery] = useState('');
   // Debounced for the same reason the merchant screen debounces: the search hits
   // the API, and here the LIKE runs over EVERY salon's history, not one salon's.
-  useEffect(() => {
-    const timer = setTimeout(() => setQuery(search), 300);
-    return () => clearTimeout(timer);
-  }, [search]);
-
-  const log = usePlatformAuditLog({ q: query, kind, scope });
-
+  const search = useSearchText(query, setQuery, 300);
+  const url = useUrlFilters(CONSOLE_AUDIT_FILTERS);
+  const kind = (url.values.kind || null) as AuditKind | null;
   /*
    * The picker's list, and the row column's id→name map. Deliberately NOT part of
    * the error branch below — see the header. `isError` here means "no picker",
-   * never "no log".
+   * never "no log". It is also what a `?salon=SAL-…` from the URL is checked
+   * against before it is sent — `salonParam.ts`.
    */
   const salonList = useAllPlatformSalons();
   const salonName = useMemo(
     () => new Map(salonList.salons.map((s) => [s.id, s.name])),
     [salonList.salons],
   );
+  const fromUrl =
+    url.values.salon === 'platform'
+      ? { salonId: null, waiting: false }
+      : resolveSalonParam(url.values.salon, salonList);
+  const scope: PlatformAuditScope =
+    url.values.salon === 'platform'
+      ? 'platform'
+      : fromUrl.salonId !== null
+        ? { salonId: fromUrl.salonId }
+        : null;
+  const setScope = (next: PlatformAuditScope) =>
+    url.set({ salon: next === null ? '' : next === 'platform' ? 'platform' : next.salonId });
+  const clearFilters = () => {
+    search.reset();
+    setQuery('');
+    url.clear();
+  };
+
+  const log = usePlatformAuditLog({ q: query, kind, scope }, !fromUrl.waiting);
 
   if (log.isError) {
     return (
@@ -132,34 +172,23 @@ export function Audit() {
         from where. Entries are append-only and kept for {retention} years.
       </InfoBanner>
 
-      <div className="audit__controls">
-        <input
-          className="avo-input audit__search"
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search actor, salon or entity"
-          aria-label="Search the platform audit log"
+      <FilterBar
+        label="Filter the platform audit log"
+        search={{
+          value: search.text,
+          onChange: search.setText,
+          label: 'Search the platform audit log',
+          placeholder: 'Search actor, salon or entity',
+        }}
+        count={log.isPending ? null : `${total} ${total === 1 ? 'entry' : 'entries'}`}
+        onClear={filtered ? clearFilters : undefined}
+      >
+        <FilterChips
+          label="Filter by kind"
+          options={AUDIT_KIND_CHIPS}
+          value={kind ?? ''}
+          onChange={(next) => url.set({ kind: next })}
         />
-        <div className="audit__filters" role="radiogroup" aria-label="Filter by kind">
-          <Chip
-            role="radio"
-            className="avo-chip--outline"
-            on={kind === null}
-            label="All"
-            onClick={() => setKind(null)}
-          />
-          {AUDIT_KINDS.map((k) => (
-            <Chip
-              key={k}
-              role="radio"
-              className="avo-chip--outline"
-              on={kind === k}
-              label={KIND_LABEL[k]}
-              onClick={() => setKind(k)}
-            />
-          ))}
-        </div>
         {/*
           `?salon=platform` — the null-salon rows on their own. A second axis, so it
           is NOT in the kind radiogroup: "AVO's own money rows" is a legitimate
@@ -183,25 +212,17 @@ export function Audit() {
           during pending it would announce a choice the reader does not have.
         */}
         {salonList.salons.length > 0 ? (
-          <Select
-            className="audit__salon"
-            label="Salon"
-            labelHidden
-            size="sm"
+          <FilterSelect
+            label="Filter by salon"
             value={scope !== null && scope !== 'platform' ? scope.salonId : ''}
-            onChange={(e) =>
-              setScope(e.target.value === '' ? null : { salonId: e.target.value })
-            }
+            onChange={(next) => setScope(next === '' ? null : { salonId: next })}
             options={[
               { value: '', label: 'Every salon' },
               ...salonList.salons.map((s) => ({ value: s.id, label: s.name })),
             ]}
           />
         ) : null}
-        <span className="audit__count" role="status">
-          {log.isPending ? '' : `${total} ${total === 1 ? 'entry' : 'entries'}`}
-        </span>
-      </div>
+      </FilterBar>
 
       <Card className="audit__card" flush>
         <div className="audit__scroll">
@@ -252,7 +273,11 @@ export function Audit() {
                        * THIS log, "the platform has never done anything" is a
                        * claim worth not making by accident.
                        */
-                      auditEmptyLine(query, kind, scopeLabel)
+                      <EmptyState
+                        title={auditEmptyLine(query, kind, scopeLabel)}
+                        body="Search and the filters look at the whole log, not just this page."
+                        action={{ label: 'Clear filters', onClick: clearFilters }}
+                      />
                     ) : (
                       <EmptyState
                         title="Nothing recorded yet"

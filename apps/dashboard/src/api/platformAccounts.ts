@@ -228,6 +228,8 @@ export interface AccountFilters {
   /** Matched SERVER-SIDE across name, salon name and (for staff) handle. */
   q: string;
   role: AccountRoleFilter;
+  /** `?salon=` — one salon's customers and staff. Absent means every salon. */
+  salon?: string | null;
 }
 
 export const platformAccountKeys = {
@@ -264,14 +266,18 @@ export const platformAccountKeys = {
  */
 export function usePlatformAccounts(
   filters: AccountFilters,
+  /** False while a `?salon=` from the URL is still being checked — `console/salonParam.ts`. */
+  enabled = true,
 ): UseInfiniteQueryResult<InfiniteData<Paginated<PlatformAccount>>> {
   return useInfiniteQuery({
+    enabled,
     queryKey: platformAccountKeys.list(filters),
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam, signal }) => {
       const params = new URLSearchParams();
       if (filters.q.trim() !== '') params.set('q', filters.q.trim());
       if (filters.role !== 'all') params.set('role', filters.role);
+      if (filters.salon) params.set('salon', filters.salon);
       if (pageParam !== null) params.set('cursor', pageParam);
       const query = params.toString();
       const raw = await authedRequest<unknown>(

@@ -80,8 +80,9 @@ function parseItems<T>(raw: unknown, parse: (item: unknown) => T, where: string)
  * "oldest" note in `pendingNote` depends on it, and a newest-first queue would
  * quietly invert what "waiting longest" means.
  */
-export function usePlatformCampaigns(status?: string): UseQueryResult<Campaign[]> {
+export function usePlatformCampaigns(status?: string, enabled = true): UseQueryResult<Campaign[]> {
   return useQuery({
+    enabled,
     queryKey: platformKeys.campaigns(status),
     queryFn: async ({ signal }) => {
       const raw = await authedRequest<unknown>(

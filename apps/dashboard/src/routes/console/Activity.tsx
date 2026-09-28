@@ -1,11 +1,22 @@
 import { useMemo } from 'react';
-import { Button, Card, EmptyState, InfoBanner, Skeleton } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  FilterBar,
+  FilterEmpty,
+  FilterSelect,
+  InfoBanner,
+  Skeleton,
+} from '@avo/ui';
 import { usePlatformActivity } from '../../api/platformActivity.js';
 import type { ActivityItem } from '../../api/salon.js';
 import { useAllPlatformSalons } from '../../api/platformSalons.js';
 import { whenLabel } from '../AuditLog.js';
 import { viewerZone } from '../salonTime.js';
 import { SectionError } from '../sectionState.js';
+import { TEXT_PARAM, useUrlFilters } from '../listFilters.js';
+import { resolveSalonParam } from './salonParam.js';
 
 /**
  * Console → Activity. `GET /v1/platform/activity`, section `activity`.
@@ -13,7 +24,9 @@ import { SectionError } from '../sectionState.js';
  * `AVO Owner Console.dc.html:137` § ACTIVITY — a banner and one card of rows,
  * each row a dot, a bolded actor, a phrase, a timestamp under it and a salon pill
  * on the right. No search box, no filter chips, no tabs. That is the whole
- * section as drawn, and it is built as drawn.
+ * section as drawn, and it is built as drawn — plus one salon picker, which the
+ * design does not draw and Aftab asked for on 2026-09-29 ("search and filters on
+ * … all other screens"). See `ACTIVITY_FILTERS`.
  *
  * =========================================================================
  * WHAT THIS FEED IS, WHICH TOOK THE API THREE STREAMS TO ANSWER
@@ -93,19 +106,29 @@ import { SectionError } from '../sectionState.js';
  * none — the sum of three streams' counts is not the count of the merged list —
  * so this one says "Show older" and claims nothing it cannot count.
  */
+/**
+ * ONE FILTER: THE SALON, `?salon=` on the request and in the URL. The feed is
+ * cursor-paged, so it is the server's filter, not a trim of the loaded lines.
+ * The endpoint takes no kind or stream parameter, so there are no chips — that
+ * request is in the lane report.
+ */
+const ACTIVITY_FILTERS = { salon: TEXT_PARAM } as const;
+
 export function Activity() {
-  const feed = usePlatformActivity();
+  const url = useUrlFilters(ACTIVITY_FILTERS);
 
   /*
    * The id→name map for the pill. Deliberately NOT folded into the error branch
    * below — see the header. `isError` here means "ids instead of names", never
-   * "no feed".
+   * "no feed". Also what a `?salon=` from the URL is checked against first.
    */
   const salonList = useAllPlatformSalons();
   const salonName = useMemo(
     () => new Map(salonList.salons.map((s) => [s.id, s.name])),
     [salonList.salons],
   );
+  const salon = resolveSalonParam(url.values.salon, salonList);
+  const feed = usePlatformActivity(salon.salonId, !salon.waiting);
 
   if (feed.isError) {
     return (
@@ -129,6 +152,24 @@ export function Activity() {
         actions. The full audit trail for the platform.
       </InfoBanner>
 
+      {salonList.salons.length > 0 ? (
+        <FilterBar
+          label="Filter activity"
+          count={salon.salonId !== null && !feed.isPending ? `${rows.length} shown` : null}
+          onClear={salon.salonId !== null ? () => url.clear() : undefined}
+        >
+          <FilterSelect
+            label="Filter by salon"
+            value={salon.salonId ?? ''}
+            onChange={(next) => url.set({ salon: next })}
+            options={[
+              { value: '', label: 'Every salon' },
+              ...salonList.salons.map((s) => ({ value: s.id, label: s.name })),
+            ]}
+          />
+        </FilterBar>
+      ) : null}
+
       <Card className="activity__card" flush>
         {feed.isPending ? (
           <ul className="activity__feed">
@@ -143,6 +184,10 @@ export function Activity() {
               </li>
             ))}
           </ul>
+        ) : rows.length === 0 && salon.salonId !== null ? (
+          <div className="activity__state">
+            <FilterEmpty things="events" onClear={() => url.clear()} />
+          </div>
         ) : rows.length === 0 ? (
           /*
            * EMPTY — BUILT, CORRECT, AND EFFECTIVELY UNREACHABLE. Said here rather

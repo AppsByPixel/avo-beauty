@@ -1,8 +1,10 @@
-import { useState } from 'react';
-import { Button, Pill, Segmented, Skeleton } from '@avo/ui';
+import { Button, FilterBar, FilterChips, FilterSelect, Pill, Skeleton } from '@avo/ui';
 import type { SupportTicket } from '@avo/types';
 import { useSetTicketStatus, useTicketQueue, type QueueFilter } from '../../api/support.js';
 import { SectionError, WriteError } from '../sectionState.js';
+import { useAllPlatformSalons } from '../../api/platformSalons.js';
+import { TEXT_PARAM, enumParam, useUrlFilters } from '../listFilters.js';
+import { resolveSalonParam } from './salonParam.js';
 
 /**
  * Policies → Support & contact → the ticket queue.
@@ -34,9 +36,30 @@ import { SectionError, WriteError } from '../sectionState.js';
  * as exactly the page size. Where more exists, the panel says so instead of
  * implying the page is the queue.
  */
+/**
+ * THE FILTERS ARE THE REQUEST, as they always were — `?route=`, `?status=` and
+ * now `?salon=`, on a cursor-paged endpoint — and they live in the URL. Status
+ * defaults to Open, so the URL spells the two departures from it: `ticket=answered`
+ * and `ticket=both`. Keys are prefixed because this panel shares its page with
+ * the policy editor.
+ */
+const QUEUE_FILTERS = {
+  queue: enumParam(['salon', 'avo']),
+  ticket: enumParam(['answered', 'both']),
+  salon: TEXT_PARAM,
+} as const;
+
 export function SupportQueue() {
-  const [filter, setFilter] = useState<QueueFilter>({ route: '', status: 'open' });
-  const queue = useTicketQueue(filter);
+  const url = useUrlFilters(QUEUE_FILTERS);
+  const salonList = useAllPlatformSalons();
+  const salon = resolveSalonParam(url.values.salon, salonList);
+  const filter: QueueFilter = {
+    route: url.values.queue as QueueFilter['route'],
+    status: url.values.ticket === 'answered' ? 'closed' : url.values.ticket === 'both' ? '' : 'open',
+    ...(salon.salonId !== null ? { salon: salon.salonId } : {}),
+  };
+  const narrowed = url.values.queue !== '' || url.values.ticket !== '' || salon.salonId !== null;
+  const queue = useTicketQueue(filter, !salon.waiting);
   const setStatus = useSetTicketStatus();
 
   return (
@@ -59,8 +82,13 @@ export function SupportQueue() {
         </span>
       </div>
 
-      <div className="support__queuefilters">
-        <Segmented
+      <FilterBar
+        label="Filter support messages"
+        className="avo-filterbar--inset"
+        count={queue.data ? `${queue.data.total} ${queue.data.total === 1 ? 'message' : 'messages'}` : null}
+        onClear={narrowed ? () => url.clear() : undefined}
+      >
+        <FilterChips
           label="Queue"
           value={filter.route}
           options={[
@@ -68,9 +96,9 @@ export function SupportQueue() {
             { value: 'salon', label: 'Salon' },
             { value: 'avo', label: 'AVO' },
           ]}
-          onChange={(route) => setFilter((f) => ({ ...f, route }))}
+          onChange={(route) => url.set({ queue: route })}
         />
-        <Segmented
+        <FilterChips
           label="Status"
           value={filter.status}
           options={[
@@ -78,9 +106,22 @@ export function SupportQueue() {
             { value: 'closed', label: 'Answered' },
             { value: '', label: 'Both' },
           ]}
-          onChange={(status) => setFilter((f) => ({ ...f, status }))}
+          onChange={(status) =>
+            url.set({ ticket: status === 'closed' ? 'answered' : status === '' ? 'both' : '' })
+          }
         />
-      </div>
+        {salonList.salons.length > 0 ? (
+          <FilterSelect
+            label="Filter by salon"
+            value={salon.salonId ?? ''}
+            onChange={(next) => url.set({ salon: next })}
+            options={[
+              { value: '', label: 'Every salon' },
+              ...salonList.salons.map((s) => ({ value: s.id, label: s.name })),
+            ]}
+          />
+        ) : null}
+      </FilterBar>
 
       {queue.isError ? (
         <SectionError
@@ -104,9 +145,14 @@ export function SupportQueue() {
          * the queue is broken.
          */
         <p className="support__empty">
-          {filter.route === '' && filter.status === ''
+          {filter.route === '' && filter.status === '' && salon.salonId === null
             ? 'No messages yet. Nothing has been sent from Contact us.'
-            : `No messages match ${describeFilter(filter)}.`}
+            : `No messages match ${describeFilter(filter, salonList.salons.find((s) => s.id === salon.salonId)?.name ?? null)}.`}{' '}
+          {narrowed ? (
+            <Button variant="quiet" onClick={() => url.clear()}>
+              Clear filters
+            </Button>
+          ) : null}
         </p>
       ) : (
         <>
@@ -147,10 +193,11 @@ export function SupportQueue() {
   );
 }
 
-function describeFilter(filter: QueueFilter): string {
+function describeFilter(filter: QueueFilter, salonName: string | null = null): string {
   const parts = [
     filter.status === 'open' ? 'Open' : filter.status === 'closed' ? 'Answered' : null,
     filter.route === 'salon' ? 'Salon' : filter.route === 'avo' ? 'AVO' : null,
+    salonName,
   ].filter((p): p is string => p !== null);
   return parts.length > 0 ? parts.join(' + ') : 'this filter';
 }

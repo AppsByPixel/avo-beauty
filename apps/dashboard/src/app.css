@@ -3199,41 +3199,10 @@ a:hover {
   max-width: 960px;
 }
 
-.audit__controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 18px 0 14px;
-  flex-wrap: wrap;
-}
-
-.audit__search {
-  flex: 1;
-  max-width: 320px;
-  border-radius: 11px;
-  padding: 11px 14px;
-}
-
-.audit__filters {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 /*
- * The `?salon=` picker. Sits with the chip because they are one axis — see the
- * comment at the control. `max-width` so a long salon name cannot push the count
- * off the row on a tablet.
+ * The toolbar is @avo/ui's `.avo-filterbar` now — the row this block used to
+ * draw is where that component's measurements came from.
  */
-.audit__salon {
-  max-width: 190px;
-}
-
-.audit__count {
-  margin-left: auto;
-  font-size: 12.5px;
-  color: var(--avo-text-muted);
-}
 
 .audit__card {
   overflow: hidden;
@@ -6909,19 +6878,17 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 18px 0 14px;
   flex-wrap: wrap;
 }
 
-.salons__search {
-  flex: 1;
-  max-width: 340px;
-  border-radius: 11px;
-  padding: 11px 14px;
+/* The toolbar takes the row; "+ Onboard a salon" sits at its end, as drawn. */
+.salons__controls > .avo-filterbar {
+  flex: 1 1 auto;
 }
 
-.salons__count {
-  margin-left: auto;
+/* The walk to the last page, said while it happens — see SALON_FILTERS. */
+.salons__walking {
+  margin: 0 0 12px;
   font-size: 12.5px;
   color: var(--avo-text-muted);
 }
@@ -8153,12 +8120,6 @@ a:hover {
   flex-wrap: wrap;
 }
 
-.support__queuefilters {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .support__tickets {
   display: flex;
   flex-direction: column;
@@ -8355,32 +8316,6 @@ a:hover {
  */
 .accounts-console {
   max-width: 960px;
-}
-
-.accounts-console__controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 18px 0 14px;
-  flex-wrap: wrap;
-}
-
-.accounts-console__search {
-  flex: 1;
-  min-width: 200px;
-  max-width: 320px;
-  border-radius: 11px;
-  padding: 11px 14px;
-}
-
-.accounts-console__count {
-  font-size: 12.5px;
-  color: var(--avo-text-muted);
-}
-
-/* Pushes the role filter to the far edge, as the design lays it out. */
-.accounts-console__controls > :last-child {
-  margin-left: auto;
 }
 
 .accounts-console__card {
