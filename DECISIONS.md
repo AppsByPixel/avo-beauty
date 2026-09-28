@@ -2222,3 +2222,17 @@ Aftab asked for.**
   string mixes the two.
 - **Shared maths:** `percentOfFloor` is now in `@avo/types`. The API and the wallet each still
   have their own copy, and both switch to the shared one next.
+
+**Reschedule loophole: lane A's reading, accepted (364c5a8).** Trunk had said "measure cut-offs from
+the original slot". Lane A did something different: each late reschedule locks in the percent she
+held at the moment she moved, and a later cancel returns the smaller of that locked percent and the
+new slot's rule. On the specified case both readings give the same answer. They differ only once the
+original date has passed. At that point the literal reading would pay 0% on a booking she had moved
+with ten days' notice.
+
+**Boost windows (lane A, 6d102c5).**
+- A branch boost may carry `startsAt` and `endsAt`.
+- It can be stopped. A stopped boost is neutral 1/0/1 and records who stopped it and when.
+- The server resolves the boost with `isBoostLive` at charge time.
+- A top-up has no branch, so a branch boost's `topup` bonus never applies to a top-up, running or
+  not. That was true before this change too.
