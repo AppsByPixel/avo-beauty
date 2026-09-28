@@ -4,6 +4,8 @@
  *   POST   /v1/salons/{id}/campaigns              perms.marketing — creates `pending`
  *   GET    /v1/salons/{id}/campaigns              perms.marketing — her own, with notes
  *   DELETE /v1/salons/{id}/campaigns/{cid}        perms.marketing — withdraw, pending only
+ *   (the salon's own reward options, `/v1/salons/{id}/campaign-rewards`, are
+ *   routes/campaignRewards.ts)
  *   GET    /v1/platform/campaigns?status=          console, `approvals`
  *   POST   /v1/platform/campaigns/{cid}/decision  console, `approvals` — release or reject
  *   GET    /v1/platform/messaging-policy          console, `approvals`
@@ -23,12 +25,13 @@
  * reviewer deciding a campaign needs to see the cap she is deciding against.
  */
 
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client';
 import { campaignId } from '../services/ids';
 import {
   campaign,
+  campaignReward,
   platformMessagingPolicy,
   CAMPAIGN_AUDIENCES,
   CAMPAIGN_CHANNELS,
@@ -51,7 +54,17 @@ import {
 } from '../services/campaign';
 
 /**
- * `CampaignSchema` on the wire — TWENTY-ONE FIELDS, INCLUDING THE HOLD.
+ * `CampaignSchema` on the wire — TWENTY-TWO FIELDS, INCLUDING THE HOLD AND THE
+ * CUSTOM REWARD'S WORDS.
+ *
+ * `customReward` (migration 0064) is the snapshot label when `reward` is
+ * 'custom', and null on every other campaign — REQUIRED AND NULLABLE, the same
+ * shape and the same lesson as the hold below: a key a client's schema requires
+ * and this serialiser omits fails every `.parse()` of every campaign, on the
+ * merchant list, the console queue and the decision response alike. This is the
+ * only function that serialises a campaign, so all three carry it.
+ *
+ * (What follows is this comment as it stood at twenty-one fields.)
  *
  * THIS COMMENT USED TO SAY THE OPPOSITE, AND THAT IS THE FINDING.
  *
@@ -99,6 +112,13 @@ function serialiseCampaign(row: CampaignRow, salonName: string) {
     audience: row.audience,
     branchId: row.branchId ?? 'all',
     reward: row.reward,
+    /**
+     * The words the merchant attached, copied at submission from her saved
+     * option — never from the request body, and never re-read from the list, so
+     * removing the option later changes nothing here. `campaign_custom_reward_is_labelled`
+     * makes this non-null exactly when `reward` is 'custom'.
+     */
+    customReward: row.customRewardLabel,
     reach: row.reach,
     when: row.sendWhen,
     scheduledAt: row.scheduledAt ? row.scheduledAt.toISOString() : '',
@@ -179,10 +199,76 @@ export async function registerCampaignRoutes(app: FastifyInstance): Promise<void
       throw badRequest('invalid_when', `when must be one of ${CAMPAIGN_WHENS.join(', ')}.`);
     }
     const reward = String(body.reward ?? 'none');
-    if (reward !== 'none' && !(REWARD_KEYS as readonly string[]).includes(reward)) {
+    if (
+      reward !== 'none' &&
+      reward !== 'custom' &&
+      !(REWARD_KEYS as readonly string[]).includes(reward)
+    ) {
       throw badRequest(
         'invalid_reward',
-        `reward must be none or one of ${REWARD_KEYS.join(', ')}.`,
+        `reward must be none, custom, or one of ${REWARD_KEYS.join(', ')}.`,
+      );
+    }
+
+    /**
+     * `reward: 'custom'` NAMES ONE OF HER SAVED OPTIONS BY ID, AND THE SERVER
+     * RESOLVES THE WORDS. Migration 0064.
+     *
+     * The label is read from `campaign_reward`, this salon's and still active,
+     * and copied onto the campaign as its snapshot. ANY LABEL IN THE BODY IS
+     * IGNORED — `customReward`, `customRewardLabel`, whatever a client sends —
+     * the principle non-negotiable #11 states for a ticket's route: the client
+     * names an id, the server resolves it. Otherwise the words a reviewer
+     * approves would be whatever the request said, and the saved list would be a
+     * suggestion.
+     *
+     * 400 `invalid_custom_reward` for a missing id, another salon's, or one she
+     * has removed — never the 500 the composite FK would answer with. 400 and
+     * not 404 because the id is a field of a form, the way `invalid_branch`
+     * would be, and "another salon's" and "removed" are one answer so neither
+     * confirms the other salon's row exists.
+     *
+     * A LABEL, NOT AN EFFECT. Nothing downstream applies `reward` to a charge,
+     * a top-up or `rewardEffect()`; the salon honours a custom reward itself.
+     *
+     * An archive racing this submit is the same state as an archive just after
+     * it: a pending campaign holding its own snapshot of an option no longer on
+     * the list, which is exactly what the snapshot is for.
+     */
+    const rawCustomId = body.customRewardId;
+    const sentCustomId = rawCustomId !== undefined && rawCustomId !== null && rawCustomId !== '';
+    let customRewardId: string | null = null;
+    let customRewardLabel: string | null = null;
+    if (reward === 'custom') {
+      if (typeof rawCustomId !== 'string' || rawCustomId.trim() === '' || rawCustomId.length > 100) {
+        throw badRequest(
+          'invalid_custom_reward',
+          'Choose one of your saved rewards for a custom reward.',
+        );
+      }
+      const [own] = await db
+        .select({ id: campaignReward.id, label: campaignReward.label })
+        .from(campaignReward)
+        .where(
+          and(
+            eq(campaignReward.id, rawCustomId.trim()),
+            eq(campaignReward.salonId, p.salonId),
+            isNull(campaignReward.archivedAt),
+          ),
+        )
+        .limit(1);
+      if (!own) {
+        throw badRequest(
+          'invalid_custom_reward',
+          'That reward is not one of your saved rewards. Choose another, or save it first.',
+        );
+      }
+      customRewardId = own.id;
+      customRewardLabel = own.label;
+    } else if (sentCustomId) {
+      throw badRequest(
+        'custom_reward_not_allowed',
+        'Only a custom reward carries a customRewardId.',
       );
     }
 
@@ -248,6 +334,8 @@ export async function registerCampaignRoutes(app: FastifyInstance): Promise<void
         audience: audience as never,
         branchId,
         reward,
+        customRewardId,
+        customRewardLabel,
         reach,
         sendWhen,
         scheduledAt,
@@ -269,7 +357,14 @@ export async function registerCampaignRoutes(app: FastifyInstance): Promise<void
       source: 'merchant',
       subjectType: 'campaign',
       subjectId: row.id,
-      metadata: { audience, reach, channel, when: sendWhen, reward },
+      metadata: {
+        audience,
+        reach,
+        channel,
+        when: sendWhen,
+        reward,
+        ...(customRewardId ? { customRewardId, customReward: customRewardLabel } : {}),
+      },
       ipAddress: req.ip ?? null,
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
     });

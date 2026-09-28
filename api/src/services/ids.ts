@@ -189,3 +189,10 @@ export const campaignId = sql`'CMP-' || nextval('campaign_number_seq')::text`;
  * that fails to be created is worse than a slow one.
  */
 export const ticketId = sql`'SUP-' || nextval('support_ticket_number_seq')::text`;
+
+/**
+ * 'CRW-10000000'. A reward a salon wrote for its campaigns — migration 0064.
+ * The in-INSERT form: the route reads the id back from `RETURNING`, and nothing
+ * needs it before the row exists.
+ */
+export const campaignRewardId = sql`'CRW-' || nextval('campaign_reward_number_seq')::text`;

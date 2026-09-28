@@ -54,7 +54,17 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, pgTable, primaryKey, text } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  unique,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 import { member } from './member';
 import { branch, salon } from './salon';
@@ -69,6 +79,53 @@ export type CampaignAudience = (typeof CAMPAIGN_AUDIENCES)[number];
 
 export const CAMPAIGN_CHANNELS = ['push', 'wa', 'both'] as const;
 export const CAMPAIGN_WHENS = ['now', 'later', 'recurring'] as const;
+
+/**
+ * A reward the salon wrote — the custom options on "Attach a reward".
+ * Migration 0064.
+ *
+ * A FREE-TEXT PERK THE SALON HONOURS ITSELF ("Free hair mask with any
+ * blow-dry"). It moves no money and has no earning effect: no charge, top-up or
+ * `rewardEffect()` reads this table, and nothing should. Happy hours keep their
+ * fixed `REWARD_KEYS`.
+ *
+ * Per salon, at most `CAMPAIGN_REWARD_LIMIT` active. Removing one ARCHIVES it
+ * (`archived_at`), because a campaign may still name it; the label a campaign
+ * shows is its own snapshot, `campaign.custom_reward_label`.
+ *
+ * Held at the column (0064): trimmed, 1..60 characters, and one active label per
+ * salon case-insensitively (`campaign_reward_active_label_uq`, partial on
+ * `archived_at IS NULL`).
+ */
+export const CAMPAIGN_REWARD_LABEL_MAX = 60;
+export const CAMPAIGN_REWARD_LIMIT = 20;
+
+export const campaignReward = pgTable(
+  'campaign_reward',
+  {
+    /** 'CRW-10000000'. `services/ids.ts § campaignRewardId`. */
+    id: text('id').primaryKey(),
+    salonId: text('salon_id')
+      .notNull()
+      .references(() => salon.id, { onDelete: 'restrict' }),
+    label: text('label').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /** The staff member's display name. Snapshot, like `campaign.submitted_by`. */
+    createdBy: text('created_by').notNull(),
+    /** Removed from the list. NULL while it is offered in the dropdown. */
+    archivedAt: timestamptz('archived_at'),
+  },
+  (t) => [
+    unique('campaign_reward_id_salon_uq').on(t.id, t.salonId),
+    uniqueIndex('campaign_reward_active_label_uq')
+      .on(t.salonId, sql`lower(${t.label})`)
+      .where(sql`${t.archivedAt} IS NULL`),
+    check('campaign_reward_label_is_trimmed', sql`${t.label} = btrim(${t.label})`),
+    check('campaign_reward_label_length', sql`char_length(${t.label}) BETWEEN 1 AND 60`),
+  ],
+);
+
+export type CampaignRewardRow = typeof campaignReward.$inferSelect;
 
 export const campaign = pgTable(
   'campaign',
@@ -88,8 +145,27 @@ export const campaign = pgTable(
      * `happy_hour.branch_id` does — one sentinel convention, not two.
      */
     branchId: text('branch_id').references(() => branch.id, { onDelete: 'restrict' }),
-    /** A `RewardKey` or the literal 'none'. Validated at the boundary. */
+    /**
+     * A `RewardKey`, the literal 'none', or 'custom' (migration 0064). Validated
+     * at the boundary — there is no CHECK on this column. A LABEL, NOT AN EFFECT:
+     * nothing applies a campaign's reward to a charge; see `campaignReward` above.
+     */
     reward: text('reward').notNull().default('none'),
+    /**
+     * The saved option this campaign named, when `reward` is 'custom'. NULL
+     * otherwise — `campaign_custom_reward_id_requires_custom`. The FK is the
+     * composite `campaign_custom_reward_same_salon_fk (custom_reward_id,
+     * salon_id)` and lives in the migration, as `artist_service`'s do.
+     */
+    customRewardId: text('custom_reward_id'),
+    /**
+     * THE SNAPSHOT of that option's label at submission, served as
+     * `customReward`. Resolved by the server from the id, never taken from the
+     * client, and never rewritten — so the campaign still reads correctly after
+     * the option is removed from the list. `campaign_custom_reward_is_labelled`:
+     * present exactly when `reward` is 'custom'.
+     */
+    customRewardLabel: text('custom_reward_label'),
 
     /**
      * SERVER-COMPUTED, NEVER TRUSTED FROM THE CLIENT — api-contract.md says so
@@ -201,6 +277,15 @@ export const campaign = pgTable(
      * quiet-hours flag reads `scheduledAt` only for `later`, and a `now` campaign
      * carrying one would make that flag lie.
      */
+    /** A custom reward has its words, and nothing else carries any. 0064. */
+    check(
+      'campaign_custom_reward_is_labelled',
+      sql`(${t.reward} = 'custom') = (${t.customRewardLabel} IS NOT NULL)`,
+    ),
+    check(
+      'campaign_custom_reward_id_requires_custom',
+      sql`${t.customRewardId} IS NULL OR ${t.reward} = 'custom'`,
+    ),
     check(
       'campaign_scheduled_at_matches_when',
       sql`(${t.sendWhen} = 'later') = (${t.scheduledAt} IS NOT NULL)`,
