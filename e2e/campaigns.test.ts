@@ -78,6 +78,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { precondition } from './support/known-bug.js';
 import {
+  A_STAFF_RESTRICTED,
   B_MEMBER,
   B_MEMBER_PHONE,
   B_SCANNER_DEVICE,
@@ -90,6 +91,7 @@ import {
   POLICY_QUIET_FROM,
   POLICY_QUIET_TO,
   POLICY_WEEKLY_CAP_PER_CUSTOMER,
+  SALON_A,
   SALON_B,
   pgDb,
   psql,
@@ -335,6 +337,9 @@ interface CampaignBody {
   campaign: {
     id: string;
     status: string;
+    reward: string;
+    /** Migration 0064: the snapshot of a `custom` reward's words, `null` otherwise. */
+    customReward: string | null;
     reach: number;
     heldReason: string | null;
     heldAt: string | null;
@@ -1747,5 +1752,370 @@ describe('the audience dimension — every member of CAMPAIGN_AUDIENCES, derived
       ).toContain(id);
     }
     expect(heldNotifications(c.id), 'a campaign that sent left a hold on the merchant bell').toBe(0);
+  });
+});
+
+// ===========================================================================
+// CUSTOM CAMPAIGN REWARDS — migration 0064, dev `44cf899`
+// ===========================================================================
+
+/**
+ * A REWARD THE SALON WROTE — `routes/campaignRewards.ts`, and `reward: 'custom'` on
+ * `POST …/campaigns`.
+ *
+ * WHAT LANE A SHIPPED, in one paragraph. A merchant saves her own reward options
+ * (`{ label }`, up to twenty active), picks one on the campaign form by id, and the
+ * server copies the words onto the campaign as `custom_reward_label` — a SNAPSHOT, so
+ * removing the option later (an archive, never a delete) changes nothing already in the
+ * queue. All three reward routes are `perms.marketing`, dashboard scope, salon-scoped.
+ *
+ * WHAT THE LEDGERS ALREADY SAY, AND WHY THIS BLOCK IS STILL NEEDED. The permission
+ * census probes the gate with a probe account and a bogus id; the tenancy table probes
+ * `requireSameSalon` with salon A's id in the path. Neither can see the three places
+ * this slice is actually exposed:
+ *
+ *   - the SECOND AXIS: salon B's own URL with salon A's reward id beside it, on the
+ *     DELETE and in `customRewardId`. Scoped by a `salon_id` term in a WHERE clause,
+ *     which no ledger line can read.
+ *   - THE WORDS: a client that sends its own label next to the id. Ignored, per the
+ *     route — non-negotiable #11's principle, one feature over: the client names an id
+ *     and the server resolves it, or the words a reviewer approves are whatever the
+ *     request said.
+ *   - MONEY: a reward is a LABEL. Nothing applies it to a charge, a top-up or
+ *     `rewardEffect()`. Asserted across a real submit, approve and send, on the rows.
+ *
+ * FIXTURES. Salon A's reward is saved by Noura (ST-001, every permission); salon B's by
+ * Layla, this file's `merchant`. Hessa is `A_STAFF_RESTRICTED` (ST-002), the seeded
+ * front desk — `perm_marketing: false` in `api/src/db/seed.ts` — and she is the right
+ * principal rather than a probe account because she is the person the permission
+ * exists to stop. No seed user is invented. Every label carries this run's stamp, so a
+ * second run against one database cannot meet `duplicate_reward`, and `afterAll`
+ * removes every row this block made.
+ */
+describe('custom campaign rewards — a label the salon wrote, and nothing more', () => {
+  /** `auth/principal.ts` § PERMISSION_COPY.marketing. */
+  const MARKETING_COPY = "You don't have permission to submit a campaign. A manager can grant it.";
+  const RUN = Date.now().toString(36);
+  const label = (what: string) => `QA CR ${what} ${RUN}`;
+  const REWARD_NOWHERE = 'CRW-DOES-NOT-EXIST';
+
+  let aManager = '';
+  let hessa = '';
+  /** Salon A's reward. Nothing in this block may archive it or attach it. */
+  let aReward = '';
+
+  async function saveReward(token: string, salonId: string, words: string): Promise<string> {
+    const res = await treq<{ id: string; label: string }>(
+      'POST',
+      `/v1/salons/${salonId}/campaign-rewards`,
+      { token, body: { label: words } },
+    );
+    precondition(res.status === 201, `POST ${salonId}/campaign-rewards: ${res.status} ${res.raw}`);
+    return res.body.id;
+  }
+
+  /** `salon_id|label|archived?` for one reward, read from the table. */
+  const rewardRow = (id: string): string =>
+    scalar(
+      `select concat_ws('|', salon_id, label, case when archived_at is null then 'active' else 'archived' end)
+         from campaign_reward where id = '${id}'`,
+    ).trim();
+
+  async function postCustom(
+    what: string,
+    body: Record<string, unknown>,
+    opts: { token?: string; salonId?: string } = {},
+  ) {
+    return treq<CampaignBody['campaign'] & { error?: string; message?: string }>(
+      'POST',
+      `/v1/salons/${opts.salonId ?? SALON_B}/campaigns`,
+      {
+        token: opts.token ?? merchant,
+        idempotencyKey: key(`custom-${what}`),
+        body: {
+          title: `QA custom ${what}`,
+          body: 'A free fringe trim with any cut this week.',
+          channel: 'push',
+          audience: 'gold',
+          when: 'now',
+          reward: 'custom',
+          ...body,
+        },
+      },
+    );
+  }
+
+  const campaignsAt = (salonId: string): number =>
+    Number(scalar(`select count(*) from campaign where salon_id = '${salonId}'`));
+
+  beforeAll(async () => {
+    aManager = await signInDashboard(SALON_A, 'noura');
+    hessa = await signInDashboard(SALON_A, 'hessa');
+    aReward = await saveReward(aManager, SALON_A, label('salon A'));
+  }, 60_000);
+
+  afterAll(() => {
+    /**
+     * EVERY ROW THIS BLOCK MADE, campaigns first — `campaign_custom_reward_same_salon_fk`
+     * is `restrict`. `campaign_send` before `campaign` for the reason `clearCampaigns`
+     * gives. Matched on this run's stamp, so nothing another file saved can match.
+     */
+    psql(`
+      DELETE FROM campaign_send WHERE campaign_id IN (
+        SELECT c.id FROM campaign c JOIN campaign_reward r ON r.id = c.custom_reward_id
+         WHERE r.label LIKE 'QA CR % ${RUN}');
+      DELETE FROM campaign WHERE custom_reward_id IN (
+        SELECT id FROM campaign_reward WHERE label LIKE 'QA CR % ${RUN}');
+      DELETE FROM campaign_reward WHERE label LIKE 'QA CR % ${RUN}';
+    `);
+  });
+
+  it('Hessa (ST-002, perms.marketing OFF) is refused all three reward routes and a custom campaign, and nothing is written', async () => {
+    precondition(
+      scalar(`select perm_marketing::text from staff_user where id = '${A_STAFF_RESTRICTED}'`).trim() === 'false',
+      `${A_STAFF_RESTRICTED} holds perms.marketing, so a 403 here would not be the permission's`,
+    );
+    precondition(rewardRow(aReward) === `${SALON_A}|${label('salon A')}|active`, `fixture: ${rewardRow(aReward)}`);
+    const before = campaignsAt(SALON_A);
+
+    const attempts: Array<[string, Promise<{ status: number; body: any; raw: string }>]> = [
+      ['GET list', treq('GET', `/v1/salons/${SALON_A}/campaign-rewards`, { token: hessa })],
+      [
+        'POST save',
+        treq('POST', `/v1/salons/${SALON_A}/campaign-rewards`, {
+          token: hessa,
+          body: { label: label('hessa') },
+        }),
+      ],
+      ['DELETE archive', treq('DELETE', `/v1/salons/${SALON_A}/campaign-rewards/${aReward}`, { token: hessa })],
+      // A REAL salon-A reward, so nothing but the permission can refuse it.
+      [
+        'POST custom campaign',
+        postCustom('hessa', { customRewardId: aReward }, { token: hessa, salonId: SALON_A }),
+      ],
+    ];
+    for (const [what, pending] of attempts) {
+      const res = await pending;
+      expect(res.status, `Hessa's ${what} answered ${res.status}: ${res.raw}`).toBe(403);
+      expect(res.body.error).toBe('forbidden');
+      expect(res.body.message, `Hessa's ${what} was refused, but not by perms.marketing`).toBe(MARKETING_COPY);
+    }
+
+    // The rows, not the replies.
+    expect(
+      scalar(`select count(*) from campaign_reward where label = '${label('hessa')}'`).trim(),
+      'Hessa saved a campaign reward without perms.marketing',
+    ).toBe('0');
+    expect(rewardRow(aReward), 'Hessa archived a campaign reward without perms.marketing').toBe(
+      `${SALON_A}|${label('salon A')}|active`,
+    );
+    expect(campaignsAt(SALON_A), 'Hessa submitted a campaign without perms.marketing').toBe(before);
+  });
+
+  it('and the refusal is the permission, not a broken route: granted marketing, Hessa reads the list', async () => {
+    /**
+     * THE MIRROR, on the READ only, for the reason `permission-census.test.ts` gives
+     * `MIRROR_WOULD_WRITE`: granting and firing a write would change what the spec
+     * above just proved unchanged. Restored in `finally` — Hessa is the seed's front
+     * desk and three other files rely on her holding exactly what the seed gives her.
+     */
+    try {
+      psql(`UPDATE staff_user SET perm_marketing = true WHERE id = '${A_STAFF_RESTRICTED}';`);
+      const res = await treq<{ items: Array<{ id: string }> }>(
+        'GET',
+        `/v1/salons/${SALON_A}/campaign-rewards`,
+        { token: hessa },
+      );
+      expect(res.status, res.raw).toBe(200);
+      expect(res.body.items.map((r) => r.id)).toContain(aReward);
+    } finally {
+      psql(`UPDATE staff_user SET perm_marketing = false WHERE id = '${A_STAFF_RESTRICTED}';`);
+    }
+  });
+
+  it("salon B cannot list, archive or attach salon A's reward — not even from her own salon's URL", async () => {
+    // Her own list: her rows and nobody else's.
+    const own = await treq<{ items: Array<{ id: string; salonId: string }> }>(
+      'GET',
+      `/v1/salons/${SALON_B}/campaign-rewards`,
+      { token: merchant },
+    );
+    expect(own.status, own.raw).toBe(200);
+    expect(own.body.items.map((r) => r.id), "salon B's list carries salon A's reward").not.toContain(aReward);
+    expect(own.raw, "salon B's list carries salon A's words").not.toContain(label('salon A'));
+    for (const r of own.body.items) expect(r.salonId, `${r.id} is not salon B's`).toBe(SALON_B);
+
+    // Salon A's URL: the tenancy gate, which SALON_ROUTES also drives.
+    const theirs = await treq('GET', `/v1/salons/${SALON_A}/campaign-rewards`, { token: merchant });
+    expect(theirs.status, theirs.raw).toBe(403);
+    expect(theirs.raw).not.toContain(label('salon A'));
+
+    /**
+     * ARCHIVE, FROM HER OWN URL. 404 `unknown_reward`, and BYTE-IDENTICAL to an id that
+     * exists nowhere — the route's own promise ("another salon's reward is not
+     * confirmable to exist"). A different answer for a real foreign id would be an
+     * oracle for salon A's reward ids even with the row untouched.
+     */
+    const archive = await treq('DELETE', `/v1/salons/${SALON_B}/campaign-rewards/${aReward}`, { token: merchant });
+    const archiveNowhere = await treq('DELETE', `/v1/salons/${SALON_B}/campaign-rewards/${REWARD_NOWHERE}`, {
+      token: merchant,
+    });
+    expect(archive.status, archive.raw).toBe(404);
+    expect(archive.body.error).toBe('unknown_reward');
+    expect(archive.raw, 'a foreign reward id answers differently from an invented one').toBe(archiveNowhere.raw);
+    expect(rewardRow(aReward), "salon B archived salon A's reward").toBe(`${SALON_A}|${label('salon A')}|active`);
+
+    /**
+     * ATTACH. 400 `invalid_custom_reward` — the route's deliberate choice over 404,
+     * because the id is a form field — byte-identical to an invented id, and no
+     * campaign row. The composite FK would refuse the row too, but as a 500; this
+     * proves the route answers first and writes nothing.
+     */
+    const before = campaignsAt(SALON_B);
+    const attach = await postCustom('foreign', { customRewardId: aReward });
+    const attachNowhere = await postCustom('nowhere', { customRewardId: REWARD_NOWHERE });
+    expect(attach.status, attach.raw).toBe(400);
+    expect(attach.body.error).toBe('invalid_custom_reward');
+    expect(attach.raw, 'a foreign reward id answers differently from an invented one').toBe(attachNowhere.raw);
+    expect(attach.raw).not.toContain(label('salon A'));
+    expect(campaignsAt(SALON_B), "a campaign was written naming salon A's reward").toBe(before);
+    expect(
+      scalar(`select count(*) from campaign where custom_reward_id = '${aReward}'`).trim(),
+      "some campaign carries salon A's reward id",
+    ).toBe('0');
+  });
+
+  it('a label the client sends is ignored — the words come from the saved reward', async () => {
+    clearCampaigns();
+    const words = label('honest');
+    const bReward = await saveReward(merchant, SALON_B, words);
+    const FORGED = 'FORGED: a free 100 KD top-up';
+
+    const res = await postCustom('forged-label', {
+      customRewardId: bReward,
+      customReward: FORGED,
+      customRewardLabel: FORGED,
+      label: FORGED,
+    });
+    expect(res.status, res.raw).toBe(201);
+    expect(res.body.status).toBe('pending');
+    expect(res.body.reward).toBe('custom');
+    expect(res.body.customReward, 'the reply carries the words the client sent').toBe(words);
+    expect(res.raw).not.toContain('FORGED');
+    // And the row, which is what the reviewer's queue is built from.
+    expect(
+      scalar(`select concat_ws('|', custom_reward_id, custom_reward_label) from campaign where id = '${res.body.id}'`).trim(),
+    ).toBe(`${bReward}|${words}`);
+
+    // A label is not a substitute for the id: no id, no custom campaign.
+    const before = campaignsAt(SALON_B);
+    const labelOnly = await postCustom('label-only', { customReward: FORGED });
+    expect(labelOnly.status, labelOnly.raw).toBe(400);
+    expect(labelOnly.body.error).toBe('invalid_custom_reward');
+    expect(campaignsAt(SALON_B)).toBe(before);
+
+    // And on a fixed reward the label is ignored, not stored.
+    const fixed = await postCustom('fixed-with-label', { reward: 'x2visit', customReward: FORGED });
+    expect(fixed.status, fixed.raw).toBe(201);
+    expect(fixed.body.reward).toBe('x2visit');
+    expect(fixed.body.customReward).toBeNull();
+    expect(
+      scalar(`select coalesce(custom_reward_label, '<null>') from campaign where id = '${fixed.body.id}'`).trim(),
+    ).toBe('<null>');
+  });
+
+  it('archived after submission, the snapshot survives on the merchant list and in the approver queue', async () => {
+    clearCampaigns();
+    const words = label('archived');
+    const bReward = await saveReward(merchant, SALON_B, words);
+    const c = await postCustom('archived', { customRewardId: bReward });
+    precondition(c.status === 201 && c.body.customReward === words, `submit: ${c.status} ${c.raw}`);
+
+    const removed = await treq('DELETE', `/v1/salons/${SALON_B}/campaign-rewards/${bReward}`, { token: merchant });
+    expect(removed.status, removed.raw).toBe(204);
+    expect(rewardRow(bReward), 'the DELETE hard-deleted the reward rather than archiving it').toBe(
+      `${SALON_B}|${words}|archived`,
+    );
+
+    // Gone from her options…
+    const options = await treq<{ items: Array<{ id: string }> }>('GET', `/v1/salons/${SALON_B}/campaign-rewards`, {
+      token: merchant,
+    });
+    expect(options.status, options.raw).toBe(200);
+    expect(options.body.items.map((r) => r.id), 'an archived reward is still offered').not.toContain(bReward);
+
+    // …kept on her campaign…
+    const wire = await fromWire(c.body.id);
+    expect(wire?.customReward, "archiving the reward rewrote the merchant's campaign").toBe(words);
+
+    // …and kept where the approver reads it, which is the view that decides.
+    const queue = await treq<{ items: Array<CampaignBody['campaign']> }>('GET', '/v1/platform/campaigns', {
+      token: owner,
+    });
+    expect(queue.status, queue.raw).toBe(200);
+    const queued = queue.body.items.find((q) => q.id === c.body.id);
+    expect(queued, 'the campaign is not in the approval queue').toBeDefined();
+    expect(queued!.status).toBe('pending');
+    expect(queued!.customReward, 'the approver reads different words from the ones submitted').toBe(words);
+    expect(
+      scalar(`select custom_reward_label from campaign where id = '${c.body.id}'`).trim(),
+    ).toBe(words);
+
+    // And an archived reward cannot be attached to a new campaign.
+    const again = await postCustom('archived-again', { customRewardId: bReward });
+    expect(again.status, again.raw).toBe(400);
+    expect(again.body.error).toBe('invalid_custom_reward');
+  });
+
+  it('a custom-reward campaign moves no money — balances and ledgers unchanged across submit, approve and send', async () => {
+    /**
+     * THE CLAIM `routes/campaignRewards.ts` MAKES IN ITS HEADER — "Nothing here moves
+     * money, and no charge, top-up or `rewardEffect` reads this table" — driven rather
+     * than read. A released campaign is the one path where a reward could plausibly be
+     * "applied" to the people it reached, so the snapshot is taken of exactly those
+     * people, and of salon B's whole ledger besides, and compared after each step.
+     *
+     * THE SNAPSHOT COVERS THE RECIPIENTS — asserted below, not assumed: the audience is
+     * `gold`, which at salon B is the three `AUD` rows (see `AUD`), and `sentTo` is
+     * required to be inside them.
+     */
+    clearCampaigns();
+    policy(quietWindowAvoiding());
+    const words = label('money');
+    const bReward = await saveReward(merchant, SALON_B, words);
+    const ids = AUD.map((a) => `'${a}'`).join(',');
+
+    const snapshot = () => ({
+      members: scalar(
+        `select string_agg(concat_ws(':', id, balance_fils, visits, tier, coalesce(stamps::text, '-')), ',' order by id)
+           from member where id in (${ids})`,
+      ).trim(),
+      memberLedger: scalar(
+        `select count(*) || ':' || coalesce(sum(amount_fils), 0) from ledger_entry where member_id in (${ids})`,
+      ).trim(),
+      memberTransactions: scalar(`select count(*) from "transaction" where member_id in (${ids})`).trim(),
+      salonLedger: scalar(
+        `select count(*) || ':' || coalesce(max(seq), 0) from ledger_entry where salon_id = '${SALON_B}'`,
+      ).trim(),
+      salonBalances: scalar(`select coalesce(sum(balance_fils), 0) from member where salon_id = '${SALON_B}'`).trim(),
+    });
+
+    const before = snapshot();
+    precondition(before.members.split(',').length === AUD.length, `fixture: ${before.members}`);
+
+    const c = await postCustom('money', { customRewardId: bReward });
+    expect(c.status, c.raw).toBe(201);
+    expect(c.body.customReward).toBe(words);
+    expect(snapshot(), 'SUBMITTING a custom-reward campaign moved money').toEqual(before);
+
+    const decision = await decide(c.body.id, 'approved');
+    expect(decision.status, decision.raw).toBe(200);
+    expect(decision.body.campaign.status, 'the campaign was not sent, so this spec proved nothing').toBe('sent');
+    expect(decision.body.campaign.customReward, 'the decision reply lost the words').toBe(words);
+    const reached = sentTo(c.body.id);
+    expect(reached.length, 'nobody received the campaign, so this spec proved nothing').toBeGreaterThan(0);
+    for (const id of reached) expect([...AUD], `${id} received it and is outside the snapshot`).toContain(id);
+
+    expect(snapshot(), 'APPROVING AND SENDING a custom-reward campaign moved money').toEqual(before);
   });
 });
