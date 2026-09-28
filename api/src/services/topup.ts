@@ -1046,6 +1046,7 @@ async function placeAttachedOrder(
           items: request.items,
           fulfilment: request.fulfilment,
           addressId: request.addressId ?? undefined,
+          pickupBranchId: request.pickupBranchId ?? undefined,
         },
         {
           memberId: m.id,
@@ -1086,6 +1087,7 @@ async function placeAttachedOrder(
         request: {
           items: request.items,
           fulfilment: request.fulfilment,
+          pickupBranchId: request.pickupBranchId ?? null,
         },
       },
     });

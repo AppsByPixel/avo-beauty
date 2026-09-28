@@ -31,6 +31,12 @@ const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toStri
 const MEMBER = `EN-DL-M-${RUN}`;
 const OTHER_MEMBER = `EN-DL-M2-${RUN}`;
 const PRODUCT = `EN-DL-P-${RUN}`;
+/**
+ * SAL-AMARA has two open branches, so since migration 0060 a pickup there names
+ * the one she collects from — `pickupBranch.int.test.ts` owns those specs. This
+ * file's pickups name Salmiya so they keep testing what they were written for.
+ */
+const PICKUP_AT = 'BR-SAL';
 
 suite('the shop delivers, and it costs nothing extra', () => {
   let app: FastifyInstance;
@@ -229,7 +235,7 @@ suite('the shop delivers, and it costs nothing extra', () => {
 
     it('a pickup order debits exactly the goods', async () => {
       const before = await balance();
-      const res = await req('POST', '/orders', hers, { ...cart(), fulfilment: 'pickup' });
+      const res = await req('POST', '/orders', hers, { ...cart(), fulfilment: 'pickup', pickupBranchId: PICKUP_AT });
       expect(res.statusCode, res.body).toBe(201);
       expect(before - (await balance())).toBe(PRICE);
     });
@@ -259,7 +265,8 @@ suite('the shop delivers, and it costs nothing extra', () => {
     });
 
     it('omitting fulfilment is a PICKUP — the behaviour that shipped before', async () => {
-      const res = await req('POST', '/orders', hers, cart());
+      // `fulfilment` omitted; the branch is named because this salon has two.
+      const res = await req('POST', '/orders', hers, { ...cart(), pickupBranchId: PICKUP_AT });
       expect(res.statusCode, res.body).toBe(201);
       const txId = JSON.parse(res.body).transaction.id as string;
       const [row] = await exec(
@@ -419,6 +426,7 @@ suite('the shop delivers, and it costs nothing extra', () => {
       const res = await req('POST', '/orders', hers, {
         items: [{ productId: PRODUCT, qty: 1 }],
         fulfilment: 'pickup',
+        pickupBranchId: PICKUP_AT,
       });
       const fresh = JSON.parse(res.body).transaction.id as string;
       const skip = await req('PATCH', `/v1/salons/${SALON}/orders/${fresh}`, manager, {
@@ -520,7 +528,7 @@ suite('the shop delivers, and it costs nothing extra', () => {
     });
 
     it('a PICKUP order queues a payload that says pickup, from the value it resolved', async () => {
-      const txId = await place({ ...cart(), fulfilment: 'pickup' });
+      const txId = await place({ ...cart(), fulfilment: 'pickup', pickupBranchId: PICKUP_AT });
       for (const payload of await payloads(txId)) {
         expect(payload.fulfilment).toBe('pickup');
       }
@@ -536,7 +544,7 @@ suite('the shop delivers, and it costs nothing extra', () => {
         const txId = await place({
           ...cart(),
           fulfilment,
-          ...(fulfilment === 'delivery' ? { addressId } : {}),
+          ...(fulfilment === 'delivery' ? { addressId } : { pickupBranchId: PICKUP_AT }),
         });
         const [row] = await exec(
           sql`SELECT fulfilment::text AS f FROM shop_order WHERE transaction_id = ${txId}`,
@@ -560,9 +568,9 @@ suite('the shop delivers, and it costs nothing extra', () => {
       expect(detail.endsWith('· for delivery')).toBe(true);
     });
 
-    it("a PICKUP order's audit detail still ends '· to collect'", async () => {
-      const txId = await place({ ...cart(), fulfilment: 'pickup' });
-      expect((await auditDetail(txId)).endsWith('· to collect')).toBe(true);
+    it("a PICKUP order's audit detail ends '· to collect at <the branch she chose>'", async () => {
+      const txId = await place({ ...cart(), fulfilment: 'pickup', pickupBranchId: PICKUP_AT });
+      expect((await auditDetail(txId)).endsWith('· to collect at Salmiya')).toBe(true);
     });
   });
 });

@@ -178,6 +178,15 @@ export async function createOrderPayment(
         items: input.order.items.map((i) => ({ productId: i.productId, qty: i.qty })),
         fulfilment: input.order.fulfilment ?? 'pickup',
         addressId: input.order.addressId ?? null,
+        /**
+         * AS SHE SENT IT, not as the pre-flight resolved it. A single-branch
+         * salon's default is re-derived at settlement, so a salon that opens a
+         * second branch while she is on the hosted page refuses with
+         * `pickup_branch_required` (money kept as credit) rather than sending
+         * her to a counter she did not choose. `quoteOrder` has already refused
+         * a foreign or closed branch before the card is charged.
+         */
+        pickupBranchId: input.order.pickupBranchId ?? null,
       },
     });
 

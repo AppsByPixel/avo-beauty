@@ -1313,6 +1313,12 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
          * only learn it by charging from the till and getting a 404.
          */
         tillsUnenrolled: impact.tillsUnenrolled.map((t) => t.label),
+        /**
+         * Shop orders a customer is still coming to collect here (migration
+         * 0060). The close leaves them on the board, marked closed — this is so
+         * she decides what happens to them before, not after.
+         */
+        pickupOrdersWaiting: impact.pickupOrdersWaiting,
       });
     },
   );
@@ -1346,6 +1352,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const impact = await branchClosureImpact(db, req.params.id, current.id);
       const heldCount = impact.depositHeldBookings;
       const heldAssumed = impact.depositHeldBookingsBranchAssumed;
+      const pickupWaiting = impact.pickupOrdersWaiting;
 
       const closedAt = new Date();
       const { row, rescoped, stranded, tillsRevoked } = await db.transaction(async (tx) => {
@@ -1472,7 +1479,8 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             (heldCount ? ` · ${heldCount} appointment(s) still hold a deposit here` : '') +
             (tillsRevoked.length
               ? ` · ${tillsRevoked.length} till(s) unenrolled: ${tillsRevoked.map((t) => t.label).join(', ')}`
-              : ''),
+              : '') +
+            (pickupWaiting ? ` · ${pickupWaiting} shop order(s) still waiting to be collected here` : ''),
           source: 'merchant',
           subjectType: 'branch',
           subjectId: current.id,
@@ -1487,6 +1495,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
             depositHeldBookings: heldCount,
             depositHeldBookingsBranchAssumed: heldAssumed,
             tillsUnenrolled: tillsRevoked,
+            pickupOrdersWaiting: pickupWaiting,
           },
           ...clientMeta(req),
         });
@@ -1529,6 +1538,8 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
          * guess. Reported by the preview and by the close, identically.
          */
         depositHeldBookingsBranchAssumed: heldAssumed,
+        /** The preview's number, served by the close identically. Migration 0060. */
+        pickupOrdersWaiting: pickupWaiting,
       });
     },
   );

@@ -79,11 +79,23 @@ suite('a shop order paid by card', () => {
     return mid;
   }
 
+  /**
+   * SAL-AMARA has two open branches, so since migration 0060 a pickup there must
+   * name the one she collects from. Every pickup this file opens collects at
+   * Salmiya unless it says otherwise; the pickup branch's own specs — including
+   * the race where it closes mid-payment — are `routes/pickupBranch.int.test.ts`.
+   */
+  const withPickup = (payload: Record<string, unknown>) =>
+    payload.fulfilment === 'delivery' || 'pickupBranchId' in payload
+      ? payload
+      : { ...payload, pickupBranchId: 'BR-SAL' };
+
   const start = async (
     who: string,
-    payload: Record<string, unknown>,
+    raw: Record<string, unknown>,
     opts: { key?: string; scenario?: string } = {},
   ) => {
+    const payload = withPickup(raw);
     const res = await app.inject({
       method: 'POST',
       url: '/orders/payments',
