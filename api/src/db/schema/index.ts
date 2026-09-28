@@ -21,7 +21,8 @@
  *          ├─ device_enrolment (a till → a branch — DECISIONS #82)
  *          ├─ booking ──── artist_calendar_connection (per artist)
  *          ├─ merchant_notification
- *          ├─ campaign ──── campaign_send (→ member)
+ *          ├─ campaign_reward (her own "Attach a reward" options — 0064)
+ *          ├─ campaign ──── campaign_send (→ member)   (campaign → campaign_reward, optionally)
  *          └─ transaction ─┬─ ledger_entry
  *                          ├─ idempotency_key
  *                          ├─ receipt_job
