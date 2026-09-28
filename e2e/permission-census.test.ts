@@ -724,10 +724,51 @@ const PINNED_COVERAGE: string[] = [
   'GET /members/me/deletion [requireMember]',
   'GET /members/me/addresses [requireMember]',
   'GET /members/me/notifications [requireMember]',
+  /**
+   * =======================================================================
+   * THE CUSTOMER BELL AND THE CARD-PAID ORDER — four member doors, dev `2859695`.
+   * The census named all four on the first run after the merge; lane A had run
+   * the census itself and asked for exactly these lines, and they are pasted from
+   * THIS file's output rather than from the brief — the rule the item-7 note
+   * above sets, because a hand-carried ledger line is the thing this pin exists to
+   * stop anyone trusting.
+   * =======================================================================
+   *   GET  /members/me/notifications/feed     the bell
+   *   POST /members/me/notifications/read     mark read — `{ids}` or `{all}`
+   *   POST /orders/payments                   open a card payment for a basket
+   *   GET  /orders/payments/:id               the authoritative read on her return
+   *
+   * `[requireMember]` IS RIGHT FOR ALL FOUR, and no permission could apply: there
+   * is no merchant on either path. No URL carries a member id, and none of the
+   * four reads one from a body — the principal IS the scope, which is item 7's
+   * shape exactly.
+   *
+   * AND, AS THERE, THIS LEDGER CANNOT TEST THE PART THAT MATTERS. Two of the four
+   * take a FOREIGN id from the request — an intent id in the path of
+   * `GET /orders/payments/:id`, notification ids in the body of the mark — and what
+   * keeps one customer out of another's is a `memberId` term in a WHERE clause and
+   * a comparison against `p.id`, not a guard the census reads. A `[requireMember]`
+   * line is byte-identical with or without them. So each is driven by request, and
+   * the row read back out of Postgres, in a spec of its own:
+   *
+   *   member-bell.test.ts    A's feed never carries B's rows; A naming B's REAL ids
+   *                          marks nothing (`marked: 0`, byte-identical to junk ids)
+   *                          and `member_notification_read` holds no mark on them;
+   *                          A's `{all: true}` marks only A's; B CAN mark them.
+   *   order-payment.test.ts  a stranger's read of the owner's payment is
+   *                          byte-identical to a made-up id AND leaves the owner's
+   *                          intent `redirected` — both layers
+   *                          (`readOrderPayment`, then `readTopUp`) ablated
+   *                          separately and each went red on its own half.
+   *
+   * These lines are the register that the doors exist. They are not the evidence.
+   */
+  'GET /members/me/notifications/feed [requireMember]',
   'GET /members/me/orders [requireMember]',
   'GET /members/me/policy-acceptance [requireMember]',
   'GET /members/me/transactions [requireMember]',
   'GET /members/me/wallet-token [requireMember]',
+  'GET /orders/payments/:id [requireMember]',
   'GET /report-downloads/:token [ANONYMOUS]',
   'GET /salons/:id [requireSalonScoped]',
   'GET /salons/:id/activity → dashboard',
@@ -1015,12 +1056,14 @@ const PINNED_COVERAGE: string[] = [
   'POST /members/:id/adjustments → accounts',
   'POST /members/me/addresses [requireMember]',
   'POST /members/me/deletion [requireMember]',
+  'POST /members/me/notifications/read [requireMember]',
   'POST /members/me/password [requirePrincipal]',
   'POST /members/me/phone-change [requireMember]',
   'POST /members/me/phone-change/:id/verify [requireMember]',
   'POST /members/me/policy-acceptance [requireMember]',
   'POST /members/me/vouchers/redeem [requireMember]',
   'POST /orders [requireMember]',
+  'POST /orders/payments [requireMember]',
   /**
    * =======================================================================
    * LANE A'S FIVE MANUAL-APPOINTMENT DOORS — item 5 and 6, dev `6a6bebc`. The

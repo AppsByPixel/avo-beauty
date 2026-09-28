@@ -71,9 +71,11 @@
  * goes red the hour the schema is corrected. Every one is named in the lane
  * report.
  *
- * COVERAGE, HONESTLY STATED. The census is enforced over GET routes. The four
- * POST responses carrying a schema — `POST /bookings`, `POST /topups`,
- * `POST /charges`, `POST /v1/support/tickets` — are probed by name below but not
+ * COVERAGE, HONESTLY STATED. The census is enforced over GET routes. The eight
+ * write responses carrying a schema — `POST /bookings`, `POST /topups`,
+ * `POST /charges`, `POST /v1/support/tickets`, `POST /v1/vouchers`,
+ * `DELETE /v1/vouchers/{id}`, `POST /members/me/vouchers/redeem`, and the
+ * `intent` half of `POST /orders/payments` — are probed by name below but not
  * census-enforced, because most writes return an acknowledgement rather than an
  * entity and a census over them would be a list of exemptions.
  *
@@ -245,6 +247,28 @@ const CT_ORDER = 'TX-CT-ORDER';
 const PIN_MEMBER = 'QA-CT-0001';
 const PIN_MEMBER_PHONE = '+96599777401';
 const PIN_MEMBER_PASSWORD = 'noura-dev-password';
+
+/**
+ * THE CARD-PAID ORDER'S SAMPLE MEMBER — for `POST`/`GET /orders/payments` and the
+ * customer bell, dev `2859695`.
+ *
+ * HER OWN, and zero-balance with no ledger, for the reason `PIN_MEMBER` gives and one
+ * more: every fil she holds arrives through the gateway in `beforeAll`, so she
+ * reconciles to her ledger by construction and the wallet census has nothing to
+ * forgive. Cloned from `QA_MEMBER` for the password hash `signInMember` sends.
+ *
+ * WHAT SHE DOES, IN ORDER, and why each step is there:
+ *   1. a 10.000 KD top-up through the hosted page — a `topup` receipt in her bell;
+ *   2. `POST /orders` for PR-01 from the wallet — the shape `order.result` is
+ *      documented as ("`OrderResult`, exactly as `POST /orders` answers"), captured
+ *      LIVE so the pin below compares two responses instead of transcribing one;
+ *   3. `POST /orders/payments` for PR-01 by card, paid on the hosted page, read back
+ *      placed — the `awaiting_payment` and `placed` samples, and a `shop` receipt.
+ * So her bell witnesses two kinds, `topup` and `shop`, which is what its pin needs.
+ */
+const OP_MEMBER = 'QA-CT-0002';
+const OP_MEMBER_PHONE = '+96599777402';
+const OP_PRODUCT = 'PR-01';
 
 function seedPinMember(): void {
   psql(`
@@ -746,6 +770,44 @@ function probes(): Probe[] {
       label: 'GET /topups/{id}',
       schemaName: 'TopUpIntentPublicSchema',
       schema: TopUpIntentPublicSchema,
+    },
+    /**
+     * A SHOP ORDER PAID BY CARD — `api/src/services/orderPayment.ts`, dev `2859695`.
+     * The unclassified check named `GET /orders/payments/:id` on the first run after
+     * the merge.
+     *
+     * PROBED, NOT UNMODELLED — BUT ONLY HALF OF IT, AND THE OTHER HALF IS PINNED.
+     * Writing "no schema in packages/types" would be false in the direction the
+     * `ImageRef` note warns about: `intent` IS `TopUpIntentPublicSchema`, by the same
+     * projection `GET /topups/{id}` uses (`serialiseIntentForCustomer`), and a route
+     * recorded as schemaless when half of it has a schema is a drift nobody looks
+     * for. So `intent` is probed against it here, both directions, like any top-up.
+     *
+     * `order` HAS NO SCHEMA — `OrderPaymentView['order']` lives in the API only — and
+     * the wallet renders the receipt sheet, the refusal sentence and the "the money
+     * is in your wallet" state off it. It is WIRE-PINNED at the bottom of this file,
+     * and its `result` is pinned against a LIVE `POST /orders` answer rather than
+     * transcribed, because the service's own comment says that is what it is.
+     *
+     * `POST /orders/payments` is probed the same way. Not census-enforced (the census
+     * is over GETs), but it is the body the wallet reads first, and a 201 whose
+     * `intent` stripped a key would be the redirect the customer never gets.
+     */
+    {
+      route: 'POST /orders/payments',
+      label: 'POST /orders/payments → body.intent',
+      source: 'POST /orders/payments',
+      schemaName: 'TopUpIntentPublicSchema',
+      schema: TopUpIntentPublicSchema,
+      select: 'intent',
+    },
+    {
+      route: 'GET /orders/payments/:id',
+      label: 'GET /orders/payments/{id} → body.intent',
+      source: 'GET /orders/payments/{id}',
+      schemaName: 'TopUpIntentPublicSchema',
+      schema: TopUpIntentPublicSchema,
+      select: 'intent',
     },
     {
       route: 'POST /charges',
@@ -1451,6 +1513,35 @@ const UNMODELLED: Record<string, string> = {
     'if the feed came back empty. `metadata`, ' +
     '`subjectType` and `subjectId` are deliberately NOT served (service header) and so ' +
     'are deliberately not in the pin. Worth a schema.',
+  /**
+   * THE CUSTOMER BELL'S FEED — `api/src/routes/memberNotifications.ts`, dev
+   * `2859695`. The unclassified check named it on the first run after the merge.
+   *
+   * UNMODELLED *AND* WIRE-PINNED, the merchant bell's treatment and for its reason,
+   * with one difference that decides the shape of the pin. The merchant row is ONE
+   * shape; this one is a UNION discriminated on `kind` — six kinds, each with its
+   * own fields (`services/memberNotifications.ts § MemberNotificationItem`). The
+   * generic `wireShape` reads an array's FIRST element, so a generic pin would pin
+   * whichever kind happened to be newest and say nothing about the rest. The pin
+   * at the bottom of this file therefore checks EVERY served row against the shape
+   * pinned for ITS kind, and refuses a sample that does not witness the kinds it
+   * claims to pin.
+   *
+   * Lane B renders it from STRUCTURED fields, not text (decision 4 — #12 and #1:
+   * the wallet composes both languages and formats the money), so a lost
+   * `amountFils` is not a missing sentence, it is a notification with no figure.
+   */
+  'GET /members/me/notifications/feed':
+    'the customer bell — {items, nextCursor, unreadCount, visibleKinds}, the items a union ' +
+    'discriminated on `kind` (topup, charge, shop, deposit_hold, deposit_return, campaign), ' +
+    'every money field integer fils and positive. `MemberFeed` lives in ' +
+    'services/memberNotifications.ts only; packages/types declares nothing for it. ' +
+    'WIRE-PINNED at the bottom of this file PER KIND, against a sample member whose bell ' +
+    'carries a real `topup` and a real `shop` receipt, with a spec refusing the pin if ' +
+    'either kind is missing from the sample. The other four kinds are declared by the ' +
+    'service and NOT witnessed here — no row of theirs is served to this sample. No ' +
+    'balance is served, deliberately (whatsapp-templates.md: never a balance over her ' +
+    'shoulder), and the pin would go red if one started to be. Worth a schema.',
   'GET /members/:id':
     'the scanner\'s member RESOLVE, and it serves the `POST /scans` ENVELOPE rather than a bare ' +
     'Member — member plus the counter state the charge screen needs. Unmodelled because that ' +
@@ -1846,6 +1937,76 @@ beforeAll(async () => {
     throw new Error(`PATCH /members/me/notifications: ${patched.status} ${patched.raw}`);
   }
   captured.set('PATCH /members/me/notifications', patched);
+
+  /**
+   * ---- a shop order paid by card, and the bell it leaves behind ----------------
+   * See `OP_MEMBER`. Every step asserts its own status, because a sample that
+   * silently stopped at `awaiting_payment` would pin the unpaid shape under the
+   * placed label.
+   */
+  psql(`
+    INSERT INTO member (id, salon_id, name, phone, email, email_verified, password_hash,
+                        balance_fils, visits, tier, stamps, policy_version)
+    SELECT '${OP_MEMBER}', salon_id, 'Contract order payment', '${OP_MEMBER_PHONE}', NULL, false,
+           password_hash, 0, 0, 'silver', NULL, policy_version
+      FROM member WHERE id = '${QA_MEMBER}'
+    ON CONFLICT (id) DO NOTHING;
+  `);
+  const opMember = await signInMember(SALON_A, OP_MEMBER_PHONE);
+
+  const opFund = await treq<any>('POST', '/topups', {
+    token: opMember,
+    idempotencyKey: key('op-fund'),
+    body: { amountFils: 10_000, method: 'knet' },
+  });
+  if (opFund.status !== 200) throw new Error(`OP fund: ${opFund.status} ${opFund.raw}`);
+  const opFundRef = /\/_gateway\/([^/?#]+)/.exec(opFund.body.redirectUrl ?? '')?.[1];
+  const opFunded = await treq('POST', `/_gateway/${opFundRef}`, {
+    token: null,
+    body: { outcome: 'succeeded', notify: true },
+  });
+  if (opFunded.status !== 200) throw new Error(`OP fund settle: ${opFunded.status} ${opFunded.raw}`);
+
+  const walletOrder = await treq<any>('POST', '/orders', {
+    token: opMember,
+    idempotencyKey: key('op-wallet-order'),
+    body: { items: [{ productId: OP_PRODUCT, qty: 1 }] },
+  });
+  if (walletOrder.status >= 300) {
+    throw new Error(`POST /orders: ${walletOrder.status} ${walletOrder.raw}`);
+  }
+  captured.set('POST /orders', walletOrder);
+
+  const opOpened = await treq<any>('POST', '/orders/payments', {
+    token: opMember,
+    idempotencyKey: key('op-card-order'),
+    body: { items: [{ productId: OP_PRODUCT, qty: 1 }], method: 'card' },
+  });
+  if (opOpened.status !== 201) {
+    throw new Error(`POST /orders/payments: ${opOpened.status} ${opOpened.raw}`);
+  }
+  captured.set('POST /orders/payments', opOpened);
+
+  const opRef = /\/_gateway\/([^/?#]+)/.exec(opOpened.body.intent?.redirectUrl ?? '')?.[1];
+  const opPaid = await treq('POST', `/_gateway/${opRef}`, {
+    token: null,
+    body: { outcome: 'succeeded', notify: true },
+  });
+  if (opPaid.status !== 200) throw new Error(`OP card settle: ${opPaid.status} ${opPaid.raw}`);
+
+  const opRead = await treq<any>('GET', `/orders/payments/${opOpened.body.intent.id}`, {
+    token: opMember,
+  });
+  if (opRead.status !== 200 || opRead.body.order?.status !== 'placed') {
+    throw new Error(`GET /orders/payments/{id} did not come back placed: ${opRead.status} ${opRead.raw}`);
+  }
+  captured.set('GET /orders/payments/{id}', opRead);
+
+  const memberBell = await treq<any>('GET', '/members/me/notifications/feed', { token: opMember });
+  if (memberBell.status !== 200) {
+    throw new Error(`GET /members/me/notifications/feed: ${memberBell.status} ${memberBell.raw}`);
+  }
+  captured.set('GET /members/me/notifications/feed', memberBell);
 
   // She is seeded at zero, so the 200 is reachable. A 409 here means the seed
   // gave her credit, not that the endpoint is wrong — say which.
@@ -2501,12 +2662,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 60 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 62 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(60);
+    ).toBe(62);
   });
 
   it('no GET route is left unclassified', () => {
@@ -3218,4 +3379,161 @@ describe('nextAppointmentAt serves a FUTURE instant, exercised rather than left 
             DELETE FROM "transaction" WHERE id = '${TX}';`);
     }
   }, 60_000);
+});
+
+// ===========================================================================
+// A SHOP ORDER PAID BY CARD, AND THE CUSTOMER BELL — the two new member shapes
+// ===========================================================================
+
+/**
+ * THE `order` HALF OF `OrderPaymentView`, in the two states this file samples.
+ *
+ * `intent` is not here: it is `TopUpIntentPublicSchema` and is probed against it in
+ * `probes()`. What is here is the half no schema covers. `refusal` and `result` are
+ * pinned NULL AS PRESENT KEYS — `status: 'awaiting_payment'` with the three null
+ * leaves is how the wallet knows there is nothing to show yet, and an API that
+ * omitted them until they were set would be a different contract behind the same
+ * spinner. `result` on the placed sample is NOT transcribed here; the spec below
+ * compares it to a live `POST /orders` answer.
+ */
+const ORDER_PAYMENT_OPENED_ORDER = {
+  status: 'awaiting_payment',
+  transactionId: null,
+  refusal: null,
+  result: null,
+};
+const ORDER_PAYMENT_PLACED_ORDER_KEYS = ['$.refusal', '$.result', '$.status', '$.transactionId'];
+
+/**
+ * THE CUSTOMER BELL, PER KIND. `services/memberNotifications.ts § MemberNotificationItem`.
+ *
+ * Only the two kinds the sample witnesses are pinned; the other four
+ * (`charge`, `deposit_hold`, `deposit_return`, `campaign`) are declared by the service
+ * and served to nobody in this file. Pinning a shape this run cannot observe would be
+ * a fixture, which rule 1 forbids. The spec below FAILS on a served kind that is not
+ * in this map, so the day the sample starts witnessing another kind, it must be
+ * pinned before the file is green.
+ *
+ * `readAt` is pinned null AS A PRESENT KEY (per member, absent row = unread). No
+ * balance field on either — whatsapp-templates.md, "never include a balance in a
+ * message that could be read over someone's shoulder" — so `balanceAfterFils`
+ * arriving on a row is an EXTRA the pin reports.
+ */
+const MEMBER_BELL_ENVELOPE = ['$.nextCursor', '$.unreadCount', '$.visibleKinds[]'];
+const MEMBER_BELL_ROWS: Record<string, Record<string, unknown>> = {
+  topup: {
+    id: 'TX-…',
+    kind: 'topup',
+    transactionId: 'TX-…',
+    createdAt: '2026-09-28T00:00:00.000Z',
+    readAt: null,
+    amountFils: 10_000,
+    bonusFils: 1_000,
+    creditFils: 11_000,
+    method: 'knet',
+  },
+  shop: {
+    id: 'TX-…',
+    kind: 'shop',
+    transactionId: 'TX-…',
+    createdAt: '2026-09-28T00:00:00.000Z',
+    readAt: null,
+    amountFils: 8_500,
+    items: [{ name: 'Argan hair oil 100ml', qty: 1 }],
+    fulfilment: 'pickup',
+  },
+};
+const MEMBER_BELL_MUST_WITNESS = ['topup', 'shop'];
+
+function bothWays(served: string[], declared: string[]): { missing: string[]; extra: string[] } {
+  return {
+    missing: declared.filter((k) => !served.includes(k)),
+    extra: served.filter((k) => !declared.includes(k)),
+  };
+}
+
+describe('wire pins — a shop order paid by card (`order` half; `intent` is probed)', () => {
+  it('POST /orders/payments answers {intent, order} with the three empty leaves present', () => {
+    const res = response('POST /orders/payments');
+    expect(res.status, res.raw).toBe(201);
+    expect(Object.keys(res.body).sort()).toEqual(['intent', 'order']);
+    const { missing, extra } = bothWays(wireShape(res.body.order), wireShape(ORDER_PAYMENT_OPENED_ORDER));
+    expect(missing, `POST /orders/payments NO LONGER SERVES order${missing.join(', order')}\n${res.raw}`).toEqual([]);
+    expect(extra, `POST /orders/payments now serves order${extra.join(', order')}, unpinned\n${res.raw}`).toEqual([]);
+    expect(res.body.order.status).toBe('awaiting_payment');
+  });
+
+  it('GET /orders/payments/{id}, placed, serves the four order keys — the sample really is placed', () => {
+    const res = response('GET /orders/payments/{id}');
+    expect(res.status, res.raw).toBe(200);
+    expect(Object.keys(res.body).sort()).toEqual(['intent', 'order']);
+    // A placed sample or nothing: an unpaid one would pin `result` as a null leaf.
+    expect(res.body.order.status, 'the sample is not placed, so `result` is unwitnessed').toBe('placed');
+    const topLevel = wireShape(res.body.order).map((k) => k.replace(/^(\$\.[a-zA-Z]+).*$/, '$1'));
+    const { missing, extra } = bothWays([...new Set(topLevel)], ORDER_PAYMENT_PLACED_ORDER_KEYS);
+    expect(missing, `the placed order payment NO LONGER SERVES ${missing.join(', ')}\n${res.raw}`).toEqual([]);
+    expect(extra, `the placed order payment now serves ${extra.join(', ')}, unpinned\n${res.raw}`).toEqual([]);
+    expect(res.body.order.refusal, 'a placed order carries a refusal').toBeNull();
+  });
+
+  it("the placed `result` is POST /orders's own answer — compared live, not transcribed", () => {
+    /**
+     * `orderPayment.ts` documents `result` as "`OrderResult`, exactly as
+     * `POST /orders` answers — the wallet's receipt sheet". It is stored as jsonb
+     * and served back, so the claim is really "the jsonb round trip loses nothing".
+     * Two live responses, so neither side can be edited to agree with the other.
+     */
+    const placed = response('GET /orders/payments/{id}').body.order.result;
+    const wallet = response('POST /orders');
+    expect(wallet.status, wallet.raw).toBeLessThan(300);
+    const { missing, extra } = bothWays(wireShape(placed), wireShape(wallet.body));
+    expect(
+      missing,
+      'the card-paid receipt is missing keys the wallet-paid receipt carries — the receipt ' +
+        `sheet built on POST /orders would read undefined: ${missing.join(', ')}`,
+    ).toEqual([]);
+    expect(extra, `the card-paid receipt carries keys POST /orders does not: ${extra.join(', ')}`).toEqual([]);
+  });
+});
+
+describe('wire pins — the customer bell, per kind', () => {
+  it('the sample witnesses the kinds it pins — a bell with one kind would pin half of this', () => {
+    const res = response('GET /members/me/notifications/feed');
+    expect(res.status, res.raw).toBe(200);
+    const kinds = new Set((res.body.items as Array<{ kind: string }>).map((i) => i.kind));
+    for (const k of MEMBER_BELL_MUST_WITNESS) {
+      expect(kinds.has(k), `the sample bell carries no \`${k}\` row — fix the fixture, do not relax the pin\n${res.raw}`).toBe(true);
+    }
+  });
+
+  it('GET /members/me/notifications/feed serves the four envelope keys', () => {
+    const res = response('GET /members/me/notifications/feed');
+    const served = wireShape(res.body).filter((k) => !k.startsWith('$.items'));
+    const { missing, extra } = bothWays(served, MEMBER_BELL_ENVELOPE);
+    expect(missing, `the bell NO LONGER SERVES ${missing.join(', ')}\n${res.raw.slice(0, 800)}`).toEqual([]);
+    expect(extra, `the bell now serves ${extra.join(', ')}, unpinned\n${res.raw.slice(0, 800)}`).toEqual([]);
+    expect(Object.keys(res.body).sort(), 'the bell envelope changed').toEqual([
+      'items',
+      'nextCursor',
+      'unreadCount',
+      'visibleKinds',
+    ]);
+  });
+
+  it('EVERY served row matches the shape pinned for its own kind, both ways', () => {
+    const res = response('GET /members/me/notifications/feed');
+    const problems: string[] = [];
+    for (const item of res.body.items as Array<Record<string, unknown>>) {
+      const kind = String(item.kind);
+      const pinned = MEMBER_BELL_ROWS[kind];
+      if (!pinned) {
+        problems.push(`a \`${kind}\` row is served and no shape is pinned for it — pin it here`);
+        continue;
+      }
+      const { missing, extra } = bothWays(wireShape(item), wireShape(pinned));
+      if (missing.length) problems.push(`${kind} ${item.id}: NO LONGER SERVES ${missing.join(', ')}`);
+      if (extra.length) problems.push(`${kind} ${item.id}: now serves ${extra.join(', ')}, unpinned`);
+    }
+    expect(problems, `${problems.join('\n')}\n--- served ---\n${res.raw.slice(0, 1200)}`).toEqual([]);
+  });
 });
