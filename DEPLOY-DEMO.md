@@ -85,12 +85,12 @@ Hit the URL a minute before showing it to anybody.
 |---|---|---|
 | Dashboard | **Vercel** — project `avo-dashboard` → `avo-dashboard-coral.vercel.app` | static Vite build |
 | API | **Vercel** — project `avo-api` → `avo-api.vercel.app` | serverless function, `api/index.ts` |
-| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0056 on 2026-09-27** |
+| Postgres | **Supabase** — project `avo-demo`, `eu-central-1` | **migrated to 0063 on 2026-09-28** |
 
 **HOSTING MOVED FROM RENDER TO VERCEL AND THIS TABLE DID NOT.** It said Render
 for two weeks after both services were live on Vercel. `render.yaml` still
-exists and is not what serves anything. Deployed state as of 2026-09-27: both
-projects on `main` @ `62ccbd1`, deployed by hand from the CLI — **neither
+exists and is not what serves anything. **Deployed state as of 2026-09-28: both
+projects on `main` @ `3dee53e`, database migrated to `0063`**, deployed by hand from the CLI — **neither
 project auto-deploys from git**, so a push to `main` changes nothing live.
 
 Postgres is **not on Render** deliberately: its own free database has
@@ -120,7 +120,7 @@ yours — I can prepare everything else, and have.
 ### 1 · Database — **already done**
 
 Supabase project `avo-demo` (`ndzmbfeyymvyiwpbjxfk`, `eu-central-1`) exists,
-is migrated (through `0056`, applied 2026-09-27), is seeded, and passed all
+is migrated (through `0063`, applied 2026-09-28), is seeded, and passed all
 **103** invariants on 2026-09-14.
 
 **THE OWNER PASSWORD IS IN AFTAB'S PASSWORD MANAGER, AND NOWHERE ELSE.** This
