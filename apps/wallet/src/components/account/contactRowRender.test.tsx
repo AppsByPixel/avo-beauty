@@ -170,6 +170,7 @@ describe('Home and Shop → the receipt hands off to Contact us through a real b
         <TransactionSheet
           transaction={TOPUP}
           branches={[{ id: 'BR-KWC', name: 'Kuwait City' }]}
+          timeZone="Asia/Kuwait"
           onClose={vi.fn()}
           onReport={vi.fn()}
         />
@@ -187,6 +188,7 @@ describe('Home and Shop → the receipt hands off to Contact us through a real b
         <TransactionSheet
           transaction={TOPUP}
           branches={[{ id: 'BR-KWC', name: 'Kuwait City' }]}
+          timeZone="Asia/Kuwait"
           onClose={vi.fn()}
           onReport={onReport}
         />

@@ -740,6 +740,7 @@ export function ShopScreen({
       <TransactionSheet
         transaction={invoice?.transaction ?? null}
         branches={branches}
+        timeZone={timezone}
         /*
           THE SERVER'S OWN FIELDS, PASSED THROUGH. If lane A renames one, this
           line stops compiling — which is the point of taking them off

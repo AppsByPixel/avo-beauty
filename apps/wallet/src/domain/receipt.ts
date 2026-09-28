@@ -164,9 +164,15 @@ export interface Receipt {
   reference: string;
 }
 
-const KUWAIT_TIME_ZONE = 'Asia/Kuwait';
-
-function fullWhen(iso: string, lang: Language): string {
+/**
+ * "30 September 2026, 10:00 am" — in the SALON's clock, `salon.timezone`.
+ *
+ * This was a hard-coded Kuwait zone until 2026-09-28: right for every salon
+ * signed so far and an hour early on the first one in Dubai. The receipt is a
+ * record of when the salon took her money, so it reads the salon's clock and
+ * never the phone's — the activity row above it does the same (`dayAndTime`).
+ */
+function fullWhen(iso: string, lang: Language, timeZone: string): string {
   return new Intl.DateTimeFormat(dateLocale(lang), {
     day: 'numeric',
     month: 'long',
@@ -174,7 +180,7 @@ function fullWhen(iso: string, lang: Language): string {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-    timeZone: KUWAIT_TIME_ZONE,
+    timeZone,
   }).format(new Date(iso));
 }
 
@@ -194,6 +200,8 @@ export function buildReceipt(
   branches: (Named & { id: string })[],
   lang: Language,
   copy: Copy,
+  /** `salon.timezone` — the clock the receipt's date line is read in. */
+  timeZone: string,
   /**
    * Present only where the caller holds a checkout response. Omitted everywhere
    * else, including the activity feed, which has a `Transaction` and nothing
@@ -440,7 +448,7 @@ export function buildReceipt(
         : tx.kind === 'adjustment' && headline > 0
           ? copy.txAdjustCredit
           : copy.txKind[tx.kind],
-    subtitle: fullWhen(tx.createdAt, lang),
+    subtitle: fullWhen(tx.createdAt, lang, timeZone),
     // U+2212 MINUS, not a hyphen — the character the design sets.
     // MONEY: Western digits in both languages, per non-negotiable #12 and the
     // design's own Arabic receipt (AVO Wallet Home.dc.html:1579 renders

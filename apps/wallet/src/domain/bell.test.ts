@@ -35,6 +35,7 @@ const ctx = (lang: Language, copy: Copy, transactions: { id: string; voidedAt: s
   lang,
   copy,
   salon: lang === 'ar' ? 'أمارا' : 'Amara',
+  timeZone: 'Asia/Kuwait',
   transactions,
   now: NOW,
 });
@@ -135,7 +136,7 @@ describe('every kind renders in both languages, from the copy module', () => {
     expect(row.title).toBe(`${copy.txKind.topup} · ${copy.txMethod.knet}`);
     expect(row.lines).toEqual([copy.bellTopupBonus(money(1000, lang))]);
     expect(row.amount).toMatchObject({ display: '+11.000', tone: 'in' });
-    expect(row.when).toBe(`${copy.today} · ${timeLabel(AT, lang)}`);
+    expect(row.when).toBe(`${copy.today} · ${timeLabel(AT, lang, 'Asia/Kuwait')}`);
   });
 
   it.each(COPIES)('%s: charge — the services, −amount', (lang, copy) => {
@@ -158,7 +159,7 @@ describe('every kind renders in both languages, from the copy module', () => {
       `${copy.bellShopLine('Repair mask', 2)}${sep}Argan hair oil 100ml · ${copy.bellDelivery}`,
     ]);
     expect(row.amount).toMatchObject({ display: '−20.500', tone: 'out' });
-    expect(row.when).toBe(`${copy.yesterday} · ${timeLabel(SHOP.createdAt, lang)}`);
+    expect(row.when).toBe(`${copy.yesterday} · ${timeLabel(SHOP.createdAt, lang, 'Asia/Kuwait')}`);
   });
 
   it.each(COPIES)('%s: deposit_hold — the template booking confirmation, −deposit', (lang, copy) => {
@@ -166,7 +167,7 @@ describe('every kind renders in both languages, from the copy module', () => {
     expect(row.title).toBe(copy.bellBookingTitle(lang === 'ar' ? 'أمارا' : 'Amara'));
     expect(row.lines).toEqual([
       copy.bellBookingWith('Blow-dry', 'Rana'),
-      copy.bellBookingAt(dayLabel(STARTS, lang), timeLabel(STARTS, lang)),
+      copy.bellBookingAt(dayLabel(STARTS, lang, 'Asia/Kuwait'), timeLabel(STARTS, lang, 'Asia/Kuwait')),
     ]);
     expect(row.amount).toMatchObject({ display: '−5.000' });
     expect(row.unread).toBe(false);
@@ -179,7 +180,7 @@ describe('every kind renders in both languages, from the copy module', () => {
   it.each(COPIES)('%s: deposit_return after a no-show — template § 4, +amount', (lang, copy) => {
     const row = bellRow(RETURN_NO_SHOW, ctx(lang, copy));
     expect(row.title).toBe(copy.bellNoShowTitle(lang === 'ar' ? 'أمارا' : 'Amara'));
-    expect(row.lines).toEqual([copy.bellNoShowBody('Blow-dry', dayLabel(STARTS, lang))]);
+    expect(row.lines).toEqual([copy.bellNoShowBody('Blow-dry', dayLabel(STARTS, lang, 'Asia/Kuwait'))]);
     expect(row.amount).toMatchObject({ display: '+5.000', tone: 'in' });
   });
 
@@ -191,7 +192,7 @@ describe('every kind renders in both languages, from the copy module', () => {
   it.each(COPIES)('%s: deposit_return after she cancelled', (lang, copy) => {
     const row = bellRow(RETURN_CANCELLED, ctx(lang, copy));
     expect(row.title).toBe(copy.txKind.deposit_return);
-    expect(row.lines).toEqual([`Blow-dry · ${dayLabel(STARTS, lang)}`, copy.bellCancelledReturn]);
+    expect(row.lines).toEqual([`Blow-dry · ${dayLabel(STARTS, lang, 'Asia/Kuwait')}`, copy.bellCancelledReturn]);
   });
 
   it.each(COPIES)('%s: campaign — the merchant words VERBATIM, no figure', (lang, copy) => {
@@ -271,23 +272,23 @@ describe('the Arabic rows are Arabic — a dropped translation goes red here', (
       'طلب من المتجر · كي نت | Argan hair oil 100ml · استلام من الصالون | دُفع عبر كي نت | أُضيفت مكافأة 0.850 د.ك إلى محفظتكِ',
     ]);
     expect(text([HOLD])).toEqual([
-      `تم تأكيد حجزكِ في أمارا. | Blow-dry مع Rana | ${dayLabel(STARTS, 'ar')} الساعة ${timeLabel(STARTS, 'ar')}`,
+      `تم تأكيد حجزكِ في أمارا. | Blow-dry مع Rana | ${dayLabel(STARTS, 'ar', 'Asia/Kuwait')} الساعة ${timeLabel(STARTS, 'ar', 'Asia/Kuwait')}`,
     ]);
     expect(text([RETURN_NO_SHOW])).toEqual([
-      `أمارا — رجع عربونكِ. | افتقدناكِ في موعد Blow-dry يوم ${dayLabel(STARTS, 'ar')}.`,
+      `أمارا — رجع عربونكِ. | افتقدناكِ في موعد Blow-dry يوم ${dayLabel(STARTS, 'ar', 'Asia/Kuwait')}.`,
     ]);
     expect(text([{ ...RETURN_NO_SHOW, serviceName: null, startsAt: null } as BellItem])).toEqual([
       'أمارا — رجع عربونكِ. | رجع عربونكِ إلى محفظتكِ.',
     ]);
     expect(text([RETURN_CANCELLED])).toEqual([
-      `استرجاع العربون | Blow-dry · ${dayLabel(STARTS, 'ar')} | ألغيتِ الحجز ورجع العربون لمحفظتكِ.`,
+      `استرجاع العربون | Blow-dry · ${dayLabel(STARTS, 'ar', 'Asia/Kuwait')} | ألغيتِ الحجز ورجع العربون لمحفظتكِ.`,
     ]);
     expect(
       text([{ id: 'LE-1', kind: 'unknown', serverKind: 'x', createdAt: AT, readAt: null } as BellItem]),
     ).toEqual(['إشعار جديد | حدّثي التطبيق لقراءة هذا الإشعار.']);
     // The day itself, as ICU renders it for the Kuwait calendar day.
-    expect(dayLabel(STARTS, 'ar')).toBe('السبت، ٣ أكتوبر');
-    expect(timeLabel(STARTS, 'ar')).toBe('٤:٣٠ م');
+    expect(dayLabel(STARTS, 'ar', 'Asia/Kuwait')).toBe('السبت، ٣ أكتوبر');
+    expect(timeLabel(STARTS, 'ar', 'Asia/Kuwait')).toBe('٤:٣٠ م');
   });
 
   it('dates and counts are Eastern in Arabic; money is Western in both (#12)', () => {

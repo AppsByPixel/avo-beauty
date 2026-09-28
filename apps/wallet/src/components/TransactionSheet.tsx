@@ -47,6 +47,8 @@ import { PickupHoursNote } from './PickupHoursNote';
 interface Props {
   transaction: Transaction | null;
   branches: { id: string; name: string }[];
+  /** `salon.timezone` — the receipt's date line is the salon's clock. */
+  timeZone: string;
   /**
    * The facts only a checkout response carries — `items[]` and the server's own
    * `balanceAfterFils`. Omitted by the activity feed, which holds a
@@ -61,9 +63,18 @@ interface Props {
   onReport: () => void;
 }
 
-export function TransactionSheet({ transaction, branches, detail, onClose, onReport }: Props) {
+export function TransactionSheet({
+  transaction,
+  branches,
+  timeZone,
+  detail,
+  onClose,
+  onReport,
+}: Props) {
   const { lang, copy } = useLanguage();
-  const receipt = transaction ? buildReceipt(transaction, branches, lang, copy, detail) : null;
+  const receipt = transaction
+    ? buildReceipt(transaction, branches, lang, copy, timeZone, detail)
+    : null;
 
   return (
     <Sheet

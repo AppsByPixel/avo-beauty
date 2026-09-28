@@ -59,8 +59,8 @@ function charge(amountFils: number): Transaction {
 
 describe('a charge the held deposit covered entirely', () => {
   it('renders the zero without a sign, in both languages', () => {
-    expect(buildReceipt(charge(0), BRANCHES, 'en', en).amount).toBe('0.000');
-    expect(buildReceipt(charge(0), BRANCHES, 'ar', ar).amount).toBe('0.000');
+    expect(buildReceipt(charge(0), BRANCHES, 'en', en, 'Asia/Kuwait').amount).toBe('0.000');
+    expect(buildReceipt(charge(0), BRANCHES, 'ar', ar, 'Asia/Kuwait').amount).toBe('0.000');
   });
 
   /**
@@ -70,7 +70,7 @@ describe('a charge the held deposit covered entirely', () => {
    */
   it('announces the bare amount, never "minus 0.000"', () => {
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
-      const label = buildReceipt(charge(0), BRANCHES, lang, copy).amountLabel;
+      const label = buildReceipt(charge(0), BRANCHES, lang, copy, 'Asia/Kuwait').amountLabel;
       // `plus`/`minus` are AR_GAPS, so the Arabic label carries the English
       // "minus" too — which is why both languages are checked for the word.
       expect(label).not.toContain('minus');
@@ -78,10 +78,10 @@ describe('a charge the held deposit covered entirely', () => {
     }
     // Pinned positively as well, so a copy change is visible rather than merely
     // still-not-containing-a-word.
-    expect(buildReceipt(charge(0), BRANCHES, 'en', en).amountLabel).toBe(
+    expect(buildReceipt(charge(0), BRANCHES, 'en', en, 'Asia/Kuwait').amountLabel).toBe(
       '0.000 Kuwaiti dinars',
     );
-    expect(buildReceipt(charge(0), BRANCHES, 'ar', ar).amountLabel).toBe(
+    expect(buildReceipt(charge(0), BRANCHES, 'ar', ar, 'Asia/Kuwait').amountLabel).toBe(
       '0.000 دينار كويتي',
     );
   });
@@ -92,14 +92,14 @@ describe('a charge the held deposit covered entirely', () => {
    * the server recorded as 0 would be the client inventing a debit (#2).
    */
   it('does not substitute the gross it never received', () => {
-    const r = buildReceipt(charge(0), BRANCHES, 'en', en);
+    const r = buildReceipt(charge(0), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(r.amount).not.toContain('6.000');
     expect(r.rows.find((row) => row.label === en.txAmountRow)?.value).toBe('0.000 KD');
   });
 
   /** A zero is not a credit — the headline must not turn green. */
   it('is not styled as money coming in', () => {
-    expect(buildReceipt(charge(0), BRANCHES, 'en', en).positive).toBe(false);
+    expect(buildReceipt(charge(0), BRANCHES, 'en', en, 'Asia/Kuwait').positive).toBe(false);
   });
 });
 
@@ -133,19 +133,19 @@ describe('a top-up receipt', () => {
   it('headlines the credit the balance actually moved by, not credit plus bonus', () => {
     // 12.000 is the old answer and it is a number nothing holds: not the
     // intent, not the ledger row, not her balance.
-    expect(buildReceipt(TOPUP, BRANCHES, 'en', en).amount).toBe('+11.000');
+    expect(buildReceipt(TOPUP, BRANCHES, 'en', en, 'Asia/Kuwait').amount).toBe('+11.000');
   });
 
   it('agrees with the activity row on the same transaction', () => {
     // The two used to agree while both were wrong, which is why neither looked
     // wrong beside the other. They agree here on the server's figure.
-    expect(buildReceipt(TOPUP, BRANCHES, 'en', en).amount).toBe(
-      toActivityRow(TOPUP, BRANCHES, 'en', en).amount,
+    expect(buildReceipt(TOPUP, BRANCHES, 'en', en, 'Asia/Kuwait').amount).toBe(
+      toActivityRow(TOPUP, BRANCHES, 'en', en, 'Asia/Kuwait').amount,
     );
   });
 
   it('the three money rows sum: paid + bonus = landed', () => {
-    const rows = buildReceipt(TOPUP, BRANCHES, 'en', en).rows;
+    const rows = buildReceipt(TOPUP, BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     const value = (label: string) => rows.find((r) => r.label === label)?.value;
     expect(value(en.txYouPaid)).toBe('10.000 KD');
     expect(value(en.txTierBonus(null))).toBe('+1.000 KD');
@@ -153,13 +153,13 @@ describe('a top-up receipt', () => {
   });
 
   it('never reports landed as more than the balance moved', () => {
-    const rows = buildReceipt(TOPUP, BRANCHES, 'en', en).rows;
+    const rows = buildReceipt(TOPUP, BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     expect(rows.find((r) => r.label === en.txLanded)?.value).not.toContain('12.000');
   });
 
   it('drops the bonus row entirely when there is none — stamps mode', () => {
     const noBonus = { ...TOPUP, amountFils: 10000, bonusFils: 0 } as Transaction;
-    const receipt = buildReceipt(noBonus, BRANCHES, 'en', en);
+    const receipt = buildReceipt(noBonus, BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(receipt.amount).toBe('+10.000');
     expect(receipt.rows.some((r) => r.label === en.txTierBonus(null))).toBe(false);
     expect(receipt.rows.find((r) => r.label === en.txYouPaid)?.value).toBe('10.000 KD');
@@ -168,7 +168,7 @@ describe('a top-up receipt', () => {
 
 describe('the sign on every other headline is unchanged', () => {
   it('keeps the minus on a real debit', () => {
-    const r = buildReceipt(charge(-6000), BRANCHES, 'en', en);
+    const r = buildReceipt(charge(-6000), BRANCHES, 'en', en, 'Asia/Kuwait');
     // U+2212 MINUS, not a hyphen — the character the design sets.
     expect(r.amount).toBe('−6.000');
     expect(r.amountLabel).toBe(en.minus('6.000 Kuwaiti dinars'));
@@ -177,7 +177,7 @@ describe('the sign on every other headline is unchanged', () => {
 
   it('keeps the plus on money coming in', () => {
     const returned = { ...charge(4000), kind: 'deposit_return' } as Transaction;
-    const r = buildReceipt(returned, BRANCHES, 'en', en);
+    const r = buildReceipt(returned, BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(r.amount).toBe('+4.000');
     expect(r.amountLabel).toBe(en.plus('4.000 Kuwaiti dinars'));
     expect(r.positive).toBe(true);
@@ -219,7 +219,7 @@ function adjustment(amountFils: number): Transaction {
 describe('an adjustment reads honestly in both directions', () => {
   it('a credit is a plus, in both languages', () => {
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
-      const r = buildReceipt(adjustment(5000), BRANCHES, lang, copy);
+      const r = buildReceipt(adjustment(5000), BRANCHES, lang, copy, 'Asia/Kuwait');
       expect(r.amount).toBe('+5.000');
       expect(r.positive).toBe(true);
       expect(r.amountLabel).toContain('5.000');
@@ -228,7 +228,7 @@ describe('an adjustment reads honestly in both directions', () => {
 
   it('a deduction is a minus, in both languages', () => {
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
-      const r = buildReceipt(adjustment(-5000), BRANCHES, lang, copy);
+      const r = buildReceipt(adjustment(-5000), BRANCHES, lang, copy, 'Asia/Kuwait');
       // U+2212, the character the design sets — not a hyphen.
       expect(r.amount).toBe('−5.000');
       expect(r.positive).toBe(false);
@@ -247,9 +247,9 @@ describe('an adjustment reads honestly in both directions', () => {
    * that a credit would be backwards.
    */
   it('a credit is titled Credit; a deduction is still an Adjustment', () => {
-    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title).toBe(en.txAdjustCredit);
-    expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en).title).toBe(en.txKind.adjustment);
-    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en).title.trim()).not.toBe('');
+    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en, 'Asia/Kuwait').title).toBe(en.txAdjustCredit);
+    expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en, 'Asia/Kuwait').title).toBe(en.txKind.adjustment);
+    expect(buildReceipt(adjustment(5000), BRANCHES, 'en', en, 'Asia/Kuwait').title.trim()).not.toBe('');
   });
 
   /**
@@ -263,8 +263,8 @@ describe('an adjustment reads honestly in both directions', () => {
    */
   it('titles a credit exactly as the activity row does', () => {
     for (const amount of [5000, -5000, 0]) {
-      expect(buildReceipt(adjustment(amount), BRANCHES, 'en', en).title).toBe(
-        toActivityRow(adjustment(amount), BRANCHES, 'en', en).title,
+      expect(buildReceipt(adjustment(amount), BRANCHES, 'en', en, 'Asia/Kuwait').title).toBe(
+        toActivityRow(adjustment(amount), BRANCHES, 'en', en, 'Asia/Kuwait').title,
       );
     }
   });
@@ -279,22 +279,22 @@ describe('an adjustment reads honestly in both directions', () => {
    * the cash and card-reversal readings without the sheet mentioning either.
    */
   it('a credit says where it landed; a deduction does not', () => {
-    const credit = buildReceipt(adjustment(5000), BRANCHES, 'en', en).rows;
+    const credit = buildReceipt(adjustment(5000), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     expect(credit.map((r) => r.label)).toContain(en.txAddedTo);
     expect(credit.find((r) => r.label === en.txAddedTo)?.value).toBe(en.txWalletBalance);
 
-    const debit = buildReceipt(adjustment(-5000), BRANCHES, 'en', en).rows;
+    const debit = buildReceipt(adjustment(-5000), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     expect(debit.map((r) => r.label)).not.toContain(en.txAddedTo);
   });
 
   /** A zero adjustment has no direction, so it names no destination either. */
   it('a zero adjustment claims no destination', () => {
-    const rows = buildReceipt(adjustment(0), BRANCHES, 'en', en).rows;
+    const rows = buildReceipt(adjustment(0), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     expect(rows.map((r) => r.label)).not.toContain(en.txAddedTo);
   });
 
   it('shows the amount as a row, unsigned, so the figure is legible twice', () => {
-    const rows = buildReceipt(adjustment(-5000), BRANCHES, 'en', en).rows;
+    const rows = buildReceipt(adjustment(-5000), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     expect(rows.map((r) => r.label)).toContain(en.txAmountRow);
     // With the currency, as `money()` formats it — the row is a full figure,
     // and unsigned: the direction is stated once, in the headline above it.
@@ -307,7 +307,7 @@ describe('an adjustment reads honestly in both directions', () => {
    */
   it('never claims a payment route — there was none', () => {
     for (const amount of [5000, -5000]) {
-      const rows = buildReceipt(adjustment(amount), BRANCHES, 'en', en).rows;
+      const rows = buildReceipt(adjustment(amount), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
       const labels = rows.map((r) => r.label);
       expect(labels).not.toContain(en.txPaidFrom);
       expect(labels).not.toContain(en.txPaidWith);
@@ -330,7 +330,7 @@ describe('an adjustment reads honestly in both directions', () => {
 
   it('never names a branch — the API assumed one and the wire cannot say so', () => {
     for (const amount of [5000, -5000]) {
-      const rows = buildReceipt(adjustment(amount), BRANCHES, 'en', en).rows;
+      const rows = buildReceipt(adjustment(amount), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
       expect(rows.map((r) => r.label)).not.toContain(en.txBranch);
       expect(rows.map((r) => r.value)).not.toContain('Kuwait City');
     }
@@ -342,12 +342,12 @@ describe('an adjustment reads honestly in both directions', () => {
    * imply one: exactly one row, the amount.
    */
   it('offers no reason and implies none', () => {
-    const rows = buildReceipt(adjustment(-5000), BRANCHES, 'en', en).rows;
+    const rows = buildReceipt(adjustment(-5000), BRANCHES, 'en', en, 'Asia/Kuwait').rows;
     expect(rows).toHaveLength(1);
   });
 
   it('still carries the reference, which is what support can act on', () => {
-    expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en).reference).toBe(
+    expect(buildReceipt(adjustment(-5000), BRANCHES, 'en', en, 'Asia/Kuwait').reference).toBe(
       'AVO-ADJ-4f2a9b1c8e03',
     );
   });
@@ -367,7 +367,7 @@ describe('the receipt names the branch in the reading language', () => {
     lang: 'en' | 'ar',
     copy: typeof en | typeof ar,
   ) =>
-    buildReceipt(charge(-6000), branches, lang, copy).rows.find((r) => r.label === copy.txBranch);
+    buildReceipt(charge(-6000), branches, lang, copy, 'Asia/Kuwait').rows.find((r) => r.label === copy.txBranch);
 
   it('renders the Arabic branch name in ar', () => {
     expect(branchRow(BRANCHES, 'ar', ar)?.value).toBe('مدينة الكويت');
@@ -388,6 +388,6 @@ describe('the receipt names the branch in the reading language', () => {
     // list. Whatever the rule is, both surfaces must apply it.
     const tx = charge(-6000);
     expect(branchRow(BRANCHES, 'ar', ar)?.value).toBe(branchName(BRANCHES[0]!, 'ar'));
-    expect(toActivityRow(tx, BRANCHES, 'ar', ar).when).toContain(branchName(BRANCHES[0]!, 'ar'));
+    expect(toActivityRow(tx, BRANCHES, 'ar', ar, 'Asia/Kuwait').when).toContain(branchName(BRANCHES[0]!, 'ar'));
   });
 });

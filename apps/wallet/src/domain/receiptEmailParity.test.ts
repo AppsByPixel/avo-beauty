@@ -111,7 +111,7 @@ const TX: Transaction = {
 
 const DETAIL: ReceiptDetail = { items: LINES, balanceAfterFils: BALANCE_AFTER_FILS };
 
-const INVOICE = buildReceipt(TX, [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: null }], 'en', en, DETAIL);
+const INVOICE = buildReceipt(TX, [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: null }], 'en', en, 'Asia/Kuwait', DETAIL);
 const INVOICE_TEXT = INVOICE.rows.map((r) => `${r.label} ${r.value}`).join('\n');
 
 describe('the two documents agree on every line', () => {
@@ -237,7 +237,7 @@ describe('the top-up receipt and the top-up email agree without an invoice', () 
     reversedByTransactionId: null,
   } as Transaction;
 
-  const sheet = buildReceipt(TOPUP_TX, [], 'en', en);
+  const sheet = buildReceipt(TOPUP_TX, [], 'en', en, 'Asia/Kuwait');
   const sheetText = sheet.rows.map((r) => `${r.label} ${r.value}`).join('\n');
 
   it('splits paid, bonus and credited identically on both', () => {
@@ -302,6 +302,7 @@ describe('what the invoice shows that the email does not, and the reverse', () =
       [{ id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت' }],
       'ar',
       ar,
+      'Asia/Kuwait',
       DETAIL,
     );
     expect(/[؀-ۿ]/.test(arInvoice.rows.map((r) => r.label).join(''))).toBe(true);

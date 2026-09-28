@@ -58,7 +58,7 @@ function tx(over: Partial<Transaction>): Transaction {
 describe('a zero-amount row carries no sign', () => {
   it('renders 0.000 without a minus, in both languages', () => {
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
-      const row = toActivityRow(tx({ amountFils: 0 }), BRANCHES, lang, copy);
+      const row = toActivityRow(tx({ amountFils: 0 }), BRANCHES, lang, copy, 'Asia/Kuwait');
       expect(row.amount).toBe('0.000');
       expect(row.amount).not.toContain('−');
       expect(row.amount).not.toContain('-');
@@ -69,7 +69,7 @@ describe('a zero-amount row carries no sign', () => {
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
       // `plus`/`minus` are AR_GAPS, so the Arabic label carries the English
       // word too — which is why both languages are checked for it.
-      const label = toActivityRow(tx({ amountFils: 0 }), BRANCHES, lang, copy).amountLabel;
+      const label = toActivityRow(tx({ amountFils: 0 }), BRANCHES, lang, copy, 'Asia/Kuwait').amountLabel;
       expect(label).not.toContain('minus');
       expect(label).not.toContain('plus');
       expect(label).toContain('0.000');
@@ -85,21 +85,21 @@ describe('a zero-amount row carries no sign', () => {
   it('agrees with the detail sheet on the same transaction', async () => {
     const { buildReceipt } = await import('./receipt');
     const zero = tx({ amountFils: 0 });
-    expect(toActivityRow(zero, BRANCHES, 'en', en).amount).toBe(
-      buildReceipt(zero, BRANCHES, 'en', en).amount,
+    expect(toActivityRow(zero, BRANCHES, 'en', en, 'Asia/Kuwait').amount).toBe(
+      buildReceipt(zero, BRANCHES, 'en', en, 'Asia/Kuwait').amount,
     );
   });
 });
 
 describe('the sign on every other row is unchanged', () => {
   it('keeps the minus on a real debit', () => {
-    const row = toActivityRow(tx({ amountFils: -5000 }), BRANCHES, 'en', en);
+    const row = toActivityRow(tx({ amountFils: -5000 }), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.amount).toBe('−5.000');
     expect(row.positive).toBe(false);
   });
 
   it('keeps the plus on money coming in', () => {
-    const row = toActivityRow(tx({ kind: 'deposit_return', amountFils: 5000 }), BRANCHES, 'en', en);
+    const row = toActivityRow(tx({ kind: 'deposit_return', amountFils: 5000 }), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.amount).toBe('+5.000');
     expect(row.positive).toBe(true);
   });
@@ -127,6 +127,7 @@ describe('the sign on every other row is unchanged', () => {
       BRANCHES,
       'en',
       en,
+      'Asia/Kuwait',
     );
     expect(row.amount).toBe('+11.000');
   });
@@ -141,6 +142,7 @@ describe('the sign on every other row is unchanged', () => {
         BRANCHES,
         'en',
         en,
+        'Asia/Kuwait',
       );
       expect(row.amount).toBe('+11.000');
     }
@@ -159,9 +161,9 @@ describe('an adjustment', () => {
    * would be backwards.
    */
   it('a credit is titled Credit; a deduction is still an Adjustment', () => {
-    expect(toActivityRow(adj(5000), BRANCHES, 'en', en).title).toBe(en.txAdjustCredit);
-    expect(toActivityRow(adj(-5000), BRANCHES, 'en', en).title).toBe(en.txKind.adjustment);
-    expect(toActivityRow(adj(5000), BRANCHES, 'en', en).title.trim()).not.toBe('');
+    expect(toActivityRow(adj(5000), BRANCHES, 'en', en, 'Asia/Kuwait').title).toBe(en.txAdjustCredit);
+    expect(toActivityRow(adj(-5000), BRANCHES, 'en', en, 'Asia/Kuwait').title).toBe(en.txKind.adjustment);
+    expect(toActivityRow(adj(5000), BRANCHES, 'en', en, 'Asia/Kuwait').title.trim()).not.toBe('');
   });
 
   /**
@@ -170,19 +172,19 @@ describe('an adjustment', () => {
    * that moved nothing — the pairing the `−0.000` fix was about.
    */
   it('a zero adjustment is not called a credit', () => {
-    const row = toActivityRow(adj(0), BRANCHES, 'en', en);
+    const row = toActivityRow(adj(0), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.title).toBe(en.txKind.adjustment);
     expect(row.amount).toBe('0.000');
   });
 
   it('reads as a credit when the console added credit', () => {
-    const row = toActivityRow(adj(5000), BRANCHES, 'en', en);
+    const row = toActivityRow(adj(5000), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.amount).toBe('+5.000');
     expect(row.positive).toBe(true);
   });
 
   it('reads as a deduction when the console took it away', () => {
-    const row = toActivityRow(adj(-5000), BRANCHES, 'en', en);
+    const row = toActivityRow(adj(-5000), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.amount).toBe('−5.000');
     expect(row.positive).toBe(false);
   });
@@ -193,7 +195,7 @@ describe('an adjustment', () => {
    * "Adjustment · Wallet balance" would assert one.
    */
   it('does not append a payment method to the title', () => {
-    const row = toActivityRow(adj(-5000), BRANCHES, 'en', en);
+    const row = toActivityRow(adj(-5000), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.title).not.toContain(en.txMethod.wallet);
     expect(row.title).not.toContain('·');
   });
@@ -204,7 +206,7 @@ describe('an adjustment', () => {
    * when adding a case.
    */
   it('keeps Western digits in Arabic', () => {
-    const row = toActivityRow(adj(-5000), BRANCHES, 'ar', ar);
+    const row = toActivityRow(adj(-5000), BRANCHES, 'ar', ar, 'Asia/Kuwait');
     expect(row.amount).toBe('−5.000');
     for (const eastern of ['٠', '١', '٢', '٣', '٤', '٥']) {
       expect(row.amount).not.toContain(eastern);
@@ -220,19 +222,19 @@ describe('the branch on a row is named in the reading language', () => {
     before the fix this rendered `اليوم · ١١:٢٢ م · Salmiya`.
   */
   it('renders the Arabic branch name in ar', () => {
-    const row = toActivityRow(tx({}), BRANCHES, 'ar', ar);
+    const row = toActivityRow(tx({}), BRANCHES, 'ar', ar, 'Asia/Kuwait');
     expect(row.when).toContain('مدينة الكويت');
     expect(row.when).not.toContain('Kuwait City');
   });
 
   it('renders the Latin branch name in en', () => {
-    const row = toActivityRow(tx({}), BRANCHES, 'en', en);
+    const row = toActivityRow(tx({}), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.when).toContain('Kuwait City');
     expect(row.when).not.toContain('مدينة الكويت');
   });
 
   it('falls back to Latin in ar when the branch has no Arabic name', () => {
-    const row = toActivityRow(tx({}), BRANCHES_NO_ARABIC, 'ar', ar);
+    const row = toActivityRow(tx({}), BRANCHES_NO_ARABIC, 'ar', ar, 'Asia/Kuwait');
     expect(row.when).toContain('Kuwait City');
     // The failure mode a missing fallback would produce is a dangling separator.
     expect(row.when).not.toMatch(/·\s*$/);
@@ -241,7 +243,7 @@ describe('the branch on a row is named in the reading language', () => {
   it('still omits the branch on a top-up, in both languages', () => {
     // A top-up has no branch a customer would recognise — unchanged by the fix.
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
-      const row = toActivityRow(tx({ kind: 'topup', amountFils: 25000 }), BRANCHES, lang, copy);
+      const row = toActivityRow(tx({ kind: 'topup', amountFils: 25000 }), BRANCHES, lang, copy, 'Asia/Kuwait');
       expect(row.when).not.toContain('Kuwait City');
       expect(row.when).not.toContain('مدينة الكويت');
     }
@@ -278,7 +280,7 @@ describe('a redeemed voucher in the feed', () => {
   });
 
   it('is a credit, not a top-up, and says so', () => {
-    const row = toActivityRow(voucher, BRANCHES, 'en', en);
+    const row = toActivityRow(voucher, BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(row.title).toBe(en.txAdjustCredit);
     expect(row.positive).toBe(true);
     expect(row.amount).toBe('+5.000');
@@ -291,12 +293,13 @@ describe('a redeemed voucher in the feed', () => {
    * ever consulted.
    */
   it('never wears a payment method the way a paid top-up does', () => {
-    const row = toActivityRow(voucher, BRANCHES, 'en', en);
+    const row = toActivityRow(voucher, BRANCHES, 'en', en, 'Asia/Kuwait');
     const paid = toActivityRow(
       tx({ kind: 'topup', amountFils: 5000, method: 'knet' }),
       BRANCHES,
       'en',
       en,
+      'Asia/Kuwait',
     );
     expect(paid.title).toBe(`${en.txKind.topup} · ${en.txMethod.knet}`);
     expect(row.title).not.toBe(paid.title);
@@ -327,6 +330,7 @@ describe('a redeemed voucher in the feed', () => {
           BRANCHES,
           'en',
           en,
+          'Asia/Kuwait',
         ).title,
     );
     expect(new Set(titles).size).toBe(1);
@@ -341,7 +345,7 @@ describe('a redeemed voucher in the feed', () => {
    */
   it('announces dinars, in both languages, with Western digits', () => {
     for (const [lang, copy] of [['en', en], ['ar', ar]] as const) {
-      const row = toActivityRow(voucher, BRANCHES, lang, copy);
+      const row = toActivityRow(voucher, BRANCHES, lang, copy, 'Asia/Kuwait');
       expect(row.amount).toBe('+5.000');
       expect(row.amountLabel).toContain('5.000');
       expect(row.amountLabel).not.toBe(row.amount);
