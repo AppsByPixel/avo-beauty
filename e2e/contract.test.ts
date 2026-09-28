@@ -112,6 +112,8 @@ import {
   MemberAddressSchema,
   MemberSchema,
   CampaignRewardSchema,
+  OrderBoardSchema,
+  OverviewAnalyticsSchema,
   CampaignSchema,
   PlatformMessagingPolicySchema,
   ProductSchema,
@@ -152,6 +154,7 @@ import {
   A_MEMBER,
   mintWalletTokenFor,
   psql,
+  reconcileWalletLedger,
   scalar,
   signInDashboard,
   signInMember,
@@ -979,6 +982,12 @@ function probes(): Probe[] {
      * the wire carries on purpose that no schema models. Checked in both
      * directions, so the day a real cursor lands and `truncated` goes away, the
      * stale-annotation half of the drift spec fails and says so.
+     *
+     * AND FOR THE BOARD IT DID, ON 2026-09-29. Lane A's `7fc27fc` gave the board a
+     * real cursor and trunk gave it `OrderBoardSchema`, so the board's `truncated`
+     * left `wireOnly` for a schema — see its probe. The MEMBER list below is
+     * unchanged: still `paginated(ShopOrderSchema)`, still the 200-row cap, still
+     * `nextCursor: null`, and nothing this run served contradicts that.
      */
     {
       route: 'GET /members/me/addresses',
@@ -1006,65 +1015,76 @@ function probes(): Probe[] {
           '`GET /salons/{id}/bookings` was just fixed for was a capped list reporting ' +
           '`nextCursor: null` with nothing behind it. It belongs to no schema because it ' +
           'describes a limitation of this endpoint rather than a property of an order. ' +
-          'The day a real cursor lands, delete this note and the other one below.',
+          'The day a real cursor lands, delete this note. (The board\'s twin went on 2026-09-29, ' +
+          'when the board got its cursor and `OrderBoardSchema`.)',
       },
     },
     /**
-     * THE MERCHANT BOARD IS `ShopOrder` PLUS TWO JOINED COLUMNS, which is the same
-     * situation as the two booking lists in `UNMODELLED` — and it is PROBED rather
-     * than filed there, because `wireOnly` did not exist when those entries were
-     * written and it does now. An `UNMODELLED` line would assert "this is not the
-     * entity" and stop; this probe validates every field of `ShopOrderSchema`
-     * INCLUDING the whole nested address on the one surface where a merchant reads
-     * a customer's home address, and names the two extra keys with reasons.
+     * THE MERCHANT BOARD HAS ITS OWN SCHEMA NOW — `OrderBoardSchema`, landed by trunk
+     * with lane A's `7fc27fc` — and the five `wireOnly` notes this probe carried are
+     * gone with it, which is what that field is for: a key the wire carries that NO
+     * schema models, and every one of them is modelled now.
      *
-     * That difference is not cosmetic. `MemberAddressSchema` is what says the
-     * coordinates are STRINGS, and this board is where a float would do damage.
+     *   `truncated`                     was the 200-row cap said out loud; it now means
+     *                                   "there is another page", beside a REAL cursor.
+     *   `memberName` / `memberPhone`    the joined member, on `MerchantShopOrderSchema`,
+     *   `memberErased`                  and still read as a PAIR — DECISIONS.md #100.
+     *   `lines` / `totalFils`           new: what she bought, as the line snapshot took
+     *                                   it, and what left her wallet.
+     *
+     * The old probe went red on the merge, which is the stale-annotation half of the
+     * drift spec doing its job: `paginated(ShopOrderSchema)` stripped `lines` and
+     * `totalFils`, and `$.truncated` was no longer a key only the wire knew about.
+     *
+     * `lines` IS REQUIRED NON-EMPTY, AND NOT BY `requireNonEmpty` — that reads one path,
+     * and `lines` is per row. `THE BOARD'S LINES ARE WITNESSED` below requires the order
+     * this file placed through the real `POST /orders` to be on the board WITH its
+     * lines, which is why the board is captured after that order rather than beside
+     * the SQL fixtures. The two SQL orders serve `lines: []` — `shop_order_line` is
+     * written by `services/order.ts` and by nothing in this file — so a sample of
+     * those alone would witness `ShopOrderLineSchema` against zero lines.
      */
     {
       route: 'GET /v1/salons/:id/orders',
       label: 'GET /v1/salons/:id/orders',
-      schemaName: 'paginated(ShopOrderSchema)',
-      schema: paginated(ShopOrderSchema),
+      schemaName: 'OrderBoardSchema',
+      schema: OrderBoardSchema,
       requireNonEmpty: ['items'],
-      wireOnly: {
-        '$.truncated': 'the same cap as the member list above, for the same reason.',
-        '$.items[].memberName':
-          'joined from `member`, so the board can say whose order it is. Not on ' +
-          '`ShopOrderSchema` because an order does not have a name — the MEMBER does, and ' +
-          'the row the customer reads through `GET /members/me/orders` carries neither. ' +
-          'One schema with two optional display columns would tolerate a server that ' +
-          'forgot them on the board, which is the trap `countedPage` exists to avoid.',
-        '$.items[].memberPhone':
-          'joined the same way, and the reason it is worth naming rather than adding to a ' +
-          'schema: it is the field that makes this response personal data about a customer ' +
-          'rather than a fulfilment record. It belongs to the BOARD, gated on `perms.shop`, ' +
-          'and it must never appear on the customer-facing list that shares this schema. ' +
-          'ALL OF THAT IS STILL TRUE, AND IT NOW HAS A NULL STATE THAT IS NOT AN OMISSION: ' +
-          '`null` here means the member is erased and there is no number to serve, which is ' +
-          'a DECISION the server took, not a column the join forgot. That is exactly why it ' +
-          'stays a named wire key rather than becoming an optional field on ' +
-          '`ShopOrderSchema` — an optional `memberPhone` cannot tell "erased, deliberately ' +
-          'no number" from "the board forgot to send it", and `countedPage`\'s whole history ' +
-          'is what a client\'s defensive default does with that ambiguity. Read it WITH ' +
-          '`memberErased` below, never on its own: the pair is the contract, and a client ' +
-          'that branches on `memberPhone == null` alone is one server bug away from ' +
-          'offering a blank `tel:`. See DECISIONS.md #100.',
-        '$.items[].memberErased':
-          'the signal DECISIONS.md #100 says the board needed and did not have. `member.name` ' +
-          'and `member.phone` survive erasure as a TOMBSTONE — "Deleted account" and a ' +
-          'synthetic `+990…` on an unassigned country code — because the member row has to ' +
-          'stay resolvable for seven years of books (`services/erasure.ts` § SCRUB, NOT ' +
-          'ROW-DELETE). Serving that tombstone in a field the wire calls a phone number is ' +
-          'how the dashboard came to render a working `tel:` link, and the scanner a `tel:` ' +
-          'AND a `wa.me`, beside a row reading "Deleted account". It is named here rather ' +
-          'than added to `ShopOrderSchema` for `memberName`\'s reason ONE STEP FURTHER: an ' +
-          'order does not have a name, does not have a phone, and is not erased — the MEMBER ' +
-          'is, and this row is a join across the two lifetimes. It is `boolean`, never ' +
-          'optional: the only client-side alternative is string-matching `+990`, which is a ' +
-          'client guessing at a server constant, and the prefix changing is a silent ' +
-          'regression that puts the link straight back.',
-      },
+    },
+    /**
+     * THE OVERVIEW ANALYTICS — `GET /v1/salons/{id}/overview/analytics`, lane A's
+     * `7fc27fc`, caught by the unclassified check on the first run after the merge.
+     * Gated `dashboard`; ST-001 holds all nine, so every permission-gated block is
+     * `ok` here and the withheld shape comes from the BRANCH sample below instead.
+     *
+     * TWO PROBES, BECAUSE THE SCHEMA IS A UNION PER BLOCK AND ONE SAMPLE EXERCISES ONE
+     * ARM. At `branch=all` the five not-per-branch blocks are `ok`; with a branch they
+     * are `{status:'withheld', reason:'not_per_branch', permission: null}` and every
+     * `branchAssumed` goes from `null` to `{assumed,total}`. A probe of either alone
+     * would pass a schema that had narrowed the other arm away.
+     *
+     * NON-EMPTY WHERE THIS RUN MADE ROWS, and nowhere it did not. `busiestTimes.cells`
+     * is this file's own settled charge; `shop.topProducts` is its own `POST /orders`
+     * and card order (captured after both); `artists.items` lists every artist of the
+     * salon, zeros included, so it is rows by definition. `topServices` is NOT
+     * required: its bookings are windowed on `starts_at`, and this file's booking is
+     * nine days out — see `isoDate`. A block that is `ok` with zero rows everywhere
+     * would parse and prove nothing, which is the probe the brief asked this file not
+     * to be.
+     */
+    {
+      route: 'GET /v1/salons/:id/overview/analytics',
+      label: `GET /v1/salons/${SALON_A}/overview/analytics`,
+      schemaName: 'OverviewAnalyticsSchema',
+      schema: OverviewAnalyticsSchema,
+      requireNonEmpty: ['artists.items', 'busiestTimes.cells', 'shop.topProducts'],
+    },
+    {
+      route: 'GET /v1/salons/:id/overview/analytics',
+      label: `GET /v1/salons/${SALON_A}/overview/analytics?branch=${A_BRANCH}`,
+      schemaName: 'OverviewAnalyticsSchema',
+      schema: OverviewAnalyticsSchema,
+      requireNonEmpty: ['artists.items'],
     },
     /**
      * =====================================================================
@@ -1113,7 +1133,7 @@ function probes(): Probe[] {
      * The distinction is this census's whole subject, in the direction it is
      * hardest to see: what a client chooses not to read is not what the server
      * does not send. So `paginated()` is the helper that matches the wire —
-     * `truncated` annotated `wireOnly`, exactly as both order lists above are —
+     * `truncated` annotated `wireOnly`, exactly as the member order list above is —
      * and `countedPage()` is still the wrong one, for the reason the old
      * `UNMODELLED` entry gave: `truncated` is a cap flag, not a `total`.
      *
@@ -1991,12 +2011,6 @@ beforeAll(async () => {
   }
   captured.set('GET /members/me/orders', myOrders);
 
-  const board = await treq<any>('GET', `/v1/salons/${SALON_A}/orders`, { token: dashboard });
-  if (board.status !== 200) {
-    throw new Error(`GET /v1/salons/:id/orders: ${board.status} ${board.raw}`);
-  }
-  captured.set('GET /v1/salons/:id/orders', board);
-
   /**
    * ---- the merchant bell, whose row has to be made before it can be read -------
    * See `BELL_NOTIFICATION`. `ST-001` holds all nine permissions, so `visibleKinds`
@@ -2104,6 +2118,18 @@ beforeAll(async () => {
     throw new Error(`GET /orders/payments/{id} did not come back placed: ${opRead.status} ${opRead.raw}`);
   }
   captured.set('GET /orders/payments/{id}', opRead);
+
+  /**
+   * THE BOARD, AFTER BOTH REAL ORDERS AND NOT BESIDE THE SQL ONES. `lines` is served
+   * from `shop_order_line`, which only `services/order.ts` writes — so a board read
+   * before `POST /orders` sees this file's two fixtures with `lines: []` and nothing
+   * else of this run's. See the board probe.
+   */
+  const board = await treq<any>('GET', `/v1/salons/${SALON_A}/orders`, { token: dashboard });
+  if (board.status !== 200) {
+    throw new Error(`GET /v1/salons/:id/orders: ${board.status} ${board.raw}`);
+  }
+  captured.set('GET /v1/salons/:id/orders', board);
 
   const memberBell = await treq<any>('GET', '/members/me/notifications/feed', { token: opMember });
   if (memberBell.status !== 200) {
@@ -2465,6 +2491,20 @@ beforeAll(async () => {
      */
     ['GET /v1/vouchers', '/v1/vouchers', platform],
     ['GET /topups/{id}', `/topups/${topUpId}`, member],
+    /**
+     * LAST, so every row this hook wrote is inside the window: the charge, both shop
+     * orders, the campaign. See the analytics probes for which blocks that fills.
+     */
+    [
+      `GET /v1/salons/${SALON_A}/overview/analytics`,
+      `/v1/salons/${SALON_A}/overview/analytics`,
+      dashboard,
+    ],
+    [
+      `GET /v1/salons/${SALON_A}/overview/analytics?branch=${A_BRANCH}`,
+      `/v1/salons/${SALON_A}/overview/analytics?branch=${A_BRANCH}`,
+      dashboard,
+    ],
   ];
 
   for (const [label, path, token] of gets) {
@@ -2495,6 +2535,16 @@ afterAll(async () => {
       (SELECT id FROM campaign_reward WHERE salon_id = '${SALON_A}' AND label = '${CT_REWARD_LABEL}');
     DELETE FROM campaign_reward WHERE salon_id = '${SALON_A}' AND label = '${CT_REWARD_LABEL}';
   `);
+  /**
+   * `PIN_MEMBER`'S BALANCE AND HER LEDGER, MADE TO AGREE — and it only ever disagrees
+   * on a SECOND run against one database. `seedPinMember()` puts her balance back to
+   * zero on conflict (the deletion sample needs her at zero), while the ledger keeps
+   * the previous run's 3.000 KD voucher credit; the wallet census then names her
+   * `QA-CT-0001 by -3000 fils`. Measured on `avo_lane_d` on 2026-09-29, second run of
+   * this file. A minted run database never meets it, which is why it waited. Last,
+   * after every sample, per the census's own instructions.
+   */
+  reconcileWalletLedger(PIN_MEMBER, 'QACT');
   await stopTenancyApi();
 });
 
@@ -2835,12 +2885,12 @@ describe('census — every GET the API registers is either probed or explicitly 
      */
     expect(
       discovered.length,
-      'the GET census no longer sees 63 routes. If you added or removed a GET, classify it ' +
+      'the GET census no longer sees 64 routes. If you added or removed a GET, classify it ' +
         '(probes() or UNMODELLED) and move this number in the same commit. If you did ' +
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(63);
+    ).toBe(64);
   });
 
   it('no GET route is left unclassified', () => {
@@ -3983,5 +4033,94 @@ describe('customReward — the sample reaches the salon\'s own words, not only n
     expect(row!.salonId).toBe(salonId);
     expect(row!.label).toBe(stored);
     expect(archived, 'the list served a reward the table has archived').toBe('active');
+  });
+});
+
+/**
+ * THE BOARD'S LINES AND THE ANALYTICS' TWO ARMS — the samples reach the values the
+ * two new schemas are about.
+ *
+ * The generic probes above prove each response parses and loses nothing. What they
+ * cannot prove is that the sample contained the part that matters: `lines: []` on
+ * every row parses `ShopOrderLineSchema` against nothing, and an analytics sample
+ * with every block `ok` never exercises `WithheldSchema` at all. Rule 2 of this
+ * file's header, per field.
+ */
+describe('the order board and the overview analytics — the samples reach the values the probes need', () => {
+  const analytics = (branch?: string) =>
+    response(
+      `GET /v1/salons/${SALON_A}/overview/analytics${branch ? `?branch=${branch}` : ''}`,
+    );
+  const NOT_PER_BRANCH = ['newMembers', 'loyalty', 'wallet', 'paymentMix', 'campaigns'] as const;
+
+  it('the board carries the order POST /orders placed this run, WITH its lines, as the receipt priced them', () => {
+    const placed = response('POST /orders');
+    expect(placed.status, placed.raw).toBeLessThan(300);
+    const txId = placed.body?.transaction?.id as string;
+    precondition(typeof txId === 'string', `POST /orders served no transaction.id: ${placed.raw}`);
+
+    const board = response('GET /v1/salons/:id/orders');
+    expect(board.status, board.raw).toBe(200);
+    const row = (board.body.items as Array<Record<string, any>>).find((o) => o.transactionId === txId);
+    expect(row, `the board does not carry ${txId}, the order this file placed\n${board.raw.slice(0, 800)}`).toBeDefined();
+
+    expect(
+      row!.lines.length,
+      `${txId} is on the board with no lines, so ShopOrderLineSchema was witnessed against nothing`,
+    ).toBeGreaterThan(0);
+    // Live against live: the snapshot `shop_order_line` took is what the receipt showed.
+    expect(row!.lines).toEqual(
+      (placed.body.items as Array<Record<string, unknown>>).map((l) => ({
+        productId: l.productId,
+        name: l.name,
+        qty: l.qty,
+        unitPriceFils: l.unitPriceFils,
+        lineTotalFils: l.lineTotalFils,
+      })),
+    );
+    expect(row!.totalFils, 'the board total is not the receipt total').toBe(placed.body.totalFils);
+    // And the money fact the route says it serves: `-amount_fils` on the order's own debit.
+    expect(row!.totalFils).toBe(-Number(scalar(`select amount_fils from "transaction" where id = '${txId}'`).trim()));
+  });
+
+  it('the board says "another page" with a cursor and "no more" without one — never one without the other', () => {
+    const board = response('GET /v1/salons/:id/orders');
+    expect(board.status, board.raw).toBe(200);
+    expect(
+      board.body.truncated,
+      `truncated is ${board.body.truncated} beside nextCursor ${JSON.stringify(board.body.nextCursor)}: ` +
+        'a board that says there is another page must say where it starts, and one that names a ' +
+        'cursor must say there is a page behind it',
+    ).toBe(board.body.nextCursor !== null);
+  });
+
+  it(`at branch=all the five salon-wide blocks are ok, and wallet.spentFils carries this run's charge`, () => {
+    const res = analytics();
+    expect(res.status, res.raw).toBe(200);
+    for (const k of NOT_PER_BRANCH) {
+      expect(res.body[k]?.status, `${k} at branch=all: ${JSON.stringify(res.body[k])}`).toBe('ok');
+    }
+    expect(res.body.branchId).toBeNull();
+    // Not a zero that parses: this hook settled a charge and two shop orders in the window.
+    expect(res.body.wallet.spentFils, 'wallet.spentFils is 0 after this run charged and sold').toBeGreaterThan(0);
+    expect(res.body.busiestTimes.branchAssumed, 'branchAssumed is null at branch=all by definition').toBeNull();
+  });
+
+  it(`with ?branch=${A_BRANCH} the same five are withheld as not_per_branch, permission null — WithheldSchema is witnessed`, () => {
+    const res = analytics(A_BRANCH);
+    expect(res.status, res.raw).toBe(200);
+    expect(res.body.branchId).toBe(A_BRANCH);
+    for (const k of NOT_PER_BRANCH) {
+      expect(res.body[k], `${k} with a branch applied`).toEqual({
+        status: 'withheld',
+        reason: 'not_per_branch',
+        permission: null,
+      });
+    }
+    // The per-branch blocks answer, and say how much of their answer was inferred.
+    for (const k of ['topServices', 'artists', 'busiestTimes', 'noShows', 'visitors', 'shop'] as const) {
+      expect(res.body[k]?.status, `${k} with a branch applied: ${JSON.stringify(res.body[k])}`).toBe('ok');
+      expect(res.body[k].branchAssumed, `${k}.branchAssumed is null with a branch applied`).not.toBeNull();
+    }
   });
 });

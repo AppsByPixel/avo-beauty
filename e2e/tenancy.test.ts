@@ -1486,6 +1486,25 @@ const SALON_ROUTES: SalonRoute[] = [
    * 403 is tenancy rather than a query that matches nothing.
    */
   { method: 'GET', template: '/v1/salons/{id}/orders' },
+  /**
+   * THE OVERVIEW ANALYTICS — `routes/overview.ts`, lane A's `7fc27fc`, found by the
+   * gap ledger below on the first run after the merge.
+   *
+   * NO `?branch=`, FOR DEPOSIT HEALTH'S REASON ABOVE AND IN THE ROUTE'S OWN WORDS:
+   * `requireSameSalon` runs "before any lookup, so a caller who is not this salon's
+   * staff cannot learn from 404-vs-200 whether a branch id exists here", and a probe
+   * carrying salon A's branch would make that ordering this row's subject instead of
+   * the tenancy answer. No `?period=` either: the default window is the one a
+   * merchant opens on.
+   *
+   * THE CONTROL IS A POPULATED ANSWER AND THE TABLE STILL CANNOT READ IT. Layla holds
+   * all nine, so every block is `ok` at salon B — and every figure in it is an
+   * AGGREGATE, which carries no telltale string for `expectNoSalonALeak` to find. The
+   * blocks that name people (`artists.items`, `upcoming.next`, `campaigns.items`) do
+   * carry names, and those salon A names ARE telltales; the sums are the half this
+   * row cannot see.
+   */
+  { method: 'GET', template: '/v1/salons/{id}/overview/analytics' },
   {
     method: 'PATCH',
     template: '/v1/salons/{id}/orders/{tid}',
@@ -3041,6 +3060,150 @@ describe('the customer book — a stranger read through your own salon answers l
 
 /**
  * ===========================================================================
+ * THE TWO BOARDS' `?memberId=` — her own salon in the path, A STRANGER'S MEMBER
+ * ID IN THE QUERY. Lane A's `7fc27fc`.
+ * ===========================================================================
+ * `GET /salons/{id}/bookings` (`appointments`) and `GET /v1/salons/{id}/orders`
+ * (`shop`) grew a `?memberId=` filter for the customer card's Next-booking and
+ * Purchases panels. `SALON_ROUTES` asks neither the second question — is that
+ * customer in this workspace — because its rows send no query at all, so the
+ * filter could stop joining the member to the salon and every row there would stay
+ * green.
+ *
+ * THE ANSWER IS THE CUSTOMER CARD'S, BY DESIGN: `404 unknown_member` / "No such
+ * member.", not an empty page. Both handlers say why — an empty list "would answer
+ * 'she has no appointments' about somebody who is not hers" — and the customer-book
+ * describe above says why it has to be indistinguishable from nobody at all. So
+ * each board is held to the same three things that describe holds the card to:
+ *
+ *   1. a foreign member is 404 AND BYTE-IDENTICAL to a member who exists nowhere —
+ *      from both sides of the boundary: salon B's board naming salon A's member,
+ *      and salon A's board naming salon B's;
+ *   2. two `memberId`s are a 400 `invalid_member_id`, not a filter on the first;
+ *   3. and the control: salon B's own member reads 200, every row hers, at least
+ *      one row — so the 404 above is tenancy and not a filter that 404s everybody.
+ *
+ * THE BOOKING FIXTURE IS THIS DESCRIBE'S OWN and goes in `afterAll`. Salon B's
+ * other bookings in this file are walk-ins (`PROBE_GUEST_NAME`), so without it her
+ * appointment filter would be asked about a member with nothing to return and the
+ * control would be a 200 of zero rows. `cancelled`, 600 days out, merchant-sourced
+ * with no deposit: it holds no slot, no money and no hold, and no other file ever
+ * sees it. Her order is `PROBE_ORDER_B`, seeded above.
+ */
+const MEMBERID_BOOKING_B = 'BK-TEN-B-MEMBERID';
+/** Salon A's seeded manager — `api/src/db/seed.ts`. The second side of the boundary. */
+const A_STAFF_HANDLE_FOR_MEMBERID = 'noura';
+
+describe("the two boards' ?memberId= — a stranger named in your own board's query answers like a stranger", () => {
+  /**
+   * `idOf` and `hers` because the two rows differ: a booking row carries `id` and
+   * `memberId`, an order row carries `transactionId` and NO member id at all — an
+   * order does not have one on the wire, the member is joined in as a name. So "only
+   * her rows" is asserted as a set equality against Postgres, on both boards, rather
+   * than as a field neither schema promises.
+   */
+  const BOARDS = [
+    {
+      name: 'bookings',
+      path: (salonId: string) => `/salons/${salonId}/bookings`,
+      idOf: (r: Record<string, unknown>) => String(r.id),
+      hers: `select id from booking where salon_id = '${SALON_B}' and member_id = '${B_MEMBER}'`,
+    },
+    {
+      name: 'orders',
+      path: (salonId: string) => `/v1/salons/${salonId}/orders`,
+      idOf: (r: Record<string, unknown>) => String(r.transactionId),
+      hers: `select transaction_id from shop_order where salon_id = '${SALON_B}' and member_id = '${B_MEMBER}'`,
+    },
+  ] as const;
+  let aDashboard = '';
+
+  beforeAll(async () => {
+    aDashboard = await signInDashboard(SALON_A, A_STAFF_HANDLE_FOR_MEMBERID);
+    psql(`
+      INSERT INTO booking (id, salon_id, branch_id, member_id, artist_id, service_id,
+                           starts_at, ends_at, duration_min, deposit_fils, status, source,
+                           hold_transaction_id, no_show_return_due_at, cancelled_at)
+      VALUES ('${MEMBERID_BOOKING_B}', '${SALON_B}', '${B_BRANCH}', '${B_MEMBER}',
+              '${PROBE_ARTIST_B}', '${B_SERVICE}',
+              now() + interval '600 days', now() + interval '600 days' + interval '30 minutes',
+              30, 0, 'cancelled', 'merchant', NULL, now() + interval '601 days', now())
+      ON CONFLICT (id) DO NOTHING;
+    `);
+  });
+
+  afterAll(() => {
+    psql(`DELETE FROM booking WHERE id = '${MEMBERID_BOOKING_B}';`);
+  });
+
+  for (const board of BOARDS) {
+    it(`GET ${board.path('{id}')}?memberId={salon A's member}, from salon B, is byte-identical to a member who exists nowhere`, async () => {
+      const foreign = await treq('GET', `${board.path(SALON_B)}?memberId=${A_MEMBER}`, { token: bDashboard });
+      const invented = await treq('GET', `${board.path(SALON_B)}?memberId=${MEMBER_NOWHERE}`, {
+        token: bDashboard,
+      });
+      expect(
+        [foreign.status, (foreign.body as { error?: string })?.error],
+        `salon A's member on salon B's ${board.name} board: ${foreign.raw}`,
+      ).toEqual([404, 'unknown_member']);
+      expect(foreign.status).toBe(invented.status);
+      expect(foreign.raw).toBe(invented.raw);
+      expectNoSalonALeak(foreign.raw, `GET ${board.path(SALON_B)}?memberId=${A_MEMBER}`);
+    });
+
+    it(`GET ${board.path('{id}')}?memberId={salon B's member}, from salon A, is byte-identical to a member who exists nowhere`, async () => {
+      const foreign = await treq('GET', `${board.path(SALON_A)}?memberId=${B_MEMBER}`, { token: aDashboard });
+      const invented = await treq('GET', `${board.path(SALON_A)}?memberId=${MEMBER_NOWHERE}`, {
+        token: aDashboard,
+      });
+      expect(
+        [foreign.status, (foreign.body as { error?: string })?.error],
+        `salon B's member on salon A's ${board.name} board: ${foreign.raw}`,
+      ).toEqual([404, 'unknown_member']);
+      expect(foreign.status).toBe(invented.status);
+      expect(foreign.raw).toBe(invented.raw);
+      // Her number is salon B's, and the body must not carry it.
+      expect(foreign.raw).not.toContain(B_MEMBER_PHONE);
+    });
+
+    it(`GET ${board.path('{id}')} with two memberIds is 400 invalid_member_id, not a filter on the first`, async () => {
+      const res = await treq('GET', `${board.path(SALON_B)}?memberId=${B_MEMBER}&memberId=${A_MEMBER}`, {
+        token: bDashboard,
+      });
+      expect(
+        [res.status, (res.body as { error?: string })?.error],
+        `two memberIds on the ${board.name} board: ${res.raw}`,
+      ).toEqual([400, 'invalid_member_id']);
+      expectNoSalonALeak(res.raw, `GET ${board.path(SALON_B)}?memberId=…&memberId=…`);
+    });
+
+    it(`and GET ${board.path('{id}')}?memberId={her own member} reads 200 with only her rows — the 404 was tenancy, not a dead filter`, async () => {
+      const res = await treq<{ items: Array<Record<string, unknown>> }>(
+        'GET',
+        `${board.path(SALON_B)}?memberId=${B_MEMBER}`,
+        { token: bDashboard },
+      );
+      expect(res.status, `salon B's own member on her ${board.name} board: ${res.raw}`).toBe(200);
+      expect(
+        res.body.items.length,
+        `${board.name} served no row for ${B_MEMBER}, so this control proves the filter answers, not that it filters`,
+      ).toBeGreaterThan(0);
+      const expected = scalar(board.hers)
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .sort();
+      expect(
+        res.body.items.map(board.idOf).sort(),
+        `the ${board.name} board filtered on ${B_MEMBER} is not exactly her rows at salon B`,
+      ).toEqual(expected);
+      expectNoSalonALeak(res.raw, `GET ${board.path(SALON_B)}?memberId=${B_MEMBER}`);
+    });
+  }
+});
+
+/**
+ * ===========================================================================
  * THE BELL'S SECOND AXIS — her own salon in the path, ANOTHER SALON'S
  * NOTIFICATION IDS IN THE BODY.
  * ===========================================================================
@@ -4108,6 +4271,9 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       // money to a customer, so a scan that stopped seeing it would leave the one
       // write this table performs across a tenant boundary unprobed by BOTH halves.
       'POST /salons/:id/bookings/:bookingId/no-show',
+      // Lane A's Overview analytics, `7fc27fc` — a third path segment after `:id` and
+      // a nested fourth, the length of path this list otherwise has no example of.
+      'GET /v1/salons/:id/overview/analytics',
     ]) {
       expect(paths, `the route scan lost ${known}`).toContain(known);
     }
