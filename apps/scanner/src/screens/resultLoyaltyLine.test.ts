@@ -61,8 +61,37 @@ const BASE = {
   happyHour: null,
 };
 
+/**
+ * `transaction.loyalty` as the server writes it for a given outcome —
+ * `services/charge.ts § loyaltyColumnsFor` through `serialiseTransactionLoyalty`.
+ * Fixture construction only: it keeps each case's two copies of the one outcome
+ * agreeing, the way the real response's do. No screen reads this function.
+ */
+function recorded(o: Record<string, unknown>) {
+  return o['mode'] === 'stamps'
+    ? {
+        mode: 'stamps',
+        stampsEarned: o['stampsEarned'],
+        tierAfter: null,
+        climbed: false,
+        rewardReady: o['rewardReady'],
+      }
+    : {
+        mode: 'tiers',
+        visitsEarned: o['visitsEarned'],
+        tierAfter: o['tier'],
+        climbed: o['climbed'] ?? false,
+        rewardReady: false,
+      };
+}
+
 function response(loyalty: Record<string, unknown>, happyHour: unknown = null) {
-  return ChargeResultSchema.parse({ ...BASE, loyalty, happyHour });
+  return ChargeResultSchema.parse({
+    ...BASE,
+    transaction: { ...BASE.transaction, loyalty: recorded(loyalty) },
+    loyalty,
+    happyHour,
+  });
 }
 
 function hh(visitMultiplier: number, stampMultiplier: number) {
@@ -179,39 +208,72 @@ describe('stamps mode', () => {
   });
 });
 
-describe('the honest fallback: the response does not say how many were earned', () => {
+describe('the count is required, and there is no fallback', () => {
   /**
-   * Today's server. `LoyaltyOutcome` carries the after-state and no count, so
-   * the first clause is the design's own "Visit added" / "Stamp added" — true for
-   * any number added — and nothing is inferred. In particular `happyHour: null`
-   * does NOT mean +1: a branch boost doubles the visit and leaves it null.
+   * Lane A's eefccb1 sends `visitsEarned` / `stampsEarned` on every charge, so
+   * the schema requires them and the line always opens with "+N visit(s)" or
+   * "+N stamp(s)". The design's "Visit added" / "Stamp added", which stood in
+   * while the API did not say, is gone — a body without the count is refused at
+   * the parse and never reaches the screen.
    */
-  it('tiers: "Visit added", then the same progress', () => {
-    const r = response({
+  /**
+   * Built WITHOUT `response()`, whose `recorded()` would copy the missing count
+   * into `transaction.loyalty` and fail the parse there instead — a refusal for
+   * the wrong reason, which would pass against the old optional schema too.
+   * The transaction's record here is whole; only the response's count is gone.
+   */
+  function withoutCount(outcome: Record<string, unknown>, record: Record<string, unknown>) {
+    return ChargeResultSchema.safeParse({
+      ...BASE,
+      transaction: { ...BASE.transaction, loyalty: record },
+      loyalty: outcome,
+    }).success;
+  }
+
+  it('tiers: a response with no visitsEarned is refused', () => {
+    const outcome = { mode: 'tiers', visits: 8, tier: 'silver', nextTier: 'gold', visitsToNext: 2, climbed: false };
+    const record = { mode: 'tiers', visitsEarned: 1, tierAfter: 'silver', climbed: false, rewardReady: false };
+    expect(withoutCount(outcome, record)).toBe(false);
+    expect(withoutCount({ ...outcome, visitsEarned: 1 }, record)).toBe(true);
+  });
+
+  it('stamps: a response with no stampsEarned is refused', () => {
+    const outcome = { mode: 'stamps', stamps: 5, target: 8, rewardReady: false };
+    const record = { mode: 'stamps', stampsEarned: 1, tierAfter: null, climbed: false, rewardReady: false };
+    expect(withoutCount(outcome, record)).toBe(false);
+    expect(withoutCount({ ...outcome, stampsEarned: 1 }, record)).toBe(true);
+  });
+
+  it('never prints the old fallback sentence', () => {
+    const tiers = response({
       mode: 'tiers',
       visits: 8,
       tier: 'silver',
       nextTier: 'gold',
       visitsToNext: 2,
       climbed: false,
+      visitsEarned: 1,
     });
-    expect(line(r)).toBe('Visit added · 2 more to Gold');
-    expect(line(r)).not.toMatch(/\+\d/);
+    const stamps = response({ mode: 'stamps', stamps: 5, target: 8, rewardReady: false, stampsEarned: 1 });
+    for (const r of [tiers, stamps]) {
+      expect(line(r)).toMatch(/^\+\d+ (visit|visits|stamp|stamps) · /);
+      expect(line(r)).not.toMatch(/added/i);
+    }
   });
 
-  it('stamps: the design\'s own sentence, "Stamp added · 5 of 8"', () => {
-    const r = response({ mode: 'stamps', stamps: 5, target: 8, rewardReady: false });
-    expect(line(r)).toBe('Stamp added · 5 of 8');
-  });
-
-  it('still names a multiplier the server did report', () => {
-    const r = response({ mode: 'stamps', stamps: 6, target: 8, rewardReady: false }, hh(1, 2));
-    expect(line(r)).toBe('Stamp added · Double stamps · 6 of 8');
-  });
-
-  it('a count of 0 is not rendered as "+0"', () => {
-    const r = response({ mode: 'stamps', stamps: 5, target: 8, rewardReady: false, stampsEarned: 0 });
-    expect(line(r)).toBe('Stamp added · 5 of 8');
+  it('prints the count the server applied, verbatim — a boost with no window is still +2', () => {
+    // `happyHour` is null under a branch boost that doubled the visit, so the
+    // count cannot come from the multiplier. It comes from `visitsEarned`.
+    const r = response({
+      mode: 'tiers',
+      visits: 9,
+      tier: 'silver',
+      nextTier: 'gold',
+      visitsToNext: 1,
+      climbed: false,
+      visitsEarned: 2,
+    });
+    expect(line(r)).toBe('+2 visits · 1 more to Gold');
   });
 
   it('a response with no loyalty outcome at all never reaches the screen', () => {
@@ -222,6 +284,7 @@ describe('the honest fallback: the response does not say how many were earned', 
       stamps: 5,
       target: 8,
       rewardReady: false,
+      stampsEarned: 1,
     });
     expect(ChargeResultSchema.safeParse(rest).success).toBe(false);
   });

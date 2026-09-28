@@ -360,12 +360,11 @@ export const copy = {
    * Aftab ruled on 2026-09-29 (DECISIONS.md § "The fourth list") that the line
    * says what she GAINED — "+1 visit · 2 more to Gold" — so the count and the
    * "more to" / "Reached" clauses are NEW COPY, recorded by trunk. What survives
-   * from the design is its first clause, used only while the API does not yet
-   * say how many were added (see api/charges.ts § visitsEarned), and its stamp
-   * progress "5 of 8".
+   * from the design is its stamp progress "5 of 8". Its first clause, "Visit
+   * added" / "Stamp added", was the fallback while the API did not say how many
+   * were added, and went when the count became required (api/charges.ts §
+   * visitsEarned).
    */
-  loyaltyVisitAdded: 'Visit added',
-  loyaltyStampAdded: 'Stamp added',
   loyaltyVisitsEarned: (n: number) => `+${n} ${n === 1 ? 'visit' : 'visits'}`,
   loyaltyStampsEarned: (n: number) => `+${n} ${n === 1 ? 'stamp' : 'stamps'}`,
   loyaltyToNext: (n: number, tier: string) => `${n} more to ${tier}`,

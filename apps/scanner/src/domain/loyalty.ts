@@ -36,19 +36,20 @@ export function tierLabel(tier: string | null): string {
  * visit (api/charges.ts § visitsEarned), so "no happy hour, so +1" would be a
  * false sentence at the counter.
  *
- * THE HONEST FALLBACK. Until lane A sends the count, the first clause is the
- * design's own "Visit added" / "Stamp added" — true for any number added — and
- * the rest of the line is unchanged. A count of 0 is treated the same way:
- * "+0 visits" on a success screen would read as a failure.
+ * THE COUNT IS ALWAYS THERE. The first clause used to fall back to the design's
+ * "Visit added" / "Stamp added" while the API did not send the count; since lane
+ * A's eefccb1 it always does, the schema requires it, and the fallback is gone.
+ * The line renders exactly the number the server applied — the server's
+ * multiplier floor is 1 (services/promotions.ts § decideEarning), so a charge
+ * never reports 0, and if one ever did this would say so rather than guess.
  */
 export function loyaltyGain(
   outcome: LoyaltyOutcome,
   happyHour: ChargeResult['happyHour'],
 ): string {
   if (outcome.mode === 'stamps') {
-    const n = outcome.stampsEarned;
     return [
-      n ? copy.loyaltyStampsEarned(n) : copy.loyaltyStampAdded,
+      copy.loyaltyStampsEarned(outcome.stampsEarned),
       happyHour ? multiplierLabel('stamp', happyHour.stampMultiplier) : null,
       outcome.rewardReady
         ? copy.loyaltyRewardReady
@@ -58,9 +59,8 @@ export function loyaltyGain(
       .join(' · ');
   }
 
-  const n = outcome.visitsEarned;
   return [
-    n ? copy.loyaltyVisitsEarned(n) : copy.loyaltyVisitAdded,
+    copy.loyaltyVisitsEarned(outcome.visitsEarned),
     happyHour ? multiplierLabel('visit', happyHour.visitMultiplier) : null,
     tierProgress(outcome),
   ]

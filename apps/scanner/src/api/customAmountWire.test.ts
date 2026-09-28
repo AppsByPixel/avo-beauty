@@ -66,12 +66,22 @@ const CHARGED = {
     customAmount: true,
     voidedAt: null,
     reversedByTransactionId: null,
+    // Migration 0065 — the same outcome as `loyalty` below, as the row records it.
+    loyalty: { mode: 'tiers', visitsEarned: 1, tierAfter: 'bronze', climbed: false, rewardReady: false },
   },
   balanceAfterFils: 6_000,
   depositAppliedFils: 0,
   depositReturnedFils: 0,
   bookingId: null,
-  loyalty: { mode: 'tiers', visits: 3, tier: 'bronze', nextTier: 'silver', visitsToNext: 2 },
+  loyalty: {
+    mode: 'tiers',
+    visits: 3,
+    tier: 'bronze',
+    nextTier: 'silver',
+    visitsToNext: 2,
+    climbed: false,
+    visitsEarned: 1,
+  },
   voidableUntil: '2026-09-14T10:35:31.000Z',
   happyHour: null,
 };
@@ -229,6 +239,8 @@ const ROW = {
   note: 'Bridal trial',
   voidedAt: null,
   reversedByTransactionId: null,
+  // `GET /charges` sends it from the same `serialiseTransactionLoyalty` (0065).
+  loyalty: { mode: 'tiers', visitsEarned: 1, tierAfter: 'bronze', climbed: false, rewardReady: false },
 };
 
 describe("today's charges keeps the two fields that say a price was typed", () => {
