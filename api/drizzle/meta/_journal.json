@@ -421,6 +421,13 @@
       "when": 1790138000000,
       "tag": "0059_the_bell_opens_on_her_history_read",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790224400000,
+      "tag": "0060_she_chooses_where_to_collect",
+      "breakpoints": true
     }
   ]
 }

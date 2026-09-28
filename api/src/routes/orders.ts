@@ -44,7 +44,9 @@ import {
   type OrderStatus,
 } from '../db/schema/delivery';
 import { member } from '../db/schema/member';
+import { branch } from '../db/schema/salon';
 import { writeAudit } from '../services/audit';
+import type { PickupBranchView } from '../services/order';
 
 /**
  * One page of the merchant's fulfilment board. A cap, reported as one — see the
@@ -91,11 +93,29 @@ const ORDERS_PAGE = 200;
  * for the erased delivery. If you are reading this to find out whether that is
  * still true, read `ShopOrders.tsx` — this comment cannot know.
  */
-function serialiseShopOrder(row: typeof shopOrder.$inferSelect) {
+function serialiseShopOrder(
+  row: typeof shopOrder.$inferSelect,
+  pickup: PickupBranchJoin | null,
+) {
   return {
     transactionId: row.transactionId,
     fulfilment: row.fulfilment,
     status: row.status,
+    /**
+     * WHERE TO PREPARE IT, AND WHERE SHE WILL COME FOR IT — migration 0060.
+     *
+     * Served INLINE with its name rather than as a bare id for the board to look
+     * up in `salon.branches`, and the reason is the closure case: that list
+     * carries only OPEN branches, so an order waiting at a branch that has since
+     * closed would resolve to nothing and its location would vanish from the
+     * one screen that has to act on it. `closed: true` is what lets the board
+     * say "this branch has closed — contact her" instead.
+     *
+     * `null` for a delivery, and for a LEGACY pickup at a multi-branch salon
+     * that was never asked (0060 backfills only where the answer was a fact).
+     * `fulfilment` tells the two apart, exactly as it does for `address`.
+     */
+    pickupBranch: pickupBranchView(row, pickup),
     /** The SNAPSHOT — what she typed when she ordered, not what her book says now. */
     address:
       row.fulfilment === 'delivery' && row.addressErasedAt === null
@@ -131,6 +151,41 @@ import { createOrderPayment, readOrderPayment } from '../services/orderPayment';
 import { parseMethod } from '../services/topup';
 import { env } from '../env';
 import { simulationHint } from './topups';
+
+/**
+ * The branch columns joined beside a shop order. A LEFT join on `(id, salon_id)`
+ * — the same composite key 0060's FK enforces — so a row can never be served
+ * with another salon's branch name even if the key were somehow bypassed.
+ */
+const pickupBranchColumns = {
+  id: branch.id,
+  name: branch.name,
+  nameAr: branch.nameAr,
+  closedAt: branch.closedAt,
+};
+type PickupBranchJoin = {
+  id: string | null;
+  name: string | null;
+  nameAr: string | null;
+  closedAt: Date | null;
+};
+const pickupBranchJoin = and(
+  eq(branch.id, shopOrder.pickupBranchId),
+  eq(branch.salonId, shopOrder.salonId),
+);
+
+function pickupBranchView(
+  row: typeof shopOrder.$inferSelect,
+  pickup: PickupBranchJoin | null,
+): PickupBranchView | null {
+  if (row.fulfilment !== 'pickup' || !row.pickupBranchId) return null;
+  if (!pickup || pickup.id === null || pickup.name === null) {
+    // Unreachable under the composite FK. Thrown rather than served as null,
+    // because null means "not chosen" and this would be a chosen branch lost.
+    throw new Error(`shop_order ${row.transactionId} names pickup branch ${row.pickupBranchId}, which did not join`);
+  }
+  return { id: pickup.id, name: pickup.name, nameAr: pickup.nameAr, closed: pickup.closedAt !== null };
+}
 
 /** A cart's ceiling. Wider than any drawn catalog, narrow enough to bound a body. */
 const MAX_LINES = 50;
@@ -204,6 +259,7 @@ function parseOrderBody(body: Record<string, unknown>): {
   items: OrderLineInput[];
   fulfilment: 'pickup' | 'delivery';
   addressId: string | undefined;
+  pickupBranchId: string | undefined;
 } {
   /**
    * NO PRICES, AND THEY ARE REFUSED RATHER THAN IGNORED.
@@ -274,7 +330,28 @@ function parseOrderBody(body: Record<string, unknown>): {
     }
   }
 
-  return { items, fulfilment, addressId };
+  /**
+   * WHERE SHE WILL COLLECT — migration 0060. `pickupBranchId`, never `branchId`:
+   * that one is refused above because it is the ATTRIBUTION field and the
+   * server resolves it; this is her answer to "which counter", which only she
+   * can give. `services/order.ts § resolvePickupBranch` validates it as an open
+   * branch of her own salon.
+   *
+   * ON A DELIVERY IT IS REFUSED, NOT IGNORED — the same treatment as an address
+   * on a pickup. A client that sent both believed one of them.
+   */
+  const pickupBranchId =
+    body.pickupBranchId === undefined || body.pickupBranchId === null
+      ? undefined
+      : requireString(body.pickupBranchId, 'pickupBranchId', 100);
+  if (pickupBranchId !== undefined && fulfilment === 'delivery') {
+    throw badRequest(
+      'pickup_branch_not_for_delivery',
+      'A delivery order has no pickup branch. Choose pickup, or leave the branch out.',
+    );
+  }
+
+  return { items, fulfilment, addressId, pickupBranchId };
 }
 export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -292,13 +369,14 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
   app.get('/members/me/orders', async (req, reply) => {
     const p = requireMember(req);
     const rows = await db
-      .select()
+      .select({ o: shopOrder, pickup: pickupBranchColumns })
       .from(shopOrder)
+      .leftJoin(branch, pickupBranchJoin)
       .where(eq(shopOrder.memberId, p.id))
       .orderBy(desc(shopOrder.createdAt))
       .limit(ORDERS_PAGE);
     return reply.send({
-      items: rows.map(serialiseShopOrder),
+      items: rows.map((r) => serialiseShopOrder(r.o, r.pickup)),
       truncated: rows.length === ORDERS_PAGE,
       nextCursor: null,
     });
@@ -353,12 +431,23 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
          */
         .select({
           o: shopOrder,
+          pickup: pickupBranchColumns,
           memberName: member.name,
           memberPhone: member.phone,
           memberErasedAt: member.erasedAt,
         })
         .from(shopOrder)
         .innerJoin(member, eq(member.id, shopOrder.memberId))
+        /**
+         * NOT FILTERED BY THE STAFF MEMBER'S BRANCH ACCESS, and that is question
+         * 2's answer rather than an omission. Closing a branch `array_remove`s it
+         * from every scoped staff member's list (`routes/salons.ts` § DELETE
+         * branch), so a board filtered by branch access would drop exactly the
+         * orders still waiting at a branch that just closed — for everyone but an
+         * all-branches account. The board is the Shop section's, gated on
+         * `perms.shop` for the salon, as it was before 0060.
+         */
+        .leftJoin(branch, pickupBranchJoin)
         .where(
           and(
             eq(shopOrder.salonId, p.salonId),
@@ -370,7 +459,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
 
       return reply.send({
         items: rows.map((r) => ({
-          ...serialiseShopOrder(r.o),
+          ...serialiseShopOrder(r.o, r.pickup),
           /**
            * THE NAME IS THE TOMBSTONE AND STAYS THE TOMBSTONE — "Deleted account"
            * is the sentence this board is meant to render, and it is already
@@ -487,7 +576,14 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
         userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
       });
 
-      return reply.send({ order: serialiseShopOrder(row) });
+      const [pickup] = row.pickupBranchId
+        ? await db
+            .select(pickupBranchColumns)
+            .from(branch)
+            .where(and(eq(branch.id, row.pickupBranchId), eq(branch.salonId, row.salonId)))
+            .limit(1)
+        : [];
+      return reply.send({ order: serialiseShopOrder(row, pickup ?? null) });
     },
   );
 
@@ -498,7 +594,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
     const key = readIdempotencyKey(req);
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { items, fulfilment, addressId } = parseOrderBody(body);
+    const { items, fulfilment, addressId, pickupBranchId } = parseOrderBody(body);
 
     const idem = {
       scope: principalScope(p),
@@ -515,11 +611,21 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
        * as a delivery meant something different, and replaying the pickup would
        * hand her a "delivered" order that is sitting on a counter.
        */
-      requestHash: hashRequestBody({ items, fulfilment, addressId: addressId ?? null }),
+      /**
+       * THE PICKUP BRANCH IS IN THE HASH TOO — collecting at Salmiya and at Kuwait
+       * City are different orders. Added only when present, so a key minted before
+       * 0060 hashes exactly as it did and a retry across the deploy still replays.
+       */
+      requestHash: hashRequestBody({
+        items,
+        fulfilment,
+        addressId: addressId ?? null,
+        ...(pickupBranchId !== undefined ? { pickupBranchId } : {}),
+      }),
     };
 
     try {
-      const result = await performOrder(db, { items, fulfilment, addressId }, {
+      const result = await performOrder(db, { items, fulfilment, addressId, pickupBranchId }, {
         principal: p,
         idempotency: idem,
         ipAddress: req.ip ?? null,
@@ -586,20 +692,26 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
     const key = readIdempotencyKey(req);
 
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { items, fulfilment, addressId } = parseOrderBody(body);
+    const { items, fulfilment, addressId, pickupBranchId } = parseOrderBody(body);
     const method = parseMethod(body.method);
 
     const idem = {
       scope: principalScope(p),
       endpoint: 'POST /orders/payments',
       key,
-      requestHash: hashRequestBody({ items, fulfilment, addressId: addressId ?? null, method }),
+      requestHash: hashRequestBody({
+        items,
+        fulfilment,
+        addressId: addressId ?? null,
+        method,
+        ...(pickupBranchId !== undefined ? { pickupBranchId } : {}),
+      }),
     };
 
     try {
       const view = await createOrderPayment(
         db,
-        { order: { items, fulfilment, addressId }, method },
+        { order: { items, fulfilment, addressId, pickupBranchId }, method },
         {
           principal: p,
           idempotency: idem,

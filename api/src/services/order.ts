@@ -82,7 +82,7 @@ import { add, fils, subtract, type Fils, type Transaction } from '@avo/types';
 import type { Db } from '../db/client';
 import { member } from '../db/schema/member';
 import { product } from '../db/schema/product';
-import { salon } from '../db/schema/salon';
+import { branch as branchTable, salon } from '../db/schema/salon';
 import { shopOrderLine } from '../db/schema/shopOrder';
 import { transaction } from '../db/schema/transaction';
 import { ledgerEntry } from '../db/schema/ledger';
@@ -120,6 +120,32 @@ export interface OrderInput {
   fulfilment?: 'pickup' | 'delivery' | undefined;
   /** Required for delivery, refused for pickup. One of HER OWN addresses. */
   addressId?: string | undefined;
+  /**
+   * WHERE SHE WILL COLLECT IT — pickup only, migration 0060. Refused on a
+   * delivery; validated as an OPEN branch of HER salon; defaulted when the salon
+   * has exactly one open branch, required when it has more. `resolveFulfilment`.
+   *
+   * NOT `branchId`, and the difference is the point. `branchId` is the
+   * attribution field the server resolves and a client may never send
+   * (`routes/orders.ts` still refuses it by name); this is her answer to a
+   * question only she can answer.
+   */
+  pickupBranchId?: string | undefined;
+}
+
+/**
+ * The branch she collects from, as every surface serves it. `closed` because a
+ * branch can close AFTER she chose it (DELETE /salons/{id}/branches/{bid}) and
+ * the order must still say where it was meant to be — `salon.branches` lists
+ * only OPEN branches, so a client resolving the id there would find nothing and
+ * the location would silently disappear. Always `false` on a fresh order: a
+ * closed branch is refused at checkout.
+ */
+export interface PickupBranchView {
+  id: string;
+  name: string;
+  nameAr: string | null;
+  closed: boolean;
 }
 
 export interface OrderContext {
@@ -156,6 +182,12 @@ export interface OrderResult {
    */
   items: OrderLineResult[];
   loyalty: LoyaltyOutcome;
+  /**
+   * Where she collects it, as the SERVER settled it — which matters most when
+   * she sent nothing and a single-branch salon's only branch was chosen for her.
+   * `null` on a delivery. Migration 0060.
+   */
+  pickupBranch: PickupBranchView | null;
   /**
    * NOT VOIDABLE, and said rather than omitted.
    *
@@ -290,20 +322,6 @@ export async function placeOrder(
   }
   const balanceAfter = subtract(balance, total);
 
-  /**
-   * The branch, resolved by the SERVER, exactly as a booking's is. A customer
-   * placing an order has not told us where she is and must not be asked: a
-   * client naming its own branch is a client choosing its own reporting bucket
-   * — services/branch.ts § "the fix that must not be taken". A single-branch
-   * salon is `established`; a multi-branch one is an attribution and the row
-   * says so through `branch_assumed`.
-   *
-   * Nothing here reads `established`, because nothing here pays out on the
-   * branch — see the header on promotions. It is carried onto the row so
-   * per-branch shop revenue is filterable rather than indistinguishable from a
-   * figure that was known.
-   */
-  const branch = await resolveBranch(tx, m.salonId, undefined);
   const now = new Date();
   const txId = await nextTransactionId(tx);
 
@@ -408,7 +426,48 @@ export async function placeOrder(
    * the money path. If a fee is ever added, that is a separate decision and
    * this comment is the thing it has to argue with.
    */
-  const { fulfilment, address } = await resolveFulfilment(tx, m.id, input);
+  const { fulfilment, address, pickupBranch } = await resolveFulfilment(
+    tx,
+    m.id,
+    m.salonId,
+    input,
+  );
+
+  /**
+   * ------------------------------------------------------ 5c. attribution --
+   *
+   * WHICH BRANCH THE REVENUE IS BOOKED TO. Two answers, and which one depends on
+   * whether she told us where she is collecting.
+   *
+   * A PICKUP ORDER IS ATTRIBUTED TO THE BRANCH SHE COLLECTS FROM, and the row
+   * says `branch_assumed = false`, because it is no longer an assumption: the
+   * goods leave that branch's counter. Before migration 0060 every shop order at
+   * a multi-branch salon was booked to the lowest branch id with
+   * `branch_assumed = true` — alphabetical order talking, one branch inheriting
+   * another's takings wholesale (`services/reports.ts § branch_assumed`). This is
+   * strictly more true, and it is what the client's own per-branch revenue ask
+   * needs.
+   *
+   * WHY LETTING HER CHOOSE IT IS SAFE HERE WHEN IT IS NOT ON A CHARGE. The rule
+   * in `services/branch.ts` — "a client choosing the branch is a client choosing
+   * its own multiplier" — is about EARNING. A shop order earns nothing per
+   * branch: no `loadPromotionInputs`, no `decideEarning`, no boost lookup, one
+   * flat visit or stamp in step 8 (see this file's header on promotions). So the
+   * branch she picks changes a reporting bucket and nothing she receives.
+   * `services/branchSource.test.ts` pins that this file never reaches the
+   * promotion engine, so the day somebody adds earning to orders that spec goes
+   * red and names this paragraph — at which point the pickup branch must stay
+   * attribution-only and `established` must stop being `true` here.
+   *
+   * It is NOT routed through `resolveBranch`'s `supplied`, deliberately: that
+   * parameter means "a branch the server established from an enrolled device",
+   * and the grep in `branchSource.test.ts` keeps it that way.
+   *
+   * A DELIVERY is still the server's resolution, exactly as before.
+   */
+  const branch = pickupBranch
+    ? { branchId: pickupBranch.id, established: true }
+    : await resolveBranch(tx, m.salonId, undefined);
 
   // ------------------------------------------------- 6. transaction record --
   await tx.insert(transaction).values({
@@ -542,6 +601,7 @@ export async function placeOrder(
     // `preparing` is the column default; named here so the lifecycle's start
     // is legible at the only place that creates one.
     status: 'preparing',
+    pickupBranchId: pickupBranch?.id ?? null,
     addressId: address?.id ?? null,
     addressLabel: address?.label ?? null,
     block: address?.block ?? null,
@@ -614,7 +674,13 @@ export async function placeOrder(
      */
     detail: `${(total / 1000).toFixed(3)} KD from ${m.name}'s wallet · ${lines
       .map((l) => `${l.qty}× ${l.name}`)
-      .join(', ')} · ${fulfilment === 'delivery' ? 'for delivery' : 'to collect'}`,
+      .join(', ')} · ${
+      fulfilment === 'delivery'
+        ? 'for delivery'
+        : // Where, since 0060 — "to collect" at a two-branch salon left the
+          // merchant reading her own audit log to ask which counter.
+          `to collect${pickupBranch ? ` at ${pickupBranch.name}` : ''}`
+    }`,
     /**
      * `wallet`, not `merchant` or `scanner`. The customer took this action from
      * her own app; no staff member was involved, and attributing it to the
@@ -633,6 +699,7 @@ export async function placeOrder(
       })),
       totalFils: total,
       branchAssumed: !branch.established,
+      pickupBranchId: pickupBranch?.id ?? null,
     },
     ipAddress: ctx.ipAddress ?? null,
     userAgent: ctx.userAgent ?? null,
@@ -669,6 +736,7 @@ export async function placeOrder(
     totalFils: total,
     items: lines,
     loyalty,
+    pickupBranch,
     voidable: false,
   };
 
@@ -764,11 +832,30 @@ async function priceBasket(
 async function resolveFulfilment(
   tx: Tx,
   memberId: string,
-  input: Pick<OrderInput, 'fulfilment' | 'addressId'>,
-): Promise<{ fulfilment: 'pickup' | 'delivery'; address: typeof memberAddress.$inferSelect | null }> {
+  salonId: string,
+  input: Pick<OrderInput, 'fulfilment' | 'addressId' | 'pickupBranchId'>,
+): Promise<{
+  fulfilment: 'pickup' | 'delivery';
+  address: typeof memberAddress.$inferSelect | null;
+  pickupBranch: PickupBranchView | null;
+}> {
   const fulfilment = input.fulfilment ?? 'pickup';
   let address: typeof memberAddress.$inferSelect | null = null;
+  let pickupBranch: PickupBranchView | null = null;
   if (fulfilment === 'delivery') {
+    /**
+     * REFUSED, NOT IGNORED — `routes/orders.ts` refuses it first; this is the
+     * copy that holds for the card-paid settlement, which reaches here from a
+     * stored request rather than through the route. A client that sent a pickup
+     * branch with a delivery believed one of the two, and quietly honouring
+     * either is the wrong answer that reads as working.
+     */
+    if (input.pickupBranchId) {
+      throw badRequest(
+        'pickup_branch_not_for_delivery',
+        'A delivery order has no pickup branch. Choose pickup, or leave the branch out.',
+      );
+    }
     if (!input.addressId) {
       throw badRequest('address_required', 'A delivery needs one of your saved addresses.');
     }
@@ -785,13 +872,96 @@ async function resolveFulfilment(
       .limit(1);
     if (!row) throw notFound('unknown_address', 'No such address.');
     address = row;
-  } else if (input.addressId) {
+  } else {
+    if (input.addressId) {
+      throw badRequest(
+        'address_not_for_pickup',
+        'A pickup order takes no address. Choose delivery, or omit the address.',
+      );
+    }
+    pickupBranch = await resolvePickupBranch(tx, salonId, input.pickupBranchId);
+  }
+  return { fulfilment, address, pickupBranch };
+}
+
+/**
+ * WHERE SHE COLLECTS — migration 0060. HER choice, the SERVER'S validation.
+ *
+ * SCOPED TO HER SALON IN THE QUERY, so another salon's branch and a branch that
+ * does not exist are the same 404 — a 403 would confirm the id is real
+ * somewhere, `resolveBranch`'s reasoning. The composite FK in 0060 refuses it
+ * again at the insert if this is ever bypassed.
+ *
+ * A CLOSED BRANCH OF HER OWN SALON IS A 409 WITH ITS OWN CODE rather than the
+ * same 404: she can see the salon, and "that branch has closed" is something
+ * she can act on where "no such branch" is not. It is the case a wallet holding
+ * a salon read from before the close will actually meet.
+ *
+ * `FOR SHARE` ON THE BRANCH ROW, and it is the whole defence against the close
+ * racing the order. `DELETE /salons/{id}/branches/{bid}` UPDATEs `closed_at`,
+ * which conflicts with a share lock: either the close waits for this order to
+ * commit (and the order then sits at a branch the board shows as closed — the
+ * case the closure preview counts), or this read waits for the close, re-reads
+ * the committed row, sees `closed_at`, and refuses. Without it an order could
+ * commit against a branch that closed a millisecond earlier and nobody would
+ * be warned. The FK's own KEY SHARE lock does not conflict with that UPDATE,
+ * which is why it is not enough.
+ *
+ * NOTHING SENT, ONE OPEN BRANCH: that branch. The common case — most salons
+ * have one — needs nothing from the client, and there is nowhere else she could
+ * mean. NOTHING SENT, SEVERAL: refused, because picking one for her is the
+ * alphabetical guess this whole column exists to replace.
+ */
+async function resolvePickupBranch(
+  tx: Tx,
+  salonId: string,
+  supplied: string | undefined,
+): Promise<PickupBranchView> {
+  if (supplied) {
+    const [row] = await tx
+      .select({
+        id: branchTable.id,
+        name: branchTable.name,
+        nameAr: branchTable.nameAr,
+        closedAt: branchTable.closedAt,
+      })
+      .from(branchTable)
+      .where(and(eq(branchTable.id, supplied), eq(branchTable.salonId, salonId)))
+      .for('share')
+      .limit(1);
+    if (!row) {
+      throw notFound(
+        'unknown_pickup_branch',
+        "That branch isn't one of this salon's. Choose where to collect from the salon's branches.",
+      );
+    }
+    if (row.closedAt !== null) {
+      throw conflict(
+        'pickup_branch_closed',
+        'That branch has closed and is no longer taking pickups. Choose another branch to collect from.',
+        { pickupBranchId: row.id },
+      );
+    }
+    return { id: row.id, name: row.name, nameAr: row.nameAr, closed: false };
+  }
+
+  // LIMIT 2: the second row is the whole question, as in `resolveBranch`.
+  const open = await tx
+    .select({ id: branchTable.id, name: branchTable.name, nameAr: branchTable.nameAr })
+    .from(branchTable)
+    .where(and(eq(branchTable.salonId, salonId), isNull(branchTable.closedAt)))
+    .orderBy(branchTable.id)
+    .for('share')
+    .limit(2);
+  const only = open[0];
+  if (!only) throw notFound('no_branch', 'That salon has no open branch.');
+  if (open.length > 1) {
     throw badRequest(
-      'address_not_for_pickup',
-      'A pickup order takes no address. Choose delivery, or omit the address.',
+      'pickup_branch_required',
+      'This salon has more than one branch. Choose the branch you will collect your order from.',
     );
   }
-  return { fulfilment, address };
+  return { id: only.id, name: only.name, nameAr: only.nameAr, closed: false };
 }
 
 /**
@@ -815,6 +985,6 @@ export async function quoteOrder(
   if (!s) throw notFound('unknown_salon', 'No such salon.');
   requireShopModule(s);
   const { lines, total } = await priceBasket(tx, m.salonId, input.items);
-  await resolveFulfilment(tx, m.id, input);
+  await resolveFulfilment(tx, m.id, m.salonId, input);
   return { totalFils: total, lines };
 }

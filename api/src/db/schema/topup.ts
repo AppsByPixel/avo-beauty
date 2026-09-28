@@ -49,6 +49,17 @@ export interface OrderPaymentRequest {
   items: Array<{ productId: string; qty: number }>;
   fulfilment: 'pickup' | 'delivery';
   addressId: string | null;
+  /**
+   * Where she will collect it — migration 0060. Rides on the stored request so
+   * the settlement places the order at the branch she chose on the cart, not at
+   * one resolved later. OPTIONAL ON THE TYPE because a request stored before
+   * 0060 has no such key: it settles as if she had sent none, which defaults at
+   * a single-branch salon and refuses (`pickup_branch_required`, credit kept) at
+   * a multi-branch one — `services/topup.ts § placeAttachedOrder`'s race rule,
+   * not a new one. Re-validated at settlement; a branch that closed while she
+   * was on the hosted page is `pickup_branch_closed`.
+   */
+  pickupBranchId?: string | null;
 }
 
 /** api-contract.md § TopUpIntent, `status`. */

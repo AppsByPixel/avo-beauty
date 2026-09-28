@@ -209,3 +209,43 @@ describe('a branch is never read from a request body', () => {
     expect(charge).toContain('resolveBranch(tx, ctx.principal.salonId, ctx.principal.enrolledBranchId)');
   });
 });
+
+/**
+ * THE PICKUP BRANCH (migration 0060) IS A CLIENT-CHOSEN BRANCH, AND IT IS ALLOWED
+ * TO BECOME A SHOP ORDER'S ATTRIBUTION FOR EXACTLY ONE REASON: a shop order earns
+ * nothing per branch. `services/order.ts § 5c` makes that argument; these specs
+ * are the argument's precondition, so the day it stops being true they go red
+ * and name the paragraph that has to change.
+ *
+ * What they do NOT say is that orders may never earn a promotion — that is an
+ * escalated product decision (order.ts header). They say that if one ever does,
+ * `pickupBranchId` must stop being `established` first.
+ */
+describe('a pickup branch is attribution only, because a shop order earns nothing per branch', () => {
+  const order = () => code(SERVICES.find((f) => rel(f) === 'services/order.ts') as string);
+  const topup = () => code(SERVICES.find((f) => rel(f) === 'services/topup.ts') as string);
+
+  it('services/order.ts never reaches the promotion engine or a boost — the reason the pickup branch may be the attribution branch', () => {
+    const c = order();
+    // Sentinel: the pickup branch really is the attribution here, or the rest is moot.
+    expect(c).toContain('pickupBranch.id, established: true');
+    for (const forbidden of ['decideEarning', 'loadPromotionInputs', "from './promotions'", 'boost']) {
+      expect(c, `services/order.ts now mentions ${forbidden} in code — see its § 5c`).not.toContain(forbidden);
+    }
+  });
+
+  it("the pickup branch is never passed as resolveBranch's `supplied` — a delivery resolves with nothing", () => {
+    const calls = [...order().matchAll(/await resolveBranch\(([^)]*)\)/g)].map((m) => m[1]?.trim());
+    expect(calls).toEqual(['tx, m.salonId, undefined']);
+  });
+
+  it("a card-paid order's top-up bonus is computed with NO branch, so naming a boosted pickup branch cannot raise it", () => {
+    expect(topup()).toContain('loadPromotionInputs(tx, s.id, null)');
+    expect(topup()).not.toMatch(/loadPromotionInputs\([^)]*pickup/i);
+  });
+
+  it('the pickup branch has its own name on the wire: routes read `body.pickupBranchId` only in routes/orders.ts', () => {
+    const readers = ROUTES.filter((f) => code(f).includes('body.pickupBranchId'));
+    expect(readers.map(rel)).toEqual(['routes/orders.ts']);
+  });
+});

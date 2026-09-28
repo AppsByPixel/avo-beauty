@@ -130,6 +130,25 @@ export const shopOrder = pgTable(
     status: orderStatus('status').notNull().default('preparing'),
 
     /**
+     * WHERE SHE WILL COLLECT IT — migration 0060. Her choice, validated by the
+     * server (an OPEN branch of HER salon), and NOT the attribution branch:
+     * `transaction.branch_id` is still the server's answer to "where did the
+     * money move", and `services/order.ts § 5c` says why, for a pickup order,
+     * the two are the same branch.
+     *
+     * NULL on a delivery (CHECKed), and NULL on a legacy pickup at a
+     * multi-branch salon that was never asked — which the wire serves as
+     * `pickupBranch: null`, "not chosen", rather than inventing a counter.
+     *
+     * NO `.references()` HERE, deliberately: the key is the COMPOSITE
+     * `(pickup_branch_id, salon_id) → branch(id, salon_id)` in the migration, so
+     * another salon's branch is refused by the schema, and a single-column
+     * reference declared here would describe a weaker key than the one that
+     * exists. `artist.branch_id` (0044) has the same arrangement.
+     */
+    pickupBranchId: text('pickup_branch_id'),
+
+    /**
      * Provenance only, and nullable because she may delete the address later.
      * The columns below are the SNAPSHOT, and they are what a driver reads —
      * `shop_order_line` snapshots `name` and `unit_price_fils` for the same
@@ -210,6 +229,11 @@ export const shopOrder = pgTable(
              AND ${t.floor} IS NULL AND ${t.apartment} IS NULL AND ${t.area} IS NULL
              AND ${t.governorate} IS NULL AND ${t.instructions} IS NULL
              AND ${t.latitude} IS NULL AND ${t.longitude} IS NULL)`,
+    ),
+    /** Migration 0060: "delivery to Salmiya's counter" is not a storable state. */
+    check(
+      'shop_order_pickup_branch_only_on_pickup',
+      sql`${t.fulfilment} = 'pickup' OR ${t.pickupBranchId} IS NULL`,
     ),
     check(
       'shop_order_coordinates_are_a_pair',

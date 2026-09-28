@@ -30,6 +30,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
+import { shopOrder } from '../db/schema/delivery';
 import { deviceEnrolment } from '../db/schema/deviceEnrolment';
 import { staffUser } from '../db/schema/staff';
 import type { Executor } from './audit';
@@ -75,6 +76,22 @@ export interface BranchClosureImpact {
    * is read on a confirmation sheet, and `label` is what the merchant typed.
    */
   tillsUnenrolled: Array<{ deviceId: string; label: string }>;
+  /**
+   * SHOP ORDERS STILL WAITING TO BE COLLECTED HERE — migration 0060.
+   *
+   * A customer chose this branch as her pickup counter and has not collected
+   * yet (`preparing` or `ready`). The close does NOT touch those orders: they
+   * stay on the salon's board, which is not branch-filtered, carrying
+   * `pickupBranch.closed: true`, so nothing vanishes. But nobody will be at
+   * that counter, and deciding what happens to her order — hand it over at
+   * another branch, deliver it, reimburse it as wallet credit — is a merchant's
+   * call the server does not make for her. The count is here so she makes it
+   * BEFORE confirming rather than discovering it when the customer arrives.
+   *
+   * A COUNT, NOT A BLOCKER, for the reason the tills and the held deposits are:
+   * a close is refused only when it would leave no open branch.
+   */
+  pickupOrdersWaiting: number;
 }
 
 export async function branchClosureImpact(
@@ -138,9 +155,21 @@ export async function branchClosureImpact(
     )
     .orderBy(deviceEnrolment.deviceId);
 
+  const [waiting] = await (exec as Db)
+    .select({ n: sql<number>`count(*)::int` })
+    .from(shopOrder)
+    .where(
+      and(
+        eq(shopOrder.salonId, salonId),
+        eq(shopOrder.pickupBranchId, branchId),
+        sql`${shopOrder.status} <> 'closed'`,
+      ),
+    );
+
   return {
     staffRescoped,
     tillsUnenrolled: tills,
+    pickupOrdersWaiting: waiting?.n ?? 0,
     staffLeftWithNoBranch: staffRescoped.filter((s) => s.remaining === 0).map((s) => s.id),
     depositHeldBookings: counts?.total ?? 0,
     depositHeldBookingsBranchAssumed: counts?.assumed ?? 0,
