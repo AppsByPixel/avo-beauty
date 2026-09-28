@@ -9348,4 +9348,9 @@ a:hover {
 
 .cust-card__more {
   margin-top: 12px;
+  /* The fold and "Show more" side by side when both are offered. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }

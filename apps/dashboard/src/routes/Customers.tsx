@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { fils } from '@avo/types';
 import { Button, Card, EmptyState, Money, Skeleton } from '@avo/ui';
 import {
@@ -714,6 +714,29 @@ export function UnservedPanels() {
 
 type HistoryQuery = ReturnType<typeof useCustomerHistory>;
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE FOLD. Aftab, 2026-09-29: "activity part is huge".
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The panel drew every row it had — a full page of 25 at first, more with each
+ * "Show more" — beside a Personal information card of three lines. It now opens
+ * on the newest FIVE and a disclosure reveals the rest.
+ *
+ * LANE B'S WALLET FOLD IS THE PRECEDENT (`apps/wallet/src/components/
+ * ActivityFeed.tsx`, 544a4b8): ONE control whose label and `aria-expanded`
+ * change — "Show all" / "Show less" — rather than one button unmounting and
+ * another mounting in its place, so focus stays on the control just pressed and
+ * it can be pressed again without hunting for it. It opens folded on every visit,
+ * which is what a disclosure should do; nothing about it is persisted.
+ *
+ * "Show more" IS A DIFFERENT CONTROL AND STAYS ONE. It asks the server for the
+ * next page; the fold only decides how many of the rows in hand are drawn. It is
+ * offered while unfolded — asking for more rows while they are hidden would be a
+ * request whose answer nobody can see — and also when she has five or fewer, so
+ * a short first page is never a dead end.
+ */
+export const HISTORY_FOLD = 5;
+
 export function History({
   history,
   timezone,
@@ -723,6 +746,9 @@ export function History({
   timezone: string | null;
   suppressed: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
+
   if (suppressed) return null;
 
   if (history.isError) {
@@ -769,22 +795,38 @@ export function History({
     );
   }
 
+  const foldable = items.length > HISTORY_FOLD;
+  const visible = foldable && !expanded ? items.slice(0, HISTORY_FOLD) : items;
+  const offerNextPage = history.hasNextPage && (expanded || !foldable);
+
   return (
     <>
-      <ul className="cust-card__feed">
-        {items.map((item) => (
+      <ul className="cust-card__feed" id={listId}>
+        {visible.map((item) => (
           <HistoryRow key={`${item.stream}:${item.id}`} item={item} timezone={timezone} />
         ))}
       </ul>
-      {history.hasNextPage ? (
+      {foldable || offerNextPage ? (
         <div className="cust-card__more">
-          <Button
-            variant="secondary"
-            onClick={() => void history.fetchNextPage()}
-            disabled={history.isFetchingNextPage}
-          >
-            {history.isFetchingNextPage ? 'Loading…' : 'Show more'}
-          </Button>
+          {foldable ? (
+            <Button
+              variant="quiet"
+              aria-expanded={expanded}
+              aria-controls={listId}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? 'Show less' : 'Show all'}
+            </Button>
+          ) : null}
+          {offerNextPage ? (
+            <Button
+              variant="secondary"
+              onClick={() => void history.fetchNextPage()}
+              disabled={history.isFetchingNextPage}
+            >
+              {history.isFetchingNextPage ? 'Loading…' : 'Show more'}
+            </Button>
+          ) : null}
         </div>
       ) : null}
     </>
