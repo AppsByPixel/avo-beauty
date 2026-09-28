@@ -2130,3 +2130,29 @@ payment code closes, when the app returns to the foreground, and on pull-to-refr
 refresh keeps the last good balance under the existing stale banner. An upcoming-booking
 card that is already showing refreshes quietly, with no skeleton flash. The failure card
 still appears on its first load.
+
+**Merchant dashboard, fourth list, first slice (lane C, 22a17ad..44e9db9). These are deviations
+Aftab asked for.**
+- **Appointments date filter:** All dates / Today / Tomorrow / This week / Dates, in the salon's
+  clock and filtered server-side. It defaults to **All dates**, so the screen opens unchanged.
+  Aftab may prefer Today.
+- **Week view:** each block opens a popover carrying the list's own actions and permission rules.
+  An empty slot does not prefill a new appointment: the grid's columns are days, not artists.
+- **Status actions are icon buttons:** five inline SVGs in `packages/ui/src/icons.tsx` in the
+  nav-icon style, with the word kept visible. Cancel and no-show use `--avo-danger-text`. The
+  resting colour is `--avo-text-muted-strong` (6.34:1), replacing a 2.87:1 link.
+- **The Business hours card is the editor:** "Hours for" picks the salon default or a branch.
+  Salon-wide hours were already writable on `PATCH /salons/{id}`. It is gated `perms.loyalty`,
+  like the branch editor.
+- **Customer card activity:** folds at 5 rows with "Show all" / "Show less".
+- **The customer card's Bookings and Purchases need `team` plus that section's permission.**
+  Lane A's 72d79f7 gates each read on its own board's permission, because `team` alone would leak
+  appointment data and shoppers' addresses. The merchant order board now carries lines and a real
+  cursor.
+- **The Overview is served by one read**, `GET /v1/salons/{id}/overview/analytics`, which returns
+  twelve blocks. A block from another section is withheld without that section's permission.
+  Things served honestly and not faked:
+  - no campaign open rates, because nothing records an open
+  - payment mix split into top-up methods and wallet spend, because charges are always paid from
+    the wallet
+  - top services counts booked services only, because a walk-in's basket is stored hashed
