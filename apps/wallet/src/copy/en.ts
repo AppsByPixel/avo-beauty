@@ -781,6 +781,33 @@ export const en: Copy = {
   noUpcomingBody: 'Book a service and your wallet holds the deposit.',
   noUpcomingAction: 'Book',
 
+  // ═══════════════════════ the salon's own booking policy (migration 0066) ══
+  // NEW COPY — no design source; the bundle predates the ruling. The policy's
+  // own words are the salon's and come from the API. See types.ts.
+  policyTitle: 'Booking policy',
+  policyNoShowKeep: 'No-show: the salon keeps your deposit.',
+  policyNoShowReturn: 'No-show: your deposit comes back to your wallet.',
+  policyCutoff: (hoursBefore, returnPercent, first) =>
+    `${first ? 'Cancel ' : ''}${hoursBefore === 1 ? '1 hour' : `${hoursBefore} hours`} before: ${
+      returnPercent === 0 ? 'nothing' : `${returnPercent}%`
+    } back`,
+  policyCutoffLater: 'later: nothing back',
+  policyCancelNothing: 'If you cancel, the salon keeps your deposit.',
+  policyLoadFailed: "We couldn't load the salon's booking policy.",
+  policyChanged: 'The salon has just updated its booking policy. Read it before you confirm.',
+  policyNone: 'This salon has not published a booking policy.',
+  reschedNotePolicy: 'You can reschedule until an hour before.',
+  cancelPreviewTitle: 'Cancel this appointment?',
+  cancelPreviewBack: (amount) => `If you cancel now, ${amount} comes back to your wallet.`,
+  cancelPreviewNothing: 'If you cancel now, nothing comes back to your wallet.',
+  cancelPreviewKept: (amount) => `The salon keeps ${amount}.`,
+  cancelConfirm: 'Cancel appointment',
+  cancelKeep: 'Keep it',
+  settledBack: (amount) => `${amount} back to your wallet`,
+  settledKept: (amount) => `${amount} kept by the salon`,
+  cancelStartedTitle: 'This appointment has started',
+  cancelStartedBody: 'It can no longer be cancelled.',
+
   // ══════════════════════════════════════════════════════════════ account ══
   // design:1182-1231, verbatim.
   accountTitle: 'Account',
@@ -986,6 +1013,9 @@ export const en: Copy = {
   bellCardOrderBonus: (bonus) => `${bonus} bonus added to your wallet`,
   bellUnknownTitle: 'New notification',
   bellUnknownBody: 'Update the app to read this one.',
+  // NEW COPY — `booking_policy`, migration 0066. No design source.
+  bellPolicyTitle: (salon) => `${salon} updated its booking policy`,
+  bellPolicyLine: 'Tap to read it.',
 
   // ───────────────────────────── the shop, paid by card — client ask W2 ──
   // NEW COPY, NO DESIGN SOURCE, CLIENT TO REVIEW.

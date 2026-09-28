@@ -31,7 +31,7 @@ import type { HomeState } from '../state/useWalletHome';
 import { useUpcoming } from '../state/useBooking';
 import { useBookingLabels } from '../state/useBookingLabels';
 import { nextAppointment } from '../domain/booking';
-import type { BookingView } from '../api/booking';
+import type { BookingView, CancelBookingResult } from '../api/booking';
 import { useTopUp } from '../state/useTopUp';
 import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
 import { loyaltyPill, loyaltyProgress } from '../domain/loyalty';
@@ -50,6 +50,7 @@ import { OfflineBanner, StaleBanner } from '../components/Banners';
 import { MembershipSection } from '../components/MembershipSection';
 import { TopUpCard } from '../components/TopUpCard';
 import {
+  CancelledCard,
   NoUpcomingCard,
   UpcomingCard,
   UpcomingFailedCard,
@@ -60,6 +61,7 @@ import { TransactionSheet } from '../components/TransactionSheet';
 import { AccountButton } from '../components/AccountButton';
 import { BellButton } from '../components/BellButton';
 import { BellSheet } from '../components/BellSheet';
+import { BookingPolicySheet } from '../components/BookingPolicySheet';
 import { useBell } from '../state/useBell';
 import { useOrders } from '../state/useOrders';
 
@@ -131,6 +133,13 @@ export function HomeScreen({
 
   const [amount, setAmount] = useState<Fils>(DEFAULT_TOP_UP_AMOUNT);
   const [openTxId, setOpenTxId] = useState<string | null>(null);
+  /**
+   * A policy booking she has just cancelled, in the SERVER's figures, drawn in
+   * the booking's place until she taps Done. See `CancelledCard`.
+   */
+  const [cancelled, setCancelled] = useState<CancelBookingResult | null>(null);
+  /** The bell's `booking_policy` row opens the salon's current policy here. */
+  const [policyOpen, setPolicyOpen] = useState(false);
 
   /**
    * FOLDING THE ACTIVITY FEED MUST NOT STRAND HER. "Show less" sits at the
@@ -249,37 +258,46 @@ export function HomeScreen({
 
   const onCancel = useCallback(
     async (booking: BookingView) => {
-      const refunded = await upcoming.cancel(booking.id);
+      const outcome = await upcoming.cancel(booking.id);
       // Only on success. A refused cancel renders its refusal on the card —
       // a toast saying "deposit returned" for a 409 would be a lie the customer
       // acts on.
-      if (refunded !== null) {
-        /*
-          =====================================================================
-          AND A SUCCESSFUL CANCEL THAT RETURNED NOTHING IS THE OTHER HALF OF
-          THAT LIE, WHICH THIS LINE WAS TELLING
-          =====================================================================
-          A front desk can now create an appointment on an existing member's
-          account, and `BookingSchema` § source makes it always zero-deposit.
-          Cancelling one answered `refundedFils: 0` and this toast rendered
-          "Appointment cancelled · 0.000 KD deposit returned" — a receipt, in
-          her own language, for money that never left her wallet.
-
-          THE TEST IS `refunded`, NOT `booking.depositFils`, and that is the one
-          place in this slice where the server's number beats the booking's.
-          Both are 0 on a merchant booking, so they agree today; they are not the
-          same question. `depositFils` is what the appointment was WORTH, and
-          `refundedFils` is what the cancellation actually MOVED — and it is the
-          second one this sentence is a receipt for. Non-negotiable #2: the
-          server decides what came back, and the toast reports it rather than
-          predicting it from a field beside it.
-        */
-        onToast(
-          refunded > 0
-            ? copy.cancelledToast(formatMoney(fils(refunded), lang))
-            : copy.cancelledToastNoDeposit,
-        );
+      if (outcome === null) return;
+      /*
+        A BOOKING MADE UNDER THE SALON'S POLICY can keep money, so its answer is
+        a card, not a toast: what came back and what the salon kept, from the
+        cancel result. Decided by the stamp on the booking the SERVER returned.
+      */
+      if (outcome.booking.policy !== null) {
+        setCancelled(outcome);
+        return;
       }
+      const refunded = outcome.refundedFils;
+      /*
+        =====================================================================
+        AND A SUCCESSFUL CANCEL THAT RETURNED NOTHING IS THE OTHER HALF OF
+        THAT LIE, WHICH THIS LINE WAS TELLING
+        =====================================================================
+        A front desk can now create an appointment on an existing member's
+        account, and `BookingSchema` § source makes it always zero-deposit.
+        Cancelling one answered `refundedFils: 0` and this toast rendered
+        "Appointment cancelled · 0.000 KD deposit returned" — a receipt, in
+        her own language, for money that never left her wallet.
+
+        THE TEST IS `refunded`, NOT `booking.depositFils`, and that is the one
+        place in this slice where the server's number beats the booking's.
+        Both are 0 on a merchant booking, so they agree today; they are not the
+        same question. `depositFils` is what the appointment was WORTH, and
+        `refundedFils` is what the cancellation actually MOVED — and it is the
+        second one this sentence is a receipt for. Non-negotiable #2: the
+        server decides what came back, and the toast reports it rather than
+        predicting it from a field beside it.
+      */
+      onToast(
+        refunded > 0
+          ? copy.cancelledToast(formatMoney(fils(refunded), lang))
+          : copy.cancelledToastNoDeposit,
+      );
     },
     [upcoming, onToast, copy, lang],
   );
@@ -349,6 +367,14 @@ export function HomeScreen({
               bell.close();
               onOpenAccount();
             }}
+            onOpenBookingPolicy={() => {
+              bell.close();
+              setPolicyOpen(true);
+            }}
+          />
+          <BookingPolicySheet
+            salonId={policyOpen ? salon.id : null}
+            onClose={() => setPolicyOpen(false)}
           />
           {/*
             design:641-643 USED TO BE RENDERED HERE and is now a sibling of the
@@ -469,7 +495,14 @@ export function HomeScreen({
         nothing: a section that vanishes reads as a screen that half-loaded.
       */}
       {bookingOn ? (
-        upcoming.status === 'loading' ? (
+        cancelled ? (
+          <CancelledCard
+            result={cancelled}
+            salon={salon}
+            serviceLabel={labels.serviceLabel(cancelled.booking.serviceId, lang)}
+            onDone={() => setCancelled(null)}
+          />
+        ) : upcoming.status === 'loading' ? (
           <UpcomingSkeleton />
         ) : upcoming.status === 'failed' ? (
           // NOT the empty card. See UpcomingFailedCard — a failed read here once

@@ -58,7 +58,9 @@ import { MIN_TAP_TARGET, WHITE, color, onBrandFill, radius, text } from '../them
 import { useLanguage } from '../i18n/language';
 import { focusable } from '../theme/focus';
 import { FailureScreen } from '../components/FailureScreen';
-import { PrimaryButton } from '../components/Buttons';
+import { PrimaryButton, SecondaryButton } from '../components/Buttons';
+import { PolicyBlock } from '../components/booking/PolicyBlock';
+import type { BookingView } from '../api/booking';
 import { TopUpSheet } from '../components/TopUpSheet';
 import { useTopUp } from '../state/useTopUp';
 import { useNewBalanceAfterTopUp } from '../state/useNewBalanceAfterTopUp';
@@ -212,6 +214,7 @@ export function BookScreen({
           salon={salon}
           startsAt={flow.result.booking.startsAt}
           depositFils={flow.result.booking.depositFils}
+          policy={flow.result.booking.policy}
           serviceName={flow.selectedService ? serviceName(flow.selectedService, lang) : '—'}
           artistLabel={flow.selectedArtist ? artistName(flow.selectedArtist, lang) : '—'}
           rescheduled={flow.rescheduling}
@@ -443,8 +446,19 @@ export function BookScreen({
             </>
           ) : null}
 
+          {/*
+            THE SALON'S BOOKING POLICY, before she confirms (migration 0066).
+            Directly above the button that agrees to it. Nothing at all when
+            the salon has none, or on a reschedule — see `useBooking § policy`.
+          */}
+          <PolicySection flow={flow} />
+
           {flow.confirmFailure ? (
-            <ConfirmFailure failure={flow.confirmFailure} rescheduling={flow.rescheduling} />
+            <ConfirmFailure
+              failure={flow.confirmFailure}
+              rescheduling={flow.rescheduling}
+              policyBooking={reschedule?.booking.policy != null}
+            />
           ) : null}
         </>
       )}
@@ -863,9 +877,12 @@ function SlotSection({ flow }: { flow: ReturnType<typeof useBooking> }) {
 function ConfirmFailure({
   failure,
   rescheduling,
+  policyBooking = false,
 }: {
   failure: { code: string | null; message: string };
   rescheduling: boolean;
+  /** Moving a booking made under the salon's policy: the legacy clause is false. */
+  policyBooking?: boolean;
 }) {
   const { lang, copy } = useLanguage();
   const taken = failure.code === 'slot_taken' || failure.code === 'slot_past';
@@ -896,7 +913,9 @@ function ConfirmFailure({
     : off
       ? copy.bookingOffBody
       : windowClosed
-        ? copy.changeClosedBody
+        ? policyBooking
+          ? copy.changeClosedBodyNoDeposit
+          : copy.changeClosedBody
         : unassigned
           ? rescheduling
             ? copy.artistNotAssignedRescheduleBody
@@ -908,6 +927,47 @@ function ConfirmFailure({
       <Text style={[text('bodyL', lang, '600'), styles.confirmFailureTitle]}>{title}</Text>
       <Text style={[text('body', lang), styles.confirmFailureBody]}>{body}</Text>
     </View>
+  );
+}
+
+// ------------------------------------------------------ the booking policy --
+
+/**
+ * The review step's policy, in its four states. `flow.policy` is null where no
+ * policy is shown (a reschedule, or a salon with no deposit), and a ready
+ * `null` is a salon that has never published one: both draw nothing, and the
+ * screen is exactly what it was.
+ */
+function PolicySection({ flow }: { flow: ReturnType<typeof useBooking> }) {
+  const { lang, copy } = useLanguage();
+  const state = flow.policy;
+  if (state === null) return null;
+  if (state.status === 'loading') {
+    return (
+      <View style={styles.policySkeleton} accessibilityLabel={copy.loadingAria} testID="book-policy-loading">
+        <View style={[styles.policyBar, { width: '44%' }]} />
+        <View style={[styles.policyBar, { width: '86%', marginTop: 10 }]} />
+      </View>
+    );
+  }
+  if (state.status === 'failed') {
+    return (
+      <View style={styles.confirmFailure} accessibilityRole="alert" testID="book-policy-failed">
+        <Text style={[text('body', lang), styles.confirmFailureBody]}>{copy.policyLoadFailed}</Text>
+        <SecondaryButton label={copy.tryAgain} onPress={flow.retryPolicy} testID="book-policy-retry" />
+      </View>
+    );
+  }
+  if (state.data === null) return null;
+  return (
+    <>
+      {flow.policyChanged ? (
+        <View accessibilityRole="alert" testID="book-policy-changed">
+          <Note>{copy.policyChanged}</Note>
+        </View>
+      ) : null}
+      <PolicyBlock terms={state.data} testID="book-review-policy" />
+    </>
   );
 }
 
@@ -972,7 +1032,13 @@ function Cta({
             : copy.bookConfirmCta(formatMoney(fils(salon.depositFils), lang))
         }
         onPress={flow.confirm}
-        disabled={flow.submitting || !flow.selectedSlot}
+        // Off until the policy is on screen: she cannot agree to what she has
+        // not been shown. `flow.policy` is null where none applies.
+        disabled={
+          flow.submitting ||
+          !flow.selectedSlot ||
+          (flow.policy !== null && flow.policy.status !== 'ready')
+        }
         testID="book-confirm"
         style={styles.cta}
       />
@@ -1022,6 +1088,7 @@ function Confirmed({
   salon,
   startsAt,
   depositFils,
+  policy,
   serviceName,
   artistLabel,
   rescheduled,
@@ -1030,6 +1097,8 @@ function Confirmed({
   salon: Salon;
   startsAt: string;
   depositFils: number;
+  /** The policy STAMPED on the booking the server returned; null when legacy. */
+  policy: BookingView['policy'];
   serviceName: string;
   artistLabel: string;
   rescheduled: boolean;
@@ -1097,12 +1166,29 @@ function Confirmed({
         contradiction the block above records is inherited by the variants
         unchanged, deliberately, rather than quietly resolved by this lane.
       */}
-      <Text style={[text('bodyS', lang), styles.policy]} testID="book-policy">
-        {held ? copy.cancelPolicy : copy.cancelPolicyNoDeposit}
-      </Text>
-      <Text style={[text('bodyS', lang), styles.policy]} testID="book-resched-note">
-        {held ? copy.reschedNote : copy.reschedNoteNoDeposit}
-      </Text>
+      {/*
+        A BOOKING MADE UNDER THE SALON'S POLICY is shown that policy, as
+        stamped, in place of the design's two legacy lines — "Free to cancel up
+        to 24h before" and "After that the deposit stays with the salon" are
+        both false under a policy that sets its own cut-offs.
+      */}
+      {held && policy ? (
+        <>
+          <PolicyBlock terms={policy} testID="book-stamped-policy" />
+          <Text style={[text('bodyS', lang), styles.policy]} testID="book-resched-note">
+            {copy.reschedNotePolicy}
+          </Text>
+        </>
+      ) : (
+        <>
+          <Text style={[text('bodyS', lang), styles.policy]} testID="book-policy">
+            {held ? copy.cancelPolicy : copy.cancelPolicyNoDeposit}
+          </Text>
+          <Text style={[text('bodyS', lang), styles.policy]} testID="book-resched-note">
+            {held ? copy.reschedNote : copy.reschedNoteNoDeposit}
+          </Text>
+        </>
+      )}
 
       <PrimaryButton label={copy.viewHome} onPress={onDone} style={styles.cta} testID="book-done" />
     </View>
@@ -1175,6 +1261,14 @@ const styles = StyleSheet.create({
   },
   confirmFailureTitle: { color: color.dangerText },
   confirmFailureBody: { color: color.dangerText, marginTop: 4, lineHeight: 19 },
+  policySkeleton: {
+    marginTop: 14,
+    padding: 16,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: color.hairline,
+  },
+  policyBar: { height: 12, borderRadius: 6, backgroundColor: color.surfaceAlt2 },
 
   cta: { marginTop: 22 },
 

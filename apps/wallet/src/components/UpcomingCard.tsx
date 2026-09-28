@@ -21,8 +21,9 @@
  * in both languages.
  */
 
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { formatMoney, type Fils, type Salon } from '@avo/types';
+import { fils, formatMoney, type Fils, type Salon } from '@avo/types';
 import { MICRO_LABEL_COLOR, MIN_TAP_TARGET, color, radius, text } from '../theme';
 import { useLanguage } from '../i18n/language';
 import { focusable } from '../theme/focus';
@@ -30,6 +31,9 @@ import { TappableRow } from './Buttons';
 import type { BookingView } from '../api/booking';
 import { formatWhen, holdsDeposit } from '../domain/booking';
 import { failureCopy, type LoadFailure } from '../domain/loadFailure';
+import { cancelPreview, type CancelPreview } from '../domain/bookingPolicy';
+import type { CancelBookingResult } from '../api/booking';
+import { PolicyBlock, SettlementLines } from './booking/PolicyBlock';
 
 interface Props {
   booking: BookingView;
@@ -57,6 +61,7 @@ export function UpcomingCard({
 }: Props) {
   const { lang, copy } = useLanguage();
   const windowClosed = failure?.code === 'change_window_closed';
+  const started = failure?.code === 'appointment_started';
   /*
     ONE DERIVATION, READ BY THREE PLACES BELOW: the pill, the note under the
     buttons, and the refused-change body. Splitting the check across the three
@@ -66,6 +71,31 @@ export function UpcomingCard({
     `domain/booking.ts` § holdsDeposit.
   */
   const held = holdsDeposit(booking);
+  /*
+    THE POLICY THIS BOOKING WAS MADE UNDER (migration 0066), stamped on it at
+    booking — never the salon's current one, which a later publish changes and
+    this booking does not follow. `null` is a legacy booking: every sentence on
+    this card is then exactly what it was. Drawn only when a deposit is held,
+    because a policy decides nothing else.
+  */
+  const stamped = held ? booking.policy : null;
+
+  /*
+    THE CANCEL PREVIEW, and the instant it was computed. A policy cancel can keep
+    money, so the first tap opens this rather than cancelling: what comes back
+    at THIS moment under the stamped rule, in integer fils rounded down exactly
+    as the server rounds. It is a sentence, not a decision (#2) — the cancel is
+    sent regardless, and the cancelled card shows the server's own figures. A
+    legacy booking returns everything and keeps its one-tap cancel.
+  */
+  const [preview, setPreview] = useState<CancelPreview | null>(null);
+  const onCancelPress = () => {
+    if (stamped === null) {
+      onCancel();
+      return;
+    }
+    setPreview(cancelPreview(stamped.cancellation, booking.startsAt, new Date(), booking.depositFils));
+  };
 
   return (
     <View style={styles.card} testID="upcoming-card">
@@ -126,8 +156,8 @@ export function UpcomingCard({
           <Text style={[text('body', lang, '600'), styles.actionText]}>{copy.reschedule}</Text>
         </TappableRow>
         <TappableRow
-          onPress={onCancel}
-          disabled={busy}
+          onPress={onCancelPress}
+          disabled={busy || preview !== null}
           accessibilityRole="button"
           accessibilityLabel={copy.cancel}
           dataSet={focusable}
@@ -148,13 +178,67 @@ export function UpcomingCard({
         designer's own, unedited. See copy/en.ts § reschedNoteNoDeposit.
       */}
       <Text style={[text('bodyS', lang), styles.note]} testID="upcoming-note">
-        {held ? copy.reschedNote : copy.reschedNoteNoDeposit}
+        {stamped !== null ? copy.reschedNotePolicy : held ? copy.reschedNote : copy.reschedNoteNoDeposit}
       </Text>
+
+      {stamped !== null ? <PolicyBlock terms={stamped} testID="upcoming-policy" /> : null}
+
+      {/* Where the deposit went, once the server has settled it. */}
+      {booking.settlement ? (
+        <SettlementLines
+          returnedFils={booking.settlement.returnedFils}
+          keptFils={booking.settlement.keptFils}
+          testID="upcoming-settlement"
+        />
+      ) : null}
+
+      {preview !== null ? (
+        <View style={styles.preview} testID="upcoming-cancel-preview">
+          <Text style={[text('body', lang, '600'), styles.previewTitle]}>{copy.cancelPreviewTitle}</Text>
+          <Text style={[text('bodyS', lang), styles.previewLine]} testID="upcoming-preview-back">
+            {preview.returnedFils > 0
+              ? copy.cancelPreviewBack(formatMoney(fils(preview.returnedFils), lang))
+              : copy.cancelPreviewNothing}
+          </Text>
+          {preview.keptFils > 0 ? (
+            <Text style={[text('bodyS', lang), styles.previewLine]} testID="upcoming-preview-kept">
+              {copy.cancelPreviewKept(formatMoney(fils(preview.keptFils), lang))}
+            </Text>
+          ) : null}
+          <View style={styles.previewActions}>
+            <TappableRow
+              onPress={() => setPreview(null)}
+              disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel={copy.cancelKeep}
+              dataSet={focusable}
+              testID="upcoming-cancel-keep"
+              style={[styles.action, busy && styles.actionBusy]}
+            >
+              <Text style={[text('body', lang, '600'), styles.actionText]}>{copy.cancelKeep}</Text>
+            </TappableRow>
+            <TappableRow
+              onPress={() => {
+                setPreview(null);
+                onCancel();
+              }}
+              disabled={busy}
+              accessibilityRole="button"
+              accessibilityLabel={copy.cancelConfirm}
+              dataSet={focusable}
+              testID="upcoming-cancel-confirm"
+              style={[styles.action, styles.actionDanger, busy && styles.actionBusy]}
+            >
+              <Text style={[text('body', lang, '600'), styles.actionDangerText]}>{copy.cancelConfirm}</Text>
+            </TappableRow>
+          </View>
+        </View>
+      ) : null}
 
       {failure ? (
         <View style={styles.refusal} accessibilityRole="alert" testID="upcoming-refusal">
           <Text style={[text('body', lang, '600'), styles.refusalTitle]}>
-            {windowClosed ? copy.changeClosedTitle : copy.errorTitle}
+            {windowClosed ? copy.changeClosedTitle : started ? copy.cancelStartedTitle : copy.errorTitle}
           </Text>
           <Text style={[text('bodyS', lang), styles.refusalBody]}>
             {/*
@@ -163,13 +247,64 @@ export function UpcomingCard({
               CHANGE; it is not keeping a deposit, because there is none.
             */}
             {windowClosed
-              ? held
+              ? held && stamped === null
                 ? copy.changeClosedBody
                 : copy.changeClosedBodyNoDeposit
-              : failure.message}
+              : started
+                ? copy.cancelStartedBody
+                : failure.message}
           </Text>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * AFTER SHE CANCELS A POLICY BOOKING: what came back and what the salon kept,
+ * in the SERVER's figures from the cancel result — never the preview she read
+ * before tapping. If she crossed a cut-off in between, this is where she finds
+ * out, and it is the true answer (#2).
+ *
+ * It stands where the booking stood until she taps Done, rather than in a
+ * 3.4-second toast: a toast is fine for "your deposit is back", and not for
+ * money she did not get back. A legacy cancel returns everything and keeps its
+ * toast.
+ */
+export function CancelledCard({
+  result,
+  salon,
+  serviceLabel,
+  onDone,
+}: {
+  result: CancelBookingResult;
+  salon: Salon;
+  serviceLabel: string | null;
+  onDone: () => void;
+}) {
+  const { lang, copy } = useLanguage();
+  return (
+    <View style={styles.card} testID="upcoming-cancelled">
+      <Text style={[text('label', lang), styles.headLabel]}>{copy.upcomingLabel}</Text>
+      <Text style={[text('displayS', lang), styles.emptyTitle]}>{copy.cancelledToastNoDeposit}</Text>
+      <Text style={[text('body', lang), styles.meta]}>
+        {serviceLabel ? `${serviceLabel} · ` : ''}
+        {formatWhen(result.booking.startsAt, salon.timezone, lang)}
+      </Text>
+      <SettlementLines
+        returnedFils={result.refundedFils}
+        keptFils={result.keptFils}
+        testID="cancelled-settlement"
+      />
+      <TappableRow
+        onPress={onDone}
+        accessibilityRole="button"
+        dataSet={focusable}
+        testID="upcoming-cancelled-done"
+        style={[styles.action, styles.emptyAction]}
+      >
+        <Text style={[text('body', lang, '600'), styles.actionText]}>{copy.done}</Text>
+      </TappableRow>
     </View>
   );
 }
@@ -355,6 +490,18 @@ const styles = StyleSheet.create({
   emptyAction: { flex: 0, alignSelf: 'flex-start', marginTop: 14, paddingHorizontal: 22 },
 
   note: { color: color.textMutedSoft, marginTop: 9, lineHeight: 18 },
+
+  // The cancel preview: the refusal panel's geometry on a neutral wash — it is a
+  // question, not an error.
+  preview: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: color.surfaceAlt2,
+  },
+  previewTitle: { color: color.ink },
+  previewLine: { color: color.textMutedStrong, marginTop: 3, lineHeight: 18 },
+  previewActions: { flexDirection: 'row', gap: 9, marginTop: 12 },
 
   refusal: {
     marginTop: 12,

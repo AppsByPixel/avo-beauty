@@ -49,6 +49,12 @@ interface Props {
   orders?: readonly ShopOrder[];
   /** Account → Notifications, where the existing switches are. */
   onOpenSettings: () => void;
+  /**
+   * The `booking_policy` row's action: open the salon's current policy. The one
+   * row in the bell that is a control, because it is the one whose content is
+   * not on the row — the notice is a pointer, and the policy is read fresh.
+   */
+  onOpenBookingPolicy?: () => void;
 }
 
 export function BellSheet({
@@ -58,6 +64,7 @@ export function BellSheet({
   transactions,
   orders = NO_ORDERS,
   onOpenSettings,
+  onOpenBookingPolicy,
 }: Props) {
   const { lang, copy } = useLanguage();
 
@@ -159,7 +166,14 @@ export function BellSheet({
             ) : null}
             <View style={styles.card} testID="bell-rows">
               {rows.map((row, index) => (
-                <Row key={row.key} row={row} last={index === rows.length - 1} />
+                <Row
+                  key={row.key}
+                  row={row}
+                  last={index === rows.length - 1}
+                  {...(row.kind === 'booking_policy' && onOpenBookingPolicy
+                    ? { onPress: onOpenBookingPolicy }
+                    : {})}
+                />
               ))}
             </View>
             {bell.nextCursor !== null ? (
@@ -182,19 +196,13 @@ export function BellSheet({
   );
 }
 
-function Row({ row, last }: { row: BellRow; last: boolean }) {
+function Row({ row, last, onPress }: { row: BellRow; last: boolean; onPress?: () => void }) {
   const { lang, copy } = useLanguage();
   const spoken = [row.unread ? copy.bellUnread : null, row.title, ...row.lines, row.when, row.amount?.label]
     .filter((p): p is string => typeof p === 'string' && p !== '')
     .join(', ');
-  return (
-    <View
-      style={[styles.row, last && styles.rowLast]}
-      accessible
-      accessibilityLabel={spoken}
-      testID={`bell-row-${row.key}`}
-      dataSet={{ kind: row.kind, unread: row.unread ? 'yes' : 'no' }}
-    >
+  const content = (
+    <>
       <View style={styles.icon}>
         {/* The unread dot is `brand` — a SURFACE use, which #9 allows. */}
         <View style={[styles.dot, row.unread ? styles.dotUnread : styles.dotRead]} />
@@ -228,6 +236,26 @@ function Row({ row, last }: { row: BellRow; last: boolean }) {
           {row.amount.display}
         </Text>
       ) : null}
+    </>
+  );
+  const shared = {
+    style: [styles.row, last && styles.rowLast],
+    accessibilityLabel: spoken,
+    testID: `bell-row-${row.key}`,
+    dataSet: { kind: row.kind, unread: row.unread ? 'yes' : 'no' },
+  };
+  /*
+    A ROW WITH AN ACTION IS A BUTTON, and only then. Every other row is a
+    record, read in place; making them all pressable would promise a detail
+    none of them has.
+  */
+  return onPress ? (
+    <Pressable {...shared} onPress={onPress} accessibilityRole="button" dataSet={{ ...shared.dataSet, ...focusable }}>
+      {content}
+    </Pressable>
+  ) : (
+    <View {...shared} accessible>
+      {content}
     </View>
   );
 }

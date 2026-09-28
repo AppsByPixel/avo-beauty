@@ -63,6 +63,9 @@ vi.mock('../api/booking', () => ({
   rescheduleBooking,
   getBookings,
   cancelBooking: vi.fn(),
+  // Migration 0066: the review step reads the salon's policy. None here — the
+  // legacy terms these specs were written against.
+  getBookingPolicy: () => Promise.resolve(null),
 }));
 
 // eslint-disable-next-line import/first
@@ -274,11 +277,15 @@ describe('two open branches, some artists assigned — branch first', () => {
     const slot = grid.data.slots[0]!;
     act(() => result.current.pickSlot(slot));
     act(() => result.current.next());
+    // Migration 0066: Confirm waits for the salon's policy to be on screen.
+    await waitFor(() => expect(result.current.policy?.status).toBe('ready'));
     act(() => result.current.confirm());
     await waitFor(() => expect(createBooking).toHaveBeenCalledTimes(1));
 
+    // No branch — and, since 0066, the policy she was shown: `null`, none.
     const body = createBooking.mock.calls[0]![0] as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(['artistId', 'serviceId', 'startsAt']);
+    expect(Object.keys(body).sort()).toEqual(['artistId', 'policyVersion', 'serviceId', 'startsAt']);
+    expect(body['policyVersion']).toBeNull();
   });
 });
 

@@ -536,21 +536,21 @@ export function postAction<S extends z.ZodTypeAny>(
 /**
  * DELETE a resource and validate what comes back.
  *
- * NO IDEMPOTENCY KEY, AND THAT IS THE API'S REASONING RATHER THAN AN OMISSION.
- * `DELETE /bookings/{id}` returns a deposit to the wallet, so by
- * non-negotiable #4's letter it moves money — but api/src/routes/bookings.ts
- * spells out why a key would be weaker here: a DELETE names ONE resource with
- * one live state, and the `deposit_held → cancelled` transition happens under
- * `FOR UPDATE`. A second cancel blocks, re-reads and is told `already_cancelled`
- * — which also holds when the client sends two DIFFERENT keys, and a key would
- * not.
+ * THE KEY IS OPTIONAL HERE, AND THE BOOKING CANCEL SENDS ONE. `DELETE
+ * /bookings/{id}` was keyless, on the API's reasoning: a DELETE names ONE
+ * resource with one live state, and the `deposit_held → cancelled` transition
+ * happens under `FOR UPDATE`, so a second cancel is told `already_cancelled` even
+ * under a different key. Since migration 0066 the cancel of a booking made under
+ * the salon's policy can KEEP part of the deposit, and the API requires a key on
+ * it (#4). `api/booking.ts § cancelBooking` sends one always.
  */
 export function deleteJson<S extends z.ZodTypeAny>(
   path: string,
   schema: S,
   signal?: AbortSignal,
+  idempotencyKey?: string,
 ): Promise<z.infer<S>> {
-  return request(path, schema, { method: 'DELETE', signal });
+  return request(path, schema, { method: 'DELETE', signal, idempotencyKey });
 }
 
 /**

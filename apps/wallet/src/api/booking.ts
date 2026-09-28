@@ -43,6 +43,8 @@ import { z } from 'zod';
 import {
   AvailabilityDaySchema,
   BookableArtistSchema,
+  BookingCancelResultSchema,
+  BookingPolicyReadSchema,
   BookingSchema,
   ServiceSchema,
   TransactionSchema,
@@ -53,6 +55,7 @@ import type {
   AvailabilitySlot,
   BookableArtist,
   Booking,
+  BookingPolicy,
   Service,
 } from '@avo/types';
 import { deleteJson, getJson, postJson } from './client';
@@ -127,11 +130,18 @@ const CreateBookingResultSchema = z.object({
 
 export type CreateBookingResult = z.infer<typeof CreateBookingResultSchema>;
 
-/** `DELETE /bookings/{id}` — the deposit comes back. Non-negotiable #5. */
-const CancelBookingResultSchema = z.object({
+/**
+ * `DELETE /bookings/{id}` — what came back and what the salon kept.
+ * Non-negotiable #5: what comes back is wallet credit.
+ *
+ * TRUNK'S `BookingCancelResultSchema` SINCE b23e78c, with the booking widened
+ * the way every booking here is (`BookingViewSchema` above). It used to be three
+ * fields declared locally; the stamped policy (migration 0066) added `keptFils`,
+ * `returnPercent`, `rule` and a `transactionId` that is NULL when nothing came
+ * back, and the server sends all of them on a legacy booking too.
+ */
+const CancelBookingResultSchema = BookingCancelResultSchema.extend({
   booking: BookingViewSchema,
-  refundedFils: z.number().int().nonnegative(),
-  balanceAfterFils: z.number().int().nonnegative(),
 });
 
 export type CancelBookingResult = z.infer<typeof CancelBookingResultSchema>;
@@ -333,8 +343,16 @@ export function getAvailability(
  * name if they are: a client naming its own branch chooses its own reporting
  * bucket, and a client naming its own deposit books for 0.001 KD.
  */
+/**
+ * `policyVersion` IS THE POLICY SHE WAS SHOWN (migration 0066): the version on
+ * the confirm step, or `null` when the salon had none. The server refuses 409
+ * `policy_changed` when it is not the current one, before anything is held —
+ * so a publish landing between the confirm step and the tap cannot stamp a
+ * policy she never read. Omitted only where no policy is shown at all (a salon
+ * that takes no deposit), which the server treats as "the client does not say".
+ */
 export function createBooking(
-  input: { artistId: string; serviceId: string; startsAt: string },
+  input: { artistId: string; serviceId: string; startsAt: string; policyVersion?: number | null },
   idempotencyKey: string,
   signal?: AbortSignal,
 ): Promise<CreateBookingResult> {
@@ -350,9 +368,40 @@ export function getBookings(
   return getJson(`/bookings${query}`, BookingPageSchema, signal).then((page) => page.items);
 }
 
-/** Cancel. The deposit returns to the wallet as credit — never cash. */
-export function cancelBooking(id: string, signal?: AbortSignal): Promise<CancelBookingResult> {
-  return deleteJson(`/bookings/${encodeURIComponent(id)}`, CancelBookingResultSchema, signal);
+/**
+ * Cancel. What returns goes to the wallet as credit — never cash.
+ *
+ * THE KEY IS SENT ALWAYS. The API requires one on a booking made under a policy
+ * (`400 idempotency_key_required`) and honours one on a legacy booking, and only
+ * the row knows which it is — so the client does not try to know. One key per
+ * cancel ATTEMPT: the caller mints it when she commits, and a retry of the same
+ * attempt reuses it so a replay returns the first answer.
+ */
+export function cancelBooking(
+  id: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<CancelBookingResult> {
+  return deleteJson(
+    `/bookings/${encodeURIComponent(id)}`,
+    CancelBookingResultSchema,
+    signal,
+    idempotencyKey,
+  );
+}
+
+/**
+ * `GET /salons/{id}/booking-policy` — the salon's CURRENT policy, or `null`
+ * when it has never published one (legacy terms apply, and nothing new is
+ * shown). Read on the confirm step and from the bell; never cached, because a
+ * cached policy is exactly the stale version `policy_changed` exists to refuse.
+ */
+export function getBookingPolicy(salonId: string, signal?: AbortSignal): Promise<BookingPolicy | null> {
+  return getJson(
+    `/salons/${encodeURIComponent(salonId)}/booking-policy`,
+    BookingPolicyReadSchema,
+    signal,
+  ).then((r) => r.policy);
 }
 
 /**
