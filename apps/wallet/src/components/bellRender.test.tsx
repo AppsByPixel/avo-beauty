@@ -100,7 +100,7 @@ function Harness({ onOpenSettings = () => undefined }: { onOpenSettings?: () => 
   return (
     <>
       <BellButton unreadCount={bell.unreadCount} onPress={bell.openPanel} />
-      <BellSheet bell={bell} salon="Amara" transactions={[]} onOpenSettings={onOpenSettings} />
+      <BellSheet bell={bell} salon="Amara" timeZone="Asia/Kuwait" transactions={[]} onOpenSettings={onOpenSettings} />
     </>
   );
 }

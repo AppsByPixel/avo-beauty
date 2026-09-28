@@ -37,6 +37,8 @@ interface Props {
   bell: BellController;
   /** The salon's name in the reading language, for the template titles. */
   salon: string;
+  /** `salon.timezone` — every stamp on the panel is the salon's clock. */
+  timeZone: string;
   /** Home's transaction page — how a voided charge is recognised. */
   transactions: readonly Pick<Transaction, 'id' | 'voidedAt'>[];
   /**
@@ -49,12 +51,22 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-export function BellSheet({ bell, salon, transactions, orders = NO_ORDERS, onOpenSettings }: Props) {
+export function BellSheet({
+  bell,
+  salon,
+  timeZone,
+  transactions,
+  orders = NO_ORDERS,
+  onOpenSettings,
+}: Props) {
   const { lang, copy } = useLanguage();
 
   const rows = useMemo(
-    () => (bell.items ? bellRows(bell.items, { lang, copy, salon, transactions, orders }) : null),
-    [bell.items, lang, copy, salon, transactions, orders],
+    () =>
+      bell.items
+        ? bellRows(bell.items, { lang, copy, salon, timeZone, transactions, orders })
+        : null,
+    [bell.items, lang, copy, salon, timeZone, transactions, orders],
   );
 
   /*

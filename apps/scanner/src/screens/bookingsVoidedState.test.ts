@@ -143,7 +143,7 @@ function stylesOf(node: Node): Record<string, unknown>[] {
 
 function render(raw: unknown) {
   const booking = ArtistBookingSchema.parse(raw);
-  const tree = BookingCard({ booking });
+  const tree = BookingCard({ booking, timeZone: 'Asia/Kuwait' });
   const nodes = flatten(tree);
   return {
     booking,

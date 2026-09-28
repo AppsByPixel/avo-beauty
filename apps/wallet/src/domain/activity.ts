@@ -31,6 +31,14 @@ export interface ActivityRow {
   failed: boolean;
 }
 
+/**
+ * Kuwait, for the ONE stamp here that is not a salon's instant: `clockTime`,
+ * the stale banner's "Showing your wallet from 14:02". Its caller is a copy
+ * function (`copy/en.ts § staleBanner`) that holds no salon, and the moment it
+ * names is the phone's last fetch rather than anything the salon did. Every
+ * salon instant — a charge, a top-up, a receipt, a booking — is read in
+ * `salon.timezone`, passed in. See `dayAndTime`.
+ */
 const KUWAIT_TIME_ZONE = 'Asia/Kuwait';
 
 /**
@@ -70,8 +78,9 @@ function when(
   branches: BranchLike[],
   lang: Language,
   copy: Copy,
+  timeZone: string,
 ): string {
-  const head = dayAndTime(new Date(tx.createdAt), lang, copy);
+  const head = dayAndTime(new Date(tx.createdAt), lang, copy, timeZone);
   const branch = branchLabel(tx, branches, lang);
   // A top-up has no branch a customer would recognise; a charge always does.
   const withBranch = branch && tx.kind !== 'topup' ? `${head} · ${branch}` : head;
@@ -86,29 +95,75 @@ function when(
 }
 
 /**
- * "Today · 4:30 pm" / "12 Jul · 4:30 pm" — the activity row's stamp, in Kuwait
- * time, Eastern digits in Arabic.
+ * "2026-09-30" — the calendar date an instant falls on in `timeZone`.
+ *
+ * `en-CA` for ISO ordering, the trick `domain/booking.ts § salonDate` uses. Not
+ * imported from there: booking.ts imports `dateLocale` from this module.
+ */
+function calendarDate(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(at);
+}
+
+/**
+ * The calendar day before "YYYY-MM-DD". Calendar arithmetic, done in UTC so no
+ * zone and no DST transition can repeat or skip a day — `now − 24h` is the
+ * version that does, twice a year, in any zone that has one.
+ */
+function dayBefore(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d! - 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * "Today · 4:30 pm" / "12 Jul · 4:30 pm" — the activity row's stamp, in the
+ * SALON's clock, Eastern digits in Arabic.
  *
  * Exported so the bell (`domain/bell.ts`) stamps its rows with the SAME words
  * and the same clock the activity row beneath it uses: a top-up that reads
  * "Today · 4:30 pm" in one list and "14 min ago" in the other is two
- * descriptions of one event. Split out of `when` unchanged.
+ * descriptions of one event. Split out of `when`.
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * BOTH HALVES IN ONE ZONE, AND THE ZONE IS THE SALON'S. Until 2026-09-28 the
+ * two halves disagreed: the time was formatted in Kuwait while Today/Yesterday
+ * came from `toDateString()` — the DEVICE's calendar. On a phone in Karachi
+ * (UTC+5) a charge at 21:30 Kuwait, read at 22:30, is 23:30 and 00:30 on the
+ * device, so the row said "Yesterday · 9:30 pm" an hour after it happened.
+ * And "Kuwait" was itself a constant rather than `salon.timezone`, so a salon
+ * in Dubai had every stamp an hour early. `timeZone` is REQUIRED so a caller
+ * cannot forget it and fall back to the device; the dashboard fixed the same
+ * bug in 60a4b3f.
+ * ═════════════════════════════════════════════════════════════════════════════
  */
-export function dayAndTime(date: Date, lang: Language, copy: Copy, now: Date = new Date()): string {
-  const sameDay = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now.getTime() - 86_400_000).toDateString() === date.toDateString();
+export function dayAndTime(
+  date: Date,
+  lang: Language,
+  copy: Copy,
+  /** `salon.timezone`, IANA. NEVER the device's zone. */
+  timeZone: string,
+  now: Date = new Date(),
+): string {
+  const on = calendarDate(date, timeZone);
+  const today = calendarDate(now, timeZone);
+  const sameDay = on === today;
+  const yesterday = on === dayBefore(today);
   const locale = dateLocale(lang);
 
   const time = new Intl.DateTimeFormat(locale, {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-    timeZone: KUWAIT_TIME_ZONE,
+    timeZone,
   }).format(date);
   const day = new Intl.DateTimeFormat(locale, {
     day: 'numeric',
     month: 'short',
-    timeZone: KUWAIT_TIME_ZONE,
+    timeZone,
   }).format(date);
 
   return sameDay
@@ -219,6 +274,8 @@ export function toActivityRow(
   branches: BranchLike[],
   lang: Language,
   copy: Copy,
+  /** `salon.timezone` — the clock the row's "Today · 4:30 pm" is read in. */
+  timeZone: string,
 ): ActivityRow {
   // The amounts arrive as plain numbers off the wire; fils() re-brands them and
   // throws on a float, so a contract violation surfaces here rather than as a
@@ -230,7 +287,7 @@ export function toActivityRow(
   return {
     id: tx.id,
     title: title(tx, copy),
-    when: when(tx, branches, lang, copy),
+    when: when(tx, branches, lang, copy, timeZone),
     /*
       U+2212 MINUS, not a hyphen — it is the character the design sets.
       MONEY: Western digits in both languages. Not routed through the Eastern

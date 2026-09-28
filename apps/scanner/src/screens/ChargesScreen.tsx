@@ -63,6 +63,7 @@ import {
   SkeletonRows,
 } from '../components/States';
 import { VoidSheet } from '../components/VoidSheet';
+import { chargeTime, salonWeekday } from '../domain/salonTime';
 
 const VOID_WINDOW_MS = 15 * 60_000;
 
@@ -78,10 +79,17 @@ export function ChargesScreen({
   onHome,
   /** Opened straight onto a void from the result screen — design:787. */
   voidTargetOnOpen,
+  timeZone,
 }: {
   accessToken: string;
   onHome: () => void;
   voidTargetOnOpen?: string | undefined;
+  /**
+   * `salon.timezone` — the header's weekday and every row's time are the
+   * salon's clock, not the device's. From ScannerFlow, which falls back to
+   * Kuwait only until the salon has loaded (`domain/salonTime.ts`).
+   */
+  timeZone: string;
 }) {
   const { staff, can, refreshPerms, reportFailure } = useSession();
   const [load, setLoad] = useState<Load>({ state: 'loading' });
@@ -193,7 +201,7 @@ export function ChargesScreen({
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <LinkButton label={copy.home} onPress={onHome} testID="charges-home" />
-        <Text style={[ui(12), styles.eyebrow]}>{todayName()}</Text>
+        <Text style={[ui(12), styles.eyebrow]}>{salonWeekday(new Date(), timeZone)}</Text>
       </View>
 
       <Text style={display(24)}>{copy.chargesTitle}</Text>
@@ -262,7 +270,7 @@ export function ChargesScreen({
                       The reference is what identifies the charge to staff.
                     */}
                     <Text style={ui(14.5, '600')}>{row.reference}</Text>
-                    <Text style={[ui(11.5), styles.cardMeta]}>{timeOf(row.createdAt)}</Text>
+                    <Text style={[ui(11.5), styles.cardMeta]}>{chargeTime(row.createdAt, timeZone)}</Text>
                     {/*
                       A PRICE SOMEBODY TYPED, SAID SO.
 
@@ -313,7 +321,7 @@ export function ChargesScreen({
                       {reason
                         ? copy.voidedNote(reason)
                         : voidedAt
-                          ? copy.voidedAtNote(timeOf(voidedAt))
+                          ? copy.voidedAtNote(chargeTime(voidedAt, timeZone))
                           : null}
                     </Text>
                   </View>
@@ -366,15 +374,6 @@ export function ChargesScreen({
 function isVoidable(row: ChargeRow): boolean {
   if (row.voidedAt !== null) return false;
   return Date.now() - new Date(row.createdAt).getTime() < VOID_WINDOW_MS;
-}
-
-function timeOf(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit' });
-}
-
-/** design:247 shows the weekday. */
-function todayName(): string {
-  return new Date().toLocaleDateString('en-GB', { weekday: 'long' });
 }
 
 const styles = StyleSheet.create({

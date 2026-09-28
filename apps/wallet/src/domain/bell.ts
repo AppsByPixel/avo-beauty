@@ -81,8 +81,6 @@ import { orderIsOpen, pickupLocation } from './shopOrders';
 import { pickupHoursLines } from './pickupHours';
 import { dateLocale, dayAndTime } from './activity';
 
-const KUWAIT_TIME_ZONE = 'Asia/Kuwait';
-
 /** The figure column. Absent on a row that moved no money (campaign, unknown). */
 export interface BellAmount {
   /** "+9.350" / "−8.500" / "8.500" — 3 decimals, Western digits, both languages. */
@@ -124,6 +122,13 @@ export interface BellContext {
   copy: Copy;
   /** The salon's name in the reading language — `salonName()`. */
   salon: string;
+  /**
+   * `salon.timezone`, IANA — the clock every stamp and booking time on the
+   * panel is read in, and the one the activity feed beneath it uses. REQUIRED:
+   * a forgotten zone is how a device-clock "Yesterday" creeps back in.
+   * (A pickup's hours still read the ORDER's `pickupBranch.timezone`.)
+   */
+  timeZone: string;
   /**
    * Home's `GET /members/me/transactions` page, for the void. See the header,
    * limit 1. Only `id` and `voidedAt` are read.
@@ -169,23 +174,29 @@ function unsigned(amountFils: number, lang: Language): BellAmount {
 
 // ----------------------------------------------------------------- dates --
 
-/** "Sat 12 Jul" — the booking's day, Kuwait time. Eastern digits in Arabic. */
-export function dayLabel(iso: string, lang: Language): string {
+/**
+ * "Sat 12 Jul" — the booking's day, in the SALON's clock (`salon.timezone`).
+ * Eastern digits in Arabic. A hard-coded Kuwait zone until 2026-09-28.
+ */
+export function dayLabel(iso: string, lang: Language, timeZone: string): string {
   return new Intl.DateTimeFormat(dateLocale(lang), {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
-    timeZone: KUWAIT_TIME_ZONE,
+    timeZone,
   }).format(new Date(iso));
 }
 
-/** "4:30 pm" — the booking's time. Arabic renders ص/م, as the templates ask. */
-export function timeLabel(iso: string, lang: Language): string {
+/**
+ * "4:30 pm" — the booking's time, in the salon's clock. Arabic renders ص/م, as
+ * the templates ask.
+ */
+export function timeLabel(iso: string, lang: Language, timeZone: string): string {
   return new Intl.DateTimeFormat(dateLocale(lang), {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-    timeZone: KUWAIT_TIME_ZONE,
+    timeZone,
   }).format(new Date(iso));
 }
 
@@ -200,7 +211,7 @@ function base(item: BellItem, ctx: BellContext) {
   return {
     key: item.id,
     ids: [item.id],
-    when: dayAndTime(new Date(item.createdAt), ctx.lang, ctx.copy, ctx.now),
+    when: dayAndTime(new Date(item.createdAt), ctx.lang, ctx.copy, ctx.timeZone, ctx.now),
     unread: item.readAt === null,
   };
 }
@@ -315,7 +326,10 @@ export function bellRow(item: BellItem, ctx: BellContext): BellRow {
         title: copy.bellBookingTitle(ctx.salon),
         lines: [
           copy.bellBookingWith(item.serviceName, item.artistName),
-          copy.bellBookingAt(dayLabel(item.startsAt, lang), timeLabel(item.startsAt, lang)),
+          copy.bellBookingAt(
+            dayLabel(item.startsAt, lang, ctx.timeZone),
+            timeLabel(item.startsAt, lang, ctx.timeZone),
+          ),
         ],
         // A zero-deposit booking moved nothing — no figure, not "−0.000".
         amount: item.amountFils > 0 ? outflow(item.amountFils, lang, copy) : null,
@@ -329,11 +343,11 @@ export function bellRow(item: BellItem, ctx: BellContext): BellRow {
       const lines = noShow
         ? [
             known
-              ? copy.bellNoShowBody(item.serviceName!, dayLabel(item.startsAt!, lang))
+              ? copy.bellNoShowBody(item.serviceName!, dayLabel(item.startsAt!, lang, ctx.timeZone))
               : copy.bellNoShowBare,
           ]
         : [
-            ...(known ? [`${item.serviceName!} · ${dayLabel(item.startsAt!, lang)}`] : []),
+            ...(known ? [`${item.serviceName!} · ${dayLabel(item.startsAt!, lang, ctx.timeZone)}`] : []),
             copy.bellCancelledReturn,
           ];
       return {
@@ -427,7 +441,7 @@ export function bellRows(items: readonly BellItem[], ctx: BellContext): BellRow[
           ],
           // UNSIGNED: the card paid. Her balance did not fall by this.
           amount: unsigned(shop.amountFils, lang),
-          when: dayAndTime(new Date(shop.createdAt), lang, copy, ctx.now),
+          when: dayAndTime(new Date(shop.createdAt), lang, copy, ctx.timeZone, ctx.now),
           // Unread if EITHER half is — a half-read pair is news she has not had.
           unread: shop.readAt === null || topup.readAt === null,
           markable: true,

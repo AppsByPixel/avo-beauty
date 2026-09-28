@@ -46,9 +46,7 @@ import { color, display, MIN_TAP_TARGET, radius, tierStyles, ui } from '../theme
 import { LinkButton } from '../components/Buttons';
 import { EmptyState, ErrorState, Refusal, SkeletonRows } from '../components/States';
 import { useSession } from '../state/session';
-
-/** The salon's zone. Every label on this screen is a salon-local time. */
-const SALON_TIME_ZONE = 'Asia/Kuwait';
+import { clockLabel, groupByDay } from '../domain/salonTime';
 
 interface Props {
   accessToken: string;
@@ -56,6 +54,12 @@ interface Props {
   /** design:135 — "Hessa · hessa" in the header. */
   staffFirstName: string;
   staffHandle: string;
+  /**
+   * `salon.timezone` — every label on this screen is a salon-local time. From
+   * ScannerFlow, which falls back to Kuwait only until the salon has loaded
+   * (`domain/salonTime.ts § FALLBACK_SALON_TIME_ZONE`).
+   */
+  timeZone: string;
 }
 
 type Load =
@@ -73,7 +77,13 @@ type Load =
   | { status: 'offline' }
   | { status: 'failed'; message: string; reference: string };
 
-export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandle }: Props) {
+export function BookingsScreen({
+  accessToken,
+  onHome,
+  staffFirstName,
+  staffHandle,
+  timeZone,
+}: Props) {
   const { reportFailure } = useSession();
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [token, setToken] = useState(0);
@@ -191,12 +201,15 @@ export function BookingsScreen({ accessToken, onHome, staffFirstName, staffHandl
         ) : null}
 
         {load.status === 'ready'
-          ? groupByDay(load.bookings).map((group) => (
+          ? groupByDay(load.bookings, timeZone, {
+              today: copy.bookingsToday,
+              tomorrow: copy.bookingsTomorrow,
+            }).map((group) => (
               <View key={group.date} style={styles.group}>
                 <Text style={[ui(11, '600'), styles.groupLabel]}>{group.label}</Text>
                 <View style={styles.cards}>
                   {group.bookings.map((booking) => (
-                    <BookingCard key={booking.id} booking={booking} />
+                    <BookingCard key={booking.id} booking={booking} timeZone={timeZone} />
                   ))}
                 </View>
               </View>
@@ -613,7 +626,14 @@ export function voidReasonLine(
  * proof that no `wa.me` survives is to fire every handler the card produces.
  * Nothing outside this file renders it.
  */
-export function BookingCard({ booking }: { booking: ArtistBooking }) {
+export function BookingCard({
+  booking,
+  timeZone,
+}: {
+  booking: ArtistBooking;
+  /** `salon.timezone` — the card's time is the salon's clock. */
+  timeZone: string;
+}) {
   /*
     ===========================================================================
     THE CLIENT MAY NOT BE A MEMBER, so neither the tier nor the name can be read
@@ -696,7 +716,7 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
       <View style={styles.cardTop}>
         <View style={styles.timeRow}>
           <Text style={[display(17, '600'), receded && styles.settledInk]}>
-            {clockLabel(booking.startsAt)}
+            {clockLabel(booking.startsAt, timeZone)}
           </Text>
           <Text style={[ui(12), styles.dim]}>· {copy.bookingsDuration(booking.durationMin)}</Text>
           {isNew ? (
@@ -867,74 +887,8 @@ export function BookingCard({ booking }: { booking: ArtistBooking }) {
 
 // ---------------------------------------------------------------- grouping --
 
-interface DayGroup {
-  date: string;
-  label: string;
-  bookings: ArtistBooking[];
-}
-
-/**
- * design:692-700 — "Today · Sun 13 Jul", "Tomorrow · Mon 14 Jul".
- *
- * Grouped on the SALON's calendar date, not the device's. The scanner is a
- * phone in a salon so the two normally agree, but a phone left on the wrong
- * zone would otherwise split a single evening across two headings — and the
- * artist would read it as two days' work.
- */
-function groupByDay(bookings: ArtistBooking[]): DayGroup[] {
-  const today = salonDate(new Date());
-  const tomorrow = salonDate(new Date(Date.now() + 86_400_000));
-  const groups = new Map<string, ArtistBooking[]>();
-
-  for (const booking of bookings) {
-    const key = salonDate(new Date(booking.startsAt));
-    const list = groups.get(key);
-    if (list) list.push(booking);
-    else groups.set(key, [booking]);
-  }
-
-  return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, list]) => ({
-      date,
-      label:
-        date === today
-          ? `${copy.bookingsToday} · ${weekdayLabel(list[0]!.startsAt)}`
-          : date === tomorrow
-            ? `${copy.bookingsTomorrow} · ${weekdayLabel(list[0]!.startsAt)}`
-            : weekdayLabel(list[0]!.startsAt),
-      bookings: list,
-    }));
-}
-
-function salonDate(at: Date): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: SALON_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(at);
-}
-
-/** "Sun 13 Jul" — the design's own heading shape. */
-function weekdayLabel(iso: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    timeZone: SALON_TIME_ZONE,
-  }).format(new Date(iso));
-}
-
-/** "2:30 pm" — design:693. The salon's zone, never the device's. */
-function clockLabel(iso: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: SALON_TIME_ZONE,
-  }).format(new Date(iso));
-}
+// `groupByDay`, and the day and clock labels, are in `domain/salonTime.ts` —
+// read in `salon.timezone`, passed in, rather than a hard-coded Kuwait.
 
 /**
  * The NEW pill — design:155.

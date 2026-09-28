@@ -187,6 +187,7 @@ describe('the bell’s shop row says where, joined from her orders', () => {
     lang,
     copy: lang === 'ar' ? ar : en,
     salon: lang === 'ar' ? 'أمارا' : 'Amara',
+    timeZone: 'Asia/Kuwait',
     transactions: [],
     now: new Date('2026-09-28T12:00:00.000Z'),
     ...(orders ? { orders } : {}),
@@ -261,12 +262,12 @@ describe('the invoice’s Collect-from row', () => {
     ['en', en, 'Salmiya'],
     ['ar', ar, 'السالمية'],
   ] as const)('%s', (lang, copy, name) => {
-    const r = buildReceipt(TX as never, TWO, lang, copy, { pickupBranch: { ...SAL, closed: false } });
+    const r = buildReceipt(TX as never, TWO, lang, copy, 'Asia/Kuwait', { pickupBranch: { ...SAL, closed: false } });
     expect(r.rows).toContainEqual({ label: copy.pickupFrom, value: name });
   });
 
   it('no detail, no row — the activity feed’s receipt is unchanged', () => {
-    const r = buildReceipt(TX as never, TWO, 'en', en);
+    const r = buildReceipt(TX as never, TWO, 'en', en, 'Asia/Kuwait');
     expect(r.rows.some((row) => row.label === en.pickupFrom)).toBe(false);
   });
 });

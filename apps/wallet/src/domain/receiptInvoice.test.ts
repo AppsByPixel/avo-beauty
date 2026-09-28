@@ -72,7 +72,7 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * for the same transaction must not move because the invoice exists.
    */
   it('changes nothing when no detail is supplied', () => {
-    const before = buildReceipt(shopTx(14500), BRANCHES, 'en', en);
+    const before = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait');
     expect(labels(before.rows)).toEqual([en.txAmountRow, en.txPaidFrom, en.txBranch]);
   });
 
@@ -86,7 +86,7 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * (`AVO Receipt Email.html`: "Olaplex No.4 shampoo / 1 × 14.500 / 14.500").
    */
   it('itemises, one row per line, with the server’s own line total', () => {
-    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, DETAIL).rows;
+    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', DETAIL).rows;
     expect(labels(rows).slice(0, 2)).toEqual(['Repair serum × 1', 'Silk scrunchie × 2']);
     expect(rows[0]?.value).toBe('9.500 KD');
     expect(rows[1]?.value).toBe('5.000 KD');
@@ -98,9 +98,9 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * reader says "nine point five hundred", not "dinars".
    */
   it('announces each line total as money, in both languages', () => {
-    expect(row(buildReceipt(shopTx(14500), BRANCHES, 'en', en, DETAIL).rows, 'Repair serum × 1')?.valueLabel)
+    expect(row(buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', DETAIL).rows, 'Repair serum × 1')?.valueLabel)
       .toBe('9.500 Kuwaiti dinars');
-    expect(row(buildReceipt(shopTx(14500), BRANCHES, 'ar', ar, DETAIL).rows, 'Repair serum × ١')?.valueLabel)
+    expect(row(buildReceipt(shopTx(14500), BRANCHES, 'ar', ar, 'Asia/Kuwait', DETAIL).rows, 'Repair serum × ١')?.valueLabel)
       .toBe('9.500 دينار كويتي');
   });
 
@@ -111,7 +111,7 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * own Arabic receipt. Both scripts appear in one row on purpose.
    */
   it('writes the quantity in Eastern digits in Arabic and the money in Western', () => {
-    const rows = buildReceipt(shopTx(14500), BRANCHES, 'ar', ar, DETAIL).rows;
+    const rows = buildReceipt(shopTx(14500), BRANCHES, 'ar', ar, 'Asia/Kuwait', DETAIL).rows;
     expect(labels(rows).slice(0, 2)).toEqual(['Repair serum × ١', 'Silk scrunchie × ٢']);
     expect(rows[0]?.value).toBe('9.500 د.ك');
   });
@@ -127,12 +127,12 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * `balanceAfterFils`, and with no detail there is no row at all.
    */
   it('states the balance after from the response, last, in both languages', () => {
-    const enRows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, DETAIL).rows;
+    const enRows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', DETAIL).rows;
     expect(enRows.at(-1)?.label).toBe('Balance after');
     expect(enRows.at(-1)?.value).toBe('48.500 KD');
     expect(enRows.at(-1)?.valueLabel).toBe('48.500 Kuwaiti dinars');
 
-    const arRows = buildReceipt(shopTx(14500), BRANCHES, 'ar', ar, DETAIL).rows;
+    const arRows = buildReceipt(shopTx(14500), BRANCHES, 'ar', ar, 'Asia/Kuwait', DETAIL).rows;
     expect(arRows.at(-1)?.label).toBe('الرصيد بعدها');
     expect(arRows.at(-1)?.value).toBe('48.500 د.ك');
   });
@@ -144,7 +144,7 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * single occasion she most needs to see one.
    */
   it('renders a zero balance after rather than dropping the row', () => {
-    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, {
+    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', {
       ...DETAIL,
       balanceAfterFils: 0,
     }).rows;
@@ -158,7 +158,7 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * lines → total → balance and reconciles on its face.
    */
   it('keeps the existing rows and their order, with the lines before them', () => {
-    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, DETAIL);
+    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', DETAIL);
     expect(labels(rows.rows)).toEqual([
       'Repair serum × 1',
       'Silk scrunchie × 2',
@@ -175,7 +175,7 @@ describe('the invoice adds rows a Transaction alone cannot supply', () => {
    * already sent, and the two would differ the first time a discount lands.
    */
   it('takes the headline from the transaction, not from the lines', () => {
-    const receipt = buildReceipt(shopTx(14500), BRANCHES, 'en', en, DETAIL);
+    const receipt = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', DETAIL);
     expect(receipt.amount).toBe('−14.500');
     expect(receipt.title).toBe(en.txKind.shop);
   });
@@ -190,7 +190,7 @@ describe('what the invoice refuses to carry', () => {
    */
   it('has no field through which a fee or a note could arrive', () => {
     const detail: Record<string, unknown> = { ...DETAIL, feeFils: 150, note: 'she_is_lazy' };
-    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, detail as ReceiptDetail).rows;
+    const rows = buildReceipt(shopTx(14500), BRANCHES, 'en', en, 'Asia/Kuwait', detail as ReceiptDetail).rows;
     const rendered = rows.map((r) => `${r.label} ${r.value}`).join(' | ');
     expect(rendered).not.toContain('0.150');
     expect(rendered).not.toContain('she_is_lazy');

@@ -194,7 +194,9 @@ export function HomeScreen({
   const rows = useMemo(
     () =>
       snapshot
-        ? snapshot.transactions.map((tx) => toActivityRow(tx, snapshot.salon.branches, lang, copy))
+        ? snapshot.transactions.map((tx) =>
+            toActivityRow(tx, snapshot.salon.branches, lang, copy, snapshot.salon.timezone),
+          )
         : [],
     [snapshot, lang, copy],
   );
@@ -301,6 +303,7 @@ export function HomeScreen({
           <TransactionSheet
             transaction={openTx}
             branches={salon.branches}
+            timeZone={salon.timezone}
             onClose={() => setOpenTxId(null)}
             // "Report a problem with this payment" → Account → Contact us, with
             // the receipt reference already handed over. src/support/contact.ts.
@@ -309,6 +312,7 @@ export function HomeScreen({
           <BellSheet
             bell={bell}
             salon={salonName(salon, lang)}
+            timeZone={salon.timezone}
             transactions={snapshot.transactions}
             {...(bellOrders.orders ? { orders: bellOrders.orders } : {})}
             onOpenSettings={() => {
