@@ -58,8 +58,10 @@ export const salon: Salon = {
   timezone: 'Asia/Kuwait',
   businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
   branches: [
-    { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya', nameAr: 'السالمية' },
-    { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City', nameAr: 'مدينة الكويت' },
+    // No per-branch override (migration 0063): both inherit the salon's hours above,
+    // which is what a real branch with a null override serves — source 'salon'.
+    { id: BRANCH_SALMIYA, salonId: SALON_ID, name: 'Salmiya', nameAr: 'السالمية', businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] }, businessHoursSource: 'salon' as const },
+    { id: BRANCH_KUWAIT_CITY, salonId: SALON_ID, name: 'Kuwait City', nameAr: 'مدينة الكويت', businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] }, businessHoursSource: 'salon' as const },
   ],
   social: [
     { id: 'instagram', label: 'Instagram', handle: '@amara.kw', on: true },
@@ -323,12 +325,28 @@ export const products: Product[] = [
   { id: 'PR-03', salonId: SALON_ID, name: 'Heat protect spray', priceFils: 6750, image: null },
 ];
 
+/**
+ * THE FULL `ServiceSchema` SHAPE, which this list did not carry until 2026-09-28.
+ *
+ * It served `{ id, name, priceFils }` only — already missing `salonId`, `nameAr`,
+ * `active` and `image`, which the real `GET /salons/:id/services` has always sent.
+ * A client strictly parsing against the mock would have failed long before today;
+ * the Services tab (migration 0061) adding `artistIds` is what made it worth fixing.
+ *
+ * Every mock artist is assigned to every service, mirroring migration 0062's
+ * backfill, so booking against the mock behaves as booking did before assignment.
+ */
+const ALL_MOCK_ARTISTS = ['AR-001', 'AR-002'];
+const svc = (id: string, name: string, priceFils: number) => ({
+  id, salonId: SALON_ID, name, nameAr: null, priceFils, active: true, image: null,
+  artistIds: ALL_MOCK_ARTISTS,
+});
 export const services = [
-  { id: 'SV-01', name: 'Blow-dry', priceFils: 8000 },
-  { id: 'SV-02', name: 'Cut & style', priceFils: 15000 },
-  { id: 'SV-03', name: 'Colour — roots', priceFils: 25000 },
-  { id: 'SV-04', name: 'Manicure', priceFils: 6000 },
-  { id: 'SV-05', name: 'Treatment', priceFils: 12500 },
+  svc('SV-01', 'Blow-dry', 8000),
+  svc('SV-02', 'Cut & style', 15000),
+  svc('SV-03', 'Colour — roots', 25000),
+  svc('SV-04', 'Manicure', 6000),
+  svc('SV-05', 'Treatment', 12500),
 ];
 
 export const promotions: PromotionSet = {

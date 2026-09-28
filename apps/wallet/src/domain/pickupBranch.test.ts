@@ -31,8 +31,8 @@ import { orderRefusal } from './orderRefusal';
 import { buildReceipt } from './receipt';
 import { pickupLocation } from './shopOrders';
 
-const KWC = { id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت' };
-const SAL = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية' };
+const KWC = { id: 'BR-KWC', name: 'Kuwait City', nameAr: 'مدينة الكويت', businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' };
+const SAL = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' };
 const TWO = [KWC, SAL];
 
 const at = (pickupBranchId: string | null, mode: 'pickup' | 'delivery' = 'pickup'): FulfilmentChoice => ({
@@ -202,7 +202,7 @@ describe('the bell’s shop row says where, joined from her orders', () => {
   });
 
   it('Arabic falls back to `name`', () => {
-    const row = bellRow(SHOP, ctx('ar', pickup({ id: 'BR-L', name: 'Lumiere Main', nameAr: null, closed: false })));
+    const row = bellRow(SHOP, ctx('ar', pickup({ id: 'BR-L', name: 'Lumiere Main', nameAr: null, closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' })));
     expect(row.lines[0]).toContain(ar.bellPickupAt('Lumiere Main'));
   });
 

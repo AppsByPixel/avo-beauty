@@ -25,9 +25,9 @@ import type { OrdersController } from '../state/useOrders';
 import { en } from '../copy/en';
 import { ar } from '../copy/ar';
 
-const SAL = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false };
+const SAL = { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' };
 /** The seed leaves SAL-LUMIERE's branches with `name_ar` NULL on purpose. */
-const LUM = { id: 'BR-LUM', name: 'Lumiere Main', nameAr: null, closed: false };
+const LUM = { id: 'BR-LUM', name: 'Lumiere Main', nameAr: null, closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' };
 
 function order(over: Partial<ShopOrder> = {}): ShopOrder {
   return {

@@ -88,7 +88,8 @@ const SALON_BODY: Record<string, unknown> = {
   noShowReturnMinutes: 60,
   timezone: 'Asia/Kuwait',
   businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
-  branches: [{ id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية' }],
+  // Hours inherited from the salon (migration 0063): a real branch always serves them.
+  branches: [{ id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية', businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] }, businessHoursSource: 'salon' }],
   social: [{ id: 'instagram', label: 'Instagram', handle: '@amara.kw', on: true }],
   whatsappEnabled: true,
   emailEnabled: true,

@@ -237,7 +237,7 @@ describe('pickup is a live fork, so its row states a fact rather than an absence
   it('says where the order is going instead of rendering a missing field', () => {
     renderRow({
       ...PICKUP,
-      pickupBranch: { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false },
+      pickupBranch: { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' },
     });
     expect(screen.getByText('Salmiya')).toBeTruthy();
     expect(document.querySelector('.orders__where')?.textContent).toBe('Collecting at Salmiya');

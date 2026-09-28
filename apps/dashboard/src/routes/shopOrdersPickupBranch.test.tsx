@@ -66,12 +66,13 @@ const scope = vi.hoisted(() => {
   };
 });
 
-const SALMIYA: Branch = { id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية' };
+const SALMIYA: Branch = { id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية', businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const };
 const KUWAIT_CITY: Branch = {
   id: 'BR-KWT',
   salonId: 'SAL-AMARA',
   name: 'Kuwait City',
   nameAr: 'مدينة الكويت',
+  businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const,
 };
 /** OPEN BRANCHES ONLY — `GET /salons/{id}` serialises no closed one. Jabriya is not here. */
 const OPEN_BRANCHES: Branch[] = [SALMIYA, KUWAIT_CITY];
@@ -123,14 +124,14 @@ function row(transactionId: string, over: Record<string, unknown>): Record<strin
 }
 
 const AT_SALMIYA = row('TX-SAL', {
-  pickupBranch: { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false },
+  pickupBranch: { id: 'BR-SAL', name: 'Salmiya', nameAr: 'السالمية', closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' },
 });
 const AT_KUWAIT_CITY = row('TX-KWT', {
-  pickupBranch: { id: 'BR-KWT', name: 'Kuwait City', nameAr: 'مدينة الكويت', closed: false },
+  pickupBranch: { id: 'BR-KWT', name: 'Kuwait City', nameAr: 'مدينة الكويت', closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' },
 });
 /** Waiting at a branch that has since closed — and is therefore absent from OPEN_BRANCHES. */
 const AT_CLOSED_JABRIYA = row('TX-JAB', {
-  pickupBranch: { id: 'BR-JAB', name: 'Jabriya', nameAr: null, closed: true },
+  pickupBranch: { id: 'BR-JAB', name: 'Jabriya', nameAr: null, closed: true, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' },
 });
 /** Placed before 0060 at a multi-branch salon: she was never asked. */
 const NOT_CHOSEN = row('TX-OLD', { pickupBranch: null });
@@ -370,7 +371,7 @@ describe("the order's branch is read off the row, never resolved in salon.branch
       ...BOARD,
       items: [
         row('TX-REN', {
-          pickupBranch: { id: 'BR-SAL', name: 'Salmiya Souq', nameAr: null, closed: false },
+          pickupBranch: { id: 'BR-SAL', name: 'Salmiya Souq', nameAr: null, closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' },
         }),
       ],
     });
@@ -382,9 +383,9 @@ describe("the order's branch is read off the row, never resolved in salon.branch
 
 describe('the board is parsed, so a malformed branch cannot pick an arm silently', () => {
   it.each([
-    ['closed as a string', { id: 'BR-JAB', name: 'Jabriya', nameAr: null, closed: 'true' }],
+    ['closed as a string', { id: 'BR-JAB', name: 'Jabriya', nameAr: null, closed: 'true', businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' }],
     ['no id', { name: 'Jabriya', nameAr: null, closed: true }],
-    ['an empty name', { id: 'BR-JAB', name: '', nameAr: null, closed: false }],
+    ['an empty name', { id: 'BR-JAB', name: '', nameAr: null, closed: false, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const, timezone: 'Asia/Kuwait' }],
     ['the key missing', undefined],
   ])('a pickupBranch with %s fails the board rather than rendering', async (_label, branch) => {
     const bad = { ...AT_CLOSED_JABRIYA, pickupBranch: branch };

@@ -64,12 +64,13 @@ afterEach(() => {
 
 /* =============================================================== fixtures == */
 
-const SALMIYA = { id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية' };
+const SALMIYA = { id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية', businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const };
 const KUWAIT_CITY = {
   id: 'BR-KWT',
   salonId: 'SAL-AMARA',
   name: 'Kuwait City',
   nameAr: 'مدينة الكويت',
+  businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const,
 };
 
 /**
@@ -155,6 +156,7 @@ const CREATED: Record<string, unknown> = {
   salonId: 'SAL-AMARA',
   name: 'Hawally',
   nameAr: null,
+  businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const,
 };
 
 /* ================================================================ the rig == */
@@ -385,7 +387,9 @@ describe('the closure preview decides an irreversible act', () => {
 
   it('covers every key of the preview body', () => {
     // A table that silently matched nothing would be hollow.
-    expect(PREVIEW_KEYS).toHaveLength(14);
+    // 14 → 16 on 2026-09-28: `businessHours` and `businessHoursSource` (migration 0063).
+    // The `it.each` below now covers both — the bump is what makes that deliberate.
+    expect(PREVIEW_KEYS).toHaveLength(16);
   });
 
   it.each(PREVIEW_KEYS)('a preview with no `%s` blocks rather than reassures', async (key) => {
@@ -499,7 +503,8 @@ describe('the close has committed by the time its body is read', () => {
   const CLOSURE_KEYS = Object.keys(CLOSURE);
 
   it('covers every key of the closure body', () => {
-    expect(CLOSURE_KEYS).toHaveLength(11);
+    // 11 → 13 on 2026-09-28: `businessHours` and `businessHoursSource` (migration 0063).
+    expect(CLOSURE_KEYS).toHaveLength(13);
   });
 
   it.each(CLOSURE_KEYS)('a closure with no `%s` degrades rather than fails', async (key) => {

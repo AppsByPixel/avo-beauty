@@ -214,7 +214,7 @@ const SALON: Salon = {
   noShowReturnMinutes: 60,
   timezone: 'Asia/Kuwait',
   businessHours: { morning: ['10:00', '13:00'], evening: ['16:00', '21:00'] },
-  branches: [{ id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية' }],
+  branches: [{ id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: 'السالمية', businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const }],
   social: [],
   whatsappEnabled: true,
   emailEnabled: false,

@@ -64,12 +64,13 @@ import { BranchSelectorView } from './BranchSelector.js';
  */
 afterEach(cleanup);
 
-const SALMIYA: Branch = { id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: null };
+const SALMIYA: Branch = { id: 'BR-SAL', salonId: 'SAL-AMARA', name: 'Salmiya', nameAr: null, businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const };
 const KUWAIT_CITY: Branch = {
   id: 'BR-KWC',
   salonId: 'SAL-AMARA',
   name: 'Kuwait City',
   nameAr: null,
+  businessHours: { morning: ['10:00', '13:00'] as [string, string], evening: ['16:00', '21:00'] as [string, string] }, businessHoursSource: 'salon' as const,
 };
 const BOTH = [SALMIYA, KUWAIT_CITY];
 

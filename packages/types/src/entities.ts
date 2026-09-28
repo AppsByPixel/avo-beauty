@@ -68,32 +68,6 @@ export const TierSchema = z.object({
   bonusPercent: z.number().min(0).max(100),
 });
 
-export const BranchSchema = z.object({
-  id: IdSchema,
-  salonId: IdSchema,
-  name: z.string().min(1),
-  /**
-   * Arabic branch name. Without it an Arabic wallet renders "Salmiya" in Latin
-   * inside otherwise-mirrored Arabic copy. The bundle's own reference
-   * implementation carries it (`avo-promotions.js` → `branchLabel`, which picks
-   * `nameAr` when `ar`), so this closes a gap between the contract and the
-   * behaviour the design already demonstrates.
-   *
-   * Nullable, not required: a salon that has not supplied one falls back to
-   * `name`, the same way an untranslated legal document falls back to `en`.
-   */
-  nameAr: z.string().nullable(),
-});
-
-export const SocialLinkSchema = z.object({
-  id: z.enum(['instagram', 'tiktok', 'snapchat', 'whatsapp']),
-  label: z.string(),
-  /** "@amara.kw", or E.164 for whatsapp. STORE THE HANDLE, DERIVE THE URL. */
-  handle: z.string(),
-  /** false hides the icon without losing the handle. */
-  on: z.boolean(),
-});
-
 /**
  * A wall-clock time. `24:00` is admitted because it is a real END of a trading
  * day and the API accepts it as one — the API also refuses it as a START, which
@@ -132,6 +106,51 @@ export const BusinessHoursSchema = z.object({
   /** ["10:00", "13:00"] — the Kuwaiti afternoon closure is the norm, not an edge case. */
   morning: z.tuple([z.string().regex(CLOCK), z.string().regex(CLOCK)]),
   evening: z.tuple([z.string().regex(CLOCK), z.string().regex(CLOCK)]),
+});
+
+/**
+ * WHERE A BRANCH'S HOURS CAME FROM. `branch` = the branch set its own override;
+ * `salon` = the branch has none and inherits the salon's `businessHours`. Served
+ * so the dashboard can show "using the salon's hours" and the wallet need not care.
+ */
+export const BusinessHoursSourceSchema = z.enum(['branch', 'salon']);
+
+export const BranchSchema = z.object({
+  id: IdSchema,
+  salonId: IdSchema,
+  name: z.string().min(1),
+  /**
+   * Arabic branch name. Without it an Arabic wallet renders "Salmiya" in Latin
+   * inside otherwise-mirrored Arabic copy. The bundle's own reference
+   * implementation carries it (`avo-promotions.js` → `branchLabel`, which picks
+   * `nameAr` when `ar`), so this closes a gap between the contract and the
+   * behaviour the design already demonstrates.
+   *
+   * Nullable, not required: a salon that has not supplied one falls back to
+   * `name`, the same way an untranslated legal document falls back to `en`.
+   */
+  nameAr: z.string().nullable(),
+  /**
+   * THE BRANCH'S RESOLVED HOURS — its own override, else the salon's. Always
+   * present, never null: a customer asking "when can I collect it" always gets an
+   * answer. See `businessHoursSource` for which one it is.
+   *
+   * RENDER THE SPANS THE WAY THE SERVER TRADES THEM. A span with `to <= from` is
+   * NOT a window — `evening: ["21:00","21:00"]` is the established way to say "no
+   * second sitting" (see BusinessHoursSchema). A salon open straight through must
+   * not be shown a phantom evening.
+   */
+  businessHours: BusinessHoursSchema,
+  businessHoursSource: BusinessHoursSourceSchema,
+});
+
+export const SocialLinkSchema = z.object({
+  id: z.enum(['instagram', 'tiktok', 'snapchat', 'whatsapp']),
+  label: z.string(),
+  /** "@amara.kw", or E.164 for whatsapp. STORE THE HANDLE, DERIVE THE URL. */
+  handle: z.string(),
+  /** false hides the icon without losing the handle. */
+  on: z.boolean(),
 });
 
 export const SalonSchema = z.object({
@@ -727,6 +746,21 @@ export const ServiceSchema = z.object({
   active: z.boolean(),
   /** Explicit `null`, never absent — a client must not have to tell "no image" from "field not sent". */
   image: ImageRefSchema.nullable(),
+  /**
+   * WHO CAN BE BOOKED TO PERFORM IT — the staff assigned to this service.
+   *
+   * Added for the client's Services tab (migration 0061). `[]` means nobody is
+   * assigned, so the service can be CHARGED at the counter but BOOKED by no one —
+   * the wallet hides it. Booking enforces this server-side (`409
+   * artist_not_assigned`); charging deliberately does not, because the person at
+   * the till rings up the visit rather than performing it.
+   *
+   * "Bookable at this branch" is the intersection of this list with
+   * `/artists/bookable?branch=` — both are already fetched, so no request per
+   * service. Migration 0062 assigned every existing artist to every existing
+   * service, so nothing that booked before this field existed stops booking.
+   */
+  artistIds: z.array(IdSchema),
 });
 
 export const ProductSchema = z.object({
@@ -885,6 +919,17 @@ export const ShopOrderSchema = z.object({
       /** Arabic name. Falls back to `name`. See BranchSchema.nameAr. */
       nameAr: z.string().nullable(),
       closed: z.boolean(),
+      /** Her pickup branch's resolved hours — the same pair `BranchSchema` serves. */
+      businessHours: BusinessHoursSchema,
+      businessHoursSource: BusinessHoursSourceSchema,
+      /**
+       * The SALON's timezone, for deciding "closed now, collect tomorrow". It must be
+       * decided in the salon's zone, never the device's: this machine runs PKT, two
+       * hours ahead of Kuwait, and a charge has already landed on the wrong day in
+       * `services/reports.ts` for exactly that reason. Display only — the server does
+       * not refuse a pickup outside hours.
+       */
+      timezone: z.string().min(1),
     })
     .nullable(),
   createdAt: DateTimeSchema,

@@ -505,7 +505,7 @@ export interface PlatformSalonRecord {
   /** Integer fils. Non-negotiable #1 — no float, ever, on the way in or out. */
   depositFils: number;
   /** OPEN branches only — `openBranchesOf` excludes `closed_at IS NOT NULL`. */
-  branches: Branch[];
+  branches: ConsoleBranch[];
 }
 
 /**
@@ -626,7 +626,21 @@ export function isCompleteLadder(tiers: Tier[] | null): tiers is Tier[] {
   return tiers !== null && tiers.length === TIER_LADDER.length;
 }
 
-function parseBranches(v: unknown, where: string): Branch[] {
+/**
+ * THE CONSOLE'S BRANCH IS NARROWER THAN `Branch`, and says so.
+ *
+ * `BranchSchema` gained `businessHours` and `businessHoursSource` (migration 0063)
+ * for the wallet's pickup and the merchant's Settings. `GET /v1/platform/salons/:id`
+ * does not serve them — the platform console has no use for a branch's trading
+ * hours — so this parser never received them. It used to return `Branch[]`
+ * anyway, which was a claim about four fields dressed as a claim about all of
+ * them; the new fields are what made the gap a type error instead of a silent
+ * `undefined`. Narrowed to the fields this route actually sends, rather than
+ * inventing hours it does not have.
+ */
+export type ConsoleBranch = Pick<Branch, 'id' | 'salonId' | 'name' | 'nameAr'>;
+
+function parseBranches(v: unknown, where: string): ConsoleBranch[] {
   if (!Array.isArray(v)) throw new Error(`${where} was not an array.`);
   return v.map((row, i) => {
     if (typeof row !== 'object' || row === null) {
