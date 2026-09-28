@@ -13,10 +13,19 @@ import {
   type MerchantBooking,
 } from '../api/bookings.js';
 import { useBookableArtists } from '../api/artists.js';
+import { formatWindowDay } from '../api/reports.js';
 import { useSalon } from '../api/salon.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { AppointmentForm } from './AppointmentForm.js';
 import { AppointmentsWeek } from './AppointmentsWeek.js';
+import {
+  ALL_DATES,
+  MAX_RANGE_DAYS,
+  rangeClause,
+  resolveRange,
+  type RangePreset,
+  type RangeSelection,
+} from './appointmentsRange.js';
 import { instantFromSalonLocal, pillFor, salonLocalFields } from './appointmentsWeekRules.js';
 import { whenLabel } from './appointmentWhen.js';
 import { DepositHealth } from './DepositHealth.js';
@@ -427,8 +436,23 @@ export function Appointments() {
    * and `AppointmentsWeek` is gated the same way from the other side.
    */
   const bookingOn = salon.data?.modules.booking ?? false;
-  const listOn = salon.isSuccess && bookingOn && view === 'list';
-  const bookings = useSalonBookings(null, listOn);
+
+  /*
+   * THE DATE FILTER. `appointmentsRange.ts` decides which two salon-local days
+   * to ask for; the SERVER applies them (`?from=&to=`). "All dates" is the
+   * request this list always made, so the door still opens on the same board.
+   *
+   * A half-filled "Dates" pair asks nothing: a request with one end is refused by
+   * name, and a skeleton over a question nobody has finished asking would promise
+   * an answer that is not coming — `Reports.tsx`' rule for the same control.
+   */
+  const [dates, setDates] = useState<RangeSelection>(ALL_DATES);
+  const resolved = resolveRange(dates, salon.data?.timezone ?? null, new Date());
+  const range = resolved.kind === 'range' ? resolved.range : null;
+  const asking = resolved.kind === 'all' || resolved.kind === 'range';
+
+  const listOn = salon.isSuccess && bookingOn && view === 'list' && asking;
+  const bookings = useSalonBookings(null, listOn, range);
 
   /*
    * The salon read gates the module question, so its failure is this section's
@@ -441,11 +465,18 @@ export function Appointments() {
    * away from replace a grid that is loading perfectly well. The week owns its
    * own `SectionError` for its own read.
    */
-  const failed = salon.isError ? salon : view === 'list' && bookings.isError ? bookings : null;
-  if (failed) {
+  /*
+   * AND THE LIST'S OWN FAILURE NOW RENDERS INSIDE THE CARD, UNDER THE FILTER.
+   * It replaced the whole screen while the list had no controls of its own; with
+   * a date filter above it, a refused range that took the filter away with it
+   * would leave the merchant no way to ask for a different one. The salon read
+   * still answers for the whole section — without it there is no module state and
+   * no zone to draw anything in.
+   */
+  if (salon.isError) {
     return (
       <SectionError
-        error={failed.error}
+        error={salon.error}
         forbiddenTitle="You don't have access to appointments"
         failedTitle="Couldn't load Appointments"
         onRetry={() => {
@@ -456,6 +487,7 @@ export function Appointments() {
       />
     );
   }
+  const listFailed = view === 'list' && listOn && bookings.isError;
 
   const loading = salon.isPending || (listOn && bookings.isPending);
   const rows = bookings.data?.items ?? [];
@@ -618,11 +650,41 @@ export function Appointments() {
         */
         <DepositHealth timezone={salon.data?.timezone ?? null} />
       ) : (
+        <>
+          <DateFilter value={dates} onChange={setDates} resolved={resolved} />
+          {listFailed ? (
+            <Card className="appts__card">
+              <SectionError
+                error={bookings.error}
+                forbiddenTitle="You don't have access to appointments"
+                failedTitle="Couldn't load Appointments"
+                onRetry={() => void bookings.refetch()}
+                retrying={bookings.isFetching}
+              />
+            </Card>
+          ) : !asking ? null : (
         <Card className="appts__card" flush>
+          {/*
+            MORE MATCHED THAN ONE PAGE HOLDS, SAID RATHER THAN HIDDEN. The list
+            reads one page of a `starts_at DESC` stream, so what is missing is the
+            SOONEST end of the range — exactly the rows a front desk opens this
+            screen for. `nextCursor` is non-null only when the server's `+ 1`
+            probe proved there is another row (`salons.ts § NULL ONLY WHEN IT IS
+            TRUE`), so this is a measured fact and never a guess. The remedy is the
+            control directly above it.
+          */}
+          {!loading && bookings.data?.nextCursor ? (
+            <p className="appts__capped" role="status">
+              More appointments match than fit on one page — these are the furthest ahead.
+              Narrow the dates to see the rest.
+            </p>
+          ) : null}
           <div className="appts__scroll">
             <table className="appts__table">
               <caption className="avo-sr-only">
-                Every booking and its deposit status, newest first.
+                {range === null
+                  ? 'Every booking and its deposit status, newest first.'
+                  : `Bookings ${rangeClause(range)} and their deposit status, newest first.`}
               </caption>
               <thead>
                 <tr>
@@ -645,6 +707,23 @@ export function Appointments() {
                       ))}
                     </tr>
                   ))
+                ) : rows.length === 0 && range !== null ? (
+                  /*
+                    THE FILTERED EMPTY — A THIRD, AND NOT THE SAME FACT AS THE
+                    OTHER TWO. The server looked at these days and found nothing,
+                    which says nothing about the rest of the book. It names the
+                    days so a merchant who picked the wrong ones can see that she
+                    has, and it does not promise bookings "land here": they land in
+                    whichever days they are for.
+                  */
+                  <tr>
+                    <td colSpan={6} className="appts__empty">
+                      <EmptyState
+                        title="No appointments in this range"
+                        body={`Nothing is booked ${rangeClause(range)}.`}
+                      />
+                    </td>
+                  </tr>
                 ) : rows.length === 0 ? (
                   /*
                     THE NOTHING-BOOKED-YET EMPTY. Reached only when the module is
@@ -757,7 +836,83 @@ export function Appointments() {
             </table>
           </div>
         </Card>
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+/* ====================================================== the date filter == */
+
+const DATE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
+  { value: 'all', label: 'All dates' },
+  { value: 'today', label: 'Today' },
+  { value: 'tomorrow', label: 'Tomorrow' },
+  { value: 'week', label: 'This week' },
+  { value: 'custom', label: 'Dates' },
+];
+
+/**
+ * The List view's date filter. `appointmentsRange.ts` carries the rules; this is
+ * the control, in `Reports.tsx`' shape — a `Segmented` whose last option opens
+ * two date fields — so the dashboard asks for a window one way.
+ *
+ * THE LINE UNDER IT SAYS WHICH DAYS ARE BEING ASKED FOR, resolved. "Today" is a
+ * word; "29 Sep 2026" is what the server was sent, and a manager reading from
+ * another country is the one who needs to see that it is the salon's today and
+ * not hers. EXPORTED for the render test.
+ */
+export function DateFilter({
+  value,
+  onChange,
+  resolved,
+}: {
+  value: RangeSelection;
+  onChange: (next: RangeSelection) => void;
+  resolved: ReturnType<typeof resolveRange>;
+}) {
+  return (
+    <div className="appts__filter">
+      <Segmented<RangePreset>
+        label="Dates shown"
+        value={value.preset}
+        onChange={(preset) => onChange({ ...value, preset })}
+        options={DATE_OPTIONS}
+      />
+      {value.preset === 'custom' ? (
+        <div className="appts__dates">
+          <TextField
+            label="From"
+            type="date"
+            value={value.from}
+            onChange={(e) => onChange({ ...value, from: e.target.value })}
+          />
+          <TextField
+            label="To"
+            type="date"
+            value={value.to}
+            onChange={(e) => onChange({ ...value, to: e.target.value })}
+          />
+        </div>
+      ) : null}
+      {resolved.kind === 'invalid' ? (
+        <p className="appts__hint appts__hint--error" role="alert">
+          {resolved.message}
+        </p>
+      ) : resolved.kind === 'incomplete' ? (
+        <p className="appts__hint">
+          Pick both days. Both are included, in your salon&rsquo;s own time. Up to {MAX_RANGE_DAYS}{' '}
+          days.
+        </p>
+      ) : resolved.kind === 'range' ? (
+        <p className="appts__hint">
+          {resolved.range.from === resolved.range.to
+            ? formatWindowDay(resolved.range.from)
+            : `${formatWindowDay(resolved.range.from)} – ${formatWindowDay(resolved.range.to)}`}
+          , in your salon&rsquo;s own time.
+        </p>
+      ) : null}
     </div>
   );
 }
