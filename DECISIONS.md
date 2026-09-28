@@ -2074,3 +2074,47 @@ credit the people it reaches is **asked, not assumed**. It would be a money path
 - The console approval card names the reward between branch and send time, where the
   console design puts it. A campaign with no reward shows no item there, although the
   design draws "No reward".
+
+### The fourth list, 2026-09-29, and four rulings from Aftab
+
+**Membership points after a scan.** *"After each scan the membership points are gained"*.
+Every charge already adds a visit (or a stamp) and re-evaluates the tier inside the charge
+transaction; there are no points and there will not be. **Ruling: show what she gained.** The
+scanner's success screen and her wallet say it: "+1 visit · 2 more to Gold" or the stamp
+equivalent. There is no new earning rule. The old AVO app's points model is not adopted.
+
+**Booking deposit: the salon's own policy replaces the return window.**
+- **No-show:** the salon chooses, as a policy setting, whether to keep the deposit or return it
+  to her wallet. The merchant-configurable no-show return window goes away. Trunk decided when
+  the rule applies (Aftab did not specify it): when staff mark the no-show, or automatically
+  when the booked slot ends (`startsAt` + service duration), whichever comes first.
+- **Cancellation by her:** Aftab: *"it should be decided in the policy how much time before the
+  booked slot, X amount will be returned"*. So the salon sets cut-off rules, each an hours-before
+  threshold with a percent returned (up to three). The first matching threshold wins, and later
+  than all of them returns nothing.
+  - What is returned is **wallet credit** (non-negotiable #5). The rest is kept by the salon.
+  - Percent is applied to integer fils and rounded down to the fil. The salon keeps the
+    remainder fil.
+- **The booking stamps the policy it was made under.** A later edit never changes what an
+  existing booking returns.
+- The policy text the salon writes is shown to her before she confirms a booking that takes a
+  deposit, and on the booking afterwards.
+
+**Policy changes notify her. These are the salon's own policies, not AVO's legal set.** Each
+publish writes one wallet-bell notice to that salon's members. It is **bell only, no push**,
+and coalesced to at most one notice per salon per day. Trunk chose that limit. A policy notice
+is a system record, not a campaign, so it does not go through AVO approval. Keeping it off
+push and rate-limited is what stops it becoming a route around non-negotiable #8.
+
+**Also on the list (no ruling needed):**
+- the booking branch step drawn like the service list, with no "All branches" choice
+- appointment date filters
+- a clickable week view
+- icon status actions
+- search and filters on every merchant list
+- boost duration and a stop control
+- the customer card showing bookings and purchases, with its activity folded
+- business hours editable branch by branch where they are displayed
+- at least ten Overview analytics widgets
+
+Client-requested restyles are recorded as they land.
