@@ -564,27 +564,14 @@ function probes(): Probe[] {
       schema: paginated(CampaignRewardSchema),
       requireNonEmpty: ['items'],
       /**
-       * THE ENVELOPE, NOT THE ITEM. `routes/campaignRewards.ts:112` answers
-       * `{ items }` with no `nextCursor`, and `paginated()` requires it
-       * (`nextCursor: z.string().nullable()`, required-and-nullable on purpose). Every
-       * other `{ items }` reply in `api/src/routes/` serves `nextCursor` — 27 of 27,
-       * checked site by site, `null` where there is no second page, including the
-       * campaign list beside this one — and trunk's mock route (`packages/mock/src/server.ts:894`) omits it the same
-       * way, so no consumer built on either would notice until it reached for
-       * `paginated()`. Found by this probe on its first run.
-       *
-       * NOT LANE D'S COLUMN TO FIX, and it is reported rather than worked around with a
-       * local `{ items }` schema here: a schema this file invented would be a contract
-       * nobody else reads. Either the route and the mock send `nextCursor: null`, or
-       * trunk declares a bare-list envelope in `packages/types` and this probe uses it.
-       * `knownBug` fails the day either lands, which is when this line comes out.
-       *
-       * THE ITEM IS STILL CHECKED IN BOTH DIRECTIONS while the envelope is known-bad:
-       * the describe at the bottom of this file parses the served row with
-       * `CampaignRewardSchema` itself and runs the stripping comparison on it.
+       * THE ENVELOPE IS CHECKED TOO, AND IT WAS WRONG. This probe's first run found the
+       * route answering `{ items }` with no `nextCursor`, where `paginated()` requires it
+       * (`nextCursor: z.string().nullable()`, required-and-nullable on purpose) and every
+       * other `{ items }` reply in `api/src/routes/` serves it. Trunk decided the fix: the
+       * route sends `nextCursor: null` like every other list, and the mock does the same
+       * (`d70ed8d`). The `knownParseFailure` that carried it until then is removed, so a
+       * route or mock that drops `nextCursor` again fails this probe outright.
        */
-      knownParseFailure:
-        'the route serves { items } with no nextCursor; every other list route serves nextCursor',
     },
     /**
      * THE APPROVAL QUEUE, across every salon. Reachable since `signInPlatform` landed.
@@ -3982,8 +3969,8 @@ describe('customReward — the sample reaches the salon\'s own words, not only n
 
     const parsed = CampaignRewardSchema.safeParse(row);
     expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
-    // Direction two on the ITEM, which the generic probe cannot reach while the
-    // envelope is a known parse failure (see its `knownParseFailure`).
+    // Direction two on the ITEM, pinned to the row this file saved; the generic
+    // probe strip-checks the envelope as a whole.
     const lost = keyDeltas(row, (parsed as { data: unknown }).data);
     expect(lost.length === 0 ? '' : describeDeltas(lost), 'CampaignRewardSchema is narrower than the wire').toBe('');
 
