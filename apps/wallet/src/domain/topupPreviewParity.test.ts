@@ -72,7 +72,7 @@ const TIERS_SALON = {
   ],
 } as Salon;
 
-const BOOSTS = [{ branchId: 'BR-SAL', visit: 2, topup: 30, stamp: 2 }];
+const BOOSTS = [{ branchId: 'BR-SAL', visit: 2, topup: 30, stamp: 2, startsAt: null, endsAt: null, stoppedAt: null, stoppedBy: null }];
 
 const WINDOWS: HappyHour[] = [
   // all-branch, pays 10% on a top-up, Sun/Mon/Tue 16:00-18:00

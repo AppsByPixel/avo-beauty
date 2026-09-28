@@ -143,6 +143,7 @@ function wire(over: Record<string, unknown>) {
     calendarSyncState: 'synced',
     policy: null,
     settlement: null,
+    returnCapPercent: null,
     memberName: 'Dana Al-Fahad',
     memberPhone: '+965 9912 4408',
     memberTier: 'gold',

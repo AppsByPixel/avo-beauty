@@ -22,7 +22,7 @@ import { readPromotionsOrNull } from './useWalletHome';
 import { ApiError } from '../api/client';
 
 const PROMOTIONS: PromotionSet = {
-  boosts: { 'BR-KWC': { visit: 2, topup: 10, stamp: 1 } },
+  boosts: { 'BR-KWC': { visit: 2, topup: 10, stamp: 1, startsAt: null, endsAt: null, stoppedAt: null, stoppedBy: null } },
   boostsPublishedAt: '2026-08-10T06:00:00.000Z',
   boostsPublishedBy: 'Noura',
   happy: [],

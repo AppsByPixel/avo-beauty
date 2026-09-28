@@ -37,7 +37,7 @@ const HH_TOPUP: HappyHour = {
 };
 
 const promotionSet = (happy: HappyHour[]): PromotionSet => ({
-  boosts: { 'BR-SAL': { visit: 2, topup: 30, stamp: 2 } },
+  boosts: { 'BR-SAL': { visit: 2, topup: 30, stamp: 2, startsAt: null, endsAt: null, stoppedAt: null, stoppedBy: null } },
   boostsPublishedAt: '2026-08-10T06:00:00.000Z',
   boostsPublishedBy: 'Noura',
   happy,

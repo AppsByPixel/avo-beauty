@@ -85,6 +85,7 @@ function booking(over: Record<string, unknown> = {}): BookingView {
     calendarSyncState: 'not_applicable',
     policy: null,
     settlement: null,
+    returnCapPercent: null,
     ...over,
   });
 }

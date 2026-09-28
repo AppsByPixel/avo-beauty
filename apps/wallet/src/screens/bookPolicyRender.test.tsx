@@ -113,6 +113,7 @@ const CREATED = {
     startsAt: SLOT.startsAt,
     policy: { id: 'BP-3', version: 3, noShow: 'keep', cancellation: V3.cancellation, text: V3.text },
     settlement: null,
+    returnCapPercent: null,
   },
   balanceAfterFils: 20000,
 };

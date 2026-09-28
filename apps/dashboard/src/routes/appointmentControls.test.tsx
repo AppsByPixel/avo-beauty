@@ -116,6 +116,7 @@ const HELD: MerchantBooking = {
   calendarSyncState: 'synced',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
@@ -145,6 +146,7 @@ const WALK_IN: MerchantBooking = {
   calendarSyncState: 'not_applicable',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   memberName: 'Mariam Al-Ajmi',
   memberTier: null,
 };

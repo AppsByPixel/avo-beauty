@@ -189,6 +189,7 @@ const HELD: MerchantBooking = {
   calendarSyncState: 'synced',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',

@@ -80,6 +80,7 @@ const ROW: MerchantBooking = {
   calendarSyncState: 'synced',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
@@ -115,6 +116,7 @@ const OK: MarkNoShowResult = {
     calendarSyncState: 'synced',
     policy: null,
     settlement: null,
+    returnCapPercent: null,
   },
   /** INTEGER FILS, both — #1. The deposit back, and her wallet after it. */
   refundedFils: 5000,

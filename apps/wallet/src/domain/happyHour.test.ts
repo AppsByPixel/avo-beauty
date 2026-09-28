@@ -54,8 +54,8 @@ const HH_02: HappyHour = {
 
 const PROMOTIONS: PromotionSet = {
   boosts: {
-    'BR-SAL': { visit: 1, topup: 0, stamp: 1 },
-    'BR-KWC': { visit: 2, topup: 10, stamp: 1 },
+    'BR-SAL': { visit: 1, topup: 0, stamp: 1, startsAt: null, endsAt: null, stoppedAt: null, stoppedBy: null },
+    'BR-KWC': { visit: 2, topup: 10, stamp: 1, startsAt: null, endsAt: null, stoppedAt: null, stoppedBy: null },
   },
   boostsPublishedAt: '2026-08-10T06:00:00.000Z',
   boostsPublishedBy: 'Noura',

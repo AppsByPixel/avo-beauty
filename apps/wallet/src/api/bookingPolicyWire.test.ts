@@ -61,6 +61,7 @@ const BOOKING = {
     text: { en: 'Terms.', ar: '' },
   },
   settlement: { returnedFils: 2502, keptFils: 2503 },
+  returnCapPercent: null,
 };
 
 const POLICY = {

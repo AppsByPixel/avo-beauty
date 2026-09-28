@@ -100,6 +100,7 @@ const ROW: MerchantBooking = {
   calendarSyncState: 'synced',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
@@ -133,6 +134,7 @@ const WRITTEN_BOOKING: Record<string, unknown> = {
   calendarSyncState: 'synced',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
 };
 
 /** The board row — `serialiseShopOrder` plus the join `perms.shop` gates. */

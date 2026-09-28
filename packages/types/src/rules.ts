@@ -142,6 +142,22 @@ export function rewardEffect(reward: RewardKey): EarningEffect {
   }
 }
 
+/**
+ * Whether a branch boost applies at `now`: from `startsAt` (inclusive) until
+ * `endsAt` (exclusive), `null` being no bound. The same predicate the API uses
+ * at charge and top-up time (lane A, 6d102c5) — a client may use it to DISPLAY
+ * a boost's state, never to decide earning (#2).
+ */
+export function isBoostLive(
+  boost: { startsAt: string | null; endsAt: string | null },
+  now: Date,
+): boolean {
+  const t = now.getTime();
+  if (boost.startsAt !== null && t < Date.parse(boost.startsAt)) return false;
+  if (boost.endsAt !== null && t >= Date.parse(boost.endsAt)) return false;
+  return true;
+}
+
 // ------------------------------------------------------------ social links --
 
 /**

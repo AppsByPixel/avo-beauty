@@ -126,6 +126,7 @@ const BOOKING: MerchantBooking = {
   calendarSyncState: 'synced',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Noura Al-Ajmi',
   memberPhone: '+96590000001',

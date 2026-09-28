@@ -644,6 +644,13 @@ export const BookingSchema = z.object({
   policy: BookingPolicyStampSchema.nullable(),
   /** Where the deposit went once settled. `null` until it is. */
   settlement: BookingSettlementSchema.nullable(),
+  /**
+   * The most her cancel can return after she rescheduled late: the percent she
+   * held at the moment she moved. A cancel returns the smaller of this and what
+   * the stamped rules give for the new slot. `null` if she never moved it, or on
+   * a legacy booking. The wallet's preview must take the same minimum.
+   */
+  returnCapPercent: z.number().int().min(0).max(100).nullable(),
 });
 
 /**
@@ -1183,6 +1190,17 @@ export const BoostSchema = z.object({
   visit: z.number().int().min(1).max(3),
   topup: z.number().int().min(0).max(30),
   stamp: z.number().int().min(1).max(3),
+  /**
+   * The boost's window (migration 0067). It applies from `startsAt` (inclusive)
+   * until `endsAt` (exclusive); `null` is no bound. NO `live` FLAG — every reader
+   * resolves it with `isBoostLive`, and the charge and top-up decide it on the
+   * server (#2).
+   */
+  startsAt: DateTimeSchema.nullable(),
+  endsAt: DateTimeSchema.nullable(),
+  /** Set by an explicit stop, after which the values are the neutral 1/0/1. */
+  stoppedAt: DateTimeSchema.nullable(),
+  stoppedBy: z.string().nullable(),
 });
 
 /**

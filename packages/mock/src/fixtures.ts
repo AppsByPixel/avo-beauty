@@ -356,10 +356,22 @@ export const services = [
   svc('SV-05', 'Treatment', 12500),
 ];
 
+/** A boost with no window and never stopped (migration 0067's default). */
+const NO_WINDOW = { startsAt: null, endsAt: null, stoppedAt: null, stoppedBy: null } as const;
+
 export const promotions: PromotionSet = {
   boosts: {
-    [BRANCH_SALMIYA]: { visit: 1, topup: 0, stamp: 1 },
-    [BRANCH_KUWAIT_CITY]: { visit: 2, topup: 10, stamp: 1 },
+    [BRANCH_SALMIYA]: { visit: 1, topup: 0, stamp: 1, ...NO_WINDOW },
+    // A running boost with an end, so a consumer sees a non-null window.
+    [BRANCH_KUWAIT_CITY]: {
+      visit: 2,
+      topup: 10,
+      stamp: 1,
+      startsAt: null,
+      endsAt: '2027-01-01T00:00:00+03:00',
+      stoppedAt: null,
+      stoppedBy: null,
+    },
   },
   boostsPublishedAt: '2026-08-10T09:00:00+03:00',
   boostsPublishedBy: 'Noura',

@@ -883,6 +883,34 @@ app.put('/v1/salons/:id/promotions/boosts', async (req, reply) => {
 });
 
 /**
+ * Stop a branch's boost now (lane A, 6d102c5): neutral 1/0/1, no window, and who
+ * stopped it. Stateless like the PUT above; the real API refuses a boost that is
+ * not running with 409 `no_boost_running`.
+ */
+app.post('/v1/salons/:id/promotions/boosts/:branchId/stop', async (req, reply) => {
+  if (await intercept(req, reply)) return;
+  const { branchId } = req.params as { branchId: string };
+  if (!(branchId in promotions.boosts)) {
+    return reply.code(404).send({ error: 'unknown_branch', message: 'No such branch.' });
+  }
+  return {
+    ...promotions,
+    boosts: {
+      ...promotions.boosts,
+      [branchId]: {
+        visit: 1,
+        topup: 0,
+        stamp: 1,
+        startsAt: null,
+        endsAt: null,
+        stoppedAt: new Date().toISOString(),
+        stoppedBy: 'Noura',
+      },
+    },
+  };
+});
+
+/**
  * The salon's own campaign rewards. In memory and per mock process, which is all a
  * consumer lane needs to drive save → pick → remove. The real rules (60 chars,
  * case-insensitive duplicates, 20 active, perms.marketing) live in

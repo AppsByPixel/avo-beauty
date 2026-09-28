@@ -59,6 +59,7 @@ const WALK_IN: MerchantBooking = {
   calendarSyncState: 'not_applicable',
   policy: null,
   settlement: null,
+  returnCapPercent: null,
   branchAssumed: false,
   memberName: 'Mariam Al-Ajmi',
   memberPhone: '+96590011223',
