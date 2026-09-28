@@ -64,6 +64,8 @@ const SALON = {
 };
 
 beforeEach(() => {
+  // The filter lives in the URL now, and jsdom keeps one URL for the whole file.
+  window.history.replaceState(null, '', '/appointments');
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   useSalon.mockReturnValue(SALON);

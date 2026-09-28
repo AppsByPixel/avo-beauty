@@ -11,7 +11,18 @@ import {
   type PromotionSet,
   type RewardKey,
 } from '@avo/types';
-import { Button, Card, Chip, Pill, Skeleton, Toggle } from '@avo/ui';
+import {
+  Button,
+  Card,
+  Chip,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  FilterSelect,
+  Pill,
+  Skeleton,
+  Toggle,
+} from '@avo/ui';
 import {
   DAY_SHORT,
   HAPPY_REWARDS,
@@ -22,6 +33,7 @@ import {
   useUpdateHappyHour,
 } from '../../api/promotions.js';
 import { WriteError } from '../sectionState.js';
+import { TEXT_PARAM, enumParam, shownLabel, useStableMatches, useUrlFilters } from '../listFilters.js';
 
 /**
  * Marketing → Happy hours.
@@ -80,9 +92,46 @@ function durationLabel(mins: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+/**
+ * ===========================================================================
+ * THE WINDOWS' FILTERS — BRANCH AND STATE, IN THE BROWSER
+ * ===========================================================================
+ * `GET /v1/salons/{id}/promotions` answers the salon's whole promotion set as
+ * one document, so these narrow a complete list.
+ *
+ * BRANCH MEANS "RUNS THERE": an all-branch window matches every branch, because
+ * it pays more at Salmiya too. Filtering to Salmiya and hiding it would say
+ * Salmiya has no happy hour when it has one.
+ *
+ * "LIVE NOW" IS A DISPLAY FILTER AND NOTHING ELSE. It asks the shared
+ * `isHappyHourLive` — the same predicate the rows' pills use — which rows to
+ * SHOW. Whether a charge earns the bonus is decided by the server at the moment
+ * it is posted (non-negotiable #2); nothing here feeds that.
+ */
+const HAPPY_FILTERS = { branch: TEXT_PARAM, state: enumParam(['live', 'paused']) } as const;
+
 export function HappyHours({ branches, promotions, loading }: HappyHoursProps) {
   const now = useTick();
-  const windows = promotions?.happy ?? [];
+  const all = promotions?.happy;
+  const url = useUrlFilters(HAPPY_FILTERS);
+  const branchFilter = branches.some((b) => b.id === url.values.branch) ? url.values.branch : '';
+  const stateFilter = url.values.state;
+  const filterKey = `${branchFilter}|${stateFilter}`;
+  const filtered = filterKey !== '|';
+  /*
+   * STABLE — a window switched off under "Live now" stays until the filter
+   * changes, so the Toggle she just pressed does not vanish from under her.
+   */
+  const windows =
+    useStableMatches(
+      all,
+      (w) => w.id,
+      (w) =>
+        (branchFilter === '' || w.branchId === 'all' || w.branchId === branchFilter) &&
+        (stateFilter === '' ||
+          (stateFilter === 'paused' ? !w.on : w.on && isHappyHourLive(w, now))),
+      filtered ? filterKey : '',
+    ) ?? [];
 
   /*
    * WHICH window gets a countdown to its opening: exactly one, the soonest.
@@ -98,7 +147,8 @@ export function HappyHours({ branches, promotions, loading }: HappyHoursProps) {
    * them — a switched-off window has no next opening, which is the point of
    * switching it off.
    */
-  const nextToOpenId = windows.reduce<{ id: string; mins: number } | null>((best, w) => {
+  // Over the WHOLE set, not the filtered view: "next" is one window for the salon.
+  const nextToOpenId = (all ?? []).reduce<{ id: string; mins: number } | null>((best, w) => {
     if (isHappyHourLive(w, now)) return best;
     const mins = minutesUntilNext(w, now);
     if (mins === null) return best;
@@ -130,12 +180,49 @@ export function HappyHours({ branches, promotions, loading }: HappyHoursProps) {
           opens. Wallets read the same windows and count down to the minute.
         </p>
 
+        {!loading && (all ?? []).length > 0 ? (
+          <FilterBar
+            label="Filter happy hours"
+            className="avo-filterbar--inset"
+            count={
+              filtered
+                ? shownLabel(windows.length, all?.length ?? 0, 'window', 'windows', true)
+                : null
+            }
+            onClear={filtered ? () => url.clear() : undefined}
+          >
+            {branches.length > 1 ? (
+              <FilterSelect
+                label="Filter by branch"
+                options={[
+                  { value: '', label: 'All branches' },
+                  ...branches.map((b) => ({ value: b.id, label: b.name })),
+                ]}
+                value={branchFilter}
+                onChange={(branch) => url.set({ branch })}
+              />
+            ) : null}
+            <FilterChips
+              label="State"
+              options={[
+                { value: '', label: 'All' },
+                { value: 'live', label: 'Live now' },
+                { value: 'paused', label: 'Paused' },
+              ]}
+              value={stateFilter}
+              onChange={(state) => url.set({ state })}
+            />
+          </FilterBar>
+        ) : null}
+
         {loading ? (
           <div className="mk__skeletons">
             {[0, 1].map((n) => (
               <Skeleton key={n} width="100%" height={64} />
             ))}
           </div>
+        ) : windows.length === 0 && filtered && (all ?? []).length > 0 ? (
+          <FilterEmpty things="windows" onClear={() => url.clear()} />
         ) : windows.length === 0 ? (
           <p className="mk__none">
             {/*

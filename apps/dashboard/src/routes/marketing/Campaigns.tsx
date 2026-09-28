@@ -1,6 +1,17 @@
 import { useState } from 'react';
 import type { Branch, Campaign, CampaignReward, RewardKey } from '@avo/types';
-import { Button, Card, Pill, Segmented, Skeleton, TextField, type PillTone } from '@avo/ui';
+import {
+  Button,
+  Card,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  Pill,
+  Segmented,
+  Skeleton,
+  TextField,
+  type PillTone,
+} from '@avo/ui';
 import {
   AUDIENCES,
   CAMPAIGN_ADD_CUSTOM_LABEL,
@@ -19,6 +30,7 @@ import {
 import { ApiError } from '../../api/client.js';
 import { instantFromSalonLocal, salonLocalFields } from '../appointmentsWeekRules.js';
 import { isForbidden, isUnauthenticated, SectionError, WriteError } from '../sectionState.js';
+import { enumParam, useUrlFilters } from '../listFilters.js';
 
 /**
  * Marketing → Campaigns. NON-NEGOTIABLE #8 LIVES ON THIS SCREEN.
@@ -507,8 +519,17 @@ function SavedRewardsError({ saved }: { saved: ReturnType<typeof useCampaignRewa
  * a fabricated row. Withdraw and the monthly cap sit behind the same gap and are
  * omitted for the same reason.
  */
+const QUEUE_STATUSES = ['pending', 'approved', 'sent', 'rejected'] as const;
+const QUEUE_FILTERS = { status: enumParam(QUEUE_STATUSES) } as const;
+const QUEUE_CHIPS = [
+  { value: '', label: 'All' },
+  ...QUEUE_STATUSES.map((value) => ({ value, label: CAMPAIGN_STATUS_LABEL[value] })),
+];
+
 function Queue({ loading, timezone }: { loading: boolean; timezone: string | null }) {
-  const campaigns = useCampaigns();
+  const url = useUrlFilters(QUEUE_FILTERS);
+  const status = (url.values.status || null) as Campaign['status'] | null;
+  const campaigns = useCampaigns(status);
   const missing = campaigns.error instanceof ApiError && campaigns.error.status === 404;
   const items = campaigns.data?.items ?? [];
 
@@ -518,6 +539,29 @@ function Queue({ loading, timezone }: { loading: boolean; timezone: string | nul
       <p className="mk__cardsub">
         Every campaign is reviewed by AVO before it reaches a phone.
       </p>
+
+      {/*
+        The status goes to the server — see `useCampaigns`. No search: a queue
+        of a salon's own few campaigns is read by status, and the brief asks for
+        status alone here.
+      */}
+      <FilterBar
+        label="Filter campaigns"
+        className="avo-filterbar--inset"
+        count={
+          loading || campaigns.isPending || campaigns.isError || status === null
+            ? null
+            : `${items.length} ${items.length === 1 ? 'campaign' : 'campaigns'}`
+        }
+        onClear={status !== null ? () => url.clear() : undefined}
+      >
+        <FilterChips
+          label="Status"
+          options={QUEUE_CHIPS}
+          value={status ?? ''}
+          onChange={(next) => url.set({ status: next })}
+        />
+      </FilterBar>
 
       {loading || campaigns.isPending ? (
         <div className="mk__skeletons">
@@ -554,6 +598,8 @@ function Queue({ loading, timezone }: { loading: boolean; timezone: string | nul
           onRetry={() => void campaigns.refetch()}
           retrying={campaigns.isFetching}
         />
+      ) : items.length === 0 && status !== null ? (
+        <FilterEmpty things="campaigns" onClear={() => url.clear()} />
       ) : items.length === 0 ? (
         /*
          * "Nothing submitted yet." named neither the thing nor the action —

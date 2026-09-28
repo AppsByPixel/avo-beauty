@@ -1,6 +1,6 @@
-import { useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { fils } from '@avo/types';
-import { Button, Card, EmptyState, Money, Pill, Skeleton } from '@avo/ui';
+import { Button, Card, EmptyState, FilterBar, Money, Pill, Skeleton } from '@avo/ui';
 import {
   useCustomer,
   useCustomerBook,
@@ -20,6 +20,7 @@ import { pillFor } from './appointmentsWeekRules.js';
 import { STATUS_PILL as ORDER_PILL } from './ShopOrders.js';
 import { clock24, clockFrame, dayMonth } from './salonTime.js';
 import { SectionError } from './sectionState.js';
+import { useSearchText } from './listFilters.js';
 
 /**
  * Merchant → Accounts → Customers. `AVO Merchant Dashboard.dc.html:547` § CUSTOMERS.
@@ -97,7 +98,6 @@ export function Customers() {
   // The salon's zone for every date on this screen. A cache hit — the shell
   // has already read the salon. See `salonTime.ts`.
   const timezone = useSalon().data?.timezone ?? null;
-  const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   /**
    * The open card, held as an ID and not as the row.
@@ -120,10 +120,12 @@ export function Customers() {
    * budgeted by `enforceCustomerDirectoryLimit` at 300 per hour. A keystroke-per-
    * request search box would spend that budget on a merchant typing a name.
    */
-  useEffect(() => {
-    const timer = setTimeout(() => setQuery(search), 300);
-    return () => clearTimeout(timer);
-  }, [search]);
+  /*
+   * NOT IN THE URL, unlike every chip on this dashboard: the box holds a
+   * customer's name or phone number, and that does not belong in browser
+   * history or in a link copied off this screen. `listFilters.ts` has the rule.
+   */
+  const search = useSearchText(query, setQuery, 300);
 
   const book = useCustomerBook(query);
 
@@ -160,37 +162,41 @@ export function Customers() {
 
   return (
     <div className="cust">
-      <div className="cust__controls">
-        <input
-          className="avo-input cust__search"
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          /*
-           * The design's placeholder is "Search name or username". There is no
-           * username on a customer (see the header), and the server matches name,
-           * phone digits or an exact member id — so the box promises what it can
-           * actually find. A placeholder naming a field the endpoint cannot search
-           * is the false claim `console/Accounts.tsx` removed from its own.
-           */
-          placeholder="Search name or phone"
-          aria-label="Search this salon's customers by name or phone"
-        />
-        <span className="cust__count" role="status">
-          {/*
-            "shown", not "customers". The endpoint serves no total — it pages 25 at
-            a time with an opaque cursor — so the only number this screen can state
-            truthfully is how many rows it is holding. `console/Accounts.tsx` made
-            the same substitution against the same absence.
+      {/*
+        The design's placeholder is "Search name or username". There is no
+        username on a customer (see the header), and the server matches name,
+        phone digits or an exact member id — so the box promises what it can
+        actually find. A placeholder naming a field the endpoint cannot search is
+        the false claim `console/Accounts.tsx` removed from its own.
 
-            AND NO `?? 0` WHILE PENDING. A count rendered from `rows.length` before
-            the first page lands announces "0 shown" beside a column of skeletons,
-            which is the premature-zero class `stateCensus.test.ts` pins on both
-            audit screens.
-          */}
-          {book.isPending ? '' : `${rows.length} shown`}
-        </span>
-      </div>
+        The count is "shown", not "customers": the endpoint serves no total — it
+        pages 25 at a time with an opaque cursor — so the only number this screen
+        can state truthfully is how many rows it is holding. And no `?? 0` while
+        pending: "0 shown" beside a column of skeletons is the premature-zero class
+        `stateCensus.test.ts` pins on both audit screens.
+
+        No other filter: the endpoint takes `?q=` and a cursor and nothing else,
+        so a tier chip would have to trim loaded pages. Lane A has `?tier=` in the
+        report.
+      */}
+      <FilterBar
+        label="Filter customers"
+        search={{
+          value: search.text,
+          onChange: search.setText,
+          label: "Search this salon's customers by name or phone",
+          placeholder: 'Search name or phone',
+        }}
+        count={book.isPending ? null : `${rows.length} shown`}
+        onClear={
+          query.trim() !== ''
+            ? () => {
+                search.reset();
+                setQuery('');
+              }
+            : undefined
+        }
+      />
 
       <Card className="cust__card" flush>
         <table className="cust__table">
@@ -233,7 +239,13 @@ export function Customers() {
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={6} className="cust__empty">
-                  <BookEmpty query={query} onClear={() => setSearch('')} />
+                  <BookEmpty
+                    query={query}
+                    onClear={() => {
+                      search.reset();
+                      setQuery('');
+                    }}
+                  />
                 </td>
               </tr>
             ) : (

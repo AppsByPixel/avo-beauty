@@ -1,9 +1,20 @@
-import { useEffect, useState } from 'react';
-import { Button, Card, Chip, EmptyState, InfoBanner, Pill, Skeleton, type PillTone } from '@avo/ui';
+import { useState } from 'react';
+import {
+  Button,
+  Card,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  InfoBanner,
+  Pill,
+  Skeleton,
+  type PillTone,
+} from '@avo/ui';
 import { AUDIT_KINDS, useAuditLog, type AuditEntry, type AuditKind } from '../api/audit.js';
 import { useSalon } from '../api/salon.js';
 import { clock24, clockFrame, dayMonth, relativeDay } from './salonTime.js';
 import { SectionError } from './sectionState.js';
+import { enumParam, useSearchText, useUrlFilters } from './listFilters.js';
 
 /**
  * Merchant → Audit log. `GET /salons/{id}/audit`, `perms.dashboard`.
@@ -120,17 +131,38 @@ export function whenLabel(iso: string, timezone: string | null, now: Date = new 
   return `${dayMonth(at, frame)} · ${time}`;
 }
 
-export function AuditLog() {
-  const [search, setSearch] = useState('');
-  const [query, setQuery] = useState('');
-  const [kind, setKind] = useState<AuditKind | null>(null);
+/**
+ * BOTH FILTERS GO TO THE SERVER — `?q=` and `?kind=` on `GET /salons/{id}/audit`,
+ * which is cursor-paged over years of rows; filtering a loaded page here would
+ * report "no entries" for a void two pages back.
+ *
+ * THE KIND IS IN THE URL; THE SEARCH IS NOT. The box matches customer names
+ * ("Search staff, customer or action"), and a customer's name does not belong
+ * in browser history or a copied link — `listFilters.ts`.
+ *
+ * NO DATE FILTER, and not one faked over loaded pages: the endpoint takes no
+ * `?from=&to=`. It is in the lane report for lane A.
+ */
+const AUDIT_FILTERS = { kind: enumParam(AUDIT_KINDS) } as const;
 
+export const AUDIT_KIND_CHIPS: ReadonlyArray<{ value: AuditKind | ''; label: string }> = [
+  { value: '', label: 'All' },
+  ...AUDIT_KINDS.map((k) => ({ value: k, label: KIND_LABEL[k] })),
+];
+
+export function AuditLog() {
+  const [query, setQuery] = useState('');
   // Debounced: the search box hits the API, and a request per keystroke would
   // put a LIKE over a years-deep table on every letter.
-  useEffect(() => {
-    const timer = setTimeout(() => setQuery(search), 300);
-    return () => clearTimeout(timer);
-  }, [search]);
+  const search = useSearchText(query, setQuery, 300);
+  const url = useUrlFilters(AUDIT_FILTERS);
+  const kind = (url.values.kind || null) as AuditKind | null;
+  const filtered = query.trim() !== '' || kind !== null;
+  const clearFilters = () => {
+    search.reset();
+    setQuery('');
+    url.clear();
+  };
 
   const log = useAuditLog({ q: query, kind });
   // The shell has already read the salon; this is a cache hit, not a request.
@@ -160,38 +192,24 @@ export function AuditLog() {
         did it and from where. Append-only: nothing here can be edited or deleted.
       </InfoBanner>
 
-      <div className="audit__controls">
-        <input
-          className="avo-input audit__search"
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search staff, customer or action"
-          aria-label="Search the audit log"
+      <FilterBar
+        label="Filter the audit log"
+        search={{
+          value: search.text,
+          onChange: search.setText,
+          label: 'Search the audit log',
+          placeholder: 'Search staff, customer or action',
+        }}
+        count={log.isPending ? null : `${total} ${total === 1 ? 'entry' : 'entries'}`}
+        onClear={filtered ? clearFilters : undefined}
+      >
+        <FilterChips
+          label="Filter by kind"
+          options={AUDIT_KIND_CHIPS}
+          value={kind ?? ''}
+          onChange={(next) => url.set({ kind: next })}
         />
-        <div className="audit__filters" role="radiogroup" aria-label="Filter by kind">
-          <Chip
-            role="radio"
-            className="avo-chip--outline"
-            on={kind === null}
-            label="All"
-            onClick={() => setKind(null)}
-          />
-          {AUDIT_KINDS.map((k) => (
-            <Chip
-              key={k}
-              role="radio"
-              className="avo-chip--outline"
-              on={kind === k}
-              label={KIND_LABEL[k]}
-              onClick={() => setKind(k)}
-            />
-          ))}
-        </div>
-        <span className="audit__count" role="status">
-          {log.isPending ? '' : `${total} ${total === 1 ? 'entry' : 'entries'}`}
-        </span>
-      </div>
+      </FilterBar>
 
       <Card className="audit__card" flush>
         {/* §1: the table scrolls inside its card; it never drops a column. */}
@@ -233,7 +251,11 @@ export function AuditLog() {
                 <tr>
                   <td colSpan={5} className="audit__empty">
                     {query || kind ? (
-                      auditEmptyLine(query, kind, null)
+                      <EmptyState
+                        title={auditEmptyLine(query, kind, null)}
+                        body="Search and the kind filter look at the whole log, not just this page."
+                        action={{ label: 'Clear filters', onClick: clearFilters }}
+                      />
                     ) : (
                       <EmptyState
                         title="Nothing recorded yet"

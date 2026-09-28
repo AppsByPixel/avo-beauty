@@ -5,6 +5,9 @@ import {
   Button,
   Card,
   EmptyState,
+  FilterBar,
+  FilterEmpty,
+  FilterSelect,
   IconButton,
   IconCancel,
   IconCheck,
@@ -43,12 +46,53 @@ import {
   type RangePreset,
   type RangeSelection,
 } from './appointmentsRange.js';
-import { instantFromSalonLocal, pillFor, salonLocalFields } from './appointmentsWeekRules.js';
+import {
+  STATUS_PILL as BOOKING_PILL,
+  instantFromSalonLocal,
+  pillFor,
+  salonLocalFields,
+} from './appointmentsWeekRules.js';
+import { DATE_PARAM, enumParam, useUrlFilters } from './listFilters.js';
 import { whenLabel } from './appointmentWhen.js';
 import { readBookingFocus, type BookingFocus } from './appointmentHref.js';
 import { DepositHealth } from './DepositHealth.js';
 import { formatReturnWindow } from './noShowWindow.js';
 import { SectionError, WriteError } from './sectionState.js';
+
+/**
+ * ===========================================================================
+ * THE LIST'S FILTERS, IN THE URL, AND BOTH GO TO THE SERVER
+ * ===========================================================================
+ * `GET /salons/{id}/bookings` pages 200 at a time (`starts_at DESC`), so a
+ * filter over the loaded page would hide the soonest bookings — the ones a
+ * front desk opens this for. Both axes are request parameters the route
+ * already takes: the date window as `?from=&to=` (salon-local, resolved by
+ * `appointmentsRange.ts`) and the status as `?status=`.
+ *
+ * IN THE URL: `dates` (the preset), `from`/`to` (the Dates fields, kept while
+ * another preset is up, as the fields always were), `status`. `day` is the
+ * one-appointment link's (`appointmentHref.ts`) and is honoured while no
+ * `dates` is set; changing the dates drops it, so Back returns to the link's
+ * view rather than the link overriding hers. `booking` is left alone — it
+ * marks the row she arrived for and is read once.
+ *
+ * NOT HERE: an artist or source filter. The route takes `?source=` but the list
+ * shows no source column, so a filter on it would narrow by something she
+ * cannot see; an artist filter needs a server parameter that does not exist and
+ * is in the lane report.
+ */
+const BOOKING_STATUS_VALUES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
+const APPOINTMENT_FILTERS = {
+  dates: enumParam(['today', 'tomorrow', 'week', 'custom']),
+  from: DATE_PARAM,
+  to: DATE_PARAM,
+  day: DATE_PARAM,
+  status: enumParam(BOOKING_STATUS_VALUES),
+} as const;
+const STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  ...BOOKING_STATUS_VALUES.map((value) => ({ value, label: BOOKING_PILL[value].label })),
+];
 
 /**
  * Merchant → Appointments. `GET /salons/{id}/bookings`, `perms.appointments`.
@@ -475,15 +519,36 @@ export function Appointments() {
   const [focus] = useState<BookingFocus | null>(() =>
     typeof window === 'undefined' ? null : readBookingFocus(window.location.search),
   );
-  const [dates, setDates] = useState<RangeSelection>(() =>
-    focus?.day ? { preset: 'custom', from: focus.day, to: focus.day } : ALL_DATES,
-  );
+  const url = useUrlFilters(APPOINTMENT_FILTERS);
+  const dates: RangeSelection =
+    url.values.dates !== ''
+      ? { preset: url.values.dates as RangePreset, from: url.values.from, to: url.values.to }
+      : url.values.day !== ''
+        ? { preset: 'custom', from: url.values.day, to: url.values.day }
+        : { ...ALL_DATES, from: url.values.from, to: url.values.to };
+  /*
+   * A new preset is a history entry; typing a day into the Dates fields
+   * replaces it, so Back does not step through every date she tried.
+   */
+  const setDates = (next: RangeSelection) => {
+    const patch = {
+      dates: next.preset === 'all' ? '' : next.preset,
+      from: next.from,
+      to: next.to,
+      day: '',
+    };
+    if (next.preset !== dates.preset) url.set(patch);
+    else url.replace(patch);
+  };
+  const status = (url.values.status || null) as (typeof BOOKING_STATUS_VALUES)[number] | null;
+  const filtersOn = url.values.dates !== '' || url.values.day !== '' || status !== null;
+  const clearFilters = () => url.set({ dates: '', from: '', to: '', day: '', status: '' });
   const resolved = resolveRange(dates, salon.data?.timezone ?? null, new Date());
   const range = resolved.kind === 'range' ? resolved.range : null;
   const asking = resolved.kind === 'all' || resolved.kind === 'range';
 
   const listOn = salon.isSuccess && bookingOn && view === 'list' && asking;
-  const bookings = useSalonBookings(null, listOn, range);
+  const bookings = useSalonBookings(status, listOn, range);
 
   /*
    * The salon read gates the module question, so its failure is this section's
@@ -783,6 +848,24 @@ export function Appointments() {
       ) : (
         <>
           <DateFilter value={dates} onChange={setDates} resolved={resolved} />
+          <FilterBar
+            label="Filter appointments"
+            count={
+              !asking || loading || listFailed
+                ? null
+                : bookings.data?.nextCursor
+                  ? `${rows.length} shown`
+                  : `${rows.length} ${rows.length === 1 ? 'appointment' : 'appointments'}`
+            }
+            onClear={filtersOn ? clearFilters : undefined}
+          >
+            <FilterSelect
+              label="Status"
+              options={STATUS_OPTIONS}
+              value={status ?? ''}
+              onChange={(next) => url.set({ status: next })}
+            />
+          </FilterBar>
           {listFailed ? (
             <Card className="appts__card">
               <SectionError
@@ -838,6 +921,17 @@ export function Appointments() {
                       ))}
                     </tr>
                   ))
+                ) : rows.length === 0 && status !== null ? (
+                  /*
+                    A STATUS WAS ASKED FOR and the server found none of it (in the
+                    window, if there is one). Not "nothing booked": the escape is
+                    the filters.
+                  */
+                  <tr>
+                    <td colSpan={6} className="appts__empty">
+                      <FilterEmpty things="appointments" onClear={clearFilters} />
+                    </td>
+                  </tr>
                 ) : rows.length === 0 && range !== null ? (
                   /*
                     THE FILTERED EMPTY — A THIRD, AND NOT THE SAME FACT AS THE

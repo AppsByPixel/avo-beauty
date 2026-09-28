@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { ErrorState, Segmented } from '@avo/ui';
 import { usePromotions } from '../api/promotions.js';
 import { useSalon } from '../api/salon.js';
@@ -6,6 +5,7 @@ import { useSession } from '../auth/AuthProvider.js';
 import { Boosts } from './marketing/Boosts.js';
 import { Campaigns } from './marketing/Campaigns.js';
 import { HappyHours } from './marketing/HappyHours.js';
+import { enumParam, useUrlFilters } from './listFilters.js';
 import { SectionError } from './sectionState.js';
 
 /**
@@ -38,8 +38,21 @@ const TABS: Array<{ value: Tab; label: string }> = [
   { value: 'happy', label: 'Happy hours' },
 ];
 
+/**
+ * The tab is `?tab=boosts|happy` so a filter link opens on its own tab; the
+ * switch drops the other tabs' filter keys in the same history entry.
+ */
+const MARKETING_TAB = { tab: enumParam(['boosts', 'happy']) } as const;
+const MARKETING_FILTER_KEYS = ['status', 'branch', 'state'] as const;
+
 export function Marketing() {
-  const [tab, setTab] = useState<Tab>('campaigns');
+  const url = useUrlFilters(MARKETING_TAB);
+  const tab: Tab = url.values.tab === 'boosts' || url.values.tab === 'happy' ? url.values.tab : 'campaigns';
+  const setTab = (next: Tab) =>
+    url.set({
+      tab: next === 'campaigns' ? '' : next,
+      ...Object.fromEntries(MARKETING_FILTER_KEYS.map((k) => [k, ''])),
+    });
   const session = useSession('merchant');
   const salon = useSalon();
   const promotions = usePromotions();
