@@ -2909,6 +2909,20 @@ a:hover {
   vertical-align: top;
 }
 
+/*
+ * THE ROW A LINK ARRIVED FOR — from the Overview's Upcoming list or a customer's
+ * Bookings panel (routes/appointmentHref.ts). A tint of the brand surface behind
+ * ordinary text (#9 forbids white on brand, not ink on a tint) and a brand rule
+ * down its first edge, so it is findable without reading every row.
+ */
+.appts__table tbody tr[data-focused='true'] td {
+  background: var(--avo-brand-tint2);
+}
+
+.appts__table tbody tr[data-focused='true'] td:first-child {
+  box-shadow: inset 3px 0 0 var(--avo-brand);
+}
+
 .appts__table tbody tr:last-child td {
   border-bottom: none;
 }

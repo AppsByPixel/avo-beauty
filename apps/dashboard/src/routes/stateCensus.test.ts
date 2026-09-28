@@ -432,7 +432,10 @@ const DOORS = ['SignIn.tsx', 'ConsoleSignIn.tsx'] as const;
  *                       the courtesy-gate ledger) — the thing under test, not a
  *                       tested thing.
  */
-const NON_SCREENS = ['NotBuiltYet.tsx', 'sectionState.tsx'] as const;
+/**
+ * `AppointmentLink.tsx` is an anchor that navigates in-app — no fetch, no state.
+ */
+const NON_SCREENS = ['NotBuiltYet.tsx', 'sectionState.tsx', 'AppointmentLink.tsx'] as const;
 
 /**
  * Every route component in a directory — and NOT the tests beside them.
