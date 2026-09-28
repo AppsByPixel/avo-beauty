@@ -1154,37 +1154,168 @@ export function DepositPanel({ salon, update }: { salon: Salon | undefined; upda
 
 /* ----------------------------------------------------------- business hours */
 
+/**
+ * ==========================================================================
+ * Settings → Business hours — WHERE THE HOURS ARE SHOWN, THEY ARE EDITED
+ * ==========================================================================
+ * Aftab, 2026-09-29: "Business hours should be editable and branch wise". This
+ * card was display-only, and it was the one he saw; the per-branch editor lived
+ * one card over, behind each row's "Hours" button.
+ *
+ * NOW ONE CARD ANSWERS BOTH. A selector — "Salon default" and each branch —
+ * shows that scope's hours and opens that scope's editor:
+ *
+ *   Salon default → `SalonHoursEditor`, `PATCH /salons/{id}` with
+ *     `{ businessHours }`. Writable server-side: `businessHours` is in
+ *     `MERCHANT_EDITABLE` and `parseBusinessHours` validates it
+ *     (api/src/routes/salons.ts). `SalonPatch` already admitted it; nothing in
+ *     the dashboard had written it.
+ *   A branch → `BranchHoursEditor`, THE SAME COMPONENT the Branches card opens,
+ *     on `PATCH /salons/{id}/branches/{bid}` (migration 0063). Its "uses the
+ *     salon's hours" answer is the server's `businessHoursSource`.
+ *
+ * THE SAME GATE AS THE BRANCH EDITOR, because it is the same permission on both
+ * endpoints: `requireDashboardPerm(req, 'loyalty')`. This panel sits inside
+ * `Settings`' `canEditSalon` block with the Branches card, which is the courtesy;
+ * the server's refusal renders through each editor's own `WriteError` (#7).
+ *
+ * NO MUTATION HOOK AT THIS LEVEL. The editors own their writes and mount only
+ * while open, so the read-only card renders without a query client — which is
+ * what `settingsBranchHours.test.tsx` has always mounted it as.
+ */
+const SALON_SCOPE = 'salon';
+
 export function BusinessHoursPanel({ salon }: { salon: Salon | undefined }) {
+  const [scope, setScope] = useState<string>(SALON_SCOPE);
+  const [editing, setEditing] = useState(false);
   const hours = salon?.businessHours;
+  const branches = salon?.branches ?? [];
+  /* A branch closed while it was selected falls back to the salon's, not to a blank. */
+  const branch = scope === SALON_SCOPE ? null : (branches.find((b) => b.id === scope) ?? null);
+  const shown = branch ? branch.businessHours : hours;
+
   return (
     <Card className="settings__card">
       <h2 className="settings__title avo-display">Business hours</h2>
-      {hours === undefined ? (
+      {salon === undefined || hours === undefined || shown === undefined ? (
         <Skeleton width="70%" height={16} />
       ) : (
         <>
-          <HoursRows hours={hours} />
-          {/*
-            THE DESIGN'S SENTENCE, VERBATIM — AND ONLY WHERE IT IS TRUE. It
-            describes the gap between two sittings. A salon open straight through
-            (`evening` zero-length, the established spelling) has no afternoon
-            closure, and telling her it does is the phantom evening in words.
-          */}
-          {isWindow(hours.morning) && isWindow(hours.evening) ? (
-            <div className="settings__note">Afternoon closure — typical of Kuwait retail.</div>
+          {branches.length > 0 ? (
+            <div className="settings__hours-scope">
+              <Select
+                label="Hours for"
+                size="sm"
+                value={branch ? branch.id : SALON_SCOPE}
+                options={[
+                  { value: SALON_SCOPE, label: 'Salon default' },
+                  ...branches.map((b) => ({ value: b.id, label: b.name })),
+                ]}
+                onChange={(e) => {
+                  setScope(e.target.value);
+                  setEditing(false);
+                }}
+              />
+            </div>
           ) : null}
+
+          {editing ? (
+            branch ? (
+              <BranchHoursEditor branch={branch} onClose={() => setEditing(false)} />
+            ) : (
+              <SalonHoursEditor salon={salon} onClose={() => setEditing(false)} />
+            )
+          ) : (
+            <>
+              {/*
+                WHERE THIS BRANCH'S HOURS COME FROM, from `businessHoursSource`
+                — the Branches card's rule, same reason: two identical sets can
+                still be an override she chose to pin.
+              */}
+              {branch ? (
+                <div className="settings__note settings__hours-source">
+                  {branch.businessHoursSource === 'salon'
+                    ? `${branch.name} uses the salon\u2019s hours.`
+                    : `${branch.name} keeps its own hours.`}
+                </div>
+              ) : null}
+              <HoursRows hours={shown} />
+              {/*
+                THE DESIGN'S SENTENCE, VERBATIM — AND ONLY WHERE IT IS TRUE. It
+                describes the gap between two sittings. A salon open straight
+                through (`evening` zero-length, the established spelling) has no
+                afternoon closure, and telling her it does is the phantom evening
+                in words.
+              */}
+              {isWindow(shown.morning) && isWindow(shown.evening) ? (
+                <div className="settings__note">Afternoon closure — typical of Kuwait retail.</div>
+              ) : null}
+              <div className="settings__hours-actions">
+                <Button
+                  variant="secondary"
+                  aria-label={
+                    branch ? `Edit the hours for ${branch.name}` : 'Edit the salon\u2019s hours'
+                  }
+                  onClick={() => setEditing(true)}
+                >
+                  Edit hours
+                </Button>
+              </div>
+            </>
+          )}
           {/*
             The zone is not decoration. `businessHours` is naive wall clock; the
             same "10:00" resolves to a different instant per zone, and it is what
             artist windows and happy hours are measured against. Shown so a
             merchant can see which clock the salon runs on.
           */}
-          {salon?.timezone ? (
+          {salon.timezone ? (
             <div className="settings__note">All times in {salon.timezone}.</div>
           ) : null}
         </>
       )}
     </Card>
+  );
+}
+
+/**
+ * THE SALON'S OWN HOURS. `PATCH /salons/{id}` with `{ businessHours }` —
+ * `perms.loyalty`. Its own `useUpdateSalon` rather than `Settings`' shared one,
+ * so its refusal renders here, under the hours, rather than at the foot of the
+ * screen where `DepositPanel` and the receipt toggles report theirs.
+ *
+ * WHAT IT MOVES: every branch whose `businessHoursSource` is `salon`. The
+ * server resolves that on the next read and the PATCH answer is the whole salon,
+ * written into the cache (`api/settings.ts § useUpdateSalon`), so the Branches
+ * card's "Using the salon's hours" rows follow from the server's answer.
+ */
+export function SalonHoursEditor({ salon, onClose }: { salon: Salon; onClose: () => void }) {
+  const save = useUpdateSalon();
+  const current = salon.businessHours;
+  const draft = useHoursDraft(current);
+  const changed = JSON.stringify(draft.next) !== JSON.stringify(current);
+
+  return (
+    <div className="settings__branch-editor" role="group" aria-label="The salon’s hours">
+      <p className="settings__branch-editor-text">
+        The salon&rsquo;s own hours. Every branch that does not keep its own uses these.
+      </p>
+      <HoursFields draft={draft} prefix="Salon" disabled={save.isPending} />
+      <div className="settings__confirm-actions">
+        <Button
+          disabled={save.isPending || !changed}
+          onClick={() => save.mutate({ businessHours: draft.next }, { onSuccess: onClose })}
+        >
+          {save.isPending ? 'Saving…' : 'Save hours'}
+        </Button>
+        <Button variant="quiet" disabled={save.isPending} onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+      {save.isError ? (
+        <WriteError error={save.error} reassurance="The salon’s hours are unchanged." />
+      ) : null}
+    </div>
   );
 }
 
@@ -1779,11 +1910,12 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
  * customers do with them today: the wallet's pickup sheet says when to collect a
  * shop order at this counter.
  *
- * THE CONTROLS ARE THE TEAM HOURS EDITOR'S, NOT A SECOND VOCABULARY. There is no
- * salon-hours EDITOR on this screen to reuse — `BusinessHoursPanel` above only
- * displays the salon's hours (`SalonPatch` admits `businessHours`, and nothing
- * in the dashboard writes it). So this borrows the one hours editor the
- * dashboard has, Team's: the `Stepper` per From/To in 30-minute steps, with the
+ * THE CONTROLS ARE THE TEAM HOURS EDITOR'S, NOT A SECOND VOCABULARY. When this
+ * was written there was no salon-hours editor to reuse — `BusinessHoursPanel`
+ * only displayed the salon's hours. There is one now (2026-09-29,
+ * `SalonHoursEditor`), and it shares this editor's draft and fields
+ * (`useHoursDraft`, `HoursFields`) rather than the other way round. The borrowed
+ * idiom is still Team's: the `Stepper` per From/To in 30-minute steps, with the
  * same keyboard contract. The read-back — the row's "Own hours · …" line and the
  * salon's `HoursRows` — goes through `routes/businessHours.ts`, so the salon's
  * hours and a branch's obey one display rule.
@@ -1806,11 +1938,12 @@ export function BranchesPanel({ salon }: { salon: Salon | undefined }) {
  */
 const HOURS_STEP = 30;
 
-export function BranchHoursEditor({ branch, onClose }: { branch: Branch; onClose: () => void }) {
-  const save = useSetBranchHours();
-  const current = branch.businessHours;
-  const own = branch.businessHoursSource === 'branch';
-
+/**
+ * THE DRAFT BOTH HOURS EDITORS EDIT — the salon's and a branch's. Lifted out of
+ * `BranchHoursEditor` when the Business hours card became an editor too, so the
+ * two cannot come to disagree about what "no evening session" writes.
+ */
+function useHoursDraft(current: BusinessHours) {
   const [morning, setMorning] = useState<[number, number]>(() =>
     isWindow(current.morning)
       ? [hhmmToMinutes(current.morning[0]), hhmmToMinutes(current.morning[1])]
@@ -1830,13 +1963,22 @@ export function BranchHoursEditor({ branch, onClose }: { branch: Branch; onClose
       ? [minutesToClock(evening[0]), minutesToClock(evening[1])]
       : noEvening(morningSpan),
   };
-  /*
-   * ON THE SALON'S HOURS, SAVING IS ALWAYS A CHANGE — it pins these hours to the
-   * branch, even if they match the salon's today, so the salon's next edit no
-   * longer moves this branch. With its own hours, only a real difference saves.
-   */
-  const changed = !own || JSON.stringify(next) !== JSON.stringify(current);
+  return { morning, setMorning, eveningOn, setEveningOn, evening, setEvening, next };
+}
 
+type HoursDraft = ReturnType<typeof useHoursDraft>;
+
+/** The two sittings' steppers. `prefix` names them: "Salmiya morning opens at". */
+function HoursFields({
+  draft,
+  prefix,
+  disabled,
+}: {
+  draft: HoursDraft;
+  prefix: string;
+  disabled: boolean;
+}) {
+  const { morning, setMorning, eveningOn, setEveningOn, evening, setEvening } = draft;
   const stepper = (
     label: string,
     value: number,
@@ -1853,10 +1995,77 @@ export function BranchHoursEditor({ branch, onClose }: { branch: Branch; onClose
       step={HOURS_STEP}
       format={(v) => minutesToClock(v)}
       valueText={minutesToClock(value)}
-      disabled={save.isPending}
+      disabled={disabled}
       onChange={onChange}
     />
   );
+
+  return (
+    <>
+      <div className="settings__branch-editor-row">
+        <span className="settings__hours-label">Morning</span>
+        {stepper(`${prefix} morning opens at`, morning[0], 0, morning[1] - HOURS_STEP, (v) =>
+          setMorning([v, morning[1]]),
+        )}
+        <span className="hours-row__arrow" aria-hidden="true">
+          &rarr;
+        </span>
+        {stepper(
+          `${prefix} morning closes at`,
+          morning[1],
+          morning[0] + HOURS_STEP,
+          END_OF_DAY,
+          (v) => setMorning([morning[0], v]),
+        )}
+      </div>
+
+      <div className="settings__branch-editor-row">
+        <Toggle
+          label="Evening session"
+          checked={eveningOn}
+          disabled={disabled}
+          onChange={setEveningOn}
+        />
+        {eveningOn ? (
+          <>
+            {stepper(
+              `${prefix} evening opens at`,
+              evening[0],
+              0,
+              evening[1] - HOURS_STEP,
+              (v) => setEvening([v, evening[1]]),
+            )}
+            <span className="hours-row__arrow" aria-hidden="true">
+              &rarr;
+            </span>
+            {stepper(
+              `${prefix} evening closes at`,
+              evening[1],
+              evening[0] + HOURS_STEP,
+              END_OF_DAY,
+              (v) => setEvening([evening[0], v]),
+            )}
+          </>
+        ) : (
+          <span className="settings__hours-none">Open straight through — no second sitting.</span>
+        )}
+      </div>
+    </>
+  );
+}
+
+export function BranchHoursEditor({ branch, onClose }: { branch: Branch; onClose: () => void }) {
+  const save = useSetBranchHours();
+  const current = branch.businessHours;
+  const own = branch.businessHoursSource === 'branch';
+  const draft = useHoursDraft(current);
+  const next = draft.next;
+  /*
+   * ON THE SALON'S HOURS, SAVING IS ALWAYS A CHANGE — it pins these hours to the
+   * branch, even if they match the salon's today, so the salon's next edit no
+   * longer moves this branch. With its own hours, only a real difference saves.
+   */
+  const changed = !own || JSON.stringify(next) !== JSON.stringify(current);
 
   return (
     <div className="settings__branch-editor" role="group" aria-label={`Hours for ${branch.name}`}>
@@ -1874,54 +2083,7 @@ export function BranchHoursEditor({ branch, onClose }: { branch: Branch; onClose
         Customers see these hours when they collect a shop order here.
       </p>
 
-      <div className="settings__branch-editor-row">
-        <span className="settings__hours-label">Morning</span>
-        {stepper(`${branch.name} morning opens at`, morning[0], 0, morning[1] - HOURS_STEP, (v) =>
-          setMorning([v, morning[1]]),
-        )}
-        <span className="hours-row__arrow" aria-hidden="true">
-          &rarr;
-        </span>
-        {stepper(
-          `${branch.name} morning closes at`,
-          morning[1],
-          morning[0] + HOURS_STEP,
-          END_OF_DAY,
-          (v) => setMorning([morning[0], v]),
-        )}
-      </div>
-
-      <div className="settings__branch-editor-row">
-        <Toggle
-          label="Evening session"
-          checked={eveningOn}
-          disabled={save.isPending}
-          onChange={setEveningOn}
-        />
-        {eveningOn ? (
-          <>
-            {stepper(
-              `${branch.name} evening opens at`,
-              evening[0],
-              0,
-              evening[1] - HOURS_STEP,
-              (v) => setEvening([v, evening[1]]),
-            )}
-            <span className="hours-row__arrow" aria-hidden="true">
-              &rarr;
-            </span>
-            {stepper(
-              `${branch.name} evening closes at`,
-              evening[1],
-              evening[0] + HOURS_STEP,
-              END_OF_DAY,
-              (v) => setEvening([evening[0], v]),
-            )}
-          </>
-        ) : (
-          <span className="settings__hours-none">Open straight through — no second sitting.</span>
-        )}
-      </div>
+      <HoursFields draft={draft} prefix={branch.name} disabled={save.isPending} />
 
       <div className="settings__confirm-actions">
         <Button

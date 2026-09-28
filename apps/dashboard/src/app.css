@@ -2073,6 +2073,21 @@ a:hover {
   color: var(--avo-text-muted);
 }
 
+/* Settings → Business hours: the scope selector and the Edit button (2026-09-29). */
+.settings__hours-scope {
+  max-width: 260px;
+  margin-bottom: 10px;
+}
+
+.settings__note.settings__hours-source {
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+
+.settings__hours-actions {
+  margin-top: 12px;
+}
+
 .settings__note {
   margin-top: 10px;
   font-size: 12px;
