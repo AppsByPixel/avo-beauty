@@ -168,6 +168,35 @@ interface ChargeResult {
   balanceAfterFils: number;
   depositAppliedFils: number;
   voidableUntil: string;
+  /**
+   * WHAT THIS CHARGE EARNED, as the server decided it (migration 0065). Salon B is
+   * a tiers salon, so `visitsEarned` is the arm every spec here reads.
+   *
+   * THE VISIT ASSERTIONS BELOW ARE WRITTEN AGAINST THIS, NOT AGAINST 1. "A charge
+   * is a visit" was true of every charge this file made only because nothing at
+   * salon B happened to be multiplying — the fixture keeps both of its happy hours
+   * OFF and its boost at the identity. A doubled visit is a correct charge, and a
+   * void now takes back exactly what the charge recorded (`routes/charges.ts §
+   * performVoid`), so a literal 1 here asserts a fixture, not the rule. The rule —
+   * the member row moved by what the server says it awarded, and the void undid
+   * precisely that — holds at every hour. `loyalty-reversal.test.ts` proves the
+   * doubled case directly, with a boost it sets itself.
+   */
+  loyalty: { mode: 'tiers'; visitsEarned: number } | { mode: 'stamps'; stampsEarned: number };
+}
+
+/** What a salon B charge says it earned. Refuses a stamps outcome rather than guessing 0. */
+function visitsEarnedBy(result: ChargeResult): number {
+  precondition(
+    result.loyalty?.mode === 'tiers',
+    `salon B is a tiers salon and the charge reported ${JSON.stringify(result.loyalty)}`,
+  );
+  const earned = (result.loyalty as { visitsEarned: number }).visitsEarned;
+  precondition(
+    Number.isInteger(earned) && earned >= 1,
+    `a settled charge reported visitsEarned=${String(earned)} — every charge earns at least one`,
+  );
+  return earned;
 }
 
 /**
@@ -621,8 +650,10 @@ describe('POST /charges', () => {
     expect(result.balanceAfterFils).toBe(before - B_SERVICE_PRICE_FILS);
     expect(balanceOf(B_MEMBER)).toBe(before - B_SERVICE_PRICE_FILS);
 
-    // Step 5 of api-contract.md § Charging — a charge is a visit.
-    expect(visitsOf(B_MEMBER)).toBe(visitsBefore + 1);
+    // Step 5 of api-contract.md § Charging — a charge is a visit, and the member
+    // row moved by exactly what the response says the server awarded. Not `+ 1`:
+    // see `ChargeResult.loyalty`.
+    expect(visitsOf(B_MEMBER)).toBe(visitsBefore + visitsEarnedBy(result));
   });
 
   /**
@@ -958,7 +989,12 @@ describe('POST /voids', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.refundedFils).toBe(B_SERVICE_PRICE_FILS);
     expect(balanceOf(B_MEMBER)).toBe(balanceAfterCharge + B_SERVICE_PRICE_FILS);
-    expect(visitsOf(B_MEMBER)).toBe(visitsAfterCharge - 1);
+    // Exactly what the charge recorded, not one. A doubled visit is taken back
+    // whole — the void used to take 1 off every charge whatever it had given.
+    expect(
+      visitsOf(B_MEMBER),
+      'the void did not take back exactly the visits the charge reported earning',
+    ).toBe(visitsAfterCharge - visitsEarnedBy(charged));
 
     /**
      * REFUNDS ARE WALLET CREDIT — non-negotiable #5, "no cash, no card reversal,
@@ -2219,7 +2255,10 @@ describe('two charges at once — the races the mock could not run', () => {
       'both racing charges debited her, so one QR paid for two visits',
     ).toBe(before - B_SERVICE_PRICE_FILS);
     // And the whole rest of the charge went with it, exactly once.
-    expect(visitsOf(B_MEMBER), 'the losing charge still counted a visit').toBe(visitsBefore + 1);
+    // By what the WINNER earned — the one charge that settled — and nothing more.
+    expect(visitsOf(B_MEMBER), 'the losing charge still counted a visit').toBe(
+      visitsBefore + visitsEarnedBy((a.status === 200 ? a : b).body as ChargeResult),
+    );
     expect(
       Number(
         scalar(
