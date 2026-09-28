@@ -82,26 +82,47 @@ const CachedSchema = z.object({
  * `businessHours` is in the same cached body and has been required all along.
  * So the filled-in value is precisely what the server would have served for
  * that snapshot. The member, the balance and the transactions are parsed as
- * strictly as ever — this relaxes the two 0063 branch fields and nothing else,
- * and the "a balance we cannot vouch for" rule below is untouched.
+ * strictly as ever — this relaxes the two 0063 branch fields and (below) the
+ * presence of 0065's `loyalty` on a transaction, nothing else, and the "a
+ * balance we cannot vouch for" rule below is untouched.
  *
  * A snapshot is a cache: the live read always follows and overwrites it, so a
  * branch override set since is at most as stale as every other cached field,
  * under the same "last updated" stamp.
  * ═════════════════════════════════════════════════════════════════════════════
  */
-const PreHoursCachedSchema = CachedSchema.extend({
+const LegacyCachedSchema = CachedSchema.extend({
   snapshot: CachedSchema.shape.snapshot.extend({
     salon: SalonSchema.extend({
       branches: z.array(
         BranchSchema.partial({ businessHours: true, businessHoursSource: true }),
       ),
     }),
+    /**
+     * ═════════════════════════════════════════════════════════════════════════
+     * TRANSACTIONS CACHED BEFORE MIGRATION 0065 — THE SAME HAZARD, ONE KEY.
+     *
+     * 0065 put `loyalty: TransactionLoyaltySchema.nullable()` on
+     * `TransactionSchema`, required on the wire. A snapshot written by the
+     * previous build holds transactions with no `loyalty` key at all, so read
+     * strictly it fails and Home cold-starts — offline, the failure screen.
+     *
+     * Upgraded to `loyalty: null`, and that invents nothing: null is precisely
+     * what the server now serves for those rows — `serialiseTransactionLoyalty`
+     * returns null on every non-charge and on a charge from before 0065 — and
+     * "nothing recorded" is exactly what the cached body knows. It is never a
+     * guessed "+1 visit" (non-negotiable #2); the activity row simply says what
+     * it said before. `.partial` relaxes PRESENCE only: a `loyalty` that is
+     * present and malformed still fails, and every other transaction field is
+     * as strict as ever.
+     * ═════════════════════════════════════════════════════════════════════════
+     */
+    transactions: z.array(TransactionSchema.partial({ loyalty: true })),
   }),
 });
 
-function upgradePreHours(cached: z.infer<typeof PreHoursCachedSchema>): CachedSnapshot {
-  const { salon } = cached.snapshot;
+function upgradeLegacy(cached: z.infer<typeof LegacyCachedSchema>): CachedSnapshot {
+  const { salon, transactions } = cached.snapshot;
   return {
     ...cached,
     snapshot: {
@@ -114,19 +135,22 @@ function upgradePreHours(cached: z.infer<typeof PreHoursCachedSchema>): CachedSn
           businessHoursSource: b.businessHoursSource ?? 'salon',
         })),
       },
+      transactions: transactions.map((t) => ({ ...t, loyalty: t.loyalty ?? null })),
     },
   } as CachedSnapshot;
 }
 
 /**
  * The stored body, or null for "nothing usable — refetch". Exported so the
- * upgrade spec can hand it a pre-0063 body without a storage double.
+ * upgrade specs can hand it a pre-0063 / pre-0065 body without a storage double.
  */
 export function parseSnapshot(raw: unknown): CachedSnapshot | null {
   const parsed = CachedSchema.safeParse(raw);
   if (parsed.success) return parsed.data as CachedSnapshot;
-  const legacy = PreHoursCachedSchema.safeParse(raw);
-  if (legacy.success) return upgradePreHours(legacy.data);
+  // One legacy schema for both upgrades, so a snapshot from before 0063 AND
+  // 0065 — a device that skipped a release — upgrades in one pass.
+  const legacy = LegacyCachedSchema.safeParse(raw);
+  if (legacy.success) return upgradeLegacy(legacy.data);
   // A snapshot written by an older contract is discarded rather than coerced:
   // showing a customer a balance we cannot vouch for is worse than showing none.
   return null;
