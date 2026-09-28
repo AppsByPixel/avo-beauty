@@ -4173,6 +4173,47 @@ a:hover {
   align-self: flex-end;
 }
 
+/*
+ * "Attach a reward" — her own saved rewards and the inline field that writes
+ * one. Layout only: every type size and colour below is one this card already
+ * uses (the select's label column, `.mk__count`, `.mk__cardsub`'s muted text).
+ */
+.mk__rewardfield {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mk__rewardactions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.mk__customreward {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.mk__customreward .mk__rewardactions {
+  margin-top: 2px;
+}
+
+.mk__customreward .section-write-error,
+.mk__field > .section-write-error {
+  margin: 8px 0 0;
+}
+
+.mk__rewardnote {
+  font-size: 12.5px;
+  color: var(--avo-text-muted);
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
 .mk__submitrow {
   display: flex;
   align-items: center;
