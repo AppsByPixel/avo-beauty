@@ -69,7 +69,8 @@ export const REWARD_KEYS = [
 ] as const;
 
 /**
- * Per-branch boosts. `{ [branchId]: { visit, topup, stamp } }` on the wire.
+ * Per-branch boosts. `{ [branchId]: { visit, topup, stamp, startsAt, endsAt,
+ * stoppedAt, stoppedBy } }` on the wire — the last four from migration 0067.
  *
  * A TABLE RATHER THAN A jsonb COLUMN ON `salon`, which is the opposite of the
  * call `salon.tiers` made — and for the reason that made that call: atomicity of

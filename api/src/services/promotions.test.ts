@@ -22,7 +22,7 @@
 
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { isHappyHourLive } from '@avo/types';
-import { decideEarning, type PromotionInputs, type HappyHourWire } from './promotions';
+import { decideEarning, isBoostLive, type PromotionInputs, type HappyHourWire } from './promotions';
 
 const SALON = { id: 'SAL-AMARA', timezone: 'Asia/Kuwait' };
 const BR_SAL = 'BR-SAL';
@@ -191,10 +191,73 @@ describe('what a client claims is never consulted', () => {
   });
 });
 
+describe('a branch boost with a duration — isBoostLive, resolved at the evaluation instant (0067)', () => {
+  const at = (iso: string) => new Date(iso);
+  const END = '2026-08-17T15:00:00.000Z'; // 18:00 Kuwait
+  const START = '2026-08-17T09:00:00.000Z'; // 12:00 Kuwait
+  const boost = (over: { startsAt?: string | null; endsAt?: string | null } = {}) => ({
+    branchId: BR_KWC,
+    visit: 2,
+    topup: 20,
+    stamp: 3,
+    startsAt: null,
+    endsAt: null,
+    ...over,
+  });
+  // No happy hours in play, so every multiplier below is the boost or nothing.
+  const decide = (b: ReturnType<typeof boost>, now: Date) =>
+    decideEarning(inputs({ branchId: BR_KWC, boosts: [b], windows: [] }), now);
+
+  it('no bounds: live at any instant — today\'s behaviour for every existing boost', () => {
+    expect(isBoostLive({ startsAt: null, endsAt: null }, at('1999-01-01T00:00:00Z'))).toBe(true);
+    expect(isBoostLive({ startsAt: null, endsAt: null }, at('2099-01-01T00:00:00Z'))).toBe(true);
+  });
+
+  it('half-open [startsAt, endsAt): on at the start, off AT the end', () => {
+    const w = { startsAt: START, endsAt: END };
+    expect(isBoostLive(w, new Date(Date.parse(START) - 1))).toBe(false);
+    expect(isBoostLive(w, at(START))).toBe(true);
+    expect(isBoostLive(w, new Date(Date.parse(END) - 1))).toBe(true);
+    expect(isBoostLive(w, at(END))).toBe(false);
+  });
+
+  it('a boost past its endsAt earns nothing at charge time — visits, stamps and top-up points', () => {
+    const d = decide(boost({ endsAt: END }), new Date(Date.parse(END) + 60_000));
+    expect(d).toMatchObject({ visitMultiplier: 1, stampMultiplier: 1, topupBonusPercent: 0, happyHourId: null });
+  });
+
+  it('the same boost still running earns all three', () => {
+    const d = decide(boost({ endsAt: END }), new Date(Date.parse(END) - 60_000));
+    expect(d).toMatchObject({ visitMultiplier: 2, stampMultiplier: 3, topupBonusPercent: 20 });
+  });
+
+  it('a boost not yet at its startsAt earns nothing', () => {
+    expect(decide(boost({ startsAt: START }), new Date(Date.parse(START) - 60_000)).visitMultiplier).toBe(1);
+    expect(decide(boost({ startsAt: START }), new Date(Date.parse(START) + 60_000)).visitMultiplier).toBe(2);
+  });
+
+  it('an expired boost does not stop a live happy hour from paying', () => {
+    const d = decideEarning(
+      inputs({ branchId: BR_KWC, boosts: [boost({ endsAt: kuwait('15:00').toISOString() })] }),
+      kuwait('16:30'),
+    );
+    expect(d.visitMultiplier).toBe(2);
+    expect(d.happyHourId).toBe('HH-01');
+  });
+
+  it('independent of the process zone — the bounds are instants, not wall clock', () => {
+    for (const tz of PROCESS_ZONES) {
+      process.env.TZ = tz;
+      expect(decide(boost({ endsAt: END }), at(END)).visitMultiplier, tz).toBe(1);
+      expect(decide(boost({ endsAt: END }), new Date(Date.parse(END) - 1)).visitMultiplier, tz).toBe(2);
+    }
+  });
+});
+
 describe('boosts and happy hours: the best offer applies, they do not compound', () => {
   const boosts = [
-    { branchId: BR_SAL, visit: 1, topup: 0, stamp: 1 },
-    { branchId: BR_KWC, visit: 2, topup: 10, stamp: 1 },
+    { branchId: BR_SAL, visit: 1, topup: 0, stamp: 1, startsAt: null, endsAt: null },
+    { branchId: BR_KWC, visit: 2, topup: 10, stamp: 1, startsAt: null, endsAt: null },
   ];
 
   it('a branch boost applies with no window at all', () => {
