@@ -177,6 +177,7 @@ import { member } from '../db/schema/member';
 import { memberNotificationRead } from '../db/schema/memberNotification';
 import { receiptJob } from '../db/schema/receipt';
 import { booking } from '../db/schema/booking';
+import { memberPolicyNotice } from '../db/schema/bookingPolicy';
 import { service } from '../db/schema/service';
 import { marketingConsentOf } from './consent';
 import {
@@ -193,13 +194,26 @@ import {
 export const RECEIPT_KINDS = ['topup', 'charge', 'shop', 'deposit_hold', 'deposit_return'] as const;
 export type ReceiptKind = (typeof RECEIPT_KINDS)[number];
 
-export const MEMBER_NOTIFICATION_KINDS = [...RECEIPT_KINDS, 'campaign'] as const;
+/**
+ * `booking_policy` — migration 0066, DECISIONS.md § the fourth list: "each publish
+ * writes one wallet-bell notice to that salon's members … bell only, no push, and
+ * coalesced to at most one notice per salon per day". The THIRD stream, and the
+ * first whose record exists only for the bell: `member_policy_notice` is written by
+ * `services/bookingPolicy.ts § publishPolicy` and is not a send of any kind — no
+ * `receipt_job`, no `campaign_send` — which is why Decision 1's rule ("a bell item
+ * is something this API already sent her") is kept rather than broken: the salon
+ * changing the terms of her bookings is a fact about her account, like a receipt,
+ * and this row IS the record of telling her. NOT marketing, so not behind the
+ * `offers` consent the way `campaign` is; always visible.
+ */
+export const MEMBER_NOTIFICATION_KINDS = [...RECEIPT_KINDS, 'booking_policy', 'campaign'] as const;
 export type MemberNotificationKind = (typeof MEMBER_NOTIFICATION_KINDS)[number];
 
-/** Two streams, one rank each. Its own rank set, so no other endpoint's cursor addresses it. */
-export const BELL_RANKS = [0, 1] as const;
+/** Three streams, one rank each. Its own rank set, so no other endpoint's cursor addresses it. */
+export const BELL_RANKS = [0, 1, 2] as const;
 const RANK_RECEIPT = 0;
 const RANK_CAMPAIGN = 1;
+const RANK_POLICY = 2;
 
 /** A page. Fixed, not client-chosen — the merchant bell's number and reasoning. */
 export const MEMBER_NOTIFICATION_PAGE_SIZE = 20;
@@ -273,6 +287,18 @@ export type MemberNotificationItem =
       startsAt: string | null;
     })
   | (ItemBase & {
+      /**
+       * The salon published a new booking policy. The wallet opens
+       * `GET /salons/{salonId}/booking-policy` for the current text; `policyVersion`
+       * is the version this notice was written for (the first publish of that
+       * salon-day — a later one the same day is coalesced into it).
+       */
+      kind: 'booking_policy';
+      salonId: string;
+      policyId: string;
+      policyVersion: number;
+    })
+  | (ItemBase & {
       kind: 'campaign';
       campaignId: string;
       /** The merchant's own words, verbatim. Decision 4. */
@@ -315,7 +341,9 @@ export async function feedScope(db: Db, memberId: string): Promise<FeedScope> {
 
 export function visibleKindsFor(scope: FeedScope): MemberNotificationKind[] {
   if (scope.erased) return [];
-  return scope.campaignsVisible ? [...MEMBER_NOTIFICATION_KINDS] : [...RECEIPT_KINDS];
+  return scope.campaignsVisible
+    ? [...MEMBER_NOTIFICATION_KINDS]
+    : [...RECEIPT_KINDS, 'booking_policy'];
 }
 
 // ------------------------------------------------------------- predicates --
@@ -373,6 +401,18 @@ function campaignStreamWhere(scope: FeedScope): SQL {
     eq(campaign.status, 'sent'),
     eq(campaign.salonId, scope.salonId),
     inArray(campaignSend.channel, APP_CHANNELS),
+  )!;
+}
+
+/**
+ * HER notices, of HER salon. `salon_id` is redundant for a member of one salon and
+ * stated anyway, for `campaignStreamWhere`'s reason: no future writer of the table
+ * turns this read into a route by which one salon reaches another's customer.
+ */
+function policyStreamWhere(scope: FeedScope): SQL {
+  return and(
+    eq(memberPolicyNotice.memberId, scope.memberId),
+    eq(memberPolicyNotice.salonId, scope.salonId),
   )!;
 }
 
@@ -492,6 +532,11 @@ export async function unreadCountFor(db: Db, scope: FeedScope): Promise<number> 
     .leftJoin(memberNotificationRead, receiptMarkJoin(scope.memberId))
     .where(and(receiptStreamWhere(db, scope.memberId), isNull(memberNotificationRead.readAt)));
 
+  const [pn] = await db
+    .select({ n: count() })
+    .from(memberPolicyNotice)
+    .where(and(policyStreamWhere(scope), isNull(memberPolicyNotice.readAt)));
+
   let campaigns = 0;
   if (scope.campaignsVisible) {
     const [c] = await db
@@ -502,7 +547,7 @@ export async function unreadCountFor(db: Db, scope: FeedScope): Promise<number> 
       .where(and(campaignStreamWhere(scope), isNull(memberNotificationRead.readAt)));
     campaigns = Number(c?.n ?? 0);
   }
-  return Number(r?.n ?? 0) + campaigns;
+  return Number(r?.n ?? 0) + Number(pn?.n ?? 0) + campaigns;
 }
 
 /**
@@ -580,6 +625,26 @@ export async function readMemberFeed(
         .limit(take)
     : [];
 
+  const notices = await db
+    .select({
+      id: memberPolicyNotice.id,
+      salonId: memberPolicyNotice.salonId,
+      policyId: memberPolicyNotice.policyId,
+      policyVersion: memberPolicyNotice.policyVersion,
+      createdAt: memberPolicyNotice.createdAt,
+      at: cursorInstant(memberPolicyNotice.createdAt),
+      readAt: memberPolicyNotice.readAt,
+    })
+    .from(memberPolicyNotice)
+    .where(
+      and(
+        policyStreamWhere(scope),
+        afterCursor(cursor, RANK_POLICY, memberPolicyNotice.createdAt, memberPolicyNotice.id),
+      ),
+    )
+    .orderBy(desc(memberPolicyNotice.createdAt), memberPolicyNotice.id)
+    .limit(take);
+
   /**
    * A malformed receipt KEEPS ITS PLACE IN THE KEY ORDER and is dropped after the
    * merge, so the cursor still advances past it. Dropping it before the merge would
@@ -607,6 +672,20 @@ export async function readMemberFeed(
       rank: RANK_CAMPAIGN,
       at: c.at,
       id: c.campaignId,
+    })),
+    ...notices.map((n) => ({
+      item: {
+        id: n.id,
+        kind: 'booking_policy' as const,
+        salonId: n.salonId,
+        policyId: n.policyId,
+        policyVersion: n.policyVersion,
+        createdAt: n.createdAt.toISOString(),
+        readAt: n.readAt?.toISOString() ?? null,
+      },
+      rank: RANK_POLICY,
+      at: n.at,
+      id: n.id,
     })),
   ];
 
@@ -702,5 +781,26 @@ export async function markMemberNotificationsRead(
           .onConflictDoNothing()
           .returning({ memberId: memberNotificationRead.memberId });
 
-  return { marked: marked.length, unreadCount: await unreadCountFor(db, scope) };
+  /**
+   * A policy notice carries its own `read_at` (migration 0066: the row is already
+   * per member). The same rules as the mark above: the ids are a FILTER on HER
+   * stream, `read_at IS NULL` keeps the FIRST read, and a notice id that is not
+   * hers marks nothing and is indistinguishable from one already read.
+   */
+  const policyMarked = await db
+    .update(memberPolicyNotice)
+    .set({ readAt: sql`greatest(now(), ${memberPolicyNotice.createdAt})` })
+    .where(
+      and(
+        policyStreamWhere(scope),
+        isNull(memberPolicyNotice.readAt),
+        ids ? inArray(memberPolicyNotice.id, ids) : undefined,
+      ),
+    )
+    .returning({ id: memberPolicyNotice.id });
+
+  return {
+    marked: marked.length + policyMarked.length,
+    unreadCount: await unreadCountFor(db, scope),
+  };
 }

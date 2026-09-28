@@ -203,6 +203,9 @@ suite('the customer notification bell', () => {
       'shop',
       'deposit_hold',
       'deposit_return',
+      // Migration 0066: the salon published a new booking policy. Not marketing,
+      // so visible whatever her offers consent.
+      'booking_policy',
       'campaign',
     ]);
     expect(body.nextCursor).toBeNull();

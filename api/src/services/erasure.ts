@@ -196,6 +196,7 @@ import { booking } from '../db/schema/booking';
 import { memberAddress, shopOrder } from '../db/schema/delivery';
 import { merchantNotification } from '../db/schema/notification';
 import { memberNotificationRead } from '../db/schema/memberNotification';
+import { memberPolicyNotice } from '../db/schema/bookingPolicy';
 import { phoneChangeChallenge } from '../db/schema/phoneChange';
 import { receiptJob } from '../db/schema/receipt';
 import { session } from '../db/schema/session';
@@ -385,6 +386,18 @@ export async function runErasureOnce(
             .delete(memberNotificationRead)
             .where(eq(memberNotificationRead.memberId, m.id))
             .returning({ id: memberNotificationRead.memberId }),
+        );
+        /**
+         * Her booking-policy bell notices (migration 0066). Per-member rows that
+         * say "your salon changed its terms" — nothing a tombstone can read, and
+         * nothing an audit needs: the salon's `booking_policy` versions, which
+         * are the actual record, are untouched.
+         */
+        await del('bellPolicyNotices', () =>
+          tx
+            .delete(memberPolicyNotice)
+            .where(eq(memberPolicyNotice.memberId, m.id))
+            .returning({ id: memberPolicyNotice.id }),
         );
         await del('supportTickets', () =>
           tx

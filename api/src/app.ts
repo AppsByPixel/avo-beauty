@@ -35,6 +35,7 @@ import { registerSalonRoutes } from './routes/salons';
 import { registerServiceRoutes } from './routes/services';
 import { registerArtistRoutes } from './routes/artists';
 import { registerBookingRoutes } from './routes/bookings';
+import { registerBookingPolicyRoutes } from './routes/bookingPolicy';
 import { registerDepositRoutes } from './routes/deposits';
 import { registerOrderRoutes } from './routes/orders';
 import { registerAddressRoutes } from './routes/addresses';
@@ -183,6 +184,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerServiceRoutes(app);
   await registerArtistRoutes(app);
   await registerBookingRoutes(app);
+  await registerBookingPolicyRoutes(app);
   await registerDepositRoutes(app);
   await registerOrderRoutes(app);
   await registerAddressRoutes(app);

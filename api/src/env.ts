@@ -245,6 +245,22 @@ const EnvSchema = z.object({
    */
   BOOKING_CHANGE_WINDOW_MINUTES: z.coerce.number().int().positive().default(60),
 
+  /**
+   * Minutes after a POLICY booking's slot ends before the automatic no-show
+   * settle fires (migration 0066). Not per-salon — the merchant-configurable
+   * window is exactly what the ruling removed.
+   *
+   * ZERO, which is trunk's ruling verbatim: "automatically when the booked slot
+   * ends (`startsAt` + service duration)". It is a named number rather than a
+   * literal because that ruling collides with the argument db/schema/booking.ts
+   * makes for measuring from `ends_at` plus a window: a charge is rung up AFTER
+   * the service, so at 0 a customer still at the till when the slot ends has her
+   * deposit settled out from under the charge — under `keep` she loses it AND
+   * pays full price. Reported to trunk with this knob as the one-line answer;
+   * the lane did not overrule the ruling.
+   */
+  BOOKING_SETTLE_GRACE_MINUTES: z.coerce.number().int().min(0).max(240).default(0),
+
   // ------------------------------------------------------------- top-ups --
 
   /**
@@ -822,6 +838,7 @@ export const env = {
   topupReaperEnabled: raw.TOPUP_REAPER_ENABLED,
   topupReaperPollMs: raw.TOPUP_REAPER_POLL_MS,
   bookingChangeWindowMinutes: raw.BOOKING_CHANGE_WINDOW_MINUTES,
+  bookingSettleGraceMinutes: raw.BOOKING_SETTLE_GRACE_MINUTES,
   imageDriver: raw.IMAGE_DRIVER,
   supabaseUrl: raw.SUPABASE_URL,
   supabaseServiceRoleKey: raw.SUPABASE_SERVICE_ROLE_KEY,
