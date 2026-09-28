@@ -599,6 +599,16 @@ suite('GET /v1/salons/:id/overview/analytics', () => {
   it('the route decides withheld blocks from the principal, not from the query', async () => {
     const res = await call(url(A, `period=${WINDOW}&perms=all&team=true`), 'limitedA');
     expect(res.status).toBe(200);
-    expect(res.body.artists).toEqual({ status: 'withheld', reason: 'permission', permission: 'team' });
+    // All five section gates, called directly through the route with each permission off.
+    const w = (permission: string) => ({ status: 'withheld', reason: 'permission', permission });
+    expect(res.body.artists).toEqual(w('team'));
+    expect(res.body.topServices).toEqual(w('appointments'));
+    expect(res.body.upcoming.next).toEqual(w('appointments'));
+    expect(res.body.shop).toEqual(w('shop'));
+    expect(res.body.campaigns).toEqual(w('marketing'));
+    // And a holder of all of them is served every one.
+    const full = await call(url(A), 'mgrA');
+    for (const k of ['artists', 'topServices', 'shop', 'campaigns']) expect(full.body[k].status, k).toBe('ok');
+    expect(full.body.upcoming.next.status).toBe('ok');
   });
 });
