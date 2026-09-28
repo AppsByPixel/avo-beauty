@@ -138,6 +138,34 @@ const N_CAMPAIGN = id('NT-CAMP'); // campaign_held, open, unread       → marke
 const N_BADLINK = id('NT-BAD'); // booking_no_show carrying a hostile deep_link
 const N_LUMIERE = id('NT-LUM'); // at the other salon entirely
 
+/**
+ * THE FIXTURE'S INSTANTS ARE PLACED AHEAD OF THE RUN, NOT ON A CALENDAR.
+ *
+ * They were literals — 2026-09-20 to 2026-09-25 — which were the newest rows in
+ * the table on the day they were written and stopped being so soon after. Other
+ * int files raise real `booking_no_show` rows for SAL-AMARA at `now()`, the feed
+ * is `created_at DESC` with a page of `NOTIFICATION_PAGE_SIZE`, and once twenty of
+ * those had built up in a persistent lane database they filled the first page and
+ * pushed every fixture off it (measured 2026-09-28 on avo_lane_a: 27 such rows,
+ * six specs red with `… is not in this feed`). A date bomb, not a regression.
+ *
+ * So each instant is an offset from a base one day past this run's start. Rows
+ * anything writes at `now()` while the file runs still sort below them, the day
+ * spacing and the one-hour resolve are the originals, and the values stay exact —
+ * `beforeEach` resets `resolved_at` to the same instant the INSERT wrote.
+ */
+const DAY = 24 * 60 * 60 * 1000;
+const BASE = Date.now() + DAY;
+const at = (days: number, hours = 0) =>
+  new Date(BASE + days * DAY + hours * 60 * 60 * 1000).toISOString();
+const T_CAL = at(0);
+const T_CAL_RESOLVED = at(1);
+const T_CAL_RESOLVED_AT = at(1, 1);
+const T_NOSHOW = at(2);
+const T_CAMPAIGN = at(3);
+const T_BADLINK = at(4);
+const T_LUMIERE = at(5);
+
 interface BellRow {
   id: string;
   kind: string;
@@ -214,37 +242,37 @@ suite('the merchant notification bell', () => {
          ${`AC Bell calendar ${RUN}`},
          'Rana Al-Sabah''s hours are set to sync from Google, and AVO cannot reach that calendar.',
          'artist', ${id('AR-1')}, '/merchant/team/AR-001', '{}'::jsonb,
-         '2026-09-20T08:00:00Z', NULL, NULL),
+         ${T_CAL}::timestamptz, NULL, NULL),
 
         (${N_CAL_RESOLVED}, ${SALON}, 'calendar_disconnected', 'warning',
          ${`AC Bell calendar resolved ${RUN}`},
          'Her calendar was unreachable and is now connected again.',
          'artist', ${id('AR-2')}, '/merchant/team/AR-002', '{}'::jsonb,
-         '2026-09-21T08:00:00Z', NULL, '2026-09-21T09:00:00Z'),
+         ${T_CAL_RESOLVED}::timestamptz, NULL, ${T_CAL_RESOLVED_AT}::timestamptz),
 
         (${N_NOSHOW}, ${SALON}, 'booking_no_show', 'info',
          ${`AC Bell no-show ${RUN}`},
          'Latifa Al-Ayyar did not arrive for her appointment, and the 5.000 KD deposit has been returned to her wallet.',
          'booking', ${id('BK-1')}, '/merchant/appointments/BK-1', '{}'::jsonb,
-         '2026-09-22T08:00:00Z', NULL, NULL),
+         ${T_NOSHOW}::timestamptz, NULL, NULL),
 
         (${N_CAMPAIGN}, ${SALON}, 'campaign_held', 'warning',
          ${`AC Bell campaign ${RUN}`},
          '"Eid offer" — outside the salon''s quiet hours window.',
          'campaign', ${id('CMP-1')}, '/marketing/campaigns', '{}'::jsonb,
-         '2026-09-23T08:00:00Z', NULL, NULL),
+         ${T_CAMPAIGN}::timestamptz, NULL, NULL),
 
         (${N_BADLINK}, ${SALON}, 'booking_no_show', 'info',
          ${`AC Bell hostile link ${RUN}`},
          'A row whose deep_link would navigate off this origin.',
          'booking', ${id('BK-2')}, '//evil.test/steal', '{}'::jsonb,
-         '2026-09-24T08:00:00Z', NULL, NULL),
+         ${T_BADLINK}::timestamptz, NULL, NULL),
 
         (${N_LUMIERE}, ${OTHER_SALON}, 'booking_no_show', 'info',
          ${`AC Bell lumiere ${RUN}`},
          'A no-show that belongs to another salon entirely.',
          'booking', ${id('BK-3')}, '/merchant/appointments/BK-3', '{}'::jsonb,
-         '2026-09-25T08:00:00Z', NULL, NULL)`);
+         ${T_LUMIERE}::timestamptz, NULL, NULL)`);
 
     for (const [name, sid, salon] of [
       ['owner', OWNER, SALON],
@@ -289,7 +317,7 @@ suite('the merchant notification bell', () => {
     await db.execute(sql`
       UPDATE merchant_notification
          SET read_at = NULL,
-             resolved_at = CASE WHEN id = ${N_CAL_RESOLVED} THEN '2026-09-21T09:00:00Z'::timestamptz
+             resolved_at = CASE WHEN id = ${N_CAL_RESOLVED} THEN ${T_CAL_RESOLVED_AT}::timestamptz
                                 ELSE NULL END
        WHERE id IN (${N_CAL}, ${N_CAL_RESOLVED}, ${N_NOSHOW}, ${N_CAMPAIGN}, ${N_BADLINK}, ${N_LUMIERE})`);
   });
