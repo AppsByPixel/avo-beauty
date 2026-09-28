@@ -105,7 +105,12 @@ suite('GET /v1/salons/:id/overview/analytics', () => {
   let app: FastifyInstance;
   let db: (typeof import('../db/client'))['db'];
   let sql: (typeof import('drizzle-orm'))['sql'];
-  let Schema: (typeof import('./overviewAnalytics.schema'))['OverviewAnalyticsSchema'];
+  /**
+   * FROM `@avo/types`, where trunk landed these shapes (8769f4c). The API's own
+   * copy was deleted, so the analytics this serves and the contract the dashboard
+   * parses are one declaration and cannot drift.
+   */
+  let Schema: (typeof import('@avo/types'))['OverviewAnalyticsSchema'];
   const bearer: Record<keyof typeof ST, string> = { mgrA: '', limitedA: '', noDashA: '', mgrB: '' };
 
   // Everything computed inside the rolled-back fixture transaction.
@@ -131,7 +136,7 @@ suite('GET /v1/salons/:id/overview/analytics', () => {
 
     db = (await import('../db/client')).db;
     sql = (await import('drizzle-orm')).sql;
-    Schema = (await import('./overviewAnalytics.schema')).OverviewAnalyticsSchema;
+    Schema = (await import('@avo/types')).OverviewAnalyticsSchema;
     const issue = (await import('../auth/sessions')).issueSession;
     const { computeOverviewAnalytics } = await import('./overviewAnalytics');
     const { computeReport } = await import('./reports');

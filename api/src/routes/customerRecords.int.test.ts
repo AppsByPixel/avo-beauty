@@ -48,7 +48,8 @@ suite('the customer card: her bookings and her purchases', () => {
   let app: FastifyInstance;
   let db: (typeof import('../db/client'))['db'];
   let sql: (typeof import('drizzle-orm'))['sql'];
-  let schema: typeof import('../services/overviewAnalytics.schema');
+  /** `@avo/types` — trunk's copy (8769f4c) is the only one; the API's was deleted. */
+  let schema: typeof import('@avo/types');
   const token: Record<string, string> = {};
 
   const M1 = id('M1');
@@ -98,7 +99,7 @@ suite('the customer card: her bookings and her purchases', () => {
   beforeAll(async () => {
     db = (await import('../db/client')).db;
     sql = (await import('drizzle-orm')).sql;
-    schema = await import('../services/overviewAnalytics.schema');
+    schema = await import('@avo/types');
     const issue = (await import('../auth/sessions')).issueSession;
     app = await (await import('../app')).buildApp();
 
