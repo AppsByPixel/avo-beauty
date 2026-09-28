@@ -131,6 +131,9 @@ export const transactions: Transaction[] = [
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    // What the charge earned (migration 0065). The fixture's one populated record,
+    // so a consumer's parse sees the non-null shape and not only nulls.
+    loyalty: { mode: 'tiers', visitsEarned: 1, tierAfter: 'silver', climbed: false, rewardReady: false },
   },
   {
     id: 'TX-8977',
@@ -146,6 +149,7 @@ export const transactions: Transaction[] = [
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   },
   {
     id: 'TX-8810',
@@ -161,6 +165,7 @@ export const transactions: Transaction[] = [
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   },
   {
     id: 'TX-8642',
@@ -176,6 +181,7 @@ export const transactions: Transaction[] = [
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   },
   {
     id: 'TX-8511',
@@ -191,6 +197,7 @@ export const transactions: Transaction[] = [
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   },
 ];
 

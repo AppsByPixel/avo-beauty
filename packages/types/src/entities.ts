@@ -296,6 +296,28 @@ export const TransactionKindSchema = z.enum([
   'adjustment',
 ]);
 
+/**
+ * What a charge earned, for "+1 visit · 2 more to Gold" (DECISIONS, the fourth
+ * list: show what she gained). The increment actually applied, after any boost
+ * or happy-hour multiplier. Lane A's eefccb1 serialises it.
+ */
+export const TransactionLoyaltySchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('tiers'),
+    visitsEarned: z.number().int().nonnegative(),
+    tierAfter: TierNameSchema.nullable(),
+    climbed: z.boolean(),
+    rewardReady: z.boolean(),
+  }),
+  z.object({
+    mode: z.literal('stamps'),
+    stampsEarned: z.number().int().nonnegative(),
+    tierAfter: z.null(),
+    climbed: z.boolean(),
+    rewardReady: z.boolean(),
+  }),
+]);
+
 export const TransactionSchema = z.object({
   id: IdSchema,
   memberId: IdSchema,
@@ -349,6 +371,12 @@ export const TransactionSchema = z.object({
    */
   voidedAt: DateTimeSchema.nullable(),
   reversedByTransactionId: IdSchema.nullable(),
+  /**
+   * What this charge earned, recorded inside the charge's own transaction
+   * (migration 0065). A void takes back exactly this. `null` on anything that is
+   * not a charge, and on a charge made before 0065 — never a guess.
+   */
+  loyalty: TransactionLoyaltySchema.nullable(),
 });
 
 // -------------------------------------------------------------- voucher ----
@@ -1311,6 +1339,7 @@ export type HappyHour = z.infer<typeof HappyHourSchema>;
 export type PromotionSet = z.infer<typeof PromotionSetSchema>;
 export type RewardKey = z.infer<typeof RewardKeySchema>;
 export type Campaign = z.infer<typeof CampaignSchema>;
+export type TransactionLoyalty = z.infer<typeof TransactionLoyaltySchema>;
 export type CampaignReward = z.infer<typeof CampaignRewardSchema>;
 export type PlatformMessagingPolicy = z.infer<typeof PlatformMessagingPolicySchema>;
 export type LegalDoc = z.infer<typeof LegalDocSchema>;

@@ -684,6 +684,8 @@ app.post('/charges', async (req, reply) => {
     // the reversal; the mock has no void history to join to.
     voidedAt: null,
     reversedByTransactionId: null,
+    // The mock earns the plain +1; it keeps no visit count to climb against.
+    loyalty: { mode: 'tiers', visitsEarned: 1, tierAfter: member.tier, climbed: false, rewardReady: false },
   };
   // The reason rides beside the transaction rather than on it: `note` is a
   // MERCHANT-ROUTE key, not part of `TransactionSchema`, for the reason that
@@ -1267,6 +1269,7 @@ app.post('/members/me/vouchers/redeem', async (req, reply) => {
     customAmount: false,
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   };
   transactions.unshift(tx);
 
