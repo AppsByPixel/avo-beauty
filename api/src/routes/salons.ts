@@ -2104,6 +2104,7 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       cursor?: string;
       from?: string;
       to?: string;
+      memberId?: unknown;
     };
   }>(
     '/salons/:id/bookings',
@@ -2174,6 +2175,54 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
       const range = parseCalendarRange(req.query?.from, req.query?.to);
 
       /**
+       * `?memberId=` — ONE CUSTOMER'S APPOINTMENTS, for the customer card's "Next
+       * booking" panel (Aftab, 2026-09-29: "On the customer view screen, the
+       * bookings and purchases should be displayed").
+       *
+       * A FILTER ON THIS BOARD, NOT A ROUTE UNDER `/customers/{memberId}`, AND THE
+       * GATE IS THIS BOARD'S. `routes/customers.ts`' header refused to serve Next
+       * booking on the card because the card is `team` and bookings are
+       * `appointments`, and those two are not ordered — so the read "wants its own
+       * `appointments`-gated read". This is that read. The two alternatives both
+       * fail a rule this codebase has already written down:
+       *
+       *   `team` alone          hands appointment data to a `team`-only holder —
+       *                         the leak customers.ts names.
+       *   `team` + appointments a gate an `appointments`-only holder walks around
+       *                         one card to the left, because this board already
+       *                         serves every one of these rows to her unfiltered —
+       *                         "worse than no gate, because it reads as a control"
+       *                         (`services/reports.ts § earnings-by-branch`).
+       *
+       * So the card panel needs both permissions — `team` to open the card, this
+       * one to fill the panel — and each read carries exactly its own.
+       *
+       * TENANCY ANSWERS THE WAY THE CARD DOES. A member who is not this salon's is
+       * `404 unknown_member`, not an empty page: an empty list would answer "she
+       * has no appointments" about somebody who is not hers, which is the softer
+       * lie `GET /customers/{memberId}/activity` refuses from the next door along.
+       * Checked with BOTH terms in the WHERE, so no later mapping can serve her.
+       *
+       * Parsed here with the other parameters and RESOLVED after them, so a
+       * malformed status still answers 400 before any member is looked up.
+       * ABSENT IS UNCHANGED: no lookup, no predicate.
+       */
+      const rawMember = req.query?.memberId;
+      if (rawMember !== undefined && typeof rawMember !== 'string') {
+        throw badRequest('invalid_member_id', 'memberId must be one member id.');
+      }
+      const wantedMember =
+        typeof rawMember === 'string' && rawMember.trim() !== '' ? rawMember.trim() : null;
+      if (wantedMember !== null) {
+        const [found] = await db
+          .select({ id: member.id })
+          .from(member)
+          .where(and(eq(member.id, wantedMember), eq(member.salonId, req.params.id)))
+          .limit(1);
+        if (!found) throw notFound('unknown_member', 'No such member.');
+      }
+
+      /**
        * THE LOOKUP HAPPENS ONLY FOR A RANGE, which is how "no params = today's
        * behaviour" is a fact about the code rather than a hope about it: with no
        * range there is no second query, no `unknown_salon` path that did not
@@ -2242,6 +2291,9 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         .where(
           and(
             eq(booking.salonId, req.params.id),
+            // `booking_member_starts_idx` is `(member_id, starts_at DESC)`: the
+            // order and the cursor below walk it directly.
+            wantedMember !== null ? eq(booking.memberId, wantedMember) : undefined,
             wanted
               ? inArray(booking.status, wanted as Array<BookingRow['status']>)
               : undefined,
