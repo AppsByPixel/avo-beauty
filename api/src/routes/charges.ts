@@ -42,7 +42,7 @@ import {
 import { requireScannerPerm, hasScenario } from '../auth/principal';
 import { env } from '../env';
 import { badRequest, conflict, notFound } from '../http/errors';
-import { serialiseTransactionLoyalty } from '../http/serialise';
+import { asWireRow, serialiseTransactionLoyalty } from '../http/serialise';
 import { parseAmountFils, requireString, requireStringArray } from '../money/validate';
 import {
   awaitCommittedKey,
@@ -510,7 +510,7 @@ export async function registerChargeRoutes(app: FastifyInstance): Promise<void> 
          * first is the only order that cannot break the till. The same shape
          * her wallet reads, from the same function.
          */
-        loyalty: serialiseTransactionLoyalty(t),
+        loyalty: serialiseTransactionLoyalty(asWireRow(t)),
       })),
       nextCursor: null,
     });

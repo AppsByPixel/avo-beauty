@@ -463,6 +463,13 @@
       "when": 1790656400000,
       "tag": "0065_what_the_visit_earned",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790742800000,
+      "tag": "0066_the_salon_writes_its_own_booking_policy",
+      "breakpoints": true
     }
   ]
 }

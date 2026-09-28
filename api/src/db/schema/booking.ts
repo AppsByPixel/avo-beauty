@@ -89,8 +89,10 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -98,6 +100,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { filsColumn, timestamptz } from './_shared';
 import { artist } from './artist';
+import { bookingPolicy, type CancellationRule, type NoShowRule } from './bookingPolicy';
 import { member } from './member';
 import { branch, salon } from './salon';
 import { service } from './service';
@@ -263,6 +266,37 @@ export const booking = pgTable(
     completedAt: timestamptz('completed_at'),
     cancelledAt: timestamptz('cancelled_at'),
     returnedAt: timestamptz('returned_at'),
+
+    /**
+     * THE POLICY THIS BOOKING WAS MADE UNDER, STAMPED (migration 0066).
+     *
+     * All six or none — `booking_policy_stamp_is_whole`. None is LEGACY: a booking
+     * made before 0066, or at a salon that has never published a policy, and it
+     * keeps the pre-0066 behaviour exactly (services/bookingPolicy.ts § LEGACY).
+     * The rules and the text are copied, not looked up, so what she was shown
+     * before she confirmed is what decides her outcome whatever the salon
+     * publishes later. `(policy_id, salon_id, policy_version)` is a composite FK
+     * onto the version row.
+     */
+    policyId: text('policy_id'),
+    policyVersion: integer('policy_version'),
+    policyNoShow: text('policy_no_show').$type<NoShowRule>(),
+    policyCancellationRules: jsonb('policy_cancellation_rules').$type<CancellationRule[]>(),
+    policyTextEn: text('policy_text_en'),
+    policyTextAr: text('policy_text_ar'),
+
+    /**
+     * WHERE THE DEPOSIT WENT when it left escrow other than by a charge.
+     * `returned + kept = deposit_fils`. NULL on rows settled before 0066 (and by
+     * the pre-0066 API), every one of which was a full return.
+     */
+    settledReturnedFils: filsColumn('settled_returned_fils'),
+    settledKeptFils: filsColumn('settled_kept_fils'),
+    /** The `deposit_forfeit` transaction, exactly when something was kept. */
+    forfeitTransactionId: text('forfeit_transaction_id').references(
+      (): AnyPgColumn => transaction.id,
+      { onDelete: 'restrict' },
+    ),
   },
   (t) => [
     index('booking_member_starts_idx').on(t.memberId, t.startsAt.desc()),
@@ -375,6 +409,52 @@ export const booking = pgTable(
       sql`(${t.status} = 'no_show_returned') = (${t.returnedAt} IS NOT NULL)`,
     ),
     check('booking_rescheduled_count_non_negative', sql`${t.rescheduledCount} >= 0`),
+
+    // ---------------------------------------------------------------- 0066 --
+    foreignKey({
+      name: 'booking_policy_fk',
+      columns: [t.policyId, t.salonId, t.policyVersion],
+      foreignColumns: [bookingPolicy.id, bookingPolicy.salonId, bookingPolicy.version],
+    }).onDelete('restrict'),
+    check(
+      'booking_policy_stamp_is_whole',
+      sql`num_nonnulls(${t.policyId}, ${t.policyVersion}, ${t.policyNoShow},
+            ${t.policyCancellationRules}, ${t.policyTextEn}, ${t.policyTextAr}) IN (0, 6)`,
+    ),
+    check('booking_policy_requires_hold', sql`${t.policyId} IS NULL OR ${t.holdTransactionId} IS NOT NULL`),
+    check(
+      'booking_policy_no_show_valid',
+      sql`${t.policyNoShow} IS NULL OR ${t.policyNoShow} IN ('keep', 'return')`,
+    ),
+    check('booking_policy_rules_valid', sql`booking_cancellation_rules_valid(${t.policyCancellationRules})`),
+    check(
+      'booking_settlement_split_is_whole',
+      sql`(${t.settledReturnedFils} IS NULL) = (${t.settledKeptFils} IS NULL)`,
+    ),
+    check(
+      'booking_settlement_split_non_negative',
+      sql`(${t.settledReturnedFils} IS NULL OR ${t.settledReturnedFils} >= 0)
+          AND (${t.settledKeptFils} IS NULL OR ${t.settledKeptFils} >= 0)`,
+    ),
+    check(
+      'booking_settlement_split_sums_to_deposit',
+      sql`${t.settledReturnedFils} IS NULL
+          OR ${t.settledReturnedFils} + ${t.settledKeptFils} = ${t.depositFils}`,
+    ),
+    check(
+      'booking_settlement_split_is_for_an_exit',
+      sql`${t.settledReturnedFils} IS NULL
+          OR (${t.holdTransactionId} IS NOT NULL AND ${t.status} IN ('cancelled', 'no_show_returned'))`,
+    ),
+    check(
+      'booking_forfeit_matches_kept',
+      sql`(${t.forfeitTransactionId} IS NOT NULL) = (coalesce(${t.settledKeptFils}, 0) > 0)`,
+    ),
+    check(
+      'booking_settled_names_the_return',
+      sql`${t.settledReturnedFils} IS NULL
+          OR (${t.settledReturnedFils} > 0) = (${t.settledTransactionId} IS DISTINCT FROM ${t.forfeitTransactionId})`,
+    ),
     check(
       'booking_rescheduled_at_matches_count',
       sql`(${t.rescheduledCount} > 0) = (${t.rescheduledAt} IS NOT NULL)`,
