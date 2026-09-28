@@ -2017,3 +2017,30 @@ must not recreate marks for an erased member, and must not hold a lock on `recei
 card 2.5% + 50 fils, borne by the merchant; the total she pays does not change. Wallet-paid
 orders carry no fee. Whether salons accept a payment-provider fee on card shop sales is a
 business decision and has not been made. The code ships with the merchant bearing it.
+
+### Pickup hours, and a Services tab — two rulings from Aftab, 2026-09-28
+
+**1. A pickup names the branch's working hours.** Asked what should happen "when a pickup
+branch closes", Aftab answered about the branch being **closed for the day** — *"please
+collect during the branch's official working hours"*, and say it is closed now and she can
+collect next day. That is the case customers meet every evening, so it is built. The
+question as asked — a branch closed **permanently** — keeps its current behaviour: the
+customer is told to contact the salon, and the order stays flagged on the merchant board.
+
+Hours already existed **per salon** (`salon.business_hours`, two windows for the Kuwaiti
+afternoon closure, editable in Settings) and the wallet never received them. A branch gains
+an **optional** override; null means the salon's hours, so no merchant has to set anything.
+"Open now" is decided in the **salon's** timezone, not the device's. **Not hard-coded to
+10 am – 10 pm** — that was an example; each salon's own hours are shown. **Limitation:** the
+hours have no weekday dimension, so a salon closed on Fridays cannot yet say so.
+
+**2. A Services tab: add services, price them, assign them to staff.** Merchants could not
+manage services at all — the API only listed them — and nothing recorded which staff do
+which service, so any artist could be booked for any service. Now: create, edit and retire
+services (no hard delete; bookings reference them), price in integer fils, and assign staff.
+**Booking** enforces the assignment server-side; **charging does not** — a receptionist
+charges for a service she does not perform.
+
+**The migration assigns every existing artist to every existing service**, so turning
+enforcement on changes nothing for any salon on day one. Without that backfill, every
+existing booking path would be refused the moment the rule went live.

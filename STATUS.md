@@ -366,6 +366,8 @@ Checked against the code before anything was built; several were not what they r
 | W6 | Activity "show more" cannot be shortened again | "Show less" was **omitted on purpose** — the design has no such string. Now authorised new copy. | In progress — lane B. |
 | S7 | Scanner: custom amount | **Already existed**, but only for `perms.void` holders — why he could not find it. | In progress — gate moves to `perms.scanner` (DECISIONS #109, answered). |
 
+**Two more, 2026-09-28:** **W8** — a pickup names its branch's working hours, and after hours says it is closed now and she can collect next day (salon hours exist; a per-branch override is added). **M7** — a Services tab on the merchant dashboard: add, price and retire services, and assign them to staff; booking enforces the assignment. Both in progress, lane A first. See DECISIONS.md § "Pickup hours, and a Services tab".
+
 **Rows 2, 3, 4 and 8 are ticked from commit evidence rather than from a session driving them.**
 That is weaker than the rest of this table and is said out loud rather than smoothed over.
 
