@@ -114,6 +114,8 @@ const PREVIEW: Record<string, unknown> = {
   depositHeldBookings: 3,
   depositHeldBookingsBranchAssumed: 2,
   tillsUnenrolled: ['Front desk'],
+  /* Migration 0060 — shop orders a customer chose to collect here, not yet collected. */
+  pickupOrdersWaiting: 2,
 };
 
 /** A preview with nothing to report — the three reassuring sentences' own case. */
@@ -124,6 +126,7 @@ const QUIET_PREVIEW: Record<string, unknown> = {
   depositHeldBookings: 0,
   depositHeldBookingsBranchAssumed: 0,
   tillsUnenrolled: [],
+  pickupOrdersWaiting: 0,
 };
 
 /** The DELETE's receipt — the same field names, in the past tense. */
@@ -135,6 +138,7 @@ const CLOSURE: Record<string, unknown> = {
   depositHeldBookings: 3,
   depositHeldBookingsBranchAssumed: 2,
   tillsUnenrolled: ['Front desk'],
+  pickupOrdersWaiting: 2,
 };
 
 /**
@@ -338,6 +342,10 @@ describe('the closure preview decides an irreversible act', () => {
       '2 of those had their branch inferred rather than recorded, so treat the count as approximate.',
     );
     expect(text).toContain('Front desk would be unenrolled and stop taking payments');
+    expect(text).toContain('2 pickup orders are waiting at this branch');
+    expect(text).toContain(
+      '— they stay on Shop → Orders, marked as at a closed branch, and nobody will be here to hand them over.',
+    );
     expect(within(group).queryByRole('button', { name: 'Close Salmiya' })).not.toBeNull();
   });
 
@@ -350,6 +358,7 @@ describe('the closure preview decides an irreversible act', () => {
     expect(text).toContain('No staff are scoped to this branch.');
     expect(text).toContain('No appointment here is holding a deposit.');
     expect(text).toContain('No till stands at this branch.');
+    expect(text).toContain('No pickup order is waiting here.');
   });
 
   /**
@@ -369,13 +378,14 @@ describe('the closure preview decides an irreversible act', () => {
     'No staff are scoped to this branch.',
     'No appointment here is holding a deposit.',
     'No till stands at this branch.',
+    'No pickup order is waiting here.',
   ];
 
   const PREVIEW_KEYS = Object.keys(PREVIEW);
 
   it('covers every key of the preview body', () => {
     // A table that silently matched nothing would be hollow.
-    expect(PREVIEW_KEYS).toHaveLength(13);
+    expect(PREVIEW_KEYS).toHaveLength(14);
   });
 
   it.each(PREVIEW_KEYS)('a preview with no `%s` blocks rather than reassures', async (key) => {
@@ -431,6 +441,7 @@ describe('the close has committed by the time its body is read', () => {
       'Unenrolled Front desk — set it up again at another branch under Tills.',
     );
     expect(text).toContain('3 appointments still hold a deposit here.');
+    expect(text).toContain('2 pickup orders are still waiting here — flagged on Shop → Orders.');
     // The full receipt, not the degraded one — the two are different sentences.
     expect(text).not.toContain(SUMMARY_UNREADABLE);
     expectNoFailureLanguage();
@@ -462,6 +473,7 @@ describe('the close has committed by the time its body is read', () => {
     expect(text).toContain('Accounts → Team');
     expect(text).toContain('staff who may have been left with no branch access');
     expect(text).toContain('Tills');
+    expect(text).toContain('Shop → Orders for pickup orders that may still be waiting there');
     // 3 · nothing that says the close failed.
     expectNoFailureLanguage();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -487,7 +499,7 @@ describe('the close has committed by the time its body is read', () => {
   const CLOSURE_KEYS = Object.keys(CLOSURE);
 
   it('covers every key of the closure body', () => {
-    expect(CLOSURE_KEYS).toHaveLength(10);
+    expect(CLOSURE_KEYS).toHaveLength(11);
   });
 
   it.each(CLOSURE_KEYS)('a closure with no `%s` degrades rather than fails', async (key) => {
@@ -573,4 +585,69 @@ describe('a created branch the client cannot read is not a branch that was not c
       );
     },
   );
+});
+
+/* ================================ 4 · pickup orders waiting, migration 0060 == */
+
+/**
+ * `pickupOrdersWaiting` — shop orders a customer chose to collect at this branch
+ * and has not collected. The close leaves them on Shop → Orders flagged
+ * `closed`, and nobody will be behind the counter, so she must read the number
+ * BEFORE the button.
+ *
+ * THE RULE FROM THIS FILE'S FIRST SLICE, APPLIED TO THE NEW FIELD: an
+ * unreadable count is not 0. "No pickup order is waiting here." under a live
+ * Close button is permission to close; it must appear only when the server
+ * said 0. The missing-key case is already covered by the table in section 1
+ * (fourteen keys); these are the shapes that are PRESENT and still unreadable —
+ * the ones a `?? 0` or a `Number()` would have turned into a reassurance.
+ */
+describe('the pickup orders waiting at a branch are read before the close, never guessed', () => {
+  it('names a single waiting order in the singular, as a warning', async () => {
+    mount({ preview: { ...QUIET_PREVIEW, pickupOrdersWaiting: 1 } });
+    await openConfirmation();
+    const group = screen.getByRole('group', { name: 'Close Salmiya?' });
+    const line = [...group.querySelectorAll('li')].find((li) =>
+      li.textContent?.includes('pickup order'),
+    );
+    expect(line?.textContent).toContain('1 pickup order is waiting at this branch');
+    expect(line?.className).toContain('settings__consequence--warn');
+    expect(group.textContent).not.toContain('No pickup order is waiting here.');
+    // A count, not a blocker — the close is still offered.
+    expect(within(group).queryByRole('button', { name: 'Close Salmiya' })).not.toBeNull();
+  });
+
+  it.each([['"2"', '2'], ['null', null], ['-1', -1], ['1.5', 1.5], ['true', true]])(
+    'a pickupOrdersWaiting of %s blocks rather than rendering as 0',
+    async (_label, value) => {
+      mount({ preview: { ...QUIET_PREVIEW, pickupOrdersWaiting: value } });
+      await openConfirmation();
+      const group = screen.getByRole('group', { name: 'Close Salmiya?' });
+      const text = group.textContent ?? '';
+      expect(text).not.toContain('No pickup order is waiting here.');
+      expect(text).not.toContain('0 pickup order');
+      expect(text).toContain("Couldn't check what closing Salmiya would do");
+      expect(within(group).queryByRole('button', { name: 'Close Salmiya' })).toBeNull();
+    },
+  );
+
+  it('a receipt with an unreadable count degrades and sends her to Shop → Orders', async () => {
+    mount({ preview: PREVIEW, close: { ...CLOSURE, pickupOrdersWaiting: '2' } });
+    await openConfirmation();
+    await confirmClose();
+    const text = (await screen.findByRole('status')).textContent ?? '';
+    expect(text).toContain(SUMMARY_UNREADABLE);
+    expect(text).toContain('Shop → Orders');
+    expect(text).not.toContain('pickup orders are still waiting here');
+    expectNoFailureLanguage();
+  });
+
+  it('a receipt of 0 says nothing about pickups rather than inventing a warning', async () => {
+    mount({ preview: PREVIEW, close: { ...CLOSURE, pickupOrdersWaiting: 0 } });
+    await openConfirmation();
+    await confirmClose();
+    const text = (await screen.findByRole('status')).textContent ?? '';
+    expect(text).not.toContain('pickup order');
+    expect(text).not.toContain(SUMMARY_UNREADABLE);
+  });
 });

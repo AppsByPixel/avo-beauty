@@ -118,11 +118,11 @@ export interface MerchantShopOrder extends ShopOrder {
    * the link. Contract decided at trunk; served by this endpoint and by
    * `GET /salons/{id}/bookings`.
    *
-   * WHILE LANE A IS MID-FLIGHT this field is simply absent from the wire, and
-   * `authedRequest` is an unchecked assertion, so it reads `undefined` — falsy,
-   * which is the pre-fix rendering. That is deliberate: this lane merges first
-   * and is green either way, and `ShopOrders.tsx` reads the null phone as the
-   * second, independent arm so a half-landed payload cannot produce `tel:null`.
+   * THE MID-FLIGHT WINDOW IS CLOSED. While lane A's signal was landing this
+   * field could be absent and read `undefined`; `serialiseMemberContact` now
+   * serves it on every row and `parseOrderBoard` REQUIRES it, so the board
+   * refuses a payload without it. `ShopOrders.tsx` still reads the null phone as
+   * a second, independent arm so no payload can produce `tel:null`.
    */
   memberErased: boolean;
 }
@@ -146,6 +146,80 @@ export interface OrderBoard {
   truncated: boolean;
   /** Always null. Not a cursor — see above. */
   nextCursor: null;
+}
+
+/**
+ * ===========================================================================
+ * THE BOARD, READ RATHER THAN ASSERTED — 0060 IS WHY THIS STOPPED BEING A CAST
+ * ===========================================================================
+ * `useOrderBoard` used to be `authedRequest<OrderBoard>`, an unchecked assertion
+ * over `unknown` JSON. `pickupBranch` is why that could not stay: the Where cell
+ * FORKS on it — `null` renders "Pickup branch not chosen", `closed: true` renders the
+ * attention state, anything else renders "Collecting at {name}" — and the
+ * header's branch selector hides rows by its `id`. A payload whose `closed`
+ * arrived as `"true"`, or whose branch arrived without an id, would pick an arm
+ * silently: an order at a closed counter drawn as an ordinary pickup, or dropped
+ * from a narrowed board. Neither is visible from the screen, which is the whole
+ * reason it has to be a parse.
+ *
+ * THE ROW IS `ShopOrderSchema`, RUN BARE, and the three joined fields are
+ * checked by hand beside it — `zod` is not a dependency of this app and
+ * `@avo/types` does not re-export `z`, so `ShopOrderSchema.extend({…})` is not
+ * available (`api/settings.ts § parseClosureShape` records the same constraint).
+ * The shared schema is what carries `pickupBranch`, so the board and the wallet
+ * cannot disagree about what one looks like.
+ *
+ * A BAD ROW FAILS THE WHOLE BOARD rather than being dropped — `api/staff.ts §
+ * parseStaffPage`'s rule, for a sharper reason here. A dropped row is an order
+ * that silently leaves the one screen that prepares it, and the customer arrives
+ * for it anyway. "Couldn't load orders" is loud and retryable; a board that is
+ * one order short is neither.
+ *
+ * `memberErased` IS NOW REQUIRED. It was tolerated as absent while lane A's
+ * signal was in flight (see `MerchantShopOrder`); `serialiseMemberContact` has
+ * served it on every row since, so a payload without it is a broken join and not
+ * a transitional one. `OrderRow` still reads the null phone as a second arm.
+ */
+export function parseOrderBoard(raw: unknown): OrderBoard {
+  const where = 'GET /v1/salons/{id}/orders';
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new Error(`${where} was not an object.`);
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.items)) throw new Error(`${where}.items was not an array.`);
+  if (typeof r.truncated !== 'boolean') throw new Error(`${where}.truncated was not a boolean.`);
+  // Always null — see `OrderBoard.nextCursor`. A string here would be a cursor
+  // this client has no way to follow.
+  if (r.nextCursor !== null) throw new Error(`${where}.nextCursor was not null.`);
+
+  return {
+    items: r.items.map((row, i) => {
+      const at = `${where}.items[${i}]`;
+      let order: ShopOrder;
+      try {
+        order = ShopOrderSchema.parse(row);
+      } catch (cause) {
+        // The index is what makes one bad row in two hundred findable.
+        throw new Error(`${at} was not a shop order: ${String(cause)}`);
+      }
+      const j = row as Record<string, unknown>;
+      if (typeof j.memberName !== 'string') throw new Error(`${at}.memberName was not a string.`);
+      if (j.memberPhone !== null && typeof j.memberPhone !== 'string') {
+        throw new Error(`${at}.memberPhone was neither a string nor null.`);
+      }
+      if (typeof j.memberErased !== 'boolean') {
+        throw new Error(`${at}.memberErased was not a boolean.`);
+      }
+      return {
+        ...order,
+        memberName: j.memberName,
+        memberPhone: j.memberPhone,
+        memberErased: j.memberErased,
+      };
+    }),
+    truncated: r.truncated,
+    nextCursor: null,
+  };
 }
 
 /**
@@ -180,11 +254,17 @@ export function useOrderBoard(status: OrderStatus | null = null): UseQueryResult
   const salonId = useSalonId();
   return useQuery({
     queryKey: orderKeys.board(salonId, status),
-    queryFn: ({ signal }) =>
-      authedRequest<OrderBoard>(
-        'merchant',
-        `/v1/salons/${salonId}/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`,
-        { signal },
+    /*
+     * PARSED, AND A PARSE FAILURE IS AN ORDINARY FAILED READ — `SectionError`
+     * draws "Couldn't load orders" with Try again. See `parseOrderBoard`.
+     */
+    queryFn: async ({ signal }) =>
+      parseOrderBoard(
+        await authedRequest<unknown>(
+          'merchant',
+          `/v1/salons/${salonId}/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+          { signal },
+        ),
       ),
     /*
      * `networkMode: 'always'` is why this section can render an error at all, and
