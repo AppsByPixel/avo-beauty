@@ -2044,3 +2044,33 @@ charges for a service she does not perform.
 **The migration assigns every existing artist to every existing service**, so turning
 enforcement on changes nothing for any salon on day one. Without that backfill, every
 existing booking path would be refused the moment the rule went live.
+
+### A reward the merchant writes herself — decided by the client, 2026-09-28
+
+**What.** Aftab: *"the merchant should be able to add a custom option in the dropdown."*
+The first build of the attach-a-reward item (6513a6f) exposed the three missing presets
+instead; that stays. Now a salon keeps up to 20 rewards of its own (`campaign_reward`,
+migration 0064), picks one like a preset, and the campaign stores a snapshot of the words at
+submission, resolved by the server from `customRewardId`. Gated on `perms.marketing`.
+
+**A label only, like every campaign reward.** Nothing applies a campaign reward as an
+earning effect, preset or custom, and a custom one moves no money: the salon honours it at
+the counter. Happy hours keep their closed list because their reward *is* applied, by
+`rewardEffect()`. Whether a campaign's preset reward (e.g. "3 KD credit") should actually
+credit the people it reaches is **asked, not assumed**. It would be a money path of its own.
+
+**New copy (the design has no custom option), English only:**
+- "Your rewards" (optgroup)
+- "+ Add a custom reward…"
+- "Your reward"
+- "e.g. Free hair mask with any blow-dry"
+- "Save", "Cancel", "Remove from your list"
+- "No reward was added." and "That reward is still on your list." (under failed writes)
+- "Couldn't load your saved rewards." with "Try again"
+- the "N / 60" count
+
+**Beyond the design, recorded:**
+- The merchant's campaign queue line now ends with the attached reward.
+- The console approval card names the reward between branch and send time, where the
+  console design puts it. A campaign with no reward shows no item there, although the
+  design draws "No reward".
