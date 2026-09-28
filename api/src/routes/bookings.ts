@@ -121,6 +121,23 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
     const artistId = requireString(body.artistId, 'artistId', 100);
     const serviceId = requireString(body.serviceId, 'serviceId', 100);
     const startsAt = requireString(body.startsAt, 'startsAt', 40);
+    /**
+     * THE POLICY VERSION SHE WAS SHOWN (migration 0066), optional. `null` means
+     * "the salon had no policy". When sent and not current, the booking is refused
+     * `policy_changed` before anything is held — `createBooking` § THE POLICY SHE IS
+     * BOOKING UNDER.
+     */
+    let policyVersion: number | null | undefined;
+    if ('policyVersion' in body) {
+      const v = body.policyVersion;
+      if (v !== null && !(typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) {
+        throw badRequest(
+          'invalid_policy_version',
+          'policyVersion must be the version number of the policy she was shown, or null.',
+        );
+      }
+      policyVersion = v;
+    }
 
     /**
      * NO `branchId`, AND NONE IS READ. A booking has a branch and the server
@@ -150,13 +167,19 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
       scope: principalScope(p),
       endpoint: 'POST /bookings',
       key,
-      requestHash: hashRequestBody({ artistId, serviceId, startsAt }),
+      // `policyVersion` is hashed only when sent, so a pre-0066 client's key
+      // hashes exactly as it always did.
+      requestHash: hashRequestBody(
+        policyVersion === undefined
+          ? { artistId, serviceId, startsAt }
+          : { artistId, serviceId, startsAt, policyVersion },
+      ),
     };
 
     try {
       const result = await createBooking(
         db,
-        { artistId, serviceId, startsAt },
+        { artistId, serviceId, startsAt, ...(policyVersion === undefined ? {} : { policyVersion }) },
         {
           principal: p,
           idempotency: idem,
@@ -225,15 +248,48 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
 
   // ----------------------------------------------------- DELETE /bookings/{id} --
   /** Cancel. The deposit returns to the wallet — non-negotiable #5. */
+  /**
+   * SINCE 0066 THE STAMPED POLICY DECIDES HOW MUCH, and the response says how much
+   * came back and how much the salon kept (`services/booking.ts § cancelBooking`).
+   *
+   * THE KEY IS READ IF SENT, AND REQUIRED ON A POLICY BOOKING — the service decides
+   * which, because only the row knows whether it is stamped. A LEGACY booking keeps
+   * the keyless contract the shipped wallet uses. One door either way: no second
+   * `POST …/cancel` for the same act.
+   */
   app.delete<{ Params: { id: string } }>('/bookings/:id', async (req, reply) => {
     const p = requireMember(req);
-    return reply.send(
-      await cancelBooking(db, req.params.id, {
-        principal: p,
-        ipAddress: req.ip ?? null,
-        userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
-      }),
-    );
+    const idem =
+      req.headers['idempotency-key'] === undefined
+        ? null
+        : {
+            scope: principalScope(p),
+            endpoint: 'DELETE /bookings/:id',
+            key: readIdempotencyKey(req),
+            // The booking is the whole request. One key names one booking.
+            requestHash: hashRequestBody({ bookingId: req.params.id }),
+          };
+
+    try {
+      return reply.send(
+        await cancelBooking(db, req.params.id, {
+          principal: p,
+          idempotency: idem,
+          ipAddress: req.ip ?? null,
+          userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
+        }),
+      );
+    } catch (err) {
+      // Only the key's own index, for `markNoShow`'s reason below: the settle's
+      // guarantee is a conditional UPDATE's row count, not a constraint.
+      if (!idem || !isUniqueViolation(err)) throw err;
+      const stored = await awaitCommittedKey(db, idem);
+      if (stored) return reply.code(stored.status).send(stored.body);
+      throw conflict(
+        'request_in_progress',
+        'That request is still being processed. Try again in a moment.',
+      );
+    }
   });
 
   // ------------------------------------------ POST /bookings/{id}/reschedule --
@@ -509,6 +565,23 @@ export async function registerBookingRoutes(app: FastifyInstance): Promise<void>
     const artistId = requireString(body.artistId, 'artistId', 100);
     const serviceId = requireString(body.serviceId, 'serviceId', 100);
     const startsAt = requireString(body.startsAt, 'startsAt', 40);
+    /**
+     * THE POLICY VERSION SHE WAS SHOWN (migration 0066), optional. `null` means
+     * "the salon had no policy". When sent and not current, the booking is refused
+     * `policy_changed` before anything is held — `createBooking` § THE POLICY SHE IS
+     * BOOKING UNDER.
+     */
+    let policyVersion: number | null | undefined;
+    if ('policyVersion' in body) {
+      const v = body.policyVersion;
+      if (v !== null && !(typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) {
+        throw badRequest(
+          'invalid_policy_version',
+          'policyVersion must be the version number of the policy she was shown, or null.',
+        );
+      }
+      policyVersion = v;
+    }
 
     /**
      * NEITHER `branchId` NOR `depositFils`, and both are refused by name rather

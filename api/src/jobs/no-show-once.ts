@@ -36,6 +36,8 @@ console.log(
       failed: result.failed,
       returnedFils: result.returnedFils,
       returnedKd: (result.returnedFils / 1000).toFixed(3),
+      kept: result.kept,
+      keptFils: result.keptFils,
     },
     null,
     2,

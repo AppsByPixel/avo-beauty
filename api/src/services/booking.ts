@@ -49,7 +49,11 @@ import type { Db } from '../db/client';
 import { artist } from '../db/schema/artist';
 import { booking } from '../db/schema/booking';
 import { ledgerEntry } from '../db/schema/ledger';
-import { depositHeldPosting, depositReleasedPosting } from '../money/ledger';
+import {
+  depositForfeitedPosting,
+  depositHeldPosting,
+  depositReleasedPosting,
+} from '../money/ledger';
 import { member } from '../db/schema/member';
 import { salon } from '../db/schema/salon';
 import { service } from '../db/schema/service';
@@ -57,12 +61,26 @@ import { transaction } from '../db/schema/transaction';
 import type { MemberPrincipal, Principal, StaffPrincipal } from '../auth/principal';
 import { NO_LOYALTY_RECORD, serialiseTransactionForCustomer } from '../http/serialise';
 import { env } from '../env';
-import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
+import {
+  badRequest,
+  conflict,
+  idempotencyKeyRequired,
+  insufficientBalance,
+  notFound,
+} from '../http/errors';
 import { parseDate, parseInstant, salonWallClock } from '../time/zone';
 import { computeAvailability, findSlot } from './availability';
 import { writeAudit, type Executor } from './audit';
 import { assertArtistPerformsService, assertBookedPairAssigned } from './artistService';
 import { resolveBranch } from './branch';
+import {
+  cancellationOutcome,
+  noShowOutcome,
+  readPublishedPolicy,
+  type CancellationRule,
+  type NoShowRule,
+  type StampedPolicyView,
+} from './bookingPolicy';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
 import { nextBookingId, nextTransactionId } from './ids';
@@ -114,6 +132,64 @@ export interface BookingRow {
   noShowReturnDueAt: Date;
   rescheduledCount: number;
   calendarSyncState: 'not_applicable' | 'pending' | 'synced' | 'failed';
+  /** The stamped policy (migration 0066). All six null on a LEGACY booking. */
+  policyId: string | null;
+  policyVersion: number | null;
+  policyNoShow: NoShowRule | null;
+  policyCancellationRules: CancellationRule[] | null;
+  policyTextEn: string | null;
+  policyTextAr: string | null;
+  /** Where the deposit went when it left escrow other than by a charge. */
+  settledReturnedFils: number | null;
+  settledKeptFils: number | null;
+  forfeitTransactionId: string | null;
+  holdTransactionId: string | null;
+}
+
+/**
+ * The stamp, or null for a LEGACY booking. `booking_policy_stamp_is_whole` makes
+ * "some of the six" unrepresentable, so testing one column is testing all six.
+ */
+export function stampedPolicyOf(row: BookingRow): StampedPolicyView | null {
+  if (
+    row.policyId === null ||
+    row.policyVersion === null ||
+    row.policyNoShow === null ||
+    row.policyCancellationRules === null ||
+    row.policyTextEn === null ||
+    row.policyTextAr === null
+  ) {
+    return null;
+  }
+  return {
+    id: row.policyId,
+    version: row.policyVersion,
+    noShow: row.policyNoShow,
+    cancellation: row.policyCancellationRules.map((r) => ({
+      hoursBefore: r.hoursBefore,
+      returnPercent: r.returnPercent,
+    })),
+    text: { en: row.policyTextEn, ar: row.policyTextAr },
+  };
+}
+
+/**
+ * Where the deposit went, when it left escrow other than by a charge. Null while
+ * it is held, on a completed booking (the charge consumed it — that is on the
+ * charge), and on a zero-deposit row (there was nothing to go anywhere).
+ *
+ * A NULL SPLIT ON A SETTLED ROW IS A FULL RETURN, and saying so is exact rather
+ * than a guess: the split columns arrived in 0066, and every row settled without
+ * them — before 0066, or by the pre-0066 API still serving while it applies —
+ * went through a `returnDeposit` that could only ever return the whole deposit.
+ */
+export function settlementOf(row: BookingRow): { returnedFils: number; keptFils: number } | null {
+  if (row.holdTransactionId === null) return null;
+  if (row.status !== 'cancelled' && row.status !== 'no_show_returned') return null;
+  if (row.settledReturnedFils === null || row.settledKeptFils === null) {
+    return { returnedFils: row.depositFils, keptFils: 0 };
+  }
+  return { returnedFils: row.settledReturnedFils, keptFils: row.settledKeptFils };
 }
 
 /**
@@ -159,7 +235,37 @@ export function serialiseBooking(row: BookingRow) {
     ).toISOString(),
     rescheduledCount: row.rescheduledCount,
     calendarSyncState: row.calendarSyncState,
+    /**
+     * THE POLICY THIS BOOKING WAS MADE UNDER — migration 0066. `null` on a
+     * LEGACY booking, and PRESENT (never omitted) on every row, because a client
+     * has to tell "made under no policy" from "an API too old to say". The text
+     * is the one she was shown before she confirmed; `ar` may be '' and falls
+     * back to `en` at the display boundary.
+     */
+    policy: stampedPolicyOf(row),
+    /** `{ returnedFils, keptFils }` once the deposit has left escrow, else null. */
+    settlement: settlementOf(row),
   };
+}
+
+// ------------------------------------------------------- the automatic settle --
+
+/**
+ * When the no-show job may settle this booking, for a slot ending at `endsAt`.
+ * Stamped on `no_show_return_due_at` at booking time and recomputed on a move.
+ *
+ *   LEGACY   `endsAt` + the salon's `no_show_return_minutes` — unchanged, and
+ *            the column is frozen now that the merchant cannot write it.
+ *   POLICY   `endsAt` + `BOOKING_SETTLE_GRACE_MINUTES` (0): "when the booked slot
+ *            ends", trunk's ruling. See env.ts for why it is a named number.
+ */
+function automaticSettleAt(
+  row: Pick<BookingRow, 'policyId'>,
+  endsAt: Date,
+  salonNoShowReturnMinutes: number,
+): Date {
+  const minutes = row.policyId !== null ? env.bookingSettleGraceMinutes : salonNoShowReturnMinutes;
+  return new Date(endsAt.getTime() + minutes * 60_000);
 }
 
 // --------------------------------------------------------------- the window --
@@ -308,6 +414,11 @@ export interface CreateBookingInput {
   serviceId: string;
   /** ISO instant. Validated against the server's own availability grid. */
   startsAt: string;
+  /**
+   * The booking-policy version the wallet showed her, `null` for "no policy", or
+   * absent when the client does not say. `createBooking` § THE POLICY SHE IS BOOKING UNDER.
+   */
+  policyVersion?: number | null;
 }
 
 export async function createBooking(
@@ -449,6 +560,32 @@ export async function createBooking(
     const endsAt = new Date(slot.endsAt);
     const durationMin = Math.round((endsAt.getTime() - startsAt.getTime()) / 60_000);
 
+    /**
+     * THE POLICY SHE IS BOOKING UNDER (migration 0066), read before any money
+     * moves.
+     *
+     * The salon's CURRENT published version, copied onto the row below — rules and
+     * text both — so nothing the salon publishes later can change what this
+     * booking returns. A salon that has never published one stamps nothing, and
+     * the booking is LEGACY (services/bookingPolicy.ts § LEGACY).
+     *
+     * `policyVersion` IS WHAT SHE WAS SHOWN. The ruling is that she sees the policy
+     * before she confirms, and a publish landing between the confirm sheet and
+     * this request would otherwise stamp a version she never read. When the
+     * client says which version it showed and it is not the current one, the
+     * booking is refused with the current version in the details, and nothing is
+     * held. Optional, so the wallet that does not send it yet keeps working;
+     * lane B should send it (the report says so).
+     */
+    const policy = await readPublishedPolicy(tx, m.salonId);
+    if (input.policyVersion !== undefined && input.policyVersion !== (policy?.version ?? null)) {
+      throw conflict(
+        'policy_changed',
+        'The salon has just updated its booking policy. Read the new one before you book.',
+        { policyVersion: policy?.version ?? null },
+      );
+    }
+
     // ------------------------------------------------------ 4. hold the deposit --
     const deposit = fils(s.depositFils);
     const balance = fils(m.balanceFils);
@@ -531,13 +668,20 @@ export async function createBooking(
       }),
     );
 
+
     /**
-     * The no-show deadline, STAMPED. `salon.no_show_return_minutes` is editable
-     * and this is a promise made to this customer about this appointment; see
-     * db/schema/booking.ts for why it is measured from `ends_at`.
+     * The automatic deadline, STAMPED — a promise made to this customer about this
+     * appointment; see db/schema/booking.ts for why it is measured from `ends_at`.
+     *
+     *   LEGACY   `ends_at` + `salon.no_show_return_minutes`, exactly as before.
+     *   POLICY   `ends_at` + `BOOKING_SETTLE_GRACE_MINUTES` (0): trunk's ruling
+     *            that the stamped no-show rule applies "when the booked slot
+     *            ends". It is the same column, so the worker, the partial index,
+     *            `findApplicableHold` and deposit health all keep working on it.
      */
     const noShowReturnDueAt = new Date(
-      endsAt.getTime() + s.noShowReturnMinutes * 60_000,
+      endsAt.getTime() +
+        (policy ? env.bookingSettleGraceMinutes : s.noShowReturnMinutes) * 60_000,
     );
 
     const [row] = await tx
@@ -558,6 +702,16 @@ export async function createBooking(
         source: 'app',
         holdTransactionId: txId,
         noShowReturnDueAt,
+        ...(policy
+          ? {
+              policyId: policy.id,
+              policyVersion: policy.version,
+              policyNoShow: policy.noShowRule,
+              policyCancellationRules: policy.cancellationRules,
+              policyTextEn: policy.textEn,
+              policyTextAr: policy.textAr,
+            }
+          : {}),
         /**
          * `pending` when there is a calendar to write to, `not_applicable` when
          * there is not. Set here rather than after the write-back so a crash
@@ -602,6 +756,8 @@ export async function createBooking(
         startsAt: startsAt.toISOString(),
         noShowReturnDueAt: noShowReturnDueAt.toISOString(),
         branchAssumed: !branch.established,
+        policyId: policy?.id ?? null,
+        policyVersion: policy?.version ?? null,
       },
       ipAddress: ctx.ipAddress ?? null,
       userAgent: ctx.userAgent ?? null,
@@ -658,32 +814,56 @@ export async function createBooking(
 // ------------------------------------------------------------- the return --
 
 /**
- * Give the deposit back. Shared by cancel and by the no-show job.
+ * Settle a held deposit: some of it back to her wallet, the rest to the salon.
+ * Shared by every exit that is not a charge — her cancel, the salon's cancel, a
+ * manual no-show and the no-show job. `returnDeposit` below is the full-return
+ * case and is what every LEGACY path and the salon's cancel call.
  *
  * Called with the booking row ALREADY LOCKED and its status already checked by
- * the caller — this writes, it does not decide.
+ * the caller — this writes, it does not decide. The SPLIT is decided by the
+ * caller from the booking's stamped policy (services/bookingPolicy.ts) and is
+ * checked here only for arithmetic: `returned + kept = deposit`, both
+ * non-negative integers, or nothing is written.
  *
  * THE LOCK ORDER IS MEMBER, THEN BOOKING, EVERYWHERE. It is written down here
  * because it is not local: `performCharge` takes the member row `FOR UPDATE` as
  * its first statement and only then reaches for the held booking, and a cancel
  * or a no-show return that took them the other way round would deadlock against
  * a charge on the same customer — two transactions each holding what the other
- * wants, resolved by Postgres killing one of them at random. Both callers here
- * therefore read the booking UNLOCKED to learn whose it is, lock the member, and
- * only then lock the booking and re-check its status. The re-check is what makes
+ * wants, resolved by Postgres killing one of them at random. Every caller here
+ * therefore reads the booking UNLOCKED to learn whose it is, locks the member, and
+ * only then locks the booking and re-checks its status. The re-check is what makes
  * the unlocked first read safe.
+ *
+ * WHAT IT WRITES (migration 0066 § 3):
+ *
+ *   returned > 0   a `deposit_return` for `returned`: `deposit_held` DEBIT +
+ *                  `member_wallet` CREDIT, her balance up by `returned`, and a
+ *                  receipt. Wallet credit, never cash or a card (#5).
+ *   kept > 0       a `deposit_forfeit` for `kept`: `deposit_held` DEBIT +
+ *                  `salon_revenue` CREDIT, `amount_fils = 0` because her wallet
+ *                  does not move, and NO receipt — there is no template for it
+ *                  (whatsapp-templates.md), which is reported, not improvised.
+ *   the booking    `settled_transaction_id` = the return if there is one, else
+ *                  the forfeit; `forfeit_transaction_id`; the split. In ONE
+ *                  conditional UPDATE, so a booking settles exactly once.
+ *
+ * `deposit_held` is debited by exactly the deposit across the two, so escrow
+ * nets to zero for the booking whatever the split.
  */
-export async function returnDeposit(
+export async function settleDeposit(
   tx: Executor,
   params: {
     row: BookingRow;
     memberRow: typeof member.$inferSelect;
     reason: 'cancelled' | 'no_show';
+    returnedFils: Fils;
+    keptFils: Fils;
     principal: Principal | null;
     now: Date;
     note: string;
     /**
-     * OPTIONAL, and null on the two callers that shipped. The worker has no
+     * OPTIONAL, and null on the two callers that shipped first. The worker has no
      * request to take them from, and the customer's cancel never passed them.
      * `markNoShow` does: a staff member moving money out of a salon's hold is the
      * same class of row as a console adjustment, which records both — and "from
@@ -692,41 +872,43 @@ export async function returnDeposit(
     ipAddress?: string | null;
     userAgent?: string | null;
   },
-): Promise<{ transactionId: string; balanceAfterFils: Fils }> {
+): Promise<{
+  /** The `deposit_return`, or null when nothing came back. */
+  transactionId: string | null;
+  /** The `deposit_forfeit`, or null when nothing was kept. */
+  forfeitTransactionId: string | null;
+  /** The one the booking's `settled_transaction_id` now names. */
+  settledTransactionId: string;
+  balanceAfterFils: Fils;
+  returnedFils: Fils;
+  keptFils: Fils;
+}> {
   const { row, memberRow, now } = params;
-  const amount = fils(row.depositFils);
-  const balanceAfter = add(fils(memberRow.balanceFils), amount);
-  const txId = await nextTransactionId(tx);
-
-  await tx
-    .update(member)
-    .set({ balanceFils: balanceAfter, updatedAt: now })
-    .where(eq(member.id, memberRow.id));
+  const deposit = fils(row.depositFils);
+  const returned = fils(params.returnedFils);
+  const kept = fils(params.keptFils);
+  if (returned < 0 || kept < 0 || add(returned, kept) !== deposit) {
+    throw new Error(
+      `deposit split ${returned} + ${kept} does not equal the ${deposit} held on ${row.id}`,
+    );
+  }
+  if (row.holdTransactionId === null) {
+    throw new Error(`settleDeposit called on ${row.id}, which holds no deposit`);
+  }
 
   const [held] = await tx
     .select({ branchId: transaction.branchId, branchAssumed: transaction.branchAssumed })
     .from(transaction)
-    .where(eq(transaction.id, (row as unknown as { holdTransactionId: string }).holdTransactionId))
+    .where(eq(transaction.id, row.holdTransactionId))
     .limit(1);
+  /**
+   * Inherited from the hold, not re-derived — the same reasoning a void inherits
+   * it from the charge it reverses. Claiming `false` here would launder a guessed
+   * branch into an established one on the way back.
+   */
+  const branchId = held?.branchId ?? row.branchId;
+  const branchAssumed = held?.branchAssumed ?? false;
 
-  await tx.insert(transaction).values({
-    id: txId,
-    memberId: memberRow.id,
-    salonId: memberRow.salonId,
-    branchId: held?.branchId ?? row.branchId,
-    /**
-     * Inherited from the hold, not re-derived — the same reasoning a void
-     * inherits it from the charge it reverses. Claiming `false` here would
-     * launder a guessed branch into an established one on the way back.
-     */
-    branchAssumed: held?.branchAssumed ?? false,
-    kind: 'deposit_return',
-    // Positive: the sign CHECK says a deposit_return credits.
-    amountFils: amount,
-    method: 'wallet',
-    status: 'settled',
-    reference: `AVO-DPR-${txId.slice(3)}`,
-    note: params.note,
     /**
      * WHO AT THE SALON DID THIS, and null when the answer is "nobody".
      *
@@ -766,21 +948,92 @@ export async function returnDeposit(
      * the bare id, so a future caller cannot quietly launder a non-staff id into
      * a staff column.
      */
-    createdByStaffId: params.principal?.kind === 'staff' ? params.principal.id : null,
-    createdAt: now,
-    settledAt: now,
-  });
+  const createdByStaffId = params.principal?.kind === 'staff' ? params.principal.id : null;
 
-  // The mirror of the hold: the liability is discharged back into the wallet.
-  await tx.insert(ledgerEntry).values(
-    depositReleasedPosting({
-      transactionId: txId,
-      salonId: memberRow.salonId,
+  let balanceAfter = fils(memberRow.balanceFils);
+  let returnTxId: string | null = null;
+  let forfeitTxId: string | null = null;
+
+  // ------------------------------------------------------- back to her wallet --
+  if (returned > 0) {
+    returnTxId = await nextTransactionId(tx);
+    balanceAfter = add(balanceAfter, returned);
+
+    await tx
+      .update(member)
+      .set({ balanceFils: balanceAfter, updatedAt: now })
+      .where(eq(member.id, memberRow.id));
+
+    await tx.insert(transaction).values({
+      id: returnTxId,
       memberId: memberRow.id,
-      amountFils: amount,
-      balanceAfterFils: balanceAfter,
-    }),
-  );
+      salonId: memberRow.salonId,
+      branchId,
+      branchAssumed,
+      kind: 'deposit_return',
+      // Positive: the sign CHECK says a deposit_return credits.
+      amountFils: returned,
+      method: 'wallet',
+      status: 'settled',
+      reference: `AVO-DPR-${returnTxId.slice(3)}`,
+      note: params.note,
+      createdByStaffId,
+      createdAt: now,
+      settledAt: now,
+    });
+
+    // The mirror of the hold: the liability is discharged back into the wallet.
+    await tx.insert(ledgerEntry).values(
+      depositReleasedPosting({
+        transactionId: returnTxId,
+        salonId: memberRow.salonId,
+        memberId: memberRow.id,
+        amountFils: returned,
+        balanceAfterFils: balanceAfter,
+      }),
+    );
+  }
+
+  // ----------------------------------------------------------- to the salon --
+  if (kept > 0) {
+    forfeitTxId = await nextTransactionId(tx);
+
+    await tx.insert(transaction).values({
+      id: forfeitTxId,
+      memberId: memberRow.id,
+      salonId: memberRow.salonId,
+      branchId,
+      branchAssumed,
+      kind: 'deposit_forfeit',
+      /**
+       * ZERO, and `transaction_amount_sign_matches_kind` requires exactly zero.
+       * `amount_fils` is her WALLET delta and her wallet does not move: the money
+       * left it when the deposit was held. The magnitude is the ledger's
+       * `deposit_held` debit below and the booking's `settled_kept_fils`.
+       */
+      amountFils: fils(0),
+      method: 'wallet',
+      status: 'settled',
+      reference: `AVO-DPF-${forfeitTxId.slice(3)}`,
+      note: params.note,
+      createdByStaffId,
+      createdAt: now,
+      settledAt: now,
+    });
+
+    await tx.insert(ledgerEntry).values(
+      depositForfeitedPosting({
+        transactionId: forfeitTxId,
+        salonId: memberRow.salonId,
+        amountFils: kept,
+      }),
+    );
+  }
+
+  // `deposit > 0` on every row with a hold (`booking_deposit_matches_hold`), so
+  // at least one of the two was written.
+  const settledTxId = returnTxId ?? forfeitTxId;
+  if (settledTxId === null) throw new Error(`nothing settled the deposit on ${row.id}`);
 
   /**
    * THE TRANSITION IS THE WHERE CLAUSE, and the row count decides.
@@ -813,21 +1066,16 @@ export async function returnDeposit(
    */
   const [settled] = await tx
     .update(booking)
-    .set(
-      params.reason === 'cancelled'
-        ? {
-            status: 'cancelled',
-            settledTransactionId: txId,
-            cancelledAt: now,
-            updatedAt: now,
-          }
-        : {
-            status: 'no_show_returned',
-            settledTransactionId: txId,
-            returnedAt: now,
-            updatedAt: now,
-          },
-    )
+    .set({
+      ...(params.reason === 'cancelled'
+        ? { status: 'cancelled' as const, cancelledAt: now }
+        : { status: 'no_show_returned' as const, returnedAt: now }),
+      settledTransactionId: settledTxId,
+      forfeitTransactionId: forfeitTxId,
+      settledReturnedFils: returned,
+      settledKeptFils: kept,
+      updatedAt: now,
+    })
     .where(and(eq(booking.id, row.id), eq(booking.status, 'deposit_held')))
     .returning({ id: booking.id });
 
@@ -839,20 +1087,41 @@ export async function returnDeposit(
     );
   }
 
-  await queueReceipts(tx, memberRow, txId, {
-    kind: 'deposit_return',
-    transactionId: txId,
-    bookingId: row.id,
-    amountFils: amount,
-    reason: params.reason,
-    balanceAfterFils: balanceAfter,
-  });
+  if (returnTxId !== null) {
+    await queueReceipts(tx, memberRow, returnTxId, {
+      kind: 'deposit_return',
+      transactionId: returnTxId,
+      bookingId: row.id,
+      amountFils: returned,
+      reason: params.reason,
+      balanceAfterFils: balanceAfter,
+    });
+  }
+
+  /**
+   * THE ACTION NAMES THE OUTCOME. A full return keeps the two strings it has
+   * always had, so every reader of the log (and every spec) that knows them is
+   * unchanged; the two new outcomes get their own.
+   */
+  const verb = params.reason === 'cancelled' ? 'cancelled' : 'no-show';
+  const action =
+    kept === 0
+      ? `Deposit returned · ${verb}`
+      : returned === 0
+        ? `Deposit kept · ${verb}`
+        : `Deposit partly returned · ${verb}`;
+  const detail =
+    kept === 0
+      ? `${kd(returned)} KD returned to ${memberRow.name} · ${params.note}`
+      : returned === 0
+        ? `${kd(kept)} KD kept by the salon · ${memberRow.name} · ${params.note}`
+        : `${kd(returned)} KD returned to ${memberRow.name}, ${kd(kept)} KD kept by the salon · ${params.note}`;
 
   await writeAudit(tx, params.principal, {
     salonId: memberRow.salonId,
     kind: 'money',
-    action: params.reason === 'cancelled' ? 'Deposit returned · cancelled' : 'Deposit returned · no-show',
-    detail: `${kd(amount)} KD returned to ${memberRow.name} · ${params.note}`,
+    action,
+    detail,
     /**
      * DERIVED FROM THE ACTOR, NOT FROM THE REASON — and the two agreed only until
      * a `no_show` could have an actor.
@@ -880,50 +1149,148 @@ export async function returnDeposit(
             : 'merchant',
     subjectType: 'booking',
     subjectId: row.id,
-    amountFils: amount,
-    metadata: { bookingId: row.id, transactionId: txId, reason: params.reason },
+    /** Her WALLET movement, the same convention as the hold's `-deposit`. */
+    amountFils: returned,
+    metadata: {
+      bookingId: row.id,
+      transactionId: returnTxId,
+      forfeitTransactionId: forfeitTxId,
+      reason: params.reason,
+      returnedFils: returned,
+      keptFils: kept,
+      policyVersion: row.policyVersion,
+    },
     ipAddress: params.ipAddress ?? null,
     userAgent: params.userAgent ?? null,
   });
 
-  return { transactionId: txId, balanceAfterFils: balanceAfter };
+  return {
+    transactionId: returnTxId,
+    forfeitTransactionId: forfeitTxId,
+    settledTransactionId: settledTxId,
+    balanceAfterFils: balanceAfter,
+    returnedFils: returned,
+    keptFils: kept,
+  };
+}
+
+/**
+ * Give the WHOLE deposit back — the only exit there was before 0066, and still
+ * the one every LEGACY booking, a `return` policy's no-show and every salon
+ * cancel takes. A thin caller of `settleDeposit`, so there is one money path and
+ * not two.
+ */
+export async function returnDeposit(
+  tx: Executor,
+  params: {
+    row: BookingRow;
+    memberRow: typeof member.$inferSelect;
+    reason: 'cancelled' | 'no_show';
+    principal: Principal | null;
+    now: Date;
+    note: string;
+    ipAddress?: string | null;
+    userAgent?: string | null;
+  },
+): Promise<{ transactionId: string; balanceAfterFils: Fils }> {
+  const settled = await settleDeposit(tx, {
+    ...params,
+    returnedFils: fils(params.row.depositFils),
+    keptFils: fils(0),
+  });
+  // Non-null: a full return of a positive deposit always writes the return.
+  return { transactionId: settled.settledTransactionId, balanceAfterFils: settled.balanceAfterFils };
 }
 
 // ------------------------------------------------------ DELETE /bookings/{id} --
 
+/** The row as it stands now, for a response that must show where the money went. */
+async function reloadBooking(tx: Executor, id: string): Promise<BookingRow> {
+  const [row] = await (tx as Db).select().from(booking).where(eq(booking.id, id)).limit(1);
+  if (!row) throw new Error(`booking ${id} vanished inside its own transaction`);
+  return row as BookingRow;
+}
+
+/** What a cancel did. The same shape for a legacy booking and a policy one. */
+export interface CancelResult {
+  booking: ReturnType<typeof serialiseBooking>;
+  /** What came back to her wallet. Kept under this name for the pre-0066 client. */
+  refundedFils: number;
+  /** What the salon kept. 0 on a legacy booking. */
+  keptFils: number;
+  /** The percent applied. 100 on a legacy booking. */
+  returnPercent: number;
+  /** The cut-off rule that matched, or null (legacy, or later than every rule). */
+  rule: CancellationRule | null;
+  balanceAfterFils: number;
+  /** The `deposit_return`, or null when nothing came back (a 0% cancellation). */
+  transactionId: string | null;
+  /** The `deposit_forfeit`, or null when nothing was kept. */
+  forfeitTransactionId: string | null;
+}
+
 /**
- * Cancel, and return the deposit.
+ * She cancels her own appointment. What comes back is decided by the policy the
+ * booking was STAMPED with — never the salon's current one.
  *
- * NO IDEMPOTENCY KEY, and that is a decision rather than an omission.
- * Non-negotiable #4 asks for a key on every money-moving POST because a POST
- * creates a new thing each time it succeeds — two charges, two top-ups. A cancel
- * names a resource that has exactly one live state, and the transition out of
- * `deposit_held` happens under `FOR UPDATE` inside this transaction. A second
- * cancel of the same booking cannot double-refund: it blocks on the row lock,
- * re-reads a status that is no longer `deposit_held`, and is answered
- * `already_cancelled`. That is the same shape as `already_voided` in
- * routes/charges.ts, and it is stronger than a key because it holds for two
- * DIFFERENT keys as well as for one repeated.
+ * ===========================================================================
+ * TWO BOOKINGS, TWO RULES — services/bookingPolicy.ts § LEGACY
+ * ===========================================================================
+ *   LEGACY   the full deposit back, refused inside the last hour
+ *            (`change_window_closed`), exactly as before 0066.
+ *   POLICY   the stamped cut-off rules decide the split, rounded DOWN to the fil;
+ *            the salon keeps the rest, the remainder fil included.
+ *            No one-hour refusal: "later than every threshold returns 0%" is the
+ *            ruling, so a late cancel is ALLOWED and returns what the rules say.
+ *            Refused once the appointment has started (`appointment_started`):
+ *            from then on it is attendance, and the no-show rule decides.
+ *
+ * ONE TRANSACTION — #3's shape. The key claim, the return, the forfeit, both
+ * ledger pairs, the status transition, the receipt and the audit row commit
+ * together or not at all.
+ *
+ * ===========================================================================
+ * THE IDEMPOTENCY KEY — REQUIRED ON A POLICY BOOKING, HONOURED ON A LEGACY ONE
+ * ===========================================================================
+ * This function used to argue, correctly, that no key was needed: the transition
+ * out of `deposit_held` under `FOR UPDATE` cannot refund twice, for one key or two.
+ * That still holds and is still the guarantee that money moves once. What changed
+ * is what a retry needs to be TOLD. Before 0066 every cancel returned the whole
+ * deposit, so a retry answered `already_cancelled` lost nothing. Now a cancel can
+ * return 50% or nothing, and a client that lost the response must learn how much
+ * came back and how much the salon kept — which `already_cancelled` cannot say
+ * and a replayed response can. So non-negotiable #4 applies on a policy booking:
+ * without a key it is refused with 400 `idempotency_key_required` before anything
+ * is read for update.
+ *
+ * A LEGACY booking keeps the keyless contract the wallet shipped against, and
+ * uses a key if one is sent. Requiring it there would break every cancel the
+ * current wallet makes, for no change in what the answer carries.
  */
 export async function cancelBooking(
   db: Db,
   bookingIdParam: string,
-  ctx: { principal: MemberPrincipal; ipAddress?: string | null; userAgent?: string | null },
-): Promise<{
-  booking: ReturnType<typeof serialiseBooking>;
-  refundedFils: number;
-  balanceAfterFils: number;
-  transactionId: string;
-}> {
+  ctx: {
+    principal: MemberPrincipal;
+    /** Present when the request carried an Idempotency-Key. */
+    idempotency?: BookingIdempotency | null;
+    ipAddress?: string | null;
+    userAgent?: string | null;
+  },
+): Promise<CancelResult> {
   return db.transaction(async (tx) => {
+    // The key FIRST, inside the transaction that carries the effect, when there is
+    // one — `markNoShow`'s ordering. A replay blocks on the unique index here.
+    const keyId = ctx.idempotency ? await claimKey(tx, ctx.idempotency) : null;
+
     /**
-     * UNLOCKED, to learn whose booking this is. See `returnDeposit`'s header for
+     * UNLOCKED, to learn whose booking this is. See `settleDeposit`'s header for
      * why the member row has to be locked first: the global order is member, then
      * booking, and a cancel that locked the booking first would deadlock against
      * a charge on the same customer.
      */
     const [probe] = await tx
-      .select({ memberId: booking.memberId })
+      .select({ memberId: booking.memberId, policyId: booking.policyId })
       .from(booking)
       .where(and(eq(booking.id, bookingIdParam), eq(booking.memberId, ctx.principal.id)))
       .limit(1);
@@ -935,6 +1302,10 @@ export async function cancelBooking(
     if (!probe?.memberId) throw notFound('unknown_booking', 'No such appointment.');
     const probeMemberId = probe.memberId;
 
+    // #4 on a policy booking. The stamp cannot appear or vanish later (nothing
+    // writes `policy_id` after the insert), so the unlocked read decides it.
+    if (probe.policyId !== null && keyId === null) throw idempotencyKeyRequired();
+
     const [m] = await tx
       .select()
       .from(member)
@@ -945,44 +1316,82 @@ export async function cancelBooking(
 
     // NOW the booking, locked, and its status re-read under that lock. This is
     // what makes the unlocked probe above harmless.
-    const [row] = await tx
+    const [locked] = await tx
       .select()
       .from(booking)
       .where(eq(booking.id, bookingIdParam))
       .for('update')
       .limit(1);
-    if (!row) throw notFound('unknown_booking', 'No such appointment.');
+    if (!locked) throw notFound('unknown_booking', 'No such appointment.');
+    const row = locked as BookingRow;
 
     if (row.status !== 'deposit_held') {
+      const kept = settlementOf(row)?.keptFils ?? 0;
       throw conflict(
         row.status === 'cancelled' ? 'already_cancelled' : 'not_cancellable',
         row.status === 'cancelled'
-          ? 'That appointment was already cancelled and the deposit is back in your wallet.'
+          ? kept > 0
+            ? 'That appointment was already cancelled.'
+            : 'That appointment was already cancelled and the deposit is back in your wallet.'
           : row.status === 'completed'
             ? 'That appointment has already happened.'
-            : 'That appointment was missed and the deposit has already been returned.',
+            : kept > 0
+              ? 'That appointment was missed.'
+              : 'That appointment was missed and the deposit has already been returned.',
         { status: row.status },
       );
     }
 
     const now = new Date();
-    assertChangeWindowOpen(row, now, 'cancelled');
+    const deposit = fils(row.depositFils);
+    const stamped = stampedPolicyOf(row);
 
-    const returned = await returnDeposit(tx, {
-      row: row as BookingRow,
+    let split: { returnedFils: Fils; keptFils: Fils; returnPercent: number; rule: CancellationRule | null };
+    if (stamped === null) {
+      assertChangeWindowOpen(row, now, 'cancelled');
+      split = { returnedFils: deposit, keptFils: fils(0), returnPercent: 100, rule: null };
+    } else {
+      if (now.getTime() >= row.startsAt.getTime()) {
+        throw conflict(
+          'appointment_started',
+          'That appointment has already started, so it can no longer be cancelled.',
+          { startsAt: row.startsAt.toISOString() },
+        );
+      }
+      split = cancellationOutcome(stamped.cancellation, row.startsAt, now, deposit);
+    }
+
+    const settled = await settleDeposit(tx, {
+      row,
       memberRow: m,
       reason: 'cancelled',
+      returnedFils: split.returnedFils,
+      keptFils: split.keptFils,
       principal: ctx.principal,
       now,
-      note: 'Cancelled by the customer',
+      note:
+        stamped === null
+          ? 'Cancelled by the customer'
+          : `Cancelled by the customer · ${split.returnPercent}% returned under booking policy v${stamped.version}`,
+      ipAddress: ctx.ipAddress ?? null,
+      userAgent: ctx.userAgent ?? null,
     });
 
-    return {
-      booking: { ...serialiseBooking(row as BookingRow), status: 'cancelled' as const },
-      refundedFils: row.depositFils,
-      balanceAfterFils: returned.balanceAfterFils,
-      transactionId: returned.transactionId,
+    const result: CancelResult = {
+      booking: serialiseBooking(await reloadBooking(tx, row.id)),
+      refundedFils: settled.returnedFils,
+      keptFils: settled.keptFils,
+      returnPercent: split.returnPercent,
+      rule: split.rule,
+      balanceAfterFils: settled.balanceAfterFils,
+      transactionId: settled.transactionId,
+      forfeitTransactionId: settled.forfeitTransactionId,
     };
+
+    if (keyId !== null) {
+      await completeKey(tx, keyId, { status: 200, body: result }, settled.settledTransactionId);
+    }
+    return result;
   });
 }
 
@@ -1138,7 +1547,12 @@ export async function markNoShow(
    * own responses.
    */
   balanceAfterFils: number | null;
+  /** The `deposit_return`, or null when nothing came back (`keep`, or no deposit). */
   transactionId: string | null;
+  /** What the salon kept under a `keep` policy. 0 otherwise. Migration 0066. */
+  keptFils: number;
+  /** The `deposit_forfeit`, or null when nothing was kept. */
+  forfeitTransactionId: string | null;
 }> {
   return db.transaction(async (tx) => {
     /**
@@ -1252,16 +1666,23 @@ export async function markNoShow(
        * describes for the pills. The deposit half of each sentence is now
        * conditional on there having been one.
        */
-      const hadDeposit = row.holdTransactionId !== null;
+      /**
+       * AND SINCE 0066, NOT A RETURN THAT WAS A FORFEIT. "The deposit has been
+       * returned" over a `keep` no-show, or "back in her wallet" over a late
+       * cancellation that returned nothing, is the same false statement one layer
+       * up: the sentence names a return only when the settlement was one.
+       */
+      const returnedAll =
+        row.holdTransactionId !== null && (settlementOf(row as BookingRow)?.keptFils ?? 0) === 0;
       throw conflict(
         row.status === 'no_show_returned' ? 'already_no_show' : 'not_markable',
         row.status === 'no_show_returned'
-          ? hadDeposit
+          ? returnedAll
             ? 'That appointment is already marked as a no-show and the deposit has been returned.'
             : 'That appointment is already marked as a no-show.'
           : row.status === 'completed'
             ? 'That appointment was charged, so it cannot be marked as a no-show.'
-            : hadDeposit
+            : returnedAll
               ? 'That appointment was cancelled, and the deposit is already back in her wallet.'
               : 'That appointment was cancelled.',
         { status: row.status },
@@ -1280,29 +1701,45 @@ export async function markNoShow(
 
     // -------------------------------------------- the deposit-bearing one --
     if (m) {
-      const returned = await returnDeposit(tx, {
+      /**
+       * THE STAMPED NO-SHOW RULE DECIDES (migration 0066). `keep` forfeits the
+       * whole deposit to the salon, `return` gives it all back; a LEGACY booking
+       * returns it all, as it always did. The worker applies the same function to
+       * the same stamp, so a mark and a slot-end settle cannot disagree about the
+       * outcome — only about who got there first, and the status transition
+       * under the lock means exactly one of them does.
+       */
+      const stamped = stampedPolicyOf(row as BookingRow);
+      const split = stamped
+        ? noShowOutcome(stamped.noShow, fils(row.depositFils))
+        : { returnedFils: fils(row.depositFils), keptFils: fils(0) };
+
+      const settled = await settleDeposit(tx, {
         row: row as BookingRow,
         memberRow: m,
         reason: 'no_show',
+        ...split,
         // A REAL ACTOR, which is the whole difference from the worker's call.
         principal: ctx.principal,
         now,
-        note: 'No-show · marked on the dashboard',
+        note:
+          split.keptFils > 0
+            ? `No-show · marked on the dashboard · deposit kept under booking policy v${stamped?.version}`
+            : 'No-show · marked on the dashboard',
         ipAddress: ctx.ipAddress ?? null,
         userAgent: ctx.userAgent ?? null,
       });
 
       const result = {
-        booking: {
-          ...serialiseBooking(row as BookingRow),
-          status: 'no_show_returned' as const,
-        },
-        refundedFils: row.depositFils,
-        balanceAfterFils: returned.balanceAfterFils,
-        transactionId: returned.transactionId,
+        booking: serialiseBooking(await reloadBooking(tx, row.id)),
+        refundedFils: settled.returnedFils as number,
+        keptFils: settled.keptFils as number,
+        balanceAfterFils: settled.balanceAfterFils as number,
+        transactionId: settled.transactionId,
+        forfeitTransactionId: settled.forfeitTransactionId,
       };
 
-      await completeKey(tx, keyId, { status: 200, body: result }, returned.transactionId);
+      await completeKey(tx, keyId, { status: 200, body: result }, settled.settledTransactionId);
       return result;
     }
 
@@ -1373,8 +1810,10 @@ export async function markNoShow(
     const result = {
       booking: serialiseBooking(marked as BookingRow),
       refundedFils: 0,
+      keptFils: 0,
       balanceAfterFils: null,
       transactionId: null,
+      forfeitTransactionId: null,
     };
 
     /** No transaction to bind the key to, because there is no transaction. */
@@ -1474,7 +1913,7 @@ export async function rescheduleBooking(
     }
 
     const endsAt = new Date(slot.endsAt);
-    const noShowReturnDueAt = new Date(endsAt.getTime() + s.noShowReturnMinutes * 60_000);
+    const noShowReturnDueAt = automaticSettleAt(row as BookingRow, endsAt, s.noShowReturnMinutes);
 
     const [updated] = await tx
       .update(booking)
@@ -1948,7 +2387,7 @@ export async function rescheduleByMerchant(
      * that setting, which is a different edit than the one she asked for.
      */
     const endsAt = new Date(startsAt.getTime() + row.durationMin * 60_000);
-    const noShowReturnDueAt = new Date(endsAt.getTime() + s.noShowReturnMinutes * 60_000);
+    const noShowReturnDueAt = automaticSettleAt(row as BookingRow, endsAt, s.noShowReturnMinutes);
     const now = new Date();
 
     const [updated] = await tx
@@ -2253,6 +2692,12 @@ export async function cancelByMerchant(
           bookingId: row.id,
         });
       }
+      /**
+       * THE WHOLE DEPOSIT, WHATEVER THE POLICY SAYS. Trunk's ruling: when the salon
+       * cancels, she did nothing wrong. So the stamped cancellation rules are not
+       * read here at all — they describe HER cancelling — and this is the same
+       * full return the path made before 0066.
+       */
       const returned = await returnDeposit(tx, {
         row: row as BookingRow,
         memberRow,
@@ -2264,7 +2709,8 @@ export async function cancelByMerchant(
         userAgent: ctx.userAgent ?? null,
       });
       return {
-        booking: { ...serialiseBooking(row as BookingRow), status: 'cancelled' as const },
+        // Reloaded, so `settlement` says the whole deposit came back.
+        booking: serialiseBooking(await reloadBooking(tx, row.id)),
         refundedFils: row.depositFils,
         balanceAfterFils: returned.balanceAfterFils,
         transactionId: returned.transactionId,
