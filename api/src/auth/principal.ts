@@ -63,6 +63,13 @@ export interface StaffPerms {
    *   DELETE /salons/{id}/branches/{bid}        and its closure preview
    *   PATCH  /v1/salons/{id}/social/{linkId}    the salon's public handles
    *   GET    /salons/{id}/loyalty               SEE the ladder — read-only
+   *   POST / PATCH / DELETE /salons/{id}/services[/{sid}]
+   *                                             the service menu and its prices
+   *                                             (migration 0061). Added, not
+   *                                             moved: a price is Settings for the
+   *                                             reason the deposit is — it sets what
+   *                                             the next charge costs. Assigning
+   *                                             who does a service is `team`.
    *
    * WHAT IT LOST is the write: `PUT /salons/{id}/loyalty` now takes the
    * console's `sections.salons`, and the five loyalty fields left

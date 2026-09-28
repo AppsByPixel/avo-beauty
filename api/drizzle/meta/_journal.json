@@ -428,6 +428,27 @@
       "when": 1790224400000,
       "tag": "0060_she_chooses_where_to_collect",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790310800000,
+      "tag": "0061_who_does_which_service",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790397200000,
+      "tag": "0062_everyone_still_does_everything",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1790483600000,
+      "tag": "0063_a_branch_keeps_its_own_hours",
+      "breakpoints": true
     }
   ]
 }

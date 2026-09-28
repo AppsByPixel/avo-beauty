@@ -32,6 +32,7 @@ import { registerChargeRoutes } from './routes/charges';
 import { registerDeviceRoutes } from './routes/devices';
 import { registerTopupRoutes } from './routes/topups';
 import { registerSalonRoutes } from './routes/salons';
+import { registerServiceRoutes } from './routes/services';
 import { registerArtistRoutes } from './routes/artists';
 import { registerBookingRoutes } from './routes/bookings';
 import { registerDepositRoutes } from './routes/deposits';
@@ -177,6 +178,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerChargeRoutes(app);
   await registerTopupRoutes(app);
   await registerSalonRoutes(app);
+  await registerServiceRoutes(app);
   await registerArtistRoutes(app);
   await registerBookingRoutes(app);
   await registerDepositRoutes(app);

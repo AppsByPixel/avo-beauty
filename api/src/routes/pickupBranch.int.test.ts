@@ -231,7 +231,21 @@ suite('she chooses which branch to collect from', () => {
     expect((await orderRow(txId)).pickup_branch_id).toBe(SAL);
 
     // The answer she is given at checkout names it.
-    expect(placed.body.pickupBranch).toEqual({ id: SAL, name: 'Salmiya', nameAr: expect.any(String), closed: false });
+    // Exact, so a field added to the pickup shape has to be named here. Since
+    // migration 0063 that includes WHEN she can collect and in which zone —
+    // SAL-AMARA's Salmiya has no override, so it is the salon's hours.
+    expect(placed.body.pickupBranch).toEqual({
+      id: SAL,
+      name: 'Salmiya',
+      nameAr: expect.any(String),
+      closed: false,
+      businessHours: {
+        morning: [expect.any(String), expect.any(String)],
+        evening: [expect.any(String), expect.any(String)],
+      },
+      businessHoursSource: 'salon',
+      timezone: 'Asia/Kuwait',
+    });
 
     // The board — where the salon has to act on it.
     const onBoard = (await board()).find((o) => o.transactionId === txId);

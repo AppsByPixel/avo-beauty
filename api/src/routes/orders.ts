@@ -44,7 +44,8 @@ import {
   type OrderStatus,
 } from '../db/schema/delivery';
 import { member } from '../db/schema/member';
-import { branch } from '../db/schema/salon';
+import { branch, salon } from '../db/schema/salon';
+import { resolveBranchHours } from '../services/branchHours';
 import { writeAudit } from '../services/audit';
 import type { PickupBranchView } from '../services/order';
 
@@ -162,13 +163,26 @@ const pickupBranchColumns = {
   name: branch.name,
   nameAr: branch.nameAr,
   closedAt: branch.closedAt,
+  /** Migration 0063 — the override, NULL for "the salon's". */
+  branchHours: branch.businessHours,
+  /**
+   * The salon's hours and zone, from `pickupSalonJoin` — the fallback for a
+   * branch with no override, and the zone every hours field is read in.
+   */
+  salonHours: salon.businessHours,
+  timezone: salon.timezone,
 };
 type PickupBranchJoin = {
   id: string | null;
   name: string | null;
   nameAr: string | null;
   closedAt: Date | null;
+  branchHours: (typeof branch.$inferSelect)['businessHours'] | null;
+  salonHours: (typeof salon.$inferSelect)['businessHours'] | null;
+  timezone: string | null;
 };
+/** The salon the pickup branch belongs to — the order's own salon, by the composite FK. */
+const pickupSalonJoin = eq(salon.id, branch.salonId);
 const pickupBranchJoin = and(
   eq(branch.id, shopOrder.pickupBranchId),
   eq(branch.salonId, shopOrder.salonId),
@@ -179,12 +193,25 @@ function pickupBranchView(
   pickup: PickupBranchJoin | null,
 ): PickupBranchView | null {
   if (row.fulfilment !== 'pickup' || !row.pickupBranchId) return null;
-  if (!pickup || pickup.id === null || pickup.name === null) {
+  if (
+    !pickup ||
+    pickup.id === null ||
+    pickup.name === null ||
+    pickup.salonHours === null ||
+    pickup.timezone === null
+  ) {
     // Unreachable under the composite FK. Thrown rather than served as null,
     // because null means "not chosen" and this would be a chosen branch lost.
     throw new Error(`shop_order ${row.transactionId} names pickup branch ${row.pickupBranchId}, which did not join`);
   }
-  return { id: pickup.id, name: pickup.name, nameAr: pickup.nameAr, closed: pickup.closedAt !== null };
+  return {
+    id: pickup.id,
+    name: pickup.name,
+    nameAr: pickup.nameAr,
+    closed: pickup.closedAt !== null,
+    ...resolveBranchHours(pickup.branchHours, pickup.salonHours),
+    timezone: pickup.timezone,
+  };
 }
 
 /** A cart's ceiling. Wider than any drawn catalog, narrow enough to bound a body. */
@@ -372,6 +399,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
       .select({ o: shopOrder, pickup: pickupBranchColumns })
       .from(shopOrder)
       .leftJoin(branch, pickupBranchJoin)
+      .leftJoin(salon, pickupSalonJoin)
       .where(eq(shopOrder.memberId, p.id))
       .orderBy(desc(shopOrder.createdAt))
       .limit(ORDERS_PAGE);
@@ -448,6 +476,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
          * `perms.shop` for the salon, as it was before 0060.
          */
         .leftJoin(branch, pickupBranchJoin)
+        .leftJoin(salon, pickupSalonJoin)
         .where(
           and(
             eq(shopOrder.salonId, p.salonId),
@@ -580,6 +609,7 @@ export async function registerOrderRoutes(app: FastifyInstance): Promise<void> {
         ? await db
             .select(pickupBranchColumns)
             .from(branch)
+            .innerJoin(salon, pickupSalonJoin)
             .where(and(eq(branch.id, row.pickupBranchId), eq(branch.salonId, row.salonId)))
             .limit(1)
         : [];

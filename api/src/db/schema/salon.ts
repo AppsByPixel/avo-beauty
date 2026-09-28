@@ -27,7 +27,7 @@ export const salonPlan = pgEnum('salon_plan', ['starter', 'growth', 'pro']);
 export const loyaltyMode = pgEnum('loyalty_mode', ['tiers', 'stamps']);
 export const tierName = pgEnum('tier_name', ['bronze', 'silver', 'gold', 'black']);
 
-type BusinessHours = z.infer<typeof BusinessHoursSchema>;
+export type BusinessHours = z.infer<typeof BusinessHoursSchema>;
 
 export const salon = pgTable(
   'salon',
@@ -270,6 +270,21 @@ export const branch = pgTable(
      * a row that still has a name.
      */
     closedAt: timestamptz('closed_at'),
+    /**
+     * THIS BRANCH'S OWN HOURS, OR NULL FOR "THE SALON'S". Migration 0063.
+     *
+     * The same two-session shape as `salon.business_hours` and validated by the
+     * same `parseBusinessHours`. NULL is the default and the common case: a
+     * branch with no override follows the salon's Settings hours, including
+     * every later edit of them, which is why 0063 did not copy them in.
+     *
+     * Never read raw by a client. `routes/salons.ts § serialiseBranch` and
+     * `routes/orders.ts § pickupBranchView` serve the RESOLVED hours
+     * (`services/branchHours.ts`) with `businessHoursSource` saying which.
+     *
+     * `branch_business_hours_shape` (0063) holds the skeleton at the column.
+     */
+    businessHours: jsonb('business_hours').$type<BusinessHours>(),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
