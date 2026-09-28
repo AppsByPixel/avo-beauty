@@ -1,6 +1,17 @@
-import { useState } from 'react';
 import type { OrderStatus } from '@avo/types';
-import { Button, Card, Chip, EmptyState, InfoBanner, Pill, Skeleton, type PillTone } from '@avo/ui';
+import {
+  Button,
+  Card,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  FilterSelect,
+  InfoBanner,
+  Pill,
+  Skeleton,
+  type PillTone,
+} from '@avo/ui';
 import {
   ORDER_STATUSES,
   useMoveOrder,
@@ -10,6 +21,9 @@ import {
 import { SectionError, WriteError } from './sectionState.js';
 import { whenLabel } from './AuditLog.js';
 import { ALL_BRANCHES, useBranchScope } from '../shell/BranchScope.js';
+import { clockFrame } from './salonTime.js';
+import { localDate, shiftDate } from './salesTrendRules.js';
+import { enumParam, shownLabel, useUrlFilters } from './listFilters.js';
 
 /**
  * Merchant → Shop → Orders. The fulfilment board.
@@ -265,10 +279,85 @@ export const STATUS_PILL: Record<OrderStatus, { label: string; tone: PillTone }>
 };
 
 /** The filter chips. `null` is the whole board — an option, not the absence of one. */
-const FILTERS: ReadonlyArray<{ value: OrderStatus | null; label: string }> = [
-  { value: null, label: 'All' },
+const STATUS_CHIPS: ReadonlyArray<{ value: OrderStatus | ''; label: string }> = [
+  { value: '', label: 'All' },
   ...ORDER_STATUSES.map((value) => ({ value, label: STATUS_PILL[value].label })),
 ];
+
+/* ------------------------------------------------------------- the filters
+ *
+ * FOUR AXES, AND WHERE EACH ONE IS APPLIED IS THE WHOLE DESIGN OF THIS TOOLBAR.
+ *
+ *   status      `?status=` ON THE REQUEST. The endpoint takes it, and on a board
+ *               at the 200 cap it is the remedy for truncation, not a trim of it.
+ *   branch      THE HEADER'S selection (`shell/BranchSelector.tsx`), applied by
+ *               `narrowToBranch` below exactly as before. Not a second control
+ *               here: two branch selections on one page is the bug
+ *               `Reports.tsx` § THE BRANCH FILTER removed.
+ *   fulfilment  IN THE BROWSER, and ONLY WHILE THE BOARD IS COMPLETE. The
+ *   placed      endpoint accepts neither, so on a truncated board filtering the
+ *               200 rows that survived would silently hide the older orders the
+ *               cap dropped — the oldest `preparing` ones, the most urgent on
+ *               the screen. So on a truncated board these two are DISABLED and
+ *               say why, and a value already in the URL is not applied. Lane A
+ *               has the `?fulfilment=` / `?from=&to=` request in the report.
+ *
+ * "Placed" is the SALON's calendar day — `salonTime.ts` has the argument; a
+ * manager reading from Karachi still means Kuwait's today.
+ */
+export const ORDER_FILTER_KEYS = ['status', 'fulfilment', 'placed'] as const;
+const PLACED_WINDOWS = ['today', 'yesterday', '7d'] as const;
+type PlacedWindow = (typeof PLACED_WINDOWS)[number];
+const ORDER_FILTERS = {
+  status: enumParam(ORDER_STATUSES),
+  fulfilment: enumParam(['pickup', 'delivery']),
+  placed: enumParam(PLACED_WINDOWS),
+} as const;
+
+const FULFILMENT_OPTIONS = [
+  { value: '', label: 'Pickup and delivery' },
+  { value: 'pickup', label: 'Pickup' },
+  { value: 'delivery', label: 'Delivery' },
+] as const;
+
+const PLACED_OPTIONS = [
+  { value: '', label: 'Any day' },
+  { value: 'today', label: 'Placed today' },
+  { value: 'yesterday', label: 'Placed yesterday' },
+  { value: '7d', label: 'Last 7 days' },
+] as const;
+
+/**
+ * The client-side half, pure, so the spec can pin it without a board. `null`
+ * zone (the salon read still in flight) applies no date window rather than
+ * guessing one in the browser's zone.
+ */
+export function applyOrderFilters<T extends Pick<MerchantShopOrder, 'fulfilment' | 'createdAt'>>(
+  rows: readonly T[],
+  fulfilment: string,
+  placed: string,
+  timezone: string | null,
+  now: Date = new Date(),
+): T[] {
+  const zone = clockFrame(timezone).zone;
+  const today = timezone === null ? null : localDate(now, zone);
+  const window: { from: string; to: string } | null =
+    today === null || placed === ''
+      ? null
+      : placed === 'today'
+        ? { from: today, to: today }
+        : placed === 'yesterday'
+          ? { from: shiftDate(today, -1), to: shiftDate(today, -1) }
+          : { from: shiftDate(today, -6), to: today };
+  return rows.filter((o) => {
+    if (fulfilment !== '' && o.fulfilment !== fulfilment) return false;
+    if (window !== null) {
+      const day = localDate(new Date(o.createdAt), zone);
+      if (day === null || day < window.from || day > window.to) return false;
+    }
+    return true;
+  });
+}
 
 /**
  * MONOTONIC, SO THE BUTTON IS THE NEXT STEP AND NOTHING ELSE.
@@ -323,7 +412,9 @@ export interface ShopOrdersProps {
 }
 
 export function ShopOrders({ shopOn, timezone }: ShopOrdersProps) {
-  const [filter, setFilter] = useState<OrderStatus | null>(null);
+  const url = useUrlFilters(ORDER_FILTERS);
+  const filter = (url.values.status || null) as OrderStatus | null;
+  const setFilter = (next: OrderStatus | null) => url.set({ status: next ?? '' });
   const board = useOrderBoard(filter);
   /*
    * The mutation is keyed to the FILTER the board is showing, because that is the
@@ -347,7 +438,16 @@ export function ShopOrders({ shopOn, timezone }: ShopOrdersProps) {
   const loaded = board.data?.items ?? [];
   const truncated = board.data?.truncated === true;
   /* The header's selection, applied — see the header § the branch selector. */
-  const { visible: rows, hidden } = narrowToBranch(loaded, scope.selected);
+  const { visible: atBranch, hidden } = narrowToBranch(loaded, scope.selected);
+  /*
+   * Applied only over a COMPLETE board — § the filters. `board.data` undefined
+   * (pending) applies nothing and renders skeletons anyway.
+   */
+  const clientOn = board.isSuccess && !truncated;
+  const fulfilment = clientOn ? url.values.fulfilment : '';
+  const placed = clientOn ? (url.values.placed as PlacedWindow | '') : '';
+  const rows = applyOrderFilters(atBranch, fulfilment, placed, timezone);
+  const clientFiltered = fulfilment !== '' || placed !== '';
   const branchName = scope.selectedName ?? 'this branch';
   const showAllBranches = () => scope.select(ALL_BRANCHES);
 
@@ -364,20 +464,42 @@ export function ShopOrders({ shopOn, timezone }: ShopOrdersProps) {
         so an order stays answerable.
       </InfoBanner>
 
-      <div className="orders__filters">
-        <div className="avo-label">Show</div>
-        <div className="orders__chips">
-          {FILTERS.map(({ value, label }) => (
-            <Chip
-              key={value ?? 'all'}
-              role="radio"
-              on={filter === value}
-              label={label}
-              onClick={() => setFilter(value)}
-            />
-          ))}
-        </div>
-      </div>
+      <FilterBar
+        label="Filter orders"
+        count={
+          board.isPending
+            ? null
+            : shownLabel(rows.length, loaded.length, 'order', 'orders', rows.length !== loaded.length)
+        }
+        onClear={url.active ? () => url.clear() : undefined}
+      >
+        <FilterChips<OrderStatus | ''>
+          label="Show"
+          options={STATUS_CHIPS}
+          value={filter ?? ''}
+          onChange={(next) => setFilter(next === '' ? null : next)}
+        />
+        <FilterSelect
+          label="Fulfilment"
+          options={FULFILMENT_OPTIONS}
+          value={fulfilment}
+          disabled={!clientOn}
+          onChange={(next) => url.set({ fulfilment: next })}
+        />
+        <FilterSelect
+          label="Placed"
+          options={PLACED_OPTIONS}
+          value={placed}
+          disabled={!clientOn}
+          onChange={(next) => url.set({ placed: next })}
+        />
+      </FilterBar>
+      {truncated && (url.values.fulfilment !== '' || url.values.placed !== '') ? (
+        <p className="orders__paused" role="status">
+          Fulfilment and date filters are paused: they can only narrow a complete board, and this
+          one has more orders than fit on one page. Narrow by status first.
+        </p>
+      ) : null}
 
       {/*
         THE TRUNCATION, RENDERED. Never hidden — see § the truncation below.
@@ -423,6 +545,20 @@ export function ShopOrders({ shopOn, timezone }: ShopOrdersProps) {
                 <tr>
                   <td colSpan={6} className="orders__empty">
                     <BoardEmpty filter={filter} shopOn={shopOn} onClear={() => setFilter(null)} />
+                  </td>
+                </tr>
+              ) : atBranch.length > 0 && rows.length === 0 && clientFiltered ? (
+                /*
+                  A FIFTH: the board has orders at this branch and none of them is
+                  the fulfilment or day asked for. The escape is the filters, not
+                  the branch — so it is checked before the branch empty below.
+                */
+                <tr>
+                  <td colSpan={6} className="orders__empty">
+                    <FilterEmpty
+                      things="orders"
+                      onClear={() => url.set({ fulfilment: '', placed: '' })}
+                    />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
