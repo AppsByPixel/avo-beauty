@@ -169,6 +169,7 @@ function Shell({ initialFetchedAt }: { initialFetchedAt: number | null }) {
       memberFetchedAt={member.fetchedAt}
       tier="silver"
       branches={[] as never}
+      timezone="Asia/Kuwait"
       onToppedUp={() => setRereads((n) => n + 1)}
       onReport={onReport}
     />

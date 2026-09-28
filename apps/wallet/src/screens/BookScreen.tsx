@@ -301,18 +301,33 @@ export function BookScreen({
           skeleton={<RowSkeleton />}
           label={copy.chooseService}
         >
-          {(services) => (
-            <View style={styles.rows}>
-              {services.map((service) => (
-                <ServiceRow
-                  key={service.id}
-                  service={service}
-                  selected={flow.selectedService?.id === service.id}
-                  onPick={() => flow.pickService(service)}
-                />
-              ))}
-            </View>
-          )}
+          {(services) =>
+            /*
+              NOTHING TO BOOK — every service is unassigned, or nobody on this
+              roster performs any (`domain/serviceAssignment.ts`). Before 0061
+              every service was bookable, so this step never needed an empty
+              state; it does now, and a label over nothing reads as a failed
+              load.
+            */
+            services.length === 0 ? (
+              <EmptyPanel
+                title={copy.servicesEmptyTitle}
+                body={copy.servicesEmptyBody}
+                testID="book-services-empty"
+              />
+            ) : (
+              <View style={styles.rows}>
+                {services.map((service) => (
+                  <ServiceRow
+                    key={service.id}
+                    service={service}
+                    selected={flow.selectedService?.id === service.id}
+                    onPick={() => flow.pickService(service)}
+                  />
+                ))}
+              </View>
+            )
+          }
         </Step>
       )}
 
@@ -325,6 +340,26 @@ export function BookScreen({
         >
           {(artists) => (
             <>
+              {/*
+                `409 artist_not_assigned` sent her back here: the artist she
+                chose no longer does this service. Said from the CODE, above the
+                refreshed list, with her service still chosen.
+              */}
+              {flow.artistUnassigned ? (
+                <View
+                  style={styles.confirmFailure}
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
+                  testID="book-artist-unassigned"
+                >
+                  <Text style={[text('bodyL', lang, '600'), styles.confirmFailureTitle]}>
+                    {copy.artistNotAssignedTitle}
+                  </Text>
+                  <Text style={[text('body', lang), styles.confirmFailureBody]}>
+                    {copy.artistNotAssignedBody}
+                  </Text>
+                </View>
+              ) : null}
               {artists.length === 0 ? (
                 <ArtistsEmpty flow={flow} />
               ) : (
@@ -408,7 +443,9 @@ export function BookScreen({
             </>
           ) : null}
 
-          {flow.confirmFailure ? <ConfirmFailure failure={flow.confirmFailure} /> : null}
+          {flow.confirmFailure ? (
+            <ConfirmFailure failure={flow.confirmFailure} rescheduling={flow.rescheduling} />
+          ) : null}
         </>
       )}
 
@@ -808,11 +845,24 @@ function SlotSection({ flow }: { flow: ReturnType<typeof useBooking> }) {
  * different screens. The fallback is now the API's own sentence under a neutral
  * heading, and the codes that have written copy get it.
  */
-function ConfirmFailure({ failure }: { failure: { code: string | null; message: string } }) {
+function ConfirmFailure({
+  failure,
+  rescheduling,
+}: {
+  failure: { code: string | null; message: string };
+  rescheduling: boolean;
+}) {
   const { lang, copy } = useLanguage();
   const taken = failure.code === 'slot_taken' || failure.code === 'slot_past';
   const off = failure.code === 'booking_not_enabled';
   const windowClosed = failure.code === 'change_window_closed';
+  /*
+    `409 artist_not_assigned` reaches THIS panel only on a reschedule — a new
+    booking is sent back to the staff step instead (`useBooking.confirm`). The
+    server's `message` is English and would be English inside a mirrored
+    layout, so the words come from the code.
+  */
+  const unassigned = failure.code === 'artist_not_assigned';
 
   const title = taken
     ? copy.slotTakenTitle
@@ -820,9 +870,11 @@ function ConfirmFailure({ failure }: { failure: { code: string | null; message: 
       ? copy.bookingOffTitle
       : windowClosed
         ? copy.changeClosedTitle
-        : // Not `errorTitle` — that is the cold-load screen's words and offers a
-          // retry. This is a refusal, and the server wrote a sentence for it.
-          copy.blockedTitle;
+        : unassigned
+          ? copy.artistNotAssignedTitle
+          : // Not `errorTitle` — that is the cold-load screen's words and offers a
+            // retry. This is a refusal, and the server wrote a sentence for it.
+            copy.blockedTitle;
 
   const body = taken
     ? copy.slotTakenBody
@@ -830,7 +882,11 @@ function ConfirmFailure({ failure }: { failure: { code: string | null; message: 
       ? copy.bookingOffBody
       : windowClosed
         ? copy.changeClosedBody
-        : failure.message;
+        : unassigned
+          ? rescheduling
+            ? copy.artistNotAssignedRescheduleBody
+            : copy.artistNotAssignedBody
+          : failure.message;
 
   return (
     <View style={styles.confirmFailure} accessibilityRole="alert" testID="book-confirm-failure">

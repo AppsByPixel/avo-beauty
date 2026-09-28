@@ -91,6 +91,8 @@
  * ═════════════════════════════════════════════════════════════════════════════
  */
 
+import type { BusinessHours } from './pickupHours';
+
 /** The two, exactly as the enum spells them. */
 export type Fulfilment = 'pickup' | 'delivery';
 
@@ -125,6 +127,13 @@ export interface PickupBranchOption {
   id: string;
   name: string;
   nameAr: string | null;
+  /**
+   * W8 — when the counter is staffed, resolved server-side (the branch's own
+   * override, else the salon's). REQUIRED, so a shell that narrowed the branch
+   * list and dropped it fails to compile rather than silently showing no hours.
+   * Display only; nothing in this module reads it.
+   */
+  businessHours: BusinessHours;
 }
 
 /**

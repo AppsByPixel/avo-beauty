@@ -799,6 +799,27 @@ export interface Copy {
   /** W7. NEW COPY. A branch that has closed since — "Salmiya (closed)". */
   pickupClosedName(branch: string): string;
   /**
+   * W8. NEW COPY, NO DESIGN SOURCE. "Collect during working hours, 10 am – 1 pm
+   * and 4 pm – 9 pm" — the client's own sentence ("please collect during the
+   * branch's official working hours"). Takes the RAW "HH:MM" spans off the
+   * contract and formats its own clock, so the digits follow the sentence's
+   * script (the `staleBanner` rule). One span or two; a zero-length evening has
+   * already been dropped by `domain/pickupHours.ts § tradingSpans`, so a salon
+   * open straight through reads as one range.
+   */
+  pickupHours(spans: readonly (readonly [string, string])[]): string;
+  /**
+   * W8. NEW COPY. The counter is shut and opens again LATER TODAY — the
+   * afternoon closure, or before the morning opening. "Closed now — collect
+   * today from 4 pm". Decided in the SALON's zone.
+   */
+  pickupClosedToday(opensAt: string): string;
+  /**
+   * W8. NEW COPY. After the last window — the client's "closed now, collect the
+   * next day". "Closed now — collect tomorrow from 10 am".
+   */
+  pickupClosedTomorrow(opensAt: string): string;
+  /**
    * W7. NEW COPY. Pay is held: a pickup at a multi-branch salon with no branch
    * chosen. The client-side mirror of `pickup_branch_required`.
    */
@@ -1011,6 +1032,25 @@ export interface Copy {
   /** The salon has no bookable artists at all -- step 2 had no empty state. */
   artistsEmptyTitle: string;
   artistsEmptyBody: string;
+  /**
+   * NEW COPY. The service step with nothing on it: every service the salon
+   * offers has nobody assigned to perform it (`Service.artistIds`, migration
+   * 0061), so none can be booked. The service step had no empty state before,
+   * because every service was always bookable.
+   */
+  servicesEmptyTitle: string;
+  servicesEmptyBody: string;
+  /**
+   * NEW COPY. `409 artist_not_assigned` — the merchant took this artist off
+   * this service between her choosing and confirming. Rendered from the CODE,
+   * never the server's English `message`. A new booking is sent back to the
+   * staff step with her service still chosen (`artistNotAssignedBody`); a
+   * reschedule, whose artist is fixed, is told her appointment did not move
+   * (`artistNotAssignedRescheduleBody`).
+   */
+  artistNotAssignedTitle: string;
+  artistNotAssignedBody: string;
+  artistNotAssignedRescheduleBody: string;
 
   // book — the artist rows' availability badge, design:1491-1492
   availLive: string;

@@ -34,6 +34,15 @@ import { toEasternDigits as ea, ARABIC_PERCENT as PC } from '../i18n/digits';
 import type { Copy } from './types';
 import { en } from './en';
 import { durationParts } from '../domain/happyHour';
+import { wallClockLabel } from '../domain/pickupHours';
+import { dateLocale } from '../domain/activity';
+
+/**
+ * "١٠ ص" / "٤:٣٠ م" — a wall-clock "HH:MM" as the wallet writes a time in
+ * Arabic: `dateLocale('ar')`, Eastern digits and ص/م from the locale, the
+ * design's own `٤:٣٠ م` (design:1286). A time is a count, so never Western.
+ */
+const clock = (hhmm: string) => wallClockLabel(hhmm, dateLocale('ar'));
 
 /**
  * design/avo-promotions.js:19-24 — the six rewards, in the designer's Arabic.
@@ -625,6 +634,12 @@ export const ar: Copy = {
   fulfilPickupChoose: 'اختاري فرعاً أدناه واستلميها منه عند جهوزها.',
   pickupFrom: 'الاستلام من',
   pickupClosedName: (branch) => `${branch} (مغلق)`,
+  // W8 — نص جديد بلا مصدر في التصميم. مُدرج في AR_UNVERIFIED. الوقت بالأرقام
+  // الشرقية مع ص/م، كما في `bell.ts § timeLabel` والتصميم (٤:٣٠ م).
+  pickupHours: (spans) =>
+    `استلمي خلال ساعات العمل، ${spans.map(([from, to]) => `${clock(from)} – ${clock(to)}`).join(' و')}`,
+  pickupClosedToday: (opensAt) => `مغلق الآن — استلمي اليوم من ${clock(opensAt)}`,
+  pickupClosedTomorrow: (opensAt) => `مغلق الآن — استلمي غداً من ${clock(opensAt)}`,
   fulfilDeliveryBody: 'سنوصلها إلى أحد عناوينك المحفوظة.',
   addressChooseTitle: 'التوصيل إلى',
   addressAddCta: 'أضيفي عنواناً',
@@ -714,6 +729,12 @@ export const ar: Copy = {
   branchEmptyBody: 'جرّبي فرعاً آخر، أو اختاري كل الفروع لرؤية الجميع.',
   artistsEmptyTitle: 'لا مصففات متاحة للحجز',
   artistsEmptyBody: 'لم يُضِف هذا الصالون أي مصففة للحجز بعد.',
+  // نص جديد، مُدرج في AR_UNVERIFIED. `اختاري` أمر للمؤنث.
+  servicesEmptyTitle: 'لا خدمات متاحة للحجز بعد',
+  servicesEmptyBody: 'لم يفتح هذا الصالون أي خدمة للحجز بعد.',
+  artistNotAssignedTitle: 'لم تعد هذه المصففة تقدّم هذه الخدمة',
+  artistNotAssignedBody: 'اختاري مصففة أخرى. خدمتكِ ما زالت مختارة.',
+  artistNotAssignedRescheduleBody: 'لم يتغيّر موعدكِ. ما زال في الوقت الذي حجزتِه.',
   morning: 'صباحاً', // design:1348
   evening: 'مساءً', // design:1348
   review: 'المراجعة', // design:1348
@@ -1422,4 +1443,18 @@ export const AR_UNVERIFIED = [
   'cardOrderRefusal.pickup_branch_closed',
   'cardOrderRefusal.pickup_branch_required',
   'cardOrderRefusal.unknown_pickup_branch',
+  /**
+   * W8 — WHEN SHE CAN COLLECT. No design source. Read `pickupClosedTomorrow`
+   * first: it is the client's own "closed now, collect the next day"; `مغلق`
+   * agrees with الفرع (masculine), and `استلمي` addresses her.
+   */
+  'pickupHours',
+  'pickupClosedToday',
+  'pickupClosedTomorrow',
+  /** Services nobody performs, and `409 artist_not_assigned`. No design source. */
+  'servicesEmptyTitle',
+  'servicesEmptyBody',
+  'artistNotAssignedTitle',
+  'artistNotAssignedBody',
+  'artistNotAssignedRescheduleBody',
 ] as const;

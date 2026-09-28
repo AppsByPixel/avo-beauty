@@ -13,6 +13,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { z } from 'zod';
 import {
+  BranchSchema,
   MemberSchema,
   PromotionSetSchema,
   SalonSchema,
@@ -56,14 +57,86 @@ const CachedSchema = z.object({
   fetchedAt: z.number().int().positive(),
 });
 
+/**
+ * ═════════════════════════════════════════════════════════════════════════════
+ * A SALON CACHED BEFORE MIGRATION 0063 — THE UPGRADE-DAY HAZARD.
+ *
+ * 0063 made `BranchSchema` require `businessHours` + `businessHoursSource`.
+ * Every customer who updates the app has a snapshot on the device written by
+ * the previous version, whose branches carry `{ id, salonId, name, nameAr }`
+ * and nothing else. Parsed strictly, that snapshot fails — every one of them,
+ * on the day they update.
+ *
+ * FAILING TO PARSE NEVER CRASHES HOME. `readSnapshot` returns null, Home goes
+ * to its skeletons and the live read replaces it — "refetch", not an error
+ * screen. That was already the contract, and it still holds for a cache this
+ * function cannot read at all (pinned in `cacheUpgrade.test.tsx`).
+ *
+ * BUT THIS ONE SHAPE IS UPGRADED RATHER THAN DISCARDED, because discarding it
+ * has a real cost on exactly that day: a customer who opens the new version
+ * OFFLINE would get the cold failure screen — no balance, no code — where the
+ * old version showed her last-known wallet. And the upgrade invents nothing:
+ * before 0063 a branch had no hours of its own, so its RESOLVED hours were the
+ * salon's (`api/src/services/branchHours.ts § resolveBranchHours` — branch
+ * NULL → the salon's, `businessHoursSource: 'salon'`). The salon's
+ * `businessHours` is in the same cached body and has been required all along.
+ * So the filled-in value is precisely what the server would have served for
+ * that snapshot. The member, the balance and the transactions are parsed as
+ * strictly as ever — this relaxes the two 0063 branch fields and nothing else,
+ * and the "a balance we cannot vouch for" rule below is untouched.
+ *
+ * A snapshot is a cache: the live read always follows and overwrites it, so a
+ * branch override set since is at most as stale as every other cached field,
+ * under the same "last updated" stamp.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+const PreHoursCachedSchema = CachedSchema.extend({
+  snapshot: CachedSchema.shape.snapshot.extend({
+    salon: SalonSchema.extend({
+      branches: z.array(
+        BranchSchema.partial({ businessHours: true, businessHoursSource: true }),
+      ),
+    }),
+  }),
+});
+
+function upgradePreHours(cached: z.infer<typeof PreHoursCachedSchema>): CachedSnapshot {
+  const { salon } = cached.snapshot;
+  return {
+    ...cached,
+    snapshot: {
+      ...cached.snapshot,
+      salon: {
+        ...salon,
+        branches: salon.branches.map((b) => ({
+          ...b,
+          businessHours: b.businessHours ?? salon.businessHours,
+          businessHoursSource: b.businessHoursSource ?? 'salon',
+        })),
+      },
+    },
+  } as CachedSnapshot;
+}
+
+/**
+ * The stored body, or null for "nothing usable — refetch". Exported so the
+ * upgrade spec can hand it a pre-0063 body without a storage double.
+ */
+export function parseSnapshot(raw: unknown): CachedSnapshot | null {
+  const parsed = CachedSchema.safeParse(raw);
+  if (parsed.success) return parsed.data as CachedSnapshot;
+  const legacy = PreHoursCachedSchema.safeParse(raw);
+  if (legacy.success) return upgradePreHours(legacy.data);
+  // A snapshot written by an older contract is discarded rather than coerced:
+  // showing a customer a balance we cannot vouch for is worse than showing none.
+  return null;
+}
+
 export async function readSnapshot(): Promise<CachedSnapshot | null> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     if (!raw) return null;
-    const parsed = CachedSchema.safeParse(JSON.parse(raw));
-    // A snapshot written by an older contract is discarded rather than coerced:
-    // showing a customer a balance we cannot vouch for is worse than showing none.
-    return parsed.success ? (parsed.data as CachedSnapshot) : null;
+    return parseSnapshot(JSON.parse(raw));
   } catch {
     return null;
   }

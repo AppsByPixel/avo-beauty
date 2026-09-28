@@ -77,7 +77,8 @@ import {
 import type { Copy } from '../copy/types';
 import type { BellItem, KnownBellItem } from '../api/bell';
 import { branchName } from './names';
-import { pickupLocation } from './shopOrders';
+import { orderIsOpen, pickupLocation } from './shopOrders';
+import { pickupHoursLines } from './pickupHours';
 import { dateLocale, dayAndTime } from './activity';
 
 const KUWAIT_TIME_ZONE = 'Asia/Kuwait';
@@ -208,7 +209,30 @@ function shopLines(item: Extract<KnownBellItem, { kind: 'shop' }>, ctx: BellCont
   const { lang, copy } = ctx;
   const goods = item.items.map((l) => copy.bellShopLine(l.name, l.qty)).join(listSeparator(lang));
   const where = item.fulfilment === 'delivery' ? copy.bellDelivery : pickupWords(item, ctx);
-  return [goods === '' ? where : `${goods} · ${where}`];
+  return [goods === '' ? where : `${goods} · ${where}`, ...pickupHoursWords(item, ctx)];
+}
+
+/**
+ * W8 — WHEN SHE CAN COLLECT, as the row's further lines: the hours, and "closed
+ * now — collect tomorrow from 10 am" while the counter is shut. The orders
+ * list's rule exactly (`OrdersSheet § PickupLine`): only a pickup still waiting
+ * to be collected, at a branch that is still open, joined from her orders. The
+ * zone is the ORDER's `pickupBranch.timezone` — never the device's.
+ */
+function pickupHoursWords(item: Extract<KnownBellItem, { kind: 'shop' }>, ctx: BellContext): string[] {
+  if (item.fulfilment === 'delivery') return [];
+  const order = ctx.orders?.find((o) => o.transactionId === item.transactionId);
+  const where = order ? pickupLocation(order) : null;
+  if (!order || where === null || where.kind !== 'branch' || !orderIsOpen(order)) return [];
+  if (where.branch.closed) return [];
+  const lines = pickupHoursLines(
+    where.branch.businessHours,
+    where.branch.timezone,
+    ctx.now ?? new Date(),
+    ctx.copy,
+  );
+  if (lines === null) return [];
+  return lines.closedNow === null ? [lines.hours] : [lines.hours, lines.closedNow];
 }
 
 /**

@@ -125,6 +125,7 @@ export function ShopScreen({
   memberFetchedAt,
   tier,
   branches,
+  timezone,
   onToppedUp,
   onReport,
 }: {
@@ -159,6 +160,12 @@ export function ShopScreen({
    * placeholder.
    */
   branches: Salon['branches'];
+  /**
+   * W8 — `salon.timezone`, the zone the pickup picker decides "closed now" in.
+   * REQUIRED: the shell always has the salon when it renders Shop, and a
+   * forgotten zone is exactly how a device-clock answer would creep in.
+   */
+  timezone: string;
   /**
    * Re-read `GET /members/me` after a successful top-up. The same callback
    * `useShop` gets as `onPaid`, and for the same reason: #2 makes the balance
@@ -623,6 +630,7 @@ export function ShopScreen({
         onChooseAddress={shop.chooseAddress}
         pickupBranches={shop.pickupBranches}
         onChoosePickupBranch={shop.choosePickupBranch}
+        pickupTimezone={timezone}
         onAddAddress={() => {
           book.clearWriteError();
           setAddressSheet({ address: null });

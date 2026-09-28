@@ -42,6 +42,7 @@ import { buildReceipt, type ReceiptDetail } from '../domain/receipt';
 import { startPaymentReport } from '../support/contact';
 import { Sheet } from './Sheet';
 import { SecondaryButton } from './Buttons';
+import { PickupHoursNote } from './PickupHoursNote';
 
 interface Props {
   transaction: Transaction | null;
@@ -158,6 +159,22 @@ export function TransactionSheet({ transaction, branches, detail, onClose, onRep
             </View>
           </View>
 
+          {/*
+            W8 — WHEN SHE CAN COLLECT, under the "Collect from" row. Only on an
+            invoice (the feed's receipt carries no `detail`), only while the
+            branch is open, and only when the order told us its hours — a card
+            result stored before 0063 did not, and draws nothing here.
+          */}
+          {detail?.pickupBranch?.businessHours && !detail.pickupBranch.closed ? (
+            <View style={styles.pickupHours}>
+              <PickupHoursNote
+                hours={detail.pickupBranch.businessHours}
+                timezone={detail.pickupBranch.timezone ?? null}
+                testID="tx-pickup-hours"
+              />
+            </View>
+          ) : null}
+
           <Text style={[text('bodyS', lang), styles.help]}>{copy.txHelp}</Text>
 
           <SecondaryButton
@@ -250,6 +267,7 @@ const styles = StyleSheet.create({
     color: color.textMutedStrong,
   },
 
+  pickupHours: { marginTop: 12, marginHorizontal: 4 },
   help: { color: color.textMutedSoft, marginTop: 12, marginHorizontal: 4, lineHeight: 18 },
   report: { marginTop: 12, backgroundColor: color.surface },
   close: { marginTop: 12, borderColor: 'transparent', backgroundColor: color.surfaceAlt2 },

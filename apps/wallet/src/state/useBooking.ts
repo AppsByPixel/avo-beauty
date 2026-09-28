@@ -71,6 +71,7 @@ import {
   type BranchChoice,
   type RosterSplit,
 } from '../domain/branchPicker';
+import { assignedArtists, bookableServices, isAssigned } from '../domain/serviceAssignment';
 
 /**
  * `'entry'` IS NOT A NUMBERED STEP. It is "the first step is not known yet" —
@@ -171,9 +172,30 @@ export interface BookingController {
    */
   splitFailure: LoadFailure | null;
 
+  /**
+   * THE SERVICES SHE CAN BOOK HERE — `domain/serviceAssignment.ts`. Not the
+   * salon's whole list: a service nobody is assigned to (`artistIds: []`) is
+   * hidden, and so is one nobody on the current roster performs — which, after
+   * she picks a branch, is "nobody at this branch". `loading` until BOTH the
+   * service list and the roster behind it have landed, so a service cannot
+   * appear and then vanish under her finger.
+   */
   services: LoadState<BookableService[]>;
+  /**
+   * THE STAFF STEP'S LIST — the roster narrowed to the artists assigned to her
+   * service. The whole roster before a service is chosen, and on a reschedule,
+   * whose artist is fixed.
+   */
   artists: LoadState<BookableArtist[]>;
   availability: LoadState<Availability>;
+  /**
+   * `409 artist_not_assigned` on a NEW booking: the merchant took her artist
+   * off this service between choosing and confirming. The flow is back on the
+   * staff step with her service kept and the artist cleared, and the lists are
+   * re-read. True until she picks again. (A reschedule, whose artist is fixed,
+   * gets `confirmFailure` with the code instead.)
+   */
+  artistUnassigned: boolean;
 
   /**
    * THE BRANCH STEP'S CONTINUE — true only once the roster behind the chosen
@@ -279,8 +301,10 @@ export function useBooking(options: {
   const [step, setStep] = useState<StepName>(
     rescheduling ? 'day' : multiBranch ? 'entry' : 'service',
   );
-  const [services, setServices] = useState<LoadState<BookableService[]>>({ status: 'loading' });
-  const [artists, setArtists] = useState<LoadState<BookableArtist[]>>({ status: 'loading' });
+  /** The salon's list, UNNARROWED. What the flow offers is `services` below. */
+  const [allServices, setServices] = useState<LoadState<BookableService[]>>({ status: 'loading' });
+  /** `/artists/bookable` for the branch choice, UNNARROWED. See `artists` below. */
+  const [roster, setRoster] = useState<LoadState<BookableArtist[]>>({ status: 'loading' });
   const [availability, setAvailability] = useState<LoadState<Availability>>({ status: 'loading' });
 
   const [serviceId, setServiceId] = useState<string | null>(reschedule?.serviceId ?? null);
@@ -289,6 +313,7 @@ export function useBooking(options: {
   const [shortfallFils, setShortfallFils] = useState<number | null>(null);
   const [confirmFailure, setConfirmFailure] = useState<LoadFailure | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [artistUnassigned, setArtistUnassigned] = useState(false);
   const [result, setResult] = useState<
     { booking: BookingView; balanceAfterFils: number | null } | null
   >(null);
@@ -442,7 +467,7 @@ export function useBooking(options: {
    */
   useEffect(() => {
     const controller = new AbortController();
-    setArtists({ status: 'loading' });
+    setRoster({ status: 'loading' });
     getArtists(salon.id, branchQuery(branchChoice), controller.signal)
       // NO CLIENT-SIDE `active` FILTER, AND ITS ABSENCE IS THE POINT.
       //
@@ -456,10 +481,10 @@ export function useBooking(options: {
       // second opinion on who may be booked, held by the client, is how a retired
       // artist gets offered and the charge handler answers with a 409
       // `artist_not_bookable` after four taps.
-      .then((data) => setArtists({ status: 'ready', data }))
+      .then((data) => setRoster({ status: 'ready', data }))
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setArtists({ status: 'failed', failure: toFailure(err) });
+        setRoster({ status: 'failed', failure: toFailure(err) });
       });
     return () => controller.abort();
   }, [salon.id, reloadToken, branchChoice]);
@@ -548,8 +573,53 @@ export function useBooking(options: {
 
   // --------------------------------------------------------- the selection --
 
+  /**
+   * THE SERVICE SHE CHOSE, found in the salon's WHOLE list rather than the
+   * narrowed one — so a reschedule of a service whose assignments have since
+   * changed still names it on the review and confirmed screens.
+   */
   const selectedService =
-    services.status === 'ready' ? (services.data.find((s) => s.id === serviceId) ?? null) : null;
+    allServices.status === 'ready'
+      ? (allServices.data.find((s) => s.id === serviceId) ?? null)
+      : null;
+
+  /**
+   * ═════════════════════════════════════════════════════════════════════════
+   * WHO DOES WHICH SERVICE — `domain/serviceAssignment.ts` (migration 0061)
+   * ═════════════════════════════════════════════════════════════════════════
+   * The service list is the salon's, intersected with the roster behind her
+   * branch choice; the staff list is that roster, narrowed to her service. No
+   * request per service — both lists were already being read.
+   *
+   * THE SERVICE LIST WAITS FOR THE ROSTER. Both go out at mount, in parallel,
+   * so this adds no round trip; what it prevents is a service drawn from the
+   * unnarrowed list and then removed when the roster lands. A FAILED roster
+   * does not fail the service step — it narrows by `artistIds: []` alone, and
+   * the staff step shows the roster's own failure with its retry.
+   *
+   * A RESCHEDULE IS NOT NARROWED. Its artist and service are fixed; narrowing
+   * would only be able to lose the name of the artist she is already booked
+   * with. The server still refuses an unassigned pair (`409
+   * artist_not_assigned`), rendered at review.
+   */
+  const services: LoadState<BookableService[]> = useMemo(() => {
+    if (allServices.status !== 'ready') return allServices;
+    if (roster.status === 'loading') return { status: 'loading' };
+    return {
+      status: 'ready',
+      data: bookableServices(allServices.data, roster.status === 'ready' ? roster.data : null),
+    };
+  }, [allServices, roster]);
+
+  const artists: LoadState<BookableArtist[]> = useMemo(() => {
+    if (roster.status !== 'ready' || rescheduling || serviceId === null) return roster;
+    // Her service is chosen but its list is being re-read (after a 409): hold
+    // the staff step on its skeleton rather than flash the unnarrowed roster.
+    if (allServices.status === 'loading') return { status: 'loading' };
+    if (selectedService === null) return roster;
+    return { status: 'ready', data: assignedArtists(roster.data, selectedService) };
+  }, [roster, rescheduling, serviceId, allServices.status, selectedService]);
+
   const selectedArtist =
     artists.status === 'ready' ? (artists.data.find((a) => a.id === artistId) ?? null) : null;
 
@@ -569,10 +639,24 @@ export function useBooking(options: {
     keyRef.current = { attempt: attemptKey, key: newIdempotencyKey() };
   }
 
-  const pickService = useCallback((service: BookableService) => {
-    setServiceId(service.id);
-    setConfirmFailure(null);
-  }, []);
+  /**
+   * A different service can have different staff. An artist she chose for the
+   * last one who does not do this one is CLEARED, with her slot — the same
+   * reason `pickBranch` clears them: a selection that survives out of view is a
+   * Continue that looks enabled for a row nobody can point at.
+   */
+  const pickService = useCallback(
+    (service: BookableService) => {
+      setServiceId(service.id);
+      if (artistId !== null && !isAssigned(service, artistId)) {
+        setArtistId(null);
+        setSelectedSlot(null);
+      }
+      setConfirmFailure(null);
+      setArtistUnassigned(false);
+    },
+    [artistId],
+  );
 
   /**
    * Narrow the roster to a location -- or to the artists who have none.
@@ -593,10 +677,12 @@ export function useBooking(options: {
     setArtistId(null);
     setSelectedSlot(null);
     setConfirmFailure(null);
+    setArtistUnassigned(false);
   }, []);
 
   const pickArtist = useCallback((artist: BookableArtist) => {
     setArtistId(artist.id);
+    setArtistUnassigned(false);
     // Her grid is a different grid. Keeping the slot would carry a 16:45 from
     // Rana's Tuesday onto Dana's, which the server would then refuse as
     // `not_a_slot` after two more taps.
@@ -628,18 +714,16 @@ export function useBooking(options: {
    * step would arrive AFTER she had also chosen a service -- two steps from the
    * chips that caused it, and reading as "nobody does this service here".
    *
-   * THE SERVICE IS NEVER THE REASON, AND THAT IS WHY THE SERVICE LIST IS NOT
-   * NARROWED. The data model has no artist-to-service relation at all:
-   * `BookableArtist` is `{id, salonId, name, nameAr, availabilityLive}`, there
-   * is no `artist_service` table, and `POST /bookings` accepts any active
-   * artist of the salon with any active service of the salon
-   * (api/src/services/booking.ts § "2. what and who"). Every artist the branch
-   * shows can be booked for every service the list shows. Narrowing the list
-   * client-side would need a field the API does not have -- reported, not
-   * invented.
+   * ⚠️ THIS PARAGRAPH USED TO SAY THE SERVICE WAS NEVER THE REASON, and it was
+   * true when written: there was no artist-to-service relation, so every artist
+   * could be booked for every service. Migration 0061 added one
+   * (`Service.artistIds`), `POST /bookings` now refuses an unassigned pair
+   * (`409 artist_not_assigned`), and the lists are narrowed by it — see
+   * § WHO DOES WHICH SERVICE below. What survives is the shape of the argument:
+   * an empty staff step must be caught where she can fix it.
    *
-   * So the only way to an empty staff step is an EMPTY BRANCH, and that is
-   * knowable on the branch step: choosing a chip re-reads the roster for it
+   * So "nobody" now means NOBODY WHO DOES ANY SERVICE, and that is knowable on
+   * the branch step: choosing a chip re-reads the roster for it
    * immediately (the artists effect is keyed on `branchChoice`). `next` from
    * `branch` therefore refuses until that read has landed with somebody in
    * it, and the screen shows the empty panel under the chips, where "try
@@ -651,8 +735,22 @@ export function useBooking(options: {
    * unassigned chip appears only when that group is. The read is waited on
    * anyway rather than special-cased, so the gate has one rule.
    */
+  /*
+    SINCE 0061 "SOMEBODY" MEANS SOMEBODY WHO DOES A SERVICE. A branch whose
+    artists are assigned to nothing would pass a bare `length > 0` and then
+    open an empty service step — the two-steps-late discovery this gate exists
+    to prevent. So it waits for the service list too (both go out at mount),
+    and a FAILED service list falls back to the roster alone, so she reaches
+    the service step's own failure and its retry rather than a held Continue.
+  */
   const branchHasArtists: boolean | null =
-    artists.status === 'ready' ? artists.data.length > 0 : null;
+    roster.status !== 'ready'
+      ? null
+      : allServices.status === 'loading'
+        ? null
+        : allServices.status === 'failed'
+          ? roster.data.length > 0
+          : bookableServices(allServices.data, roster.data).length > 0;
 
   const next = useCallback(() => {
     setStep((s) => {
@@ -725,6 +823,27 @@ export function useBooking(options: {
           setShortfallFils(err.shortfallFils);
           return;
         }
+        /**
+         * `409 artist_not_assigned` — THE MERCHANT CHANGED WHO DOES WHAT WHILE
+         * SHE WAS BOOKING. Recoverable, and she keeps her place: back to the
+         * staff step with her SERVICE KEPT, the artist and slot cleared (the
+         * slot was that artist's grid), and both lists re-read so the step
+         * shows who does it now. A new artist is a new attempt, so the key
+         * re-mints on its own. Nothing was held: the refusal is before the
+         * deposit moves.
+         *
+         * A RESCHEDULE CANNOT GO BACK TO A STAFF STEP — its artist is the one
+         * already booked — so it falls through to `confirmFailure`, rendered
+         * from the code: her appointment did not move.
+         */
+        if (failure.code === 'artist_not_assigned' && !reschedule) {
+          setArtistId(null);
+          setSelectedSlot(null);
+          setArtistUnassigned(true);
+          setStep('artist');
+          setReloadToken((t) => t + 1);
+          return;
+        }
         setConfirmFailure(failure);
       } finally {
         setSubmitting(false);
@@ -786,6 +905,7 @@ export function useBooking(options: {
     services,
     artists,
     availability,
+    artistUnassigned,
     branchOptions,
     branchChoice,
     rosterSplit,

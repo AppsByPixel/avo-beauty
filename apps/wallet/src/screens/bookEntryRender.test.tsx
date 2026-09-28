@@ -77,8 +77,9 @@ const salonWith = (branches: Array<typeof KWC>): Salon =>
 
 const MEMBER = { balanceFils: 25000, tier: 'silver' } as unknown as Member;
 
+/** Everyone does it — migration 0062's backfill, which is every salon today. */
 const SERVICES = [
-  { id: 'SV-1', salonId: 'SAL-AMARA', name: 'Cut & style', nameAr: 'قص وتصفيف', priceFils: 12000, active: true, image: null },
+  { id: 'SV-1', salonId: 'SAL-AMARA', name: 'Cut & style', nameAr: 'قص وتصفيف', priceFils: 12000, active: true, image: null, artistIds: ['AR-1', 'AR-2', 'AR-3'] },
 ];
 
 const artist = (id: string): BookableArtist =>

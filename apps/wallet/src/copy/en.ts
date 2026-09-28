@@ -9,8 +9,12 @@
 
 import { formatCountdown, type RewardKey, type TierName } from '@avo/types';
 import type { Copy } from './types';
-import { clockTime } from '../domain/activity';
+import { clockTime, dateLocale } from '../domain/activity';
 import { durationParts } from '../domain/happyHour';
+import { wallClockLabel } from '../domain/pickupHours';
+
+/** "10 am" / "4:30 pm" — a wall-clock "HH:MM" in the English 12-hour form. */
+const clock = (hhmm: string) => wallClockLabel(hhmm, dateLocale('en'));
 
 /** design/avo-promotions.js:19-24 — the six rewards a window can carry. */
 const REWARD_EN: Record<RewardKey, string> = {
@@ -533,6 +537,12 @@ export const en: Copy = {
   fulfilPickupChoose: 'Choose a branch below and pick it up there when it is ready.',
   pickupFrom: 'Collect from',
   pickupClosedName: (branch) => `${branch} (closed)`,
+  // W8 — NEW COPY, NO DESIGN SOURCE, CLIENT TO REVIEW. Raw "HH:MM" in; the
+  // clock is formatted here, `en-GB` 12-hour, as `bell.ts § timeLabel` does.
+  pickupHours: (spans) =>
+    `Collect during working hours, ${spans.map(([from, to]) => `${clock(from)} – ${clock(to)}`).join(' and ')}`,
+  pickupClosedToday: (opensAt) => `Closed now — collect today from ${clock(opensAt)}`,
+  pickupClosedTomorrow: (opensAt) => `Closed now — collect tomorrow from ${clock(opensAt)}`,
   fulfilDeliveryBody: 'We will bring it to one of your saved addresses.',
   addressChooseTitle: 'Deliver to',
   addressAddCta: 'Add an address',
@@ -637,6 +647,12 @@ export const en: Copy = {
   branchEmptyBody: 'Try another branch, or choose All branches to see everyone.',
   artistsEmptyTitle: 'No artists to book with',
   artistsEmptyBody: "This salon hasn't added anyone to book with yet.",
+  // NEW COPY — services nobody is assigned to, and `409 artist_not_assigned`.
+  servicesEmptyTitle: 'No services to book yet',
+  servicesEmptyBody: "This salon hasn't opened any services for booking yet.",
+  artistNotAssignedTitle: 'That artist no longer does this service',
+  artistNotAssignedBody: 'Choose another artist. Your service is still selected.',
+  artistNotAssignedRescheduleBody: 'Your appointment has not changed. It is still at the time you booked.',
   morning: 'Morning', // design:1241
   evening: 'Evening', // design:1241
   review: 'Review', // design:1241
