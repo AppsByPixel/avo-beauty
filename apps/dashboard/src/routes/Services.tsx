@@ -1,6 +1,18 @@
 import { useState, type ReactNode } from 'react';
 import { fils, type Fils, type Service } from '@avo/types';
-import { Button, Card, Chip, InfoBanner, Money, Pill, Skeleton } from '@avo/ui';
+import {
+  Button,
+  Card,
+  Chip,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  FilterSelect,
+  InfoBanner,
+  Money,
+  Pill,
+  Skeleton,
+} from '@avo/ui';
 import { useArtists, type DashboardArtist } from '../api/artists.js';
 import { priceInputValue, readPriceInput } from '../api/products.js';
 import {
@@ -13,6 +25,15 @@ import {
 } from '../api/services.js';
 import { useSession } from '../auth/AuthProvider.js';
 import { SectionError, WriteError } from './sectionState.js';
+import {
+  TEXT_PARAM,
+  enumParam,
+  shownLabel,
+  textMatches,
+  useSearchText,
+  useStableMatches,
+  useUrlFilters,
+} from './listFilters.js';
 
 /**
  * Merchant → Services. The client's M7: "a Services tab where they can add the
@@ -79,6 +100,42 @@ const NOT_FOUND = {
   unknown_artist: 'One of those staff members is no longer on this salon’s team.',
 } as const;
 
+/**
+ * ===========================================================================
+ * THE MENU'S FILTERS — IN THE BROWSER, OVER A MENU THE SERVER SENDS WHOLE
+ * ===========================================================================
+ * `GET /salons/{id}/services` returns every ACTIVE service with
+ * `nextCursor: null` and no LIMIT, so these are matches over a complete list.
+ *
+ *   search     the English or the Arabic name — both are on the row.
+ *   booking    "Bookable" / "No one assigned", from `artistIds` on the row
+ *              itself. It is the menu's one real status: a service nobody is
+ *              assigned to is chargeable at the counter and bookable by nobody,
+ *              which is the thing a manager comes here to fix.
+ *   artist     who does it — offered only when the roster is readable
+ *              (`perms.team`); without it there are no names to offer.
+ *
+ * NO "ACTIVE" FILTER. A retired service is not served at all, so every row is
+ * active and the control would have one answer. Lane A has the request for a
+ * way to read retired ones, if a manager needs to find one.
+ */
+const SERVICE_FILTERS = {
+  q: TEXT_PARAM,
+  booking: enumParam(['bookable', 'unassigned']),
+  artist: TEXT_PARAM,
+} as const;
+
+export function serviceMatches(
+  service: Service,
+  f: { q: string; booking: string; artist: string },
+): boolean {
+  if (!textMatches(f.q, service.name, service.nameAr)) return false;
+  if (f.booking === 'bookable' && service.artistIds.length === 0) return false;
+  if (f.booking === 'unassigned' && service.artistIds.length > 0) return false;
+  if (f.artist !== '' && !service.artistIds.includes(f.artist)) return false;
+  return true;
+}
+
 export function Services() {
   const session = useSession('merchant');
   const canPrice = session.perms.loyalty;
@@ -88,6 +145,30 @@ export function Services() {
   const roster = useArtists(canAssign);
   const create = useCreateService();
   const [drafting, setDrafting] = useState(false);
+
+  const url = useUrlFilters(SERVICE_FILTERS);
+  const search = useSearchText(url.values.q, (q) => url.replace({ q }), 150);
+  const artists = roster.data?.items ?? [];
+  // An artist id from the URL counts only once the roster says she exists here.
+  const artist = artists.some((a) => a.id === url.values.artist) ? url.values.artist : '';
+  const filter = { q: url.values.q, booking: url.values.booking, artist };
+  const filterKey = [filter.q.trim(), filter.booking, filter.artist].join('|');
+  const filtered = filterKey !== '||';
+  /*
+   * STABLE, for the same reason as Shop: a row being repriced or reassigned
+   * must not vanish when its save makes it stop matching (assign someone to an
+   * "No one assigned" row and it would otherwise disappear on the 200).
+   */
+  const visible = useStableMatches(
+    services.data?.items,
+    (sv) => sv.id,
+    (sv) => serviceMatches(sv, filter),
+    filtered ? filterKey : '',
+  );
+  const clearFilters = () => {
+    search.reset();
+    url.clear();
+  };
 
   if (services.isError) {
     return (
@@ -117,6 +198,44 @@ export function Services() {
 
       {canPrice && canAssign ? null : <PermissionNote canPrice={canPrice} canAssign={canAssign} />}
 
+      <FilterBar
+        label="Filter services"
+        search={{
+          value: search.text,
+          onChange: search.setText,
+          label: 'Search services by name',
+          placeholder: 'Search services',
+        }}
+        count={
+          services.isPending || !filtered
+            ? null
+            : shownLabel(visible?.length ?? 0, items?.length ?? 0, 'service', 'services', true)
+        }
+        onClear={filtered ? clearFilters : undefined}
+      >
+        <FilterChips
+          label="Booking"
+          options={[
+            { value: '', label: 'All' },
+            { value: 'bookable', label: 'Bookable' },
+            { value: 'unassigned', label: 'No one assigned' },
+          ]}
+          value={filter.booking}
+          onChange={(booking) => url.set({ booking })}
+        />
+        {canAssign && artists.length > 0 ? (
+          <FilterSelect
+            label="Done by"
+            options={[
+              { value: '', label: 'Anyone' },
+              ...artists.map((a) => ({ value: a.id, label: a.name })),
+            ]}
+            value={filter.artist}
+            onChange={(next) => url.set({ artist: next })}
+          />
+        ) : null}
+      </FilterBar>
+
       <Card className="shop__card">
         {services.isPending ? (
           [0, 1, 2, 3, 4].map((n) => (
@@ -128,7 +247,7 @@ export function Services() {
           ))
         ) : (
           <>
-            {(items ?? []).map((service) => (
+            {(visible ?? []).map((service) => (
               <ServiceRow
                 key={service.id}
                 service={service}
@@ -152,6 +271,10 @@ export function Services() {
                 }}
                 onCreate={(input) => create.mutate(input, { onSuccess: () => setDrafting(false) })}
               />
+            ) : null}
+
+            {filtered && (items ?? []).length > 0 && (visible ?? []).length === 0 && !drafting ? (
+              <FilterEmpty things="services" onClear={clearFilters} />
             ) : null}
 
             {(items ?? []).length === 0 && !drafting ? (

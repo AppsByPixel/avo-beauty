@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Chip, EmptyState, InfoBanner, Pill, Segmented, Skeleton, Stepper } from '@avo/ui';
+import {
+  Button,
+  Card,
+  Chip,
+  EmptyState,
+  FilterBar,
+  FilterChips,
+  FilterEmpty,
+  FilterSelect,
+  InfoBanner,
+  Pill,
+  Segmented,
+  Skeleton,
+  Stepper,
+} from '@avo/ui';
 import {
   SLOT_MINUTES,
   useArtists,
@@ -10,7 +24,16 @@ import {
   type DayWindow,
   type SlotMinutes,
 } from '../api/artists.js';
+import { useSalon } from '../api/salon.js';
 import { SectionError, WriteError } from './sectionState.js';
+import {
+  TEXT_PARAM,
+  enumParam,
+  shownLabel,
+  textMatches,
+  useSearchText,
+  useUrlFilters,
+} from './listFilters.js';
 
 /**
  * Merchant → Team. `GET /salons/{id}/artists`, `PUT /artists/{id}/availability`.
@@ -105,12 +128,56 @@ function normaliseWeek(windows: DashboardArtist['windows']): ArtistWindows {
   return out;
 }
 
+/**
+ * THE ROSTER'S FILTERS, IN THE BROWSER. `GET /salons/{id}/artists` answers
+ * every artist with `nextCursor: null` and no LIMIT, so a name search, a branch
+ * and the availability source narrow a list that is already whole. The server's
+ * own `?branch=` would be the same answer at the cost of a request per click.
+ *
+ * `unassigned` is the server's word for an artist with no branch
+ * (api/src/routes/artists.ts § `?branch=unassigned`) — the set a merchant has to
+ * act on after migration 0044 — so the option exists whenever the salon has
+ * more than one branch to be unassigned from.
+ */
+const TEAM_FILTERS = {
+  q: TEXT_PARAM,
+  branch: TEXT_PARAM,
+  source: enumParam(['google', 'manual']),
+} as const;
+const UNASSIGNED = 'unassigned';
+
+export function artistMatches(
+  artist: DashboardArtist,
+  f: { q: string; branch: string; source: string },
+): boolean {
+  if (!textMatches(f.q, artist.name, artist.nameAr)) return false;
+  if (f.branch === UNASSIGNED && artist.branchId !== null) return false;
+  if (f.branch !== '' && f.branch !== UNASSIGNED && artist.branchId !== f.branch) return false;
+  if (f.source !== '' && artist.availabilitySource !== f.source) return false;
+  return true;
+}
+
 export function Team() {
   const artists = useArtists();
   const [editingId, setEditingId] = useState<string | null>(null);
+  // A cache hit — the shell has read the salon. Branch NAMES for the select.
+  const branches = useSalon().data?.branches ?? [];
+  const url = useUrlFilters(TEAM_FILTERS);
+  const search = useSearchText(url.values.q, (q) => url.replace({ q }), 150);
+  const branch =
+    url.values.branch === UNASSIGNED || branches.some((b) => b.id === url.values.branch)
+      ? url.values.branch
+      : '';
+  const filter = { q: url.values.q, branch, source: url.values.source };
+  const filtered = filter.q.trim() !== '' || filter.branch !== '' || filter.source !== '';
+  const clearFilters = () => {
+    search.reset();
+    url.clear();
+  };
 
   const items = artists.data?.items;
   const editing = items?.find((a) => a.id === editingId) ?? null;
+  const shown = (items ?? []).filter((a) => artistMatches(a, filter));
 
   // An artist who vanishes from the roster while her editor is open (removed in
   // another tab) must not strand the screen on an editor with nothing behind it.
@@ -161,11 +228,55 @@ export function Team() {
           body="Artists appear here once they are added to the salon. Each one carries her own weekly hours and booking slot length."
         />
       ) : (
-        <div className="team__grid">
-          {items.map((artist) => (
-            <ArtistCard key={artist.id} artist={artist} onEdit={() => setEditingId(artist.id)} />
-          ))}
-        </div>
+        <>
+          <FilterBar
+            label="Filter artists"
+            search={{
+              value: search.text,
+              onChange: search.setText,
+              label: 'Search artists by name',
+              placeholder: 'Search artists',
+            }}
+            count={
+              filtered
+                ? shownLabel(shown.length, items.length, 'artist', 'artists', true)
+                : null
+            }
+            onClear={filtered ? clearFilters : undefined}
+          >
+            {branches.length > 1 ? (
+              <FilterSelect
+                label="Branch"
+                options={[
+                  { value: '', label: 'All branches' },
+                  ...branches.map((b) => ({ value: b.id, label: b.name })),
+                  { value: UNASSIGNED, label: 'No branch yet' },
+                ]}
+                value={filter.branch}
+                onChange={(next) => url.set({ branch: next })}
+              />
+            ) : null}
+            <FilterChips
+              label="Availability"
+              options={[
+                { value: '', label: 'All' },
+                { value: 'google', label: 'Google Calendar' },
+                { value: 'manual', label: 'Manual hours' },
+              ]}
+              value={filter.source}
+              onChange={(next) => url.set({ source: next })}
+            />
+          </FilterBar>
+          {shown.length === 0 ? (
+            <FilterEmpty things="artists" onClear={clearFilters} />
+          ) : (
+            <div className="team__grid">
+              {shown.map((artist) => (
+                <ArtistCard key={artist.id} artist={artist} onEdit={() => setEditingId(artist.id)} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </>
   );
