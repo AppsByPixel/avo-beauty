@@ -243,6 +243,16 @@ let platform = '';
  */
 const CT_ADDRESS = 'ADR-CT-0001';
 const CT_ORDER = 'TX-CT-ORDER';
+/**
+ * A PICKUP order with its pickup branch set — migration 0060's `pickupBranch`.
+ *
+ * `CT_ORDER` is a delivery, and a delivery serves `pickupBranch: null`. A `null`
+ * satisfies `.nullable()` perfectly while exercising none of the four nested keys,
+ * so without a non-null row the stripping probe below cannot see `id`, `name`,
+ * `nameAr` or `closed` at all — the field would be "declared" and still unmeasured.
+ * `THE PICKUP BRANCH IS WITNESSED` below asserts both order lists carry one.
+ */
+const CT_PICKUP_ORDER = 'TX-CT-PICKUP';
 
 const PIN_MEMBER = 'QA-CT-0001';
 const PIN_MEMBER_PHONE = '+96599777401';
@@ -1877,6 +1887,22 @@ beforeAll(async () => {
     ON CONFLICT (transaction_id) DO UPDATE SET
       status = 'preparing', ready_at = NULL, closed_at = NULL,
       address_id = EXCLUDED.address_id;
+
+    -- The pickup twin. Attributed to the branch she collects from and NOT assumed,
+    -- which is the row services/order.ts writes for a pickup since 0060.
+    INSERT INTO transaction (id, member_id, salon_id, branch_id, branch_assumed, kind,
+                             amount_fils, method, status, settled_at)
+    VALUES ('${CT_PICKUP_ORDER}', '${QA_MEMBER}', '${SALON_A}', '${A_BRANCH}', false, 'shop',
+            -1000, 'wallet', 'settled', now())
+    ON CONFLICT (id) DO UPDATE SET salon_id = EXCLUDED.salon_id;
+
+    INSERT INTO shop_order (transaction_id, salon_id, member_id, fulfilment, status,
+                            pickup_branch_id)
+    VALUES ('${CT_PICKUP_ORDER}', '${SALON_A}', '${QA_MEMBER}', 'pickup', 'preparing',
+            '${A_BRANCH}')
+    ON CONFLICT (transaction_id) DO UPDATE SET
+      status = 'preparing', ready_at = NULL, closed_at = NULL,
+      pickup_branch_id = EXCLUDED.pickup_branch_id;
   `);
 
   const addresses = await treq<any>('GET', '/members/me/addresses', { token: member });
@@ -1970,7 +1996,10 @@ beforeAll(async () => {
   const walletOrder = await treq<any>('POST', '/orders', {
     token: opMember,
     idempotencyKey: key('op-wallet-order'),
-    body: { items: [{ productId: OP_PRODUCT, qty: 1 }] },
+    // 0060: SAL-AMARA has two open branches, so a pickup names where she collects.
+    // Both doors name the SAME branch, so the receipt comparison below compares
+    // like with like — `pickupBranch` populated on both sides.
+    body: { items: [{ productId: OP_PRODUCT, qty: 1 }], pickupBranchId: A_BRANCH },
   });
   if (walletOrder.status >= 300) {
     throw new Error(`POST /orders: ${walletOrder.status} ${walletOrder.raw}`);
@@ -1980,7 +2009,7 @@ beforeAll(async () => {
   const opOpened = await treq<any>('POST', '/orders/payments', {
     token: opMember,
     idempotencyKey: key('op-card-order'),
-    body: { items: [{ productId: OP_PRODUCT, qty: 1 }], method: 'card' },
+    body: { items: [{ productId: OP_PRODUCT, qty: 1 }], pickupBranchId: A_BRANCH, method: 'card' },
   });
   if (opOpened.status !== 201) {
     throw new Error(`POST /orders/payments: ${opOpened.status} ${opOpened.raw}`);
@@ -3535,5 +3564,86 @@ describe('wire pins — the customer bell, per kind', () => {
       if (extra.length) problems.push(`${kind} ${item.id}: now serves ${extra.join(', ')}, unpinned`);
     }
     expect(problems, `${problems.join('\n')}\n--- served ---\n${res.raw.slice(0, 1200)}`).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// Migration 0060 — the pickup branch, declared AND witnessed
+// ===========================================================================
+
+/**
+ * THE PICKUP BRANCH IS WITNESSED, NOT MERELY DECLARED.
+ *
+ * Lane A predicted a drift here — `$.items[].pickupBranch` served and stripped —
+ * and trunk closed it at the cause by adding `pickupBranch` to `ShopOrderSchema`
+ * (e4730fe), landed with the serialiser. So there is NO `wireOnly` note for it on
+ * either order list, and there must not be one: the generic stripping probe above
+ * would call such a note stale and fail.
+ *
+ * What the generic probe cannot do on its own is guarantee it SAW the object. A
+ * page whose every row is a delivery serves `pickupBranch: null` on each, which
+ * `.nullable()` accepts while exercising none of `id`, `name`, `nameAr`, `closed`
+ * — so a schema that dropped `nameAr` from the nested object would still read
+ * green. `CT_PICKUP_ORDER` is the fixture that makes it a real measurement, and
+ * this spec is what fails if the fixture ever stops reaching the page.
+ */
+describe('the pickup branch — declared on ShopOrderSchema, and witnessed on both order lists', () => {
+  /**
+   * What the branch row says NOW, read from Postgres rather than typed — the seed's
+   * name is `Salmiya` / `السالمية`, but a name is merchant configuration and this
+   * spec is about the shape and the join, not about a rename elsewhere.
+   */
+  const branchRow = () => {
+    const [name, nameAr] = scalar(
+      `select concat_ws('|', name, coalesce(name_ar, '')) from branch where id='${A_BRANCH}'`,
+    )
+      .trim()
+      .split('|');
+    return { id: A_BRANCH, name, nameAr: nameAr === '' ? null : nameAr, closed: false };
+  };
+  let SALMIYA: ReturnType<typeof branchRow>;
+  beforeAll(() => {
+    SALMIYA = branchRow();
+    precondition(SALMIYA.name !== '', `${A_BRANCH} has no row, so nothing below is a measurement`);
+  });
+
+  for (const label of ['GET /members/me/orders', 'GET /v1/salons/:id/orders']) {
+    it(`${label} serves a non-null pickupBranch, and the parse keeps every key of it`, () => {
+      const res = response(label);
+      expect(res.status, res.raw).toBe(200);
+      const served = (res.body.items as Array<Record<string, any>>).find(
+        (o) => o.transactionId === CT_PICKUP_ORDER,
+      );
+      expect(served, `${label} does not carry ${CT_PICKUP_ORDER}\n${res.raw.slice(0, 800)}`).toBeDefined();
+      expect(served!.fulfilment).toBe('pickup');
+      expect(served!.pickupBranch, 'the pickup order came back with no branch').toEqual(SALMIYA);
+
+      const parsed = ShopOrderSchema.safeParse(served);
+      expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
+      expect(
+        (parsed as { data: Record<string, any> }).data.pickupBranch,
+        'ShopOrderSchema dropped part of pickupBranch — the wallet would read undefined',
+      ).toEqual(SALMIYA);
+
+      // The delivery twin on the same page is null, not absent — `.nullable()`,
+      // not `.optional()`, is what the schema says and what the wire must do.
+      const delivery = (res.body.items as Array<Record<string, any>>).find(
+        (o) => o.transactionId === CT_ORDER,
+      );
+      expect(delivery, `${label} does not carry ${CT_ORDER}`).toBeDefined();
+      expect(Object.prototype.hasOwnProperty.call(delivery, 'pickupBranch')).toBe(true);
+      expect(delivery!.pickupBranch).toBeNull();
+    });
+  }
+
+  it('both receipts — the wallet-paid POST /orders and the card-paid result — say where she collects', () => {
+    const wallet = response('POST /orders');
+    expect(wallet.status, wallet.raw).toBeLessThan(300);
+    expect(wallet.body.pickupBranch, wallet.raw).toEqual(SALMIYA);
+
+    const placed = response('GET /orders/payments/{id}').body.order.result;
+    expect(placed?.pickupBranch, 'the card-paid receipt lost the pickup branch in the jsonb round trip').toEqual(
+      SALMIYA,
+    );
   });
 });
