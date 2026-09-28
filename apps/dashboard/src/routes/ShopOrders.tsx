@@ -313,9 +313,16 @@ export interface ShopOrdersProps {
    * into `false` at a call site, which is the exact defect this prop guards.
    */
   shopOn: boolean | undefined;
+  /**
+   * The salon's zone, from the same `useSalon()` read as `shopOn`. An order's
+   * placed / ready / closed stamps are the salon's clock — "she says she waited
+   * an hour" is reconstructed against the salon's day, not the reader's.
+   * `null` while that read is in flight; see `salonTime.ts § clockFrame`.
+   */
+  timezone: string | null;
 }
 
-export function ShopOrders({ shopOn }: ShopOrdersProps) {
+export function ShopOrders({ shopOn, timezone }: ShopOrdersProps) {
   const [filter, setFilter] = useState<OrderStatus | null>(null);
   const board = useOrderBoard(filter);
   /*
@@ -435,6 +442,7 @@ export function ShopOrders({ shopOn }: ShopOrdersProps) {
                   <OrderRow
                     key={order.transactionId}
                     order={order}
+                    timezone={timezone}
                     moving={move.isPending && move.variables?.transactionId === order.transactionId}
                     onMove={(to) => move.mutate({ transactionId: order.transactionId, status: to })}
                   />
@@ -694,10 +702,12 @@ export function PickupWhere({ branch }: { branch: MerchantShopOrder['pickupBranc
 
 export function OrderRow({
   order,
+  timezone,
   moving,
   onMove,
 }: {
   order: MerchantShopOrder;
+  timezone: string | null;
   moving: boolean;
   onMove: (to: Exclude<OrderStatus, 'preparing'>) => void;
 }) {
@@ -822,7 +832,7 @@ export function OrderRow({
       </td>
       <td className="orders__when">
         <time dateTime={order.createdAt} title={new Date(order.createdAt).toISOString()}>
-          {whenLabel(order.createdAt)}
+          {whenLabel(order.createdAt, timezone)}
         </time>
         {/*
           THE SERVER'S TIMESTAMPS, NOT A CLIENT'S IDEA OF WHEN A BUTTON WAS
@@ -832,12 +842,12 @@ export function OrderRow({
         */}
         {order.readyAt ? (
           <div className="orders__stamp">
-            Ready <time dateTime={order.readyAt}>{whenLabel(order.readyAt)}</time>
+            Ready <time dateTime={order.readyAt}>{whenLabel(order.readyAt, timezone)}</time>
           </div>
         ) : null}
         {order.closedAt ? (
           <div className="orders__stamp">
-            Closed <time dateTime={order.closedAt}>{whenLabel(order.closedAt)}</time>
+            Closed <time dateTime={order.closedAt}>{whenLabel(order.closedAt, timezone)}</time>
           </div>
         ) : null}
       </td>

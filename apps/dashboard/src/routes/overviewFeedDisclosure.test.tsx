@@ -73,6 +73,7 @@ function renderList(props: Partial<Parameters<typeof ActivityList>[0]> = {}) {
   return render(
     <ActivityList
       items={feed(20)}
+      timezone="Asia/Kuwait"
       loading={false}
       error={null}
       onRetry={() => {}}

@@ -51,7 +51,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client.js';
 import { DEPOSIT_FRAMING } from './depositHealthRules.js';
 
@@ -260,7 +260,7 @@ function rig() {
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   }
-  return render(<DepositHealth />, { wrapper: Wrapper });
+  return render(<DepositHealth timezone="Asia/Kuwait" />, { wrapper: Wrapper });
 }
 
 /** The section element for one state — `data-state` is on the element for this. */
@@ -945,5 +945,37 @@ describe('a pending screen announces nothing it is not painting', () => {
     expect(screen.queryByText(DEPOSIT_FRAMING.return_overdue.title)).toBeNull();
     // The labels are standing prose and may show; the VALUES may not.
     expect(screen.getByText('Held right now')).toBeTruthy();
+  });
+});
+
+/* ============================================ the slot, in the salon's clock == */
+
+/**
+ * THE QUEUE PRINTS A SLOT IN THE SALON'S CLOCK, FROM A VIEWER WHO IS NOT IN IT.
+ * `whenLabelZone.test.ts` pins the formatter; this pins the WIRING — that the
+ * `timezone` handed to `<DepositHealth>` actually reaches the row, three
+ * components down. The process is moved to Karachi (+05:00) for this block only.
+ */
+describe('a row’s slot is the salon’s clock, not the viewer’s', () => {
+  const saved = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = 'Asia/Karachi';
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+    vi.useRealTimers();
+  });
+
+  it('22:30 Kuwait reads "Today · 10:30 PM", though Karachi is already past midnight', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-28T20:00:00.000Z')); // 23:00 Kuwait / 01:00 Karachi (29th)
+    serve({ ...HEALTH, rows: [{ ...LATIFA, startsAt: '2026-09-28T19:30:00.000Z' }] });
+    rig();
+
+    const cell = await screen.findByText(/Today · 10:30 PM/);
+    expect(cell).toBeTruthy();
+    expect(document.body.textContent).not.toContain('12:30 AM');
+    vi.useRealTimers();
   });
 });

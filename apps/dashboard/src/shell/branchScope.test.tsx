@@ -342,14 +342,14 @@ describe('"Loaded today" under a branch is an absence, not a zero', () => {
    * correct, the schema is correct, the types are correct, and the glass lies.
    */
   it('never paints 0.000 for a figure the workspace did not answer', () => {
-    const { container } = render(<KpiRow metrics={byBranch()} loading={false} />);
+    const { container } = render(<KpiRow metrics={byBranch()} loading={false} timezone="Asia/Kuwait" />);
     expect(container.textContent).not.toContain('0.000');
     // Nor the unit, which would frame the dash as an amount.
     expect(container.textContent).not.toContain('KD');
   });
 
   it('says why the value is a dash, in the tile', () => {
-    render(<KpiRow metrics={byBranch()} loading={false} />);
+    render(<KpiRow metrics={byBranch()} loading={false} timezone="Asia/Kuwait" />);
     expect(screen.getByText('Top-ups happen in the app, not at a branch')).toBeTruthy();
   });
 
@@ -360,7 +360,7 @@ describe('"Loaded today" under a branch is an absence, not a zero', () => {
    * is a four-column grid that a missing tile would visibly break.
    */
   it('keeps all four tiles, so nothing reads as "this figure does not exist"', () => {
-    render(<KpiRow metrics={byBranch()} loading={false} />);
+    render(<KpiRow metrics={byBranch()} loading={false} timezone="Asia/Kuwait" />);
     for (const label of ['Active members', 'Loaded today', 'Repeat rate', 'Upcoming today']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
@@ -368,12 +368,12 @@ describe('"Loaded today" under a branch is an absence, not a zero', () => {
 
   /** The KNET delta hangs off the same null and simply has nothing to say. */
   it('drops the KNET share rather than rendering 0% via KNET', () => {
-    const { container } = render(<KpiRow metrics={byBranch()} loading={false} />);
+    const { container } = render(<KpiRow metrics={byBranch()} loading={false} timezone="Asia/Kuwait" />);
     expect(container.textContent).not.toContain('via KNET');
   });
 
   it('still renders the money and the KNET share at all branches', () => {
-    const { container } = render(<KpiRow metrics={wide()} loading={false} />);
+    const { container } = render(<KpiRow metrics={wide()} loading={false} timezone="Asia/Kuwait" />);
     expect(container.textContent).toContain('184.500');
     expect(container.textContent).toContain('KD');
     expect(container.textContent).toContain('62% via KNET');
@@ -381,7 +381,7 @@ describe('"Loaded today" under a branch is an absence, not a zero', () => {
   });
 
   it('skeletons before data, never a zero and never the dash', () => {
-    const { container } = render(<KpiRow metrics={undefined} loading />);
+    const { container } = render(<KpiRow metrics={undefined} loading timezone="Asia/Kuwait" />);
     expect(container.querySelectorAll('.avo-skeleton').length).toBeGreaterThan(0);
     expect(container.textContent).not.toContain('0.000');
     expect(container.textContent).not.toContain('Top-ups happen');

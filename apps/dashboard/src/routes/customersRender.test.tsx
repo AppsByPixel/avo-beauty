@@ -176,9 +176,16 @@ function rig() {
   return render(<Customers />, { wrapper: Wrapper });
 }
 
-/** Every path `authedRequest` was called with, in order. */
+/**
+ * Every path `authedRequest` was called with, in order — LESS the salon read.
+ * `Customers` reads `GET /salons/{id}` for the salon's zone (every date on the
+ * screen is the salon's calendar); in the app that is a cache hit on the shell's
+ * read, and here it is one extra call that says nothing about the book.
+ */
 function paths(): string[] {
-  return authedRequest.mock.calls.map((call) => call[1] as string);
+  return authedRequest.mock.calls
+    .map((call) => call[1] as string)
+    .filter((path) => path !== '/salons/SAL-AMARA');
 }
 
 /* ------------------------------------------------------------------- the book */

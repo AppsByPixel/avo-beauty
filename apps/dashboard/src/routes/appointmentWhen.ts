@@ -1,3 +1,5 @@
+import { clock12, clockFrame, dayMonth, relativeDay } from './salonTime.js';
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * WHEN A BOOKING'S SLOT IS, AS THE MERCHANT READS IT — ONE FUNCTION, TWO SCREENS
@@ -15,8 +17,8 @@
  * `Appointments.tsx` mounts `DepositHealth`. So both import from here and
  * neither owns the wording of the other's column.
  *
- * THE API SENDS AN ISO INSTANT ON PURPOSE. The relative phrasing depends on the
- * READER's clock, and non-negotiable #12 makes the Arabic surfaces a real layout
+ * THE API SENDS AN ISO INSTANT ON PURPOSE. The relative phrasing depends on WHEN it
+ * is read, and non-negotiable #12 makes the Arabic surfaces a real layout
  * rather than a string swap — so the server declines to compose the sentence and
  * this is where it gets composed for the English-only merchant surfaces.
  *
@@ -25,20 +27,32 @@
  * looks back — every row it draws has `starts_at < now` — and it still uses this
  * function rather than a trimmed copy, because a formatter with an unreachable
  * arm is cheaper than two formatters that can disagree about "Yesterday".
+ *
+ * IN THE SALON'S CLOCK, AND "TODAY" IS THE SALON'S TODAY. This used to call
+ * `toLocaleTimeString` with no `timeZone` and count days between browser-local
+ * midnights, so it answered in the READER's zone. `AppointmentForm` builds the
+ * instant from the salon's zone and names it on the field, so a merchant who
+ * typed 10:00 read "12:00 PM" back from Pakistan. Found live on BK-10000005;
+ * `salonTime.ts` carries the argument and `whenLabelZone.test.ts` pins it from
+ * Karachi. The zone is an argument with no default so no caller can forget it.
+ *
+ * AN UNPARSEABLE INSTANT DEGRADES TO "unknown", `Customers.tsx § whenLabel`'s
+ * word, rather than to "Invalid Date · Invalid Date".
  */
-export function whenLabel(iso: string): string {
+export function whenLabel(iso: string, timezone: string | null, now: Date = new Date()): string {
   const at = new Date(iso);
-  const time = at.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
+  if (Number.isNaN(at.getTime())) return 'unknown';
+  const frame = clockFrame(timezone);
+  const time = clock12(at, frame);
 
-  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((midnight(at) - midnight(new Date())) / 86_400_000);
-
-  if (days === 0) return `Today · ${time}`;
-  if (days === -1) return `Yesterday · ${time}`;
-  if (days === 1) return `Tomorrow · ${time}`;
-  return `${at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${time}`;
+  switch (relativeDay(at, now, frame.zone)) {
+    case 'today':
+      return `Today · ${time}`;
+    case 'yesterday':
+      return `Yesterday · ${time}`;
+    case 'tomorrow':
+      return `Tomorrow · ${time}`;
+    default:
+      return `${dayMonth(at, frame)} · ${time}`;
+  }
 }

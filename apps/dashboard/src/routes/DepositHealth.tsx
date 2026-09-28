@@ -200,7 +200,15 @@ function assumedClause(assumed: number | null, total: number, noun: string): str
  * bookings, which is the two-figures-disagreeing defect the API's single-query
  * aggregate exists to prevent, reintroduced by the client.
  */
-function DepositSection({ group, truncated }: { group: DepositGroup; truncated: boolean }) {
+function DepositSection({
+  group,
+  truncated,
+  timezone,
+}: {
+  group: DepositGroup;
+  truncated: boolean;
+  timezone: string | null;
+}) {
   if (group.bookings === 0) return null;
 
   const framing = DEPOSIT_FRAMING[group.state];
@@ -266,7 +274,7 @@ function DepositSection({ group, truncated }: { group: DepositGroup; truncated: 
             </thead>
             <tbody>
               {group.rows.map((row) => (
-                <DepositBookingRow key={row.bookingId} row={row} money={money} />
+                <DepositBookingRow key={row.bookingId} row={row} money={money} timezone={timezone} />
               ))}
             </tbody>
           </table>
@@ -287,7 +295,16 @@ function DepositSection({ group, truncated }: { group: DepositGroup; truncated: 
  * `perms.void` and a confirmation, and duplicating one here would be a second
  * place for the idempotency key to be minted.
  */
-export function DepositBookingRow({ row, money }: { row: DepositRow; money: boolean }) {
+export function DepositBookingRow({
+  row,
+  money,
+  timezone,
+}: {
+  row: DepositRow;
+  money: boolean;
+  /** The salon's zone — the slot is printed in its clock. See `appointmentWhen.ts`. */
+  timezone: string | null;
+}) {
   const party = partyFor(row);
   /*
    * `returnOverdueMinutes` IS NULL ON TWO OF THE THREE STATES AND THAT NULL IS
@@ -321,7 +338,7 @@ export function DepositBookingRow({ row, money }: { row: DepositRow; money: bool
       <td>{row.serviceName}</td>
       <td className="deposits__muted">{row.artistName}</td>
       <td className="deposits__when">
-        {whenLabel(row.startsAt)}
+        {whenLabel(row.startsAt, timezone)}
         <div className="deposits__branch">
           {row.branchName}
           {/*
@@ -382,7 +399,13 @@ function DepositContact({ party }: { party: ReturnType<typeof partyFor> }) {
 
 /* ================================================================ the screen */
 
-export function DepositHealth() {
+/**
+ * `timezone` is the salon's, passed down by `Appointments` which already holds
+ * the salon read — the rows print a booking's slot in the salon's clock, the
+ * same reading the List gives the same booking. `null` while that read is in
+ * flight; see `salonTime.ts § clockFrame` for what a row says then.
+ */
+export function DepositHealth({ timezone }: { timezone: string | null }) {
   /*
    * THE SHELL'S BRANCH SELECTION, not a second control. `?branch=` here is the
    * same parameter, the same vocabulary and the same `branchQuery` the Overview
@@ -411,7 +434,7 @@ export function DepositHealth() {
     <div className="deposits">
       <DepositTiles health={data} loading={loading} />
       <DepositAssumedNote health={data} />
-      {loading ? <DepositSkeleton /> : data ? <DepositBody health={data} /> : null}
+      {loading ? <DepositSkeleton /> : data ? <DepositBody health={data} timezone={timezone} /> : null}
     </div>
   );
 }
@@ -456,7 +479,7 @@ function DepositSkeleton() {
  *   it is still in the future — which is exactly what deposits are for, and the
  *   copy says so rather than merely reporting a zero.
  */
-export function DepositBody({ health }: { health: Health }) {
+export function DepositBody({ health, timezone }: { health: Health; timezone: string | null }) {
   if (health.held.bookings === 0) {
     return (
       <Card className="deposits__card">
@@ -488,7 +511,12 @@ export function DepositBody({ health }: { health: Health }) {
   return (
     <>
       {groups.map((group) => (
-        <DepositSection key={group.state} group={group} truncated={health.rowsTruncated} />
+        <DepositSection
+          key={group.state}
+          group={group}
+          truncated={health.rowsTruncated}
+          timezone={timezone}
+        />
       ))}
     </>
   );

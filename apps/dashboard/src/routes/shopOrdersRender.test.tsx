@@ -46,7 +46,7 @@
  */
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { MerchantShopOrder } from '../api/orders.js';
 import { AddressSnapshot, BoardEmpty, OrderRow, TruncatedNotice } from './ShopOrders.js';
 
@@ -220,7 +220,7 @@ function renderRow(order: MerchantShopOrder, moving = false) {
   const view = render(
     <table>
       <tbody>
-        <OrderRow order={order} moving={moving} onMove={onMove} />
+        <OrderRow order={order} timezone="Asia/Kuwait" moving={moving} onMove={onMove} />
       </tbody>
     </table>,
   );
@@ -858,5 +858,44 @@ describe('a moved row keeps the fields the PATCH does not send', () => {
      * changes, deliberately, rather than a surprise.
      */
     expect(container.querySelector('.orders__customer')?.textContent).toBe('');
+  });
+});
+
+/* ======================================== the stamps, in the salon's clock == */
+
+/**
+ * AN ORDER'S STAMPS ARE THE SALON'S CLOCK, FROM A VIEWER WHO IS NOT IN IT.
+ * The process is moved to Karachi (+05:00) for this block. 19:30Z is 22:30 in
+ * Kuwait on the 28th and 00:30 in Karachi on the 29th — so the old,
+ * browser-zoned stamp read "29 Sept · 00:30" on an order placed this evening.
+ */
+describe('an order’s stamps are the salon’s clock, not the viewer’s', () => {
+  const saved = process.env.TZ;
+  beforeAll(() => {
+    process.env.TZ = 'Asia/Karachi';
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+    vi.useRealTimers();
+  });
+
+  it('placed, ready and closed all read in Kuwait time, under Kuwait’s Today', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-28T20:00:00.000Z')); // 23:00 Kuwait / 01:00 Karachi (29th)
+    const { container } = renderRow({
+      ...DELIVERY,
+      status: 'closed',
+      createdAt: '2026-09-28T19:30:00.000Z',
+      readyAt: '2026-09-28T19:45:00.000Z',
+      closedAt: '2026-09-28T19:55:00.000Z',
+    });
+
+    const when = container.querySelector('.orders__when')?.textContent ?? '';
+    expect(when).toContain('Today · 22:30');
+    expect(when).toContain('Ready Today · 22:45');
+    expect(when).toContain('Closed Today · 22:55');
+    expect(when).not.toContain('00:30');
+    vi.useRealTimers();
   });
 });

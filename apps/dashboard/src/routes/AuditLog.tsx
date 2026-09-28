@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Button, Card, Chip, EmptyState, InfoBanner, Pill, Skeleton, type PillTone } from '@avo/ui';
 import { AUDIT_KINDS, useAuditLog, type AuditEntry, type AuditKind } from '../api/audit.js';
+import { useSalon } from '../api/salon.js';
+import { clock24, clockFrame, dayMonth, relativeDay } from './salonTime.js';
 import { SectionError } from './sectionState.js';
 
 /**
@@ -87,16 +89,35 @@ export function auditEmptyLine(
   return 'No entries match that search.';
 }
 
-export function whenLabel(iso: string): string {
+/**
+ * "Today · 14:05", "Yesterday · 09:12", "9 Jul · 19:40" — the feed stamp the
+ * audit log, the Shop orders board and the console's two feeds share.
+ *
+ * THE ZONE IS AN ARGUMENT, AND WHICH ONE IS A DECISION PER SCREEN, NOT A DEFAULT.
+ * This used to format in the browser's zone and compare `toDateString()`s, so a
+ * reader in Karachi saw a Kuwait salon's evening under tomorrow's date.
+ * `salonTime.ts` has the whole argument; the decisions it forces are:
+ *
+ *   - THE MERCHANT AUDIT LOG AND THE ORDERS BOARD pass the SALON's zone. They
+ *     are the salon's own records, read against its till receipts and its
+ *     appointment book, and "Today" here must be the same day the Appointments
+ *     list calls Today — a void at 22:30 Kuwait time is today's void there.
+ *   - THE CONSOLE (`console/Audit.tsx`, `console/Activity.tsx`) passes
+ *     `viewerZone()`. Its rows span every salon, and one column mixing each
+ *     row's own zone would stop sorting by time as a reader scans it. The
+ *     reader's own clock is the one frame every row shares — chosen explicitly
+ *     at the call site so it is never what happens by leaving a zone out.
+ */
+export function whenLabel(iso: string, timezone: string | null, now: Date = new Date()): string {
   const at = new Date(iso);
-  const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
+  if (Number.isNaN(at.getTime())) return 'unknown';
+  const frame = clockFrame(timezone);
+  const time = clock24(at, frame);
 
-  if (at.toDateString() === today.toDateString()) return `Today · ${time}`;
-  if (at.toDateString() === yesterday.toDateString()) return `Yesterday · ${time}`;
-  return `${at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${time}`;
+  const day = relativeDay(at, now, frame.zone);
+  if (day === 'today') return `Today · ${time}`;
+  if (day === 'yesterday') return `Yesterday · ${time}`;
+  return `${dayMonth(at, frame)} · ${time}`;
 }
 
 export function AuditLog() {
@@ -112,6 +133,8 @@ export function AuditLog() {
   }, [search]);
 
   const log = useAuditLog({ q: query, kind });
+  // The shell has already read the salon; this is a cache hit, not a request.
+  const timezone = useSalon().data?.timezone ?? null;
 
   if (log.isError) {
     return (
@@ -220,7 +243,7 @@ export function AuditLog() {
                   </td>
                 </tr>
               ) : (
-                rows.map((entry) => <AuditRow key={entry.id} entry={entry} />)
+                rows.map((entry) => <AuditRow key={entry.id} entry={entry} timezone={timezone} />)
               )}
             </tbody>
           </table>
@@ -247,7 +270,7 @@ export function AuditLog() {
   );
 }
 
-function AuditRow({ entry }: { entry: AuditEntry }) {
+function AuditRow({ entry, timezone }: { entry: AuditEntry; timezone: string | null }) {
   return (
     <tr data-platform={entry.isPlatformAction ? '' : undefined}>
       <td className="audit__when">
@@ -257,7 +280,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
           reconstructing "Yesterday" from a screenshot.
         */}
         <time dateTime={entry.when} title={new Date(entry.when).toISOString()}>
-          {whenLabel(entry.when)}
+          {whenLabel(entry.when, timezone)}
         </time>
       </td>
       <td>

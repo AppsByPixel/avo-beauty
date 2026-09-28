@@ -12,6 +12,7 @@ import {
   type MerchantNotification,
   type NotificationFeed,
 } from '../api/notifications.js';
+import { feedStamp } from '../routes/salonTime.js';
 import { SectionError } from '../routes/sectionState.js';
 
 /**
@@ -123,6 +124,8 @@ export interface NotificationBellPanelProps {
   onNavigate: (to: string) => void;
   /** When `feed` was last fetched successfully, for the stale banner. */
   updatedAt: number;
+  /** The salon's zone — a row's stamp is the salon's clock. See `feedStamp`. */
+  timezone: string | null;
 }
 
 /**
@@ -144,6 +147,7 @@ export function NotificationBellPanel({
   onMarkRead,
   onNavigate,
   updatedAt,
+  timezone,
 }: NotificationBellPanelProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -304,6 +308,7 @@ export function NotificationBellPanel({
               retrying={retrying}
               onNavigate={onNavigate}
               updatedAt={updatedAt}
+              timezone={timezone}
               scopeSentence={scopeSentence}
             />
           </div>
@@ -328,6 +333,7 @@ function PanelBody({
   retrying,
   onNavigate,
   updatedAt,
+  timezone,
   scopeSentence,
 }: Omit<NotificationBellPanelProps, 'onMarkRead'> & { scopeSentence: string | null }) {
   /*
@@ -346,7 +352,7 @@ function PanelBody({
         ) : (
           <>
             {feed.items.map((n) => (
-              <Row key={n.id} notification={n} onNavigate={onNavigate} />
+              <Row key={n.id} notification={n} timezone={timezone} onNavigate={onNavigate} />
             ))}
             {/*
              * THE PAGE, SAID OUT LOUD. `nextCursor` is a REAL cursor here —
@@ -441,9 +447,11 @@ function Empty({ scopeSentence }: { scopeSentence: string | null }) {
 
 function Row({
   notification,
+  timezone,
   onNavigate,
 }: {
   notification: MerchantNotification;
+  timezone: string | null;
   onNavigate: (to: string) => void;
 }) {
   const resolved = notification.resolvedAt !== null;
@@ -466,7 +474,7 @@ function Row({
       </span>
       {resolved ? <span className="avo-sr-only">Resolved.</span> : null}
       <span className="dash-bell__body">{notification.body}</span>
-      <span className="dash-bell__when">{timeLabel(notification.createdAt)}</span>
+      <span className="dash-bell__when">{feedStamp(notification.createdAt, timezone)}</span>
     </span>
   );
 
@@ -500,22 +508,15 @@ function Row({
   );
 }
 
-/**
- * `Overview.tsx § timeLabel`, deliberately the same rule: the clock for today,
- * the date and the clock for anything older. The design writes "6 min ago" and
- * "Yesterday", which is a relative format that goes stale in place on a panel
- * that stays open — and the activity feed one card away already settled this
- * question for this surface. Western digits by construction (#12): an `en-GB`
- * locale, never the browser's.
+/*
+ * THE ROW'S STAMP IS `salonTime.ts § feedStamp` — the Overview feed's rule,
+ * deliberately the same one and now literally the same function: the clock for
+ * today, the date and the clock for anything older, in the SALON's clock. The
+ * design writes "6 min ago" and "Yesterday", which is a relative format that goes
+ * stale in place on a panel that stays open — and the activity feed one card
+ * away already settled this question for this surface. Western digits by
+ * construction (#12): an `en-GB` locale, never the browser's.
  */
-function timeLabel(iso: string): string {
-  const when = new Date(iso);
-  const sameDay = when.toDateString() === new Date().toDateString();
-  const clock = when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return sameDay
-    ? clock
-    : `${when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${clock}`;
-}
 
 /* ----------------------------------------------------------- the container */
 
@@ -523,7 +524,7 @@ function timeLabel(iso: string): string {
  * What `MerchantShell` mounts. Hooks in, props down — the split that lets the
  * panel above be rendered by a test with a fixture instead of a query client.
  */
-export function NotificationBell() {
+export function NotificationBell({ timezone }: { timezone: string | null }) {
   const query = useNotifications();
   const markRead = useMarkNotificationsRead();
   const navigate = useNavigate();
@@ -546,6 +547,7 @@ export function NotificationBell() {
       onMarkRead={onMarkRead}
       onNavigate={(to) => void navigate({ to })}
       updatedAt={query.dataUpdatedAt}
+      timezone={timezone}
     />
   );
 }

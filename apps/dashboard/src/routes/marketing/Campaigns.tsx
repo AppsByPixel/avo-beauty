@@ -17,6 +17,7 @@ import {
   type CampaignDraft,
 } from '../../api/promotions.js';
 import { ApiError } from '../../api/client.js';
+import { instantFromSalonLocal, salonLocalFields } from '../appointmentsWeekRules.js';
 import { isForbidden, isUnauthenticated, SectionError, WriteError } from '../sectionState.js';
 
 /**
@@ -41,6 +42,46 @@ import { isForbidden, isUnauthenticated, SectionError, WriteError } from '../sec
 export interface CampaignsProps {
   branches: Branch[];
   loading: boolean;
+  /**
+   * The salon's IANA zone. "Scheduled for" is a wall clock in it, and the queue
+   * reads a scheduled instant back in it. `null` until the salon read lands.
+   */
+  timezone: string | null;
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * "SCHEDULED FOR" IS THE SALON'S WALL CLOCK, AND THE API TAKES AN INSTANT
+ * ═══════════════════════════════════════════════════════════════════════════
+ * A `datetime-local` value has no zone ("2026-09-30T10:00"), and it used to be
+ * posted as it came. `POST /campaigns` does `new Date(raw)`, which reads a
+ * zone-less string in the API PROCESS's zone — whatever the host happens to run.
+ * On a UTC host a Kuwait merchant's 10:00 was scheduled for 13:00 Kuwait time,
+ * and the queue row, which sliced the ISO instant (the UTC wall clock), read
+ * "10:00" straight back to her: wrong at both ends and invisible from either.
+ *
+ * `appointmentsWeekRules.ts § instantFromSalonLocal` is the bridge
+ * `AppointmentForm` already crosses for the same reason; this crosses it too.
+ * A value it cannot convert — only an unusable zone does that to a well-formed
+ * control value — goes as `''`, which the server refuses with its own sentence,
+ * rather than as the zone-less string it would silently accept.
+ */
+export function scheduledInstant(value: string, timezone: string | null): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
+  if (!m || timezone === null) return '';
+  return instantFromSalonLocal(m[1] ?? '', m[2] ?? '', timezone) ?? '';
+}
+
+/**
+ * The queue row's "2026-09-30 10:00", in the salon's clock. It printed
+ * `scheduledAt.replace('T', ' ').slice(0, 16)` — the UTC wall clock out of the
+ * ISO string. Same shape now, read through `salonLocalFields`; an unusable zone
+ * keeps the UTC reading and names it, per `salonTime.ts § clockFrame`.
+ */
+export function scheduledLabel(iso: string, timezone: string | null): string {
+  const local = timezone === null ? null : salonLocalFields(iso, timezone);
+  if (local) return `${local.date} ${local.time}`;
+  return `${iso.replace('T', ' ').slice(0, 16)} UTC`;
 }
 
 const STATUS_TONE: Record<Campaign['status'], PillTone> = {
@@ -74,7 +115,7 @@ function rewardFields(choice: RewardChoice): Pick<CampaignDraft, 'reward' | 'cus
   return id === null ? { reward: choice as RewardKey | 'none' } : { reward: 'custom', customRewardId: id };
 }
 
-export function Campaigns({ branches, loading }: CampaignsProps) {
+export function Campaigns({ branches, loading, timezone }: CampaignsProps) {
   const submit = useSubmitCampaign();
   const [audience, setAudience] = useState<Campaign['audience']>('all');
   const [branchId, setBranchId] = useState('all');
@@ -199,7 +240,7 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
                   branchId,
                   ...rewardFields(reward),
                   when,
-                  scheduledAt: when === 'later' ? scheduledAt : '',
+                  scheduledAt: when === 'later' ? scheduledInstant(scheduledAt, timezone) : '',
                 },
                 {
                   onSuccess: () => {
@@ -281,7 +322,7 @@ export function Campaigns({ branches, loading }: CampaignsProps) {
           </p>
         </Card>
 
-        <Queue loading={loading} />
+        <Queue loading={loading} timezone={timezone} />
       </div>
     </div>
   );
@@ -466,7 +507,7 @@ function SavedRewardsError({ saved }: { saved: ReturnType<typeof useCampaignRewa
  * a fabricated row. Withdraw and the monthly cap sit behind the same gap and are
  * omitted for the same reason.
  */
-function Queue({ loading }: { loading: boolean }) {
+function Queue({ loading, timezone }: { loading: boolean; timezone: string | null }) {
   const campaigns = useCampaigns();
   const missing = campaigns.error instanceof ApiError && campaigns.error.status === 404;
   const items = campaigns.data?.items ?? [];
@@ -527,13 +568,13 @@ function Queue({ loading }: { loading: boolean }) {
           campaign before it reaches a phone, and you&rsquo;ll be told the decision.
         </p>
       ) : (
-        items.map((c) => <QueueRow key={c.id} campaign={c} />)
+        items.map((c) => <QueueRow key={c.id} campaign={c} timezone={timezone} />)
       )}
     </Card>
   );
 }
 
-function QueueRow({ campaign: c }: { campaign: Campaign }) {
+function QueueRow({ campaign: c, timezone }: { campaign: Campaign; timezone: string | null }) {
   /*
    * THE REWARD, AS SHE ATTACHED IT. A custom one is the server's snapshot of her
    * words at submission, verbatim — so removing it from her list later does not
@@ -551,7 +592,7 @@ function QueueRow({ campaign: c }: { campaign: Campaign }) {
           c.when === 'recurring'
             ? 'Auto'
             : c.scheduledAt
-              ? c.scheduledAt.replace('T', ' ').slice(0, 16)
+              ? scheduledLabel(c.scheduledAt, timezone)
               : 'On approval',
           { push: 'push', wa: 'WhatsApp', both: 'push + WhatsApp' }[c.channel],
           c.result ?? `${c.reach.toLocaleString('en-US')} people`,

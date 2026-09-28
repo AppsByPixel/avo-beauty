@@ -154,7 +154,7 @@ function renderWith(ui: ReactNode) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
-const renderComposer = () => renderWith(<Campaigns branches={[]} loading={false} />);
+const renderComposer = () => renderWith(<Campaigns branches={[]} loading={false} timezone="Asia/Kuwait" />);
 const rewardSelect = () => screen.getByLabelText<HTMLSelectElement>(/Attach a reward/);
 const optionTexts = () => [...rewardSelect().options].map((o) => o.textContent);
 

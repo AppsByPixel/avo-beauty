@@ -174,7 +174,7 @@ function mount(board: unknown, patch?: unknown) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  render(<ShopOrders shopOn />, { wrapper });
+  render(<ShopOrders shopOn timezone="Asia/Kuwait" />, { wrapper });
 }
 
 /** The row for a transaction, once the board has loaded. */

@@ -9,6 +9,7 @@ import {
 } from '../../api/audit.js';
 import { useAllPlatformSalons } from '../../api/platformSalons.js';
 import { auditEmptyLine, ClockGlyph, KIND_LABEL, KIND_TONE, whenLabel } from '../AuditLog.js';
+import { viewerZone } from '../salonTime.js';
 import { SectionError } from '../sectionState.js';
 
 /**
@@ -313,7 +314,7 @@ function ConsoleAuditRow({
     <tr data-platform={entry.isPlatformAction ? '' : undefined}>
       <td className="audit__when">
         <time dateTime={entry.when} title={new Date(entry.when).toISOString()}>
-          {whenLabel(entry.when)}
+          {whenLabel(entry.when, viewerZone())}
         </time>
       </td>
       <td>

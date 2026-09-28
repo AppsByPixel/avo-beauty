@@ -10,6 +10,8 @@ import {
 } from '../api/customers.js';
 import type { ActivityItem } from '../api/salon.js';
 import { ApiError } from '../api/client.js';
+import { useSalon } from '../api/salon.js';
+import { clock24, clockFrame, dayMonth } from './salonTime.js';
 import { SectionError } from './sectionState.js';
 
 /**
@@ -89,6 +91,9 @@ import { SectionError } from './sectionState.js';
 /* ------------------------------------------------------------ the book view */
 
 export function Customers() {
+  // The salon's zone for every date on this screen. A cache hit — the shell
+  // has already read the salon. See `salonTime.ts`.
+  const timezone = useSalon().data?.timezone ?? null;
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   /**
@@ -127,7 +132,7 @@ export function Customers() {
    * card she is reading to a failure that says nothing about it.
    */
   if (openId !== null) {
-    return <CustomerCard memberId={openId} onBack={() => setOpenId(null)} />;
+    return <CustomerCard memberId={openId} timezone={timezone} onBack={() => setOpenId(null)} />;
   }
 
   if (book.isError) {
@@ -233,6 +238,7 @@ export function Customers() {
                 <CustomerRow
                   key={customer.id}
                   customer={customer}
+                  timezone={timezone}
                   onOpen={() => setOpenId(customer.id)}
                 />
               ))
@@ -297,9 +303,11 @@ export function BookEmpty({ query, onClear }: { query: string; onClear: () => vo
 
 export function CustomerRow({
   customer,
+  timezone,
   onOpen,
 }: {
   customer: CustomerListItem;
+  timezone: string | null;
   onOpen: () => void;
 }) {
   return (
@@ -327,7 +335,7 @@ export function CustomerRow({
         */}
         <Money amount={fils(customer.balanceFils)} withUnit />
       </td>
-      <td className="cust__joined">{monthYear(customer.joinedAt)}</td>
+      <td className="cust__joined">{monthYear(customer.joinedAt, timezone)}</td>
       <td className="cust__open">
         <Button variant="secondary" onClick={onOpen}>
           View
@@ -452,7 +460,15 @@ function isUnknownMember(error: unknown): boolean {
  * retrying will answer the same thing forever. It gets its own state, with no
  * retry, for the reason a 403 has none.
  */
-export function CustomerCard({ memberId, onBack }: { memberId: string; onBack: () => void }) {
+export function CustomerCard({
+  memberId,
+  timezone,
+  onBack,
+}: {
+  memberId: string;
+  timezone: string | null;
+  onBack: () => void;
+}) {
   const card = useCustomer(memberId);
   const history = useCustomerHistory(memberId);
 
@@ -481,7 +497,7 @@ export function CustomerCard({ memberId, onBack }: { memberId: string; onBack: (
           />
         )
       ) : (
-        <CustomerProfile customer={card.data} />
+        <CustomerProfile customer={card.data} timezone={timezone} />
       )}
 
       <div className="cust-card__grid">
@@ -489,6 +505,7 @@ export function CustomerCard({ memberId, onBack }: { memberId: string; onBack: (
           <h3 className="cust-card__panel-title avo-display">Recent activity</h3>
           <History
             history={history}
+            timezone={timezone}
             /*
               The history is not asked for again when the card itself has already
               answered 404 — the member is not in this salon and the second refusal
@@ -505,7 +522,13 @@ export function CustomerCard({ memberId, onBack }: { memberId: string; onBack: (
 }
 
 /** The design's header strip, Personal information and Wallet. */
-export function CustomerProfile({ customer }: { customer: CustomerDetail }) {
+export function CustomerProfile({
+  customer,
+  timezone,
+}: {
+  customer: CustomerDetail;
+  timezone: string | null;
+}) {
   return (
     <>
       <div className="cust-card__head">
@@ -520,7 +543,7 @@ export function CustomerProfile({ customer }: { customer: CustomerDetail }) {
               There is no handle on a customer, so what survives is the true half —
               kept in the design's own words.
             */}
-            member since {monthYear(customer.joinedAt)} · {customer.visits}{' '}
+            member since {monthYear(customer.joinedAt, timezone)} · {customer.visits}{' '}
             {customer.visits === 1 ? 'visit' : 'visits'} · <NoShowCount customer={customer} />
           </div>
         </div>
@@ -551,7 +574,7 @@ export function CustomerProfile({ customer }: { customer: CustomerDetail }) {
             </div>
             <div className="cust-card__info-row">
               <dt>Joined</dt>
-              <dd>{fullDate(customer.joinedAt)}</dd>
+              <dd>{fullDate(customer.joinedAt, timezone)}</dd>
             </div>
           </dl>
         </Card>
@@ -693,9 +716,11 @@ type HistoryQuery = ReturnType<typeof useCustomerHistory>;
 
 export function History({
   history,
+  timezone,
   suppressed,
 }: {
   history: HistoryQuery;
+  timezone: string | null;
   suppressed: boolean;
 }) {
   if (suppressed) return null;
@@ -748,7 +773,7 @@ export function History({
     <>
       <ul className="cust-card__feed">
         {items.map((item) => (
-          <HistoryRow key={`${item.stream}:${item.id}`} item={item} />
+          <HistoryRow key={`${item.stream}:${item.id}`} item={item} timezone={timezone} />
         ))}
       </ul>
       {history.hasNextPage ? (
@@ -786,13 +811,13 @@ export function History({
  * terms. Rendering the raw integer a second time invites the two to disagree, which
  * on a top-up they would.
  */
-export function HistoryRow({ item }: { item: ActivityItem }) {
+export function HistoryRow({ item, timezone }: { item: ActivityItem; timezone: string | null }) {
   return (
     <li className="cust-card__feed-row">
       <span className="cust-card__feed-dot" data-stream={item.stream} aria-hidden="true" />
       <span className="cust-card__feed-body">
         <span className="cust-card__feed-what">{item.what}</span>
-        <span className="cust-card__feed-when">{whenLabel(item.at)}</span>
+        <span className="cust-card__feed-when">{whenLabel(item.at, timezone)}</span>
       </span>
     </li>
   );
@@ -832,23 +857,34 @@ function CustomerSkeleton() {
  * `Accounts.tsx § formatExpiry` set that shape for the same reason: a date this
  * client could not read is a server the merchant cannot fix, and printing the
  * browser's error string into a customer's row helps nobody.
+ *
+ * IN THE SALON'S CALENDAR, all three. They used the browser's, so a member who
+ * joined at 23:30 Kuwait time on 31 March was "member since Apr" from Karachi.
+ * `salonTime.ts` has the argument; the zone is an argument with no default.
  */
-export function monthYear(iso: string): string {
+export function monthYear(iso: string, timezone: string | null): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return 'unknown';
-  return at.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+  const { zone } = clockFrame(timezone);
+  return at.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: zone });
 }
 
-export function fullDate(iso: string): string {
+export function fullDate(iso: string, timezone: string | null): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return 'unknown';
-  return at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const { zone } = clockFrame(timezone);
+  return at.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: zone,
+  });
 }
 
 /** `AuditLog.tsx`' feed stamp, same shape so two feeds do not read two ways. */
-export function whenLabel(iso: string): string {
+export function whenLabel(iso: string, timezone: string | null): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return 'unknown';
-  const time = at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return `${at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${time}`;
+  const frame = clockFrame(timezone);
+  return `${dayMonth(at, frame)} · ${clock24(at, frame)}`;
 }
