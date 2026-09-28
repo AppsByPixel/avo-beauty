@@ -73,6 +73,7 @@ function tx(createdAt: string, over: Partial<Transaction> = {}): Transaction {
     createdAt,
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
     ...over,
   } as Transaction;
 }

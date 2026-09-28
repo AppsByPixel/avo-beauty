@@ -111,6 +111,7 @@ function orderResult(pickupBranch: unknown) {
       createdAt: '2026-09-28T18:20:00.000Z',
       voidedAt: null,
       reversedByTransactionId: null,
+      loyalty: null,
     },
     balanceAfterFils: 16850,
     totalFils: 8500,

@@ -54,6 +54,7 @@ function charge(amountFils: number): Transaction {
     createdAt: '2026-08-19T06:16:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   } as Transaction;
 }
 
@@ -127,6 +128,7 @@ const TOPUP: Transaction = {
   createdAt: '2026-08-25T21:38:22.862Z',
   voidedAt: null,
   reversedByTransactionId: null,
+  loyalty: null,
 } as Transaction;
 
 describe('a top-up receipt', () => {
@@ -213,6 +215,7 @@ function adjustment(amountFils: number): Transaction {
     createdAt: '2026-08-19T06:16:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   } as Transaction;
 }
 

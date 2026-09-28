@@ -107,6 +107,7 @@ const TX: Transaction = {
   createdAt: '2026-09-06T13:20:00.000Z',
   voidedAt: null,
   reversedByTransactionId: null,
+  loyalty: null,
 } as Transaction;
 
 const DETAIL: ReceiptDetail = { items: LINES, balanceAfterFils: BALANCE_AFTER_FILS };
@@ -235,6 +236,7 @@ describe('the top-up receipt and the top-up email agree without an invoice', () 
     createdAt: '2026-09-06T13:20:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   } as Transaction;
 
   const sheet = buildReceipt(TOPUP_TX, [], 'en', en, 'Asia/Kuwait');

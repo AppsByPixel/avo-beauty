@@ -598,6 +598,26 @@ export interface Copy {
    */
   txBalanceAfter: string;
   /**
+   * WHAT THE VISIT EARNED — the receipt row design:1568 draws as
+   * `['Visit credit', '+1 visit']` (Arabic design:1582, `['احتساب الزيارة',
+   * '+زيارة واحدة']`), and the clause the activity row appends to its sub-line.
+   *
+   * Read from `Transaction.loyalty` (migration 0065), the count the server
+   * recorded on the charge row. Never derived: a row whose `loyalty` is null — any
+   * non-charge, and a charge made before 0065 — draws neither the row nor the
+   * clause (`domain/activity.ts § earnedLabel`).
+   *
+   * ONE LABEL FOR BOTH MODES. The design's sample salon is a tiers salon, so it
+   * only ever writes "+1 visit"; at a stamps salon the visit's credit is a stamp,
+   * and "Visit credit · +1 stamp" says exactly that without a label the design
+   * never wrote. So only the stamp VALUE is new copy.
+   */
+  txVisitCredit: string;
+  /** "+1 visit" (design:1568) / "+2 visits". The server's count, verbatim. */
+  txVisitsEarned: (n: number) => string;
+  /** "+1 stamp" / "+2 stamps". NEW COPY — the design has no stamps receipt. */
+  txStampsEarned: (n: number) => string;
+  /**
    * The activity title and receipt title for a POSITIVE `adjustment`.
    *
    * "Adjustment" is a bookkeeping word for a row that is, to her, money arriving.

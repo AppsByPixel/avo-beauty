@@ -256,6 +256,7 @@ describe('the invoice’s Collect-from row', () => {
     createdAt: '2026-09-28T13:20:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   } as const;
 
   it.each([

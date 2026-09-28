@@ -122,6 +122,8 @@ const MONEY_SAMPLE = '5.000 KD';
 const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   greeting: ['دانة'],
   tierHint: [6, 'gold'],
+  txVisitsEarned: [12],
+  txStampsEarned: [12],
   stampsHint: [3, 8],
   stampsPill: [3, 8],
   tierLadder: ['silver', 'gold'],

@@ -96,6 +96,7 @@ const ORDER = {
     createdAt: '2026-09-06T13:20:00.000Z',
     voidedAt: null,
     reversedByTransactionId: null,
+    loyalty: null,
   },
   balanceAfterFils: 48500,
   totalFils: 14500,
