@@ -21,7 +21,7 @@
  * ----------------------------------
  * `loadedTodayFils` is the third place `salon.timezone` earns its keep. A salon
  * closes at 21:00 Kuwait, which is 18:00Z; a "today" computed from the process
- * zone under docker-compose's TZ=UTC would roll over at 03:00 Kuwait, so the
+ * zone on a UTC host (a Vercel function) would roll over at 03:00 Kuwait, so the
  * last three hours of every evening's takings would land on the previous day's
  * tile. The merchant would see a number she could not reconcile against her own
  * till and would have no way to tell it was a boundary rather than a loss.

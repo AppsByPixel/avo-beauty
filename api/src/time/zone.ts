@@ -11,11 +11,20 @@
  * ------------------------------
  * Not once, anywhere below. Every conversion names the zone explicitly and
  * `Intl.DateTimeFormat` resolves it from the ICU database, so the answer is
- * identical whether the API booted under `TZ=UTC` (docker-compose), `TZ=Asia/
- * Kuwait` (a developer's laptop) or `TZ=America/New_York` (the proof case in
- * src/time/zone.test.ts). `new Date(y, m, d, …)`, `getHours()`, `getDay()` and
- * `getTimezoneOffset()` all read the process zone; none of them appear here, and
- * none of them should appear in a handler either.
+ * identical whether the API booted under UTC (a Vercel function or a CI runner:
+ * neither sets `TZ`, and both default to UTC), under the zone of a developer's
+ * laptop (`pnpm dev` inherits it — Asia/Karachi or Asia/Kuwait here), or under
+ * `TZ=America/New_York` (the proof case in src/time/zone.test.ts).
+ *
+ * docker-compose.yml does NOT set the API's zone. Its `TZ: UTC` and `PGTZ: UTC`
+ * are on the Postgres container, and the API is not a compose service — it runs
+ * on the host, in the host's zone. No environment pins the process zone, which
+ * is the whole reason it is never read.
+ *
+ * `new Date(y, m, d, …)`, `getHours()`, `getDay()` and `getTimezoneOffset()` all
+ * read the process zone; none of them appear here, and none of them should appear
+ * in a handler either. Neither should `new Date(raw)` on a caller's string: a
+ * string with no offset is read in the process zone too — see `parseInstant`.
  *
  * WHY AN OFFSET IS DERIVED RATHER THAN STORED
  * -------------------------------------------
@@ -230,16 +239,20 @@ export function parseDate(value: unknown, field = 'date'): CalendarDate {
   }
   const m = YMD.exec(value) as RegExpExecArray;
   const date: CalendarDate = { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
-  // Round-tripping catches "2026-02-31", which the regex is happy with.
-  const probe = new Date(Date.UTC(date.year, date.month - 1, date.day));
-  if (
-    probe.getUTCFullYear() !== date.year ||
-    probe.getUTCMonth() + 1 !== date.month ||
-    probe.getUTCDate() !== date.day
-  ) {
+  if (!isCalendarDate(date)) {
     throw badRequest('invalid_date', `${field} is not a real date: ${value}.`);
   }
   return date;
+}
+
+/** Round-tripping catches "2026-02-31", which a YYYY-MM-DD regex is happy with. */
+function isCalendarDate(date: CalendarDate): boolean {
+  const probe = new Date(Date.UTC(date.year, date.month - 1, date.day));
+  return (
+    probe.getUTCFullYear() === date.year &&
+    probe.getUTCMonth() + 1 === date.month &&
+    probe.getUTCDate() === date.day
+  );
 }
 
 /** The JS weekday (0 = Sunday) of a calendar date. Zone-free by construction. */
@@ -281,4 +294,66 @@ export function minutesToHhmm(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * A caller-supplied INSTANT — "2026-09-30T07:00:00Z", "2026-09-30T10:00+03:00" —
+ * parsed, or refused with a sentence that names the fix.
+ *
+ * THE OFFSET IS REQUIRED, and that is the point of this function. `new Date(raw)`
+ * accepts "2026-09-30T10:00" and reads it in the PROCESS zone: 05:00Z on a laptop
+ * in Karachi, 10:00Z on Vercel. The second is a Kuwait merchant's 10:00 campaign
+ * going out at 13:00 her time, and nothing in the request or the response would
+ * show it. A server cannot know which clock a zoneless wall time was written in,
+ * so it does not guess: the client names the instant — the dashboard builds it in
+ * the salon's zone with `instantFromSalonLocal` — and a string that does not say
+ * which clock it is in is refused here.
+ *
+ * Also refused, for the same reason: a bare date ("2026-09-30", which `Date`
+ * reads as UTC midnight rather than the salon's), a date the calendar does not
+ * have ("2026-02-31", which `Date` silently rolls into March), and `T24:00`.
+ *
+ * NOT for salon-local wall clocks. A happy hour's `from`/`to` ("16:00") and a
+ * branch's hours are zoneless on purpose — they mean "at the salon" and resolve
+ * through `salon.timezone` via `wallClockInstant`. A calendar date is `parseDate`.
+ *
+ * The CODE is the caller's, so each route keeps the refusal it already had
+ * (`invalid_scheduled_at`, `invalid_starts_at`, `invalid_expiry`) and a client
+ * that handles it needs no new branch.
+ */
+const ISO_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+/** A date, or a date and a time, with nothing after it: the zoneless shapes `Date` accepts. */
+const ZONELESS = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/;
+
+export interface InstantField {
+  /** The wire name, used in the message: "scheduledAt". */
+  field: string;
+  /** The route's refusal code: `invalid_scheduled_at`, `invalid_starts_at`, … */
+  code: string;
+}
+
+export function parseInstant(value: unknown, { field, code }: InstantField): Date {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (ZONELESS.test(raw)) {
+    throw badRequest(
+      code,
+      `${field} "${raw}" does not say which time zone it is in, so it could be any of several moments. Send it with a Z or an offset, like "2026-09-30T07:00:00Z" or "2026-09-30T10:00:00+03:00".`,
+    );
+  }
+  const m = ISO_INSTANT.exec(raw);
+  const at = new Date(raw);
+  if (
+    !m ||
+    Number.isNaN(at.getTime()) ||
+    // `Date` rolls "2026-02-31" into March rather than refusing it.
+    !isCalendarDate({ year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) })
+  ) {
+    throw badRequest(
+      code,
+      `${field} must be an ISO 8601 instant with its time zone, like "2026-09-30T07:00:00Z" or "2026-09-30T10:00:00+03:00".`,
+    );
+  }
+  return at;
 }

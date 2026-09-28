@@ -122,8 +122,8 @@ export const salon = pgTable(
     /**
      * IANA zone id. THE zone every naive wall-clock value in this schema is
      * resolved against — `business_hours` below, `artist.windows`, and
-     * `happy_hour.from`/`.to`. Never the process zone: docker-compose.yml sets
-     * TZ=UTC, so an unzoned conversion offers a Kuwait salon's 10:00 at 13:00
+     * `happy_hour.from`/`.to`. Never the process zone: a Vercel function runs in
+     * UTC, so an unzoned conversion offers a Kuwait salon's 10:00 at 13:00
      * and, for a happy hour, applies the wrong earning multiplier. One of those
      * is a mis-booked appointment; the other is money.
      *

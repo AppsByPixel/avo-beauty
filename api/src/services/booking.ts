@@ -58,7 +58,7 @@ import type { MemberPrincipal, Principal, StaffPrincipal } from '../auth/princip
 import { serialiseTransactionForCustomer } from '../http/serialise';
 import { env } from '../env';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
-import { parseDate, salonWallClock } from '../time/zone';
+import { parseDate, parseInstant, salonWallClock } from '../time/zone';
 import { computeAvailability, findSlot } from './availability';
 import { writeAudit, type Executor } from './audit';
 import { assertArtistPerformsService, assertBookedPairAssigned } from './artistService';
@@ -396,10 +396,9 @@ export async function createBooking(
      * calls, which is the whole reason it was lifted out of that route: the grid
      * the customer chose from and the grid this checks against cannot drift.
      */
-    const startsAt = new Date(input.startsAt);
-    if (Number.isNaN(startsAt.getTime())) {
-      throw badRequest('invalid_starts_at', 'startsAt must be an ISO instant.');
-    }
+    // With its offset — `time/zone.ts` § parseInstant. A zoneless "10:00" read in
+    // the process zone is 13:00 Kuwait on a UTC host, and 13:00 is a real slot.
+    const startsAt = parseStartsAt(input.startsAt);
     const now = new Date();
     // The salon's calendar date for that instant — never the server's. A booking
     // at 22:00 Kuwait time on the 19th is the 19th, whatever UTC calls it.
@@ -1427,10 +1426,7 @@ export async function rescheduleBooking(
     // means.
     assertChangeWindowOpen(row, now, 'moved');
 
-    const startsAt = new Date(startsAtIso);
-    if (Number.isNaN(startsAt.getTime())) {
-      throw badRequest('invalid_starts_at', 'startsAt must be an ISO instant.');
-    }
+    const startsAt = parseStartsAt(startsAtIso);
     if (startsAt.getTime() === row.startsAt.getTime()) {
       throw badRequest('same_slot', 'That is the time the appointment is already at.');
     }
@@ -1666,12 +1662,15 @@ async function artistForSalon(
   return a;
 }
 
-function parseInstant(raw: string, field: string): Date {
-  const at = new Date(raw);
-  if (Number.isNaN(at.getTime())) {
-    throw badRequest('invalid_starts_at', `${field} must be an ISO instant.`);
-  }
-  return at;
+/**
+ * Every `startsAt` a caller sends — customer booking, customer reschedule,
+ * merchant booking, merchant reschedule — goes through here, and it must carry
+ * its offset. The slot check alone would NOT catch a zoneless one: on a UTC host
+ * "2026-09-30T10:00" is 13:00 Kuwait, which is usually a real, free slot, and the
+ * customer would be booked three hours after the time she picked.
+ */
+function parseStartsAt(raw: string): Date {
+  return parseInstant(raw, { field: 'startsAt', code: 'invalid_starts_at' });
 }
 
 export interface CreateMerchantBookingInput {
@@ -1748,7 +1747,7 @@ export async function createMerchantBooking(
       memberRow = m;
     }
 
-    const startsAt = parseInstant(input.startsAt, 'startsAt');
+    const startsAt = parseStartsAt(input.startsAt);
     const now = new Date();
 
     /**
@@ -1928,7 +1927,7 @@ export async function rescheduleByMerchant(
   return db.transaction(async (tx) => {
     const row = await lockLiveBooking(tx, params.salonId, params.bookingId, terminalRefusal('changed'));
 
-    const startsAt = parseInstant(params.startsAt, 'startsAt');
+    const startsAt = parseStartsAt(params.startsAt);
     if (startsAt.getTime() === row.startsAt.getTime()) {
       throw badRequest('same_slot', 'That is the time the appointment is already at.');
     }
