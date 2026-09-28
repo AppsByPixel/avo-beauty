@@ -77,6 +77,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chargeReversedPosting,
   depositAppliedPosting,
+  depositForfeitedPosting,
   depositHeldPosting,
   depositReleasedPosting,
   LEDGER_ACCOUNTS,
@@ -186,6 +187,11 @@ const POSTINGS: Record<string, LedgerPosting[]> = {
   'deposit released back to the wallet': depositReleasedPosting(
     wallet(fils(5_000), fils(24_500)),
   ),
+  'deposit forfeited to the salon under its policy': depositForfeitedPosting({
+    transactionId: TX,
+    salonId: SALON,
+    amountFils: fils(2_002),
+  }),
   'merchant-funded happy-hour credit': merchantFundedCreditPosting(
     wallet(fils(3_000), fils(27_500)),
   ),
@@ -479,6 +485,34 @@ describe('spend, deposits and reversals — by account', () => {
     // Wallet credit, not a gateway reversal. `gateway_clearing` here would be a
     // card refund the ledger has no authority to claim happened.
     expect(accountsOf(p)).not.toContain('gateway_clearing');
+  });
+
+  it('a forfeited deposit discharges the liability INTO salon revenue — never back to her, never to AVO', () => {
+    const p = depositForfeitedPosting({ transactionId: TX, salonId: SALON, amountFils: fils(2_002) });
+    expect(legs(p)).toEqual([
+      { account: 'deposit_held', direction: 'debit', amountFils: 2_002 },
+      { account: 'salon_revenue', direction: 'credit', amountFils: 2_002 },
+    ]);
+    expect(accountsOf(p)).not.toContain('member_wallet');
+    expect(accountsOf(p)).not.toContain('avo_commission');
+    // Names nobody: a forfeit does not move her spendable balance.
+    expect(p.every((l) => l.memberId === null)).toBe(true);
+  });
+
+  it('a partial cancellation empties escrow exactly: return + forfeit debit deposit_held by the whole deposit', () => {
+    // 5.005 KD at 60%: 3003 back to her, 2002 kept (rounded down, the salon keeps the fil).
+    const hold = depositHeldPosting(wallet(fils(5_005), fils(19_495)));
+    const back = depositReleasedPosting(wallet(fils(3_003), fils(22_498)));
+    const kept = depositForfeitedPosting({ transactionId: TX, salonId: SALON, amountFils: fils(2_002) });
+    const escrow = [...hold, ...back, ...kept]
+      .filter((l) => l.account === 'deposit_held')
+      .reduce((n, l) => n + (l.direction === 'credit' ? l.amountFils : -l.amountFils), 0);
+    expect(escrow).toBe(0);
+    // And her wallet nets to what she actually lost: the kept share, no more.
+    const wallet_ = [...hold, ...back, ...kept]
+      .filter((l) => l.account === 'member_wallet')
+      .reduce((n, l) => n + (l.direction === 'credit' ? l.amountFils : -l.amountFils), 0);
+    expect(wallet_).toBe(-2_002);
   });
 
   it('a void debits salon_revenue — including the deposit portion', () => {
