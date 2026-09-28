@@ -1,10 +1,13 @@
 import type { ReactNode } from 'react';
 import { Button } from '@avo/ui';
+import { clockFrame } from '../routes/salonTime.js';
 
 export interface HeaderProps {
   title: string;
   subtitle: string;
   salonName: string;
+  /** The salon's IANA zone, or `null` until the salon read lands. See `todayLabel`. */
+  timezone: string | null;
   /**
    * THE BRANCH SCOPE, AS A NODE RATHER THAN A STRING — and the type change is
    * the point of the change.
@@ -41,11 +44,25 @@ export interface HeaderProps {
   onSignOut: () => void;
 }
 
-/** "Saturday · 11 July 2026" — the format used in the design header. */
-function todayLabel(): string {
-  const now = new Date();
-  const weekday = now.toLocaleDateString('en-GB', { weekday: 'long' });
-  const rest = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+/**
+ * "Saturday · 11 July 2026" — the format used in the design header.
+ *
+ * THE SALON'S TODAY, NOT THE BROWSER'S. Every "Today" on the board below is
+ * read in the salon's clock (`routes/salonTime.ts`), so a header dated from the
+ * browser would name Tuesday above a list whose "Today" rows are Monday's for
+ * anyone east of the salon after its midnight. Empty until the salon read lands
+ * — the salon name beside it is "—" for the same tick.
+ */
+export function todayLabel(timezone: string | null, now: Date = new Date()): string {
+  if (timezone === null) return '';
+  const { zone } = clockFrame(timezone);
+  const weekday = now.toLocaleDateString('en-GB', { weekday: 'long', timeZone: zone });
+  const rest = now.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: zone,
+  });
   return `${weekday} · ${rest}`;
 }
 
@@ -53,6 +70,7 @@ export function Header({
   title,
   subtitle,
   salonName,
+  timezone,
   branch,
   bell,
   onOpenMenu,
@@ -88,7 +106,7 @@ export function Header({
       </div>
 
       <div className="dash-header__right">
-        <span className="dash-header__date">{todayLabel()}</span>
+        <span className="dash-header__date">{todayLabel(timezone)}</span>
         {/*
           Between the date and the rule, which is where the design puts it
           (AVO Merchant Dashboard.dc.html:88-95) - and it stays when the date

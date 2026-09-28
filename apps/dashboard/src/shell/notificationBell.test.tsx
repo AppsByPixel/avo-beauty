@@ -147,6 +147,7 @@ function panel(
       onMarkRead={(s) => sent.push(s)}
       onNavigate={(to) => went.push(to)}
       updatedAt={Date.parse('2026-09-26T08:30:00.000Z')}
+      timezone="Asia/Kuwait"
       {...over}
     />
   );

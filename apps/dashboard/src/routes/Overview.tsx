@@ -17,7 +17,9 @@ import {
   type ActivityItem,
   type SalonMetrics,
 } from '../api/salon.js';
+import { useSalon } from '../api/salon.js';
 import { useBranchScope } from '../shell/BranchScope.js';
+import { clock12, clockFrame, feedStamp } from './salonTime.js';
 import { SalesTrendCard } from './SalesTrend.js';
 
 /**
@@ -49,6 +51,9 @@ export function Overview() {
   const { selected, selectedName } = useBranchScope();
   const metrics = useSalonMetrics(selected);
   const activity = useRecentActivity();
+  // The salon's zone for every clock on this page. A cache hit: the shell and
+  // `BranchScopeProvider` have already read the salon.
+  const timezone = useSalon().data?.timezone ?? null;
 
   /*
    * STALE-NOT-BLANK DOES NOT APPLY TO A REFUSAL.
@@ -112,7 +117,7 @@ export function Overview() {
         />
       ) : null}
 
-      <KpiRow metrics={metrics.data} loading={metrics.isPending} />
+      <KpiRow metrics={metrics.data} loading={metrics.isPending} timezone={timezone} />
 
       {/*
         HOW MUCH OF THE PER-BRANCH ANSWER IS A GUESS — proportionally, or not at
@@ -158,6 +163,7 @@ export function Overview() {
           </h2>
           <ActivityList
             items={activity.data?.items}
+            timezone={timezone}
             loading={activity.isPending}
             error={activity.isError ? activity.error : null}
             onRetry={() => void activity.refetch()}
@@ -331,9 +337,12 @@ export function AssumedNote({ metrics }: { metrics: SalonMetrics | undefined }) 
 export function KpiRow({
   metrics,
   loading,
+  timezone,
 }: {
   metrics: SalonMetrics | undefined;
   loading: boolean;
+  /** The salon's zone, for "next at 4:30 PM". See `nextAtLabel`. */
+  timezone: string | null;
 }) {
   /*
    * interaction-spec.md §4: money fields skeleton as a bar. Never render
@@ -429,7 +438,7 @@ export function KpiRow({
         label="Upcoming today"
         value={String(metrics.upcomingAppointments)}
         {...(metrics.nextAppointmentAt !== null
-          ? { delta: `next at ${nextAtLabel(metrics.nextAppointmentAt)}` }
+          ? { delta: `next at ${nextAtLabel(metrics.nextAppointmentAt, timezone)}` }
           : {})}
       />
     </div>
@@ -441,10 +450,14 @@ export function KpiRow({
  *
  * THE SERVER SENDS AN INSTANT, DELIBERATELY. The schema's comment ties the field
  * to the count's own window and zone; the RENDERING is this client's job, in the
- * salon's clock. The zone is pinned to Asia/Kuwait rather than the browser's:
- * every salon this product ships to is Kuwaiti (`salon.timezone` defaults to it,
- * and the platform's own month boundary is defined in it), and an owner checking
- * the dashboard from abroad should read her salon's 4:30 PM, not her hotel's.
+ * salon's clock — not the browser's, because an owner checking the dashboard
+ * from abroad should read her salon's 4:30 PM, not her hotel's.
+ *
+ * THE SALON'S OWN `timezone`, NO LONGER A PINNED `Asia/Kuwait`. The pin was
+ * right for every salon seeded today and wrong for the first white-label salon
+ * anywhere else — `appointmentsWeekRules.ts § instantFromSalonLocal` makes that
+ * argument for the form, and this tile names the same booking the list does,
+ * so it reads the same zone the list reads. `salonTime.ts` has the rest.
  *
  * `null` never reaches here — the schema guarantees it co-occurs with a count of
  * 0, and the call site hides the sub-label on null, which is the tile's honest
@@ -452,14 +465,10 @@ export function KpiRow({
  * en locale renders Latin digits, which is what the money rule requires of the
  * Arabic layout too.
  */
-function nextAtLabel(iso: string): string {
+function nextAtLabel(iso: string, timezone: string | null): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return 'soon';
-  return at.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'Asia/Kuwait',
-  });
+  return clock12(at, clockFrame(timezone));
 }
 
 /* ------------------------------------------------ five, then the rest ---- */
@@ -559,13 +568,22 @@ export function discloseFeed(
 
 interface ActivityListProps {
   items: ActivityItem[] | undefined;
+  /** The salon's zone — the feed's clock is the salon's. See `salonTime.ts § feedStamp`. */
+  timezone: string | null;
   loading: boolean;
   error: unknown;
   onRetry: () => void;
   retrying: boolean;
 }
 
-export function ActivityList({ items, loading, error, onRetry, retrying }: ActivityListProps) {
+export function ActivityList({
+  items,
+  timezone,
+  loading,
+  error,
+  onRetry,
+  retrying,
+}: ActivityListProps) {
   /*
    * VIEW STATE, AND IT LIVES HERE. It is not a preference, it is not persisted,
    * and it does not belong on `useRecentActivity`: nothing about it reaches the
@@ -741,7 +759,7 @@ export function ActivityList({ items, loading, error, onRetry, retrying }: Activ
               <span className="overview__feed-text">
                 <b>{item.who}</b> {item.what}
               </span>
-              <span className="overview__feed-when">{timeLabel(item.at)}</span>
+              <span className="overview__feed-when">{feedStamp(item.at, timezone)}</span>
             </span>
           </li>
         ))}
@@ -787,15 +805,6 @@ export function ActivityList({ items, loading, error, onRetry, retrying }: Activ
   );
 }
 
-function timeLabel(iso: string): string {
-  const when = new Date(iso);
-  const sameDay = when.toDateString() === new Date().toDateString();
-  return sameDay
-    ? when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-    : when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) +
-        ' · ' +
-        when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-}
 
 /* ------------------------------------------------------------------- errors */
 

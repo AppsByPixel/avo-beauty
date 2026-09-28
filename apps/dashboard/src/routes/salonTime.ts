@@ -98,3 +98,19 @@ export function clock24(at: Date, frame: ClockFrame): string {
 export function dayMonth(at: Date, frame: ClockFrame): string {
   return at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: frame.zone });
 }
+
+/**
+ * "14:05" for today, "9 Jul · 19:40" for anything older — the Overview activity
+ * feed's stamp and the notification bell's, one function because the bell's
+ * docblock calls it "deliberately the same rule" and two copies are how that
+ * stops being true. Today is the SALON's today: both compared browser-local
+ * `toDateString()`s, so from Karachi a Kuwait top-up at 22:30 read as tomorrow's
+ * "00:30" in the feed while the audit log, one screen over, said "Today · 22:30".
+ */
+export function feedStamp(iso: string, timezone: string | null, now: Date = new Date()): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return 'unknown';
+  const frame = clockFrame(timezone);
+  const clock = clock24(when, frame);
+  return relativeDay(when, now, frame.zone) === 'today' ? clock : `${dayMonth(when, frame)} · ${clock}`;
+}

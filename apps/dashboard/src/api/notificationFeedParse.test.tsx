@@ -258,7 +258,7 @@ function mount(body: unknown, markReadBody: unknown = MARK_READ_BODY) {
   return render(
     <Boundary>
       <QueryClientProvider client={client}>
-        <NotificationBell />
+        <NotificationBell timezone="Asia/Kuwait" />
         <main>Appointments</main>
       </QueryClientProvider>
     </Boundary>,

@@ -321,6 +321,7 @@ function SignedInShell() {
               title={title}
               subtitle={subtitle}
               salonName={salonName}
+              timezone={salon?.timezone ?? null}
               branch={<BranchSelector />}
               /*
                * ONE BELL FOR THE WHOLE WORKSPACE, mounted here for the reason
@@ -332,7 +333,7 @@ function SignedInShell() {
                * It sits below the `!session` early return with everything else
                * that reads the session, so a signed-out shell issues no request.
                */
-              bell={<NotificationBell />}
+              bell={<NotificationBell timezone={salon?.timezone ?? null} />}
               menuOpen={drawerOpen}
               onSignOut={onSignOut}
               {...(breakpoint === 'tablet'
