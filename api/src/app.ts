@@ -48,6 +48,7 @@ import { registerPlatformRoutes } from './routes/platform';
 import { registerPlatformAdminRoutes } from './routes/platformAdmins';
 import { registerPlatformConsoleRoutes } from './routes/platformConsole';
 import { registerCampaignRoutes } from './routes/campaigns';
+import { registerCampaignRewardRoutes } from './routes/campaignRewards';
 import { registerPolicyRoutes } from './routes/policies';
 import { registerSupportRoutes } from './routes/support';
 import { registerReportRoutes } from './routes/reports';
@@ -194,6 +195,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerPlatformAdminRoutes(app);
   await registerPlatformConsoleRoutes(app);
   await registerCampaignRoutes(app);
+  await registerCampaignRewardRoutes(app);
   await registerPolicyRoutes(app);
   await registerSupportRoutes(app);
   await registerReportRoutes(app);
