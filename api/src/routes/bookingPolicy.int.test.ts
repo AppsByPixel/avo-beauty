@@ -38,6 +38,12 @@ const OTHER_MANAGER = `${OTHER}-MGR`;
 const ARTIST = `${SALON}-AR`;
 const SVC = `${SALON}-SV`;
 const DEPOSIT = 5_005;
+/**
+ * `BOOKING_SETTLE_GRACE_MINUTES`' default, which this suite runs under: a policy
+ * booking settles automatically at `ends_at` + 60, the hour the till needs.
+ * `bookingSettleGraceZero.int.test.ts` pins 0 in a process of its own.
+ */
+const GRACE_MIN = 60;
 
 type Json = Record<string, any>;
 
@@ -153,7 +159,7 @@ suite('the salon writes its own booking policy (0066)', () => {
         SELECT ${bk}, ${SALON}, ${BRANCH}, ${memberId}, ${artist}, ${SVC},
                now() + ${start}::interval, now() + ${start}::interval + ${`${dur} minutes`}::interval, ${dur},
                ${DEPOSIT}, 'deposit_held', ${hold},
-               now() + ${start}::interval + ${`${dur} minutes`}::interval,
+               now() + ${start}::interval + ${`${dur + GRACE_MIN} minutes`}::interval,
                p.id, p.version, p.no_show_rule, p.cancellation_rules, p.text_en, p.text_ar
           FROM booking_policy p WHERE p.id = ${opts.policyId}`);
     }
@@ -464,8 +470,8 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(booked.policy).toMatchObject({ version: 2, noShow: 'keep', cancellation: RULES });
       expect(booked.policy.text).toEqual({ en: TEXT.en, ar: 'نص' });
       expect(booked.settlement).toBeNull();
-      // Automatic settle at slot end: `no_show_return_due_at` = `ends_at` (+0).
-      expect(booked.noShowReturnDueAt).toBe(booked.endsAt);
+      // Automatic settle an hour after the slot ends: `ends_at` + the grace (60).
+      expect(Date.parse(booked.noShowReturnDueAt) - Date.parse(booked.endsAt)).toBe(GRACE_MIN * 60_000);
 
       // The salon changes its mind: everything kept, from any distance.
       await publish({ noShow: 'return', cancellation: [], text: { en: 'Nothing back on cancel.', ar: '' } });
@@ -683,7 +689,7 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(await settlementLegs(bk)).toEqual(['deposit_held:debit:5005', 'member_wallet:credit:5005']);
     });
 
-    it('the sweep settles AT slot end, not a second before, and applies the stamp', async () => {
+    it('the sweep settles an HOUR after slot end (grace 60), not a second before, and applies the stamp', async () => {
       const mk = await customer();
       const mr = await customer();
       // Started 30 minutes ago, 60 minutes long: the slot ends in 30 minutes.
@@ -694,12 +700,19 @@ suite('the salon writes its own booking policy (0066)', () => {
         await num(sql`SELECT (extract(epoch FROM ends_at) * 1000)::bigint AS n FROM booking WHERE id = ${keep}`),
       );
       const [bk0, br0] = [await balanceOf(mk), await balanceOf(mr)];
+      const held = () =>
+        num(sql`SELECT count(*)::int AS n FROM booking WHERE id IN (${keep}, ${ret}) AND status = 'deposit_held'`);
 
-      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() - 1_000));
-      expect(await num(sql`SELECT count(*)::int AS n FROM booking WHERE id IN (${keep}, ${ret}) AND status = 'deposit_held'`)).toBe(2);
+      // At slot end, and five minutes after it — she may still be at the till.
+      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + 1_000));
+      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + 5 * 60_000));
+      expect(await held()).toBe(2);
+      // A second before the grace runs out.
+      await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + GRACE_MIN * 60_000 - 1_000));
+      expect(await held()).toBe(2);
 
       // The second booking's slot ends within a few ms of the first's (two INSERTs).
-      const tick = await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + 60_000));
+      const tick = await runNoShowReturnsOnce(db, 500, new Date(endsAt.getTime() + GRACE_MIN * 60_000 + 60_000));
       expect(tick.kept).toBeGreaterThanOrEqual(1);
       expect(tick.returned).toBeGreaterThanOrEqual(1);
 
@@ -718,13 +731,48 @@ suite('the salon writes its own booking policy (0066)', () => {
       expect(n?.title).toBe('A deposit was kept under your booking policy');
     });
 
+    it('keep, and charged at the till five minutes after her slot ended: the deposit is APPLIED, not kept', async () => {
+      // The case the 60-minute grace exists for. At grace 0 the sweep would have
+      // forfeited this deposit at slot end and the till would charge in full.
+      const m = await customer();
+      const bk = await heldBooking(m, { startsInMinutes: -65, durationMin: 60, policyId: keepId });
+      await runNoShowReturnsOnce(db, 500);
+      expect(await num(sql`SELECT count(*)::int AS n FROM booking WHERE id = ${bk} AND status = 'deposit_held'`)).toBe(1);
+
+      const before = await balanceOf(m);
+      const till = (
+        await issue(db, {
+          principalKind: 'staff',
+          staffId: MANAGER,
+          salonId: SALON,
+          scope: 'scanner',
+          deviceId: `BP-DEV-${randomUUID()}`,
+        })
+      ).accessToken;
+      const res = await app.inject({
+        method: 'POST',
+        url: '/charges',
+        headers: { authorization: `Bearer ${till}`, 'idempotency-key': `bp-till-${randomUUID()}` },
+        payload: { memberId: m, amountFils: 9_000, reason: 'BP till after slot end', confirmDuplicate: true },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const out = res.json() as Json;
+      expect(out).toMatchObject({ depositAppliedFils: DEPOSIT, depositReturnedFils: 0, bookingId: bk });
+      // 9.000 less the 5.005 already held: 3.995 from her spendable balance, nothing forfeited.
+      expect(await balanceOf(m)).toBe(before - (9_000 - DEPOSIT));
+      const [row] = await exec(sql`
+        SELECT status::text AS status, forfeit_transaction_id AS f FROM booking WHERE id = ${bk}`);
+      expect(row).toEqual({ status: 'completed', f: null });
+    });
+
     it('sweep and manual mark racing: each booking settles EXACTLY once', async () => {
       const pairs: Array<{ m: string; bk: string; before: number }> = [];
       for (let i = 0; i < 6; i++) {
         const m = await customer();
-        // Ended already (started 90 min ago, 60 min long), so both paths want it.
+        // Past its grace already (started 150 min ago, 60 min long, +60), so both
+        // paths want it.
         const bk = await heldBooking(m, {
-          startsInMinutes: -90,
+          startsInMinutes: -(60 + GRACE_MIN + 30),
           durationMin: 60,
           policyId: i % 2 === 0 ? keepId : returnId,
         });
@@ -784,7 +832,8 @@ suite('the salon writes its own booking policy (0066)', () => {
         await num(sql`
           SELECT (extract(epoch FROM no_show_return_due_at) * 1000)::bigint AS n FROM booking WHERE id = ${bk}`),
       );
-      // Its slot ended 30 minutes ago; a policy booking would already be settled.
+      // Its slot ended 30 minutes ago. Its deadline is the salon's old window
+      // (60), stamped at booking — not the policy grace, whatever that is set to.
       await runNoShowReturnsOnce(db, 500, new Date(due.getTime() - 1_000));
       expect(await num(sql`SELECT count(*)::int AS n FROM booking WHERE id = ${bk} AND status = 'deposit_held'`)).toBe(1);
       // +1 ms: the epoch above is rounded to the millisecond, the column holds microseconds.

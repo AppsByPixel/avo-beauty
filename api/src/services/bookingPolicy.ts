@@ -12,8 +12,9 @@
  *   no-show        `keep` → the deposit is forfeited to the salon.
  *                  `return` → it goes back to her wallet.
  *                  Applied when staff mark the no-show (after `starts_at`) or when
- *                  the slot ends (`ends_at` + `BOOKING_SETTLE_GRACE_MINUTES`, 0 by
- *                  default), whichever is first — trunk's ruling.
+ *                  the slot ends (`ends_at` + `BOOKING_SETTLE_GRACE_MINUTES`, 60 by
+ *                  default, so she can still be charged at the till), whichever
+ *                  is first — trunk's rulings.
  *   her cancel     up to three `{ hoursBefore, returnPercent }`. The first rule
  *                  whose threshold she meets wins; later than all of them, 0%.
  *                  `returnPercent` of integer fils, ROUNDED DOWN; the salon keeps

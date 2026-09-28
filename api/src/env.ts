@@ -250,16 +250,20 @@ const EnvSchema = z.object({
    * settle fires (migration 0066). Not per-salon — the merchant-configurable
    * window is exactly what the ruling removed.
    *
-   * ZERO, which is trunk's ruling verbatim: "automatically when the booked slot
-   * ends (`startsAt` + service duration)". It is a named number rather than a
-   * literal because that ruling collides with the argument db/schema/booking.ts
-   * makes for measuring from `ends_at` plus a window: a charge is rung up AFTER
-   * the service, so at 0 a customer still at the till when the slot ends has her
-   * deposit settled out from under the charge — under `keep` she loses it AND
-   * pays full price. Reported to trunk with this knob as the one-line answer;
-   * the lane did not overrule the ruling.
+   * SIXTY, trunk's ruling of 2026-09-29, replacing its own earlier "settle when
+   * the booked slot ends" (0). A charge is rung up AFTER the service, so at 0 a
+   * customer still at the till when her slot ends has her deposit settled out
+   * from under the charge — under `keep` she loses it AND pays full price. With
+   * sixty minutes the till still finds the hold (`findApplicableHold` reads
+   * `no_show_return_due_at > now`) and applies it; only a genuine no-show
+   * reaches the sweep. A manual mark after `starts_at` is unaffected.
+   *
+   * Stamped onto `no_show_return_due_at` at booking time and at each move, so a
+   * later change to this number changes new stamps only, never a promise
+   * already made. `bookingSettleGraceZero.int.test.ts` pins 0 to prove the
+   * setting is read.
    */
-  BOOKING_SETTLE_GRACE_MINUTES: z.coerce.number().int().min(0).max(240).default(0),
+  BOOKING_SETTLE_GRACE_MINUTES: z.coerce.number().int().min(0).max(240).default(60),
 
   // ------------------------------------------------------------- top-ups --
 

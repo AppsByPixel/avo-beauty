@@ -263,8 +263,8 @@ export function serialiseBooking(row: BookingRow) {
  *
  *   LEGACY   `endsAt` + the salon's `no_show_return_minutes` — unchanged, and
  *            the column is frozen now that the merchant cannot write it.
- *   POLICY   `endsAt` + `BOOKING_SETTLE_GRACE_MINUTES` (0): "when the booked slot
- *            ends", trunk's ruling. See env.ts for why it is a named number.
+ *   POLICY   `endsAt` + `BOOKING_SETTLE_GRACE_MINUTES` (60): the slot's end plus
+ *            the time a till needs to ring up the visit. See env.ts.
  */
 function automaticSettleAt(
   row: Pick<BookingRow, 'policyId'>,
@@ -681,9 +681,9 @@ export async function createBooking(
      * appointment; see db/schema/booking.ts for why it is measured from `ends_at`.
      *
      *   LEGACY   `ends_at` + `salon.no_show_return_minutes`, exactly as before.
-     *   POLICY   `ends_at` + `BOOKING_SETTLE_GRACE_MINUTES` (0): trunk's ruling
-     *            that the stamped no-show rule applies "when the booked slot
-     *            ends". It is the same column, so the worker, the partial index,
+     *   POLICY   `ends_at` + `BOOKING_SETTLE_GRACE_MINUTES` (60): the stamped
+     *            no-show rule applies once the slot has ended and the till has
+     *            had its hour. It is the same column, so the worker, the partial index,
      *            `findApplicableHold` and deposit health all keep working on it.
      */
     const noShowReturnDueAt = new Date(
