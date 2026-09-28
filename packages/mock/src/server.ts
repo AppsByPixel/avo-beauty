@@ -897,10 +897,18 @@ app.get('/v1/salons/:id/campaign-rewards', async (req, reply) => {
 app.post('/v1/salons/:id/campaign-rewards', async (req, reply) => {
   if (await intercept(req, reply)) return;
   const label = String((req.body as { label?: unknown } | null)?.label ?? '').trim();
-  if (label.length < 1 || label.length > 60) {
+  // Code points, as the API and the column's char_length count them.
+  const n = [...label].length;
+  if (n < 1) {
     return reply
       .code(400)
       .send({ error: 'invalid_label', message: 'Write the reward, up to 60 characters.' });
+  }
+  if (n > 60) {
+    return reply.code(400).send({
+      error: 'invalid_label',
+      message: `A reward can be up to 60 characters. This one is ${n}.`,
+    });
   }
   if (campaignRewards.some((r) => r.label.toLowerCase() === label.toLowerCase())) {
     return reply
@@ -941,7 +949,14 @@ app.post('/v1/salons/:id/campaigns', async (req, reply) => {
   // The server resolves the words from the id, as the real API does; a label the
   // client sends is ignored.
   let customReward: string | null = null;
+  const sentId = body.customRewardId !== undefined && body.customRewardId !== null && body.customRewardId !== '';
   if (body.reward === 'custom') {
+    if (!sentId) {
+      return reply.code(400).send({
+        error: 'invalid_custom_reward',
+        message: 'Choose one of your saved rewards for a custom reward.',
+      });
+    }
     const found = campaignRewards.find((r) => r.id === body.customRewardId);
     if (!found) {
       return reply
@@ -952,6 +967,11 @@ app.post('/v1/salons/:id/campaigns', async (req, reply) => {
         });
     }
     customReward = found.label;
+  } else if (sentId) {
+    return reply.code(400).send({
+      error: 'custom_reward_not_allowed',
+      message: 'Only a custom reward carries a customRewardId.',
+    });
   }
   const { customRewardId: _id, ...rest } = body;
   return {
