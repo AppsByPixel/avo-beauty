@@ -93,6 +93,32 @@ function multiplierLabel(kind: 'visit' | 'stamp', multiplier: number): string | 
 }
 
 /**
+ * The tier beside her name on the result screen — "Latifa A. · Silver".
+ *
+ * ═════════════════════════════════════════════════════════════════════════════
+ * THIS DEVIATES FROM THE DESIGN, deliberately (trunk's ruling, 2026-09-29).
+ * design:381 renders `Latifa A. · {{ loyaltyPill }}`, and the prototype's
+ * `loyaltyPill` is the member card's pill from BEFORE the charge. So on a charge
+ * that climbed a rung the screen read "Latifa A. · Silver" directly above the
+ * Loyalty row's "Reached Gold": two tiers for one woman, one screen apart, and
+ * the counter reads the wrong one out to her.
+ *
+ * When the charge climbed, the sub-line shows the tier AFTER it: the server's
+ * `loyalty.tier`, the same field "Reached Gold" is drawn from. Nothing is
+ * evaluated here (non-negotiable #2); `climbed` is the server's too. Every
+ * other case keeps the pill exactly as MemberScreen drew it, which is still the
+ * design's: no climb, a stamps salon (whose "4 / 8" pill this ruling does not
+ * cover), an API too old to send `climbed`, or a climb to no tier at all.
+ * ═════════════════════════════════════════════════════════════════════════════
+ */
+export function resultPill(pillBeforeCharge: string, outcome: LoyaltyOutcome): string {
+  if (outcome.mode === 'tiers' && outcome.climbed === true && outcome.tier !== null) {
+    return tierLabel(outcome.tier);
+  }
+  return pillBeforeCharge;
+}
+
+/**
  * The pill on the member card — design:608.
  * Stamps salons show "4 / 8"; tiers salons show the tier name.
  */
