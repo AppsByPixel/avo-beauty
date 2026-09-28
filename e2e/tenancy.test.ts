@@ -573,6 +573,18 @@ afterAll(async () => {
    */
   retireBranches(SALON_B, branchIdsNamed(SALON_B, PROBE_BRANCH_PREFIX));
 
+  /*
+   * THE BOOKING POLICY THE PUT CONTROL PUBLISHED, REMOVED, notices first for the FK.
+   * Left standing it would put a notice in every salon B member's bell, which
+   * `member-bell.test.ts` counts. `booking_policy` is append-only for `avo_app`, not for
+   * the owner this runs as, and no booking references it: salon B takes none.
+   */
+  psql(`
+    DELETE FROM member_policy_notice WHERE salon_id = '${SALON_B}' AND policy_id IN
+      (SELECT id FROM booking_policy WHERE salon_id = '${SALON_B}' AND text_en = '${TENANCY_POLICY.text.en}');
+    DELETE FROM booking_policy WHERE salon_id = '${SALON_B}' AND text_en = '${TENANCY_POLICY.text.en}';
+  `);
+
   /**
    * THE APPOINTMENT THE CREATE CONTROL MADE, REMOVED.
    *
@@ -773,6 +785,16 @@ interface SalonRoute {
  * lint.
  */
 const PROBE_BRANCH_PREFIX = 'Tenancy probe branch';
+
+/**
+ * The booking policy the PUT row sends. Its text is this file's own so `afterAll` removes
+ * exactly the version the control half published at salon B, and nothing else.
+ */
+const TENANCY_POLICY = {
+  noShow: 'keep',
+  cancellation: [{ hoursBefore: 24, returnPercent: 50 }],
+  text: { en: 'Tenancy probe · booking policy', ar: '' },
+};
 const PROBE_BRANCH_NAME = `${PROBE_BRANCH_PREFIX} ${Date.now()}`;
 
 /**
@@ -1395,6 +1417,16 @@ const SALON_ROUTES: SalonRoute[] = [
     method: 'PATCH',
     template: '/salons/{id}',
     /**
+     * `depositFils` SINCE 54308ea. It was `noShowReturnMinutes`, which left
+     * `MERCHANT_EDITABLE` for `PLATFORM_ONLY_EDITABLE` when the salon's booking policy
+     * replaced the return window (migration 0066), and the control half went red on
+     * `400 not_editable` exactly as it did for `stampTarget` below. `5000` is what
+     * `seedSalonB()` sets, so the control restores it; `7500` is inside the 1.000 to
+     * 10.000 range, so the attack half cannot be refused by validation instead of
+     * tenancy. Salon B takes no bookings, so no deposit anywhere is priced by it.
+     *
+     * The history this row carried before that, kept for the argument it makes:
+     *
      * `noShowReturnMinutes`, AND IT WAS `stampTarget` UNTIL THE LOYALTY REVERSAL.
      *
      * This row asks one question — does `requireSameSalon` fire on the merchant's
@@ -1419,8 +1451,8 @@ const SALON_ROUTES: SalonRoute[] = [
      * cannot be refused by validation instead of by tenancy — which is the property the
      * table header asks of every body here.
      */
-    body: { noShowReturnMinutes: 999 },
-    controlBody: { noShowReturnMinutes: 60 },
+    body: { depositFils: 7_500 },
+    controlBody: { depositFils: 5_000 },
   },
   {
     method: 'POST',
@@ -1622,6 +1654,20 @@ const SALON_ROUTES: SalonRoute[] = [
    * `PUT /salons/{id}/loyalty` after this table.
    */
   { method: 'GET', template: '/salons/{id}/loyalty' },
+
+  /**
+   * THE SALON'S BOOKING POLICY — migration 0066, lane A's 54308ea. Found by the gap
+   * ledger below on the first run after the merge.
+   *
+   * The GET carries no permission (every customer is shown the policy before she
+   * books), so tenancy is its ONLY control, which is why its row matters more than
+   * most. The PUT's body is valid on both halves, so the attack half can only be
+   * refused by the salon guard; its CONTROL really publishes at salon B, and
+   * `afterAll` removes that version and its bell notices by `TENANCY_POLICY`'s text.
+   * Salon B takes no bookings, so nothing is ever stamped with it.
+   */
+  { method: 'GET', template: '/salons/{id}/booking-policy' },
+  { method: 'PUT', template: '/salons/{id}/booking-policy', body: TENANCY_POLICY },
 
   /**
    * LANE A'S FOUR PROMOTION WRITES.
@@ -2526,6 +2572,46 @@ describe("salon-scoped routes — salon B's manager calling salon A's URL", () =
  * well: it is still `/salons/:id`-shaped, so `discoverSalonScopedRoutes()` finds it
  * and requires a 403 with no salon A data in it. That half never needed the table.
  */
+/**
+ * THE BOOKING POLICY, FROM THE CUSTOMER'S SIDE AS WELL.
+ *
+ * `SALON_ROUTES` sends salon B's MANAGER. The read is also open to every customer of the
+ * salon (`requireSalonScoped`), so salon B's CUSTOMER is the other principal who could
+ * reach salon A's policy by id, and she is the one the wallet hands a salon id to. And a
+ * refused PUT must leave nothing behind: a 403 written after the insert would still be a
+ * 403 on the wire.
+ */
+describe("salon A's booking policy, by id, from salon B", () => {
+  const versionsAtA = () =>
+    Number(scalar(`select count(*) from booking_policy where salon_id='${SALON_A}'`));
+
+  it("salon B's customer cannot read it", async () => {
+    const res = await treq<{ error: string; message: string }>(
+      'GET',
+      `/salons/${SALON_A}/booking-policy`,
+      { token: bMember },
+    );
+    expect(res.status, res.raw).toBe(403);
+    expect(Object.keys(res.body).sort()).toEqual(['error', 'message']);
+    expectNoSalonALeak(res.raw, 'GET /salons/{A}/booking-policy as B\'s customer');
+  });
+
+  it("salon B's customer and manager cannot write it, and no version or notice appears at A", async () => {
+    const before = versionsAtA();
+    const noticesBefore = Number(
+      scalar(`select count(*) from member_policy_notice where salon_id='${SALON_A}'`),
+    );
+    for (const token of [bMember, bDashboard]) {
+      const res = await treq('PUT', `/salons/${SALON_A}/booking-policy`, { token, body: TENANCY_POLICY });
+      expect(res.status, res.raw).toBe(403);
+    }
+    expect(versionsAtA(), "a refused write published at salon A").toBe(before);
+    expect(
+      Number(scalar(`select count(*) from member_policy_notice where salon_id='${SALON_A}'`)),
+    ).toBe(noticesBefore);
+  });
+});
+
 describe('PUT /salons/{id}/loyalty — withdrawn from the merchant, and withdrawn the same way at every salon', () => {
   let platform = '';
 
@@ -4257,6 +4343,9 @@ describe('gap ledger — every salon-scoped route lane A registers', () => {
       'POST /salons/:id/branches',
       'PATCH /salons/:id/branches/:bid',
       'DELETE /salons/:id/branches/:bid',
+      // The salon's booking policy, migration 0066. The ledger fired on both.
+      'GET /salons/:id/booking-policy',
+      'PUT /salons/:id/booking-policy',
       // Lane A's four image writes. They belong in this tripwire more than any row
       // above it, because they carry BOTH awkward shapes at once — a second path
       // parameter AND an explicit generic between the method and the paren — which

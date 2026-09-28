@@ -274,17 +274,22 @@ describe('Settings — everything the section renders is on the salon read', () 
 });
 
 describe('Settings — what a merchant can actually change, proved by reading it back', () => {
-  it('the deposit, the no-show window and the WhatsApp switch round-trip', async () => {
+  /**
+   * THE NO-SHOW WINDOW LEFT THIS ROUND TRIP IN 54308ea. The salon's booking policy
+   * (`PUT /salons/{id}/booking-policy`, migration 0066) decides what a no-show does
+   * now, and `noShowReturnMinutes` moved to `PLATFORM_ONLY_EDITABLE`: the console
+   * keeps it for legacy deadlines and the counter's early-arrival grace. The spec
+   * after this one pins the merchant's refusal.
+   */
+  it('the deposit and the WhatsApp switch round-trip', async () => {
     const before = await readSalon();
     const nextDeposit = before.depositFils === 6_000 ? 7_000 : 6_000;
-    const nextMinutes = before.noShowReturnMinutes === 45 ? 90 : 45;
     const nextWhatsapp = !before.whatsappEnabled;
 
     const patched = await treq('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
       body: {
         depositFils: nextDeposit,
-        noShowReturnMinutes: nextMinutes,
         whatsappEnabled: nextWhatsapp,
       },
     });
@@ -293,7 +298,6 @@ describe('Settings — what a merchant can actually change, proved by reading it
     // THE SECOND REQUEST. An echoed body would satisfy everything above.
     const after = await readSalon();
     expect(after.depositFils, 'the deposit did not persist').toBe(nextDeposit);
-    expect(after.noShowReturnMinutes).toBe(nextMinutes);
     expect(after.whatsappEnabled).toBe(nextWhatsapp);
 
     // Put it back, so a re-run of this file starts where it started.
@@ -301,10 +305,25 @@ describe('Settings — what a merchant can actually change, proved by reading it
       token: dashboard,
       body: {
         depositFils: before.depositFils,
-        noShowReturnMinutes: before.noShowReturnMinutes,
         whatsappEnabled: before.whatsappEnabled,
       },
     });
+  });
+
+  it('the no-show window is no longer hers: refused by name, and the column does not move', async () => {
+    const before = scalar(`select no_show_return_minutes::text from salon where id='${SALON_B}'`);
+    const next = before === '45' ? 90 : 45;
+    const res = await treq<{ error?: string; message?: string }>('PATCH', `/salons/${SALON_B}`, {
+      token: dashboard,
+      body: { noShowReturnMinutes: next },
+    });
+    expect(res.status, res.raw).toBe(400);
+    expect(res.body.error).toBe('not_editable');
+    expect(res.body.message).toContain('noShowReturnMinutes');
+    expect(
+      scalar(`select no_show_return_minutes::text from salon where id='${SALON_B}'`),
+      'a refused PATCH still wrote the window',
+    ).toBe(before);
   });
 
   it('a fractional deposit never reaches the column (non-negotiable #1)', async () => {
@@ -361,9 +380,11 @@ describe('Settings — what a merchant can actually change, proved by reading it
     const before = Number(
       scalar(`select count(*) from audit_log where salon_id='${SALON_B}' and kind='rules'`),
     );
+    // `depositFils` since 54308ea took `noShowReturnMinutes` from the merchant.
+    const deposit = Number(scalar(`select deposit_fils from salon where id='${SALON_B}'`));
     const res = await treq('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
-      body: { noShowReturnMinutes: 61 },
+      body: { depositFils: deposit === 6_100 ? 6_200 : 6_100 },
     });
     precondition(res.status === 200, `PATCH answered ${res.status} ${res.raw}`);
 
@@ -371,6 +392,9 @@ describe('Settings — what a merchant can actually change, proved by reading it
       scalar(`select count(*) from audit_log where salon_id='${SALON_B}' and kind='rules'`),
     );
     expect(after, 'a settings change wrote no audit row').toBe(before + 1);
+
+    // Put it back; the restore writes its own audit row, after the count above.
+    await treq('PATCH', `/salons/${SALON_B}`, { token: dashboard, body: { depositFils: deposit } });
   });
 });
 
@@ -428,9 +452,11 @@ describe('Settings — the structure of a salon, and it is configurable now', ()
    * PROMOTED. The PATCH now builds the same `Salon` the GET does.
    */
   it('PATCH /salons/{id} answers a Salon, the shape GET answers', async () => {
+    // The salon's own deposit, written back unchanged: a real PATCH that moves nothing.
+    // It was `noShowReturnMinutes`, which the merchant cannot write since 54308ea.
     const res = await treq<SalonView>('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
-      body: { noShowReturnMinutes: 62 },
+      body: { depositFils: Number(scalar(`select deposit_fils from salon where id='${SALON_B}'`)) },
     });
     precondition(res.status === 200, `PATCH answered ${res.status} ${res.raw}`);
 
@@ -1002,22 +1028,21 @@ describe('Loyalty — AVO publishes the ladder, and the merchant reads it', () =
    * the permission was revoked rather than the ladder withdrawn.
    */
   it('and the rest of her Settings screen still writes — perms.loyalty was narrowed, not revoked', async () => {
-    const before = Number(scalar(`select no_show_return_minutes from salon where id='${SALON_B}'`));
-    const next = before === 61 ? 62 : 61;
+    // The deposit, since 54308ea moved `noShowReturnMinutes` to the console as well.
+    const before = Number(scalar(`select deposit_fils from salon where id='${SALON_B}'`));
+    const next = before === 6_100 ? 6_200 : 6_100;
 
     const res = await treq('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
-      body: { noShowReturnMinutes: next },
+      body: { depositFils: next },
     });
     expect(res.status, `a merchant-editable field was refused: ${res.raw}`).toBe(200);
-    expect(Number(scalar(`select no_show_return_minutes from salon where id='${SALON_B}'`))).toBe(
-      next,
-    );
+    expect(Number(scalar(`select deposit_fils from salon where id='${SALON_B}'`))).toBe(next);
 
     // Put it back. The snapshot in `afterAll` covers the loyalty columns, not this one.
     await treq('PATCH', `/salons/${SALON_B}`, {
       token: dashboard,
-      body: { noShowReturnMinutes: before },
+      body: { depositFils: before },
     });
   });
 

@@ -177,6 +177,23 @@ describe('tripwires — both bells are populated, or nothing below means anythin
       expect(marksOn(own), `${m.id} already has read marks — the fixture is not fresh`).toBe(0);
     }
   });
+
+  /**
+   * `booking_policy` IS ALWAYS VISIBLE (migration 0066). The salon changing the terms of
+   * her bookings is a fact about her account, like a receipt, and not marketing, so it is
+   * not behind the `offers` consent the way `campaign` is. Every receipt kind must be
+   * there too. `booking-policy.test.ts` proves a publish lands in the bell; this proves
+   * the bell says it can hold one, for both members, whatever their consent.
+   */
+  it('both bells can hold a booking-policy notice, and every receipt kind', async () => {
+    for (const tok of [tokenA, tokenB]) {
+      const f = await feedOf(tok);
+      expect(f.status, f.raw).toBe(200);
+      expect(f.body.visibleKinds).toEqual(
+        expect.arrayContaining(['topup', 'charge', 'shop', 'deposit_hold', 'deposit_return', 'booking_policy']),
+      );
+    }
+  });
 });
 
 // ------------------------------------------------------------------ read --

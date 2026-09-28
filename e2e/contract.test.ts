@@ -107,6 +107,7 @@ import {
   ArtistSchema,
   AvailabilityDaySchema,
   BookableArtistSchema,
+  BookingPolicyReadSchema,
   BookingSchema,
   LegalDocumentSetSchema,
   MemberAddressSchema,
@@ -146,6 +147,7 @@ import {
   A_BRANCH,
   A_SERVICE,
   A_STAFF_FULL,
+  B_STAFF_HANDLE,
   QA_MEMBER,
   QA_MEMBER_PHONE,
   SALON_A,
@@ -357,6 +359,19 @@ let topUpId = '';
  * would otherwise meet 409 `duplicate_reward` before a single probe ran.
  */
 const CT_REWARD_LABEL = 'Contract probe · free fringe trim';
+
+/**
+ * THE BOOKING-POLICY SAMPLE, published at salon B. Its English text is this file's own,
+ * so `afterAll` removes exactly this version and the bell notices it wrote.
+ */
+const CT_BOOKING_POLICY = {
+  noShow: 'keep',
+  cancellation: [
+    { hoursBefore: 48, returnPercent: 100 },
+    { hoursBefore: 24, returnPercent: 50 },
+  ],
+  text: { en: 'Contract probe · booking policy sample', ar: 'نموذج سياسة الحجز' },
+};
 let customRewardId = '';
 let customCampaignId = '';
 
@@ -659,6 +674,28 @@ function probes(): Probe[] {
       label: 'GET /bookings/{id}',
       schemaName: 'BookingSchema',
       schema: BookingSchema,
+    },
+    /**
+     * THE SALON'S BOOKING POLICY (migration 0066), PROBED TWICE, and the published one is
+     * the point. `{ policy: null }` satisfies `BookingPolicySchema.nullable()` whatever the
+     * inner schema says, so a probe of a salon that never published would parse an
+     * envelope and nothing in it: the `subtracted: []` trap the availability probes
+     * below document. Salon B publishes in `beforeAll` (it takes no bookings, so no other
+     * file's booking is stamped by it) and `afterAll` removes the version and its bell
+     * notices. Salon A's null is kept as the second sample because it is the shape a
+     * wallet meets first, on every salon that has not written a policy.
+     */
+    {
+      route: 'GET /salons/:id/booking-policy',
+      label: `GET /salons/${SALON_B}/booking-policy`,
+      schemaName: 'BookingPolicyReadSchema',
+      schema: BookingPolicyReadSchema,
+    },
+    {
+      route: 'GET /salons/:id/booking-policy',
+      label: `GET /salons/${SALON_A}/booking-policy`,
+      schemaName: 'BookingPolicyReadSchema',
+      schema: BookingPolicyReadSchema,
     },
     /**
      * AVAILABILITY IS PROBED TWICE, ON PURPOSE, AND THE SECOND ONE IS THE POINT.
@@ -2415,8 +2452,25 @@ beforeAll(async () => {
   if (ticket.status !== 200) throw new Error(`POST /v1/support/tickets: ${ticket.status} ${ticket.raw}`);
   captured.set('POST /v1/support/tickets', ticket);
 
+  // ---- the booking policy, published at salon B -------------------------------
+  // See the two probes. Through the real PUT, so the sample is what a publish serves.
+  const bStaff = await signInDashboard(SALON_B, B_STAFF_HANDLE);
+  const policy = await treq<any>('PUT', `/salons/${SALON_B}/booking-policy`, {
+    token: bStaff,
+    body: CT_BOOKING_POLICY,
+  });
+  if (policy.status !== 200) {
+    throw new Error(`PUT /salons/${SALON_B}/booking-policy: ${policy.status} ${policy.raw}`);
+  }
+  captured.set(
+    `GET /salons/${SALON_B}/booking-policy`,
+    await treq<any>('GET', `/salons/${SALON_B}/booking-policy`, { token: bStaff }),
+  );
+
   // ---- every GET, captured once ------------------------------------------------
   const gets: Array<[string, string, string]> = [
+    // Her read, at a salon with no policy: `{ policy: null }`.
+    [`GET /salons/${SALON_A}/booking-policy`, `/salons/${SALON_A}/booking-policy`, member],
     [`GET /salons/${SALON_A}`, `/salons/${SALON_A}`, dashboard],
     [`GET /salons/${SALON_A}/metrics`, `/salons/${SALON_A}/metrics`, dashboard],
     [`GET /salons/${SALON_A}/services`, `/salons/${SALON_A}/services`, dashboard],
@@ -2514,6 +2568,16 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  /*
+   * THE BOOKING-POLICY SAMPLE GOES BACK, notices first for the FK. `booking_policy` is
+   * append-only for `avo_app`, not for the owner this runs as. Nothing references the
+   * version but its notices: salon B takes no bookings, so no booking is stamped with it.
+   */
+  psql(`
+    DELETE FROM member_policy_notice WHERE salon_id = '${SALON_B}' AND policy_id IN
+      (SELECT id FROM booking_policy WHERE salon_id = '${SALON_B}' AND text_en = '${CT_BOOKING_POLICY.text.en}');
+    DELETE FROM booking_policy WHERE salon_id = '${SALON_B}' AND text_en = '${CT_BOOKING_POLICY.text.en}';
+  `);
   /**
    * THE BELL ROW GOES BACK. It is this file's, by id and by subject, and nothing
    * after this run needs it — but `merchant_notification_open_uq` spans unresolved
@@ -2890,7 +2954,7 @@ describe('census — every GET the API registers is either probed or explicitly 
         'NEITHER, the reader has stopped reading routes it used to read — start at ' +
         '`ambiguousRegistrations()` in permission-census.test.ts, which names the ' +
         'registrations it could see and could not resolve.',
-    ).toBe(64);
+    ).toBe(65);
   });
 
   it('no GET route is left unclassified', () => {
@@ -3716,6 +3780,28 @@ describe('wire pins — a shop order paid by card (`order` half; `intent` is pro
         `sheet built on POST /orders would read undefined: ${missing.join(', ')}`,
     ).toEqual([]);
     expect(extra, `the card-paid receipt carries keys POST /orders does not: ${extra.join(', ')}`).toEqual([]);
+  });
+});
+
+describe('the booking-policy samples are worth parsing', () => {
+  /**
+   * `BookingPolicySchema.nullable()` accepts `null` whatever `BookingPolicySchema` says,
+   * so the probe above proves the inner shape only if one sample is a real publish. This
+   * is that assertion, and it names the fixture rather than passing on an envelope.
+   */
+  it('salon B serves the version this file published, and salon A serves null', () => {
+    const b = response(`GET /salons/${SALON_B}/booking-policy`);
+    expect(b.status, b.raw).toBe(200);
+    expect(b.body.policy, `salon B's sample is null, so the probe parsed nothing:\n${b.raw}`).not.toBeNull();
+    expect(b.body.policy.salonId).toBe(SALON_B);
+    expect(b.body.policy.text).toEqual(CT_BOOKING_POLICY.text);
+    expect(b.body.policy.cancellation).toEqual(CT_BOOKING_POLICY.cancellation);
+
+    const a = response(`GET /salons/${SALON_A}/booking-policy`);
+    expect(a.status, a.raw).toBe(200);
+    expect(a.body, 'salon A has a published policy, which every other file would book under').toEqual({
+      policy: null,
+    });
   });
 });
 

@@ -416,6 +416,11 @@ const PROBES: Probe[] = [
   {
     perm: 'loyalty',
     /**
+     * `depositFils` SINCE 54308ea, which took `noShowReturnMinutes` from the merchant
+     * too (the booking policy replaced the return window): against lane A's API that
+     * body would now be refused `400 not_editable` before the permission is read, the
+     * same trap the paragraph below describes for `stampTarget`.
+     *
      * `noShowReturnMinutes`, AND THE LABEL USED TO SAY "the loyalty editor writes
      * through here".
      *
@@ -437,7 +442,7 @@ const PROBES: Probe[] = [
       (
         await api('PATCH', `/salons/${SALON_ID}`, {
           scenario: NOPERMS,
-          body: { noShowReturnMinutes: 61 },
+          body: { depositFils: 6_000 },
         })
       ).status,
   },
