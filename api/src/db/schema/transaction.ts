@@ -15,6 +15,7 @@ import {
   boolean,
   check,
   index,
+  integer,
   pgEnum,
   pgTable,
   text,
@@ -25,7 +26,7 @@ import { fils } from '@avo/types';
 import { filsColumn, timestamptz } from './_shared';
 import { member } from './member';
 import { happyHour } from './promotion';
-import { branch, salon } from './salon';
+import { branch, loyaltyMode, salon, tierName } from './salon';
 import { staffUser } from './staff';
 
 export const transactionKind = pgEnum('transaction_kind', [
@@ -266,6 +267,27 @@ export const transaction = pgTable(
      */
     customAmount: boolean('custom_amount').notNull().default(false),
 
+    /**
+     * WHAT THIS CHARGE EARNED.  (migration 0065 — the argument is there in full)
+     *
+     * Written by `services/charge.ts § 9` inside the charge's own transaction,
+     * from the same outcome the `POST /charges` response carries, and read by
+     * two things: her activity feed (`serialiseTransactionLoyalty`) and `POST
+     * /voids`, which takes back exactly `loyaltyVisitsEarned` /
+     * `loyaltyStampsEarned` rather than the flat one visit it used to.
+     *
+     * ALL NULL on every charge written before 0065 and on every non-charge row.
+     * NULL is "no outcome was recorded", never "earned nothing" — the void's
+     * fallback and the wallet's null both depend on the difference.
+     * `transaction_loyalty_is_whole` makes the six an all-or-nothing record.
+     */
+    loyaltyMode: loyaltyMode('loyalty_mode'),
+    loyaltyVisitsEarned: integer('loyalty_visits_earned'),
+    loyaltyStampsEarned: integer('loyalty_stamps_earned'),
+    loyaltyTierAfter: tierName('loyalty_tier_after'),
+    loyaltyClimbed: boolean('loyalty_climbed'),
+    loyaltyRewardReady: boolean('loyalty_reward_ready'),
+
     createdByStaffId: text('created_by_staff_id').references(() => staffUser.id, {
       onDelete: 'restrict',
     }),
@@ -449,6 +471,27 @@ export const transaction = pgTable(
     index('transaction_member_basket_recent_idx')
       .on(t.memberId, t.basketHash, t.createdAt.desc())
       .where(sql`kind = 'charge' AND basket_hash IS NOT NULL`),
+
+    /** 0065. A loyalty outcome describes a charge, like a typed price does. */
+    check('transaction_loyalty_is_charge_only', sql`${t.loyaltyMode} IS NULL OR ${t.kind} = 'charge'`),
+    /** 0065. All six NULL, or a whole tiers record, or a whole stamps record. */
+    check(
+      'transaction_loyalty_is_whole',
+      sql`(${t.loyaltyMode} IS NULL AND ${t.loyaltyVisitsEarned} IS NULL
+            AND ${t.loyaltyStampsEarned} IS NULL AND ${t.loyaltyTierAfter} IS NULL
+            AND ${t.loyaltyClimbed} IS NULL AND ${t.loyaltyRewardReady} IS NULL)
+          OR (${t.loyaltyMode} = 'tiers' AND ${t.loyaltyVisitsEarned} IS NOT NULL
+            AND ${t.loyaltyStampsEarned} IS NULL AND ${t.loyaltyClimbed} IS NOT NULL
+            AND ${t.loyaltyRewardReady} = false)
+          OR (${t.loyaltyMode} = 'stamps' AND ${t.loyaltyStampsEarned} IS NOT NULL
+            AND ${t.loyaltyVisitsEarned} IS NULL AND ${t.loyaltyTierAfter} IS NULL
+            AND ${t.loyaltyClimbed} = false AND ${t.loyaltyRewardReady} IS NOT NULL)`,
+    ),
+    check(
+      'transaction_loyalty_earned_non_negative',
+      sql`(${t.loyaltyVisitsEarned} IS NULL OR ${t.loyaltyVisitsEarned} >= 0)
+          AND (${t.loyaltyStampsEarned} IS NULL OR ${t.loyaltyStampsEarned} >= 0)`,
+    ),
 
     /**
      * "Show me every typed price this salon took." Partial, on the true rows
