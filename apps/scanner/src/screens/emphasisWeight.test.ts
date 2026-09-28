@@ -136,7 +136,11 @@ describe('inline emphasis in body copy is 600 — DECISIONS.md #115', () => {
       // comparing — and it is still not taken here, because rewriting how a
       // trunk-ruled test states its rule inside the slice that trips it is how
       // a ratchet gets quietly loosened by the person it caught.
-      "screens/BookingsScreen.tsx:704 ui(10,'700')",
+      //
+      // SIXTH MOVE, 704 → 724, same membership: the salon-zone slice gave
+      // `BookingsScreen` a `timeZone` prop and `BookingCard` a multi-line
+      // signature above this call. Nothing about a font weight changed.
+      "screens/BookingsScreen.tsx:724 ui(10,'700')",
     ]);
   });
 });

@@ -227,7 +227,7 @@ function texts(node: unknown, out: string[] = []): string[] {
 function render(raw: unknown) {
   openURL.mockClear();
   const booking = ArtistBookingSchema.parse(raw);
-  const tree = BookingCard({ booking });
+  const tree = BookingCard({ booking, timeZone: 'Asia/Kuwait' });
   const nodes = flatten(tree);
   const pressed: string[] = [];
   for (const n of nodes) {

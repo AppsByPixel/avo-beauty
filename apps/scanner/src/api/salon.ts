@@ -36,6 +36,11 @@ export interface SalonLoyalty {
   name: string;
   /** The white-label hex. Applied at the NEXT launch — see src/theme/sealed.ts. */
   brandColor: string;
+  /**
+   * `Salon.timezone`, IANA — the clock the Charges and Bookings screens read
+   * every time in. See `domain/salonTime.ts`.
+   */
+  timezone: string;
 }
 
 export async function fetchSalonLoyalty(
@@ -55,5 +60,6 @@ export async function fetchSalonLoyalty(
     stampTarget: salon.loyaltyMode === 'stamps' ? (salon.stampTarget ?? null) : null,
     name: salon.name,
     brandColor: salon.brandColor,
+    timezone: salon.timezone,
   };
 }

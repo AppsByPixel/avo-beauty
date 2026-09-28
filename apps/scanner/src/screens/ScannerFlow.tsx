@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { ApiError } from '../api/client';
 import { fetchSalonLoyalty, type SalonLoyalty } from '../api/salon';
+import { FALLBACK_SALON_TIME_ZONE } from '../domain/salonTime';
 import { adoptSalonName } from '../config/brand';
 import { resolveScan, type ScanResult } from '../api/scans';
 import { fetchMember, type LookupMember } from '../api/members';
@@ -192,6 +193,13 @@ export function ScannerFlow() {
     }
   }, []);
 
+  /*
+    The salon's clock for Charges and Bookings. Kuwait ONLY while the salon read
+    is in flight or has failed — the contract's own default, and what Bookings
+    hard-coded before; never the device's zone. See domain/salonTime.ts.
+  */
+  const timeZone = salon?.timezone ?? FALLBACK_SALON_TIME_ZONE;
+
   const firstName = staff?.name.split(' ')[0] ?? 'there';
   // design:135, :402 — "Hessa · hessa" in both screens' headers.
   const staffHandle = staff?.handle ?? '—';
@@ -275,6 +283,7 @@ export function ScannerFlow() {
           accessToken={accessToken}
           onHome={goHome}
           voidTargetOnOpen={screen.voidTarget}
+          timeZone={timeZone}
         />
       )}
 
@@ -284,6 +293,7 @@ export function ScannerFlow() {
           onHome={goHome}
           staffFirstName={firstName}
           staffHandle={staffHandle}
+          timeZone={timeZone}
         />
       )}
 
