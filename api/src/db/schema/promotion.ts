@@ -56,6 +56,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { timestamptz } from './_shared';
 import { branch, salon } from './salon';
+import { staffUser } from './staff';
 
 /** api-contract.md § Promotion set: the six reward keys, and only these. */
 export const REWARD_KEYS = [
@@ -102,11 +103,49 @@ export const boost = pgTable(
     publishedAt: timestamptz('published_at').notNull().defaultNow(),
     publishedBy: text('published_by').notNull(),
 
+    /**
+     * THE WINDOW (migration 0067). The boost applies while
+     * `starts_at <= now < ends_at`, each bound optional — NULL/NULL is today's
+     * "from publish until changed". There is NO `live` column: every reader
+     * resolves `isBoostLive` (services/promotions.ts) against its own clock, the
+     * `isHappyHourLive` design, so an expired boost stops paying at `ends_at`
+     * with nothing having to run.
+     */
+    startsAt: timestamptz('starts_at'),
+    endsAt: timestamptz('ends_at'),
+
+    /**
+     * THE STOP (migration 0067). A stopped row is NEUTRAL (1/0/1, no window) —
+     * `boost_stopped_is_neutral` — and these say who ended it and when. All three
+     * or none, `boost_stop_is_whole`. Cleared by the next publish that changes
+     * the branch.
+     */
+    stoppedAt: timestamptz('stopped_at'),
+    /** The staff member's display name, as `published_by`. */
+    stoppedBy: text('stopped_by'),
+    stoppedByStaffId: text('stopped_by_staff_id').references(() => staffUser.id, {
+      onDelete: 'restrict',
+    }),
+
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.salonId, t.branchId] }),
+    check(
+      'boost_window_ordered',
+      sql`${t.startsAt} IS NULL OR ${t.endsAt} IS NULL OR ${t.endsAt} > ${t.startsAt}`,
+    ),
+    check(
+      'boost_stop_is_whole',
+      sql`(${t.stoppedAt} IS NULL AND ${t.stoppedBy} IS NULL AND ${t.stoppedByStaffId} IS NULL)
+          OR (${t.stoppedAt} IS NOT NULL AND ${t.stoppedBy} IS NOT NULL AND ${t.stoppedByStaffId} IS NOT NULL)`,
+    ),
+    check(
+      'boost_stopped_is_neutral',
+      sql`${t.stoppedAt} IS NULL
+          OR (${t.visit} = 1 AND ${t.topup} = 0 AND ${t.stamp} = 1 AND ${t.startsAt} IS NULL AND ${t.endsAt} IS NULL)`,
+    ),
     // The dashboard's steppers stop at these bounds. Non-negotiable #7: the UI
     // stopping is a courtesy, this is the control. A `visit: 50` reaching the
     // database would multiply a customer's loyalty standing by fifty.

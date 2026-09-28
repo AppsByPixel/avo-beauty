@@ -470,6 +470,13 @@
       "when": 1790742800000,
       "tag": "0066_the_salon_writes_its_own_booking_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1790829200000,
+      "tag": "0067_a_late_move_keeps_its_return_and_a_boost_that_ends",
+      "breakpoints": true
     }
   ]
 }
