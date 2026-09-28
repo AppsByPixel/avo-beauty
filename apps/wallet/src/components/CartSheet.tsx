@@ -60,7 +60,9 @@ import { FulfilmentSection } from './FulfilmentSection';
 import { PrimaryButton } from './Buttons';
 import type { AddressBookController } from '../state/useAddresses';
 import type { CheckoutBlock, Fulfilment, FulfilmentChoice } from '../domain/fulfilment';
-import { color, MIN_TAP_TARGET, radius, text } from '../theme';
+import { PAYMENT_METHODS } from '../domain/topup';
+import type { CardMethod } from '../state/useCardCheckout';
+import { color, MIN_TAP_TARGET, radius, text, WHITE } from '../theme';
 import { focusable } from '../theme/focus';
 import { alignEnd } from '../i18n/rtl';
 
@@ -92,7 +94,24 @@ interface Props {
   onAddAddress: () => void;
   onEditAddress: (address: MemberAddress) => void;
   onDeleteAddress: (address: MemberAddress) => void;
+  /**
+   * W2 — HOW SHE PAYS, ALWAYS VISIBLE. `wallet` is the path this sheet has
+   * always had and is the default, so nothing about it changes unless she
+   * picks a card method.
+   *
+   * OPTIONAL, DEFAULTING TO THE WALLET RAIL, so a caller that predates W2 (two
+   * render specs mount this sheet directly) gets exactly the sheet it pinned.
+   */
+  method?: CheckoutMethod;
+  onMethod?: (method: CheckoutMethod) => void;
+  /** Pay the basket by the chosen card method — `useCardCheckout.pay`. */
+  onPayCard?: (method: CardMethod) => void;
+  /** A card attempt for this basket is unresolved: BOTH pay buttons are held. */
+  cardOpen?: boolean;
+  onCheckCard?: () => void;
 }
+
+export type CheckoutMethod = 'wallet' | CardMethod;
 
 export function CartSheet({
   open,
@@ -118,6 +137,11 @@ export function CartSheet({
   onAddAddress,
   onEditAddress,
   onDeleteAddress,
+  method = 'wallet',
+  onMethod = () => undefined,
+  onPayCard = () => undefined,
+  cardOpen = false,
+  onCheckCard = () => undefined,
 }: Props) {
   const { lang, copy } = useLanguage();
   const empty = lines.length === 0;
@@ -135,6 +159,24 @@ export function CartSheet({
 
   // The shortfall the server named, over the one computed locally.
   const shownShortfall = refusal?.kind === 'short' ? refusal.shortfallFils : shortfall;
+
+  /*
+    WHAT HOLDS THE CARD BUTTON: exactly the conditions that already hold the
+    wallet button (whose own `disabled` list below is untouched). The card rail
+    inherits the wallet path's "unknown outcome" refusals on purpose — after an
+    `offline`/`failed` wallet order nobody knows whether that debit settled, and
+    paying the same basket by card beside it is the double charge by the other
+    door. An unresolved CARD attempt is not in this list: it replaces both
+    buttons outright (see the CTA block).
+  */
+  const walletHeld =
+    busy ||
+    blocked ||
+    block === 'noAddress' ||
+    refusal?.kind === 'offline' ||
+    refusal?.kind === 'failed' ||
+    refusal?.kind === 'alreadyPlaced';
+  const byCard = method !== 'wallet';
 
   return (
     <Sheet open={open} dismissible onDismiss={onClose} label={copy.cartTitle} testID="cart-sheet">
@@ -233,6 +275,8 @@ export function CartSheet({
               onEdit={onEditAddress}
               onDelete={onDeleteAddress}
             />
+
+            <MethodChoice method={method} balanceFils={balanceFils} onMethod={onMethod} />
           </ScrollView>
 
           {/* design:965-966 — the total, then where it is paid from. */}
@@ -244,16 +288,23 @@ export function CartSheet({
               lang={lang}
               emphasis
             />
-            <Row
-              label={copy.cartPayFrom}
-              value={formatMoney(balanceFilsAsFils(balanceFils), lang)}
-              aria={moneyAriaLabel(balanceFilsAsFils(balanceFils), lang)}
-              lang={lang}
-              tone={canAfford ? 'ok' : 'bad'}
-            />
+            {/*
+              "Paid from wallet" and the shortfall are facts about the WALLET
+              rail. Paying by card, her balance is untouched and irrelevant, so
+              neither is drawn — and no fee row either: none is served.
+            */}
+            {!byCard ? (
+              <Row
+                label={copy.cartPayFrom}
+                value={formatMoney(balanceFilsAsFils(balanceFils), lang)}
+                aria={moneyAriaLabel(balanceFilsAsFils(balanceFils), lang)}
+                lang={lang}
+                tone={canAfford ? 'ok' : 'bad'}
+              />
+            ) : null}
 
             {/* design:968 — the shortfall chip. */}
-            {!canAfford || refusal?.kind === 'short' ? (
+            {!byCard && (!canAfford || refusal?.kind === 'short') ? (
               <Chip
                 lang={lang}
                 testID="cart-short"
@@ -320,8 +371,34 @@ export function CartSheet({
               design does (:1460). Blocked by a stale product → no submit at all,
               because the server would refuse it and she has to remove it first.
               Otherwise → pay.
+
+              W2 adds a fourth: a card method chosen → the one-step card
+              payment. And a fifth that outranks all of them: while a card
+              attempt is unresolved, "Check the payment" is drawn INSTEAD of
+              either pay button. That branch is the lock — no wallet or card
+              submit exists on screen to be tapped beside a payment that may
+              still land (cardCheckoutRender.test.tsx, "pending").
             */}
-            {!canAfford ? (
+            {cardOpen ? (
+              <>
+                <Chip lang={lang} testID="cart-card-open" text={copy.cardOrderOpen} />
+                <PrimaryButton
+                  label={copy.cardOrderCheck}
+                  onPress={onCheckCard}
+                  testID="cart-card-check"
+                  style={styles.cta}
+                />
+              </>
+            ) : byCard ? (
+              <PrimaryButton
+                label={copy.cartPayWith(formatMoney(total, lang), copy.payMethod[method])}
+                accessibilityLabel={copy.cartPayWith(moneyAriaLabel(total, lang), copy.payMethod[method])}
+                onPress={() => onPayCard(method)}
+                disabled={walletHeld}
+                testID="cart-pay-card"
+                style={styles.cta}
+              />
+            ) : !canAfford ? (
               <PrimaryButton
                 label={copy.cartTopUpCta}
                 onPress={onTopUp}
@@ -358,6 +435,74 @@ export function CartSheet({
         </>
       )}
     </Sheet>
+  );
+}
+
+/**
+ * THE METHOD CHOICE — W2. The top-up sheet's own rows (tag, name, "Most used in
+ * Kuwait", radio), with the wallet balance first: it is the path this cart has
+ * always had, and the default. KNET, Apple Pay and card follow in
+ * `PAYMENT_METHODS` order — the product decision that file records.
+ *
+ * NO FEE LINE under any method: the customer projection serves none.
+ */
+function MethodChoice({
+  method,
+  balanceFils,
+  onMethod,
+}: {
+  method: CheckoutMethod;
+  balanceFils: number;
+  onMethod: (m: CheckoutMethod) => void;
+}) {
+  const { lang, copy } = useLanguage();
+  const options: Array<{ id: CheckoutMethod; tag: string | null; name: string; mostUsed: boolean }> = [
+    { id: 'wallet', tag: null, name: copy.txMethod.wallet, mostUsed: false },
+    ...PAYMENT_METHODS.map((o) => ({ id: o.id, tag: o.tag, name: copy.payMethod[o.id], mostUsed: o.mostUsed })),
+  ];
+  return (
+    <View style={styles.methods} testID="cart-methods">
+      <Text style={[text('label', lang), styles.methodLabel]}>{copy.methodLabel}</Text>
+      {options.map((o) => {
+        const on = o.id === method;
+        return (
+          <Pressable
+            key={o.id}
+            onPress={() => onMethod(o.id)}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: on }}
+            aria-checked={on}
+            accessibilityLabel={o.name}
+            dataSet={focusable}
+            testID={`cart-method-${o.id}`}
+            style={[styles.method, on && styles.methodOn]}
+          >
+            <View style={[styles.methodTag, o.tag === null && styles.methodTagWallet]}>
+              {o.tag ? <Text style={styles.methodTagText}>{o.tag}</Text> : null}
+            </View>
+            <View style={styles.methodBody}>
+              <View style={styles.methodNameRow}>
+                <Text style={[text('bodyL', lang, '600'), styles.methodName]}>{o.name}</Text>
+                {o.mostUsed ? (
+                  <View style={styles.notePill}>
+                    <Text style={[text('bodyS', lang, '600'), styles.notePillText]}>{copy.mostUsed}</Text>
+                  </View>
+                ) : null}
+              </View>
+              {o.id === 'wallet' ? (
+                <Text
+                  style={[text('bodyS', lang), styles.methodSub]}
+                  accessibilityLabel={moneyAriaLabel(fils(balanceFils), lang)}
+                >
+                  {formatMoney(fils(balanceFils), lang)}
+                </Text>
+              ) : null}
+            </View>
+            <View style={[styles.radio, on && styles.radioOn]}>{on ? <View style={styles.radioDot} /> : null}</View>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -564,6 +709,51 @@ const styles = StyleSheet.create({
   chipDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.dangerDot, flexShrink: 0 },
   chipText: { color: color.dangerText, flex: 1 },
   cta: { marginTop: 14 },
+
+  // W2 — the method rows, the top-up sheet's own measurements.
+  methods: { marginTop: 16, gap: 9 },
+  methodLabel: { color: color.textMutedLabel, marginStart: 2, marginBottom: 1 },
+  method: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: MIN_TAP_TARGET,
+    paddingVertical: 12,
+    paddingHorizontal: 13,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: color.borderControl,
+    backgroundColor: color.surface,
+  },
+  methodOn: { borderColor: color.brandDeep, backgroundColor: color.brandTint },
+  // #9: white on brandDeep, never on brand.
+  methodTag: {
+    width: 38,
+    height: 26,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: color.brandDeep,
+  },
+  methodTagWallet: { backgroundColor: color.surfaceAlt2 },
+  methodTagText: { color: WHITE, fontSize: 10, fontWeight: '700', fontFamily: 'Inter_700Bold' },
+  methodBody: { flex: 1 },
+  methodNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
+  methodName: { color: color.ink },
+  methodSub: { color: color.textMuted, marginTop: 1 },
+  notePill: { backgroundColor: color.brandTint, paddingVertical: 2, paddingHorizontal: 8, borderRadius: radius.pill },
+  notePillText: { color: color.brandDeep },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: color.borderControl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOn: { borderColor: color.brandDeep, backgroundColor: color.brandDeep },
+  radioDot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: WHITE },
   empty: { alignItems: 'center', paddingTop: 40, paddingBottom: 30, paddingHorizontal: 10 },
   emptyTitle: { color: color.textMuted },
   emptyBody: { color: color.textMutedSoft, marginTop: 6 },

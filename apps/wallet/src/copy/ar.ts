@@ -999,6 +999,36 @@ export const ar: Copy = {
   bellUnknownTitle: 'إشعار جديد',
   bellUnknownBody: 'حدّثي التطبيق لقراءة هذا الإشعار.',
 
+  // ───────────────────────────── the shop, paid by card — client ask W2 ──
+  // WRITTEN ARABIC, FEMININE ADDRESS, NO DESIGN SOURCE — all in AR_UNVERIFIED.
+  // Not AR_GAPS: the race screen is the one sentence in this flow that must be
+  // understood, and English there would tell an Arabic reader nothing about
+  // where her money is.
+  cartPayWith: (amount, method) => `ادفعي ${amount} عبر ${method}`,
+  cardOrderOpen: 'ما زال دفع هذه السلة بالبطاقة بانتظار التأكيد. تحقّقي منه قبل الدفع مرة أخرى.',
+  cardOrderCheck: 'تحقّقي من الدفع',
+  cardOrderStartFailedTitle: 'تعذّر بدء الدفع',
+  cardOrderStartFailedBody: 'لم يُخصم أي مبلغ. حاولي مرة أخرى بعد قليل.',
+  cardOrderGatewayFailedTitle: 'لم تُفتح صفحة الدفع',
+  cardOrderGatewayFailedBody: 'لم يُخصم أي مبلغ ودفعتكِ ما زالت بانتظاركِ. افتحي صفحة الدفع مرة أخرى.',
+  cardOrderOpenPage: 'افتحي صفحة الدفع',
+  cardOrderDeclined: 'رفض البنك الدفع. لم يُخصم أي مبلغ ولم يُسجَّل أي طلب.',
+  cardOrderCancelled: 'ألغيتِ الدفع. لم يُخصم أي مبلغ ولم يُسجَّل أي طلب.',
+  cardOrderPending: 'قد تستغرق دقيقة. لا تعيدي الدفع — يُسجَّل طلبكِ فور تأكيد البنك.',
+  cardOrderAttemptOpen: 'بدأ دفع لهذه السلة بالفعل. تحقّقي منه قبل الدفع بطريقة أخرى.',
+  cardOrderRefusedTitle: 'مبلغكِ في محفظتكِ',
+  cardOrderRefusedBody: (amount) => `${amount} في محفظتكِ. وصلت دفعتكِ، لكن الطلب لم يكتمل.`,
+  cardOrderRefusal: {
+    price_changed: 'تغيّر سعر في سلتكِ أثناء الدفع. راجعي السلة وادفعي من رصيدكِ.',
+    shop_not_enabled: 'توقف الصالون عن استقبال طلبات المتجر أثناء الدفع.',
+    invalid_products: 'أحد المنتجات في سلتكِ لم يعد متوفراً.',
+    unknown_address: 'حُذف عنوان التوصيل الذي اخترتِه.',
+    address_required: 'احتاج الطلب إلى عنوان توصيل.',
+    other: 'تعذّر علينا إتمام الطلب.',
+  },
+  cardOrderInWallet: 'في محفظتكِ',
+  cardOrderBackToCart: 'العودة إلى سلتكِ',
+
   langSwitch: 'EN', // design:1339
   restartNeeded: en.restartNeeded, // AR GAP
 };
@@ -1323,4 +1353,32 @@ export const AR_UNVERIFIED = [
   'bellCardOrderBonus',
   'bellUnknownTitle',
   'bellUnknownBody',
+  /**
+   * THE SHOP PAID BY CARD — client ask W2. Nothing in the bundle draws a card
+   * checkout for an order. Read first: `cardOrderRefusedTitle` and
+   * `cardOrderRefusedBody` (the race screen — the sentence that has to tell her
+   * she did NOT lose her money) and the six `cardOrderRefusal` reasons.
+   */
+  'cartPayWith',
+  'cardOrderOpen',
+  'cardOrderCheck',
+  'cardOrderStartFailedTitle',
+  'cardOrderStartFailedBody',
+  'cardOrderGatewayFailedTitle',
+  'cardOrderGatewayFailedBody',
+  'cardOrderOpenPage',
+  'cardOrderDeclined',
+  'cardOrderCancelled',
+  'cardOrderPending',
+  'cardOrderAttemptOpen',
+  'cardOrderRefusedTitle',
+  'cardOrderRefusedBody',
+  'cardOrderRefusal.price_changed',
+  'cardOrderRefusal.shop_not_enabled',
+  'cardOrderRefusal.invalid_products',
+  'cardOrderRefusal.unknown_address',
+  'cardOrderRefusal.address_required',
+  'cardOrderRefusal.other',
+  'cardOrderInWallet',
+  'cardOrderBackToCart',
 ] as const;

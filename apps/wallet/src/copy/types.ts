@@ -20,6 +20,7 @@
  */
 
 import type { PaymentMethod, RewardKey, TierName, Transaction } from '@avo/types';
+import type { CardRefusalReason } from '../domain/cardCheckout';
 
 export interface Copy {
   // header
@@ -1409,6 +1410,57 @@ export interface Copy {
   /** A kind this build does not know. Drawn neutral, never crashed on. */
   bellUnknownTitle: string;
   bellUnknownBody: string;
+
+  // ───────────────────────────── the shop, paid by card — client ask W2 ──
+  /**
+   * PAYING FOR A BASKET BY KNET, CARD OR APPLE PAY IN ONE STEP. The method
+   * list reuses the top-up's own labels (`methodLabel`, `payMethod`,
+   * `txMethod.wallet`) and the redirect reuses `payRedirectTitle`/`Sub` and
+   * `payDontClose` — design:1371-1372 — so nothing about leaving for the bank
+   * reads differently from a top-up. Everything below is NEW, has no design
+   * source in either language, and is flagged for review (AR_UNVERIFIED).
+   *
+   * NO FEE LINE ANYWHERE. A card fee is an open business question and the
+   * merchant bears it today; the customer projection carries no fee, so there
+   * is no key for one.
+   */
+  /** The card CTA — "Pay 8.500 KD with KNET". One money argument, one method word. */
+  cartPayWith(amount: string, method: string): string;
+  /**
+   * A card attempt for this basket has not resolved, so BOTH pay buttons are
+   * held until she checks it. A second payment beside a pending one is the
+   * double charge this lock exists to prevent.
+   */
+  cardOrderOpen: string;
+  cardOrderCheck: string;
+  /** The POST failed or its answer was lost. Nothing moves until the bank page. */
+  cardOrderStartFailedTitle: string;
+  cardOrderStartFailedBody: string;
+  cardOrderGatewayFailedTitle: string;
+  cardOrderGatewayFailedBody: string;
+  cardOrderOpenPage: string;
+  /** not_paid. "…and no order was placed" is what a top-up's words cannot say. */
+  cardOrderDeclined: string;
+  cardOrderCancelled: string;
+  cardOrderPending: string;
+  /** 422 `idempotency_key_reused` on this path: an attempt is already open. */
+  cardOrderAttemptOpen: string;
+  /**
+   * THE RACE. Paid, credited, and the order refused. The TITLE says where her
+   * money is before anything else, because the one wrong reading of this
+   * screen is "I lost money" — and she did not.
+   */
+  cardOrderRefusedTitle: string;
+  /** One money argument: `intent.creditFils`, what landed in her wallet. */
+  cardOrderRefusedBody(amount: string): string;
+  /**
+   * WHY the order did not go through — rendered from `order.refusal.code`,
+   * NEVER from the server's English `message`. `other` covers `order_failed`
+   * and any code this build does not know.
+   */
+  cardOrderRefusal: Record<CardRefusalReason, string>;
+  cardOrderInWallet: string;
+  cardOrderBackToCart: string;
 
   // the language switch itself
   langSwitch: string;

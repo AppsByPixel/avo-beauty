@@ -238,6 +238,10 @@ const CALLS: Partial<Record<keyof Copy, unknown[]>> = {
   bellNoShowBody: ['Blow-dry', '—'],
   // The payment method's own label (`txMethod`), a word.
   bellCardOrder: ['KNET'],
+
+  // --- the shop paid by card (W2). Already-formatted money, plus a method word.
+  cartPayWith: [MONEY_SAMPLE, 'KNET'],
+  cardOrderRefusedBody: [MONEY_SAMPLE],
 };
 
 /**
@@ -317,6 +321,13 @@ const MONEY_ARG_KEYS = new Set([
   */
   'bellTopupBonus',
   'bellCardOrderBonus',
+  /*
+    The card checkout's two amounts (W2). `cartPayWith` takes a second argument,
+    the method's WORD, which carries no digit — so the sentence still holds
+    exactly one number, and it is money.
+  */
+  'cartPayWith',
+  'cardOrderRefusedBody',
 ]);
 
 /** Flatten a copy object to `[dottedKey, renderedString]` pairs. */
