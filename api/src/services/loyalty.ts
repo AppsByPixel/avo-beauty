@@ -115,3 +115,76 @@ export function applyStamps(
   };
 }
 
+/**
+ * ===========================================================================
+ * THE VOID'S HALF: take back what a charge earned, and nothing else.
+ * ===========================================================================
+ * `routes/charges.ts § performVoid`. Pure, like the two above, so the rules are
+ * testable without a database.
+ *
+ * SUBTRACT, NEVER RESTORE. The void does not put `visits` back to what it was
+ * before the charge, because that number is stale the moment a second till
+ * charges her inside the fifteen-minute window: restoring it would erase the
+ * other visit too. It takes `earned` off whatever the count is NOW.
+ *
+ * NEVER BELOW ZERO — `member_visits_non_negative` / `member_stamps_non_negative`
+ * would refuse the row and roll the whole refund back. Clamping is the right
+ * answer rather than a refusal: the only way the count can be below `earned` is
+ * something else lowering it in between, and the money still has to go back.
+ *
+ * THE TIER IS RE-EVALUATED EXACTLY AS THE CHARGE EVALUATES IT: `tierForVisits`
+ * on the salon's CURRENT ladder, the same function `applyVisits` calls. The rung
+ * is a function of the visit count and has never been a ratchet — `applyVisits`
+ * already reports any change of rung as `climbed`, a republished ladder can
+ * move her down on her next visit (`routes/loyalty.ts § appliesAt:
+ * 'next_visit'`), and `activityFeed.describeLoyalty` already words a descent.
+ * So a void that takes her back under a threshold she crossed with the voided
+ * charge takes her back down, and one that does not cross a threshold moves
+ * nothing. The old void never touched the tier at all, which left her on a rung
+ * her count no longer supported until her NEXT charge re-evaluated it — and that
+ * charge then reported a "climb" downwards.
+ */
+export interface TiersReversal {
+  visits: number;
+  tier: TierName | null;
+  /** What was actually taken off — `earned`, or less if the count was lower. */
+  visitsRemoved: number;
+  /** The rung moved. The caller records it the way the charge records a climb. */
+  changed: boolean;
+}
+
+export function reverseVisits(
+  tiers: Tier[],
+  currentVisits: number,
+  currentTier: TierName | null,
+  earned: number,
+): TiersReversal {
+  const visits = Math.max(0, currentVisits - Math.max(0, earned));
+  const tier = tierForVisits(tiers, visits);
+  return {
+    visits,
+    tier,
+    visitsRemoved: currentVisits - visits,
+    changed: tier !== currentTier,
+  };
+}
+
+export interface StampsReversal {
+  stamps: number;
+  stampsRemoved: number;
+}
+
+/**
+ * NO REWARD IS UN-CLAIMED, because nothing here can claim one. There is no
+ * redeem endpoint in this API: `member.stamps` only ever goes up (charge and
+ * shop), `rewardReady` is `stamps >= target`, and the salon honours the reward
+ * off-system. So this only lowers the count, never writes or removes a reward
+ * row, and leaves the `stamp_reward_ready` event where it is (loyalty_event is
+ * append-only by intent). When a claim flow exists and resets the card, a void
+ * after it takes back at most what is left on the card — the clamp — and her
+ * claimed reward stays claimed.
+ */
+export function reverseStamps(currentStamps: number, earned: number): StampsReversal {
+  const stamps = Math.max(0, currentStamps - Math.max(0, earned));
+  return { stamps, stampsRemoved: currentStamps - stamps };
+}

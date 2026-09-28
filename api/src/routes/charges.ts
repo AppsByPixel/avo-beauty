@@ -61,6 +61,8 @@ import {
 } from '../services/charge';
 import { chargeScannerBudget } from '../services/scannerLimit';
 import { writeAudit } from '../services/audit';
+import { reverseStamps, reverseVisits, type TierName } from '../services/loyalty';
+import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { nextTransactionId } from '../services/ids';
 import { parseDate, salonWallClock, wallClockInstant } from '../time/zone';
@@ -761,9 +763,99 @@ async function performVoid(
           .limit(1)
       : [undefined];
 
+    /**
+     * ======================================================================
+     * THE LOYALTY THE CHARGE EARNED GOES BACK — EXACTLY THAT, AND NO MORE.
+     * ======================================================================
+     * This line was `visits: Math.max(0, m.visits - 1)`, whatever the charge had
+     * given. So a visit doubled by a branch boost or an x2visit happy hour lost
+     * one of its two on void, and on a stamp card the void took a visit that
+     * stamps mode never adds and LEFT the stamps the charge had added. Lane B
+     * found it; migration 0065 is what makes the fix possible, because the
+     * charge row now records the increment it applied (`services/charge.ts § 9,
+     * continued`).
+     *
+     * RECORDED: take back `loyalty_visits_earned` or `loyalty_stamps_earned`, in
+     * the mode the CHARGE was taken in — the counter that actually moved — off
+     * whatever the count is NOW (`reverseVisits` says why subtract, not restore).
+     *
+     * THE FALLBACK, for a charge with no record (written by the API before 0065 —
+     * reachable only for charges the old build took in the fifteen minutes
+     * before this one replaced it). The mode is the salon's current one, the
+     * only one there is to read.
+     *   tiers   ONE VISIT, which is what this handler always did. It is the
+     *           floor of what any charge earned (multipliers floor at 1), so it
+     *           can under-take a boosted visit but never takes one she earned
+     *           somewhere else.
+     *   stamps  ONE STAMP, AND NO VISIT. The old arithmetic here was wrong in
+     *           both halves: stamps mode never adds a visit (charge.ts § 9 writes
+     *           only `stamps`), so "-1 visit" took something the charge never
+     *           gave, and it left the stamp the charge did give. One stamp is the
+     *           floor for the same reason one visit is — `boost_stamp_in_range`
+     *           and x2stamp/x3stamp are all >= 1 — so it is the most that can be
+     *           said without guessing, and it errs toward her.
+     *
+     * THE TIER IS RE-EVALUATED on the salon's ladder, the same `tierForVisits`
+     * the charge uses, so a void can take her back DOWN a rung — exactly when the
+     * voided charge is what put her over the threshold. That is the existing rule
+     * rather than a new one: the rung has always been a function of the count
+     * (`services/loyalty.ts § reverseVisits` carries the argument). Only when the
+     * salon still runs tiers: a stamps salon's `tier` is not a thing its charges
+     * move, so its void does not move it either.
+     *
+     * NEVER BELOW ZERO, by the clamp in `reverseVisits` / `reverseStamps` — the
+     * member CHECKs would otherwise roll the refund back with it.
+     *
+     * ONE TRANSACTION, ONE KEY. All of it is inside this `db.transaction`, under
+     * the member row lock taken above, and the result — including what was taken
+     * off — is what `completeKey` stores. A retried void under the same key is
+     * answered from that stored body and reverses nothing twice; a second void
+     * under a DIFFERENT key is `already_voided`, by the read above and by
+     * `transaction_reverses_uq` beneath it.
+     */
+    const [loyaltyConfig] = await tx
+      .select({ loyaltyMode: salon.loyaltyMode, tiers: salon.tiers })
+      .from(salon)
+      .where(eq(salon.id, principal.salonId))
+      .limit(1);
+    if (!loyaltyConfig) throw notFound('unknown_salon', 'No such salon.');
+
+    const recorded = target.loyaltyMode !== null;
+    const reversedMode = target.loyaltyMode ?? loyaltyConfig.loyaltyMode;
+    let visitsAfter = m.visits;
+    let tierAfter: TierName | null = m.tier ?? null;
+    let stampsAfter = m.stamps;
+    let visitsRemoved = 0;
+    let stampsRemoved = 0;
+    let tierChanged = false;
+
+    if (reversedMode === 'tiers') {
+      const earned = recorded ? (target.loyaltyVisitsEarned ?? 0) : 1;
+      if (loyaltyConfig.loyaltyMode === 'tiers') {
+        const r = reverseVisits(loyaltyConfig.tiers ?? [], m.visits, m.tier ?? null, earned);
+        visitsAfter = r.visits;
+        tierAfter = r.tier;
+        tierChanged = r.changed;
+        visitsRemoved = r.visitsRemoved;
+      } else {
+        visitsAfter = Math.max(0, m.visits - earned);
+        visitsRemoved = m.visits - visitsAfter;
+      }
+    } else if (m.stamps !== null) {
+      const r = reverseStamps(m.stamps, recorded ? (target.loyaltyStampsEarned ?? 0) : 1);
+      stampsAfter = r.stamps;
+      stampsRemoved = r.stampsRemoved;
+    }
+
     await tx
       .update(member)
-      .set({ balanceFils: balanceAfter, visits: Math.max(0, m.visits - 1), updatedAt: now })
+      .set({
+        balanceFils: balanceAfter,
+        visits: visitsAfter,
+        tier: tierAfter,
+        stamps: stampsAfter,
+        updatedAt: now,
+      })
       .where(eq(member.id, m.id));
 
     // A compensating row. The unique index on reverses_transaction_id is what
@@ -808,6 +900,32 @@ async function performVoid(
     );
 
     /**
+     * THE RUNG MOVED, SO IT IS RECORDED — the same row the charge writes when it
+     * moves her, for the same reason (db/schema/loyaltyEvent.ts): otherwise the
+     * Overview feed's last word on her is "reached Gold tier" while her card says
+     * Silver. `from`/`to` carry the direction and `describeLoyalty` already words
+     * a descent ("moved to Silver tier from Gold"). Attributed to the VOID row,
+     * which is what moved her. Skipped for a null destination, as the charge
+     * skips it — a move to no rung has no `to_tier` to state.
+     *
+     * NOTHING IS DELETED. The voided charge's own `tier_climb` or
+     * `stamp_reward_ready` row stays: loyalty_event is append-only by intent,
+     * and it is a true record of what the charge did at the time. A stamp card
+     * that drops back under its target writes nothing — there is no event kind
+     * for it, and inventing one is not this slice's to do.
+     */
+    if (tierChanged && tierAfter !== null) {
+      await tx.insert(loyaltyEvent).values({
+        salonId: principal.salonId,
+        memberId: m.id,
+        transactionId: voidId,
+        kind: 'tier_climb',
+        fromTier: m.tier ?? null,
+        toTier: tierAfter,
+      });
+    }
+
+    /**
      * The whole refund comes out of `salon_revenue`, INCLUDING the deposit
      * portion, and that is correct rather than a shortcut: the deposit stopped
      * being a `deposit_held` liability the moment the charge discharged it into
@@ -846,6 +964,17 @@ async function performVoid(
         chargedFils: Math.abs(target.amountFils),
         depositReturnedFils: depositApplied,
         bookingId: heldBooking?.id ?? null,
+        // What came off her card, and whether the charge had recorded it or the
+        // fallback decided — the audit row is where "why did she lose two
+        // visits" is answered.
+        loyalty: {
+          mode: reversedMode,
+          recorded,
+          visitsRemoved,
+          stampsRemoved,
+          tierBefore: m.tier ?? null,
+          tierAfter,
+        },
       },
       ipAddress: req.ip ?? null,
       userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
@@ -861,7 +990,22 @@ async function performVoid(
        */
       depositReturnedFils: depositApplied,
       bookingId: heldBooking?.id ?? null,
-      visitRemoved: true,
+      /**
+       * NOW TRUE ONLY WHEN A VISIT WAS. It was a constant `true`, which on a
+       * stamp card described the bug rather than the outcome. No client branches
+       * on it (the scanner declares it and renders nothing from it); the counts
+       * below are the full answer.
+       */
+      visitRemoved: visitsRemoved > 0,
+      /**
+       * WHAT CAME OFF HER CARD — the void's mirror of the charge's
+       * `visitsEarned` / `stampsEarned`, so the till can say "2 visits removed"
+       * rather than assume one. `recorded: false` is the fallback above.
+       */
+      loyalty:
+        reversedMode === 'tiers'
+          ? { mode: 'tiers' as const, visitsRemoved, tierAfter, recorded }
+          : { mode: 'stamps' as const, stampsRemoved, recorded },
     };
     await completeKey(tx, keyId, { status: 200, body: result }, voidId);
     return result;
