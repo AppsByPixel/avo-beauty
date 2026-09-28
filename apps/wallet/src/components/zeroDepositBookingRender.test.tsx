@@ -83,6 +83,8 @@ function booking(over: Record<string, unknown> = {}): BookingView {
     noShowReturnDueAt: '2026-09-28T15:45:00.000Z',
     rescheduledCount: 0,
     calendarSyncState: 'not_applicable',
+    policy: null,
+    settlement: null,
     ...over,
   });
 }

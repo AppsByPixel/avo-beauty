@@ -98,6 +98,8 @@ const ROW: MerchantBooking = {
   noShowReturnDueAt: '2026-09-17T12:00:00.000Z',
   rescheduledCount: 0,
   calendarSyncState: 'synced',
+  policy: null,
+  settlement: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
@@ -129,6 +131,8 @@ const WRITTEN_BOOKING: Record<string, unknown> = {
   noShowReturnDueAt: ROW.noShowReturnDueAt,
   rescheduledCount: 0,
   calendarSyncState: 'synced',
+  policy: null,
+  settlement: null,
 };
 
 /** The board row — `serialiseShopOrder` plus the join `perms.shop` gates. */

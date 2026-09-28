@@ -175,6 +175,8 @@ function wire(over: Record<string, unknown>) {
     noShowReturnDueAt: IN_THREE_HOURS,
     rescheduledCount: 0,
     calendarSyncState: 'synced',
+    policy: null,
+    settlement: null,
     memberName: 'Dana Al-Fahad',
     memberPhone: '+965 9912 4408',
     memberErased: false,

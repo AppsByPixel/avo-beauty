@@ -127,6 +127,8 @@ function wire(over: Record<string, unknown> = {}) {
     noShowReturnDueAt: '2026-09-28T11:00:00.000Z',
     rescheduledCount: 0,
     calendarSyncState: 'synced',
+    policy: null,
+    settlement: null,
     memberName: 'Dana Al-Fahad',
     memberPhone: '+965 9912 4408',
     memberTier: 'gold',

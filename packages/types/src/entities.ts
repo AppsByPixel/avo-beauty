@@ -511,6 +511,57 @@ export const TopUpIntentPublicSchema = TopUpIntentSchema.omit({ feeFils: true })
  * shared family phone often enough that it is not hypothetical. Reported, not
  * built.
  */
+// ------------------------------------------------------ booking policy ---
+//
+// The salon's own booking policy (DECISIONS, the fourth list): the salon chooses
+// whether a no-show keeps or returns the deposit, and sets up to three cut-offs
+// for her own cancellation. What returns is wallet credit (#5), rounded DOWN to
+// the fil; the salon keeps the remainder. Lane A's 54308ea serialises all of it.
+
+export const CancellationRuleSchema = z.object({
+  hoursBefore: z.number().int().min(1).max(720),
+  returnPercent: z.number().int().min(0).max(100),
+});
+
+export const BookingPolicyTextSchema = z.object({
+  en: z.string(),
+  /** '' falls back to `en`, as LegalDoc does. */
+  ar: z.string(),
+});
+
+export const BookingPolicySchema = z.object({
+  id: IdSchema,
+  salonId: IdSchema,
+  version: z.number().int().positive(),
+  noShow: z.enum(['keep', 'return']),
+  cancellation: z.array(CancellationRuleSchema).max(3),
+  text: z.object({ en: z.string().min(1).max(1000), ar: z.string().max(1000) }),
+  publishedAt: DateTimeSchema,
+});
+
+/** `GET /salons/{id}/booking-policy`. `null` until the salon publishes one. */
+export const BookingPolicyReadSchema = z.object({ policy: BookingPolicySchema.nullable() });
+
+/** `PUT /salons/{id}/booking-policy` — an identical body publishes nothing. */
+export const BookingPolicyPublishSchema = z.object({
+  policy: BookingPolicySchema,
+  published: z.boolean(),
+  noticesWritten: z.number().int().nonnegative(),
+});
+
+export const BookingPolicyStampSchema = z.object({
+  id: IdSchema,
+  version: z.number().int().positive(),
+  noShow: z.enum(['keep', 'return']),
+  cancellation: z.array(CancellationRuleSchema),
+  text: BookingPolicyTextSchema,
+});
+
+export const BookingSettlementSchema = z.object({
+  returnedFils: FilsSchema.nonnegative(),
+  keptFils: FilsSchema.nonnegative(),
+});
+
 export const BookingSchema = z.object({
   id: IdSchema,
   /** NULL only on a `merchant`-sourced booking for a guest. See above. */
@@ -584,6 +635,31 @@ export const BookingSchema = z.object({
   /** A reschedule carries the deposit; this counts how often. */
   rescheduledCount: z.number().int().nonnegative(),
   calendarSyncState: z.enum(['not_applicable', 'pending', 'synced', 'failed']),
+  /**
+   * The salon policy this booking was made under, stamped at booking (migration
+   * 0066). A later edit never changes what this booking returns. `null` on a
+   * booking made before 0066 or at a salon that never published one — those keep
+   * the legacy full return.
+   */
+  policy: BookingPolicyStampSchema.nullable(),
+  /** Where the deposit went once settled. `null` until it is. */
+  settlement: BookingSettlementSchema.nullable(),
+});
+
+/**
+ * Her cancel (`DELETE /bookings/:id`) under the stamped policy: what came back to
+ * her wallet and what the salon kept. `transactionId` is null when nothing was
+ * returned; `forfeitTransactionId` when nothing was kept.
+ */
+export const BookingCancelResultSchema = z.object({
+  booking: BookingSchema,
+  refundedFils: FilsSchema,
+  keptFils: FilsSchema,
+  returnPercent: z.number().int().min(0).max(100),
+  rule: CancellationRuleSchema.nullable(),
+  balanceAfterFils: FilsSchema,
+  transactionId: IdSchema.nullable(),
+  forfeitTransactionId: IdSchema.nullable(),
 });
 
 export const ArtistSchema = z.object({
@@ -1339,6 +1415,11 @@ export type HappyHour = z.infer<typeof HappyHourSchema>;
 export type PromotionSet = z.infer<typeof PromotionSetSchema>;
 export type RewardKey = z.infer<typeof RewardKeySchema>;
 export type Campaign = z.infer<typeof CampaignSchema>;
+export type CancellationRule = z.infer<typeof CancellationRuleSchema>;
+export type BookingPolicy = z.infer<typeof BookingPolicySchema>;
+export type BookingPolicyStamp = z.infer<typeof BookingPolicyStampSchema>;
+export type BookingSettlement = z.infer<typeof BookingSettlementSchema>;
+export type BookingCancelResult = z.infer<typeof BookingCancelResultSchema>;
 export type TransactionLoyalty = z.infer<typeof TransactionLoyaltySchema>;
 export type CampaignReward = z.infer<typeof CampaignRewardSchema>;
 export type PlatformMessagingPolicy = z.infer<typeof PlatformMessagingPolicySchema>;

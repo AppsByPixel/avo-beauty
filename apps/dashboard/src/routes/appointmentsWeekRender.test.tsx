@@ -124,6 +124,8 @@ const BOOKING: MerchantBooking = {
   changeableUntil: '2026-09-28T07:00:00.000Z',
   rescheduledCount: 0,
   calendarSyncState: 'synced',
+  policy: null,
+  settlement: null,
   branchAssumed: false,
   memberName: 'Noura Al-Ajmi',
   memberPhone: '+96590000001',

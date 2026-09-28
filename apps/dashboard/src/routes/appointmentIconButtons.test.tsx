@@ -57,6 +57,8 @@ const WALK_IN: MerchantBooking = {
   noShowReturnDueAt: '2026-09-17T12:00:00.000Z',
   rescheduledCount: 0,
   calendarSyncState: 'not_applicable',
+  policy: null,
+  settlement: null,
   branchAssumed: false,
   memberName: 'Mariam Al-Ajmi',
   memberPhone: '+96590011223',

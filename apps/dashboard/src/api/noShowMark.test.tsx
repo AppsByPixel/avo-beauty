@@ -78,6 +78,8 @@ const ROW: MerchantBooking = {
   noShowReturnDueAt: '2026-09-17T12:00:00.000Z',
   rescheduledCount: 0,
   calendarSyncState: 'synced',
+  policy: null,
+  settlement: null,
   branchAssumed: false,
   memberName: 'Dana Al-Sabah',
   memberPhone: '+96599124408',
@@ -111,6 +113,8 @@ const OK: MarkNoShowResult = {
     noShowReturnDueAt: ROW.noShowReturnDueAt,
     rescheduledCount: 0,
     calendarSyncState: 'synced',
+    policy: null,
+    settlement: null,
   },
   /** INTEGER FILS, both — #1. The deposit back, and her wallet after it. */
   refundedFils: 5000,
