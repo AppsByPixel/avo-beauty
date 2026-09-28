@@ -174,6 +174,30 @@ const A_ARTIST = 'AR-001';
 const A_QUIET_ARTIST = 'AR-003';
 
 /**
+ * SALMIYA KEEPS HER OWN HOURS FOR THE LENGTH OF THIS FILE — migration 0063.
+ *
+ * Without it every branch on every sample follows the salon (`businessHoursSource:
+ * 'salon'`), and the probes below would exercise one of the enum's two values and
+ * none of the override: `BusinessHoursSourceSchema` narrowed to `'salon'` alone, or a
+ * serialiser that ignored `branch.business_hours` entirely, would both read green.
+ * That is last slice's `pickupBranch: null` blind spot one field over.
+ *
+ * `A_BRANCH` and not a branch of this file's own: a new open branch at salon A would
+ * move `resolveBranch`'s lowest-id tie-break for every charge in the suite, and hours
+ * are read by nothing but the two serialisers (`routes/salons.ts`, `services/order.ts`),
+ * so an override moves no money and refuses nothing. And it is the PICKUP branch, so
+ * the nested `pickupBranch` on both order lists and both receipts carries the
+ * override too. `BR-KWC` is left following the salon, so the salon sample carries
+ * both values side by side. Set before the first sample is taken; put back in
+ * `afterAll`.
+ *
+ * Deliberately unlike the salon's seeded 10:00–13:00 / 16:00–21:00 in all four
+ * clocks, so a serialiser that served the salon's hours under a `'branch'` label
+ * fails on every one of them.
+ */
+const CT_BRANCH_HOURS = { morning: ['09:30', '12:30'], evening: ['15:30', '22:30'] };
+
+/**
  * THE MERCHANT BELL'S SAMPLE ROW.
  *
  * `merchant_notification` has been written to since phase 6, but the SEED creates
@@ -1740,6 +1764,9 @@ const AWAITING_MERGE: Record<string, string> = {
 
 beforeAll(async () => {
   await startTenancyApi();
+  // See CT_BRANCH_HOURS. First, so no sample below is taken without it.
+  psql(`UPDATE branch SET business_hours = '${JSON.stringify(CT_BRANCH_HOURS)}'::jsonb
+         WHERE id = '${A_BRANCH}' AND salon_id = '${SALON_A}';`);
   dashboard = await signInDashboard(SALON_A, A_STAFF_HANDLE);
   scanner = await signInScanner(SALON_A, A_STAFF_HANDLE, A_SCANNER_DEVICE);
   member = await signInMember(SALON_A, QA_MEMBER_PHONE);
@@ -2351,6 +2378,8 @@ afterAll(async () => {
    * its slot reservation cost four no-show specs before it was returned.
    */
   psql(`DELETE FROM merchant_notification WHERE id = '${BELL_NOTIFICATION}';`);
+  // Salmiya follows the salon again. See CT_BRANCH_HOURS.
+  psql(`UPDATE branch SET business_hours = NULL WHERE id = '${A_BRANCH}' AND salon_id = '${SALON_A}';`);
   await stopTenancyApi();
 });
 
@@ -3594,12 +3623,36 @@ describe('the pickup branch — declared on ShopOrderSchema, and witnessed on bo
    * spec is about the shape and the join, not about a rename elsewhere.
    */
   const branchRow = () => {
-    const [name, nameAr] = scalar(
-      `select concat_ws('|', name, coalesce(name_ar, '')) from branch where id='${A_BRANCH}'`,
+    const [name, nameAr, hours, timezone] = scalar(
+      `select concat_ws('|', b.name, coalesce(b.name_ar, ''), coalesce(b.business_hours::text, ''), s.timezone)
+         from branch b join salon s on s.id = b.salon_id where b.id='${A_BRANCH}'`,
     )
       .trim()
       .split('|');
-    return { id: A_BRANCH, name, nameAr: nameAr === '' ? null : nameAr, closed: false };
+    /**
+     * Since 0063 the nested branch carries its RESOLVED hours, their source and the
+     * salon's zone. The hours are read back from the column, and the column is
+     * required to be this file's override — so `'branch'` below is a measurement of a
+     * row that really has its own hours, not a label typed to match the wire.
+     */
+    // Re-keyed before comparing: jsonb stores keys in its own order (`evening` first),
+    // so the column's text is not the fixture's text even when the value is.
+    const stored = hours ? (JSON.parse(hours) as typeof CT_BRANCH_HOURS) : null;
+    precondition(
+      !!stored &&
+        JSON.stringify({ morning: stored.morning, evening: stored.evening }) === JSON.stringify(CT_BRANCH_HOURS),
+      `${A_BRANCH} does not carry this file's hours override (${hours || 'NULL'}), so ` +
+        "a `businessHoursSource: 'branch'` expectation would be asserting a fixture that is not there",
+    );
+    return {
+      id: A_BRANCH,
+      name,
+      nameAr: nameAr === '' ? null : nameAr,
+      closed: false,
+      businessHours: CT_BRANCH_HOURS,
+      businessHoursSource: 'branch',
+      timezone,
+    };
   };
   let SALMIYA: ReturnType<typeof branchRow>;
   beforeAll(() => {
@@ -3644,6 +3697,88 @@ describe('the pickup branch — declared on ShopOrderSchema, and witnessed on bo
     const placed = response('GET /orders/payments/{id}').body.order.result;
     expect(placed?.pickupBranch, 'the card-paid receipt lost the pickup branch in the jsonb round trip').toEqual(
       SALMIYA,
+    );
+  });
+});
+
+// ===========================================================================
+// Migrations 0061 and 0063 — who does which service, and a branch's own hours
+// ===========================================================================
+
+/**
+ * THE TWO NEW FIELDS ARE WITNESSED, NOT MERELY DECLARED.
+ *
+ * Trunk landed `ServiceSchema.artistIds` and `BranchSchema.businessHours` /
+ * `businessHoursSource` with the serialisers that send them (f5e6f77), so the generic
+ * probes above already parse and strip-check both. What they cannot promise on their
+ * own is that the sample reached the values that matter:
+ *
+ *   - a service with `artistIds: []` proves nothing about the array's ITEMS — a schema
+ *     of `z.array(z.number())` or `z.array(z.never())` parses an empty array;
+ *   - a salon whose every branch follows the salon proves nothing about the OVERRIDE —
+ *     an enum narrowed to `'salon'`, or a serialiser that ignored the column, reads
+ *     green.
+ *
+ * So each is required here, from the samples the probes above already use.
+ */
+describe('artistIds and branch hours — the samples reach the values the probes need', () => {
+  it('GET /salons/:id/services serves a service with a NON-EMPTY artistIds, and the parse keeps every id', () => {
+    const res = response(`GET /salons/${SALON_A}/services`);
+    expect(res.status, res.raw).toBe(200);
+    const items = res.body.items as Array<{ id: string; artistIds: unknown }>;
+    const staffed = items.filter((i) => Array.isArray(i.artistIds) && i.artistIds.length > 0);
+    expect(
+      staffed.length,
+      "not one service on salon A's menu has an artist assigned, so ServiceSchema.artistIds " +
+        "has been checked against empty arrays only — which accept any item type.\n" +
+        res.raw.slice(0, 800),
+    ).toBeGreaterThan(0);
+
+    const parsed = paginated(ServiceSchema).safeParse(res.body);
+    expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
+    const byId = new Map(
+      ((parsed as { data: { items: Array<{ id: string; artistIds: string[] }> } }).data.items).map(
+        (i) => [i.id, i.artistIds],
+      ),
+    );
+    for (const svc of staffed) {
+      expect(byId.get(svc.id), `ServiceSchema changed ${svc.id}'s artistIds`).toEqual(svc.artistIds);
+    }
+
+    // And the ids are the ones the table holds — read in SQL, not off the API's own reply.
+    const svc = staffed[0]!;
+    const stored = scalar(
+      `select coalesce(string_agg(artist_id, ',' order by artist_id), '')
+         from artist_service where service_id = '${svc.id}'`,
+    ).trim();
+    expect((svc.artistIds as string[]).join(','), `${svc.id}'s artistIds is not artist_service`).toBe(stored);
+  });
+
+  it("GET /salons/:id serves a branch with its OWN hours ('branch') beside one following the salon ('salon')", () => {
+    const res = response(`GET /salons/${SALON_A}`);
+    expect(res.status, res.raw).toBe(200);
+    const salonHours = res.body.businessHours;
+    const branches = res.body.branches as Array<Record<string, any>>;
+
+    const own = branches.find((b) => b.id === A_BRANCH);
+    expect(own, `${A_BRANCH} is not on the salon sample`).toBeDefined();
+    expect(own!.businessHoursSource).toBe('branch');
+    expect(own!.businessHours).toEqual(CT_BRANCH_HOURS);
+    expect(own!.businessHours, "the override is the salon's hours under a 'branch' label").not.toEqual(salonHours);
+
+    const follower = branches.find((b) => b.id !== A_BRANCH);
+    expect(follower, 'salon A has only one open branch, so the fallback is not witnessed').toBeDefined();
+    expect(follower!.businessHoursSource).toBe('salon');
+    expect(follower!.businessHours).toEqual(salonHours);
+
+    const parsed = SalonSchema.safeParse(res.body);
+    expect(parsed.success, describeParseError(parsed.success ? undefined : parsed.error)).toBe(true);
+    const kept = (parsed as { data: { branches: Array<Record<string, unknown>> } }).data.branches;
+    const pick = (b: Record<string, unknown> | undefined) =>
+      b && { businessHours: b.businessHours, businessHoursSource: b.businessHoursSource };
+    expect(pick(kept.find((b) => b.id === A_BRANCH)), 'SalonSchema changed the override').toEqual(pick(own));
+    expect(pick(kept.find((b) => b.id === follower!.id)), 'SalonSchema changed the fallback').toEqual(
+      pick(follower),
     );
   });
 });

@@ -131,6 +131,17 @@ function resetArtist(): void {
       availability_source = 'google', google_connected = true,
       slot_minutes = 30, windows = EXCLUDED.windows, active = true;
 
+    -- SHE DOES MANICURES (migration 0061). This artist is created after the seed and
+    -- 0062 assigned every existing artist to every existing service, so she is
+    -- assigned nothing and POST /bookings answers 409 artist_not_assigned — which is
+    -- checked BEFORE the slot, so without this row the "FAILED booking" spec below
+    -- never reaches the not_a_slot 400 it is about, and never reaches the
+    -- computeAvailability write whose rollback it tests. Re-asserted per spec, with the
+    -- rest of her, because the row is part of what makes her bookable.
+    INSERT INTO artist_service (artist_id, service_id, salon_id)
+    VALUES ('${ARTIST}', '${SERVICE}', '${SALON_A}')
+    ON CONFLICT DO NOTHING;
+
     -- No connection row, ever, for this artist. Deleted rather than assumed
     -- absent: artist_calendar_connection.artist_id is UNIQUE, and one left
     -- behind would turn every calendar_not_connected assertion below into a
