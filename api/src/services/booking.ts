@@ -61,6 +61,7 @@ import { badRequest, conflict, insufficientBalance, notFound } from '../http/err
 import { parseDate, salonWallClock } from '../time/zone';
 import { computeAvailability, findSlot } from './availability';
 import { writeAudit, type Executor } from './audit';
+import { assertArtistPerformsService, assertBookedPairAssigned } from './artistService';
 import { resolveBranch } from './branch';
 import { claimKey, completeKey } from './idempotency';
 import { queueReceipts } from './receipts';
@@ -372,6 +373,14 @@ export async function createBooking(
       )
       .limit(1);
     if (!svc) throw notFound('unknown_service', 'No such service.');
+
+    /**
+     * SHE MUST DO THIS SERVICE (migration 0061). After both ids have resolved
+     * against her salon — so another salon's artist is still `unknown_artist`,
+     * never a 409 that confirms it exists — and before the slot and the money,
+     * so a refusal here has held nothing. See services/artistService.ts.
+     */
+    await assertArtistPerformsService(tx, a, svc);
 
     // ---------------------------------------------------------- 3. the slot --
     /**
@@ -1429,6 +1438,14 @@ export async function rescheduleBooking(
     const [s] = await tx.select().from(salon).where(eq(salon.id, row.salonId)).limit(1);
     if (!s) throw notFound('unknown_salon', 'No such salon.');
 
+    /**
+     * A NEW SLOT RE-COMMITS HER TO THIS SERVICE (migration 0061). If the salon
+     * has since taken it off her, the move is refused and the booking stays
+     * where it is — at its original time it still happens, and she can still
+     * cancel it for free up to an hour before.
+     */
+    await assertBookedPairAssigned(tx, row.artistId, row.serviceId);
+
     const localDate = salonWallClock(startsAt, s.timezone).date;
     // On `tx`, for the reason `createBooking` above gives. Nothing has been
     // written in this transaction yet — the booking row is still locked, not
@@ -1698,6 +1715,9 @@ export async function createMerchantBooking(
       .limit(1);
     if (!svc) throw notFound('unknown_service', 'No such service.');
 
+    // The front desk is held to the same rule as the customer — migration 0061.
+    await assertArtistPerformsService(tx, a, svc);
+
     /**
      * THE MEMBER, WHEN THERE IS ONE — and she must be one of this salon's.
      *
@@ -1916,6 +1936,9 @@ export async function rescheduleByMerchant(
     const [s] = await tx.select().from(salon).where(eq(salon.id, row.salonId)).limit(1);
     if (!s) throw notFound('unknown_salon', 'No such salon.');
 
+    // The customer's reschedule's rule, for the same reason — migration 0061.
+    await assertBookedPairAssigned(tx, row.artistId, row.serviceId);
+
     /**
      * THE LENGTH IS CARRIED, NOT RECOMPUTED. This endpoint moves an appointment;
      * it does not resize one. Recomputing from `artist.slotMinutes` would silently
@@ -1996,6 +2019,14 @@ export async function reassignArtist(
     }
 
     const a = await artistForSalon(tx, params.artistId, params.salonId);
+
+    /**
+     * THE NEW ARTIST MUST DO THIS SERVICE (migration 0061). This is the path the
+     * rule most needs: "reassign to whoever is free" is exactly how a manicure
+     * ends up in a colourist's diary. Checked after `artistForSalon`, so another
+     * salon's artist is still `unknown_artist` and not a 409 confirming it.
+     */
+    await assertBookedPairAssigned(tx, a.id, row.serviceId);
 
     /**
      * THE BRANCH MOVES WITH THE ARTIST, because `createBooking` established that a

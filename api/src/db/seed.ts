@@ -916,6 +916,33 @@ async function seed(): Promise<void> {
       },
     });
 
+  /**
+   * WHO DOES WHICH SERVICE (migration 0061): every seeded artist does every
+   * seeded service, which is the rule the demo had before assignment existed.
+   *
+   * WRITTEN HERE AND NOT LEFT TO 0062, because on a fresh database the order is
+   * migrate THEN seed: 0062's backfill runs over an empty `artist` table and
+   * links nothing, and these rows are created after it. Without this block every
+   * booking against the demo roster answers `409 artist_not_assigned` — the
+   * exact outage 0062 exists to prevent in production, reproduced in every lane
+   * database and every e2e run.
+   *
+   * SCOPED TO THE SEED'S OWN IDS, not "every artist × every service". A lane
+   * database also holds int-spec fixtures, and a spec that deliberately leaves
+   * a service unassigned must not find it assigned by a re-seed. DoNothing, so
+   * a re-seed does not duplicate: it adds back only what is missing, which
+   * includes a seeded pair a spec removed and did not restore. `artistService.int.test.ts` changes only
+   * its own fixture rows, and restores the one seeded pair it touches.
+   */
+  await db.execute(sql`
+    INSERT INTO artist_service (artist_id, service_id, salon_id)
+    SELECT a.id, s.id, a.salon_id
+      FROM artist a
+      JOIN service s ON s.salon_id = a.salon_id
+     WHERE a.id IN ('AR-001', 'AR-002', 'AR-003', 'AR-004')
+       AND s.id IN ('SV-01', 'SV-02', 'SV-03', 'SV-04', 'SV-05')
+    ON CONFLICT DO NOTHING`);
+
   // Dana — the fixture member. 24.500 KD, 5 visits, Silver.
   await db
     .insert(member)

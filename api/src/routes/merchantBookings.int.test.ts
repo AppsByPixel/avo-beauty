@@ -312,6 +312,18 @@ suite('the merchant writes an appointment down, and then changes it', () => {
     await exec(sql`
       INSERT INTO service (id, salon_id, name, price_fils)
       VALUES (${SVC}, ${SALON}, ${`MB Int Service ${RUN}`}, 8000)`);
+    /**
+     * WHO DOES IT (migration 0061). A service inserted after 0062 ran has nobody
+     * assigned, exactly as one created through `POST /salons/{id}/services` does,
+     * and every create, reschedule and reassign below would be refused
+     * `artist_not_assigned`. The four seeded artists do it — the state a merchant
+     * reaches by ticking them on the Services tab.
+     */
+    await exec(sql`
+      INSERT INTO artist_service (artist_id, service_id, salon_id)
+      SELECT a.id, ${SVC}, ${SALON} FROM artist a
+       WHERE a.id IN ('AR-001', 'AR-002', 'AR-003', 'AR-004')
+      ON CONFLICT DO NOTHING`);
 
     managerBearer = await web(MANAGER);
     frontdeskBearer = await web(FRONTDESK);

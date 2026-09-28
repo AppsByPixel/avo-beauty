@@ -150,6 +150,21 @@ export async function nextTopUpIntentId(exec: Executor): Promise<string> {
   return `TI-${await draw(exec, sql`SELECT nextval('topup_intent_number_seq') AS n`)}`;
 }
 
+/**
+ * 'SV-10000042'. A service on the menu — migration 0061, which is when anything
+ * other than the seed started creating one (`POST /salons/{id}/services`).
+ *
+ * A SEQUENCE AND NOT THE `PR-` DICE ROLL BESIDE IT, although a service is not
+ * money: it is priced into every charge basket and named by every booking, and
+ * a 23505 on its insert would be a merchant told "try again" for a collision in
+ * a space she cannot see. `ids.test.ts` pins the 36^6 minters so a sixth is a
+ * decision; this one was decided the other way. The seeded `SV-01`..`SV-05` are
+ * two digits wide, so `START WITH 10000000` cannot meet them.
+ */
+export async function nextServiceId(exec: Executor): Promise<string> {
+  return `SV-${await draw(exec, sql`SELECT nextval('service_number_seq') AS n`)}`;
+}
+
 /** 'BK-10000042'. The appointment. */
 export async function nextBookingId(exec: Executor): Promise<string> {
   return `BK-${await draw(exec, sql`SELECT nextval('booking_number_seq') AS n`)}`;

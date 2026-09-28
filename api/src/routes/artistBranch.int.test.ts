@@ -110,6 +110,11 @@ suite('an artist belongs to one branch', () => {
     await db.execute(sql`
       INSERT INTO service (id, salon_id, name, price_fils, active)
       VALUES (${SVC}, ${SALON}, ${`EN AB Service ${RUN}`}, 9000, true)`);
+    // All three do it (migration 0061) — a new service has nobody assigned, and
+    // this suite is about where a booking lands, not whether it may be made.
+    await db.execute(sql`
+      INSERT INTO artist_service (artist_id, service_id, salon_id) VALUES
+        (${AR_SAL}, ${SVC}, ${SALON}), (${AR_KWC}, ${SVC}, ${SALON}), (${AR_NONE}, ${SVC}, ${SALON})`);
 
     await db.execute(sql`
       INSERT INTO member (id, salon_id, name, phone, password_hash, balance_fils, tier, visits, policy_version)

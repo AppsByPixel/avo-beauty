@@ -80,6 +80,7 @@ import {
 } from '../services/period';
 import { parseTimeZone } from '../time/zone';
 import { loyaltyConfigOf } from './loyalty';
+import { serialiseServices } from './services';
 
 /** api-contract.md § Booking — the four statuses, and the merchant's status pills. */
 const BOOKING_STATUSES = ['deposit_held', 'completed', 'no_show_returned', 'cancelled'] as const;
@@ -2319,17 +2320,23 @@ export async function registerSalonRoutes(app: FastifyInstance): Promise<void> {
         active: service.active,
       })
       .from(service)
-      .where(and(eq(service.salonId, req.params.id), eq(service.active, true)));
+      .where(and(eq(service.salonId, req.params.id), eq(service.active, true)))
+      // A stable order, so the Services tab does not reshuffle on a re-read — the
+      // products route's `ORDER BY id`. It had none, and heap order is not a
+      // promise once rows are being edited. By id, which is the order the seeded
+      // menu already came back in, so no client sees today's list move.
+      .orderBy(asc(service.id));
 
-    /** The same contract addition as the products route above. Same caveat. */
-    const images = await primaryImagesFor(
-      db,
-      req.params.id,
-      'service',
-      rows.map((r) => r.id),
-    );
+    /**
+     * `image` (the products route's contract caveat) and, since migration 0061,
+     * `artistIds` — who may be BOOKED for each. Built by `serialiseServices` in
+     * routes/services.ts, which every write there answers with too, so the read
+     * and the writes are one shape. `[]` on a service nobody is assigned to: a
+     * NEW service is chargeable here at once and bookable by nobody until the
+     * Services tab assigns someone, and the wallet hides it by that list.
+     */
     return reply.send({
-      items: rows.map((r) => ({ ...r, image: images.get(r.id) ?? null })),
+      items: await serialiseServices(db, req.params.id, rows),
       nextCursor: null,
     });
   });

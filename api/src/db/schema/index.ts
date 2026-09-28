@@ -13,6 +13,7 @@
  *          ├─ product
  *          ├─ image ──── image_attachment (→ product | service, by id, no FK)
  *          ├─ artist (→ staff_user, optionally: an artist needs no login)
+ *          │     └─ artist_service (→ service: who may be BOOKED for what — 0061)
  *          ├─ member ─┬── wallet_token
  *          │           └── voucher (AVO-issued; → platform_admin)
  *          ├─ staff_user
@@ -50,6 +51,7 @@ export * from './service';
 export * from './product';
 export * from './image';
 export * from './artist';
+export * from './artistService';
 export * from './member';
 export * from './phoneChange';
 export * from './staff';
