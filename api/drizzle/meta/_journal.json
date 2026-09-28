@@ -456,6 +456,13 @@
       "when": 1790570000000,
       "tag": "0064_a_reward_the_salon_wrote",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790656400000,
+      "tag": "0065_what_the_visit_earned",
+      "breakpoints": true
     }
   ]
 }

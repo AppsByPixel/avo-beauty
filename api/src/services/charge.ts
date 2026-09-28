@@ -39,7 +39,7 @@
  */
 
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
-import { add, fils, formatMoney, subtract, type Fils, type Transaction } from '@avo/types';
+import { add, fils, formatMoney, subtract, type Fils } from '@avo/types';
 import type { Db } from '../db/client';
 import { booking } from '../db/schema/booking';
 import { member } from '../db/schema/member';
@@ -56,7 +56,7 @@ import {
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { StaffPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
-import { serialiseTransactionForCustomer } from '../http/serialise';
+import { serialiseTransactionForCustomer, type CustomerTransactionWire } from '../http/serialise';
 import { findApplicableHold } from './booking';
 import { resolveBranch } from './branch';
 import { applyStamps, applyVisits, type LoyaltyOutcome } from './loyalty';
@@ -250,8 +250,12 @@ export interface ChargeResult {
    * is a promise to remember, and two hand-assembled copies of one shape drift. The
    * type now comes from the schema, so tsc names the next added field instead of a
    * contract test finding it later.
+   *
+   * `CustomerTransactionWire` is that `Transaction` plus `loyalty` (migration
+   * 0065), which trunk has not yet landed on `TransactionSchema`. When it does,
+   * the two are the same type.
    */
-  transaction: Transaction;
+  transaction: CustomerTransactionWire;
   balanceAfterFils: number;
   /** What the held deposit took off this charge. The scanner's credit line. */
   depositAppliedFils: number;
@@ -583,6 +587,14 @@ export async function performCharge(
                 // second tap on a basket can each be the duplicate here.
                 customAmount: earlier.t.customAmount,
                 note: earlier.t.note,
+                // What THAT charge earned, off its own row — the refusal describes
+                // the earlier charge, not the one being attempted.
+                loyaltyMode: earlier.t.loyaltyMode,
+                loyaltyVisitsEarned: earlier.t.loyaltyVisitsEarned,
+                loyaltyStampsEarned: earlier.t.loyaltyStampsEarned,
+                loyaltyTierAfter: earlier.t.loyaltyTierAfter,
+                loyaltyClimbed: earlier.t.loyaltyClimbed,
+                loyaltyRewardReady: earlier.t.loyaltyRewardReady,
               },
               // The query already established it has no reversal, which is why it
               // matched at all. `null` here is that fact, not a default.
@@ -987,6 +999,26 @@ export async function performCharge(
     }
 
     /**
+     * ------------------------------- 9, continued. what the visit earned --
+     *
+     * ON THE CHARGE ROW, from the SAME outcome object the response carries at
+     * step 12 — so the row, the scanner's "+2 visits" and her
+     * wallet's activity line are one value, not three computations of it.
+     * Migration 0065 carries why the row needs it: her wallet reads rows, not
+     * this response, and `POST /voids` has to know what it is undoing. It used
+     * to take one visit off every charge whatever the charge had given.
+     *
+     * Inside this transaction like every other write here (non-negotiable #3).
+     * A charge that rolls back takes its record with it; a record that fails its
+     * CHECK rolls the charge back rather than committing a debit whose visit
+     * nobody can reverse.
+     */
+    await tx
+      .update(transaction)
+      .set(loyaltyColumnsFor(loyalty))
+      .where(eq(transaction.id, txId));
+
+    /**
      * ------------------------------------------ 9b. a flat promotion credit --
      *
      * `credit3` — 3.000 KD into the wallet, granted by a live window.
@@ -1159,6 +1191,13 @@ export async function performCharge(
            */
           customAmount: input.custom !== undefined,
           note: input.custom ? input.custom.reason : null,
+          /**
+           * The same call step 9 wrote the row with, for the reason the two lines
+           * above give: one payload, one expression, or the reply and the row
+           * drift. So `transaction.loyalty` here and `loyalty` on this response
+           * are the same outcome in two shapes.
+           */
+          ...loyaltyColumnsFor(loyalty),
         },
         /**
          * NO REVERSAL, and stated rather than defaulted. This charge was created
@@ -1202,3 +1241,36 @@ export async function performCharge(
  * They are now one function that returns the guess and the fact separately —
  * services/branch.ts, which carries the reasoning and the incident.
  */
+
+/**
+ * The six 0065 columns for an outcome. One function, so the charge's write and
+ * `transaction_loyalty_is_whole` agree about which fields each mode fills: the
+ * tiers arm has no stamps and cannot be "reward ready"; the stamps arm has no
+ * rung and cannot climb.
+ */
+export function loyaltyColumnsFor(outcome: LoyaltyOutcome): {
+  loyaltyMode: 'tiers' | 'stamps';
+  loyaltyVisitsEarned: number | null;
+  loyaltyStampsEarned: number | null;
+  loyaltyTierAfter: 'bronze' | 'silver' | 'gold' | 'black' | null;
+  loyaltyClimbed: boolean;
+  loyaltyRewardReady: boolean;
+} {
+  return outcome.mode === 'tiers'
+    ? {
+        loyaltyMode: 'tiers',
+        loyaltyVisitsEarned: outcome.visitsEarned,
+        loyaltyStampsEarned: null,
+        loyaltyTierAfter: outcome.tier,
+        loyaltyClimbed: outcome.climbed,
+        loyaltyRewardReady: false,
+      }
+    : {
+        loyaltyMode: 'stamps',
+        loyaltyVisitsEarned: null,
+        loyaltyStampsEarned: outcome.stampsEarned,
+        loyaltyTierAfter: null,
+        loyaltyClimbed: false,
+        loyaltyRewardReady: outcome.rewardReady,
+      };
+}

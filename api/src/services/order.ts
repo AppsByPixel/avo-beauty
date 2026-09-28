@@ -90,7 +90,7 @@ import { walletSpendPosting } from '../money/ledger';
 import { loyaltyEvent } from '../db/schema/loyaltyEvent';
 import type { MemberPrincipal } from '../auth/principal';
 import { badRequest, conflict, insufficientBalance, notFound } from '../http/errors';
-import { serialiseTransactionForCustomer } from '../http/serialise';
+import { NO_LOYALTY_RECORD, serialiseTransactionForCustomer } from '../http/serialise';
 import { resolveBranch } from './branch';
 import { resolveBranchHours, type BusinessHoursSource } from './branchHours';
 import type { BusinessHours } from '../db/schema/salon';
@@ -744,6 +744,15 @@ export async function placeOrder(
         // choice this code is making.
         customAmount: false,
         note: null,
+        /**
+         * NOT RECORDED FOR A SHOP ORDER, although § 8 above does award one visit.
+         * Migration 0065 is scoped to charges — the slice that asked for it, and
+         * the only row a void reverses — and its CHECK keeps it there, so this is
+         * what the row holds. The wallet's order detail draws "Visit credit +1
+         * visit"; recording it here is a one-line widening of that CHECK when it
+         * is ruled.
+         */
+        ...NO_LOYALTY_RECORD,
       },
       // No reversal is possible: nothing voids a `shop` row. Stated, because
       // the parameter is required precisely so a caller that COULD have one

@@ -38,6 +38,91 @@ export interface TransactionRow {
    * serialiser emits it, and only for the fourth.
    */
   note: string | null;
+  /**
+   * WHAT THE VISIT EARNED — migration 0065's six columns, all null except on a
+   * charge written after it. REQUIRED here rather than optional, for the reason
+   * `ReversalRow` below is required: a caller that builds a row literal and
+   * forgets them must fail to compile, not quietly serve `loyalty: null` for a
+   * charge that recorded one.
+   */
+  loyaltyMode: 'tiers' | 'stamps' | null;
+  loyaltyVisitsEarned: number | null;
+  loyaltyStampsEarned: number | null;
+  loyaltyTierAfter: 'bronze' | 'silver' | 'gold' | 'black' | null;
+  loyaltyClimbed: boolean | null;
+  loyaltyRewardReady: boolean | null;
+}
+
+/** The six 0065 columns as a row-literal fragment for a row that earned nothing. */
+export const NO_LOYALTY_RECORD = {
+  loyaltyMode: null,
+  loyaltyVisitsEarned: null,
+  loyaltyStampsEarned: null,
+  loyaltyTierAfter: null,
+  loyaltyClimbed: null,
+  loyaltyRewardReady: null,
+} as const;
+
+/**
+ * `loyalty` ON HER TRANSACTION — what this visit earned, for the wallet's
+ * "+1 visit · 2 more to Gold" (DECISIONS.md § "The fourth list").
+ *
+ * Declared HERE and not in `@avo/types`, which is trunk-owned. The shape trunk is
+ * asked to land on `TransactionSchema` is exactly this, as
+ * `loyalty: TransactionLoyaltySchema.nullable()` — REQUIRED on the wire, null
+ * permitted. Once it lands, `Transaction` carries the field itself and the
+ * intersection below becomes a no-op.
+ *
+ * A DISCRIMINATED UNION ON `mode`, like the charge response's `LoyaltyOutcome`:
+ * a tiers salon never sends stamps and a stamps salon never sends visits, so
+ * `visitsEarned` and `stampsEarned` are never both present to disagree.
+ */
+export type TransactionLoyaltyWire =
+  | {
+      mode: 'tiers';
+      visitsEarned: number;
+      tierAfter: 'bronze' | 'silver' | 'gold' | 'black' | null;
+      climbed: boolean;
+      rewardReady: boolean;
+    }
+  | {
+      mode: 'stamps';
+      stampsEarned: number;
+      tierAfter: null;
+      climbed: boolean;
+      rewardReady: boolean;
+    };
+
+export type CustomerTransactionWire = Transaction & { loyalty: TransactionLoyaltyWire | null };
+
+/**
+ * NULL ON ANYTHING THAT IS NOT A CHARGE, AND ON A CHARGE FROM BEFORE 0065.
+ *
+ * Both are "nothing was recorded", and neither is "earned nothing" — a
+ * pre-migration charge DID earn a visit, and nobody wrote down how many. So the
+ * wallet renders a null exactly as it renders every row today, and never
+ * guesses "+1" for it. `transaction_loyalty_is_whole` guarantees the mode's
+ * fields are present whenever `loyalty_mode` is; the `?? 0` / `?? false` below
+ * are unreachable against that CHECK and exist only so a type-level null
+ * cannot become a runtime `undefined` on the wire.
+ */
+export function serialiseTransactionLoyalty(row: TransactionRow): TransactionLoyaltyWire | null {
+  if (row.kind !== 'charge' || row.loyaltyMode === null) return null;
+  return row.loyaltyMode === 'tiers'
+    ? {
+        mode: 'tiers',
+        visitsEarned: row.loyaltyVisitsEarned ?? 0,
+        tierAfter: row.loyaltyTierAfter,
+        climbed: row.loyaltyClimbed ?? false,
+        rewardReady: row.loyaltyRewardReady ?? false,
+      }
+    : {
+        mode: 'stamps',
+        stampsEarned: row.loyaltyStampsEarned ?? 0,
+        tierAfter: null,
+        climbed: row.loyaltyClimbed ?? false,
+        rewardReady: row.loyaltyRewardReady ?? false,
+      };
 }
 
 /**
@@ -85,7 +170,7 @@ export interface ReversalRow {
 export function serialiseTransactionForCustomer(
   row: TransactionRow,
   reversal: ReversalRow | null,
-): Transaction {
+): CustomerTransactionWire {
   return {
     id: row.id,
     memberId: row.memberId,
@@ -114,6 +199,11 @@ export function serialiseTransactionForCustomer(
      */
     voidedAt: reversal ? reversal.createdAt.toISOString() : null,
     reversedByTransactionId: reversal ? reversal.id : null,
+    /**
+     * What the visit earned (migration 0065). Always present, null when nothing
+     * was recorded — `serialiseTransactionLoyalty` says when that is.
+     */
+    loyalty: serialiseTransactionLoyalty(row),
   };
 }
 
@@ -134,7 +224,7 @@ export function serialiseTransactionForCustomer(
 export function serialiseTransactionForMerchant(
   row: TransactionRow,
   reversal: ReversalRow | null,
-): Transaction & { feeFils: number; note: string | null } {
+): CustomerTransactionWire & { feeFils: number; note: string | null } {
   return {
     ...serialiseTransactionForCustomer(row, reversal),
     feeFils: row.feeFils,
